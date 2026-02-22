@@ -1,0 +1,15 @@
+dependencies:
+- name: redis
+  repository: https://charts.bitnami.com/bitnami
+  version: 24.1.2
+- name: minio
+  repository: https://charts.min.io/
+  version: 5.4.0
+- name: postgresql
+  repository: https://charts.bitnami.com/bitnami
+  version: 18.2.3
+- name: kube-prometheus-stack
+  repository: https://prometheus-community.github.io/helm-charts
+  version: 81.4.2
+digest: sha256:fd04fe19262bba78f420216977a1a5f0b5555b845994d8132be7e426be73a06a
+generated: "2026-02-22T17:54:26.113601953-03:00"

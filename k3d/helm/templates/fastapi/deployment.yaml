@@ -1,0 +1,13 @@
+{{- $appName := "fastapi" -}}
+{{- $appConfig := index $.Values $appName }}
+
+apiVersion: apps/v1
+{{- include "coelhonexus.DeploymentSettings" (dict "appName" $appName "root" .) | nindent 0 }}
+spec:
+  replicas: {{ $appConfig.replicas }}
+{{- include "coelhonexus.DeploymentSpecSettings" (dict "appName" $appName "root" .) | nindent 2 }}
+{{- include "coelhonexus.DeploymentResources" (dict "appName" $appName "root" .) | nindent 10}}
+{{- toYaml (index .Values $appName "livenessProbeSettings") | nindent 10 }}
+{{- if index .Values $appName "readinessProbeSettings" }}
+{{- toYaml (index .Values $appName "readinessProbeSettings") | nindent 10 }}
+{{- end }}

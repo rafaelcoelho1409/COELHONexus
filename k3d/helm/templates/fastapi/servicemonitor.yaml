@@ -1,0 +1,22 @@
+{{- if index .Values "kube-prometheus-stack" "enabled" }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Release.Name }}-fastapi
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: coelhonexus-fastapi
+    release: {{ .Release.Name }}
+spec:
+  selector:
+    matchLabels:
+      app: coelhonexus-fastapi
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: http
+      interval: 30s
+      path: /metrics
+      scheme: http
+{{- end }}

@@ -1,0 +1,113 @@
+apiVersion: skaffold/v4beta13
+kind: Config
+metadata:
+  name: coelhonexus
+
+build:
+  # Use 'latest' tag for all images (k3d dev - pods use imagePullPolicy: Always)
+  tagPolicy:
+    customTemplate:
+      template: "latest"
+  artifacts:
+    # FastAPI ML backend
+    - image: coelhonexus-fastapi
+      context: apps/fastapi
+      docker:
+        dockerfile: Dockerfile.fastapi
+        noCache: true
+      sync:
+        manual:
+          - src: "**/*.py"
+            dest: /app
+  local:
+    push: true  # Push to k3d registry (localhost:5002)
+    tryImportMissing: true
+    useBuildkit: true
+    useDockerCLI: true
+
+# MANIFESTS (v4beta13 structure)
+manifests:
+  helm:
+    releases:
+      - name: coelhonexus
+        chartPath: ./k3d/helm
+        namespace: coelhonexus
+        createNamespace: true
+        skipBuildDependencies: true  # Dependencies already downloaded
+        # No setValueTemplates needed - all image config is in values.yaml
+        # FastAPI uses coelhonexus-registry:5000 (cluster internal access)
+        # with 'latest' tag and imagePullPolicy: Always
+
+deploy:
+  helm:
+    flags:
+      install:
+        - --timeout=10m
+        - --wait
+      upgrade:
+        - --timeout=10m
+        - --wait
+
+portForward:
+  # FastAPI ML backend
+  - resourceType: service
+    resourceName: coelhonexus-fastapi
+    namespace: coelhonexus
+    port: 8000
+    localPort: 23020
+    address: 0.0.0.0
+  # MinIO S3 API
+  - resourceType: service
+    resourceName: coelhonexus-minio
+    namespace: coelhonexus
+    port: 9000
+    localPort: 23021
+    address: 0.0.0.0
+  # MinIO Console (Web UI)
+  - resourceType: service
+    resourceName: coelhonexus-minio-console
+    namespace: coelhonexus
+    port: 9001
+    localPort: 23022
+    address: 0.0.0.0
+  # Prometheus
+  - resourceType: service
+    resourceName: coelhonexus-kube-prometheu-prometheus
+    namespace: coelhonexus
+    port: 9090
+    localPort: 23023
+    address: 0.0.0.0
+  # Grafana
+  - resourceType: service
+    resourceName: coelhonexus-grafana
+    namespace: coelhonexus
+    port: 3000
+    localPort: 23024
+    address: 0.0.0.0
+  # Alertmanager (port 9094)
+  - resourceType: service
+    resourceName: coelhonexus-kube-prometheu-alertmanager
+    namespace: coelhonexus
+    port: 9094
+    localPort: 23025
+    address: 0.0.0.0
+  # PostgreSQL (for direct access if needed)
+  - resourceType: service
+    resourceName: coelhonexus-postgresql
+    namespace: coelhonexus
+    port: 5432
+    localPort: 23026
+    address: 0.0.0.0
+  # Redis (for direct access if needed)
+  - resourceType: service
+    resourceName: coelhonexus-redis-master
+    namespace: coelhonexus
+    port: 6379
+    localPort: 23027
+    address: 0.0.0.0
+
+
+# NOTE: Ensure docker-buildx is installed when useBuildkit is true
+# Port-forwards use 23020-23028 to avoid host conflicts with reco (23000-23009) and coelhocloud
+# sh mirror_localhost_tailscale.sh $(for i in {23020..23028}; do echo $i; done)
+# skaffold dev --cache-artifacts=false --no-prune=false

@@ -1,0 +1,20 @@
+[project]
+name = "coelhonexus-fastapi"
+version = "1.0.0"
+description = "COELHO Nexus - FastAPI"
+requires-python = ">=3.13"
+dependencies = [
+    # HTTP API
+    "fastapi",
+    "uvicorn",
+    "prometheus-fastapi-instrumentator",
+    "pydantic",
+    "starlette",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = []
