@@ -1,0 +1,25 @@
+root = "."
+tmp_dir = "/tmp/air"
+
+[build]
+  # Run templ generate before each build so .templ changes are compiled
+  pre_cmd  = ["templ generate"]
+  cmd      = "go build -o /tmp/air/server ./cmd/server"
+  bin      = "/tmp/air/server"
+  delay    = 500
+  include_ext = ["go", "templ"]
+  exclude_dir = ["static", "logs"]
+  kill_delay  = "1s"
+  rerun       = false
+
+[log]
+  time = false
+
+[color]
+  main    = "magenta"
+  watcher = "cyan"
+  build   = "yellow"
+  runner  = "green"
+
+[misc]
+  clean_on_exit = true

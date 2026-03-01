@@ -19,6 +19,20 @@ build:
         manual:
           - src: "**/*.py"
             dest: /app
+    # Go + Templ + HTMX web frontend
+    - image: coelhonexus-web
+      context: apps/web
+      docker:
+        dockerfile: Dockerfile.web
+        noCache: true
+      sync:
+        manual:
+          - src: "static/**"
+            dest: /app/static
+          - src: "**/*.go"
+            dest: /app
+          - src: "**/*.templ"
+            dest: /app
   local:
     push: true  # Push to k3d registry (localhost:5002)
     tryImportMissing: true
@@ -105,9 +119,16 @@ portForward:
     port: 6379
     localPort: 23027
     address: 0.0.0.0
+  # Go web frontend
+  - resourceType: service
+    resourceName: coelhonexus-web
+    namespace: coelhonexus
+    port: 3000
+    localPort: 23028
+    address: 0.0.0.0
 
 
 # NOTE: Ensure docker-buildx is installed when useBuildkit is true
 # Port-forwards use 23020-23028 to avoid host conflicts with reco (23000-23009) and coelhocloud
-# sh mirror_localhost_tailscale.sh $(for i in {23020..23028}; do echo $i; done)
+# sh mirror_localhost_tailscale.sh $(for i in {23020..23029}; do echo $i; done)
 # skaffold dev --cache-artifacts=false --no-prune=false

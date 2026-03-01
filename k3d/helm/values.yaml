@@ -53,6 +53,44 @@ fastapi:
       failureThreshold: 3
 
 
+# Go + Templ + HTMX web frontend
+web:
+  image: coelhonexus-registry:5000/coelhonexus-web:latest
+  imagePullPolicy: Always
+  replicas: 1
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+  portsSettings:
+    ports:
+      - name: http
+        port: 3000
+        targetPort: 3000
+        nodePort: 30028
+        protocol: TCP
+    type: LoadBalancer
+  livenessProbeSettings:
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 3000
+      initialDelaySeconds: 30
+      periodSeconds: 15
+      failureThreshold: 3
+  readinessProbeSettings:
+    readinessProbe:
+      httpGet:
+        path: /health
+        port: 3000
+      initialDelaySeconds: 15
+      periodSeconds: 10
+      failureThreshold: 3
+
+
 # Redis configuration (Bitnami Redis chart)
 # Available for application state management if needed
 redis:

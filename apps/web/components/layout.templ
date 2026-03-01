@@ -1,0 +1,71 @@
+package components
+
+templ Layout(title string, content templ.Component) {
+	<!DOCTYPE html>
+	<html lang="en" class="dark">
+	<head>
+		<meta charset="UTF-8"/>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+		<meta name="theme-color" content="#0a0a0f"/>
+		<meta name="description" content="AI-powered YouTube Content Search & Knowledge Graph"/>
+		<title>{ title } — COELHO Nexus</title>
+		<link rel="manifest" href="/manifest.json"/>
+		<link rel="icon" href="/static/icons/icon-192.png"/>
+		<link rel="stylesheet" href="/static/css/app.css"/>
+		<script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
+	</head>
+	<body>
+		<div class="app-wrapper">
+			@Navbar(title)
+			<main class="main-content">
+				@content
+			</main>
+			@Footer()
+		</div>
+	</body>
+	</html>
+}
+
+templ Navbar(active string) {
+	<nav class="navbar glass-nav">
+		<a href="/" class="navbar-brand">
+			<span class="brand-icon">⬡</span>
+			<span class="brand-name">COELHO<span class="brand-accent">Nexus</span></span>
+		</a>
+		<input type="checkbox" id="mobile-toggle" class="mobile-toggle-input" aria-label="Toggle menu"/>
+		<ul class="nav-links">
+			<!-- YouTube Content Search dropdown -->
+			<li class="nav-item-dropdown">
+				<input type="checkbox" id="yt-dropdown-toggle" class="dropdown-toggle-input"/>
+				<label
+					for="yt-dropdown-toggle"
+					class={
+						"nav-link nav-link-dropdown-label",
+						templ.KV("nav-link--active", active == "Search" || active == "Video" || active == "Channel" || active == "Playlist"),
+					}
+				>
+					YouTube Content Search
+					<span class="dropdown-arrow">▾</span>
+				</label>
+				<ul class="dropdown-menu glass-card">
+					<li><a href="/search"   class={ "dropdown-item", templ.KV("dropdown-item--active", active == "Search") }>Search</a></li>
+					<li><a href="/video"    class={ "dropdown-item", templ.KV("dropdown-item--active", active == "Video") }>Video</a></li>
+					<li><a href="/channel"  class={ "dropdown-item", templ.KV("dropdown-item--active", active == "Channel") }>Channel</a></li>
+					<li><a href="/playlist" class={ "dropdown-item", templ.KV("dropdown-item--active", active == "Playlist") }>Playlist</a></li>
+				</ul>
+			</li>
+			<!-- Future: Browser Use -->
+		</ul>
+		<label for="mobile-toggle" class="mobile-menu-btn" aria-label="Menu">
+			<span></span><span></span><span></span>
+		</label>
+	</nav>
+}
+
+templ Footer() {
+	<footer class="footer">
+		<p class="footer-text">
+			Built by <a href="https://github.com/rafaelcoelho1409" class="footer-link" target="_blank" rel="noopener">Rafael Coelho</a> · Powered by Go + Templ + HTMX
+		</p>
+	</footer>
+}

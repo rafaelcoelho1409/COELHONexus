@@ -1,0 +1,126 @@
+package components
+
+templ HomePage() {
+	<!DOCTYPE html>
+	<html lang="en" class="dark">
+	<head>
+		<meta charset="UTF-8"/>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+		<meta name="theme-color" content="#0a0a0f"/>
+		<meta name="description" content="AI-powered YouTube Content Search & Knowledge Graph"/>
+		<title>COELHO Nexus — AI YouTube Intelligence</title>
+		<link rel="manifest" href="/manifest.json"/>
+		<link rel="icon" href="/static/icons/icon-192.png"/>
+		<link rel="stylesheet" href="/static/css/app.css"/>
+		<script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
+	</head>
+	<body>
+		<div class="app-wrapper">
+			@Navbar("")
+			<main class="main-content">
+				<!-- Hero -->
+				<section class="hero">
+					<div class="hero-bg">
+						<div class="orb orb-1"></div>
+						<div class="orb orb-2"></div>
+						<div class="orb orb-3"></div>
+					</div>
+					<div class="hero-content">
+						<div class="hero-badge">
+							<span class="badge-dot"></span>
+							AI-Powered Knowledge Graph
+						</div>
+						<h1 class="hero-title">
+							Turn YouTube Into
+							<span class="gradient-text">Intelligence</span>
+						</h1>
+						<p class="hero-subtitle">
+							Extract insights, map relationships, and query knowledge from any YouTube video, channel, or playlist using autonomous AI agents.
+						</p>
+						<div class="hero-actions">
+							<a href="/search" class="btn btn-primary">
+								<span>Start Searching</span>
+								<svg class="btn-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
+							</a>
+							<a href="https://github.com/rafaelcoelho1409/YouTubeContentSearch" class="btn btn-ghost" target="_blank" rel="noopener">
+								View on GitHub
+							</a>
+						</div>
+					</div>
+					<div class="hero-visual">
+						<div class="graph-preview glass-card">
+							<div class="graph-node node-center">YT</div>
+							<div class="graph-node node-1">AI</div>
+							<div class="graph-node node-2">NLP</div>
+							<div class="graph-node node-3">KG</div>
+							<div class="graph-node node-4">LLM</div>
+							<svg class="graph-lines" viewBox="0 0 300 300">
+								<line x1="150" y1="150" x2="240" y2="80" stroke="url(#lineGrad)" stroke-width="1.5" opacity="0.6"/>
+								<line x1="150" y1="150" x2="60" y2="80" stroke="url(#lineGrad)" stroke-width="1.5" opacity="0.6"/>
+								<line x1="150" y1="150" x2="240" y2="220" stroke="url(#lineGrad)" stroke-width="1.5" opacity="0.6"/>
+								<line x1="150" y1="150" x2="60" y2="220" stroke="url(#lineGrad)" stroke-width="1.5" opacity="0.6"/>
+								<defs>
+									<linearGradient id="lineGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+										<stop offset="0%" style="stop-color:#6c63ff"/>
+										<stop offset="100%" style="stop-color:#00d4ff"/>
+									</linearGradient>
+								</defs>
+							</svg>
+						</div>
+					</div>
+				</section>
+
+				<!-- Feature Cards -->
+				<section class="features">
+					<div class="section-header">
+						<h2 class="section-title">Four Modes of Intelligence</h2>
+						<p class="section-subtitle">Choose how you want to explore YouTube content</p>
+					</div>
+					<div class="features-grid">
+						@FeatureCard("Search", "🔍", "/search", "Autonomous AI agents search videos based on your context, filters, and preferences.", "#6c63ff", "#8b5cf6")
+						@FeatureCard("Video", "▶", "/video", "Extract deep insights, entities, and knowledge graphs from any specific video.", "#00d4ff", "#0891b2")
+						@FeatureCard("Channel", "📡", "/channel", "Analyze an entire channel's transcriptions to map topics and knowledge.", "#10b981", "#059669")
+						@FeatureCard("Playlist", "🎵", "/playlist", "Process full playlists and build a unified knowledge graph from all content.", "#f59e0b", "#d97706")
+					</div>
+				</section>
+
+				<!-- Tech Stack -->
+				<section class="tech-stack">
+					<div class="section-header">
+						<h2 class="section-title">Built With Modern Tech</h2>
+					</div>
+					<div class="tech-grid">
+						@TechBadge("Go", "Backend")
+						@TechBadge("Templ", "Templating")
+						@TechBadge("HTMX", "Interactivity")
+						@TechBadge("FastAPI", "AI API")
+						@TechBadge("LangChain", "LLM Agents")
+						@TechBadge("Neo4j", "Knowledge Graph")
+						@TechBadge("Groq", "Inference")
+						@TechBadge("Kubernetes", "Orchestration")
+					</div>
+				</section>
+			</main>
+			@Footer()
+		</div>
+	</body>
+	</html>
+}
+
+templ FeatureCard(title string, icon string, href string, description string, colorFrom string, colorTo string) {
+	<a href={ templ.SafeURL(href) } class="feature-card glass-card">
+		<div class="feature-icon" style={ "background: linear-gradient(135deg, " + colorFrom + "22, " + colorTo + "44)" }>
+			<span>{ icon }</span>
+		</div>
+		<h3 class="feature-title">{ title }</h3>
+		<p class="feature-desc">{ description }</p>
+		<span class="feature-arrow">→</span>
+	</a>
+}
+
+templ TechBadge(name string, role string) {
+	<div class="tech-badge glass-card">
+		<span class="tech-name">{ name }</span>
+		<span class="tech-role">{ role }</span>
+	</div>
+}
