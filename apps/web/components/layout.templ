@@ -2,7 +2,7 @@ package components
 
 templ Layout(title string, content templ.Component) {
 	<!DOCTYPE html>
-	<html lang="en" class="dark">
+	<html lang="en" data-theme="dark">
 	<head>
 		<meta charset="UTF-8"/>
 		<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
@@ -11,61 +11,77 @@ templ Layout(title string, content templ.Component) {
 		<title>{ title } — COELHO Nexus</title>
 		<link rel="manifest" href="/manifest.json"/>
 		<link rel="icon" href="/static/icons/icon-192.png"/>
-		<link rel="stylesheet" href="/static/css/app.css"/>
+		<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@4.12.23/dist/full.min.css"/>
+		<script src="https://cdn.tailwindcss.com"></script>
 		<script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
+		<link rel="stylesheet" href="/static/css/app.css"/>
 	</head>
-	<body>
-		<div class="app-wrapper">
-			@Navbar(title)
-			<main class="main-content">
-				@content
-			</main>
-			@Footer()
-		</div>
+	<body class="bg-base-100 min-h-screen flex flex-col">
+		@Navbar(title)
+		<main class="flex-1">
+			@content
+		</main>
+		@Footer()
 	</body>
 	</html>
 }
 
 templ Navbar(active string) {
-	<nav class="navbar glass-nav">
-		<a href="/" class="navbar-brand">
-			<span class="brand-icon">⬡</span>
-			<span class="brand-name">COELHO<span class="brand-accent">Nexus</span></span>
-		</a>
-		<input type="checkbox" id="mobile-toggle" class="mobile-toggle-input" aria-label="Toggle menu"/>
-		<ul class="nav-links">
-			<!-- YouTube Content Search dropdown -->
-			<li class="nav-item-dropdown">
-				<input type="checkbox" id="yt-dropdown-toggle" class="dropdown-toggle-input"/>
-				<label
-					for="yt-dropdown-toggle"
-					class={
-						"nav-link nav-link-dropdown-label",
-						templ.KV("nav-link--active", active == "Search" || active == "Video" || active == "Channel" || active == "Playlist"),
-					}
-				>
-					YouTube Content Search
-					<span class="dropdown-arrow">▾</span>
-				</label>
-				<ul class="dropdown-menu glass-card">
-					<li><a href="/search"   class={ "dropdown-item", templ.KV("dropdown-item--active", active == "Search") }>Search</a></li>
-					<li><a href="/video"    class={ "dropdown-item", templ.KV("dropdown-item--active", active == "Video") }>Video</a></li>
-					<li><a href="/channel"  class={ "dropdown-item", templ.KV("dropdown-item--active", active == "Channel") }>Channel</a></li>
-					<li><a href="/playlist" class={ "dropdown-item", templ.KV("dropdown-item--active", active == "Playlist") }>Playlist</a></li>
+	<div class="navbar bg-base-100/80 backdrop-blur-md border-b border-base-300 sticky top-0 z-50 px-4">
+		<div class="navbar-start">
+			<a href="/" class="flex items-center gap-3 group">
+				<div class="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-info flex items-center justify-center shadow-lg shadow-primary/25 group-hover:shadow-primary/40 transition-shadow">
+					<span class="text-xl font-black text-white">⬡</span>
+				</div>
+				<div class="flex flex-col leading-none">
+					<span class="text-lg font-extrabold tracking-tight">COELHO<span class="text-transparent bg-clip-text bg-gradient-to-r from-primary to-info">Nexus</span></span>
+					<span class="text-[10px] text-base-content/40 uppercase tracking-widest">AI Intelligence</span>
+				</div>
+			</a>
+		</div>
+		<div class="navbar-end hidden lg:flex">
+			<ul class="menu menu-horizontal px-1">
+				<!-- YouTube Content Search dropdown -->
+				<li class="relative">
+					<details>
+						<summary class={ templ.KV("text-primary", active == "Search" || active == "Video" || active == "Channel" || active == "Playlist") }>
+							YouTube Content Search
+						</summary>
+						<ul class="absolute right-0 top-full mt-1 bg-base-200 rounded-box w-52 p-2 shadow-xl z-[100]">
+							<li><a href="/search"   class={ templ.KV("active", active == "Search") }>🔍 Search</a></li>
+							<li><a href="/video"    class={ templ.KV("active", active == "Video") }>▶ Video</a></li>
+							<li><a href="/channel"  class={ templ.KV("active", active == "Channel") }>📡 Channel</a></li>
+							<li><a href="/playlist" class={ templ.KV("active", active == "Playlist") }>🎵 Playlist</a></li>
+						</ul>
+					</details>
+				</li>
+				<!-- Future: Browser Use -->
+			</ul>
+		</div>
+		<div class="navbar-end lg:hidden">
+			<!-- Mobile menu -->
+			<div class="dropdown dropdown-end">
+				<div tabindex="0" role="button" class="btn btn-ghost btn-circle">
+					<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+					</svg>
+				</div>
+				<ul tabindex="0" class="menu menu-sm dropdown-content bg-base-200 rounded-box z-50 mt-3 w-52 p-2 shadow-xl">
+					<li class="menu-title">YouTube Content Search</li>
+					<li><a href="/search"   class={ templ.KV("active", active == "Search") }>🔍 Search</a></li>
+					<li><a href="/video"    class={ templ.KV("active", active == "Video") }>▶ Video</a></li>
+					<li><a href="/channel"  class={ templ.KV("active", active == "Channel") }>📡 Channel</a></li>
+					<li><a href="/playlist" class={ templ.KV("active", active == "Playlist") }>🎵 Playlist</a></li>
 				</ul>
-			</li>
-			<!-- Future: Browser Use -->
-		</ul>
-		<label for="mobile-toggle" class="mobile-menu-btn" aria-label="Menu">
-			<span></span><span></span><span></span>
-		</label>
-	</nav>
+			</div>
+		</div>
+	</div>
 }
 
 templ Footer() {
-	<footer class="footer">
-		<p class="footer-text">
-			Built by <a href="https://github.com/rafaelcoelho1409" class="footer-link" target="_blank" rel="noopener">Rafael Coelho</a> · Powered by Go + Templ + HTMX
+	<footer class="footer footer-center p-4 bg-base-200 text-base-content border-t border-base-300 mt-auto">
+		<p class="text-sm opacity-60">
+			Built by <a href="https://github.com/rafaelcoelho1409" class="link link-primary" target="_blank" rel="noopener">Rafael Coelho</a> · Powered by Go + Templ + HTMX
 		</p>
 	</footer>
 }

@@ -19,6 +19,7 @@ build:
         manual:
           - src: "**/*.py"
             dest: /app
+            strip: ""
     # Go + Templ + HTMX web frontend
     - image: coelhonexus-web
       context: apps/web
@@ -29,10 +30,13 @@ build:
         manual:
           - src: "static/**"
             dest: /app/static
+            strip: "static/"
           - src: "**/*.go"
             dest: /app
+            strip: ""
           - src: "**/*.templ"
             dest: /app
+            strip: ""
   local:
     push: true  # Push to k3d registry (localhost:5002)
     tryImportMissing: true
@@ -48,9 +52,10 @@ manifests:
         namespace: coelhonexus
         createNamespace: true
         skipBuildDependencies: true  # Dependencies already downloaded
-        # No setValueTemplates needed - all image config is in values.yaml
-        # FastAPI uses coelhonexus-registry:5000 (cluster internal access)
-        # with 'latest' tag and imagePullPolicy: Always
+        # Override image names so Skaffold can match pods for file sync
+        setValueTemplates:
+          fastapi.image: "{{.IMAGE_FULLY_QUALIFIED_coelhonexus_fastapi}}"
+          web.image: "{{.IMAGE_FULLY_QUALIFIED_coelhonexus_web}}"
 
 deploy:
   helm:

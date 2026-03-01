@@ -8,7 +8,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends procps curl && \
     rm -rf /var/lib/apt/lists/* && \
     go install github.com/a-h/templ/cmd/templ@v0.3.865 && \
-    go install github.com/air-verse/air@latest
+    go install github.com/air-verse/air@v1.61.7
 
 # Copy dependency files first (for layer caching)
 COPY go.mod go.sum ./
