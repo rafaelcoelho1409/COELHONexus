@@ -17,14 +17,14 @@ Usage: {{ include "coelhonexus.imageName" (dict "appName" "fastapi" "root" .) }}
 
 
 {{/*
-Common environment variables for all services
+Common environment variables for all services (non-sensitive)
+Credentials are loaded from secret via secretRef
 */}}
 {{- define "coelhonexus.commonEnvVars" -}}
 FASTAPI_HOST: "coelhonexus-fastapi"
-REDIS_HOST: "redis://coelhonexus-redis-master:6379"
-MINIO_HOST: "coelhonexus-minio"
-MINIO_ACCESS_KEY: "{{ .Values.minio.rootUser }}"
-MINIO_SECRET_KEY: "{{ .Values.minio.rootPassword }}"
+REDIS_URL: "redis://{{ .Values.redis.host }}:{{ .Values.redis.port }}"
+MINIO_HOST: "{{ .Values.minio.host }}"
+MINIO_PORT: "{{ .Values.minio.port }}"
 {{- end -}}
 
 
@@ -123,6 +123,9 @@ template:
         envFrom:
           - configMapRef:
               name: coelhonexus-{{ .appName }}-configmap
+          - secretRef:
+              name: {{ .root.Values.secretName }}
+              optional: true
 {{- end -}}
 
 
