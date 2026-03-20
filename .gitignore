@@ -32,12 +32,6 @@ logs/*
 .idea/
 .DS_Store
 
-# Data
-data/clustering/raw/*
-data/clustering/transformed/*
-data/recommendation/raw/*
-data/recommendation/transformed/*
-
 # =============================================================================
 # Terraform / K3D
 # =============================================================================
@@ -64,10 +58,6 @@ terraform.tfvars
 # Kubeconfig (sensitive credentials)
 kubeconfig
 **/kubeconfig
-
-# K3D/Kubernetes persistent data
-data/minio/
-data/postgresql/
 
 # Crash logs
 crash.log

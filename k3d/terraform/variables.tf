@@ -69,14 +69,4 @@ variable "rancher_bootstrap_password" {
   sensitive   = true
 }
 
-# Storage Configuration
-# Volume mounts are computed dynamically in main.tf using project_root
-variable "volume_mounts" {
-  description = "Host volumes to mount into the cluster for persistent storage (computed from project root)"
-  type = list(object({
-    host_path      = string
-    container_path = string
-    node_filter    = string
-  }))
-  default = null  # Will be computed in main.tf if not provided
-}
+# Note: Local volume mounts removed - databases are hosted on COELHO Cloud
