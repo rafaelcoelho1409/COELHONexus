@@ -20,6 +20,23 @@ build:
           - src: "**/*.py"
             dest: /app
             strip: ""
+    # Web frontend (Go + Templ + HTMX + PWA)
+    - image: coelhonexus-web
+      context: apps/web
+      docker:
+        dockerfile: Dockerfile.web
+        noCache: true
+      sync:
+        manual:
+          - src: "**/*.go"
+            dest: /app
+            strip: ""
+          - src: "**/*.templ"
+            dest: /app
+            strip: ""
+          - src: "static/**/*"
+            dest: /app/static
+            strip: "static/"
   local:
     push: true  # Push to COELHOCloud registry (localhost:5000)
     tryImportMissing: true
@@ -57,8 +74,15 @@ portForward:
     port: 8000
     localPort: 23000
     address: 0.0.0.0
+  # Web frontend
+  - resourceType: service
+    resourceName: coelhonexus-web
+    namespace: coelhonexus
+    port: 3000
+    localPort: 23001
+    address: 0.0.0.0
 
 
 # NOTE: Ensure docker-buildx is installed when useBuildkit is true
-# sh mirror_localhost_tailscale.sh $(for i in {23000..23001}; do echo $i; done)
+# sh mirror_localhost_tailscale.sh $(for i in {23000..23002}; do echo $i; done)
 # skaffold dev --cache-artifacts=false --no-prune=false

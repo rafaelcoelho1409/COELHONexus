@@ -1,0 +1,84 @@
+package pages
+
+templ Graphs() {
+	<div class="page graphs-page">
+		<header class="page-header">
+			<h1>Knowledge Graph</h1>
+			<p class="page-subtitle">Visualize entities and relationships extracted from YouTube content</p>
+		</header>
+		<div class="graphs-layout">
+			<!-- Graph Controls -->
+			<div class="card graph-controls">
+				<h2 class="card-title">Graph Controls</h2>
+				<div class="form-group">
+					<label class="form-label">View Mode</label>
+					<select class="form-select" id="graph-view-mode">
+						<option value="knowledge">Knowledge Graph</option>
+						<option value="workflow">Agent Workflow</option>
+					</select>
+				</div>
+				<div class="form-group">
+					<label class="form-label">Layout</label>
+					<select class="form-select" id="graph-layout">
+						<option value="force">Force-Directed</option>
+						<option value="hierarchical">Hierarchical</option>
+						<option value="circular">Circular</option>
+					</select>
+				</div>
+				<div class="graph-stats">
+					<div class="stat-item">
+						<span class="stat-label">Nodes</span>
+						<span class="stat-value" id="node-count">0</span>
+					</div>
+					<div class="stat-item">
+						<span class="stat-label">Edges</span>
+						<span class="stat-value" id="edge-count">0</span>
+					</div>
+				</div>
+				<div class="form-actions">
+					<button class="btn btn-outline btn-sm">
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+							<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+							<polyline points="7 10 12 15 17 10"></polyline>
+							<line x1="12" y1="15" x2="12" y2="3"></line>
+						</svg>
+						Export Graph
+					</button>
+					<button class="btn btn-outline btn-sm btn-danger">
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+							<polyline points="3 6 5 6 21 6"></polyline>
+							<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+						</svg>
+						Clear Graph
+					</button>
+				</div>
+			</div>
+			<!-- Graph Visualization -->
+			<div class="card graph-container">
+				<div id="graph-visualization" class="graph-canvas">
+					<div class="empty-state">
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+							<circle cx="18" cy="18" r="3"></circle>
+							<circle cx="6" cy="6" r="3"></circle>
+							<circle cx="6" cy="18" r="3"></circle>
+							<path d="M6 9v6"></path>
+							<path d="M9 6h6a3 3 0 0 1 3 3v6"></path>
+						</svg>
+						<p>No graph data available</p>
+						<p class="text-muted">Search for YouTube content to build a knowledge graph</p>
+						<a href="/search" class="btn btn-primary btn-sm">Start Searching</a>
+					</div>
+				</div>
+			</div>
+			<!-- Entity Details Panel -->
+			<div class="card entity-panel">
+				<h2 class="card-title">Entity Details</h2>
+				<div id="entity-details" class="entity-content">
+					<div class="empty-state small">
+						<p>Select a node to view details</p>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+}

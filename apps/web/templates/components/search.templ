@@ -1,0 +1,194 @@
+package components
+
+import "strconv"
+
+type SearchResult struct {
+	Title     string
+	Channel   string
+	Views     string
+	Duration  string
+	Thumbnail string
+	VideoID   string
+}
+
+templ SearchForm(searchType string) {
+	<form
+		hx-post="/api/search"
+		hx-target="#chat-container"
+		hx-swap="innerHTML"
+		hx-indicator="#search-indicator"
+	>
+		<input type="hidden" name="search_type" value={ searchType }/>
+		<div class="form-group">
+			<label class="form-label">Context to Search</label>
+			<textarea
+				name="query"
+				class="form-textarea"
+				rows="3"
+				placeholder="Describe what you're looking for..."
+				required
+			></textarea>
+		</div>
+		if searchType == "search" {
+			<!-- General Search Options -->
+			<div class="form-row">
+				<div class="form-group">
+					<label class="form-label">Max Videos</label>
+					<input type="number" name="max_videos" class="form-input" value="5" min="1" max="20"/>
+				</div>
+				<div class="form-group">
+					<label class="form-label">Upload Date</label>
+					<select name="upload_date" class="form-select">
+						<option value="">Any time</option>
+						<option value="hour">Last hour</option>
+						<option value="today">Today</option>
+						<option value="week">This week</option>
+						<option value="month">This month</option>
+						<option value="year">This year</option>
+					</select>
+				</div>
+			</div>
+			<div class="form-row">
+				<div class="form-group">
+					<label class="form-label">Duration</label>
+					<select name="duration" class="form-select">
+						<option value="">Any</option>
+						<option value="short">Under 4 min</option>
+						<option value="medium">4-20 min</option>
+						<option value="long">Over 20 min</option>
+					</select>
+				</div>
+				<div class="form-group">
+					<label class="form-label">Sort By</label>
+					<select name="sort_by" class="form-select">
+						<option value="relevance">Relevance</option>
+						<option value="date">Upload Date</option>
+						<option value="viewCount">View Count</option>
+						<option value="rating">Rating</option>
+					</select>
+				</div>
+			</div>
+			<div class="form-group">
+				<label class="form-label">Features</label>
+				<div class="checkbox-group">
+					<label class="checkbox-label">
+						<input type="checkbox" name="features" value="hd"/>
+						<span>HD</span>
+					</label>
+					<label class="checkbox-label">
+						<input type="checkbox" name="features" value="cc"/>
+						<span>Subtitles/CC</span>
+					</label>
+					<label class="checkbox-label">
+						<input type="checkbox" name="features" value="4k"/>
+						<span>4K</span>
+					</label>
+					<label class="checkbox-label">
+						<input type="checkbox" name="features" value="live"/>
+						<span>Live</span>
+					</label>
+				</div>
+			</div>
+		}
+		if searchType == "video" {
+			<div class="form-group">
+				<label class="form-label">Video URL</label>
+				<input
+					type="url"
+					name="video_url"
+					class="form-input"
+					placeholder="https://www.youtube.com/watch?v=..."
+					required
+				/>
+			</div>
+		}
+		if searchType == "channel" {
+			<div class="form-group">
+				<label class="form-label">Channel URL</label>
+				<input
+					type="url"
+					name="channel_url"
+					class="form-input"
+					placeholder="https://www.youtube.com/@channel"
+					required
+				/>
+			</div>
+			<div class="form-group">
+				<label class="form-label">Max Videos</label>
+				<input type="number" name="max_videos" class="form-input" value="5" min="1" max="50"/>
+			</div>
+		}
+		if searchType == "playlist" {
+			<div class="form-group">
+				<label class="form-label">Playlist URL</label>
+				<input
+					type="url"
+					name="playlist_url"
+					class="form-input"
+					placeholder="https://www.youtube.com/playlist?list=..."
+					required
+				/>
+			</div>
+			<div class="form-group">
+				<label class="form-label">Max Videos</label>
+				<input type="number" name="max_videos" class="form-input" value="5" min="1" max="50"/>
+			</div>
+		}
+		<div class="form-actions">
+			<button type="submit" class="btn btn-primary btn-lg">
+				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+					<circle cx="11" cy="11" r="8"></circle>
+					<line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+				</svg>
+				Search & Analyze
+			</button>
+		</div>
+		<div id="search-indicator" class="htmx-indicator">
+			<div class="spinner"></div>
+			<span>Processing...</span>
+		</div>
+	</form>
+}
+
+templ SearchResults(results []SearchResult, searchType string, query string) {
+	<div class="chat-message assistant">
+		<div class="message-avatar">
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+				<path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+				<path d="M2 17l10 5 10-5"></path>
+				<path d="M2 12l10 5 10-5"></path>
+			</svg>
+		</div>
+		<div class="message-content">
+			<div class="message-header">
+				<span class="message-role">COELHO Nexus</span>
+				<span class="message-time">Just now</span>
+			</div>
+			<div class="search-results-header">
+				<h3>Search Results for "{ query }"</h3>
+				<span class="result-count">{ strconv.Itoa(len(results)) } videos found</span>
+			</div>
+			if len(results) > 0 {
+				<div class="video-results-grid">
+					for _, result := range results {
+						<div class="video-card">
+							<div class="video-thumbnail">
+								<img src={ result.Thumbnail } alt={ result.Title }/>
+								<span class="video-duration">{ result.Duration }</span>
+							</div>
+							<div class="video-info">
+								<h4 class="video-title">{ result.Title }</h4>
+								<p class="video-channel">{ result.Channel }</p>
+								<p class="video-views">{ result.Views }</p>
+							</div>
+						</div>
+					}
+				</div>
+			} else {
+				<div class="no-results">
+					<p>No videos found matching your criteria.</p>
+				</div>
+			}
+		</div>
+	</div>
+}

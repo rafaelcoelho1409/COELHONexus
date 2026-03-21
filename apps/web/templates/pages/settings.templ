@@ -1,0 +1,102 @@
+package pages
+
+templ Settings() {
+	<div class="page settings-page">
+		<header class="page-header">
+			<h1>Settings</h1>
+			<p class="page-subtitle">Configure LLM providers and application settings</p>
+		</header>
+		<div class="settings-grid">
+			<!-- LLM Configuration -->
+			<div class="card span-2">
+				<h2 class="card-title">LLM Configuration</h2>
+				<form
+					hx-post="/api/settings/save"
+					hx-target="#settings-status"
+					hx-swap="innerHTML"
+				>
+					<div class="form-row">
+						<div class="form-group">
+							<label class="form-label">Framework</label>
+							<select name="framework" class="form-select">
+								<option value="groq">Groq</option>
+								<option value="ollama">Ollama</option>
+								<option value="openai">OpenAI</option>
+								<option value="sambanova">SambaNova</option>
+								<option value="nvidia">NVIDIA NIM</option>
+							</select>
+						</div>
+						<div class="form-group">
+							<label class="form-label">Model</label>
+							<select name="model" class="form-select">
+								<option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
+								<option value="llama-3.1-8b-instant">llama-3.1-8b-instant</option>
+								<option value="mixtral-8x7b-32768">mixtral-8x7b-32768</option>
+							</select>
+						</div>
+					</div>
+					<div class="form-group">
+						<label class="form-label">Temperature: <span id="temp-value">0.7</span></label>
+						<input
+							type="range"
+							name="temperature"
+							class="form-range"
+							min="0"
+							max="1"
+							step="0.01"
+							value="0.7"
+							oninput="document.getElementById('temp-value').textContent = this.value"
+						/>
+					</div>
+					<div class="form-group">
+						<label class="form-label">API Key</label>
+						<input type="password" name="api_key" class="form-input" placeholder="Enter API key..."/>
+					</div>
+					<div class="form-actions">
+						<button type="submit" class="btn btn-primary">Save Configuration</button>
+					</div>
+					<div id="settings-status"></div>
+				</form>
+			</div>
+			<!-- Neo4j Configuration -->
+			<div class="card">
+				<h2 class="card-title">Neo4j Connection</h2>
+				<form>
+					<div class="form-group">
+						<label class="form-label">URI</label>
+						<input type="text" name="neo4j_uri" class="form-input" placeholder="bolt://localhost:7687"/>
+					</div>
+					<div class="form-group">
+						<label class="form-label">Username</label>
+						<input type="text" name="neo4j_user" class="form-input" placeholder="neo4j"/>
+					</div>
+					<div class="form-group">
+						<label class="form-label">Password</label>
+						<input type="password" name="neo4j_password" class="form-input" placeholder="password"/>
+					</div>
+					<div class="form-actions">
+						<button type="button" class="btn btn-outline">Test Connection</button>
+					</div>
+				</form>
+			</div>
+			<!-- Application Settings -->
+			<div class="card">
+				<h2 class="card-title">Application</h2>
+				<form>
+					<div class="form-group">
+						<label class="form-label">Max Videos per Search</label>
+						<input type="number" name="max_videos" class="form-input" value="5" min="1" max="20"/>
+					</div>
+					<div class="form-group">
+						<label class="form-label">Chunk Size (tokens)</label>
+						<input type="number" name="chunk_size" class="form-input" value="512"/>
+					</div>
+					<div class="form-group">
+						<label class="form-label">Chunk Overlap</label>
+						<input type="number" name="chunk_overlap" class="form-input" value="24"/>
+					</div>
+				</form>
+			</div>
+		</div>
+	</div>
+}

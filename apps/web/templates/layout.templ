@@ -1,0 +1,99 @@
+package templates
+
+templ Layout(contents templ.Component) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<meta name="description" content="COELHO Nexus - YouTube Content Search with Knowledge Graphs"/>
+			<meta name="theme-color" content="#0f0f23"/>
+			<title>COELHO Nexus</title>
+			<!-- PWA -->
+			<link rel="manifest" href="/manifest.json"/>
+			<link rel="icon" type="image/png" href="/static/icons/icon-192.png"/>
+			<link rel="apple-touch-icon" href="/static/icons/icon-192.png"/>
+			<!-- Styles -->
+			<link rel="stylesheet" href="/static/css/main.css"/>
+			<!-- HTMX -->
+			<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+			<script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
+		</head>
+		<body hx-boost="true">
+			<div class="app-container">
+				@Sidebar()
+				<main class="main-content">
+					@contents
+				</main>
+			</div>
+			<!-- PWA Service Worker -->
+			<script>
+				if ('serviceWorker' in navigator) {
+					navigator.serviceWorker.register('/sw.js');
+				}
+			</script>
+		</body>
+	</html>
+}
+
+templ Sidebar() {
+	<aside class="sidebar">
+		<div class="sidebar-header">
+			<div class="logo">
+				<svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+					<path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+					<path d="M2 17l10 5 10-5"></path>
+					<path d="M2 12l10 5 10-5"></path>
+				</svg>
+				<span class="logo-text">COELHO Nexus</span>
+			</div>
+			<p class="subtitle">YouTube Content Search</p>
+		</div>
+		<nav class="sidebar-nav">
+			<a href="/" class="nav-item" hx-boost="true">
+				<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+					<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+					<polyline points="9 22 9 12 15 12 15 22"></polyline>
+				</svg>
+				<span>Home</span>
+			</a>
+			<a href="/search" class="nav-item" hx-boost="true">
+				<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+					<circle cx="11" cy="11" r="8"></circle>
+					<line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+				</svg>
+				<span>Search</span>
+			</a>
+			<a href="/graphs" class="nav-item" hx-boost="true">
+				<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+					<circle cx="18" cy="18" r="3"></circle>
+					<circle cx="6" cy="6" r="3"></circle>
+					<path d="M13 6h3a2 2 0 0 1 2 2v7"></path>
+					<line x1="6" y1="9" x2="6" y2="21"></line>
+				</svg>
+				<span>Knowledge Graph</span>
+			</a>
+			<a href="/settings" class="nav-item" hx-boost="true">
+				<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+					<circle cx="12" cy="12" r="3"></circle>
+					<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+				</svg>
+				<span>Settings</span>
+			</a>
+		</nav>
+		<div class="sidebar-footer">
+			<button
+				class="btn btn-outline btn-sm"
+				hx-delete="/api/memory/clear"
+				hx-confirm="Clear all conversation memory?"
+			>
+				<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+					<polyline points="3 6 5 6 21 6"></polyline>
+					<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+				</svg>
+				Clear Memory
+			</button>
+			<p class="version">v0.1.0</p>
+		</div>
+	</aside>
+}
