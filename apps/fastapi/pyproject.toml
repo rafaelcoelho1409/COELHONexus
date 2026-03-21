@@ -7,14 +7,11 @@ dependencies = [
     # HTTP API
     "fastapi",
     "uvicorn",
-    "prometheus-fastapi-instrumentator",
     "pydantic",
     "starlette",
-    "langchain-groq",
+    "deepagents",
+    "langchain",
     "langchain-openai",
-    "langchain-nvidia-ai-endpoints",
-    "langchain-google-genai",
-    "google-generativeai",
 ]
 
 [build-system]

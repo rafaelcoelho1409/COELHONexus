@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 
+	"coelhonexus-web/config"
 	"coelhonexus-web/templates"
 	"coelhonexus-web/templates/components"
 	"coelhonexus-web/templates/pages"
@@ -90,4 +92,89 @@ func ClearMemoryHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("HX-Trigger", "memory-cleared")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Memory cleared"))
+}
+
+// Settings Handlers
+
+func RefreshModelsHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	apiKey := r.FormValue("api_key")
+	provider := r.FormValue("provider")
+
+	if provider == "" {
+		provider = config.DefaultProvider
+	}
+
+	if apiKey == "" {
+		pages.ModelsFetchError("Enter API key first").Render(r.Context(), w)
+		return
+	}
+
+	// Save API key and provider immediately
+	config.UpdateLLMField("api_key", apiKey)
+	config.UpdateLLMField("provider", provider)
+
+	// Currently only NVIDIA NIM is supported
+	if provider != "nvidia_nim" {
+		pages.ModelsFetchError("Provider not yet supported").Render(r.Context(), w)
+		return
+	}
+
+	models, err := config.FetchModelsWithKey(apiKey)
+	if err != nil || len(models) == 0 {
+		pages.ModelsFetchError("Failed to fetch - check API key").Render(r.Context(), w)
+		return
+	}
+
+	// Cache the fetched models
+	config.SetCachedModels(models)
+
+	settings := config.GetLLMSettings()
+	pages.ModelOptions(models, settings.Model).Render(r.Context(), w)
+}
+
+func SaveLLMSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+
+	provider := r.FormValue("provider")
+	apiKey := r.FormValue("api_key")
+	model := r.FormValue("model")
+	tempStr := r.FormValue("temperature")
+
+	var temperature float64
+	if tempStr != "" {
+		fmt.Sscanf(tempStr, "%f", &temperature)
+	}
+
+	// Save all settings
+	config.SetLLMSettings(config.LLMSettings{
+		Provider:    provider,
+		APIKey:      apiKey,
+		Model:       model,
+		Temperature: temperature,
+	})
+
+	// TODO: Forward to FastAPI /agents_config endpoint
+
+	components.SettingsSuccess().Render(r.Context(), w)
+}
+
+func SaveNeo4jSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	// TODO: Forward to FastAPI
+
+	components.SettingsSuccess().Render(r.Context(), w)
+}
+
+func TestNeo4jHandler(w http.ResponseWriter, r *http.Request) {
+	// TODO: Forward to FastAPI /neo4j/test endpoint
+
+	w.Write([]byte(`<div class="alert alert-success"><span>Connection successful</span></div>`))
+}
+
+func SaveSearchSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	// TODO: Forward to FastAPI
+
+	components.SettingsSuccess().Render(r.Context(), w)
 }

@@ -33,12 +33,22 @@ func main() {
 	r.Get("/settings", handlers.SettingsPage)
 	r.Get("/graphs", handlers.GraphsPage)
 
-	// HTMX partials
+	// HTMX partials - Search
 	r.Post("/api/search", handlers.SearchHandler)
 	r.Post("/api/search/form", handlers.SearchFormPartial)
+
+	// HTMX partials - Chat
 	r.Get("/api/chat/messages", handlers.ChatMessagesPartial)
 	r.Post("/api/chat/send", handlers.ChatSendHandler)
-	r.Post("/api/settings/save", handlers.SettingsSaveHandler)
+
+	// HTMX partials - Settings (NVIDIA NIM)
+	r.Post("/api/settings/models/refresh", handlers.RefreshModelsHandler)
+	r.Post("/api/settings/llm", handlers.SaveLLMSettingsHandler)
+	r.Post("/api/settings/neo4j", handlers.SaveNeo4jSettingsHandler)
+	r.Post("/api/settings/neo4j/test", handlers.TestNeo4jHandler)
+	r.Post("/api/settings/search", handlers.SaveSearchSettingsHandler)
+
+	// Memory
 	r.Delete("/api/memory/clear", handlers.ClearMemoryHandler)
 
 	// Health check

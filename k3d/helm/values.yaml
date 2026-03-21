@@ -3,9 +3,10 @@
 # 'production' = ArgoCD with k3d built-in registry
 environment: local
 
-# Monitoring - ServiceMonitors for COELHOCloud's Prometheus
-monitoring:
-  enabled: true
+# Observability - OpenTelemetry to Grafana Alloy + LGTM
+observability:
+  enabled: false
+  otlp_endpoint: "alloy.monitoring:4317"
 
 # External services (COELHOCloud infrastructure)
 # Credentials are loaded from coelhonexus-secret (upload via upload_env_to_k3d.sh)

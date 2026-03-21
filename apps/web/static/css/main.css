@@ -449,8 +449,35 @@ body {
   accent-color: var(--color-primary);
 }
 
+.form-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.link {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+.link:hover {
+  color: var(--color-primary-light);
+  text-decoration: underline;
+}
+
+.input-with-action {
+  display: flex;
+  gap: 8px;
+}
+
+.input-with-action .form-input {
+  flex: 1;
+}
+
 .form-actions {
   margin-top: 20px;
+  display: flex;
+  gap: 8px;
 }
 
 /* Buttons */

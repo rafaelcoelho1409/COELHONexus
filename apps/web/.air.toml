@@ -1,49 +1,24 @@
-# Air configuration for hot-reload
+# Air hot-reload configuration
 root = "."
 tmp_dir = "tmp"
 
 [build]
-# Command to build the application
+# Regenerate templ and build
 cmd = "templ generate && go build -o ./tmp/main ."
-# Binary file to run
 bin = "./tmp/main"
-# Watch these file extensions
-include_ext = ["go", "templ", "html", "css", "js"]
+# Watch these extensions
+include_ext = ["go", "templ"]
 # Exclude directories
-exclude_dir = ["tmp", "vendor", ".git"]
-# Exclude files
-exclude_file = []
-# Exclude regex patterns
-exclude_regex = ["_test.go"]
-# Delay before rebuilding (ms)
-delay = 1000
-# Stop running old binary before building
+exclude_dir = ["tmp", "static"]
+# Delay before rebuild (ms)
+delay = 500
+# Stop old binary before building
 stop_on_error = true
-# Send interrupt signal before killing
 send_interrupt = true
-# Delay after sending interrupt (ms)
 kill_delay = 500
-# Log file (empty for stdout)
-log = ""
-# Rerun binary when build fails
-rerun = false
-# Rerun delay (ms)
-rerun_delay = 500
 
 [log]
-# Show log time
 time = false
-# Only show main log
-main_only = false
-
-[color]
-# Build message color
-build = "yellow"
-# Runner message color
-runner = "green"
-# Watcher message color
-watcher = "cyan"
 
 [misc]
-# Delete tmp directory on exit
 clean_on_exit = true

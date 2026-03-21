@@ -25,18 +25,18 @@ build:
       context: apps/web
       docker:
         dockerfile: Dockerfile.web
-        noCache: true
+        noCache: false
       sync:
         manual:
+          - src: "static/**"
+            dest: /app/static
+            strip: "static/"
           - src: "**/*.go"
             dest: /app
             strip: ""
           - src: "**/*.templ"
             dest: /app
             strip: ""
-          - src: "static/**/*"
-            dest: /app/static
-            strip: "static/"
   local:
     push: true  # Push to COELHOCloud registry (localhost:5000)
     tryImportMissing: true
@@ -51,10 +51,11 @@ manifests:
         chartPath: ./k3d/helm
         namespace: coelhonexus
         createNamespace: true
-        skipBuildDependencies: true  # Dependencies already downloaded
-        # No setValueTemplates needed - all image config is in values.yaml
-        # FastAPI uses coelhocloud-registry:5000 (cluster internal access)
-        # with 'latest' tag and imagePullPolicy: Always
+        skipBuildDependencies: true
+        # Enable Skaffold image tracking for hot-reload sync
+        setValueTemplates:
+          fastapi.image: "{{.IMAGE_FULLY_QUALIFIED_coelhonexus_fastapi}}"
+          web.image: "{{.IMAGE_FULLY_QUALIFIED_coelhonexus_web}}"
 
 deploy:
   helm:

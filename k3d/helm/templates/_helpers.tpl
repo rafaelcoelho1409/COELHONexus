@@ -1,18 +1,10 @@
 {{/*
-Generate image name based on environment
+Generate image name
 Usage: {{ include "coelhonexus.imageName" (dict "appName" "fastapi" "root" .) }}
+Images are specified with full registry path in values.yaml
 */}}
 {{- define "coelhonexus.imageName" -}}
-{{- $image := index .root.Values .appName "image" -}}
-{{- if eq .root.Values.environment "production" -}}
-  {{- if not (hasPrefix .root.Values.registry.url $image) -}}
-    {{- printf "%s/%s" .root.Values.registry.url $image -}}
-  {{- else -}}
-    {{- $image -}}
-  {{- end -}}
-{{- else -}}
-  {{- $image -}}
-{{- end -}}
+{{- index .root.Values .appName "image" -}}
 {{- end -}}
 
 

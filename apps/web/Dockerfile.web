@@ -1,29 +1,29 @@
-# Single-stage Dockerfile for Skaffold file sync with hot-reload
+# Single-stage Dockerfile for Skaffold file sync
 FROM golang:1.23-alpine
 
-# Install dependencies
-RUN apk add --no-cache git bash
+# Install system dependencies
+RUN apk add --no-cache git
 
-# Install Air for hot-reload (pinned to version compatible with Go 1.23)
+# Install Air for hot-reload
 RUN go install github.com/air-verse/air@v1.61.7
 
-# Install Templ (pinned version)
+# Install Templ
 RUN go install github.com/a-h/templ/cmd/templ@v0.2.793
 
 WORKDIR /app
 
+# Copy dependency files first (for layer caching)
+COPY go.mod ./
+
 # Copy application code
 COPY . /app
 
-# Generate templ files first (creates _templ.go files)
-RUN templ generate
+# Generate templ files and ensure deps
+RUN templ generate && go mod tidy
 
-# Download dependencies and generate go.sum
-RUN go mod tidy
-
-# Build the application (for initial startup)
-RUN go build -o /app/server .
+# Create tmp directory for Air
+RUN mkdir -p /app/tmp
 
 EXPOSE 3000
 
-ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]
+ENTRYPOINT ["/bin/sh", "/app/entrypoint.sh"]
