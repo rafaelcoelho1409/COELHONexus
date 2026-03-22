@@ -1,75 +1,118 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
-
-	"coelhonexus-web/handlers"
-
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	"time"
 )
 
-func main() {
-	r := chi.NewRouter()
+// FastAPI client
+var fastAPIURL = getEnv("FASTAPI_URL", "http://coelhonexus-fastapi:8000")
+var httpClient = &http.Client{Timeout: 10 * time.Second}
 
-	// Middleware
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.Compress(5))
+func getEnv(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func main() {
+	mux := http.NewServeMux()
 
 	// Static files
-	fileServer := http.FileServer(http.Dir("static"))
-	r.Handle("/static/*", http.StripPrefix("/static/", fileServer))
-
-	// PWA files (must be at root)
-	r.Get("/manifest.json", serveFile("static/manifest.json"))
-	r.Get("/sw.js", serveFile("static/sw.js"))
-
-	// Pages
-	r.Get("/", handlers.HomePage)
-	r.Get("/search", handlers.SearchPage)
-	r.Get("/settings", handlers.SettingsPage)
-	r.Get("/graphs", handlers.GraphsPage)
-
-	// HTMX partials - Search
-	r.Post("/api/search", handlers.SearchHandler)
-	r.Post("/api/search/form", handlers.SearchFormPartial)
-
-	// HTMX partials - Chat
-	r.Get("/api/chat/messages", handlers.ChatMessagesPartial)
-	r.Post("/api/chat/send", handlers.ChatSendHandler)
-
-	// HTMX partials - Settings (NVIDIA NIM)
-	r.Post("/api/settings/models/refresh", handlers.RefreshModelsHandler)
-	r.Post("/api/settings/llm", handlers.SaveLLMSettingsHandler)
-	r.Post("/api/settings/neo4j", handlers.SaveNeo4jSettingsHandler)
-	r.Post("/api/settings/neo4j/test", handlers.TestNeo4jHandler)
-	r.Post("/api/settings/search", handlers.SaveSearchSettingsHandler)
-
-	// Memory
-	r.Delete("/api/memory/clear", handlers.ClearMemoryHandler)
+	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 
 	// Health check
-	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "3000"
-	}
+	// Home page - calls FastAPI /health
+	mux.HandleFunc("/", homeHandler)
 
-	log.Printf("Starting server on :%s", port)
-	if err := http.ListenAndServe(":"+port, r); err != nil {
+	// Test FastAPI connection
+	mux.HandleFunc("/api/test", testFastAPIHandler)
+
+	port := getEnv("PORT", "3000")
+	log.Printf("Web server starting on :%s", port)
+	log.Printf("FastAPI URL: %s", fastAPIURL)
+
+	if err := http.ListenAndServe(":"+port, mux); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func serveFile(filepath string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, filepath)
+func homeHandler(w http.ResponseWriter, r *http.Request) {
+	html := `<!DOCTYPE html>
+<html>
+<head>
+    <title>COELHO Nexus</title>
+    <link rel="stylesheet" href="/static/css/main.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+</head>
+<body>
+    <div class="app-container">
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <span class="logo-text">COELHO Nexus</span>
+                </div>
+                <p class="subtitle">YouTube Content Search</p>
+            </div>
+        </aside>
+        <main class="main-content">
+            <div class="page">
+                <header class="page-header">
+                    <h1>Welcome to COELHO Nexus</h1>
+                    <p class="page-subtitle">Building from scratch - Go + HTMX + FastAPI</p>
+                </header>
+                <div class="card">
+                    <h2 class="card-title">FastAPI Connection Test</h2>
+                    <button
+                        class="btn btn-primary"
+                        hx-get="/api/test"
+                        hx-target="#result"
+                        hx-swap="innerHTML"
+                    >
+                        Test FastAPI /health
+                    </button>
+                    <div id="result" style="margin-top: 16px;"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+</body>
+</html>`
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(html))
+}
+
+func testFastAPIHandler(w http.ResponseWriter, r *http.Request) {
+	// Call FastAPI /health endpoint
+	resp, err := httpClient.Get(fastAPIURL + "/health")
+	if err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprintf(w, `<div class="alert" style="background:#fed7d7;color:#c53030;padding:12px;border-radius:4px;">
+			Error connecting to FastAPI: %s
+		</div>`, err.Error())
+		return
 	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	var result map[string]interface{}
+	json.Unmarshal(body, &result)
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, `<div class="alert" style="background:#c6f6d5;color:#276749;padding:12px;border-radius:4px;">
+		<strong>FastAPI is healthy!</strong><br>
+		Response: %s
+	</div>`, string(body))
 }

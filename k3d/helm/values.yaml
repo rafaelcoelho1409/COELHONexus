@@ -8,18 +8,46 @@ observability:
   enabled: false
   otlp_endpoint: "alloy.monitoring:4317"
 
-# External services (COELHOCloud infrastructure)
+# External services (COELHOCloud infrastructure via Tailscale)
 # Credentials are loaded from coelhonexus-secret (upload via upload_env_to_k3d.sh)
 minio:
-  host: minio.minio
-  port: 9000
+  host: minio-api.YOUR_TAILNET_DOMAIN.ts.net
+  port: 443
+  endpoint: "https://minio-api.YOUR_TAILNET_DOMAIN.ts.net"
 
 redis:
-  host: redis-master.redis
+  # External access via Tailscale (WireGuard encrypted)
+  host: redis-tcp.YOUR_TAILNET_DOMAIN.ts.net
   port: 6379
+
+neo4j:
+  host: http://neo4j.YOUR_TAILNET_DOMAIN.ts.net
+  port: 7474
 
 # Secret containing credentials (created by upload_env_to_k3d.sh)
 secretName: coelhonexus-secret
+
+# Secret key mappings (upload_env_to_k3d.sh converts UPPER_CASE to lower-case)
+# Maps secret keys back to expected environment variable names
+secretMappings:
+  - envName: REDIS_PASSWORD
+    key: redis-password
+  - envName: NEO4J_USERNAME
+    key: neo4j-username
+  - envName: NEO4J_PASSWORD
+    key: neo4j-password
+  - envName: AWS_ACCESS_KEY_ID
+    key: aws-access-key-id
+  - envName: AWS_SECRET_ACCESS_KEY
+    key: aws-secret-access-key
+  - envName: OPENAI_API_KEY
+    key: openai-api-key
+  - envName: GROQ_API_KEY
+    key: groq-api-key
+  - envName: NVIDIA_API_KEY
+    key: nvidia-api-key
+  - envName: SAMBANOVA_API_KEY
+    key: sambanova-api-key
 
 # Registry configuration - uses COELHOCloud's k3d registry
 registry:

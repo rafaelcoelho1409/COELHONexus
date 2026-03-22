@@ -879,8 +879,201 @@ body {
   }
 }
 
+/* Modals */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.modal-content {
+  background: var(--bg-card);
+  border-radius: 8px;
+  max-width: 600px;
+  width: 100%;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-lg);
+}
+
+.modal-lg {
+  max-width: 900px;
+}
+
+.modal-xl {
+  max-width: 1200px;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 0;
+  line-height: 1;
+}
+
+.modal-close:hover {
+  color: var(--text-primary);
+}
+
+.modal-body {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* Graph Modals */
+.graphs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+.graph-card {
+  background: var(--bg-input);
+  border-radius: 6px;
+  padding: 16px;
+}
+
+.graph-card h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+}
+
+.graph-diagram {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.workflow-svg {
+  width: 100%;
+  max-width: 300px;
+  height: auto;
+}
+
+.graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 16px;
+  background: var(--bg-input);
+  border-radius: 6px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.legend-color {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+}
+
+/* Neo4j Canvas */
+.neo4j-canvas {
+  min-height: 500px;
+  background: var(--bg-input);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.graph-loading {
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.graph-loading .spinner {
+  margin: 0 auto 12px;
+}
+
+.graph-controls-bar {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* Additional Button Styles */
+.btn-block {
+  width: 100%;
+}
+
+.divider {
+  border: none;
+  border-top: 1px solid var(--border-color);
+  margin: 16px 0;
+}
+
+/* Properties List */
+.properties-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 12px;
+  font-size: 0.85rem;
+}
+
+.properties-list dt {
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.properties-list dd {
+  color: var(--text-primary);
+}
+
+/* Node Details */
+.node-details h4 {
+  font-size: 1rem;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* Text utilities */
+.text-muted {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
 /* Print styles */
 @media print {
   .sidebar { display: none; }
   .main-content { margin-left: 0; }
+  .modal-overlay { display: none; }
 }

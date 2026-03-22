@@ -1,8 +1,7 @@
 from fastapi import APIRouter, HTTPException
+from langchain_openai import ChatOpenAI
 
-from schemas.structures import (
-    ModelConfig
-)
+from schemas.structures import ModelConfig
 
 
 router = APIRouter()
@@ -22,7 +21,6 @@ model_config = ModelConfig(
     channel_url = None,
     playlist_url = None
     )
-
 
 # =============================================================================
 # Endpoints

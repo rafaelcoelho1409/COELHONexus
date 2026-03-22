@@ -9,9 +9,16 @@ dependencies = [
     "uvicorn",
     "pydantic",
     "starlette",
+    "python-dotenv",
     "deepagents",
     "langchain",
-    "langchain-openai",
+    "langgraph",
+    "langchain-openai",   # OpenAI, NVIDIA NIM, SambaNova
+    "langchain-groq",     # Groq
+    "langchain-ollama",   # Ollama (local)
+    "langgraph-checkpoint-redis",
+    "redis",
+    "neo4j",
 ]
 
 [build-system]

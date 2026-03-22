@@ -14,9 +14,11 @@ Credentials are loaded from secret via secretRef
 */}}
 {{- define "coelhonexus.commonEnvVars" -}}
 FASTAPI_HOST: "coelhonexus-fastapi"
-REDIS_URL: "redis://{{ .Values.redis.host }}:{{ .Values.redis.port }}"
+REDIS_HOST: "{{ .Values.redis.host }}"
+REDIS_PORT: "{{ .Values.redis.port }}"
 MINIO_HOST: "{{ .Values.minio.host }}"
 MINIO_PORT: "{{ .Values.minio.port }}"
+MINIO_ENDPOINT: "{{ .Values.minio.endpoint }}"
 {{- end -}}
 
 
@@ -115,9 +117,24 @@ template:
         envFrom:
           - configMapRef:
               name: coelhonexus-{{ .appName }}-configmap
-          - secretRef:
-              name: {{ .root.Values.secretName }}
-              optional: true
+        env:
+          {{- include "coelhonexus.secretEnvVars" .root | nindent 10 }}
+{{- end -}}
+
+
+{{/*
+Secret environment variables - maps secret keys to env var names
+Iterates over secretMappings defined in values.yaml
+*/}}
+{{- define "coelhonexus.secretEnvVars" -}}
+{{- range .Values.secretMappings }}
+- name: {{ .envName }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $.Values.secretName }}
+      key: {{ .key }}
+      optional: true
+{{- end }}
 {{- end -}}
 
 

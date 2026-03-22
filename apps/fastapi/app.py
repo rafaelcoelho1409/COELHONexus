@@ -1,9 +1,25 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 
 from routers.v1.youtube import agents as youtube_agents
 from routers.v1.youtube import models as youtube_models
+from routers.v1.youtube import search as youtube_search
+
+# =============================================================================
+# Configuration
+# =============================================================================
+REDIS_HOST = os.environ["REDIS_HOST"]
+REDIS_PORT = os.environ["REDIS_PORT"]
+REDIS_PASSWORD = os.environ["REDIS_PASSWORD"]
+
+# Build Redis URL with optional authentication
+if REDIS_PASSWORD:
+    REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}"
+else:
+    REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}"
 
 # =============================================================================
 # Lifespan (startup/shutdown)
@@ -12,9 +28,18 @@ from routers.v1.youtube import models as youtube_models
 async def lifespan(app: FastAPI):
     """Application lifespan handler for startup/shutdown tasks."""
     print("Starting FastAPI Service...", flush = True)
-    print("FastAPI startup complete.", flush = True)
-    yield
-    print("FastAPI shutting down...", flush = True)
+    app.state.config = {
+        "configurable": {"thread_id": "1"}
+    }
+    # Async Redis checkpointer - yield INSIDE context manager!
+    async with AsyncRedisSaver.from_conn_string(REDIS_URL) as checkpointer:
+        await checkpointer.setup()
+        app.state.checkpointer = checkpointer
+        print("Redis checkpointer initialized.", flush = True)
+        print("FastAPI startup complete.", flush = True)
+        yield  # App runs here - connection stays open
+        print("FastAPI shutting down...", flush = True)
+    print("Redis connection closed.", flush = True)
 
 
 # =============================================================================
@@ -43,13 +68,19 @@ app.add_middleware(
 app.include_router(
     youtube_agents.router,
     prefix = "/api/v1/youtube/agents",
-    tags = ["YouTube", "Agents"],
+    tags = ["YouTube"],
 )
 
 app.include_router(
-    youtube_agents.router,
+    youtube_models.router,
     prefix = "/api/v1/youtube/models",
-    tags = ["YouTube", "Models"],
+    tags = ["YouTube"],
+)
+
+app.include_router(
+    youtube_search.router,
+    prefix = "/api/v1/youtube/search",
+    tags = ["YouTube"],
 )
 
 

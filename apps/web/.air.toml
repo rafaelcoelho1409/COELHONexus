@@ -3,11 +3,11 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-# Regenerate templ and build
-cmd = "templ generate && go build -o ./tmp/main ."
+# Build Go binary (add templ generate when templates exist)
+cmd = "go build -o ./tmp/main ."
 bin = "./tmp/main"
 # Watch these extensions
-include_ext = ["go", "templ"]
+include_ext = ["go"]
 # Exclude directories
 exclude_dir = ["tmp", "static"]
 # Delay before rebuild (ms)

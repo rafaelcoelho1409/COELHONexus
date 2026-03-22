@@ -1,9 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from langchain_openai import ChatOpenAI
 
-from schemas.structures import (
-    AgentsConfig
-)
+from schemas.structures import AgentsConfig
 
 
 router = APIRouter()
@@ -16,7 +14,6 @@ agents_config = AgentsConfig(
     temperature_filter = None,
     model_name = None,
     api_key = {"api_key": None})
-
 
 # =============================================================================
 # Endpoints
