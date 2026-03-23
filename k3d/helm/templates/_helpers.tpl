@@ -19,6 +19,7 @@ REDIS_PORT: "{{ .Values.redis.port }}"
 MINIO_HOST: "{{ .Values.minio.host }}"
 MINIO_PORT: "{{ .Values.minio.port }}"
 MINIO_ENDPOINT: "{{ .Values.minio.endpoint }}"
+NEO4J_URI: "{{ .Values.neo4j.uri }}"
 {{- end -}}
 
 

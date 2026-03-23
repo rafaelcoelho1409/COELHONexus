@@ -19,10 +19,10 @@ RUN apt-get update && \
 # Copy dependency files first (for layer caching)
 COPY pyproject.toml ./
 
-# Install dependencies (cache mount for speed)
+# Install dependencies with CPU-only PyTorch
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv lock && \
-    uv sync --frozen --no-install-project --no-dev
+    uv sync --frozen --no-install-project --no-dev --extra cpu
 
 # Copy application code
 COPY . /app

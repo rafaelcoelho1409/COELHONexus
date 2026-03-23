@@ -2,10 +2,11 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+import redis.asyncio as redis_aio
+from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 
 from routers.v1.youtube import agents as youtube_agents
-from routers.v1.youtube import models as youtube_models
 from routers.v1.youtube import search as youtube_search
 
 # =============================================================================
@@ -28,8 +29,12 @@ else:
 async def lifespan(app: FastAPI):
     """Application lifespan handler for startup/shutdown tasks."""
     print("Starting FastAPI Service...", flush = True)
+    app.state.redis_aio = redis_aio.from_url(REDIS_URL)
     app.state.config = {
         "configurable": {"thread_id": "1"}
+    }
+    app.state.llm_framework = {
+        "NVIDIA": ChatOpenAI,
     }
     # Async Redis checkpointer - yield INSIDE context manager!
     async with AsyncRedisSaver.from_conn_string(REDIS_URL) as checkpointer:
@@ -39,6 +44,7 @@ async def lifespan(app: FastAPI):
         print("FastAPI startup complete.", flush = True)
         yield  # App runs here - connection stays open
         print("FastAPI shutting down...", flush = True)
+        await app.state.redis_aio.close()
     print("Redis connection closed.", flush = True)
 
 
@@ -68,12 +74,6 @@ app.add_middleware(
 app.include_router(
     youtube_agents.router,
     prefix = "/api/v1/youtube/agents",
-    tags = ["YouTube"],
-)
-
-app.include_router(
-    youtube_models.router,
-    prefix = "/api/v1/youtube/models",
     tags = ["YouTube"],
 )
 

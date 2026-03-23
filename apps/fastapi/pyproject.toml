@@ -10,20 +10,42 @@ dependencies = [
     "pydantic",
     "starlette",
     "python-dotenv",
+    # AI/ML
     "deepagents",
     "langchain",
     "langgraph",
-    "langchain-openai",   # OpenAI, NVIDIA NIM, SambaNova
-    "langchain-groq",     # Groq
-    "langchain-ollama",   # Ollama (local)
-    "langgraph-checkpoint-redis",
-    "redis",
+    "langchain-openai",        # OpenAI, NVIDIA NIM, SambaNova
+    "langchain-groq",          # Groq
+    "langchain-ollama",        # Ollama (local)
+    "langchain-huggingface",   # HuggingFace embeddings
+    "langchain-neo4j",         # Neo4j graph database
+    "langchain-experimental",  # LLMGraphTransformer
+    "sentence-transformers",   # Local embeddings (all-MiniLM-L6-v2)
+    # Storage
     "neo4j",
+    "redis",
+    "langgraph-checkpoint-redis",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[project.optional-dependencies]
+cpu = ["torch", "torchvision"]
+
 [dependency-groups]
 dev = []
+
+# =============================================================================
+# CPU-only PyTorch via extras
+# Usage: uv sync --extra cpu
+# =============================================================================
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", extra = "cpu" }]
+torchvision = [{ index = "pytorch-cpu", extra = "cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

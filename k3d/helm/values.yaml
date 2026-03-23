@@ -21,8 +21,9 @@ redis:
   port: 6379
 
 neo4j:
-  host: http://neo4j.YOUR_TAILNET_DOMAIN.ts.net
-  port: 7474
+  # External access via Tailscale (WireGuard encrypted)
+  uri: "bolt://neo4j.YOUR_TAILNET_DOMAIN.ts.net:7687"
+  # Credentials loaded from secret (NEO4J_USERNAME, NEO4J_PASSWORD)
 
 # Secret containing credentials (created by upload_env_to_k3d.sh)
 secretName: coelhonexus-secret

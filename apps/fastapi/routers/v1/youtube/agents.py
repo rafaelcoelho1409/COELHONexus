@@ -1,33 +1,29 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import (
+    APIRouter, 
+    HTTPException, 
+    Request
+)
 from langchain_openai import ChatOpenAI
 
-from schemas.structures import AgentsConfig
+from schemas.inputs import LLMConfig
 
 
 router = APIRouter()
 
-# =============================================================================
-# Variables
-# =============================================================================
-agents_config = AgentsConfig(
-    framework = None,
-    temperature_filter = None,
-    model_name = None,
-    api_key = {"api_key": None})
 
 # =============================================================================
 # Endpoints
 # =============================================================================
-@router.get("/config", response_model = AgentsConfig, response_model_exclude = {"api_key"})
-def get_agents_config():
-    return agents_config
+@router.put("/config")
+async def update_agents_config(config: LLMConfig, request: Request):
+    redis_aio = request.app.state.redis_aio
+    await redis_aio.json().set(
+        "coelhonexus:youtube:agents:config", 
+        "$", 
+        config.model_dump(exclude_none = True)
+    )
+    return {
+        "status": "saved", 
+        "config": config.model_dump(
+            exclude = {"api_key"})}
 
-@router.put("/config", response_model = AgentsConfig, response_model_exclude = {"api_key"})
-def update_agents_config(config: AgentsConfig):
-    agents_config.framework = config.framework
-    agents_config.temperature_filter = config.temperature_filter
-    agents_config.model_name = config.model_name
-    agents_config.api_key = config.api_key
-    for key, value in agents_config.api_key["api_key"].items():
-        os.environ[key] = value
-    return agents_config
