@@ -52,3 +52,8 @@ class YouTubeSearchConfig(BaseModel):
     video_ids: list[str] | None = None
     channel_id: str | None = None
     playlist_id: str | None = None
+
+
+class TranscriptionRequest(BaseModel):
+    video_ids: list[str]
+    languages: list[str] | None = None  # e.g. ["pt", "en"] - if None, uses first available

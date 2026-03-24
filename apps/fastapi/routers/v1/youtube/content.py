@@ -4,12 +4,19 @@ from fastapi import (
     HTTPException,
     Request
 )
-from pytubefix import YouTube, AsyncYouTube, Channel, Playlist
+from pytubefix import AsyncYouTube, Channel, Playlist
 from pytubefix.contrib.search import Search, Filter
+from youtube_transcript_api import YouTubeTranscriptApi
 
-from schemas.inputs import YouTubeSearchConfig
-from .helpers import build_filters, extract_video_metadata, extract_video_metadata_async
-
+from schemas.inputs import (
+    YouTubeSearchConfig,
+    TranscriptionRequest
+)
+from .helpers import (
+    build_filters, 
+    extract_video_metadata, 
+    extract_video_metadata_async
+)
 
 router = APIRouter()
 
@@ -195,3 +202,30 @@ async def search_youtube_playlist(request: Request):
             #"description": [v["description"] for v in videos],
         }
     }
+
+@router.post("/transcriptions")
+async def get_transcriptions(payload: TranscriptionRequest):
+    """Fetch transcriptions for multiple videos concurrently."""
+    def fetch_transcript(video_id: str, languages: list[str] | None) -> dict:
+        ytt_api = YouTubeTranscriptApi()
+        try:
+            if languages:
+                fetched = ytt_api.fetch(video_id, languages=languages)
+            else:
+                # Get first available transcript (any language)
+                transcript_list = ytt_api.list(video_id)
+                first_transcript = next(iter(transcript_list))
+                fetched = first_transcript.fetch()
+            return {
+                "video_id": video_id,
+                "language": fetched.language_code,
+                "page_content": " ".join([snippet.text for snippet in fetched])}
+        except Exception as e:
+            return {
+                "video_id": video_id,
+                "error": str(e)}
+    transcriptions = await asyncio.gather(*[
+        asyncio.to_thread(fetch_transcript, vid, payload.languages)
+        for vid in payload.video_ids
+    ])
+    return {"transcriptions": transcriptions}
