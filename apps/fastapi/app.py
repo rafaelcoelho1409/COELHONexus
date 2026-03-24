@@ -7,7 +7,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 
 from routers.v1.youtube import agents as youtube_agents
-from routers.v1.youtube import search as youtube_search
+from routers.v1.youtube import content as youtube_content
 
 # =============================================================================
 # Configuration
@@ -36,6 +36,29 @@ async def lifespan(app: FastAPI):
     app.state.llm_framework = {
         "NVIDIA": ChatOpenAI,
     }
+    # Load LLM config from Redis or use defaults
+    config_key = "coelhonexus:youtube:agents:config"
+    llm_config = await app.state.redis_aio.json().get(config_key)
+    if llm_config:
+        # Config exists - use it to instantiate LLM
+        provider = llm_config["provider"]
+        llm_class = app.state.llm_framework[provider]
+        app.state.llm = llm_class(
+            model = llm_config["model"],
+            temperature = llm_config["temperature"],
+            base_url = llm_config["base_url"],
+            api_key = llm_config["api_key"],
+        )
+        print(f"LLM loaded from Redis: {provider}/{llm_config['model']}", flush=True)
+    else:
+        # No config - use default
+        app.state.llm = ChatOpenAI(
+            model = "meta/llama-3.3-70b-instruct",
+            temperature = 0.0,
+            base_url = "https://integrate.api.nvidia.com/v1",
+            api_key = os.environ["NVIDIA_API_KEY"],
+        )
+        print("LLM loaded with defaults (NVIDIA/llama-3.3-70b)", flush = True)
     # Async Redis checkpointer - yield INSIDE context manager!
     async with AsyncRedisSaver.from_conn_string(REDIS_URL) as checkpointer:
         await checkpointer.setup()
@@ -78,8 +101,8 @@ app.include_router(
 )
 
 app.include_router(
-    youtube_search.router,
-    prefix = "/api/v1/youtube/search",
+    youtube_content.router,
+    prefix = "/api/v1/youtube/content",
     tags = ["YouTube"],
 )
 

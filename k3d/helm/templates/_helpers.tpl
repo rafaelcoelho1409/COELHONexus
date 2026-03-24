@@ -175,3 +175,26 @@ Selector labels
 app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+
+{{/*
+Probe settings - renders all probes (startup, liveness, readiness) for a container
+Usage: {{ include "coelhonexus.ProbeSettings" (dict "appName" "fastapi" "root" .) }}
+
+Probe execution order:
+1. startupProbe  - Runs ONLY during startup, disables liveness/readiness until success
+2. livenessProbe - Runs after startup succeeds, restarts pod on failure
+3. readinessProbe - Runs after startup succeeds, removes from Service on failure
+*/}}
+{{- define "coelhonexus.ProbeSettings" -}}
+{{- $appConfig := index .root.Values .appName -}}
+{{- if $appConfig.startupProbeSettings }}
+{{ toYaml $appConfig.startupProbeSettings }}
+{{- end }}
+{{- if $appConfig.livenessProbeSettings }}
+{{ toYaml $appConfig.livenessProbeSettings }}
+{{- end }}
+{{- if $appConfig.readinessProbeSettings }}
+{{ toYaml $appConfig.readinessProbeSettings }}
+{{- end }}
+{{- end -}}

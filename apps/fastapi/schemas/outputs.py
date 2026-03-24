@@ -22,3 +22,10 @@ class Entities(BaseModel):
         description = "All the person, organization, or business entities that "
         "appear in the text",
     )
+
+class ModelLoadResponse(BaseModel):
+    status: str
+    neo4j_connected: bool
+    vector_index_ready: bool
+    transformer_ready: bool
+    embedding_model: str

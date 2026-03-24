@@ -82,21 +82,30 @@ fastapi:
         nodePort: 30020
         protocol: TCP
     type: LoadBalancer
+  # Probe execution order: startup -> liveness + readiness
+  # startupProbe runs ONLY during startup, disables liveness/readiness until success
+  startupProbeSettings:
+    startupProbe:
+      httpGet:
+        path: /health
+        port: 8000
+      failureThreshold: 30      # 30 x 10s = 300s max startup time
+      periodSeconds: 10
   livenessProbeSettings:
     livenessProbe:
       httpGet:
         path: /health
         port: 8000
-      initialDelaySeconds: 180
-      periodSeconds: 30
-      failureThreshold: 5
+      initialDelaySeconds: 0    # Starts immediately after startup probe passes
+      periodSeconds: 15
+      failureThreshold: 3
   readinessProbeSettings:
     readinessProbe:
       httpGet:
         path: /health
         port: 8000
-      initialDelaySeconds: 120
-      periodSeconds: 10
+      initialDelaySeconds: 0    # Starts immediately after startup probe passes
+      periodSeconds: 5
       failureThreshold: 3
 
 # Web frontend (Go + Templ + HTMX + PWA)
@@ -119,12 +128,20 @@ web:
         nodePort: 30021
         protocol: TCP
     type: LoadBalancer
+  # Probe execution order: startup -> liveness + readiness
+  startupProbeSettings:
+    startupProbe:
+      httpGet:
+        path: /health
+        port: 3000
+      failureThreshold: 6       # 6 x 5s = 30s max startup time
+      periodSeconds: 5
   livenessProbeSettings:
     livenessProbe:
       httpGet:
         path: /health
         port: 3000
-      initialDelaySeconds: 30
+      initialDelaySeconds: 0    # Starts immediately after startup probe passes
       periodSeconds: 10
       failureThreshold: 3
   readinessProbeSettings:
@@ -132,6 +149,6 @@ web:
       httpGet:
         path: /health
         port: 3000
-      initialDelaySeconds: 10
+      initialDelaySeconds: 0    # Starts immediately after startup probe passes
       periodSeconds: 5
       failureThreshold: 3

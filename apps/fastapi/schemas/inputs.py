@@ -1,29 +1,58 @@
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List
+from pydantic import BaseModel, ConfigDict
+from typing import List, Literal
 
 class LLMConfig(BaseModel):
-    provider: str
-    model: str | None
-    temperature: float | None
-    base_url: str | None
-    api_key: str | None
+    provider: str = "NVIDIA"
+    model: str | None = None
+    temperature: float | None = None
+    base_url: str | None = None
+    api_key: str | None = None
     model_config = ConfigDict(extra = "allow")  # Accept extra fields
 
-
 class YouTubeSearchConfig(BaseModel):
-    max_results: int | None
-    search_type: str | None
-    upload_date: str | None
-    video_type: str | None
-    duration: str | None
-    features: list | None
-    sort_by: str | None
-    video_url: str | None
-    channel_url: str | None
-    playlist_url: str | None
+    search_type: Literal["search", "video", "channel", "playlist"] | None = None
+    query: str | None = None
+    max_results: int | None = None
+    upload_date: Literal[
+        "Last Hour",
+        "Today",
+        "This Week",
+        "This Month",
+        "This Year"
+    ] | None = None
+    video_type: Literal[
+        "Video",
+        "Channel",
+        "Playlist",
+        "Movie"
+    ] | None = None
+    duration: Literal[
+        "Under 4 minutes",
+        "4 - 20 minutes",
+        "Over 20 minutes"
+    ] | None = None
+    features: list[Literal[
+        "Live",
+        "4K",
+        "HD",
+        "Subtitles/CC",
+        "Creative Commons",
+        "360",
+        "VR180",
+        "3D",
+        "HDR",
+        "Location",
+        "Purchased"
+    ]] | None = None
+    sort_by: Literal[
+        "Relevance",
+        "Upload Date",
+        "View count",
+        "Rating"
+    ] | None = None
+    video_url: str | None = None
+    channel_url: str | None = None
+    playlist_url: str | None = None
 
-class ModelSpec(BaseModel):
-    base_url: str | None
-    api_key: str | None
-    model: str | None
-    temperature: float
+class QueryRequest(BaseModel):
+    query: str

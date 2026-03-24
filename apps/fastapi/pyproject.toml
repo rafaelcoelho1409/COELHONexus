@@ -4,13 +4,11 @@ version = "1.0.0"
 description = "COELHO Nexus - FastAPI"
 requires-python = ">=3.13"
 dependencies = [
-    # HTTP API
     "fastapi",
     "uvicorn",
     "pydantic",
     "starlette",
     "python-dotenv",
-    # AI/ML
     "deepagents",
     "langchain",
     "langgraph",
@@ -20,11 +18,11 @@ dependencies = [
     "langchain-huggingface",   # HuggingFace embeddings
     "langchain-neo4j",         # Neo4j graph database
     "langchain-experimental",  # LLMGraphTransformer
-    "sentence-transformers",   # Local embeddings (all-MiniLM-L6-v2)
-    # Storage
+    "langgraph-checkpoint-redis",
+    "sentence-transformers",   # Local embeddings
     "neo4j",
     "redis",
-    "langgraph-checkpoint-redis",
+    "pytubefix",
 ]
 
 [build-system]

@@ -3,7 +3,6 @@ from fastapi import (
     HTTPException, 
     Request
 )
-from langchain_openai import ChatOpenAI
 
 from schemas.inputs import LLMConfig
 
