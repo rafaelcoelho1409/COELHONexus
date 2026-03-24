@@ -3,6 +3,29 @@ from pytubefix.contrib.search import Filter
 from schemas.inputs import YouTubeSearchConfig
 
 
+def safe(func, default=None):
+    """Safely execute a function that may raise an exception."""
+    try:
+        return func()
+    except:
+        return default
+
+
+def extract_video_metadata(video) -> dict:
+    """Safely extract metadata from a pytubefix video object."""
+    return {
+        "video_id": safe(lambda: video.video_id, ""),
+        "title": safe(lambda: video.title, ""),
+        "author": safe(lambda: video.author, ""),
+        "publish_date": safe(lambda: str(video.publish_date), ""),
+        "views": safe(lambda: video.views, 0),
+        "length": safe(lambda: video.length, 0),
+        "captions": safe(lambda: list(video.captions.lang_code_index.keys()), []),
+        #"keywords": safe(lambda: video.keywords, []),
+        #"description": safe(lambda: video.description, ""),
+    }
+
+
 def build_filters(config: YouTubeSearchConfig) -> Filter:
     # Enum mappings
     upload_date_map = {

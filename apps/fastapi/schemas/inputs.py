@@ -10,8 +10,8 @@ class LLMConfig(BaseModel):
     model_config = ConfigDict(extra = "allow")  # Accept extra fields
 
 class YouTubeSearchConfig(BaseModel):
-    search_type: Literal["search", "video", "channel", "playlist"] | None = None
-    max_results: int | None = None
+    query: str | None = None
+    max_results: int | None = 10
     upload_date: Literal[
         "Last Hour",
         "Today",
@@ -49,6 +49,6 @@ class YouTubeSearchConfig(BaseModel):
         "View count",
         "Rating"
     ] | None = None
-    video_url: str | None = None
-    channel_url: str | None = None
-    playlist_url: str | None = None
+    video_id: str | None = None
+    channel_id: str | None = None
+    playlist_id: str | None = None

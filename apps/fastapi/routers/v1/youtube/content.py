@@ -3,11 +3,11 @@ from fastapi import (
     HTTPException, 
     Request
 )
-from pytubefix import YouTube, Channel, Playlist
+from pytubefix import YouTube, AsyncYouTube, Channel, Playlist
 from pytubefix.contrib.search import Search, Filter
 
 from schemas.inputs import YouTubeSearchConfig
-from .helpers import build_filters
+from .helpers import build_filters, extract_video_metadata
 
 
 router = APIRouter()
@@ -17,11 +17,11 @@ router = APIRouter()
 # Endpoints
 # =============================================================================
 @router.put("/config")
-async def create_search_config(config: YouTubeSearchConfig, request: Request):
+async def replace_search_config(config: YouTubeSearchConfig, request: Request):
+    """Full replacement of config. Resets all fields not provided."""
     redis_aio = request.app.state.redis_aio
-    # Apply defaults for PUT (full replace)
     data = config.model_dump(exclude_none = True)
-    data.setdefault("search_type", "search")
+    data.setdefault("query", "alborghetti")
     data.setdefault("max_results", 10)
     data.setdefault("sort_by", "Relevance")
     await redis_aio.json().set(
@@ -29,7 +29,7 @@ async def create_search_config(config: YouTubeSearchConfig, request: Request):
         "$",
         data
     )
-    return {"status": "saved", "config": data}
+    return {"status": "replaced", "config": data}
 
 @router.patch("/config")
 async def patch_search_config(config: YouTubeSearchConfig, request: Request):
@@ -41,7 +41,7 @@ async def patch_search_config(config: YouTubeSearchConfig, request: Request):
     if not existing:
         raise HTTPException(
             status_code = 404,
-            detail = "Config not found. Use PUT to create.")
+            detail = "Config not found.")
     # Merge only provided fields
     merged = {
         **existing[0], 
@@ -51,10 +51,12 @@ async def patch_search_config(config: YouTubeSearchConfig, request: Request):
         "$",
         merged
     )
-    return {"status": "updated", "config": merged}
+    return {
+        "status": "updated", 
+        "config": merged}
 
 @router.get("/search")
-async def search_results(query: str, request: Request):
+async def search_results(request: Request):
     redis_aio = request.app.state.redis_aio
     search_config = await redis_aio.json().get(
         "coelhonexus:youtube:search:config",
@@ -66,20 +68,124 @@ async def search_results(query: str, request: Request):
     search_config = YouTubeSearchConfig(**search_config[0])
     # Search
     filters = build_filters(search_config)
-    max_results = search_config.max_results or 10
-    search_results = Search(
-        query,
-        filters = filters).videos[:max_results]
-    search_results_dict = {}
-    search_results_dict[query] = {
-        "title": [video.title for video in search_results],
-        "author": [video.author for video in search_results],
-        "publish_date": [video.publish_date for video in search_results],
-        "views": [video.views for video in search_results],
-        "length": [video.length for video in search_results],
-        "captions": [str(list(video.captions.lang_code_index.keys())) for video in search_results],
-        #"keywords": [video.keywords for video in search_results],
-        #"description": [video.description for video in search_results],
-        "video_id": [video.video_id for video in search_results],
+    results = Search(
+        search_config.query,
+        filters = filters).videos[:search_config.max_results]
+    videos = [extract_video_metadata(v) for v in results]
+    return {
+        search_config.query: {
+            "video_id": [v["video_id"] for v in videos],
+            "title": [v["title"] for v in videos],
+            "author": [v["author"] for v in videos],
+            "publish_date": [v["publish_date"] for v in videos],
+            "views": [v["views"] for v in videos],
+            "length": [v["length"] for v in videos],
+            "captions": [v["captions"] for v in videos],
+            #"keywords": [v["keywords"] for v in videos],
+            #"description": [v["description"] for v in videos],
+        }
     }
-    return search_results_dict
+
+@router.get("/video")
+async def search_youtube_video(request: Request):
+    redis_aio = request.app.state.redis_aio
+    search_config = await redis_aio.json().get(
+        "coelhonexus:youtube:search:config",
+        "$")
+    if not search_config:
+        raise HTTPException(
+            status_code = 404,
+            detail = "Search config not found")
+    search_config = YouTubeSearchConfig(**search_config[0])
+    # Video
+    if search_config.video_id is None:
+        raise HTTPException(
+            status_code = 404,
+            detail = "Video ID not found")
+    video_url = "https://www.youtube.com/watch?v=" + search_config.video_id
+    #video = YouTube(video_url)
+    video = AsyncYouTube(video_url)
+    metadata = extract_video_metadata(video)
+    return {
+        video_url: {
+            "video_id": [metadata["video_id"]],
+            "title": [metadata["title"]],
+            "author": [metadata["author"]],
+            "publish_date": [metadata["publish_date"]],
+            "views": [metadata["views"]],
+            "length": [metadata["length"]],
+            "captions": [metadata["captions"]],
+            #"keywords": [metadata["keywords"]],
+            #"description": [metadata["description"]],
+        }
+    }
+
+
+@router.get("/channel")
+async def search_youtube_channel(request: Request):
+    redis_aio = request.app.state.redis_aio
+    search_config = await redis_aio.json().get(
+        "coelhonexus:youtube:search:config",
+        "$")
+    if not search_config:
+        raise HTTPException(
+            status_code = 404,
+            detail = "Search config not found")
+    search_config = YouTubeSearchConfig(**search_config[0])
+    # Channel
+    if search_config.channel_id is None:
+        raise HTTPException(
+            status_code = 404,
+            detail = "Channel not found")
+    channel_url = "https://www.youtube.com/@" + search_config.channel_id
+    channel = Channel(channel_url)
+    videos = [extract_video_metadata(v) for v in channel.videos[:search_config.max_results]]
+    return {
+        channel_url: {
+            "video_id": [v["video_id"] for v in videos],
+            "title": [v["title"] for v in videos],
+            "author": [v["author"] for v in videos],
+            "publish_date": [v["publish_date"] for v in videos],
+            "views": [v["views"] for v in videos],
+            "length": [v["length"] for v in videos],
+            "captions": [v["captions"] for v in videos],
+            #"keywords": [v["keywords"] for v in videos],
+            #"description": [v["description"] for v in videos],
+            "channel_name": channel.channel_name,
+            "channel_description": channel.description,
+            "last_updated": str(channel.last_updated),
+        }
+    }
+
+@router.get("/playlist")
+async def search_youtube_playlist(playlist_id: str, request: Request):
+    redis_aio = request.app.state.redis_aio
+    search_config = await redis_aio.json().get(
+        "coelhonexus:youtube:search:config",
+        "$")
+    if not search_config:
+        raise HTTPException(
+            status_code = 404,
+            detail = "Search config not found")
+    search_config = YouTubeSearchConfig(**search_config[0])
+    # Playlist
+    if search_config.playlist_id is None:
+        raise HTTPException(
+            status_code = 404,
+            detail = "Playlist not found")
+    playlist_url = "https://www.youtube.com/playlist?list=" + search_config.playlist_id
+    playlist = Playlist(playlist_url)
+    videos = [extract_video_metadata(v) for v in playlist.videos[:search_config.max_results]]
+    return {
+        playlist_url: {
+            "video_id": [v["video_id"] for v in videos],
+            "title": [v["title"] for v in videos],
+            "author": [v["author"] for v in videos],
+            "publish_date": [v["publish_date"] for v in videos],
+            "views": [v["views"] for v in videos],
+            "length": [v["length"] for v in videos],
+            "captions": [v["captions"] for v in videos],
+            #"keywords": [v["keywords"] for v in videos],
+            #"description": [v["description"] for v in videos],
+        }
+    }

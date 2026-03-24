@@ -6,6 +6,7 @@ import redis.asyncio as redis_aio
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 
+from schemas.inputs import YouTubeSearchConfig
 from routers.v1.youtube import agents as youtube_agents
 from routers.v1.youtube import content as youtube_content
 
@@ -30,6 +31,23 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler for startup/shutdown tasks."""
     print("Starting FastAPI Service...", flush = True)
     app.state.redis_aio = redis_aio.from_url(REDIS_URL)
+    # Create default YouTubeSearchConfig only if it doesn't exist
+    search_config_key = "coelhonexus:youtube:search:config"
+    existing_config = await app.state.redis_aio.json().get(search_config_key)
+    if not existing_config:
+        search_config = YouTubeSearchConfig()
+        search_config = search_config.model_dump(exclude_none = True)
+        search_config.setdefault("query", "alborghetti")
+        search_config.setdefault("max_results", 10)
+        search_config.setdefault("sort_by", "Relevance")
+        await app.state.redis_aio.json().set(
+            search_config_key,
+            "$",
+            search_config
+        )
+        print("YouTubeSearchConfig created with defaults.", flush = True)
+    else:
+        print("YouTubeSearchConfig loaded from Redis.", flush = True)
     app.state.config = {
         "configurable": {"thread_id": "1"}
     }
