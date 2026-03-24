@@ -11,7 +11,6 @@ class LLMConfig(BaseModel):
 
 class YouTubeSearchConfig(BaseModel):
     search_type: Literal["search", "video", "channel", "playlist"] | None = None
-    query: str | None = None
     max_results: int | None = None
     upload_date: Literal[
         "Last Hour",
@@ -53,6 +52,3 @@ class YouTubeSearchConfig(BaseModel):
     video_url: str | None = None
     channel_url: str | None = None
     playlist_url: str | None = None
-
-class QueryRequest(BaseModel):
-    query: str
