@@ -26,6 +26,29 @@ def extract_video_metadata(video) -> dict:
     }
 
 
+async def safe_async(coro, default=None):
+    """Safely execute an async coroutine that may raise an exception."""
+    try:
+        return await coro
+    except:
+        return default
+
+
+async def extract_video_metadata_async(video, video_id: str = "") -> dict:
+    """Safely extract metadata from a pytubefix AsyncYouTube object."""
+    return {
+        "video_id": video_id,
+        "title": await safe_async(video.title(), ""),
+        "author": await safe_async(video.author(), ""),
+        "publish_date": str(await safe_async(video.publish_date(), "")),
+        "views": await safe_async(video.views(), 0),
+        "length": await safe_async(video.length(), 0),
+        "captions": await safe_async(video.captions(), []),
+        #"keywords": await safe_async(video.keywords(), []),
+        #"description": await safe_async(video.description(), ""),
+    }
+
+
 def build_filters(config: YouTubeSearchConfig) -> Filter:
     # Enum mappings
     upload_date_map = {

@@ -49,6 +49,6 @@ class YouTubeSearchConfig(BaseModel):
         "View count",
         "Rating"
     ] | None = None
-    video_id: str | None = None
+    video_ids: list[str] | None = None
     channel_id: str | None = None
     playlist_id: str | None = None

@@ -1,13 +1,14 @@
+import asyncio
 from fastapi import (
-    APIRouter, 
-    HTTPException, 
+    APIRouter,
+    HTTPException,
     Request
 )
 from pytubefix import YouTube, AsyncYouTube, Channel, Playlist
 from pytubefix.contrib.search import Search, Filter
 
 from schemas.inputs import YouTubeSearchConfig
-from .helpers import build_filters, extract_video_metadata
+from .helpers import build_filters, extract_video_metadata, extract_video_metadata_async
 
 
 router = APIRouter()
@@ -86,8 +87,9 @@ async def search_results(request: Request):
         }
     }
 
-@router.get("/video")
-async def search_youtube_video(request: Request):
+@router.get("/videos")
+async def get_youtube_videos(request: Request):
+    """Fetch multiple videos concurrently using AsyncYouTube."""
     redis_aio = request.app.state.redis_aio
     search_config = await redis_aio.json().get(
         "coelhonexus:youtube:search:config",
@@ -97,26 +99,30 @@ async def search_youtube_video(request: Request):
             status_code = 404,
             detail = "Search config not found")
     search_config = YouTubeSearchConfig(**search_config[0])
-    # Video
-    if search_config.video_id is None:
+    # Videos
+    if not search_config.video_ids:
         raise HTTPException(
             status_code = 404,
-            detail = "Video ID not found")
-    video_url = "https://www.youtube.com/watch?v=" + search_config.video_id
-    #video = YouTube(video_url)
-    video = AsyncYouTube(video_url)
-    metadata = extract_video_metadata(video)
+            detail = "Video IDs not found")
+    # Fetch all videos concurrently
+    async def fetch_video(video_id: str) -> dict:
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        video = AsyncYouTube(url)
+        return await extract_video_metadata_async(video, video_id)
+    videos = await asyncio.gather(*[
+        fetch_video(vid) for vid in search_config.video_ids
+    ])
     return {
-        video_url: {
-            "video_id": [metadata["video_id"]],
-            "title": [metadata["title"]],
-            "author": [metadata["author"]],
-            "publish_date": [metadata["publish_date"]],
-            "views": [metadata["views"]],
-            "length": [metadata["length"]],
-            "captions": [metadata["captions"]],
-            #"keywords": [metadata["keywords"]],
-            #"description": [metadata["description"]],
+        "videos": {
+            "video_id": [v["video_id"] for v in videos],
+            "title": [v["title"] for v in videos],
+            "author": [v["author"] for v in videos],
+            "publish_date": [v["publish_date"] for v in videos],
+            "views": [v["views"] for v in videos],
+            "length": [v["length"] for v in videos],
+            "captions": [v["captions"] for v in videos],
+            #"keywords": [v["keywords"] for v in videos],
+            #"description": [v["description"] for v in videos],
         }
     }
 
@@ -158,7 +164,7 @@ async def search_youtube_channel(request: Request):
     }
 
 @router.get("/playlist")
-async def search_youtube_playlist(playlist_id: str, request: Request):
+async def search_youtube_playlist(request: Request):
     redis_aio = request.app.state.redis_aio
     search_config = await redis_aio.json().get(
         "coelhonexus:youtube:search:config",
