@@ -1,9 +1,15 @@
 """
 YouTube helpers:
 - yt-dlp subprocess for metadata extraction (optimized for speed and completeness)
-- Playwright CDP for transcript extraction (bypasses IP blocking)
-- youtube-transcript-api with proxy fallback (WARP -> Tor -> Direct) as backup
+- Playwright CDP for transcript extraction (optimized v2, bypasses IP blocking)
 - ElasticSearch indexing
+
+Playwright optimizations:
+- Aggressive resource blocking (video, ads, tracking)
+- Kill YouTube background processes
+- Manual transcript priority over auto-generated
+- Direct API fetch before DOM scraping
+- Multiple fallback methods for transcript button
 """
 import asyncio
 import logging
@@ -484,7 +490,7 @@ def fetch_transcript_with_proxy_fallback(
 
 
 # =============================================================================
-# Playwright CDP Transcript Extraction (Bypasses IP Blocking)
+# Playwright CDP Transcript Extraction (Optimized v2)
 # =============================================================================
 # CDP endpoints for Playwright server (Tailscale addresses)
 CDP_HEADLESS = os.environ.get(
@@ -496,6 +502,28 @@ CDP_HEADED = os.environ.get(
     "https://playwright-cdp.YOUR_TAILNET_DOMAIN.ts.net"
 )
 
+# Resource blocking patterns - balanced for speed and reliability
+BLOCK_PATTERNS = [
+    # VIDEO/AUDIO STREAMING (Biggest speedup: 2-5 seconds)
+    "**/videoplayback*",
+    "**/googlevideo.com/*",
+    "**/*.googlevideo.com/*",
+    # ADS
+    "**/doubleclick.net/*",
+    "**/googleadservices.com/*",
+    "**/googlesyndication.com/*",
+    "**/googleads.g.doubleclick.net/*",
+    "**/youtube.com/pagead/*",
+    # ANALYTICS/TRACKING
+    "**/google-analytics.com/*",
+    "**/googletagmanager.com/*",
+    "**/youtube.com/api/stats/*",
+    "**/youtube.com/ptracking*",
+    "**/s.youtube.com/*",
+]
+
+BLOCK_RESOURCE_TYPES = {"media"}  # Only block media (video/audio)
+
 
 @dataclass
 class TranscriptSegment:
@@ -503,22 +531,23 @@ class TranscriptSegment:
     text: str
 
 
+@dataclass
+class CaptionTrack:
+    language_code: str
+    name: str
+    is_auto_generated: bool
+    base_url: str
+
+
 def _get_cdp_websocket_url(cdp_endpoint: str) -> str:
     """
     Get the proper WebSocket URL for CDP connection.
-
-    When CDP is accessed via HTTPS reverse proxy (like Tailscale Ingress),
-    the /json/version endpoint returns ws:// URLs on port 80, but we need
-    wss:// URLs on port 443.
-
-    This function fetches /json/version, extracts the WebSocket path,
-    and constructs a proper wss:// URL using the original HTTPS host.
+    Handles HTTPS reverse proxy (Tailscale Ingress) by constructing wss:// URL.
     """
     parsed = urlparse(cdp_endpoint)
     json_url = f"{cdp_endpoint}/json/version"
 
     try:
-        # Create SSL context that doesn't verify (for self-signed certs)
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
@@ -531,136 +560,260 @@ def _get_cdp_websocket_url(cdp_endpoint: str) -> str:
                 log.warning(f"[cdp] No webSocketDebuggerUrl in response from {json_url}")
                 return cdp_endpoint
 
-            # Extract the path from the ws:// URL (e.g., /devtools/browser/<uuid>)
             ws_parsed = urlparse(ws_url)
             ws_path = ws_parsed.path
 
-            # Construct proper wss:// URL using the original HTTPS host
             if parsed.scheme == "https":
                 proper_url = f"wss://{parsed.netloc}{ws_path}"
             else:
                 proper_url = f"ws://{parsed.netloc}{ws_path}"
 
-            log.info(f"[cdp] Resolved WebSocket URL: {proper_url}")
+            log.info(f"[cdp] Resolved: {proper_url[:60]}...")
             return proper_url
 
     except Exception as e:
-        log.warning(f"[cdp] Failed to fetch {json_url}: {e}, falling back to endpoint")
+        log.warning(f"[cdp] Failed to fetch {json_url}: {e}")
         return cdp_endpoint
 
 
-async def fetch_transcript_with_playwright(
-    video_id: str,
-    headless: bool = True,
-    timeout_ms: int = 15000,
-) -> dict:
-    """
-    Fetch transcript using Playwright CDP connection (bypasses IP blocking).
+async def _setup_routes(page) -> None:
+    """Set up aggressive resource blocking."""
+    for pattern in BLOCK_PATTERNS:
+        await page.route(pattern, lambda r: r.abort())
 
-    Args:
-        video_id: YouTube video ID
-        headless: Use headless browser (faster) or headed (visible in noVNC)
-        timeout_ms: Timeout for waiting for transcript panel
+    async def block_by_type(route):
+        if route.request.resource_type in BLOCK_RESOURCE_TYPES:
+            await route.abort()
+        else:
+            await route.continue_()
 
-    Returns:
-        dict with video_id, language, page_content, segments or error
-    """
-    cdp_endpoint = CDP_HEADLESS if headless else CDP_HEADED
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    start_time = time.time()
+    await page.route("**/*", block_by_type)
 
-    # Get proper WebSocket URL (handles HTTPS reverse proxy)
-    cdp_url = await asyncio.to_thread(_get_cdp_websocket_url, cdp_endpoint)
-    log.info(f"[playwright:transcript] starting video_id={video_id} cdp={cdp_url}")
 
+async def _kill_youtube_background(page) -> None:
+    """Kill YouTube's resource-hungry background processes."""
+    await page.evaluate('''
+        () => {
+            const video = document.querySelector("video");
+            if (video) {
+                video.pause();
+                video.removeAttribute("src");
+                video.load();
+            }
+            const highestId = window.setTimeout(() => {}, 0);
+            for (let i = 0; i < highestId; i++) {
+                window.clearTimeout(i);
+                window.clearInterval(i);
+            }
+        }
+    ''')
+
+
+async def _get_caption_tracks(page) -> list[CaptionTrack]:
+    """Extract caption tracks from ytInitialPlayerResponse."""
+    tracks_data = await page.evaluate('''
+        () => {
+            const caps = window.ytInitialPlayerResponse?.captions;
+            if (!caps?.playerCaptionsTracklistRenderer?.captionTracks) return [];
+            return caps.playerCaptionsTracklistRenderer.captionTracks.map(t => ({
+                languageCode: t.languageCode || '',
+                name: t.name?.simpleText || t.languageCode || '',
+                isAutoGenerated: t.kind === 'asr' || (t.vssId || '').startsWith('a.'),
+                baseUrl: t.baseUrl || ''
+            }));
+        }
+    ''')
+
+    return [
+        CaptionTrack(
+            language_code=t['languageCode'],
+            name=t['name'],
+            is_auto_generated=t['isAutoGenerated'],
+            base_url=t['baseUrl']
+        )
+        for t in tracks_data
+    ]
+
+
+def _select_best_track(tracks: list[CaptionTrack], prefer_manual: bool = True) -> CaptionTrack:
+    """Select best track: English manual > Portuguese manual > any manual > English auto > any."""
+    def priority(t: CaptionTrack) -> tuple:
+        is_english = t.language_code.startswith('en')
+        is_portuguese = t.language_code.startswith('pt')
+        return (
+            t.is_auto_generated if prefer_manual else False,
+            0 if is_english else (1 if is_portuguese else 2),
+        )
+    return sorted(tracks, key=priority)[0]
+
+
+async def _fetch_transcript_direct(page, base_url: str) -> list[dict]:
+    """Try to fetch transcript directly from caption URL (fast path)."""
+    json_url = base_url + ("&" if "?" in base_url else "?") + "fmt=json3"
+
+    result = await page.evaluate(f'''
+        async () => {{
+            try {{
+                const resp = await fetch("{json_url}", {{
+                    credentials: "include",
+                    headers: {{ "Accept": "application/json" }}
+                }});
+                const text = await resp.text();
+                if (text.startsWith('<')) return {{ error: "blocked" }};
+                return JSON.parse(text);
+            }} catch (e) {{
+                return {{ error: e.message }};
+            }}
+        }}
+    ''')
+
+    if 'error' in result:
+        raise ValueError(result['error'])
+
+    segments = []
+    for event in result.get('events', []):
+        if 'segs' in event:
+            text = ''.join(s.get('utf8', '') for s in event['segs']).strip()
+            if text:
+                start_ms = event.get('tStartMs', 0)
+                minutes = start_ms // 60000
+                seconds = (start_ms // 1000) % 60
+                segments.append({'timestamp': f"{minutes}:{seconds:02d}", 'text': text})
+
+    return segments
+
+
+async def _extract_via_dom(page, timeout_ms: int) -> str:
+    """Extract transcript via DOM interaction (fallback)."""
+    # Wait for page content to fully initialize
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.connect_over_cdp(cdp_url)
-            context = await browser.new_context()
-            page = await context.new_page()
-            # Block video/audio for speed
-            await page.route("**/videoplayback*", lambda r: r.abort())
-            await page.route("**/googlevideo.com/*", lambda r: r.abort())
-            await page.goto(url, wait_until="domcontentloaded")
-            # Pause video immediately
-            await page.evaluate('document.querySelector("video")?.pause()')
-            await page.wait_for_timeout(1500)
-            # Expand description
-            await page.click("tp-yt-paper-button#expand")
-            await page.wait_for_timeout(500)
-            # Click "Show transcript"
-            await page.click('button[aria-label="Show transcript"]')
-            # Wait for transcript content (look for timestamp pattern)
-            await page.wait_for_function(
-                """() => {
-                    const panels = document.querySelectorAll("ytd-engagement-panel-section-list-renderer");
-                    for (const p of panels) {
-                        if (p.innerText.match(/\\d+:\\d{2}/)) return true;
-                    }
-                    return false;
-                }""",
-                timeout = timeout_ms,
-            )
-            # Extract raw transcript text
-            raw_text = await page.evaluate(
-                """() => {
-                    const panels = document.querySelectorAll("ytd-engagement-panel-section-list-renderer");
-                    for (const p of panels) {
-                        if (p.innerText.match(/\\d+:\\d{2}/)) {
-                            return p.innerText;
-                        }
-                    }
-                    return "";
-                }"""
-            )
-            await context.close()
+        await page.wait_for_selector('ytd-watch-metadata, #above-the-fold', timeout=15000)
     except Exception as e:
-        elapsed = time.time() - start_time
-        log.info(f"[playwright:transcript] FAIL video_id={video_id} time={elapsed:.2f}s error={str(e)[:100]}")
-        return {
-            "video_id": video_id,
-            "error": str(e),
+        log.warning(f"[dom] Metadata selector not found: {e}")
+
+    await page.wait_for_timeout(2000)
+
+    # Check if transcript panel is already visible
+    already_visible = await page.evaluate('''
+        () => {
+            const panels = document.querySelectorAll('ytd-engagement-panel-section-list-renderer');
+            for (const p of panels) {
+                if (p.getAttribute('visibility') === 'ENGAGEMENT_PANEL_VISIBILITY_EXPANDED'
+                    && /\\d+:\\d{2}/.test(p.innerText)) {
+                    return true;
+                }
+            }
+            return false;
         }
-    if not raw_text:
-        elapsed = time.time() - start_time
-        log.info(f"[playwright:transcript] NO_TRANSCRIPT video_id={video_id} time={elapsed:.2f}s")
-        return {
-            "video_id": video_id,
-            "error": "No transcript available",
+    ''')
+
+    if already_visible:
+        log.info("[dom] Transcript panel already visible")
+        return await page.evaluate('''
+            () => {
+                const panels = document.querySelectorAll('ytd-engagement-panel-section-list-renderer');
+                for (const p of panels) {
+                    if (p.getAttribute('visibility') === 'ENGAGEMENT_PANEL_VISIBILITY_EXPANDED'
+                        && /\\d+:\\d{2}/.test(p.innerText)) {
+                        return p.innerText;
+                    }
+                }
+                return '';
+            }
+        ''')
+
+    # Method 1: Try expand button
+    try:
+        expand_btn = page.locator("tp-yt-paper-button#expand:not([hidden])").first
+        if await expand_btn.count() > 0:
+            await expand_btn.click(timeout=2000)
+            await page.wait_for_timeout(500)
+    except:
+        pass
+
+    # Method 2: Try clicking on description to expand
+    try:
+        desc = page.locator("#description-inline-expander, ytd-text-inline-expander").first
+        if await desc.count() > 0:
+            await desc.click(timeout=2000)
+            await page.wait_for_timeout(500)
+    except:
+        pass
+
+    # Method 3: Try "Show transcript" button
+    clicked = False
+    for selector in ['button[aria-label="Show transcript"]', 'ytd-video-description-transcript-section-renderer button']:
+        try:
+            btn = page.locator(selector).first
+            if await btn.count() > 0:
+                await btn.click(timeout=2000)
+                clicked = True
+                break
+        except:
+            continue
+
+    # Method 4: Try "More actions" menu
+    if not clicked:
+        try:
+            more_btn = page.locator('button[aria-label="More actions"]').first
+            if await more_btn.count() > 0:
+                await more_btn.click(timeout=2000)
+                await page.wait_for_timeout(300)
+                menu_item = page.locator('tp-yt-paper-listbox ytd-menu-service-item-renderer').filter(has_text="transcript")
+                if await menu_item.count() > 0:
+                    await menu_item.first.click(timeout=2000)
+                    clicked = True
+        except:
+            pass
+
+    if not clicked:
+        raise ValueError("Transcript button not found")
+
+    # Wait for transcript panel with timestamps
+    await page.wait_for_function(
+        '''() => {
+            const panels = document.querySelectorAll('ytd-engagement-panel-section-list-renderer');
+            for (const p of panels) {
+                if (p.getAttribute('visibility') === 'ENGAGEMENT_PANEL_VISIBILITY_EXPANDED'
+                    && /\\d+:\\d{2}/.test(p.innerText)) {
+                    return true;
+                }
+            }
+            return false;
+        }''',
+        timeout=timeout_ms,
+    )
+
+    return await page.evaluate('''
+        () => {
+            const panels = document.querySelectorAll('ytd-engagement-panel-section-list-renderer');
+            for (const p of panels) {
+                if (p.getAttribute('visibility') === 'ENGAGEMENT_PANEL_VISIBILITY_EXPANDED'
+                    && /\\d+:\\d{2}/.test(p.innerText)) {
+                    return p.innerText;
+                }
+            }
+            return '';
         }
-    # Parse transcript
-    segments = _parse_playwright_transcript(raw_text)
-    page_content = " ".join([seg.text for seg in segments])
-    elapsed = time.time() - start_time
-    log.info(f"[playwright:transcript] OK video_id={video_id} segments={len(segments)} chars={len(page_content)} time={elapsed:.2f}s")
-    return {
-        "video_id": video_id,
-        "language": "auto",  # Playwright doesn't expose language info easily
-        "page_content": page_content,
-        "segments": [{"timestamp": s.timestamp, "text": s.text} for s in segments],
-        "proxy_used": "Playwright",
-    }
+    ''')
 
 
-def _parse_playwright_transcript(raw_text: str) -> list[TranscriptSegment]:
-    """Parse raw transcript text from Playwright into segments."""
+def _parse_transcript(raw_text: str) -> list[TranscriptSegment]:
+    """Parse raw transcript text into segments."""
     lines = [line.strip() for line in raw_text.split("\n") if line.strip()]
     segments = []
-    # Skip header lines (e.g., "Transcript", "Search transcript")
+
     i = 0
     while i < len(lines) and not re.match(r"^\d+:\d{2}$", lines[i]):
         i += 1
-    # Parse timestamp + text pairs
+
     while i < len(lines):
         line = lines[i]
-        # Match timestamp like "0:01" or "12:34"
         if re.match(r"^\d+:\d{2}$", line):
             timestamp = line
-            # Next line might be duration description, skip it
             i += 1
             if i < len(lines) and re.match(r"^\d+\s+(second|minute)", lines[i]):
                 i += 1
-            # Collect text until next timestamp
             text_parts = []
             while i < len(lines) and not re.match(r"^\d+:\d{2}$", lines[i]):
                 text_parts.append(lines[i])
@@ -669,7 +822,130 @@ def _parse_playwright_transcript(raw_text: str) -> list[TranscriptSegment]:
                 segments.append(TranscriptSegment(timestamp=timestamp, text=" ".join(text_parts)))
         else:
             i += 1
+
     return segments
+
+
+async def fetch_transcript_with_playwright(
+    video_id: str,
+    headless: bool = True,
+    timeout_ms: int = 12000,
+    prefer_manual: bool = True,
+) -> dict:
+    """
+    Fetch transcript using Playwright CDP (optimized v2).
+
+    Optimizations:
+    - Aggressive resource blocking (video, ads, tracking)
+    - Kill YouTube background processes
+    - Manual transcript priority over auto-generated
+    - Direct API fetch before DOM scraping
+    - Multiple fallback methods for transcript button
+    """
+    cdp_endpoint = CDP_HEADLESS if headless else CDP_HEADED
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    start_time = time.time()
+
+    cdp_url = await asyncio.to_thread(_get_cdp_websocket_url, cdp_endpoint)
+    log.info(f"[playwright] starting video_id={video_id}")
+
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.connect_over_cdp(cdp_url)
+            context = await browser.new_context(
+                viewport={"width": 1280, "height": 720},
+            )
+            page = await context.new_page()
+
+            # Set up blocking BEFORE navigation
+            await _setup_routes(page)
+
+            # Navigation with full load
+            await page.goto(url, wait_until="load")
+
+            # Kill background processes immediately
+            await _kill_youtube_background(page)
+
+            # Wait for captions data
+            try:
+                await page.wait_for_function(
+                    '() => !!window.ytInitialPlayerResponse?.captions',
+                    timeout=5000
+                )
+            except:
+                pass
+
+            # Get caption tracks
+            tracks = await _get_caption_tracks(page)
+            language = "auto"
+            is_auto_generated = True
+            method = "dom_scrape"
+
+            if tracks:
+                manual_count = sum(1 for t in tracks if not t.is_auto_generated)
+                log.info(f"[playwright] tracks={len(tracks)} manual={manual_count}")
+
+                selected = _select_best_track(tracks, prefer_manual)
+                language = selected.language_code
+                is_auto_generated = selected.is_auto_generated
+                log.info(f"[playwright] selected={language} auto={is_auto_generated}")
+
+                # Try direct API first (fast path)
+                try:
+                    segments_data = await _fetch_transcript_direct(page, selected.base_url)
+                    await context.close()
+
+                    segments = [TranscriptSegment(timestamp=s['timestamp'], text=s['text']) for s in segments_data]
+                    page_content = " ".join([seg.text for seg in segments])
+                    elapsed = time.time() - start_time
+
+                    log.info(f"[playwright] OK video_id={video_id} method=direct_api segments={len(segments)} time={elapsed:.2f}s")
+                    return {
+                        "video_id": video_id,
+                        "language": language,
+                        "is_auto_generated": is_auto_generated,
+                        "page_content": page_content,
+                        "segments": [{"timestamp": s.timestamp, "text": s.text} for s in segments],
+                        "proxy_used": "Playwright",
+                        "method": "direct_api",
+                    }
+                except Exception as e:
+                    log.info(f"[playwright] direct_api failed: {e}")
+
+            # Fallback to DOM scraping
+            raw_text = await _extract_via_dom(page, timeout_ms)
+            await context.close()
+
+            if not raw_text:
+                raise ValueError(f"No transcript for: {video_id}")
+
+            segments = _parse_transcript(raw_text)
+            page_content = " ".join([seg.text for seg in segments])
+
+            # Detect auto-generated from raw text if no tracks
+            if "auto-generated" in raw_text.lower():
+                is_auto_generated = True
+
+            elapsed = time.time() - start_time
+            log.info(f"[playwright] OK video_id={video_id} method=dom_scrape segments={len(segments)} time={elapsed:.2f}s")
+
+            return {
+                "video_id": video_id,
+                "language": language,
+                "is_auto_generated": is_auto_generated,
+                "page_content": page_content,
+                "segments": [{"timestamp": s.timestamp, "text": s.text} for s in segments],
+                "proxy_used": "Playwright",
+                "method": "dom_scrape",
+            }
+
+    except Exception as e:
+        elapsed = time.time() - start_time
+        log.error(f"[playwright] FAIL video_id={video_id} time={elapsed:.2f}s error={str(e)[:100]}")
+        return {
+            "video_id": video_id,
+            "error": str(e),
+        }
 
 
 async def fetch_transcript_with_fallback(
