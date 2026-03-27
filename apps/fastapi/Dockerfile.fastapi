@@ -11,10 +11,13 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /app
 
-# Install runtime system dependencies
+# Install runtime system dependencies + deno (for yt-dlp PO Token support)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends procps && \
+    apt-get install -y --no-install-recommends procps curl unzip && \
+    curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh && \
     rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/usr/local/bin:$PATH"
 
 # Copy dependency files first (for layer caching)
 COPY pyproject.toml ./

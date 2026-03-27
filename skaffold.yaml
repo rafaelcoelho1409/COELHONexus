@@ -19,7 +19,6 @@ build:
         manual:
           - src: "**/*.py"
             dest: /app
-            strip: ""
     # Web frontend (Go + Templ + HTMX + PWA)
     - image: coelhonexus-web
       context: apps/web

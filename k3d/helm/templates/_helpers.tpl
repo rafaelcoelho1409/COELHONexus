@@ -20,6 +20,16 @@ MINIO_HOST: "{{ .Values.minio.host }}"
 MINIO_PORT: "{{ .Values.minio.port }}"
 MINIO_ENDPOINT: "{{ .Values.minio.endpoint }}"
 NEO4J_URI: "{{ .Values.neo4j.uri }}"
+ELASTICSEARCH_HOST: "{{ .Values.elasticsearch.host }}"
+ELASTICSEARCH_USERNAME: "{{ .Values.elasticsearch.username }}"
+# Proxy configuration (WARP host/port, Tor host/port)
+WARP_PROXY_HOST: "{{ .Values.proxy.warp.host }}"
+WARP_PROXY_PORT: "{{ .Values.proxy.warp.port }}"
+TOR_PROXY_HOST: "{{ .Values.proxy.tor.host }}"
+TOR_PROXY_PORT: "{{ .Values.proxy.tor.port }}"
+# Playwright CDP endpoints (browser automation, bypasses IP blocking)
+PLAYWRIGHT_CDP_HEADLESS: "{{ .Values.playwright.cdp_headless }}"
+PLAYWRIGHT_CDP_HEADED: "{{ .Values.playwright.cdp_headed }}"
 {{- end -}}
 
 

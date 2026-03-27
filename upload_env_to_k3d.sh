@@ -134,7 +134,7 @@ if kubectl apply -f "$SECRET_YAML" >/dev/null 2>&1; then
     echo "   - Secret name: $SECRET_NAME"
     echo ""
     echo "Verify with: kubectl get secret $SECRET_NAME -n $NAMESPACE -o yaml"
-    echo "Start development with: skaffold dev --profile=dev"
+    echo "Start development with: skaffold dev"
 else
     echo "Failed to create secret. Debug with:"
     echo "kubectl apply -f $SECRET_YAML"

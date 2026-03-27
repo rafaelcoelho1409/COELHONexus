@@ -11,7 +11,7 @@ class LLMConfig(BaseModel):
 
 class YouTubeSearchConfig(BaseModel):
     query: str | None = None
-    max_results: int | None = 10
+    max_results: int | None = 10  # 0 = all videos (channel/playlist only, not allowed for /search)
     upload_date: Literal[
         "Last Hour",
         "Today",
@@ -49,11 +49,14 @@ class YouTubeSearchConfig(BaseModel):
         "View count",
         "Rating"
     ] | None = None
+    offset: int = 0  # Skip first N videos (for pagination)
     video_ids: list[str] | None = None
     channel_id: str | None = None
     playlist_id: str | None = None
+    include_transcription: bool = True  # Fetch full transcription for each video
 
 
 class TranscriptionRequest(BaseModel):
     video_ids: list[str]
     languages: list[str] | None = None  # e.g. ["pt", "en"] - if None, uses first available
+    use_playwright: bool = True  # Use Playwright CDP (bypasses IP blocking, recommended)

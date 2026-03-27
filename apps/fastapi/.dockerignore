@@ -36,6 +36,9 @@ Thumbs.db
 .git/
 .gitignore
 
+# Claude Code
+.claude/
+
 # Testing
 .pytest_cache/
 .coverage

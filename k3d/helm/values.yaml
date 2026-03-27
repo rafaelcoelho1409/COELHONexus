@@ -25,6 +25,30 @@ neo4j:
   uri: "bolt://neo4j.YOUR_TAILNET_DOMAIN.ts.net:7687"
   # Credentials loaded from secret (NEO4J_USERNAME, NEO4J_PASSWORD)
 
+elasticsearch:
+  # External access via Tailscale (WireGuard encrypted)
+  host: "https://elasticsearch.YOUR_TAILNET_DOMAIN.ts.net"
+  username: "elastic"
+  # Password loaded from secret (ELASTICSEARCH_PASSWORD)
+
+# Proxy configuration for YouTube Transcript API (WARP + Tor fallback)
+# Uses external Tailscale addresses for remote access
+proxy:
+  warp:
+    # External access via Tailscale (auth credentials from secret)
+    host: "warp-proxy.YOUR_TAILNET_DOMAIN.ts.net"
+    port: 1080
+  tor:
+    # External access via Tailscale (no auth)
+    host: "tor-proxy.YOUR_TAILNET_DOMAIN.ts.net"
+    port: 9150
+
+# Playwright CDP for browser automation (bypasses IP blocking)
+# Uses external Tailscale addresses for remote access
+playwright:
+  cdp_headless: "https://playwright-cdp-headless.YOUR_TAILNET_DOMAIN.ts.net"
+  cdp_headed: "https://playwright-cdp.YOUR_TAILNET_DOMAIN.ts.net"
+
 # Secret containing credentials (created by upload_env_to_k3d.sh)
 secretName: coelhonexus-secret
 
@@ -49,6 +73,12 @@ secretMappings:
     key: nvidia-api-key
   - envName: SAMBANOVA_API_KEY
     key: sambanova-api-key
+  - envName: ELASTICSEARCH_PASSWORD
+    key: elasticsearch-password
+  - envName: WARP_PROXY_USER
+    key: warp-proxy-user
+  - envName: WARP_PROXY_PASS
+    key: warp-proxy-pass
 
 # Registry configuration - uses COELHOCloud's k3d registry
 registry:
@@ -69,11 +99,11 @@ fastapi:
   replicas: 1
   resources:
     requests:
+      memory: "2Gi"
+      cpu: "500m"
+    limits:
       memory: "4Gi"
       cpu: "1000m"
-    limits:
-      memory: "8Gi"
-      cpu: "2000m"
   portsSettings:
     ports:
       - name: http

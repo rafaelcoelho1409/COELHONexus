@@ -3,12 +3,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import redis.asyncio as redis_aio
+from elasticsearch import AsyncElasticsearch
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 
 from schemas.inputs import YouTubeSearchConfig
 from routers.v1.youtube import agents as youtube_agents
 from routers.v1.youtube import content as youtube_content
+from routers.v1.youtube.helpers import create_youtube_index
 
 # =============================================================================
 # Configuration
@@ -23,6 +25,11 @@ if REDIS_PASSWORD:
 else:
     REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}"
 
+# ElasticSearch configuration
+ES_HOST = os.environ["ELASTICSEARCH_HOST"]
+ES_USERNAME = os.environ["ELASTICSEARCH_USERNAME"]
+ES_PASSWORD = os.environ["ELASTICSEARCH_PASSWORD"]
+
 # =============================================================================
 # Lifespan (startup/shutdown)
 # =============================================================================
@@ -31,6 +38,16 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler for startup/shutdown tasks."""
     print("Starting FastAPI Service...", flush = True)
     app.state.redis_aio = redis_aio.from_url(REDIS_URL)
+    # ElasticSearch async client
+    app.state.es = AsyncElasticsearch(
+        hosts = [ES_HOST],
+        basic_auth = (ES_USERNAME, ES_PASSWORD) if ES_PASSWORD else None,
+        verify_certs = False,  # Tailscale provides encryption
+    )
+    print(f"ElasticSearch client initialized: {ES_HOST}", flush=True)
+    # Create YouTube index if not exists
+    es_index_result = await create_youtube_index(app.state.es)
+    print(f"ElasticSearch YouTube index: {es_index_result}", flush=True)
     # Create default YouTubeSearchConfig only if it doesn't exist
     search_config_key = "coelhonexus:youtube:search:config"
     existing_config = await app.state.redis_aio.json().get(search_config_key)
@@ -85,6 +102,8 @@ async def lifespan(app: FastAPI):
         print("FastAPI startup complete.", flush = True)
         yield  # App runs here - connection stays open
         print("FastAPI shutting down...", flush = True)
+        await app.state.es.close()
+        print("ElasticSearch connection closed.", flush=True)
         await app.state.redis_aio.close()
     print("Redis connection closed.", flush = True)
 

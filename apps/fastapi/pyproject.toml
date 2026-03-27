@@ -22,8 +22,14 @@ dependencies = [
     "sentence-transformers",   # Local embeddings
     "neo4j",
     "redis",
-    "pytubefix",
-    "youtube-transcript-api",
+    "yt-dlp",                  # YouTube metadata extraction (subprocess)
+    "bgutil-ytdlp-pot-provider>=1.3.0",  # PO Token plugin (latest, matches sidecar API)
+    "curl_cffi>=0.11",             # Browser impersonation for yt-dlp
+    "youtube-transcript-api",  # Transcriptions with proxy support
+    "PySocks",                 # SOCKS proxy support for youtube-transcript-api
+    "orjson",                  # Fast JSON parsing
+    "elasticsearch[async]>=8.0.0,<9.0.0",  # ES server is v8
+    "playwright",              # Browser automation (connects to remote server)
 ]
 
 [build-system]
