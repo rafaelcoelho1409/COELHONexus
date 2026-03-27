@@ -14,7 +14,10 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
+from urllib.request import urlopen
+import ssl
+import json
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.proxies import GenericProxyConfig
 from playwright.async_api import async_playwright
@@ -500,6 +503,52 @@ class TranscriptSegment:
     text: str
 
 
+def _get_cdp_websocket_url(cdp_endpoint: str) -> str:
+    """
+    Get the proper WebSocket URL for CDP connection.
+
+    When CDP is accessed via HTTPS reverse proxy (like Tailscale Ingress),
+    the /json/version endpoint returns ws:// URLs on port 80, but we need
+    wss:// URLs on port 443.
+
+    This function fetches /json/version, extracts the WebSocket path,
+    and constructs a proper wss:// URL using the original HTTPS host.
+    """
+    parsed = urlparse(cdp_endpoint)
+    json_url = f"{cdp_endpoint}/json/version"
+
+    try:
+        # Create SSL context that doesn't verify (for self-signed certs)
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        with urlopen(json_url, timeout=10, context=ctx) as response:
+            data = json.loads(response.read().decode())
+            ws_url = data.get("webSocketDebuggerUrl", "")
+
+            if not ws_url:
+                log.warning(f"[cdp] No webSocketDebuggerUrl in response from {json_url}")
+                return cdp_endpoint
+
+            # Extract the path from the ws:// URL (e.g., /devtools/browser/<uuid>)
+            ws_parsed = urlparse(ws_url)
+            ws_path = ws_parsed.path
+
+            # Construct proper wss:// URL using the original HTTPS host
+            if parsed.scheme == "https":
+                proper_url = f"wss://{parsed.netloc}{ws_path}"
+            else:
+                proper_url = f"ws://{parsed.netloc}{ws_path}"
+
+            log.info(f"[cdp] Resolved WebSocket URL: {proper_url}")
+            return proper_url
+
+    except Exception as e:
+        log.warning(f"[cdp] Failed to fetch {json_url}: {e}, falling back to endpoint")
+        return cdp_endpoint
+
+
 async def fetch_transcript_with_playwright(
     video_id: str,
     headless: bool = True,
@@ -516,10 +565,14 @@ async def fetch_transcript_with_playwright(
     Returns:
         dict with video_id, language, page_content, segments or error
     """
-    cdp_url = CDP_HEADLESS if headless else CDP_HEADED
+    cdp_endpoint = CDP_HEADLESS if headless else CDP_HEADED
     url = f"https://www.youtube.com/watch?v={video_id}"
     start_time = time.time()
+
+    # Get proper WebSocket URL (handles HTTPS reverse proxy)
+    cdp_url = await asyncio.to_thread(_get_cdp_websocket_url, cdp_endpoint)
     log.info(f"[playwright:transcript] starting video_id={video_id} cdp={cdp_url}")
+
     try:
         async with async_playwright() as p:
             browser = await p.chromium.connect_over_cdp(cdp_url)
