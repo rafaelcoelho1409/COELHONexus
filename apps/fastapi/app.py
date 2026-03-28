@@ -10,7 +10,11 @@ from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 from schemas.inputs import YouTubeSearchConfig
 from routers.v1.youtube import agents as youtube_agents
 from routers.v1.youtube import content as youtube_content
-from routers.v1.youtube.helpers import create_youtube_index
+from routers.v1.youtube.helpers import (
+    create_youtube_index,
+    init_transcript_service,
+    close_transcript_service,
+)
 
 # =============================================================================
 # Configuration
@@ -48,6 +52,13 @@ async def lifespan(app: FastAPI):
     # Create YouTube index if not exists
     es_index_result = await create_youtube_index(app.state.es)
     print(f"ElasticSearch YouTube index: {es_index_result}", flush=True)
+    # Initialize Playwright transcript service (browser pool)
+    # Memory: ~100Mi per context, 4Gi limit = safe for 10 concurrent
+    # Pool size defaults to max_concurrent to avoid context creation storms
+    app.state.transcript_service = await init_transcript_service(
+        max_concurrent=10,
+    )
+    print("Playwright transcript service initialized.", flush=True)
     # Create default YouTubeSearchConfig only if it doesn't exist
     search_config_key = "coelhonexus:youtube:search:config"
     existing_config = await app.state.redis_aio.json().get(search_config_key)
@@ -102,6 +113,8 @@ async def lifespan(app: FastAPI):
         print("FastAPI startup complete.", flush = True)
         yield  # App runs here - connection stays open
         print("FastAPI shutting down...", flush = True)
+        await close_transcript_service()
+        print("Playwright transcript service closed.", flush=True)
         await app.state.es.close()
         print("ElasticSearch connection closed.", flush=True)
         await app.state.redis_aio.close()

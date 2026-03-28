@@ -412,20 +412,30 @@ def get_proxy_config(proxy_url: str) -> GenericProxyConfig:
         https_url = proxy_url)
 
 
-async def add_transcription(video: dict, use_playwright: bool = True) -> dict:
+async def add_transcription(video: dict, use_service: bool = True) -> dict:
     """
     Add full transcription to a video metadata dict.
-    Uses Playwright by default (bypasses IP blocking), falls back to proxy chain.
+
+    Uses PlaywrightTranscriptService (browser pool with semaphore control).
+    Falls back to legacy function if service not initialized.
     """
     video_id = video.get("id")
     if not video_id:
         return video
-    result = await fetch_transcript_with_fallback(video_id, use_playwright=use_playwright)
+
+    # Try to use the global service (semaphore-controlled)
+    service = _transcript_service
+    if use_service and service and service._initialized:
+        result = await service._fetch_with_fallback(video_id, prefer_manual=True, use_fallback=True)
+    else:
+        # Fallback to legacy function
+        result = await fetch_transcript_with_fallback(video_id, use_playwright=True)
+
     if "error" not in result:
         video["transcription"] = result.get("page_content", "")
         video["transcription_language"] = result.get("language", "")
-        video["transcription_proxy"] = result.get("proxy_used", "")
-        log.info(f"[add_transcription] OK video_id={video_id} lang={video['transcription_language']} method={video['transcription_proxy']}")
+        video["transcription_method"] = result.get("method", "")
+        log.info(f"[add_transcription] OK video_id={video_id} lang={video['transcription_language']} method={video['transcription_method']}")
     else:
         video["transcription"] = ""
         video["transcription_error"] = result.get("error", "")
@@ -469,13 +479,26 @@ def fetch_transcript_with_proxy_fallback(
                 first_transcript = next(iter(transcript_list))
                 fetched = first_transcript.fetch()
             elapsed = time.time() - start_time
-            content = " ".join([snippet.text for snippet in fetched])
-            log.info(f"[transcript] OK proxy={proxy_name} video_id={video_id} lang={fetched.language_code} chars={len(content)} time={elapsed:.2f}s")
+            # Build segments with timestamps
+            segments = []
+            for snippet in fetched:
+                start_sec = snippet.start
+                minutes = int(start_sec // 60)
+                seconds = int(start_sec % 60)
+                segments.append({
+                    "timestamp": f"{minutes}:{seconds:02d}",
+                    "text": snippet.text,
+                })
+            content = " ".join([s["text"] for s in segments])
+            is_auto = fetched.is_generated if hasattr(fetched, 'is_generated') else True
+            log.info(f"[transcript] OK proxy={proxy_name} video_id={video_id} lang={fetched.language_code} segments={len(segments)} time={elapsed:.2f}s")
             return {
                 "video_id": video_id,
                 "language": fetched.language_code,
+                "is_auto_generated": is_auto,
                 "page_content": content,
-                "proxy_used": proxy_name,
+                "segments": segments,
+                "method": proxy_name,
             }
         except Exception as e:
             elapsed = time.time() - start_time
@@ -954,23 +977,416 @@ async def fetch_transcript_with_fallback(
     use_playwright: bool = True,
 ) -> dict:
     """
-    Fetch transcript using Playwright CDP (bypasses IP blocking).
-    Proxy fallback disabled - Playwright should work 100% of the time.
-
-    Args:
-        video_id: YouTube video ID
-        languages: Preferred languages (not used with Playwright)
-        use_playwright: Use Playwright (default True, set False to use proxy chain)
+    Legacy function - use PlaywrightTranscriptService.fetch_batch() instead.
+    Kept for backward compatibility.
     """
     if use_playwright:
         return await fetch_transcript_with_playwright(video_id, headless=True)
-    # Legacy proxy chain (only if explicitly requested)
     result = await asyncio.to_thread(
         fetch_transcript_with_proxy_fallback,
         video_id,
         languages
     )
     return result
+
+
+# =============================================================================
+# PlaywrightTranscriptService - Browser Pool with Semaphore Control
+# =============================================================================
+# Errors that should trigger proxy fallback
+FALLBACK_ERRORS = [
+    "timeout", "blocked", "captcha", "bot", "no transcript",
+    "button not found", "err_", "connection", "refused",
+]
+
+
+def _should_fallback(error: str) -> bool:
+    """Check if error should trigger proxy fallback."""
+    error_lower = error.lower()
+    return any(trigger in error_lower for trigger in FALLBACK_ERRORS)
+
+
+class PlaywrightTranscriptService:
+    """
+    Browser pool with semaphore-controlled concurrency.
+
+    Features:
+    - Semaphore limits concurrent browser contexts (default: 5)
+    - Context pool for reuse (reduces context creation overhead)
+    - Automatic fallback to proxy chain on errors
+    - Memory-safe: proper cleanup in all paths
+
+    Usage:
+        # Initialize at FastAPI lifespan
+        service = PlaywrightTranscriptService(max_concurrent=5)
+        await service.initialize()
+
+        # Use in endpoint
+        results = await service.fetch_batch(video_ids)
+
+        # Cleanup at shutdown
+        await service.close()
+    """
+
+    def __init__(
+        self,
+        cdp_url: str | None = None,
+        max_concurrent: int = 5,
+        context_pool_size: int | None = None,
+        timeout_ms: int = 12000,
+        navigation_timeout_ms: int = 60000,
+    ):
+        """
+        Args:
+            cdp_url: WebSocket URL for CDP connection (auto-resolved if None)
+            max_concurrent: Maximum parallel transcript extractions
+            context_pool_size: Number of warm contexts to keep in pool (defaults to max_concurrent)
+            timeout_ms: Timeout for DOM scraping fallback
+            navigation_timeout_ms: Timeout for Page.goto (default: 60s)
+        """
+        self._cdp_endpoint = cdp_url
+        self.max_concurrent = max_concurrent
+        # Pool size should match max_concurrent to avoid context creation storms
+        self.context_pool_size = context_pool_size if context_pool_size is not None else max_concurrent
+        self.timeout_ms = timeout_ms
+        self.navigation_timeout_ms = navigation_timeout_ms
+
+        self.semaphore = asyncio.Semaphore(max_concurrent)
+        self._playwright = None
+        self._browser = None
+        self._context_pool: asyncio.Queue = None
+        self._initialized = False
+        self._cdp_url = None
+
+    async def initialize(self) -> None:
+        """Initialize browser and context pool. Call once at startup."""
+        if self._initialized:
+            return
+
+        # Resolve CDP WebSocket URL
+        cdp_endpoint = self._cdp_endpoint or CDP_HEADLESS
+        self._cdp_url = await asyncio.to_thread(_get_cdp_websocket_url, cdp_endpoint)
+        log.info(f"[transcript-service] Initializing with CDP: {self._cdp_url[:60]}...")
+
+        # Connect to browser
+        self._playwright = await async_playwright().start()
+        self._browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
+
+        # Pre-warm context pool
+        self._context_pool = asyncio.Queue(maxsize=self.context_pool_size)
+        for i in range(self.context_pool_size):
+            ctx = await self._create_context()
+            await self._context_pool.put(ctx)
+            log.info(f"[transcript-service] Warmed context {i+1}/{self.context_pool_size}")
+
+        self._initialized = True
+        log.info(f"[transcript-service] Ready (max_concurrent={self.max_concurrent}, pool_size={self.context_pool_size})")
+
+    async def close(self) -> None:
+        """Cleanup all resources. Call at shutdown."""
+        if not self._initialized:
+            return
+
+        log.info("[transcript-service] Shutting down...")
+
+        # Close all pooled contexts
+        closed = 0
+        while not self._context_pool.empty():
+            try:
+                ctx = self._context_pool.get_nowait()
+                await ctx.close()
+                closed += 1
+            except:
+                pass
+
+        log.info(f"[transcript-service] Closed {closed} pooled contexts")
+
+        if self._browser:
+            try:
+                await self._browser.close()
+            except:
+                pass
+
+        if self._playwright:
+            try:
+                await self._playwright.stop()
+            except:
+                pass
+
+        self._initialized = False
+        log.info("[transcript-service] Shutdown complete")
+
+    async def _create_context(self):
+        """Create a new browser context with optimized settings."""
+        return await self._browser.new_context(
+            viewport={"width": 1280, "height": 720},
+        )
+
+    async def _acquire_context(self):
+        """Get a context from pool or create new if pool empty."""
+        try:
+            return self._context_pool.get_nowait()
+        except asyncio.QueueEmpty:
+            log.info("[transcript-service] Pool exhausted, creating temporary context")
+            return await self._create_context()
+
+    async def _release_context(self, ctx, reuse: bool = True) -> None:
+        """Return context to pool or close it."""
+        if not reuse:
+            try:
+                await ctx.close()
+            except:
+                pass
+            return
+
+        if self._context_pool.qsize() < self.context_pool_size:
+            try:
+                # Clear cookies for clean reuse
+                await ctx.clear_cookies()
+                self._context_pool.put_nowait(ctx)
+            except:
+                try:
+                    await ctx.close()
+                except:
+                    pass
+        else:
+            try:
+                await ctx.close()
+            except:
+                pass
+
+    async def fetch_single(
+        self,
+        video_id: str,
+        prefer_manual: bool = True,
+    ) -> dict:
+        """
+        Fetch transcript for a single video with semaphore control.
+
+        Args:
+            video_id: YouTube video ID
+            prefer_manual: Prefer manual transcripts over auto-generated
+
+        Returns:
+            dict with video_id, page_content, language, segments, etc.
+        """
+        start_time = time.time()
+
+        async with self.semaphore:
+            context = await self._acquire_context()
+            page = None
+            reuse_context = True
+
+            try:
+                page = await context.new_page()
+                await _setup_routes(page)
+
+                url = f"https://www.youtube.com/watch?v={video_id}"
+
+                # Navigate with configurable timeout and retry logic
+                max_nav_retries = 2
+                for nav_attempt in range(max_nav_retries + 1):
+                    try:
+                        await page.goto(url, wait_until="load", timeout=self.navigation_timeout_ms)
+                        break
+                    except Exception as nav_error:
+                        if nav_attempt < max_nav_retries:
+                            log.warning(f"[transcript-service] {video_id} nav retry {nav_attempt + 1}/{max_nav_retries}: {str(nav_error)[:50]}")
+                            await asyncio.sleep(1)
+                        else:
+                            raise nav_error
+
+                await _kill_youtube_background(page)
+
+                # Wait for captions data
+                try:
+                    await page.wait_for_function(
+                        '() => !!window.ytInitialPlayerResponse?.captions',
+                        timeout=5000
+                    )
+                except:
+                    pass
+
+                # Get caption tracks
+                tracks = await _get_caption_tracks(page)
+                language = "auto"
+                is_auto_generated = True
+
+                if tracks:
+                    manual_count = sum(1 for t in tracks if not t.is_auto_generated)
+                    log.info(f"[transcript-service] {video_id}: tracks={len(tracks)} manual={manual_count}")
+
+                    selected = _select_best_track(tracks, prefer_manual)
+                    language = selected.language_code
+                    is_auto_generated = selected.is_auto_generated
+
+                    # Try direct API first (fast path)
+                    try:
+                        segments_data = await _fetch_transcript_direct(page, selected.base_url)
+                        segments = [TranscriptSegment(timestamp=s['timestamp'], text=s['text']) for s in segments_data]
+                        page_content = " ".join([seg.text for seg in segments])
+                        elapsed = time.time() - start_time
+
+                        log.info(f"[transcript-service] OK {video_id} method=direct_api segments={len(segments)} time={elapsed:.2f}s")
+                        return {
+                            "video_id": video_id,
+                            "language": language,
+                            "is_auto_generated": is_auto_generated,
+                            "page_content": page_content,
+                            "segments": [{"timestamp": s.timestamp, "text": s.text} for s in segments],
+                            "method": "direct_api",
+                        }
+                    except Exception as e:
+                        log.info(f"[transcript-service] {video_id} direct_api failed: {e}")
+
+                # Fallback to DOM scraping
+                raw_text = await _extract_via_dom(page, self.timeout_ms)
+
+                if not raw_text:
+                    raise ValueError(f"No transcript for: {video_id}")
+
+                segments = _parse_transcript(raw_text)
+                page_content = " ".join([seg.text for seg in segments])
+
+                if "auto-generated" in raw_text.lower():
+                    is_auto_generated = True
+
+                elapsed = time.time() - start_time
+                log.info(f"[transcript-service] OK {video_id} method=dom_scrape segments={len(segments)} time={elapsed:.2f}s")
+
+                return {
+                    "video_id": video_id,
+                    "language": language,
+                    "is_auto_generated": is_auto_generated,
+                    "page_content": page_content,
+                    "segments": [{"timestamp": s.timestamp, "text": s.text} for s in segments],
+                    "method": "dom_scrape",
+                }
+
+            except Exception as e:
+                reuse_context = False  # Don't reuse context on error
+                elapsed = time.time() - start_time
+                log.error(f"[transcript-service] FAIL {video_id} time={elapsed:.2f}s error={str(e)[:100]}")
+                return {
+                    "video_id": video_id,
+                    "error": str(e),
+                }
+
+            finally:
+                if page:
+                    try:
+                        await page.close()
+                    except:
+                        pass
+                await self._release_context(context, reuse=reuse_context)
+
+    async def _fetch_with_fallback(
+        self,
+        video_id: str,
+        prefer_manual: bool,
+        use_fallback: bool,
+    ) -> dict:
+        """Fetch single video with optional proxy fallback."""
+        result = await self.fetch_single(video_id, prefer_manual)
+
+        if "error" not in result:
+            return result
+
+        if not use_fallback:
+            return result
+
+        # Check if error should trigger fallback
+        if not _should_fallback(result.get("error", "")):
+            return result
+
+        log.info(f"[transcript-service] {video_id} trying proxy fallback")
+        fallback_result = await asyncio.to_thread(
+            fetch_transcript_with_proxy_fallback,
+            video_id,
+            None  # languages
+        )
+        return fallback_result
+
+    async def fetch_batch(
+        self,
+        video_ids: list[str],
+        prefer_manual: bool = True,
+        use_fallback: bool = True,
+    ) -> list[dict]:
+        """
+        Fetch transcripts for multiple videos with controlled concurrency.
+
+        The semaphore ensures max_concurrent limit is respected,
+        preventing OOM from too many browser contexts.
+
+        Args:
+            video_ids: List of YouTube video IDs
+            prefer_manual: Prefer manual transcripts over auto-generated
+            use_fallback: Try proxy chain if Playwright fails
+
+        Returns:
+            List of transcript dicts (same order as video_ids)
+        """
+        if not self._initialized:
+            raise RuntimeError("PlaywrightTranscriptService not initialized. Call initialize() first.")
+
+        log.info(f"[transcript-service] Batch started: {len(video_ids)} videos (max_concurrent={self.max_concurrent})")
+        start_time = time.time()
+
+        tasks = [
+            self._fetch_with_fallback(vid, prefer_manual, use_fallback)
+            for vid in video_ids
+        ]
+        results = await asyncio.gather(*tasks)
+
+        elapsed = time.time() - start_time
+        success = sum(1 for r in results if "error" not in r)
+        log.info(f"[transcript-service] Batch complete: {success}/{len(video_ids)} OK, time={elapsed:.2f}s")
+
+        return results
+
+
+# Global service instance (initialized at FastAPI lifespan)
+_transcript_service: PlaywrightTranscriptService | None = None
+
+
+def get_transcript_service() -> PlaywrightTranscriptService:
+    """Get the global transcript service instance."""
+    global _transcript_service
+    if _transcript_service is None:
+        _transcript_service = PlaywrightTranscriptService()
+    return _transcript_service
+
+
+async def init_transcript_service(
+    max_concurrent: int = 5,
+    context_pool_size: int | None = None,
+    navigation_timeout_ms: int = 60000,
+) -> PlaywrightTranscriptService:
+    """
+    Initialize the global transcript service. Call at FastAPI lifespan startup.
+
+    Args:
+        max_concurrent: Maximum parallel transcript extractions
+        context_pool_size: Pool size (defaults to max_concurrent to avoid context creation storms)
+        navigation_timeout_ms: Timeout for Page.goto (default: 60s)
+    """
+    global _transcript_service
+    _transcript_service = PlaywrightTranscriptService(
+        max_concurrent=max_concurrent,
+        context_pool_size=context_pool_size,  # Will default to max_concurrent if None
+        navigation_timeout_ms=navigation_timeout_ms,
+    )
+    await _transcript_service.initialize()
+    return _transcript_service
+
+
+async def close_transcript_service() -> None:
+    """Close the global transcript service. Call at FastAPI lifespan shutdown."""
+    global _transcript_service
+    if _transcript_service:
+        await _transcript_service.close()
+        _transcript_service = None
 
 
 # =============================================================================

@@ -227,21 +227,21 @@ async def search_youtube_playlist(request: Request):
 
 
 @router.post("/transcriptions")
-async def get_transcriptions(payload: TranscriptionRequest):
+async def get_transcriptions(payload: TranscriptionRequest, request: Request):
     """
-    Fetch transcriptions for multiple videos.
+    Fetch transcriptions for multiple videos with controlled concurrency.
 
-    By default uses Playwright CDP (bypasses IP blocking).
-    Falls back to proxy chain (WARP -> Tor -> Direct) if Playwright fails.
+    Uses Playwright CDP browser pool (bypasses IP blocking).
+    - Semaphore limits concurrent browser contexts (default: 5)
+    - Context pool for reuse (reduces memory overhead)
+    - Automatic fallback to proxy chain on errors
 
-    Set use_playwright=false to skip Playwright and use proxy chain directly.
+    No batch size limit - semaphore ensures memory safety regardless of batch size.
+    Large batches (500+ videos) will queue and process with controlled concurrency.
     """
-    transcriptions = await asyncio.gather(*[
-        fetch_transcript_with_fallback(
-            vid,
-            languages = payload.languages,
-            use_playwright = payload.use_playwright,
-        )
-        for vid in payload.video_ids
-    ])
+    transcript_service = request.app.state.transcript_service
+    transcriptions = await transcript_service.fetch_batch(
+        payload.video_ids,
+        use_fallback=payload.use_playwright,  # If Playwright enabled, allow fallback
+    )
     return {"transcriptions": transcriptions}
