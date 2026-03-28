@@ -707,14 +707,49 @@ async def _fetch_transcript_direct(page, base_url: str) -> list[dict]:
 
 
 async def _extract_via_dom(page, timeout_ms: int) -> str:
-    """Extract transcript via DOM interaction (fallback)."""
+    """
+    Extract transcript via DOM interaction (fallback).
+
+    Uses multiple fallback strategies based on YouTube's A/B testing variations:
+    1. Check if transcript panel is already visible
+    2. Handle consent dialogs if present
+    3. Expand description using multiple selectors
+    4. Click transcript button using aria-label (most stable)
+    5. Fallback to "More actions" menu
+    """
     # Wait for page content to fully initialize
     try:
         await page.wait_for_selector('ytd-watch-metadata, #above-the-fold', timeout=15000)
     except Exception as e:
         log.warning(f"[dom] Metadata selector not found: {e}")
 
+    # Additional wait for dynamic content (YouTube loads async)
     await page.wait_for_timeout(2000)
+
+    # Handle consent dialog if present (YouTube GDPR banner)
+    try:
+        consent_check = await page.evaluate('''
+            () => !!document.querySelector('ytd-consent-bump-v2-lightbox, tp-yt-paper-dialog')
+        ''')
+        if consent_check:
+            log.info("[dom] Consent dialog detected, attempting to dismiss...")
+            accept_selectors = [
+                'button[aria-label*="Accept"]',
+                'button:has-text("Accept all")',
+                'button:has-text("Reject all")',  # Either works to dismiss
+                'tp-yt-paper-button:has-text("Accept")',
+            ]
+            for sel in accept_selectors:
+                try:
+                    btn = page.locator(sel).first
+                    if await btn.count() > 0:
+                        await btn.click(timeout=3000)
+                        await page.wait_for_timeout(1000)
+                        break
+                except:
+                    continue
+    except:
+        pass
 
     # Check if transcript panel is already visible
     already_visible = await page.evaluate('''
@@ -732,81 +767,195 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
 
     if already_visible:
         log.info("[dom] Transcript panel already visible")
-        return await page.evaluate('''
-            () => {
-                const panels = document.querySelectorAll('ytd-engagement-panel-section-list-renderer');
-                for (const p of panels) {
-                    if (p.getAttribute('visibility') === 'ENGAGEMENT_PANEL_VISIBILITY_EXPANDED'
-                        && /\\d+:\\d{2}/.test(p.innerText)) {
-                        return p.innerText;
-                    }
-                }
-                return '';
-            }
-        ''')
+        return await _extract_transcript_text(page)
 
-    # Method 1: Try expand button
-    try:
-        expand_btn = page.locator("tp-yt-paper-button#expand:not([hidden])").first
-        if await expand_btn.count() > 0:
-            await expand_btn.click(timeout=2000)
-            await page.wait_for_timeout(500)
-    except:
-        pass
+    # Step 1: Expand description first (required for transcript button visibility)
+    # Multiple selectors for YouTube's A/B testing variations
+    expand_selectors = [
+        'tp-yt-paper-button#expand:not([hidden])',
+        '#expand[aria-label*="more"]',
+        '#description-inline-expander tp-yt-paper-button',
+        'ytd-text-inline-expander #expand',
+        '#description ytd-text-inline-expander',
+        'button[aria-label="Show more"]',
+    ]
 
-    # Method 2: Try clicking on description to expand
-    try:
-        desc = page.locator("#description-inline-expander, ytd-text-inline-expander").first
-        if await desc.count() > 0:
-            await desc.click(timeout=2000)
-            await page.wait_for_timeout(500)
-    except:
-        pass
-
-    # Method 3: Try "Show transcript" button
-    clicked = False
-    for selector in ['button[aria-label="Show transcript"]', 'ytd-video-description-transcript-section-renderer button']:
+    expanded = False
+    for selector in expand_selectors:
         try:
             btn = page.locator(selector).first
             if await btn.count() > 0:
-                await btn.click(timeout=2000)
-                clicked = True
+                await btn.click(timeout=3000)
+                await page.wait_for_timeout(800)
+                expanded = True
+                log.info(f"[dom] Description expanded via: {selector[:40]}")
                 break
         except:
             continue
 
-    # Method 4: Try "More actions" menu
-    if not clicked:
+    # Also try clicking on description area directly (some layouts)
+    if not expanded:
         try:
-            more_btn = page.locator('button[aria-label="More actions"]').first
-            if await more_btn.count() > 0:
-                await more_btn.click(timeout=2000)
-                await page.wait_for_timeout(300)
-                menu_item = page.locator('tp-yt-paper-listbox ytd-menu-service-item-renderer').filter(has_text="transcript")
-                if await menu_item.count() > 0:
-                    await menu_item.first.click(timeout=2000)
-                    clicked = True
+            desc_area = page.locator("#description-inline-expander, ytd-text-inline-expander, #description").first
+            if await desc_area.count() > 0:
+                await desc_area.click(timeout=2000)
+                await page.wait_for_timeout(800)
+                expanded = True
+                log.info("[dom] Description expanded via click on area")
         except:
             pass
 
-    if not clicked:
-        raise ValueError("Transcript button not found")
+    # Step 2: Find and click transcript button using JavaScript (more reliable)
+    # This handles cases where Playwright locators find elements but can't click them
+    clicked = await page.evaluate('''
+        () => {
+            // Strategy 1: Find by exact aria-label
+            const exactBtn = document.querySelector('[aria-label="Show transcript"]');
+            if (exactBtn && exactBtn.offsetParent !== null) {
+                exactBtn.scrollIntoView({ block: 'center' });
+                exactBtn.click();
+                return 'exact-aria-label';
+            }
 
-    # Wait for transcript panel with timestamps
-    await page.wait_for_function(
-        '''() => {
-            const panels = document.querySelectorAll('ytd-engagement-panel-section-list-renderer');
-            for (const p of panels) {
-                if (p.getAttribute('visibility') === 'ENGAGEMENT_PANEL_VISIBILITY_EXPANDED'
-                    && /\\d+:\\d{2}/.test(p.innerText)) {
-                    return true;
+            // Strategy 2: Find in transcript section
+            const transcriptSection = document.querySelector('ytd-video-description-transcript-section-renderer');
+            if (transcriptSection) {
+                const btn = transcriptSection.querySelector('button, [role="button"]');
+                if (btn && btn.offsetParent !== null) {
+                    btn.scrollIntoView({ block: 'center' });
+                    btn.click();
+                    return 'transcript-section';
                 }
             }
-            return false;
-        }''',
-        timeout=timeout_ms,
-    )
 
+            // Strategy 3: Find by partial aria-label match (case-insensitive)
+            const allBtns = document.querySelectorAll('[aria-label]');
+            for (const btn of allBtns) {
+                const label = btn.getAttribute('aria-label') || '';
+                if (label.toLowerCase().includes('transcript') &&
+                    label.toLowerCase().includes('show') &&
+                    btn.offsetParent !== null) {
+                    btn.scrollIntoView({ block: 'center' });
+                    btn.click();
+                    return 'partial-aria-label';
+                }
+            }
+
+            // Strategy 4: Find button with "transcript" text
+            const textBtns = document.querySelectorAll('button');
+            for (const btn of textBtns) {
+                if (btn.textContent.toLowerCase().includes('transcript') &&
+                    btn.offsetParent !== null) {
+                    btn.scrollIntoView({ block: 'center' });
+                    btn.click();
+                    return 'text-content';
+                }
+            }
+
+            return null;
+        }
+    ''')
+
+    if clicked:
+        log.info(f"[dom] Transcript button clicked via JS: {clicked}")
+        await page.wait_for_timeout(500)
+    else:
+        # Fallback: try Playwright locators
+        transcript_selectors = [
+            '[aria-label="Show transcript"]',
+            'button[aria-label="Show transcript"]',
+            'ytd-video-description-transcript-section-renderer button',
+            'button:has-text("Show transcript")',
+        ]
+        for selector in transcript_selectors:
+            try:
+                btn = page.locator(selector).first
+                if await btn.count() > 0 and await btn.is_visible():
+                    await btn.scroll_into_view_if_needed(timeout=2000)
+                    await page.wait_for_timeout(300)
+                    await btn.click(timeout=3000)
+                    clicked = selector
+                    log.info(f"[dom] Transcript button clicked via locator: {selector[:40]}")
+                    break
+            except:
+                continue
+
+    # Step 3: Fallback - "More actions" menu (three-dot menu)
+    if not clicked:
+        try:
+            more_selectors = [
+                'button[aria-label="More actions"]',
+                '#button[aria-label="More actions"]',
+                'yt-icon-button[aria-label="More actions"]',
+            ]
+            for more_sel in more_selectors:
+                more_btn = page.locator(more_sel).first
+                if await more_btn.count() > 0:
+                    await more_btn.click(timeout=3000)
+                    await page.wait_for_timeout(500)
+
+                    # Look for transcript in dropdown menu
+                    menu_selectors = [
+                        'tp-yt-paper-listbox ytd-menu-service-item-renderer:has-text("transcript")',
+                        'ytd-menu-popup-renderer ytd-menu-service-item-renderer:has-text("transcript")',
+                        '[role="menuitem"]:has-text("transcript")',
+                    ]
+                    for menu_sel in menu_selectors:
+                        menu_item = page.locator(menu_sel).first
+                        if await menu_item.count() > 0:
+                            await menu_item.click(timeout=3000)
+                            clicked = True
+                            log.info("[dom] Transcript opened via More actions menu")
+                            break
+                    if clicked:
+                        break
+        except:
+            pass
+
+    # Step 4: Debug info if nothing worked
+    if not clicked:
+        debug_info = await page.evaluate('''
+            () => ({
+                url: window.location.href,
+                title: document.title,
+                hasVideo: !!document.querySelector('video'),
+                expandBtns: document.querySelectorAll('tp-yt-paper-button#expand, [id="expand"]').length,
+                transcriptBtns: document.querySelectorAll('[aria-label*="transcript" i]').length,
+                moreActionsBtns: document.querySelectorAll('[aria-label="More actions"]').length,
+                descSection: !!document.querySelector('ytd-video-description-transcript-section-renderer'),
+                allAriaLabels: Array.from(document.querySelectorAll('[aria-label]'))
+                    .map(el => el.getAttribute('aria-label'))
+                    .filter(l => l && (l.toLowerCase().includes('transcript') || l.toLowerCase().includes('more') || l.toLowerCase().includes('expand')))
+                    .slice(0, 10),
+            })
+        ''')
+        log.warning(f"[dom] Transcript button not found. Debug: {debug_info}")
+        raise ValueError("Transcript button not found")
+
+    # Step 5: Wait for transcript panel to appear with timestamps
+    try:
+        await page.wait_for_function(
+            '''() => {
+                const panels = document.querySelectorAll('ytd-engagement-panel-section-list-renderer');
+                for (const p of panels) {
+                    if (p.getAttribute('visibility') === 'ENGAGEMENT_PANEL_VISIBILITY_EXPANDED'
+                        && /\\d+:\\d{2}/.test(p.innerText)) {
+                        return true;
+                    }
+                }
+                return false;
+            }''',
+            timeout=timeout_ms,
+        )
+    except Exception as e:
+        log.warning(f"[dom] Transcript panel did not appear: {e}")
+        raise ValueError(f"Transcript panel timeout: {str(e)[:50]}")
+
+    return await _extract_transcript_text(page)
+
+
+async def _extract_transcript_text(page) -> str:
+    """Extract text from visible transcript panel."""
     return await page.evaluate('''
         () => {
             const panels = document.querySelectorAll('ytd-engagement-panel-section-list-renderer');
@@ -852,7 +1001,7 @@ def _parse_transcript(raw_text: str) -> list[TranscriptSegment]:
 async def fetch_transcript_with_playwright(
     video_id: str,
     headless: bool = True,
-    timeout_ms: int = 12000,
+    timeout_ms: int = 30000,
     prefer_manual: bool = True,
 ) -> dict:
     """
@@ -1033,7 +1182,7 @@ class PlaywrightTranscriptService:
         cdp_url: str | None = None,
         max_concurrent: int = 5,
         context_pool_size: int | None = None,
-        timeout_ms: int = 12000,
+        timeout_ms: int = 30000,
         navigation_timeout_ms: int = 60000,
     ):
         """
