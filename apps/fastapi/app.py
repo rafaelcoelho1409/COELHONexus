@@ -7,7 +7,6 @@ from elasticsearch import AsyncElasticsearch
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 
-from schemas.inputs import YouTubeSearchConfig
 from routers.v1.youtube import agents as youtube_agents
 from routers.v1.youtube import content as youtube_content
 from routers.v1.youtube.helpers import (
@@ -63,23 +62,6 @@ async def lifespan(app: FastAPI):
         max_retries=2,
     )
     print("Playwright transcript service initialized.", flush=True)
-    # Create default YouTubeSearchConfig only if it doesn't exist
-    search_config_key = "coelhonexus:youtube:search:config"
-    existing_config = await app.state.redis_aio.json().get(search_config_key)
-    if not existing_config:
-        search_config = YouTubeSearchConfig()
-        search_config = search_config.model_dump(exclude_none = True)
-        search_config.setdefault("query", "alborghetti")
-        search_config.setdefault("max_results", 10)
-        search_config.setdefault("sort_by", "Relevance")
-        await app.state.redis_aio.json().set(
-            search_config_key,
-            "$",
-            search_config
-        )
-        print("YouTubeSearchConfig created with defaults.", flush = True)
-    else:
-        print("YouTubeSearchConfig loaded from Redis.", flush = True)
     app.state.config = {
         "configurable": {"thread_id": "1"}
     }

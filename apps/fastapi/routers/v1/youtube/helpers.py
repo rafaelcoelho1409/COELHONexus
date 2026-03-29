@@ -153,46 +153,187 @@ class YtDlpExtractor:
         query: str,
         max_results: int = 10,
         sort_by_date: bool = False,
+        # Duration filters
+        duration: str | None = None,
+        duration_min: int | None = None,
+        duration_max: int | None = None,
+        # Date filters
+        date_after: str | None = None,
+        date_before: str | None = None,
+        # View/like count filters
+        min_views: int | None = None,
+        max_views: int | None = None,
+        min_likes: int | None = None,
+        # Live status filters
+        is_live: bool | None = None,
+        live_status: str | None = None,
+        # Availability filter
+        availability: str | None = None,
+        # Age limit filter
+        age_limit: int | None = None,
+        # String filters (support operators: *=, ^=, $=, ~=)
+        title_contains: str | None = None,
+        description_contains: str | None = None,
+        channel_name: str | None = None,
     ) -> list[dict]:
         """
-        Search YouTube with FULL metadata extraction.
-        Step 1: Use --flat-playlist to get video IDs quickly
-        Step 2: Extract full metadata for each video in parallel
-        """
-        prefix = "ytsearchdate" if sort_by_date else "ytsearch"
-        search_url = f"{prefix}{max_results}:{query}"
-        log.info(f"[yt-dlp:search] query='{query}' max_results={max_results} sort_by_date={sort_by_date}")
+        Search YouTube and return available metadata from search results.
+        Fast: uses --flat-playlist (no per-video extraction).
 
-        # Step 1: Get video IDs with --flat-playlist (fast)
+        All filters applied via yt-dlp post-processing:
+        - duration: preset or custom min/max in seconds
+        - date_after/date_before: YYYYMMDD or relative (e.g., "today-2weeks")
+        - min_views/max_views: View count range
+        - min_likes: Minimum like count
+        - is_live/live_status: Live stream filtering
+        - availability: public, unlisted, premium_only, subscriber_only
+        - age_limit: Download only videos suitable for given age
+        - title_contains/description_contains/channel_name: String filters with operators
+
+        String filter operators:
+        - Exact: "Python Tutorial"
+        - Contains: "*=tutorial"
+        - Starts with: "^=How to"
+        - Ends with: "$=2026"
+        - Regex: "~=(?i)python"
+
+        Returns list of dicts with: id, title, url, duration, channel, view_count, etc.
+        """
+        # Check if any filters are active
+        has_filters = any([
+            duration, duration_min, duration_max, date_after, date_before,
+            min_views, max_views, min_likes, is_live, live_status,
+            availability, age_limit, title_contains, description_contains, channel_name
+        ])
+
+        # Request more results to account for post-filtering
+        fetch_count = max_results * 3 if has_filters else max_results
+
+        # Use ytsearchdate prefix for date sorting
+        prefix = "ytsearchdate" if sort_by_date else "ytsearch"
+        search_url = f"{prefix}{fetch_count}:{query}"
+
+        # Build match-filter conditions (combined with & for AND logic)
+        match_conditions = []
+
+        # Duration filters
+        if duration_min is not None or duration_max is not None:
+            # Custom duration range overrides preset
+            if duration_min is not None:
+                match_conditions.append(f"duration>={duration_min}")
+            if duration_max is not None:
+                match_conditions.append(f"duration<={duration_max}")
+        elif duration:
+            # Preset duration ranges
+            if duration == "Under 4 minutes":
+                match_conditions.append("duration<240")
+            elif duration == "4 - 20 minutes":
+                match_conditions.append("duration>=240")
+                match_conditions.append("duration<=1200")
+            elif duration == "Over 20 minutes":
+                match_conditions.append("duration>1200")
+
+        # View count filters (using match-filter, not deprecated --min/max-views)
+        if min_views is not None:
+            match_conditions.append(f"view_count>=?{min_views}")
+        if max_views is not None:
+            match_conditions.append(f"view_count<=?{max_views}")
+
+        # Like count filter
+        if min_likes is not None:
+            match_conditions.append(f"like_count>=?{min_likes}")
+
+        # Live status filters
+        if live_status:
+            match_conditions.append(f"live_status='{live_status}'")
+        elif is_live is True:
+            match_conditions.append("is_live")
+        elif is_live is False:
+            match_conditions.append("!is_live")
+
+        # Availability filter
+        if availability:
+            match_conditions.append(f"availability='{availability}'")
+
+        # String filters (check for operators, default to contains)
+        def build_string_filter(field: str, value: str) -> str:
+            # Support operators: *=, ^=, $=, ~= and their negations !*=, !^=, !$=, !~=
+            if value.startswith(("*=", "^=", "$=", "~=", "!*=", "!^=", "!$=", "!~=", "=")):
+                return f"{field}{value}"
+            # Default: contains (case-insensitive via regex)
+            return f"{field}*='{value}'"
+
+        if title_contains:
+            match_conditions.append(build_string_filter("title", title_contains))
+        if description_contains:
+            match_conditions.append(build_string_filter("description", description_contains))
+        if channel_name:
+            match_conditions.append(build_string_filter("channel", channel_name))
+
+        log.info(f"[yt-dlp:search] query='{query}' max={max_results} sort_date={sort_by_date} filters={len(match_conditions)}")
+
         args = [
             *self.BASE_ARGS,
             "--flat-playlist",
             "--dump-single-json",
-            search_url,
+            # Enable approximate date for flat-playlist filtering
+            "--extractor-args", "youtube:approximate_date",
         ]
+
+        # Add combined match-filter (all conditions with AND logic)
+        if match_conditions:
+            combined_filter = " & ".join(match_conditions)
+            args.extend(["--match-filter", combined_filter])
+
+        # Date filters (dedicated args, not match-filter)
+        if date_after:
+            args.extend(["--dateafter", date_after])
+        if date_before:
+            args.extend(["--datebefore", date_before])
+
+        # Age limit filter (dedicated arg)
+        if age_limit is not None:
+            args.extend(["--age-limit", str(age_limit)])
+
+        args.append(search_url)
+
         async with self.semaphore:
-            success, stdout, stderr = await self._run_yt_dlp(args, timeout=60)
+            success, stdout, stderr = await self._run_yt_dlp(args, timeout=90)
         if not success:
-            log.info(f"[yt-dlp:search] FAILED to get video IDs query='{query}'")
+            log.info(f"[yt-dlp:search] FAILED query='{query}'")
             return [{"error": stderr or "Search failed"}]
 
         try:
             data = orjson.loads(stdout)
             entries = data.get("entries", [])
-            video_ids = [e.get("id") for e in entries if e and e.get("id")]
-            log.info(f"[yt-dlp:search] found {len(video_ids)} video IDs for query='{query}'")
+            # Return all available metadata from search results (limited to max_results)
+            videos = []
+            for entry in entries:
+                if entry and entry.get("id"):
+                    videos.append({
+                        "id": entry.get("id"),
+                        "title": entry.get("title"),
+                        "url": entry.get("url") or f"https://www.youtube.com/watch?v={entry.get('id')}",
+                        "duration": entry.get("duration"),
+                        "duration_string": entry.get("duration_string"),
+                        "view_count": entry.get("view_count"),
+                        "like_count": entry.get("like_count"),
+                        "channel": entry.get("channel"),
+                        "channel_id": entry.get("channel_id"),
+                        "channel_url": entry.get("channel_url"),
+                        "thumbnail": entry.get("thumbnail"),
+                        "description": entry.get("description"),
+                        "upload_date": entry.get("upload_date"),
+                        "live_status": entry.get("live_status"),
+                        "availability": entry.get("availability"),
+                    })
+                    if len(videos) >= max_results:
+                        break
+            log.info(f"[yt-dlp:search] OK query='{query}' results={len(videos)}")
+            return videos
         except orjson.JSONDecodeError:
             log.info(f"[yt-dlp:search] JSON_ERROR query='{query}'")
             return [{"error": "JSON parse error"}]
-
-        if not video_ids:
-            return []
-
-        # Step 2: Extract full metadata in parallel (errors handled per-video)
-        videos = await self.extract_batch(video_ids)
-        ok_videos = [v for v in videos if "error" not in v]
-        log.info(f"[yt-dlp:search] OK query='{query}' videos={len(ok_videos)}/{len(video_ids)}")
-        return ok_videos
 
     async def extract_playlist(
         self,
