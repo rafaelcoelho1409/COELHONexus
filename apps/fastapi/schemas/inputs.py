@@ -54,9 +54,9 @@ class YouTubeSearchConfig(BaseModel):
     channel_id: str | None = None
     playlist_id: str | None = None
     include_transcription: bool = True  # Fetch full transcription for each video
+    transcription_languages: list[str] | None = None  # e.g. ["en", "pt"] - None = best available (English priority)
 
 
 class TranscriptionRequest(BaseModel):
     video_ids: list[str]
     languages: list[str] | None = None  # e.g. ["pt", "en"] - if None, uses first available
-    use_playwright: bool = True  # Use Playwright CDP (bypasses IP blocking, recommended)

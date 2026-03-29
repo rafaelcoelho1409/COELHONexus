@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 from urllib.request import urlopen
 import ssl
 import json
@@ -33,12 +33,14 @@ from tenacity import (
     retry_if_exception_type,
     before_sleep_log,
 )
-from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api.proxies import GenericProxyConfig
 from playwright.async_api import async_playwright, Error as PlaywrightError
 
 # Use uvicorn's logger for proper output in FastAPI
 log = logging.getLogger("uvicorn.error")
+
+# ElasticSearch index names (normalized: metadata + transcriptions)
+ES_INDEX_METADATA = "coelhonexus-youtube-metadata"
+ES_INDEX_TRANSCRIPTIONS = "coelhonexus-youtube-transcriptions"
 
 
 # =============================================================================
@@ -389,140 +391,176 @@ def get_extractor() -> YtDlpExtractor:
 
 
 # =============================================================================
-# Transcription with Proxy Fallback (WARP -> Tor -> Direct)
+# Batch Transcription Helper with ES Caching
 # =============================================================================
-def build_warp_proxy_url() -> str | None:
-    """Build WARP proxy URL from environment variables."""
-    host = os.environ.get("WARP_PROXY_HOST")
-    port = os.environ.get("WARP_PROXY_PORT")
-    if not host or not port:
-        return None
-    user = os.environ.get("WARP_PROXY_USER", "")
-    password = os.environ.get("WARP_PROXY_PASS", "")
-    if user and password:
-        # URL-encode user and password to handle special chars like /
-        return f"socks5://{quote(user, safe='')}:{quote(password, safe='')}@{host}:{port}"
-    return f"socks5://{host}:{port}"
-
-
-def build_tor_proxy_url() -> str | None:
-    """Build Tor proxy URL from environment variables."""
-    host = os.environ.get("TOR_PROXY_HOST")
-    port = os.environ.get("TOR_PROXY_PORT")
-    if not host or not port:
-        return None
-    return f"socks5://{host}:{port}"
-
-
-def get_proxy_config(proxy_url: str) -> GenericProxyConfig:
-    """Create a GenericProxyConfig from a proxy URL."""
-    return GenericProxyConfig(
-        http_url = proxy_url, 
-        https_url = proxy_url)
-
-
-async def add_transcription(video: dict, use_service: bool = True) -> dict:
+async def _check_existing_transcriptions(
+    es_client,
+    video_ids: list[str],
+    languages: list[str] | None = None,
+) -> dict[str, set[str]]:
     """
-    Add full transcription to a video metadata dict.
+    Check ElasticSearch transcriptions index for existing transcriptions.
 
-    Uses PlaywrightTranscriptService (browser pool with semaphore control).
-    Falls back to legacy function if service not initialized.
+    Returns:
+        Dict mapping video_id -> set of existing language codes
     """
-    video_id = video.get("id")
-    if not video_id:
-        return video
+    if not es_client or not video_ids:
+        return {}
 
-    # Try to use the global service (semaphore-controlled)
-    service = _transcript_service
-    if use_service and service and service._initialized:
-        result = await service._fetch_with_fallback(video_id, prefer_manual=True, use_fallback=True)
-    else:
-        # Fallback to legacy function
-        result = await fetch_transcript_with_fallback(video_id, use_playwright=True)
+    try:
+        # Query transcriptions index for all matching video_ids
+        result = await es_client.search(
+            index=ES_INDEX_TRANSCRIPTIONS,
+            query={"terms": {"video_id": video_ids}},
+            _source=["video_id", "lang"],
+            size=len(video_ids) * 10,  # Allow up to 10 languages per video
+        )
 
-    if "error" not in result:
-        video["transcription"] = result.get("page_content", "")
-        video["transcription_language"] = result.get("language", "")
-        video["transcription_method"] = result.get("method", "")
-        log.info(f"[add_transcription] OK video_id={video_id} lang={video['transcription_language']} method={video['transcription_method']}")
-    else:
-        video["transcription"] = ""
-        video["transcription_error"] = result.get("error", "")
-        log.info(f"[add_transcription] FAIL video_id={video_id}")
-    return video
+        existing = {}
+        for hit in result.get("hits", {}).get("hits", []):
+            source = hit.get("_source", {})
+            vid = source.get("video_id")
+            lang = source.get("lang")
+            if vid and lang:
+                if vid not in existing:
+                    existing[vid] = set()
+                existing[vid].add(lang)
+
+        return existing
+    except Exception as e:
+        log.warning(f"[transcription-cache] ES lookup failed: {e}")
+        return {}
 
 
-def fetch_transcript_with_proxy_fallback(
-    video_id: str,
-    languages: list[str] | None = None
-) -> dict:
+def _needs_transcription(
+    existing_langs: set[str],
+    languages: list[str] | None = None,
+) -> bool:
     """
-    Fetch transcript with proxy fallback: WARP -> Tor -> Direct.
-    Returns dict with video_id, language, page_content or error.
-    """
-    # Build proxy chain, skipping unconfigured proxies
-    proxy_chain = []
-    warp_url = build_warp_proxy_url()
-    if warp_url:
-        proxy_chain.append(("WARP", warp_url))
-    tor_url = build_tor_proxy_url()
-    if tor_url:
-        proxy_chain.append(("Tor", tor_url))
-    proxy_chain.append(("Direct", None))  # Always try direct as fallback
+    Check if we need to fetch transcription based on existing languages.
 
-    last_error = None
-    for proxy_name, proxy_url in proxy_chain:
-        start_time = time.time()
-        try:
-            log.info(f"[transcript] trying proxy={proxy_name} video_id={video_id}")
-            if proxy_url:
-                ytt_api = YouTubeTranscriptApi(
-                    proxy_config=get_proxy_config(proxy_url)
-                )
-            else:
-                ytt_api = YouTubeTranscriptApi()
-            if languages:
-                fetched = ytt_api.fetch(video_id, languages=languages)
-            else:
-                transcript_list = ytt_api.list(video_id)
-                first_transcript = next(iter(transcript_list))
-                fetched = first_transcript.fetch()
-            elapsed = time.time() - start_time
-            # Build segments with timestamps
-            segments = []
-            for snippet in fetched:
-                start_sec = snippet.start
-                minutes = int(start_sec // 60)
-                seconds = int(start_sec % 60)
-                segments.append({
-                    "timestamp": f"{minutes}:{seconds:02d}",
-                    "text": snippet.text,
-                })
-            content = " ".join([s["text"] for s in segments])
-            is_auto = fetched.is_generated if hasattr(fetched, 'is_generated') else True
-            log.info(f"[transcript] OK proxy={proxy_name} video_id={video_id} lang={fetched.language_code} segments={len(segments)} time={elapsed:.2f}s")
-            return {
-                "video_id": video_id,
-                "language": fetched.language_code,
-                "is_auto_generated": is_auto,
-                "page_content": content,
-                "segments": segments,
-                "method": proxy_name,
-            }
-        except Exception as e:
-            elapsed = time.time() - start_time
-            last_error = str(e)
-            log.info(f"[transcript] FAIL proxy={proxy_name} video_id={video_id} time={elapsed:.2f}s error={last_error[:100]}")
+    Args:
+        existing_langs: Set of existing language codes (e.g., {"en", "pt"})
+        languages: Requested languages (None = any language is fine)
+
+    Returns:
+        True if transcription fetch is needed
+    """
+    if not existing_langs:
+        return True
+
+    if languages is None:
+        # No specific language requested - any existing transcription is fine
+        return False
+
+    # Check if all requested languages exist
+    for lang in languages:
+        # Match language prefix (e.g., "en" matches "en-US", "en-GB")
+        found = any(
+            existing_lang.startswith(lang) or lang.startswith(existing_lang)
+            for existing_lang in existing_langs
+        )
+        if not found:
+            return True
+
+    return False
+
+
+async def fetch_transcriptions_batch(
+    video_ids: list[str],
+    transcript_service=None,
+    es_client=None,
+    languages: list[str] | None = None,
+) -> list[dict]:
+    """
+    Fetch transcriptions for videos using Playwright CDP with ES caching.
+
+    Features:
+    - ES cache lookup: skips videos that already have transcriptions
+    - Language priority: manual > auto-generated, English priority if no preference
+    - Semaphore-controlled concurrency (5 parallel)
+    - Exponential backoff retry
+
+    Args:
+        video_ids: List of YouTube video IDs
+        transcript_service: PlaywrightTranscriptService instance (uses global if None)
+        es_client: AsyncElasticsearch client for cache lookup (optional)
+        languages: Requested languages (None = best available, English priority)
+
+    Returns:
+        List of transcription documents ready for ES indexing:
+        [{"video_id": "abc", "lang": "en", "content": "...", "is_auto": False, "method": "dom_scrape"}, ...]
+    """
+    if not video_ids:
+        return []
+
+    # Use provided service or global
+    service = transcript_service or _transcript_service
+    if not service or not service._initialized:
+        log.error("[fetch_transcriptions_batch] Service not initialized")
+        return []
+
+    # Check ES cache for existing transcriptions
+    existing_transcriptions = await _check_existing_transcriptions(es_client, video_ids, languages)
+
+    # Filter out videos that already have required transcriptions
+    ids_to_fetch = []
+    cached_count = 0
+    for vid in video_ids:
+        existing_langs = existing_transcriptions.get(vid, set())
+        if _needs_transcription(existing_langs, languages):
+            ids_to_fetch.append(vid)
+        else:
+            cached_count += 1
+            log.info(f"[transcription-cache] HIT {vid} langs={existing_langs}")
+
+    if cached_count > 0:
+        log.info(f"[fetch_transcriptions_batch] Cache: {cached_count} hits, {len(ids_to_fetch)} to fetch")
+
+    if not ids_to_fetch:
+        log.info("[fetch_transcriptions_batch] All videos cached, no fetch needed")
+        return []
+
+    log.info(f"[fetch_transcriptions_batch] Fetching {len(ids_to_fetch)} videos")
+
+    # Fetch transcriptions for videos not in cache
+    results = await service.fetch_batch(ids_to_fetch, prefer_manual=True)
+
+    # Build transcription documents for ES indexing
+    transcription_docs = []
+    success_count = 0
+    for result in results:
+        vid = result.get("video_id")
+        if not vid:
             continue
-    log.info(f"[transcript] ALL_FAILED video_id={video_id}")
-    return {
-        "video_id": video_id,
-        "error": last_error,
-    }
+
+        if "error" not in result:
+            lang = result.get("language", "unknown")
+            content = result.get("page_content", "")
+            is_auto = result.get("is_auto_generated", True)
+            method = result.get("method", "")
+
+            transcription_docs.append({
+                "id": f"{vid}_{lang}",  # Composite ID for ES document
+                "video_id": vid,
+                "lang": lang,
+                "content": content,
+                "is_auto": is_auto,
+                "method": method,
+                "_extracted_at": datetime.utcnow().isoformat(),
+            })
+
+            success_count += 1
+            log.info(f"[fetch_transcriptions_batch] OK {vid} lang={lang} auto={is_auto} len={len(content)}")
+        else:
+            log.warning(f"[fetch_transcriptions_batch] FAIL {vid}: {result.get('error', '')[:100]}")
+
+    log.info(f"[fetch_transcriptions_batch] Complete: {success_count}/{len(ids_to_fetch)} fetched, {cached_count} cached")
+    return transcription_docs
 
 
 # =============================================================================
-# Playwright CDP Transcript Extraction (Optimized v2)
+# Playwright CDP Transcript Extraction
 # =============================================================================
 # CDP endpoints for Playwright server (Tailscale addresses)
 CDP_HEADLESS = os.environ.get(
@@ -1129,51 +1167,17 @@ async def fetch_transcript_with_playwright(
         }
 
 
-async def fetch_transcript_with_fallback(
-    video_id: str,
-    languages: list[str] | None = None,
-    use_playwright: bool = True,
-) -> dict:
-    """
-    Legacy function - use PlaywrightTranscriptService.fetch_batch() instead.
-    Kept for backward compatibility.
-    """
-    if use_playwright:
-        return await fetch_transcript_with_playwright(video_id, headless=True)
-    result = await asyncio.to_thread(
-        fetch_transcript_with_proxy_fallback,
-        video_id,
-        languages
-    )
-    return result
-
-
 # =============================================================================
 # PlaywrightTranscriptService - Browser Pool with Semaphore Control
 # =============================================================================
-# Errors that should trigger proxy fallback
-FALLBACK_ERRORS = [
-    "timeout", "blocked", "captcha", "bot", "no transcript",
-    "button not found", "err_", "connection", "refused",
-]
-
-
-def _should_fallback(error: str) -> bool:
-    """Check if error should trigger proxy fallback."""
-    error_lower = error.lower()
-    return any(trigger in error_lower for trigger in FALLBACK_ERRORS)
-
-
 class PlaywrightTranscriptService:
     """
-    Browser pool with semaphore-controlled concurrency and periodic refresh.
+    Browser pool with semaphore-controlled concurrency for transcript extraction.
 
-    Features v3:
-    - Periodic browser recreation (every N videos to prevent stale connections)
+    Features:
     - Tenacity-based retry with exponential backoff
     - Semaphore limits concurrent browser contexts (default: 5)
     - Context pool for reuse (reduces context creation overhead)
-    - Automatic fallback to proxy chain on errors
     - Memory-safe: proper cleanup in all paths
 
     Usage:
@@ -1547,51 +1551,21 @@ class PlaywrightTranscriptService:
                         pass
                 await self._release_context(context, reuse=reuse_context)
 
-    async def _fetch_with_fallback(
-        self,
-        video_id: str,
-        prefer_manual: bool,
-        use_fallback: bool,
-    ) -> dict:
-        """Fetch single video with optional proxy fallback."""
-        result = await self.fetch_single(video_id, prefer_manual)
-
-        if "error" not in result:
-            return result
-
-        if not use_fallback:
-            return result
-
-        # Check if error should trigger fallback
-        if not _should_fallback(result.get("error", "")):
-            return result
-
-        log.info(f"[transcript-service] {video_id} trying proxy fallback")
-        fallback_result = await asyncio.to_thread(
-            fetch_transcript_with_proxy_fallback,
-            video_id,
-            None  # languages
-        )
-        return fallback_result
-
     async def fetch_batch(
         self,
         video_ids: list[str],
         prefer_manual: bool = True,
-        use_fallback: bool = True,
     ) -> list[dict]:
         """
         Fetch transcripts for multiple videos with controlled concurrency.
 
-        Features v3:
-        - Periodic browser refresh (every browser_refresh_interval videos)
+        Features:
         - Exponential backoff retry on connection errors
         - Semaphore ensures max_concurrent limit is respected
 
         Args:
             video_ids: List of YouTube video IDs
             prefer_manual: Prefer manual transcripts over auto-generated
-            use_fallback: Try proxy chain if Playwright fails
 
         Returns:
             List of transcript dicts (same order as video_ids)
@@ -1601,17 +1575,14 @@ class PlaywrightTranscriptService:
 
         batch_size = len(video_ids)
         log.info(f"[transcript-service] Batch started: {batch_size} videos "
-                 f"(max_concurrent={self.max_concurrent}, refresh_every={self.browser_refresh_interval}, retries={self.max_retries})")
+                 f"(max_concurrent={self.max_concurrent}, retries={self.max_retries})")
         start_time = time.time()
 
         # Reset stats for this batch
         batch_extractions_start = self._total_extractions
         batch_errors_start = self._total_errors
 
-        tasks = [
-            self._fetch_with_fallback(vid, prefer_manual, use_fallback)
-            for vid in video_ids
-        ]
+        tasks = [self.fetch_single(vid, prefer_manual) for vid in video_ids]
         results = await asyncio.gather(*tasks)
 
         elapsed = time.time() - start_time
@@ -1679,20 +1650,17 @@ async def close_transcript_service() -> None:
 # =============================================================================
 # ElasticSearch Indexing
 # =============================================================================
-ES_INDEX_YOUTUBE = "coelhonexus-youtube"
-
-
 async def index_videos_to_elasticsearch(
     es_client,
     videos: list[dict],
-    index: str = ES_INDEX_YOUTUBE,
+    index: str = ES_INDEX_METADATA,
 ) -> dict:
     """
-    Index videos to ElasticSearch in bulk.
+    Index video metadata to ElasticSearch in bulk.
     Returns summary of indexed/failed documents.
     """
     if not videos:
-        log.info(f"[elasticsearch] skip indexing, no videos")
+        log.info("[elasticsearch] skip indexing, no videos")
         return {"indexed": 0, "failed": 0}
     # Build bulk operations
     operations = []
@@ -1704,7 +1672,7 @@ async def index_videos_to_elasticsearch(
         operations.append({"index": {"_index": index, "_id": video_id}})
         operations.append(video)
     if not operations:
-        log.info(f"[elasticsearch] skip indexing, no valid video IDs")
+        log.info("[elasticsearch] skip indexing, no valid video IDs")
         return {"indexed": 0, "failed": 0}
     # Execute bulk
     log.info(f"[elasticsearch] indexing {len(operations)//2} videos to {index}")
@@ -1722,9 +1690,56 @@ async def index_videos_to_elasticsearch(
         return {"indexed": 0, "failed": len(videos), "error": str(e)}
 
 
-async def create_youtube_index(es_client, index: str = ES_INDEX_YOUTUBE):
-    """Create ElasticSearch index with optimal mappings for YouTube videos."""
-    mapping = {
+async def index_transcriptions_to_elasticsearch(
+    es_client,
+    transcriptions: list[dict],
+    index: str = ES_INDEX_TRANSCRIPTIONS,
+) -> dict:
+    """
+    Index transcriptions to ElasticSearch in bulk.
+    Each transcription document has: id, video_id, lang, content, is_auto, method, _extracted_at
+    Returns summary of indexed/failed documents.
+    """
+    if not transcriptions:
+        log.info("[elasticsearch] skip indexing, no transcriptions")
+        return {"indexed": 0, "failed": 0}
+    # Build bulk operations
+    operations = []
+    for trans in transcriptions:
+        doc_id = trans.get("id")  # Composite ID: {video_id}_{lang}
+        if not doc_id:
+            continue
+        operations.append({"index": {"_index": index, "_id": doc_id}})
+        operations.append(trans)
+    if not operations:
+        log.info("[elasticsearch] skip indexing, no valid transcription IDs")
+        return {"indexed": 0, "failed": 0}
+    # Execute bulk
+    log.info(f"[elasticsearch] indexing {len(operations)//2} transcriptions to {index}")
+    start_time = time.time()
+    try:
+        response = await es_client.bulk(operations=operations, refresh=True)
+        elapsed = time.time() - start_time
+        indexed = sum(1 for item in response["items"] if item["index"]["status"] in (200, 201))
+        failed = len(response["items"]) - indexed
+        log.info(f"[elasticsearch] OK indexed={indexed} failed={failed} time={elapsed:.2f}s")
+        return {"indexed": indexed, "failed": failed, "errors": response.get("errors", False)}
+    except Exception as e:
+        elapsed = time.time() - start_time
+        log.info(f"[elasticsearch] ERROR time={elapsed:.2f}s error={str(e)[:200]}")
+        return {"indexed": 0, "failed": len(transcriptions), "error": str(e)}
+
+
+async def create_youtube_indexes(es_client) -> dict:
+    """
+    Create both ElasticSearch indexes for YouTube data:
+    - coelhonexus-youtube-metadata: Video metadata (title, channel, views, etc.)
+    - coelhonexus-youtube-transcriptions: Transcriptions (one doc per video+language)
+    """
+    results = {}
+
+    # Metadata index mapping
+    metadata_mapping = {
         "mappings": {
             "properties": {
                 # Core fields
@@ -1783,13 +1798,9 @@ async def create_youtube_index(es_client, index: str = ES_INDEX_YOUTUBE):
                     }
                 },
 
-                # Subtitles
+                # Subtitles (available languages from yt-dlp)
                 "subtitles": {"type": "keyword"},
                 "automatic_captions": {"type": "keyword"},
-
-                # Transcription
-                "transcription": {"type": "text", "analyzer": "standard"},
-                "transcription_language": {"type": "keyword"},
 
                 # Extraction metadata
                 "_extracted_at": {"type": "date"},
@@ -1801,16 +1812,53 @@ async def create_youtube_index(es_client, index: str = ES_INDEX_YOUTUBE):
         }
     }
 
-    # Create index if not exists
+    # Transcriptions index mapping
+    transcriptions_mapping = {
+        "mappings": {
+            "properties": {
+                "id": {"type": "keyword"},           # Composite: {video_id}_{lang}
+                "video_id": {"type": "keyword"},     # YouTube video ID
+                "lang": {"type": "keyword"},         # Language code (en, pt, es, etc.)
+                "content": {"type": "text", "analyzer": "standard"},  # Full transcription text
+                "is_auto": {"type": "boolean"},      # True if auto-generated
+                "method": {"type": "keyword"},       # Extraction method (dom_scrape, direct_api)
+                "_extracted_at": {"type": "date"},   # When transcription was extracted
+            }
+        },
+        "settings": {
+            "number_of_shards": 1,
+            "number_of_replicas": 0,
+        }
+    }
+
+    # Create metadata index
     try:
-        exists = await es_client.indices.exists(index=index)
+        exists = await es_client.indices.exists(index=ES_INDEX_METADATA)
         if not exists:
             await es_client.indices.create(
-                index=index,
-                mappings=mapping["mappings"],
-                settings=mapping["settings"],
+                index=ES_INDEX_METADATA,
+                mappings=metadata_mapping["mappings"],
+                settings=metadata_mapping["settings"],
             )
-            return {"created": True, "index": index}
-        return {"created": False, "index": index, "message": "Index already exists"}
+            results["metadata"] = {"created": True, "index": ES_INDEX_METADATA}
+        else:
+            results["metadata"] = {"created": False, "index": ES_INDEX_METADATA, "message": "exists"}
     except Exception as e:
-        return {"created": False, "index": index, "error": str(e)}
+        results["metadata"] = {"created": False, "index": ES_INDEX_METADATA, "error": str(e)}
+
+    # Create transcriptions index
+    try:
+        exists = await es_client.indices.exists(index=ES_INDEX_TRANSCRIPTIONS)
+        if not exists:
+            await es_client.indices.create(
+                index=ES_INDEX_TRANSCRIPTIONS,
+                mappings=transcriptions_mapping["mappings"],
+                settings=transcriptions_mapping["settings"],
+            )
+            results["transcriptions"] = {"created": True, "index": ES_INDEX_TRANSCRIPTIONS}
+        else:
+            results["transcriptions"] = {"created": False, "index": ES_INDEX_TRANSCRIPTIONS, "message": "exists"}
+    except Exception as e:
+        results["transcriptions"] = {"created": False, "index": ES_INDEX_TRANSCRIPTIONS, "error": str(e)}
+
+    return results

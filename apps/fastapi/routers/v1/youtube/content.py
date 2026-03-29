@@ -1,18 +1,16 @@
 """
 YouTube content endpoints using yt-dlp subprocess for metadata extraction.
-Transcriptions use youtube-transcript-api with proxy fallback (WARP -> Tor -> Direct).
-All extracted data is indexed to ElasticSearch.
+Transcriptions use Playwright CDP (bypasses IP blocking).
+Data is indexed to two ES indexes: metadata + transcriptions (normalized).
 """
-import asyncio
 from fastapi import APIRouter, HTTPException, Request
 
 from schemas.inputs import YouTubeSearchConfig, TranscriptionRequest
 from .helpers import (
     get_extractor,
-    fetch_transcript_with_fallback,
-    fetch_transcript_with_playwright,
-    add_transcription,
+    fetch_transcriptions_batch,
     index_videos_to_elasticsearch,
+    index_transcriptions_to_elasticsearch,
 )
 
 router = APIRouter()
@@ -83,17 +81,32 @@ async def search_results(request: Request):
     videos = await extractor.search(
         search_config.query,
         search_config.max_results,
-        sort_by_date = sort_by_date,
+        sort_by_date=sort_by_date,
     )
-    # Add transcriptions if requested
+
+    # Index video metadata to ES
+    es_metadata = await index_videos_to_elasticsearch(es_client, videos)
+
+    # Fetch and index transcriptions if requested
+    es_transcriptions = {"indexed": 0, "failed": 0}
     if search_config.include_transcription:
-        videos = await asyncio.gather(*[add_transcription(v) for v in videos])
-    # Index to ElasticSearch
-    es_result = await index_videos_to_elasticsearch(es_client, videos)
+        video_ids = [v["id"] for v in videos if v.get("id") and "error" not in v]
+        transcription_docs = await fetch_transcriptions_batch(
+            video_ids,
+            transcript_service=request.app.state.transcript_service,
+            es_client=es_client,
+            languages=search_config.transcription_languages,
+        )
+        if transcription_docs:
+            es_transcriptions = await index_transcriptions_to_elasticsearch(es_client, transcription_docs)
+
     return {
         "query": search_config.query,
         "total_results": len(videos),
-        "elasticsearch": es_result,
+        "elasticsearch": {
+            "metadata": es_metadata,
+            "transcriptions": es_transcriptions,
+        },
     }
 
 
@@ -120,15 +133,28 @@ async def get_youtube_videos(request: Request):
     extractor = get_extractor()
     videos = await extractor.extract_batch(search_config.video_ids)
 
-    if search_config.include_transcription:
-        videos = await asyncio.gather(*[add_transcription(v) for v in videos])
+    # Index video metadata to ES
+    es_metadata = await index_videos_to_elasticsearch(es_client, videos)
 
-    # Index to ElasticSearch
-    es_result = await index_videos_to_elasticsearch(es_client, videos)
+    # Fetch and index transcriptions if requested
+    es_transcriptions = {"indexed": 0, "failed": 0}
+    if search_config.include_transcription:
+        video_ids = [v["id"] for v in videos if v.get("id") and "error" not in v]
+        transcription_docs = await fetch_transcriptions_batch(
+            video_ids,
+            transcript_service=request.app.state.transcript_service,
+            es_client=es_client,
+            languages=search_config.transcription_languages,
+        )
+        if transcription_docs:
+            es_transcriptions = await index_transcriptions_to_elasticsearch(es_client, transcription_docs)
 
     return {
         "total_results": len(videos),
-        "elasticsearch": es_result,
+        "elasticsearch": {
+            "metadata": es_metadata,
+            "transcriptions": es_transcriptions,
+        },
     }
 
 
@@ -162,20 +188,33 @@ async def search_youtube_channel(request: Request):
     if "error" in result and not result.get("videos"):
         raise HTTPException(status_code=500, detail=result["error"])
 
-    if search_config.include_transcription:
-        result["videos"] = await asyncio.gather(*[
-            add_transcription(v) for v in result.get("videos", [])
-        ])
+    videos = result.get("videos", [])
 
-    # Index to ElasticSearch
-    es_result = await index_videos_to_elasticsearch(es_client, result.get("videos", []))
+    # Index video metadata to ES
+    es_metadata = await index_videos_to_elasticsearch(es_client, videos)
+
+    # Fetch and index transcriptions if requested
+    es_transcriptions = {"indexed": 0, "failed": 0}
+    if search_config.include_transcription:
+        video_ids = [v["id"] for v in videos if v.get("id") and "error" not in v]
+        transcription_docs = await fetch_transcriptions_batch(
+            video_ids,
+            transcript_service=request.app.state.transcript_service,
+            es_client=es_client,
+            languages=search_config.transcription_languages,
+        )
+        if transcription_docs:
+            es_transcriptions = await index_transcriptions_to_elasticsearch(es_client, transcription_docs)
 
     return {
         "channel_id": result.get("channel_id"),
         "channel_name": result.get("channel_name"),
         "channel_url": result.get("channel_url"),
         "total_videos": result.get("total_videos"),
-        "elasticsearch": es_result,
+        "elasticsearch": {
+            "metadata": es_metadata,
+            "transcriptions": es_transcriptions,
+        },
     }
 
 
@@ -209,20 +248,33 @@ async def search_youtube_playlist(request: Request):
     if "error" in result and not result.get("videos"):
         raise HTTPException(status_code=500, detail=result["error"])
 
-    if search_config.include_transcription:
-        result["videos"] = await asyncio.gather(*[
-            add_transcription(v) for v in result.get("videos", [])
-        ])
+    videos = result.get("videos", [])
 
-    # Index to ElasticSearch
-    es_result = await index_videos_to_elasticsearch(es_client, result.get("videos", []))
+    # Index video metadata to ES
+    es_metadata = await index_videos_to_elasticsearch(es_client, videos)
+
+    # Fetch and index transcriptions if requested
+    es_transcriptions = {"indexed": 0, "failed": 0}
+    if search_config.include_transcription:
+        video_ids = [v["id"] for v in videos if v.get("id") and "error" not in v]
+        transcription_docs = await fetch_transcriptions_batch(
+            video_ids,
+            transcript_service=request.app.state.transcript_service,
+            es_client=es_client,
+            languages=search_config.transcription_languages,
+        )
+        if transcription_docs:
+            es_transcriptions = await index_transcriptions_to_elasticsearch(es_client, transcription_docs)
 
     return {
         "playlist_id": result.get("playlist_id"),
         "playlist_title": result.get("playlist_title"),
         "playlist_url": result.get("playlist_url"),
         "total_videos": result.get("total_videos"),
-        "elasticsearch": es_result,
+        "elasticsearch": {
+            "metadata": es_metadata,
+            "transcriptions": es_transcriptions,
+        },
     }
 
 
@@ -234,14 +286,11 @@ async def get_transcriptions(payload: TranscriptionRequest, request: Request):
     Uses Playwright CDP browser pool (bypasses IP blocking).
     - Semaphore limits concurrent browser contexts (default: 5)
     - Context pool for reuse (reduces memory overhead)
-    - Automatic fallback to proxy chain on errors
+    - Exponential backoff retry on errors
 
     No batch size limit - semaphore ensures memory safety regardless of batch size.
     Large batches (500+ videos) will queue and process with controlled concurrency.
     """
     transcript_service = request.app.state.transcript_service
-    transcriptions = await transcript_service.fetch_batch(
-        payload.video_ids,
-        use_fallback=payload.use_playwright,  # If Playwright enabled, allow fallback
-    )
+    transcriptions = await transcript_service.fetch_batch(payload.video_ids)
     return {"transcriptions": transcriptions}

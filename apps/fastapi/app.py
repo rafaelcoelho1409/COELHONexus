@@ -11,7 +11,7 @@ from schemas.inputs import YouTubeSearchConfig
 from routers.v1.youtube import agents as youtube_agents
 from routers.v1.youtube import content as youtube_content
 from routers.v1.youtube.helpers import (
-    create_youtube_index,
+    create_youtube_indexes,
     init_transcript_service,
     close_transcript_service,
 )
@@ -49,9 +49,9 @@ async def lifespan(app: FastAPI):
         verify_certs = False,  # Tailscale provides encryption
     )
     print(f"ElasticSearch client initialized: {ES_HOST}", flush=True)
-    # Create YouTube index if not exists
-    es_index_result = await create_youtube_index(app.state.es)
-    print(f"ElasticSearch YouTube index: {es_index_result}", flush=True)
+    # Create YouTube indexes if not exists (metadata + transcriptions)
+    es_index_result = await create_youtube_indexes(app.state.es)
+    print(f"ElasticSearch YouTube indexes: {es_index_result}", flush=True)
     # Initialize Playwright transcript service (browser pool)
     # v3 optimizations:
     # - max_concurrent=5: Optimal for CDP stability (10 causes timeouts)
