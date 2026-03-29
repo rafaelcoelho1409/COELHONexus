@@ -30,6 +30,7 @@ dependencies = [
     "orjson",                  # Fast JSON parsing
     "elasticsearch[async]>=8.0.0,<9.0.0",  # ES server is v8
     "playwright",              # Browser automation (connects to remote server)
+    "tenacity",                # Retry with exponential backoff
 ]
 
 [build-system]

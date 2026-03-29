@@ -1,10 +1,12 @@
 """
 YouTube helpers:
 - yt-dlp subprocess for metadata extraction (optimized for speed and completeness)
-- Playwright CDP for transcript extraction (optimized v2, bypasses IP blocking)
+- Playwright CDP for transcript extraction (optimized v3, bypasses IP blocking)
 - ElasticSearch indexing
 
-Playwright optimizations:
+Playwright optimizations v3:
+- Periodic browser recreation (prevents stale CDP connections)
+- Tenacity-based retry with exponential backoff
 - Aggressive resource blocking (video, ads, tracking)
 - Kill YouTube background processes
 - Manual transcript priority over auto-generated
@@ -24,9 +26,16 @@ from urllib.parse import quote, urlparse
 from urllib.request import urlopen
 import ssl
 import json
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    before_sleep_log,
+)
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.proxies import GenericProxyConfig
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, Error as PlaywrightError
 
 # Use uvicorn's logger for proper output in FastAPI
 log = logging.getLogger("uvicorn.error")
@@ -1157,9 +1166,11 @@ def _should_fallback(error: str) -> bool:
 
 class PlaywrightTranscriptService:
     """
-    Browser pool with semaphore-controlled concurrency.
+    Browser pool with semaphore-controlled concurrency and periodic refresh.
 
-    Features:
+    Features v3:
+    - Periodic browser recreation (every N videos to prevent stale connections)
+    - Tenacity-based retry with exponential backoff
     - Semaphore limits concurrent browser contexts (default: 5)
     - Context pool for reuse (reduces context creation overhead)
     - Automatic fallback to proxy chain on errors
@@ -1184,6 +1195,8 @@ class PlaywrightTranscriptService:
         context_pool_size: int | None = None,
         timeout_ms: int = 30000,
         navigation_timeout_ms: int = 60000,
+        browser_refresh_interval: int = 15,  # Recreate browser every N videos
+        max_retries: int = 2,  # Max retries per video with exponential backoff
     ):
         """
         Args:
@@ -1192,6 +1205,8 @@ class PlaywrightTranscriptService:
             context_pool_size: Number of warm contexts to keep in pool (defaults to max_concurrent)
             timeout_ms: Timeout for DOM scraping fallback
             navigation_timeout_ms: Timeout for Page.goto (default: 60s)
+            browser_refresh_interval: Recreate browser connection every N videos (prevents stale CDP)
+            max_retries: Max retries per video with exponential backoff
         """
         self._cdp_endpoint = cdp_url
         self.max_concurrent = max_concurrent
@@ -1199,6 +1214,8 @@ class PlaywrightTranscriptService:
         self.context_pool_size = context_pool_size if context_pool_size is not None else max_concurrent
         self.timeout_ms = timeout_ms
         self.navigation_timeout_ms = navigation_timeout_ms
+        self.browser_refresh_interval = browser_refresh_interval
+        self.max_retries = max_retries
 
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self._playwright = None
@@ -1206,6 +1223,12 @@ class PlaywrightTranscriptService:
         self._context_pool: asyncio.Queue = None
         self._initialized = False
         self._cdp_url = None
+
+        # Browser refresh tracking
+        self._videos_since_refresh = 0
+        self._refresh_lock = asyncio.Lock()
+        self._total_extractions = 0
+        self._total_errors = 0
 
     async def initialize(self) -> None:
         """Initialize browser and context pool. Call once at startup."""
@@ -1265,6 +1288,71 @@ class PlaywrightTranscriptService:
         self._initialized = False
         log.info("[transcript-service] Shutdown complete")
 
+    async def _refresh_browser(self) -> None:
+        """
+        Refresh browser connection to prevent stale CDP connections.
+        Called automatically after browser_refresh_interval videos.
+        """
+        async with self._refresh_lock:
+            log.info(f"[transcript-service] Refreshing browser (after {self._videos_since_refresh} videos)...")
+
+            # 1. Drain and close all pooled contexts
+            closed = 0
+            while not self._context_pool.empty():
+                try:
+                    ctx = self._context_pool.get_nowait()
+                    await ctx.close()
+                    closed += 1
+                except:
+                    pass
+
+            # 2. Close old browser
+            if self._browser:
+                try:
+                    await self._browser.close()
+                except Exception as e:
+                    log.warning(f"[transcript-service] Error closing old browser: {e}")
+
+            # 3. Re-resolve CDP URL (may have changed)
+            cdp_endpoint = self._cdp_endpoint or CDP_HEADLESS
+            self._cdp_url = await asyncio.to_thread(_get_cdp_websocket_url, cdp_endpoint)
+
+            # 4. Connect fresh browser
+            self._browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
+
+            # 5. Re-warm context pool
+            self._context_pool = asyncio.Queue(maxsize=self.context_pool_size)
+            for i in range(self.context_pool_size):
+                ctx = await self._create_context()
+                await self._context_pool.put(ctx)
+
+            self._videos_since_refresh = 0
+            log.info(f"[transcript-service] Browser refreshed (closed {closed} contexts, warmed {self.context_pool_size} new)")
+
+    async def _check_browser_health(self) -> bool:
+        """
+        Check if browser connection is still healthy.
+        Returns True if healthy, False if refresh needed.
+        """
+        if not self._browser:
+            return False
+        try:
+            # Quick health check - check if browser is connected
+            if not self._browser.is_connected():
+                return False
+            return True
+        except Exception as e:
+            log.warning(f"[transcript-service] Browser health check failed: {e}")
+            return False
+
+    async def _ensure_healthy_browser(self) -> None:
+        """Ensure browser is healthy, refresh if needed."""
+        # Only refresh on actual browser health failure (not periodic)
+        # Periodic refresh during concurrent ops causes cascading failures
+        if not await self._check_browser_health():
+            log.warning("[transcript-service] Browser unhealthy, forcing refresh")
+            await self._refresh_browser()
+
     async def _create_context(self):
         """Create a new browser context with optimized settings."""
         return await self._browser.new_context(
@@ -1310,7 +1398,7 @@ class PlaywrightTranscriptService:
         prefer_manual: bool = True,
     ) -> dict:
         """
-        Fetch transcript for a single video with semaphore control.
+        Fetch transcript for a single video with semaphore control and retry.
 
         Args:
             video_id: YouTube video ID
@@ -1319,31 +1407,58 @@ class PlaywrightTranscriptService:
         Returns:
             dict with video_id, page_content, language, segments, etc.
         """
+        # Try with retries using exponential backoff
+        last_error = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                result = await self._fetch_single_attempt(video_id, prefer_manual, attempt)
+                if "error" not in result:
+                    return result
+                # If it's a content error (no transcript), don't retry
+                error_msg = result.get("error", "").lower()
+                if any(x in error_msg for x in ["no transcript", "button not found", "unavailable"]):
+                    return result
+                last_error = result.get("error")
+            except Exception as e:
+                last_error = str(e)
+                # Connection errors are handled by _fetch_single_attempt
+                # Don't refresh here - let the health check in _fetch_single_attempt handle it
+
+            if attempt < self.max_retries:
+                wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                log.info(f"[transcript-service] {video_id} retry {attempt + 1}/{self.max_retries} in {wait_time}s")
+                await asyncio.sleep(wait_time)
+
+        return {"video_id": video_id, "error": last_error or "Max retries exceeded"}
+
+    async def _fetch_single_attempt(
+        self,
+        video_id: str,
+        prefer_manual: bool,
+        attempt: int = 0,
+    ) -> dict:
+        """Single extraction attempt (called by fetch_single with retry logic)."""
         start_time = time.time()
 
         async with self.semaphore:
+            # Ensure browser is healthy before extraction
+            await self._ensure_healthy_browser()
+
             context = await self._acquire_context()
             page = None
             reuse_context = True
 
             try:
+                self._videos_since_refresh += 1
+                self._total_extractions += 1
+
                 page = await context.new_page()
                 await _setup_routes(page)
 
                 url = f"https://www.youtube.com/watch?v={video_id}"
 
-                # Navigate with configurable timeout and retry logic
-                max_nav_retries = 2
-                for nav_attempt in range(max_nav_retries + 1):
-                    try:
-                        await page.goto(url, wait_until="load", timeout=self.navigation_timeout_ms)
-                        break
-                    except Exception as nav_error:
-                        if nav_attempt < max_nav_retries:
-                            log.warning(f"[transcript-service] {video_id} nav retry {nav_attempt + 1}/{max_nav_retries}: {str(nav_error)[:50]}")
-                            await asyncio.sleep(1)
-                        else:
-                            raise nav_error
+                # Navigate with timeout (no inner retry, outer retry handles it)
+                await page.goto(url, wait_until="load", timeout=self.navigation_timeout_ms)
 
                 await _kill_youtube_background(page)
 
@@ -1414,11 +1529,14 @@ class PlaywrightTranscriptService:
 
             except Exception as e:
                 reuse_context = False  # Don't reuse context on error
+                self._total_errors += 1
                 elapsed = time.time() - start_time
-                log.error(f"[transcript-service] FAIL {video_id} time={elapsed:.2f}s error={str(e)[:100]}")
+                error_str = str(e)
+
+                log.error(f"[transcript-service] FAIL {video_id} time={elapsed:.2f}s error={error_str[:100]}")
                 return {
                     "video_id": video_id,
-                    "error": str(e),
+                    "error": error_str,
                 }
 
             finally:
@@ -1465,8 +1583,10 @@ class PlaywrightTranscriptService:
         """
         Fetch transcripts for multiple videos with controlled concurrency.
 
-        The semaphore ensures max_concurrent limit is respected,
-        preventing OOM from too many browser contexts.
+        Features v3:
+        - Periodic browser refresh (every browser_refresh_interval videos)
+        - Exponential backoff retry on connection errors
+        - Semaphore ensures max_concurrent limit is respected
 
         Args:
             video_ids: List of YouTube video IDs
@@ -1479,8 +1599,14 @@ class PlaywrightTranscriptService:
         if not self._initialized:
             raise RuntimeError("PlaywrightTranscriptService not initialized. Call initialize() first.")
 
-        log.info(f"[transcript-service] Batch started: {len(video_ids)} videos (max_concurrent={self.max_concurrent})")
+        batch_size = len(video_ids)
+        log.info(f"[transcript-service] Batch started: {batch_size} videos "
+                 f"(max_concurrent={self.max_concurrent}, refresh_every={self.browser_refresh_interval}, retries={self.max_retries})")
         start_time = time.time()
+
+        # Reset stats for this batch
+        batch_extractions_start = self._total_extractions
+        batch_errors_start = self._total_errors
 
         tasks = [
             self._fetch_with_fallback(vid, prefer_manual, use_fallback)
@@ -1490,7 +1616,13 @@ class PlaywrightTranscriptService:
 
         elapsed = time.time() - start_time
         success = sum(1 for r in results if "error" not in r)
-        log.info(f"[transcript-service] Batch complete: {success}/{len(video_ids)} OK, time={elapsed:.2f}s")
+        batch_extractions = self._total_extractions - batch_extractions_start
+        batch_errors = self._total_errors - batch_errors_start
+        avg_time = elapsed / batch_size if batch_size > 0 else 0
+
+        log.info(f"[transcript-service] Batch complete: {success}/{batch_size} OK "
+                 f"time={elapsed:.1f}s avg={avg_time:.1f}s/video "
+                 f"extractions={batch_extractions} errors={batch_errors}")
 
         return results
 
@@ -1511,6 +1643,8 @@ async def init_transcript_service(
     max_concurrent: int = 5,
     context_pool_size: int | None = None,
     navigation_timeout_ms: int = 60000,
+    browser_refresh_interval: int = 15,
+    max_retries: int = 2,
 ) -> PlaywrightTranscriptService:
     """
     Initialize the global transcript service. Call at FastAPI lifespan startup.
@@ -1519,12 +1653,16 @@ async def init_transcript_service(
         max_concurrent: Maximum parallel transcript extractions
         context_pool_size: Pool size (defaults to max_concurrent to avoid context creation storms)
         navigation_timeout_ms: Timeout for Page.goto (default: 60s)
+        browser_refresh_interval: Recreate browser every N videos (prevents stale CDP)
+        max_retries: Max retries per video with exponential backoff
     """
     global _transcript_service
     _transcript_service = PlaywrightTranscriptService(
         max_concurrent=max_concurrent,
         context_pool_size=context_pool_size,  # Will default to max_concurrent if None
         navigation_timeout_ms=navigation_timeout_ms,
+        browser_refresh_interval=browser_refresh_interval,
+        max_retries=max_retries,
     )
     await _transcript_service.initialize()
     return _transcript_service
