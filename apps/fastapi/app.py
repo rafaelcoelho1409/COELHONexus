@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
     print(f"ElasticSearch YouTube index: {es_index_result}", flush=True)
     # Initialize Playwright transcript service (browser pool)
     # v3 optimizations:
-    # - max_concurrent=5: ~100Mi per context, 5 concurrent for CDP stability
+    # - max_concurrent=5: Optimal for CDP stability (10 causes timeouts)
     # - browser_refresh_interval=15: Recreate browser every 15 videos (prevents stale CDP)
     # - max_retries=2: Exponential backoff retry (1s, 2s, 4s delays)
     app.state.transcript_service = await init_transcript_service(
