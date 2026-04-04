@@ -45,39 +45,37 @@ async def search_videos(payload: SearchRequest, request: Request):
     """
     if payload.max_results <= 0:
         raise HTTPException(
-            status_code=400,
-            detail="max_results must be > 0"
+            status_code = 400,
+            detail = "max_results must be > 0"
         )
-
     extractor = get_extractor()
     videos = await extractor.search(
-        query=payload.query,
-        max_results=payload.max_results,
-        sort_by_date=payload.sort_by_date,
+        query = payload.query,
+        max_results = payload.max_results,
+        sort_by_date = payload.sort_by_date,
         # Duration
-        duration=payload.duration,
-        duration_min=payload.duration_min,
-        duration_max=payload.duration_max,
+        duration = payload.duration,
+        duration_min = payload.duration_min,
+        duration_max = payload.duration_max,
         # Dates
-        date_after=payload.date_after,
-        date_before=payload.date_before,
+        date_after = payload.date_after,
+        date_before = payload.date_before,
         # View/like counts
-        min_views=payload.min_views,
-        max_views=payload.max_views,
-        min_likes=payload.min_likes,
+        min_views = payload.min_views,
+        max_views = payload.max_views,
+        min_likes = payload.min_likes,
         # Live status
-        is_live=payload.is_live,
-        live_status=payload.live_status,
+        is_live = payload.is_live,
+        live_status = payload.live_status,
         # Availability
-        availability=payload.availability,
+        availability = payload.availability,
         # Age limit
-        age_limit=payload.age_limit,
+        age_limit = payload.age_limit,
         # String filters
-        title_contains=payload.title_contains,
-        description_contains=payload.description_contains,
-        channel_name=payload.channel_name,
+        title_contains = payload.title_contains,
+        description_contains = payload.description_contains,
+        channel_name = payload.channel_name,
     )
-
     return {
         "query": payload.query,
         "filters": {
@@ -110,29 +108,26 @@ async def get_videos(payload: VideosRequest, request: Request):
     Extracts metadata and transcriptions, indexes to ElasticSearch.
     """
     es_client = request.app.state.es
-
     if not payload.video_ids:
-        raise HTTPException(status_code=400, detail="video_ids is required")
-
+        raise HTTPException(
+            status_code = 400, 
+            detail = "video_ids is required")
     extractor = get_extractor()
     videos = await extractor.extract_batch(payload.video_ids)
-
     # Index video metadata to ES
     es_metadata = await index_videos_to_elasticsearch(es_client, videos)
-
     # Fetch and index transcriptions if requested
     es_transcriptions = {"indexed": 0, "failed": 0}
     if payload.include_transcription:
         video_ids = [v["id"] for v in videos if v.get("id") and "error" not in v]
         transcription_docs = await fetch_transcriptions_batch(
             video_ids,
-            transcript_service=request.app.state.transcript_service,
-            es_client=es_client,
-            languages=payload.transcription_languages,
+            transcript_service = request.app.state.transcript_service,
+            es_client = es_client,
+            languages = payload.transcription_languages,
         )
         if transcription_docs:
             es_transcriptions = await index_transcriptions_to_elasticsearch(es_client, transcription_docs)
-
     return {
         "total_results": len(videos),
         "elasticsearch": {
@@ -150,34 +145,30 @@ async def get_channel_videos(payload: ChannelRequest, request: Request):
     max_results=0 fetches ALL videos.
     """
     es_client = request.app.state.es
-
     extractor = get_extractor()
     result = await extractor.extract_channel(
         payload.channel_id,
         payload.max_results
     )
-
     if "error" in result and not result.get("videos"):
-        raise HTTPException(status_code=500, detail=result["error"])
-
+        raise HTTPException(
+            status_code = 500, 
+            detail = result["error"])
     videos = result.get("videos", [])
-
     # Index video metadata to ES
     es_metadata = await index_videos_to_elasticsearch(es_client, videos)
-
     # Fetch and index transcriptions if requested
     es_transcriptions = {"indexed": 0, "failed": 0}
     if payload.include_transcription:
         video_ids = [v["id"] for v in videos if v.get("id") and "error" not in v]
         transcription_docs = await fetch_transcriptions_batch(
             video_ids,
-            transcript_service=request.app.state.transcript_service,
-            es_client=es_client,
-            languages=payload.transcription_languages,
+            transcript_service = request.app.state.transcript_service,
+            es_client = es_client,
+            languages = payload.transcription_languages,
         )
         if transcription_docs:
             es_transcriptions = await index_transcriptions_to_elasticsearch(es_client, transcription_docs)
-
     return {
         "channel_id": result.get("channel_id"),
         "channel_name": result.get("channel_name"),
@@ -198,34 +189,30 @@ async def get_playlist_videos(payload: PlaylistRequest, request: Request):
     max_results=0 fetches ALL videos.
     """
     es_client = request.app.state.es
-
     extractor = get_extractor()
     result = await extractor.extract_playlist(
         payload.playlist_id,
         payload.max_results
     )
-
     if "error" in result and not result.get("videos"):
-        raise HTTPException(status_code=500, detail=result["error"])
-
+        raise HTTPException(
+            status_code = 500, 
+            detail = result["error"])
     videos = result.get("videos", [])
-
     # Index video metadata to ES
     es_metadata = await index_videos_to_elasticsearch(es_client, videos)
-
     # Fetch and index transcriptions if requested
     es_transcriptions = {"indexed": 0, "failed": 0}
     if payload.include_transcription:
         video_ids = [v["id"] for v in videos if v.get("id") and "error" not in v]
         transcription_docs = await fetch_transcriptions_batch(
             video_ids,
-            transcript_service=request.app.state.transcript_service,
-            es_client=es_client,
-            languages=payload.transcription_languages,
+            transcript_service = request.app.state.transcript_service,
+            es_client = es_client,
+            languages = payload.transcription_languages,
         )
         if transcription_docs:
             es_transcriptions = await index_transcriptions_to_elasticsearch(es_client, transcription_docs)
-
     return {
         "playlist_id": result.get("playlist_id"),
         "playlist_title": result.get("playlist_title"),

@@ -51,7 +51,6 @@ class YtDlpExtractor:
     Memory-safe yt-dlp metadata extractor using subprocess.
     Optimized for SPEED and COMPLETENESS of metadata extraction.
     """
-
     # Base args for all extractions
     # PO Token provider runs as sidecar at localhost:4416
     BASE_ARGS = [
@@ -77,7 +76,7 @@ class YtDlpExtractor:
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.timeout = timeout
         self.buffer_limit = buffer_limit
-
+    
     async def _run_yt_dlp(self, args: list[str], timeout: float | None = None) -> tuple[bool, str, str]:
         """Execute yt-dlp as subprocess with timeout and memory limits."""
         effective_timeout = timeout or self.timeout
@@ -85,18 +84,18 @@ class YtDlpExtractor:
         try:
             proc = await asyncio.create_subprocess_exec(
                 *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                limit=self.buffer_limit,
+                stdout = asyncio.subprocess.PIPE,
+                stderr = asyncio.subprocess.PIPE,
+                limit = self.buffer_limit,
             )
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(),
-                timeout=effective_timeout
+                timeout = effective_timeout
             )
             elapsed = time.time() - start_time
             success = proc.returncode == 0
-            stdout_str = stdout.decode("utf-8", errors="replace")
-            stderr_str = stderr.decode("utf-8", errors="replace")
+            stdout_str = stdout.decode("utf-8", errors = "replace")
+            stderr_str = stderr.decode("utf-8", errors = "replace")
             if success:
                 log.info(f"[yt-dlp] OK ({elapsed:.2f}s) size={len(stdout_str)} bytes")
             else:
@@ -205,17 +204,13 @@ class YtDlpExtractor:
             min_views, max_views, min_likes, is_live, live_status,
             availability, age_limit, title_contains, description_contains, channel_name
         ])
-
         # Request more results to account for post-filtering
         fetch_count = max_results * 3 if has_filters else max_results
-
         # Use ytsearchdate prefix for date sorting
         prefix = "ytsearchdate" if sort_by_date else "ytsearch"
         search_url = f"{prefix}{fetch_count}:{query}"
-
         # Build match-filter conditions (combined with & for AND logic)
         match_conditions = []
-
         # Duration filters
         if duration_min is not None or duration_max is not None:
             # Custom duration range overrides preset
@@ -232,17 +227,14 @@ class YtDlpExtractor:
                 match_conditions.append("duration<=1200")
             elif duration == "Over 20 minutes":
                 match_conditions.append("duration>1200")
-
         # View count filters (using match-filter, not deprecated --min/max-views)
         if min_views is not None:
             match_conditions.append(f"view_count>=?{min_views}")
         if max_views is not None:
             match_conditions.append(f"view_count<=?{max_views}")
-
         # Like count filter
         if min_likes is not None:
             match_conditions.append(f"like_count>=?{min_likes}")
-
         # Live status filters
         if live_status:
             match_conditions.append(f"live_status='{live_status}'")
@@ -250,11 +242,9 @@ class YtDlpExtractor:
             match_conditions.append("is_live")
         elif is_live is False:
             match_conditions.append("!is_live")
-
         # Availability filter
         if availability:
             match_conditions.append(f"availability='{availability}'")
-
         # String filters (check for operators, default to contains)
         def build_string_filter(field: str, value: str) -> str:
             # Support operators: *=, ^=, $=, ~= and their negations !*=, !^=, !$=, !~=
@@ -262,16 +252,13 @@ class YtDlpExtractor:
                 return f"{field}{value}"
             # Default: contains (case-insensitive via regex)
             return f"{field}*='{value}'"
-
         if title_contains:
             match_conditions.append(build_string_filter("title", title_contains))
         if description_contains:
             match_conditions.append(build_string_filter("description", description_contains))
         if channel_name:
             match_conditions.append(build_string_filter("channel", channel_name))
-
         log.info(f"[yt-dlp:search] query='{query}' max={max_results} sort_date={sort_by_date} filters={len(match_conditions)}")
-
         args = [
             *self.BASE_ARGS,
             "--flat-playlist",
@@ -279,30 +266,24 @@ class YtDlpExtractor:
             # Enable approximate date for flat-playlist filtering
             "--extractor-args", "youtube:approximate_date",
         ]
-
         # Add combined match-filter (all conditions with AND logic)
         if match_conditions:
             combined_filter = " & ".join(match_conditions)
             args.extend(["--match-filter", combined_filter])
-
         # Date filters (dedicated args, not match-filter)
         if date_after:
             args.extend(["--dateafter", date_after])
         if date_before:
             args.extend(["--datebefore", date_before])
-
         # Age limit filter (dedicated arg)
         if age_limit is not None:
             args.extend(["--age-limit", str(age_limit)])
-
         args.append(search_url)
-
         async with self.semaphore:
             success, stdout, stderr = await self._run_yt_dlp(args, timeout=90)
         if not success:
             log.info(f"[yt-dlp:search] FAILED query='{query}'")
             return [{"error": stderr or "Search failed"}]
-
         try:
             data = orjson.loads(stdout)
             entries = data.get("entries", [])
@@ -352,7 +333,6 @@ class YtDlpExtractor:
         ]
         if max_videos > 0:
             args.extend(["--playlist-end", str(max_videos)])
-
         async with self.semaphore:
             success, stdout, stderr = await self._run_yt_dlp(args, timeout=timeout)
         if not success:
@@ -391,7 +371,6 @@ class YtDlpExtractor:
             url = f"https://www.youtube.com/channel/{channel_id}/videos"
         else:
             url = f"https://www.youtube.com/@{channel_id}/videos"
-
         args = [
             *self.BASE_ARGS,
             "--dump-single-json",  # Full metadata
@@ -399,7 +378,6 @@ class YtDlpExtractor:
         ]
         if max_videos > 0:
             args.extend(["--playlist-end", str(max_videos)])
-
         async with self.semaphore:
             success, stdout, stderr = await self._run_yt_dlp(args, timeout=timeout)
         if not success:
@@ -547,16 +525,14 @@ async def _check_existing_transcriptions(
     """
     if not es_client or not video_ids:
         return {}
-
     try:
         # Query transcriptions index for all matching video_ids
         result = await es_client.search(
-            index=ES_INDEX_TRANSCRIPTIONS,
-            query={"terms": {"video_id": video_ids}},
-            _source=["video_id", "lang"],
-            size=len(video_ids) * 10,  # Allow up to 10 languages per video
+            index = ES_INDEX_TRANSCRIPTIONS,
+            query = {"terms": {"video_id": video_ids}},
+            _source = ["video_id", "lang"],
+            size = len(video_ids) * 10,  # Allow up to 10 languages per video
         )
-
         existing = {}
         for hit in result.get("hits", {}).get("hits", []):
             source = hit.get("_source", {})
@@ -566,7 +542,6 @@ async def _check_existing_transcriptions(
                 if vid not in existing:
                     existing[vid] = set()
                 existing[vid].add(lang)
-
         return existing
     except Exception as e:
         log.warning(f"[transcription-cache] ES lookup failed: {e}")
@@ -589,11 +564,9 @@ def _needs_transcription(
     """
     if not existing_langs:
         return True
-
     if languages is None:
         # No specific language requested - any existing transcription is fine
         return False
-
     # Check if all requested languages exist
     for lang in languages:
         # Match language prefix (e.g., "en" matches "en-US", "en-GB")
@@ -603,14 +576,13 @@ def _needs_transcription(
         )
         if not found:
             return True
-
     return False
 
 
 async def fetch_transcriptions_batch(
     video_ids: list[str],
-    transcript_service=None,
-    es_client=None,
+    transcript_service = None,
+    es_client = None,
     languages: list[str] | None = None,
 ) -> list[dict]:
     """
@@ -634,16 +606,16 @@ async def fetch_transcriptions_batch(
     """
     if not video_ids:
         return []
-
     # Use provided service or global
     service = transcript_service or _transcript_service
     if not service or not service._initialized:
         log.error("[fetch_transcriptions_batch] Service not initialized")
         return []
-
     # Check ES cache for existing transcriptions
-    existing_transcriptions = await _check_existing_transcriptions(es_client, video_ids, languages)
-
+    existing_transcriptions = await _check_existing_transcriptions(
+        es_client, 
+        video_ids, 
+        languages)
     # Filter out videos that already have required transcriptions
     ids_to_fetch = []
     cached_count = 0
@@ -654,19 +626,14 @@ async def fetch_transcriptions_batch(
         else:
             cached_count += 1
             log.info(f"[transcription-cache] HIT {vid} langs={existing_langs}")
-
     if cached_count > 0:
         log.info(f"[fetch_transcriptions_batch] Cache: {cached_count} hits, {len(ids_to_fetch)} to fetch")
-
     if not ids_to_fetch:
         log.info("[fetch_transcriptions_batch] All videos cached, no fetch needed")
         return []
-
     log.info(f"[fetch_transcriptions_batch] Fetching {len(ids_to_fetch)} videos")
-
     # Fetch transcriptions for videos not in cache
     results = await service.fetch_batch(ids_to_fetch, prefer_manual=True)
-
     # Build transcription documents for ES indexing
     transcription_docs = []
     success_count = 0
@@ -674,13 +641,11 @@ async def fetch_transcriptions_batch(
         vid = result.get("video_id")
         if not vid:
             continue
-
         if "error" not in result:
             lang = result.get("language", "unknown")
             content = result.get("page_content", "")
             is_auto = result.get("is_auto_generated", True)
             method = result.get("method", "")
-
             transcription_docs.append({
                 "id": f"{vid}_{lang}",  # Composite ID for ES document
                 "video_id": vid,
@@ -690,12 +655,10 @@ async def fetch_transcriptions_batch(
                 "method": method,
                 "_extracted_at": datetime.utcnow().isoformat(),
             })
-
             success_count += 1
             log.info(f"[fetch_transcriptions_batch] OK {vid} lang={lang} auto={is_auto} len={len(content)}")
         else:
             log.warning(f"[fetch_transcriptions_batch] FAIL {vid}: {result.get('error', '')[:100]}")
-
     log.info(f"[fetch_transcriptions_batch] Complete: {success_count}/{len(ids_to_fetch)} fetched, {cached_count} cached")
     return transcription_docs
 
@@ -757,31 +720,24 @@ def _get_cdp_websocket_url(cdp_endpoint: str) -> str:
     """
     parsed = urlparse(cdp_endpoint)
     json_url = f"{cdp_endpoint}/json/version"
-
     try:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-
-        with urlopen(json_url, timeout=10, context=ctx) as response:
+        with urlopen(json_url, timeout = 10, context = ctx) as response:
             data = json.loads(response.read().decode())
             ws_url = data.get("webSocketDebuggerUrl", "")
-
             if not ws_url:
                 log.warning(f"[cdp] No webSocketDebuggerUrl in response from {json_url}")
                 return cdp_endpoint
-
             ws_parsed = urlparse(ws_url)
             ws_path = ws_parsed.path
-
             if parsed.scheme == "https":
                 proper_url = f"wss://{parsed.netloc}{ws_path}"
             else:
                 proper_url = f"ws://{parsed.netloc}{ws_path}"
-
             log.info(f"[cdp] Resolved: {proper_url[:60]}...")
             return proper_url
-
     except Exception as e:
         log.warning(f"[cdp] Failed to fetch {json_url}: {e}")
         return cdp_endpoint
@@ -791,13 +747,11 @@ async def _setup_routes(page) -> None:
     """Set up aggressive resource blocking."""
     for pattern in BLOCK_PATTERNS:
         await page.route(pattern, lambda r: r.abort())
-
     async def block_by_type(route):
         if route.request.resource_type in BLOCK_RESOURCE_TYPES:
             await route.abort()
         else:
             await route.continue_()
-
     await page.route("**/*", block_by_type)
 
 
@@ -834,13 +788,12 @@ async def _get_caption_tracks(page) -> list[CaptionTrack]:
             }));
         }
     ''')
-
     return [
         CaptionTrack(
-            language_code=t['languageCode'],
-            name=t['name'],
-            is_auto_generated=t['isAutoGenerated'],
-            base_url=t['baseUrl']
+            language_code = t['languageCode'],
+            name = t['name'],
+            is_auto_generated = t['isAutoGenerated'],
+            base_url = t['baseUrl']
         )
         for t in tracks_data
     ]
@@ -855,13 +808,12 @@ def _select_best_track(tracks: list[CaptionTrack], prefer_manual: bool = True) -
             t.is_auto_generated if prefer_manual else False,
             0 if is_english else (1 if is_portuguese else 2),
         )
-    return sorted(tracks, key=priority)[0]
+    return sorted(tracks, key = priority)[0]
 
 
 async def _fetch_transcript_direct(page, base_url: str) -> list[dict]:
     """Try to fetch transcript directly from caption URL (fast path)."""
     json_url = base_url + ("&" if "?" in base_url else "?") + "fmt=json3"
-
     result = await page.evaluate(f'''
         async () => {{
             try {{
@@ -877,10 +829,8 @@ async def _fetch_transcript_direct(page, base_url: str) -> list[dict]:
             }}
         }}
     ''')
-
     if 'error' in result:
         raise ValueError(result['error'])
-
     segments = []
     for event in result.get('events', []):
         if 'segs' in event:
@@ -890,7 +840,6 @@ async def _fetch_transcript_direct(page, base_url: str) -> list[dict]:
                 minutes = start_ms // 60000
                 seconds = (start_ms // 1000) % 60
                 segments.append({'timestamp': f"{minutes}:{seconds:02d}", 'text': text})
-
     return segments
 
 
@@ -910,10 +859,8 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
         await page.wait_for_selector('ytd-watch-metadata, #above-the-fold', timeout=15000)
     except Exception as e:
         log.warning(f"[dom] Metadata selector not found: {e}")
-
     # Additional wait for dynamic content (YouTube loads async)
     await page.wait_for_timeout(2000)
-
     # Handle consent dialog if present (YouTube GDPR banner)
     try:
         consent_check = await page.evaluate('''
@@ -938,7 +885,6 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
                     continue
     except:
         pass
-
     # Check if transcript panel is already visible
     already_visible = await page.evaluate('''
         () => {
@@ -952,11 +898,9 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
             return false;
         }
     ''')
-
     if already_visible:
         log.info("[dom] Transcript panel already visible")
         return await _extract_transcript_text(page)
-
     # Step 1: Expand description first (required for transcript button visibility)
     # Multiple selectors for YouTube's A/B testing variations
     expand_selectors = [
@@ -967,7 +911,6 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
         '#description ytd-text-inline-expander',
         'button[aria-label="Show more"]',
     ]
-
     expanded = False
     for selector in expand_selectors:
         try:
@@ -980,7 +923,6 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
                 break
         except:
             continue
-
     # Also try clicking on description area directly (some layouts)
     if not expanded:
         try:
@@ -992,7 +934,6 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
                 log.info("[dom] Description expanded via click on area")
         except:
             pass
-
     # Step 2: Find and click transcript button using JavaScript (more reliable)
     # This handles cases where Playwright locators find elements but can't click them
     clicked = await page.evaluate('''
@@ -1043,7 +984,6 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
             return null;
         }
     ''')
-
     if clicked:
         log.info(f"[dom] Transcript button clicked via JS: {clicked}")
         await page.wait_for_timeout(500)
@@ -1067,7 +1007,6 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
                     break
             except:
                 continue
-
     # Step 3: Fallback - "More actions" menu (three-dot menu)
     if not clicked:
         try:
@@ -1099,7 +1038,6 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
                         break
         except:
             pass
-
     # Step 4: Debug info if nothing worked
     if not clicked:
         debug_info = await page.evaluate('''
@@ -1119,7 +1057,6 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
         ''')
         log.warning(f"[dom] Transcript button not found. Debug: {debug_info}")
         raise ValueError("Transcript button not found")
-
     # Step 5: Wait for transcript panel to appear with timestamps
     try:
         await page.wait_for_function(
@@ -1133,12 +1070,11 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
                 }
                 return false;
             }''',
-            timeout=timeout_ms,
+            timeout = timeout_ms,
         )
     except Exception as e:
         log.warning(f"[dom] Transcript panel did not appear: {e}")
         raise ValueError(f"Transcript panel timeout: {str(e)[:50]}")
-
     return await _extract_transcript_text(page)
 
 
@@ -1162,11 +1098,9 @@ def _parse_transcript(raw_text: str) -> list[TranscriptSegment]:
     """Parse raw transcript text into segments."""
     lines = [line.strip() for line in raw_text.split("\n") if line.strip()]
     segments = []
-
     i = 0
     while i < len(lines) and not re.match(r"^\d+:\d{2}$", lines[i]):
         i += 1
-
     while i < len(lines):
         line = lines[i]
         if re.match(r"^\d+:\d{2}$", line):
@@ -1182,7 +1116,6 @@ def _parse_transcript(raw_text: str) -> list[TranscriptSegment]:
                 segments.append(TranscriptSegment(timestamp=timestamp, text=" ".join(text_parts)))
         else:
             i += 1
-
     return segments
 
 
@@ -1205,10 +1138,8 @@ async def fetch_transcript_with_playwright(
     cdp_endpoint = CDP_HEADLESS if headless else CDP_HEADED
     url = f"https://www.youtube.com/watch?v={video_id}"
     start_time = time.time()
-
     cdp_url = await asyncio.to_thread(_get_cdp_websocket_url, cdp_endpoint)
     log.info(f"[playwright] starting video_id={video_id}")
-
     try:
         async with async_playwright() as p:
             browser = await p.chromium.connect_over_cdp(cdp_url)
@@ -1216,49 +1147,39 @@ async def fetch_transcript_with_playwright(
                 viewport={"width": 1280, "height": 720},
             )
             page = await context.new_page()
-
             # Set up blocking BEFORE navigation
             await _setup_routes(page)
-
             # Navigation with full load
-            await page.goto(url, wait_until="load")
-
+            await page.goto(url, wait_until = "load")
             # Kill background processes immediately
             await _kill_youtube_background(page)
-
             # Wait for captions data
             try:
                 await page.wait_for_function(
                     '() => !!window.ytInitialPlayerResponse?.captions',
-                    timeout=5000
+                    timeout = 5000
                 )
             except:
                 pass
-
             # Get caption tracks
             tracks = await _get_caption_tracks(page)
             language = "auto"
             is_auto_generated = True
             method = "dom_scrape"
-
             if tracks:
                 manual_count = sum(1 for t in tracks if not t.is_auto_generated)
                 log.info(f"[playwright] tracks={len(tracks)} manual={manual_count}")
-
                 selected = _select_best_track(tracks, prefer_manual)
                 language = selected.language_code
                 is_auto_generated = selected.is_auto_generated
                 log.info(f"[playwright] selected={language} auto={is_auto_generated}")
-
                 # Try direct API first (fast path)
                 try:
                     segments_data = await _fetch_transcript_direct(page, selected.base_url)
                     await context.close()
-
                     segments = [TranscriptSegment(timestamp=s['timestamp'], text=s['text']) for s in segments_data]
                     page_content = " ".join([seg.text for seg in segments])
                     elapsed = time.time() - start_time
-
                     log.info(f"[playwright] OK video_id={video_id} method=direct_api segments={len(segments)} time={elapsed:.2f}s")
                     return {
                         "video_id": video_id,
@@ -1271,24 +1192,18 @@ async def fetch_transcript_with_playwright(
                     }
                 except Exception as e:
                     log.info(f"[playwright] direct_api failed: {e}")
-
             # Fallback to DOM scraping
             raw_text = await _extract_via_dom(page, timeout_ms)
             await context.close()
-
             if not raw_text:
                 raise ValueError(f"No transcript for: {video_id}")
-
             segments = _parse_transcript(raw_text)
             page_content = " ".join([seg.text for seg in segments])
-
             # Detect auto-generated from raw text if no tracks
             if "auto-generated" in raw_text.lower():
                 is_auto_generated = True
-
             elapsed = time.time() - start_time
             log.info(f"[playwright] OK video_id={video_id} method=dom_scrape segments={len(segments)} time={elapsed:.2f}s")
-
             return {
                 "video_id": video_id,
                 "language": language,
@@ -1298,7 +1213,6 @@ async def fetch_transcript_with_playwright(
                 "proxy_used": "Playwright",
                 "method": "dom_scrape",
             }
-
     except Exception as e:
         elapsed = time.time() - start_time
         log.error(f"[playwright] FAIL video_id={video_id} time={elapsed:.2f}s error={str(e)[:100]}")
@@ -1361,14 +1275,12 @@ class PlaywrightTranscriptService:
         self.navigation_timeout_ms = navigation_timeout_ms
         self.browser_refresh_interval = browser_refresh_interval
         self.max_retries = max_retries
-
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self._playwright = None
         self._browser = None
         self._context_pool: asyncio.Queue = None
         self._initialized = False
         self._cdp_url = None
-
         # Browser refresh tracking
         self._videos_since_refresh = 0
         self._refresh_lock = asyncio.Lock()
@@ -1379,23 +1291,19 @@ class PlaywrightTranscriptService:
         """Initialize browser and context pool. Call once at startup."""
         if self._initialized:
             return
-
         # Resolve CDP WebSocket URL
         cdp_endpoint = self._cdp_endpoint or CDP_HEADLESS
         self._cdp_url = await asyncio.to_thread(_get_cdp_websocket_url, cdp_endpoint)
         log.info(f"[transcript-service] Initializing with CDP: {self._cdp_url[:60]}...")
-
         # Connect to browser
         self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
-
         # Pre-warm context pool
-        self._context_pool = asyncio.Queue(maxsize=self.context_pool_size)
+        self._context_pool = asyncio.Queue(maxsize = self.context_pool_size)
         for i in range(self.context_pool_size):
             ctx = await self._create_context()
             await self._context_pool.put(ctx)
             log.info(f"[transcript-service] Warmed context {i+1}/{self.context_pool_size}")
-
         self._initialized = True
         log.info(f"[transcript-service] Ready (max_concurrent={self.max_concurrent}, pool_size={self.context_pool_size})")
 
@@ -1403,9 +1311,7 @@ class PlaywrightTranscriptService:
         """Cleanup all resources. Call at shutdown."""
         if not self._initialized:
             return
-
         log.info("[transcript-service] Shutting down...")
-
         # Close all pooled contexts
         closed = 0
         while not self._context_pool.empty():
@@ -1415,21 +1321,17 @@ class PlaywrightTranscriptService:
                 closed += 1
             except:
                 pass
-
         log.info(f"[transcript-service] Closed {closed} pooled contexts")
-
         if self._browser:
             try:
                 await self._browser.close()
             except:
                 pass
-
         if self._playwright:
             try:
                 await self._playwright.stop()
             except:
                 pass
-
         self._initialized = False
         log.info("[transcript-service] Shutdown complete")
 
@@ -1440,7 +1342,6 @@ class PlaywrightTranscriptService:
         """
         async with self._refresh_lock:
             log.info(f"[transcript-service] Refreshing browser (after {self._videos_since_refresh} videos)...")
-
             # 1. Drain and close all pooled contexts
             closed = 0
             while not self._context_pool.empty():
@@ -1450,27 +1351,22 @@ class PlaywrightTranscriptService:
                     closed += 1
                 except:
                     pass
-
             # 2. Close old browser
             if self._browser:
                 try:
                     await self._browser.close()
                 except Exception as e:
                     log.warning(f"[transcript-service] Error closing old browser: {e}")
-
             # 3. Re-resolve CDP URL (may have changed)
             cdp_endpoint = self._cdp_endpoint or CDP_HEADLESS
             self._cdp_url = await asyncio.to_thread(_get_cdp_websocket_url, cdp_endpoint)
-
             # 4. Connect fresh browser
             self._browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
-
             # 5. Re-warm context pool
             self._context_pool = asyncio.Queue(maxsize=self.context_pool_size)
             for i in range(self.context_pool_size):
                 ctx = await self._create_context()
                 await self._context_pool.put(ctx)
-
             self._videos_since_refresh = 0
             log.info(f"[transcript-service] Browser refreshed (closed {closed} contexts, warmed {self.context_pool_size} new)")
 
@@ -1501,7 +1397,7 @@ class PlaywrightTranscriptService:
     async def _create_context(self):
         """Create a new browser context with optimized settings."""
         return await self._browser.new_context(
-            viewport={"width": 1280, "height": 720},
+            viewport = {"width": 1280, "height": 720},
         )
 
     async def _acquire_context(self):
@@ -1520,7 +1416,6 @@ class PlaywrightTranscriptService:
             except:
                 pass
             return
-
         if self._context_pool.qsize() < self.context_pool_size:
             try:
                 # Clear cookies for clean reuse
@@ -1568,12 +1463,10 @@ class PlaywrightTranscriptService:
                 last_error = str(e)
                 # Connection errors are handled by _fetch_single_attempt
                 # Don't refresh here - let the health check in _fetch_single_attempt handle it
-
             if attempt < self.max_retries:
                 wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
                 log.info(f"[transcript-service] {video_id} retry {attempt + 1}/{self.max_retries} in {wait_time}s")
                 await asyncio.sleep(wait_time)
-
         return {"video_id": video_id, "error": last_error or "Max retries exceeded"}
 
     async def _fetch_single_attempt(
@@ -1584,29 +1477,24 @@ class PlaywrightTranscriptService:
     ) -> dict:
         """Single extraction attempt (called by fetch_single with retry logic)."""
         start_time = time.time()
-
         async with self.semaphore:
             # Ensure browser is healthy before extraction
             await self._ensure_healthy_browser()
-
             context = await self._acquire_context()
             page = None
             reuse_context = True
-
             try:
                 self._videos_since_refresh += 1
                 self._total_extractions += 1
-
                 page = await context.new_page()
                 await _setup_routes(page)
-
                 url = f"https://www.youtube.com/watch?v={video_id}"
-
                 # Navigate with timeout (no inner retry, outer retry handles it)
-                await page.goto(url, wait_until="load", timeout=self.navigation_timeout_ms)
-
+                await page.goto(
+                    url, 
+                    wait_until = "load", 
+                    timeout = self.navigation_timeout_ms)
                 await _kill_youtube_background(page)
-
                 # Wait for captions data
                 try:
                     await page.wait_for_function(
@@ -1615,27 +1503,22 @@ class PlaywrightTranscriptService:
                     )
                 except:
                     pass
-
                 # Get caption tracks
                 tracks = await _get_caption_tracks(page)
                 language = "auto"
                 is_auto_generated = True
-
                 if tracks:
                     manual_count = sum(1 for t in tracks if not t.is_auto_generated)
                     log.info(f"[transcript-service] {video_id}: tracks={len(tracks)} manual={manual_count}")
-
                     selected = _select_best_track(tracks, prefer_manual)
                     language = selected.language_code
                     is_auto_generated = selected.is_auto_generated
-
                     # Try direct API first (fast path)
                     try:
                         segments_data = await _fetch_transcript_direct(page, selected.base_url)
                         segments = [TranscriptSegment(timestamp=s['timestamp'], text=s['text']) for s in segments_data]
                         page_content = " ".join([seg.text for seg in segments])
                         elapsed = time.time() - start_time
-
                         log.info(f"[transcript-service] OK {video_id} method=direct_api segments={len(segments)} time={elapsed:.2f}s")
                         return {
                             "video_id": video_id,
@@ -1647,22 +1530,16 @@ class PlaywrightTranscriptService:
                         }
                     except Exception as e:
                         log.info(f"[transcript-service] {video_id} direct_api failed: {e}")
-
                 # Fallback to DOM scraping
                 raw_text = await _extract_via_dom(page, self.timeout_ms)
-
                 if not raw_text:
                     raise ValueError(f"No transcript for: {video_id}")
-
                 segments = _parse_transcript(raw_text)
                 page_content = " ".join([seg.text for seg in segments])
-
                 if "auto-generated" in raw_text.lower():
                     is_auto_generated = True
-
                 elapsed = time.time() - start_time
                 log.info(f"[transcript-service] OK {video_id} method=dom_scrape segments={len(segments)} time={elapsed:.2f}s")
-
                 return {
                     "video_id": video_id,
                     "language": language,
@@ -1671,19 +1548,16 @@ class PlaywrightTranscriptService:
                     "segments": [{"timestamp": s.timestamp, "text": s.text} for s in segments],
                     "method": "dom_scrape",
                 }
-
             except Exception as e:
                 reuse_context = False  # Don't reuse context on error
                 self._total_errors += 1
                 elapsed = time.time() - start_time
                 error_str = str(e)
-
                 log.error(f"[transcript-service] FAIL {video_id} time={elapsed:.2f}s error={error_str[:100]}")
                 return {
                     "video_id": video_id,
                     "error": error_str,
                 }
-
             finally:
                 if page:
                     try:
@@ -1713,29 +1587,23 @@ class PlaywrightTranscriptService:
         """
         if not self._initialized:
             raise RuntimeError("PlaywrightTranscriptService not initialized. Call initialize() first.")
-
         batch_size = len(video_ids)
         log.info(f"[transcript-service] Batch started: {batch_size} videos "
                  f"(max_concurrent={self.max_concurrent}, retries={self.max_retries})")
         start_time = time.time()
-
         # Reset stats for this batch
         batch_extractions_start = self._total_extractions
         batch_errors_start = self._total_errors
-
         tasks = [self.fetch_single(vid, prefer_manual) for vid in video_ids]
         results = await asyncio.gather(*tasks)
-
         elapsed = time.time() - start_time
         success = sum(1 for r in results if "error" not in r)
         batch_extractions = self._total_extractions - batch_extractions_start
         batch_errors = self._total_errors - batch_errors_start
         avg_time = elapsed / batch_size if batch_size > 0 else 0
-
         log.info(f"[transcript-service] Batch complete: {success}/{batch_size} OK "
                  f"time={elapsed:.1f}s avg={avg_time:.1f}s/video "
                  f"extractions={batch_extractions} errors={batch_errors}")
-
         return results
 
 
@@ -1770,11 +1638,11 @@ async def init_transcript_service(
     """
     global _transcript_service
     _transcript_service = PlaywrightTranscriptService(
-        max_concurrent=max_concurrent,
-        context_pool_size=context_pool_size,  # Will default to max_concurrent if None
-        navigation_timeout_ms=navigation_timeout_ms,
-        browser_refresh_interval=browser_refresh_interval,
-        max_retries=max_retries,
+        max_concurrent = max_concurrent,
+        context_pool_size = context_pool_size,  # Will default to max_concurrent if None
+        navigation_timeout_ms = navigation_timeout_ms,
+        browser_refresh_interval = browser_refresh_interval,
+        max_retries = max_retries,
     )
     await _transcript_service.initialize()
     return _transcript_service
@@ -1878,7 +1746,6 @@ async def create_youtube_indexes(es_client) -> dict:
     - coelhonexus-youtube-transcriptions: Transcriptions (one doc per video+language)
     """
     results = {}
-
     # Metadata index mapping
     metadata_mapping = {
         "mappings": {
@@ -1888,11 +1755,9 @@ async def create_youtube_indexes(es_client) -> dict:
                 "title": {"type": "text", "analyzer": "standard"},
                 "fulltitle": {"type": "text"},
                 "description": {"type": "text", "analyzer": "standard"},
-
                 # URLs
                 "webpage_url": {"type": "keyword"},
                 "thumbnail_url": {"type": "keyword"},
-
                 # Channel
                 "channel": {"type": "text"},
                 "channel_id": {"type": "keyword"},
@@ -1901,34 +1766,28 @@ async def create_youtube_indexes(es_client) -> dict:
                 "channel_is_verified": {"type": "boolean"},
                 "uploader": {"type": "text"},
                 "uploader_id": {"type": "keyword"},
-
                 # Dates
                 "upload_date": {"type": "keyword"},  # YYYYMMDD format
                 "timestamp": {"type": "date", "format": "epoch_second"},
                 "release_date": {"type": "keyword"},
-
                 # Duration
                 "duration": {"type": "integer"},
                 "duration_string": {"type": "keyword"},
-
                 # Engagement
                 "view_count": {"type": "long"},
                 "like_count": {"type": "long"},
                 "dislike_count": {"type": "long"},
                 "comment_count": {"type": "long"},
                 "average_rating": {"type": "float"},
-
                 # Classification
                 "categories": {"type": "keyword"},
                 "tags": {"type": "keyword"},
                 "age_limit": {"type": "integer"},
                 "availability": {"type": "keyword"},
-
                 # Live
                 "is_live": {"type": "boolean"},
                 "was_live": {"type": "boolean"},
                 "live_status": {"type": "keyword"},
-
                 # Chapters
                 "chapters": {
                     "type": "nested",
@@ -1938,11 +1797,9 @@ async def create_youtube_indexes(es_client) -> dict:
                         "end_time": {"type": "float"},
                     }
                 },
-
                 # Subtitles (available languages from yt-dlp)
                 "subtitles": {"type": "keyword"},
                 "automatic_captions": {"type": "keyword"},
-
                 # Extraction metadata
                 "_extracted_at": {"type": "date"},
             }
@@ -1952,7 +1809,6 @@ async def create_youtube_indexes(es_client) -> dict:
             "number_of_replicas": 0,
         }
     }
-
     # Transcriptions index mapping
     transcriptions_mapping = {
         "mappings": {
@@ -1971,35 +1827,32 @@ async def create_youtube_indexes(es_client) -> dict:
             "number_of_replicas": 0,
         }
     }
-
     # Create metadata index
     try:
-        exists = await es_client.indices.exists(index=ES_INDEX_METADATA)
+        exists = await es_client.indices.exists(index = ES_INDEX_METADATA)
         if not exists:
             await es_client.indices.create(
-                index=ES_INDEX_METADATA,
-                mappings=metadata_mapping["mappings"],
-                settings=metadata_mapping["settings"],
+                index = ES_INDEX_METADATA,
+                mappings = metadata_mapping["mappings"],
+                settings = metadata_mapping["settings"],
             )
             results["metadata"] = {"created": True, "index": ES_INDEX_METADATA}
         else:
             results["metadata"] = {"created": False, "index": ES_INDEX_METADATA, "message": "exists"}
     except Exception as e:
         results["metadata"] = {"created": False, "index": ES_INDEX_METADATA, "error": str(e)}
-
     # Create transcriptions index
     try:
-        exists = await es_client.indices.exists(index=ES_INDEX_TRANSCRIPTIONS)
+        exists = await es_client.indices.exists(index = ES_INDEX_TRANSCRIPTIONS)
         if not exists:
             await es_client.indices.create(
-                index=ES_INDEX_TRANSCRIPTIONS,
-                mappings=transcriptions_mapping["mappings"],
-                settings=transcriptions_mapping["settings"],
+                index = ES_INDEX_TRANSCRIPTIONS,
+                mappings = transcriptions_mapping["mappings"],
+                settings = transcriptions_mapping["settings"],
             )
             results["transcriptions"] = {"created": True, "index": ES_INDEX_TRANSCRIPTIONS}
         else:
             results["transcriptions"] = {"created": False, "index": ES_INDEX_TRANSCRIPTIONS, "message": "exists"}
     except Exception as e:
         results["transcriptions"] = {"created": False, "index": ES_INDEX_TRANSCRIPTIONS, "error": str(e)}
-
     return results
