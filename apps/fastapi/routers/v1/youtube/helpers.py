@@ -1,17 +1,15 @@
 """
 YouTube helpers:
 - yt-dlp subprocess for metadata extraction (optimized for speed and completeness)
-- Playwright CDP for transcript extraction (optimized v3, bypasses IP blocking)
+- Playwright CDP for transcript extraction (simple DOM-based approach)
 - ElasticSearch indexing
 
-Playwright optimizations v3:
-- Periodic browser recreation (prevents stale CDP connections)
-- Tenacity-based retry with exponential backoff
-- Aggressive resource blocking (video, ads, tracking)
-- Kill YouTube background processes
-- Manual transcript priority over auto-generated
-- Direct API fetch before DOM scraping
-- Multiple fallback methods for transcript button
+Transcript extraction flow (simple, reliable):
+1. Wait for page to fully load
+2. Click "...more" to expand description
+3. Scroll to Transcript section
+4. Click "Show transcript" button
+5. Extract content from panel
 """
 import asyncio
 import logging
@@ -42,21 +40,9 @@ log = logging.getLogger("uvicorn.error")
 ES_INDEX_METADATA = "coelhonexus-youtube-metadata"
 ES_INDEX_TRANSCRIPTIONS = "coelhonexus-youtube-transcriptions"
 
-# Concurrency limit for yt-dlp subtitle extraction (matches Playwright limit)
-# Prevents OOM when processing large batches
-YTDLP_SUBS_MAX_CONCURRENT = 5
-_ytdlp_subs_semaphore: asyncio.Semaphore | None = None
-
-def _get_ytdlp_subs_semaphore() -> asyncio.Semaphore:
-    """Get or create the yt-dlp subtitle semaphore (lazy init for event loop safety)."""
-    global _ytdlp_subs_semaphore
-    if _ytdlp_subs_semaphore is None:
-        _ytdlp_subs_semaphore = asyncio.Semaphore(YTDLP_SUBS_MAX_CONCURRENT)
-    return _ytdlp_subs_semaphore
-
 
 # =============================================================================
-# yt-dlp Subprocess Extractor (Optimized)
+# yt-dlp Subprocess Extractor (Metadata Only)
 # =============================================================================
 class YtDlpExtractor:
     """
@@ -522,239 +508,6 @@ def get_extractor() -> YtDlpExtractor:
 
 
 # =============================================================================
-# yt-dlp Subtitle Extraction (Primary Method - handles PO tokens)
-# =============================================================================
-async def fetch_transcript_with_ytdlp(
-    video_id: str,
-    languages: list[str] | None = None,
-    timeout: float = 30.0,
-) -> dict:
-    """
-    Fetch transcript using yt-dlp subprocess (primary method).
-
-    yt-dlp handles YouTube's PO token requirements automatically,
-    making this more reliable than browser-based methods.
-
-    Args:
-        video_id: YouTube video ID
-        languages: Preferred languages (e.g., ["en", "pt"]). If None, gets best available.
-        timeout: Subprocess timeout in seconds
-
-    Returns:
-        Dict with video_id, language, is_auto_generated, page_content, segments
-        or Dict with video_id, error on failure
-    """
-    import tempfile
-    import subprocess
-    import glob as glob_module
-
-    # Limit concurrent yt-dlp processes to prevent OOM
-    async with _get_ytdlp_subs_semaphore():
-        url = f"https://www.youtube.com/watch?v={video_id}"
-        start_time = time.time()
-
-        # Create temp directory for subtitle files
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Build yt-dlp command with PO token + JS challenge solver
-            cmd = [
-                "yt-dlp",
-                "--skip-download",           # Don't download video
-                "--write-subs",              # Write manual subtitles
-                "--write-auto-subs",         # Write auto-generated subs if no manual
-                "--sub-format", "json3",     # JSON3 format with timestamps
-                "--no-progress",
-                # Enable JS challenge solver (required for subtitles)
-                "--remote-components", "ejs:github",
-                # PO Token support (bgutil-pot sidecar + Deno)
-                "--extractor-args", "youtube:player_client=web_safari;fetch_pot=always",
-                # Rate limit protection
-                "--sleep-subtitles", "1",
-                "-o", f"{tmpdir}/%(id)s.%(ext)s",  # Output template
-            ]
-
-            # Add language preference
-            if languages:
-                cmd.extend(["--sub-langs", ",".join(languages)])
-            else:
-                # Default: try English, Portuguese, Spanish and auto-generated
-                cmd.extend(["--sub-langs", "en.*,pt.*,es.*"])
-
-            cmd.append(url)
-
-            log.info(f"[yt-dlp:subs] extracting video_id={video_id}")
-
-            try:
-                proc = await asyncio.wait_for(
-                    asyncio.create_subprocess_exec(
-                        *cmd,
-                        stdout = subprocess.PIPE,
-                        stderr = subprocess.PIPE,
-                        cwd = tmpdir,
-                    ),
-                    timeout = timeout
-                )
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(),
-                    timeout = timeout
-                )
-
-                elapsed = time.time() - start_time
-
-                if proc.returncode != 0:
-                    stderr_str = stderr.decode("utf-8", errors="replace")
-                    # Check for common "no subtitles" errors
-                    if "no subtitles" in stderr_str.lower() or "no captions" in stderr_str.lower():
-                        log.info(f"[yt-dlp:subs] NO_SUBS video_id={video_id} time={elapsed:.2f}s")
-                        return {"video_id": video_id, "error": "No subtitles available"}
-                    log.info(f"[yt-dlp:subs] FAIL video_id={video_id} time={elapsed:.2f}s stderr={stderr_str[:200]}")
-                    return {"video_id": video_id, "error": f"yt-dlp failed: {stderr_str[:200]}"}
-
-                # Find the subtitle file (JSON3 format)
-                sub_files = glob_module.glob(f"{tmpdir}/*.json3")
-                if not sub_files:
-                    # Try VTT as fallback
-                    sub_files = glob_module.glob(f"{tmpdir}/*.vtt")
-
-                if not sub_files:
-                    log.info(f"[yt-dlp:subs] NO_FILE video_id={video_id} time={elapsed:.2f}s")
-                    return {"video_id": video_id, "error": "No subtitle file generated"}
-
-                # Parse the first subtitle file found
-                sub_file = sub_files[0]
-                filename = os.path.basename(sub_file)
-
-                # Detect language and auto-generated status from filename
-                # Format: VIDEO_ID.LANG.json3 or VIDEO_ID.LANG.vtt
-                is_auto_generated = ".auto." in filename or "-auto." in filename
-                parts = filename.replace(".json3", "").replace(".vtt", "").split(".")
-                language = parts[-1] if len(parts) > 1 else "unknown"
-
-                # Parse JSON3 format
-                if sub_file.endswith(".json3"):
-                    segments = _parse_json3_subtitles(sub_file)
-                else:
-                    segments = _parse_vtt_subtitles(sub_file)
-
-                if not segments:
-                    log.info(f"[yt-dlp:subs] EMPTY video_id={video_id} time={elapsed:.2f}s")
-                    return {"video_id": video_id, "error": "Empty subtitle file"}
-
-                page_content = " ".join([s["text"] for s in segments])
-
-                log.info(f"[yt-dlp:subs] OK video_id={video_id} lang={language} auto={is_auto_generated} segments={len(segments)} time={elapsed:.2f}s")
-
-                return {
-                    "video_id": video_id,
-                    "language": language,
-                    "is_auto_generated": is_auto_generated,
-                    "page_content": page_content,
-                    "segments": segments,
-                    "method": "yt-dlp",
-                }
-
-            except asyncio.TimeoutError:
-                elapsed = time.time() - start_time
-                log.info(f"[yt-dlp:subs] TIMEOUT video_id={video_id} time={elapsed:.2f}s limit={timeout}s")
-                return {"video_id": video_id, "error": f"Timeout after {timeout}s"}
-            except Exception as e:
-                elapsed = time.time() - start_time
-                log.error(f"[yt-dlp:subs] ERROR video_id={video_id} time={elapsed:.2f}s {type(e).__name__}: {e}")
-                return {"video_id": video_id, "error": str(e)}
-
-
-def _parse_json3_subtitles(filepath: str) -> list[dict]:
-    """Parse yt-dlp JSON3 subtitle format."""
-    try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        segments = []
-        events = data.get("events", [])
-
-        for event in events:
-            # Skip events without text segments
-            segs = event.get("segs", [])
-            if not segs:
-                continue
-
-            # Combine text from all segments in this event
-            text = "".join(s.get("utf8", "") for s in segs).strip()
-            if not text:
-                continue
-
-            # Get timestamp (in milliseconds)
-            start_ms = event.get("tStartMs", 0)
-            duration_ms = event.get("dDurationMs", 0)
-
-            # Convert to MM:SS or HH:MM:SS format
-            total_seconds = start_ms // 1000
-            hours = total_seconds // 3600
-            minutes = (total_seconds % 3600) // 60
-            seconds = total_seconds % 60
-
-            if hours > 0:
-                timestamp = f"{hours}:{minutes:02d}:{seconds:02d}"
-            else:
-                timestamp = f"{minutes}:{seconds:02d}"
-
-            segments.append({
-                "timestamp": timestamp,
-                "text": text,
-                "start_ms": start_ms,
-                "duration_ms": duration_ms,
-            })
-
-        return segments
-    except Exception as e:
-        log.warning(f"[yt-dlp:subs] JSON3 parse error: {e}")
-        return []
-
-
-def _parse_vtt_subtitles(filepath: str) -> list[dict]:
-    """Parse VTT subtitle format as fallback."""
-    try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        segments = []
-        # VTT format: timestamps like "00:00:00.000 --> 00:00:05.000"
-        pattern = r"(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*\d{2}:\d{2}:\d{2}\.\d{3}\s*\n(.+?)(?=\n\n|\n\d{2}:|\Z)"
-
-        for match in re.finditer(pattern, content, re.DOTALL):
-            timestamp_raw = match.group(1)
-            text = match.group(2).strip()
-
-            # Remove VTT tags like <c> and timestamps within text
-            text = re.sub(r"<[^>]+>", "", text)
-            text = re.sub(r"\n", " ", text)
-            text = text.strip()
-
-            if not text:
-                continue
-
-            # Convert HH:MM:SS.mmm to display format
-            parts = timestamp_raw.split(":")
-            hours = int(parts[0])
-            minutes = int(parts[1])
-            seconds = int(float(parts[2]))
-
-            if hours > 0:
-                timestamp = f"{hours}:{minutes:02d}:{seconds:02d}"
-            else:
-                timestamp = f"{minutes}:{seconds:02d}"
-
-            segments.append({
-                "timestamp": timestamp,
-                "text": text,
-            })
-
-        return segments
-    except Exception as e:
-        log.warning(f"[yt-dlp:subs] VTT parse error: {e}")
-        return []
-
-
-# =============================================================================
 # Batch Transcription Helper with ES Caching
 # =============================================================================
 async def _check_existing_transcriptions(
@@ -833,28 +586,28 @@ async def fetch_transcriptions_batch(
     """
     Fetch transcriptions for videos with ES caching.
 
-    Strategy (in order of preference):
+    Strategy:
     1. ES cache lookup - skip videos with existing transcriptions
-    2. yt-dlp subprocess - primary method, handles PO tokens automatically
-    3. Playwright CDP - fallback for yt-dlp failures (browser-based)
+    2. Playwright CDP - DOM-based extraction (simple, reliable)
 
     Args:
         video_ids: List of YouTube video IDs
-        transcript_service: PlaywrightTranscriptService instance for fallback (uses global if None)
+        transcript_service: PlaywrightTranscriptService instance (uses global if None)
         es_client: AsyncElasticsearch client for cache lookup (optional)
-        languages: Requested languages (None = best available, English priority)
+        languages: Requested languages (None = best available)
 
     Returns:
-        List of transcription documents ready for ES indexing:
-        [{"video_id": "abc", "lang": "en", "content": "...", "is_auto": False, "method": "yt-dlp"}, ...]
+        List of transcription documents ready for ES indexing
     """
     if not video_ids:
         return []
+
     # Check ES cache for existing transcriptions
     existing_transcriptions = await _check_existing_transcriptions(
         es_client,
         video_ids,
         languages)
+
     # Filter out videos that already have required transcriptions
     ids_to_fetch = []
     cached_count = 0
@@ -865,36 +618,37 @@ async def fetch_transcriptions_batch(
         else:
             cached_count += 1
             log.info(f"[transcription-cache] HIT {vid} langs={existing_langs}")
+
     if cached_count > 0:
         log.info(f"[fetch_transcriptions_batch] Cache: {cached_count} hits, {len(ids_to_fetch)} to fetch")
+
     if not ids_to_fetch:
         log.info("[fetch_transcriptions_batch] All videos cached, no fetch needed")
         return []
-    log.info(f"[fetch_transcriptions_batch] Fetching {len(ids_to_fetch)} videos via yt-dlp (primary)")
 
-    # Step 1: Try yt-dlp for all videos (fast, handles PO tokens)
-    ytdlp_tasks = [
-        fetch_transcript_with_ytdlp(vid, languages=languages, timeout=30.0)
-        for vid in ids_to_fetch
-    ]
-    ytdlp_results = await asyncio.gather(*ytdlp_tasks, return_exceptions=True)
+    # Fetch transcripts via Playwright DOM extraction
+    service = transcript_service or _transcript_service
+    if not service or not service._initialized:
+        log.error("[fetch_transcriptions_batch] Playwright service not available")
+        return []
 
-    # Process yt-dlp results
+    log.info(f"[fetch_transcriptions_batch] Fetching {len(ids_to_fetch)} videos via Playwright")
+    playwright_results = await service.fetch_batch(ids_to_fetch, prefer_manual=True)
+
+    # Process results
     transcription_docs = []
-    failed_ids = []
     success_count = 0
 
-    for vid, result in zip(ids_to_fetch, ytdlp_results):
-        if isinstance(result, Exception):
-            log.warning(f"[fetch_transcriptions_batch] yt-dlp exception {vid}: {result}")
-            failed_ids.append(vid)
+    for result in playwright_results:
+        vid = result.get("video_id")
+        if not vid:
             continue
 
-        if "error" not in result and result.get("page_content"):
+        if "error" not in result:
             lang = result.get("language", "unknown")
             content = result.get("page_content", "")
             is_auto = result.get("is_auto_generated", True)
-            method = result.get("method", "yt-dlp")
+            method = result.get("method", "dom_scrape")
             transcription_docs.append({
                 "id": f"{vid}_{lang}",
                 "video_id": vid,
@@ -905,43 +659,9 @@ async def fetch_transcriptions_batch(
                 "_extracted_at": datetime.utcnow().isoformat(),
             })
             success_count += 1
-            log.info(f"[fetch_transcriptions_batch] OK (yt-dlp) {vid} lang={lang} auto={is_auto} len={len(content)}")
+            log.info(f"[fetch_transcriptions_batch] OK {vid} lang={lang} auto={is_auto} len={len(content)}")
         else:
-            error_msg = result.get("error", "Unknown") if isinstance(result, dict) else "Unknown"
-            log.info(f"[fetch_transcriptions_batch] yt-dlp failed {vid}: {error_msg[:50]}")
-            failed_ids.append(vid)
-
-    # Step 2: Playwright fallback for yt-dlp failures
-    if failed_ids:
-        service = transcript_service or _transcript_service
-        if service and service._initialized:
-            log.info(f"[fetch_transcriptions_batch] Playwright fallback for {len(failed_ids)} videos")
-            playwright_results = await service.fetch_batch(failed_ids, prefer_manual=True)
-
-            for result in playwright_results:
-                vid = result.get("video_id")
-                if not vid:
-                    continue
-                if "error" not in result:
-                    lang = result.get("language", "unknown")
-                    content = result.get("page_content", "")
-                    is_auto = result.get("is_auto_generated", True)
-                    method = result.get("method", "playwright")
-                    transcription_docs.append({
-                        "id": f"{vid}_{lang}",
-                        "video_id": vid,
-                        "lang": lang,
-                        "content": content,
-                        "is_auto": is_auto,
-                        "method": method,
-                        "_extracted_at": datetime.utcnow().isoformat(),
-                    })
-                    success_count += 1
-                    log.info(f"[fetch_transcriptions_batch] OK (playwright) {vid} lang={lang} auto={is_auto} len={len(content)}")
-                else:
-                    log.warning(f"[fetch_transcriptions_batch] FAIL {vid}: {result.get('error', '')[:100]}")
-        else:
-            log.warning(f"[fetch_transcriptions_batch] Playwright service not available for {len(failed_ids)} fallbacks")
+            log.warning(f"[fetch_transcriptions_batch] FAIL {vid}: {result.get('error', '')[:100]}")
 
     log.info(f"[fetch_transcriptions_batch] Complete: {success_count}/{len(ids_to_fetch)} fetched, {cached_count} cached")
     return transcription_docs
@@ -1093,53 +813,6 @@ def _select_best_track(tracks: list[CaptionTrack], prefer_manual: bool = True) -
             0 if is_english else (1 if is_portuguese else 2),
         )
     return sorted(tracks, key = priority)[0]
-
-
-async def _fetch_transcript_direct(page, base_url: str) -> list[dict]:
-    """Try to fetch transcript directly from caption URL (fast path)."""
-    json_url = base_url + ("&" if "?" in base_url else "?") + "fmt=json3"
-    result = await page.evaluate(f'''
-        async () => {{
-            try {{
-                const resp = await fetch("{json_url}", {{
-                    credentials: "include",
-                    headers: {{ "Accept": "application/json" }}
-                }});
-                if (!resp.ok) {{
-                    return {{ error: "HTTP " + resp.status }};
-                }}
-                const text = await resp.text();
-                if (!text || text.length === 0) {{
-                    return {{ error: "empty response" }};
-                }}
-                if (text.startsWith('<')) {{
-                    return {{ error: "blocked (HTML response)" }};
-                }}
-                if (text.length < 10) {{
-                    return {{ error: "truncated response: " + text.length + " bytes" }};
-                }}
-                try {{
-                    return JSON.parse(text);
-                }} catch (parseErr) {{
-                    return {{ error: "JSON parse failed: " + parseErr.message + " (len=" + text.length + ")" }};
-                }}
-            }} catch (e) {{
-                return {{ error: e.message }};
-            }}
-        }}
-    ''')
-    if 'error' in result:
-        raise ValueError(result['error'])
-    segments = []
-    for event in result.get('events', []):
-        if 'segs' in event:
-            text = ''.join(s.get('utf8', '') for s in event['segs']).strip()
-            if text:
-                start_ms = event.get('tStartMs', 0)
-                minutes = start_ms // 60000
-                seconds = (start_ms // 1000) % 60
-                segments.append({'timestamp': f"{minutes}:{seconds:02d}", 'text': text})
-    return segments
 
 
 async def _extract_via_dom(page, timeout_ms: int) -> str:
