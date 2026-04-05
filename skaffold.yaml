@@ -14,8 +14,10 @@ build:
       context: apps/fastapi
       docker:
         dockerfile: Dockerfile.fastapi
-        noCache: true
+        noCache: false  # Enable layer caching for faster rebuilds
       sync:
+        # Hot-reload: sync Python files directly to container (no rebuild)
+        # Requires: skaffold dev (not skaffold run)
         manual:
           - src: "**/*.py"
             dest: /app
