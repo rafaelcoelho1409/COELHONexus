@@ -680,27 +680,75 @@ CDP_HEADED = os.environ.get(
     "https://playwright-cdp.YOUR_TAILNET_DOMAIN.ts.net"
 )
 
-# Resource blocking patterns - balanced for speed and reliability
+# Resource blocking patterns - aggressive for speed
 BLOCK_PATTERNS = [
     # VIDEO/AUDIO STREAMING (Biggest speedup: 2-5 seconds)
     "**/videoplayback*",
     "**/googlevideo.com/*",
     "**/*.googlevideo.com/*",
+    "**/*.m3u8",              # HLS manifests
+    "**/*.ts",                # HLS segments
+    "**/manifest*",           # DASH manifests
     # ADS
     "**/doubleclick.net/*",
     "**/googleadservices.com/*",
     "**/googlesyndication.com/*",
     "**/googleads.g.doubleclick.net/*",
     "**/youtube.com/pagead/*",
+    "**/adservice.google.com/*",
+    "**/ads?*",
+    "**/pagead*",
     # ANALYTICS/TRACKING
     "**/google-analytics.com/*",
     "**/googletagmanager.com/*",
     "**/youtube.com/api/stats/*",
     "**/youtube.com/ptracking*",
     "**/s.youtube.com/*",
+    "**/youtubei/v1/log*",
+    "**/log_interaction*",
+    # IMAGES (not needed for transcripts)
+    "**/*.jpg",
+    "**/*.jpeg",
+    "**/*.png",
+    "**/*.gif",
+    "**/*.webp",
+    "**/yt3.ggpht.com/*",
+    "**/i.ytimg.com/*",
 ]
 
-BLOCK_RESOURCE_TYPES = {"media"}  # Only block media (video/audio)
+BLOCK_RESOURCE_TYPES = {"media", "image", "font"}
+
+# CSS to hide video player only (keep transcript panel visible!)
+HIDE_VIDEO_CSS = """
+video, #movie_player, .html5-video-player, .video-stream,
+#player-container-inner, .ytp-cued-thumbnail-overlay {
+    display: none !important;
+    visibility: hidden !important;
+}
+"""
+
+# JavaScript to cleanup DOM - only video player (keep #secondary for transcript!)
+CLEANUP_DOM_JS = """
+() => {
+    // Stop and remove video only
+    const video = document.querySelector('video');
+    if (video) {
+        video.pause();
+        video.src = '';
+        video.remove();
+    }
+    // Remove player container but NOT #secondary (transcript panel is there!)
+    document.querySelector('#movie_player')?.remove();
+    // Remove only comments
+    document.querySelector('#comments')?.remove();
+    // Kill timers
+    const highestId = window.setTimeout(() => {}, 0);
+    for (let i = 0; i < highestId; i++) {
+        window.clearTimeout(i);
+        window.clearInterval(i);
+    }
+}
+"""
 
 
 @dataclass
@@ -759,23 +807,14 @@ async def _setup_routes(page) -> None:
     await page.route("**/*", block_by_type)
 
 
-async def _kill_youtube_background(page) -> None:
-    """Kill YouTube's resource-hungry background processes."""
-    await page.evaluate('''
-        () => {
-            const video = document.querySelector("video");
-            if (video) {
-                video.pause();
-                video.removeAttribute("src");
-                video.load();
-            }
-            const highestId = window.setTimeout(() => {}, 0);
-            for (let i = 0; i < highestId; i++) {
-                window.clearTimeout(i);
-                window.clearInterval(i);
-            }
-        }
-    ''')
+async def _inject_hide_css(page) -> None:
+    """Inject CSS to hide video player immediately after navigation."""
+    await page.add_style_tag(content=HIDE_VIDEO_CSS)
+
+
+async def _cleanup_dom(page) -> None:
+    """Remove video player and heavy DOM elements."""
+    await page.evaluate(CLEANUP_DOM_JS)
 
 
 async def _get_caption_tracks(page) -> list[CaptionTrack]:
@@ -1058,15 +1097,17 @@ async def fetch_transcript_with_playwright(
         async with async_playwright() as p:
             browser = await p.chromium.connect_over_cdp(cdp_url)
             context = await browser.new_context(
-                viewport={"width": 1280, "height": 720},
+                viewport={"width": 1920, "height": 1080},
             )
             page = await context.new_page()
             # Set up blocking BEFORE navigation
             await _setup_routes(page)
             # Navigation with full load
             await page.goto(url, wait_until = "load")
-            # Kill background processes immediately
-            await _kill_youtube_background(page)
+            # Inject CSS to hide video player immediately
+            await _inject_hide_css(page)
+            # Cleanup DOM - remove video player and heavy elements
+            await _cleanup_dom(page)
             # Wait for captions data
             try:
                 await page.wait_for_function(
@@ -1386,10 +1427,13 @@ class PlaywrightTranscriptService:
                 url = f"https://www.youtube.com/watch?v={video_id}"
                 # Navigate with timeout (no inner retry, outer retry handles it)
                 await page.goto(
-                    url, 
-                    wait_until = "load", 
+                    url,
+                    wait_until = "load",
                     timeout = self.navigation_timeout_ms)
-                await _kill_youtube_background(page)
+                # Inject CSS to hide video player immediately
+                await _inject_hide_css(page)
+                # Cleanup DOM - remove video player and heavy elements
+                await _cleanup_dom(page)
                 # Wait for captions data
                 try:
                     await page.wait_for_function(
