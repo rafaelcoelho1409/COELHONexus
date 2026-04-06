@@ -52,14 +52,14 @@ async def lifespan(app: FastAPI):
     es_index_result = await create_youtube_indexes(app.state.es)
     print(f"ElasticSearch YouTube indexes: {es_index_result}", flush=True)
     # Initialize Playwright transcript service (browser pool)
-    # v4 optimizations (memory-safe):
-    # - max_concurrent=3: Reduced to prevent OOM (each Chrome context ~200MB)
-    # - browser_refresh_interval=10: More aggressive refresh to release memory
-    # - max_retries=2: Batch retry with exponential backoff
+    # v5 optimizations (overnight-safe):
+    # - max_concurrent=5: Optimal with cleanup safeguards
+    # - browser_refresh_interval=10: Aggressive refresh to release memory
+    # - max_retries=5: More retries for overnight batch jobs
     app.state.transcript_service = await init_transcript_service(
-        max_concurrent=3,
+        max_concurrent=5,
         browser_refresh_interval=10,
-        max_retries=2,
+        max_retries=5,
     )
     print("Playwright transcript service initialized.", flush=True)
     app.state.config = {

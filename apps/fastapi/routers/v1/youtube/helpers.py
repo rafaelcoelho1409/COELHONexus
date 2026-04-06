@@ -580,19 +580,27 @@ async def fetch_transcriptions_batch(
     transcript_service = None,
     es_client = None,
     languages: list[str] | None = None,
+    chunk_size: int = 50,
 ) -> list[dict]:
     """
-    Fetch transcriptions for videos with ES caching.
+    Fetch transcriptions for videos with ES caching and chunked processing.
 
     Strategy:
     1. ES cache lookup - skip videos with existing transcriptions
-    2. Playwright CDP - browser-based DOM scraping (optimized v4)
+    2. Chunk processing - process in batches of chunk_size for crash resilience
+    3. Playwright CDP - browser-based DOM scraping (optimized v5)
+
+    For large batches (e.g., 500 videos overnight):
+    - Processes in chunks of 50 videos
+    - Each chunk is independent - crash only loses current chunk
+    - On retry, ES cache skips already-indexed videos
 
     Args:
         video_ids: List of YouTube video IDs
         transcript_service: PlaywrightTranscriptService instance (uses global if None)
         es_client: AsyncElasticsearch client for cache lookup (optional)
         languages: Requested languages (None = best available, English priority)
+        chunk_size: Videos per chunk (default 50 - optimal for memory/resilience)
 
     Returns:
         List of transcription documents ready for ES indexing:
@@ -631,36 +639,66 @@ async def fetch_transcriptions_batch(
         log.error("[fetch_transcriptions_batch] Playwright service not available")
         return []
 
-    log.info(f"[fetch_transcriptions_batch] Fetching {len(ids_to_fetch)} videos via Playwright")
-    playwright_results = await service.fetch_batch(ids_to_fetch, prefer_manual=True)
-    # Process results
+    # Chunk processing for large batches (crash resilience)
+    total_to_fetch = len(ids_to_fetch)
+    num_chunks = (total_to_fetch + chunk_size - 1) // chunk_size
+    log.info(f"[fetch_transcriptions_batch] Fetching {total_to_fetch} videos in {num_chunks} chunks of {chunk_size}")
+
     transcription_docs = []
-    success_count = 0
+    total_success = 0
+    total_failed = 0
 
-    for result in playwright_results:
-        vid = result.get("video_id")
-        if not vid:
-            continue
+    for chunk_num in range(num_chunks):
+        start_idx = chunk_num * chunk_size
+        end_idx = min(start_idx + chunk_size, total_to_fetch)
+        chunk_ids = ids_to_fetch[start_idx:end_idx]
 
-        if "error" not in result and result.get("page_content"):
-            lang = result.get("language", "unknown")
-            content = result.get("page_content", "")
-            is_auto = result.get("is_auto_generated", True)
-            transcription_docs.append({
-                "id": f"{vid}_{lang}",
-                "video_id": vid,
-                "lang": lang,
-                "content": content,
-                "is_auto": is_auto,
-                "method": "playwright",
-                "_extracted_at": datetime.utcnow().isoformat(),
-            })
-            success_count += 1
-            log.info(f"[fetch_transcriptions_batch] OK {vid} lang={lang} auto={is_auto} len={len(content)}")
-        else:
-            log.warning(f"[fetch_transcriptions_batch] FAIL {vid}: {result.get('error', '')[:100]}")
+        log.info(f"[fetch_transcriptions_batch] Chunk {chunk_num + 1}/{num_chunks}: {len(chunk_ids)} videos")
 
-    log.info(f"[fetch_transcriptions_batch] Complete: {success_count}/{len(ids_to_fetch)} fetched, {cached_count} cached")
+        # Process chunk
+        chunk_results = await service.fetch_batch(chunk_ids, prefer_manual=True)
+
+        # Process chunk results - collect docs for this chunk separately
+        chunk_docs = []
+        for result in chunk_results:
+            vid = result.get("video_id")
+            if not vid:
+                continue
+
+            if "error" not in result and result.get("page_content"):
+                lang = result.get("language", "unknown")
+                content = result.get("page_content", "")
+                is_auto = result.get("is_auto_generated", True)
+                doc = {
+                    "id": f"{vid}_{lang}",
+                    "video_id": vid,
+                    "lang": lang,
+                    "content": content,
+                    "is_auto": is_auto,
+                    "method": "playwright",
+                    "_extracted_at": datetime.utcnow().isoformat(),
+                }
+                chunk_docs.append(doc)
+                transcription_docs.append(doc)
+                total_success += 1
+                log.info(f"[fetch_transcriptions_batch] OK {vid} lang={lang} auto={is_auto} len={len(content)}")
+            else:
+                total_failed += 1
+                log.warning(f"[fetch_transcriptions_batch] FAIL {vid}: {result.get('error', '')[:100]}")
+
+        # Index chunk results immediately (crash resilience - don't lose progress)
+        if chunk_docs and es_client:
+            try:
+                await index_transcriptions_to_elasticsearch(es_client, chunk_docs)
+                log.info(f"[fetch_transcriptions_batch] Chunk {chunk_num + 1} indexed: {len(chunk_docs)} docs")
+            except Exception as e:
+                log.error(f"[fetch_transcriptions_batch] Chunk {chunk_num + 1} index error: {e}")
+
+        log.info(f"[fetch_transcriptions_batch] Chunk {chunk_num + 1}/{num_chunks} complete: "
+                 f"{total_success} OK, {total_failed} failed so far")
+
+    log.info(f"[fetch_transcriptions_batch] Complete: {total_success}/{total_to_fetch} fetched, "
+             f"{total_failed} failed, {cached_count} cached")
     return transcription_docs
 
 
@@ -1210,10 +1248,13 @@ class PlaywrightTranscriptService:
         self._initialized = False
         log.info("[transcript-service] Shutdown complete")
 
-    async def _refresh_browser(self) -> None:
+    async def _refresh_browser(self, max_retries: int = 6, initial_wait: float = 5.0) -> None:
         """
         Refresh browser connection to prevent stale CDP connections.
         Called automatically after browser_refresh_interval videos.
+
+        If Playwright server crashed and restarted, this will wait and retry
+        connecting with exponential backoff (up to ~60s total wait).
         """
         async with self._refresh_lock:
             log.info(f"[transcript-service] Refreshing browser (after {self._videos_since_refresh} videos)...")
@@ -1232,12 +1273,29 @@ class PlaywrightTranscriptService:
                     await self._browser.close()
                 except Exception as e:
                     log.warning(f"[transcript-service] Error closing old browser: {e}")
-            # 3. Re-resolve CDP URL (use HEADED - YouTube blocks headless)
+
+            # 3. Re-resolve CDP URL and connect with retry (handles Playwright restarts)
             cdp_endpoint = self._cdp_endpoint or CDP_HEADED
-            self._cdp_url = await asyncio.to_thread(_get_cdp_websocket_url, cdp_endpoint)
-            # 4. Connect fresh browser
-            self._browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
-            # 5. Re-warm context pool
+            last_error = None
+            for attempt in range(max_retries):
+                try:
+                    # Re-resolve URL each attempt (Playwright may have restarted with new URL)
+                    self._cdp_url = await asyncio.to_thread(_get_cdp_websocket_url, cdp_endpoint)
+                    self._browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
+                    log.info(f"[transcript-service] CDP connected (attempt {attempt + 1})")
+                    break
+                except Exception as e:
+                    last_error = e
+                    if attempt < max_retries - 1:
+                        wait_time = initial_wait * (2 ** attempt)  # 5s, 10s, 20s, 40s...
+                        log.warning(f"[transcript-service] CDP connect failed (attempt {attempt + 1}/{max_retries}), "
+                                   f"retrying in {wait_time}s: {e}")
+                        await asyncio.sleep(wait_time)
+                    else:
+                        log.error(f"[transcript-service] CDP connect failed after {max_retries} attempts: {e}")
+                        raise RuntimeError(f"Failed to connect to Playwright CDP after {max_retries} attempts") from last_error
+
+            # 4. Re-warm context pool
             self._context_pool = asyncio.Queue(maxsize=self.context_pool_size)
             for i in range(self.context_pool_size):
                 ctx = await self._create_context()
