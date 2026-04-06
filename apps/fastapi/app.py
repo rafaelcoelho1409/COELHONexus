@@ -55,11 +55,11 @@ async def lifespan(app: FastAPI):
     # v5 optimizations (overnight-safe):
     # - max_concurrent=5: Optimal with cleanup safeguards
     # - browser_refresh_interval=10: Aggressive refresh to release memory
-    # - max_retries=5: More retries for overnight batch jobs
+    # - max_retries=3: Balance between recovery and avoiding wasted retries
     app.state.transcript_service = await init_transcript_service(
         max_concurrent=5,
         browser_refresh_interval=10,
-        max_retries=5,
+        max_retries=3,
     )
     print("Playwright transcript service initialized.", flush=True)
     app.state.config = {

@@ -321,34 +321,41 @@ class YtDlpExtractor:
         args = [
             *self.BASE_ARGS,
             "--dump-single-json",  # Full metadata
+            # Skip restricted content (members-only, premium, needs auth)
+            "--match-filter", "availability != subscriber_only",
+            "--match-filter", "availability != premium_only",
+            "--match-filter", "availability != needs_auth",
             url,
         ]
         if max_videos > 0:
             args.extend(["--playlist-end", str(max_videos)])
         async with self.semaphore:
             success, stdout, stderr = await self._run_yt_dlp(args, timeout=timeout)
-        if not success:
-            log.info(f"[yt-dlp:playlist] FAILED id={playlist_id}")
-            return {"error": stderr, "videos": []}
+        # Try parsing JSON even on failure (--ignore-errors may have partial results)
         try:
-            data = orjson.loads(stdout)
+            data = orjson.loads(stdout) if stdout.strip() else {}
             entries = data.get("entries", [])
             videos = [self._normalize_video(e) for e in entries if e]
-            log.info(f"[yt-dlp:playlist] OK id={playlist_id} title='{data.get('title', '')[:50]}' videos={len(videos)}")
-            return {
-                "playlist_id": data.get("id"),
-                "playlist_title": data.get("title"),
-                "playlist_url": url,
-                "playlist_description": data.get("description"),
-                "playlist_uploader": data.get("uploader"),
-                "playlist_uploader_id": data.get("uploader_id"),
-                "playlist_count": data.get("playlist_count"),
-                "total_videos": len(videos),
-                "videos": videos,
-            }
+            if videos:
+                skipped = len(entries) - len(videos) if entries else 0
+                log.info(f"[yt-dlp:playlist] OK id={playlist_id} title='{data.get('title', '')[:50]}' videos={len(videos)} skipped={skipped}")
+                return {
+                    "playlist_id": data.get("id"),
+                    "playlist_title": data.get("title"),
+                    "playlist_url": url,
+                    "playlist_description": data.get("description"),
+                    "playlist_uploader": data.get("uploader"),
+                    "playlist_uploader_id": data.get("uploader_id"),
+                    "playlist_count": data.get("playlist_count"),
+                    "total_videos": len(videos),
+                    "videos": videos,
+                }
+            # No videos extracted - return error
+            log.info(f"[yt-dlp:playlist] FAILED id={playlist_id} (no accessible videos)")
+            return {"error": stderr or "No accessible videos found", "videos": []}
         except orjson.JSONDecodeError as e:
             log.info(f"[yt-dlp:playlist] JSON_ERROR id={playlist_id}")
-            return {"error": f"JSON parse error: {e}", "videos": []}
+            return {"error": stderr or f"JSON parse error: {e}", "videos": []}
 
     async def extract_channel(
         self,
@@ -366,32 +373,39 @@ class YtDlpExtractor:
         args = [
             *self.BASE_ARGS,
             "--dump-single-json",  # Full metadata
+            # Skip restricted content (members-only, premium, needs auth)
+            "--match-filter", "availability != subscriber_only",
+            "--match-filter", "availability != premium_only",
+            "--match-filter", "availability != needs_auth",
             url,
         ]
         if max_videos > 0:
             args.extend(["--playlist-end", str(max_videos)])
         async with self.semaphore:
             success, stdout, stderr = await self._run_yt_dlp(args, timeout=timeout)
-        if not success:
-            log.info(f"[yt-dlp:channel] FAILED id={channel_id}")
-            return {"error": stderr, "videos": []}
+        # Try parsing JSON even on failure (--ignore-errors may have partial results)
         try:
-            data = orjson.loads(stdout)
+            data = orjson.loads(stdout) if stdout.strip() else {}
             entries = data.get("entries", [])
             videos = [self._normalize_video(e) for e in entries if e]
-            log.info(f"[yt-dlp:channel] OK id={channel_id} name='{data.get('channel', '')[:50]}' videos={len(videos)}")
-            return {
-                "channel_id": data.get("channel_id") or data.get("id"),
-                "channel_name": data.get("channel") or data.get("uploader"),
-                "channel_url": data.get("channel_url") or url,
-                "channel_description": data.get("description"),
-                "channel_follower_count": data.get("channel_follower_count"),
-                "total_videos": len(videos),
-                "videos": videos,
-            }
+            if videos:
+                skipped = len(entries) - len(videos) if entries else 0
+                log.info(f"[yt-dlp:channel] OK id={channel_id} name='{data.get('channel', '')[:50]}' videos={len(videos)} skipped={skipped}")
+                return {
+                    "channel_id": data.get("channel_id") or data.get("id"),
+                    "channel_name": data.get("channel") or data.get("uploader"),
+                    "channel_url": data.get("channel_url") or url,
+                    "channel_description": data.get("description"),
+                    "channel_follower_count": data.get("channel_follower_count"),
+                    "total_videos": len(videos),
+                    "videos": videos,
+                }
+            # No videos extracted - return error
+            log.info(f"[yt-dlp:channel] FAILED id={channel_id} (no accessible videos)")
+            return {"error": stderr or "No accessible videos found", "videos": []}
         except orjson.JSONDecodeError as e:
             log.info(f"[yt-dlp:channel] JSON_ERROR id={channel_id}")
-            return {"error": f"JSON parse error: {e}", "videos": []}
+            return {"error": stderr or f"JSON parse error: {e}", "videos": []}
 
     def _normalize_video(self, data: dict) -> dict:
         """
