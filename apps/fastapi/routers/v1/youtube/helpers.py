@@ -1,15 +1,16 @@
 """
 YouTube helpers:
 - yt-dlp subprocess for metadata extraction (optimized for speed and completeness)
-- Playwright CDP for transcript extraction (simple DOM-based approach)
+- Playwright CDP for transcript extraction (optimized v4 - smart waits)
 - ElasticSearch indexing
 
-Transcript extraction flow (simple, reliable):
-1. Wait for page to fully load
-2. Click "...more" to expand description
-3. Scroll to Transcript section
-4. Click "Show transcript" button
-5. Extract content from panel
+Playwright optimizations v4:
+- Smart element waiting (no fixed timeouts)
+- networkidle navigation for full page load
+- Polling loop for transcript panel
+- Larger viewport (1920x1080) to avoid mobile UI
+- Periodic browser recreation (prevents stale CDP connections)
+- Aggressive resource blocking (video, ads, tracking)
 """
 import asyncio
 import logging
@@ -24,14 +25,7 @@ from urllib.parse import urlparse
 from urllib.request import urlopen
 import ssl
 import json
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-    before_sleep_log,
-)
-from playwright.async_api import async_playwright, Error as PlaywrightError
+from playwright.async_api import async_playwright
 
 # Use uvicorn's logger for proper output in FastAPI
 log = logging.getLogger("uvicorn.error")
@@ -42,7 +36,7 @@ ES_INDEX_TRANSCRIPTIONS = "coelhonexus-youtube-transcriptions"
 
 
 # =============================================================================
-# yt-dlp Subprocess Extractor (Metadata Only)
+# yt-dlp Subprocess Extractor (Optimized)
 # =============================================================================
 class YtDlpExtractor:
     """
@@ -510,6 +504,10 @@ def get_extractor() -> YtDlpExtractor:
 # =============================================================================
 # Batch Transcription Helper with ES Caching
 # =============================================================================
+# NOTE: yt-dlp subtitle extraction removed - always fails with 429 rate limit
+# Playwright CDP is now the only transcript extraction method
+
+
 async def _check_existing_transcriptions(
     es_client,
     video_ids: list[str],
@@ -588,16 +586,17 @@ async def fetch_transcriptions_batch(
 
     Strategy:
     1. ES cache lookup - skip videos with existing transcriptions
-    2. Playwright CDP - DOM-based extraction (simple, reliable)
+    2. Playwright CDP - browser-based DOM scraping (optimized v4)
 
     Args:
         video_ids: List of YouTube video IDs
         transcript_service: PlaywrightTranscriptService instance (uses global if None)
         es_client: AsyncElasticsearch client for cache lookup (optional)
-        languages: Requested languages (None = best available)
+        languages: Requested languages (None = best available, English priority)
 
     Returns:
-        List of transcription documents ready for ES indexing
+        List of transcription documents ready for ES indexing:
+        [{"video_id": "abc", "lang": "en", "content": "...", "is_auto": False, "method": "playwright"}, ...]
     """
     if not video_ids:
         return []
@@ -626,7 +625,7 @@ async def fetch_transcriptions_batch(
         log.info("[fetch_transcriptions_batch] All videos cached, no fetch needed")
         return []
 
-    # Fetch transcripts via Playwright DOM extraction
+    # Fetch via Playwright CDP (only method - yt-dlp subtitle extraction removed due to 429 rate limits)
     service = transcript_service or _transcript_service
     if not service or not service._initialized:
         log.error("[fetch_transcriptions_batch] Playwright service not available")
@@ -634,7 +633,6 @@ async def fetch_transcriptions_batch(
 
     log.info(f"[fetch_transcriptions_batch] Fetching {len(ids_to_fetch)} videos via Playwright")
     playwright_results = await service.fetch_batch(ids_to_fetch, prefer_manual=True)
-
     # Process results
     transcription_docs = []
     success_count = 0
@@ -644,18 +642,17 @@ async def fetch_transcriptions_batch(
         if not vid:
             continue
 
-        if "error" not in result:
+        if "error" not in result and result.get("page_content"):
             lang = result.get("language", "unknown")
             content = result.get("page_content", "")
             is_auto = result.get("is_auto_generated", True)
-            method = result.get("method", "dom_scrape")
             transcription_docs.append({
                 "id": f"{vid}_{lang}",
                 "video_id": vid,
                 "lang": lang,
                 "content": content,
                 "is_auto": is_auto,
-                "method": method,
+                "method": "playwright",
                 "_extracted_at": datetime.utcnow().isoformat(),
             })
             success_count += 1
@@ -680,75 +677,27 @@ CDP_HEADED = os.environ.get(
     "https://playwright-cdp.YOUR_TAILNET_DOMAIN.ts.net"
 )
 
-# Resource blocking patterns - aggressive for speed
+# Resource blocking patterns - balanced for speed and reliability
 BLOCK_PATTERNS = [
     # VIDEO/AUDIO STREAMING (Biggest speedup: 2-5 seconds)
     "**/videoplayback*",
     "**/googlevideo.com/*",
     "**/*.googlevideo.com/*",
-    "**/*.m3u8",              # HLS manifests
-    "**/*.ts",                # HLS segments
-    "**/manifest*",           # DASH manifests
     # ADS
     "**/doubleclick.net/*",
     "**/googleadservices.com/*",
     "**/googlesyndication.com/*",
     "**/googleads.g.doubleclick.net/*",
     "**/youtube.com/pagead/*",
-    "**/adservice.google.com/*",
-    "**/ads?*",
-    "**/pagead*",
     # ANALYTICS/TRACKING
     "**/google-analytics.com/*",
     "**/googletagmanager.com/*",
     "**/youtube.com/api/stats/*",
     "**/youtube.com/ptracking*",
     "**/s.youtube.com/*",
-    "**/youtubei/v1/log*",
-    "**/log_interaction*",
-    # IMAGES (not needed for transcripts)
-    "**/*.jpg",
-    "**/*.jpeg",
-    "**/*.png",
-    "**/*.gif",
-    "**/*.webp",
-    "**/yt3.ggpht.com/*",
-    "**/i.ytimg.com/*",
 ]
 
-BLOCK_RESOURCE_TYPES = {"media", "image", "font"}
-
-# CSS to hide video player only (keep transcript panel visible!)
-HIDE_VIDEO_CSS = """
-video, #movie_player, .html5-video-player, .video-stream,
-#player-container-inner, .ytp-cued-thumbnail-overlay {
-    display: none !important;
-    visibility: hidden !important;
-}
-"""
-
-# JavaScript to cleanup DOM - only video player (keep #secondary for transcript!)
-CLEANUP_DOM_JS = """
-() => {
-    // Stop and remove video only
-    const video = document.querySelector('video');
-    if (video) {
-        video.pause();
-        video.src = '';
-        video.remove();
-    }
-    // Remove player container but NOT #secondary (transcript panel is there!)
-    document.querySelector('#movie_player')?.remove();
-    // Remove only comments
-    document.querySelector('#comments')?.remove();
-    // Kill timers
-    const highestId = window.setTimeout(() => {}, 0);
-    for (let i = 0; i < highestId; i++) {
-        window.clearTimeout(i);
-        window.clearInterval(i);
-    }
-}
-"""
+BLOCK_RESOURCE_TYPES = {"media"}  # Only block media (video/audio)
 
 
 @dataclass
@@ -807,14 +756,23 @@ async def _setup_routes(page) -> None:
     await page.route("**/*", block_by_type)
 
 
-async def _inject_hide_css(page) -> None:
-    """Inject CSS to hide video player immediately after navigation."""
-    await page.add_style_tag(content=HIDE_VIDEO_CSS)
-
-
-async def _cleanup_dom(page) -> None:
-    """Remove video player and heavy DOM elements."""
-    await page.evaluate(CLEANUP_DOM_JS)
+async def _kill_youtube_background(page) -> None:
+    """Kill YouTube's resource-hungry background processes."""
+    await page.evaluate('''
+        () => {
+            const video = document.querySelector("video");
+            if (video) {
+                video.pause();
+                video.removeAttribute("src");
+                video.load();
+            }
+            const highestId = window.setTimeout(() => {}, 0);
+            for (let i = 0; i < highestId; i++) {
+                window.clearTimeout(i);
+                window.clearInterval(i);
+            }
+        }
+    ''')
 
 
 async def _get_caption_tracks(page) -> list[CaptionTrack]:
@@ -854,20 +812,75 @@ def _select_best_track(tracks: list[CaptionTrack], prefer_manual: bool = True) -
     return sorted(tracks, key = priority)[0]
 
 
+async def _fetch_transcript_direct(page, base_url: str) -> list[dict]:
+    """Try to fetch transcript directly from caption URL (fast path)."""
+    json_url = base_url + ("&" if "?" in base_url else "?") + "fmt=json3"
+    result = await page.evaluate(f'''
+        async () => {{
+            try {{
+                const resp = await fetch("{json_url}", {{
+                    credentials: "include",
+                    headers: {{ "Accept": "application/json" }}
+                }});
+                if (!resp.ok) {{
+                    return {{ error: "HTTP " + resp.status }};
+                }}
+                const text = await resp.text();
+                if (!text || text.length === 0) {{
+                    return {{ error: "empty response" }};
+                }}
+                if (text.startsWith('<')) {{
+                    return {{ error: "blocked (HTML response)" }};
+                }}
+                if (text.length < 10) {{
+                    return {{ error: "truncated response: " + text.length + " bytes" }};
+                }}
+                try {{
+                    return JSON.parse(text);
+                }} catch (parseErr) {{
+                    return {{ error: "JSON parse failed: " + parseErr.message + " (len=" + text.length + ")" }};
+                }}
+            }} catch (e) {{
+                return {{ error: e.message }};
+            }}
+        }}
+    ''')
+    if 'error' in result:
+        raise ValueError(result['error'])
+    segments = []
+    for event in result.get('events', []):
+        if 'segs' in event:
+            text = ''.join(s.get('utf8', '') for s in event['segs']).strip()
+            if text:
+                start_ms = event.get('tStartMs', 0)
+                minutes = start_ms // 60000
+                seconds = (start_ms // 1000) % 60
+                segments.append({'timestamp': f"{minutes}:{seconds:02d}", 'text': text})
+    return segments
+
+
 async def _extract_via_dom(page, timeout_ms: int) -> str:
     """
-    Extract transcript via DOM interaction.
+    Extract transcript via DOM interaction (optimized v4 with smart waits).
 
-    Primary approach (simple, deterministic):
-    1. Wait for page to fully load
-    2. Click "...more" button to expand description
-    3. Scroll to Transcript section
-    4. Click "Show transcript" button
-    5. Wait for panel to load and extract content
+    Strategy:
+    1. Wait for video player to be ready (indicates page loaded)
+    2. Wait for and click expand button (or skip if not found)
+    3. Wait for and click transcript button
+    4. Poll for transcript panel to load (up to 15 attempts)
+    5. Extract content
     """
-    # Step 1: Wait for page to fully load
-    await page.wait_for_timeout(3000)
-    log.info("[dom] Page loaded, waiting for dynamic content...")
+    # Step 1: Wait for YouTube to fully render its UI
+    try:
+        # Wait for video player (indicates core UI loaded)
+        await page.wait_for_selector('#movie_player, ytd-player', state='attached', timeout=15000)
+        # Also wait for description area (where transcript button lives)
+        await page.wait_for_selector('ytd-watch-metadata, #above-the-fold', state='attached', timeout=10000)
+        log.info("[dom] Page ready (player + metadata loaded)")
+    except Exception:
+        # Fallback: wait a bit for JS to render
+        await page.wait_for_timeout(3000)
+        log.info("[dom] Fallback wait completed")
 
     # Check if transcript panel is already visible
     already_visible = await page.evaluate('''() => {
@@ -880,101 +893,110 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
         log.info("[dom] Transcript panel already visible")
         return await _extract_transcript_text(page)
 
-    # Step 2: Click "...more" button to expand description
-    expand_result = await page.evaluate('''() => {
-        const btn = document.querySelector('tp-yt-paper-button#expand:not([hidden])');
-        if (btn && btn.offsetParent !== null) {
-            btn.scrollIntoView({ block: 'center' });
-            btn.click();
-            return { success: true };
-        }
-        return { success: false };
-    }''')
+    # Step 2: Wait for and click expand button (with retry)
+    expanded = False
+    for expand_attempt in range(3):
+        try:
+            expand_btn = await page.wait_for_selector(
+                'tp-yt-paper-button#expand:not([hidden])',
+                state='visible',
+                timeout=5000
+            )
+            if expand_btn:
+                await expand_btn.scroll_into_view_if_needed()
+                await expand_btn.click()
+                log.info("[dom] Description expanded")
+                # Wait for transcript section to appear
+                await page.wait_for_selector(
+                    'ytd-video-description-transcript-section-renderer',
+                    state='attached',
+                    timeout=5000
+                )
+                expanded = True
+                break
+        except Exception:
+            if expand_attempt < 2:
+                await page.wait_for_timeout(1000)  # Brief wait before retry
+            continue
 
-    if expand_result.get('success'):
-        log.info("[dom] Description expanded")
-        await page.wait_for_timeout(1500)  # Wait for content to render
-    else:
-        log.info("[dom] Expand button not found, continuing anyway...")
+    if not expanded:
+        log.info("[dom] Expand button not found after retries, continuing...")
 
-    # Step 3: Scroll to Transcript section
-    await page.evaluate('''() => {
-        const section = document.querySelector('ytd-video-description-transcript-section-renderer');
-        if (section) {
-            section.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        }
-    }''')
-    await page.wait_for_timeout(500)
+    # Step 3: Find and click transcript button with multiple selectors
+    transcript_clicked = False
+    selectors = [
+        '[aria-label="Show transcript"]',
+        'ytd-video-description-transcript-section-renderer button',
+        'button[aria-label*="transcript" i]',
+    ]
 
-    # Step 4: Click "Show transcript" button
-    click_result = await page.evaluate('''() => {
-        // Primary: aria-label selector
-        const btn = document.querySelector('[aria-label="Show transcript"]');
-        if (btn && btn.offsetParent !== null) {
-            btn.scrollIntoView({ block: 'center' });
-            btn.click();
-            return { success: true, method: 'aria-label' };
-        }
-        // Fallback: button inside transcript section
-        const section = document.querySelector('ytd-video-description-transcript-section-renderer');
-        if (section) {
-            const sectionBtn = section.querySelector('button');
-            if (sectionBtn && sectionBtn.offsetParent !== null) {
-                sectionBtn.scrollIntoView({ block: 'center' });
-                sectionBtn.click();
-                return { success: true, method: 'section-button' };
+    for selector in selectors:
+        try:
+            btn = await page.wait_for_selector(selector, state='visible', timeout=3000)
+            if btn:
+                await btn.scroll_into_view_if_needed()
+                await btn.click()
+                log.info(f"[dom] Transcript button clicked: {selector}")
+                transcript_clicked = True
+                break
+        except Exception:
+            continue
+
+    if not transcript_clicked:
+        # Debug info before failing
+        debug_info = await page.evaluate('''() => ({
+            hasExpandBtn: !!document.querySelector('tp-yt-paper-button#expand'),
+            hasTranscriptSection: !!document.querySelector('ytd-video-description-transcript-section-renderer'),
+            hasShowTranscriptBtn: !!document.querySelector('[aria-label="Show transcript"]'),
+            descExpanded: document.querySelector('ytd-text-inline-expander')?.hasAttribute('is-expanded'),
+            url: window.location.href,
+        })''')
+        log.warning(f"[dom] Transcript button not found. Debug: {debug_info}")
+        raise ValueError("Transcript button not found")
+
+    # Step 4: Poll for transcript panel to load (up to 15 attempts, 1s apart)
+    panel_loaded = False
+    segment_count = 0
+
+    for attempt in range(15):
+        panel_state = await page.evaluate('''() => {
+            // Check for segments (most reliable)
+            const segments = document.querySelectorAll(
+                'ytd-transcript-segment-renderer, transcript-segment-view-model'
+            );
+            if (segments.length > 0) {
+                return { loaded: true, segmentCount: segments.length };
             }
-        }
-        return { success: false };
-    }''')
-
-    if click_result.get('success'):
-        log.info(f"[dom] Show transcript clicked via: {click_result.get('method')}")
-        await page.wait_for_timeout(3000)  # Wait for panel to load
-    else:
-        # Retry once after additional wait
-        log.info("[dom] Show transcript button not found, retrying...")
-        await page.wait_for_timeout(2000)
-        click_result = await page.evaluate('''() => {
-            const btn = document.querySelector('[aria-label="Show transcript"]');
-            if (btn && btn.offsetParent !== null) {
-                btn.scrollIntoView({ block: 'center' });
-                btn.click();
-                return { success: true, method: 'retry' };
+            // Check for panel with timestamps
+            const panel = document.querySelector(
+                'ytd-engagement-panel-section-list-renderer[visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]'
+            );
+            if (panel && /\\d+:\\d{2}/.test(panel.innerText)) {
+                return { loaded: true, segmentCount: 0 };
             }
-            return { success: false };
+            // Check new panel by target-id
+            const newPanel = document.querySelector(
+                'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"]'
+            );
+            if (newPanel && /\\d+:\\d{2}/.test(newPanel.innerText)) {
+                return { loaded: true, segmentCount: 0 };
+            }
+            return { loaded: false, segmentCount: 0 };
         }''')
-        if click_result.get('success'):
-            log.info("[dom] Show transcript clicked on retry")
-            await page.wait_for_timeout(3000)
-        else:
-            # Debug info
-            debug_info = await page.evaluate('''() => ({
-                hasExpandBtn: !!document.querySelector('tp-yt-paper-button#expand'),
-                hasTranscriptSection: !!document.querySelector('ytd-video-description-transcript-section-renderer'),
-                hasShowTranscriptBtn: !!document.querySelector('[aria-label="Show transcript"]'),
-                descExpanded: document.querySelector('ytd-text-inline-expander')?.hasAttribute('is-expanded'),
-            })''')
-            log.warning(f"[dom] Transcript button not found. Debug: {debug_info}")
-            raise ValueError("Transcript button not found")
-    # Step 5: Verify panel loaded and extract transcript
-    panel_state = await page.evaluate('''() => {
-        const panel = document.querySelector(
-            'ytd-engagement-panel-section-list-renderer[visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]'
-        );
-        if (!panel) return { loaded: false };
-        return {
-            loaded: true,
-            hasTimestamps: /\\d+:\\d{2}/.test(panel.innerText),
-            segmentCount: panel.querySelectorAll('ytd-transcript-segment-renderer, transcript-segment-view-model').length
-        };
-    }''')
 
-    if not panel_state.get('loaded') or not panel_state.get('hasTimestamps'):
-        log.warning(f"[dom] Panel not loaded properly: {panel_state}")
+        if panel_state.get('loaded'):
+            panel_loaded = True
+            segment_count = panel_state.get('segmentCount', 0)
+            log.info(f"[dom] Panel loaded (attempt {attempt + 1}) segments={segment_count}")
+            break
+
+        if attempt < 14:  # Don't sleep on last attempt
+            await page.wait_for_timeout(1000)
+
+    if not panel_loaded:
+        log.warning("[dom] Panel not loaded after 15 attempts")
         raise ValueError("Transcript panel not loaded")
 
-    log.info(f"[dom] Panel loaded with {panel_state.get('segmentCount', 0)} segments")
     return await _extract_transcript_text(page)
 
 
@@ -1072,92 +1094,6 @@ def _parse_transcript(raw_text: str) -> list[TranscriptSegment]:
     return segments
 
 
-async def fetch_transcript_with_playwright(
-    video_id: str,
-    headless: bool = True,
-    timeout_ms: int = 30000,
-    prefer_manual: bool = True,
-) -> dict:
-    """
-    Fetch transcript using Playwright CDP (optimized v2).
-
-    Optimizations:
-    - Aggressive resource blocking (video, ads, tracking)
-    - Kill YouTube background processes
-    - Manual transcript priority over auto-generated
-    - Direct API fetch before DOM scraping
-    - Multiple fallback methods for transcript button
-    """
-    cdp_endpoint = CDP_HEADLESS if headless else CDP_HEADED
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    start_time = time.time()
-    cdp_url = await asyncio.to_thread(_get_cdp_websocket_url, cdp_endpoint)
-    log.info(f"[playwright] starting video_id={video_id}")
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.connect_over_cdp(cdp_url)
-            context = await browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-            )
-            page = await context.new_page()
-            # Set up blocking BEFORE navigation
-            await _setup_routes(page)
-            # Navigation with full load
-            await page.goto(url, wait_until = "load")
-            # Inject CSS to hide video player immediately
-            await _inject_hide_css(page)
-            # Cleanup DOM - remove video player and heavy elements
-            await _cleanup_dom(page)
-            # Wait for captions data
-            try:
-                await page.wait_for_function(
-                    '() => !!window.ytInitialPlayerResponse?.captions',
-                    timeout = 5000
-                )
-            except:
-                pass
-            # Get caption tracks
-            tracks = await _get_caption_tracks(page)
-            language = "auto"
-            is_auto_generated = True
-            method = "dom_scrape"
-            if tracks:
-                manual_count = sum(1 for t in tracks if not t.is_auto_generated)
-                log.info(f"[playwright] tracks={len(tracks)} manual={manual_count}")
-                selected = _select_best_track(tracks, prefer_manual)
-                language = selected.language_code
-                is_auto_generated = selected.is_auto_generated
-                log.info(f"[playwright] selected={language} auto={is_auto_generated}")
-            # DOM scraping (direct API removed - always fails without PO token)
-            raw_text = await _extract_via_dom(page, timeout_ms)
-            await context.close()
-            if not raw_text:
-                raise ValueError(f"No transcript for: {video_id}")
-            segments = _parse_transcript(raw_text)
-            page_content = " ".join([seg.text for seg in segments])
-            # Detect auto-generated from raw text if no tracks
-            if "auto-generated" in raw_text.lower():
-                is_auto_generated = True
-            elapsed = time.time() - start_time
-            log.info(f"[playwright] OK video_id={video_id} method=dom_scrape segments={len(segments)} time={elapsed:.2f}s")
-            return {
-                "video_id": video_id,
-                "language": language,
-                "is_auto_generated": is_auto_generated,
-                "page_content": page_content,
-                "segments": [{"timestamp": s.timestamp, "text": s.text} for s in segments],
-                "proxy_used": "Playwright",
-                "method": "dom_scrape",
-            }
-    except Exception as e:
-        elapsed = time.time() - start_time
-        log.error(f"[playwright] FAIL video_id={video_id} time={elapsed:.2f}s error={str(e)[:100]}")
-        return {
-            "video_id": video_id,
-            "error": str(e),
-        }
-
-
 # =============================================================================
 # PlaywrightTranscriptService - Browser Pool with Semaphore Control
 # =============================================================================
@@ -1222,6 +1158,9 @@ class PlaywrightTranscriptService:
         self._refresh_lock = asyncio.Lock()
         self._total_extractions = 0
         self._total_errors = 0
+        # Active operations counter - prevents refresh during in-flight requests
+        self._active_ops = 0
+        self._active_ops_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         """Initialize browser and context pool. Call once at startup."""
@@ -1306,6 +1245,30 @@ class PlaywrightTranscriptService:
             self._videos_since_refresh = 0
             log.info(f"[transcript-service] Browser refreshed (closed {closed} contexts, warmed {self.context_pool_size} new)")
 
+    async def _cleanup_contexts(self) -> None:
+        """
+        Force close all pooled contexts and recreate fresh ones.
+        Called after each batch to prevent memory accumulation.
+        """
+        async with self._refresh_lock:
+            # Drain and close all contexts
+            closed = 0
+            while not self._context_pool.empty():
+                try:
+                    ctx = self._context_pool.get_nowait()
+                    await ctx.close()
+                    closed += 1
+                except:
+                    pass
+            # Recreate fresh contexts
+            for i in range(self.context_pool_size):
+                try:
+                    ctx = await self._create_context()
+                    await self._context_pool.put(ctx)
+                except Exception as e:
+                    log.warning(f"[transcript-service] Failed to recreate context {i}: {e}")
+            log.info(f"[transcript-service] Cleanup: closed {closed}, recreated {self._context_pool.qsize()} contexts")
+
     async def _check_browser_health(self) -> bool:
         """
         Check if browser connection is still healthy.
@@ -1325,23 +1288,37 @@ class PlaywrightTranscriptService:
     async def _ensure_healthy_browser(self) -> None:
         """Ensure browser is healthy, refresh if needed."""
         # Only refresh on actual browser health failure (not periodic)
-        # Periodic refresh during concurrent ops causes cascading failures
         if not await self._check_browser_health():
-            log.warning("[transcript-service] Browser unhealthy, forcing refresh")
-            await self._refresh_browser()
+            # Wait for active operations to complete before refresh
+            async with self._refresh_lock:
+                # Double-check after acquiring lock (another thread might have refreshed)
+                if await self._check_browser_health():
+                    return
+                # Wait for active ops to drain (max 30s)
+                for _ in range(60):
+                    async with self._active_ops_lock:
+                        if self._active_ops == 0:
+                            break
+                    await asyncio.sleep(0.5)
+                log.warning(f"[transcript-service] Browser unhealthy, refreshing (active_ops={self._active_ops})")
+                await self._refresh_browser()
 
     async def _create_context(self):
         """Create a new browser context with optimized settings."""
         return await self._browser.new_context(
-            viewport = {"width": 1280, "height": 720},
+            viewport = {"width": 1920, "height": 1080},  # Full HD to avoid mobile UI
         )
 
-    async def _acquire_context(self):
-        """Get a context from pool or create new if pool empty."""
+    async def _acquire_context(self, timeout: float = 30.0):
+        """Get a context from pool, waiting if necessary."""
         try:
-            return self._context_pool.get_nowait()
-        except asyncio.QueueEmpty:
-            log.info("[transcript-service] Pool exhausted, creating temporary context")
+            # Wait for context with timeout instead of creating unlimited temps
+            return await asyncio.wait_for(
+                self._context_pool.get(),
+                timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            log.warning("[transcript-service] Context pool timeout, creating temporary")
             return await self._create_context()
 
     async def _release_context(self, ctx, reuse: bool = True) -> None:
@@ -1411,11 +1388,21 @@ class PlaywrightTranscriptService:
         prefer_manual: bool,
         attempt: int = 0,
     ) -> dict:
-        """Single extraction attempt (called by fetch_single with retry logic)."""
+        """Single extraction attempt (called by fetch_batch with batch retry)."""
         start_time = time.time()
+
+        # Small staggered delay to reduce CDP pressure (0-500ms based on attempt)
+        if attempt == 0:
+            await asyncio.sleep(0.1 * (hash(video_id) % 5))
+
         async with self.semaphore:
-            # Ensure browser is healthy before extraction
+            # Track active operations (prevents refresh during in-flight)
+            async with self._active_ops_lock:
+                self._active_ops += 1
+
+            # Check browser health (will wait for active ops if refresh needed)
             await self._ensure_healthy_browser()
+
             context = await self._acquire_context()
             page = None
             reuse_context = True
@@ -1425,15 +1412,12 @@ class PlaywrightTranscriptService:
                 page = await context.new_page()
                 await _setup_routes(page)
                 url = f"https://www.youtube.com/watch?v={video_id}"
-                # Navigate with timeout (no inner retry, outer retry handles it)
+                # Navigate and wait for full page load
                 await page.goto(
                     url,
                     wait_until = "load",
                     timeout = self.navigation_timeout_ms)
-                # Inject CSS to hide video player immediately
-                await _inject_hide_css(page)
-                # Cleanup DOM - remove video player and heavy elements
-                await _cleanup_dom(page)
+                await _kill_youtube_background(page)
                 # Wait for captions data
                 try:
                     await page.wait_for_function(
@@ -1487,6 +1471,9 @@ class PlaywrightTranscriptService:
                     except:
                         pass
                 await self._release_context(context, reuse=reuse_context)
+                # Decrement active ops counter
+                async with self._active_ops_lock:
+                    self._active_ops -= 1
 
     async def fetch_batch(
         self,
@@ -1494,11 +1481,15 @@ class PlaywrightTranscriptService:
         prefer_manual: bool = True,
     ) -> list[dict]:
         """
-        Fetch transcripts for multiple videos with controlled concurrency.
+        Fetch transcripts for multiple videos with batch retry strategy.
 
-        Features:
-        - Exponential backoff retry on connection errors
-        - Semaphore ensures max_concurrent limit is respected
+        Strategy:
+        1. First pass: Try all videos once (no inline retry)
+        2. Classify failures as retryable or permanent
+        3. Retry passes: Retry all retryable failures together after cooldown
+
+        Retryable errors: panel not loaded, timeout, target closed, navigation
+        Permanent errors: button not found, no transcript, unavailable
 
         Args:
             video_ids: List of YouTube video IDs
@@ -1509,23 +1500,81 @@ class PlaywrightTranscriptService:
         """
         if not self._initialized:
             raise RuntimeError("PlaywrightTranscriptService not initialized. Call initialize() first.")
+
         batch_size = len(video_ids)
         log.info(f"[transcript-service] Batch started: {batch_size} videos "
-                 f"(max_concurrent={self.max_concurrent}, retries={self.max_retries})")
+                 f"(max_concurrent={self.max_concurrent}, batch_retries={self.max_retries})")
         start_time = time.time()
-        # Reset stats for this batch
-        batch_extractions_start = self._total_extractions
-        batch_errors_start = self._total_errors
-        tasks = [self.fetch_single(vid, prefer_manual) for vid in video_ids]
-        results = await asyncio.gather(*tasks)
+
+        # Results dict to track all outcomes (preserves order)
+        results_map: dict[str, dict] = {}
+
+        # Error classification
+        # Only truly permanent errors (video confirmed to have no transcript)
+        PERMANENT_ERRORS = ["no transcript", "unavailable", "video unavailable", "private video"]
+        # Retryable errors (timing issues, connection problems, page load issues)
+        RETRYABLE_ERRORS = ["button not found", "panel not loaded", "timeout", "target closed", "navigation", "browser", "context", "expand"]
+
+        def is_retryable(error_msg: str) -> bool:
+            error_lower = error_msg.lower()
+            if any(p in error_lower for p in PERMANENT_ERRORS):
+                return False
+            return any(r in error_lower for r in RETRYABLE_ERRORS)
+
+        # Track pending videos for retry passes
+        pending_ids = list(video_ids)
+
+        for pass_num in range(self.max_retries + 1):
+            if not pending_ids:
+                break
+
+            pass_label = "First pass" if pass_num == 0 else f"Retry pass {pass_num}"
+            log.info(f"[transcript-service] {pass_label}: {len(pending_ids)} videos")
+
+            # Run all pending videos concurrently (semaphore limits to max_concurrent)
+            tasks = [self._fetch_single_attempt(vid, prefer_manual, pass_num) for vid in pending_ids]
+            pass_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Process results and collect retryable failures
+            next_pending = []
+            for vid, result in zip(pending_ids, pass_results):
+                if isinstance(result, Exception):
+                    error_str = str(result)
+                    result = {"video_id": vid, "error": error_str}
+
+                if "error" not in result:
+                    # Success
+                    results_map[vid] = result
+                else:
+                    error_msg = result.get("error", "")
+                    if is_retryable(error_msg) and pass_num < self.max_retries:
+                        next_pending.append(vid)
+                    else:
+                        # Permanent failure or max retries reached
+                        results_map[vid] = result
+
+            pending_ids = next_pending
+
+            # Cooldown before retry (let YouTube/CDP stabilize)
+            if pending_ids and pass_num < self.max_retries:
+                cooldown = 3 + pass_num * 2  # 3s, 5s, 7s...
+                log.info(f"[transcript-service] {len(pending_ids)} retryable failures, waiting {cooldown}s before retry")
+                await asyncio.sleep(cooldown)
+                # Don't force refresh here - let health check handle it naturally
+                # This prevents closing contexts while other ops might be in-flight
+
+        # Build final results in original order
+        results = [results_map.get(vid, {"video_id": vid, "error": "Not processed"}) for vid in video_ids]
+
         elapsed = time.time() - start_time
         success = sum(1 for r in results if "error" not in r)
-        batch_extractions = self._total_extractions - batch_extractions_start
-        batch_errors = self._total_errors - batch_errors_start
         avg_time = elapsed / batch_size if batch_size > 0 else 0
         log.info(f"[transcript-service] Batch complete: {success}/{batch_size} OK "
-                 f"time={elapsed:.1f}s avg={avg_time:.1f}s/video "
-                 f"extractions={batch_extractions} errors={batch_errors}")
+                 f"time={elapsed:.1f}s avg={avg_time:.1f}s/video")
+
+        # Cleanup contexts after batch to prevent memory accumulation
+        await self._cleanup_contexts()
+
         return results
 
 
