@@ -595,6 +595,7 @@ async def fetch_transcriptions_batch(
     es_client = None,
     languages: list[str] | None = None,
     chunk_size: int = 10,
+    video_metadata: dict[str, dict] | None = None,
 ) -> list[dict]:
     """
     Fetch transcriptions for videos with ES caching and chunked processing.
@@ -614,11 +615,12 @@ async def fetch_transcriptions_batch(
         transcript_service: PlaywrightTranscriptService instance (uses global if None)
         es_client: AsyncElasticsearch client for cache lookup (optional)
         languages: Requested languages (None = best available, English priority)
-        chunk_size: Videos per chunk (default 50 - optimal for memory/resilience)
+        chunk_size: Videos per chunk (default 10 - frequent ES checkpoints)
+        video_metadata: Optional dict mapping video_id -> {channel_id, playlist_id} for denormalization
 
     Returns:
         List of transcription documents ready for ES indexing:
-        [{"video_id": "abc", "lang": "en", "content": "...", "is_auto": False, "method": "playwright"}, ...]
+        [{"video_id": "abc", "lang": "en", "content": "...", "channel_id": "...", ...}, ...]
     """
     if not video_ids:
         return []
@@ -683,13 +685,18 @@ async def fetch_transcriptions_batch(
                 lang = result.get("language", "unknown")
                 content = result.get("page_content", "")
                 is_auto = result.get("is_auto_generated", True)
+                # Get denormalized fields from video metadata
+                meta = (video_metadata or {}).get(vid, {})
                 doc = {
                     "id": f"{vid}_{lang}",
                     "video_id": vid,
                     "lang": lang,
                     "content": content,
                     "is_auto": is_auto,
-                    "method": "playwright",
+                    "method": "dom_scrape",
+                    # Denormalized fields for fast filtering
+                    "channel_id": meta.get("channel_id"),
+                    "playlist_id": meta.get("playlist_id"),
                     "_extracted_at": datetime.utcnow().isoformat(),
                 }
                 chunk_docs.append(doc)
@@ -1843,6 +1850,9 @@ async def create_youtube_indexes(es_client) -> dict:
                 "channel_is_verified": {"type": "boolean"},
                 "uploader": {"type": "text"},
                 "uploader_id": {"type": "keyword"},
+                # Playlist (if video came from playlist extraction)
+                "playlist_id": {"type": "keyword"},
+                "playlist_title": {"type": "text"},
                 # Dates
                 "upload_date": {"type": "keyword"},  # YYYYMMDD format
                 "timestamp": {"type": "date", "format": "epoch_second"},
@@ -1896,6 +1906,9 @@ async def create_youtube_indexes(es_client) -> dict:
                 "content": {"type": "text", "analyzer": "standard"},  # Full transcription text
                 "is_auto": {"type": "boolean"},      # True if auto-generated
                 "method": {"type": "keyword"},       # Extraction method (dom_scrape, direct_api)
+                # Denormalized fields for fast filtering (no joins needed)
+                "channel_id": {"type": "keyword"},   # Channel ID for filtering
+                "playlist_id": {"type": "keyword"},  # Playlist ID for filtering
                 "_extracted_at": {"type": "date"},   # When transcription was extracted
             }
         },

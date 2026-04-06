@@ -120,11 +120,17 @@ async def get_videos(payload: VideosRequest, request: Request):
     es_transcriptions = {"indexed": 0, "failed": 0}
     if payload.include_transcription:
         video_ids = [v["id"] for v in videos if v.get("id") and "error" not in v]
+        # Build metadata map for denormalization (channel_id, playlist_id)
+        video_metadata = {
+            v["id"]: {"channel_id": v.get("channel_id"), "playlist_id": v.get("playlist_id")}
+            for v in videos if v.get("id")
+        }
         transcription_docs = await fetch_transcriptions_batch(
             video_ids,
             transcript_service = request.app.state.transcript_service,
             es_client = es_client,
             languages = payload.transcription_languages,
+            video_metadata = video_metadata,
         )
         if transcription_docs:
             es_transcriptions = await index_transcriptions_to_elasticsearch(es_client, transcription_docs)
@@ -161,11 +167,18 @@ async def get_channel_videos(payload: ChannelRequest, request: Request):
     es_transcriptions = {"indexed": 0, "failed": 0}
     if payload.include_transcription:
         video_ids = [v["id"] for v in videos if v.get("id") and "error" not in v]
+        # Build metadata map - all videos share same channel_id
+        channel_id = result.get("channel_id")
+        video_metadata = {
+            v["id"]: {"channel_id": channel_id, "playlist_id": v.get("playlist_id")}
+            for v in videos if v.get("id")
+        }
         transcription_docs = await fetch_transcriptions_batch(
             video_ids,
             transcript_service = request.app.state.transcript_service,
             es_client = es_client,
             languages = payload.transcription_languages,
+            video_metadata = video_metadata,
         )
         if transcription_docs:
             es_transcriptions = await index_transcriptions_to_elasticsearch(es_client, transcription_docs)
@@ -205,11 +218,18 @@ async def get_playlist_videos(payload: PlaylistRequest, request: Request):
     es_transcriptions = {"indexed": 0, "failed": 0}
     if payload.include_transcription:
         video_ids = [v["id"] for v in videos if v.get("id") and "error" not in v]
+        # Build metadata map - all videos share same playlist_id
+        playlist_id = result.get("playlist_id")
+        video_metadata = {
+            v["id"]: {"channel_id": v.get("channel_id"), "playlist_id": playlist_id}
+            for v in videos if v.get("id")
+        }
         transcription_docs = await fetch_transcriptions_batch(
             video_ids,
             transcript_service = request.app.state.transcript_service,
             es_client = es_client,
             languages = payload.transcription_languages,
+            video_metadata = video_metadata,
         )
         if transcription_docs:
             es_transcriptions = await index_transcriptions_to_elasticsearch(es_client, transcription_docs)
