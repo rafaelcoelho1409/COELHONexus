@@ -49,7 +49,7 @@ manifests:
   helm:
     releases:
       - name: coelhonexus
-        chartPath: ./k3d/helm
+        chartPath: ./k8s/helm
         namespace: coelhonexus
         createNamespace: true
         skipBuildDependencies: true

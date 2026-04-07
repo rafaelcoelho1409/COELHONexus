@@ -163,7 +163,7 @@ otelcol.receiver.otlp "default" {
 
 #### Step 5: Update Helm Values
 
-Add to `k3d/helm/values.yaml`:
+Add to `k8s/helm/values.yaml`:
 
 ```yaml
 env:

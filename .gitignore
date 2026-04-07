@@ -63,6 +63,6 @@ kubeconfig
 crash.log
 crash.*.log
 
-k3d/helm/charts
+k8s/helm/charts
 
 *.npz

@@ -158,7 +158,7 @@ Generates valid "Proof-of-Origin" tokens to bypass bot detection.
 The PO Token provider runs as a **sidecar container** in the FastAPI pod:
 
 ```yaml
-# k3d/helm/templates/fastapi/deployment.yaml
+# k8s/helm/templates/fastapi/deployment.yaml
 - name: bgutil-pot
   image: jim60105/bgutil-pot:latest
   args: ["server", "--host", "0.0.0.0"]
