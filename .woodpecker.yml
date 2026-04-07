@@ -1,0 +1,58 @@
+# =============================================================================
+# WOODPECKER CI PIPELINE - COELHONexus
+# =============================================================================
+# Builds Docker images and pushes to k3d registry on push to master
+#
+# Images built:
+#   - coelhonexus-fastapi (FastAPI backend)
+#   - coelhonexus-web (Go + Templ + HTMX frontend)
+#
+# Registry:
+#   - Push to: localhost:5000 (Woodpecker runs on same host as k3d)
+#   - Pull from: coelhocloud-registry:5000 (in-cluster)
+#
+# ArgoCD will auto-sync when images are updated (imagePullPolicy: Always)
+# =============================================================================
+
+when:
+  branch: master
+  event: push
+
+steps:
+  # -------------------------------------------------------------------------
+  # Build FastAPI Image
+  # -------------------------------------------------------------------------
+  build-fastapi:
+    image: docker:29-dind
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    commands:
+      - echo "Building coelhonexus-fastapi..."
+      - docker build -t localhost:5000/coelhonexus-fastapi:latest -f apps/fastapi/Dockerfile.fastapi apps/fastapi
+      - docker push localhost:5000/coelhonexus-fastapi:latest
+      - echo "FastAPI image pushed to registry"
+
+  # -------------------------------------------------------------------------
+  # Build Web Frontend Image
+  # -------------------------------------------------------------------------
+  build-web:
+    image: docker:29-dind
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    commands:
+      - echo "Building coelhonexus-web..."
+      - docker build -t localhost:5000/coelhonexus-web:latest -f apps/web/Dockerfile.web apps/web
+      - docker push localhost:5000/coelhonexus-web:latest
+      - echo "Web image pushed to registry"
+
+  # -------------------------------------------------------------------------
+  # Notify ArgoCD to Sync (optional - ArgoCD can auto-sync)
+  # -------------------------------------------------------------------------
+  notify-argocd:
+    image: curlimages/curl:latest
+    commands:
+      - echo "Images built and pushed. ArgoCD will sync automatically."
+      - echo "FastAPI: coelhocloud-registry:5000/coelhonexus-fastapi:latest"
+      - echo "Web: coelhocloud-registry:5000/coelhonexus-web:latest"
+    when:
+      status: success

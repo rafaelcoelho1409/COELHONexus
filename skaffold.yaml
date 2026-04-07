@@ -50,7 +50,7 @@ manifests:
     releases:
       - name: coelhonexus
         chartPath: ./k8s/helm
-        namespace: coelhonexus
+        namespace: coelhonexus-dev
         createNamespace: true
         skipBuildDependencies: true
         # Enable Skaffold image tracking for hot-reload sync
@@ -69,22 +69,26 @@ deploy:
         - --wait
 
 portForward:
-  # FastAPI ML backend
+  # FastAPI ML backend (dev ports: 23020-23039)
   - resourceType: service
     resourceName: coelhonexus-fastapi
-    namespace: coelhonexus
+    namespace: coelhonexus-dev
     port: 8000
-    localPort: 23000
+    localPort: 23020
     address: 0.0.0.0
   # Web frontend
   - resourceType: service
     resourceName: coelhonexus-web
-    namespace: coelhonexus
+    namespace: coelhonexus-dev
     port: 3000
-    localPort: 23001
+    localPort: 23021
     address: 0.0.0.0
 
 
 # NOTE: Ensure docker-buildx is installed when useBuildkit is true
-# sh mirror_localhost_tailscale.sh $(for i in {23000..23002}; do echo $i; done)
+# Development (Skaffold): ports 23020-23039
+# sh mirror_localhost_tailscale.sh $(for i in {23020..23022}; do echo $i; done)
 # skaffold dev --cache-artifacts=false --no-prune=false
+#
+# Production (ArgoCD): ports 23000-23019
+# echo "fastapi:23000:8000 web:23001:3000" | xargs -n1 | xargs -P2 -I{} sh -c 'p="{}"; kubectl port-forward -n coelhonexus-prod svc/coelhonexus-${p%%:*} ${p#*:} &'

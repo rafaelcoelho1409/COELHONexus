@@ -1,0 +1,59 @@
+# =============================================================================
+# ARGOCD APPLICATION - COELHONexus
+# =============================================================================
+# Deploys COELHONexus from Gitea using Helm chart
+#
+# Apply this to ArgoCD:
+#   kubectl apply -f k8s/argocd/application.yaml
+#
+# Or via ArgoCD CLI:
+#   argocd app create coelhonexus -f k8s/argocd/application.yaml
+#
+# Port forwarding (production ports 23000-23019):
+#   echo "fastapi:23000:8000 web:23001:3000" | xargs -n1 | xargs -P2 -I{} sh -c 'p="{}"; kubectl port-forward -n coelhonexus-prod svc/coelhonexus-${p%%:*} ${p#*:} &'
+#
+# Namespaces:
+#   - coelhonexus-dev: Skaffold local development (ports 23020-23039)
+#   - coelhonexus-prod: ArgoCD production (ports 23000-23019)
+# =============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: coelhonexus
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    # Gitea repository URL (update 'rafael' to your Gitea username if different)
+    repoURL: https://gitea.YOUR_TAILNET_DOMAIN.ts.net/rafael/COELHONexus.git
+    targetRevision: master
+    path: k8s/helm
+
+    # Helm configuration
+    helm:
+      releaseName: coelhonexus
+      valueFiles:
+        - values.yaml
+      # values.yaml already configured with correct registry and imagePullPolicy
+      # No overrides needed - all config is in values.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: coelhonexus-prod
+
+  syncPolicy:
+    automated:
+      prune: true       # Delete resources not in Git
+      selfHeal: true    # Revert manual changes
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
