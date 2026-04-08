@@ -26,6 +26,10 @@ variables:
   INTERNAL_REGISTRY: "gitlab-registry.gitlab.svc.cluster.local:5000"
   FASTAPI_IMAGE: "${INTERNAL_REGISTRY}/root/coelhonexus/fastapi"
   WEB_IMAGE: "${INTERNAL_REGISTRY}/root/coelhonexus/web"
+  # Docker daemon configuration for insecure registry
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_TLS_CERTDIR: ""
+  DOCKER_DRIVER: overlay2
 
 # =============================================================================
 # BUILD STAGE
@@ -33,9 +37,10 @@ variables:
 
 build-fastapi:
   stage: build
-  image: docker:24-dind
+  image: docker:28-dind
   services:
-    - docker:24-dind
+    - name: docker:28-dind
+      command: ["--insecure-registry=gitlab-registry.gitlab.svc.cluster.local:5000"]
   only:
     - master
     - main
@@ -51,9 +56,10 @@ build-fastapi:
 
 build-web:
   stage: build
-  image: docker:24-dind
+  image: docker:28-dind
   services:
-    - docker:24-dind
+    - name: docker:28-dind
+      command: ["--insecure-registry=gitlab-registry.gitlab.svc.cluster.local:5000"]
   only:
     - master
     - main
