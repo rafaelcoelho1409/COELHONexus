@@ -1,7 +1,7 @@
 # Environment configuration
 # 'local' = Skaffold local development (no registry prefix)
-# 'production' = ArgoCD with k3d built-in registry
-environment: local
+# 'production' = ArgoCD with GitLab Container Registry
+environment: production
 
 # Observability - OpenTelemetry to Grafana Alloy + LGTM
 observability:
@@ -80,21 +80,21 @@ secretMappings:
   - envName: WARP_PROXY_PASS
     key: warp-proxy-pass
 
-# Registry configuration - uses COELHOCloud's k3d registry
+# Registry configuration - uses GitLab Container Registry
 registry:
-  url: coelhocloud-registry:5000
-  # ImagePullSecret not needed for k3d insecure registry
-  imagePullSecret: ""
+  url: registry.YOUR_TAILNET_DOMAIN.ts.net
+  # ImagePullSecret for GitLab registry authentication
+  imagePullSecret: gitlab-registry-credentials
 
 # Image configurations
-# Uses coelhocloud-registry:5000 (cluster internal access)
+# Uses GitLab Container Registry (registry.YOUR_TAILNET_DOMAIN.ts.net)
 # with 'latest' tag and imagePullPolicy: Always
 
 
 # FastAPI unified ML backend (includes River incremental and Sklearn batch training)
-# Uses COELHOCloud's k3d internal registry for pod access
+# Uses GitLab Container Registry
 fastapi:
-  image: coelhocloud-registry:5000/coelhonexus-fastapi:latest
+  image: registry.YOUR_TAILNET_DOMAIN.ts.net/root/coelhonexus/fastapi:latest
   imagePullPolicy: Always  # Always pull latest from Skaffold builds
   replicas: 1
   resources:
@@ -140,7 +140,7 @@ fastapi:
 
 # Web frontend (Go + Templ + HTMX + PWA)
 web:
-  image: coelhocloud-registry:5000/coelhonexus-web:latest
+  image: registry.YOUR_TAILNET_DOMAIN.ts.net/root/coelhonexus/web:latest
   imagePullPolicy: Always
   replicas: 1
   resources:

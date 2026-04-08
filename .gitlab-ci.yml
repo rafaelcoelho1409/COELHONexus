@@ -1,0 +1,130 @@
+# =============================================================================
+# GITLAB CI/CD - COELHONexus
+# =============================================================================
+# Pipeline: git push -> GitLab CI -> Docker build -> ArgoCD deploy
+#
+# Fully automated - just push to master!
+#
+# Required GitLab CI/CD Variables (Settings -> CI/CD -> Variables):
+#   - KUBECONFIG_BASE64: base64 encoded kubeconfig for cluster access
+#
+# Registry: GitLab Container Registry (registry.YOUR_TAILNET_DOMAIN.ts.net)
+#
+# Setup (one-time):
+#   1. Go to: GitLab -> COELHONexus -> Settings -> CI/CD -> Variables
+#   2. Add variable named: KUBECONFIG_BASE64
+#   3. Value: cat ~/.kube/config | base64 -w0
+#   4. Check "Mask variable" for security
+# =============================================================================
+
+stages:
+  - build
+  - deploy
+
+variables:
+  # GitLab Container Registry (auto-configured)
+  FASTAPI_IMAGE: "${CI_REGISTRY_IMAGE}/fastapi"
+  WEB_IMAGE: "${CI_REGISTRY_IMAGE}/web"
+
+# =============================================================================
+# BUILD STAGE
+# =============================================================================
+
+build-fastapi:
+  stage: build
+  image: docker:24-dind
+  services:
+    - docker:24-dind
+  only:
+    - master
+    - main
+  before_script:
+    - docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} ${CI_REGISTRY}
+  script:
+    - echo "Building FastAPI image..."
+    - docker build -t ${FASTAPI_IMAGE}:${CI_COMMIT_SHORT_SHA} -t ${FASTAPI_IMAGE}:latest
+        -f apps/fastapi/Dockerfile.fastapi apps/fastapi
+    - docker push ${FASTAPI_IMAGE}:${CI_COMMIT_SHORT_SHA}
+    - docker push ${FASTAPI_IMAGE}:latest
+    - echo "FastAPI image pushed to ${FASTAPI_IMAGE}"
+
+build-web:
+  stage: build
+  image: docker:24-dind
+  services:
+    - docker:24-dind
+  only:
+    - master
+    - main
+  before_script:
+    - docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} ${CI_REGISTRY}
+  script:
+    - echo "Building Web image..."
+    - docker build -t ${WEB_IMAGE}:${CI_COMMIT_SHORT_SHA} -t ${WEB_IMAGE}:latest
+        -f apps/web/Dockerfile.web apps/web
+    - docker push ${WEB_IMAGE}:${CI_COMMIT_SHORT_SHA}
+    - docker push ${WEB_IMAGE}:latest
+    - echo "Web image pushed to ${WEB_IMAGE}"
+
+# =============================================================================
+# DEPLOY STAGE
+# =============================================================================
+
+deploy:
+  stage: deploy
+  image: bitnami/kubectl:latest
+  only:
+    - master
+    - main
+  needs:
+    - build-fastapi
+    - build-web
+  script:
+    # Setup kubeconfig
+    - mkdir -p ~/.kube
+    - echo "${KUBECONFIG_BASE64}" | base64 -d > ~/.kube/config
+    - chmod 600 ~/.kube/config
+
+    # Verify cluster access
+    - kubectl cluster-info
+
+    # Create namespace if not exists
+    - kubectl create namespace coelhonexus --dry-run=client -o yaml | kubectl apply -f -
+
+    # Create/update GitLab registry credentials secret
+    - |
+      kubectl create secret docker-registry gitlab-registry-credentials \
+        --namespace=coelhonexus \
+        --docker-server=${CI_REGISTRY} \
+        --docker-username=${CI_REGISTRY_USER} \
+        --docker-password=${CI_REGISTRY_PASSWORD} \
+        --dry-run=client -o yaml | kubectl apply -f -
+    - echo "Registry credentials secret created/updated"
+
+    # Apply ArgoCD Application (idempotent)
+    - kubectl apply -f k8s/argocd/application.yaml
+    - echo "ArgoCD application applied"
+
+    # Wait for ArgoCD to process
+    - sleep 10
+
+    # Wait for deployments to be created by ArgoCD
+    - |
+      for i in $(seq 1 30); do
+        if kubectl get deployment/coelhonexus-fastapi -n coelhonexus 2>/dev/null; then
+          echo "Deployments found"
+          break
+        fi
+        echo "Waiting for deployments to be created by ArgoCD... ($i/30)"
+        sleep 10
+      done
+
+    # Restart deployments to pull new images
+    - kubectl rollout restart deployment/coelhonexus-fastapi -n coelhonexus
+    - kubectl rollout restart deployment/coelhonexus-web -n coelhonexus
+    - echo "Deployments restarted - pulling new images"
+
+    # Wait for rollout to complete
+    - kubectl rollout status deployment/coelhonexus-fastapi -n coelhonexus --timeout=300s
+    - kubectl rollout status deployment/coelhonexus-web -n coelhonexus --timeout=300s
+    - echo "Deployment complete!"

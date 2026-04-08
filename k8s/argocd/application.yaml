@@ -1,7 +1,7 @@
 # =============================================================================
 # ARGOCD APPLICATION - COELHONexus
 # =============================================================================
-# Deploys COELHONexus from Gitea using Helm chart
+# Deploys COELHONexus from GitLab using Helm chart
 #
 # Apply this to ArgoCD:
 #   kubectl apply -f k8s/argocd/application.yaml
@@ -27,8 +27,8 @@ spec:
   project: default
 
   source:
-    # Gitea repository URL (update 'rafael' to your Gitea username if different)
-    repoURL: https://gitea.YOUR_TAILNET_DOMAIN.ts.net/rafael/COELHONexus.git
+    # GitLab repository URL
+    repoURL: https://gitlab.YOUR_TAILNET_DOMAIN.ts.net/root/COELHONexus.git
     targetRevision: master
     path: k8s/helm
 
