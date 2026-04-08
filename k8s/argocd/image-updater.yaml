@@ -1,0 +1,38 @@
+# =============================================================================
+# ARGOCD IMAGE UPDATER CR - COELHONexus
+# =============================================================================
+# Enables automatic image updates for COELHONexus Application.
+# Image Updater v1.1+ uses CRDs (required).
+#
+# Apply once alongside the Application:
+#   kubectl apply -f k8s/argocd/
+#
+# Flow: GitLab CI builds -> Registry -> Image Updater detects -> ArgoCD deploys
+# =============================================================================
+apiVersion: argocd-image-updater.argoproj.io/v1alpha1
+kind: ImageUpdater
+metadata:
+  name: coelhonexus
+  namespace: argocd
+spec:
+  applicationRefs:
+    - namePattern: coelhonexus
+      images:
+        - alias: fastapi
+          imageName: coelhocloud-registry:5000/coelhonexus-fastapi:latest
+          commonUpdateSettings:
+            updateStrategy: digest
+          manifestTargets:
+            helm:
+              name: fastapi.image
+
+        - alias: web
+          imageName: coelhocloud-registry:5000/coelhonexus-web:latest
+          commonUpdateSettings:
+            updateStrategy: digest
+          manifestTargets:
+            helm:
+              name: web.image
+
+  writeBackConfig:
+    method: argocd

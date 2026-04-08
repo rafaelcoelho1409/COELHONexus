@@ -21,14 +21,7 @@ kind: Application
 metadata:
   name: coelhonexus
   namespace: argocd
-  annotations:
-    # ArgoCD Image Updater - auto-detect new images in k3d registry
-    argocd-image-updater.argoproj.io/image-list: "fastapi=coelhocloud-registry:5000/coelhonexus-fastapi:latest, web=coelhocloud-registry:5000/coelhonexus-web:latest"
-    argocd-image-updater.argoproj.io/fastapi.update-strategy: digest
-    argocd-image-updater.argoproj.io/web.update-strategy: digest
-    argocd-image-updater.argoproj.io/fastapi.helm.image-name: fastapi.image
-    argocd-image-updater.argoproj.io/web.helm.image-name: web.image
-    argocd-image-updater.argoproj.io/write-back-method: argocd
+  # Image Updater config in image-updater.yaml (CRD required for v1.1+)
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
