@@ -24,7 +24,7 @@ spec:
             updateStrategy: digest
           manifestTargets:
             helm:
-              name: fastapi.image
+              spec: fastapi.image  # Full image reference (repo:tag@digest)
 
         - alias: web
           imageName: coelhocloud-registry:5000/coelhonexus-web:latest
@@ -32,7 +32,7 @@ spec:
             updateStrategy: digest
           manifestTargets:
             helm:
-              name: web.image
+              spec: web.image  # Full image reference (repo:tag@digest)
 
   writeBackConfig:
     method: argocd
