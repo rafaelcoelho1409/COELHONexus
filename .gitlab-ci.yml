@@ -39,6 +39,9 @@ build-fastapi:
   only:
     - master
     - main
+  variables:
+    # Optimize Kaniko memory usage
+    KANIKO_EXTRA_ARGS: "--single-snapshot --snapshotMode=redo"
   before_script:
     # Configure registry credentials for Kaniko
     - mkdir -p /kaniko/.docker
@@ -52,6 +55,9 @@ build-fastapi:
       --destination="${FASTAPI_IMAGE}:latest"
       --insecure
       --skip-tls-verify
+      --single-snapshot
+      --snapshot-mode=redo
+      --push-retry=3
     - echo "FastAPI image pushed to ${FASTAPI_IMAGE}"
 
 build-web:
@@ -75,6 +81,9 @@ build-web:
       --destination="${WEB_IMAGE}:latest"
       --insecure
       --skip-tls-verify
+      --single-snapshot
+      --snapshot-mode=redo
+      --push-retry=3
     - echo "Web image pushed to ${WEB_IMAGE}"
 
 # =============================================================================
