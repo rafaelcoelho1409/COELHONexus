@@ -58,6 +58,8 @@ build-fastapi:
       --skip-tls-verify
       --single-snapshot
       --snapshot-mode=redo
+      --compressed-caching=false
+      --use-new-run
       --push-retry=3
     - echo "FastAPI image pushed to ${FASTAPI_IMAGE}"
 
@@ -84,6 +86,8 @@ build-web:
       --skip-tls-verify
       --single-snapshot
       --snapshot-mode=redo
+      --compressed-caching=false
+      --use-new-run
       --push-retry=3
     - echo "Web image pushed to ${WEB_IMAGE}"
 
