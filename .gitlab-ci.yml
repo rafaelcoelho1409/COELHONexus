@@ -22,9 +22,10 @@ stages:
   - deploy
 
 variables:
-  # GitLab Container Registry (auto-configured)
-  FASTAPI_IMAGE: "${CI_REGISTRY_IMAGE}/fastapi"
-  WEB_IMAGE: "${CI_REGISTRY_IMAGE}/web"
+  # GitLab Container Registry - use in-cluster URL (pods can't reach Tailscale hostnames)
+  INTERNAL_REGISTRY: "gitlab-registry.gitlab.svc.cluster.local:5000"
+  FASTAPI_IMAGE: "${INTERNAL_REGISTRY}/root/coelhonexus/fastapi"
+  WEB_IMAGE: "${INTERNAL_REGISTRY}/root/coelhonexus/web"
 
 # =============================================================================
 # BUILD STAGE
@@ -39,7 +40,7 @@ build-fastapi:
     - master
     - main
   before_script:
-    - docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} ${CI_REGISTRY}
+    - docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} ${INTERNAL_REGISTRY}
   script:
     - echo "Building FastAPI image..."
     - docker build -t ${FASTAPI_IMAGE}:${CI_COMMIT_SHORT_SHA} -t ${FASTAPI_IMAGE}:latest
@@ -57,7 +58,7 @@ build-web:
     - master
     - main
   before_script:
-    - docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} ${CI_REGISTRY}
+    - docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} ${INTERNAL_REGISTRY}
   script:
     - echo "Building Web image..."
     - docker build -t ${WEB_IMAGE}:${CI_COMMIT_SHORT_SHA} -t ${WEB_IMAGE}:latest
@@ -95,7 +96,7 @@ deploy:
     - |
       kubectl create secret docker-registry gitlab-registry-credentials \
         --namespace=coelhonexus \
-        --docker-server=${CI_REGISTRY} \
+        --docker-server=${INTERNAL_REGISTRY} \
         --docker-username=${CI_REGISTRY_USER} \
         --docker-password=${CI_REGISTRY_PASSWORD} \
         --dry-run=client -o yaml | kubectl apply -f -
