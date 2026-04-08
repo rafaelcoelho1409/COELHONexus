@@ -1,0 +1,87 @@
+# =============================================================================
+# GITEA ACTIONS - COELHONexus CI/CD
+# =============================================================================
+# Pipeline: git push -> Gitea Actions -> Docker build -> ArgoCD deploy
+#
+# Fully automated - just push to master!
+#
+# Required Gitea Secrets:
+#   - KUBECONFIG_BASE64: base64 encoded kubeconfig for cluster access
+#
+# Setup (one-time):
+#   1. Go to: Gitea → COELHONexus → Settings → Actions → Secrets
+#   2. Add secret named: KUBECONFIG_BASE64
+#   3. Value: cat ~/.kube/config | base64 -w0
+# =============================================================================
+
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build and push FastAPI image
+        run: |
+          echo "Building coelhonexus-fastapi..."
+          docker build -t localhost:5000/coelhonexus-fastapi:latest -f apps/fastapi/Dockerfile.fastapi apps/fastapi
+          docker push localhost:5000/coelhonexus-fastapi:latest
+          echo "FastAPI image pushed"
+
+      - name: Build and push Web image
+        run: |
+          echo "Building coelhonexus-web..."
+          docker build -t localhost:5000/coelhonexus-web:latest -f apps/web/Dockerfile.web apps/web
+          docker push localhost:5000/coelhonexus-web:latest
+          echo "Web image pushed"
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Apply ArgoCD Application (idempotent)
+        run: |
+          kubectl apply -f k8s/argocd/application.yaml
+          echo "ArgoCD application applied"
+
+      - name: Wait for ArgoCD sync
+        run: |
+          echo "Waiting for ArgoCD to sync..."
+          sleep 10
+
+      - name: Restart deployments to pull new images
+        run: |
+          # Check if deployments exist, if not wait for ArgoCD
+          for i in {1..30}; do
+            if kubectl get deployment/coelhonexus-fastapi -n coelhonexus-prod &>/dev/null; then
+              break
+            fi
+            echo "Waiting for deployments to be created by ArgoCD... ($i/30)"
+            sleep 10
+          done
+
+          kubectl rollout restart deployment/coelhonexus-fastapi -n coelhonexus-prod
+          kubectl rollout restart deployment/coelhonexus-web -n coelhonexus-prod
+          echo "Deployments restarted - pulling new images"
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/coelhonexus-fastapi -n coelhonexus-prod --timeout=300s
+          kubectl rollout status deployment/coelhonexus-web -n coelhonexus-prod --timeout=300s
+          echo "Deployment complete!"
