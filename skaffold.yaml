@@ -57,6 +57,7 @@ manifests:
         setValueTemplates:
           fastapi.image: "{{.IMAGE_FULLY_QUALIFIED_coelhonexus_fastapi}}"
           web.image: "{{.IMAGE_FULLY_QUALIFIED_coelhonexus_web}}"
+          environment: local  # Enables --reload in uvicorn for hot-reload
 
 deploy:
   helm:

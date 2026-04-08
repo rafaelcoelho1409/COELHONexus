@@ -13,6 +13,7 @@ Common environment variables for all services (non-sensitive)
 Credentials are loaded from secret via secretRef
 */}}
 {{- define "coelhonexus.commonEnvVars" -}}
+ENVIRONMENT: "{{ .Values.environment }}"
 FASTAPI_HOST: "coelhonexus-fastapi"
 REDIS_HOST: "{{ .Values.redis.host }}"
 REDIS_PORT: "{{ .Values.redis.port }}"
