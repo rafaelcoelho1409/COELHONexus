@@ -41,7 +41,7 @@ build-fastapi:
   services:
     - name: docker:28-dind
       alias: docker
-      command: ["--insecure-registry=coelhocloud-registry:5000"]
+      command: ["dockerd", "--host=tcp://0.0.0.0:2375", "--host=unix:///var/run/docker.sock", "--tls=false", "--insecure-registry=coelhocloud-registry:5000"]
   only:
     - master
     - main
@@ -64,7 +64,7 @@ build-web:
   services:
     - name: docker:28-dind
       alias: docker
-      command: ["--insecure-registry=coelhocloud-registry:5000"]
+      command: ["dockerd", "--host=tcp://0.0.0.0:2375", "--host=unix:///var/run/docker.sock", "--tls=false", "--insecure-registry=coelhocloud-registry:5000"]
   only:
     - master
     - main
