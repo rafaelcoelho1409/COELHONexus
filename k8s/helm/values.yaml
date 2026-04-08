@@ -80,11 +80,11 @@ secretMappings:
   - envName: WARP_PROXY_PASS
     key: warp-proxy-pass
 
-# Registry configuration - uses GitLab Container Registry (in-cluster URL)
+# Registry configuration - uses k3d COELHOCloud Registry (same as Skaffold)
 registry:
-  url: gitlab-registry.gitlab.svc.cluster.local:5000
-  # ImagePullSecret for GitLab registry authentication
-  imagePullSecret: gitlab-registry-credentials
+  url: coelhocloud-registry:5000
+  # k3d registry doesn't need authentication
+  imagePullSecret: ""
 
 # Image configurations
 # Uses GitLab Container Registry (registry.YOUR_TAILNET_DOMAIN.ts.net)
@@ -92,9 +92,9 @@ registry:
 
 
 # FastAPI unified ML backend (includes River incremental and Sklearn batch training)
-# Uses GitLab Container Registry (in-cluster URL)
+# Uses k3d COELHOCloud Registry (same as Skaffold)
 fastapi:
-  image: gitlab-registry.gitlab.svc.cluster.local:5000/root/coelhonexus/fastapi:latest
+  image: coelhocloud-registry:5000/coelhonexus-fastapi:latest
   imagePullPolicy: Always  # Always pull latest from Skaffold builds
   replicas: 1
   resources:
@@ -140,7 +140,7 @@ fastapi:
 
 # Web frontend (Go + Templ + HTMX + PWA)
 web:
-  image: gitlab-registry.gitlab.svc.cluster.local:5000/root/coelhonexus/web:latest
+  image: coelhocloud-registry:5000/coelhonexus-web:latest
   imagePullPolicy: Always
   replicas: 1
   resources:

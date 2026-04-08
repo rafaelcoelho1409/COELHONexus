@@ -8,7 +8,7 @@
 # Required GitLab CI/CD Variables (Settings -> CI/CD -> Variables):
 #   - KUBECONFIG_BASE64: base64 encoded kubeconfig for cluster access
 #
-# Registry: GitLab Container Registry (registry.YOUR_TAILNET_DOMAIN.ts.net)
+# Registry: k3d COELHOCloud Registry (coelhocloud-registry:5000) - same as Skaffold
 #
 # Setup (one-time):
 #   1. Go to: GitLab -> COELHONexus -> Settings -> CI/CD -> Variables
@@ -22,73 +22,63 @@ stages:
   - deploy
 
 variables:
-  # GitLab Container Registry - use in-cluster URL (pods can't reach Tailscale hostnames)
-  INTERNAL_REGISTRY: "gitlab-registry.gitlab.svc.cluster.local:5000"
-  FASTAPI_IMAGE: "${INTERNAL_REGISTRY}/root/coelhonexus/fastapi"
-  WEB_IMAGE: "${INTERNAL_REGISTRY}/root/coelhonexus/web"
+  # k3d COELHOCloud Registry (same as Skaffold uses)
+  REGISTRY: "coelhocloud-registry:5000"
+  FASTAPI_IMAGE: "${REGISTRY}/coelhonexus-fastapi"
+  WEB_IMAGE: "${REGISTRY}/coelhonexus-web"
+  # Docker-in-Docker configuration
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_TLS_CERTDIR: ""
+  DOCKER_BUILDKIT: "1"
 
 # =============================================================================
-# BUILD STAGE (using Kaniko - no privileged mode needed)
+# BUILD STAGE (Docker-in-Docker - same as Skaffold)
 # =============================================================================
 
 build-fastapi:
   stage: build
-  image:
-    name: gcr.io/kaniko-project/executor:v1.24.0-debug
-    entrypoint: [""]
+  image: docker:28-cli
+  services:
+    - name: docker:28-dind
+      alias: docker
+      command: ["--insecure-registry=coelhocloud-registry:5000"]
   only:
     - master
     - main
-  variables:
-    # Kubernetes executor resource overrides for large builds (PyTorch)
-    KUBERNETES_MEMORY_REQUEST: "2Gi"
-    KUBERNETES_MEMORY_LIMIT: "4Gi"
   before_script:
-    # Configure registry credentials for Kaniko
-    - mkdir -p /kaniko/.docker
-    - echo "{\"auths\":{\"${INTERNAL_REGISTRY}\":{\"auth\":\"$(echo -n ${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD} | base64)\"}}}" > /kaniko/.docker/config.json
+    - until docker info; do sleep 1; done
   script:
-    - echo "Building FastAPI image with Kaniko..."
-    - /kaniko/executor
-      --context="${CI_PROJECT_DIR}/apps/fastapi"
-      --dockerfile="${CI_PROJECT_DIR}/apps/fastapi/Dockerfile.fastapi"
-      --destination="${FASTAPI_IMAGE}:${CI_COMMIT_SHORT_SHA}"
-      --destination="${FASTAPI_IMAGE}:latest"
-      --insecure
-      --skip-tls-verify
-      --single-snapshot
-      --snapshot-mode=redo
-      --compressed-caching=false
-      --use-new-run
-      --push-retry=3
+    - echo "Building FastAPI image with Docker (same as Skaffold)..."
+    - docker build
+      -t ${FASTAPI_IMAGE}:${CI_COMMIT_SHORT_SHA}
+      -t ${FASTAPI_IMAGE}:latest
+      -f apps/fastapi/Dockerfile.fastapi
+      apps/fastapi
+    - docker push ${FASTAPI_IMAGE}:${CI_COMMIT_SHORT_SHA}
+    - docker push ${FASTAPI_IMAGE}:latest
     - echo "FastAPI image pushed to ${FASTAPI_IMAGE}"
 
 build-web:
   stage: build
-  image:
-    name: gcr.io/kaniko-project/executor:v1.24.0-debug
-    entrypoint: [""]
+  image: docker:28-cli
+  services:
+    - name: docker:28-dind
+      alias: docker
+      command: ["--insecure-registry=coelhocloud-registry:5000"]
   only:
     - master
     - main
   before_script:
-    # Configure registry credentials for Kaniko
-    - mkdir -p /kaniko/.docker
-    - echo "{\"auths\":{\"${INTERNAL_REGISTRY}\":{\"auth\":\"$(echo -n ${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD} | base64)\"}}}" > /kaniko/.docker/config.json
+    - until docker info; do sleep 1; done
   script:
-    - echo "Building Web image with Kaniko..."
-    - /kaniko/executor
-      --context="${CI_PROJECT_DIR}/apps/web"
-      --dockerfile="${CI_PROJECT_DIR}/apps/web/Dockerfile.web"
-      --destination="${WEB_IMAGE}:${CI_COMMIT_SHORT_SHA}"
-      --destination="${WEB_IMAGE}:latest"
-      --insecure
-      --skip-tls-verify
-      --single-snapshot
-      --snapshot-mode=redo
-      --compressed-caching=false
-      --use-new-run
-      --push-retry=3
+    - echo "Building Web image with Docker (same as Skaffold)..."
+    - docker build
+      -t ${WEB_IMAGE}:${CI_COMMIT_SHORT_SHA}
+      -t ${WEB_IMAGE}:latest
+      -f apps/web/Dockerfile.web
+      apps/web
+    - docker push ${WEB_IMAGE}:${CI_COMMIT_SHORT_SHA}
+    - docker push ${WEB_IMAGE}:latest
     - echo "Web image pushed to ${WEB_IMAGE}"
 
 # =============================================================================
@@ -116,15 +106,7 @@ deploy:
     # Create namespace if not exists
     - kubectl create namespace coelhonexus --dry-run=client -o yaml | kubectl apply -f -
 
-    # Create/update GitLab registry credentials secret
-    - |
-      kubectl create secret docker-registry gitlab-registry-credentials \
-        --namespace=coelhonexus \
-        --docker-server=${INTERNAL_REGISTRY} \
-        --docker-username=${CI_REGISTRY_USER} \
-        --docker-password=${CI_REGISTRY_PASSWORD} \
-        --dry-run=client -o yaml | kubectl apply -f -
-    - echo "Registry credentials secret created/updated"
+    # k3d registry doesn't need authentication (no imagePullSecret needed)
 
     # Apply ArgoCD Application (idempotent)
     - kubectl apply -f k8s/argocd/application.yaml
