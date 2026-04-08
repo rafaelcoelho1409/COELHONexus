@@ -23,7 +23,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: docker
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -43,11 +43,17 @@ jobs:
           echo "Web image pushed"
 
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: docker
     needs: [build]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          mv kubectl /usr/local/bin/
 
       - name: Setup kubeconfig
         run: |
