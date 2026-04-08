@@ -28,13 +28,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Setup buildx with custom DNS
+        run: |
+          docker buildx create --name mybuilder --driver docker-container \
+            --driver-opt network=host \
+            --buildkitd-flags '--allow-insecure-entitlement network.host'
+          docker buildx use mybuilder
+
       - name: Build and push FastAPI image
         run: |
           echo "Building coelhonexus-fastapi..."
           for i in 1 2 3; do
-            docker build -t localhost:5000/coelhonexus-fastapi:latest -f apps/fastapi/Dockerfile.fastapi apps/fastapi && break
-            echo "Retry $i/3 in 10s..."
-            sleep 10
+            docker buildx build --load \
+              --network=host \
+              -t localhost:5000/coelhonexus-fastapi:latest \
+              -f apps/fastapi/Dockerfile.fastapi apps/fastapi && break
+            echo "Retry $i/3 in 15s..."
+            sleep 15
           done
           docker push localhost:5000/coelhonexus-fastapi:latest
           echo "FastAPI image pushed"
@@ -43,9 +53,12 @@ jobs:
         run: |
           echo "Building coelhonexus-web..."
           for i in 1 2 3; do
-            docker build -t localhost:5000/coelhonexus-web:latest -f apps/web/Dockerfile.web apps/web && break
-            echo "Retry $i/3 in 10s..."
-            sleep 10
+            docker buildx build --load \
+              --network=host \
+              -t localhost:5000/coelhonexus-web:latest \
+              -f apps/web/Dockerfile.web apps/web && break
+            echo "Retry $i/3 in 15s..."
+            sleep 15
           done
           docker push localhost:5000/coelhonexus-web:latest
           echo "Web image pushed"
