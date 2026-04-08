@@ -37,9 +37,11 @@ variables:
 
 build-fastapi:
   stage: build
-  image: docker:28-dind
+  image: docker:28-cli
   services:
     - name: docker:28-dind
+      alias: docker
+      entrypoint: ["dockerd-entrypoint.sh"]
       command: ["--insecure-registry=gitlab-registry.gitlab.svc.cluster.local:5000"]
   only:
     - master
@@ -56,9 +58,11 @@ build-fastapi:
 
 build-web:
   stage: build
-  image: docker:28-dind
+  image: docker:28-cli
   services:
     - name: docker:28-dind
+      alias: docker
+      entrypoint: ["dockerd-entrypoint.sh"]
       command: ["--insecure-registry=gitlab-registry.gitlab.svc.cluster.local:5000"]
   only:
     - master
