@@ -91,4 +91,4 @@ portForward:
 # skaffold dev --cache-artifacts=false --no-prune=false
 #
 # Production (ArgoCD): ports 23000-23019
-# echo "fastapi:23000:8000 web:23001:3000" | xargs -n1 | xargs -P2 -I{} sh -c 'p="{}"; kubectl port-forward -n coelhonexus-prod svc/coelhonexus-${p%%:*} ${p#*:} &'
+# echo "fastapi:23000:8000 web:23001:3000" | xargs -n1 | xargs -P2 -I{} sh -c 'p="{}"; kubectl port-forward -n coelhonexus svc/coelhonexus-${p%%:*} ${p#*:} &'

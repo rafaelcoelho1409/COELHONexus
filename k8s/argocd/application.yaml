@@ -10,11 +10,11 @@
 #   argocd app create coelhonexus -f k8s/argocd/application.yaml
 #
 # Port forwarding (production ports 23000-23019):
-#   echo "fastapi:23000:8000 web:23001:3000" | xargs -n1 | xargs -P2 -I{} sh -c 'p="{}"; kubectl port-forward -n coelhonexus-prod svc/coelhonexus-${p%%:*} ${p#*:} &'
+#   echo "fastapi:23000:8000 web:23001:3000" | xargs -n1 | xargs -P2 -I{} sh -c 'p="{}"; kubectl port-forward -n coelhonexus svc/coelhonexus-${p%%:*} ${p#*:} &'
 #
 # Namespaces:
 #   - coelhonexus-dev: Skaffold local development (ports 23020-23039)
-#   - coelhonexus-prod: ArgoCD production (ports 23000-23019)
+#   - coelhonexus: ArgoCD production (ports 23000-23019)
 # =============================================================================
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -42,7 +42,7 @@ spec:
 
   destination:
     server: https://kubernetes.default.svc
-    namespace: coelhonexus-prod
+    namespace: coelhonexus
 
   syncPolicy:
     automated:
