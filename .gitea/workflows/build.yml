@@ -27,7 +27,8 @@ jobs:
     steps:
       - name: Checkout code
         run: |
-          git clone "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" .
+          # Use in-cluster URL (job containers can't resolve Tailscale hostnames)
+          git clone "http://gitea-http.gitea.svc.cluster.local:3000/${GITHUB_REPOSITORY}.git" .
           git checkout "${GITHUB_SHA}"
 
       - name: Setup buildx with custom DNS
@@ -71,7 +72,8 @@ jobs:
     steps:
       - name: Checkout code
         run: |
-          git clone "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" .
+          # Use in-cluster URL (job containers can't resolve Tailscale hostnames)
+          git clone "http://gitea-http.gitea.svc.cluster.local:3000/${GITHUB_REPOSITORY}.git" .
           git checkout "${GITHUB_SHA}"
 
       - name: Install kubectl
