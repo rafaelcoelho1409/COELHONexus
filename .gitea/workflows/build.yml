@@ -33,38 +33,19 @@ jobs:
           git clone "http://gitea-http.gitea.svc.cluster.local:3000/${GITHUB_REPOSITORY}.git" .
           git checkout "${GITHUB_SHA}"
 
-      - name: Setup buildx with custom DNS
-        run: |
-          docker buildx create --name mybuilder --driver docker-container \
-            --driver-opt network=host \
-            --buildkitd-flags '--allow-insecure-entitlement network.host'
-          docker buildx use mybuilder
-
       - name: Build and push FastAPI image
         run: |
           echo "Building coelhonexus-fastapi..."
-          for i in 1 2 3; do
-            docker buildx build --load \
-              --network=host \
-              -t 172.27.0.8:5000/coelhonexus-fastapi:latest \
-              -f apps/fastapi/Dockerfile.fastapi apps/fastapi && break
-            echo "Retry $i/3 in 15s..."
-            sleep 15
-          done
+          docker build -t 172.27.0.8:5000/coelhonexus-fastapi:latest \
+            -f apps/fastapi/Dockerfile.fastapi apps/fastapi
           docker push 172.27.0.8:5000/coelhonexus-fastapi:latest
           echo "FastAPI image pushed"
 
       - name: Build and push Web image
         run: |
           echo "Building coelhonexus-web..."
-          for i in 1 2 3; do
-            docker buildx build --load \
-              --network=host \
-              -t 172.27.0.8:5000/coelhonexus-web:latest \
-              -f apps/web/Dockerfile.web apps/web && break
-            echo "Retry $i/3 in 15s..."
-            sleep 15
-          done
+          docker build -t 172.27.0.8:5000/coelhonexus-web:latest \
+            -f apps/web/Dockerfile.web apps/web
           docker push 172.27.0.8:5000/coelhonexus-web:latest
           echo "Web image pushed"
 
