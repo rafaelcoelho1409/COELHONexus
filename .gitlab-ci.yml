@@ -40,8 +40,9 @@ build-fastapi:
     - master
     - main
   variables:
-    # Optimize Kaniko memory usage
-    KANIKO_EXTRA_ARGS: "--single-snapshot --snapshotMode=redo"
+    # Kubernetes executor resource overrides for large builds (PyTorch)
+    KUBERNETES_MEMORY_REQUEST: "2Gi"
+    KUBERNETES_MEMORY_LIMIT: "4Gi"
   before_script:
     # Configure registry credentials for Kaniko
     - mkdir -p /kaniko/.docker
