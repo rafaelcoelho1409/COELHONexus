@@ -1,25 +1,20 @@
 # =============================================================================
 # GITLAB CI/CD - COELHONexus
 # =============================================================================
-# Pipeline: git push -> GitLab CI -> Docker build -> ArgoCD deploy
+# Pipeline: git push -> GitLab CI -> Docker build -> ArgoCD Image Updater
 #
 # Fully automated - just push to master!
+# Same workflow as Skaffold: build -> push -> done (ArgoCD handles deploy)
 #
-# Required GitLab CI/CD Variables (Settings -> CI/CD -> Variables):
-#   - KUBECONFIG_BASE64: base64 encoded kubeconfig for cluster access
+# Registry: k3d COELHOCloud Registry (coelhocloud-registry:5000)
+# Deploy: ArgoCD Image Updater auto-detects new images and syncs
 #
-# Registry: k3d COELHOCloud Registry (coelhocloud-registry:5000) - same as Skaffold
-#
-# Setup (one-time):
-#   1. Go to: GitLab -> COELHONexus -> Settings -> CI/CD -> Variables
-#   2. Add variable named: KUBECONFIG_BASE64
-#   3. Value: cat ~/.kube/config | base64 -w0
-#   4. Check "Mask variable" for security
+# No CI/CD variables needed!
 # =============================================================================
 
 stages:
   - build
-  - deploy
+  # Deploy handled by ArgoCD Image Updater (auto-detects new images)
 
 variables:
   # k3d COELHOCloud Registry (same as Skaffold uses)
@@ -82,56 +77,12 @@ build-web:
     - echo "Web image pushed to ${WEB_IMAGE}"
 
 # =============================================================================
-# DEPLOY STAGE
+# DEPLOY - Handled by ArgoCD Image Updater
 # =============================================================================
-
-deploy:
-  stage: deploy
-  image: bitnami/kubectl:latest
-  only:
-    - master
-    - main
-  needs:
-    - build-fastapi
-    - build-web
-  script:
-    # Setup kubeconfig
-    - mkdir -p ~/.kube
-    - echo "${KUBECONFIG_BASE64}" | base64 -d > ~/.kube/config
-    - chmod 600 ~/.kube/config
-
-    # Verify cluster access
-    - kubectl cluster-info
-
-    # Create namespace if not exists
-    - kubectl create namespace coelhonexus --dry-run=client -o yaml | kubectl apply -f -
-
-    # k3d registry doesn't need authentication (no imagePullSecret needed)
-
-    # Apply ArgoCD Application (idempotent)
-    - kubectl apply -f k8s/argocd/application.yaml
-    - echo "ArgoCD application applied"
-
-    # Wait for ArgoCD to process
-    - sleep 10
-
-    # Wait for deployments to be created by ArgoCD
-    - |
-      for i in $(seq 1 30); do
-        if kubectl get deployment/coelhonexus-fastapi -n coelhonexus 2>/dev/null; then
-          echo "Deployments found"
-          break
-        fi
-        echo "Waiting for deployments to be created by ArgoCD... ($i/30)"
-        sleep 10
-      done
-
-    # Restart deployments to pull new images
-    - kubectl rollout restart deployment/coelhonexus-fastapi -n coelhonexus
-    - kubectl rollout restart deployment/coelhonexus-web -n coelhonexus
-    - echo "Deployments restarted - pulling new images"
-
-    # Wait for rollout to complete
-    - kubectl rollout status deployment/coelhonexus-fastapi -n coelhonexus --timeout=300s
-    - kubectl rollout status deployment/coelhonexus-web -n coelhonexus --timeout=300s
-    - echo "Deployment complete!"
+# No deploy stage needed!
+# ArgoCD Image Updater watches k3d registry and auto-deploys when:
+#   1. CI pushes new images to coelhocloud-registry:5000
+#   2. Image Updater detects new digest (update-strategy: digest)
+#   3. ArgoCD syncs and restarts pods
+#
+# This is the same flow as Skaffold - just build, push, done!
