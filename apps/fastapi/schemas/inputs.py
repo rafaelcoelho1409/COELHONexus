@@ -114,3 +114,17 @@ class PlaylistRequest(BaseModel):
     max_results: int = 10  # 0 = all videos
     include_transcription: bool = True
     transcription_languages: list[str] | None = None
+
+
+# =============================================================================
+# Agentic RAG Requests
+# =============================================================================
+class RAGSearchRequest(BaseModel):
+    """
+    Search YouTube content using Agentic RAG.
+    The agent retrieves, grades, and generates an answer with citations.
+    If results are poor, it rewrites the query and retries automatically.
+    """
+    question: str
+    thread_id: str = "default"
+    max_retries: int = 3

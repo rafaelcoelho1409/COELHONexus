@@ -2,4 +2,4 @@
 
 apiVersion: v1
 {{- include "coelhonexus.ServiceSettings" (dict "appName" $appName "root" .) | nindent 0 }}
-{{- toYaml (index .Values $appName "portsSettings") | nindent 2}}
+{{- include "coelhonexus.ServicePortsSettings" (dict "appName" $appName "root" .) }}

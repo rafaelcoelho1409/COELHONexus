@@ -4,6 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import redis.asyncio as redis_aio
 from elasticsearch import AsyncElasticsearch
+from qdrant_client import AsyncQdrantClient
+from neo4j import AsyncGraphDatabase
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 
@@ -32,6 +34,16 @@ else:
 ES_HOST = os.environ["ELASTICSEARCH_HOST"]
 ES_USERNAME = os.environ["ELASTICSEARCH_USERNAME"]
 ES_PASSWORD = os.environ["ELASTICSEARCH_PASSWORD"]
+
+# Qdrant configuration
+QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
+QDRANT_PORT = int(os.environ.get("QDRANT_PORT", "6333"))
+QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY")
+
+# Neo4j configuration
+NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USERNAME = os.environ.get("NEO4J_USERNAME", "neo4j")
+NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "")
 
 # =============================================================================
 # Lifespan (startup/shutdown)
@@ -62,6 +74,21 @@ async def lifespan(app: FastAPI):
         max_retries=3,
     )
     print("Playwright transcript service initialized.", flush=True)
+    # Qdrant async client
+    app.state.qdrant = AsyncQdrantClient(
+        url=QDRANT_URL,
+        port=QDRANT_PORT,
+        api_key=QDRANT_API_KEY if QDRANT_API_KEY else None,
+    )
+    qdrant_collections = await app.state.qdrant.get_collections()
+    print(f"Qdrant connected: {len(qdrant_collections.collections)} collections", flush=True)
+    # Neo4j async driver
+    app.state.neo4j_driver = AsyncGraphDatabase.driver(
+        NEO4J_URI,
+        auth=(NEO4J_USERNAME, NEO4J_PASSWORD) if NEO4J_PASSWORD else None,
+    )
+    await app.state.neo4j_driver.verify_connectivity()
+    print(f"Neo4j connected: {NEO4J_URI}", flush=True)
     app.state.config = {
         "configurable": {"thread_id": "1"}
     }
@@ -101,6 +128,10 @@ async def lifespan(app: FastAPI):
         print("FastAPI shutting down...", flush = True)
         await close_transcript_service()
         print("Playwright transcript service closed.", flush=True)
+        await app.state.qdrant.close()
+        print("Qdrant connection closed.", flush=True)
+        await app.state.neo4j_driver.close()
+        print("Neo4j connection closed.", flush=True)
         await app.state.es.close()
         print("ElasticSearch connection closed.", flush=True)
         await app.state.redis_aio.close()

@@ -25,6 +25,11 @@ neo4j:
   uri: "bolt://neo4j.YOUR_TAILNET_DOMAIN.ts.net:7687"
   # Credentials loaded from secret (NEO4J_USERNAME, NEO4J_PASSWORD)
 
+qdrant:
+  # External access via Tailscale HTTPS (port 443 only, 6333/6334 not exposed)
+  url: "https://qdrant.YOUR_TAILNET_DOMAIN.ts.net"
+  port: 443
+
 elasticsearch:
   # External access via Tailscale (WireGuard encrypted)
   host: "https://elasticsearch.YOUR_TAILNET_DOMAIN.ts.net"
@@ -75,6 +80,8 @@ secretMappings:
     key: sambanova-api-key
   - envName: ELASTICSEARCH_PASSWORD
     key: elasticsearch-password
+  - envName: QDRANT_API_KEY
+    key: qdrant-api-key
   - envName: WARP_PROXY_USER
     key: warp-proxy-user
   - envName: WARP_PROXY_PASS

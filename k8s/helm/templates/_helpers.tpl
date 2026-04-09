@@ -21,6 +21,8 @@ MINIO_HOST: "{{ .Values.minio.host }}"
 MINIO_PORT: "{{ .Values.minio.port }}"
 MINIO_ENDPOINT: "{{ .Values.minio.endpoint }}"
 NEO4J_URI: "{{ .Values.neo4j.uri }}"
+QDRANT_URL: "{{ .Values.qdrant.url }}"
+QDRANT_PORT: "{{ .Values.qdrant.port }}"
 ELASTICSEARCH_HOST: "{{ .Values.elasticsearch.host }}"
 ELASTICSEARCH_USERNAME: "{{ .Values.elasticsearch.username }}"
 # Proxy configuration (WARP host/port, Tor host/port)
@@ -186,6 +188,26 @@ Selector labels
 app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+
+{{/*
+Service ports settings - ClusterIP for local (Skaffold), full portsSettings for production (ArgoCD)
+Usage: {{ include "coelhonexus.ServicePortsSettings" (dict "appName" "fastapi" "root" .) }}
+*/}}
+{{- define "coelhonexus.ServicePortsSettings" -}}
+{{- if eq .root.Values.environment "local" }}
+  type: ClusterIP
+  ports:
+    {{- range (index .root.Values .appName "portsSettings" "ports") }}
+    - name: {{ .name }}
+      port: {{ .port }}
+      targetPort: {{ .targetPort }}
+      protocol: {{ .protocol }}
+    {{- end }}
+{{- else }}
+  {{- toYaml (index .root.Values .appName "portsSettings") | nindent 2 }}
+{{- end }}
+{{- end -}}
 
 
 {{/*

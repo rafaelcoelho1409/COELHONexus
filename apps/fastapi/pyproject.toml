@@ -17,9 +17,12 @@ dependencies = [
     "langchain-ollama",        # Ollama (local)
     "langchain-huggingface",   # HuggingFace embeddings
     "langchain-neo4j",         # Neo4j graph database
+    "langchain-qdrant",        # Qdrant vector store
     "langchain-experimental",  # LLMGraphTransformer
+    "langchain-text-splitters", # Text chunking
     "langgraph-checkpoint-redis",
     "sentence-transformers",   # Local embeddings
+    "qdrant-client",           # Qdrant vector database client
     "neo4j",
     "redis",
     "yt-dlp",                  # YouTube metadata extraction (subprocess)
