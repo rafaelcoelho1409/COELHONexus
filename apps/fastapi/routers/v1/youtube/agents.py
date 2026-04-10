@@ -129,7 +129,7 @@ async def rag_search_stream(body: RAGSearchRequest, request: Request):
             "thread_id": body.thread_id,
             "max_retries": body.max_retries,
         },
-        "recursion_limit": (body.max_retries + 1) * 4,
+        "recursion_limit": (body.max_retries + 1) * 6,
     }
 
     async def event_generator():
@@ -301,6 +301,20 @@ async def graph_stats(request: Request):
 # =============================================================================
 # Helpers
 # =============================================================================
+def _ensure_embeddings(app):
+    """
+    Lazy-load embedding models on first use.
+    Avoids OOMKilled at startup when Playwright + embeddings exceed 4Gi.
+    Once loaded, cached on app.state for subsequent requests.
+    """
+    if app.state.dense_embeddings is None:
+        from services.embeddings import create_dense_embeddings, create_sparse_embeddings
+        app.state.dense_embeddings = create_dense_embeddings("bge-base")
+        app.state.sparse_embeddings = create_sparse_embeddings()
+        print("Embedding models lazy-loaded (bge-base ONNX + BM25 sparse)", flush = True)
+    return app.state.dense_embeddings
+
+
 def _build_graph(request: Request):
     """
     Build the LangGraph workflow from app state.
@@ -315,14 +329,18 @@ def _build_graph(request: Request):
     """
     app = request.app
     # ES retriever (always available)
-    es_retriever = ElasticsearchRetriever(app.state.es)
-    # Qdrant hybrid retriever (available after /ingest)
+    # top_k=5: with fallback chain (8 models × 40 RPM = ~320 RPM), no rate limit concern
+    es_retriever = ElasticsearchRetriever(app.state.es, top_k = 5)
+    # Qdrant hybrid retriever — lazy-load embeddings on first use
     qdrant_retriever = None
-    if hasattr(app.state, "dense_embeddings") and hasattr(app.state, "sparse_embeddings"):
+    dense = _ensure_embeddings(app)
+    sparse = app.state.sparse_embeddings
+    if dense and sparse:
         qdrant_retriever = QdrantHybridRetriever(
             qdrant = app.state.qdrant,
-            dense_embeddings = app.state.dense_embeddings,
-            sparse_embeddings = app.state.sparse_embeddings,
+            dense_embeddings = dense,
+            sparse_embeddings = sparse,
+            top_k = 5,
         )
     # Neo4j graph retriever (available after /ingest/graph)
     neo4j_retriever = None

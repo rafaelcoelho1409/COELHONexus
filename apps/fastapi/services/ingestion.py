@@ -197,12 +197,18 @@ async def ingest_to_qdrant(
             "points_upserted": 0,
             "collection_created": collection_created,
         }
-    # 6. Generate embeddings (dense + sparse)
+    # 6. Generate embeddings (dense + sparse) in small batches
+    # ONNX Runtime allocates large temp buffers during inference.
+    # Processing all chunks at once spikes memory and triggers OOMKill.
+    # Batching in groups of 8 keeps peak memory manageable.
     texts = [doc.page_content for doc in all_chunks]
-    # Dense embeddings (batch)
-    dense_vectors = dense_embeddings.embed_documents(texts)
-    # Sparse embeddings (batch)
-    sparse_vectors = list(sparse_embeddings.embed_documents(texts))
+    EMBED_BATCH = 8
+    dense_vectors = []
+    sparse_vectors = []
+    for i in range(0, len(texts), EMBED_BATCH):
+        batch = texts[i:i + EMBED_BATCH]
+        dense_vectors.extend(dense_embeddings.embed_documents(batch))
+        sparse_vectors.extend(sparse_embeddings.embed_documents(batch))
     # 7. Build Qdrant points and upsert in batches
     BATCH_SIZE = 100
     total_upserted = 0
@@ -222,8 +228,8 @@ async def ingest_to_qdrant(
                 vector = {
                     "dense": dense_vectors[i],
                     "sparse": models.SparseVector(
-                        indices = sparse_vec.indices.tolist(),
-                        values = sparse_vec.values.tolist(),
+                        indices = sparse_vec.indices,
+                        values = sparse_vec.values,
                     ),
                 },
                 payload = {

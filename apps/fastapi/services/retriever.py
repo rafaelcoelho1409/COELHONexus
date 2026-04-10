@@ -20,7 +20,7 @@ import asyncio
 from elasticsearch import AsyncElasticsearch
 from qdrant_client import AsyncQdrantClient
 from langchain_core.documents import Document
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
 from langchain_qdrant import FastEmbedSparse
 from langchain_neo4j import Neo4jGraph
 from langchain_openai import ChatOpenAI
@@ -119,7 +119,7 @@ class QdrantHybridRetriever:
     def __init__(
         self,
         qdrant: AsyncQdrantClient,
-        dense_embeddings: HuggingFaceEmbeddings,
+        dense_embeddings: FastEmbedEmbeddings,
         sparse_embeddings: FastEmbedSparse,
         top_k: int = 10,
     ):
@@ -161,8 +161,8 @@ class QdrantHybridRetriever:
         if sparse_vector is not None:
             prefetch.append(Prefetch(
                 query = models.SparseVector(
-                    indices = sparse_vector.indices.tolist(),
-                    values = sparse_vector.values.tolist(),
+                    indices = sparse_vector.indices,
+                    values = sparse_vector.values,
                 ),
                 using = "sparse",
                 limit = self.top_k * 2,
@@ -258,7 +258,7 @@ class Neo4jRetriever:
             ),
             ("human", "{query}"),
         ])
-        chain = prompt | self.llm.with_structured_output(ExtractedEntities)
+        chain = prompt | self.llm.with_structured_output(ExtractedEntities, method = "function_calling")
         try:
             result = await chain.ainvoke({"query": query})
             return result.entities

@@ -109,8 +109,8 @@ fastapi:
       memory: "2Gi"
       cpu: "500m"
     limits:
-      memory: "4Gi"
-      cpu: "1000m"
+      memory: "8Gi"
+      cpu: "2000m"
   portsSettings:
     ports:
       - name: http

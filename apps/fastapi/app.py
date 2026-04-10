@@ -89,12 +89,13 @@ async def lifespan(app: FastAPI):
     )
     await app.state.neo4j_driver.verify_connectivity()
     print(f"Neo4j connected: {NEO4J_URI}", flush=True)
-    # Embedding models for Qdrant hybrid search (dense + sparse)
-    # Loaded once at startup — models are cached after first download
-    from services.embeddings import create_dense_embeddings, create_sparse_embeddings
-    app.state.dense_embeddings = create_dense_embeddings("bge-base")
-    app.state.sparse_embeddings = create_sparse_embeddings()
-    print("Embedding models loaded (bge-base dense + BM25 sparse)", flush=True)
+    # Embedding models: LAZY-LOADED on first use (not at startup)
+    # Loading bge-base (~430MB) + BM25 sparse at startup caused OOMKilled (4Gi limit)
+    # with Playwright browser pool (5 contexts) already in memory.
+    # Models are loaded on first /ingest or /search call instead.
+    app.state.dense_embeddings = None
+    app.state.sparse_embeddings = None
+    print("Embedding models will lazy-load on first use.", flush=True)
     # Neo4j LangChain graph (for LLMGraphTransformer and Cypher queries)
     # This is separate from neo4j_driver — Neo4jGraph wraps it with LangChain integration
     from langchain_neo4j import Neo4jGraph
@@ -107,32 +108,63 @@ async def lifespan(app: FastAPI):
     app.state.config = {
         "configurable": {"thread_id": "1"}
     }
-    app.state.llm_framework = {
-        "NVIDIA": ChatOpenAI,
-    }
-    # Load LLM config from Redis or use defaults
-    config_key = "coelhonexus:youtube:agents:config"
-    llm_config = await app.state.redis_aio.json().get(config_key)
-    if llm_config:
-        # Config exists - use it to instantiate LLM
-        provider = llm_config["provider"]
-        llm_class = app.state.llm_framework[provider]
-        app.state.llm = llm_class(
-            model = llm_config["model"],
-            temperature = llm_config["temperature"],
-            base_url = llm_config["base_url"],
-            api_key = llm_config["api_key"],
-        )
-        print(f"LLM loaded from Redis: {provider}/{llm_config['model']}", flush=True)
-    else:
-        # No config - use default
-        app.state.llm = ChatOpenAI(
-            model = "meta/llama-3.3-70b-instruct",
+    # =========================================================================
+    # LLM with Fallbacks — Priority-based model chain (April 2026)
+    # =========================================================================
+    # CONCEPT: with_fallbacks() tries models in order. If model #1 returns
+    # 429 (rate limit) or times out, it immediately tries model #2, etc.
+    # Each model on NVIDIA NIM has its own ~40 RPM budget (per-model limits),
+    # so rotating across 14 models gives ~560 RPM effective throughput.
+    #
+    # max_retries=0: fail immediately on 429 (don't waste time retrying)
+    # timeout=60: don't hang on slow models
+    #
+    # Ranked by Chatbot Arena ELO + benchmarks (April 2026):
+    #  1. GLM5              — Arena 1451, SWE-bench 77.8%, GPQA 86.0 (best open-source)
+    #  2. Kimi K2.5         — Arena 1447, HumanEval 99.0, MMLU 92.0 (multimodal)
+    #  3. Kimi K2           — Arena 1447, AIME 96.1 (text-only, same quality)
+    #  4. Kimi K2 Thinking  — Reasoning mode with chain-of-thought
+    #  5. DeepSeek V3.2     — Arena 1421, best MIT-licensed S-tier
+    #  6. Nemotron Super 120B — NVIDIA's largest open model
+    #  7. Qwen 3.5 122B     — MoE 122B (10B active), strong quality
+    #  8. Nemotron Super 49B — MATH 97.4, punches above weight
+    #  9. Mistral Small 4   — 119B MoE (6B active), fast + capable
+    # 10. Gemma 4 31B       — Google's latest, solid all-rounder
+    # 11. Llama 4 Maverick  — 17B×128E MoE, latest Meta
+    # 12. Llama 3.3 70B     — battle-tested baseline
+    # 13. Qwen3 Next 80B    — 80B MoE (3B active), ultra-efficient
+    # 14. Llama 3.1 8B      — fastest, last resort
+    #
+    # All 14 verified to support function calling (with_structured_output).
+    NVIDIA_URL = "https://integrate.api.nvidia.com/v1"
+    NVIDIA_KEY = os.environ.get("NVIDIA_API_KEY", "")
+    def _nim(model: str) -> ChatOpenAI:
+        return ChatOpenAI(
+            model = model,
             temperature = 0.0,
-            base_url = "https://integrate.api.nvidia.com/v1",
-            api_key = os.environ["NVIDIA_API_KEY"],
+            base_url = NVIDIA_URL,
+            api_key = NVIDIA_KEY,
+            max_retries = 0,
+            timeout = 60,
         )
-        print("LLM loaded with defaults (NVIDIA/llama-3.3-70b)", flush = True)
+    primary = _nim("z-ai/glm5")
+    fallbacks = [
+        _nim("moonshotai/kimi-k2.5"),
+        _nim("moonshotai/kimi-k2-instruct"),
+        _nim("moonshotai/kimi-k2-thinking"),
+        _nim("deepseek-ai/deepseek-v3.2"),
+        _nim("nvidia/nemotron-3-super-120b-a12b"),
+        _nim("qwen/qwen3.5-122b-a10b"),
+        _nim("nvidia/llama-3.3-nemotron-super-49b-v1.5"),
+        _nim("mistralai/mistral-small-4-119b-2603"),
+        _nim("google/gemma-4-31b-it"),
+        _nim("meta/llama-4-maverick-17b-128e-instruct"),
+        _nim("meta/llama-3.3-70b-instruct"),
+        _nim("qwen/qwen3-next-80b-a3b-instruct"),
+        _nim("meta/llama-3.1-8b-instruct"),
+    ]
+    app.state.llm = primary.with_fallbacks(fallbacks)
+    print(f"LLM loaded: {primary.model_name} + {len(fallbacks)} fallbacks (NVIDIA NIM)", flush = True)
     # Async Redis checkpointer - yield INSIDE context manager!
     async with AsyncRedisSaver.from_conn_string(REDIS_URL) as checkpointer:
         await checkpointer.setup()

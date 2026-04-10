@@ -22,10 +22,10 @@ ENV PATH="/usr/local/bin:$PATH"
 # Copy dependency files first (for layer caching)
 COPY pyproject.toml ./
 
-# Install dependencies with CPU-only PyTorch
+# Install dependencies (no PyTorch — embeddings use ONNX via FastEmbed)
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv lock && \
-    uv sync --frozen --no-install-project --no-dev --extra cpu
+    uv sync --frozen --no-install-project --no-dev
 
 # Copy application code
 COPY . /app

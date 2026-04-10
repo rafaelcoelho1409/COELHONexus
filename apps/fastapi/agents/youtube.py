@@ -25,6 +25,7 @@ Graph:
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, END
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 
@@ -166,7 +167,7 @@ async def check_hallucination(state: YouTubeRAGState, llm: ChatOpenAI) -> dict:
         doc_texts.append(doc.page_content[:1000])
     documents_str = "\n---\n".join(doc_texts)
 
-    chain = HALLUCINATION_PROMPT | llm.with_structured_output(HallucinationCheck)
+    chain = HALLUCINATION_PROMPT | llm.with_structured_output(HallucinationCheck, method = "function_calling")
     try:
         result: HallucinationCheck = await chain.ainvoke({
             "question": state["question"],
@@ -226,7 +227,7 @@ async def rewrite_query(state: YouTubeRAGState, llm: ChatOpenAI) -> dict:
 # =============================================================================
 # Conditional Edges
 # =============================================================================
-def decide_after_grading(state: YouTubeRAGState, config: dict) -> str:
+def decide_after_grading(state: YouTubeRAGState, config: RunnableConfig) -> str:
     """Route after document grading: generate, rewrite, or end."""
     if state["documents"]:
         return "generate"
@@ -236,7 +237,7 @@ def decide_after_grading(state: YouTubeRAGState, config: dict) -> str:
     return "end"
 
 
-def decide_after_hallucination_check(state: YouTubeRAGState, config: dict) -> str:
+def decide_after_hallucination_check(state: YouTubeRAGState, config: RunnableConfig) -> str:
     """
     Route after hallucination check: accept or retry.
 
@@ -275,13 +276,34 @@ def build_youtube_rag_graph(
     - format_citations: extracts structured citations for the response
     """
     workflow = StateGraph(YouTubeRAGState)
-    # Register all nodes
-    workflow.add_node("retrieve", lambda state: retrieve(state, retriever))
-    workflow.add_node("grade_documents", lambda state: grade_documents(state, grader))
-    workflow.add_node("generate", lambda state: generate(state, llm))
-    workflow.add_node("check_hallucination", lambda state: check_hallucination(state, llm))
+
+    # Register nodes as async closures.
+    # CONCEPT: LangGraph inspects whether a node function is async via
+    # asyncio.iscoroutinefunction(). sync lambdas returning coroutines
+    # and functools.partial both fail this check. Defining proper async
+    # inner functions is the only reliable way to bind dependencies
+    # while preserving the async signature LangGraph requires.
+    async def _retrieve(state):
+        return await retrieve(state, retriever)
+
+    async def _grade(state):
+        return await grade_documents(state, grader)
+
+    async def _generate(state):
+        return await generate(state, llm)
+
+    async def _check_hallucination(state):
+        return await check_hallucination(state, llm)
+
+    async def _rewrite(state):
+        return await rewrite_query(state, llm)
+
+    workflow.add_node("retrieve", _retrieve)
+    workflow.add_node("grade_documents", _grade)
+    workflow.add_node("generate", _generate)
+    workflow.add_node("check_hallucination", _check_hallucination)
     workflow.add_node("format_citations", format_citations)
-    workflow.add_node("rewrite_query", lambda state: rewrite_query(state, llm))
+    workflow.add_node("rewrite_query", _rewrite)
     # Entry point
     workflow.set_entry_point("retrieve")
     # Edges
@@ -311,4 +333,7 @@ def build_youtube_rag_graph(
     workflow.add_edge("format_citations", END)
     # After rewriting: retry retrieval (the cycle)
     workflow.add_edge("rewrite_query", "retrieve")
-    return workflow.compile(checkpointer = checkpointer)
+    # Compile without checkpointer for now — AsyncRedisSaver causes deadlock
+    # when called from endpoint handlers within the lifespan async-with block.
+    # TODO: fix by initializing checkpointer outside the context manager
+    return workflow.compile()

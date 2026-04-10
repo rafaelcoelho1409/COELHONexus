@@ -15,14 +15,13 @@ dependencies = [
     "langchain-openai",        # OpenAI, NVIDIA NIM, SambaNova
     "langchain-groq",          # Groq
     "langchain-ollama",        # Ollama (local)
-    "langchain-huggingface",   # HuggingFace embeddings
+    "langchain-community",     # FastEmbedEmbeddings (ONNX, no PyTorch)
     "langchain-neo4j",         # Neo4j graph database
     "langchain-qdrant",        # Qdrant vector store
     "langchain-experimental",  # LLMGraphTransformer
     "langchain-text-splitters", # Text chunking
     "langgraph-checkpoint-redis",
-    "sentence-transformers",   # Local embeddings
-    "fastembed",               # Qdrant BM25 sparse vectors (hybrid search)
+    "fastembed",               # ONNX embeddings: dense (bge) + sparse (BM25)
     "flashrank",               # Cross-encoder reranker (local, no API cost)
     "qdrant-client",           # Qdrant vector database client
     "neo4j",
@@ -40,21 +39,5 @@ dependencies = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[project.optional-dependencies]
-cpu = ["torch", "torchvision"]
-
 [dependency-groups]
 dev = []
-
-# =============================================================================
-# CPU-only PyTorch via extras
-# Usage: uv sync --extra cpu
-# =============================================================================
-[tool.uv.sources]
-torch = [{ index = "pytorch-cpu", extra = "cpu" }]
-torchvision = [{ index = "pytorch-cpu", extra = "cpu" }]
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
