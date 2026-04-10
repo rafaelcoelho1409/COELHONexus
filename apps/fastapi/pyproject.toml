@@ -22,6 +22,8 @@ dependencies = [
     "langchain-text-splitters", # Text chunking
     "langgraph-checkpoint-redis",
     "sentence-transformers",   # Local embeddings
+    "fastembed",               # Qdrant BM25 sparse vectors (hybrid search)
+    "flashrank",               # Cross-encoder reranker (local, no API cost)
     "qdrant-client",           # Qdrant vector database client
     "neo4j",
     "redis",

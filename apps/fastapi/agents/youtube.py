@@ -8,24 +8,27 @@ CONCEPT: StateGraph is the core of LangGraph 1.1.
 - compile() turns the graph into an executable with optional checkpointer
 - ainvoke() runs the graph; astream() streams node-by-node updates
 
-The agentic loop:
+The agentic loop (Phase 4 — full production graph):
   1. RETRIEVE: search for documents matching the query
   2. GRADE: LLM evaluates each document for relevance
   3. If good docs exist → GENERATE answer with citations
-  4. If no good docs → REWRITE query and retry (up to max_retries)
+  4. If no good docs → REWRITE query and retry
+  5. CHECK HALLUCINATION: verify answer is grounded in documents
+  6. If grounded → FORMAT CITATIONS → END
+  7. If not grounded → REWRITE and retry
 
-IMPORTANT LangGraph 1.1 notes:
-- recursion_limit goes in ainvoke(config={"recursion_limit": N}), NOT in compile()
-- compile(checkpointer=...) enables conversation persistence
-- astream(version="v2") gives type-safe streaming chunks
+Graph:
+  retrieve → grade → [generate | rewrite → retrieve]
+                       ↓
+                  check_hallucination → [format_citations → END | rewrite → retrieve]
 """
+from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, END
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 
 from schemas.state import YouTubeRAGState
-from services.retriever import ElasticsearchRetriever
 from services.grader import DocumentGrader
 
 
@@ -63,26 +66,62 @@ REWRITE_PROMPT = ChatPromptTemplate.from_messages([
     ),
 ])
 
+HALLUCINATION_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are a hallucination detector. Given an answer and the source documents it was "
+        "generated from, determine:\n"
+        "1. Is the answer GROUNDED in the documents? (no fabricated facts)\n"
+        "2. Does the answer ADDRESS the original question?\n"
+        "Be strict. If the answer contains ANY claim not supported by the documents, "
+        "mark it as not grounded.",
+    ),
+    (
+        "human",
+        "Question: {question}\n\n"
+        "Answer: {generation}\n\n"
+        "Source documents:\n{documents}\n\n"
+        "Evaluate the answer.",
+    ),
+])
+
+
+# =============================================================================
+# Structured Output Models for Phase 4
+# =============================================================================
+class HallucinationCheck(BaseModel):
+    """Result of hallucination detection."""
+    grounded: bool = Field(
+        description = "True if ALL claims in the answer are supported by the source documents"
+    )
+    addresses_question: bool = Field(
+        description = "True if the answer actually addresses the original question"
+    )
+    reason: str = Field(
+        description = "Brief explanation of the assessment"
+    )
+
 
 # =============================================================================
 # Graph Node Functions
 # =============================================================================
-async def retrieve(state: YouTubeRAGState, retriever: ElasticsearchRetriever) -> dict:
+async def retrieve(state: YouTubeRAGState, retriever) -> dict:
     """
     RETRIEVE node: search for documents matching the query.
-    Uses search_query (which may have been rewritten) instead of original question.
+    Also tracks which retrieval sources contributed results.
     """
     query = state.get("search_query") or state["question"]
-    documents = await retriever.retrieve(query)
-    return {"documents": documents}
+    try:
+        documents = await retriever.retrieve(query)
+    except Exception:
+        documents = []
+    # Track which sources contributed
+    sources = list({doc.metadata.get("source", "unknown") for doc in documents})
+    return {"documents": documents, "retrieval_sources": sources}
 
 
 async def grade_documents(state: YouTubeRAGState, grader: DocumentGrader) -> dict:
-    """
-    GRADE node: LLM evaluates each document for relevance.
-    Filters out irrelevant documents. The conditional edge after this node
-    checks if any relevant documents remain.
-    """
+    """GRADE node: LLM evaluates each document for relevance in PARALLEL."""
     relevant_docs = await grader.grade_documents(
         state["question"],
         state["documents"],
@@ -91,100 +130,163 @@ async def grade_documents(state: YouTubeRAGState, grader: DocumentGrader) -> dic
 
 
 async def generate(state: YouTubeRAGState, llm: ChatOpenAI) -> dict:
-    """
-    GENERATE node: produce an answer using relevant documents.
-    Formats documents as context and asks the LLM to answer with citations.
-    """
-    # Format documents as context
+    """GENERATE node: produce an answer using relevant documents."""
     context_parts = []
     for doc in state["documents"]:
         meta = doc.metadata
         header = f"[Video: {meta.get('title', 'Unknown')}] ({meta.get('webpage_url', '')})"
         context_parts.append(f"{header}\n{doc.page_content}")
     context = "\n\n---\n\n".join(context_parts)
-
-    # Generate answer
     chain = GENERATE_PROMPT | llm
-    response = await chain.ainvoke({
-        "question": state["question"],
-        "context": context,
-    })
-    return {"generation": response.content}
+    try:
+        response = await chain.ainvoke({
+            "question": state["question"],
+            "context": context,
+        })
+        return {"generation": response.content}
+    except Exception as e:
+        return {"generation": f"Error generating answer: {e}"}
+
+
+async def check_hallucination(state: YouTubeRAGState, llm: ChatOpenAI) -> dict:
+    """
+    CHECK HALLUCINATION node (Phase 4): verify the generation is grounded.
+
+    CONCEPT: LLM-as-judge for factual grounding. The LLM compares the
+    generated answer against the source documents and checks:
+    1. Are all claims supported by the documents? (grounded)
+    2. Does the answer actually address the question? (addresses_question)
+
+    If either check fails, the conditional edge routes to rewrite_query
+    for another retrieval attempt with different terms.
+    """
+    # Format source documents for the check
+    doc_texts = []
+    for doc in state["documents"]:
+        doc_texts.append(doc.page_content[:1000])
+    documents_str = "\n---\n".join(doc_texts)
+
+    chain = HALLUCINATION_PROMPT | llm.with_structured_output(HallucinationCheck)
+    try:
+        result: HallucinationCheck = await chain.ainvoke({
+            "question": state["question"],
+            "generation": state["generation"],
+            "documents": documents_str,
+        })
+        return {
+            "grounded": result.grounded and result.addresses_question,
+        }
+    except Exception:
+        # If check fails, assume grounded to avoid blocking
+        return {"grounded": True}
+
+
+async def format_citations(state: YouTubeRAGState) -> dict:
+    """
+    FORMAT CITATIONS node (Phase 4): extract structured citations from documents.
+
+    CONCEPT: Citations let the user verify the answer by clicking through
+    to the source video. Each citation includes the video title and URL.
+    Deduplicated by video_id to avoid repeating the same source.
+    """
+    seen_videos = set()
+    citations = []
+    for doc in state["documents"]:
+        meta = doc.metadata
+        video_id = meta.get("video_id", "")
+        if video_id and video_id not in seen_videos:
+            seen_videos.add(video_id)
+            citations.append({
+                "video_id": video_id,
+                "title": meta.get("title", ""),
+                "channel": meta.get("channel", ""),
+                "url": meta.get("webpage_url", ""),
+                "source": meta.get("source", ""),
+            })
+    return {"citations": citations}
 
 
 async def rewrite_query(state: YouTubeRAGState, llm: ChatOpenAI) -> dict:
-    """
-    REWRITE node: expand/rephrase the query for better retrieval.
-    Increments retry_count. The retrieve node will use the new search_query.
-    """
+    """REWRITE node: expand/rephrase the query for better retrieval."""
     chain = REWRITE_PROMPT | llm
-    response = await chain.ainvoke({
-        "question": state["question"],
-        "search_query": state.get("search_query") or state["question"],
-    })
+    try:
+        response = await chain.ainvoke({
+            "question": state["question"],
+            "search_query": state.get("search_query") or state["question"],
+        })
+        new_query = response.content.strip()
+    except Exception:
+        new_query = f"{state['question']} (expanded)"
     return {
-        "search_query": response.content.strip(),
+        "search_query": new_query,
         "retry_count": state.get("retry_count", 0) + 1,
     }
 
 
 # =============================================================================
-# Conditional Edge: decide what to do after grading
+# Conditional Edges
 # =============================================================================
-def decide_after_grading(state: YouTubeRAGState) -> str:
-    """
-    CONCEPT: Conditional edges inspect the state and return a string key
-    that maps to the next node. This is how LangGraph implements branching.
-    """
+def decide_after_grading(state: YouTubeRAGState, config: dict) -> str:
+    """Route after document grading: generate, rewrite, or end."""
     if state["documents"]:
         return "generate"
-    # No relevant docs — check retry budget
-    max_retries = state.get("_max_retries", 3)
+    max_retries = config.get("configurable", {}).get("max_retries", 3)
     if state.get("retry_count", 0) < max_retries:
         return "rewrite"
     return "end"
+
+
+def decide_after_hallucination_check(state: YouTubeRAGState, config: dict) -> str:
+    """
+    Route after hallucination check: accept or retry.
+
+    CONCEPT: If the answer isn't grounded, we rewrite and try again.
+    But only if we haven't exhausted retries — prevents infinite loops
+    where the LLM keeps generating hallucinated answers.
+    """
+    if state.get("grounded", False):
+        return "format_citations"
+    max_retries = config.get("configurable", {}).get("max_retries", 3)
+    if state.get("retry_count", 0) < max_retries:
+        return "rewrite"
+    # Exhausted retries — accept what we have
+    return "format_citations"
 
 
 # =============================================================================
 # Build the Graph
 # =============================================================================
 def build_youtube_rag_graph(
-    retriever: ElasticsearchRetriever,
+    retriever,
     grader: DocumentGrader,
     llm: ChatOpenAI,
     checkpointer: AsyncRedisSaver,
 ):
     """
-    Build and compile the LangGraph agentic RAG workflow.
+    Build and compile the full production LangGraph workflow.
 
-    CONCEPT: StateGraph lifecycle:
-    1. StateGraph(schema) — define the state type
-    2. add_node("name", func) — register processing functions
-    3. set_entry_point("name") — where execution starts
-    4. add_edge("from", "to") — unconditional transitions
-    5. add_conditional_edges("from", func, mapping) — branching
-    6. compile(checkpointer=...) — produce executable graph
+    Phase 4 graph structure:
+      retrieve → grade → [generate | rewrite → retrieve]
+                           ↓
+                      check_hallucination → [format_citations → END | rewrite → retrieve]
 
-    The checkpointer enables:
-    - Conversation persistence (same thread_id resumes from last state)
-    - Crash recovery (interrupted runs can be resumed)
-    - State inspection for debugging
+    New nodes vs Phase 1-3:
+    - check_hallucination: LLM verifies answer is grounded in documents
+    - format_citations: extracts structured citations for the response
     """
     workflow = StateGraph(YouTubeRAGState)
-
-    # Add nodes — each wraps the service dependencies via closures
+    # Register all nodes
     workflow.add_node("retrieve", lambda state: retrieve(state, retriever))
     workflow.add_node("grade_documents", lambda state: grade_documents(state, grader))
     workflow.add_node("generate", lambda state: generate(state, llm))
+    workflow.add_node("check_hallucination", lambda state: check_hallucination(state, llm))
+    workflow.add_node("format_citations", format_citations)
     workflow.add_node("rewrite_query", lambda state: rewrite_query(state, llm))
-
-    # Set entry point
+    # Entry point
     workflow.set_entry_point("retrieve")
-
     # Edges
     workflow.add_edge("retrieve", "grade_documents")
-
-    # Conditional edge after grading: generate, rewrite, or end
+    # After grading: generate, rewrite, or end
     workflow.add_conditional_edges(
         "grade_documents",
         decide_after_grading,
@@ -194,12 +296,19 @@ def build_youtube_rag_graph(
             "end": END,
         },
     )
-
-    # After rewriting, retry retrieval (this creates the cycle)
+    # After generating: check hallucination
+    workflow.add_edge("generate", "check_hallucination")
+    # After hallucination check: accept (format citations) or rewrite
+    workflow.add_conditional_edges(
+        "check_hallucination",
+        decide_after_hallucination_check,
+        {
+            "format_citations": "format_citations",
+            "rewrite": "rewrite_query",
+        },
+    )
+    # After formatting citations: done
+    workflow.add_edge("format_citations", END)
+    # After rewriting: retry retrieval (the cycle)
     workflow.add_edge("rewrite_query", "retrieve")
-
-    # After generating, we're done
-    workflow.add_edge("generate", END)
-
-    # Compile with checkpointer for persistence
-    return workflow.compile(checkpointer=checkpointer)
+    return workflow.compile(checkpointer = checkpointer)

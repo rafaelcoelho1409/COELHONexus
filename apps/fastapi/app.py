@@ -89,6 +89,21 @@ async def lifespan(app: FastAPI):
     )
     await app.state.neo4j_driver.verify_connectivity()
     print(f"Neo4j connected: {NEO4J_URI}", flush=True)
+    # Embedding models for Qdrant hybrid search (dense + sparse)
+    # Loaded once at startup — models are cached after first download
+    from services.embeddings import create_dense_embeddings, create_sparse_embeddings
+    app.state.dense_embeddings = create_dense_embeddings("bge-base")
+    app.state.sparse_embeddings = create_sparse_embeddings()
+    print("Embedding models loaded (bge-base dense + BM25 sparse)", flush=True)
+    # Neo4j LangChain graph (for LLMGraphTransformer and Cypher queries)
+    # This is separate from neo4j_driver — Neo4jGraph wraps it with LangChain integration
+    from langchain_neo4j import Neo4jGraph
+    app.state.neo4j_graph = Neo4jGraph(
+        url = NEO4J_URI,
+        username = NEO4J_USERNAME,
+        password = NEO4J_PASSWORD,
+    )
+    print("Neo4j LangChain graph initialized.", flush=True)
     app.state.config = {
         "configurable": {"thread_id": "1"}
     }
