@@ -11,6 +11,7 @@ from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 
 from routers.v1.youtube import agents as youtube_agents
 from routers.v1.youtube import content as youtube_content
+from routers.v1 import tasks as tasks_router
 from routers.v1.youtube.helpers import (
     create_youtube_indexes,
     init_transcript_service,
@@ -218,6 +219,12 @@ app.include_router(
     youtube_content.router,
     prefix = "/api/v1/youtube/content",
     tags = ["YouTube"],
+)
+
+app.include_router(
+    tasks_router.router,
+    prefix = "/api/v1/tasks",
+    tags = ["Tasks"],
 )
 
 

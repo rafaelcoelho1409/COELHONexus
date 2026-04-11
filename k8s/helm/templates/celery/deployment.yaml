@@ -1,0 +1,82 @@
+{{- if .Values.celery.enabled }}
+{{- $appName := "celery" -}}
+{{- $fastapi := index $.Values "fastapi" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coelhonexus-celery-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion }}
+    app.kubernetes.io/component: celery-worker
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  replicas: {{ .Values.celery.replicas }}
+  selector:
+    matchLabels:
+      app: coelhonexus-celery-worker
+  template:
+    metadata:
+      labels:
+        app: coelhonexus-celery-worker
+    spec:
+      {{- if and (eq .Values.environment "production") (.Values.registry.imagePullSecret) }}
+      imagePullSecrets:
+        - name: {{ .Values.registry.imagePullSecret }}
+      {{- end }}
+      containers:
+        # Celery worker — same image as FastAPI, different entrypoint
+        - name: celery-worker
+          image: {{ $fastapi.image }}
+          imagePullPolicy: {{ $fastapi.imagePullPolicy }}
+          command:
+            - celery
+            - -A
+            - celery_app
+            - worker
+            - -Q
+            - {{ .Values.celery.queues }}
+            - -c
+            - "{{ .Values.celery.concurrency }}"
+            - --loglevel=info
+            - -n
+            - "worker@%h"
+          envFrom:
+            - configMapRef:
+                name: coelhonexus-fastapi-configmap
+          env:
+            {{- include "coelhonexus.secretEnvVars" . | nindent 12 }}
+          resources:
+            requests:
+              memory: {{ .Values.celery.resources.requests.memory }}
+              cpu: {{ .Values.celery.resources.requests.cpu }}
+            limits:
+              memory: {{ .Values.celery.resources.limits.memory }}
+              cpu: {{ .Values.celery.resources.limits.cpu }}
+        # Sidecar: PO Token provider (needed for crawler queue yt-dlp tasks)
+        - name: bgutil-pot
+          image: brainicism/bgutil-ytdlp-pot-provider:1.3.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 4416
+              protocol: TCP
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            tcpSocket:
+              port: 4416
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            tcpSocket:
+              port: 4416
+            initialDelaySeconds: 5
+            periodSeconds: 10
+{{- end }}

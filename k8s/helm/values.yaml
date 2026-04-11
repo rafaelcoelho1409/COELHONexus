@@ -145,6 +145,20 @@ fastapi:
       periodSeconds: 5
       failureThreshold: 3
 
+# Celery worker (background tasks — same image as FastAPI, different command)
+celery:
+  enabled: true
+  replicas: 1
+  concurrency: 3  # Number of concurrent tasks per worker
+  queues: "crawler,embedding,llm,default"
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "4Gi"
+      cpu: "2000m"
+
 # Web frontend (Go + Templ + HTMX + PWA)
 web:
   image: coelhocloud-registry:5000/coelhonexus-web:latest

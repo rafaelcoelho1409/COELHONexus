@@ -89,8 +89,8 @@ portForward:
 # NOTE: Ensure docker-buildx is installed when useBuildkit is true
 # Development (Skaffold): ports 23020-23039
 # sh mirror_localhost_tailscale.sh $(for i in {23020..23022}; do echo $i; done)
-# skaffold dev --cache-artifacts=false --no-prune=false --trigger=polling --watch-poll-interval=3000
-# --auto-build=false
+# skaffold dev --cache-artifacts=false --no-prune=false --auto-sync=false --auto-build=false
+# # press b (build) or s (sync) 
 
 #
 # Production (ArgoCD): ports 23000-23019

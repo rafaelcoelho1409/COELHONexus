@@ -1,24 +1,22 @@
 """
-Dual Ingestion Pipeline — ES Transcripts → Qdrant Hybrid Collection
+Streaming Ingestion Pipeline — ES Transcripts → Qdrant Hybrid Collection
 
-CONCEPT: This pipeline bridges your existing data (ES) with the new vector store (Qdrant).
-It reads transcripts from Elasticsearch, chunks them, generates both dense and sparse
-embeddings, and upserts to a Qdrant collection configured for hybrid search.
+CONCEPT: Process transcripts ONE AT A TIME in a streaming fashion.
+Never hold more than one transcript's worth of data in memory.
 
-Flow:
-  ES (transcriptions index) → Read transcripts
-    → Chunk (RecursiveCharacterTextSplitter)
-    → Embed (dense: bge-base + sparse: BM25)
-    → Upsert to Qdrant collection "youtube-transcripts"
+Old approach (OOM on 359 transcripts):
+  Load ALL transcripts → chunk ALL → embed ALL → upsert ALL
 
-The Qdrant collection stores BOTH vector types:
-- "dense": semantic embeddings from transformer model
-- "sparse": BM25 keyword embeddings from FastEmbed
+New approach (memory-safe for any dataset size):
+  For each transcript:
+    Fetch from ES → chunk → embed (batch of 8) → upsert → free memory → next
 
-This enables hybrid search: one Qdrant query returns results ranked by
-both semantic similarity AND keyword matching, with automatic score fusion.
+This uses constant memory regardless of dataset size.
+Qdrant's upsert is called per-transcript (5-10 points each), which is
+efficient enough — Qdrant handles small batches well.
 
-Phase 3 will extend this to also extract entities into Neo4j.
+ES scroll API is used to iterate through all transcripts without loading
+them all at once (default ES search only returns first 100).
 """
 import hashlib
 from elasticsearch import AsyncElasticsearch
@@ -47,14 +45,7 @@ QDRANT_COLLECTION = "youtube-transcripts"
 
 
 def _deterministic_id(video_id: str, chunk_index: int) -> str:
-    """
-    Generate a deterministic point ID for Qdrant.
-
-    CONCEPT: Using a hash of video_id + chunk_index means:
-    - Re-ingesting the same video overwrites existing points (idempotent)
-    - No duplicate points for the same content
-    - IDs are consistent across runs
-    """
+    """Deterministic point ID: hash of video_id + chunk_index (idempotent)."""
     raw = f"{video_id}_{chunk_index}"
     return hashlib.md5(raw.encode()).hexdigest()
 
@@ -63,15 +54,7 @@ async def ensure_collection(
     qdrant: AsyncQdrantClient,
     dense_dimensions: int,
 ) -> bool:
-    """
-    Create the Qdrant collection if it doesn't exist.
-
-    CONCEPT: A Qdrant collection needs vector configuration upfront:
-    - "dense": the semantic vector config (size, distance metric)
-    - "sparse": the BM25 sparse vector config (no fixed size — varies per doc)
-
-    Cosine distance is standard for normalized embeddings.
-    """
+    """Create the Qdrant collection if it doesn't exist."""
     collections = await qdrant.get_collections()
     existing = {c.name for c in collections.collections}
     if QDRANT_COLLECTION in existing:
@@ -93,30 +76,45 @@ async def ensure_collection(
     return True
 
 
-async def fetch_transcripts_from_es(
+async def _scroll_transcripts(
     es: AsyncElasticsearch,
     video_ids: list[str] | None = None,
-    batch_size: int = 100,
-) -> list[dict]:
+    batch_size: int = 50,
+):
     """
-    Fetch transcripts from ES. If video_ids is None, fetches all.
+    Async generator that yields transcripts from ES using scroll API.
 
-    Returns list of dicts with: video_id, content, lang, channel_id
+    CONCEPT: ES search only returns `size` results (default 100).
+    For 359+ transcripts, we need scroll API to paginate through all of them.
+    This generator yields batches of transcripts without loading all into memory.
     """
     if video_ids:
         query = {"terms": {"video_id": video_ids}}
     else:
         query = {"match_all": {}}
-    results = []
-    # Use search with scroll for large result sets
+
+    # Initial search with scroll
     response = await es.search(
         index = ES_INDEX_TRANSCRIPTIONS,
         query = query,
         size = batch_size,
+        scroll = "5m",
         _source = ["video_id", "content", "lang", "channel_id"],
     )
-    results.extend([h["_source"] for h in response["hits"]["hits"]])
-    return results
+    scroll_id = response.get("_scroll_id")
+    hits = response["hits"]["hits"]
+
+    while hits:
+        for hit in hits:
+            yield hit["_source"]
+        # Fetch next page
+        response = await es.scroll(scroll_id = scroll_id, scroll = "5m")
+        scroll_id = response.get("_scroll_id")
+        hits = response["hits"]["hits"]
+
+    # Clean up scroll context
+    if scroll_id:
+        await es.clear_scroll(scroll_id = scroll_id)
 
 
 async def fetch_metadata_from_es(
@@ -135,6 +133,19 @@ async def fetch_metadata_from_es(
     return {h["_id"]: h["_source"] for h in response["hits"]["hits"]}
 
 
+# Keep this for graph_builder imports
+async def fetch_transcripts_from_es(
+    es: AsyncElasticsearch,
+    video_ids: list[str] | None = None,
+    batch_size: int = 100,
+) -> list[dict]:
+    """Fetch transcripts from ES (non-streaming, for small batches)."""
+    results = []
+    async for transcript in _scroll_transcripts(es, video_ids, batch_size):
+        results.append(transcript)
+    return results
+
+
 async def ingest_to_qdrant(
     es: AsyncElasticsearch,
     qdrant: AsyncQdrantClient,
@@ -144,38 +155,50 @@ async def ingest_to_qdrant(
     chunk_overlap: int = 200,
 ) -> dict:
     """
-    Full ingestion pipeline: ES → Chunk → Embed → Qdrant.
+    Streaming ingestion pipeline: ES → Chunk → Embed → Qdrant.
 
-    CONCEPT: This is a batch pipeline, not a streaming one.
-    For production with thousands of videos, you'd run this as a background
-    task or Airflow DAG. For development, it runs synchronously per request.
+    CONCEPT: Processes ONE transcript at a time to keep memory constant.
+    For each transcript:
+      1. Fetch transcript text from ES (via scroll)
+      2. Fetch metadata for that video
+      3. Chunk the transcript (~5 chunks per video)
+      4. Embed chunks in batches of 8 (dense + sparse)
+      5. Upsert points to Qdrant
+      6. Free memory, move to next transcript
 
-    Returns stats: {total_transcripts, total_chunks, points_upserted, collection_created}
+    Memory usage: ~constant regardless of total transcripts.
+    For 359 transcripts × ~5 chunks each = ~1795 points total,
+    but only ~5-8 chunks are in memory at any time.
     """
-    # 1. Initialize embedding models
+    # 1. Initialize embedding models (lazy-loaded, cached after first call)
     dense_embeddings = create_dense_embeddings(embedding_model)
     sparse_embeddings = create_sparse_embeddings()
     dimensions = get_embedding_dimensions(embedding_model)
+
     # 2. Ensure Qdrant collection exists
     collection_created = await ensure_collection(qdrant, dimensions)
-    # 3. Fetch transcripts from ES
-    transcripts = await fetch_transcripts_from_es(es, video_ids)
-    if not transcripts:
-        return {
-            "total_transcripts": 0,
-            "total_chunks": 0,
-            "points_upserted": 0,
-            "collection_created": collection_created,
-        }
-    # 4. Fetch metadata for all videos
-    all_video_ids = list({t["video_id"] for t in transcripts})
-    metadata_map = await fetch_metadata_from_es(es, all_video_ids)
-    # 5. Chunk all transcripts
+
+    # 3. Stream transcripts and process one at a time
     chunker = create_chunker(chunk_size, chunk_overlap)
-    all_chunks: list[Document] = []
-    for transcript in transcripts:
+    total_transcripts = 0
+    total_chunks = 0
+    total_upserted = 0
+    EMBED_BATCH = 8
+
+    # Cache metadata to avoid re-fetching for same video
+    metadata_cache: dict = {}
+
+    async for transcript in _scroll_transcripts(es, video_ids):
         vid = transcript["video_id"]
-        meta = metadata_map.get(vid, {})
+        total_transcripts += 1
+
+        # Fetch metadata (cached per video)
+        if vid not in metadata_cache:
+            meta_map = await fetch_metadata_from_es(es, [vid])
+            metadata_cache[vid] = meta_map.get(vid, {})
+        meta = metadata_cache[vid]
+
+        # Chunk this transcript
         chunks = chunk_transcript(
             video_id = vid,
             content = transcript.get("content", ""),
@@ -189,42 +212,26 @@ async def ingest_to_qdrant(
             },
             chunker = chunker,
         )
-        all_chunks.extend(chunks)
-    if not all_chunks:
-        return {
-            "total_transcripts": len(transcripts),
-            "total_chunks": 0,
-            "points_upserted": 0,
-            "collection_created": collection_created,
-        }
-    # 6. Generate embeddings (dense + sparse) in small batches
-    # ONNX Runtime allocates large temp buffers during inference.
-    # Processing all chunks at once spikes memory and triggers OOMKill.
-    # Batching in groups of 8 keeps peak memory manageable.
-    texts = [doc.page_content for doc in all_chunks]
-    EMBED_BATCH = 8
-    dense_vectors = []
-    sparse_vectors = []
-    for i in range(0, len(texts), EMBED_BATCH):
-        batch = texts[i:i + EMBED_BATCH]
-        dense_vectors.extend(dense_embeddings.embed_documents(batch))
-        sparse_vectors.extend(sparse_embeddings.embed_documents(batch))
-    # 7. Build Qdrant points and upsert in batches
-    BATCH_SIZE = 100
-    total_upserted = 0
-    for batch_start in range(0, len(all_chunks), BATCH_SIZE):
-        batch_end = min(batch_start + BATCH_SIZE, len(all_chunks))
+        if not chunks:
+            continue
+
+        total_chunks += len(chunks)
+
+        # Embed in batches of EMBED_BATCH
+        texts = [doc.page_content for doc in chunks]
+        dense_vectors = []
+        sparse_vectors = []
+        for i in range(0, len(texts), EMBED_BATCH):
+            batch = texts[i:i + EMBED_BATCH]
+            dense_vectors.extend(dense_embeddings.embed_documents(batch))
+            sparse_vectors.extend(sparse_embeddings.embed_documents(batch))
+
+        # Build points and upsert
         points = []
-        for i in range(batch_start, batch_end):
-            doc = all_chunks[i]
-            point_id = _deterministic_id(
-                doc.metadata["video_id"],
-                doc.metadata["chunk_index"],
-            )
-            # Build sparse vector from FastEmbed output
+        for i, doc in enumerate(chunks):
             sparse_vec = sparse_vectors[i]
             points.append(PointStruct(
-                id = point_id,
+                id = _deterministic_id(doc.metadata["video_id"], doc.metadata["chunk_index"]),
                 vector = {
                     "dense": dense_vectors[i],
                     "sparse": models.SparseVector(
@@ -245,14 +252,17 @@ async def ingest_to_qdrant(
                     "webpage_url": doc.metadata.get("webpage_url", ""),
                 },
             ))
-        await qdrant.upsert(
-            collection_name = QDRANT_COLLECTION,
-            points = points,
-        )
+
+        await qdrant.upsert(collection_name = QDRANT_COLLECTION, points = points)
         total_upserted += len(points)
+
+        # Log progress every 50 transcripts
+        if total_transcripts % 50 == 0:
+            print(f"[ingest] Progress: {total_transcripts} transcripts, {total_chunks} chunks, {total_upserted} points", flush = True)
+
     return {
-        "total_transcripts": len(transcripts),
-        "total_chunks": len(all_chunks),
+        "total_transcripts": total_transcripts,
+        "total_chunks": total_chunks,
         "points_upserted": total_upserted,
         "collection_created": collection_created,
         "embedding_model": embedding_model,

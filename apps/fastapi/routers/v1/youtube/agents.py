@@ -11,7 +11,7 @@ Endpoints:
 """
 import json
 from pydantic import BaseModel
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from schemas.inputs import LLMConfig, RAGSearchRequest
@@ -165,18 +165,24 @@ class IngestRequest(BaseModel):
 
 
 @router.post("/ingest")
-async def ingest_to_qdrant(body: IngestRequest, request: Request):
+async def ingest_to_qdrant(
+    body: IngestRequest,
+    request: Request,
+    background: bool = Query(False, alias = "async", description = "Run as background task (Celery)"),
+):
     """
     Ingest transcripts from ES → Qdrant hybrid collection.
 
-    CONCEPT: This bridges your existing ES data with Qdrant vector search.
-    After ingestion, /search automatically uses Qdrant hybrid search
-    (dense + sparse vectors) instead of ES full-text search.
+    With ?async=true: returns immediately with task_id (Celery background task).
+    Without: blocks until complete (original behavior).
 
     Flow: ES transcriptions → chunk → embed (dense + sparse) → Qdrant upsert
-
-    Run this after you've extracted videos+transcripts via /content/videos.
     """
+    if background:
+        from tasks.ingestion import ingest_to_qdrant as ingest_task
+        task = ingest_task.delay(body.video_ids, body.chunk_size, body.chunk_overlap)
+        return {"task_id": task.id, "status": "queued", "endpoint": "/api/v1/tasks/" + task.id}
+
     from services.ingestion import ingest_to_qdrant as run_ingestion
     from services.cache import invalidate_cache
 
@@ -188,7 +194,6 @@ async def ingest_to_qdrant(body: IngestRequest, request: Request):
             chunk_size = body.chunk_size,
             chunk_overlap = body.chunk_overlap,
         )
-        # Invalidate all cached responses — new data means stale answers
         await invalidate_cache(request.app.state.redis_aio)
     except Exception as e:
         raise HTTPException(
@@ -213,20 +218,24 @@ class GraphIngestRequest(BaseModel):
 
 
 @router.post("/ingest/graph")
-async def ingest_to_graph(body: GraphIngestRequest, request: Request):
+async def ingest_to_graph(
+    body: GraphIngestRequest,
+    request: Request,
+    background: bool = Query(False, alias = "async", description = "Run as background task (Celery)"),
+):
     """
     Extract entities and relationships from transcript chunks into Neo4j.
 
-    CONCEPT: This is a TWO-STEP process:
-    1. Create Video/Channel nodes from metadata (free — no LLM needed)
-    2. Extract Topic/Person/Technology entities from chunks (LLM-expensive)
+    With ?async=true: returns immediately with task_id (recommended for large datasets).
+    Without: blocks until complete (original behavior).
 
     COST WARNING: Each chunk = 1 LLM call for entity extraction.
-    100 chunks ≈ 100 LLM calls. Consider running on a subset first.
-
-    After ingestion, /search automatically includes Neo4j graph traversal
-    alongside Qdrant hybrid search for multi-source retrieval.
+    100 chunks ≈ 100 LLM calls. Use ?async=true for large datasets.
     """
+    if background:
+        from tasks.graph import ingest_to_graph as graph_task
+        task = graph_task.delay(body.video_ids, body.batch_size, body.chunk_size, body.chunk_overlap)
+        return {"task_id": task.id, "status": "queued", "endpoint": "/api/v1/tasks/" + task.id}
     from services.ingestion import fetch_transcripts_from_es, fetch_metadata_from_es
     from services.chunker import create_chunker, chunk_transcript
     from services.graph_builder import (

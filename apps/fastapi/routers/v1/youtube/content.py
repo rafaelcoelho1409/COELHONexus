@@ -6,12 +6,15 @@ POST /videos   - Extract + index selected videos by ID
 POST /channel  - Extract + index channel videos
 POST /playlist - Extract + index playlist videos
 
+All extraction endpoints support ?async=true to run as Celery background tasks.
+Without ?async=true, endpoints behave as before (synchronous, blocking).
+
 Extraction endpoints use:
 - yt-dlp for metadata extraction
 - Playwright CDP for transcriptions (bypasses IP blocking)
 - ES indexes: metadata + transcriptions (normalized)
 """
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from schemas.inputs import SearchRequest, VideosRequest, ChannelRequest, PlaylistRequest
 from .helpers import (
@@ -102,11 +105,27 @@ async def search_videos(payload: SearchRequest, request: Request):
 
 
 @router.post("/videos")
-async def get_videos(payload: VideosRequest, request: Request):
+async def get_videos(
+    payload: VideosRequest,
+    request: Request,
+    background: bool = Query(False, alias = "async", description = "Run as background task (Celery)"),
+):
     """
     Fetch specific videos by ID.
     Extracts metadata and transcriptions, indexes to ElasticSearch.
+
+    With ?async=true: returns immediately with task_id (Celery background task).
+    Without: blocks until complete (original behavior).
     """
+    if background:
+        from tasks.crawler import extract_videos
+        task = extract_videos.delay(
+            payload.video_ids,
+            payload.include_transcription,
+            payload.transcription_languages,
+        )
+        return {"task_id": task.id, "status": "queued", "endpoint": "/api/v1/tasks/" + task.id}
+
     es_client = request.app.state.es
     if not payload.video_ids:
         raise HTTPException(
@@ -144,12 +163,28 @@ async def get_videos(payload: VideosRequest, request: Request):
 
 
 @router.post("/channel")
-async def get_channel_videos(payload: ChannelRequest, request: Request):
+async def get_channel_videos(
+    payload: ChannelRequest,
+    request: Request,
+    background: bool = Query(False, alias = "async", description = "Run as background task (Celery)"),
+):
     """
     Fetch videos from a YouTube channel.
     Extracts metadata and transcriptions, indexes to ElasticSearch.
     max_results=0 fetches ALL videos.
+
+    With ?async=true: returns immediately with task_id (Celery background task).
     """
+    if background:
+        from tasks.crawler import extract_channel
+        task = extract_channel.delay(
+            payload.channel_id,
+            payload.max_results,
+            payload.include_transcription,
+            payload.transcription_languages,
+        )
+        return {"task_id": task.id, "status": "queued", "endpoint": "/api/v1/tasks/" + task.id}
+
     es_client = request.app.state.es
     extractor = get_extractor()
     result = await extractor.extract_channel(
@@ -195,12 +230,28 @@ async def get_channel_videos(payload: ChannelRequest, request: Request):
 
 
 @router.post("/playlist")
-async def get_playlist_videos(payload: PlaylistRequest, request: Request):
+async def get_playlist_videos(
+    payload: PlaylistRequest,
+    request: Request,
+    background: bool = Query(False, alias = "async", description = "Run as background task (Celery)"),
+):
     """
     Fetch videos from a YouTube playlist.
     Extracts metadata and transcriptions, indexes to ElasticSearch.
     max_results=0 fetches ALL videos.
+
+    With ?async=true: returns immediately with task_id (Celery background task).
     """
+    if background:
+        from tasks.crawler import extract_playlist
+        task = extract_playlist.delay(
+            payload.playlist_id,
+            payload.max_results,
+            payload.include_transcription,
+            payload.transcription_languages,
+        )
+        return {"task_id": task.id, "status": "queued", "endpoint": "/api/v1/tasks/" + task.id}
+
     es_client = request.app.state.es
     extractor = get_extractor()
     result = await extractor.extract_playlist(
