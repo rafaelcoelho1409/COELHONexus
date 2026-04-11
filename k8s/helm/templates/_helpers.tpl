@@ -33,6 +33,8 @@ TOR_PROXY_PORT: "{{ .Values.proxy.tor.port }}"
 # Playwright CDP endpoints (browser automation, bypasses IP blocking)
 PLAYWRIGHT_CDP_HEADLESS: "{{ .Values.playwright.cdp_headless }}"
 PLAYWRIGHT_CDP_HEADED: "{{ .Values.playwright.cdp_headed }}"
+# Embedding model (NVIDIA NIM API — see docs/NVIDIA-NIM-EMBEDDING-MODELS.md)
+NVIDIA_EMBEDDING_MODEL: "{{ .Values.embedding.model }}"
 {{- end -}}
 
 

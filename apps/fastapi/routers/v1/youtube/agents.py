@@ -264,9 +264,9 @@ def _ensure_embeddings(app):
     """
     if app.state.dense_embeddings is None:
         from services.embeddings import create_dense_embeddings, create_sparse_embeddings
-        app.state.dense_embeddings = create_dense_embeddings("bge-base")
-        app.state.sparse_embeddings = create_sparse_embeddings()
-        print("Embedding models lazy-loaded (bge-base ONNX + BM25 sparse)", flush = True)
+        app.state.dense_embeddings = create_dense_embeddings()  # NVIDIA NIM API (zero CPU)
+        app.state.sparse_embeddings = create_sparse_embeddings()  # Local BM25 (minimal CPU)
+        print("Embeddings initialized (NVIDIA NIM API + BM25 sparse)", flush = True)
     return app.state.dense_embeddings
 
 

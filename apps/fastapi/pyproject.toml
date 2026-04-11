@@ -21,7 +21,8 @@ dependencies = [
     "langchain-experimental",  # LLMGraphTransformer
     "langchain-text-splitters", # Text chunking
     "langgraph-checkpoint-redis",
-    "fastembed",               # ONNX embeddings: dense (bge) + sparse (BM25)
+    "fastembed",               # BM25 sparse embeddings (local, lightweight)
+    "httpx",                   # HTTP client for NVIDIA NIM embedding API
     "flashrank",               # Cross-encoder reranker (local, no API cost)
     "qdrant-client",           # Qdrant vector database client
     "neo4j",

@@ -150,7 +150,6 @@ async def ingest_to_qdrant(
     es: AsyncElasticsearch,
     qdrant: AsyncQdrantClient,
     video_ids: list[str] | None = None,
-    embedding_model: str = "bge-base",
     chunk_size: int = 2000,
     chunk_overlap: int = 200,
 ) -> dict:
@@ -170,25 +169,33 @@ async def ingest_to_qdrant(
     For 359 transcripts × ~5 chunks each = ~1795 points total,
     but only ~5-8 chunks are in memory at any time.
     """
-    # 1. Initialize embedding models (lazy-loaded, cached after first call)
-    dense_embeddings = create_dense_embeddings(embedding_model)
+    # 1. Initialize embedding models
+    # Dense: NVIDIA NIM API (zero CPU, server-side GPU inference)
+    # Sparse: FastEmbed BM25 (local, minimal CPU — just tokenization)
+    dense_embeddings = create_dense_embeddings()
     sparse_embeddings = create_sparse_embeddings()
-    dimensions = get_embedding_dimensions(embedding_model)
+    dimensions = get_embedding_dimensions()
 
     # 2. Ensure Qdrant collection exists
     collection_created = await ensure_collection(qdrant, dimensions)
 
-    # 3. Stream transcripts and process one at a time
+    # 3. Fetch ALL transcripts first (fast — just text + IDs, ~5s for 359)
+    # Then process one-by-one for embedding (slow — CPU-bound, ~10min)
+    # This separates the ES scroll phase (needs open context) from the
+    # embedding phase (takes minutes, would expire the scroll context).
+    all_transcripts = []
+    async for transcript in _scroll_transcripts(es, video_ids):
+        all_transcripts.append(transcript)
+
     chunker = create_chunker(chunk_size, chunk_overlap)
     total_transcripts = 0
     total_chunks = 0
     total_upserted = 0
-    EMBED_BATCH = 8
 
     # Cache metadata to avoid re-fetching for same video
     metadata_cache: dict = {}
 
-    async for transcript in _scroll_transcripts(es, video_ids):
+    for transcript in all_transcripts:
         vid = transcript["video_id"]
         total_transcripts += 1
 
@@ -217,14 +224,10 @@ async def ingest_to_qdrant(
 
         total_chunks += len(chunks)
 
-        # Embed in batches of EMBED_BATCH
+        # Embed: dense via NVIDIA NIM API (zero CPU), sparse via local BM25
         texts = [doc.page_content for doc in chunks]
-        dense_vectors = []
-        sparse_vectors = []
-        for i in range(0, len(texts), EMBED_BATCH):
-            batch = texts[i:i + EMBED_BATCH]
-            dense_vectors.extend(dense_embeddings.embed_documents(batch))
-            sparse_vectors.extend(sparse_embeddings.embed_documents(batch))
+        dense_vectors = dense_embeddings.embed_documents(texts)
+        sparse_vectors = list(sparse_embeddings.embed_documents(texts))
 
         # Build points and upsert
         points = []
@@ -265,6 +268,6 @@ async def ingest_to_qdrant(
         "total_chunks": total_chunks,
         "points_upserted": total_upserted,
         "collection_created": collection_created,
-        "embedding_model": embedding_model,
+        "embedding": "nvidia-nim-api",
         "collection": QDRANT_COLLECTION,
     }

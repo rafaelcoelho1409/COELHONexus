@@ -1,81 +1,173 @@
 """
-Embedding Service — Dense + Sparse for Qdrant Hybrid Search
+Embedding Service — NVIDIA NIM API + BM25 Sparse for Qdrant Hybrid Search
 
 CONCEPT: Qdrant hybrid search needs TWO types of embeddings per document:
-  1. Dense embeddings (semantic meaning) — from a transformer model
-  2. Sparse embeddings (keyword matching) — BM25 via FastEmbed
+  1. Dense embeddings (semantic meaning) — NVIDIA NIM embedding API
+  2. Sparse embeddings (keyword matching) — BM25 via FastEmbed (local, lightweight)
 
-Both use FastEmbed (ONNX Runtime) — NO PyTorch.
-This saves ~600-800MB of RAM vs sentence-transformers/PyTorch,
-letting embeddings coexist with Playwright browser contexts in 8Gi.
+Dense embeddings use NVIDIA NIM API:
+  - Zero CPU usage (server-side GPU inference)
+  - Same API key as LLM models (already configured)
+  - Single model with exponential backoff retry on 429
+  - Rate-limit-aware pacing for bulk ingestion (30 req/min)
+  - Configurable via NVIDIA_EMBEDDING_MODEL env var
 
-EMBEDDING MODEL CHOICE:
-- bge-small: 384d, 67MB quantized ONNX — lightweight, fast
-- bge-base: 768d, 210MB quantized ONNX — higher quality
-- nomic: 768d — good multilingual
+IMPORTANT: All vectors in a Qdrant collection MUST come from the same model.
+Different models produce incompatible vector spaces. Do NOT switch models
+without re-ingesting the entire collection.
 
-We default to bge-small for minimal memory. The quality gap vs bge-base
-is compensated by BM25 sparse hybrid search + FlashRank reranking.
+Available models (tested 2026-04-11, see docs/NVIDIA-NIM-EMBEDDING-MODELS.md):
+  2048d: nvidia/llama-nemotron-embed-1b-v2 (default, best quality)
+  2048d: nvidia/llama-3.2-nv-embedqa-1b-v2 (multilingual)
+  1024d: nvidia/nv-embedqa-e5-v5 (mature, shorter context)
+  4096d: nvidia/nv-embed-v1 (highest quality, older)
 """
 import os
-# Disable ONNX Runtime memory arena pre-allocation.
-# Without this, ONNX allocates large memory blocks upfront (~2-5GB)
-# that spike RSS past the K8s memory limit and trigger OOMKill.
-# With this, ONNX allocates memory on-demand — uses less peak RAM.
-os.environ.setdefault("ORT_DISABLE_MEMORY_ARENA", "1")
-
-from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
+import time
+import logging
+from langchain_core.embeddings import Embeddings
 from langchain_qdrant import FastEmbedSparse
 
+logger = logging.getLogger(__name__)
 
 # =============================================================================
-# Dense Embedding Models (all via FastEmbed ONNX — no PyTorch)
+# Configuration — change model via env var or Helm values
 # =============================================================================
-EMBEDDING_MODELS = {
-    "bge-small": {
-        "model_name": "BAAI/bge-small-en-v1.5",
-        "dimensions": 384,
-    },
-    "bge-base": {
-        "model_name": "BAAI/bge-base-en-v1.5",
-        "dimensions": 768,
-    },
-    "nomic": {
-        "model_name": "nomic-ai/nomic-embed-text-v1.5",
-        "dimensions": 768,
-    },
+NVIDIA_URL = "https://integrate.api.nvidia.com/v1"
+NVIDIA_KEY = os.environ.get("NVIDIA_API_KEY", "")
+
+# Default: best quality model with 8K context, 2048 dimensions
+# Override: set NVIDIA_EMBEDDING_MODEL env var in Helm values or .env
+NVIDIA_EMBEDDING_MODEL = os.environ.get(
+    "NVIDIA_EMBEDDING_MODEL",
+    "nvidia/llama-nemotron-embed-1b-v2",
+)
+
+# Dimensions per model (must match Qdrant collection)
+MODEL_DIMENSIONS = {
+    "nvidia/llama-nemotron-embed-1b-v2": 2048,
+    "nvidia/llama-3.2-nv-embedqa-1b-v2": 2048,
+    "nvidia/llama-nemotron-embed-vl-1b-v2": 2048,
+    "nvidia/llama-3.2-nemoretriever-1b-vlm-embed-v1": 2048,
+    "nvidia/llama-3.2-nemoretriever-300m-embed-v1": 2048,
+    "nvidia/nv-embedqa-e5-v5": 1024,
+    "nvidia/nv-embed-v1": 4096,
+    "nvidia/nv-embedcode-7b-v1": 4096,
 }
 
-DEFAULT_MODEL = "bge-base"
 
-
-def create_dense_embeddings(model_key: str = DEFAULT_MODEL) -> FastEmbedEmbeddings:
+class NVIDIAEmbeddings(Embeddings):
     """
-    Create a dense embedding model for semantic search.
+    NVIDIA NIM Embedding API with retry and rate-limit-aware pacing.
 
-    CONCEPT: FastEmbedEmbeddings uses ONNX Runtime instead of PyTorch.
-    Models are quantized (INT8) and optimized for CPU inference.
-    bge-small: ~67MB model, ~100MB total RSS (vs ~580MB with PyTorch).
+    Single model — all vectors in the same geometric space.
+    On 429: exponential backoff retry (2s, 4s, 8s, 16s, max 5 retries).
+    For bulk ingestion: self-paces at ~30 req/min to avoid hitting limits.
 
-    The LangChain Embeddings interface is identical:
-        embeddings.embed_documents(["hello world"])  -> list[list[float]]
-        embeddings.embed_query("hello")              -> list[float]
+    Implements LangChain Embeddings interface:
+      - embed_documents(texts) → list[list[float]]
+      - embed_query(text) → list[float]
     """
-    config = EMBEDDING_MODELS[model_key]
-    return FastEmbedEmbeddings(model_name = config["model_name"])
 
+    def __init__(self, model: str = NVIDIA_EMBEDDING_MODEL):
+        self.model = model
+        self.dimensions = MODEL_DIMENSIONS.get(model, 2048)
+        import httpx
+        self._client = httpx.Client(timeout = 120.0)
+        logger.info(f"[embeddings] Using {model} ({self.dimensions}d) via NVIDIA NIM API")
 
-def get_embedding_dimensions(model_key: str = DEFAULT_MODEL) -> int:
-    """Return the vector dimensions for a given model."""
-    return EMBEDDING_MODELS[model_key]["dimensions"]
+    def _call_api(self, texts: list[str], input_type: str = "passage") -> list[list[float]]:
+        """
+        Call NVIDIA NIM embedding API with exponential backoff on 429.
+        Max 5 retries: 2s → 4s → 8s → 16s → 32s (total max wait: ~62s).
+        """
+        max_retries = 5
+        for attempt in range(max_retries + 1):
+            try:
+                response = self._client.post(
+                    f"{NVIDIA_URL}/embeddings",
+                    headers = {
+                        "Authorization": f"Bearer {NVIDIA_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json = {
+                        "model": self.model,
+                        "input": texts,
+                        "input_type": input_type,
+                    },
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    return [item["embedding"] for item in data["data"]]
+                elif response.status_code == 429:
+                    if attempt < max_retries:
+                        wait = 2 ** (attempt + 1)  # 2, 4, 8, 16, 32
+                        logger.info(f"[embeddings] 429 rate limited, retry {attempt + 1}/{max_retries} in {wait}s")
+                        time.sleep(wait)
+                        continue
+                    raise RuntimeError(f"Embedding API rate limited after {max_retries} retries")
+                else:
+                    raise RuntimeError(f"Embedding API returned {response.status_code}: {response.text[:200]}")
+            except Exception as e:
+                if "rate limited" in str(e) or "429" in str(e):
+                    raise
+                if attempt < max_retries:
+                    wait = 2 ** (attempt + 1)
+                    logger.warning(f"[embeddings] Error: {e}, retry {attempt + 1}/{max_retries} in {wait}s")
+                    time.sleep(wait)
+                    continue
+                raise
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        """
+        Embed documents with rate-limit-aware batching.
+
+        Batches of 50 texts, with 2s pause between batches.
+        50 texts × 30 batches/min = ~1500 texts/min (well within 40 RPM).
+        For 1800 chunks: ~36 batches × 2s pause = ~72s pauses + API time ≈ ~3-5 min total.
+        """
+        if not texts:
+            return []
+        BATCH_SIZE = 50
+        all_embeddings = []
+        for i in range(0, len(texts), BATCH_SIZE):
+            batch = texts[i:i + BATCH_SIZE]
+            embeddings = self._call_api(batch, input_type = "passage")
+            all_embeddings.extend(embeddings)
+            # Rate-limit pacing: pause between batches to stay under 40 RPM
+            if i + BATCH_SIZE < len(texts):
+                time.sleep(2)
+        return all_embeddings
+
+    def embed_query(self, text: str) -> list[float]:
+        """Embed a single query — no pacing needed (single request)."""
+        result = self._call_api([text], input_type = "query")
+        return result[0]
 
 
 # =============================================================================
-# Sparse Embedding Model (BM25 for Qdrant hybrid)
+# Factory Functions
+# =============================================================================
+def create_dense_embeddings() -> NVIDIAEmbeddings:
+    """
+    Create NVIDIA NIM embedding client.
+    Model configurable via NVIDIA_EMBEDDING_MODEL env var.
+    Default: nvidia/llama-nemotron-embed-1b-v2 (2048d, 8K context).
+    """
+    return NVIDIAEmbeddings(model = NVIDIA_EMBEDDING_MODEL)
+
+
+def get_embedding_dimensions() -> int:
+    """Return vector dimensions for the configured model."""
+    return MODEL_DIMENSIONS.get(NVIDIA_EMBEDDING_MODEL, 2048)
+
+
+# =============================================================================
+# Sparse Embedding Model (BM25 — local, minimal CPU)
 # =============================================================================
 def create_sparse_embeddings() -> FastEmbedSparse:
     """
-    Create a BM25 sparse embedding model for keyword matching.
-    Both dense and sparse now use the same ONNX Runtime backend.
+    BM25 sparse embeddings for keyword matching.
+    Stays local — just tokenization + counting (no neural network, no CPU impact).
     """
     return FastEmbedSparse(model_name = "Qdrant/bm25")

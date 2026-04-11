@@ -54,6 +54,11 @@ playwright:
   cdp_headless: "https://playwright-cdp-headless.YOUR_TAILNET_DOMAIN.ts.net"
   cdp_headed: "https://playwright-cdp.YOUR_TAILNET_DOMAIN.ts.net"
 
+# Embedding model (NVIDIA NIM API — see docs/NVIDIA-NIM-EMBEDDING-MODELS.md)
+# Change model here to switch. MUST re-ingest all data after changing (vectors are incompatible across models).
+embedding:
+  model: "nvidia/llama-nemotron-embed-1b-v2"  # 2048d, 8K context, best quality
+
 # Secret containing credentials (created by upload_env_to_k3d.sh)
 secretName: coelhonexus-secret
 
@@ -154,10 +159,10 @@ celery:
   resources:
     requests:
       memory: "1Gi"
-      cpu: "500m"
+      cpu: "100m"
     limits:
       memory: "4Gi"
-      cpu: "2000m"
+      cpu: "500m"  # Low CPU cap — embedding runs slower but doesn't slow the machine
 
 # Web frontend (Go + Templ + HTMX + PWA)
 web:

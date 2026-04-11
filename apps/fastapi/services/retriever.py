@@ -20,7 +20,7 @@ import asyncio
 from elasticsearch import AsyncElasticsearch
 from qdrant_client import AsyncQdrantClient
 from langchain_core.documents import Document
-from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
+from langchain_core.embeddings import Embeddings
 from langchain_qdrant import FastEmbedSparse
 from langchain_neo4j import Neo4jGraph
 from langchain_openai import ChatOpenAI
@@ -119,7 +119,7 @@ class QdrantHybridRetriever:
     def __init__(
         self,
         qdrant: AsyncQdrantClient,
-        dense_embeddings: FastEmbedEmbeddings,
+        dense_embeddings: Embeddings,
         sparse_embeddings: FastEmbedSparse,
         top_k: int = 10,
     ):
@@ -140,8 +140,7 @@ class QdrantHybridRetriever:
         """
         # Generate both embeddings for the query
         dense_vector = self.dense_embeddings.embed_query(query)
-        sparse_results = list(self.sparse_embeddings.embed_query(query))
-        sparse_vector = sparse_results[0] if sparse_results else None
+        sparse_vector = self.sparse_embeddings.embed_query(query)  # Returns SparseVector directly
         # Build Qdrant query with hybrid prefetch
         from qdrant_client.http.models import (
             QueryRequest,
