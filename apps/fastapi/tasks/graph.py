@@ -9,6 +9,10 @@ As a Celery task, it runs in the background with progress tracking.
 """
 import asyncio
 import os
+import sys
+if "/app" not in sys.path:
+    sys.path.insert(0, "/app")
+
 from celery_app import app
 from celery.utils.log import get_task_logger
 

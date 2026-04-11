@@ -12,6 +12,12 @@ in real-time and the GET /tasks/{id} endpoint returns.
 """
 import asyncio
 import os
+import sys
+
+# Ensure /app is in Python path (Celery worker may not inherit it)
+if "/app" not in sys.path:
+    sys.path.insert(0, "/app")
+
 from celery_app import app
 from celery.utils.log import get_task_logger
 
@@ -64,7 +70,7 @@ async def _extract_videos_async(video_ids, include_transcription, languages):
             }
             # Init Playwright for this worker
             transcript_service = await init_transcript_service(
-                max_concurrent = 3,
+                max_concurrent = 5,
                 browser_refresh_interval = 10,
                 max_retries = 3,
             )
@@ -119,7 +125,7 @@ async def _extract_channel_async(channel_id, max_results, include_transcription,
                 for v in videos if v.get("id")
             }
             transcript_service = await init_transcript_service(
-                max_concurrent = 3,
+                max_concurrent = 5,
                 browser_refresh_interval = 10,
                 max_retries = 3,
             )
@@ -176,7 +182,7 @@ async def _extract_playlist_async(playlist_id, max_results, include_transcriptio
                 for v in videos if v.get("id")
             }
             transcript_service = await init_transcript_service(
-                max_concurrent = 3,
+                max_concurrent = 5,
                 browser_refresh_interval = 10,
                 max_retries = 3,
             )

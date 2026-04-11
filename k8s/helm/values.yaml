@@ -149,7 +149,7 @@ fastapi:
 celery:
   enabled: true
   replicas: 1
-  concurrency: 3  # Number of concurrent tasks per worker
+  concurrency: 5  # Number of concurrent tasks per worker
   queues: "crawler,embedding,llm,default"
   resources:
     requests:

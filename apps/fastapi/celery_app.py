@@ -16,6 +16,14 @@ The worker imports and runs the same code as FastAPI
 but executes it in Celery's process, not inside uvicorn.
 """
 import os
+import sys
+
+# Ensure /app is in Python path BEFORE any imports.
+# Celery worker process may not inherit the working directory in sys.path.
+# This must run here (celery_app.py loads first) so all task imports work.
+if "/app" not in sys.path:
+    sys.path.insert(0, "/app")
+
 from celery import Celery
 
 # Redis URL — same pattern as app.py

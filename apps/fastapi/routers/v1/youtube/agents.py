@@ -11,7 +11,7 @@ Endpoints:
 """
 import json
 from pydantic import BaseModel
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from schemas.inputs import LLMConfig, RAGSearchRequest
@@ -165,41 +165,16 @@ class IngestRequest(BaseModel):
 
 
 @router.post("/ingest")
-async def ingest_to_qdrant(
-    body: IngestRequest,
-    request: Request,
-    background: bool = Query(False, alias = "async", description = "Run as background task (Celery)"),
-):
+async def ingest_to_qdrant(body: IngestRequest):
     """
-    Ingest transcripts from ES → Qdrant hybrid collection.
-
-    With ?async=true: returns immediately with task_id (Celery background task).
-    Without: blocks until complete (original behavior).
+    Ingest transcripts from ES → Qdrant hybrid collection (Celery background task).
+    Returns immediately with task_id.
 
     Flow: ES transcriptions → chunk → embed (dense + sparse) → Qdrant upsert
     """
-    if background:
-        from tasks.ingestion import ingest_to_qdrant as ingest_task
-        task = ingest_task.delay(body.video_ids, body.chunk_size, body.chunk_overlap)
-        return {"task_id": task.id, "status": "queued", "endpoint": "/api/v1/tasks/" + task.id}
-
-    from services.ingestion import ingest_to_qdrant as run_ingestion
-    from services.cache import invalidate_cache
-
-    try:
-        stats = await run_ingestion(
-            es = request.app.state.es,
-            qdrant = request.app.state.qdrant,
-            video_ids = body.video_ids,
-            chunk_size = body.chunk_size,
-            chunk_overlap = body.chunk_overlap,
-        )
-        await invalidate_cache(request.app.state.redis_aio)
-    except Exception as e:
-        raise HTTPException(
-            status_code = 500,
-            detail = f"Ingestion error: {str(e)}")
-    return stats
+    from tasks.ingestion import ingest_to_qdrant as ingest_task
+    task = ingest_task.delay(body.video_ids, body.chunk_size, body.chunk_overlap)
+    return {"task_id": task.id, "status": "queued", "endpoint": f"/api/v1/tasks/{task.id}"}
 
 
 # =============================================================================
@@ -218,77 +193,16 @@ class GraphIngestRequest(BaseModel):
 
 
 @router.post("/ingest/graph")
-async def ingest_to_graph(
-    body: GraphIngestRequest,
-    request: Request,
-    background: bool = Query(False, alias = "async", description = "Run as background task (Celery)"),
-):
+async def ingest_to_graph(body: GraphIngestRequest):
     """
-    Extract entities and relationships from transcript chunks into Neo4j.
+    Extract entities from transcript chunks → Neo4j (Celery background task).
+    Returns immediately with task_id.
 
-    With ?async=true: returns immediately with task_id (recommended for large datasets).
-    Without: blocks until complete (original behavior).
-
-    COST WARNING: Each chunk = 1 LLM call for entity extraction.
-    100 chunks ≈ 100 LLM calls. Use ?async=true for large datasets.
+    COST: Each chunk = 1 LLM call. 100 chunks ≈ 100 LLM calls.
     """
-    if background:
-        from tasks.graph import ingest_to_graph as graph_task
-        task = graph_task.delay(body.video_ids, body.batch_size, body.chunk_size, body.chunk_overlap)
-        return {"task_id": task.id, "status": "queued", "endpoint": "/api/v1/tasks/" + task.id}
-    from services.ingestion import fetch_transcripts_from_es, fetch_metadata_from_es
-    from services.chunker import create_chunker, chunk_transcript
-    from services.graph_builder import (
-        extract_and_store_graph,
-        build_video_metadata_graph,
-    )
-    app = request.app
-    neo4j_graph = app.state.neo4j_graph
-    try:
-        # 1. Fetch transcripts and metadata from ES
-        transcripts = await fetch_transcripts_from_es(app.state.es, body.video_ids)
-        if not transcripts:
-            return {"error": "No transcripts found in ES"}
-        all_video_ids = list({t["video_id"] for t in transcripts})
-        metadata_map = await fetch_metadata_from_es(app.state.es, all_video_ids)
-        # 2. Create Video/Channel nodes from metadata (no LLM cost)
-        video_metadata = [
-            {**metadata_map.get(vid, {}), "video_id": vid}
-            for vid in all_video_ids
-        ]
-        build_video_metadata_graph(neo4j_graph, video_metadata)
-        # 3. Chunk transcripts
-        chunker = create_chunker(body.chunk_size, body.chunk_overlap)
-        all_chunks = []
-        for transcript in transcripts:
-            vid = transcript["video_id"]
-            meta = metadata_map.get(vid, {})
-            chunks = chunk_transcript(
-                video_id = vid,
-                content = transcript.get("content", ""),
-                metadata = {
-                    "title": meta.get("title", ""),
-                    "channel": meta.get("channel", ""),
-                },
-                chunker = chunker,
-            )
-            all_chunks.extend(chunks)
-        # 4. Extract entities via LLM and store in Neo4j
-        extraction_stats = await extract_and_store_graph(
-            documents = all_chunks,
-            llm = app.state.llm,
-            neo4j_graph = neo4j_graph,
-            batch_size = body.batch_size,
-        )
-        return {
-            "videos_processed": len(all_video_ids),
-            "chunks_processed": len(all_chunks),
-            **extraction_stats,
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code = 500,
-            detail = f"Graph ingestion error: {str(e)}")
+    from tasks.graph import ingest_to_graph as graph_task
+    task = graph_task.delay(body.video_ids, body.batch_size, body.chunk_size, body.chunk_overlap)
+    return {"task_id": task.id, "status": "queued", "endpoint": f"/api/v1/tasks/{task.id}"}
 
 
 @router.get("/graph/stats")
@@ -305,6 +219,38 @@ async def graph_stats(request: Request):
         raise HTTPException(
             status_code = 500,
             detail = f"Graph stats error: {str(e)}")
+
+
+# =============================================================================
+# Full Pipeline (Celery chain: extract → ingest Qdrant → ingest Neo4j)
+# =============================================================================
+class PipelineRequest(BaseModel):
+    """Full channel pipeline: extract → ingest vectors → ingest graph."""
+    channel_id: str
+    max_results: int = 0
+    include_transcription: bool = True
+    include_qdrant: bool = True
+    include_graph: bool = False
+
+
+@router.post("/pipeline")
+async def full_pipeline(body: PipelineRequest):
+    """
+    Full channel pipeline (Celery chain).
+    Triggers: extract_channel → ingest_to_qdrant → ingest_to_graph → clear_cache
+
+    Each step runs in its own Celery worker queue.
+    Returns immediately with task_id.
+    """
+    from tasks.pipeline import full_channel_pipeline
+    task = full_channel_pipeline.delay(
+        body.channel_id,
+        body.max_results,
+        body.include_transcription,
+        body.include_qdrant,
+        body.include_graph,
+    )
+    return {"task_id": task.id, "status": "queued", "endpoint": f"/api/v1/tasks/{task.id}"}
 
 
 # =============================================================================

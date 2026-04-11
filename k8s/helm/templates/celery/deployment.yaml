@@ -47,6 +47,11 @@ spec:
             - configMapRef:
                 name: coelhonexus-fastapi-configmap
           env:
+            # PYTHONPATH must include /app so forked worker processes can import
+            # routers/, services/, schemas/ etc. Celery forks don't inherit sys.path
+            # modifications from the parent process.
+            - name: PYTHONPATH
+              value: "/app"
             {{- include "coelhonexus.secretEnvVars" . | nindent 12 }}
           resources:
             requests:
