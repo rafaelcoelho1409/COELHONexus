@@ -1,365 +1,300 @@
 # Agentic RAG — Endpoint Test Guide
 
 > Complete test suite for the YouTube Content Search Agentic RAG system.
-> Uses **359 transcriptions** from the **Wealthy Expat** channel (`UC49PyeVkVY6godW0pF6H8Pg`).
-> Channel content: citizenship by investment, tax optimization, expat relocation, golden visas.
+> Architecture: FastAPI (API) + Celery (background tasks) + NVIDIA NIM (LLM + embeddings)
+> Data: **402 transcriptions** from the **Wealthy Expat** channel (`UC49PyeVkVY6godW0pF6H8Pg`).
 
 **Base URL (Skaffold):** `http://localhost:23020`
-**Base URL (ArgoCD):** `http://localhost:23000`
-
-Replace `$BASE` with the appropriate URL in the commands below.
+**Flower Dashboard:** `https://celery-flower.YOUR_TAILNET_DOMAIN.ts.net`
+**Neo4j Browser:** `http://neo4j.YOUR_TAILNET_DOMAIN.ts.net:7474`
+**Qdrant Dashboard:** `https://qdrant.YOUR_TAILNET_DOMAIN.ts.net/dashboard`
 
 ---
 
 ## Table of Contents
 
 1. [Health Check](#1-health-check)
-2. [PUT /config — LLM Configuration](#2-put-config)
-3. [POST /ingest — Qdrant Vector Ingestion](#3-post-ingest)
-4. [POST /search — Agentic RAG Search](#4-post-search)
-5. [POST /search/stream — SSE Streaming Search](#5-post-searchstream)
-6. [POST /ingest/graph — Neo4j Entity Extraction](#6-post-ingestgraph)
-7. [GET /graph/stats — Knowledge Graph Statistics](#7-get-graphstats)
-8. [End-to-End Flow](#8-end-to-end-flow)
-9. [Edge Cases and Failure Modes](#9-edge-cases)
+2. [Content Crawlers (Celery)](#2-content-crawlers)
+3. [Qdrant Ingest (Celery + NVIDIA NIM Embeddings)](#3-qdrant-ingest)
+4. [Neo4j Graph Ingest (Celery + LLM Entity Extraction)](#4-neo4j-graph-ingest)
+5. [Agentic RAG Search (Sync)](#5-agentic-rag-search)
+6. [SSE Streaming Search](#6-sse-streaming-search)
+7. [Task Management](#7-task-management)
+8. [Full Pipeline](#8-full-pipeline)
+9. [LLM Configuration](#9-llm-configuration)
+10. [Cache Behavior](#10-cache-behavior)
+11. [Edge Cases](#11-edge-cases)
 
 ---
 
 ## 1. Health Check
 
-Verify the app started and all connections are live.
-
 ```bash
-curl -s $BASE/health | python3 -m json.tool
+curl -s $BASE/health
 ```
 
-**Expected:**
-```json
-{"status": "healthy", "service": "COELHO Nexus"}
-```
+**Expected:** `{"status": "healthy", "service": "COELHO Nexus"}`
 
-**What to check in startup logs:**
+**Startup logs should show:**
 ```
-Qdrant connected: X collections
+Qdrant connected: 1 collections
 Neo4j connected: bolt://neo4j.YOUR_TAILNET_DOMAIN.ts.net:7687
-Embedding models loaded (bge-base dense + BM25 sparse)
+Embedding models will lazy-load on first use.
 Neo4j LangChain graph initialized.
-Redis checkpointer initialized.
+LLM loaded: z-ai/glm5 + 13 fallbacks (NVIDIA NIM)
+FastAPI startup complete.
 ```
 
-If any line is missing, the corresponding Phase won't work.
-
----
-
-## 2. PUT /config
-
-**What it does:** Updates the LLM provider/model used by ALL agent operations (grading, generation, rewriting, hallucination check, entity extraction).
-
-### Test 2.1 — Set NVIDIA NIM (default)
-
+**Pods running:**
 ```bash
-curl -s -X PUT $BASE/api/v1/youtube/agents/config \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "provider": "NVIDIA",
-    "model": "meta/llama-3.3-70b-instruct",
-    "temperature": 0.0,
-    "base_url": "https://integrate.api.nvidia.com/v1",
-    "api_key": "YOUR_NVIDIA_API_KEY"
-  }' | python3 -m json.tool
-```
-
-**Expected:**
-```json
-{
-    "status": "saved",
-    "config": {
-        "provider": "NVIDIA",
-        "model": "meta/llama-3.3-70b-instruct",
-        "temperature": 0.0,
-        "base_url": "https://integrate.api.nvidia.com/v1"
-    }
-}
-```
-
-**How it works internally:**
-- Saves to Redis key `coelhonexus:youtube:agents:config` as JSON
-- `api_key` is excluded from the response (security)
-- On next startup, `app.py` loads this config to instantiate the LLM
-- Does NOT hot-reload — restart needed for changes to take effect
-
-### Test 2.2 — Verify config persisted in Redis
-
-```bash
-# From the pod or via redis-cli
-redis-cli -h redis-tcp.YOUR_TAILNET_DOMAIN.ts.net -a $REDIS_PASSWORD \
-  JSON.GET coelhonexus:youtube:agents:config
+kubectl get pods -n coelhonexus-dev
+# coelhonexus-fastapi-xxx         2/2   Running
+# coelhonexus-celery-worker-xxx   2/2   Running
+# coelhonexus-web-xxx             1/1   Running
 ```
 
 ---
 
-## 3. POST /ingest
+## 2. Content Crawlers
 
-**What it does:** Reads transcriptions from Elasticsearch, chunks them (2000 chars, 200 overlap), generates dense embeddings (bge-base-en-v1.5, 768d) + sparse embeddings (BM25), upserts to Qdrant hybrid collection `youtube-transcripts`.
+All crawler endpoints run as **Celery background tasks**. They return a task_id immediately.
 
-**Cost:** FREE — all embeddings computed locally on CPU.
-**Time:** ~5-15 min for 359 transcripts (depends on CPU).
-
-### Test 3.1 — Ingest specific videos (small test)
+### 2.1 Search (sync — no Celery)
 
 ```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/ingest \
+curl -s -X POST $BASE/api/v1/youtube/content/search \
   -H 'Content-Type: application/json' \
-  -d '{
-    "video_ids": ["7a_KPrvhJi8", "YjeMkwVMwOM", "WM126J84rcw"],
-    "chunk_size": 2000,
-    "chunk_overlap": 200
-  }' | python3 -m json.tool
+  -d '{"query": "citizenship by investment", "max_results": 3}'
 ```
 
-**Expected:**
-```json
-{
-    "total_transcripts": 3,
-    "total_chunks": 30,
-    "points_upserted": 30,
-    "collection_created": true,
-    "embedding_model": "bge-base",
-    "collection": "youtube-transcripts"
-}
-```
+**Expected:** Immediate response with search results (no task_id, runs synchronously).
 
-**What to verify:**
-- `total_transcripts`: should match number of video_ids with transcripts in ES
-- `total_chunks`: each transcript (~8000 chars) / chunk_size (2000) ≈ 4-5 chunks per video
-- `points_upserted` = `total_chunks` (every chunk becomes a Qdrant point)
-- `collection_created: true` on first run, `false` on subsequent runs
-- Check Qdrant dashboard: `https://qdrant.YOUR_TAILNET_DOMAIN.ts.net/dashboard` → collection `youtube-transcripts`
-
-### Test 3.2 — Ingest ALL transcripts
+### 2.2 Extract Videos (Celery)
 
 ```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/ingest \
+# Submit
+curl -s -X POST $BASE/api/v1/youtube/content/videos \
   -H 'Content-Type: application/json' \
-  -d '{"video_ids": null}' | python3 -m json.tool
+  -d '{"video_ids": ["VIDEO_ID_1", "VIDEO_ID_2"], "include_transcription": true}'
+
+# Response: {"task_id": "...", "status": "queued", "endpoint": "/api/v1/tasks/..."}
+
+# Poll status
+curl -s $BASE/api/v1/tasks/{task_id}
 ```
 
-**Expected:** `total_transcripts: 359`, `total_chunks: ~1500-2000`, `points_upserted: ~1500-2000`.
+**Expected:** Task completes with `{"total_videos": 2, "metadata": {"indexed": 2}, "transcriptions": {"indexed": 2}}`
 
-### Test 3.3 — Re-ingest (idempotency test)
-
-Run the same ingest again:
+### 2.3 Extract Channel (Celery)
 
 ```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/ingest \
+curl -s -X POST $BASE/api/v1/youtube/content/channel \
   -H 'Content-Type: application/json' \
-  -d '{"video_ids": ["7a_KPrvhJi8"]}' | python3 -m json.tool
+  -d '{"channel_id": "TechWorldwithNana", "max_results": 3, "include_transcription": true}'
 ```
 
-**Expected:** Same stats. Point count in Qdrant should NOT increase — deterministic IDs (MD5 of video_id + chunk_index) mean same content overwrites existing points.
+**Expected:** Task completes with channel metadata + videos extracted + transcriptions indexed.
 
-### Test 3.4 — Custom chunk parameters
+### 2.4 Extract Playlist (Celery)
 
 ```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/ingest \
+curl -s -X POST $BASE/api/v1/youtube/content/playlist \
   -H 'Content-Type: application/json' \
-  -d '{
-    "video_ids": ["VFEijm3Z57U"],
-    "chunk_size": 1000,
-    "chunk_overlap": 100
-  }' | python3 -m json.tool
+  -d '{"playlist_id": "PLUc76aQXizyOqOKE0Cspsv8Bpkujv75N3", "max_results": 3, "include_transcription": true}'
 ```
 
-**Expected:** More chunks per video (smaller chunk_size = more pieces).
-Useful for testing whether smaller chunks improve search precision.
+**Expected:** Task completes with playlist videos extracted.
 
 ---
 
-## 4. POST /search
+## 3. Qdrant Ingest
 
-**What it does:** Full agentic RAG pipeline:
-1. **Retrieve** — SmartRetriever: Qdrant hybrid (dense + BM25) + Neo4j graph (if available), parallel, deduplicated, reranked with FlashRank
-2. **Grade** — LLM grades each document for relevance (parallel via asyncio.gather)
-3. **Generate** — LLM produces answer with citations from relevant documents
-4. **Check Hallucination** — LLM verifies answer is grounded in documents
-5. **Format Citations** — Extracts structured source links
-6. If grading/hallucination fails → **Rewrite Query** → retry from step 1
+Ingests transcripts from ES → chunks → NVIDIA NIM embedding API (2048d) → Qdrant.
+Runs as Celery task. **Zero CPU usage** (API-based embeddings).
 
-**Cost:** LLM tokens (grading × N docs + generation + hallucination check + possible rewrites).
-
-### Test 4.1 — Basic factual query
+### 3.1 Ingest Specific Videos
 
 ```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/search \
+curl -s -X POST $BASE/api/v1/youtube/agents/ingest \
   -H 'Content-Type: application/json' \
-  -d '{
-    "question": "What countries does Wealthy Expat recommend for citizenship by investment?"
-  }' | python3 -m json.tool
+  -d '{"video_ids": ["7a_KPrvhJi8", "YjeMkwVMwOM"]}'
 ```
 
-**Expected response structure:**
-```json
-{
-    "answer": "Based on the transcripts, Wealthy Expat discusses several countries for citizenship by investment including Saint Kitts and Nevis, Dominica, Grenada, Vanuatu... [Video: Best Alternatives to Caribbean Citizenship by Investment]...",
-    "citations": [
-        {
-            "video_id": "7a_KPrvhJi8",
-            "title": "Best Alternatives to Caribbean Citizenship by Investment",
-            "channel": "Wealthy Expat",
-            "url": "https://www.youtube.com/watch?v=7a_KPrvhJi8",
-            "source": "qdrant_hybrid"
-        }
-    ],
-    "grounded": true,
-    "retrieval_sources": ["qdrant_hybrid"],
-    "retry_count": 0,
-    "search_query": "What countries does Wealthy Expat recommend for citizenship by investment?"
-}
-```
-
-**What to verify:**
-- `answer`: should reference specific countries mentioned in transcripts, not generic knowledge
-- `citations`: deduplicated by video_id, each with title + URL
-- `grounded: true`: hallucination check passed
-- `retrieval_sources`: shows which retriever(s) contributed
-- `retry_count: 0`: no rewrites needed (good query + relevant content)
-
-### Test 4.2 — Semantic query (different vocabulary)
-
-Tests Qdrant dense vectors — query uses different words than the transcripts.
+### 3.2 Ingest ALL Transcripts
 
 ```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/search \
+curl -s -X POST $BASE/api/v1/youtube/agents/ingest \
   -H 'Content-Type: application/json' \
-  -d '{
-    "question": "How can wealthy people legally reduce their tax burden by moving abroad?"
-  }' | python3 -m json.tool
+  -d '{"video_ids": null}'
 ```
 
-**Why this matters:** The transcripts say "tax optimization" and "offshore strategies", not "reduce tax burden". ES keyword search might miss this. Qdrant dense vectors should match the semantic meaning.
+**Expected:** `{"total_transcripts": 402, "total_chunks": ~2900, "points_upserted": ~2900, "embedding": "nvidia-nim-api"}`
 
-**Expected:** Answer about tax strategies from transcripts, `retrieval_sources: ["qdrant_hybrid"]`.
+### 3.3 Verify in Qdrant Dashboard
 
-### Test 4.3 — Keyword-specific query (BM25 sparse shines)
+Open `https://qdrant.YOUR_TAILNET_DOMAIN.ts.net/dashboard`:
+- Collection: `youtube-transcripts`
+- Vectors: `dense` (2048d, cosine) + `sparse`
+- Points: ~3266
+
+### 3.4 Test Cosine Similarity Directly
 
 ```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/search \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "question": "Saint Kitts and Nevis citizenship $150,000 investment"
-  }' | python3 -m json.tool
+# Requires NVIDIA_API_KEY and QDRANT_API_KEY
+# Embed a query, then search Qdrant
+curl -sk -H "api-key: $QDRANT_API_KEY" -X POST \
+  "https://qdrant.YOUR_TAILNET_DOMAIN.ts.net/collections/youtube-transcripts/points/query" \
+  -H "Content-Type: application/json" \
+  -d '{"query": [VECTOR], "using": "dense", "limit": 3, "with_payload": true}'
 ```
 
-**Why this matters:** Exact terms like "Saint Kitts and Nevis" and "$150,000" are best matched by BM25 sparse vectors. The dense model might confuse it with other Caribbean nations.
-
-### Test 4.4 — Query triggering rewrite
-
-Content that doesn't exist — forces the agent to rewrite and retry.
-
-```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/search \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "question": "What does Wealthy Expat say about quantum computing?",
-    "max_retries": 2
-  }' | python3 -m json.tool
-```
-
-**Expected:**
-```json
-{
-    "answer": "No answer generated.",
-    "citations": [],
-    "grounded": false,
-    "retry_count": 2,
-    "search_query": "quantum computing technology videos wealthy expat channel"
-}
-```
-
-**What to verify:**
-- `retry_count: 2`: agent rewrote the query twice before giving up
-- `search_query`: different from original question (was rewritten by LLM)
-- `answer`: should clearly state no relevant information found
-
-### Test 4.5 — Cache hit test
-
-Run the same query twice:
-
-```bash
-# First call — full pipeline (~5-15 seconds)
-time curl -s -X POST $BASE/api/v1/youtube/agents/search \
-  -H 'Content-Type: application/json' \
-  -d '{"question": "What is the best country for a digital nomad visa?"}' > /dev/null
-
-# Second call — should be instant (<100ms)
-time curl -s -X POST $BASE/api/v1/youtube/agents/search \
-  -H 'Content-Type: application/json' \
-  -d '{"question": "What is the best country for a digital nomad visa?"}' | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'from_cache: {d.get(\"_from_cache\", False)}')"
-```
-
-**Expected:** Second call returns `_from_cache: True` in <100ms.
-
-### Test 4.6 — Thread persistence (conversation memory)
-
-Same thread_id across multiple queries — tests checkpointer.
-
-```bash
-# First question
-curl -s -X POST $BASE/api/v1/youtube/agents/search \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "question": "What are the pros of Portugal golden visa?",
-    "thread_id": "conversation-001"
-  }' | python3 -m json.tool
-
-# Second question on same thread
-curl -s -X POST $BASE/api/v1/youtube/agents/search \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "question": "And what about Greece compared to that?",
-    "thread_id": "conversation-001"
-  }' | python3 -m json.tool
-```
-
-**What to verify:** The second query might benefit from checkpointed state (the graph knows the previous context for this thread).
-
-### Test 4.7 — Hallucination detection test
-
-Ask for specific numbers/facts — harder for the LLM to fabricate.
-
-```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/search \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "question": "What exact investment amounts are required for Saint Kitts citizenship?"
-  }' | python3 -m json.tool
-```
-
-**What to verify:**
-- `grounded: true`: all amounts should be from the transcripts
-- If the LLM fabricates a number not in the sources, `grounded` should be `false` and a retry should trigger
-
-### Test 4.8 — Multi-video comparative query
-
-Tests whether the system pulls from multiple videos.
-
-```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/search \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "question": "Compare the citizenship by investment programs of Belarus, Saint Kitts, and Greece. What are the costs and benefits of each?"
-  }' | python3 -m json.tool
-```
-
-**Expected:** Answer synthesizes information from multiple videos. `citations` should list 3+ different videos.
+**Relevance benchmark (tested 2026-04-11):**
+- Relevant query ("citizenship by investment Caribbean"): score ~0.58
+- Semantic match ("pay less taxes moving abroad"): score ~0.49
+- Irrelevant ("quantum physics black hole"): score ~0.12
 
 ---
 
-## 5. POST /search/stream
+## 4. Neo4j Graph Ingest
 
-**What it does:** Same pipeline as `/search`, but streams node-by-node updates via Server-Sent Events (SSE). The client sees real-time progress.
+Extracts entities and relationships from **full transcripts** via LLM → stores in Neo4j.
+Runs as Celery task. 1 LLM call per transcript (not chunked).
+~402 LLM calls total, ~40-60 minutes.
 
-### Test 5.1 — Basic streaming
+### 4.1 Ingest All Transcripts
+
+```bash
+curl -s -X POST $BASE/api/v1/youtube/agents/ingest/graph \
+  -H 'Content-Type: application/json' \
+  -d '{"video_ids": null, "batch_size": 3}'
+```
+
+### 4.2 Ingest Specific Videos
+
+```bash
+curl -s -X POST $BASE/api/v1/youtube/agents/ingest/graph \
+  -H 'Content-Type: application/json' \
+  -d '{"video_ids": ["7a_KPrvhJi8", "VFEijm3Z57U"], "batch_size": 3}'
+```
+
+### 4.3 Check Graph Stats
+
+```bash
+curl -s $BASE/api/v1/youtube/agents/graph/stats
+```
+
+**Expected:** Node counts by label (Person, Country, Organization, etc.) + relationship counts by type.
+
+### 4.4 Verify in Neo4j Browser
+
+Open `http://neo4j.YOUR_TAILNET_DOMAIN.ts.net:7474`:
+
+```cypher
+-- Visual graph (best overview)
+MATCH (n:__Entity__)-[r]-(m)
+WHERE NOT m:Document
+RETURN n, r, m
+LIMIT 200
+
+-- Node types discovered
+MATCH (n) WHERE NOT n:Document AND NOT n:__Entity__
+UNWIND labels(n) AS label
+RETURN label, count(*) AS count ORDER BY count DESC
+
+-- Relationship types
+MATCH ()-[r]->()
+RETURN type(r) AS type, count(*) AS count ORDER BY count DESC
+
+-- Most connected entities
+MATCH (n:__Entity__)-[r]-()
+RETURN n.id, labels(n), count(r) AS connections
+ORDER BY connections DESC LIMIT 20
+```
+
+### 4.5 Features
+
+- **No schema constraints** — LLM captures all entity/relationship types
+- **Format-guided instructions** — TitleCase nodes, UPPER_SNAKE_CASE relationships
+- **Entity resolution** — rapidfuzz merges duplicates (75% threshold) after extraction
+- **Works for any channel** — no domain-specific config needed
+
+---
+
+## 5. Agentic RAG Search
+
+Full pipeline: Retrieve (Qdrant hybrid + Neo4j graph + ES fallback) → Grade → Generate → Hallucination Check → Citations.
+
+### 5.1 Basic Search
+
+```bash
+curl -s -X POST $BASE/api/v1/youtube/agents/search \
+  -H 'Content-Type: application/json' \
+  -d '{"question": "What are the cheapest countries for citizenship by investment?"}'
+```
+
+**Expected response:**
+```json
+{
+  "answer": "Based on the transcripts, Dominica and St. Lucia...",
+  "citations": [{"video_id": "...", "title": "...", "source": "qdrant_hybrid"}],
+  "grounded": true,
+  "retrieval_sources": ["qdrant_hybrid", "neo4j_graph"],
+  "retry_count": 0,
+  "search_query": "What are the cheapest..."
+}
+```
+
+**What to verify:**
+- `retrieval_sources` includes `qdrant_hybrid` (vector search working)
+- `grounded: true` (hallucination check passed)
+- `citations` have video titles and URLs
+- Answer references specific content from transcripts
+
+### 5.2 Semantic Query (Different Vocabulary)
+
+```bash
+curl -s -X POST $BASE/api/v1/youtube/agents/search \
+  -H 'Content-Type: application/json' \
+  -d '{"question": "How can wealthy people legally reduce their tax burden by moving abroad?"}'
+```
+
+**Expected:** Finds tax optimization content even though transcripts use different words.
+
+### 5.3 Multi-Source Query (Neo4j + Qdrant)
+
+```bash
+curl -s -X POST $BASE/api/v1/youtube/agents/search \
+  -H 'Content-Type: application/json' \
+  -d '{"question": "What does Wealthy Expat say about Dubai for crypto investors?"}'
+```
+
+**Expected:** `retrieval_sources: ["qdrant_hybrid", "neo4j_graph"]` — both contributing.
+
+### 5.4 Query Triggering Rewrite
+
+```bash
+curl -s -X POST $BASE/api/v1/youtube/agents/search \
+  -H 'Content-Type: application/json' \
+  -d '{"question": "What does Wealthy Expat say about quantum computing?", "max_retries": 1}'
+```
+
+**Expected:** `retry_count: 1`, `grounded: false`, empty/no answer.
+
+### 5.5 Comparative Query
+
+```bash
+curl -s -X POST $BASE/api/v1/youtube/agents/search \
+  -H 'Content-Type: application/json' \
+  -d '{"question": "Compare citizenship by investment programs of Dominica, Saint Kitts, and Grenada"}'
+```
+
+**Expected:** Answer synthesizes from multiple videos, 3+ citations.
+
+---
+
+## 6. SSE Streaming Search
+
+Same pipeline, but streams node-by-node progress via Server-Sent Events.
 
 ```bash
 curl -N -X POST $BASE/api/v1/youtube/agents/search/stream \
@@ -367,367 +302,159 @@ curl -N -X POST $BASE/api/v1/youtube/agents/search/stream \
   -d '{"question": "What are the tax benefits of living in Dubai?"}'
 ```
 
-**Expected output (SSE events, one per node):**
-
+**Expected SSE events:**
 ```
-data: {"node": "retrieve", "documents": [...], "document_count": 10}
-
-data: {"node": "grade_documents", "documents": [...], "document_count": 4}
-
-data: {"node": "generate", "generation": "Based on the transcripts..."}
-
+data: {"node": "retrieve", "document_count": 5}
+data: {"node": "grade_documents", "document_count": 3}
+data: {"node": "generate", "generation": "Based on..."}
 data: {"node": "check_hallucination"}
-
 data: {"node": "format_citations"}
-
 data: {"node": "end", "status": "complete"}
 ```
 
-**What to verify:**
-- Events arrive incrementally (not all at once)
-- `retrieve` shows raw document count before grading
-- `grade_documents` shows filtered count (fewer docs)
-- `generate` contains the full answer text
-- Sequence matches the graph: retrieve → grade → generate → check → format → end
+---
 
-### Test 5.2 — Streaming with rewrite (observe retry loop)
+## 7. Task Management
+
+### 7.1 Check Task Status
 
 ```bash
-curl -N -X POST $BASE/api/v1/youtube/agents/search/stream \
+curl -s $BASE/api/v1/tasks/{task_id}
+```
+
+**States:** `PENDING` → `STARTED` → `PROGRESS` → `SUCCESS` or `FAILURE`
+
+### 7.2 List Active Tasks
+
+```bash
+curl -s $BASE/api/v1/tasks
+```
+
+### 7.3 Cancel a Task
+
+```bash
+curl -s -X DELETE $BASE/api/v1/tasks/{task_id}
+```
+
+### 7.4 Monitor via Flower
+
+Open `https://celery-flower.YOUR_TAILNET_DOMAIN.ts.net`:
+- Active/completed/failed tasks
+- Worker status and resource usage
+- Queue depth
+
+---
+
+## 8. Full Pipeline
+
+One call triggers: extract channel → ingest Qdrant → ingest Neo4j → clear cache.
+
+```bash
+curl -s -X POST $BASE/api/v1/youtube/agents/pipeline \
   -H 'Content-Type: application/json' \
   -d '{
-    "question": "What does Wealthy Expat think about Mars colonization?",
-    "max_retries": 1
+    "channel_id": "TechWorldwithNana",
+    "max_results": 5,
+    "include_transcription": true,
+    "include_qdrant": true,
+    "include_graph": false
   }'
 ```
 
-**Expected:** You'll see the rewrite cycle in real-time:
-```
-data: {"node": "retrieve", "document_count": 5}
-data: {"node": "grade_documents", "document_count": 0}
-data: {"node": "rewrite_query", "search_query": "space exploration mars wealthy expat", "retry_count": 1}
-data: {"node": "retrieve", "document_count": 3}
-data: {"node": "grade_documents", "document_count": 0}
-data: {"node": "end", "status": "complete"}
-```
-
-### Test 5.3 — Parse SSE events programmatically (Python)
-
-```python
-import requests
-import json
-
-url = "http://localhost:23020/api/v1/youtube/agents/search/stream"
-payload = {"question": "Best European countries for tax residency?"}
-
-with requests.post(url, json=payload, stream=True) as r:
-    for line in r.iter_lines():
-        if line:
-            text = line.decode("utf-8")
-            if text.startswith("data: "):
-                event = json.loads(text[6:])
-                print(f"[{event['node']}]", end=" ")
-                if "document_count" in event:
-                    print(f"docs={event['document_count']}")
-                elif "generation" in event:
-                    print(f"answer={event['generation'][:100]}...")
-                elif "retry_count" in event:
-                    print(f"retry={event['retry_count']} query={event['search_query']}")
-                else:
-                    print()
-```
+**Expected:** Returns task_id. Each step runs sequentially in Celery.
 
 ---
 
-## 6. POST /ingest/graph
+## 9. LLM Configuration
 
-**What it does:** Two-step process:
-1. Creates Video + Channel nodes from metadata (FREE — direct Cypher, no LLM)
-2. Extracts Topic, Person, Technology, Concept entities from transcript chunks via LLMGraphTransformer (COSTS LLM TOKENS)
-
-**Cost:** ~1 LLM call per chunk. For 5 videos ≈ ~25 chunks ≈ ~25 LLM calls.
-
-### Test 6.1 — Small test (5 videos)
+### 9.1 Check Current LLM
 
 ```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/ingest/graph \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "video_ids": [
-      "7a_KPrvhJi8",
-      "VFEijm3Z57U",
-      "Lx5GkAS5d7Q",
-      "mTdWcsiPnDM",
-      "6AKEQPPvJ5s"
-    ],
-    "batch_size": 5,
-    "chunk_size": 2000,
-    "chunk_overlap": 200
-  }' | python3 -m json.tool
+kubectl logs -n coelhonexus-dev deploy/coelhonexus-fastapi -c coelhonexus-fastapi-container | grep "LLM loaded"
 ```
 
-**Expected:**
-```json
-{
-    "videos_processed": 5,
-    "chunks_processed": 25,
-    "documents_processed": 25,
-    "nodes_created": 80,
-    "relationships_created": 120
-}
-```
+**Default:** `z-ai/glm5 + 13 fallbacks (NVIDIA NIM)`
 
-**What to verify:**
-- `videos_processed`: matches input count
-- `nodes_created`: entities extracted (Topics, Persons, Technologies, etc.)
-- `relationships_created`: connections between entities (DISCUSSES, MENTIONS, etc.)
-- Check Neo4j Browser: `http://neo4j.YOUR_TAILNET_DOMAIN.ts.net:7474`
-
-### Test 6.2 — Verify graph in Neo4j Browser
-
-Open `http://neo4j.YOUR_TAILNET_DOMAIN.ts.net:7474` and run these Cypher queries:
-
-```cypher
--- See all nodes
-MATCH (n) RETURN n LIMIT 100
-
--- See Video → Channel relationships
-MATCH (v:Video)-[:BELONGS_TO]->(c:Channel) RETURN v.title, c.name LIMIT 20
-
--- See what topics are discussed
-MATCH (v:Video)-[:DISCUSSES]->(t:Topic) RETURN v.title, t.id LIMIT 30
-
--- See people mentioned
-MATCH (v:Video)-[:MENTIONS]->(p:Person) RETURN v.title, p.id LIMIT 20
-
--- Find topics shared between multiple videos
-MATCH (v1:Video)-[:DISCUSSES]->(t:Topic)<-[:DISCUSSES]-(v2:Video)
-WHERE v1 <> v2
-RETURN t.id AS topic, collect(DISTINCT v1.title) AS videos
-LIMIT 10
-
--- Count nodes by type
-MATCH (n)
-UNWIND labels(n) AS label
-RETURN label, count(*) AS count
-ORDER BY count DESC
-```
-
-### Test 6.3 — Batch size impact
-
-Smaller batch_size = fewer concurrent LLM calls = slower but less API pressure:
+### 9.2 Update LLM Config
 
 ```bash
-# Conservative (2 concurrent LLM calls per batch)
-curl -s -X POST $BASE/api/v1/youtube/agents/ingest/graph \
+curl -s -X PUT $BASE/api/v1/youtube/agents/config \
   -H 'Content-Type: application/json' \
-  -d '{
-    "video_ids": ["WM126J84rcw", "YjeMkwVMwOM"],
-    "batch_size": 2
-  }' | python3 -m json.tool
+  -d '{"provider": "NVIDIA", "model": "meta/llama-3.3-70b-instruct", "temperature": 0.0}'
 ```
 
-### Test 6.4 — Re-ingest same videos (idempotency)
-
-```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/ingest/graph \
-  -H 'Content-Type: application/json' \
-  -d '{"video_ids": ["7a_KPrvhJi8"], "batch_size": 5}' | python3 -m json.tool
-```
-
-**What to verify:** Run the stats endpoint before and after — node count should NOT double. `MERGE` statements in `build_video_metadata_graph` are idempotent. However, LLMGraphTransformer + `add_graph_documents` may create duplicate entity nodes if the LLM extracts slightly different names. Check for near-duplicates in Neo4j.
+**Note:** Requires FastAPI restart to take effect.
 
 ---
 
-## 7. GET /graph/stats
+## 10. Cache Behavior
 
-**What it does:** Returns node and relationship counts from Neo4j, grouped by label/type.
+### 10.1 Verify Cache Hit
 
 ```bash
-curl -s $BASE/api/v1/youtube/agents/graph/stats | python3 -m json.tool
+# First call: full pipeline (~20-30s)
+curl -s -X POST $BASE/api/v1/youtube/agents/search \
+  -H 'Content-Type: application/json' \
+  -d '{"question": "Dubai golden visa"}'
+
+# Second call: instant (<1s, from cache)
+curl -s -X POST $BASE/api/v1/youtube/agents/search \
+  -H 'Content-Type: application/json' \
+  -d '{"question": "Dubai golden visa"}'
+# Check: "_from_cache": true
 ```
 
-**Expected:**
-```json
-{
-    "total_nodes": 150,
-    "total_relationships": 200,
-    "nodes_by_label": {
-        "__Entity__": 120,
-        "Topic": 45,
-        "Video": 5,
-        "Person": 25,
-        "Channel": 1,
-        "Technology": 15,
-        "Concept": 30,
-        "Document": 25
-    },
-    "relationships_by_type": {
-        "DISCUSSES": 80,
-        "MENTIONS": 40,
-        "BELONGS_TO": 5,
-        "RELATED_TO": 30,
-        "FEATURES": 20,
-        "USES": 25
-    }
-}
-```
+### 10.2 Cache Invalidation
 
-**What to verify:**
-- `__Entity__` count = sum of all entity types (every entity gets this base label)
-- `Document` count = number of chunks processed (source tracking)
-- `Video` count = number of videos ingested via `/ingest/graph`
-- `Channel` count = 1 (all videos from same channel)
-- `BELONGS_TO` count = `Video` count (each video belongs to one channel)
+Cache is automatically cleared when you run `POST /agents/ingest`.
 
 ---
 
-## 8. End-to-End Flow
+## 11. Edge Cases
 
-Complete test sequence from zero to multi-source search:
+### 11.1 Empty Question
 
 ```bash
-BASE="http://localhost:23020"
-
-# 1. Health check
-echo "=== Health Check ==="
-curl -s $BASE/health
-
-# 2. Ingest 5 videos to Qdrant (free, ~1 min)
-echo -e "\n\n=== Qdrant Ingestion ==="
-curl -s -X POST $BASE/api/v1/youtube/agents/ingest \
-  -H 'Content-Type: application/json' \
-  -d '{"video_ids": ["7a_KPrvhJi8","VFEijm3Z57U","Lx5GkAS5d7Q","mTdWcsiPnDM","6AKEQPPvJ5s"]}'
-
-# 3. Search (Qdrant hybrid only — no Neo4j data yet)
-echo -e "\n\n=== Search (Qdrant only) ==="
 curl -s -X POST $BASE/api/v1/youtube/agents/search \
   -H 'Content-Type: application/json' \
-  -d '{"question": "Which Caribbean islands offer citizenship by investment?"}' \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Sources: {d[\"retrieval_sources\"]}\nGrounded: {d[\"grounded\"]}\nRetries: {d[\"retry_count\"]}\nCitations: {len(d[\"citations\"])}\nAnswer: {d[\"answer\"][:200]}...')"
-
-# 4. Ingest to Neo4j (costs LLM tokens, ~2 min for 5 videos)
-echo -e "\n\n=== Neo4j Graph Ingestion ==="
-curl -s -X POST $BASE/api/v1/youtube/agents/ingest/graph \
-  -H 'Content-Type: application/json' \
-  -d '{"video_ids": ["7a_KPrvhJi8","VFEijm3Z57U","Lx5GkAS5d7Q","mTdWcsiPnDM","6AKEQPPvJ5s"], "batch_size": 5}'
-
-# 5. Check graph stats
-echo -e "\n\n=== Graph Stats ==="
-curl -s $BASE/api/v1/youtube/agents/graph/stats | python3 -m json.tool
-
-# 6. Search (Qdrant + Neo4j in parallel)
-echo -e "\n\n=== Search (Multi-source) ==="
-curl -s -X POST $BASE/api/v1/youtube/agents/search \
-  -H 'Content-Type: application/json' \
-  -d '{"question": "What countries and people are mentioned in relation to golden visa programs?"}' \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Sources: {d[\"retrieval_sources\"]}\nGrounded: {d[\"grounded\"]}\nCitations: {len(d[\"citations\"])}\nAnswer: {d[\"answer\"][:300]}...')"
-
-# 7. Cache hit test
-echo -e "\n\n=== Cache Test ==="
-curl -s -X POST $BASE/api/v1/youtube/agents/search \
-  -H 'Content-Type: application/json' \
-  -d '{"question": "What countries and people are mentioned in relation to golden visa programs?"}' \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'From cache: {d.get(\"_from_cache\", False)}')"
+  -d '{"question": ""}'
 ```
 
----
-
-## 9. Edge Cases and Failure Modes
-
-### Test 9.1 — Empty question
+### 11.2 Non-Existent Video IDs
 
 ```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/search \
+curl -s -X POST $BASE/api/v1/youtube/content/videos \
   -H 'Content-Type: application/json' \
-  -d '{"question": ""}' | python3 -m json.tool
+  -d '{"video_ids": ["NONEXISTENT123"]}'
 ```
 
-**Expected:** Validation error (422) or empty result.
-
-### Test 9.2 — Very long question
+### 11.3 Concurrent Requests
 
 ```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/search \
-  -H 'Content-Type: application/json' \
-  -d "{\"question\": \"$(python3 -c "print('What about taxes? ' * 500)")\"}" \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('answer','')[:200])"
-```
-
-**Expected:** Should handle gracefully — the retriever truncates or the LLM manages the long input.
-
-### Test 9.3 — Non-existent video IDs in ingest
-
-```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/ingest \
-  -H 'Content-Type: application/json' \
-  -d '{"video_ids": ["NONEXISTENT123"]}' | python3 -m json.tool
-```
-
-**Expected:** `total_transcripts: 0, total_chunks: 0, points_upserted: 0`.
-
-### Test 9.4 — Max retries exhausted
-
-```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/search \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "question": "Explain the recipe for chocolate cake",
-    "max_retries": 1
-  }' | python3 -m json.tool
-```
-
-**Expected:** `retry_count: 1`, no relevant answer. Agent gave up after 1 rewrite attempt.
-
-### Test 9.5 — Ingest invalidates cache
-
-```bash
-# First: search and cache a result
-curl -s -X POST $BASE/api/v1/youtube/agents/search \
-  -H 'Content-Type: application/json' \
-  -d '{"question": "Dubai tax benefits"}' > /dev/null
-
-# Verify it's cached
-curl -s -X POST $BASE/api/v1/youtube/agents/search \
-  -H 'Content-Type: application/json' \
-  -d '{"question": "Dubai tax benefits"}' \
-  | python3 -c "import sys,json; print(f'cached: {json.load(sys.stdin).get(\"_from_cache\", False)}')"
-# Should print: cached: True
-
-# Now ingest (this clears all cache)
-curl -s -X POST $BASE/api/v1/youtube/agents/ingest \
-  -H 'Content-Type: application/json' \
-  -d '{"video_ids": ["7a_KPrvhJi8"]}' > /dev/null
-
-# Verify cache was cleared
-curl -s -X POST $BASE/api/v1/youtube/agents/search \
-  -H 'Content-Type: application/json' \
-  -d '{"question": "Dubai tax benefits"}' \
-  | python3 -c "import sys,json; print(f'cached: {json.load(sys.stdin).get(\"_from_cache\", False)}')"
-# Should print: cached: False (full pipeline runs again)
-```
-
-### Test 9.6 — Concurrent requests
-
-```bash
-# Fire 5 searches in parallel
-for q in \
-  "Best country for crypto investors" \
-  "Portugal golden visa requirements" \
-  "Dubai tax free living" \
-  "Serbia citizenship by merit" \
-  "Caribbean passport investment cost"; do
+for q in "Dubai tax" "Portugal visa" "Caribbean passport" "Serbia citizenship" "crypto nomad"; do
   curl -s -X POST $BASE/api/v1/youtube/agents/search \
     -H 'Content-Type: application/json' \
-    -d "{\"question\": \"$q\"}" \
-    | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'{d[\"search_query\"][:40]:40s} | grounded={d[\"grounded\"]} | citations={len(d[\"citations\"])}')" &
+    -d "{\"question\": \"$q\"}" &
 done
 wait
-echo "All done"
 ```
-
-**Expected:** All 5 return valid results. Tests concurrent LLM calls, Qdrant queries, and Redis checkpointing under load.
 
 ---
 
-*Last updated: 2026-04-10*
+## Architecture Summary
+
+| Component | Technology | Role |
+|-----------|-----------|------|
+| **FastAPI** | Python 3.13 | API server (sync search, task enqueue) |
+| **Celery** | Redis broker | Background tasks (crawling, ingestion, graph) |
+| **Flower** | mher/flower | Celery monitoring dashboard |
+| **NVIDIA NIM** | 14 LLM models + embedding API | Generation, grading, entity extraction, embeddings |
+| **Qdrant** | Hybrid (dense 2048d + BM25 sparse) | Semantic + keyword search |
+| **Neo4j** | Community Edition + APOC | Knowledge graph (entities + relationships) |
+| **Elasticsearch** | v8 | Raw data storage + full-text fallback |
+| **Redis Stack** | v7.4 | Cache, LangGraph checkpoints, Celery broker |
+| **FlashRank** | Cross-encoder | Reranking retrieved documents |
+
+---
+
+*Last updated: 2026-04-12*

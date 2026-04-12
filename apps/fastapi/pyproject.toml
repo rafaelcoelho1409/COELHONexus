@@ -24,6 +24,7 @@ dependencies = [
     "fastembed",               # BM25 sparse embeddings (local, lightweight)
     "httpx",                   # HTTP client for NVIDIA NIM embedding API
     "flashrank",               # Cross-encoder reranker (local, no API cost)
+    "rapidfuzz",               # Fuzzy string matching for entity resolution
     "qdrant-client",           # Qdrant vector database client
     "neo4j",
     "redis",

@@ -5,27 +5,9 @@ CONCEPT: A knowledge graph stores ENTITIES (nodes) and RELATIONSHIPS (edges).
 Unlike a vector store that answers "what text is similar?", a knowledge graph
 answers "how are things connected?" — enabling multi-hop reasoning.
 
-Example: "What topics does Andrej Karpathy discuss that are also discussed by 3Blue1Brown?"
-- Vector search: can't answer this (no concept of entities or connections)
-- Graph traversal:
-    (Speaker:Karpathy)-[:DISCUSSES]->(Topic:Transformers)<-[:DISCUSSES]-(Speaker:3Blue1Brown)
-
-Schema design follows the architecture doc:
-- Video: a YouTube video
-- Channel: a YouTube channel
-- Topic: a subject/concept extracted from transcripts
-- Speaker: a person mentioned or speaking in a video
-- Segment: a chunk of transcript text
-
-Relationships encode how entities connect:
-- BELONGS_TO: Video → Channel
-- DISCUSSES: Video/Speaker → Topic
-- PART_OF: Segment → Video
-- RELATED_TO: Topic → Topic (semantic similarity)
-- MENTIONS: Segment → Speaker/Topic
-
-These Pydantic models are for documentation and API responses.
-The actual Neo4j schema is created by LLMGraphTransformer + Cypher queries.
+Schema is auto-discoverable per channel via discover_schema(), but we provide
+a strong default schema optimized for YouTube content about expat/investment topics.
+The schema can be overridden for different content domains.
 """
 from pydantic import BaseModel
 
@@ -35,7 +17,7 @@ from pydantic import BaseModel
 # =============================================================================
 class VideoNode(BaseModel):
     """A YouTube video in the knowledge graph."""
-    id: str                         # YouTube video ID
+    id: str
     title: str
     channel_id: str | None = None
     channel: str | None = None
@@ -45,24 +27,10 @@ class VideoNode(BaseModel):
 
 class ChannelNode(BaseModel):
     """A YouTube channel."""
-    id: str                         # Channel ID
+    id: str
     name: str
 
 
-class TopicNode(BaseModel):
-    """A topic/concept extracted from video transcripts."""
-    name: str
-    description: str | None = None
-
-
-class SpeakerNode(BaseModel):
-    """A person mentioned or speaking in videos."""
-    name: str
-
-
-# =============================================================================
-# Graph Statistics (for /graph/stats endpoint)
-# =============================================================================
 class GraphStats(BaseModel):
     """Summary statistics for the knowledge graph."""
     total_nodes: int = 0
@@ -72,18 +40,35 @@ class GraphStats(BaseModel):
 
 
 # =============================================================================
-# Allowed nodes and relationships for LLMGraphTransformer
+# Extraction Instructions — No schema constraints, format-guided
 # =============================================================================
-# These constrain what the LLM can extract — without constraints,
-# the LLM invents arbitrary entity types and the graph becomes messy.
+# NO allowed_nodes or allowed_relationships constraints.
+# The LLM captures ALL entities and relationships it finds.
+# Instructions enforce consistent FORMATTING, not content limits.
+# This works across ANY YouTube channel topic (finance, tech, cooking, etc.)
 
-ALLOWED_NODES = ["Video", "Channel", "Topic", "Person", "Concept", "Technology"]
+EXTRACTION_INSTRUCTIONS = """
+Extract ALL entities and relationships from the text. Do not limit yourself
+to predefined types — capture everything meaningful.
 
-ALLOWED_RELATIONSHIPS = [
-    "DISCUSSES",     # Video/Person → Topic/Concept/Technology
-    "BELONGS_TO",    # Video → Channel
-    "MENTIONS",      # Video → Person/Technology
-    "RELATED_TO",    # Topic → Topic, Concept → Concept
-    "FEATURES",      # Video → Person (appears in video)
-    "USES",          # Person/Video → Technology
-]
+FORMATTING RULES (critical for graph consistency):
+- Node labels: use TitleCase singular nouns (e.g., Country, Person, Organization,
+  Technology, Concept, Product, Event, Law, Program, City)
+- Relationship types: use UPPER_SNAKE_CASE verbs (e.g., DISCUSSES, RECOMMENDS,
+  LOCATED_IN, WARNS_AGAINST, COSTS, RELATED_TO, MENTIONS, FEATURES, USES)
+- Entity IDs: use the most complete, official form of the name
+  - Countries: official full names ("Saint Kitts and Nevis" not "St Kitts")
+  - People: full names when available ("Rafael Cintron" not "Rafael")
+  - Organizations: official names ("Goldman Sachs" not "Goldman")
+- Money amounts: normalize to numbers ("$100,000" not "$100K" or "100 thousand")
+- Prefer general relationship types when possible (DISCUSSES over TALKS_ABOUT)
+- Merge obvious aliases (e.g., "the UAE" and "United Arab Emirates" → same entity)
+
+WHAT TO EXTRACT:
+- Every person, organization, country, city, concept, product, technology,
+  event, law, program, or notable entity mentioned
+- Every relationship between entities: who recommends what, who warns against
+  what, what costs how much, what is located where, what is related to what
+- Opinions and stances: if the speaker recommends or warns against something,
+  capture that as a relationship (RECOMMENDS or WARNS_AGAINST)
+"""

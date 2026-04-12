@@ -1,11 +1,11 @@
 """
-Graph Tasks — Neo4j Knowledge Graph Entity Extraction
+Graph Tasks — Neo4j Knowledge Graph Entity Extraction (Optimized)
 
-CONCEPT: Wraps LLMGraphTransformer entity extraction (services/graph_builder.py)
-as a Celery task. Runs in the LLM worker — each chunk requires an LLM call.
-
-This was the most expensive operation (100+ LLM calls, 5+ minutes).
-As a Celery task, it runs in the background with progress tracking.
+IMPROVEMENTS:
+- Full transcript per LLM call (352 calls instead of 2911)
+- Domain-specific schema + extraction instructions
+- Entity resolution via rapidfuzz (post-processing)
+- Rate-limit pacing (2s between batches, batch_size=3)
 """
 import asyncio
 import os
@@ -20,13 +20,13 @@ logger = get_task_logger(__name__)
 
 
 @app.task(bind = True, name = "tasks.graph.ingest_to_graph")
-def ingest_to_graph(self, video_ids = None, batch_size = 5, chunk_size = 2000, chunk_overlap = 200):
+def ingest_to_graph(self, video_ids = None, batch_size = 3):
     """
-    Extract entities from transcript chunks via LLM → store in Neo4j.
+    Extract entities from FULL transcripts via LLM → store in Neo4j.
 
-    Two-phase process:
-    1. Create Video/Channel nodes from metadata (free — no LLM)
-    2. Extract Topic/Person/Technology entities from chunks (LLM-expensive)
+    Optimized: sends full transcript per LLM call (not chunks).
+    352 transcripts = 352 LLM calls (was 2911 with chunks).
+    Includes entity resolution post-processing.
     """
     logger.info(f"[ingest_to_graph] Starting: video_ids={video_ids}, batch_size={batch_size}")
     self.update_state(state = "PROGRESS", meta = {"status": "initializing"})
@@ -36,7 +36,6 @@ def ingest_to_graph(self, video_ids = None, batch_size = 5, chunk_size = 2000, c
         from langchain_neo4j import Neo4jGraph
         from langchain_openai import ChatOpenAI
         from services.ingestion import fetch_transcripts_from_es, fetch_metadata_from_es
-        from services.chunker import create_chunker, chunk_transcript
         from services.graph_builder import extract_and_store_graph, build_video_metadata_graph
 
         es = AsyncElasticsearch(
@@ -54,7 +53,7 @@ def ingest_to_graph(self, video_ids = None, batch_size = 5, chunk_size = 2000, c
             password = os.environ.get("NEO4J_PASSWORD", ""),
         )
 
-        # Use the same LLM fallback chain as FastAPI
+        # LLM fallback chain (same as FastAPI)
         NVIDIA_URL = "https://integrate.api.nvidia.com/v1"
         NVIDIA_KEY = os.environ.get("NVIDIA_API_KEY", "")
 
@@ -62,7 +61,7 @@ def ingest_to_graph(self, video_ids = None, batch_size = 5, chunk_size = 2000, c
             return ChatOpenAI(
                 model = model, temperature = 0.0,
                 base_url = NVIDIA_URL, api_key = NVIDIA_KEY,
-                max_retries = 0, timeout = 60,
+                max_retries = 0, timeout = 120,  # 120s timeout for full transcripts
             )
 
         primary = _nim("z-ai/glm5")
@@ -92,26 +91,10 @@ def ingest_to_graph(self, video_ids = None, batch_size = 5, chunk_size = 2000, c
             ]
             build_video_metadata_graph(neo4j_graph, video_metadata)
 
-            # 3. Chunk transcripts
-            chunker = create_chunker(chunk_size, chunk_overlap)
-            all_chunks = []
-            for transcript in transcripts:
-                vid = transcript["video_id"]
-                meta = metadata_map.get(vid, {})
-                chunks = chunk_transcript(
-                    video_id = vid,
-                    content = transcript.get("content", ""),
-                    metadata = {
-                        "title": meta.get("title", ""),
-                        "channel": meta.get("channel", ""),
-                    },
-                    chunker = chunker,
-                )
-                all_chunks.extend(chunks)
-
-            # 4. Extract entities via LLM and store in Neo4j
+            # 3. Extract entities from FULL transcripts (not chunks)
             extraction_stats = await extract_and_store_graph(
-                documents = all_chunks,
+                transcripts = transcripts,
+                metadata_map = metadata_map,
                 llm = llm,
                 neo4j_graph = neo4j_graph,
                 batch_size = batch_size,
@@ -119,7 +102,6 @@ def ingest_to_graph(self, video_ids = None, batch_size = 5, chunk_size = 2000, c
 
             return {
                 "videos_processed": len(all_video_ids),
-                "chunks_processed": len(all_chunks),
                 **extraction_stats,
             }
         finally:
