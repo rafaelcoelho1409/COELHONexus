@@ -158,6 +158,30 @@ Single model with retry: `nvidia/llama-nemotron-embed-1b-v2` (2048d, 8K context)
 | **Community detection** | Neo4j graph algorithms for topic clusters | Nice-to-have |
 | **Multi-modal (Phase 5)** | Video frame extraction + visual search | Future |
 
+## Neo4j Knowledge Graph — Assessment & Roadmap
+
+### Current State (8/10)
+
+| Aspect | Status | Notes |
+|--------|:------:|-------|
+| Entity extraction (LLMGraphTransformer) | **Done** | Unconstrained, format-guided, full transcripts |
+| Entity resolution (rapidfuzz) | **Done** | 75% threshold, normalizes + merges duplicates |
+| Celery background processing | **Done** | Runs overnight, real-time Neo4j updates |
+| Video/Channel metadata graph | **Done** | MERGE-based, idempotent |
+| Skip already-processed videos | **Done** | Checks Neo4j before LLM call |
+| Money amount false merge fix | **Done** | Excludes numeric entities from fuzzy match |
+| Improved Neo4j retriever | **Done** | Multi-pattern Cypher traversal |
+
+### Future Improvements
+
+| Improvement | Impact | Priority |
+|-------------|--------|:--------:|
+| Community detection (Louvain/Label Propagation) | Topic clusters, content grouping | Medium |
+| Temporal analysis (filter by upload_date) | Track opinion evolution over time | Medium |
+| Auto-schema discovery per channel | Better entity types per domain | Low |
+| Graph embeddings (Node2Vec/GraphSAGE) | Graph-aware semantic search | Advanced |
+| Entity normalization via LLM aliases | Reduce duplicates at extraction time | Low |
+
 ---
 
-*Last updated: 2026-04-11*
+*Last updated: 2026-04-12*

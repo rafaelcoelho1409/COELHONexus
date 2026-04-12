@@ -73,11 +73,28 @@ async def extract_and_store_graph(
     total_nodes = 0
     total_relationships = 0
     total_processed = 0
+    total_skipped = 0
+
+    # Check which videos already have entities in Neo4j (skip re-processing)
+    already_processed = set()
+    try:
+        result = neo4j_graph.query(
+            "MATCH (d:Document) WHERE d.video_id IS NOT NULL "
+            "RETURN collect(DISTINCT d.video_id) AS processed_ids"
+        )
+        if result and result[0].get("processed_ids"):
+            already_processed = set(result[0]["processed_ids"])
+            logger.info(f"[graph] {len(already_processed)} videos already processed in Neo4j, will skip")
+    except Exception:
+        pass  # If check fails, process everything
 
     # Build one Document per transcript (full text, not chunked)
     documents = []
     for transcript in transcripts:
         vid = transcript["video_id"]
+        if vid in already_processed:
+            total_skipped += 1
+            continue
         meta = metadata_map.get(vid, {})
         content = transcript.get("content", "")
         if not content or not content.strip():
@@ -93,7 +110,7 @@ async def extract_and_store_graph(
             },
         ))
 
-    logger.info(f"[graph] Processing {len(documents)} transcripts (full text, not chunked)")
+    logger.info(f"[graph] Processing {len(documents)} transcripts, skipped {total_skipped} already processed")
 
     # Process in small batches with rate-limit pacing
     for batch_start in range(0, len(documents), batch_size):
@@ -108,6 +125,19 @@ async def extract_and_store_graph(
                 include_source = True,
                 baseEntityLabel = True,
             )
+
+            # Tag Document nodes with video_id for skip-on-re-run
+            for doc in batch:
+                vid = doc.metadata.get("video_id", "")
+                if vid:
+                    try:
+                        neo4j_graph.query(
+                            "MATCH (d:Document) WHERE d.text CONTAINS $title "
+                            "SET d.video_id = $video_id",
+                            params = {"title": doc.metadata.get("title", "")[:50], "video_id": vid},
+                        )
+                    except Exception:
+                        pass
 
             for gdoc in graph_documents:
                 total_nodes += len(gdoc.nodes)
@@ -200,8 +230,14 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
             "RETURN label, collect(DISTINCT id) AS ids"
         )
 
+        # Labels to exclude from fuzzy matching (numbers match falsely)
+        SKIP_FUZZY_LABELS = {"Money", "Money amount", "Cost", "Number", "Date", "Currency"}
+
         for row in entities:
             label = row["label"]
+            # Skip numeric entity types — "r$ 100.000" vs "r$ 1.000.000" are different values
+            if label in SKIP_FUZZY_LABELS:
+                continue
             # Ensure ids are strings (Neo4j can return mixed types)
             ids = [str(i) for i in row["ids"] if isinstance(i, str)]
             if len(ids) < 2:

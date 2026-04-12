@@ -279,24 +279,43 @@ class Neo4jRetriever:
         """
         if not entities:
             return []
-        # Normalize entities for case-insensitive matching
         entity_patterns = [e.lower() for e in entities]
-        # Query 1: Find source documents connected to matching entities
+
+        # Multi-pattern Cypher traversal:
+        # 1. Direct match: entity matches query terms
+        # 2. One-hop: entities connected to matched entities
+        # 3. Document source: original transcript text linked to entities
         try:
             results = self.graph.query(
-                "MATCH (e) "
-                "WHERE any(label IN labels(e) WHERE label <> '__Entity__') "
-                "AND (toLower(e.id) IN $entities OR toLower(e.name) IN $entities) "
+                # Direct entity match + source documents
+                "MATCH (e:__Entity__) "
+                "WHERE toLower(e.id) IN $entities "
                 "OPTIONAL MATCH (e)<-[r]-(doc:Document) "
-                "OPTIONAL MATCH (e)<-[:DISCUSSES|MENTIONS]-(v:Video) "
+                "OPTIONAL MATCH (e)<-[r2]-(v:Video) "
+                "WITH e, doc, v, r, r2 "
                 "RETURN "
                 "  COALESCE(doc.text, e.id + ': ' + COALESCE(e.description, '')) AS content, "
                 "  COALESCE(v.id, '') AS video_id, "
                 "  COALESCE(v.title, '') AS title, "
                 "  COALESCE(v.webpage_url, '') AS webpage_url, "
-                "  labels(e) AS entity_labels, "
                 "  e.id AS entity_id, "
-                "  type(r) AS relationship "
+                "  type(r) AS relationship, "
+                "  'direct' AS match_type "
+                "LIMIT $limit "
+                "UNION "
+                # One-hop neighbors: entities connected to matched entities
+                "MATCH (e:__Entity__)-[r]-(neighbor:__Entity__) "
+                "WHERE toLower(e.id) IN $entities AND e <> neighbor "
+                "OPTIONAL MATCH (neighbor)<--(doc:Document) "
+                "OPTIONAL MATCH (neighbor)<--(v:Video) "
+                "RETURN "
+                "  COALESCE(doc.text, neighbor.id + ' (' + type(r) + ' ' + e.id + ')') AS content, "
+                "  COALESCE(v.id, '') AS video_id, "
+                "  COALESCE(v.title, '') AS title, "
+                "  COALESCE(v.webpage_url, '') AS webpage_url, "
+                "  neighbor.id AS entity_id, "
+                "  type(r) AS relationship, "
+                "  'one_hop' AS match_type "
                 "LIMIT $limit",
                 params = {"entities": entity_patterns, "limit": self.top_k * 2},
             )
