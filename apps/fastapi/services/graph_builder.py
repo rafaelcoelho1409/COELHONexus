@@ -119,7 +119,7 @@ async def extract_and_store_graph(
                         f"{total_nodes} nodes, {total_relationships} rels")
 
         except Exception as e:
-            logger.warning(f"[graph] Batch failed: {e}. Continuing with next batch.")
+            logger.warning(f"[graph] Batch {batch_start // batch_size + 1} failed: {type(e).__name__}: {str(e)[:200]}. Continuing.")
             total_processed += len(batch)
 
         # Rate-limit pacing: 2s between batches to avoid 429 errors
@@ -193,16 +193,17 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
         # Get all entity IDs grouped by label
         entities = neo4j_graph.query(
             "MATCH (n:__Entity__) "
-            "WHERE n.id IS NOT NULL "
-            "WITH labels(n) AS labels, n.id AS id "
-            "UNWIND labels AS label "
-            "WITH label, id WHERE label <> '__Entity__' "
+            "WHERE n.id IS NOT NULL AND n.id <> '' "
+            "UNWIND labels(n) AS label "
+            "WITH label, n.id AS id "
+            "WHERE label <> '__Entity__' AND label <> 'Document' "
             "RETURN label, collect(DISTINCT id) AS ids"
         )
 
         for row in entities:
             label = row["label"]
-            ids = row["ids"]
+            # Ensure ids are strings (Neo4j can return mixed types)
+            ids = [str(i) for i in row["ids"] if isinstance(i, str)]
             if len(ids) < 2:
                 continue
 
@@ -221,7 +222,7 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
                         duplicate = id2 if canonical == id1 else id1
                         try:
                             neo4j_graph.query(
-                                f"MATCH (n1:{label} {{id: $canonical}}), (n2:{label} {{id: $duplicate}}) "
+                                f"MATCH (n1:`{label}` {{id: $canonical}}), (n2:`{label}` {{id: $duplicate}}) "
                                 "CALL apoc.refactor.mergeNodes([n1, n2], "
                                 "  {properties: 'combine', mergeRels: true}) YIELD node "
                                 "RETURN node",

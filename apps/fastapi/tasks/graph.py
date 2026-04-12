@@ -61,7 +61,7 @@ def ingest_to_graph(self, video_ids = None, batch_size = 3):
             return ChatOpenAI(
                 model = model, temperature = 0.0,
                 base_url = NVIDIA_URL, api_key = NVIDIA_KEY,
-                max_retries = 0, timeout = 120,  # 120s timeout for full transcripts
+                max_retries = 0, timeout = 600,  # 10 min timeout — full transcript entity extraction is slow
             )
 
         primary = _nim("z-ai/glm5")
