@@ -182,14 +182,12 @@ async def ingest_to_qdrant(body: IngestRequest):
 # =============================================================================
 class GraphIngestRequest(BaseModel):
     """
-    Request to extract entities from transcript chunks into Neo4j.
+    Request to extract entities from full transcripts into Neo4j.
     If video_ids is None, processes ALL transcripts in ES.
     batch_size controls concurrent LLM calls per batch.
     """
     video_ids: list[str] | None = None
-    batch_size: int = 10
-    chunk_size: int = 2000
-    chunk_overlap: int = 200
+    batch_size: int = 3
 
 
 @router.post("/ingest/graph")
@@ -201,7 +199,7 @@ async def ingest_to_graph(body: GraphIngestRequest):
     COST: Each chunk = 1 LLM call. 100 chunks ≈ 100 LLM calls.
     """
     from tasks.graph import ingest_to_graph as graph_task
-    task = graph_task.delay(body.video_ids, body.batch_size, body.chunk_size, body.chunk_overlap)
+    task = graph_task.delay(body.video_ids, body.batch_size)
     return {"task_id": task.id, "status": "queued", "endpoint": f"/api/v1/tasks/{task.id}"}
 
 
