@@ -17,6 +17,7 @@ RETRIEVAL STRATEGY (Phase 3):
 4. ES as final fallback if Qdrant is unavailable
 """
 import asyncio
+import logging
 from elasticsearch import AsyncElasticsearch
 from qdrant_client import AsyncQdrantClient
 from langchain_core.documents import Document
@@ -27,6 +28,7 @@ from langchain_openai import ChatOpenAI
 
 from services.ingestion import QDRANT_COLLECTION
 
+logger = logging.getLogger(__name__)
 
 ES_INDEX_TRANSCRIPTIONS = "coelhonexus-youtube-transcriptions"
 ES_INDEX_METADATA = "coelhonexus-youtube-metadata"
@@ -260,8 +262,10 @@ class Neo4jRetriever:
         chain = prompt | self.llm.with_structured_output(ExtractedEntities, method = "function_calling")
         try:
             result = await chain.ainvoke({"query": query})
+            logger.info(f"[neo4j-retriever] Extracted entities: {result.entities}")
             return result.entities
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[neo4j-retriever] Entity extraction failed: {type(e).__name__}: {str(e)[:200]}")
             return []
 
     def _traverse_graph(self, entities: list[str]) -> list[Document]:
@@ -276,10 +280,20 @@ class Neo4jRetriever:
 
         The __Entity__ label (set by baseEntityLabel=True during ingestion)
         lets us search across ALL entity types in one query.
+
+        NOTE: LLMGraphTransformer stores some entity IDs as arrays
+        (e.g., ['Dubai', 'UAE']). The CASE expressions below normalize
+        array IDs to their first element before comparison.
         """
         if not entities:
             return []
         entity_patterns = [e.lower() for e in entities]
+
+        # Helper: normalize e.id (string or list) to a single string.
+        # LLMGraphTransformer stores ~28% of entity IDs as arrays
+        # (e.g., ['Dubai', 'UAE']). valueType() is Neo4j 5+-compatible.
+        NORMALIZE_ID = 'CASE WHEN valueType(e.id) STARTS WITH "LIST" THEN head(e.id) ELSE e.id END'
+        NORMALIZE_NEIGHBOR_ID = 'CASE WHEN valueType(neighbor.id) STARTS WITH "LIST" THEN head(neighbor.id) ELSE neighbor.id END'
 
         # Multi-pattern Cypher traversal:
         # 1. Direct match: entity matches query terms
@@ -289,37 +303,45 @@ class Neo4jRetriever:
             results = self.graph.query(
                 # Direct entity match + source documents
                 "MATCH (e:__Entity__) "
-                "WHERE toLower(e.id) IN $entities "
+                "WHERE e.id IS NOT NULL "
+                f"WITH e, ({NORMALIZE_ID}) AS eid "
+                "WHERE toLower(toString(eid)) IN $entities "
                 "OPTIONAL MATCH (e)<-[r]-(doc:Document) "
                 "OPTIONAL MATCH (e)<-[r2]-(v:Video) "
-                "WITH e, doc, v, r, r2 "
+                "WITH e, eid, doc, v, r, r2 "
                 "RETURN "
-                "  COALESCE(doc.text, e.id + ': ' + COALESCE(e.description, '')) AS content, "
+                "  COALESCE(doc.text, toString(eid) + ': ' + COALESCE(e.description, '')) AS content, "
                 "  COALESCE(v.id, '') AS video_id, "
                 "  COALESCE(v.title, '') AS title, "
                 "  COALESCE(v.webpage_url, '') AS webpage_url, "
-                "  e.id AS entity_id, "
+                "  toString(eid) AS entity_id, "
                 "  type(r) AS relationship, "
                 "  'direct' AS match_type "
                 "LIMIT $limit "
                 "UNION "
                 # One-hop neighbors: entities connected to matched entities
-                "MATCH (e:__Entity__)-[r]-(neighbor:__Entity__) "
-                "WHERE toLower(e.id) IN $entities AND e <> neighbor "
+                "MATCH (e:__Entity__) "
+                "WHERE e.id IS NOT NULL "
+                f"WITH e, ({NORMALIZE_ID}) AS eid "
+                "WHERE toLower(toString(eid)) IN $entities "
+                "MATCH (e)-[r]-(neighbor:__Entity__) "
+                "WHERE e <> neighbor "
                 "OPTIONAL MATCH (neighbor)<--(doc:Document) "
                 "OPTIONAL MATCH (neighbor)<--(v:Video) "
+                f"WITH neighbor, doc, v, r, e, eid, ({NORMALIZE_NEIGHBOR_ID}) AS nid "
                 "RETURN "
-                "  COALESCE(doc.text, neighbor.id + ' (' + type(r) + ' ' + e.id + ')') AS content, "
+                "  COALESCE(doc.text, toString(nid) + ' (' + type(r) + ' ' + toString(eid) + ')') AS content, "
                 "  COALESCE(v.id, '') AS video_id, "
                 "  COALESCE(v.title, '') AS title, "
                 "  COALESCE(v.webpage_url, '') AS webpage_url, "
-                "  neighbor.id AS entity_id, "
+                "  toString(nid) AS entity_id, "
                 "  type(r) AS relationship, "
                 "  'one_hop' AS match_type "
                 "LIMIT $limit",
                 params = {"entities": entity_patterns, "limit": self.top_k * 2},
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[neo4j-retriever] Cypher query failed: {type(e).__name__}: {str(e)[:200]}")
             return []
         # Convert to Documents, deduplicate by content
         seen_content = set()
@@ -393,7 +415,9 @@ class SmartRetriever:
             all_docs = []
             for name, result in zip(tasks.keys(), results):
                 if isinstance(result, Exception):
+                    logger.warning(f"[smart-retriever] {name} failed: {type(result).__name__}: {str(result)[:200]}")
                     continue
+                logger.info(f"[smart-retriever] {name} returned {len(result)} documents")
                 all_docs.extend(result)
             if all_docs:
                 deduped = self._deduplicate(all_docs)
