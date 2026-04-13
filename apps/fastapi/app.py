@@ -110,35 +110,56 @@ async def lifespan(app: FastAPI):
         "configurable": {"thread_id": "1"}
     }
     # =========================================================================
-    # LLM with Fallbacks — Priority-based model chain (April 2026)
+    # LLM with Fallbacks — Groq-first + NVIDIA NIM (April 2026)
     # =========================================================================
-    # CONCEPT: with_fallbacks() tries models in order. If model #1 returns
-    # 429 (rate limit) or times out, it immediately tries model #2, etc.
-    # Each model on NVIDIA NIM has its own ~40 RPM budget (per-model limits),
-    # so rotating across 14 models gives ~560 RPM effective throughput.
+    # CONCEPT: Groq models respond in milliseconds (394-1000 TPS on custom
+    # LPU hardware) vs seconds on NVIDIA NIM. We put Groq FIRST for speed,
+    # then fall back to NVIDIA NIM's 14 models when Groq hits rate limits.
+    #
+    # Groq free tier: 30 RPM per model (60 for Qwen3/Kimi), 100K-500K TPD
+    # NVIDIA NIM free tier: ~40 RPM per model, unlimited daily tokens
+    # Combined: Groq handles ~150 RPM (5 models), NVIDIA handles overflow
     #
     # max_retries=0: fail immediately on 429 (don't waste time retrying)
-    # timeout=60: don't hang on slow models
+    # timeout=60: don't hang on slow models (Groq rarely needs >5s)
     #
-    # Ranked by Chatbot Arena ELO + benchmarks (April 2026):
-    #  1. GLM5              — Arena 1451, SWE-bench 77.8%, GPQA 86.0 (best open-source)
-    #  2. Kimi K2.5         — Arena 1447, HumanEval 99.0, MMLU 92.0 (multimodal)
-    #  3. Kimi K2           — Arena 1447, AIME 96.1 (text-only, same quality)
-    #  4. Kimi K2 Thinking  — Reasoning mode with chain-of-thought
-    #  5. DeepSeek V3.2     — Arena 1421, best MIT-licensed S-tier
-    #  6. Nemotron Super 120B — NVIDIA's largest open model
-    #  7. Qwen 3.5 122B     — MoE 122B (10B active), strong quality
-    #  8. Nemotron Super 49B — MATH 97.4, punches above weight
-    #  9. Mistral Small 4   — 119B MoE (6B active), fast + capable
-    # 10. Gemma 4 31B       — Google's latest, solid all-rounder
-    # 11. Llama 4 Maverick  — 17B×128E MoE, latest Meta
-    # 12. Llama 3.3 70B     — battle-tested baseline
-    # 13. Qwen3 Next 80B    — 80B MoE (3B active), ultra-efficient
-    # 14. Llama 3.1 8B      — fastest, last resort
+    # === Groq models (speed-first, 394-1000 TPS) ===
+    #  1. Llama 3.3 70B      — Best quality on Groq, 394 TPS, 30 RPM
+    #  2. Qwen3 32B          — 60 RPM (double!), 662 TPS, reasoning support
+    #  3. Kimi K2 Instruct   — 60 RPM, strong quality
+    #  4. GPT-OSS 120B       — OpenAI open-source, 500 TPS
+    #  5. Llama 3.1 8B       — 840 TPS, highest free quota (500K TPD)
     #
-    # All 14 verified to support function calling (with_structured_output).
+    # === NVIDIA NIM models (unlimited fallback, ranked by Arena ELO) ===
+    #  6. GLM5               — Arena 1451, best open-source
+    #  7. Kimi K2.5          — Arena 1447, multimodal
+    #  8. Kimi K2 Instruct   — Arena 1447, text-only
+    #  9. DeepSeek V3.2      — Arena 1421, MIT-licensed
+    # 10. Nemotron Super 120B
+    # 11. Qwen 3.5 122B
+    # 12. Nemotron Super 49B
+    # 13. Mistral Small 4
+    # 14. Gemma 4 31B
+    # 15. Llama 4 Maverick
+    # 16. Llama 3.3 70B
+    # 17. Qwen3 Next 80B
+    # 18. Llama 3.1 8B
+    #
+    GROQ_URL = "https://api.groq.com/openai/v1"
+    GROQ_KEY = os.environ.get("GROQ_API_KEY", "")
     NVIDIA_URL = "https://integrate.api.nvidia.com/v1"
     NVIDIA_KEY = os.environ.get("NVIDIA_API_KEY", "")
+
+    def _groq(model: str) -> ChatOpenAI:
+        return ChatOpenAI(
+            model = model,
+            temperature = 0.0,
+            base_url = GROQ_URL,
+            api_key = GROQ_KEY,
+            max_retries = 0,
+            timeout = 30,  # Groq is fast — 30s is generous
+        )
+
     def _nim(model: str) -> ChatOpenAI:
         return ChatOpenAI(
             model = model,
@@ -148,8 +169,20 @@ async def lifespan(app: FastAPI):
             max_retries = 0,
             timeout = 60,
         )
-    primary = _nim("z-ai/glm5")
-    fallbacks = [
+
+    # Build fallback chain: Groq (speed) → NVIDIA NIM (capacity)
+    groq_models = []
+    if GROQ_KEY:
+        groq_models = [
+            _groq("llama-3.3-70b-versatile"),
+            _groq("qwen/qwen3-32b"),
+            _groq("moonshotai/kimi-k2-instruct"),
+            _groq("openai/gpt-oss-120b"),
+            _groq("llama-3.1-8b-instant"),
+        ]
+
+    nim_models = [
+        _nim("z-ai/glm5"),
         _nim("moonshotai/kimi-k2.5"),
         _nim("moonshotai/kimi-k2-instruct"),
         _nim("moonshotai/kimi-k2-thinking"),
@@ -164,8 +197,14 @@ async def lifespan(app: FastAPI):
         _nim("qwen/qwen3-next-80b-a3b-instruct"),
         _nim("meta/llama-3.1-8b-instruct"),
     ]
+
+    all_models = groq_models + nim_models
+    primary = all_models[0]
+    fallbacks = all_models[1:]
     app.state.llm = primary.with_fallbacks(fallbacks)
-    print(f"LLM loaded: {primary.model_name} + {len(fallbacks)} fallbacks (NVIDIA NIM)", flush = True)
+    providers = f"Groq ({len(groq_models)})" if groq_models else ""
+    providers += (" + " if providers else "") + f"NVIDIA NIM ({len(nim_models)})"
+    print(f"LLM loaded: {primary.model_name} + {len(fallbacks)} fallbacks ({providers})", flush = True)
     # Async Redis checkpointer - yield INSIDE context manager!
     async with AsyncRedisSaver.from_conn_string(REDIS_URL) as checkpointer:
         await checkpointer.setup()

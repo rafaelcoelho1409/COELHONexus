@@ -53,27 +53,45 @@ def ingest_to_graph(self, video_ids = None, batch_size = 3):
             password = os.environ.get("NEO4J_PASSWORD", ""),
         )
 
-        # LLM fallback chain (same as FastAPI)
+        # LLM fallback chain: Groq (speed) → NVIDIA NIM (capacity)
+        # Graph extraction uses 600s timeout (full transcripts are slow)
+        GROQ_URL = "https://api.groq.com/openai/v1"
+        GROQ_KEY = os.environ.get("GROQ_API_KEY", "")
         NVIDIA_URL = "https://integrate.api.nvidia.com/v1"
         NVIDIA_KEY = os.environ.get("NVIDIA_API_KEY", "")
+
+        def _groq(model):
+            return ChatOpenAI(
+                model = model, temperature = 0.0,
+                base_url = GROQ_URL, api_key = GROQ_KEY,
+                max_retries = 0, timeout = 120,
+            )
 
         def _nim(model):
             return ChatOpenAI(
                 model = model, temperature = 0.0,
                 base_url = NVIDIA_URL, api_key = NVIDIA_KEY,
-                max_retries = 0, timeout = 600,  # 10 min timeout — full transcript entity extraction is slow
+                max_retries = 0, timeout = 600,
             )
 
-        primary = _nim("z-ai/glm5")
-        fallbacks = [
+        all_models = []
+        if GROQ_KEY:
+            all_models.extend([
+                _groq("llama-3.3-70b-versatile"),
+                _groq("qwen/qwen3-32b"),
+                _groq("llama-3.1-8b-instant"),
+            ])
+        all_models.extend([
+            _nim("z-ai/glm5"),
             _nim("moonshotai/kimi-k2.5"),
             _nim("moonshotai/kimi-k2-instruct"),
             _nim("deepseek-ai/deepseek-v3.2"),
             _nim("nvidia/llama-3.3-nemotron-super-49b-v1.5"),
             _nim("meta/llama-3.3-70b-instruct"),
             _nim("meta/llama-3.1-8b-instruct"),
-        ]
-        llm = primary.with_fallbacks(fallbacks)
+        ])
+        primary = all_models[0]
+        llm = primary.with_fallbacks(all_models[1:])
 
         try:
             # 1. Fetch transcripts and metadata from ES
