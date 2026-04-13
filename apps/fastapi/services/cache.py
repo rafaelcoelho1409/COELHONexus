@@ -24,21 +24,25 @@ CACHE_PREFIX = "coelhonexus:rag:cache:"
 DEFAULT_TTL = 3600  # 1 hour
 
 
-def _cache_key(question: str) -> str:
-    """Generate a deterministic cache key from the question."""
-    h = hashlib.sha256(question.strip().lower().encode()).hexdigest()[:16]
+def _cache_key(question: str, mode: str | None = None) -> str:
+    """Generate a deterministic cache key from the question and optional mode."""
+    raw = question.strip().lower()
+    if mode:
+        raw += f"|mode={mode}"
+    h = hashlib.sha256(raw.encode()).hexdigest()[:16]
     return f"{CACHE_PREFIX}{h}"
 
 
 async def get_cached_response(
     redis: redis_aio.Redis,
     question: str,
+    mode: str | None = None,
 ) -> dict | None:
     """
     Check if a cached response exists for this question.
     Returns the cached dict or None if not found / expired.
     """
-    key = _cache_key(question)
+    key = _cache_key(question, mode)
     try:
         data = await redis.get(key)
         if data:
@@ -53,6 +57,7 @@ async def cache_response(
     question: str,
     response: dict,
     ttl: int = DEFAULT_TTL,
+    mode: str | None = None,
 ):
     """
     Cache a RAG response with TTL.
@@ -61,7 +66,7 @@ async def cache_response(
     so that cache hits skip the ENTIRE pipeline — no retrieval, no grading,
     no generation. This is a huge cost and latency saving for repeated queries.
     """
-    key = _cache_key(question)
+    key = _cache_key(question, mode)
     payload = {
         **response,
         "_cached_at": time.time(),

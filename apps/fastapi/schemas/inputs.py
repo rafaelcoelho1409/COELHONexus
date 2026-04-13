@@ -121,10 +121,14 @@ class PlaylistRequest(BaseModel):
 # =============================================================================
 class RAGSearchRequest(BaseModel):
     """
-    Search YouTube content using Agentic RAG.
-    The agent retrieves, grades, and generates an answer with citations.
-    If results are poor, it rewrites the query and retries automatically.
+    Search YouTube content using Adaptive Agentic RAG.
+
+    Modes (auto-detected by classifier, or forced via force_mode):
+    - fast: simple questions → direct LLM answer, no retrieval (<2s)
+    - standard: factual questions → full RAG pipeline with citations (15-60s)
+    - deep: analytical questions → multi-agent research with synthesis (30-120s)
     """
     question: str
     thread_id: str = "default"
     max_retries: int = 3
+    force_mode: Literal["fast", "standard", "deep"] | None = None

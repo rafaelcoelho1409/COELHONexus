@@ -22,7 +22,7 @@ from services.retriever import (
     SmartRetriever,
 )
 from services.grader import DocumentGrader
-from agents.youtube import build_youtube_rag_graph
+from agents.adaptive import build_adaptive_rag_graph
 
 
 router = APIRouter()
@@ -63,7 +63,7 @@ async def rag_search(body: RAGSearchRequest, request: Request):
     from services.cache import get_cached_response, cache_response
 
     # Check cache first
-    cached = await get_cached_response(request.app.state.redis_aio, body.question)
+    cached = await get_cached_response(request.app.state.redis_aio, body.question, body.force_mode)
     if cached:
         cached["_from_cache"] = True
         return cached
@@ -71,20 +71,25 @@ async def rag_search(body: RAGSearchRequest, request: Request):
     graph = _build_graph(request)
     initial_state = {
         "question": body.question,
-        "documents": [],
+        "mode": "",
+        "force_mode": body.force_mode or "",
         "generation": "",
+        "citations": [],
+        "grounded": False,
+        "retrieval_sources": [],
         "retry_count": 0,
         "search_query": body.question,
-        "grounded": False,
-        "citations": [],
-        "retrieval_sources": [],
+        "sub_questions": [],
+        "sub_results": [],
+        "research_plan": "",
+        "confidence_score": 0.0,
     }
     config = {
         "configurable": {
             "thread_id": body.thread_id,
             "max_retries": body.max_retries,
         },
-        "recursion_limit": (body.max_retries + 1) * 6,  # 6 nodes per cycle now
+        "recursion_limit": 100,  # DEEP mode needs headroom for parallel subagents
     }
     try:
         result = await graph.ainvoke(initial_state, config = config)
@@ -93,17 +98,23 @@ async def rag_search(body: RAGSearchRequest, request: Request):
             status_code = 500,
             detail = f"Agent error: {str(e)}")
 
+    mode = result.get("mode", "standard")
     response = {
         "answer": result.get("generation", "No answer generated."),
+        "mode": mode,
         "citations": result.get("citations", []),
         "grounded": result.get("grounded", False),
         "retrieval_sources": result.get("retrieval_sources", []),
         "retry_count": result.get("retry_count", 0),
         "search_query": result.get("search_query", body.question),
     }
+    # Include deep-mode extras when applicable
+    if mode == "deep":
+        response["sub_questions"] = result.get("sub_questions", [])
+        response["confidence_score"] = result.get("confidence_score", 0.0)
 
     # Cache the response
-    await cache_response(request.app.state.redis_aio, body.question, response)
+    await cache_response(request.app.state.redis_aio, body.question, response, mode=mode)
 
     return response
 
@@ -119,17 +130,25 @@ async def rag_search_stream(body: RAGSearchRequest, request: Request):
     graph = _build_graph(request)
     initial_state = {
         "question": body.question,
-        "documents": [],
+        "mode": "",
+        "force_mode": body.force_mode or "",
         "generation": "",
+        "citations": [],
+        "grounded": False,
+        "retrieval_sources": [],
         "retry_count": 0,
         "search_query": body.question,
+        "sub_questions": [],
+        "sub_results": [],
+        "research_plan": "",
+        "confidence_score": 0.0,
     }
     config = {
         "configurable": {
             "thread_id": body.thread_id,
             "max_retries": body.max_retries,
         },
-        "recursion_limit": (body.max_retries + 1) * 6,
+        "recursion_limit": 100,
     }
 
     async def event_generator():
@@ -281,9 +300,15 @@ def _build_graph(request: Request):
     Results are merged and deduplicated before grading.
     """
     app = request.app
-    # ES retriever (always available)
-    # top_k=5: with fallback chain (8 models × 40 RPM = ~320 RPM), no rate limit concern
-    es_retriever = ElasticsearchRetriever(app.state.es, top_k = 5)
+    # Two-stage retrieval: overfetch from each source → FlashRank reranks to top 10.
+    # Each source fetches 15 candidates (wide net), SmartRetriever merges ~30,
+    # deduplicates, then FlashRank cross-encoder picks the best 10.
+    # Grading further filters to ~5-7 relevant documents for generation.
+    RETRIEVER_TOP_K = 15  # Per-source fetch (Qdrant, Neo4j, ES)
+    FINAL_TOP_K = 10      # After rerank
+
+    # ES retriever (fallback only — used when Qdrant+Neo4j both fail)
+    es_retriever = ElasticsearchRetriever(app.state.es, top_k = RETRIEVER_TOP_K)
     # Qdrant hybrid retriever — lazy-load embeddings on first use
     qdrant_retriever = None
     dense = _ensure_embeddings(app)
@@ -293,7 +318,7 @@ def _build_graph(request: Request):
             qdrant = app.state.qdrant,
             dense_embeddings = dense,
             sparse_embeddings = sparse,
-            top_k = 5,
+            top_k = RETRIEVER_TOP_K,
         )
     # Neo4j graph retriever (available after /ingest/graph)
     neo4j_retriever = None
@@ -301,11 +326,12 @@ def _build_graph(request: Request):
         neo4j_retriever = Neo4jRetriever(
             neo4j_graph = app.state.neo4j_graph,
             llm = app.state.llm,
+            top_k = RETRIEVER_TOP_K,
         )
-    # Smart retriever: Qdrant + Neo4j in parallel, ES fallback
-    retriever = SmartRetriever(es_retriever, qdrant_retriever, neo4j_retriever)
+    # Smart retriever: Qdrant + Neo4j in parallel, ES fallback, rerank to FINAL_TOP_K
+    retriever = SmartRetriever(es_retriever, qdrant_retriever, neo4j_retriever, top_k = FINAL_TOP_K)
     grader = DocumentGrader(app.state.llm)
-    return build_youtube_rag_graph(
+    return build_adaptive_rag_graph(
         retriever = retriever,
         grader = grader,
         llm = app.state.llm,
@@ -333,4 +359,19 @@ def _serialize_update(node_name: str, update: dict) -> dict:
         result["search_query"] = update["search_query"]
     if "retry_count" in update:
         result["retry_count"] = update["retry_count"]
+    # Adaptive RAG fields
+    if "mode" in update:
+        result["mode"] = update["mode"]
+    if "sub_questions" in update and update["sub_questions"]:
+        result["sub_questions"] = update["sub_questions"]
+    if "research_plan" in update and update["research_plan"]:
+        result["research_plan"] = update["research_plan"]
+    if "sub_results" in update and update["sub_results"]:
+        result["sub_results_count"] = len(update["sub_results"])
+        # Preview latest sub-result
+        latest = update["sub_results"][-1]
+        result["latest_sub_question"] = latest.get("sub_question", "")
+        result["latest_sub_answer_preview"] = latest.get("answer", "")[:200]
+    if "confidence_score" in update and update["confidence_score"]:
+        result["confidence_score"] = update["confidence_score"]
     return result
