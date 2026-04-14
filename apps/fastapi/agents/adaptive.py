@@ -29,6 +29,7 @@ Architecture:
                      END
 """
 import asyncio
+import re
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, END
 from langgraph.types import Send
@@ -38,7 +39,7 @@ from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 
 from schemas.state import AdaptiveRAGState
 from services.grader import DocumentGrader
-from agents.youtube import build_youtube_rag_graph
+from agents.youtube import build_youtube_rag_graph, _strip_think_tags
 
 
 # =============================================================================
@@ -55,6 +56,10 @@ class QueryClassification(BaseModel):
     sub_questions: list[str] = Field(
         default_factory=list,
         description="For 'deep' mode: 3-8 focused sub-questions to investigate"
+    )
+    channel_names: list[str] = Field(
+        default_factory=list,
+        description="Channel or person names mentioned in the query (for scope filtering)"
     )
 
 
@@ -91,7 +96,14 @@ CLASSIFY_PROMPT = ChatPromptTemplate.from_messages([
         "'What contradictions exist across all videos?', "
         "'What hidden assumptions does this channel never question?'\n\n"
         "When uncertain, default to STANDARD.\n"
-        "For DEEP mode, also generate 3-8 focused sub-questions that break down the analysis.",
+        "For DEEP mode, also generate 3-8 focused sub-questions that break down the analysis.\n\n"
+        "SCOPE DETECTION: Identify any specific channel or person names mentioned in the query. "
+        "Return them in channel_names so retrieval can be scoped to their content only.\n"
+        "Examples:\n"
+        "- 'What does Vitoria Stecca think about X?' → channel_names: ['Vitoria Stecca']\n"
+        "- 'Compare Rafael Cintron and Vitoria Stecca' → channel_names: ['Rafael Cintron', 'Vitoria Stecca']\n"
+        "- 'What are the best tax strategies?' → channel_names: [] (no specific person/channel)\n"
+        "If the query is about a SPECIFIC person/channel, always include their name.",
     ),
     ("human", "{question}"),
 ])
@@ -151,26 +163,59 @@ CRITIC_PROMPT = ChatPromptTemplate.from_messages([
 # =============================================================================
 # Node Functions
 # =============================================================================
-async def classify_query(state: AdaptiveRAGState, llm: ChatOpenAI) -> dict:
+async def classify_query(state: AdaptiveRAGState, llm: ChatOpenAI, neo4j_graph=None) -> dict:
     """
     Entry point: classify query complexity → route to FAST/STANDARD/DEEP.
-    If force_mode is set, skip the LLM call.
+    Also auto-detects channel scope from the question and resolves
+    channel names to IDs via Neo4j.
+    If force_mode is set, skip the mode classification LLM call.
     """
+    # Use API-provided channel_ids if present
+    channel_ids = state.get("channel_ids") or []
+
     force = state.get("force_mode")
-    if force:
-        return {"mode": force, "sub_questions": []}
+    if force and channel_ids:
+        return {"mode": force, "sub_questions": [], "channel_ids": channel_ids}
 
     chain = CLASSIFY_PROMPT | llm.with_structured_output(
         QueryClassification, method="function_calling"
     )
     try:
         result = await chain.ainvoke({"question": state["question"]})
+        mode = force or result.mode
+        sub_questions = result.sub_questions if mode == "deep" else []
+
+        # Auto-resolve channel names to IDs if not provided by API
+        if not channel_ids and result.channel_names and neo4j_graph:
+            channel_ids = _resolve_channel_ids(neo4j_graph, result.channel_names)
+
         return {
-            "mode": result.mode,
-            "sub_questions": result.sub_questions if result.mode == "deep" else [],
+            "mode": mode,
+            "sub_questions": sub_questions,
+            "channel_ids": channel_ids,
         }
     except Exception:
-        return {"mode": "standard", "sub_questions": []}
+        return {"mode": force or "standard", "sub_questions": [], "channel_ids": channel_ids}
+
+
+def _resolve_channel_ids(neo4j_graph, channel_names: list[str]) -> list[str]:
+    """
+    Resolve channel/person names to channel IDs via Neo4j.
+    Searches both Channel.name and Channel.id (case-insensitive).
+    """
+    if not channel_names:
+        return []
+    patterns = [n.lower() for n in channel_names]
+    try:
+        results = neo4j_graph.query(
+            "MATCH (c:Channel) "
+            "WHERE toLower(c.name) IN $names OR toLower(c.id) IN $names "
+            "RETURN c.id AS channel_id",
+            params={"names": patterns},
+        )
+        return [r["channel_id"] for r in results if r.get("channel_id")]
+    except Exception:
+        return []
 
 
 async def direct_answer(state: AdaptiveRAGState, llm: ChatOpenAI) -> dict:
@@ -179,7 +224,7 @@ async def direct_answer(state: AdaptiveRAGState, llm: ChatOpenAI) -> dict:
     try:
         response = await chain.ainvoke({"question": state["question"]})
         return {
-            "generation": response.content,
+            "generation": _strip_think_tags(response.content),
             "grounded": True,
             "citations": [],
             "retrieval_sources": [],
@@ -322,7 +367,7 @@ async def synthesize(state: AdaptiveRAGState, llm: ChatOpenAI) -> dict:
             "research_plan": state.get("research_plan", ""),
             "sub_results": sub_results_text,
         })
-        generation = response.content
+        generation = _strip_think_tags(response.content)
     except Exception as e:
         generation = f"Synthesis error: {e}"
 
@@ -391,8 +436,9 @@ def fan_out_subagents(state: AdaptiveRAGState) -> list:
     After planning, fan out sub-questions to parallel subagents via Send().
     Each Send() targets the run_subagent node with one sub-question.
     """
+    channel_ids = state.get("channel_ids") or []
     return [
-        Send("run_subagent", {"sub_question": q})
+        Send("run_subagent", {"sub_question": q, "channel_ids": channel_ids})
         for q in state.get("sub_questions", [])
     ]
 
@@ -405,39 +451,52 @@ def build_adaptive_rag_graph(
     grader: DocumentGrader,
     llm: ChatOpenAI,
     checkpointer: AsyncRedisSaver,
+    neo4j_graph=None,
 ):
     """
     Build the Adaptive RAG parent graph.
 
     Wraps the existing STANDARD pipeline as a subgraph and adds
     FAST (direct answer) and DEEP (multi-agent research) paths.
+
+    Channel scope: the classifier auto-detects channel names from the
+    question, resolves them to IDs via Neo4j, and passes channel_ids
+    to the STANDARD subgraph. This ensures single-channel queries
+    don't get contaminated by other channels' content.
     """
-    # Compile the existing STANDARD pipeline as a reusable subgraph
-    standard_graph = build_youtube_rag_graph(
-        retriever=retriever,
-        grader=grader,
-        llm=llm,
-        checkpointer=checkpointer,
-    )
+    def _build_standard_graph(channel_ids: list[str] | None = None):
+        """Build a STANDARD pipeline scoped to specific channels."""
+        return build_youtube_rag_graph(
+            retriever=retriever,
+            grader=grader,
+            llm=llm,
+            checkpointer=checkpointer,
+            channel_ids=channel_ids or None,
+        )
 
     # Build parent graph
     workflow = StateGraph(AdaptiveRAGState)
 
     # Bind dependencies via async closures
     async def _classify(state):
-        return await classify_query(state, llm)
+        return await classify_query(state, llm, neo4j_graph)
 
     async def _direct_answer(state):
         return await direct_answer(state, llm)
 
     async def _run_standard(state):
-        return await run_standard_pipeline(state, standard_graph)
+        # Build a channel-scoped STANDARD graph for this request
+        scoped_graph = _build_standard_graph(state.get("channel_ids"))
+        return await run_standard_pipeline(state, scoped_graph)
 
     async def _plan_research(state):
         return await plan_research(state, llm)
 
     async def _run_subagent(payload):
-        return await run_subagent(payload, standard_graph)
+        # Subagents inherit the channel scope from the parent state
+        channel_ids = payload.get("channel_ids")
+        scoped_graph = _build_standard_graph(channel_ids)
+        return await run_subagent(payload, scoped_graph)
 
     async def _synthesize(state):
         return await synthesize(state, llm)

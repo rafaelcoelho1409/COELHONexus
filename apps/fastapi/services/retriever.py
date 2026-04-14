@@ -44,17 +44,22 @@ class ElasticsearchRetriever:
         self.es = es_client
         self.top_k = top_k
 
-    async def retrieve(self, query: str) -> list[Document]:
+    async def retrieve(self, query: str, channel_ids: list[str] | None = None) -> list[Document]:
         """Search transcriptions using ES full-text search."""
+        # Build query with optional channel scope
+        es_query: dict
+        if channel_ids:
+            es_query = {
+                "bool": {
+                    "must": {"multi_match": {"query": query, "fields": ["content"], "type": "best_fields"}},
+                    "filter": {"terms": {"channel_id": channel_ids}},
+                }
+            }
+        else:
+            es_query = {"multi_match": {"query": query, "fields": ["content"], "type": "best_fields"}}
         results = await self.es.search(
             index = ES_INDEX_TRANSCRIPTIONS,
-            query = {
-                "multi_match": {
-                    "query": query,
-                    "fields": ["content"],
-                    "type": "best_fields",
-                }
-            },
+            query = es_query,
             size = self.top_k,
             _source = ["video_id", "lang", "content", "channel_id"],
         )
@@ -130,15 +135,16 @@ class QdrantHybridRetriever:
         self.sparse_embeddings = sparse_embeddings
         self.top_k = top_k
 
-    async def retrieve(self, query: str) -> list[Document]:
+    async def retrieve(self, query: str, channel_ids: list[str] | None = None) -> list[Document]:
         """
         Hybrid search: dense + sparse vectors in one Qdrant query.
 
         Steps:
         1. Embed the query with both models (dense + sparse)
-        2. Send a single prefetch query to Qdrant
-        3. Qdrant searches both vector spaces and fuses results
-        4. Convert scored points to LangChain Documents
+        2. Build optional channel_id pre-filter
+        3. Send a single prefetch query to Qdrant
+        4. Qdrant searches both vector spaces and fuses results
+        5. Convert scored points to LangChain Documents
         """
         # Generate both embeddings for the query
         dense_vector = self.dense_embeddings.embed_query(query)
@@ -149,14 +155,24 @@ class QdrantHybridRetriever:
             Prefetch,
             FusionQuery,
             Fusion,
+            Filter,
+            FieldCondition,
+            MatchAny,
             models,
         )
+        # Build channel scope filter (pre-filter, not post-filter)
+        query_filter = None
+        if channel_ids:
+            query_filter = Filter(must=[
+                FieldCondition(key="channel_id", match=MatchAny(any=channel_ids))
+            ])
         prefetch = []
         # Dense search
         prefetch.append(Prefetch(
             query = dense_vector,
             using = "dense",
             limit = self.top_k * 2,  # Fetch more for fusion
+            filter = query_filter,
         ))
         # Sparse search
         if sparse_vector is not None:
@@ -167,6 +183,7 @@ class QdrantHybridRetriever:
                 ),
                 using = "sparse",
                 limit = self.top_k * 2,
+                filter = query_filter,
             ))
         # Fused query with RRF
         results = await self.qdrant.query_points(
@@ -225,16 +242,17 @@ class Neo4jRetriever:
         self.llm = llm
         self.top_k = top_k
 
-    async def retrieve(self, query: str) -> list[Document]:
+    async def retrieve(self, query: str, channel_ids: list[str] | None = None) -> list[Document]:
         """
         Extract entities from query, then traverse the knowledge graph.
+        Optional channel_ids filter scopes traversal to specific channels.
         """
         # Step 1: Extract entities from the query using the LLM
         entities = await self._extract_entities(query)
         if not entities:
             return []
         # Step 2: Find content connected to those entities via Cypher
-        documents = self._traverse_graph(entities)
+        documents = self._traverse_graph(entities, channel_ids)
         return documents[:self.top_k]
 
     async def _extract_entities(self, query: str) -> list[str]:
@@ -268,7 +286,7 @@ class Neo4jRetriever:
             logger.warning(f"[neo4j-retriever] Entity extraction failed: {type(e).__name__}: {str(e)[:200]}")
             return []
 
-    def _traverse_graph(self, entities: list[str]) -> list[Document]:
+    def _traverse_graph(self, entities: list[str], channel_ids: list[str] | None = None) -> list[Document]:
         """
         Run Cypher queries to find content related to extracted entities.
 
@@ -295,6 +313,20 @@ class Neo4jRetriever:
         NORMALIZE_ID = 'CASE WHEN valueType(e.id) STARTS WITH "LIST" THEN head(e.id) ELSE e.id END'
         NORMALIZE_NEIGHBOR_ID = 'CASE WHEN valueType(neighbor.id) STARTS WITH "LIST" THEN head(neighbor.id) ELSE neighbor.id END'
 
+        # Channel scope: filter Videos by channel_id via BELONGS_TO relationship
+        # When channel_ids is empty, no filter is applied (cross-channel search)
+        CHANNEL_FILTER = ""
+        if channel_ids:
+            CHANNEL_FILTER = "OPTIONAL MATCH (v)-[:BELONGS_TO]->(ch:Channel) WHERE ch.id IN $channel_ids WITH e, eid, doc, v, r, r2 WHERE v IS NULL OR ch IS NOT NULL "
+
+        CHANNEL_FILTER_ONEHOP = ""
+        if channel_ids:
+            CHANNEL_FILTER_ONEHOP = "OPTIONAL MATCH (v)-[:BELONGS_TO]->(ch:Channel) WHERE ch.id IN $channel_ids WITH neighbor, doc, v, r, e, eid, nid WHERE v IS NULL OR ch IS NOT NULL "
+
+        params = {"entities": entity_patterns, "limit": self.top_k * 2}
+        if channel_ids:
+            params["channel_ids"] = channel_ids
+
         # Multi-pattern Cypher traversal:
         # 1. Direct match: entity matches query terms
         # 2. One-hop: entities connected to matched entities
@@ -309,6 +341,7 @@ class Neo4jRetriever:
                 "OPTIONAL MATCH (e)<-[r]-(doc:Document) "
                 "OPTIONAL MATCH (e)<-[r2]-(v:Video) "
                 "WITH e, eid, doc, v, r, r2 "
+                + CHANNEL_FILTER +
                 "RETURN "
                 "  COALESCE(doc.text, toString(eid) + ': ' + COALESCE(e.description, '')) AS content, "
                 "  COALESCE(v.id, '') AS video_id, "
@@ -329,6 +362,7 @@ class Neo4jRetriever:
                 "OPTIONAL MATCH (neighbor)<--(doc:Document) "
                 "OPTIONAL MATCH (neighbor)<--(v:Video) "
                 f"WITH neighbor, doc, v, r, e, eid, ({NORMALIZE_NEIGHBOR_ID}) AS nid "
+                + CHANNEL_FILTER_ONEHOP +
                 "RETURN "
                 "  COALESCE(doc.text, toString(nid) + ' (' + type(r) + ' ' + toString(eid) + ')') AS content, "
                 "  COALESCE(v.id, '') AS video_id, "
@@ -338,7 +372,7 @@ class Neo4jRetriever:
                 "  type(r) AS relationship, "
                 "  'one_hop' AS match_type "
                 "LIMIT $limit",
-                params = {"entities": entity_patterns, "limit": self.top_k * 2},
+                params = params,
             )
         except Exception as e:
             logger.warning(f"[neo4j-retriever] Cypher query failed: {type(e).__name__}: {str(e)[:200]}")
@@ -398,13 +432,13 @@ class SmartRetriever:
         self.use_reranker = use_reranker
         self.top_k = top_k
 
-    async def retrieve(self, query: str) -> list[Document]:
+    async def retrieve(self, query: str, channel_ids: list[str] | None = None) -> list[Document]:
         # Build list of retriever coroutines to run in parallel
         tasks = {}
         if self.qdrant_retriever:
-            tasks["qdrant"] = self.qdrant_retriever.retrieve(query)
+            tasks["qdrant"] = self.qdrant_retriever.retrieve(query, channel_ids)
         if self.neo4j_retriever:
-            tasks["neo4j"] = self.neo4j_retriever.retrieve(query)
+            tasks["neo4j"] = self.neo4j_retriever.retrieve(query, channel_ids)
         # Run available retrievers in parallel
         if tasks:
             results = await asyncio.gather(
@@ -424,7 +458,7 @@ class SmartRetriever:
                 return self._rerank(query, deduped)
         # Fallback to ES full-text
         try:
-            docs = await self.es_retriever.retrieve(query)
+            docs = await self.es_retriever.retrieve(query, channel_ids)
             return self._rerank(query, docs)
         except Exception:
             return []

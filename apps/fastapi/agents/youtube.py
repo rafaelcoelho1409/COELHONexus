@@ -22,11 +22,17 @@ Graph:
                        ↓
                   check_hallucination → [format_citations → END | rewrite → retrieve]
 """
+import re
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, END
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
+
+
+def _strip_think_tags(text: str) -> str:
+    """Strip <think>...</think> reasoning tokens from model output."""
+    return re.sub(r"<think>[\s\S]*?</think>\s*", "", text).strip()
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 
 from schemas.state import YouTubeRAGState
@@ -106,14 +112,15 @@ class HallucinationCheck(BaseModel):
 # =============================================================================
 # Graph Node Functions
 # =============================================================================
-async def retrieve(state: YouTubeRAGState, retriever) -> dict:
+async def retrieve(state: YouTubeRAGState, retriever, channel_ids: list[str] | None = None) -> dict:
     """
     RETRIEVE node: search for documents matching the query.
     Also tracks which retrieval sources contributed results.
+    channel_ids is passed via closure from the parent graph to scope retrieval.
     """
     query = state.get("search_query") or state["question"]
     try:
-        documents = await retriever.retrieve(query)
+        documents = await retriever.retrieve(query, channel_ids)
     except Exception:
         documents = []
     # Track which sources contributed
@@ -144,7 +151,7 @@ async def generate(state: YouTubeRAGState, llm: ChatOpenAI) -> dict:
             "question": state["question"],
             "context": context,
         })
-        return {"generation": response.content}
+        return {"generation": _strip_think_tags(response.content)}
     except Exception as e:
         return {"generation": f"Error generating answer: {e}"}
 
@@ -215,7 +222,7 @@ async def rewrite_query(state: YouTubeRAGState, llm: ChatOpenAI) -> dict:
             "question": state["question"],
             "search_query": state.get("search_query") or state["question"],
         })
-        new_query = response.content.strip()
+        new_query = _strip_think_tags(response.content)
     except Exception:
         new_query = f"{state['question']} (expanded)"
     return {
@@ -262,6 +269,7 @@ def build_youtube_rag_graph(
     grader: DocumentGrader,
     llm: ChatOpenAI,
     checkpointer: AsyncRedisSaver,
+    channel_ids: list[str] | None = None,
 ):
     """
     Build and compile the full production LangGraph workflow.
@@ -284,7 +292,7 @@ def build_youtube_rag_graph(
     # inner functions is the only reliable way to bind dependencies
     # while preserving the async signature LangGraph requires.
     async def _retrieve(state):
-        return await retrieve(state, retriever)
+        return await retrieve(state, retriever, channel_ids)
 
     async def _grade(state):
         return await grade_documents(state, grader)

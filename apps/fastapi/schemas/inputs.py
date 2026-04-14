@@ -132,3 +132,4 @@ class RAGSearchRequest(BaseModel):
     thread_id: str = "default"
     max_retries: int = 3
     force_mode: Literal["fast", "standard", "deep"] | None = None
+    channel_ids: list[str] | None = None  # Scope to specific channels (auto-detected if not provided)

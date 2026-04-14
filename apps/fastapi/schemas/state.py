@@ -48,6 +48,8 @@ class AdaptiveRAGState(TypedDict):
     retrieval_sources: list[str]                # Sources that contributed
     retry_count: int                            # Preserved for response compat
     search_query: str                           # Preserved for response compat
+    # Scope filter — auto-detected from question or manual override
+    channel_ids: list[str]                      # Scope retrieval to these channels (empty = all)
     # DEEP mode fields
     sub_questions: list[str]                    # Decomposed questions from planner
     sub_results: Annotated[list[dict], operator.add]  # Accumulated subagent results

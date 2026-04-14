@@ -73,6 +73,7 @@ async def rag_search(body: RAGSearchRequest, request: Request):
         "question": body.question,
         "mode": "",
         "force_mode": body.force_mode or "",
+        "channel_ids": body.channel_ids or [],
         "generation": "",
         "citations": [],
         "grounded": False,
@@ -132,6 +133,7 @@ async def rag_search_stream(body: RAGSearchRequest, request: Request):
         "question": body.question,
         "mode": "",
         "force_mode": body.force_mode or "",
+        "channel_ids": body.channel_ids or [],
         "generation": "",
         "citations": [],
         "grounded": False,
@@ -336,6 +338,7 @@ def _build_graph(request: Request):
         grader = grader,
         llm = app.state.llm,
         checkpointer = app.state.checkpointer,
+        neo4j_graph = app.state.neo4j_graph if hasattr(app.state, "neo4j_graph") else None,
     )
 
 
