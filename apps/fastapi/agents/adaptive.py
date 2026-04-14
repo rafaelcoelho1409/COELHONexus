@@ -35,7 +35,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.types import Send
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.redis.aio import AsyncRedisSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from schemas.state import AdaptiveRAGState
 from services.grader import DocumentGrader
@@ -423,7 +423,7 @@ async def critic(state: AdaptiveRAGState, llm: ChatOpenAI) -> dict:
 # =============================================================================
 def route_by_mode(state: AdaptiveRAGState) -> str | list:
     """Route after classification: FAST, STANDARD, or DEEP."""
-    mode = state.get("mode", "standard")
+    mode = state.get("mode", "standard").lower()
     if mode == "fast":
         return "direct_answer"
     elif mode == "deep":
@@ -450,7 +450,7 @@ def build_adaptive_rag_graph(
     retriever,
     grader: DocumentGrader,
     llm: ChatOpenAI,
-    checkpointer: AsyncRedisSaver,
+    checkpointer: AsyncPostgresSaver,
     neo4j_graph=None,
 ):
     """

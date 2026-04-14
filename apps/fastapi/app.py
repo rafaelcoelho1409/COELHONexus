@@ -7,7 +7,7 @@ from elasticsearch import AsyncElasticsearch
 from qdrant_client import AsyncQdrantClient
 from neo4j import AsyncGraphDatabase
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.redis.aio import AsyncRedisSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from routers.v1.youtube import agents as youtube_agents
 from routers.v1.youtube import content as youtube_content
@@ -45,6 +45,39 @@ QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY")
 NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USERNAME = os.environ.get("NEO4J_USERNAME", "neo4j")
 NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "")
+
+# PostgreSQL configuration (LangGraph conversation persistence)
+PG_HOST = os.environ.get("POSTGRES_HOST", "postgresql.postgresql.svc.cluster.local")
+PG_PORT = os.environ.get("POSTGRES_PORT", "5432")
+PG_USER = os.environ.get("POSTGRES_USER", "postgres")
+PG_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "")
+PG_DATABASE = os.environ.get("POSTGRES_DATABASE", "coelhonexus")
+from urllib.parse import quote_plus as _urlencode
+PG_URL = f"postgresql://{PG_USER}:{_urlencode(PG_PASSWORD)}@{PG_HOST}:{PG_PORT}/{PG_DATABASE}"
+
+
+async def _ensure_postgres_database():
+    """
+    Auto-create the PostgreSQL database if it doesn't exist.
+    Connects to the default 'postgres' database first, then creates the target.
+    Uses psycopg (bundled with langgraph-checkpoint-postgres).
+    """
+    import psycopg
+    admin_url = f"postgresql://{PG_USER}:{_urlencode(PG_PASSWORD)}@{PG_HOST}:{PG_PORT}/postgres"
+    try:
+        # autocommit=True required for CREATE DATABASE (can't run inside transaction)
+        async with await psycopg.AsyncConnection.connect(admin_url, autocommit=True) as conn:
+            result = await conn.execute(
+                "SELECT 1 FROM pg_database WHERE datname = %s", (PG_DATABASE,)
+            )
+            exists = await result.fetchone()
+            if not exists:
+                await conn.execute(f'CREATE DATABASE "{PG_DATABASE}"')
+                print(f"PostgreSQL database '{PG_DATABASE}' created.", flush=True)
+            else:
+                print(f"PostgreSQL database '{PG_DATABASE}' already exists.", flush=True)
+    except Exception as e:
+        print(f"PostgreSQL database check/create failed: {e}", flush=True)
 
 # =============================================================================
 # Lifespan (startup/shutdown)
@@ -205,11 +238,13 @@ async def lifespan(app: FastAPI):
     providers = f"Groq ({len(groq_models)})" if groq_models else ""
     providers += (" + " if providers else "") + f"NVIDIA NIM ({len(nim_models)})"
     print(f"LLM loaded: {primary.model_name} + {len(fallbacks)} fallbacks ({providers})", flush = True)
-    # Async Redis checkpointer - yield INSIDE context manager!
-    async with AsyncRedisSaver.from_conn_string(REDIS_URL) as checkpointer:
+    # PostgreSQL checkpointer for conversation persistence
+    # Auto-creates the database if it doesn't exist
+    await _ensure_postgres_database()
+    async with AsyncPostgresSaver.from_conn_string(PG_URL) as checkpointer:
         await checkpointer.setup()
         app.state.checkpointer = checkpointer
-        print("Redis checkpointer initialized.", flush = True)
+        print(f"PostgreSQL checkpointer initialized: {PG_HOST}/{PG_DATABASE}", flush = True)
         print("FastAPI startup complete.", flush = True)
         yield  # App runs here - connection stays open
         print("FastAPI shutting down...", flush = True)

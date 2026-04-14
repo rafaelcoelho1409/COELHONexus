@@ -20,6 +20,13 @@ redis:
   host: redis-tcp.YOUR_TAILNET_DOMAIN.ts.net
   port: 6379
 
+postgresql:
+  # In-cluster access (same K3s cluster as COELHOCloud)
+  host: postgresql.postgresql.svc.cluster.local
+  port: 5432
+  user: postgres
+  database: coelhonexus
+
 neo4j:
   # External access via Tailscale (WireGuard encrypted)
   uri: "bolt://neo4j.YOUR_TAILNET_DOMAIN.ts.net:7687"
@@ -87,6 +94,8 @@ secretMappings:
     key: elasticsearch-password
   - envName: QDRANT_API_KEY
     key: qdrant-api-key
+  - envName: POSTGRES_PASSWORD
+    key: postgres-password
   - envName: WARP_PROXY_USER
     key: warp-proxy-user
   - envName: WARP_PROXY_PASS

@@ -21,6 +21,8 @@ dependencies = [
     "langchain-experimental",  # LLMGraphTransformer
     "langchain-text-splitters", # Text chunking
     "langgraph-checkpoint-redis",
+    "langgraph-checkpoint-postgres",  # PostgreSQL checkpointer for conversation persistence
+    "psycopg[binary]",               # PostgreSQL async driver (binary — no libpq needed)
     "fastembed",               # BM25 sparse embeddings (local, lightweight)
     "httpx",                   # HTTP client for NVIDIA NIM embedding API
     "flashrank",               # Cross-encoder reranker (local, no API cost)

@@ -33,7 +33,7 @@ from langchain_openai import ChatOpenAI
 def _strip_think_tags(text: str) -> str:
     """Strip <think>...</think> reasoning tokens from model output."""
     return re.sub(r"<think>[\s\S]*?</think>\s*", "", text).strip()
-from langgraph.checkpoint.redis.aio import AsyncRedisSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from schemas.state import YouTubeRAGState
 from services.grader import DocumentGrader
@@ -268,7 +268,7 @@ def build_youtube_rag_graph(
     retriever,
     grader: DocumentGrader,
     llm: ChatOpenAI,
-    checkpointer: AsyncRedisSaver,
+    checkpointer: AsyncPostgresSaver,
     channel_ids: list[str] | None = None,
 ):
     """
