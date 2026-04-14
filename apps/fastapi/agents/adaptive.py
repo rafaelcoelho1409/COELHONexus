@@ -79,6 +79,23 @@ class CriticAssessment(BaseModel):
 # =============================================================================
 # Prompt Templates
 # =============================================================================
+CONTEXTUALIZE_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are a question contextualizer. Given a conversation history and a new question, "
+        "determine if the question references previous context (pronouns like 'she', 'he', "
+        "'that', 'it', 'they', phrases like 'tell me more', 'what about', 'the same', "
+        "'and what about', or any implicit references to prior topics).\n\n"
+        "If YES: Rewrite the question as a standalone question that includes the necessary context.\n"
+        "If NO: Return the original question unchanged.\n\n"
+        "Return ONLY the rewritten question. Nothing else.",
+    ),
+    (
+        "human",
+        "Conversation history:\n{history}\n\nNew question: {question}",
+    ),
+])
+
 CLASSIFY_PROMPT = ChatPromptTemplate.from_messages([
     (
         "system",
@@ -163,6 +180,36 @@ CRITIC_PROMPT = ChatPromptTemplate.from_messages([
 # =============================================================================
 # Node Functions
 # =============================================================================
+async def contextualize_question(state: AdaptiveRAGState, llm: ChatOpenAI) -> dict:
+    """
+    If conversation history exists, rewrite the question to be standalone.
+    "Tell me more about that" → "Tell me more about Vitoria Stecca's views on confidence"
+    Short-circuits when history is empty (zero cost for first message).
+    """
+    history = state.get("conversation_history") or []
+    if not history:
+        return {}  # No history — nothing to contextualize
+
+    # Format history for the prompt
+    parts = []
+    for turn in history[-5:]:  # Last 5 turns max
+        parts.append(f"Q: {turn['question']}\nA: {turn['answer'][:300]}")
+    formatted = "\n---\n".join(parts)
+
+    chain = CONTEXTUALIZE_PROMPT | llm
+    try:
+        response = await chain.ainvoke({
+            "history": formatted,
+            "question": state["question"],
+        })
+        rewritten = _strip_think_tags(response.content)
+        if rewritten and rewritten != state["question"]:
+            return {"question": rewritten, "search_query": rewritten}
+    except Exception:
+        pass
+    return {}
+
+
 async def classify_query(state: AdaptiveRAGState, llm: ChatOpenAI, neo4j_graph=None) -> dict:
     """
     Entry point: classify query complexity → route to FAST/STANDARD/DEEP.
@@ -478,6 +525,9 @@ def build_adaptive_rag_graph(
     workflow = StateGraph(AdaptiveRAGState)
 
     # Bind dependencies via async closures
+    async def _contextualize(state):
+        return await contextualize_question(state, llm)
+
     async def _classify(state):
         return await classify_query(state, llm, neo4j_graph)
 
@@ -505,6 +555,7 @@ def build_adaptive_rag_graph(
         return await critic(state, llm)
 
     # Register nodes
+    workflow.add_node("contextualize", _contextualize)
     workflow.add_node("classify_query", _classify)
     workflow.add_node("direct_answer", _direct_answer)
     workflow.add_node("run_standard", _run_standard)
@@ -513,8 +564,9 @@ def build_adaptive_rag_graph(
     workflow.add_node("synthesize", _synthesize)
     workflow.add_node("critic", _critic)
 
-    # Entry point
-    workflow.set_entry_point("classify_query")
+    # Entry point: contextualize → classify → route
+    workflow.set_entry_point("contextualize")
+    workflow.add_edge("contextualize", "classify_query")
 
     # After classification: route to FAST, STANDARD, or DEEP
     workflow.add_conditional_edges(

@@ -238,9 +238,12 @@ async def lifespan(app: FastAPI):
     providers = f"Groq ({len(groq_models)})" if groq_models else ""
     providers += (" + " if providers else "") + f"NVIDIA NIM ({len(nim_models)})"
     print(f"LLM loaded: {primary.model_name} + {len(fallbacks)} fallbacks ({providers})", flush = True)
-    # PostgreSQL checkpointer for conversation persistence
-    # Auto-creates the database if it doesn't exist
+    # PostgreSQL: auto-create database + conversation history table + checkpointer
     await _ensure_postgres_database()
+    from services.conversation import ensure_conversation_table
+    await ensure_conversation_table(PG_URL)
+    app.state.pg_url = PG_URL
+    print(f"PostgreSQL conversation history table ready.", flush = True)
     async with AsyncPostgresSaver.from_conn_string(PG_URL) as checkpointer:
         await checkpointer.setup()
         app.state.checkpointer = checkpointer

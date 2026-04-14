@@ -61,18 +61,24 @@ async def rag_search(body: RAGSearchRequest, request: Request):
     - Structured citations: video title + URL for each source
     """
     from services.cache import get_cached_response, cache_response
+    from services.conversation import get_history, save_turn
 
-    # Check cache first
-    cached = await get_cached_response(request.app.state.redis_aio, body.question, body.force_mode)
-    if cached:
-        cached["_from_cache"] = True
-        return cached
+    # Check cache first (skip cache for threaded conversations)
+    if not body.thread_id or body.thread_id == "default":
+        cached = await get_cached_response(request.app.state.redis_aio, body.question, body.force_mode)
+        if cached:
+            cached["_from_cache"] = True
+            return cached
+
+    # Load conversation history for this thread
+    history = await get_history(request.app.state.pg_url, body.thread_id)
 
     graph = _build_graph(request)
     initial_state = {
         "question": body.question,
         "mode": "",
         "force_mode": body.force_mode or "",
+        "conversation_history": history,
         "channel_ids": body.channel_ids or [],
         "generation": "",
         "citations": [],
@@ -114,8 +120,12 @@ async def rag_search(body: RAGSearchRequest, request: Request):
         response["sub_questions"] = result.get("sub_questions", [])
         response["confidence_score"] = result.get("confidence_score", 0.0)
 
-    # Cache the response
-    await cache_response(request.app.state.redis_aio, body.question, response, mode=mode)
+    # Save conversation turn to PostgreSQL
+    await save_turn(request.app.state.pg_url, body.thread_id, body.question, response["answer"], mode)
+
+    # Cache the response (only for non-threaded queries)
+    if not body.thread_id or body.thread_id == "default":
+        await cache_response(request.app.state.redis_aio, body.question, response, mode=mode)
 
     return response
 
@@ -128,11 +138,17 @@ async def rag_search_stream(body: RAGSearchRequest, request: Request):
     CONCEPT: astream() yields updates as each node completes.
     The client receives real-time progress: which node is running, partial results, etc.
     """
+    from services.conversation import get_history, save_turn
+
+    # Load conversation history for this thread
+    history = await get_history(request.app.state.pg_url, body.thread_id)
+
     graph = _build_graph(request)
     initial_state = {
         "question": body.question,
         "mode": "",
         "force_mode": body.force_mode or "",
+        "conversation_history": history,
         "channel_ids": body.channel_ids or [],
         "generation": "",
         "citations": [],
@@ -154,11 +170,17 @@ async def rag_search_stream(body: RAGSearchRequest, request: Request):
     }
 
     async def event_generator():
+        last_generation = ""
         try:
             async for event in graph.astream(initial_state, config = config, stream_mode = "updates"):
                 for node_name, update in event.items():
+                    if "generation" in update and update["generation"]:
+                        last_generation = update["generation"]
                     serializable_update = _serialize_update(node_name, update)
                     yield f"data: {json.dumps(serializable_update)}\n\n"
+            # Save conversation turn after streaming completes
+            if last_generation:
+                await save_turn(request.app.state.pg_url, body.thread_id, body.question, last_generation)
             yield f"data: {json.dumps({'node': 'end', 'status': 'complete'})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'node': 'error', 'error': str(e)})}\n\n"

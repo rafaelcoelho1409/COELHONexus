@@ -48,6 +48,8 @@ class AdaptiveRAGState(TypedDict):
     retrieval_sources: list[str]                # Sources that contributed
     retry_count: int                            # Preserved for response compat
     search_query: str                           # Preserved for response compat
+    # Conversation memory — previous Q&A pairs for follow-up context
+    conversation_history: list[dict]            # [{question, answer}] from PostgreSQL
     # Scope filter — auto-detected from question or manual override
     channel_ids: list[str]                      # Scope retrieval to these channels (empty = all)
     # DEEP mode fields
