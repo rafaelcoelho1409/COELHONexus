@@ -43,18 +43,14 @@ app.config_from_object({
     # Broker + result backend: both Redis
     "broker_url": REDIS_URL,
     "result_backend": REDIS_URL,
-
     # Serialization: JSON (all task args and results must be JSON-serializable)
     "task_serializer": "json",
     "result_serializer": "json",
     "accept_content": ["json"],
-
     # Result expiry: 24 hours (auto-cleanup old results from Redis)
     "result_expires": 86400,
-
     # Track task start time (enables STARTED state in Flower)
     "task_track_started": True,
-
     # Task routing: direct tasks to specialized queues
     "task_routes": {
         "tasks.crawler.*": {"queue": "crawler"},
@@ -62,19 +58,14 @@ app.config_from_object({
         "tasks.graph.*": {"queue": "llm"},
         "tasks.pipeline.*": {"queue": "crawler"},
     },
-
     # Default queue for unrouted tasks
     "task_default_queue": "default",
-
     # Worker: prefetch 1 task at a time (long-running tasks shouldn't queue up)
     "worker_prefetch_multiplier": 1,
-
     # Acknowledge task AFTER execution (not before) — prevents task loss on crash
     "task_acks_late": True,
-
     # Reject and requeue tasks when worker is killed (OOM, SIGKILL)
     "task_reject_on_worker_lost": True,
-
     # Timezone
     "timezone": "UTC",
 })

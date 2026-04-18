@@ -24,28 +24,23 @@ from routers.v1.youtube.helpers import (
 REDIS_HOST = os.environ["REDIS_HOST"]
 REDIS_PORT = os.environ["REDIS_PORT"]
 REDIS_PASSWORD = os.environ["REDIS_PASSWORD"]
-
 # Build Redis URL with optional authentication
 if REDIS_PASSWORD:
     REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}"
 else:
     REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}"
-
 # ElasticSearch configuration
 ES_HOST = os.environ["ELASTICSEARCH_HOST"]
 ES_USERNAME = os.environ["ELASTICSEARCH_USERNAME"]
 ES_PASSWORD = os.environ["ELASTICSEARCH_PASSWORD"]
-
 # Qdrant configuration
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 QDRANT_PORT = int(os.environ.get("QDRANT_PORT", "6333"))
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY")
-
 # Neo4j configuration
 NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USERNAME = os.environ.get("NEO4J_USERNAME", "neo4j")
 NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "")
-
 # PostgreSQL configuration (LangGraph conversation persistence)
 PG_HOST = os.environ.get("POSTGRES_HOST", "postgresql.postgresql.svc.cluster.local")
 PG_PORT = os.environ.get("POSTGRES_PORT", "5432")
@@ -66,18 +61,20 @@ async def _ensure_postgres_database():
     admin_url = f"postgresql://{PG_USER}:{_urlencode(PG_PASSWORD)}@{PG_HOST}:{PG_PORT}/postgres"
     try:
         # autocommit=True required for CREATE DATABASE (can't run inside transaction)
-        async with await psycopg.AsyncConnection.connect(admin_url, autocommit=True) as conn:
+        async with await psycopg.AsyncConnection.connect(
+            admin_url, 
+            autocommit = True) as conn:
             result = await conn.execute(
                 "SELECT 1 FROM pg_database WHERE datname = %s", (PG_DATABASE,)
             )
             exists = await result.fetchone()
             if not exists:
                 await conn.execute(f'CREATE DATABASE "{PG_DATABASE}"')
-                print(f"PostgreSQL database '{PG_DATABASE}' created.", flush=True)
+                print(f"PostgreSQL database '{PG_DATABASE}' created.", flush = True)
             else:
-                print(f"PostgreSQL database '{PG_DATABASE}' already exists.", flush=True)
+                print(f"PostgreSQL database '{PG_DATABASE}' already exists.", flush = True)
     except Exception as e:
-        print(f"PostgreSQL database check/create failed: {e}", flush=True)
+        print(f"PostgreSQL database check/create failed: {e}", flush = True)
 
 # =============================================================================
 # Lifespan (startup/shutdown)
@@ -93,43 +90,43 @@ async def lifespan(app: FastAPI):
         basic_auth = (ES_USERNAME, ES_PASSWORD) if ES_PASSWORD else None,
         verify_certs = False,  # Tailscale provides encryption
     )
-    print(f"ElasticSearch client initialized: {ES_HOST}", flush=True)
+    print(f"ElasticSearch client initialized: {ES_HOST}", flush = True)
     # Create YouTube indexes if not exists (metadata + transcriptions)
     es_index_result = await create_youtube_indexes(app.state.es)
-    print(f"ElasticSearch YouTube indexes: {es_index_result}", flush=True)
+    print(f"ElasticSearch YouTube indexes: {es_index_result}", flush = True)
     # Initialize Playwright transcript service (browser pool)
     # v5 optimizations (overnight-safe):
     # - max_concurrent=5: Optimal with cleanup safeguards
     # - browser_refresh_interval=10: Aggressive refresh to release memory
     # - max_retries=3: Balance between recovery and avoiding wasted retries
     app.state.transcript_service = await init_transcript_service(
-        max_concurrent=5,
-        browser_refresh_interval=10,
-        max_retries=3,
+        max_concurrent = 5,
+        browser_refresh_interval = 10,
+        max_retries = 3,
     )
-    print("Playwright transcript service initialized.", flush=True)
+    print("Playwright transcript service initialized.", flush = True)
     # Qdrant async client
     app.state.qdrant = AsyncQdrantClient(
-        url=QDRANT_URL,
-        port=QDRANT_PORT,
-        api_key=QDRANT_API_KEY if QDRANT_API_KEY else None,
+        url = QDRANT_URL,
+        port = QDRANT_PORT,
+        api_key = QDRANT_API_KEY if QDRANT_API_KEY else None,
     )
     qdrant_collections = await app.state.qdrant.get_collections()
-    print(f"Qdrant connected: {len(qdrant_collections.collections)} collections", flush=True)
+    print(f"Qdrant connected: {len(qdrant_collections.collections)} collections", flush = True)
     # Neo4j async driver
     app.state.neo4j_driver = AsyncGraphDatabase.driver(
         NEO4J_URI,
         auth=(NEO4J_USERNAME, NEO4J_PASSWORD) if NEO4J_PASSWORD else None,
     )
     await app.state.neo4j_driver.verify_connectivity()
-    print(f"Neo4j connected: {NEO4J_URI}", flush=True)
+    print(f"Neo4j connected: {NEO4J_URI}", flush = True)
     # Embedding models: LAZY-LOADED on first use (not at startup)
     # Loading bge-base (~430MB) + BM25 sparse at startup caused OOMKilled (4Gi limit)
     # with Playwright browser pool (5 contexts) already in memory.
     # Models are loaded on first /ingest or /search call instead.
     app.state.dense_embeddings = None
     app.state.sparse_embeddings = None
-    print("Embedding models will lazy-load on first use.", flush=True)
+    print("Embedding models will lazy-load on first use.", flush = True)
     # Neo4j LangChain graph (for LLMGraphTransformer and Cypher queries)
     # This is separate from neo4j_driver — Neo4jGraph wraps it with LangChain integration
     from langchain_neo4j import Neo4jGraph
@@ -138,7 +135,7 @@ async def lifespan(app: FastAPI):
         username = NEO4J_USERNAME,
         password = NEO4J_PASSWORD,
     )
-    print("Neo4j LangChain graph initialized.", flush=True)
+    print("Neo4j LangChain graph initialized.", flush = True)
     app.state.config = {
         "configurable": {"thread_id": "1"}
     }
@@ -213,7 +210,6 @@ async def lifespan(app: FastAPI):
             _groq("openai/gpt-oss-120b"),
             _groq("llama-3.1-8b-instant"),
         ]
-
     nim_models = [
         _nim("z-ai/glm5"),
         _nim("moonshotai/kimi-k2.5"),
@@ -230,7 +226,6 @@ async def lifespan(app: FastAPI):
         _nim("qwen/qwen3-next-80b-a3b-instruct"),
         _nim("meta/llama-3.1-8b-instruct"),
     ]
-
     all_models = groq_models + nim_models
     primary = all_models[0]
     fallbacks = all_models[1:]
@@ -252,13 +247,13 @@ async def lifespan(app: FastAPI):
         yield  # App runs here - connection stays open
         print("FastAPI shutting down...", flush = True)
         await close_transcript_service()
-        print("Playwright transcript service closed.", flush=True)
+        print("Playwright transcript service closed.", flush = True)
         await app.state.qdrant.close()
-        print("Qdrant connection closed.", flush=True)
+        print("Qdrant connection closed.", flush = True)
         await app.state.neo4j_driver.close()
-        print("Neo4j connection closed.", flush=True)
+        print("Neo4j connection closed.", flush = True)
         await app.state.es.close()
-        print("ElasticSearch connection closed.", flush=True)
+        print("ElasticSearch connection closed.", flush = True)
         await app.state.redis_aio.close()
     print("Redis connection closed.", flush = True)
 
