@@ -26,13 +26,11 @@ metadata:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
-
   source:
     # GitLab repository URL
     repoURL: https://gitlab.YOUR_TAILNET_DOMAIN.ts.net/root/COELHONexus.git
     targetRevision: master
     path: k8s/helm
-
     # Helm configuration
     helm:
       releaseName: coelhonexus
@@ -40,11 +38,9 @@ spec:
         - values.yaml
       # values.yaml already configured with correct registry and imagePullPolicy
       # No overrides needed - all config is in values.yaml
-
   destination:
     server: https://kubernetes.default.svc
     namespace: coelhonexus
-
   syncPolicy:
     automated:
       prune: true       # Delete resources not in Git
