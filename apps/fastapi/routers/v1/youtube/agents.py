@@ -22,7 +22,7 @@ from services.retriever import (
     SmartRetriever,
 )
 from services.grader import DocumentGrader
-from agents.adaptive import build_adaptive_rag_graph
+from graphs.adaptive import AdaptiveRAGGraph
 
 
 router = APIRouter()
@@ -355,7 +355,8 @@ def _build_graph(request: Request):
     # Smart retriever: Qdrant + Neo4j in parallel, ES fallback, rerank to FINAL_TOP_K
     retriever = SmartRetriever(es_retriever, qdrant_retriever, neo4j_retriever, top_k = FINAL_TOP_K)
     grader = DocumentGrader(app.state.llm)
-    return build_adaptive_rag_graph(
+    adaptive_graph_builder = AdaptiveRAGGraph()
+    return adaptive_graph_builder.build_adaptive_rag_graph(
         retriever = retriever,
         grader = grader,
         llm = app.state.llm,
