@@ -41,19 +41,14 @@ def full_channel_pipeline(
         include_graph: Extract entities to Neo4j (expensive — LLM calls)
     """
     steps = [extract_channel.si(channel_id, max_results, include_transcription)]
-
     if include_qdrant:
         steps.append(ingest_to_qdrant.si())
-
     if include_graph:
         steps.append(ingest_to_graph.si())
-
     steps.append(invalidate_cache.si())
-
     # si() = signature with immutable args (don't pass previous result as first arg)
     pipeline = chain(*steps)
     result = pipeline.apply_async()
-
     return {
         "pipeline_id": result.id,
         "steps": [s.name for s in steps],

@@ -19,8 +19,14 @@ from celery.utils.log import get_task_logger
 logger = get_task_logger(__name__)
 
 
-@app.task(bind = True, name = "tasks.ingestion.ingest_to_qdrant")
-def ingest_to_qdrant(self, video_ids = None, chunk_size = 2000, chunk_overlap = 200):
+@app.task(
+    bind = True, 
+    name = "tasks.ingestion.ingest_to_qdrant")
+def ingest_to_qdrant(
+    self, 
+    video_ids = None, 
+    chunk_size = 2000, 
+    chunk_overlap = 200):
     """
     Stream ES transcripts → chunk → embed (ONNX) → Qdrant.
 
@@ -28,13 +34,14 @@ def ingest_to_qdrant(self, video_ids = None, chunk_size = 2000, chunk_overlap = 
     Now it runs in its own Celery worker process — survives any FastAPI restart.
     """
     logger.info(f"[ingest_to_qdrant] Starting: video_ids={video_ids}, chunk_size={chunk_size}")
-    self.update_state(state = "PROGRESS", meta = {"status": "initializing"})
+    self.update_state(
+        state = "PROGRESS", 
+        meta = {"status": "initializing"})
 
     async def _run():
         from elasticsearch import AsyncElasticsearch
         from qdrant_client import AsyncQdrantClient
         from services.ingestion import ingest_to_qdrant as run_ingestion
-
         es = AsyncElasticsearch(
             hosts = [os.environ["ELASTICSEARCH_HOST"]],
             basic_auth = (
@@ -43,17 +50,14 @@ def ingest_to_qdrant(self, video_ids = None, chunk_size = 2000, chunk_overlap = 
             ),
             verify_certs = False,
         )
-
         qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:6333")
         qdrant_port = int(os.environ.get("QDRANT_PORT", "6333"))
         qdrant_api_key = os.environ.get("QDRANT_API_KEY")
-
         qdrant = AsyncQdrantClient(
             url = qdrant_url,
             port = qdrant_port,
             api_key = qdrant_api_key if qdrant_api_key else None,
         )
-
         try:
             result = await run_ingestion(
                 es = es,
@@ -66,13 +70,14 @@ def ingest_to_qdrant(self, video_ids = None, chunk_size = 2000, chunk_overlap = 
         finally:
             await qdrant.close()
             await es.close()
-
     result = asyncio.run(_run())
     logger.info(f"[ingest_to_qdrant] Done: {result}")
     return result
 
 
-@app.task(bind = True, name = "tasks.ingestion.invalidate_cache")
+@app.task(
+    bind = True, 
+    name = "tasks.ingestion.invalidate_cache")
 def invalidate_cache(self):
     """Clear all RAG search cache after new data ingestion."""
     import asyncio
@@ -89,6 +94,5 @@ def invalidate_cache(self):
             await _invalidate(r)
         finally:
             await r.close()
-
     asyncio.run(_run())
     return {"status": "cache_cleared"}
