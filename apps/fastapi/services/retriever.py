@@ -27,6 +27,8 @@ from langchain_neo4j import Neo4jGraph
 from langchain_openai import ChatOpenAI
 
 from services.ingestion import QDRANT_COLLECTION
+from schemas.agents import ExtractedEntities
+from schemas.prompts import ENTITY_EXTRACTION_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +41,17 @@ ES_INDEX_METADATA = "coelhonexus-youtube-metadata"
 # =============================================================================
 class ElasticsearchRetriever:
     """Full-text search over YouTube transcriptions in Elasticsearch."""
-
-    def __init__(self, es_client: AsyncElasticsearch, top_k: int = 10):
+    def __init__(
+        self, 
+        es_client: AsyncElasticsearch, 
+        top_k: int = 10):
         self.es = es_client
         self.top_k = top_k
 
-    async def retrieve(self, query: str, channel_ids: list[str] | None = None) -> list[Document]:
+    async def retrieve(
+        self, 
+        query: str, 
+        channel_ids: list[str] | None = None) -> list[Document]:
         """Search transcriptions using ES full-text search."""
         # Build query with optional channel scope
         es_query: dict
@@ -73,19 +80,20 @@ class ElasticsearchRetriever:
             src = hit["_source"]
             video_id = src["video_id"]
             meta = metadata_map.get(video_id, {})
-            documents.append(Document(
-                page_content = src.get("content", ""),
-                metadata = {
-                    "video_id": video_id,
-                    "lang": src.get("lang", "en"),
-                    "title": meta.get("title", ""),
-                    "channel": meta.get("channel", ""),
-                    "channel_id": src.get("channel_id", ""),
-                    "upload_date": meta.get("upload_date", ""),
-                    "webpage_url": meta.get("webpage_url", ""),
-                    "score": hit["_score"],
-                    "source": "elasticsearch",
-                },
+            documents.append(
+                Document(
+                    page_content = src.get("content", ""),
+                    metadata = {
+                        "video_id": video_id,
+                        "lang": src.get("lang", "en"),
+                        "title": meta.get("title", ""),
+                        "channel": meta.get("channel", ""),
+                        "channel_id": src.get("channel_id", ""),
+                        "upload_date": meta.get("upload_date", ""),
+                        "webpage_url": meta.get("webpage_url", ""),
+                        "score": hit["_score"],
+                        "source": "elasticsearch",
+                    },
             ))
         return documents
 
@@ -122,7 +130,6 @@ class QdrantHybridRetriever:
     2. Run Qdrant semantic search separately
     3. Implement manual RRF fusion code
     """
-
     def __init__(
         self,
         qdrant: AsyncQdrantClient,
@@ -135,7 +142,10 @@ class QdrantHybridRetriever:
         self.sparse_embeddings = sparse_embeddings
         self.top_k = top_k
 
-    async def retrieve(self, query: str, channel_ids: list[str] | None = None) -> list[Document]:
+    async def retrieve(
+        self, 
+        query: str, 
+        channel_ids: list[str] | None = None) -> list[Document]:
         """
         Hybrid search: dense + sparse vectors in one Qdrant query.
 
@@ -151,7 +161,6 @@ class QdrantHybridRetriever:
         sparse_vector = self.sparse_embeddings.embed_query(query)  # Returns SparseVector directly
         # Build Qdrant query with hybrid prefetch
         from qdrant_client.http.models import (
-            QueryRequest,
             Prefetch,
             FusionQuery,
             Fusion,
@@ -163,33 +172,38 @@ class QdrantHybridRetriever:
         # Build channel scope filter (pre-filter, not post-filter)
         query_filter = None
         if channel_ids:
-            query_filter = Filter(must=[
-                FieldCondition(key="channel_id", match=MatchAny(any=channel_ids))
+            query_filter = Filter(
+                must = [
+                    FieldCondition(
+                        key = "channel_id", 
+                        match = MatchAny(any = channel_ids))
             ])
         prefetch = []
         # Dense search
-        prefetch.append(Prefetch(
-            query = dense_vector,
-            using = "dense",
-            limit = self.top_k * 2,  # Fetch more for fusion
-            filter = query_filter,
+        prefetch.append(
+            Prefetch(
+                query = dense_vector,
+                using = "dense",
+                limit = self.top_k * 2,  # Fetch more for fusion
+                filter = query_filter,
         ))
         # Sparse search
         if sparse_vector is not None:
-            prefetch.append(Prefetch(
-                query = models.SparseVector(
-                    indices = sparse_vector.indices,
-                    values = sparse_vector.values,
-                ),
-                using = "sparse",
-                limit = self.top_k * 2,
-                filter = query_filter,
+            prefetch.append(
+                Prefetch(
+                    query = models.SparseVector(
+                        indices = sparse_vector.indices,
+                        values = sparse_vector.values,
+                    ),
+                    using = "sparse",
+                    limit = self.top_k * 2,
+                    filter = query_filter,
             ))
         # Fused query with RRF
         results = await self.qdrant.query_points(
             collection_name = QDRANT_COLLECTION,
             prefetch = prefetch,
-            query = FusionQuery(fusion=Fusion.RRF),
+            query = FusionQuery(fusion = Fusion.RRF),
             limit = self.top_k,
             with_payload = True,
         )
@@ -197,20 +211,21 @@ class QdrantHybridRetriever:
         documents = []
         for point in results.points:
             payload = point.payload or {}
-            documents.append(Document(
-                page_content = payload.get("content", ""),
-                metadata = {
-                    "video_id": payload.get("video_id", ""),
-                    "chunk_index": payload.get("chunk_index", 0),
-                    "title": payload.get("title", ""),
-                    "channel": payload.get("channel", ""),
-                    "channel_id": payload.get("channel_id", ""),
-                    "upload_date": payload.get("upload_date", ""),
-                    "webpage_url": payload.get("webpage_url", ""),
-                    "lang": payload.get("lang", "en"),
-                    "score": point.score,
-                    "source": "qdrant_hybrid",
-                },
+            documents.append(
+                Document(
+                    page_content = payload.get("content", ""),
+                    metadata = {
+                        "video_id": payload.get("video_id", ""),
+                        "chunk_index": payload.get("chunk_index", 0),
+                        "title": payload.get("title", ""),
+                        "channel": payload.get("channel", ""),
+                        "channel_id": payload.get("channel_id", ""),
+                        "upload_date": payload.get("upload_date", ""),
+                        "webpage_url": payload.get("webpage_url", ""),
+                        "lang": payload.get("lang", "en"),
+                        "score": point.score,
+                        "source": "qdrant_hybrid",
+                    },
             ))
         return documents
 
@@ -237,12 +252,19 @@ class Neo4jRetriever:
     is better. The SmartRetriever runs both in parallel.
     """
 
-    def __init__(self, neo4j_graph: Neo4jGraph, llm: ChatOpenAI, top_k: int = 10):
+    def __init__(
+        self, 
+        neo4j_graph: Neo4jGraph, 
+        llm: ChatOpenAI, 
+        top_k: int = 10):
         self.graph = neo4j_graph
         self.llm = llm
         self.top_k = top_k
 
-    async def retrieve(self, query: str, channel_ids: list[str] | None = None) -> list[Document]:
+    async def retrieve(
+        self, 
+        query: str, 
+        channel_ids: list[str] | None = None) -> list[Document]:
         """
         Extract entities from query, then traverse the knowledge graph.
         Optional channel_ids filter scopes traversal to specific channels.
@@ -262,22 +284,10 @@ class Neo4jRetriever:
         CONCEPT: We use with_structured_output to get a clean list of entities.
         The LLM understands context: "Karpathy" → person, "transformers" → topic.
         """
-        from pydantic import BaseModel, Field
-        class ExtractedEntities(BaseModel):
-            entities: list[str] = Field(
-                description = "List of entity names (people, topics, technologies, channels) mentioned in the query"
-            )
-        from langchain_core.prompts import ChatPromptTemplate
-        prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                "Extract entity names from the user's question. "
-                "Entities are: people, topics, technologies, concepts, channels. "
-                "Return only the entity names as a list. Be concise.",
-            ),
-            ("human", "{query}"),
-        ])
-        chain = prompt | self.llm.with_structured_output(ExtractedEntities, method = "function_calling")
+        chain = ENTITY_EXTRACTION_PROMPT | self.llm.with_structured_output(
+            ExtractedEntities,
+            method = "function_calling",
+        )
         try:
             result = await chain.ainvoke({"query": query})
             logger.info(f"[neo4j-retriever] Extracted entities: {result.entities}")
@@ -286,7 +296,10 @@ class Neo4jRetriever:
             logger.warning(f"[neo4j-retriever] Entity extraction failed: {type(e).__name__}: {str(e)[:200]}")
             return []
 
-    def _traverse_graph(self, entities: list[str], channel_ids: list[str] | None = None) -> list[Document]:
+    def _traverse_graph(
+        self, 
+        entities: list[str], 
+        channel_ids: list[str] | None = None) -> list[Document]:
         """
         Run Cypher queries to find content related to extracted entities.
 
@@ -306,27 +319,22 @@ class Neo4jRetriever:
         if not entities:
             return []
         entity_patterns = [e.lower() for e in entities]
-
         # Helper: normalize e.id (string or list) to a single string.
         # LLMGraphTransformer stores ~28% of entity IDs as arrays
         # (e.g., ['Dubai', 'UAE']). valueType() is Neo4j 5+-compatible.
         NORMALIZE_ID = 'CASE WHEN valueType(e.id) STARTS WITH "LIST" THEN head(e.id) ELSE e.id END'
         NORMALIZE_NEIGHBOR_ID = 'CASE WHEN valueType(neighbor.id) STARTS WITH "LIST" THEN head(neighbor.id) ELSE neighbor.id END'
-
         # Channel scope: filter Videos by channel_id via BELONGS_TO relationship
         # When channel_ids is empty, no filter is applied (cross-channel search)
         CHANNEL_FILTER = ""
         if channel_ids:
             CHANNEL_FILTER = "OPTIONAL MATCH (v)-[:BELONGS_TO]->(ch:Channel) WHERE ch.id IN $channel_ids WITH e, eid, doc, v, r, r2 WHERE v IS NULL OR ch IS NOT NULL "
-
         CHANNEL_FILTER_ONEHOP = ""
         if channel_ids:
             CHANNEL_FILTER_ONEHOP = "OPTIONAL MATCH (v)-[:BELONGS_TO]->(ch:Channel) WHERE ch.id IN $channel_ids WITH neighbor, doc, v, r, e, eid, nid WHERE v IS NULL OR ch IS NOT NULL "
-
         params = {"entities": entity_patterns, "limit": self.top_k * 2}
         if channel_ids:
             params["channel_ids"] = channel_ids
-
         # Multi-pattern Cypher traversal:
         # 1. Direct match: entity matches query terms
         # 2. One-hop: entities connected to matched entities
@@ -385,17 +393,18 @@ class Neo4jRetriever:
             if not content or content in seen_content:
                 continue
             seen_content.add(content)
-            documents.append(Document(
-                page_content = content,
-                metadata = {
-                    "video_id": row.get("video_id", ""),
-                    "title": row.get("title", ""),
-                    "webpage_url": row.get("webpage_url", ""),
-                    "entity_id": row.get("entity_id", ""),
-                    "entity_labels": row.get("entity_labels", []),
-                    "relationship": row.get("relationship", ""),
-                    "source": "neo4j_graph",
-                },
+            documents.append(
+                Document(
+                    page_content = content,
+                    metadata = {
+                        "video_id": row.get("video_id", ""),
+                        "title": row.get("title", ""),
+                        "webpage_url": row.get("webpage_url", ""),
+                        "entity_id": row.get("entity_id", ""),
+                        "entity_labels": row.get("entity_labels", []),
+                        "relationship": row.get("relationship", ""),
+                        "source": "neo4j_graph",
+                    },
             ))
         return documents
 
@@ -432,7 +441,10 @@ class SmartRetriever:
         self.use_reranker = use_reranker
         self.top_k = top_k
 
-    async def retrieve(self, query: str, channel_ids: list[str] | None = None) -> list[Document]:
+    async def retrieve(
+        self, 
+        query: str, 
+        channel_ids: list[str] | None = None) -> list[Document]:
         # Build list of retriever coroutines to run in parallel
         tasks = {}
         if self.qdrant_retriever:
@@ -463,7 +475,10 @@ class SmartRetriever:
         except Exception:
             return []
 
-    def _rerank(self, query: str, documents: list[Document]) -> list[Document]:
+    def _rerank(
+        self, 
+        query: str, 
+        documents: list[Document]) -> list[Document]:
         """
         CONCEPT: Two-stage retrieval.
         Stage 1 (retrievers): high recall, fast, approximate ranking
@@ -480,7 +495,9 @@ class SmartRetriever:
         except Exception:
             return documents[:self.top_k]
 
-    def _deduplicate(self, documents: list[Document]) -> list[Document]:
+    def _deduplicate(
+        self, 
+        documents: list[Document]) -> list[Document]:
         """Remove duplicate documents based on content prefix."""
         seen = set()
         unique = []

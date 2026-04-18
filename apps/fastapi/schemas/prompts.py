@@ -150,3 +150,77 @@ CRITIC_PROMPT = ChatPromptTemplate.from_messages([
         "Evaluate the synthesis.",
     ),
 ])
+
+GRADING_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are a relevance grader. Given a user question and a retrieved document, "
+        "determine if the document contains information relevant to answering the question. "
+        "Respond with 'relevant' or 'not_relevant'. "
+        "A document is relevant if it contains ANY information that helps answer the question, "
+        "even partially.",
+    ),
+    (
+        "human",
+        "Question: {question}\n\nDocument content:\n{document}",
+    ),
+])
+
+SCHEMA_DISCOVERY_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are a knowledge graph schema designer. Analyze the sample transcripts "
+        "and suggest the most useful entity types and relationship types for building "
+        "a knowledge graph. Focus on types that enable multi-hop reasoning and "
+        "cross-document connections. Return 5-8 node types and 6-10 relationship types.",
+    ),
+    (
+        "human",
+        "Sample transcripts:\n\n{samples}\n\nSuggest the best schema:",
+    ),
+])
+
+ENTITY_EXTRACTION_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "Extract entity names from the user's question. "
+        "Entities are: people, topics, technologies, concepts, channels. "
+        "Return only the entity names as a list. Be concise.",
+    ),
+    ("human", "{query}"),
+])
+
+
+# =============================================================================
+# Knowledge Graph Extraction Instructions — No schema constraints, format-guided
+# =============================================================================
+# NO allowed_nodes or allowed_relationships constraints.
+# The LLM captures ALL entities and relationships it finds.
+# Instructions enforce consistent FORMATTING, not content limits.
+# This works across ANY YouTube channel topic (finance, tech, cooking, etc.)
+
+EXTRACTION_INSTRUCTIONS = """
+Extract ALL entities and relationships from the text. Do not limit yourself
+to predefined types — capture everything meaningful.
+
+FORMATTING RULES (critical for graph consistency):
+- Node labels: use TitleCase singular nouns (e.g., Country, Person, Organization,
+  Technology, Concept, Product, Event, Law, Program, City)
+- Relationship types: use UPPER_SNAKE_CASE verbs (e.g., DISCUSSES, RECOMMENDS,
+  LOCATED_IN, WARNS_AGAINST, COSTS, RELATED_TO, MENTIONS, FEATURES, USES)
+- Entity IDs: use the most complete, official form of the name
+  - Countries: official full names ("Saint Kitts and Nevis" not "St Kitts")
+  - People: full names when available ("Rafael Cintron" not "Rafael")
+  - Organizations: official names ("Goldman Sachs" not "Goldman")
+- Money amounts: normalize to numbers ("$100,000" not "$100K" or "100 thousand")
+- Prefer general relationship types when possible (DISCUSSES over TALKS_ABOUT)
+- Merge obvious aliases (e.g., "the UAE" and "United Arab Emirates" → same entity)
+
+WHAT TO EXTRACT:
+- Every person, organization, country, city, concept, product, technology,
+  event, law, program, or notable entity mentioned
+- Every relationship between entities: who recommends what, who warns against
+  what, what costs how much, what is located where, what is related to what
+- Opinions and stances: if the speaker recommends or warns against something,
+  capture that as a relationship (RECOMMENDS or WARNS_AGAINST)
+"""

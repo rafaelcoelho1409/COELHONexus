@@ -29,9 +29,11 @@ from qdrant_client.http.models import (
     PointStruct,
     models,
 )
-from langchain_core.documents import Document
 
-from services.chunker import create_chunker, chunk_transcript
+from services.chunker import (
+    create_chunker, 
+    chunk_transcript
+)
 from services.embeddings import (
     create_dense_embeddings,
     create_sparse_embeddings,
@@ -92,7 +94,6 @@ async def _scroll_transcripts(
         query = {"terms": {"video_id": video_ids}}
     else:
         query = {"match_all": {}}
-
     # Initial search with scroll
     response = await es.search(
         index = ES_INDEX_TRANSCRIPTIONS,
@@ -103,7 +104,6 @@ async def _scroll_transcripts(
     )
     scroll_id = response.get("_scroll_id")
     hits = response["hits"]["hits"]
-
     while hits:
         for hit in hits:
             yield hit["_source"]
@@ -111,7 +111,6 @@ async def _scroll_transcripts(
         response = await es.scroll(scroll_id = scroll_id, scroll = "5m")
         scroll_id = response.get("_scroll_id")
         hits = response["hits"]["hits"]
-
     # Clean up scroll context
     if scroll_id:
         await es.clear_scroll(scroll_id = scroll_id)
@@ -175,10 +174,8 @@ async def ingest_to_qdrant(
     dense_embeddings = create_dense_embeddings()
     sparse_embeddings = create_sparse_embeddings()
     dimensions = get_embedding_dimensions()
-
     # 2. Ensure Qdrant collection exists
     collection_created = await ensure_collection(qdrant, dimensions)
-
     # 3. Fetch ALL transcripts first (fast — just text + IDs, ~5s for 359)
     # Then process one-by-one for embedding (slow — CPU-bound, ~10min)
     # This separates the ES scroll phase (needs open context) from the
@@ -186,25 +183,20 @@ async def ingest_to_qdrant(
     all_transcripts = []
     async for transcript in _scroll_transcripts(es, video_ids):
         all_transcripts.append(transcript)
-
     chunker = create_chunker(chunk_size, chunk_overlap)
     total_transcripts = 0
     total_chunks = 0
     total_upserted = 0
-
     # Cache metadata to avoid re-fetching for same video
     metadata_cache: dict = {}
-
     for transcript in all_transcripts:
         vid = transcript["video_id"]
         total_transcripts += 1
-
         # Fetch metadata (cached per video)
         if vid not in metadata_cache:
             meta_map = await fetch_metadata_from_es(es, [vid])
             metadata_cache[vid] = meta_map.get(vid, {})
         meta = metadata_cache[vid]
-
         # Chunk this transcript
         chunks = chunk_transcript(
             video_id = vid,
@@ -221,48 +213,47 @@ async def ingest_to_qdrant(
         )
         if not chunks:
             continue
-
         total_chunks += len(chunks)
-
         # Embed: dense via NVIDIA NIM API (zero CPU), sparse via local BM25
         texts = [doc.page_content for doc in chunks]
         dense_vectors = dense_embeddings.embed_documents(texts)
         sparse_vectors = list(sparse_embeddings.embed_documents(texts))
-
         # Build points and upsert
         points = []
         for i, doc in enumerate(chunks):
             sparse_vec = sparse_vectors[i]
-            points.append(PointStruct(
-                id = _deterministic_id(doc.metadata["video_id"], doc.metadata["chunk_index"]),
-                vector = {
-                    "dense": dense_vectors[i],
-                    "sparse": models.SparseVector(
-                        indices = sparse_vec.indices,
-                        values = sparse_vec.values,
-                    ),
-                },
-                payload = {
-                    "content": doc.page_content,
-                    "video_id": doc.metadata["video_id"],
-                    "chunk_index": doc.metadata["chunk_index"],
-                    "total_chunks": doc.metadata["total_chunks"],
-                    "title": doc.metadata.get("title", ""),
-                    "channel": doc.metadata.get("channel", ""),
-                    "channel_id": doc.metadata.get("channel_id", ""),
-                    "lang": doc.metadata.get("lang", "en"),
-                    "upload_date": doc.metadata.get("upload_date", ""),
-                    "webpage_url": doc.metadata.get("webpage_url", ""),
-                },
+            points.append(
+                PointStruct(
+                    id = _deterministic_id(
+                        doc.metadata["video_id"], 
+                        doc.metadata["chunk_index"]),
+                    vector = {
+                        "dense": dense_vectors[i],
+                        "sparse": models.SparseVector(
+                            indices = sparse_vec.indices,
+                            values = sparse_vec.values,
+                        ),
+                    },
+                    payload = {
+                        "content": doc.page_content,
+                        "video_id": doc.metadata["video_id"],
+                        "chunk_index": doc.metadata["chunk_index"],
+                        "total_chunks": doc.metadata["total_chunks"],
+                        "title": doc.metadata.get("title", ""),
+                        "channel": doc.metadata.get("channel", ""),
+                        "channel_id": doc.metadata.get("channel_id", ""),
+                        "lang": doc.metadata.get("lang", "en"),
+                        "upload_date": doc.metadata.get("upload_date", ""),
+                        "webpage_url": doc.metadata.get("webpage_url", ""),
+                    },
             ))
-
-        await qdrant.upsert(collection_name = QDRANT_COLLECTION, points = points)
+        await qdrant.upsert(
+            collection_name = QDRANT_COLLECTION, 
+            points = points)
         total_upserted += len(points)
-
         # Log progress every 50 transcripts
         if total_transcripts % 50 == 0:
             print(f"[ingest] Progress: {total_transcripts} transcripts, {total_chunks} chunks, {total_upserted} points", flush = True)
-
     return {
         "total_transcripts": total_transcripts,
         "total_chunks": total_chunks,

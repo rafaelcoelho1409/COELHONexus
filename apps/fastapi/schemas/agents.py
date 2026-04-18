@@ -1,5 +1,4 @@
-from pydantic import BaseModel
-from langchain_core.prompts import ChatPromptTemplate
+from pydantic import BaseModel, Field
 
 
 # =============================================================================
@@ -51,4 +50,31 @@ class HallucinationCheck(BaseModel):
     )
     reason: str = Field(
         description = "Brief explanation of the assessment"
+    )
+
+
+class GradeResult(BaseModel):
+    """Binary relevance grade for a document."""
+    score: str = Field(
+        description = "'relevant' if the document answers the question, 'not_relevant' otherwise"
+    )
+
+
+class SchemaDiscovery(BaseModel):
+    """Auto-discovered knowledge-graph schema from sample transcripts."""
+    allowed_nodes: list[str] = Field(
+        description = "Entity types to extract (e.g., Country, Person, Organization)"
+    )
+    allowed_relationships: list[str] = Field(
+        description = "Relationship types (e.g., RECOMMENDS, LOCATED_IN)"
+    )
+    extraction_focus: str = Field(
+        description = "Brief description of what to focus on during extraction"
+    )
+
+
+class ExtractedEntities(BaseModel):
+    """Entity names identified in a user query (for graph retrieval)."""
+    entities: list[str] = Field(
+        description = "List of entity names (people, topics, technologies, channels) mentioned in the query"
     )

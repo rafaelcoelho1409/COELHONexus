@@ -13,7 +13,9 @@ import psycopg
 
 async def ensure_conversation_table(pg_url: str):
     """Create the conversation_history table if it doesn't exist."""
-    async with await psycopg.AsyncConnection.connect(pg_url, autocommit=True) as conn:
+    async with await psycopg.AsyncConnection.connect(
+        pg_url, 
+        autocommit = True) as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS conversation_history (
                 id SERIAL PRIMARY KEY,
@@ -30,7 +32,10 @@ async def ensure_conversation_table(pg_url: str):
         """)
 
 
-async def get_history(pg_url: str, thread_id: str, limit: int = 10) -> list[dict]:
+async def get_history(
+    pg_url: str, 
+    thread_id: str, 
+    limit: int = 10) -> list[dict]:
     """
     Fetch the last N Q&A pairs for a thread, ordered oldest-first.
     Returns [{"question": "...", "answer": "..."}, ...]
@@ -49,7 +54,12 @@ async def get_history(pg_url: str, thread_id: str, limit: int = 10) -> list[dict
     return [{"question": r[0], "answer": r[1]} for r in reversed(rows)]
 
 
-async def save_turn(pg_url: str, thread_id: str, question: str, answer: str, mode: str = ""):
+async def save_turn(
+    pg_url: str, 
+    thread_id: str, 
+    question: str, 
+    answer: str, 
+    mode: str = ""):
     """Insert one Q&A turn into conversation history."""
     if not thread_id or thread_id == "default":
         return

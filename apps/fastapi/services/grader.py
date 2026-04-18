@@ -13,42 +13,21 @@ With the fallback chain (8 models × 40 RPM = ~320 RPM), we can grade
 documents in PARALLEL again without hitting rate limits.
 """
 import asyncio
-from pydantic import BaseModel, Field
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.documents import Document
 
-
-class GradeResult(BaseModel):
-    """Binary relevance grade for a document."""
-    score: str = Field(
-        description = "'relevant' if the document answers the question, 'not_relevant' otherwise"
-    )
-
-
-GRADING_PROMPT = ChatPromptTemplate.from_messages([
-    (
-        "system",
-        "You are a relevance grader. Given a user question and a retrieved document, "
-        "determine if the document contains information relevant to answering the question. "
-        "Respond with 'relevant' or 'not_relevant'. "
-        "A document is relevant if it contains ANY information that helps answer the question, "
-        "even partially.",
-    ),
-    (
-        "human",
-        "Question: {question}\n\nDocument content:\n{document}",
-    ),
-])
+from schemas.agents import GradeResult
+from schemas.prompts import GRADING_PROMPT
 
 
 class DocumentGrader:
     """Grades document relevance using LLM structured output."""
-
     def __init__(self, llm):
         # llm is a RunnableWithFallbacks (from with_fallbacks()).
         # with_structured_output works on the underlying Runnable chain.
         # method="function_calling" ensures compatibility with all NVIDIA NIM models.
-        self.grader = GRADING_PROMPT | llm.with_structured_output(GradeResult, method = "function_calling")
+        self.grader = GRADING_PROMPT | llm.with_structured_output(
+            GradeResult, 
+            method = "function_calling")
 
     async def grade_documents(
         self,

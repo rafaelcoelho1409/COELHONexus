@@ -18,11 +18,14 @@ Flow:
 import time
 import logging
 from langchain_core.documents import Document
-from langchain_openai import ChatOpenAI
 from langchain_experimental.graph_transformers import LLMGraphTransformer
 from langchain_neo4j import Neo4jGraph
 
-from schemas.graph import EXTRACTION_INSTRUCTIONS
+from schemas.agents import SchemaDiscovery
+from schemas.prompts import (
+    EXTRACTION_INSTRUCTIONS, 
+    SCHEMA_DISCOVERY_PROMPT
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +77,6 @@ async def extract_and_store_graph(
     total_relationships = 0
     total_processed = 0
     total_skipped = 0
-
     # Check which videos already have entities in Neo4j (skip re-processing)
     already_processed = set()
     try:
@@ -87,7 +89,6 @@ async def extract_and_store_graph(
             logger.info(f"[graph] {len(already_processed)} videos already processed in Neo4j, will skip")
     except Exception:
         pass  # If check fails, process everything
-
     # Build one Document per transcript (full text, not chunked)
     documents = []
     for transcript in transcripts:
@@ -101,31 +102,27 @@ async def extract_and_store_graph(
             continue
         # All NVIDIA NIM models support 128K tokens.
         # Longest transcript: ~38K tokens (147K chars). No truncation needed.
-        documents.append(Document(
-            page_content = content,
-            metadata = {
-                "video_id": vid,
-                "title": meta.get("title", ""),
-                "channel": meta.get("channel", ""),
-            },
+        documents.append(
+            Document(
+                page_content = content,
+                metadata = {
+                    "video_id": vid,
+                    "title": meta.get("title", ""),
+                    "channel": meta.get("channel", ""),
+                },
         ))
-
     logger.info(f"[graph] Processing {len(documents)} transcripts, skipped {total_skipped} already processed")
-
     # Process in small batches with rate-limit pacing
     for batch_start in range(0, len(documents), batch_size):
         batch = documents[batch_start:batch_start + batch_size]
-
         try:
             graph_documents = await transformer.aconvert_to_graph_documents(batch)
-
             # Store in Neo4j immediately (real-time updates)
             neo4j_graph.add_graph_documents(
                 graph_documents,
                 include_source = True,
                 baseEntityLabel = True,
             )
-
             # Tag Document nodes with video_id for skip-on-re-run
             for doc in batch:
                 vid = doc.metadata.get("video_id", "")
@@ -138,29 +135,23 @@ async def extract_and_store_graph(
                         )
                     except Exception:
                         pass
-
             for gdoc in graph_documents:
                 total_nodes += len(gdoc.nodes)
                 total_relationships += len(gdoc.relationships)
             total_processed += len(batch)
-
             logger.info(f"[graph] Batch {batch_start // batch_size + 1}: "
                         f"{total_processed}/{len(documents)} transcripts, "
                         f"{total_nodes} nodes, {total_relationships} rels")
-
         except Exception as e:
             logger.warning(f"[graph] Batch {batch_start // batch_size + 1} failed: {type(e).__name__}: {str(e)[:200]}. Continuing.")
             total_processed += len(batch)
-
         # Rate-limit pacing: 2s between batches to avoid 429 errors
         if batch_start + batch_size < len(documents):
             time.sleep(2)
-
     # Post-processing: entity resolution
     logger.info(f"[graph] Running entity resolution...")
     resolved = resolve_entities(neo4j_graph)
     logger.info(f"[graph] Entity resolution: {resolved} nodes merged")
-
     return {
         "documents_processed": total_processed,
         "nodes_created": total_nodes,
@@ -185,7 +176,6 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     apoc.refactor.mergeNodes for Neo4j node merging.
     """
     merged_count = 0
-
     # Step 1: Normalize all entity IDs to lowercase
     try:
         result = neo4j_graph.query(
@@ -198,7 +188,6 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
         logger.info(f"[entity-resolution] Normalized {normalized} entity names")
     except Exception as e:
         logger.warning(f"[entity-resolution] Normalization failed: {e}")
-
     # Step 2: Merge exact duplicates (same label + same id after normalization)
     try:
         result = neo4j_graph.query(
@@ -215,11 +204,9 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
         logger.info(f"[entity-resolution] Merged {merged_count} exact duplicates")
     except Exception as e:
         logger.warning(f"[entity-resolution] Exact merge failed: {e}")
-
     # Step 3: Fuzzy match merge (via Python — fetch, match, merge)
     try:
         from rapidfuzz import fuzz
-
         # Get all entity IDs grouped by label
         entities = neo4j_graph.query(
             "MATCH (n:__Entity__) "
@@ -229,10 +216,14 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
             "WHERE label <> '__Entity__' AND label <> 'Document' "
             "RETURN label, collect(DISTINCT id) AS ids"
         )
-
         # Labels to exclude from fuzzy matching (numbers match falsely)
-        SKIP_FUZZY_LABELS = {"Money", "Money amount", "Cost", "Number", "Date", "Currency"}
-
+        SKIP_FUZZY_LABELS = {
+            "Money", 
+            "Money amount", 
+            "Cost", 
+            "Number", 
+            "Date", 
+            "Currency"}
         for row in entities:
             label = row["label"]
             # Skip numeric entity types — "r$ 100.000" vs "r$ 1.000.000" are different values
@@ -242,7 +233,6 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
             ids = [str(i) for i in row["ids"] if isinstance(i, str)]
             if len(ids) < 2:
                 continue
-
             # Find pairs with >75% similarity
             merged_ids = set()
             for i, id1 in enumerate(ids):
@@ -269,12 +259,10 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
                             logger.info(f"[entity-resolution] Fuzzy merged: '{duplicate}' → '{canonical}' ({score}%)")
                         except Exception:
                             pass
-
     except ImportError:
         logger.warning("[entity-resolution] rapidfuzz not installed, skipping fuzzy merge")
     except Exception as e:
         logger.warning(f"[entity-resolution] Fuzzy merge failed: {e}")
-
     return merged_count
 
 
@@ -292,27 +280,11 @@ async def discover_schema(
     Returns: {"allowed_nodes": [...], "allowed_relationships": [...], "instructions": "..."}
     """
     samples = "\n\n---\n\n".join(sample_transcripts[:3])
-
-    from langchain_core.prompts import ChatPromptTemplate
-    from pydantic import BaseModel, Field
-
-    class SchemaDiscovery(BaseModel):
-        allowed_nodes: list[str] = Field(description = "Entity types to extract (e.g., Country, Person, Organization)")
-        allowed_relationships: list[str] = Field(description = "Relationship types (e.g., RECOMMENDS, LOCATED_IN)")
-        extraction_focus: str = Field(description = "Brief description of what to focus on during extraction")
-
-    prompt = ChatPromptTemplate.from_messages([
-        ("system",
-         "You are a knowledge graph schema designer. Analyze the sample transcripts "
-         "and suggest the most useful entity types and relationship types for building "
-         "a knowledge graph. Focus on types that enable multi-hop reasoning and "
-         "cross-document connections. Return 5-8 node types and 6-10 relationship types."),
-        ("human", "Sample transcripts:\n\n{samples}\n\nSuggest the best schema:"),
-    ])
-
-    chain = prompt | llm.with_structured_output(SchemaDiscovery, method = "function_calling")
+    chain = SCHEMA_DISCOVERY_PROMPT | llm.with_structured_output(
+        SchemaDiscovery,
+        method = "function_calling",
+    )
     result = await chain.ainvoke({"samples": samples[:10000]})
-
     return {
         "allowed_nodes": result.allowed_nodes,
         "allowed_relationships": result.allowed_relationships,
@@ -329,14 +301,12 @@ async def get_graph_stats(neo4j_graph: Neo4jGraph) -> dict:
         "ORDER BY count DESC"
     )
     nodes_by_label = {row["label"]: row["count"] for row in nodes_result}
-
     rels_result = neo4j_graph.query(
         "MATCH ()-[r]->() "
         "RETURN type(r) AS type, count(*) AS count "
         "ORDER BY count DESC"
     )
     rels_by_type = {row["type"]: row["count"] for row in rels_result}
-
     return {
         "total_nodes": sum(nodes_by_label.values()),
         "total_relationships": sum(rels_by_type.values()),

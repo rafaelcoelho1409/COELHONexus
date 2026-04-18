@@ -68,15 +68,19 @@ class NVIDIAEmbeddings(Embeddings):
       - embed_documents(texts) → list[list[float]]
       - embed_query(text) → list[float]
     """
-
-    def __init__(self, model: str = NVIDIA_EMBEDDING_MODEL):
+    def __init__(
+        self, 
+        model: str = NVIDIA_EMBEDDING_MODEL):
         self.model = model
         self.dimensions = MODEL_DIMENSIONS.get(model, 2048)
         import httpx
         self._client = httpx.Client(timeout = 120.0)
         logger.info(f"[embeddings] Using {model} ({self.dimensions}d) via NVIDIA NIM API")
 
-    def _call_api(self, texts: list[str], input_type: str = "passage") -> list[list[float]]:
+    def _call_api(
+        self, 
+        texts: list[str], 
+        input_type: str = "passage") -> list[list[float]]:
         """
         Call NVIDIA NIM embedding API with exponential backoff on 429.
         Max 5 retries: 2s → 4s → 8s → 16s → 32s (total max wait: ~62s).
