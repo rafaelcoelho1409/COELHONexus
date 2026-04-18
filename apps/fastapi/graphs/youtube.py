@@ -22,10 +22,7 @@ Graph:
                        ↓
                   check_hallucination → [format_citations → END | rewrite → retrieve]
 """
-import re
-from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, END
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver

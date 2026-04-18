@@ -26,6 +26,17 @@ from urllib.request import urlopen
 import ssl
 import json
 from playwright.async_api import async_playwright
+from fastapi import (
+    Request
+)
+
+from services.retriever import (
+    ElasticsearchRetriever,
+    QdrantHybridRetriever,
+    Neo4jRetriever,
+    SmartRetriever,
+)
+from graphs.adaptive import AdaptiveRAGGraph
 
 # Use uvicorn's logger for proper output in FastAPI
 log = logging.getLogger("uvicorn.error")
@@ -69,7 +80,10 @@ class YtDlpExtractor:
         self.timeout = timeout
         self.buffer_limit = buffer_limit
     
-    async def _run_yt_dlp(self, args: list[str], timeout: float | None = None) -> tuple[bool, str, str]:
+    async def _run_yt_dlp(
+        self, 
+        args: list[str], 
+        timeout: float | None = None) -> tuple[bool, str, str]:
         """Execute yt-dlp as subprocess with timeout and memory limits."""
         effective_timeout = timeout or self.timeout
         start_time = time.time()
@@ -104,7 +118,9 @@ class YtDlpExtractor:
             log.info(f"[yt-dlp] ERROR ({elapsed:.2f}s) {type(e).__name__}: {e}")
             return False, "", str(e)
 
-    async def extract_video(self, video_id: str) -> dict:
+    async def extract_video(
+        self, 
+        video_id: str) -> dict:
         """Extract FULL metadata for a single video."""
         log.info(f"[yt-dlp:video] extracting id={video_id}")
         url = f"https://www.youtube.com/watch?v={video_id}"
@@ -128,7 +144,9 @@ class YtDlpExtractor:
         log.info(f"[yt-dlp:video] FAILED id={video_id} error={stderr[:100] if stderr else 'Unknown'}")
         return {"id": video_id, "error": stderr or "Unknown error"}
 
-    async def extract_batch(self, video_ids: list[str]) -> list[dict]:
+    async def extract_batch(
+        self, 
+        video_ids: list[str]) -> list[dict]:
         """Extract metadata for multiple videos in parallel."""
         log.info(f"[yt-dlp:batch] starting count={len(video_ids)}")
         start_time = time.time()
@@ -192,9 +210,21 @@ class YtDlpExtractor:
         """
         # Check if any filters are active
         has_filters = any([
-            duration, duration_min, duration_max, date_after, date_before,
-            min_views, max_views, min_likes, is_live, live_status,
-            availability, age_limit, title_contains, description_contains, channel_name
+            duration, 
+            duration_min, 
+            duration_max, 
+            date_after, 
+            date_before,
+            min_views, 
+            max_views, 
+            min_likes, 
+            is_live, 
+            live_status,
+            availability, 
+            age_limit, 
+            title_contains, 
+            description_contains, 
+            channel_name
         ])
         # Request more results to account for post-filtering
         fetch_count = max_results * 3 if has_filters else max_results
@@ -272,7 +302,7 @@ class YtDlpExtractor:
             args.extend(["--age-limit", str(age_limit)])
         args.append(search_url)
         async with self.semaphore:
-            success, stdout, stderr = await self._run_yt_dlp(args, timeout=90)
+            success, stdout, stderr = await self._run_yt_dlp(args, timeout = 90)
         if not success:
             log.info(f"[yt-dlp:search] FAILED query='{query}'")
             return [{"error": stderr or "Search failed"}]
@@ -382,7 +412,7 @@ class YtDlpExtractor:
         if max_videos > 0:
             args.extend(["--playlist-end", str(max_videos)])
         async with self.semaphore:
-            success, stdout, stderr = await self._run_yt_dlp(args, timeout=timeout)
+            success, stdout, stderr = await self._run_yt_dlp(args, timeout = timeout)
         # Try parsing JSON even on failure (--ignore-errors may have partial results)
         try:
             data = orjson.loads(stdout) if stdout.strip() else {}
@@ -624,13 +654,11 @@ async def fetch_transcriptions_batch(
     """
     if not video_ids:
         return []
-
     # Check ES cache for existing transcriptions
     existing_transcriptions = await _check_existing_transcriptions(
         es_client,
         video_ids,
         languages)
-
     # Filter out videos that already have required transcriptions
     ids_to_fetch = []
     cached_count = 0
@@ -641,46 +669,38 @@ async def fetch_transcriptions_batch(
         else:
             cached_count += 1
             log.info(f"[transcription-cache] HIT {vid} langs={existing_langs}")
-
     if cached_count > 0:
         log.info(f"[fetch_transcriptions_batch] Cache: {cached_count} hits, {len(ids_to_fetch)} to fetch")
-
     if not ids_to_fetch:
         log.info("[fetch_transcriptions_batch] All videos cached, no fetch needed")
         return []
-
     # Fetch via Playwright CDP (only method - yt-dlp subtitle extraction removed due to 429 rate limits)
     service = transcript_service or _transcript_service
     if not service or not service._initialized:
         log.error("[fetch_transcriptions_batch] Playwright service not available")
         return []
-
     # Chunk processing for large batches (crash resilience)
     total_to_fetch = len(ids_to_fetch)
     num_chunks = (total_to_fetch + chunk_size - 1) // chunk_size
     log.info(f"[fetch_transcriptions_batch] Fetching {total_to_fetch} videos in {num_chunks} chunks of {chunk_size}")
-
     transcription_docs = []
     total_success = 0
     total_failed = 0
-
     for chunk_num in range(num_chunks):
         start_idx = chunk_num * chunk_size
         end_idx = min(start_idx + chunk_size, total_to_fetch)
         chunk_ids = ids_to_fetch[start_idx:end_idx]
-
         log.info(f"[fetch_transcriptions_batch] Chunk {chunk_num + 1}/{num_chunks}: {len(chunk_ids)} videos")
-
         # Process chunk
-        chunk_results = await service.fetch_batch(chunk_ids, prefer_manual=True)
-
+        chunk_results = await service.fetch_batch(
+            chunk_ids, 
+            prefer_manual = True)
         # Process chunk results - collect docs for this chunk separately
         chunk_docs = []
         for result in chunk_results:
             vid = result.get("video_id")
             if not vid:
                 continue
-
             if "error" not in result and result.get("page_content"):
                 lang = result.get("language", "unknown")
                 content = result.get("page_content", "")
@@ -706,7 +726,6 @@ async def fetch_transcriptions_batch(
             else:
                 total_failed += 1
                 log.warning(f"[fetch_transcriptions_batch] FAIL {vid}: {result.get('error', '')[:100]}")
-
         # Index chunk results immediately (crash resilience - don't lose progress)
         if chunk_docs and es_client:
             try:
@@ -714,10 +733,8 @@ async def fetch_transcriptions_batch(
                 log.info(f"[fetch_transcriptions_batch] Chunk {chunk_num + 1} indexed: {len(chunk_docs)} docs")
             except Exception as e:
                 log.error(f"[fetch_transcriptions_batch] Chunk {chunk_num + 1} index error: {e}")
-
         log.info(f"[fetch_transcriptions_batch] Chunk {chunk_num + 1}/{num_chunks} complete: "
                  f"{total_success} OK, {total_failed} failed so far")
-
     log.info(f"[fetch_transcriptions_batch] Complete: {total_success}/{total_to_fetch} fetched, "
              f"{total_failed} failed, {cached_count} cached")
     return transcription_docs
@@ -859,7 +876,9 @@ async def _get_caption_tracks(page) -> list[CaptionTrack]:
     ]
 
 
-def _select_best_track(tracks: list[CaptionTrack], prefer_manual: bool = True) -> CaptionTrack:
+def _select_best_track(
+    tracks: list[CaptionTrack], 
+    prefer_manual: bool = True) -> CaptionTrack:
     """Select best track: English manual > Portuguese manual > any manual > English auto > any."""
     def priority(t: CaptionTrack) -> tuple:
         is_english = t.language_code.startswith('en')
@@ -932,15 +951,20 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
     # Step 1: Wait for YouTube to fully render its UI
     try:
         # Wait for video player (indicates core UI loaded)
-        await page.wait_for_selector('#movie_player, ytd-player', state='attached', timeout=15000)
+        await page.wait_for_selector(
+            '#movie_player, ytd-player', 
+            state = 'attached', 
+            timeout = 15000)
         # Also wait for description area (where transcript button lives)
-        await page.wait_for_selector('ytd-watch-metadata, #above-the-fold', state='attached', timeout=10000)
+        await page.wait_for_selector(
+            'ytd-watch-metadata, #above-the-fold', 
+            state = 'attached', 
+            timeout = 10000)
         log.info("[dom] Page ready (player + metadata loaded)")
     except Exception:
         # Fallback: wait a bit for JS to render
         await page.wait_for_timeout(3000)
         log.info("[dom] Fallback wait completed")
-
     # Check if transcript panel is already visible
     already_visible = await page.evaluate('''() => {
         const segments = document.querySelectorAll('transcript-segment-view-model, ytd-transcript-segment-renderer');
@@ -951,15 +975,14 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
     if already_visible:
         log.info("[dom] Transcript panel already visible")
         return await _extract_transcript_text(page)
-
     # Step 2: Wait for and click expand button (with retry)
     expanded = False
     for expand_attempt in range(3):
         try:
             expand_btn = await page.wait_for_selector(
                 'tp-yt-paper-button#expand:not([hidden])',
-                state='visible',
-                timeout=5000
+                state = 'visible',
+                timeout = 5000
             )
             if expand_btn:
                 await expand_btn.scroll_into_view_if_needed()
@@ -968,8 +991,8 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
                 # Wait for transcript section to appear
                 await page.wait_for_selector(
                     'ytd-video-description-transcript-section-renderer',
-                    state='attached',
-                    timeout=5000
+                    state = 'attached',
+                    timeout = 5000
                 )
                 expanded = True
                 break
@@ -977,10 +1000,8 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
             if expand_attempt < 2:
                 await page.wait_for_timeout(1000)  # Brief wait before retry
             continue
-
     if not expanded:
         log.info("[dom] Expand button not found after retries, continuing...")
-
     # Step 3: Find and click transcript button with multiple selectors
     transcript_clicked = False
     selectors = [
@@ -988,10 +1009,12 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
         'ytd-video-description-transcript-section-renderer button',
         'button[aria-label*="transcript" i]',
     ]
-
     for selector in selectors:
         try:
-            btn = await page.wait_for_selector(selector, state='visible', timeout=3000)
+            btn = await page.wait_for_selector(
+                selector, 
+                state = 'visible', 
+                timeout = 3000)
             if btn:
                 await btn.scroll_into_view_if_needed()
                 await btn.click()
@@ -1000,7 +1023,6 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
                 break
         except Exception:
             continue
-
     if not transcript_clicked:
         # Debug info before failing
         debug_info = await page.evaluate('''() => ({
@@ -1012,11 +1034,9 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
         })''')
         log.warning(f"[dom] Transcript button not found. Debug: {debug_info}")
         raise ValueError("Transcript button not found")
-
     # Step 4: Poll for transcript panel to load (up to 15 attempts, 1s apart)
     panel_loaded = False
     segment_count = 0
-
     for attempt in range(15):
         panel_state = await page.evaluate('''() => {
             // Check for segments (most reliable)
@@ -1042,20 +1062,16 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
             }
             return { loaded: false, segmentCount: 0 };
         }''')
-
         if panel_state.get('loaded'):
             panel_loaded = True
             segment_count = panel_state.get('segmentCount', 0)
             log.info(f"[dom] Panel loaded (attempt {attempt + 1}) segments={segment_count}")
             break
-
         if attempt < 14:  # Don't sleep on last attempt
             await page.wait_for_timeout(1000)
-
     if not panel_loaded:
         log.warning("[dom] Panel not loaded after 15 attempts")
         raise ValueError("Transcript panel not loaded")
-
     return await _extract_transcript_text(page)
 
 
@@ -1147,7 +1163,10 @@ def _parse_transcript(raw_text: str) -> list[TranscriptSegment]:
                 text_parts.append(lines[i])
                 i += 1
             if text_parts:
-                segments.append(TranscriptSegment(timestamp=timestamp, text=" ".join(text_parts)))
+                segments.append(
+                    TranscriptSegment(
+                        timestamp = timestamp, 
+                        text = " ".join(text_parts)))
         else:
             i += 1
     return segments
@@ -1269,7 +1288,10 @@ class PlaywrightTranscriptService:
         self._initialized = False
         log.info("[transcript-service] Shutdown complete")
 
-    async def _refresh_browser(self, max_retries: int = 6, initial_wait: float = 5.0) -> None:
+    async def _refresh_browser(
+        self, 
+        max_retries: int = 6, 
+        initial_wait: float = 5.0) -> None:
         """
         Refresh browser connection to prevent stale CDP connections.
         Called automatically after browser_refresh_interval videos.
@@ -1296,7 +1318,6 @@ class PlaywrightTranscriptService:
                 await self._browser.close()
             except Exception as e:
                 log.warning(f"[transcript-service] Error closing old browser: {e}")
-
         # 3. Re-resolve CDP URL and connect with retry (handles Playwright restarts)
         # IMPORTANT: connect_over_cdp can hang indefinitely (known Playwright bug)
         # Must wrap with asyncio.wait_for() to enforce timeout
@@ -1309,12 +1330,12 @@ class PlaywrightTranscriptService:
                 log.info(f"[transcript-service] CDP reconnect attempt {attempt + 1}/{max_retries}...")
                 self._cdp_url = await asyncio.wait_for(
                     asyncio.to_thread(_get_cdp_websocket_url, cdp_endpoint),
-                    timeout=connect_timeout
+                    timeout = connect_timeout
                 )
                 # connect_over_cdp can hang forever - enforce timeout
                 self._browser = await asyncio.wait_for(
                     self._playwright.chromium.connect_over_cdp(self._cdp_url),
-                    timeout=connect_timeout
+                    timeout = connect_timeout
                 )
                 log.info(f"[transcript-service] CDP connected (attempt {attempt + 1})")
                 break
@@ -1338,9 +1359,9 @@ class PlaywrightTranscriptService:
                 else:
                     log.error(f"[transcript-service] CDP connect failed after {max_retries} attempts: {e}")
                     raise RuntimeError(f"Failed to connect to Playwright CDP after {max_retries} attempts") from last_error
-
         # 4. Re-warm context pool
-        self._context_pool = asyncio.Queue(maxsize=self.context_pool_size)
+        self._context_pool = asyncio.Queue(
+            maxsize = self.context_pool_size)
         for i in range(self.context_pool_size):
             ctx = await self._create_context()
             await self._context_pool.put(ctx)
@@ -1417,31 +1438,37 @@ class PlaywrightTranscriptService:
             # Wait for context with timeout instead of creating unlimited temps
             return await asyncio.wait_for(
                 self._context_pool.get(),
-                timeout=timeout
+                timeout = timeout
             )
         except asyncio.TimeoutError:
             log.warning("[transcript-service] Context pool timeout, creating temporary")
             return await self._create_context()
 
-    async def _release_context(self, ctx, reuse: bool = True, timeout: float = 5.0) -> None:
+    async def _release_context(
+        self, 
+        ctx, 
+        reuse: bool = True, 
+        timeout: float = 5.0) -> None:
         """Return context to pool or close it (with timeout to prevent hangs)."""
         async def _close_ctx():
             try:
                 await ctx.close()
             except:
                 pass
-
         if not reuse:
             try:
-                await asyncio.wait_for(_close_ctx(), timeout=timeout)
+                await asyncio.wait_for(
+                    _close_ctx(), 
+                    timeout = timeout)
             except asyncio.TimeoutError:
                 log.warning("[transcript-service] Context close timed out")
             return
-
         if self._context_pool.qsize() < self.context_pool_size:
             try:
                 # Clear cookies for clean reuse (with timeout)
-                await asyncio.wait_for(ctx.clear_cookies(), timeout=timeout)
+                await asyncio.wait_for(
+                    ctx.clear_cookies(), 
+                    timeout = timeout)
                 self._context_pool.put_nowait(ctx)
             except asyncio.TimeoutError:
                 log.warning("[transcript-service] Cookie clear timed out, discarding context")
@@ -1475,7 +1502,10 @@ class PlaywrightTranscriptService:
         last_error = None
         for attempt in range(self.max_retries + 1):
             try:
-                result = await self._fetch_single_attempt(video_id, prefer_manual, attempt)
+                result = await self._fetch_single_attempt(
+                    video_id, 
+                    prefer_manual, 
+                    attempt)
                 if "error" not in result:
                     return result
                 # If it's a content error (no transcript), don't retry
@@ -1501,20 +1531,16 @@ class PlaywrightTranscriptService:
     ) -> dict:
         """Single extraction attempt (called by fetch_batch with batch retry)."""
         start_time = time.time()
-
         # Small staggered delay to reduce CDP pressure (0-500ms based on attempt)
         if attempt == 0:
             await asyncio.sleep(0.1 * (hash(video_id) % 5))
-
         async with self.semaphore:
             # Check browser health FIRST (before incrementing active_ops)
             # This prevents race condition where new ops increment while refresh waits
             await self._ensure_healthy_browser()
-
             # NOW track active operations (after browser is confirmed healthy)
             async with self._active_ops_lock:
                 self._active_ops += 1
-
             context = await self._acquire_context()
             page = None
             reuse_context = True
@@ -1534,7 +1560,7 @@ class PlaywrightTranscriptService:
                 try:
                     await page.wait_for_function(
                         '() => !!window.ytInitialPlayerResponse?.captions',
-                        timeout=5000
+                        timeout = 5000
                     )
                 except:
                     pass
@@ -1586,7 +1612,7 @@ class PlaywrightTranscriptService:
                         await page.close()
                     except:
                         pass
-                await self._release_context(context, reuse=reuse_context)
+                await self._release_context(context, reuse = reuse_context)
 
     async def fetch_batch(
         self,
@@ -1613,48 +1639,56 @@ class PlaywrightTranscriptService:
         """
         if not self._initialized:
             raise RuntimeError("PlaywrightTranscriptService not initialized. Call initialize() first.")
-
         batch_size = len(video_ids)
         log.info(f"[transcript-service] Batch started: {batch_size} videos "
                  f"(max_concurrent={self.max_concurrent}, batch_retries={self.max_retries})")
         start_time = time.time()
-
         # Results dict to track all outcomes (preserves order)
         results_map: dict[str, dict] = {}
-
         # Error classification
         # Only truly permanent errors (video confirmed to have no transcript)
-        PERMANENT_ERRORS = ["no transcript", "unavailable", "video unavailable", "private video"]
+        PERMANENT_ERRORS = [
+            "no transcript", 
+            "unavailable", 
+            "video unavailable", 
+            "private video"]
         # Retryable errors (timing issues, connection problems, page load issues)
-        RETRYABLE_ERRORS = ["button not found", "panel not loaded", "timeout", "target closed", "navigation", "browser", "context", "expand"]
-
+        RETRYABLE_ERRORS = [
+            "button not found", 
+            "panel not loaded", 
+            "timeout", 
+            "target closed", 
+            "navigation", 
+            "browser", 
+            "context", 
+            "expand"]
         def is_retryable(error_msg: str) -> bool:
             error_lower = error_msg.lower()
             if any(p in error_lower for p in PERMANENT_ERRORS):
                 return False
             return any(r in error_lower for r in RETRYABLE_ERRORS)
-
         # Track pending videos for retry passes
         pending_ids = list(video_ids)
-
         for pass_num in range(self.max_retries + 1):
             if not pending_ids:
                 break
-
             pass_label = "First pass" if pass_num == 0 else f"Retry pass {pass_num}"
             log.info(f"[transcript-service] {pass_label}: {len(pending_ids)} videos")
-
             # Run all pending videos concurrently (semaphore limits to max_concurrent)
-            tasks = [self._fetch_single_attempt(vid, prefer_manual, pass_num) for vid in pending_ids]
-            pass_results = await asyncio.gather(*tasks, return_exceptions=True)
-
+            tasks = [
+                self._fetch_single_attempt(
+                    vid, 
+                    prefer_manual, 
+                    pass_num) 
+                for vid 
+                in pending_ids]
+            pass_results = await asyncio.gather(*tasks, return_exceptions = True)
             # Process results and collect retryable failures
             next_pending = []
             for vid, result in zip(pending_ids, pass_results):
                 if isinstance(result, Exception):
                     error_str = str(result)
                     result = {"video_id": vid, "error": error_str}
-
                 if "error" not in result:
                     # Success
                     results_map[vid] = result
@@ -1665,9 +1699,7 @@ class PlaywrightTranscriptService:
                     else:
                         # Permanent failure or max retries reached
                         results_map[vid] = result
-
             pending_ids = next_pending
-
             # Cooldown before retry (let YouTube/CDP stabilize)
             if pending_ids and pass_num < self.max_retries:
                 cooldown = 3 + pass_num * 2  # 3s, 5s, 7s...
@@ -1675,19 +1707,18 @@ class PlaywrightTranscriptService:
                 await asyncio.sleep(cooldown)
                 # Don't force refresh here - let health check handle it naturally
                 # This prevents closing contexts while other ops might be in-flight
-
         # Build final results in original order
-        results = [results_map.get(vid, {"video_id": vid, "error": "Not processed"}) for vid in video_ids]
-
+        results = [
+            results_map.get(vid, {"video_id": vid, "error": "Not processed"}) 
+            for vid 
+            in video_ids]
         elapsed = time.time() - start_time
         success = sum(1 for r in results if "error" not in r)
         avg_time = elapsed / batch_size if batch_size > 0 else 0
         log.info(f"[transcript-service] Batch complete: {success}/{batch_size} OK "
                  f"time={elapsed:.1f}s avg={avg_time:.1f}s/video")
-
         # Cleanup contexts after batch to prevent memory accumulation
         await self._cleanup_contexts()
-
         return results
 
 
@@ -1771,7 +1802,9 @@ async def index_videos_to_elasticsearch(
     log.info(f"[elasticsearch] indexing {len(operations)//2} videos to {index}")
     start_time = time.time()
     try:
-        response = await es_client.bulk(operations=operations, refresh=True)
+        response = await es_client.bulk(
+            operations = operations, 
+            refresh = True)
         elapsed = time.time() - start_time
         indexed = sum(1 for item in response["items"] if item["index"]["status"] in (200, 201))
         failed = len(response["items"]) - indexed
@@ -1811,7 +1844,9 @@ async def index_transcriptions_to_elasticsearch(
     log.info(f"[elasticsearch] indexing {len(operations)//2} transcriptions to {index}")
     start_time = time.time()
     try:
-        response = await es_client.bulk(operations=operations, refresh=True)
+        response = await es_client.bulk(
+            operations = operations, 
+            refresh = True)
         elapsed = time.time() - start_time
         indexed = sum(1 for item in response["items"] if item["index"]["status"] in (200, 201))
         failed = len(response["items"]) - indexed
@@ -1926,9 +1961,14 @@ async def create_youtube_indexes(es_client) -> dict:
                 mappings = metadata_mapping["mappings"],
                 settings = metadata_mapping["settings"],
             )
-            results["metadata"] = {"created": True, "index": ES_INDEX_METADATA}
+            results["metadata"] = {
+                "created": True, 
+                "index": ES_INDEX_METADATA}
         else:
-            results["metadata"] = {"created": False, "index": ES_INDEX_METADATA, "message": "exists"}
+            results["metadata"] = {
+                "created": False, 
+                "index": ES_INDEX_METADATA, 
+                "message": "exists"}
     except Exception as e:
         results["metadata"] = {"created": False, "index": ES_INDEX_METADATA, "error": str(e)}
     # Create transcriptions index
@@ -1940,9 +1980,128 @@ async def create_youtube_indexes(es_client) -> dict:
                 mappings = transcriptions_mapping["mappings"],
                 settings = transcriptions_mapping["settings"],
             )
-            results["transcriptions"] = {"created": True, "index": ES_INDEX_TRANSCRIPTIONS}
+            results["transcriptions"] = {
+                "created": True, 
+                "index": ES_INDEX_TRANSCRIPTIONS}
         else:
-            results["transcriptions"] = {"created": False, "index": ES_INDEX_TRANSCRIPTIONS, "message": "exists"}
+            results["transcriptions"] = {
+                "created": False, 
+                "index": ES_INDEX_TRANSCRIPTIONS, 
+                "message": "exists"}
     except Exception as e:
-        results["transcriptions"] = {"created": False, "index": ES_INDEX_TRANSCRIPTIONS, "error": str(e)}
+        results["transcriptions"] = {
+            "created": False, 
+            "index": ES_INDEX_TRANSCRIPTIONS, 
+            "error": str(e)}
     return results
+
+
+def _ensure_embeddings(app):
+    """
+    Lazy-load embedding models on first use.
+    Avoids OOMKilled at startup when Playwright + embeddings exceed 4Gi.
+    Once loaded, cached on app.state for subsequent requests.
+    """
+    if app.state.dense_embeddings is None:
+        from services.embeddings import create_dense_embeddings, create_sparse_embeddings
+        app.state.dense_embeddings = create_dense_embeddings()  # NVIDIA NIM API (zero CPU)
+        app.state.sparse_embeddings = create_sparse_embeddings()  # Local BM25 (minimal CPU)
+        print("Embeddings initialized (NVIDIA NIM API + BM25 sparse)", flush = True)
+    return app.state.dense_embeddings
+
+
+def _build_graph(request: Request):
+    """
+    Build the LangGraph workflow from app state.
+
+    CONCEPT: SmartRetriever orchestrates THREE retrieval sources:
+    1. Qdrant hybrid (dense + sparse) — content/semantic search
+    2. Neo4j graph traversal — entity and relationship queries
+    3. ES full-text — fallback if both above are unavailable
+
+    Qdrant and Neo4j run in PARALLEL via asyncio.gather.
+    Results are merged and deduplicated before grading.
+    """
+    app = request.app
+    # Two-stage retrieval: overfetch from each source → FlashRank reranks to top 10.
+    # Each source fetches 15 candidates (wide net), SmartRetriever merges ~30,
+    # deduplicates, then FlashRank cross-encoder picks the best 10.
+    # Grading further filters to ~5-7 relevant documents for generation.
+    RETRIEVER_TOP_K = 15  # Per-source fetch (Qdrant, Neo4j, ES)
+    FINAL_TOP_K = 10      # After rerank
+    # ES retriever (fallback only — used when Qdrant+Neo4j both fail)
+    es_retriever = ElasticsearchRetriever(
+        app.state.es, 
+        top_k = RETRIEVER_TOP_K)
+    # Qdrant hybrid retriever — lazy-load embeddings on first use
+    qdrant_retriever = None
+    dense = _ensure_embeddings(app)
+    sparse = app.state.sparse_embeddings
+    if dense and sparse:
+        qdrant_retriever = QdrantHybridRetriever(
+            qdrant = app.state.qdrant,
+            dense_embeddings = dense,
+            sparse_embeddings = sparse,
+            top_k = RETRIEVER_TOP_K,
+        )
+    # Neo4j graph retriever (available after /ingest/graph)
+    neo4j_retriever = None
+    if hasattr(app.state, "neo4j_graph"):
+        neo4j_retriever = Neo4jRetriever(
+            neo4j_graph = app.state.neo4j_graph,
+            llm = app.state.llm,
+            top_k = RETRIEVER_TOP_K,
+        )
+    # Smart retriever: Qdrant + Neo4j in parallel, ES fallback, rerank to FINAL_TOP_K
+    retriever = SmartRetriever(
+        es_retriever, 
+        qdrant_retriever, 
+        neo4j_retriever, 
+        top_k = FINAL_TOP_K)
+    grader = DocumentGrader(app.state.llm)
+    adaptive_graph_builder = AdaptiveRAGGraph()
+    return adaptive_graph_builder.build_adaptive_rag_graph(
+        retriever = retriever,
+        grader = grader,
+        llm = app.state.llm,
+        checkpointer = app.state.checkpointer,
+        neo4j_graph = app.state.neo4j_graph if hasattr(app.state, "neo4j_graph") else None,
+    )
+
+
+def _serialize_update(node_name: str, update: dict) -> dict:
+    """Convert a node update to JSON-serializable format."""
+    result = {"node": node_name}
+    if "documents" in update:
+        result["documents"] = [
+            {
+                "video_id": doc.metadata.get("video_id"),
+                "title": doc.metadata.get("title"),
+                "source": doc.metadata.get("source"),
+                "content_preview": doc.page_content[:200],
+            }
+            for doc in update["documents"]
+        ]
+        result["document_count"] = len(update["documents"])
+    if "generation" in update:
+        result["generation"] = update["generation"]
+    if "search_query" in update:
+        result["search_query"] = update["search_query"]
+    if "retry_count" in update:
+        result["retry_count"] = update["retry_count"]
+    # Adaptive RAG fields
+    if "mode" in update:
+        result["mode"] = update["mode"]
+    if "sub_questions" in update and update["sub_questions"]:
+        result["sub_questions"] = update["sub_questions"]
+    if "research_plan" in update and update["research_plan"]:
+        result["research_plan"] = update["research_plan"]
+    if "sub_results" in update and update["sub_results"]:
+        result["sub_results_count"] = len(update["sub_results"])
+        # Preview latest sub-result
+        latest = update["sub_results"][-1]
+        result["latest_sub_question"] = latest.get("sub_question", "")
+        result["latest_sub_answer_preview"] = latest.get("answer", "")[:200]
+    if "confidence_score" in update and update["confidence_score"]:
+        result["confidence_score"] = update["confidence_score"]
+    return result

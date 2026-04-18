@@ -6,7 +6,7 @@ Endpoints:
 - GET  /tasks            — List recent tasks
 - DELETE /tasks/{task_id} — Cancel a running task
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from celery.result import AsyncResult
 from celery_app import app as celery_app
 
@@ -29,12 +29,10 @@ async def get_task_status(task_id: str):
     FAILURE state includes the exception traceback.
     """
     result = AsyncResult(task_id, app = celery_app)
-
     response = {
         "task_id": task_id,
         "status": result.status,
     }
-
     if result.status == "PROGRESS":
         response["progress"] = result.info
     elif result.status == "SUCCESS":
@@ -43,7 +41,6 @@ async def get_task_status(task_id: str):
         response["error"] = str(result.result)
     elif result.status == "STARTED":
         response["progress"] = result.info if result.info else {"status": "running"}
-
     return response
 
 
@@ -59,13 +56,10 @@ async def list_tasks():
     This returns active/reserved/scheduled tasks from live workers.
     """
     inspect = celery_app.control.inspect()
-
     active = inspect.active() or {}
     reserved = inspect.reserved() or {}
     scheduled = inspect.scheduled() or {}
-
     tasks = []
-
     for worker, worker_tasks in active.items():
         for t in worker_tasks:
             tasks.append({
@@ -74,7 +68,6 @@ async def list_tasks():
                 "worker": worker,
                 "state": "ACTIVE",
             })
-
     for worker, worker_tasks in reserved.items():
         for t in worker_tasks:
             tasks.append({
@@ -83,7 +76,6 @@ async def list_tasks():
                 "worker": worker,
                 "state": "RESERVED",
             })
-
     for worker, worker_tasks in scheduled.items():
         for t in worker_tasks:
             tasks.append({
@@ -92,8 +84,9 @@ async def list_tasks():
                 "worker": worker,
                 "state": "SCHEDULED",
             })
-
-    return {"tasks": tasks, "total": len(tasks)}
+    return {
+        "tasks": tasks, 
+        "total": len(tasks)}
 
 
 @router.delete("/{task_id}")
@@ -104,5 +97,9 @@ async def cancel_task(task_id: str):
     CONCEPT: revoke() tells the worker to cancel the task.
     terminate=True sends SIGTERM to the worker process running the task.
     """
-    celery_app.control.revoke(task_id, terminate = True)
-    return {"task_id": task_id, "status": "cancelled"}
+    celery_app.control.revoke(
+        task_id, 
+        terminate = True)
+    return {
+        "task_id": task_id, 
+        "status": "cancelled"}

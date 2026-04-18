@@ -133,3 +133,41 @@ class RAGSearchRequest(BaseModel):
     max_retries: int = 3
     force_mode: Literal["fast", "standard", "deep"] | None = None
     channel_ids: list[str] | None = None  # Scope to specific channels (auto-detected if not provided)
+
+
+# =============================================================================
+# Ingestion (Phase 2)
+# =============================================================================
+class IngestRequest(BaseModel):
+    """
+    Request to ingest transcripts from ES into Qdrant.
+    If video_ids is None, ingests ALL transcripts in ES.
+    """
+    video_ids: list[str] | None = None
+    chunk_size: int = 2000
+    chunk_overlap: int = 200
+
+
+# =============================================================================
+# Knowledge Graph (Phase 3)
+# =============================================================================
+class GraphIngestRequest(BaseModel):
+    """
+    Request to extract entities from full transcripts into Neo4j.
+    If video_ids is None, processes ALL transcripts in ES.
+    batch_size controls concurrent LLM calls per batch.
+    """
+    video_ids: list[str] | None = None
+    batch_size: int = 3
+
+
+# =============================================================================
+# Full Pipeline (Celery chain: extract → ingest Qdrant → ingest Neo4j)
+# =============================================================================
+class PipelineRequest(BaseModel):
+    """Full channel pipeline: extract → ingest vectors → ingest graph."""
+    channel_id: str
+    max_results: int = 0
+    include_transcription: bool = True
+    include_qdrant: bool = True
+    include_graph: bool = False

@@ -9,23 +9,36 @@ POST /playlist - Extract + index playlist videos (Celery background task)
 Heavy extraction endpoints always run as Celery background tasks.
 Returns task_id immediately — poll GET /api/v1/tasks/{task_id} for progress.
 """
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import (
+    APIRouter, 
+    HTTPException, 
+    Request
+)
 
-from schemas.inputs import SearchRequest, VideosRequest, ChannelRequest, PlaylistRequest
+from schemas.inputs import (
+    SearchRequest, 
+    VideosRequest, 
+    ChannelRequest, 
+    PlaylistRequest
+)
 from .helpers import get_extractor
+
 
 router = APIRouter()
 
-
 @router.post("/search")
-async def search_videos(payload: SearchRequest, request: Request):
+async def search_videos(
+    payload: SearchRequest, 
+    request: Request):
     """
     Search YouTube videos by query (sync — fast, no ES indexing).
     Returns search results with available metadata.
     Use /videos endpoint to extract and index selected videos.
     """
     if payload.max_results <= 0:
-        raise HTTPException(status_code = 400, detail = "max_results must be > 0")
+        raise HTTPException(
+            status_code = 400, 
+            detail = "max_results must be > 0")
     extractor = get_extractor()
     videos = await extractor.search(
         query = payload.query,
@@ -61,14 +74,19 @@ async def get_videos(payload: VideosRequest):
     Returns immediately with task_id.
     """
     if not payload.video_ids:
-        raise HTTPException(status_code = 400, detail = "video_ids is required")
+        raise HTTPException(
+            status_code = 400, 
+            detail = "video_ids is required")
     from tasks.crawler import extract_videos
     task = extract_videos.delay(
         payload.video_ids,
         payload.include_transcription,
         payload.transcription_languages,
     )
-    return {"task_id": task.id, "status": "queued", "endpoint": f"/api/v1/tasks/{task.id}"}
+    return {
+        "task_id": task.id, 
+        "status": "queued", 
+        "endpoint": f"/api/v1/tasks/{task.id}"}
 
 
 @router.post("/channel")
@@ -85,7 +103,10 @@ async def get_channel_videos(payload: ChannelRequest):
         payload.include_transcription,
         payload.transcription_languages,
     )
-    return {"task_id": task.id, "status": "queued", "endpoint": f"/api/v1/tasks/{task.id}"}
+    return {
+        "task_id": task.id, 
+        "status": "queued", 
+        "endpoint": f"/api/v1/tasks/{task.id}"}
 
 
 @router.post("/playlist")
@@ -102,4 +123,7 @@ async def get_playlist_videos(payload: PlaylistRequest):
         payload.include_transcription,
         payload.transcription_languages,
     )
-    return {"task_id": task.id, "status": "queued", "endpoint": f"/api/v1/tasks/{task.id}"}
+    return {
+        "task_id": task.id, 
+        "status": "queued", 
+        "endpoint": f"/api/v1/tasks/{task.id}"}
