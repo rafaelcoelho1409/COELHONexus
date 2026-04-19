@@ -4,10 +4,15 @@ metadata:
   name: coelhonexus
 
 build:
-  # Use 'latest' tag for all images (k3d dev - pods use imagePullPolicy: Always)
+  # Content-based tag: hashes the build context, so the tag changes whenever
+  # source files change. This guarantees:
+  #   1. Skaffold rebuilds when sources change (new tag => cache miss)
+  #   2. Kubernetes detects image change and rolls out a new pod (tag differs)
+  #   3. tryImportMissing can't accidentally pull a stale 'latest' from registry
+  #      because the tag itself is unique per content snapshot.
+  # Identical builds reuse cache (same tag), so this stays fast.
   tagPolicy:
-    customTemplate:
-      template: "latest"
+    sha256: {}
   artifacts:
     # FastAPI ML backend
     - image: coelhonexus-fastapi
@@ -40,7 +45,12 @@ build:
             strip: ""
   local:
     push: true  # Push to COELHOCloud registry (localhost:5000)
-    tryImportMissing: true
+    # IMPORTANT: tryImportMissing=false forces Skaffold to always build from
+    # source. With true, Skaffold would silently import an existing image with
+    # the same name+tag from the registry — which masked code changes when
+    # combined with the old 'latest' tag policy. Combined with sha256 tags
+    # above, this guarantees every build reflects current source code.
+    tryImportMissing: false
     useBuildkit: true
     useDockerCLI: true
 

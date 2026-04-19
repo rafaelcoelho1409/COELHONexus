@@ -196,6 +196,9 @@ async def rag_search_stream(
                 config = config, 
                 stream_mode = "updates"):
                 for node_name, update in event.items():
+                    if not isinstance(update, dict):
+                        yield f"data: {json.dumps({'node': node_name})}\n\n"
+                        continue
                     if "generation" in update and update["generation"]:
                         last_generation = update["generation"]
                     serializable_update = _serialize_update(node_name, update)

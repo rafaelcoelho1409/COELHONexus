@@ -36,6 +36,7 @@ from services.retriever import (
     Neo4jRetriever,
     SmartRetriever,
 )
+from services.grader import DocumentGrader
 from graphs.adaptive import AdaptiveRAGGraph
 
 # Use uvicorn's logger for proper output in FastAPI
