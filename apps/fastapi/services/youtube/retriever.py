@@ -26,9 +26,9 @@ from langchain_qdrant import FastEmbedSparse
 from langchain_neo4j import Neo4jGraph
 from langchain_openai import ChatOpenAI
 
-from services.ingestion import QDRANT_COLLECTION
-from schemas.agents import ExtractedEntities
-from schemas.prompts import ENTITY_EXTRACTION_PROMPT
+from services.youtube.ingestion import QDRANT_COLLECTION
+from schemas.youtube.agents import ExtractedEntities
+from schemas.youtube.prompts import ENTITY_EXTRACTION_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -490,7 +490,7 @@ class SmartRetriever:
         if not self.use_reranker or len(documents) <= 1:
             return documents[:self.top_k]
         try:
-            from services.reranker import rerank_documents
+            from services.youtube.reranker import rerank_documents
             return rerank_documents(query, documents, top_k = self.top_k)
         except Exception:
             return documents[:self.top_k]

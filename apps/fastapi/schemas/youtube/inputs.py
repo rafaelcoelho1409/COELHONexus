@@ -1,13 +1,24 @@
-from pydantic import BaseModel, ConfigDict
-from typing import Literal
+from typing import Annotated, Literal
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 
+# =============================================================================
+# Reusable string constraints
+# =============================================================================
+# Strips surrounding whitespace, then requires at least 1 character.
+# Rejects "", "   ", "\n\t" with a 422 before the handler ever runs.
+NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+# =============================================================================
+# LLM Configuration
+# =============================================================================
 class LLMConfig(BaseModel):
-    provider: str = "NVIDIA"
-    model: str | None = None
+    provider: NonEmptyStr = "NVIDIA"
+    model: NonEmptyStr | None = None
     temperature: float | None = None
-    base_url: str | None = None
-    api_key: str | None = None
+    base_url: NonEmptyStr | None = None
+    api_key: NonEmptyStr | None = None
     model_config = ConfigDict(extra="allow")
 
 
@@ -32,7 +43,7 @@ class SearchRequest(BaseModel):
 
     Date format: YYYYMMDD or relative like "today-2weeks", "now-1month", "yesterday"
     """
-    query: str
+    query: NonEmptyStr
     max_results: int = 10
 
     # Sort order (ytsearchdate prefix)
@@ -50,8 +61,8 @@ class SearchRequest(BaseModel):
 
     # Date filters (--dateafter/--datebefore)
     # Format: YYYYMMDD or relative like "today-2weeks", "now-1month"
-    date_after: str | None = None
-    date_before: str | None = None
+    date_after: NonEmptyStr | None = None
+    date_before: NonEmptyStr | None = None
 
     # View count filters (--match-filter view_count>=?N)
     min_views: int | None = None
@@ -88,32 +99,32 @@ class SearchRequest(BaseModel):
 
     # String filters (--match-filter with operators)
     # Supports: exact, *=contains, ^=starts_with, $=ends_with, ~=regex
-    title_contains: str | None = None
-    description_contains: str | None = None
-    channel_name: str | None = None
+    title_contains: NonEmptyStr | None = None
+    description_contains: NonEmptyStr | None = None
+    channel_name: NonEmptyStr | None = None
 
 
 class VideosRequest(BaseModel):
     """Fetch specific videos by ID."""
-    video_ids: list[str]
+    video_ids: list[NonEmptyStr] = Field(..., min_length=1)
     include_transcription: bool = True
-    transcription_languages: list[str] | None = None
+    transcription_languages: list[NonEmptyStr] | None = None
 
 
 class ChannelRequest(BaseModel):
     """Fetch videos from a YouTube channel."""
-    channel_id: str  # Can be @handle or channel ID
+    channel_id: NonEmptyStr  # Can be @handle or channel ID
     max_results: int = 10  # 0 = all videos
     include_transcription: bool = True
-    transcription_languages: list[str] | None = None
+    transcription_languages: list[NonEmptyStr] | None = None
 
 
 class PlaylistRequest(BaseModel):
     """Fetch videos from a YouTube playlist."""
-    playlist_id: str
+    playlist_id: NonEmptyStr
     max_results: int = 10  # 0 = all videos
     include_transcription: bool = True
-    transcription_languages: list[str] | None = None
+    transcription_languages: list[NonEmptyStr] | None = None
 
 
 # =============================================================================
@@ -128,11 +139,11 @@ class RAGSearchRequest(BaseModel):
     - standard: factual questions → full RAG pipeline with citations (15-60s)
     - deep: analytical questions → multi-agent research with synthesis (30-120s)
     """
-    question: str
-    thread_id: str = "default"
+    question: NonEmptyStr
+    thread_id: NonEmptyStr = "default"
     max_retries: int = 3
     force_mode: Literal["fast", "standard", "deep"] | None = None
-    channel_ids: list[str] | None = None  # Scope to specific channels (auto-detected if not provided)
+    channel_ids: list[NonEmptyStr] | None = None  # Scope to specific channels (auto-detected if not provided)
 
 
 # =============================================================================
@@ -143,7 +154,7 @@ class IngestRequest(BaseModel):
     Request to ingest transcripts from ES into Qdrant.
     If video_ids is None, ingests ALL transcripts in ES.
     """
-    video_ids: list[str] | None = None
+    video_ids: list[NonEmptyStr] | None = None
     chunk_size: int = 2000
     chunk_overlap: int = 200
 
@@ -157,7 +168,7 @@ class GraphIngestRequest(BaseModel):
     If video_ids is None, processes ALL transcripts in ES.
     batch_size controls concurrent LLM calls per batch.
     """
-    video_ids: list[str] | None = None
+    video_ids: list[NonEmptyStr] | None = None
     batch_size: int = 3
 
 
@@ -166,7 +177,7 @@ class GraphIngestRequest(BaseModel):
 # =============================================================================
 class PipelineRequest(BaseModel):
     """Full channel pipeline: extract → ingest vectors → ingest graph."""
-    channel_id: str
+    channel_id: NonEmptyStr
     max_results: int = 0
     include_transcription: bool = True
     include_qdrant: bool = True

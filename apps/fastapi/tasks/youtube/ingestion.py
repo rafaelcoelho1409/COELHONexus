@@ -21,7 +21,7 @@ logger = get_task_logger(__name__)
 
 @app.task(
     bind = True, 
-    name = "tasks.ingestion.ingest_to_qdrant")
+    name = "tasks.youtube.ingestion.ingest_to_qdrant")
 def ingest_to_qdrant(
     self, 
     video_ids = None, 
@@ -41,7 +41,7 @@ def ingest_to_qdrant(
     async def _run():
         from elasticsearch import AsyncElasticsearch
         from qdrant_client import AsyncQdrantClient
-        from services.ingestion import ingest_to_qdrant as run_ingestion
+        from services.youtube.ingestion import ingest_to_qdrant as run_ingestion
         es = AsyncElasticsearch(
             hosts = [os.environ["ELASTICSEARCH_HOST"]],
             basic_auth = (
@@ -77,12 +77,12 @@ def ingest_to_qdrant(
 
 @app.task(
     bind = True, 
-    name = "tasks.ingestion.invalidate_cache")
+    name = "tasks.youtube.ingestion.invalidate_cache")
 def invalidate_cache(self):
     """Clear all RAG search cache after new data ingestion."""
     import asyncio
     import redis.asyncio as redis_aio
-    from services.cache import invalidate_cache as _invalidate
+    from services.youtube.cache import invalidate_cache as _invalidate
 
     async def _run():
         REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")

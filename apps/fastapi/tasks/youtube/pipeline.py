@@ -9,12 +9,12 @@ If any step fails, Celery retries that step — not the whole pipeline.
 """
 from celery import chain
 from celery_app import app
-from tasks.crawler import extract_channel
-from tasks.ingestion import ingest_to_qdrant, invalidate_cache
-from tasks.graph import ingest_to_graph
+from tasks.youtube.crawler import extract_channel
+from tasks.youtube.ingestion import ingest_to_qdrant, invalidate_cache
+from tasks.youtube.graph import ingest_to_graph
 
 
-@app.task(bind = True, name = "tasks.pipeline.full_channel_pipeline")
+@app.task(bind = True, name = "tasks.youtube.pipeline.full_channel_pipeline")
 def full_channel_pipeline(
     self,
     channel_id,

@@ -1,6 +1,8 @@
 # Study Generator — Architecture
 
-**Status:** Design / decision record
+> **⚠️ SUPERSEDED 2026-04-19.** Canonical design is now [`KNOWLEDGE-DISTILLER-ARCHITECTURE.md`](./KNOWLEDGE-DISTILLER-ARCHITECTURE.md). This document is kept for historical reference only.
+
+**Status:** Historical design / decision record (superseded)
 **Target:** Phase-2 feature on COELHONexus (after DuckDB + LangGraph v1 studies ship manually on OpenClaude)
 **Date:** 2026-04-18
 **Related docs:**

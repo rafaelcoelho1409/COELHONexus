@@ -30,11 +30,11 @@ from qdrant_client.http.models import (
     models,
 )
 
-from services.chunker import (
-    create_chunker, 
+from services.youtube.chunker import (
+    create_chunker,
     chunk_transcript
 )
-from services.embeddings import (
+from services.youtube.embeddings import (
     create_dense_embeddings,
     create_sparse_embeddings,
     get_embedding_dimensions,

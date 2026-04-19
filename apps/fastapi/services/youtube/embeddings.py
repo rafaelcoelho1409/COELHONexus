@@ -78,13 +78,23 @@ class NVIDIAEmbeddings(Embeddings):
         logger.info(f"[embeddings] Using {model} ({self.dimensions}d) via NVIDIA NIM API")
 
     def _call_api(
-        self, 
-        texts: list[str], 
+        self,
+        texts: list[str],
         input_type: str = "passage") -> list[list[float]]:
         """
-        Call NVIDIA NIM embedding API with exponential backoff on 429.
-        Max 5 retries: 2s → 4s → 8s → 16s → 32s (total max wait: ~62s).
+        Call NVIDIA NIM embedding API.
+
+        Retry policy:
+          - Empty input → return [] immediately (NVIDIA API rejects this as 400; pointless to call)
+          - HTTP 429 or 5xx → exponential backoff (2s, 4s, 8s, 16s, 32s; max 5 retries)
+          - HTTP 4xx (other) → raise immediately (deterministic client error, retry is useless and blocks the event loop)
+          - Network / transient exception → retry with same backoff
         """
+        # Guard: NVIDIA NIM rejects empty lists AND lists with empty/whitespace elements with
+        # "Input list must be non-empty and all elements must be non-empty." A retry loop on
+        # this deterministic 400 blocks the event loop ~62s and trips the k8s liveness probe.
+        if not texts or all(not t or not t.strip() for t in texts):
+            return []
         max_retries = 5
         for attempt in range(max_retries + 1):
             try:
@@ -103,21 +113,24 @@ class NVIDIAEmbeddings(Embeddings):
                 if response.status_code == 200:
                     data = response.json()
                     return [item["embedding"] for item in data["data"]]
-                elif response.status_code == 429:
+                # Transient: 429 rate-limit or any 5xx server error → retry
+                if response.status_code == 429 or response.status_code >= 500:
                     if attempt < max_retries:
-                        wait = 2 ** (attempt + 1)  # 2, 4, 8, 16, 32
-                        logger.info(f"[embeddings] 429 rate limited, retry {attempt + 1}/{max_retries} in {wait}s")
+                        wait = 2 ** (attempt + 1)
+                        logger.info(f"[embeddings] HTTP {response.status_code}, retry {attempt + 1}/{max_retries} in {wait}s")
                         time.sleep(wait)
                         continue
-                    raise RuntimeError(f"Embedding API rate limited after {max_retries} retries")
-                else:
-                    raise RuntimeError(f"Embedding API returned {response.status_code}: {response.text[:200]}")
+                    raise RuntimeError(f"Embedding API HTTP {response.status_code} after {max_retries} retries")
+                # 4xx (other) — deterministic client error, do NOT retry
+                raise RuntimeError(f"Embedding API returned {response.status_code}: {response.text[:200]}")
+            except RuntimeError:
+                # Re-raise our own classified errors without wrapping in retry
+                raise
             except Exception as e:
-                if "rate limited" in str(e) or "429" in str(e):
-                    raise
+                # Network / transient exception → retry
                 if attempt < max_retries:
                     wait = 2 ** (attempt + 1)
-                    logger.warning(f"[embeddings] Error: {e}, retry {attempt + 1}/{max_retries} in {wait}s")
+                    logger.warning(f"[embeddings] Network error: {e}, retry {attempt + 1}/{max_retries} in {wait}s")
                     time.sleep(wait)
                     continue
                 raise
@@ -145,7 +158,11 @@ class NVIDIAEmbeddings(Embeddings):
 
     def embed_query(self, text: str) -> list[float]:
         """Embed a single query — no pacing needed (single request)."""
+        if not text or not text.strip():
+            raise ValueError("Cannot embed an empty query")
         result = self._call_api([text], input_type = "query")
+        if not result:
+            raise ValueError("Embedding API returned no result for query")
         return result[0]
 
 

@@ -15,8 +15,8 @@ documents in PARALLEL again without hitting rate limits.
 import asyncio
 from langchain_core.documents import Document
 
-from schemas.agents import GradeResult
-from schemas.prompts import GRADING_PROMPT
+from schemas.youtube.agents import GradeResult
+from schemas.youtube.prompts import GRADING_PROMPT
 
 
 class DocumentGrader:

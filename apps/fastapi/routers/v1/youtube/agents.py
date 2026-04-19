@@ -17,16 +17,16 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 
-from schemas.inputs import (
+from schemas.youtube.inputs import (
     LLMConfig,
     RAGSearchRequest,
     IngestRequest,
     GraphIngestRequest,
     PipelineRequest
 )
-from services.cache import get_cached_response, cache_response
-from services.conversation import get_history, save_turn
-from services.graph_builder import get_graph_stats
+from services.youtube.cache import get_cached_response, cache_response
+from services.youtube.conversation import get_history, save_turn
+from services.youtube.graph_builder import get_graph_stats
 from .helpers import (
     _build_graph,
     _serialize_update
@@ -231,7 +231,7 @@ async def ingest_to_qdrant(payload: IngestRequest):
 
     Flow: ES transcriptions → chunk → embed (dense + sparse) → Qdrant upsert
     """
-    from tasks.ingestion import ingest_to_qdrant as ingest_task
+    from tasks.youtube.ingestion import ingest_to_qdrant as ingest_task
     task = ingest_task.delay(
         payload.video_ids, 
         payload.chunk_size, 
@@ -250,7 +250,7 @@ async def ingest_to_graph(payload: GraphIngestRequest):
 
     COST: Each chunk = 1 LLM call. 100 chunks ≈ 100 LLM calls.
     """
-    from tasks.graph import ingest_to_graph as graph_task
+    from tasks.youtube.graph import ingest_to_graph as graph_task
     task = graph_task.delay(
         payload.video_ids, 
         payload.batch_size)
@@ -284,7 +284,7 @@ async def full_pipeline(payload: PipelineRequest):
     Each step runs in its own Celery worker queue.
     Returns immediately with task_id.
     """
-    from tasks.pipeline import full_channel_pipeline
+    from tasks.youtube.pipeline import full_channel_pipeline
     task = full_channel_pipeline.delay(
         payload.channel_id,
         payload.max_results,

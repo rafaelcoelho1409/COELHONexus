@@ -30,14 +30,14 @@ from fastapi import (
     Request
 )
 
-from services.retriever import (
+from services.youtube.retriever import (
     ElasticsearchRetriever,
     QdrantHybridRetriever,
     Neo4jRetriever,
     SmartRetriever,
 )
-from services.grader import DocumentGrader
-from graphs.adaptive import AdaptiveRAGGraph
+from services.youtube.grader import DocumentGrader
+from graphs.youtube.adaptive import AdaptiveRAGGraph
 
 # Use uvicorn's logger for proper output in FastAPI
 log = logging.getLogger("uvicorn.error")
@@ -2004,7 +2004,7 @@ def _ensure_embeddings(app):
     Once loaded, cached on app.state for subsequent requests.
     """
     if app.state.dense_embeddings is None:
-        from services.embeddings import create_dense_embeddings, create_sparse_embeddings
+        from services.youtube.embeddings import create_dense_embeddings, create_sparse_embeddings
         app.state.dense_embeddings = create_dense_embeddings()  # NVIDIA NIM API (zero CPU)
         app.state.sparse_embeddings = create_sparse_embeddings()  # Local BM25 (minimal CPU)
         print("Embeddings initialized (NVIDIA NIM API + BM25 sparse)", flush = True)

@@ -224,7 +224,7 @@ async def _extract_playlist_async(
 # =============================================================================
 @app.task(
     bind = True, 
-    name = "tasks.crawler.extract_videos")
+    name = "tasks.youtube.crawler.extract_videos")
 def extract_videos(
     self, 
     video_ids, 
@@ -246,7 +246,7 @@ def extract_videos(
 
 @app.task(
     bind = True, 
-    name = "tasks.crawler.extract_channel")
+    name = "tasks.youtube.crawler.extract_channel")
 def extract_channel(
     self, 
     channel_id, 
@@ -270,7 +270,7 @@ def extract_channel(
 
 @app.task(
     bind = True, 
-    name = "tasks.crawler.extract_playlist")
+    name = "tasks.youtube.crawler.extract_playlist")
 def extract_playlist(
     self, 
     playlist_id, 

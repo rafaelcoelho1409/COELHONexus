@@ -53,10 +53,10 @@ app.config_from_object({
     "task_track_started": True,
     # Task routing: direct tasks to specialized queues
     "task_routes": {
-        "tasks.crawler.*": {"queue": "crawler"},
-        "tasks.ingestion.*": {"queue": "embedding"},
-        "tasks.graph.*": {"queue": "llm"},
-        "tasks.pipeline.*": {"queue": "crawler"},
+        "tasks.youtube.crawler.*": {"queue": "crawler"},
+        "tasks.youtube.ingestion.*": {"queue": "embedding"},
+        "tasks.youtube.graph.*": {"queue": "llm"},
+        "tasks.youtube.pipeline.*": {"queue": "crawler"},
     },
     # Default queue for unrouted tasks
     "task_default_queue": "default",
@@ -72,8 +72,8 @@ app.config_from_object({
 
 # Explicitly include task modules (autodiscover has import issues with nested packages)
 app.conf.include = [
-    "tasks.crawler",
-    "tasks.ingestion",
-    "tasks.graph",
-    "tasks.pipeline",
+    "tasks.youtube.crawler",
+    "tasks.youtube.ingestion",
+    "tasks.youtube.graph",
+    "tasks.youtube.pipeline",
 ]

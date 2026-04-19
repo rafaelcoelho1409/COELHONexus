@@ -70,7 +70,23 @@
 - Identify which queries trigger DEEP mode most often
 - Dashboard for RAG quality metrics over time
 
-### Priority 6 — Open Source Preparation
+### Priority 6 — Knowledge Distiller
+
+**Adaptive documentation synthesis from official docs** — _validated 2026-04-19_
+
+- DeepAgents 0.5.x + LangGraph 1.1.x + LangChain
+- **Tiered ingestion** (new): Tier 1 `/llms-full.txt` → Tier 2 Context7 MCP → Tier 3 Crawl4AI v0.8 BFS crawl
+- **Dynamic chapter count** (new): planner decides N ∈ [4, 12] based on framework complexity; parallel synthesis via `Send()`
+- **Whole-docs + variable-tone** principle: coverage constant, presentation adapts to `UserProfile.level`
+- Adaptive Grader (8 dimensions) with Self-Refine loop (max 2 iterations, threshold 0.85)
+- **Pedagogy artifacts** (new): each chapter produces `README.md` + `challenges.md` + `flashcards.json` (active recall + SRS)
+- **Synthesis model swap** (GLM-5 deprecated 2026-04-20): `minimaxai/minimax-m2.7` for synthesis, `moonshotai/kimi-k2-thinking` for planning/grading, `nvidia/nemotron-3-nano-30b-a3b` for critic
+- Output: `.md` canonical; PDF/HTML/EPUB via Pandoc, Anki via genanki — all on-demand exports
+- Episodic memory: learns user preferences from completed studies
+- **Canonical arch:** `docs/KNOWLEDGE-DISTILLER-ARCHITECTURE.md`
+- Principle: `docs/KNOWLEDGE-DISTILLER-WHOLE-DOCS-VARIABLE-TONE.md`
+
+### Priority 7 — Open Source Preparation
 
 **Portfolio-ready release**
 - README with architecture diagrams

@@ -21,9 +21,9 @@ from langchain_core.documents import Document
 from langchain_experimental.graph_transformers import LLMGraphTransformer
 from langchain_neo4j import Neo4jGraph
 
-from schemas.agents import SchemaDiscovery
-from schemas.prompts import (
-    EXTRACTION_INSTRUCTIONS, 
+from schemas.youtube.agents import SchemaDiscovery
+from schemas.youtube.prompts import (
+    EXTRACTION_INSTRUCTIONS,
     SCHEMA_DISCOVERY_PROMPT
 )
 

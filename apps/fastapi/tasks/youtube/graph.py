@@ -21,7 +21,7 @@ logger = get_task_logger(__name__)
 
 @app.task(
     bind = True, 
-    name = "tasks.graph.ingest_to_graph")
+    name = "tasks.youtube.graph.ingest_to_graph")
 def ingest_to_graph(
     self, 
     video_ids = None, 
@@ -42,8 +42,8 @@ def ingest_to_graph(
         from elasticsearch import AsyncElasticsearch
         from langchain_neo4j import Neo4jGraph
         from langchain_openai import ChatOpenAI
-        from services.ingestion import fetch_transcripts_from_es, fetch_metadata_from_es
-        from services.graph_builder import extract_and_store_graph, build_video_metadata_graph
+        from services.youtube.ingestion import fetch_transcripts_from_es, fetch_metadata_from_es
+        from services.youtube.graph_builder import extract_and_store_graph, build_video_metadata_graph
         es = AsyncElasticsearch(
             hosts = [os.environ["ELASTICSEARCH_HOST"]],
             basic_auth = (

@@ -15,10 +15,10 @@ from fastapi import (
     Request
 )
 
-from schemas.inputs import (
-    SearchRequest, 
-    VideosRequest, 
-    ChannelRequest, 
+from schemas.youtube.inputs import (
+    SearchRequest,
+    VideosRequest,
+    ChannelRequest,
     PlaylistRequest
 )
 from .helpers import get_extractor
@@ -77,7 +77,7 @@ async def get_videos(payload: VideosRequest):
         raise HTTPException(
             status_code = 400, 
             detail = "video_ids is required")
-    from tasks.crawler import extract_videos
+    from tasks.youtube.crawler import extract_videos
     task = extract_videos.delay(
         payload.video_ids,
         payload.include_transcription,
@@ -96,7 +96,7 @@ async def get_channel_videos(payload: ChannelRequest):
     Returns immediately with task_id.
     max_results=0 fetches ALL videos.
     """
-    from tasks.crawler import extract_channel
+    from tasks.youtube.crawler import extract_channel
     task = extract_channel.delay(
         payload.channel_id,
         payload.max_results,
@@ -116,7 +116,7 @@ async def get_playlist_videos(payload: PlaylistRequest):
     Returns immediately with task_id.
     max_results=0 fetches ALL videos.
     """
-    from tasks.crawler import extract_playlist
+    from tasks.youtube.crawler import extract_playlist
     task = extract_playlist.delay(
         payload.playlist_id,
         payload.max_results,

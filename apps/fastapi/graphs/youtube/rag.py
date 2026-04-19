@@ -27,15 +27,15 @@ from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-from schemas.state import YouTubeRAGState
-from schemas.agents import HallucinationCheck
-from schemas.prompts import (
+from schemas.youtube.state import YouTubeRAGState
+from schemas.youtube.agents import HallucinationCheck
+from schemas.youtube.prompts import (
     GENERATE_PROMPT,
     REWRITE_PROMPT,
     HALLUCINATION_PROMPT,
 )
-from services.grader import DocumentGrader
-from .helpers import _strip_think_tags
+from services.youtube.grader import DocumentGrader
+from graphs.youtube.helpers import _strip_think_tags
 
 
 class YouTubeContentGraph:

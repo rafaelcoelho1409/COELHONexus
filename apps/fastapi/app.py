@@ -134,6 +134,7 @@ async def lifespan(app: FastAPI):
         url = NEO4J_URI,
         username = NEO4J_USERNAME,
         password = NEO4J_PASSWORD,
+        refresh_schema = False,  # 41k nodes × 35+ labels → apoc.meta.data() stalls startup 25-45s; nothing reads the cached schema
     )
     print("Neo4j LangChain graph initialized.", flush = True)
     app.state.config = {
@@ -235,7 +236,7 @@ async def lifespan(app: FastAPI):
     print(f"LLM loaded: {primary.model_name} + {len(fallbacks)} fallbacks ({providers})", flush = True)
     # PostgreSQL: auto-create database + conversation history table + checkpointer
     await _ensure_postgres_database()
-    from services.conversation import ensure_conversation_table
+    from services.youtube.conversation import ensure_conversation_table
     await ensure_conversation_table(PG_URL)
     app.state.pg_url = PG_URL
     print(f"PostgreSQL conversation history table ready.", flush = True)
@@ -320,4 +321,3 @@ async def root():
 async def health():
     """Health check endpoint."""
     return {"status": "healthy", "service": "COELHO Nexus"}
-    

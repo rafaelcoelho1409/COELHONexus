@@ -34,22 +34,22 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-from schemas.state import AdaptiveRAGState
-from services.grader import DocumentGrader
-from graphs.youtube import YouTubeContentGraph
-from schemas.agents import (
+from schemas.youtube.state import AdaptiveRAGState
+from services.youtube.grader import DocumentGrader
+from graphs.youtube.rag import YouTubeContentGraph
+from schemas.youtube.agents import (
     QueryClassification,
     CriticAssessment,
     ResearchPlan
 )
-from schemas.prompts import (
+from schemas.youtube.prompts import (
     CONTEXTUALIZE_PROMPT,
     CLASSIFY_PROMPT,
     DIRECT_ANSWER_PROMPT,
     SYNTHESIZE_PROMPT,
     CRITIC_PROMPT,
 )
-from .helpers import (
+from graphs.youtube.helpers import (
     _resolve_channel_ids,
     _strip_think_tags
 )
