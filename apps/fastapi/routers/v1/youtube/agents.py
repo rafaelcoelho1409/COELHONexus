@@ -5,8 +5,8 @@ Endpoints:
 - PUT  /config         — Update LLM configuration
 - POST /search         — Agentic RAG search (full invoke, returns final answer)
 - POST /search/stream  — Agentic RAG search with SSE streaming (node-by-node updates)
-- POST /ingest         — Ingest transcripts from ES into Qdrant (Phase 2)
-- POST /ingest/graph   — Extract entities from chunks into Neo4j (Phase 3)
+- POST /ingest/qdrant  — Ingest transcripts from ES into Qdrant (Phase 2)
+- POST /ingest/neo4j   — Extract entities from chunks into Neo4j (Phase 3)
 - GET  /graph/stats    — Knowledge graph node/relationship counts (Phase 3)
 """
 import json
@@ -223,7 +223,7 @@ async def rag_search_stream(
     )
 
 
-@router.post("/ingest")
+@router.post("/ingest/qdrant")
 async def ingest_to_qdrant(payload: IngestRequest):
     """
     Ingest transcripts from ES → Qdrant hybrid collection (Celery background task).
@@ -231,7 +231,7 @@ async def ingest_to_qdrant(payload: IngestRequest):
 
     Flow: ES transcriptions → chunk → embed (dense + sparse) → Qdrant upsert
     """
-    from tasks.youtube.ingestion import ingest_to_qdrant as ingest_task
+    from tasks.youtube.qdrant import ingest_to_qdrant as ingest_task
     task = ingest_task.delay(
         payload.video_ids, 
         payload.chunk_size, 
@@ -242,17 +242,17 @@ async def ingest_to_qdrant(payload: IngestRequest):
         "endpoint": f"/api/v1/tasks/{task.id}"}
 
 
-@router.post("/ingest/graph")
-async def ingest_to_graph(payload: GraphIngestRequest):
+@router.post("/ingest/neo4j")
+async def ingest_to_neo4j(payload: GraphIngestRequest):
     """
     Extract entities from transcript chunks → Neo4j (Celery background task).
     Returns immediately with task_id.
 
     COST: Each chunk = 1 LLM call. 100 chunks ≈ 100 LLM calls.
     """
-    from tasks.youtube.graph import ingest_to_graph as graph_task
+    from tasks.youtube.neo4j import ingest_to_neo4j as graph_task
     task = graph_task.delay(
-        payload.video_ids, 
+        payload.video_ids,
         payload.batch_size)
     return {
         "task_id": task.id, 
@@ -279,7 +279,7 @@ async def graph_stats(request: Request):
 async def full_pipeline(payload: PipelineRequest):
     """
     Full channel pipeline (Celery chain).
-    Triggers: extract_channel → ingest_to_qdrant → ingest_to_graph → clear_cache
+    Triggers: extract_channel → ingest_to_qdrant → ingest_to_neo4j → clear_cache
 
     Each step runs in its own Celery worker queue.
     Returns immediately with task_id.

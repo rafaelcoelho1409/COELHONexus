@@ -18,10 +18,10 @@ The user is learning by building. Every step is designed to teach one concept cl
 | 1 | Schemas & state types | `schemas/knowledge.py`, `schemas/state.py` | ~120 | Pydantic + TypedDict + `Annotated[..., operator.add]` reducer |
 | 2 | Prompts | `schemas/prompts_knowledge.py` | ~150 | Prompt engineering for structured output; tone-adapter pattern |
 | 3 | Tiered ingestion service | `services/ingestion_docs.py` | ~200 | Graceful fallback waterfall; async HTTP; Crawl4AI v0.8 |
-| 4 | Planner node | `agents/knowledge.py` (part) | ~60 | `with_structured_output()` for deterministic LLM decisions |
-| 5 | Synthesizer + grader + Self-Refine loop | `agents/knowledge.py` (part) | ~180 | Self-Refine iteration pattern; per-chapter artifact writing |
-| 6 | Critic node | `agents/knowledge.py` (part) | ~80 | RAGAS-style citation verification |
-| 7 | Assembler node | `agents/knowledge.py` (part) | ~60 | Cross-chapter summary + debt tracking |
+| 4 | Planner node | `graphs/knowledge/distiller.py` (part) | ~60 | `with_structured_output()` for deterministic LLM decisions |
+| 5 | Synthesizer + grader + Self-Refine loop | `graphs/knowledge/distiller.py` (part) | ~180 | Self-Refine iteration pattern; per-chapter artifact writing |
+| 6 | Critic node | `graphs/knowledge/distiller.py` (part) | ~80 | RAGAS-style citation verification |
+| 7 | Assembler node | `graphs/knowledge/distiller.py` (part) | ~60 | Cross-chapter summary + debt tracking |
 | 8 | Graph builder | `graphs/knowledge.py` | ~120 | LangGraph `StateGraph` + dynamic `Send()` fan-out |
 | 9 | Celery task | `tasks/knowledge.py` | ~80 | Background long-running job with progress + checkpointing |
 | 10 | FastAPI router | `routers/v1/knowledge.py`, `app.py` | ~200 | REST + SSE streaming on top of a LangGraph job |

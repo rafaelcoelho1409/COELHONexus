@@ -31,13 +31,24 @@ spec:
         - name: celery-worker
           image: {{ $fastapi.image }}
           imagePullPolicy: {{ $fastapi.imagePullPolicy }}
+          # SYS_PTRACE lets py-spy attach to the worker's Python processes to
+          # dump a live stack trace when a task hangs (no restart required).
+          # Scoped to worker only — FastAPI pod doesn't need it.
+          securityContext:
+            capabilities:
+              add:
+                - SYS_PTRACE
           command:
             - celery
             - -A
             - celery_app
             - worker
+            # Environment-suffixed queue names (e.g. "llm-local" or
+            # "llm-production"). Prevents dev and prod workers from stealing
+            # each other's tasks on the shared Redis broker. Must stay in sync
+            # with task_routes in apps/fastapi/celery_app.py.
             - -Q
-            - {{ .Values.celery.queues }}
+            - {{- $env := .Values.environment -}}{{- $queues := splitList "," .Values.celery.queues -}}{{- $suffixed := list -}}{{- range $queues -}}{{- $suffixed = append $suffixed (printf "%s-%s" . $env) -}}{{- end }} {{ join "," $suffixed }}
             - -c
             - "{{ .Values.celery.concurrency }}"
             - --loglevel=info

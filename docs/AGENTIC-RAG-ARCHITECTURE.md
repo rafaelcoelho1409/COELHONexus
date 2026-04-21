@@ -63,7 +63,7 @@ YouTube Video
                                           ▼
                                     Qdrant (hybrid collection)
 
-                                    POST /agents/ingest/graph (Celery)
+                                    POST /agents/ingest/neo4j (Celery)
                                           ↓
                                     LLMGraphTransformer (14-model fallback)
                                           ↓
@@ -137,8 +137,8 @@ Single model with retry: `nvidia/llama-nemotron-embed-1b-v2` (2048d, 8K context)
 | `POST /content/playlist` | Celery | Extract + index playlist |
 | `POST /agents/search` | Sync | Agentic RAG search |
 | `POST /agents/search/stream` | Sync SSE | Streaming RAG search |
-| `POST /agents/ingest` | Celery | ES → Qdrant (embedding) |
-| `POST /agents/ingest/graph` | Celery | Chunks → Neo4j (LLM extraction) |
+| `POST /agents/ingest/qdrant` | Celery | ES → Qdrant (embedding) |
+| `POST /agents/ingest/neo4j` | Celery | Chunks → Neo4j (LLM extraction) |
 | `POST /agents/pipeline` | Celery | Full chain: extract → ingest → graph |
 | `PUT /agents/config` | Sync | Update LLM config |
 | `GET /agents/graph/stats` | Sync | Neo4j node/relationship counts |

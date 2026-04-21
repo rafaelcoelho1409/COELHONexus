@@ -101,6 +101,7 @@
 
 | Enhancement | Impact | Priority |
 |-------------|--------|----------|
+| **YouTube ANALYST mode** (4th mode, DeepAgents-powered) — see [`YOUTUBE-ANALYST-MODE-ARCHITECTURE.md`](./YOUTUBE-ANALYST-MODE-ARCHITECTURE.md) | Recursive decomposition, argument trees, temporal evolution, creator dossiers, cross-session user memory. Deferred until KD → Textbook-to-Code → Reddit Analyst ship first | Medium |
 | GraphRAG community detection (Leiden/Louvain on Neo4j) | Pre-computed topic clusters for global queries | Medium |
 | RAPTOR tree summaries (multi-level abstractions in Qdrant) | Better analytical query quality | Medium |
 | Enriched KG with sentiment/stance extraction | Enables psychological analysis queries | Medium |

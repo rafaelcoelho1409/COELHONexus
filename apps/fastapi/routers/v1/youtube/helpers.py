@@ -2045,7 +2045,7 @@ def _build_graph(request: Request):
             sparse_embeddings = sparse,
             top_k = RETRIEVER_TOP_K,
         )
-    # Neo4j graph retriever (available after /ingest/graph)
+    # Neo4j graph retriever (available after /ingest/neo4j)
     neo4j_retriever = None
     if hasattr(app.state, "neo4j_graph"):
         neo4j_retriever = Neo4jRetriever(

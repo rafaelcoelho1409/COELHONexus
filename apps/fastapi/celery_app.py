@@ -36,6 +36,21 @@ if REDIS_PASSWORD:
 else:
     REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}"
 
+# Environment-scoped queue names.
+# Both skaffold-dev and argocd-prod point at the SAME Redis instance (shared
+# broker keeps Flower/monitoring unified). Without a suffix, both environments'
+# workers compete on the same queue names (`llm`, `crawler`, ...) and either
+# can steal the other's tasks.
+# Suffix makes the intent explicit: tasks published by the dev FastAPI land on
+# `llm-local`; prod FastAPI's tasks land on `llm-production`. Workers listen
+# only to their own environment's queues (see Helm celery deployment).
+# ENVIRONMENT is set by Helm (values.yaml): "local" or "production".
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "local").lower()
+Q_CRAWLER = f"crawler-{ENVIRONMENT}"
+Q_EMBEDDING = f"embedding-{ENVIRONMENT}"
+Q_LLM = f"llm-{ENVIRONMENT}"
+Q_DEFAULT = f"default-{ENVIRONMENT}"
+
 # Celery app
 app = Celery("coelhonexus")
 
@@ -51,15 +66,19 @@ app.config_from_object({
     "result_expires": 86400,
     # Track task start time (enables STARTED state in Flower)
     "task_track_started": True,
-    # Task routing: direct tasks to specialized queues
+    # Task routing: direct tasks to specialized queues (env-suffixed — see above)
     "task_routes": {
-        "tasks.youtube.crawler.*": {"queue": "crawler"},
-        "tasks.youtube.ingestion.*": {"queue": "embedding"},
-        "tasks.youtube.graph.*": {"queue": "llm"},
-        "tasks.youtube.pipeline.*": {"queue": "crawler"},
+        "tasks.youtube.crawler.*": {"queue": Q_CRAWLER},
+        "tasks.youtube.qdrant.*": {"queue": Q_EMBEDDING},
+        "tasks.youtube.neo4j.*": {"queue": Q_LLM},
+        "tasks.youtube.pipeline.*": {"queue": Q_CRAWLER},
+        # Knowledge Distiller — LLM-heavy pipeline, same queue as graph extraction
+        "tasks.knowledge.distiller.*": {"queue": Q_LLM},
+        # KD exports (Pandoc/xelatex/genanki) — CPU-bound but short; share the llm queue.
+        "tasks.knowledge.export.*": {"queue": Q_LLM},
     },
     # Default queue for unrouted tasks
-    "task_default_queue": "default",
+    "task_default_queue": Q_DEFAULT,
     # Worker: prefetch 1 task at a time (long-running tasks shouldn't queue up)
     "worker_prefetch_multiplier": 1,
     # Acknowledge task AFTER execution (not before) — prevents task loss on crash
@@ -73,7 +92,9 @@ app.config_from_object({
 # Explicitly include task modules (autodiscover has import issues with nested packages)
 app.conf.include = [
     "tasks.youtube.crawler",
-    "tasks.youtube.ingestion",
-    "tasks.youtube.graph",
+    "tasks.youtube.qdrant",
+    "tasks.youtube.neo4j",
     "tasks.youtube.pipeline",
+    "tasks.knowledge.distiller",
+    "tasks.knowledge.export",
 ]

@@ -38,6 +38,11 @@ dependencies = [
     "elasticsearch[async]>=8.0.0,<9.0.0",  # ES server is v8
     "playwright",              # Browser automation (connects to remote server)
     "tenacity",                # Retry with exponential backoff
+    "crawl4ai>=0.8.0,<0.9",    # LLM-friendly docs crawler (Knowledge Distiller Tier 4)
+    "aioboto3>=13.0",          # Async S3 client for MinIO (Knowledge Distiller storage)
+    "pypandoc>=1.13",          # Pandoc Python wrapper (KD exports: PDF/HTML/EPUB). Requires system `pandoc` + `texlive-xetex` for PDF (installed in Dockerfile.fastapi).
+    "genanki>=0.13",           # Anki .apkg generator (KD exports: flashcards per chapter)
+    "py-spy>=0.4",             # Live Python process sampler (attach to Celery worker pid to dump a hung task's stack without restarting)
 ]
 
 [build-system]

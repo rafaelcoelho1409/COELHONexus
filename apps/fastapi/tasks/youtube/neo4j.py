@@ -21,10 +21,10 @@ logger = get_task_logger(__name__)
 
 @app.task(
     bind = True, 
-    name = "tasks.youtube.graph.ingest_to_graph")
-def ingest_to_graph(
-    self, 
-    video_ids = None, 
+    name = "tasks.youtube.neo4j.ingest_to_neo4j")
+def ingest_to_neo4j(
+    self,
+    video_ids = None,
     batch_size = 3):
     """
     Extract entities from FULL transcripts via LLM → store in Neo4j.
@@ -33,7 +33,7 @@ def ingest_to_graph(
     352 transcripts = 352 LLM calls (was 2911 with chunks).
     Includes entity resolution post-processing.
     """
-    logger.info(f"[ingest_to_graph] Starting: video_ids={video_ids}, batch_size={batch_size}")
+    logger.info(f"[ingest_to_neo4j] Starting: video_ids={video_ids}, batch_size={batch_size}")
     self.update_state(
         state = "PROGRESS", 
         meta = {"status": "initializing"})
@@ -129,5 +129,5 @@ def ingest_to_graph(
         finally:
             await es.close()
     result = asyncio.run(_run())
-    logger.info(f"[ingest_to_graph] Done: {result}")
+    logger.info(f"[ingest_to_neo4j] Done: {result}")
     return result

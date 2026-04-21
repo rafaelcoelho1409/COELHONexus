@@ -1,0 +1,989 @@
+"""
+Knowledge Distiller — FastAPI Router
+
+Public API for the KD pipeline. Thin HTTP layer on top of the Celery task
+(tasks/knowledge/distiller.py) and MinIO storage (services/knowledge/storage.py).
+
+Endpoints:
+  POST   /studies                             Create study (runs scope gate first)
+  POST   /studies/resolve                     Preview docs_url without enqueueing
+  GET    /studies/{study_id}                  Status + phase + progress
+  GET    /studies/{study_id}/stream           SSE node-by-node updates
+  GET    /studies/{study_id}/tree             MinIO object manifest
+  GET    /studies/{study_id}/chapters/{n}     One chapter's 3 artifacts
+  POST   /studies/{study_id}/export           PDF/HTML/EPUB/Anki derived export
+  DELETE /studies/{study_id}                  Cancel
+  GET    /downloads/{user_id}/{slug}          .tar.gz of study artifacts (by MinIO folder)
+
+ARCHITECTURE:
+  1. POST runs the scope classifier (Groq llama-3.1-8b-instant) SYNCHRONOUSLY
+     (~500ms). Off-topic requests return 400 before any Celery work.
+  2. On pass, a study_id (uuid4) is generated, study_root is precomputed, and
+     a study record is stashed in Redis (coelhonexus:knowledge:study:{id}).
+  3. The Celery task is enqueued with task_id = study_id so both identifiers
+     stay in lockstep.
+  4. The GET endpoints read the Redis record, probe Celery's AsyncResult for
+     the latest progress meta, and read MinIO for on-disk artifacts.
+
+STREAMING:
+  The SSE endpoint polls AsyncResult.info every 1s (so it's Celery-free —
+  no pub/sub infra). It yields a new SSE event whenever the meta dict
+  changes. Close the stream when state reaches SUCCESS or FAILURE.
+
+SCOPE-GATE FAILURE MODES:
+  - LLM succeeds + is_code_framework=False → 400 with rejection_reason
+  - LLM raises (network, timeout)          → 503 — we fail CLOSED (never
+    enqueue unverified scope)
+"""
+import asyncio
+import io
+import json
+import logging
+import tarfile
+import uuid
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, HTTPException, Request, Path
+from fastapi.responses import StreamingResponse
+from celery.result import AsyncResult
+
+import httpx
+
+from celery_app import app as celery_app
+from schemas.knowledge.inputs import (
+    CreateStudyRequest,
+    ExportRequest,
+    ResolveStudyRequest,
+)
+from schemas.knowledge.resolver import ResolveRequest
+from services.knowledge.docs_resolver import resolve as resolve_v2
+from services.knowledge.docs_url_resolver import resolve_docs_url
+from services.knowledge.registry import list_versions as registry_list_versions
+from services.knowledge.scope import classify_scope
+
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+# =============================================================================
+# Redis helpers — study_id ↔ study_root registry
+# =============================================================================
+# 30 days: after a study completes, artifacts live in MinIO regardless. The
+# registry is the index for surfacing them back by study_id.
+STUDY_TTL_SECONDS = 30 * 24 * 60 * 60
+
+
+def _study_key(study_id: str) -> str:
+    return f"coelhonexus:knowledge:study:{study_id}"
+
+
+def _make_study_root(
+    user_id: str,
+    framework: str,
+    version: str | None,
+    level: str | None = None) -> str:
+    """
+    Build the MinIO key prefix for one run.
+
+    Shape: {user_id}/knowledge/{framework}-{version|"latest"}-{level|"senior"}
+
+    Idempotent: the same (user, framework, version, level) tuple always
+    maps to the same folder. Re-running a study continues in place, reusing
+    every page already written via the streaming ingest cache layer —
+    which is the whole point of having a cache. No timestamp component =
+    no "stale copies" to sweep up later, and subsequent runs get near-zero
+    cache restore cost (study_root *is* the cache for this identity).
+    """
+    framework_part = framework.lower().strip().replace(" ", "-")
+    version_part = (version or "latest").lower().strip().replace(" ", "-")
+    level_part = (level or "senior").lower().strip()
+    return f"{user_id}/knowledge/{framework_part}-{version_part}-{level_part}"
+
+
+async def _save_study_record(redis_aio, study_id: str, record: dict) -> None:
+    """Persist {study_id → study_root + metadata} with TTL."""
+    await redis_aio.set(
+        _study_key(study_id),
+        json.dumps(record),
+        ex = STUDY_TTL_SECONDS,
+    )
+
+
+async def _load_study_record(redis_aio, study_id: str) -> dict | None:
+    raw = await redis_aio.get(_study_key(study_id))
+    if not raw:
+        return None
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    return json.loads(raw)
+
+
+def _celery_snapshot(study_id: str) -> dict:
+    """
+    Read the Celery task state + meta for this study. Returns a uniform shape
+    so every status endpoint returns the same keys.
+
+    Progress meta from the Celery task matches:
+      {study_id, study_root, phase, last_node, nodes_seen}
+    (see tasks/knowledge/distiller.py).
+    """
+    result = AsyncResult(study_id, app = celery_app)
+    snapshot: dict = {
+        "task_state": result.status,
+        "progress": None,
+        "result": None,
+        "error": None,
+    }
+    info = result.info
+    if result.status in ("PROGRESS", "STARTED"):
+        snapshot["progress"] = info if isinstance(info, dict) else None
+    elif result.status == "SUCCESS":
+        snapshot["result"] = result.result
+    elif result.status == "FAILURE":
+        # result.result on failure is the exception object
+        snapshot["error"] = str(result.result) if result.result is not None else "unknown error"
+    return snapshot
+
+
+# =============================================================================
+# POST /studies/resolve/v2 — multi-topic resolver (A → B → C → D + crossover)
+# =============================================================================
+# v2 takes a framework name OR a crossover string ("DeepAgents + LangChain +
+# LangGraph"), decomposes it, fans out per canonical topic, and returns one
+# ResolvedDocs per topic — each carrying a tier (1-4) classification so the
+# crawler knows which ingestion strategy to run.
+#
+# Differs from v1 /studies/resolve:
+#   - v1: single framework, v1 heuristic scoring + LLM yes/no confirm,
+#     returns one docs_url, no tier
+#   - v2: single OR crossover, LLM rerank with strict JSON schema,
+#     content-validated tier probes, Redis cache, returns list[ResolvedDocs]
+#
+# Reference: docs/KNOWLEDGE-DISTILLER-RESOLVER-STRATEGY.md
+@router.post("/studies/resolve/v2")
+async def resolve_study_v2(
+    payload: ResolveRequest,
+    request: Request):
+    """
+    Resolve docs for a single framework OR a crossover request.
+
+    Flow:
+      1. Scope gate on the raw input (rejects non-code-framework requests).
+      2. Crossover decomposer — splits input into canonical topics.
+      3. Per topic, Stages A-D run in parallel via asyncio.gather:
+         - Stage A: registry hint (PyPI/npm/crates — existence + homepage)
+         - Stage B: SearXNG (3 parallel query templates, ~15 candidates)
+         - Stage C: LLM rerank (strict JSON schema, picks canonical docs_url)
+         - Stage D: content-validated probe → tier 1-4 classification
+      4. Redis cache with confidence-based TTL (7d on conf ≥ 0.7, 1h otherwise).
+
+    Returns:
+        {
+          "input": <raw framework arg>,
+          "is_crossover": bool,
+          "results": list[ResolvedDocs],
+        }
+
+    ResolvedDocs carries: canonical_name, docs_url, repo_url, version,
+    tier (1-4), tier_evidence (per-file probes), confidence (0-1),
+    fallback_candidates (rejected URLs with reasons), source_signals
+    (provenance).
+
+    Error codes:
+        400: scope gate rejected the input.
+        503: scope classifier itself failed.
+    """
+    app = request.app
+    # Scope gate uses the FULL fallback chain (app.state.llm) on this
+    # endpoint — the fast 8B classifier misclassifies newer 2025-2026
+    # frameworks (e.g. DeepAgents) as "ambiguous concepts" because its
+    # training cutoff predates them. The main chain starts with NIM
+    # reasoning models that know current frameworks; accuracy matters
+    # more than latency here since the endpoint is a dry-run.
+    scope_llm = app.state.llm
+
+    try:
+        scope = await classify_scope(payload.framework, scope_llm)
+    except RuntimeError as e:
+        logger.warning(f"[knowledge] resolve/v2 scope failed: {e}")
+        raise HTTPException(
+            status_code = 503,
+            detail = f"Scope classifier unavailable: {e}",
+        )
+    if not scope.is_code_framework:
+        raise HTTPException(
+            status_code = 400,
+            detail = {
+                "message": scope.rejection_reason or "Not a code framework",
+                "detected_topic": scope.detected_topic,
+                "framework": payload.framework,
+            },
+        )
+
+    # Rerank + decompose still use the fast scope classifier when available
+    # (high-volume, latency-sensitive LLM calls inside the resolver). Only
+    # the scope gate itself uses the full chain.
+    rerank_llm = getattr(app.state, "llm_scope", None) or app.state.llm
+    results = await resolve_v2(
+        request = payload,
+        llm = rerank_llm,
+        redis_aio = app.state.redis_aio,
+    )
+
+    # Surface crossover flag + count for the client. is_crossover follows
+    # from the decomposer; we re-derive it from len(results) here so the
+    # response shape is self-contained without leaking the decomposer type.
+    return {
+        "input": payload.framework,
+        "is_crossover": len(results) > 1,
+        "total_topics": len(results),
+        "results": [r.model_dump() for r in results],
+    }
+
+
+# =============================================================================
+# POST /studies/resolve — dry-run: resolve docs_url without enqueueing
+# =============================================================================
+@router.post("/studies/resolve")
+async def resolve_study(
+    payload: ResolveStudyRequest,
+    request: Request,
+    verify: bool = True,
+    allow_fallback: bool = False):
+    """
+    Propose a docs_url for the given framework WITHOUT enqueueing any work.
+
+    Flow:
+      1. Scope classifier (~500ms) — reject non-code-frameworks with 400.
+      2. Package registry lookup (PyPI / npm / crates.io / etc.) — returns
+         `available_versions` so the caller sees the real version list.
+      3. Version validation:
+         - `payload.version` is None → treated as "latest"
+         - `payload.version` is set AND in registry → used as-is
+         - `payload.version` is set AND NOT in registry:
+             * `allow_fallback=false` (default) → 422 with available_versions
+             * `allow_fallback=true` → fall back to "latest", flag
+               `version_fallback: true` in response
+         - registry is unavailable (language unsupported) → version
+           passed through as-is (we have no ground truth to reject it)
+      4. SearXNG ranked search → layer-3 LLM disambiguation → HEAD verification,
+         with version folded into the query.
+
+    Query params:
+        verify (bool, default True):         run the layer-3 LLM disambiguation step.
+        allow_fallback (bool, default False): if True, treat a non-registry version
+                                              as "latest" with a warning in the response,
+                                              rather than returning 422.
+
+    Error codes:
+        400: scope gate rejected the input (not a code framework).
+        422: version not found in registry and allow_fallback=false,
+             OR no reachable docs URL even after all layers.
+        503: scope classifier itself failed.
+    """
+    app = request.app
+    scope_llm = getattr(app.state, "llm_scope", None) or app.state.llm
+
+    # 1) Scope gate — bail fast on non-code-frameworks
+    try:
+        scope = await classify_scope(payload.framework, scope_llm)
+    except RuntimeError as e:
+        logger.warning(f"[knowledge] resolve: scope classifier failed for '{payload.framework}': {e}")
+        raise HTTPException(
+            status_code = 503,
+            detail = f"Scope classifier unavailable: {e}",
+        )
+    if not scope.is_code_framework:
+        raise HTTPException(
+            status_code = 400,
+            detail = {
+                "message": scope.rejection_reason or "Not a code framework",
+                "detected_topic": scope.detected_topic,
+                "framework": payload.framework,
+            },
+        )
+
+    language = payload.language or scope.language
+
+    # 2) Package-registry lookup — populate available_versions
+    registry_listing = await registry_list_versions(payload.framework, language)
+    available_versions_payload = (
+        registry_listing.model_dump() if registry_listing else None
+    )
+
+    # 3) Version resolution + fallback semantics
+    requested_version = (payload.version or "").strip() or None
+    resolved_version: str | None = requested_version
+    version_fallback = False
+    fallback_reason: str | None = None
+
+    if requested_version and registry_listing is not None:
+        # We have ground truth — check if it exists
+        if requested_version not in registry_listing.all:
+            if allow_fallback:
+                resolved_version = None  # → "latest"
+                version_fallback = True
+                fallback_reason = (
+                    f"Version {requested_version!r} not found in {registry_listing.source}. "
+                    f"Falling back to latest (currently {registry_listing.latest_stable!r})."
+                )
+                logger.info(
+                    f"[knowledge] resolve: version fallback for '{payload.framework}' "
+                    f"{requested_version!r} → latest"
+                )
+            else:
+                # Fail loud: return 422 with the list
+                sample = registry_listing.all[:10]
+                more = len(registry_listing.all) - len(sample)
+                raise HTTPException(
+                    status_code = 422,
+                    detail = {
+                        "message": (
+                            f"Version {requested_version!r} not found for "
+                            f"{payload.framework!r} in {registry_listing.source}. "
+                            f"Retry with one of the available versions, or pass "
+                            f"`?allow_fallback=true` to use latest instead."
+                        ),
+                        "framework": payload.framework,
+                        "requested_version": requested_version,
+                        "available_versions_sample": sample,
+                        "available_versions_total": len(registry_listing.all),
+                        "available_versions_truncated_remaining": more,
+                        "registry_source": registry_listing.source,
+                    },
+                )
+    elif requested_version and registry_listing is None:
+        logger.info(
+            f"[knowledge] resolve: registry unavailable for language={language!r}, "
+            f"accepting version={requested_version!r} as-is"
+        )
+
+    # 4) Resolve docs URL (version-biased when set).
+    #    Two-step fallback logic when `allow_fallback=true`:
+    #    (a) Try the requested version first.
+    #    (b) If that fails but allow_fallback is set, retry as "latest".
+    #    Set `docs_fallback=True` in the response so the caller knows the
+    #    crawl target won't actually match the requested version.
+    docs_fallback = False
+    docs_fallback_reason: str | None = None
+    try:
+        resolved_docs_url, docs_url_source = await resolve_docs_url(
+            framework = payload.framework,
+            language = language,
+            user_supplied = payload.user_supplied_url,
+            version = resolved_version,
+            verify = verify,
+            llm = scope_llm,
+        )
+    except RuntimeError as e:
+        # If the user asked for a specific version AND opted into fallback,
+        # retry once without the version pin to see if latest docs are reachable.
+        if resolved_version and allow_fallback:
+            logger.info(
+                f"[knowledge] resolve: docs URL for version {resolved_version!r} "
+                f"not found; allow_fallback=true → retrying as latest"
+            )
+            try:
+                resolved_docs_url, docs_url_source = await resolve_docs_url(
+                    framework = payload.framework,
+                    language = language,
+                    user_supplied = payload.user_supplied_url,
+                    version = None,                 # drop the version pin
+                    verify = verify,
+                    llm = scope_llm,
+                )
+                docs_fallback = True
+                docs_fallback_reason = (
+                    f"No version-specific docs URL found for "
+                    f"{payload.framework} {resolved_version!r}. The crawler "
+                    f"will read the latest docs instead — content may not "
+                    f"exactly match the pinned version."
+                )
+                # The effective identity for caching is now "latest":
+                resolved_version = None
+            except RuntimeError as e2:
+                raise HTTPException(
+                    status_code = 422,
+                    detail = {
+                        "message": (
+                            f"Could not find a reachable documentation URL for "
+                            f"{payload.framework!r} even after falling back to "
+                            f"latest."
+                        ),
+                        "framework": payload.framework,
+                        "error": str(e2),
+                        "detected_topic": scope.detected_topic,
+                    },
+                )
+        else:
+            # Strict mode: fail loud so the caller doesn't silently crawl wrong docs
+            logger.warning(
+                f"[knowledge] resolve URL failed: framework='{payload.framework}' "
+                f"language='{language}' version='{resolved_version}': {e}"
+            )
+            raise HTTPException(
+                status_code = 422,
+                detail = {
+                    "message": (
+                        "Could not find a reachable documentation URL for the "
+                        "requested version. Pass `?allow_fallback=true` to use "
+                        "latest docs instead, or supply docs_url manually."
+                    ),
+                    "framework": payload.framework,
+                    "resolved_version": resolved_version or "latest",
+                    "detected_topic": scope.detected_topic,
+                },
+            )
+
+    logger.info(
+        f"[knowledge] resolve ok: framework='{payload.framework}' "
+        f"version={resolved_version or 'latest'} docs_fallback={docs_fallback} "
+        f"url='{resolved_docs_url}' source={docs_url_source}"
+    )
+    return {
+        "framework": payload.framework,
+        "detected_topic": scope.detected_topic,
+        "language": language,
+        "is_code_framework": True,
+        "version": requested_version,                        # echo what was asked
+        "resolved_version": resolved_version or "latest",    # what the slug/cache will use
+        "version_fallback": version_fallback,                # registry-level fallback
+        "fallback_reason": fallback_reason,
+        "docs_fallback": docs_fallback,                      # docs-URL-level fallback
+        "docs_fallback_reason": docs_fallback_reason,
+        "docs_url": resolved_docs_url,
+        "docs_url_source": docs_url_source,
+        "available_versions": available_versions_payload,
+        "next_step": (
+            "POST /api/v1/knowledge/studies with docs_url + version set to "
+            "confirm and start the full pipeline."
+        ),
+    }
+
+
+# =============================================================================
+# POST /studies — create + scope-gate + enqueue (docs_url REQUIRED)
+# =============================================================================
+@router.post("/studies")
+async def create_study(
+    payload: CreateStudyRequest,
+    request: Request,
+    max_concurrent_chapters: int = 5):
+    """
+    Create a Knowledge Distiller study. Requires `docs_url` — use
+    POST /studies/resolve first if you don't already know the URL.
+
+    Steps:
+      1. Scope gate (Groq 8B classifier, ~500ms): reject non-code-frameworks.
+      2. HEAD-verify docs_url is reachable.
+      3. Generate study_id (uuid4), compute study_root prefix.
+      4. Stash registry entry in Redis.
+      5. Enqueue Celery task (task_id == study_id).
+
+    Query params:
+        max_concurrent_chapters (int, default 2): cap on parallel
+        synthesize_chapter workers. Lower = more consistent voice across
+        chapters (primary LLM serves every chapter), slower overall. Set
+        to 1 for strict serialization. Values 1-3 recommended; higher
+        values risk rate-limiting the primary model and fanning out to
+        different fallbacks → inconsistent tone between chapters.
+
+    Error codes:
+        400: scope gate rejected the input. detail contains the rejection_reason.
+        422: docs_url not reachable (HEAD returned non-2xx/3xx).
+        503: scope classifier itself failed.
+    """
+    app = request.app
+    # 1) Scope gate
+    scope_llm = getattr(app.state, "llm_scope", None) or app.state.llm
+    try:
+        scope = await classify_scope(payload.framework, scope_llm)
+    except RuntimeError as e:
+        logger.warning(f"[knowledge] scope classifier failed for '{payload.framework}': {e}")
+        raise HTTPException(
+            status_code = 503,
+            detail = f"Scope classifier unavailable: {e}",
+        )
+    if not scope.is_code_framework:
+        raise HTTPException(
+            status_code = 400,
+            detail = {
+                "message": scope.rejection_reason or "Not a code framework",
+                "detected_topic": scope.detected_topic,
+                "framework": payload.framework,
+            },
+        )
+
+    # 2) HEAD-verify docs_url is reachable before enqueueing expensive work
+    async with httpx.AsyncClient(
+        timeout = httpx.Timeout(5.0, connect = 5.0),
+        headers = {"User-Agent": "COELHONexus-KnowledgeDistiller/1.0"},
+    ) as client:
+        reachable = False
+        try:
+            r = await client.head(payload.docs_url, follow_redirects = True)
+            if 200 <= r.status_code < 400:
+                reachable = True
+            elif r.status_code == 405:
+                # Some servers reject HEAD — retry with GET (no body read)
+                r = await client.get(payload.docs_url, follow_redirects = True)
+                reachable = 200 <= r.status_code < 400
+        except (httpx.RequestError, httpx.HTTPError) as e:
+            logger.info(f"[knowledge] docs_url HEAD failed for {payload.docs_url}: {e}")
+    if not reachable:
+        raise HTTPException(
+            status_code = 422,
+            detail = {
+                "message": (
+                    "The supplied docs_url is not reachable. Verify the URL "
+                    "or call POST /studies/resolve to find one automatically."
+                ),
+                "docs_url": payload.docs_url,
+            },
+        )
+
+    # 3) Build study identity — slug = {framework}-{version|"latest"}-{level}-{ts}
+    study_id = str(uuid.uuid4())
+    study_root = _make_study_root(
+        user_id = payload.user_id,
+        framework = payload.framework,
+        version = payload.version,
+        level = payload.user_profile.level,
+    )
+    record = {
+        "study_id": study_id,
+        "study_root": study_root,
+        "user_id": payload.user_id,
+        "framework": payload.framework,
+        "version": payload.version or "latest",   # normalize for downstream cache key
+        "level": payload.user_profile.level,
+        "language": scope.language,
+        "detected_topic": scope.detected_topic,
+        "docs_url": payload.docs_url,
+        "docs_url_source": "user",
+        "user_profile": payload.user_profile.model_dump(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # 4) Persist study registry entry
+    await _save_study_record(app.state.redis_aio, study_id, record)
+
+    # 5) Enqueue Celery task — task_id == study_id so /studies/{id} can read
+    #    AsyncResult by the same identifier.
+    from tasks.knowledge.distiller import run_knowledge_distiller
+    run_knowledge_distiller.apply_async(
+        kwargs = {
+            "study_id": study_id,
+            "framework": payload.framework,
+            "version": payload.version,
+            "docs_url": payload.docs_url,
+            "language": scope.language,
+            "user_id": payload.user_id,
+            "user_profile": payload.user_profile.model_dump(),
+            "study_root": study_root,
+            "max_concurrent_chapters": max_concurrent_chapters,
+        },
+        task_id = study_id,
+    )
+    logger.info(
+        f"[knowledge] study queued: id={study_id} root={study_root} "
+        f"framework={payload.framework} docs_url={payload.docs_url}"
+    )
+
+    return {
+        "study_id": study_id,
+        "task_id": study_id,
+        "study_root": study_root,
+        "status": "queued",
+        "endpoint": f"/api/v1/tasks/{study_id}",
+        "stream_endpoint": f"/api/v1/knowledge/studies/{study_id}/stream",
+        "detected_topic": scope.detected_topic,
+        "language": scope.language,
+        "docs_url": payload.docs_url,
+    }
+
+
+# =============================================================================
+# GET /studies/{study_id} — status + phase + Celery meta
+# =============================================================================
+@router.get("/studies/{study_id}")
+async def get_study(
+    study_id: str,
+    request: Request):
+    """
+    Unified status endpoint. Combines:
+      - the study registry entry (framework, study_root, user_profile, etc.)
+      - current Celery task state + progress meta from the running task
+      - final result if the task has succeeded
+    """
+    record = await _load_study_record(request.app.state.redis_aio, study_id)
+    if not record:
+        raise HTTPException(status_code = 404, detail = "Study not found")
+    snapshot = _celery_snapshot(study_id)
+    return {
+        "study": record,
+        **snapshot,
+    }
+
+
+# =============================================================================
+# GET /studies/{study_id}/stream — SSE node-by-node updates
+# =============================================================================
+@router.get("/studies/{study_id}/stream")
+async def stream_study(
+    study_id: str,
+    request: Request):
+    """
+    Server-Sent Events stream of task progress.
+
+    Implementation note: the Celery task lives in a separate worker process.
+    Instead of setting up Redis pub/sub, we poll AsyncResult.info every 1s
+    — cheap, stateless, and reuses Celery's existing Redis-backed state store.
+
+    Event frames:
+        data: {"event": "progress", "task_state": "...", "progress": {...}}\\n\\n
+        data: {"event": "success",  "result": {...}}\\n\\n
+        data: {"event": "failure",  "error":  "..."}\\n\\n
+        data: {"event": "end"}\\n\\n
+
+    The stream closes when the task reaches SUCCESS or FAILURE.
+    """
+    record = await _load_study_record(request.app.state.redis_aio, study_id)
+    if not record:
+        raise HTTPException(status_code = 404, detail = "Study not found")
+
+    async def event_generator():
+        last_progress: dict | None = None
+        # emit an initial frame so the client has context immediately
+        yield f"data: {json.dumps({'event': 'study', 'study': record})}\n\n"
+        while True:
+            # Stop if the client disconnected — don't keep polling into the void.
+            if await request.is_disconnected():
+                logger.info(f"[knowledge] stream client disconnected: {study_id}")
+                return
+            snap = _celery_snapshot(study_id)
+            state = snap["task_state"]
+            if state == "SUCCESS":
+                yield f"data: {json.dumps({'event': 'success', 'result': snap['result']})}\n\n"
+                yield f"data: {json.dumps({'event': 'end'})}\n\n"
+                return
+            if state == "FAILURE":
+                yield f"data: {json.dumps({'event': 'failure', 'error': snap['error']})}\n\n"
+                yield f"data: {json.dumps({'event': 'end'})}\n\n"
+                return
+            # PROGRESS / STARTED / PENDING — only emit when meta changes
+            progress = snap.get("progress")
+            if progress != last_progress:
+                yield f"data: {json.dumps({'event': 'progress', 'task_state': state, 'progress': progress})}\n\n"
+                last_progress = progress
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type = "text/event-stream",
+        headers = {
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",   # nginx/ingress: don't buffer
+        },
+    )
+
+
+# =============================================================================
+# GET /studies/{study_id}/tree — MinIO manifest
+# =============================================================================
+@router.get("/studies/{study_id}/tree")
+async def get_study_tree(
+    study_id: str,
+    request: Request):
+    """
+    List all objects written under this study's MinIO prefix.
+
+    Returns:
+        {
+            "study_id": ...,
+            "study_root": ...,
+            "total": N,
+            "objects": ["{root}/research/raw/foo.md", ...],
+        }
+    """
+    record = await _load_study_record(request.app.state.redis_aio, study_id)
+    if not record:
+        raise HTTPException(status_code = 404, detail = "Study not found")
+    storage = request.app.state.study_storage
+    keys = await storage.list(record["study_root"] + "/")
+    return {
+        "study_id": study_id,
+        "study_root": record["study_root"],
+        "total": len(keys),
+        "objects": keys,
+    }
+
+
+# =============================================================================
+# GET /studies/{study_id}/chapters/{n} — one chapter's 3 artifacts
+# =============================================================================
+@router.get("/studies/{study_id}/chapters/{n}")
+async def get_chapter(
+    request: Request,
+    study_id: str,
+    n: int = Path(..., ge = 1, le = 12)):
+    """
+    Read one chapter's 3 artifacts from MinIO:
+      - {root}/chapter{N:02d}/README.md
+      - {root}/chapter{N:02d}/challenges.md
+      - {root}/chapter{N:02d}/flashcards.json
+
+    Returns:
+        {
+            "chapter": N,
+            "content":    str,        # README.md
+            "challenges": str,        # challenges.md
+            "flashcards": list[dict], # parsed flashcards.json
+        }
+
+    404 if any of the three artifacts is missing — the chapter is incomplete
+    and shouldn't be surfaced.
+    """
+    record = await _load_study_record(request.app.state.redis_aio, study_id)
+    if not record:
+        raise HTTPException(status_code = 404, detail = "Study not found")
+    storage = request.app.state.study_storage
+    chapter_prefix = f"{record['study_root']}/chapter{n:02d}"
+    readme_key = f"{chapter_prefix}/README.md"
+    challenges_key = f"{chapter_prefix}/challenges.md"
+    flashcards_key = f"{chapter_prefix}/flashcards.json"
+    try:
+        readme, challenges, flashcards_raw = await asyncio.gather(
+            storage.read_text(readme_key),
+            storage.read_text(challenges_key),
+            storage.read_text(flashcards_key),
+        )
+    except Exception as e:
+        logger.info(f"[knowledge] chapter {n} not ready for {study_id}: {e}")
+        raise HTTPException(
+            status_code = 404,
+            detail = f"Chapter {n} not ready or not found",
+        )
+    try:
+        flashcards = json.loads(flashcards_raw)
+    except json.JSONDecodeError:
+        flashcards = []
+    return {
+        "study_id": study_id,
+        "chapter": n,
+        "content": readme,
+        "challenges": challenges,
+        "flashcards": flashcards,
+    }
+
+
+# =============================================================================
+# Tarball helper (shared by UUID + folder-slug endpoints)
+# =============================================================================
+async def _build_study_tarball(
+    storage,
+    study_root: str,
+    framework_tag: str,
+    include_raw: bool,
+    include_exports: bool) -> tuple[io.BytesIO, str]:
+    """
+    Fetch all selected artifacts under `study_root` from MinIO and bundle into
+    a gzipped tar in memory. Returns (buffer, suggested_filename).
+
+    Raises HTTPException(404) if the prefix is empty or has no user-facing
+    artifacts (pipeline still running).
+    """
+    all_keys = await storage.list(study_root + "/")
+    if not all_keys:
+        raise HTTPException(
+            status_code = 404,
+            detail = f"No artifacts found at MinIO prefix {study_root!r}",
+        )
+
+    prefix = f"{study_root}/"
+    selected: list[tuple[str, str]] = []  # [(minio_key, archive_relpath), ...]
+    for key in all_keys:
+        rel = key[len(prefix):]
+        if rel.startswith("research/raw/") and not include_raw:
+            continue
+        if rel.startswith("exports/") and not include_exports:
+            continue
+        selected.append((key, rel))
+    if not selected:
+        raise HTTPException(
+            status_code = 404,
+            detail = (
+                "Study has no user-facing artifacts yet (pipeline incomplete). "
+                "Use ?include_raw=true to download raw ingestion if needed."
+            ),
+        )
+
+    # Parallel-fetch files from MinIO, in batches so we don't storm it.
+    async def _fetch(key: str) -> bytes:
+        return await storage.read(key)
+    batch_size = 20
+    fetched: dict[str, bytes] = {}
+    for i in range(0, len(selected), batch_size):
+        batch = selected[i : i + batch_size]
+        results = await asyncio.gather(*(_fetch(k) for k, _ in batch))
+        for (k, _), data in zip(batch, results):
+            fetched[k] = data
+    logger.info(
+        f"[knowledge] download {study_root}: {len(fetched)} objects "
+        f"({sum(len(v) for v in fetched.values())} bytes)"
+    )
+
+    # Build tarball in memory. Root folder inside = study_root basename so
+    # `tar -xzf file.tar.gz -C target/` extracts as `target/<folder>/...`.
+    root_folder = study_root.rsplit("/", 1)[-1]
+    buf = io.BytesIO()
+    with tarfile.open(fileobj = buf, mode = "w:gz") as tar:
+        for key, rel in selected:
+            data = fetched[key]
+            info = tarfile.TarInfo(name = f"{root_folder}/{rel}")
+            info.size = len(data)
+            info.mtime = int(datetime.now(timezone.utc).timestamp())
+            tar.addfile(info, io.BytesIO(data))
+    buf.seek(0)
+
+    filename = f"study-{framework_tag}.tar.gz"
+    return buf, filename
+
+
+# =============================================================================
+# GET /downloads/{user_id}/{slug} — direct MinIO-folder download
+# =============================================================================
+# Recommended endpoint for offline reading — no UUID lookup required.
+# Uses the MinIO folder name (e.g. "pydantic-20260420T171547Z") directly, so
+# you can grab a study as long as its objects are still in the bucket — even
+# if the Redis registry entry TTL'd out.
+@router.get("/downloads/{user_id}/{slug}")
+async def download_by_slug(
+    user_id: str,
+    slug: str,
+    request: Request,
+    include_raw: bool = True,
+    include_exports: bool = False):
+    """
+    Download a study's artifacts by MinIO folder name.
+
+    `{slug}` is the folder name under `{user_id}/knowledge/` — typically
+    `<framework>-<timestamp>` (e.g. `pydantic-20260420T171547Z`) or
+    `<framework>-<version>-<timestamp>`. You can list existing studies via
+    `mc ls coelhonexus/{user_id}/knowledge/` or your MinIO console.
+
+    Defaults: includes the full raw corpus under `research/raw/` so the
+    downloaded bundle is self-contained and verifiable. Exports (PDF/HTML/
+    EPUB/APKG) are excluded by default — fetch them separately when needed.
+
+    Filters (query params):
+      - `include_raw=false`   → skip `research/raw/*.md` (usually 500+ files, much smaller tarball)
+      - `include_exports=true` → also include `exports/*` (PDF/HTML/EPUB/APKG)
+
+    Usage:
+      curl -o study.tar.gz \\
+        "http://<host>/api/v1/knowledge/downloads/smoketest/pydantic-20260420T171547Z"
+      tar -xzf study.tar.gz -C ~/Workbench/STUDIES/Pydantic/
+    """
+    storage = request.app.state.study_storage
+    study_root = f"{user_id}/knowledge/{slug}"
+    buf, filename = await _build_study_tarball(
+        storage, study_root, slug, include_raw, include_exports,
+    )
+    return StreamingResponse(
+        buf,
+        media_type = "application/gzip",
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(buf.getbuffer().nbytes),
+        },
+    )
+
+
+# =============================================================================
+# POST /studies/{study_id}/export — enqueue a derived-artifact render
+# =============================================================================
+@router.post("/studies/{study_id}/export")
+async def export_study(
+    study_id: str,
+    payload: ExportRequest,
+    request: Request):
+    """
+    Generate a derived artifact (PDF/HTML/EPUB/Anki) from the study's
+    canonical markdown. Runs as a Celery task — the pandoc+xelatex render
+    can take 30-60s for a full study, too long for a request round trip.
+
+    Output lands at:
+        <study_root>/exports/study.{pdf,html,epub,apkg}
+
+    Returns:
+        {
+            "task_id": <celery id>,
+            "status": "queued",
+            "endpoint": "/api/v1/tasks/{task_id}",
+            "study_id": ...,
+            "format": ...,
+            "expected_object_key": <minio key once rendered>,
+        }
+
+    Error codes:
+        404: study_id not found in the registry.
+    """
+    record = await _load_study_record(request.app.state.redis_aio, study_id)
+    if not record:
+        raise HTTPException(status_code = 404, detail = "Study not found")
+    from tasks.knowledge.export import export_study as export_task
+    task = export_task.delay(
+        study_id,
+        record["study_root"],
+        record["framework"],
+        payload.format,
+    )
+    ext = "apkg" if payload.format == "anki" else payload.format
+    expected_key = f"{record['study_root']}/exports/study.{ext}"
+    logger.info(
+        f"[knowledge] export queued: study={study_id} format={payload.format} "
+        f"task_id={task.id} expected={expected_key}"
+    )
+    return {
+        "task_id": task.id,
+        "status": "queued",
+        "endpoint": f"/api/v1/tasks/{task.id}",
+        "study_id": study_id,
+        "format": payload.format,
+        "expected_object_key": expected_key,
+    }
+
+
+# =============================================================================
+# DELETE /studies/{study_id} — cancel running task
+# =============================================================================
+@router.delete("/studies/{study_id}")
+async def cancel_study(
+    study_id: str,
+    request: Request):
+    """
+    Cancel a running study. Revokes the Celery task with SIGTERM and marks
+    the registry record as cancelled. Does NOT delete MinIO artifacts — any
+    already-written chapters remain readable via /tree and /chapters/{n}.
+
+    Returns:
+        {"study_id": ..., "status": "cancelled"}
+    """
+    record = await _load_study_record(request.app.state.redis_aio, study_id)
+    if not record:
+        raise HTTPException(status_code = 404, detail = "Study not found")
+    # Revoke the Celery task — terminate=True sends SIGTERM to the worker.
+    celery_app.control.revoke(study_id, terminate = True)
+    # Update registry so subsequent GETs reflect the cancellation
+    record["status"] = "cancelled"
+    record["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+    await _save_study_record(request.app.state.redis_aio, study_id, record)
+    logger.info(f"[knowledge] study cancelled: {study_id}")
+    return {
+        "study_id": study_id,
+        "status": "cancelled",
+    }

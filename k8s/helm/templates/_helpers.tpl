@@ -39,6 +39,8 @@ PLAYWRIGHT_CDP_HEADLESS: "{{ .Values.playwright.cdp_headless }}"
 PLAYWRIGHT_CDP_HEADED: "{{ .Values.playwright.cdp_headed }}"
 # Embedding model (NVIDIA NIM API — see docs/NVIDIA-NIM-EMBEDDING-MODELS.md)
 NVIDIA_EMBEDDING_MODEL: "{{ .Values.embedding.model }}"
+# SearXNG metasearch (in-cluster) — used by Knowledge Distiller docs-URL resolver
+SEARXNG_URL: "{{ .Values.searxng.url }}"
 {{- end -}}
 
 

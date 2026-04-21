@@ -1,0 +1,138 @@
+"""
+Knowledge Distiller — Request DTOs (user-facing)
+
+Pydantic models for FastAPI request bodies. Pydantic validates every
+field at request time; bad inputs return HTTP 422 before the handler
+runs (the same defensive pattern we applied in schemas/youtube/inputs.py).
+
+See docs/KNOWLEDGE-DISTILLER-ARCHITECTURE.md for the canonical shape.
+"""
+from typing import Annotated, Literal, Optional
+from pydantic import BaseModel, Field, StringConstraints
+
+
+# Reusable: strips surrounding whitespace, requires ≥1 char.
+# Rejects "", "   ", "\n\t" with a 422 before the handler runs.
+NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1)]
+
+
+# =============================================================================
+# User Profile — drives tone adaptation at synthesis time
+# =============================================================================
+class UserProfile(BaseModel):
+    """
+    Learning profile. Coverage is CONSTANT across levels — only presentation
+    varies (code density, assumption level, example depth).
+
+    See docs/KNOWLEDGE-DISTILLER-WHOLE-DOCS-VARIABLE-TONE.md for the principle.
+    """
+    level: Literal["junior", "mid", "senior"] = "senior"
+    target_markets: list[NonEmptyStr] = Field(
+        default_factory = list,
+        description = "Geo markets the user targets. Example: ['uae', 'singapore']"
+    )
+    mastered_technologies: list[NonEmptyStr] = Field(
+        default_factory = list,
+        description = "Tech the user already knows — synthesizer will skip intros and focus on novel aspects"
+    )
+    portfolio_refs: list[NonEmptyStr] = Field(
+        default_factory = list,
+        description = "User's flagship projects to cross-reference in examples. Example: ['COELHO RealTime', 'COELHO Agents']"
+    )
+    acceptance_threshold: float = Field(
+        default = 0.85, 
+        ge = 0.0, 
+        le = 1.0,
+        description = "Minimum grader composite score before a chapter is accepted (0.0-1.0)"
+    )
+
+
+# =============================================================================
+# Study Creation — POST /api/v1/knowledge/studies
+# =============================================================================
+class CreateStudyRequest(BaseModel):
+    """
+    Kick off a new study. Two-step flow:
+      1. Call POST /studies/resolve first to get a proposed docs_url from
+         SearXNG + LLM disambiguation. Returns the resolved URL WITHOUT
+         enqueueing anything.
+      2. Pass that URL (or your own) as `docs_url` to POST /studies. The
+         handler HEAD-verifies reachability, runs the scope gate, then
+         enqueues the Celery task.
+
+    This makes the "wrong URL crawled" failure mode a 3-second confirmation
+    step instead of a 10-15 min wasted crawl.
+
+    Storage: all artifacts land in MinIO under key prefix
+    `{user_id}/knowledge/{framework}-{version}-{ts}/...`
+    """
+    framework: NonEmptyStr = Field(
+        description = "Code framework, library, SDK, CLI tool, or developer topic. Examples: 'FastAPI', 'React', 'CUDA', 'tokio'"
+    )
+    version: Optional[NonEmptyStr] = Field(
+        default = None,
+        description = "Optional version pin. None = latest. Example: '0.104.1'"
+    )
+    docs_url: NonEmptyStr = Field(
+        description = (
+            "REQUIRED. Official documentation root URL. Must be reachable "
+            "(HEAD-verified). Use POST /studies/resolve first to have the "
+            "system propose one based on framework name + SearXNG search, "
+            "or paste the URL directly if you already know it."
+        )
+    )
+    user_id: NonEmptyStr = Field(
+        default = "default",
+        description = "Multi-tenancy key. Used as the top-level MinIO prefix. When JWT auth lands, the router overrides this with the authenticated user's ID."
+    )
+    user_profile: UserProfile = Field(default_factory = UserProfile)
+
+
+# =============================================================================
+# Study Resolve — POST /api/v1/knowledge/studies/resolve
+# =============================================================================
+class ResolveStudyRequest(BaseModel):
+    """
+    Ask the system to propose a docs_url for the given framework WITHOUT
+    enqueueing any work. Returns the scope-gate verdict + resolved URL +
+    available versions (when a package registry knows about the framework)
+    so the caller can confirm before submitting the real POST /studies.
+
+    Cheap: one scope-classifier call + one package-registry call +
+    SearXNG search + optional LLM disambiguation on top candidates.
+    Typically <5s, zero MinIO/Celery cost.
+    """
+    framework: NonEmptyStr = Field(
+        description = "Framework name to resolve docs for."
+    )
+    version: Optional[NonEmptyStr] = Field(
+        default = None,
+        description = (
+            "Optional specific version. If set AND found in the language's "
+            "package registry (PyPI/npm/crates.io/etc.), the resolver "
+            "searches for docs matching that version. If the requested "
+            "version is NOT in the registry, the endpoint returns 422 with "
+            "the list of available versions — unless `?allow_fallback=true` "
+            "is passed, in which case it falls back to 'latest' and flags "
+            "`version_fallback: true` in the response."
+        )
+    )
+    language: Optional[NonEmptyStr] = Field(
+        default = None,
+        description = "Optional language hint (e.g., 'Python'). If omitted, derived from the scope gate."
+    )
+    user_supplied_url: Optional[NonEmptyStr] = Field(
+        default = None,
+        description = "If the user already has a candidate URL, supply it here — the resolver will prefer it when its host matches a verified SearXNG result."
+    )
+
+
+# =============================================================================
+# Export — POST /api/v1/knowledge/studies/{id}/export
+# =============================================================================
+ExportFormat = Literal["pdf", "html", "epub", "anki"]
+
+
+class ExportRequest(BaseModel):
+    """Generate a derived artifact from the canonical markdown. Triggers a Celery task."""
+    format: ExportFormat

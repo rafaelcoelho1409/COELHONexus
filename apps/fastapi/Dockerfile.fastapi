@@ -11,9 +11,22 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /app
 
-# Install runtime system dependencies + deno (for yt-dlp PO Token support)
+# Install runtime system dependencies:
+#   - procps, curl, unzip: general utilities
+#   - deno: yt-dlp PO Token support
+#   - pandoc + texlive-xetex + fonts: Knowledge Distiller exports (PDF/HTML/EPUB)
+#     xelatex over pdflatex for Unicode + better code-block typography.
+#     fonts-dejavu provides DejaVu Serif/Sans/Mono referenced in pandoc.py.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends procps curl unzip && \
+    apt-get install -y --no-install-recommends \
+        procps curl unzip \
+        pandoc \
+        texlive-xetex \
+        texlive-fonts-recommended \
+        texlive-latex-recommended \
+        lmodern \
+        fonts-dejavu \
+    && \
     curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh && \
     rm -rf /var/lib/apt/lists/*
 

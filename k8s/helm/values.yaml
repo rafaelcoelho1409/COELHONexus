@@ -66,6 +66,13 @@ playwright:
 embedding:
   model: "nvidia/llama-nemotron-embed-1b-v2"  # 2048d, 8K context, best quality
 
+# SearXNG — in-cluster metasearch used by Knowledge Distiller to resolve
+# official documentation URLs (and any future web-search need). Internal DNS
+# avoids Tailscale TLS overhead on every query. Service lives in the
+# `searxng` namespace and is already deployed outside this chart.
+searxng:
+  url: "http://searxng.searxng.svc.cluster.local:8080"
+
 # Secret containing credentials (created by upload_env_to_k3d.sh)
 secretName: coelhonexus-secret
 
@@ -164,6 +171,10 @@ celery:
   enabled: true
   replicas: 1
   concurrency: 5  # Number of concurrent tasks per worker
+  # Queue names are environment-suffixed in the deployment template (see
+  # k8s/helm/templates/celery/deployment.yaml). Both dev (skaffold) and prod
+  # (argocd) share the same Redis broker, but workers only consume their own
+  # environment's tasks — no cross-env task stealing.
   queues: "crawler,embedding,llm,default"
   resources:
     requests:

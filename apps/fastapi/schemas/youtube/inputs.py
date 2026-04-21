@@ -45,10 +45,8 @@ class SearchRequest(BaseModel):
     """
     query: NonEmptyStr
     max_results: int = 10
-
     # Sort order (ytsearchdate prefix)
     sort_by_date: bool = False
-
     # Duration filter (--match-filter duration)
     duration: Literal[
         "Under 4 minutes",
@@ -58,19 +56,15 @@ class SearchRequest(BaseModel):
     # Exact duration range in seconds (overrides duration preset)
     duration_min: int | None = None
     duration_max: int | None = None
-
     # Date filters (--dateafter/--datebefore)
     # Format: YYYYMMDD or relative like "today-2weeks", "now-1month"
     date_after: NonEmptyStr | None = None
     date_before: NonEmptyStr | None = None
-
     # View count filters (--match-filter view_count>=?N)
     min_views: int | None = None
     max_views: int | None = None
-
     # Like count filter (--match-filter like_count>=?N)
     min_likes: int | None = None
-
     # Live status filter (--match-filter)
     # True = only live, False = exclude live, None = all
     is_live: bool | None = None
@@ -82,7 +76,6 @@ class SearchRequest(BaseModel):
         "was_live",      # Was live, now VOD
         "post_live"      # Was live, VOD not yet processed
     ] | None = None
-
     # Availability filter (--match-filter availability)
     # Values from yt-dlp docs line 1362
     availability: Literal[
@@ -93,10 +86,8 @@ class SearchRequest(BaseModel):
         "subscriber_only",
         "needs_auth"
     ] | None = None
-
     # Age limit filter (--age-limit YEARS)
     age_limit: int | None = None
-
     # String filters (--match-filter with operators)
     # Supports: exact, *=contains, ^=starts_with, $=ends_with, ~=regex
     title_contains: NonEmptyStr | None = None

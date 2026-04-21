@@ -66,3 +66,6 @@ crash.*.log
 k8s/helm/charts
 
 *.npz
+.openclaude-profile.json
+.claude/
+.openclaude/

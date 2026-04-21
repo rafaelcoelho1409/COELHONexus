@@ -11,6 +11,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from routers.v1.youtube import agents as youtube_agents
 from routers.v1.youtube import content as youtube_content
+from routers.v1.knowledge import distiller as knowledge_distiller
 from routers.v1 import tasks as tasks_router
 from routers.v1.youtube.helpers import (
     create_youtube_indexes,
@@ -141,99 +142,28 @@ async def lifespan(app: FastAPI):
         "configurable": {"thread_id": "1"}
     }
     # =========================================================================
-    # LLM with Fallbacks — Groq-first + NVIDIA NIM (April 2026)
+    # LLM Fallback Chain — see services/llm_chain.py
     # =========================================================================
-    # CONCEPT: Groq models respond in milliseconds (394-1000 TPS on custom
-    # LPU hardware) vs seconds on NVIDIA NIM. We put Groq FIRST for speed,
-    # then fall back to NVIDIA NIM's 14 models when Groq hits rate limits.
-    #
-    # Groq free tier: 30 RPM per model (60 for Qwen3/Kimi), 100K-500K TPD
-    # NVIDIA NIM free tier: ~40 RPM per model, unlimited daily tokens
-    # Combined: Groq handles ~150 RPM (5 models), NVIDIA handles overflow
-    #
-    # max_retries=0: fail immediately on 429 (don't waste time retrying)
-    # timeout=60: don't hang on slow models (Groq rarely needs >5s)
-    #
-    # === Groq models (speed-first, 394-1000 TPS) ===
-    #  1. Llama 3.3 70B      — Best quality on Groq, 394 TPS, 30 RPM
-    #  2. Qwen3 32B          — 60 RPM (double!), 662 TPS, reasoning support
-    #  3. Kimi K2 Instruct   — 60 RPM, strong quality
-    #  4. GPT-OSS 120B       — OpenAI open-source, 500 TPS
-    #  5. Llama 3.1 8B       — 840 TPS, highest free quota (500K TPD)
-    #
-    # === NVIDIA NIM models (unlimited fallback, ranked by Arena ELO) ===
-    #  6. GLM5               — Arena 1451, best open-source
-    #  7. Kimi K2.5          — Arena 1447, multimodal
-    #  8. Kimi K2 Instruct   — Arena 1447, text-only
-    #  9. DeepSeek V3.2      — Arena 1421, MIT-licensed
-    # 10. Nemotron Super 120B
-    # 11. Qwen 3.5 122B
-    # 12. Nemotron Super 49B
-    # 13. Mistral Small 4
-    # 14. Gemma 4 31B
-    # 15. Llama 4 Maverick
-    # 16. Llama 3.3 70B
-    # 17. Qwen3 Next 80B
-    # 18. Llama 3.1 8B
-    #
-    GROQ_URL = "https://api.groq.com/openai/v1"
-    GROQ_KEY = os.environ.get("GROQ_API_KEY", "")
-    NVIDIA_URL = "https://integrate.api.nvidia.com/v1"
-    NVIDIA_KEY = os.environ.get("NVIDIA_API_KEY", "")
-
-    def _groq(model: str) -> ChatOpenAI:
-        return ChatOpenAI(
-            model = model,
-            temperature = 0.0,
-            base_url = GROQ_URL,
-            api_key = GROQ_KEY,
-            max_retries = 0,
-            timeout = 30,  # Groq is fast — 30s is generous
-        )
-
-    def _nim(model: str) -> ChatOpenAI:
-        return ChatOpenAI(
-            model = model,
-            temperature = 0.0,
-            base_url = NVIDIA_URL,
-            api_key = NVIDIA_KEY,
-            max_retries = 0,
-            timeout = 60,
-        )
-
-    # Build fallback chain: Groq (speed) → NVIDIA NIM (capacity)
-    groq_models = []
-    if GROQ_KEY:
-        groq_models = [
-            _groq("llama-3.3-70b-versatile"),
-            _groq("qwen/qwen3-32b"),
-            _groq("moonshotai/kimi-k2-instruct"),
-            _groq("openai/gpt-oss-120b"),
-            _groq("llama-3.1-8b-instant"),
-        ]
-    nim_models = [
-        _nim("z-ai/glm5"),
-        _nim("moonshotai/kimi-k2.5"),
-        _nim("moonshotai/kimi-k2-instruct"),
-        _nim("moonshotai/kimi-k2-thinking"),
-        _nim("deepseek-ai/deepseek-v3.2"),
-        _nim("nvidia/nemotron-3-super-120b-a12b"),
-        _nim("qwen/qwen3.5-122b-a10b"),
-        _nim("nvidia/llama-3.3-nemotron-super-49b-v1.5"),
-        _nim("mistralai/mistral-small-4-119b-2603"),
-        _nim("google/gemma-4-31b-it"),
-        _nim("meta/llama-4-maverick-17b-128e-instruct"),
-        _nim("meta/llama-3.3-70b-instruct"),
-        _nim("qwen/qwen3-next-80b-a3b-instruct"),
-        _nim("meta/llama-3.1-8b-instruct"),
-    ]
-    all_models = groq_models + nim_models
-    primary = all_models[0]
-    fallbacks = all_models[1:]
-    app.state.llm = primary.with_fallbacks(fallbacks)
-    providers = f"Groq ({len(groq_models)})" if groq_models else ""
-    providers += (" + " if providers else "") + f"NVIDIA NIM ({len(nim_models)})"
-    print(f"LLM loaded: {primary.model_name} + {len(fallbacks)} fallbacks ({providers})", flush = True)
+    # 13-model ordered fallback (Groq + NIM interleaved by phase:
+    # large-context → 128K-quality → speed). One source of truth in
+    # services/llm_chain.py so FastAPI and Celery tasks can't drift.
+    # Research doc: docs/STUDY-GENERATOR-ADAPTIVE-GRADER.md (April 2026 update).
+    from services.llm_chain import build_llm_fallback_chain, build_scope_classifier_llm
+    app.state.llm = build_llm_fallback_chain()
+    app.state.llm_scope = build_scope_classifier_llm()
+    print("LLM chain loaded (see services/llm_chain.py for model order).", flush = True)
+    # MinIO object storage for Knowledge Distiller artifacts (bucket self-provisions)
+    from services.knowledge.storage import MinIOStudyStorage
+    MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "https://minio-api.YOUR_TAILNET_DOMAIN.ts.net")
+    MINIO_BUCKET = os.environ.get("MINIO_BUCKET_COELHONEXUS", "coelhonexus")
+    app.state.study_storage = MinIOStudyStorage(
+        bucket = MINIO_BUCKET,
+        endpoint_url = MINIO_ENDPOINT,
+        access_key = os.environ.get("AWS_ACCESS_KEY_ID", ""),
+        secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY", ""),
+    )
+    await app.state.study_storage.ensure_bucket()
+    print(f"MinIO study storage ready: bucket={MINIO_BUCKET} at {MINIO_ENDPOINT}", flush = True)
     # PostgreSQL: auto-create database + conversation history table + checkpointer
     await _ensure_postgres_database()
     from services.youtube.conversation import ensure_conversation_table
@@ -292,6 +222,12 @@ app.include_router(
     youtube_content.router,
     prefix = "/api/v1/youtube/content",
     tags = ["YouTube"],
+)
+
+app.include_router(
+    knowledge_distiller.router,
+    prefix = "/api/v1/knowledge",
+    tags = ["Knowledge"],
 )
 
 app.include_router(

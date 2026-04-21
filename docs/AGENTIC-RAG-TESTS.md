@@ -115,7 +115,7 @@ Runs as Celery task. **Zero CPU usage** (API-based embeddings).
 ### 3.1 Ingest Specific Videos
 
 ```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/ingest \
+curl -s -X POST $BASE/api/v1/youtube/agents/ingest/qdrant \
   -H 'Content-Type: application/json' \
   -d '{"video_ids": ["7a_KPrvhJi8", "YjeMkwVMwOM"]}'
 ```
@@ -123,7 +123,7 @@ curl -s -X POST $BASE/api/v1/youtube/agents/ingest \
 ### 3.2 Ingest ALL Transcripts
 
 ```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/ingest \
+curl -s -X POST $BASE/api/v1/youtube/agents/ingest/qdrant \
   -H 'Content-Type: application/json' \
   -d '{"video_ids": null}'
 ```
@@ -164,7 +164,7 @@ Runs as Celery task. 1 LLM call per transcript (not chunked).
 ### 4.1 Ingest All Transcripts
 
 ```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/ingest/graph \
+curl -s -X POST $BASE/api/v1/youtube/agents/ingest/neo4j \
   -H 'Content-Type: application/json' \
   -d '{"video_ids": null, "batch_size": 3}'
 ```
@@ -172,7 +172,7 @@ curl -s -X POST $BASE/api/v1/youtube/agents/ingest/graph \
 ### 4.2 Ingest Specific Videos
 
 ```bash
-curl -s -X POST $BASE/api/v1/youtube/agents/ingest/graph \
+curl -s -X POST $BASE/api/v1/youtube/agents/ingest/neo4j \
   -H 'Content-Type: application/json' \
   -d '{"video_ids": ["7a_KPrvhJi8", "VFEijm3Z57U"], "batch_size": 3}'
 ```

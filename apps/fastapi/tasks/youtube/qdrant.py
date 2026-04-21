@@ -21,7 +21,7 @@ logger = get_task_logger(__name__)
 
 @app.task(
     bind = True, 
-    name = "tasks.youtube.ingestion.ingest_to_qdrant")
+    name = "tasks.youtube.qdrant.ingest_to_qdrant")
 def ingest_to_qdrant(
     self, 
     video_ids = None, 
@@ -77,7 +77,7 @@ def ingest_to_qdrant(
 
 @app.task(
     bind = True, 
-    name = "tasks.youtube.ingestion.invalidate_cache")
+    name = "tasks.youtube.qdrant.invalidate_cache")
 def invalidate_cache(self):
     """Clear all RAG search cache after new data ingestion."""
     import asyncio

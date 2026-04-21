@@ -3,15 +3,15 @@ Pipeline Tasks — Full channel ingestion chain
 
 CONCEPT: Celery chains execute tasks in sequence, passing results forward.
 One POST /pipeline call triggers the entire flow:
-  extract_channel → ingest_to_qdrant → ingest_to_graph → invalidate_cache
+  extract_channel → ingest_to_qdrant → ingest_to_neo4j → invalidate_cache
 
 If any step fails, Celery retries that step — not the whole pipeline.
 """
 from celery import chain
 from celery_app import app
 from tasks.youtube.crawler import extract_channel
-from tasks.youtube.ingestion import ingest_to_qdrant, invalidate_cache
-from tasks.youtube.graph import ingest_to_graph
+from tasks.youtube.qdrant import ingest_to_qdrant, invalidate_cache
+from tasks.youtube.neo4j import ingest_to_neo4j
 
 
 @app.task(bind = True, name = "tasks.youtube.pipeline.full_channel_pipeline")
@@ -30,7 +30,7 @@ def full_channel_pipeline(
     own worker (possibly on different queues):
       extract_channel (crawler queue) →
       ingest_to_qdrant (embedding queue) →
-      ingest_to_graph (llm queue) →
+      ingest_to_neo4j (llm queue) →
       invalidate_cache (embedding queue)
 
     Args:
@@ -44,7 +44,7 @@ def full_channel_pipeline(
     if include_qdrant:
         steps.append(ingest_to_qdrant.si())
     if include_graph:
-        steps.append(ingest_to_graph.si())
+        steps.append(ingest_to_neo4j.si())
     steps.append(invalidate_cache.si())
     # si() = signature with immutable args (don't pass previous result as first arg)
     pipeline = chain(*steps)
