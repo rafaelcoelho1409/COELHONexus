@@ -1,5 +1,5 @@
 """
-Knowledge Distiller — Resolver v2 Schemas
+Knowledge Distiller — Resolver Schemas
 
 Registry existence-only + SearXNG fan-out + LLM rerank + content-validated
 tier classification. See docs/KNOWLEDGE-DISTILLER-RESOLVER-STRATEGY.md for

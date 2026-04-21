@@ -89,45 +89,6 @@ class CreateStudyRequest(BaseModel):
 
 
 # =============================================================================
-# Study Resolve — POST /api/v1/knowledge/studies/resolve
-# =============================================================================
-class ResolveStudyRequest(BaseModel):
-    """
-    Ask the system to propose a docs_url for the given framework WITHOUT
-    enqueueing any work. Returns the scope-gate verdict + resolved URL +
-    available versions (when a package registry knows about the framework)
-    so the caller can confirm before submitting the real POST /studies.
-
-    Cheap: one scope-classifier call + one package-registry call +
-    SearXNG search + optional LLM disambiguation on top candidates.
-    Typically <5s, zero MinIO/Celery cost.
-    """
-    framework: NonEmptyStr = Field(
-        description = "Framework name to resolve docs for."
-    )
-    version: Optional[NonEmptyStr] = Field(
-        default = None,
-        description = (
-            "Optional specific version. If set AND found in the language's "
-            "package registry (PyPI/npm/crates.io/etc.), the resolver "
-            "searches for docs matching that version. If the requested "
-            "version is NOT in the registry, the endpoint returns 422 with "
-            "the list of available versions — unless `?allow_fallback=true` "
-            "is passed, in which case it falls back to 'latest' and flags "
-            "`version_fallback: true` in the response."
-        )
-    )
-    language: Optional[NonEmptyStr] = Field(
-        default = None,
-        description = "Optional language hint (e.g., 'Python'). If omitted, derived from the scope gate."
-    )
-    user_supplied_url: Optional[NonEmptyStr] = Field(
-        default = None,
-        description = "If the user already has a candidate URL, supply it here — the resolver will prefer it when its host matches a verified SearXNG result."
-    )
-
-
-# =============================================================================
 # Export — POST /api/v1/knowledge/studies/{id}/export
 # =============================================================================
 ExportFormat = Literal["pdf", "html", "epub", "anki"]

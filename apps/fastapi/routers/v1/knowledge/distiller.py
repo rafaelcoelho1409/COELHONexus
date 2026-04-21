@@ -6,7 +6,7 @@ Public API for the KD pipeline. Thin HTTP layer on top of the Celery task
 
 Endpoints:
   POST   /studies                             Create study (runs scope gate first)
-  POST   /studies/resolve                     Preview docs_url without enqueueing
+  POST   /studies/resolve                     Resolve canonical docs_url + tier (1-4); supports crossover
   GET    /studies/{study_id}                  Status + phase + progress
   GET    /studies/{study_id}/stream           SSE node-by-node updates
   GET    /studies/{study_id}/tree             MinIO object manifest
@@ -53,12 +53,9 @@ from celery_app import app as celery_app
 from schemas.knowledge.inputs import (
     CreateStudyRequest,
     ExportRequest,
-    ResolveStudyRequest,
 )
 from schemas.knowledge.resolver import ResolveRequest
-from services.knowledge.docs_resolver import resolve as resolve_v2
-from services.knowledge.docs_url_resolver import resolve_docs_url
-from services.knowledge.registry import list_versions as registry_list_versions
+from services.knowledge.docs_resolver import resolve as resolve_docs
 from services.knowledge.scope import classify_scope
 
 
@@ -148,66 +145,60 @@ def _celery_snapshot(study_id: str) -> dict:
 
 
 # =============================================================================
-# POST /studies/resolve/v2 — multi-topic resolver (A → B → C → D + crossover)
+# POST /studies/resolve — canonical docs-URL + tier classification
 # =============================================================================
-# v2 takes a framework name OR a crossover string ("DeepAgents + LangChain +
-# LangGraph"), decomposes it, fans out per canonical topic, and returns one
-# ResolvedDocs per topic — each carrying a tier (1-4) classification so the
-# crawler knows which ingestion strategy to run.
+# Accepts a framework name OR a crossover request ("Grafana Alloy + LGTM +
+# PromQL"), decomposes it into canonical topics, fans out per topic, and
+# returns one ResolvedDocs per topic — each carrying a tier (1-4) that tells
+# the crawler which ingestion strategy to run.
 #
-# Differs from v1 /studies/resolve:
-#   - v1: single framework, v1 heuristic scoring + LLM yes/no confirm,
-#     returns one docs_url, no tier
-#   - v2: single OR crossover, LLM rerank with strict JSON schema,
-#     content-validated tier probes, Redis cache, returns list[ResolvedDocs]
+# Stages per topic:
+#   A — Registry hint    (PyPI / npm / crates.io — existence + homepage)
+#   B — SearXNG          (3 parallel query templates, ~15 candidates)
+#   C — LLM rerank       (strict JSON schema, picks canonical docs_url)
+#   D — Content validator (probe /llms-full.txt, /llms.txt, /sitemap.xml +
+#                          root liveness D0 + index spot-check D2 + GitHub
+#                          discovery upgrade for github.com/{org}/{repo})
 #
+# Cache: Redis with confidence-based TTL (7 days on conf ≥ 0.7, else 1 hour).
 # Reference: docs/KNOWLEDGE-DISTILLER-RESOLVER-STRATEGY.md
-@router.post("/studies/resolve/v2")
-async def resolve_study_v2(
+@router.post("/studies/resolve")
+async def resolve_study(
     payload: ResolveRequest,
     request: Request):
     """
     Resolve docs for a single framework OR a crossover request.
 
-    Flow:
-      1. Scope gate on the raw input (rejects non-code-framework requests).
-      2. Crossover decomposer — splits input into canonical topics.
-      3. Per topic, Stages A-D run in parallel via asyncio.gather:
-         - Stage A: registry hint (PyPI/npm/crates — existence + homepage)
-         - Stage B: SearXNG (3 parallel query templates, ~15 candidates)
-         - Stage C: LLM rerank (strict JSON schema, picks canonical docs_url)
-         - Stage D: content-validated probe → tier 1-4 classification
-      4. Redis cache with confidence-based TTL (7d on conf ≥ 0.7, 1h otherwise).
-
     Returns:
         {
           "input": <raw framework arg>,
           "is_crossover": bool,
-          "results": list[ResolvedDocs],
+          "total_topics": int,
+          "results": [ResolvedDocs, ...]
         }
 
     ResolvedDocs carries: canonical_name, docs_url, repo_url, version,
-    tier (1-4), tier_evidence (per-file probes), confidence (0-1),
-    fallback_candidates (rejected URLs with reasons), source_signals
-    (provenance).
+    tier (1-4), tier_evidence (per-file probes + D0 liveness + D2
+    spot-check), confidence (0-1), fallback_candidates (rejected URLs
+    with reasons), source_signals (provenance).
 
     Error codes:
         400: scope gate rejected the input.
         503: scope classifier itself failed.
     """
     app = request.app
-    # Scope gate uses the FULL fallback chain (app.state.llm) on this
-    # endpoint — the fast 8B classifier misclassifies newer 2025-2026
-    # frameworks (e.g. DeepAgents) as "ambiguous concepts" because its
-    # training cutoff predates them. The main chain starts with NIM
-    # reasoning models that know current frameworks; accuracy matters
-    # more than latency here since the endpoint is a dry-run.
+    # Scope gate uses the FULL fallback chain (app.state.llm). The 8B
+    # classifier misclassifies newer 2025-2026 frameworks (e.g. DeepAgents)
+    # as "ambiguous concepts" because its training cutoff predates them.
+    # The main chain starts with reasoning models that know current
+    # frameworks; accuracy matters more than latency here since the
+    # endpoint is a dry-run.
     scope_llm = app.state.llm
 
     try:
         scope = await classify_scope(payload.framework, scope_llm)
     except RuntimeError as e:
-        logger.warning(f"[knowledge] resolve/v2 scope failed: {e}")
+        logger.warning(f"[knowledge] resolve scope failed: {e}")
         raise HTTPException(
             status_code = 503,
             detail = f"Scope classifier unavailable: {e}",
@@ -222,244 +213,20 @@ async def resolve_study_v2(
             },
         )
 
-    # Rerank + decompose still use the fast scope classifier when available
-    # (high-volume, latency-sensitive LLM calls inside the resolver). Only
-    # the scope gate itself uses the full chain.
+    # Rerank + decompose use the fast classifier (high-volume, latency-
+    # sensitive LLM calls). Only the scope gate itself uses the full chain.
     rerank_llm = getattr(app.state, "llm_scope", None) or app.state.llm
-    results = await resolve_v2(
+    results = await resolve_docs(
         request = payload,
         llm = rerank_llm,
         redis_aio = app.state.redis_aio,
     )
 
-    # Surface crossover flag + count for the client. is_crossover follows
-    # from the decomposer; we re-derive it from len(results) here so the
-    # response shape is self-contained without leaking the decomposer type.
     return {
         "input": payload.framework,
         "is_crossover": len(results) > 1,
         "total_topics": len(results),
         "results": [r.model_dump() for r in results],
-    }
-
-
-# =============================================================================
-# POST /studies/resolve — dry-run: resolve docs_url without enqueueing
-# =============================================================================
-@router.post("/studies/resolve")
-async def resolve_study(
-    payload: ResolveStudyRequest,
-    request: Request,
-    verify: bool = True,
-    allow_fallback: bool = False):
-    """
-    Propose a docs_url for the given framework WITHOUT enqueueing any work.
-
-    Flow:
-      1. Scope classifier (~500ms) — reject non-code-frameworks with 400.
-      2. Package registry lookup (PyPI / npm / crates.io / etc.) — returns
-         `available_versions` so the caller sees the real version list.
-      3. Version validation:
-         - `payload.version` is None → treated as "latest"
-         - `payload.version` is set AND in registry → used as-is
-         - `payload.version` is set AND NOT in registry:
-             * `allow_fallback=false` (default) → 422 with available_versions
-             * `allow_fallback=true` → fall back to "latest", flag
-               `version_fallback: true` in response
-         - registry is unavailable (language unsupported) → version
-           passed through as-is (we have no ground truth to reject it)
-      4. SearXNG ranked search → layer-3 LLM disambiguation → HEAD verification,
-         with version folded into the query.
-
-    Query params:
-        verify (bool, default True):         run the layer-3 LLM disambiguation step.
-        allow_fallback (bool, default False): if True, treat a non-registry version
-                                              as "latest" with a warning in the response,
-                                              rather than returning 422.
-
-    Error codes:
-        400: scope gate rejected the input (not a code framework).
-        422: version not found in registry and allow_fallback=false,
-             OR no reachable docs URL even after all layers.
-        503: scope classifier itself failed.
-    """
-    app = request.app
-    scope_llm = getattr(app.state, "llm_scope", None) or app.state.llm
-
-    # 1) Scope gate — bail fast on non-code-frameworks
-    try:
-        scope = await classify_scope(payload.framework, scope_llm)
-    except RuntimeError as e:
-        logger.warning(f"[knowledge] resolve: scope classifier failed for '{payload.framework}': {e}")
-        raise HTTPException(
-            status_code = 503,
-            detail = f"Scope classifier unavailable: {e}",
-        )
-    if not scope.is_code_framework:
-        raise HTTPException(
-            status_code = 400,
-            detail = {
-                "message": scope.rejection_reason or "Not a code framework",
-                "detected_topic": scope.detected_topic,
-                "framework": payload.framework,
-            },
-        )
-
-    language = payload.language or scope.language
-
-    # 2) Package-registry lookup — populate available_versions
-    registry_listing = await registry_list_versions(payload.framework, language)
-    available_versions_payload = (
-        registry_listing.model_dump() if registry_listing else None
-    )
-
-    # 3) Version resolution + fallback semantics
-    requested_version = (payload.version or "").strip() or None
-    resolved_version: str | None = requested_version
-    version_fallback = False
-    fallback_reason: str | None = None
-
-    if requested_version and registry_listing is not None:
-        # We have ground truth — check if it exists
-        if requested_version not in registry_listing.all:
-            if allow_fallback:
-                resolved_version = None  # → "latest"
-                version_fallback = True
-                fallback_reason = (
-                    f"Version {requested_version!r} not found in {registry_listing.source}. "
-                    f"Falling back to latest (currently {registry_listing.latest_stable!r})."
-                )
-                logger.info(
-                    f"[knowledge] resolve: version fallback for '{payload.framework}' "
-                    f"{requested_version!r} → latest"
-                )
-            else:
-                # Fail loud: return 422 with the list
-                sample = registry_listing.all[:10]
-                more = len(registry_listing.all) - len(sample)
-                raise HTTPException(
-                    status_code = 422,
-                    detail = {
-                        "message": (
-                            f"Version {requested_version!r} not found for "
-                            f"{payload.framework!r} in {registry_listing.source}. "
-                            f"Retry with one of the available versions, or pass "
-                            f"`?allow_fallback=true` to use latest instead."
-                        ),
-                        "framework": payload.framework,
-                        "requested_version": requested_version,
-                        "available_versions_sample": sample,
-                        "available_versions_total": len(registry_listing.all),
-                        "available_versions_truncated_remaining": more,
-                        "registry_source": registry_listing.source,
-                    },
-                )
-    elif requested_version and registry_listing is None:
-        logger.info(
-            f"[knowledge] resolve: registry unavailable for language={language!r}, "
-            f"accepting version={requested_version!r} as-is"
-        )
-
-    # 4) Resolve docs URL (version-biased when set).
-    #    Two-step fallback logic when `allow_fallback=true`:
-    #    (a) Try the requested version first.
-    #    (b) If that fails but allow_fallback is set, retry as "latest".
-    #    Set `docs_fallback=True` in the response so the caller knows the
-    #    crawl target won't actually match the requested version.
-    docs_fallback = False
-    docs_fallback_reason: str | None = None
-    try:
-        resolved_docs_url, docs_url_source = await resolve_docs_url(
-            framework = payload.framework,
-            language = language,
-            user_supplied = payload.user_supplied_url,
-            version = resolved_version,
-            verify = verify,
-            llm = scope_llm,
-        )
-    except RuntimeError as e:
-        # If the user asked for a specific version AND opted into fallback,
-        # retry once without the version pin to see if latest docs are reachable.
-        if resolved_version and allow_fallback:
-            logger.info(
-                f"[knowledge] resolve: docs URL for version {resolved_version!r} "
-                f"not found; allow_fallback=true → retrying as latest"
-            )
-            try:
-                resolved_docs_url, docs_url_source = await resolve_docs_url(
-                    framework = payload.framework,
-                    language = language,
-                    user_supplied = payload.user_supplied_url,
-                    version = None,                 # drop the version pin
-                    verify = verify,
-                    llm = scope_llm,
-                )
-                docs_fallback = True
-                docs_fallback_reason = (
-                    f"No version-specific docs URL found for "
-                    f"{payload.framework} {resolved_version!r}. The crawler "
-                    f"will read the latest docs instead — content may not "
-                    f"exactly match the pinned version."
-                )
-                # The effective identity for caching is now "latest":
-                resolved_version = None
-            except RuntimeError as e2:
-                raise HTTPException(
-                    status_code = 422,
-                    detail = {
-                        "message": (
-                            f"Could not find a reachable documentation URL for "
-                            f"{payload.framework!r} even after falling back to "
-                            f"latest."
-                        ),
-                        "framework": payload.framework,
-                        "error": str(e2),
-                        "detected_topic": scope.detected_topic,
-                    },
-                )
-        else:
-            # Strict mode: fail loud so the caller doesn't silently crawl wrong docs
-            logger.warning(
-                f"[knowledge] resolve URL failed: framework='{payload.framework}' "
-                f"language='{language}' version='{resolved_version}': {e}"
-            )
-            raise HTTPException(
-                status_code = 422,
-                detail = {
-                    "message": (
-                        "Could not find a reachable documentation URL for the "
-                        "requested version. Pass `?allow_fallback=true` to use "
-                        "latest docs instead, or supply docs_url manually."
-                    ),
-                    "framework": payload.framework,
-                    "resolved_version": resolved_version or "latest",
-                    "detected_topic": scope.detected_topic,
-                },
-            )
-
-    logger.info(
-        f"[knowledge] resolve ok: framework='{payload.framework}' "
-        f"version={resolved_version or 'latest'} docs_fallback={docs_fallback} "
-        f"url='{resolved_docs_url}' source={docs_url_source}"
-    )
-    return {
-        "framework": payload.framework,
-        "detected_topic": scope.detected_topic,
-        "language": language,
-        "is_code_framework": True,
-        "version": requested_version,                        # echo what was asked
-        "resolved_version": resolved_version or "latest",    # what the slug/cache will use
-        "version_fallback": version_fallback,                # registry-level fallback
-        "fallback_reason": fallback_reason,
-        "docs_fallback": docs_fallback,                      # docs-URL-level fallback
-        "docs_fallback_reason": docs_fallback_reason,
-        "docs_url": resolved_docs_url,
-        "docs_url_source": docs_url_source,
-        "available_versions": available_versions_payload,
-        "next_step": (
-            "POST /api/v1/knowledge/studies with docs_url + version set to "
-            "confirm and start the full pipeline."
-        ),
     }
 
 

@@ -1,5 +1,5 @@
 """
-Knowledge Distiller — Docs Resolver v2 (orchestrator)
+Knowledge Distiller — Docs Resolver (orchestrator)
 
 Four-stage pipeline per topic:
 

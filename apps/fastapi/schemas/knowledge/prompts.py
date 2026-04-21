@@ -464,7 +464,7 @@ CURATOR_PROMPT = ChatPromptTemplate.from_messages([
 
 
 # =============================================================================
-# Resolver v2 — crossover decomposition (single LLM call, strict JSON schema)
+# Resolver — crossover decomposition (single LLM call, strict JSON schema)
 # =============================================================================
 # Precedent: Perplexity / Google AI Mode query fan-out. Cheap pre-pass that
 # splits inputs like "Grafana Alloy + LGTM + PromQL + LogQL + River" into
@@ -504,7 +504,7 @@ RESOLVER_DECOMPOSE_PROMPT = ChatPromptTemplate.from_messages([
 
 
 # =============================================================================
-# Resolver v2 — LLM rerank (Stage C)
+# Resolver — LLM rerank (Stage C)
 # =============================================================================
 # Consumes: framework name + aliases + version hint + registry homepage/repo +
 # SearXNG candidates. Returns the canonical docs_url in strict JSON schema.
