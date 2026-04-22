@@ -376,8 +376,21 @@ async def ingest_framework_docs(
                 f"falling back to Tier 4 Playwright"
             )
 
-    # Tier 1/2/3 branches: stubbed. Same graceful fallthrough to Tier 4.
-    if cfg.tier in (1, 2, 3):
+    # Tier 1 — /llms-full.txt single-file fast path. Resolver's D-probe
+    # already content-validated the file; Tier 1 just fetches it.
+    if cfg.tier == 1:
+        logger.info(f"[ingest] dispatcher → Tier 1 (llms-full.txt) for {cfg.framework!r}")
+        try:
+            from services.knowledge.llms_full_ingest import ingest_llms_full_txt
+            return await ingest_llms_full_txt(cfg, storage)
+        except Exception as e:
+            logger.warning(
+                f"[ingest] Tier 1 failed for {cfg.framework!r} ({e}); "
+                f"falling back to Tier 4 Playwright"
+            )
+
+    # Tier 2/3 branches: stubbed. Same graceful fallthrough to Tier 4.
+    if cfg.tier in (2, 3):
         logger.info(
             f"[ingest] dispatcher → Tier {cfg.tier} requested for "
             f"{cfg.framework!r}; not yet implemented, falling back to Tier 4"
