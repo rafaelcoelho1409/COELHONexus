@@ -46,7 +46,6 @@ from langgraph.types import Send
 
 from schemas.knowledge.agents import (
     ChapterPlan,
-    ChapterPlanList,
     ChapterSynthesis,
     CriticAssessment,
     GraderEvaluation,
@@ -55,7 +54,6 @@ from schemas.knowledge.agents import (
 from schemas.knowledge.ingestion import DocsIngestionConfig
 from schemas.knowledge.inputs import UserProfile
 from schemas.knowledge.prompts import (
-    CHAPTER_REDUCE_PROMPT,
     CRITIC_PROMPT,
     CURATOR_PROMPT,
     PLANNER_PROMPT,
@@ -465,63 +463,37 @@ class KnowledgeDistillerGraph:
             f"in {_shard_elapsed:.1f}s"
         )
 
-        # ------ REDUCE pass — merge into final ChapterPlanList ---------------
-        cluster_lines: list[str] = []
+        # ------ REDUCE pass — Clio pattern (embed + k-means + label + order) -
+        # The previous single-shot CHAPTER_REDUCE_PROMPT call failed reliably
+        # on large corpora (observed 2026-04-22 on 300 micro-clusters):
+        #   - NIM 504 gateway timeout after 300s on every reasoning model
+        #   - Groq 413 TPM rate-limit on every model except llama-4-scout
+        # Both are structural — a 25K-token prompt simply can't fit through
+        # free-tier NIM's gateway window or Groq's 6K-12K TPM caps.
+        #
+        # The Clio pattern (Anthropic, arxiv 2412.13678) decouples grouping
+        # (embeddings + k-means, deterministic, zero LLM tokens) from naming
+        # (one small LLM call per meta-cluster, ~3K tokens each, parallel).
+        # No LLM call ever sees all 300 clusters; biggest prompt is ~3K tokens
+        # — safely under every provider's constraint.
+        #
+        # See graphs/knowledge/reduce_cluster.py for the full implementation.
         shard_unused_all: list[str] = []
-        for idx, sr in enumerate(shard_results, 1):
-            for c in sr.clusters:
-                cluster_lines.append(
-                    f"- [shard {idx}] {c.cluster_name}: {c.description} "
-                    f"({len(c.file_slugs)} files: {', '.join(c.file_slugs[:3])}"
-                    f"{'...' if len(c.file_slugs) > 3 else ''})"
-                )
+        for sr in shard_results:
             shard_unused_all.extend(sr.unused_shard_slugs)
-        cluster_summary_text = "\n".join(cluster_lines)
-        # NOTE (2026-04-22): the previous version also interpolated an
-        # `all_slugs` block listing every one of the corpus's ~4000 slug
-        # strings as a coverage reference. That ballooned the REDUCE prompt
-        # to ~75K tokens of slug-names alone, pushing NIM into 5-min
-        # Gateway Timeouts and Groq into 413 Payload Too Large. The
-        # coverage invariant is already enforced deterministically by
-        # `_validate_plan` + the coverage-repair step below (auto-parks
-        # forgotten slugs into unused_files), so it's safe — and far
-        # cheaper — to drop the all_slugs block from the prompt. The LLM
-        # sees every assigned slug in context of its cluster anyway
-        # (`cluster_summary` inlines the first few file_slugs per cluster).
-        shard_unused_text = (
-            "\n".join(f"- {s}" for s in shard_unused_all)
-            if shard_unused_all else "(none — reducer may still add more)"
-        )
-        reduce_chain = CHAPTER_REDUCE_PROMPT | llm.with_structured_output(
-            ChapterPlanList, method = "function_calling", include_raw = True,
-        )
+        from graphs.knowledge.reduce_cluster import embed_and_cluster_reduce
         try:
-            raw_and_parsed: dict = await reduce_chain.ainvoke({
-                "framework": framework,
-                "shard_count": len(shards),
-                "cluster_summary": cluster_summary_text,
-                "shard_unused": shard_unused_text,
-            })
-        except Exception as e:
-            raise RuntimeError(f"Planner REDUCE call failed: {e}") from e
-        raw_msg = raw_and_parsed.get("raw")
-        plan = raw_and_parsed.get("parsed")
-        parsing_error = raw_and_parsed.get("parsing_error")
-        if parsing_error is not None:
-            raise RuntimeError(f"Planner REDUCE parsing error: {parsing_error}") from parsing_error
-        if plan is None:
-            raise RuntimeError("Planner REDUCE returned no parsed plan")
-        finish_reason = None
-        if raw_msg is not None and hasattr(raw_msg, "response_metadata"):
-            finish_reason = (raw_msg.response_metadata or {}).get("finish_reason")
-        if finish_reason == "length":
-            raise RuntimeError(
-                "Planner REDUCE output truncated (finish_reason=length); "
-                "raising to trigger fallback model."
+            plan = await embed_and_cluster_reduce(
+                shard_results = shard_results,
+                shard_unused_all = shard_unused_all,
+                framework = framework,
+                llm = llm,
             )
+        except Exception as e:
+            raise RuntimeError(f"Planner REDUCE (Clio pattern) failed: {e}") from e
         logger.info(
             f"[planner] REDUCE complete: {len(plan.chapters)} chapters + "
-            f"{len(plan.unused_files)} unused_files (reasoning: {plan.reasoning[:80]})"
+            f"{len(plan.unused_files)} unused_files (reasoning: {plan.reasoning[:120]})"
         )
 
         # 4) Validate (log-only — critic node is the formal gate)

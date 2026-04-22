@@ -172,6 +172,61 @@ class ChapterPlanList(BaseModel):
 
 
 # =============================================================================
+# Clio-pattern REDUCE — per-meta-cluster labeling + global ordering
+# =============================================================================
+# Used by graphs/knowledge/reduce_cluster.py to replace the single-shot
+# CHAPTER_REDUCE_PROMPT call for large corpora. See that module's docstring
+# for the end-to-end architecture.
+class MetaLabelDraft(BaseModel):
+    """
+    Output of one META_LABEL_PROMPT call. The LLM emits title + goal for ONE
+    meta-cluster; assigned_files is filled in deterministically by the
+    reducer (union of member micro-clusters' file_slugs), and `number` is
+    assigned by the ORDER_PROMPT pass. Keeping this schema minimal lets the
+    labeling call stay under ~500 output tokens regardless of meta-cluster size.
+    """
+    title: str = Field(
+        description = (
+            "Concise chapter title — 2-6 words. Covers the intersection of "
+            "the input micro-clusters' topics. Avoid generic titles like "
+            "'Overview' or 'Miscellaneous'."
+        ),
+    )
+    goal: str = Field(
+        description = (
+            "One sentence, ≤200 chars. What the reader GAINS from the chapter "
+            "(not what's in it). Starts with a verb: 'Understand', 'Learn to', "
+            "'Build'."
+        ),
+    )
+
+
+class OrderedIndices(BaseModel):
+    """
+    Output of the ORDER_PROMPT pass. The LLM sees M chapter drafts and
+    returns a permutation of 0..M-1 representing the reading order.
+
+    The reducer validates: len == M, set(order) == set(range(M)). No
+    min/max_length is set on the field because M varies per run — we
+    enforce correctness client-side.
+    """
+    order: list[int] = Field(
+        description = (
+            "Permutation of 0..M-1 indicating reading order. "
+            "order[0] is the first chapter the reader should read. "
+            "Must contain every index exactly once. No repeats, no holes."
+        ),
+    )
+    rationale: str = Field(
+        description = (
+            "One sentence explaining the spine of the ordering "
+            "(e.g., 'Foundations first, then runtime integrations, "
+            "then advanced orchestration')."
+        ),
+    )
+
+
+# =============================================================================
 # Adaptive Grader — 8-dimensional evaluation (inside the Self-Refine loop)
 # =============================================================================
 class Issue(BaseModel):

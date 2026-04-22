@@ -207,6 +207,91 @@ CHAPTER_REDUCE_PROMPT = ChatPromptTemplate.from_messages([
 
 
 # =============================================================================
+# Clio-pattern REDUCE — meta-cluster labeler (2026-04-22)
+# =============================================================================
+# Replaces the single-shot CHAPTER_REDUCE_PROMPT for large corpora (>~80
+# micro-clusters). Architecture (Anthropic Clio, arxiv 2412.13678):
+#   1. MAP (unchanged): N shard-labelers emit ~300 micro-clusters
+#   2. Embed each micro-cluster's (name + description) with a local model
+#   3. k-means groups the ~300 vectors into M meta-clusters (M ∈ [4,12]
+#      picked by silhouette score)
+#   4. For EACH meta-cluster, this prompt emits one chapter's title + goal
+#      (assigned_files is computed deterministically as the union of the
+#      member micro-clusters' file_slugs — no LLM needed for that).
+#   5. A separate ordering call (ORDER_PROMPT) sequences the M chapters.
+#
+# Why the split: the single-shot REDUCE call reliably hits NIM's 300s
+# gateway timeout and Groq's 12K TPM cap at 300 clusters. Each META_LABEL
+# call sees ~30 micro-clusters (~3K tokens) — safely under every constraint.
+META_LABEL_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are the Chapter Labeler. You see N micro-clusters that share "
+        "a theme (grouped by semantic similarity of their name + description). "
+        "Your job: emit ONE chapter for this meta-cluster — a concrete title "
+        "and a one-sentence goal.\n\n"
+        "Rules:\n"
+        "1. title: 2-6 words. Describe what the chapter covers (the "
+        "   intersection of the input clusters' topics). Examples: "
+        "   'State Management & Reducers', 'Streaming & Async Runtimes', "
+        "   'Agent Middleware'. AVOID generic titles like 'Overview' or "
+        "   'Miscellaneous'.\n"
+        "2. goal: one sentence, ≤200 chars. What the reader gains from "
+        "   this chapter (not what it contains). Start with a verb: "
+        "   'Understand...', 'Learn to...', 'Build...'.\n"
+        "3. You do NOT assign file_slugs — they're computed automatically "
+        "   as the union of the input micro-clusters. Do not enumerate them.\n"
+        "4. You do NOT pick chapter number — the ordering pass does that.\n"
+        "5. If the micro-clusters seem incoherent (a stray noise cluster "
+        "   that k-means grouped incorrectly), still emit the best title "
+        "   you can. The critic will flag it downstream."
+    ),
+    (
+        "human",
+        "Framework: {framework}\n\n"
+        "Meta-cluster ID: {meta_id}\n"
+        "Member micro-clusters ({n_members}):\n"
+        "{member_lines}\n\n"
+        "Emit the chapter title + goal."
+    ),
+])
+
+
+# =============================================================================
+# Clio-pattern REDUCE — chapter ordering pass
+# =============================================================================
+# Single small call that receives M chapter (title, goal) pairs and returns
+# the reading order as a list of indices. ~2K tokens — safe on every model.
+# Prerequisites-first pedagogy: foundations before integrations/advanced.
+ORDER_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are the Reading-Order Planner. You see M unordered chapter "
+        "drafts for a framework's study material. Your job: return the "
+        "best reading order as a list of 0-indexed chapter indices.\n\n"
+        "Rules:\n"
+        "1. Foundations first (setup, core concepts, state primitives), "
+        "   then integrations (external services, middleware), then "
+        "   advanced (custom runtime, orchestration, internals).\n"
+        "2. A reader should NEVER hit a concept before its prerequisite. "
+        "   Cross-chapter prerequisites dominate over topical grouping.\n"
+        "3. Emit EXACTLY M indices, one permutation of 0..M-1. No repeats. "
+        "   No missing indices.\n"
+        "4. rationale: one sentence explaining the spine of the ordering.\n"
+        "5. If two chapters are truly parallel (no prerequisite between "
+        "   them), place the simpler one first."
+    ),
+    (
+        "human",
+        "Framework: {framework}\n\n"
+        "Chapter drafts (index: title — goal):\n"
+        "{chapter_lines}\n\n"
+        "Return the reading order."
+    ),
+])
+
+
+# =============================================================================
 # Synthesizer — generates the chapter README + challenges + flashcards
 # =============================================================================
 SYNTHESIZER_PROMPT = ChatPromptTemplate.from_messages([
