@@ -477,7 +477,17 @@ class KnowledgeDistillerGraph:
                 )
             shard_unused_all.extend(sr.unused_shard_slugs)
         cluster_summary_text = "\n".join(cluster_lines)
-        all_slugs_text = "\n".join(slug for slug, _ in entries)
+        # NOTE (2026-04-22): the previous version also interpolated an
+        # `all_slugs` block listing every one of the corpus's ~4000 slug
+        # strings as a coverage reference. That ballooned the REDUCE prompt
+        # to ~75K tokens of slug-names alone, pushing NIM into 5-min
+        # Gateway Timeouts and Groq into 413 Payload Too Large. The
+        # coverage invariant is already enforced deterministically by
+        # `_validate_plan` + the coverage-repair step below (auto-parks
+        # forgotten slugs into unused_files), so it's safe — and far
+        # cheaper — to drop the all_slugs block from the prompt. The LLM
+        # sees every assigned slug in context of its cluster anyway
+        # (`cluster_summary` inlines the first few file_slugs per cluster).
         shard_unused_text = (
             "\n".join(f"- {s}" for s in shard_unused_all)
             if shard_unused_all else "(none — reducer may still add more)"
@@ -491,7 +501,6 @@ class KnowledgeDistillerGraph:
                 "shard_count": len(shards),
                 "cluster_summary": cluster_summary_text,
                 "shard_unused": shard_unused_text,
-                "all_slugs": all_slugs_text,
             })
         except Exception as e:
             raise RuntimeError(f"Planner REDUCE call failed: {e}") from e

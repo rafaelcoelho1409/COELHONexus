@@ -93,20 +93,28 @@ class MinIOStudyStorage:
         # Session is safe to share across tasks; clients are opened per-operation.
         self._session = aioboto3.Session()
         # signature_version=s3v4 is REQUIRED for MinIO (default v2 won't work).
-        # max_pool_connections bumped from botocore's default 10 — the Tier 1
-        # planner splitter fires up to ~8 concurrent put_object calls per
-        # client; leaving the default would starve the pool under load and
-        # surface as IncompleteBody errors. 32 gives headroom for future
-        # bumps without tuning here again.
+        # max_pool_connections bumped from botocore's default 10 so the
+        # concurrent `put_object` calls in `write_many` have pool headroom.
+        # connect_timeout and read_timeout are CRITICAL: without them,
+        # aioboto3/aiobotocore-backed put_object calls can hang silently at
+        # the aiohttp layer under concurrent load (documented class of bug,
+        # aio-libs/aiobotocore#738 and #451, closed without upstream fix).
+        # 10s connect / 30s read is generous for the 2-10 KB sections we
+        # write while catching any socket-level stalls quickly.
         self._boto_config = Config(
             signature_version = "s3v4",
             max_pool_connections = 32,
+            connect_timeout = 10,
+            read_timeout = 30,
             # Built-in retry for the occasional transient 5xx / timeout.
-            # `put_object` failures that aioboto3 surfaces as IncompleteBody
-            # are NOT automatically retried by this mode (the SDK only
-            # retries request-level errors, not body-upload races) — the
-            # write() wrapper below handles those explicitly.
-            retries = {"max_attempts": 3, "mode": "standard"},
+            # Bumped from 3 to 10 per the community recommendation for
+            # 16+ concurrent requests (Stitching this with the chunk-level
+            # retry in write_many/read_many gives belt-and-suspenders recovery:
+            # botocore retries transient HTTP errors on a live session;
+            # write_many retries chunks with a FRESH session when a
+            # whole-chunk timeout fires, covering the silent-hang case
+            # that botocore's timer-based retries can't catch.)
+            retries = {"max_attempts": 10, "mode": "standard"},
         )
 
     def _client(self):
@@ -226,113 +234,181 @@ class MinIOStudyStorage:
         self,
         items: "list[tuple[str, str | bytes, ContentType]]",
         max_concurrent: int = 16,
-        chunk_size: int = 256) -> list[int]:
+        chunk_size: int = 256,
+        chunk_timeout_s: float = 60.0,
+        max_chunk_retries: int = 3) -> list[int]:
         """
-        Write many objects in parallel, in chunks, each chunk opening its own
-        aioboto3 client context. Returns bytes-written counts in input order.
+        Write many objects in parallel, in chunks, with:
+          - A fresh aioboto3 client per chunk attempt (isolates session state).
+          - `asyncio.wait_for` around each chunk to catch silent hangs that
+            botocore's retry layer can't detect (aio-libs/aiobotocore#738).
+          - Chunk-level retry-with-fresh-client when a chunk times out or
+            returns a transient ClientError. The per-chunk timeout is the
+            only escape hatch from a stalled aiohttp socket that never
+            receives a response.
+          - `BoundedSemaphore` limit tied to the botocore pool size (the
+            pattern recommended by aiobotocore community discussions for
+            avoiding pool starvation under concurrent put_object load).
 
-        Two-level strategy tuned 2026-04-22 after several iterations:
+        Returns bytes-written counts in input order.
 
-        1. Chunks of ~256 amortize the TLS + SigV4 handshake cost across
-           hundreds of PUTs per handshake (vs one handshake per PUT, which
-           capped throughput at 0.8 files/sec).
-        2. Fresh client PER CHUNK isolates aioboto3 session state from any
-           IncompleteBody-induced corruption in a prior chunk. A single
-           shared client across 3700+ PUTs was observed to wedge silently
-           after a burst of IncompleteBody retries — the retries absorbed
-           the errors but the shared aiohttp session stayed in a bad state
-           for all subsequent requests. Re-opening per chunk gives the
-           session a clean slate every 256 files.
-        3. Concurrency 16 inside each chunk is empirically below the
-           IncompleteBody threshold for real-world body sizes (2-50 KB).
-           Benchmark said 32 was safe for 2KB bodies but live traffic
-           triggers the race on larger sections. The transient retry below
-           remains as defense-in-depth; it almost never fires at 16.
-
-        Expected throughput: ~50-60 files/sec steady-state on ~10 KB sections
-        over Tailscale-backed MinIO, so a 3700-file Tier 1 splitter batch
-        completes in roughly 60-90 seconds.
+        Parameters
+        ----------
+        max_concurrent   : in-flight PUTs per chunk (cap at max_pool_connections)
+        chunk_size       : items per chunk (one fresh client per chunk attempt)
+        chunk_timeout_s  : seconds allowed per chunk attempt before escalating
+                           to a fresh-client retry. 60s covers the slowest
+                           observed healthy chunk (20s) with 3x headroom.
+        max_chunk_retries: attempts per chunk; 3 = 1 try + 2 retries with
+                           fresh client, 1s/2s backoff between.
         """
         if not items:
             return []
         results: list[int] = []
         for start in range(0, len(items), chunk_size):
             chunk = items[start : start + chunk_size]
-            sem = asyncio.Semaphore(max_concurrent)
-            async with self._client() as s3:
-                async def _put_one(
-                    key: str, content: str | bytes, content_type: ContentType,
-                ) -> int:
-                    body = content.encode("utf-8") if isinstance(content, str) else content
-                    last_err: Exception | None = None
-                    for attempt in range(3):
-                        try:
-                            async with sem:
-                                await s3.put_object(
-                                    Bucket = self.bucket,
-                                    Key = key,
-                                    Body = body,
-                                    ContentType = content_type,
-                                )
-                            return len(body)
-                        except ClientError as e:
-                            code = (e.response or {}).get("Error", {}).get("Code", "")
-                            transient = code in (
-                                "IncompleteBody",
-                                "RequestTimeout",
-                                "InternalError",
-                                "ServiceUnavailable",
-                                "SlowDown",
-                            )
-                            if not transient or attempt == 2:
-                                raise
-                            last_err = e
-                            await asyncio.sleep(0.3 * (3 ** attempt))
-                            logger.info(
-                                f"[storage] write_many {key!r} transient {code} "
-                                f"(attempt {attempt+1}/3); retrying"
-                            )
-                    if last_err is not None:
-                        raise last_err
-                    return len(body)
-
-                chunk_results = await asyncio.gather(
-                    *(_put_one(k, c, ct) for k, c, ct in chunk)
+            chunk_end = start + len(chunk)
+            last_err: Exception | None = None
+            for attempt in range(max_chunk_retries):
+                try:
+                    chunk_results = await asyncio.wait_for(
+                        self._write_chunk(chunk, max_concurrent),
+                        timeout = chunk_timeout_s,
+                    )
+                    results.extend(chunk_results)
+                    break   # chunk succeeded
+                except asyncio.TimeoutError as e:
+                    last_err = e
+                    logger.warning(
+                        f"[storage] write_many chunk [{start}:{chunk_end}) "
+                        f"attempt {attempt+1}/{max_chunk_retries} TIMED OUT "
+                        f"after {chunk_timeout_s}s — retrying with fresh client"
+                    )
+                except ClientError as e:
+                    code = (e.response or {}).get("Error", {}).get("Code", "")
+                    transient = code in (
+                        "IncompleteBody", "RequestTimeout", "InternalError",
+                        "ServiceUnavailable", "SlowDown",
+                    )
+                    if not transient:
+                        raise
+                    last_err = e
+                    logger.warning(
+                        f"[storage] write_many chunk [{start}:{chunk_end}) "
+                        f"attempt {attempt+1}/{max_chunk_retries} transient "
+                        f"{code} — retrying with fresh client"
+                    )
+                if attempt < max_chunk_retries - 1:
+                    await asyncio.sleep(1.0 * (2 ** attempt))   # 1s, 2s
+            else:
+                # All attempts exhausted
+                raise RuntimeError(
+                    f"write_many chunk [{start}:{chunk_end}) failed after "
+                    f"{max_chunk_retries} attempts; last error: "
+                    f"{type(last_err).__name__}: {last_err}"
                 )
-            results.extend(chunk_results)
         return results
+
+    async def _write_chunk(
+        self,
+        chunk: "list[tuple[str, str | bytes, ContentType]]",
+        max_concurrent: int) -> list[int]:
+        """
+        Write one chunk through a single fresh aioboto3 client. Raised
+        exceptions and timeouts are handled by the caller (write_many).
+        """
+        sem = asyncio.BoundedSemaphore(max_concurrent)
+        async with self._client() as s3:
+            async def _put_one(
+                key: str, content: str | bytes, content_type: ContentType,
+            ) -> int:
+                body = content.encode("utf-8") if isinstance(content, str) else content
+                async with sem:
+                    await s3.put_object(
+                        Bucket = self.bucket,
+                        Key = key,
+                        Body = body,
+                        ContentType = content_type,
+                    )
+                return len(body)
+            return await asyncio.gather(
+                *(_put_one(k, c, ct) for k, c, ct in chunk)
+            )
 
     async def read_many(
         self,
         keys: list[str],
         max_concurrent: int = 16,
         chunk_size: int = 256,
+        chunk_timeout_s: float = 60.0,
+        max_chunk_retries: int = 3,
         encoding: str = "utf-8") -> list[str]:
         """
-        Read many objects in parallel, in chunks, each chunk opening its own
-        aioboto3 client context. Returns decoded text bodies in input order.
-        Same chunk/client/concurrency strategy as `write_many` — see that
-        method's docstring for the rationale.
+        Read many objects in parallel, in chunks. Same chunk / fresh-client /
+        timeout / retry strategy as `write_many` — see that method's
+        docstring for the rationale.
         """
         if not keys:
             return []
         results: list[str] = []
         for start in range(0, len(keys), chunk_size):
             chunk = keys[start : start + chunk_size]
-            sem = asyncio.Semaphore(max_concurrent)
-            async with self._client() as s3:
-                async def _get_one(key: str) -> str:
-                    async with sem:
-                        resp = await s3.get_object(Bucket = self.bucket, Key = key)
-                        async with resp["Body"] as stream:
-                            data = await stream.read()
-                    return data.decode(encoding)
-
-                chunk_results = await asyncio.gather(
-                    *(_get_one(k) for k in chunk)
+            chunk_end = start + len(chunk)
+            last_err: Exception | None = None
+            for attempt in range(max_chunk_retries):
+                try:
+                    chunk_results = await asyncio.wait_for(
+                        self._read_chunk(chunk, max_concurrent, encoding),
+                        timeout = chunk_timeout_s,
+                    )
+                    results.extend(chunk_results)
+                    break
+                except asyncio.TimeoutError as e:
+                    last_err = e
+                    logger.warning(
+                        f"[storage] read_many chunk [{start}:{chunk_end}) "
+                        f"attempt {attempt+1}/{max_chunk_retries} TIMED OUT "
+                        f"after {chunk_timeout_s}s — retrying with fresh client"
+                    )
+                except ClientError as e:
+                    code = (e.response or {}).get("Error", {}).get("Code", "")
+                    transient = code in (
+                        "RequestTimeout", "InternalError",
+                        "ServiceUnavailable", "SlowDown",
+                    )
+                    if not transient:
+                        raise
+                    last_err = e
+                    logger.warning(
+                        f"[storage] read_many chunk [{start}:{chunk_end}) "
+                        f"attempt {attempt+1}/{max_chunk_retries} transient "
+                        f"{code} — retrying with fresh client"
+                    )
+                if attempt < max_chunk_retries - 1:
+                    await asyncio.sleep(1.0 * (2 ** attempt))
+            else:
+                raise RuntimeError(
+                    f"read_many chunk [{start}:{chunk_end}) failed after "
+                    f"{max_chunk_retries} attempts; last error: "
+                    f"{type(last_err).__name__}: {last_err}"
                 )
-            results.extend(chunk_results)
         return results
+
+    async def _read_chunk(
+        self,
+        chunk: list[str],
+        max_concurrent: int,
+        encoding: str) -> list[str]:
+        """One chunk through a fresh aioboto3 client — see write_many above."""
+        sem = asyncio.BoundedSemaphore(max_concurrent)
+        async with self._client() as s3:
+            async def _get_one(key: str) -> str:
+                async with sem:
+                    resp = await s3.get_object(Bucket = self.bucket, Key = key)
+                    async with resp["Body"] as stream:
+                        data = await stream.read()
+                return data.decode(encoding)
+            return await asyncio.gather(*(_get_one(k) for k in chunk))
 
     async def list(self, prefix: str) -> list[str]:
         """
