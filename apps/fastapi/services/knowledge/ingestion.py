@@ -389,11 +389,27 @@ async def ingest_framework_docs(
                 f"falling back to Tier 4 Playwright"
             )
 
-    # Tier 2/3 branches: stubbed. Same graceful fallthrough to Tier 4.
-    if cfg.tier in (2, 3):
+    # Tier 3 — sitemap.xml parallel httpx fast path. Resolver D-probe already
+    # content-validated the sitemap; Tier 3 expands it, filters to docs
+    # subtree, parallel-fetches pages, and extracts markdown via
+    # rs-trafilatura (F1 0.859-0.966 on docs). ~2-5 min for 100-500 pages
+    # vs ~20 min Tier 4 Playwright.
+    if cfg.tier == 3:
+        logger.info(f"[ingest] dispatcher → Tier 3 (sitemap httpx) for {cfg.framework!r}")
+        try:
+            from services.knowledge.sitemap_ingest import ingest_sitemap_httpx
+            return await ingest_sitemap_httpx(cfg, storage)
+        except Exception as e:
+            logger.warning(
+                f"[ingest] Tier 3 failed for {cfg.framework!r} ({e}); "
+                f"falling back to Tier 4 Playwright"
+            )
+
+    # Tier 2 branch: stubbed. Same graceful fallthrough to Tier 4.
+    if cfg.tier == 2:
         logger.info(
-            f"[ingest] dispatcher → Tier {cfg.tier} requested for "
-            f"{cfg.framework!r}; not yet implemented, falling back to Tier 4"
+            f"[ingest] dispatcher → Tier 2 requested for {cfg.framework!r}; "
+            f"not yet implemented, falling back to Tier 4"
         )
 
     # Default path: Tier 4 (Crawl4AI Playwright). Handles cfg.tier == 4
