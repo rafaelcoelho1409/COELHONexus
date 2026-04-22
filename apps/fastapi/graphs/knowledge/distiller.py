@@ -172,6 +172,10 @@ class KnowledgeDistillerGraph:
             docs_url = docs_url,
             language = state.get("language"),
             study_root = study_root,
+            # study_id enables per-page progress reporting to Redis via
+            # IngestProgress → /studies/{id}/stream SSE events. None on
+            # legacy graph invocations that didn't carry it.
+            study_id = state.get("study_id"),
             # Forward resolver hints — dispatcher in ingestion.py uses
             # these to pick the right tier; None values fall through to
             # Tier 4 (Crawl4AI Playwright) for backward compat.

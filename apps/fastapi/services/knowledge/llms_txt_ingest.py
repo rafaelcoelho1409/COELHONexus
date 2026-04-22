@@ -51,6 +51,7 @@ from schemas.knowledge.ingestion import (
     IngestResult,
     ManifestEntry,
 )
+from services.knowledge.ingest_progress import IngestProgress
 from services.knowledge.ingestion import (
     _build_language_filter,
     _is_polyglot_framework,
@@ -347,21 +348,29 @@ async def ingest_llms_txt(
         # -----------------------------------------------------------------
         # Step 3 — Parallel fetch + extract + write
         # -----------------------------------------------------------------
+        progress = IngestProgress(cfg.study_id)
+        await progress.start(tier = "llms_txt", total = len(filtered))
+
         sem = asyncio.Semaphore(_MAX_CONCURRENT)
         failures: list[tuple[str, str]] = []
         manifest: list[ManifestEntry] = []
         total_bytes = 0
+        completed = 0
 
         async def _one(url: str) -> None:
-            nonlocal total_bytes
+            nonlocal total_bytes, completed
             async with sem:
                 try:
                     r = await _fetch(client, url)
                 except Exception as e:
                     failures.append((url, f"{type(e).__name__}: {e}"))
+                    completed += 1
+                    await progress.update(completed, f"(failed) {url}")
                     return
                 if r.status_code != 200:
                     failures.append((url, f"HTTP {r.status_code}"))
+                    completed += 1
+                    await progress.update(completed, f"(failed) {url}")
                     return
                 body = r.text
                 if _looks_like_markdown(url):
@@ -370,6 +379,8 @@ async def ingest_llms_txt(
                     content = _html_to_markdown(body, url)
                 if not content:
                     failures.append((url, "empty / unparseable content"))
+                    completed += 1
+                    await progress.update(completed, f"(failed) {url}")
                     return
                 slug = _slugify(url)
                 entry = await _write_raw(
@@ -384,8 +395,14 @@ async def ingest_llms_txt(
                 if entry is not None:
                     manifest.append(entry)
                     total_bytes += entry.bytes
+                completed += 1
+                await progress.update(completed, url)
 
-        await asyncio.gather(*(_one(u) for u in filtered))
+        try:
+            await asyncio.gather(*(_one(u) for u in filtered))
+        finally:
+            await progress.finish(status = "done" if manifest else "failed")
+            await progress.close()
 
     # -----------------------------------------------------------------
     # Step 4 — Result + partial-failure check

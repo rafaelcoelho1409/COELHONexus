@@ -56,6 +56,7 @@ from schemas.knowledge.ingestion import (
     IngestResult,
     ManifestEntry,
 )
+from services.knowledge.ingest_progress import IngestProgress
 from services.knowledge.ingestion import (
     _build_language_filter,
     _is_polyglot_framework,
@@ -338,25 +339,35 @@ async def ingest_sitemap_httpx(
         # -----------------------------------------------------------------
         # Step 3 — Parallel page fetch + extract + write
         # -----------------------------------------------------------------
+        progress = IngestProgress(cfg.study_id)
+        await progress.start(tier = "sitemap", total = len(filtered))
+
         sem = asyncio.Semaphore(_MAX_CONCURRENT)
         failures: list[tuple[str, str]] = []
         manifest: list[ManifestEntry] = []
         total_bytes = 0
+        completed = 0
 
         async def _one(url: str) -> None:
-            nonlocal total_bytes
+            nonlocal total_bytes, completed
             async with sem:
                 try:
                     resp = await _fetch_text(client, url)
                 except Exception as e:
                     failures.append((url, f"{type(e).__name__}: {e}"))
+                    completed += 1
+                    await progress.update(completed, f"(failed) {url}")
                     return
                 if resp.status_code != 200:
                     failures.append((url, f"HTTP {resp.status_code}"))
+                    completed += 1
+                    await progress.update(completed, f"(failed) {url}")
                     return
                 md = _extract_markdown(resp.text, url)
                 if not md:
                     failures.append((url, "empty extraction"))
+                    completed += 1
+                    await progress.update(completed, f"(failed) {url}")
                     return
                 slug = _slugify(url)
                 entry = await _write_raw(
@@ -371,8 +382,14 @@ async def ingest_sitemap_httpx(
                 if entry is not None:
                     manifest.append(entry)
                     total_bytes += entry.bytes
+                completed += 1
+                await progress.update(completed, url)
 
-        await asyncio.gather(*(_one(u) for u in filtered))
+        try:
+            await asyncio.gather(*(_one(u) for u in filtered))
+        finally:
+            await progress.finish(status = "done" if manifest else "failed")
+            await progress.close()
 
     # -----------------------------------------------------------------
     # Step 4 — Result + partial-failure check

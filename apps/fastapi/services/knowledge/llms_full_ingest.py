@@ -44,6 +44,7 @@ from schemas.knowledge.ingestion import (
     IngestResult,
     ManifestEntry,
 )
+from services.knowledge.ingest_progress import IngestProgress
 from services.knowledge.ingestion import _write_raw
 from services.knowledge.storage import MinIOStudyStorage
 
@@ -102,61 +103,66 @@ async def ingest_llms_full_txt(
         f"candidates={candidates}"
     )
 
+    progress = IngestProgress(cfg.study_id)
+    await progress.start(tier = "llms_full_txt", total = 1)
     last_error: str | None = None
-    async with httpx.AsyncClient(
-        timeout = httpx.Timeout(_HTTP_TIMEOUT, connect = 10.0),
-        follow_redirects = True,
-    ) as client:
-        for url in candidates:
-            try:
-                resp = await _fetch(client, url)
-            except Exception as e:
-                last_error = f"{type(e).__name__}: {e}"
-                logger.info(f"[tier-1] {url} failed: {last_error}")
-                continue
-            if resp.status_code != 200:
-                last_error = f"HTTP {resp.status_code}"
-                logger.info(f"[tier-1] {url} → {last_error}")
-                continue
-            body = resp.text
-            if len(body) < _MIN_OK_BYTES:
-                last_error = f"body too short ({len(body)} bytes)"
-                logger.info(f"[tier-1] {url} → {last_error}")
-                continue
-            # Success — write single file
-            slug = _derive_slug(host)
-            entry = await _write_raw(
-                storage = storage,
-                study_root = cfg.study_root,
-                slug = slug,
-                content = body,
-                url = url,
-                tier = "llms_full_txt",
-                cfg = cfg,
-            )
-            if entry is None:
-                # Content-quality gate rejected it — extremely rare at this
-                # point because the resolver already validated the body.
-                last_error = "failed content-quality gate"
-                logger.warning(f"[tier-1] {url} → {last_error}")
-                continue
-            logger.info(
-                f"[tier-1] OK — 1 file, {entry.bytes} bytes "
-                f"(source={url})"
-            )
-            return IngestResult(
-                tier_used = "llms_full_txt",
-                total_files = 1,
-                total_bytes = entry.bytes,
-                manifest = [entry],
-                skipped_urls = [],
-            )
-
-    raise RuntimeError(
-        f"Tier 1 exhausted candidates for {cfg.framework!r}: "
-        f"tried {candidates}, last error: {last_error}. "
-        f"Dispatcher will fall back to Tier 4."
-    )
+    try:
+        async with httpx.AsyncClient(
+            timeout = httpx.Timeout(_HTTP_TIMEOUT, connect = 10.0),
+            follow_redirects = True,
+        ) as client:
+            for url in candidates:
+                try:
+                    resp = await _fetch(client, url)
+                except Exception as e:
+                    last_error = f"{type(e).__name__}: {e}"
+                    logger.info(f"[tier-1] {url} failed: {last_error}")
+                    continue
+                if resp.status_code != 200:
+                    last_error = f"HTTP {resp.status_code}"
+                    logger.info(f"[tier-1] {url} → {last_error}")
+                    continue
+                body = resp.text
+                if len(body) < _MIN_OK_BYTES:
+                    last_error = f"body too short ({len(body)} bytes)"
+                    logger.info(f"[tier-1] {url} → {last_error}")
+                    continue
+                # Success — write single file
+                slug = _derive_slug(host)
+                entry = await _write_raw(
+                    storage = storage,
+                    study_root = cfg.study_root,
+                    slug = slug,
+                    content = body,
+                    url = url,
+                    tier = "llms_full_txt",
+                    cfg = cfg,
+                )
+                if entry is None:
+                    last_error = "failed content-quality gate"
+                    logger.warning(f"[tier-1] {url} → {last_error}")
+                    continue
+                await progress.update(current = 1, last_url = url)
+                logger.info(
+                    f"[tier-1] OK — 1 file, {entry.bytes} bytes "
+                    f"(source={url})"
+                )
+                await progress.finish(status = "done")
+                return IngestResult(
+                    tier_used = "llms_full_txt",
+                    total_files = 1,
+                    total_bytes = entry.bytes,
+                    manifest = [entry],
+                    skipped_urls = [],
+                )
+        await progress.finish(status = "failed")
+        raise RuntimeError(
+            f"Tier 1 exhausted candidates for {cfg.framework!r}: "
+            f"tried {candidates}, last error: {last_error}. "
+            f"Dispatcher will fall back to Tier 4."
+        )
+    finally:
+        await progress.close()
 
 
 def _derive_slug(host: str) -> str:

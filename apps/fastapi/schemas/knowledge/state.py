@@ -65,6 +65,7 @@ class KnowledgeDistillerState(TypedDict):
     Persisted via AsyncPostgresSaver after every node so runs survive restarts.
     """
     # -- Input (set at dispatch time) --
+    study_id: Optional[str]         # UUID of this study — threads into DocsIngestionConfig for IngestProgress → Redis (used by /stream SSE). None on legacy graph invocations.
     framework: str
     version: Optional[str]
     docs_url: Optional[str]

@@ -204,6 +204,10 @@ def run_knowledge_distiller(
             )
 
             initial_state = {
+                # study_id threads into DocsIngestionConfig → IngestProgress
+                # so tier functions can emit SSE-friendly progress events to
+                # Redis (consumed by /studies/{id}/stream).
+                "study_id": study_id,
                 "framework": framework,
                 "version": version,
                 "docs_url": docs_url,

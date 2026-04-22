@@ -58,6 +58,7 @@ from schemas.knowledge.ingestion import (
     IngestResult,
     ManifestEntry,
 )
+from services.knowledge.ingest_progress import IngestProgress
 from services.knowledge.ingestion import _write_raw
 from services.knowledge.storage import MinIOStudyStorage
 
@@ -318,21 +319,30 @@ async def ingest_github_tree(
         # -----------------------------------------------------------------
         # Step 2 — parallel raw fetches with a semaphore cap
         # -----------------------------------------------------------------
+        progress = IngestProgress(cfg.study_id)
+        await progress.start(tier = "github_readme_only", total = len(md_paths))
+
         sem = asyncio.Semaphore(_MAX_CONCURRENT)
         failures: list[tuple[str, str]] = []  # [(path, reason), ...]
         manifest: list[ManifestEntry] = []
         total_bytes = 0
+        # Shared counter — atomic enough for single-threaded asyncio.
+        completed = 0
 
         async def _one(path: str) -> None:
-            nonlocal total_bytes
+            nonlocal total_bytes, completed
             async with sem:
                 try:
                     url, body = await _fetch_raw_blob(client, org, repo, branch, path)
                 except httpx.HTTPStatusError as e:
                     failures.append((path, f"HTTP {e.response.status_code}"))
+                    completed += 1
+                    await progress.update(completed, f"(failed) {path}")
                     return
                 except Exception as e:
                     failures.append((path, f"{type(e).__name__}: {e}"))
+                    completed += 1
+                    await progress.update(completed, f"(failed) {path}")
                     return
                 # Decode (best-effort UTF-8 with replacement — rare repos use
                 # legacy encodings but replacement won't lose docs content).
@@ -353,8 +363,14 @@ async def ingest_github_tree(
                 if entry is not None:
                     manifest.append(entry)
                     total_bytes += entry.bytes
+                completed += 1
+                await progress.update(completed, url)
 
-        await asyncio.gather(*(_one(p) for p in md_paths))
+        try:
+            await asyncio.gather(*(_one(p) for p in md_paths))
+        finally:
+            await progress.finish(status = "done" if manifest else "failed")
+            await progress.close()
 
     # -----------------------------------------------------------------
     # Step 3 — result + partial-failure check

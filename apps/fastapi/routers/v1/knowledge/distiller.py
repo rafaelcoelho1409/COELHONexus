@@ -430,11 +430,16 @@ async def stream_study(
     Server-Sent Events stream of task progress.
 
     Implementation note: the Celery task lives in a separate worker process.
-    Instead of setting up Redis pub/sub, we poll AsyncResult.info every 1s
-    — cheap, stateless, and reuses Celery's existing Redis-backed state store.
+    Instead of setting up Redis pub/sub, we poll two sources every 1s:
+      1. Celery AsyncResult.info — top-level phase (ingest/plan/synthesize/…)
+      2. Redis key `coelhonexus:knowledge:ingest_progress:{id}` — per-page
+         progress emitted by the tier functions (Step 8). Lets the client
+         see "47/153 pages fetched" live during long ingest runs.
 
     Event frames:
-        data: {"event": "progress", "task_state": "...", "progress": {...}}\\n\\n
+        data: {"event": "progress", "task_state": "...",
+               "progress": {...celery meta...},
+               "ingest_progress": {tier, current, total, last_url, status}}\\n\\n
         data: {"event": "success",  "result": {...}}\\n\\n
         data: {"event": "failure",  "error":  "..."}\\n\\n
         data: {"event": "end"}\\n\\n
@@ -445,8 +450,11 @@ async def stream_study(
     if not record:
         raise HTTPException(status_code = 404, detail = "Study not found")
 
+    from services.knowledge.ingest_progress import read_progress
+
     async def event_generator():
         last_progress: dict | None = None
+        last_ingest_progress: dict | None = None
         # emit an initial frame so the client has context immediately
         yield f"data: {json.dumps({'event': 'study', 'study': record})}\n\n"
         while True:
@@ -456,6 +464,9 @@ async def stream_study(
                 return
             snap = _celery_snapshot(study_id)
             state = snap["task_state"]
+            ingest_progress = await read_progress(
+                request.app.state.redis_aio, study_id,
+            )
             if state == "SUCCESS":
                 yield f"data: {json.dumps({'event': 'success', 'result': snap['result']})}\n\n"
                 yield f"data: {json.dumps({'event': 'end'})}\n\n"
@@ -464,11 +475,22 @@ async def stream_study(
                 yield f"data: {json.dumps({'event': 'failure', 'error': snap['error']})}\n\n"
                 yield f"data: {json.dumps({'event': 'end'})}\n\n"
                 return
-            # PROGRESS / STARTED / PENDING — only emit when meta changes
+            # PROGRESS / STARTED / PENDING — emit when EITHER the Celery meta
+            # or the ingest per-page counter has moved.
             progress = snap.get("progress")
-            if progress != last_progress:
-                yield f"data: {json.dumps({'event': 'progress', 'task_state': state, 'progress': progress})}\n\n"
+            if progress != last_progress or ingest_progress != last_ingest_progress:
+                yield (
+                    "data: "
+                    + json.dumps({
+                        "event": "progress",
+                        "task_state": state,
+                        "progress": progress,
+                        "ingest_progress": ingest_progress,
+                    })
+                    + "\n\n"
+                )
                 last_progress = progress
+                last_ingest_progress = ingest_progress
             await asyncio.sleep(1.0)
 
     return StreamingResponse(
