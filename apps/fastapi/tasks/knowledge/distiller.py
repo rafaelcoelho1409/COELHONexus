@@ -83,6 +83,14 @@ def run_knowledge_distiller(
     user_profile: dict | None = None,
     study_root: str | None = None,
     max_concurrent_chapters: int = 5,
+    # Resolver hints (all optional; forwarded by the /studies router when
+    # the call originates from a prior /resolve — None on legacy paths)
+    tier: int | None = None,
+    github_discover: str | None = None,
+    github_org: str | None = None,
+    github_repo: str | None = None,
+    github_default_branch: str | None = None,
+    repo_url: str | None = None,
 ) -> dict:
     """
     Run the full Knowledge Distiller pipeline for one framework.
@@ -203,6 +211,14 @@ def run_knowledge_distiller(
                 "user_id": user_id,
                 "user_profile": UserProfile(**user_profile),
                 "study_root": study_root,
+                # Resolver hints — forwarded to the ingest node so the
+                # dispatcher can pick the right tier without re-probing.
+                "tier": tier,
+                "github_discover": github_discover,
+                "github_org": github_org,
+                "github_repo": github_repo,
+                "github_default_branch": github_default_branch,
+                "repo_url": repo_url,
                 "current_phase": "ingest",
                 "ingest_tier_used": "none",
                 "raw_files": [],

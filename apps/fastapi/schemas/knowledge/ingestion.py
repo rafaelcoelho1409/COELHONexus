@@ -14,10 +14,16 @@ from schemas.knowledge.inputs import NonEmptyStr
 # =============================================================================
 # Type aliases
 # =============================================================================
-# Which tier won the ingestion race. Mirrors IngestTier in state.py but
-# excludes "none" — ManifestEntry and IngestResult only exist after a tier
-# actually succeeded.
-IngestTierName = Literal["sitemap", "crawl4ai"]
+# Which tier won the ingestion race. Superset of the crawl4ai + sitemap
+# names used before the tier dispatcher landed — adds llms_full_txt,
+# llms_txt, and github_readme_only for the 2026 tier-aware pipeline.
+IngestTierName = Literal[
+    "llms_full_txt",       # Tier 1 — single HTTP GET of /llms-full.txt
+    "llms_txt",            # Tier 2 — parse llms.txt + parallel .md fetch
+    "sitemap",             # Tier 3 — parse sitemap.xml + httpx parallel fetch
+    "crawl4ai",            # Tier 4 — Crawl4AI + Playwright
+    "github_readme_only",  # Tier-GH — GitHub tree API + raw.githubusercontent.com
+]
 
 
 # =============================================================================
@@ -38,6 +44,24 @@ class DocsIngestionConfig(BaseModel):
     max_link_text_ratio: float = Field(default = 0.55, ge = 0.1, le = 1.0)  # post-filter: drop pages that are >N% anchor text (navigation/index pages)
     extra_allow_patterns: list[NonEmptyStr] = Field(default_factory = list)
     extra_deny_patterns: list[NonEmptyStr] = Field(default_factory = list)
+    # -----------------------------------------------------------------
+    # Resolver hints — forwarded from `ResolvedDocs`. The dispatcher in
+    # services/knowledge/ingestion.py branches on these; legacy callers
+    # that leave them None fall through to Tier 4 (Crawl4AI Playwright),
+    # preserving backward compat with any path that still passes only a
+    # plain `docs_url`.
+    # -----------------------------------------------------------------
+    tier: Optional[Literal[1, 2, 3, 4]] = Field(
+        default = None,
+        description = "Resolver tier classification (1-4). None → Tier 4 default.",
+    )
+    github_discover: Optional[Literal["homepage", "pages", "readme_only", "api_unavailable", "no_repo_in_path"]] = Field(
+        default = None,
+        description = "Resolver's GitHub discovery outcome. 'readme_only' triggers Tier-GH.",
+    )
+    github_org: Optional[NonEmptyStr] = None
+    github_repo: Optional[NonEmptyStr] = None
+    github_default_branch: Optional[NonEmptyStr] = None
 
 
 class ManifestEntry(BaseModel):

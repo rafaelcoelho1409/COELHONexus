@@ -334,14 +334,60 @@ async def _write_raw(
 
 
 # =============================================================================
-# Public API — Crawl4AI-driven integral ingestion
+# Public API — tier-aware dispatcher
 # =============================================================================
 async def ingest_framework_docs(
     cfg: DocsIngestionConfig,
     storage: MinIOStudyStorage,
     cache = None) -> IngestResult:
     """
-    Single-path ingestion using Crawl4AI v0.8 with Playwright rendering.
+    Route to the right ingestion strategy based on the resolver's tier +
+    GitHub-discovery signals carried on `cfg`. Legacy callers that leave
+    the hint fields None fall through to Tier 4 (Crawl4AI Playwright) so
+    the existing /studies behavior is preserved.
+
+    Strategy table:
+      github_discover == "readme_only"  → Tier-GH  (not implemented yet)
+      tier == 1                         → Tier 1   (not implemented yet)
+      tier == 2                         → Tier 2   (not implemented yet)
+      tier == 3                         → Tier 3   (not implemented yet)
+      tier == 4 | None                  → Tier 4   (existing Crawl4AI path)
+
+    Tier 1/2/3/GH branches will be added in follow-up steps (see
+    docs/KNOWLEDGE-DISTILLER-INGESTION-PIPELINE-PLAN.md). Until each
+    lands, the dispatcher falls through to Tier 4 so the pipeline
+    keeps running on all frameworks.
+    """
+    # Tier-GH short-circuit: github.com readme-only repos have no docs
+    # host to Playwright-crawl; the GitHub API tree + raw.githubusercontent
+    # fetch produces better results in ~5s instead of ~20 min.
+    if cfg.github_discover == "readme_only":
+        logger.info(
+            f"[ingest] dispatcher → Tier-GH (readme_only) for "
+            f"{cfg.framework!r}; not yet implemented, falling back to Tier 4"
+        )
+        # Step 2 of the plan will land `_ingest_github_tree(cfg, storage)` —
+        # until then, fall through to Tier 4 so the pipeline doesn't break.
+
+    # Tier 1/2/3 branches: stubbed. Same graceful fallthrough to Tier 4.
+    if cfg.tier in (1, 2, 3):
+        logger.info(
+            f"[ingest] dispatcher → Tier {cfg.tier} requested for "
+            f"{cfg.framework!r}; not yet implemented, falling back to Tier 4"
+        )
+
+    # Default path: Tier 4 (Crawl4AI Playwright). Handles cfg.tier == 4
+    # explicitly AND any None/stubbed case above. Runs the existing
+    # 700-LoC Crawl4AI block as-is.
+    return await _ingest_crawl4ai(cfg, storage, cache)
+
+
+async def _ingest_crawl4ai(
+    cfg: DocsIngestionConfig,
+    storage: MinIOStudyStorage,
+    cache = None) -> IngestResult:
+    """
+    Tier 4 — Crawl4AI v0.8 with Playwright rendering.
 
     PIPELINE (one HTTP round, no tier fallbacks):
       1. AsyncUrlSeeder discovers URLs from `sitemap.xml` + Common Crawl

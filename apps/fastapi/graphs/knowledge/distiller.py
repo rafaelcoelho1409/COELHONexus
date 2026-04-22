@@ -172,6 +172,14 @@ class KnowledgeDistillerGraph:
             docs_url = docs_url,
             language = state.get("language"),
             study_root = study_root,
+            # Forward resolver hints — dispatcher in ingestion.py uses
+            # these to pick the right tier; None values fall through to
+            # Tier 4 (Crawl4AI Playwright) for backward compat.
+            tier = state.get("tier"),
+            github_discover = state.get("github_discover"),
+            github_org = state.get("github_org"),
+            github_repo = state.get("github_repo"),
+            github_default_branch = state.get("github_default_branch"),
         )
         # Pass cache into ingest so it can (a) skip URLs that a previous
         # attempt already cached (resume), and (b) tee every successful

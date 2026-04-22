@@ -337,6 +337,12 @@ async def create_study(
         "detected_topic": scope.detected_topic,
         "docs_url": payload.docs_url,
         "docs_url_source": "user",
+        "tier": payload.tier,
+        "github_discover": payload.github_discover,
+        "github_org": payload.github_org,
+        "github_repo": payload.github_repo,
+        "github_default_branch": payload.github_default_branch,
+        "repo_url": payload.repo_url,
         "user_profile": payload.user_profile.model_dump(),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -345,7 +351,10 @@ async def create_study(
     await _save_study_record(app.state.redis_aio, study_id, record)
 
     # 5) Enqueue Celery task — task_id == study_id so /studies/{id} can read
-    #    AsyncResult by the same identifier.
+    #    AsyncResult by the same identifier. Forward the resolver's tier +
+    #    GitHub metadata when present so the ingestion dispatcher picks the
+    #    right strategy (Tier 1 / 2 / 3 / 4 / Tier-GH); legacy callers that
+    #    POST without these fields fall through to Tier 4 Playwright.
     from tasks.knowledge.distiller import run_knowledge_distiller
     run_knowledge_distiller.apply_async(
         kwargs = {
@@ -358,12 +367,20 @@ async def create_study(
             "user_profile": payload.user_profile.model_dump(),
             "study_root": study_root,
             "max_concurrent_chapters": max_concurrent_chapters,
+            # Resolver hints (all optional, None by default)
+            "tier": payload.tier,
+            "github_discover": payload.github_discover,
+            "github_org": payload.github_org,
+            "github_repo": payload.github_repo,
+            "github_default_branch": payload.github_default_branch,
+            "repo_url": payload.repo_url,
         },
         task_id = study_id,
     )
     logger.info(
         f"[knowledge] study queued: id={study_id} root={study_root} "
-        f"framework={payload.framework} docs_url={payload.docs_url}"
+        f"framework={payload.framework} docs_url={payload.docs_url} "
+        f"tier={payload.tier} github_discover={payload.github_discover}"
     )
 
     return {

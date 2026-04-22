@@ -87,6 +87,49 @@ class CreateStudyRequest(BaseModel):
     )
     user_profile: UserProfile = Field(default_factory = UserProfile)
 
+    # -----------------------------------------------------------------
+    # Resolver-provided hints (optional) — forwarded to the ingestion
+    # dispatcher so it can pick the right tier strategy instead of
+    # defaulting to Playwright for everything. These come directly from
+    # `POST /studies/resolve` → `ResolvedDocs`. Omit when calling /studies
+    # directly with just a docs_url (legacy path); the dispatcher will
+    # fall through to Tier 4 (Crawl4AI Playwright).
+    # -----------------------------------------------------------------
+    tier: Optional[Literal[1, 2, 3, 4]] = Field(
+        default = None,
+        description = (
+            "Resolver-classified ingestion tier (1-4). Controls which "
+            "strategy the ingestion pipeline runs: 1=llms-full.txt fast "
+            "path, 2=llms.txt parallel fetch, 3=sitemap.xml httpx, "
+            "4=Crawl4AI Playwright. None = fall through to Tier 4."
+        ),
+    )
+    repo_url: Optional[NonEmptyStr] = Field(
+        default = None,
+        description = "Resolver-provided source repo URL (github.com/org/repo), used by Tier-GH."
+    )
+    github_discover: Optional[Literal["homepage", "pages", "readme_only", "api_unavailable", "no_repo_in_path"]] = Field(
+        default = None,
+        description = (
+            "Outcome of the resolver's GitHub repo discovery (when docs_url "
+            "landed on github.com). 'readme_only' triggers the Tier-GH branch "
+            "that fetches raw *.md via the GitHub API instead of Playwright-"
+            "crawling the file tree page."
+        ),
+    )
+    github_org: Optional[NonEmptyStr] = Field(
+        default = None,
+        description = "GitHub org (from `repo_url` / resolver discovery). Used by Tier-GH."
+    )
+    github_repo: Optional[NonEmptyStr] = Field(
+        default = None,
+        description = "GitHub repo name. Used by Tier-GH."
+    )
+    github_default_branch: Optional[NonEmptyStr] = Field(
+        default = None,
+        description = "Default branch reported by the GitHub API. Used by Tier-GH to build raw.githubusercontent.com URLs."
+    )
+
 
 # =============================================================================
 # Export — POST /api/v1/knowledge/studies/{id}/export

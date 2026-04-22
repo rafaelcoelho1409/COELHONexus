@@ -34,9 +34,12 @@ Phase = Literal[
 ]
 
 IngestTier = Literal[
-    "sitemap",        # Tier 3 — standard web sitemap.xml
-    "crawl4ai",       # Tier 4 — BFS deep crawl with keyword scorer
-    "none",           # Not yet attempted
+    "llms_full_txt",        # Tier 1 — single HTTP GET of /llms-full.txt
+    "llms_txt",             # Tier 2 — parse llms.txt + parallel .md fetch
+    "sitemap",              # Tier 3 — standard web sitemap.xml
+    "crawl4ai",             # Tier 4 — BFS deep crawl with keyword scorer
+    "github_readme_only",   # Tier-GH — GitHub tree API + raw.githubusercontent.com
+    "none",                 # Not yet attempted
 ]
 
 
@@ -69,6 +72,16 @@ class KnowledgeDistillerState(TypedDict):
     user_id: str                    # MinIO multi-tenancy key (from CreateStudyRequest.user_id)
     user_profile: UserProfile       # Pydantic model stored inside TypedDict (JSON-serializable)
     study_root: str                 # MinIO object key prefix: "{user_id}/knowledge/{framework}-{version}-{ts}"
+    # -- Resolver hints (set at dispatch time, optional — absent on legacy --
+    # callers that POST to /studies without going through /resolve first). --
+    # The ingest_docs node forwards these into DocsIngestionConfig so the  --
+    # dispatcher picks Tier 1/2/3/4 or Tier-GH without re-probing.         --
+    tier: Optional[int]             # 1, 2, 3, 4 or None (→ Tier 4 default)
+    github_discover: Optional[str]  # "homepage" | "pages" | "readme_only" | None
+    github_org: Optional[str]
+    github_repo: Optional[str]
+    github_default_branch: Optional[str]
+    repo_url: Optional[str]
     # -- Phase tracking --
     current_phase: Phase
     ingest_tier_used: IngestTier
