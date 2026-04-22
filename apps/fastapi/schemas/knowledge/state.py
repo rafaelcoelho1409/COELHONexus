@@ -69,6 +69,14 @@ class KnowledgeDistillerState(TypedDict):
     framework: str
     version: Optional[str]
     docs_url: Optional[str]
+    # Coalesced-group fields. For solo studies, len == 1 and the values mirror
+    # `framework` / `docs_url`. For studies from POST /studies/batch with a
+    # coalesced ResolvedStudy (coalesced_from ≥ 2), these carry the full
+    # member list so the ingester (once updated) can union subtree prefixes
+    # for Tier 2/3/4 fetches. Tier 1 reads only `docs_url` — the monolithic
+    # llms-full.txt is source-of-truth regardless.
+    docs_urls: list[str]            # [docs_url] for solo; [...N...] for coalesced groups
+    canonical_names: list[str]      # [framework] for solo; [name, name, ...] for coalesced groups
     language: Optional[str]         # Programming language scope (from ScopeValidation.language at Step 11)
     user_id: str                    # MinIO multi-tenancy key (from CreateStudyRequest.user_id)
     user_profile: UserProfile       # Pydantic model stored inside TypedDict (JSON-serializable)

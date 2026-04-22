@@ -71,6 +71,18 @@ def _pg_url() -> str:
 @app.task(
     bind = True,
     name = "tasks.knowledge.distiller.run_knowledge_distiller",
+    # acks_late=False: ack the broker message on PICKUP (before task runs),
+    # overriding the celery_app.py global of acks_late=True. Rationale —
+    # the distiller is non-idempotent (UUID generation, MinIO writes, LLM
+    # token spend), user-initiated (a re-POST is a click, not a crisis),
+    # and internally resumable (LangGraph AsyncPostgresSaver keeps every
+    # superstep). Auto-redelivery after worker death on skaffold dev restarts
+    # or rollout cycles was silently re-running abandoned 15-20 min studies
+    # — expensive and user-surprising. With acks_late=False, a mid-run SIGKILL
+    # loses the run instead; the user sees FAILURE or stale PROGRESS and
+    # decides whether to re-POST. See celery_app.py block comment for the
+    # full derivation and docs/KNOWLEDGE-DISTILLER-* series for context.
+    acks_late = False,
 )
 def run_knowledge_distiller(
     self,
@@ -91,6 +103,21 @@ def run_knowledge_distiller(
     github_repo: str | None = None,
     github_default_branch: str | None = None,
     repo_url: str | None = None,
+    # Coalesced-study hints (set when the caller is /studies/batch with a
+    # ResolvedStudy containing ≥2 members — see routers/v1/knowledge/
+    # distiller.py::create_batch). docs_urls carries the UNION of subtree
+    # prefixes for Tier 2/3/4 ingesters; for Tier 1 it is informational.
+    docs_urls: list[str] | None = None,
+    canonical_names: list[str] | None = None,
+    # Chain-compatible failure mode. When True (set by /studies/batch so the
+    # Celery chain keeps moving past a failed study), top-level exceptions
+    # are caught + recorded in the study record + returned as a sentinel
+    # dict instead of re-raised. When False (legacy /studies POST path),
+    # exceptions re-raise → Celery FAILURE state as before.
+    #
+    # Workaround for celery/celery#2416 (open since 2015 — "continue chain
+    # on failure after retries" is not a built-in Celery feature).
+    is_chained: bool = False,
 ) -> dict:
     """
     Run the full Knowledge Distiller pipeline for one framework.
@@ -127,9 +154,11 @@ def run_knowledge_distiller(
     if user_profile is None:
         user_profile = {}
 
+    coalesced_n = len(canonical_names) if canonical_names else 1
     logger.info(
         f"[KD:{study_id}] starting — framework={framework} "
-        f"language={language or '-'} user_id={user_id} study_root={study_root}"
+        f"language={language or '-'} user_id={user_id} study_root={study_root} "
+        f"coalesced_from={coalesced_n} chained={is_chained}"
     )
     self.update_state(
         state = "PROGRESS",
@@ -211,6 +240,12 @@ def run_knowledge_distiller(
                 "framework": framework,
                 "version": version,
                 "docs_url": docs_url,
+                # Coalesced-group fields — length-1 for solo studies. Tier 2/3/4
+                # ingesters (when updated) will use docs_urls as a subtree-prefix
+                # union. For Tier 1 (shared llms-full.txt) the ingester still
+                # reads a single docs_url; docs_urls is informational.
+                "docs_urls": docs_urls or ([docs_url] if docs_url else []),
+                "canonical_names": canonical_names or [framework],
                 "language": language,
                 "user_id": user_id,
                 "user_profile": UserProfile(**user_profile),
@@ -294,9 +329,28 @@ def run_knowledge_distiller(
         result = asyncio.run(_run())
     except Exception as e:
         logger.exception(f"[KD:{study_id}] failed: {e}")
-        # Re-raise — Celery will mark the task FAILURE and record the
-        # traceback. The router can surface it via /tasks/{id}.
-        raise
+        if not is_chained:
+            # Legacy single-study path — Celery marks the task FAILURE and
+            # records the traceback. The router surfaces it via /tasks/{id}.
+            raise
+        # Chained-batch path — return a sentinel dict so the Celery chain
+        # continues to the next study instead of aborting (celery#2416).
+        # Callers inspect `phase == "failed"` + `error` to distinguish.
+        failure_summary = {
+            "study_id": study_id,
+            "study_root": study_root,
+            "phase": "failed",
+            "error": f"{type(e).__name__}: {str(e)[:500]}",
+            "ingest_tier_used": None,
+            "num_chapters": 0,
+            "summary_path": None,
+            "debt_path": None,
+            "validation_report": None,
+        }
+        logger.info(
+            f"[KD:{study_id}] chained failure recorded — chain will continue"
+        )
+        return failure_summary
 
     logger.info(
         f"[KD:{study_id}] done — phase={result.get('phase')} "

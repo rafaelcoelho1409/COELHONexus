@@ -30,6 +30,13 @@ logger = get_task_logger(__name__)
 @app.task(
     bind = True,
     name = "tasks.knowledge.export.export_study",
+    # Same rationale as run_knowledge_distiller — user-triggered (clicks
+    # "Export to PDF"), non-idempotent (writes a new rendered artifact to
+    # MinIO), re-triggerable by the user on failure. acks_late=False avoids
+    # the same zombie-on-worker-restart class of failures that would have a
+    # stale export task re-run a week later for a study the user already
+    # forgot about.
+    acks_late = False,
 )
 def export_study(
     self,

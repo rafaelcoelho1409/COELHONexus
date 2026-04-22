@@ -24,7 +24,9 @@ import asyncio
 import hashlib
 import json
 import logging
+from collections import OrderedDict
 from typing import Optional
+from urllib.parse import urlparse
 
 from langchain_openai import ChatOpenAI
 
@@ -36,6 +38,7 @@ from schemas.knowledge.resolver import (
     RegistryHint,
     ResolveRequest,
     ResolvedDocs,
+    ResolvedStudy,
     SearchHit,
     Tier,
     TierEvidence,
@@ -448,3 +451,113 @@ async def resolve(
         else:
             out.append(res)
     return out
+
+
+# =============================================================================
+# Coalescence — group topics that share the same ingestion source
+# =============================================================================
+# When a crossover like "DeepAgents + LangChain + LangGraph" produces N
+# ResolvedDocs that all point at the same Tier 1 llms-full.txt (or Tier 2/3/4
+# source on the same host), creating N separate studies downloads the same
+# corpus N times and synthesizes N redundant plans. `coalesce_studies` groups
+# such topics into one ResolvedStudy so the ingester + distiller run ONCE.
+#
+# The coalescing key must be strict enough to avoid false merges — two topics
+# with the same tier but DIFFERENT sources (different llms-full.txt files, or
+# different hosts) must stay separate. Key design:
+#
+#   Tier 1  → ("t1", llms_full_txt.url)
+#   Tier 2  → ("t2", host, llms_txt.url)
+#   Tier 3  → ("t3", host, sitemap_xml.url)
+#   Tier 4  → ("t4", host)
+#   Tier-GH → None (each repo is its own source)
+#   unresolved → None (docs_url is None — nothing to merge)
+#
+# None means "this topic is in a group by itself." We assign a unique synthetic
+# key so it doesn't collide with any other solo member.
+def _coalesce_key(r: ResolvedDocs) -> Optional[tuple]:
+    """
+    Return the coalescing key for a resolved topic. None = keep solo.
+
+    Strictness rationale: we only coalesce when evidence DIRECTLY confirms
+    the shared source. A tier probe that returned SPA_FAKE / MISSING / ERROR
+    on that file is not a valid coalescing anchor even if tier==N.
+    """
+    if not r.docs_url:
+        return None
+    if (r.source_signals or {}).get("github_discover") == "readme_only":
+        return None
+    ev = r.tier_evidence
+    host = (urlparse(r.docs_url).netloc or "").lower()
+    if r.tier == 1 and ev.llms_full_txt.result == "VALID":
+        return ("t1", ev.llms_full_txt.url)
+    if r.tier == 2 and ev.llms_txt.result == "VALID":
+        return ("t2", host, ev.llms_txt.url)
+    if r.tier == 3 and ev.sitemap_xml.result == "VALID":
+        return ("t3", host, ev.sitemap_xml.url)
+    if r.tier == 4:
+        return ("t4", host)
+    return None
+
+
+def coalesce_studies(resolved: list[ResolvedDocs]) -> list[ResolvedStudy]:
+    """
+    Group `resolved` topics sharing the same ingestion source into a
+    smaller list of `ResolvedStudy`. Order-preserving: each group keeps
+    the position of its first member in the output.
+
+    Length-1 groups (solo topics) are still returned as ResolvedStudy so
+    downstream code can iterate uniformly. Callers that only care about
+    coalescing can filter on `s.coalesced_from >= 2`.
+    """
+    groups: "OrderedDict[tuple, list[ResolvedDocs]]" = OrderedDict()
+    solo_counter = 0
+    for r in resolved:
+        key = _coalesce_key(r)
+        if key is None:
+            # Synthetic unique key so this member stays in its own group
+            # without ever colliding with real coalescing keys.
+            key = ("solo", solo_counter)
+            solo_counter += 1
+        groups.setdefault(key, []).append(r)
+
+    studies: list[ResolvedStudy] = []
+    for _, members in groups.items():
+        primary = members[0]
+        host: Optional[str] = None
+        if primary.docs_url:
+            host = (urlparse(primary.docs_url).netloc or "").lower() or None
+        shared_host = host if len(members) >= 2 else None
+
+        # Union of repo URLs — distinct, order-preserving.
+        repo_seen: set[str] = set()
+        repos: list[str] = []
+        for m in members:
+            if m.repo_url and m.repo_url not in repo_seen:
+                repo_seen.add(m.repo_url)
+                repos.append(m.repo_url)
+
+        docs_urls = [m.docs_url for m in members if m.docs_url]
+
+        studies.append(ResolvedStudy(
+            canonical_names = [m.canonical_name for m in members],
+            docs_urls = docs_urls,
+            primary_docs_url = primary.docs_url,
+            shared_host = shared_host,
+            tier = primary.tier,
+            tier_evidence = primary.tier_evidence,
+            repo_urls = repos,
+            version = primary.version,
+            confidence = min(m.confidence for m in members),
+            coalesced_from = len(members),
+            members = members,
+        ))
+
+    if any(s.coalesced_from >= 2 for s in studies):
+        merged_count = sum(s.coalesced_from for s in studies if s.coalesced_from >= 2)
+        merged_groups = sum(1 for s in studies if s.coalesced_from >= 2)
+        logger.info(
+            f"[resolver] coalesced {merged_count} topics into {merged_groups} "
+            f"unified studies (total_studies={len(studies)})"
+        )
+    return studies

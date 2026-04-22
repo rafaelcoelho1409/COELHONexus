@@ -6,7 +6,9 @@ Public API for the KD pipeline. Thin HTTP layer on top of the Celery task
 
 Endpoints:
   POST   /studies                             Create study (runs scope gate first)
-  POST   /studies/resolve                     Resolve canonical docs_url + tier (1-4); supports crossover
+  POST   /studies/resolve                     Resolve canonical docs_url + tier (1-4); supports crossover + coalescing
+  POST   /studies/batch                       Enqueue N coalesced studies as a Celery chain (sequential)
+  GET    /studies/batch/{batch_id}            Aggregate per-study status for a batch
   GET    /studies/{study_id}                  Status + phase + progress
   GET    /studies/{study_id}/stream           SSE node-by-node updates
   GET    /studies/{study_id}/tree             MinIO object manifest
@@ -51,11 +53,15 @@ import httpx
 
 from celery_app import app as celery_app
 from schemas.knowledge.inputs import (
+    CreateBatchRequest,
     CreateStudyRequest,
     ExportRequest,
 )
-from schemas.knowledge.resolver import ResolveRequest
-from services.knowledge.docs_resolver import resolve as resolve_docs
+from schemas.knowledge.resolver import ResolveRequest, ResolvedStudy
+from services.knowledge.docs_resolver import (
+    coalesce_studies,
+    resolve as resolve_docs,
+)
 from services.knowledge.scope import classify_scope
 
 
@@ -74,6 +80,10 @@ STUDY_TTL_SECONDS = 30 * 24 * 60 * 60
 
 def _study_key(study_id: str) -> str:
     return f"coelhonexus:knowledge:study:{study_id}"
+
+
+def _batch_key(batch_id: str) -> str:
+    return f"coelhonexus:knowledge:batch:{batch_id}"
 
 
 def _make_study_root(
@@ -99,6 +109,39 @@ def _make_study_root(
     return f"{user_id}/knowledge/{framework_part}-{version_part}-{level_part}"
 
 
+def _make_group_study_root(
+    user_id: str,
+    canonical_names: list[str],
+    version: str | None,
+    level: str | None = None) -> str:
+    """
+    MinIO prefix for a coalesced ResolvedStudy with ≥2 members.
+
+    Shape (len ≥ 2): {user_id}/knowledge/{primary}-plus{N-1}-{version}-{level}
+    Shape (len == 1): same as _make_study_root (delegates — preserves the
+    idempotent cache-restore property for solo studies in a batch).
+
+    Example: ["DeepAgents","LangChain","LangGraph"] v=None l="senior"
+          → "{user}/knowledge/deepagents-plus2-latest-senior"
+
+    The rule uses the FIRST canonical_name as the primary label (same
+    position the resolver's `primary_docs_url` comes from). Stable ordering
+    matters: re-running the same coalesced group resolves to the same
+    MinIO prefix and hits the cache.
+    """
+    if len(canonical_names) <= 1:
+        return _make_study_root(
+            user_id = user_id,
+            framework = canonical_names[0] if canonical_names else "unknown",
+            version = version,
+            level = level,
+        )
+    primary = canonical_names[0].lower().strip().replace(" ", "-")
+    version_part = (version or "latest").lower().strip().replace(" ", "-")
+    level_part = (level or "senior").lower().strip()
+    return f"{user_id}/knowledge/{primary}-plus{len(canonical_names) - 1}-{version_part}-{level_part}"
+
+
 async def _save_study_record(redis_aio, study_id: str, record: dict) -> None:
     """Persist {study_id → study_root + metadata} with TTL."""
     await redis_aio.set(
@@ -110,6 +153,24 @@ async def _save_study_record(redis_aio, study_id: str, record: dict) -> None:
 
 async def _load_study_record(redis_aio, study_id: str) -> dict | None:
     raw = await redis_aio.get(_study_key(study_id))
+    if not raw:
+        return None
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    return json.loads(raw)
+
+
+async def _save_batch_record(redis_aio, batch_id: str, record: dict) -> None:
+    """Persist {batch_id → batch manifest} with the same TTL as studies."""
+    await redis_aio.set(
+        _batch_key(batch_id),
+        json.dumps(record),
+        ex = STUDY_TTL_SECONDS,
+    )
+
+
+async def _load_batch_record(redis_aio, batch_id: str) -> dict | None:
+    raw = await redis_aio.get(_batch_key(batch_id))
     if not raw:
         return None
     if isinstance(raw, bytes):
@@ -154,7 +215,7 @@ def _celery_snapshot(study_id: str) -> dict:
 #
 # Stages per topic:
 #   A — Registry hint    (PyPI / npm / crates.io — existence + homepage)
-#   B — SearXNG          (3 parallel query templates, ~15 candidates)
+#   B — Search           (Exa → Tavily → Jina fallback, ~10 candidates)
 #   C — LLM rerank       (strict JSON schema, picks canonical docs_url)
 #   D — Content validator (probe /llms-full.txt, /llms.txt, /sitemap.xml +
 #                          root liveness D0 + index spot-check D2 + GitHub
@@ -229,11 +290,20 @@ async def resolve_study(
         redis_aio = app.state.redis_aio,
     )
 
+    # Coalesce topics that share the same ingestion source. A crossover like
+    # "DeepAgents + LangChain + LangGraph" where all three land on the same
+    # docs.langchain.com/llms-full.txt collapses from 3 ResolvedDocs into 1
+    # ResolvedStudy — the downstream pipeline ingests + synthesizes once
+    # instead of 3 identical times. Length-1 groups pass through unchanged.
+    studies = coalesce_studies(results)
+
     return {
         "input": payload.framework,
         "is_crossover": len(results) > 1,
         "total_topics": len(results),
+        "total_studies": len(studies),
         "results": [r.model_dump() for r in results],
+        "studies": [s.model_dump() for s in studies],
     }
 
 
@@ -376,6 +446,13 @@ async def create_study(
             "repo_url": payload.repo_url,
         },
         task_id = study_id,
+        # Safety net: discard if the message has been sitting in the broker
+        # unconsumed for >2h. With acks_late=False on the distiller decorator,
+        # a stuck unacked message can't exist in the first place — this is
+        # belt-and-suspenders against future config regressions and ancient-
+        # message replay after broker surgery. 2h comfortably exceeds even
+        # the p99 distiller runtime of ~25 min.
+        expires = 7200,
     )
     logger.info(
         f"[knowledge] study queued: id={study_id} root={study_root} "
@@ -393,6 +470,281 @@ async def create_study(
         "detected_topic": scope.detected_topic,
         "language": scope.language,
         "docs_url": payload.docs_url,
+    }
+
+
+# =============================================================================
+# POST /studies/batch — enqueue N coalesced studies sequentially via chain
+# =============================================================================
+# Consumes the `studies[]` list returned by POST /studies/resolve. The
+# client reviews / edits / confirms the coalesced groups, then POSTs them
+# here. Each ResolvedStudy in the list becomes one Celery task linked via
+# celery.chain(...) — strict sequential execution (no cross-study LLM
+# rate-limit thrashing, no target-host 429 bursts). A coalesced group of
+# ≥2 members materializes as ONE study whose MinIO prefix + manifest
+# carry all the canonical_names (the coalescer's original intent).
+#
+# Failure isolation: each link runs with `is_chained=True`, which converts
+# top-level exceptions inside the Celery task into a sentinel success
+# result so the chain keeps moving. Standard workaround for celery#2416
+# ("continue chain on failure after retries" is not a built-in feature).
+#
+# Ordering inside the chain: tier ascending (Tier 1 → Tier 4 → GH). Fast
+# studies complete first so the user sees artifacts while the slow tail
+# runs. Within a tier, coalesced groups (higher info-per-minute) go first.
+@router.post("/studies/batch")
+async def create_batch(
+    payload: CreateBatchRequest,
+    request: Request):
+    """
+    Enqueue a batch of studies (possibly coalesced) as a Celery chain
+    for strict sequential execution.
+
+    Returns:
+        {
+          "batch_id": <uuid>,
+          "total_studies": N,
+          "user_id": ...,
+          "studies": [
+            {
+              "study_id": <uuid>,
+              "canonical_names": [...],
+              "primary_docs_url": ...,
+              "tier": 1..4,
+              "coalesced_from": 1..N,
+              "study_root": ...,
+              "status": "queued"
+            },
+            ...
+          ]
+        }
+
+    The per-study `study_id` can be polled individually via
+    GET /studies/{study_id}; the whole batch via GET /studies/batch/{batch_id}.
+    """
+    from celery import chain
+    from tasks.knowledge.distiller import run_knowledge_distiller
+
+    app = request.app
+    user_profile_dump = payload.user_profile.model_dump()
+
+    # Order the studies: lower tier first (fast-path first). Coalesced groups
+    # within the same tier go ahead of solo ones (more information per unit
+    # of wall-clock time). Preserve original index as tiebreaker so the
+    # ordering is deterministic for a given input.
+    ordered_studies: list[tuple[int, ResolvedStudy]] = sorted(
+        enumerate(payload.studies),
+        key = lambda pair: (
+            pair[1].tier,
+            -pair[1].coalesced_from,  # higher coalesced_from first within tier
+            pair[0],
+        ),
+    )
+
+    signatures: list = []
+    manifest: list[dict] = []
+    batch_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+
+    for _, study in ordered_studies:
+        study_id = str(uuid.uuid4())
+        names = study.canonical_names or []
+        if not names:
+            # Defensive: a ResolvedStudy with no canonical_names is malformed
+            # upstream. Skip with a visible skip entry rather than crashing
+            # the whole batch.
+            manifest.append({
+                "study_id": None,
+                "canonical_names": [],
+                "primary_docs_url": study.primary_docs_url,
+                "tier": study.tier,
+                "coalesced_from": study.coalesced_from,
+                "study_root": None,
+                "status": "skipped",
+                "reason": "empty canonical_names",
+            })
+            continue
+
+        joined_framework = " + ".join(names)
+        study_root = _make_group_study_root(
+            user_id = payload.user_id,
+            canonical_names = names,
+            version = study.version,
+            level = payload.user_profile.level,
+        )
+
+        # Persist per-study record so GET /studies/{study_id} works for each
+        # batch member exactly like a single-study POST /studies creation.
+        record = {
+            "study_id": study_id,
+            "study_root": study_root,
+            "user_id": payload.user_id,
+            "framework": joined_framework,
+            "canonical_names": names,
+            "version": study.version,
+            "level": payload.user_profile.level,
+            "language": None,
+            "detected_topic": None,
+            "docs_url": study.primary_docs_url,
+            "docs_urls": study.docs_urls,
+            "docs_url_source": "batch",
+            "tier": study.tier,
+            "github_discover": None,
+            "github_org": None,
+            "github_repo": None,
+            "github_default_branch": None,
+            "repo_url": study.repo_urls[0] if study.repo_urls else None,
+            "user_profile": user_profile_dump,
+            "coalesced_from": study.coalesced_from,
+            "batch_id": batch_id,
+            "created_at": now,
+        }
+        await _save_study_record(app.state.redis_aio, study_id, record)
+
+        # Immutable signature (.si) — the chain passes the previous task's
+        # result as first arg by default; .si ignores it so our kwargs-only
+        # task signature works cleanly. .set(task_id=...) pins the Celery
+        # task_id to study_id so AsyncResult(study_id) works the same as it
+        # does for the single-study /studies POST path.
+        sig = run_knowledge_distiller.si(
+            study_id = study_id,
+            framework = joined_framework,
+            version = study.version,
+            docs_url = study.primary_docs_url,
+            language = None,
+            user_id = payload.user_id,
+            user_profile = user_profile_dump,
+            study_root = study_root,
+            max_concurrent_chapters = payload.max_concurrent_chapters,
+            tier = study.tier,
+            github_discover = None,
+            github_org = None,
+            github_repo = None,
+            github_default_branch = None,
+            repo_url = study.repo_urls[0] if study.repo_urls else None,
+            docs_urls = study.docs_urls,
+            canonical_names = names,
+            is_chained = True,
+        ).set(task_id = study_id, expires = 7200)
+
+        signatures.append(sig)
+        manifest.append({
+            "study_id": study_id,
+            "canonical_names": names,
+            "primary_docs_url": study.primary_docs_url,
+            "tier": study.tier,
+            "coalesced_from": study.coalesced_from,
+            "study_root": study_root,
+            "status": "queued",
+        })
+
+    if not signatures:
+        raise HTTPException(
+            status_code = 422,
+            detail = {
+                "message": "No valid studies in the batch — every entry was skipped.",
+                "manifest": manifest,
+            },
+        )
+
+    # Kick off the chain. With `.si()` each link runs as a fresh call,
+    # ignoring the prior task's return value. The worker picks up the
+    # next link only when the prior one reports SUCCESS (including the
+    # sentinel-failure SUCCESS from is_chained=True wrapping).
+    chain(*signatures).apply_async()
+
+    batch_record = {
+        "batch_id": batch_id,
+        "user_id": payload.user_id,
+        "created_at": now,
+        "total_studies": len(manifest),
+        "studies": manifest,
+    }
+    await _save_batch_record(app.state.redis_aio, batch_id, batch_record)
+
+    logger.info(
+        f"[knowledge] batch queued: batch_id={batch_id} "
+        f"studies={len(signatures)} (skipped={len(manifest) - len(signatures)}) "
+        f"user_id={payload.user_id}"
+    )
+
+    return {
+        "batch_id": batch_id,
+        "total_studies": len(manifest),
+        "user_id": payload.user_id,
+        "studies": manifest,
+        "batch_endpoint": f"/api/v1/knowledge/studies/batch/{batch_id}",
+    }
+
+
+# =============================================================================
+# GET /studies/batch/{batch_id} — aggregate per-study status
+# =============================================================================
+# Per-member status is read from each study's Celery AsyncResult (same
+# source as /studies/{study_id}), so this endpoint is a thin aggregator
+# over the manifest stored at batch creation time.
+#
+# Route precedence: this path must be declared BEFORE GET /studies/{study_id}
+# so FastAPI matches the literal "batch" segment first.
+@router.get("/studies/batch/{batch_id}")
+async def get_batch_status(
+    batch_id: str = Path(..., description = "Batch UUID returned by POST /studies/batch"),
+    request: Request = None):
+    """
+    Aggregate status for a batch. Returns the manifest plus a live
+    Celery snapshot per member (task_state, progress, result / error).
+    """
+    record = await _load_batch_record(request.app.state.redis_aio, batch_id)
+    if not record:
+        raise HTTPException(
+            status_code = 404,
+            detail = {"message": "batch not found (may have expired)", "batch_id": batch_id},
+        )
+
+    enriched_studies: list[dict] = []
+    for entry in record.get("studies", []):
+        study_id = entry.get("study_id")
+        item = dict(entry)
+        if study_id:
+            snap = _celery_snapshot(study_id)
+            # Map Celery state + our sentinel-failure phase into a single
+            # user-facing status the frontend can render without branching.
+            task_state = snap.get("task_state")
+            result = snap.get("result") or {}
+            failure_sentinel = isinstance(result, dict) and result.get("phase") == "failed"
+            if task_state == "SUCCESS" and failure_sentinel:
+                derived = "failed"
+            elif task_state == "SUCCESS":
+                derived = "complete"
+            elif task_state == "FAILURE":
+                derived = "failed"
+            elif task_state in ("PROGRESS", "STARTED"):
+                derived = "running"
+            elif task_state in ("PENDING", "RECEIVED"):
+                derived = "queued"
+            else:
+                derived = str(task_state or "unknown").lower()
+            item["status"] = derived
+            item["task_state"] = task_state
+            item["progress"] = snap.get("progress")
+            item["result"] = snap.get("result")
+            item["error"] = snap.get("error") or (
+                result.get("error") if failure_sentinel else None
+            )
+        enriched_studies.append(item)
+
+    # Derived batch-level status: "complete" when every child is terminal
+    # (complete OR failed), otherwise "running" if any is running/queued.
+    statuses = {s.get("status") for s in enriched_studies}
+    if statuses.issubset({"complete", "failed", "skipped"}):
+        batch_status = "complete"
+    else:
+        batch_status = "running"
+
+    return {
+        **record,
+        "studies": enriched_studies,
+        "status": batch_status,
     }
 
 

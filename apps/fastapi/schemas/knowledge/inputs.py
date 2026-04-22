@@ -132,6 +132,59 @@ class CreateStudyRequest(BaseModel):
 
 
 # =============================================================================
+# Batch Creation — POST /api/v1/knowledge/studies/batch
+# =============================================================================
+# Consumes the `studies[]` output of `/studies/resolve` directly. The batch
+# endpoint is the post-resolver orchestrator — it does NOT re-run resolution
+# or re-run coalescing. Each ResolvedStudy in the payload becomes one Celery
+# task in a `chain(...)` pipeline, guaranteeing strict sequential execution
+# across the batch (no LLM rate-limit thrashing, no target-host 429 bursts).
+#
+# Typical flow:
+#   1. Client POSTs a ResolveRequest to /studies/resolve.
+#   2. Client reviews the returned `studies[]` (may split / edit groups).
+#   3. Client POSTs the (possibly edited) `studies[]` here.
+#   4. Server enqueues one Celery task per member of `studies[]`, linked
+#      via chain() for serial execution. Returns a batch_id + per-study
+#      study_ids so the frontend can poll GET /studies/batch/{batch_id}.
+from schemas.knowledge.resolver import ResolvedStudy
+
+
+class CreateBatchRequest(BaseModel):
+    """
+    Batch study creation. Accepts the coalesced `studies[]` list from
+    `/studies/resolve`. Each ResolvedStudy becomes exactly one Celery task
+    in the chain; a coalesced group (coalesced_from ≥ 2) materializes as
+    ONE unified study whose MinIO prefix and manifest carry all member
+    canonical_names.
+    """
+    studies: list[ResolvedStudy] = Field(
+        min_length = 1,
+        max_length = 8,
+        description = (
+            "Coalesced studies from /studies/resolve. Cap at 8 entries to "
+            "prevent runaway batches; users wanting more should split into "
+            "explicit follow-up requests."
+        ),
+    )
+    user_id: NonEmptyStr = Field(
+        default = "default",
+        description = "Multi-tenancy key — MinIO top-level prefix. When JWT auth lands, the router overrides from the authenticated session.",
+    )
+    user_profile: UserProfile = Field(default_factory = UserProfile)
+    max_concurrent_chapters: int = Field(
+        default = 5,
+        ge = 1,
+        le = 10,
+        description = (
+            "Per-study inner-chapter synthesis concurrency. This applies WITHIN "
+            "each chained study; the chain itself remains strictly sequential "
+            "across studies regardless of this value."
+        ),
+    )
+
+
+# =============================================================================
 # Export — POST /api/v1/knowledge/studies/{id}/export
 # =============================================================================
 ExportFormat = Literal["pdf", "html", "epub", "anki"]

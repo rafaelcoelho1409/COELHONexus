@@ -81,10 +81,23 @@ app.config_from_object({
     "task_default_queue": Q_DEFAULT,
     # Worker: prefetch 1 task at a time (long-running tasks shouldn't queue up)
     "worker_prefetch_multiplier": 1,
-    # Acknowledge task AFTER execution (not before) — prevents task loss on crash
+    # Acknowledge task AFTER execution (not before) — prevents task loss on
+    # crash. SAFE ONLY FOR IDEMPOTENT TASKS. Individual non-idempotent tasks
+    # (Knowledge Distiller + KD Export) override with `acks_late=False` at
+    # the @app.task decorator — those tasks are user-triggered and resumable
+    # via checkpointer/re-click, so auto-redelivery on worker crash creates
+    # unwanted zombie runs rather than recovering real work.
     "task_acks_late": True,
-    # Reject and requeue tasks when worker is killed (OOM, SIGKILL)
+    # Reject and requeue tasks when worker is killed (OOM, SIGKILL). Only
+    # affects tasks that still have acks_late=True; no-op for KD tasks.
     "task_reject_on_worker_lost": True,
+    # Broker-level safety: cap how long an unacked message may live before
+    # Redis makes it visible again. Default is 1h (3600). 7200 = 2h covers
+    # YouTube tasks that may legitimately exceed 1h without triggering the
+    # classic "running task duplicated mid-run" Redis bug. For KD tasks
+    # (acks_late=False) this is a defense-in-depth setting that rarely
+    # fires — messages are acked on pickup, never reaching the unacked pool.
+    "broker_transport_options": {"visibility_timeout": 7200},
     # Timezone
     "timezone": "UTC",
 })

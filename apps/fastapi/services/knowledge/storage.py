@@ -38,6 +38,7 @@ Session is shared (thread-safe, task-safe). For KD's load (~hundreds of
 S3 ops per study run) this is more than fast enough; pool if we ever
 hit bottlenecks.
 """
+import asyncio
 import logging
 from typing import Literal
 import aioboto3
@@ -92,7 +93,21 @@ class MinIOStudyStorage:
         # Session is safe to share across tasks; clients are opened per-operation.
         self._session = aioboto3.Session()
         # signature_version=s3v4 is REQUIRED for MinIO (default v2 won't work).
-        self._boto_config = Config(signature_version = "s3v4")
+        # max_pool_connections bumped from botocore's default 10 — the Tier 1
+        # planner splitter fires up to ~8 concurrent put_object calls per
+        # client; leaving the default would starve the pool under load and
+        # surface as IncompleteBody errors. 32 gives headroom for future
+        # bumps without tuning here again.
+        self._boto_config = Config(
+            signature_version = "s3v4",
+            max_pool_connections = 32,
+            # Built-in retry for the occasional transient 5xx / timeout.
+            # `put_object` failures that aioboto3 surfaces as IncompleteBody
+            # are NOT automatically retried by this mode (the SDK only
+            # retries request-level errors, not body-upload races) — the
+            # write() wrapper below handles those explicitly.
+            retries = {"max_attempts": 3, "mode": "standard"},
+        )
 
     def _client(self):
         """Open an aioboto3 S3 client context manager. Always use as `async with`."""
@@ -139,15 +154,48 @@ class MinIOStudyStorage:
         """
         Write content to the given key. Strings are UTF-8 encoded.
         Returns the number of bytes written (useful for manifest entries).
+
+        Retries on transient `IncompleteBody` ClientError — an aioboto3-level
+        race surfaced under high write concurrency. Observed 2026-04-22 in
+        the Tier 1 planner splitter running ~3700 parallel put_objects.
+        Three attempts with brief exponential backoff (0.3s / 0.9s) — enough
+        to ride out the race without amplifying actual outages.
         """
         body = content.encode("utf-8") if isinstance(content, str) else content
-        async with self._client() as s3:
-            await s3.put_object(
-                Bucket = self.bucket,
-                Key = key,
-                Body = body,
-                ContentType = content_type,
-            )
+        last_err: Exception | None = None
+        for attempt in range(3):
+            try:
+                async with self._client() as s3:
+                    await s3.put_object(
+                        Bucket = self.bucket,
+                        Key = key,
+                        Body = body,
+                        ContentType = content_type,
+                    )
+                return len(body)
+            except ClientError as e:
+                code = (e.response or {}).get("Error", {}).get("Code", "")
+                # IncompleteBody, RequestTimeout, and 5xx are the transient
+                # classes worth retrying at the body-upload layer. 4xx other
+                # than those (e.g. AccessDenied, NoSuchBucket) are permanent.
+                transient = code in (
+                    "IncompleteBody",
+                    "RequestTimeout",
+                    "InternalError",
+                    "ServiceUnavailable",
+                    "SlowDown",
+                )
+                if not transient or attempt == 2:
+                    raise
+                last_err = e
+                # Backoff: 0.3s, 0.9s
+                await asyncio.sleep(0.3 * (3 ** attempt))
+                logger.info(
+                    f"[storage] write {key!r} transient {code} (attempt {attempt+1}/3); retrying"
+                )
+        # Defensive — loop always either returns or raises above.
+        if last_err is not None:
+            raise last_err
         return len(body)
 
     async def read(self, key: str) -> bytes:
@@ -161,6 +209,130 @@ class MinIOStudyStorage:
         """Read object and decode as text (UTF-8 default)."""
         data = await self.read(key)
         return data.decode(encoding)
+
+    # -------------------------------------------------------------------------
+    # Batched ops — share ONE aioboto3 client across many requests
+    # -------------------------------------------------------------------------
+    # Motivating measurement (2026-04-22): the Tier 1 planner splitter writes
+    # thousands of small section files to MinIO. Using `write()` in a loop
+    # (each call `async with self._client()`) paid a fresh TLS + SigV4 auth
+    # handshake PER PUT. At Tailscale latency ~250 ms/handshake, the splitter
+    # throughput collapsed to < 1 file/sec despite Semaphore(8) — the
+    # handshakes serialized through the semaphore slot. One shared client
+    # reuses a keep-alive connection pool for the whole batch, eliminating
+    # that per-call overhead and letting the semaphore's 8 slots actually
+    # run in parallel on top of an already-warm pool.
+    async def write_many(
+        self,
+        items: "list[tuple[str, str | bytes, ContentType]]",
+        max_concurrent: int = 16,
+        chunk_size: int = 256) -> list[int]:
+        """
+        Write many objects in parallel, in chunks, each chunk opening its own
+        aioboto3 client context. Returns bytes-written counts in input order.
+
+        Two-level strategy tuned 2026-04-22 after several iterations:
+
+        1. Chunks of ~256 amortize the TLS + SigV4 handshake cost across
+           hundreds of PUTs per handshake (vs one handshake per PUT, which
+           capped throughput at 0.8 files/sec).
+        2. Fresh client PER CHUNK isolates aioboto3 session state from any
+           IncompleteBody-induced corruption in a prior chunk. A single
+           shared client across 3700+ PUTs was observed to wedge silently
+           after a burst of IncompleteBody retries — the retries absorbed
+           the errors but the shared aiohttp session stayed in a bad state
+           for all subsequent requests. Re-opening per chunk gives the
+           session a clean slate every 256 files.
+        3. Concurrency 16 inside each chunk is empirically below the
+           IncompleteBody threshold for real-world body sizes (2-50 KB).
+           Benchmark said 32 was safe for 2KB bodies but live traffic
+           triggers the race on larger sections. The transient retry below
+           remains as defense-in-depth; it almost never fires at 16.
+
+        Expected throughput: ~50-60 files/sec steady-state on ~10 KB sections
+        over Tailscale-backed MinIO, so a 3700-file Tier 1 splitter batch
+        completes in roughly 60-90 seconds.
+        """
+        if not items:
+            return []
+        results: list[int] = []
+        for start in range(0, len(items), chunk_size):
+            chunk = items[start : start + chunk_size]
+            sem = asyncio.Semaphore(max_concurrent)
+            async with self._client() as s3:
+                async def _put_one(
+                    key: str, content: str | bytes, content_type: ContentType,
+                ) -> int:
+                    body = content.encode("utf-8") if isinstance(content, str) else content
+                    last_err: Exception | None = None
+                    for attempt in range(3):
+                        try:
+                            async with sem:
+                                await s3.put_object(
+                                    Bucket = self.bucket,
+                                    Key = key,
+                                    Body = body,
+                                    ContentType = content_type,
+                                )
+                            return len(body)
+                        except ClientError as e:
+                            code = (e.response or {}).get("Error", {}).get("Code", "")
+                            transient = code in (
+                                "IncompleteBody",
+                                "RequestTimeout",
+                                "InternalError",
+                                "ServiceUnavailable",
+                                "SlowDown",
+                            )
+                            if not transient or attempt == 2:
+                                raise
+                            last_err = e
+                            await asyncio.sleep(0.3 * (3 ** attempt))
+                            logger.info(
+                                f"[storage] write_many {key!r} transient {code} "
+                                f"(attempt {attempt+1}/3); retrying"
+                            )
+                    if last_err is not None:
+                        raise last_err
+                    return len(body)
+
+                chunk_results = await asyncio.gather(
+                    *(_put_one(k, c, ct) for k, c, ct in chunk)
+                )
+            results.extend(chunk_results)
+        return results
+
+    async def read_many(
+        self,
+        keys: list[str],
+        max_concurrent: int = 16,
+        chunk_size: int = 256,
+        encoding: str = "utf-8") -> list[str]:
+        """
+        Read many objects in parallel, in chunks, each chunk opening its own
+        aioboto3 client context. Returns decoded text bodies in input order.
+        Same chunk/client/concurrency strategy as `write_many` — see that
+        method's docstring for the rationale.
+        """
+        if not keys:
+            return []
+        results: list[str] = []
+        for start in range(0, len(keys), chunk_size):
+            chunk = keys[start : start + chunk_size]
+            sem = asyncio.Semaphore(max_concurrent)
+            async with self._client() as s3:
+                async def _get_one(key: str) -> str:
+                    async with sem:
+                        resp = await s3.get_object(Bucket = self.bucket, Key = key)
+                        async with resp["Body"] as stream:
+                            data = await stream.read()
+                    return data.decode(encoding)
+
+                chunk_results = await asyncio.gather(
+                    *(_get_one(k) for k in chunk)
+                )
+            results.extend(chunk_results)
+        return results
 
     async def list(self, prefix: str) -> list[str]:
         """

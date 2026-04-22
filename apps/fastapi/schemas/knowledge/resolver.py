@@ -383,3 +383,92 @@ class ResolvedDocs(BaseModel):
             "invaluable for debugging."
         ),
     )
+
+
+# =============================================================================
+# Output — ResolvedStudy (coalesced group of ResolvedDocs sharing a source)
+# =============================================================================
+class ResolvedStudy(BaseModel):
+    """
+    One or more ResolvedDocs grouped into a single ingestion unit. Length-1
+    groups pass through unchanged; length-2+ groups represent a crossover
+    request whose topics share the same underlying docs source (same Tier 1
+    llms-full.txt, same Tier 2 llms.txt index, same Tier 3 sitemap, or same
+    Tier 4 host).
+
+    Motivating case: a user asks for "DeepAgents + LangChain + LangGraph".
+    Each topic resolves independently — but all three docs live under
+    docs.langchain.com and share the same host-root llms-full.txt (Tier 1).
+    Creating three separate studies would download the same file three
+    times and synthesize three identical corpora. Coalescing produces ONE
+    study carrying all three labels, ingesting + planning + synthesizing
+    the unified material once. Saves ~3× on MinIO / Celery / LLM tokens
+    AND produces a richer plan (cross-references between products).
+
+    Coalescing key (see docs_resolver._coalesce_key):
+      Tier 1 — same llms_full_txt.url (monolithic file)
+      Tier 2 — same llms_txt.url + same host (shared index, subtree union)
+      Tier 3 — same sitemap_xml.url + same host
+      Tier 4 — same host (same crawl root, subtree union)
+      Tier-GH (github readme-only) — never coalesces (each repo is distinct)
+      Unresolved / failed — never coalesces (each its own group)
+    """
+    canonical_names: list[str] = Field(
+        description = "Canonical topic names in this unified study. Length ≥1.",
+    )
+    docs_urls: list[str] = Field(
+        description = (
+            "Per-member docs_url. The ingester uses these as a UNION of "
+            "subtree prefixes for Tier 2/3/4 scoping. Length matches "
+            "canonical_names (empty slots dropped — unresolved members "
+            "won't appear in a coalesced group in the first place)."
+        ),
+    )
+    primary_docs_url: Optional[str] = Field(
+        default = None,
+        description = (
+            "Representative URL for the study — first member's docs_url. "
+            "Null only when the group's single member has docs_url=None."
+        ),
+    )
+    shared_host: Optional[str] = Field(
+        default = None,
+        description = (
+            "Common host across members (e.g. 'docs.langchain.com'). Null "
+            "for single-member groups or unresolved groups."
+        ),
+    )
+    tier: Tier = Field(
+        description = "Shared tier — all members have the same tier by construction.",
+    )
+    tier_evidence: TierEvidence = Field(
+        description = (
+            "Evidence from the primary member — all members share this "
+            "source (that's the coalescing condition). Safe to read as "
+            "'the group's evidence'."
+        ),
+    )
+    repo_urls: list[str] = Field(
+        default_factory = list,
+        description = "Union of members' repo URLs (distinct, order-preserving).",
+    )
+    version: str = Field(
+        default = "latest",
+        description = "Shared version — first member's value.",
+    )
+    confidence: float = Field(
+        ge = 0.0, le = 1.0,
+        description = "Minimum confidence across members (conservative aggregation).",
+    )
+    coalesced_from: int = Field(
+        description = (
+            "Number of ResolvedDocs merged into this study (≥1). Value 1 "
+            "means no coalescing happened; value ≥2 signals unification."
+        ),
+    )
+    members: list[ResolvedDocs] = Field(
+        description = (
+            "Original per-topic ResolvedDocs preserved for drill-down. "
+            "Length equals coalesced_from."
+        ),
+    )
