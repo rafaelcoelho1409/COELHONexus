@@ -187,13 +187,12 @@ async def resolve_study(
         503: scope classifier itself failed.
     """
     app = request.app
-    # Scope gate uses the FULL fallback chain (app.state.llm). The 8B
-    # classifier misclassifies newer 2025-2026 frameworks (e.g. DeepAgents)
-    # as "ambiguous concepts" because its training cutoff predates them.
-    # The main chain starts with reasoning models that know current
-    # frameworks; accuracy matters more than latency here since the
-    # endpoint is a dry-run.
-    scope_llm = app.state.llm
+    # Scope gate + decomposer + rerank all share the resolver LLM chain
+    # (same 14-model order as app.state.llm but with 30s Groq / 60s NIM
+    # timeouts — stalled primaries cascade in 1 min instead of 5). Groq 8B
+    # is excluded as primary because its training cutoff misclassifies
+    # 2025-2026 frameworks; NIM GLM-5.1 is the primary, which knows them.
+    scope_llm = app.state.llm_resolver
 
     try:
         scope = await classify_scope(payload.framework, scope_llm)
@@ -213,12 +212,20 @@ async def resolve_study(
             },
         )
 
-    # Rerank + decompose use the fast classifier (high-volume, latency-
-    # sensitive LLM calls). Only the scope gate itself uses the full chain.
-    rerank_llm = getattr(app.state, "llm_scope", None) or app.state.llm
+    # Decompose + rerank share the same resolver LLM chain as scope gate.
+    rerank_llm = app.state.llm_resolver
+    if app.state.search_chain is None:
+        raise HTTPException(
+            status_code = 503,
+            detail = (
+                "No search provider keys configured. Set at least one of: "
+                "EXA_API_KEY, TAVILY_API_KEY, JINA_API_KEY."
+            ),
+        )
     results = await resolve_docs(
         request = payload,
         llm = rerank_llm,
+        search_chain = app.state.search_chain,
         redis_aio = app.state.redis_aio,
     )
 

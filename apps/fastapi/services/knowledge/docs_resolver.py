@@ -3,10 +3,11 @@ Knowledge Distiller — Docs Resolver (orchestrator)
 
 Four-stage pipeline per topic:
 
-  A — Registry hint      (services.knowledge.registry.hint_lookup)
-  B — SearXNG candidates (services.knowledge.searxng.search_candidates)
-  C — LLM rerank         (this module)
-  D — Validator          (services.knowledge.docs_probe.probe_and_classify)
+  A — Registry hint       (services.knowledge.registry.hint_lookup)
+  B — Search candidates   (services.search_chain.search_candidates)
+                          — multi-provider fallback: Exa → Tavily → Jina
+  C — LLM rerank          (this module)
+  D — Validator           (services.knowledge.docs_probe.probe_and_classify)
 
 Plus a pre-pass crossover decomposer (services.knowledge.crossover.decompose)
 that splits combined-study requests like "DeepAgents + LangChain + LangGraph"
@@ -42,7 +43,7 @@ from schemas.knowledge.resolver import (
 from services.knowledge.crossover import decompose
 from services.knowledge.docs_probe import probe_and_classify
 from services.knowledge.registry import hint_lookup as registry_hint_lookup
-from services.knowledge.searxng import search_candidates
+from services.search_chain import SearchFallbackChain, search_candidates
 
 
 logger = logging.getLogger(__name__)
@@ -169,14 +170,14 @@ async def _resolve_topic(
     version: str | None,
     aliases: list[str],
     llm: ChatOpenAI,
+    search_chain: SearchFallbackChain,
     allow_fallback: bool,
     redis_aio,
     force_refresh: bool) -> ResolvedDocs:
     """
-    Run the per-topic Stages A-D pipeline. Returns a ResolvedDocs. On failures
-    that don't outright break the pipeline (SearXNG empty, LLM timeout, etc.)
-    this function degrades gracefully — see the resolver design doc §
-    "Error handling".
+    Run the per-topic Stages A-D pipeline. Returns a ResolvedDocs. On
+    recoverable failures (search empty, LLM timeout, etc.) this function
+    degrades gracefully — see resolver design doc § "Error handling".
     """
     canonical = topic.canonical_name
     key = _cache_key(canonical, aliases, version)
@@ -195,9 +196,9 @@ async def _resolve_topic(
         registry_hint_lookup(canonical, language = None),
     )
 
-    # Stage B — SearXNG (parallel queries)
+    # Stage B — Search (multi-provider fallback: Exa → Tavily → Jina)
     stage_b_task = asyncio.create_task(
-        search_candidates(canonical, aliases = aliases, version = version),
+        search_candidates(search_chain, canonical, aliases = aliases, version = version),
     )
 
     registry_hint, hits = await asyncio.gather(stage_a_task, stage_b_task)
@@ -355,6 +356,7 @@ async def _resolve_topic(
 async def resolve(
     request: ResolveRequest,
     llm: ChatOpenAI,
+    search_chain: SearchFallbackChain,
     redis_aio) -> list[ResolvedDocs]:
     """
     Main entry point. Runs the crossover decomposer, then fans out per topic.
@@ -365,6 +367,10 @@ async def resolve(
         llm: LangChain chat model supporting function_calling. Same instance
              used for decompose() and the rerank pass — cheap classifier
              (Groq 8B) is the right fit; burns ~2 calls per topic.
+        search_chain: shared multi-provider fallback chain from
+             services.search_chain. Cascades Exa → Tavily → Jina on
+             rate-limit / quota / 5xx. Per-provider cooldown state is
+             shared across all topics in this call.
         redis_aio: app.state.redis_aio (async Redis client). Used for the
                    confidence-based cache.
     """
@@ -383,6 +389,7 @@ async def resolve(
             version = request.version,
             aliases = request.aliases,
             llm = llm,
+            search_chain = search_chain,
             allow_fallback = request.allow_fallback,
             redis_aio = redis_aio,
             force_refresh = request.force_refresh,

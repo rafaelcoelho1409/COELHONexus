@@ -178,6 +178,45 @@ def build_llm_fallback_chain(
     return primary.with_fallbacks(fallbacks)
 
 
+def build_resolver_llm_chain(
+    groq_timeout_s: int = 30,
+    nim_timeout_s: int = 60):
+    """
+    Resolver-only chain with TIGHT timeouts — Groq 30s / NIM 60s.
+
+    Why a separate chain: the KD resolver's LLM calls are all classifier-
+    style — scope gate (~200 tokens), crossover decomposer (~500 tokens),
+    URL rerank (~2K tokens). Typical latency on NIM GLM-5.1 is 3-10s;
+    a p99 call finishes under 30s. The default 300s timeout tuned for KD
+    planner/synthesizer prompts (25K tokens on reasoning models) turns a
+    stalled primary into a 5-minute wait on the request path, where every
+    second counts.
+
+    Lower bounds:
+      - Groq 30s: Groq hello-world <5s, function-calling typically 1-3s,
+        headroom for long structured outputs.
+      - NIM 60s: covers the hardest resolver call (rerank with ~2K-token
+        candidates list) even on reasoning models; stalls cascade in 1 min
+        instead of 5 min.
+
+    Cascade walks 14 models at 60s each = ~14 min worst case (vs 70 min at
+    300s). In practice the primary succeeds and the chain never cascades.
+
+    Excludes NO models — all 14 in the main catalog are available as
+    fallbacks. Unlike build_synth_fallback_chain (which drops the Groq
+    tail for quality), resolver classification is robust enough for
+    Llama 3.1 8B etc. to handle as last-resort fallbacks.
+
+    Used by:
+      - POST /api/v1/knowledge/studies/resolve — scope gate, crossover
+        decomposer, URL rerank (all via app.state.llm_resolver)
+    """
+    chain = _ordered_fallback(groq_timeout_s, nim_timeout_s)
+    primary = chain[0]
+    fallbacks = chain[1:]
+    return primary.with_fallbacks(fallbacks)
+
+
 def build_synth_fallback_chain(
     groq_timeout_s: int = 120,
     nim_timeout_s: int = 300):

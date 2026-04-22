@@ -107,6 +107,12 @@ secretMappings:
     key: warp-proxy-user
   - envName: WARP_PROXY_PASS
     key: warp-proxy-pass
+  - envName: EXA_API_KEY
+    key: exa-api-key
+  - envName: TAVILY_API_KEY
+    key: tavily-api-key
+  - envName: JINA_API_KEY
+    key: jina-api-key
 
 # Registry configuration - uses k3d COELHOCloud Registry (same as Skaffold)
 registry:

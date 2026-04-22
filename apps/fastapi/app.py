@@ -148,10 +148,28 @@ async def lifespan(app: FastAPI):
     # large-context → 128K-quality → speed). One source of truth in
     # services/llm_chain.py so FastAPI and Celery tasks can't drift.
     # Research doc: docs/STUDY-GENERATOR-ADAPTIVE-GRADER.md (April 2026 update).
-    from services.llm_chain import build_llm_fallback_chain, build_scope_classifier_llm
+    from services.llm_chain import (
+        build_llm_fallback_chain,
+        build_scope_classifier_llm,
+        build_resolver_llm_chain,
+    )
     app.state.llm = build_llm_fallback_chain()
     app.state.llm_scope = build_scope_classifier_llm()
+    # Resolver-only chain — same 14 models, tight 30s/60s timeouts so a
+    # stalled model cascades in 1 min on the request path (vs 5 min on the
+    # general chain tuned for KD planner/synthesizer).
+    app.state.llm_resolver = build_resolver_llm_chain()
     print("LLM chain loaded (see services/llm_chain.py for model order).", flush = True)
+    # Search API Fallback Chain — Exa → Tavily → Jina (see services/search_chain.py)
+    # Used by the Knowledge Distiller resolver Stage B (candidate URL search).
+    # Missing keys skip their provider; RuntimeError if zero are configured.
+    from services.search_chain import build_search_fallback_chain
+    try:
+        app.state.search_chain = build_search_fallback_chain()
+        print("Search chain loaded (see services/search_chain.py for provider order).", flush = True)
+    except RuntimeError as _search_e:
+        app.state.search_chain = None
+        print(f"WARNING: search chain unavailable — {_search_e}", flush = True)
     # MinIO object storage for Knowledge Distiller artifacts (bucket self-provisions)
     from services.knowledge.storage import MinIOStudyStorage
     MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "https://minio-api.YOUR_TAILNET_DOMAIN.ts.net")
