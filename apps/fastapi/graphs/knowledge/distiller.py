@@ -994,6 +994,16 @@ class KnowledgeDistillerGraph:
             })
         except Exception as e:
             raise RuntimeError(f"Critic LLM call failed: {e}") from e
+        # Same None-guard rationale as _grade_attempt: with_structured_output
+        # can return None silently when the LLM emits no tool_call. Without
+        # this check, `llm_assessment.issues` below would crash with a
+        # misleading AttributeError.
+        if llm_assessment is None:
+            raise RuntimeError(
+                "critic returned None (no tool_call or malformed structured "
+                "output) — every model in the fallback chain failed to emit "
+                "a parseable CriticAssessment"
+            )
 
         # 4) Deterministic style linter — cheap, LLM-free, catches what the
         #    LLM critic is bad at (heading-depth drift, code-density spread,

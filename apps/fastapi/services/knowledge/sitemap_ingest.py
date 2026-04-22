@@ -11,10 +11,8 @@ PIPELINE (~2-5 min for typical ~100-500 page docs, vs ~20 min Tier 4 Playwright)
   3. Filter URLs to the docs subtree + language + extra allow/deny patterns
   4. Parallel httpx GET each URL (Semaphore cap) with tenacity retries
   5. trafilatura extracts markdown from each HTML response (pure-Python,
-     F1 ≈ 0.791 on docs). rs-trafilatura would lift that to 0.859-0.966
-     but only ships cp312 wheels as of 0.1.1 — we're on cp313. Swap is
-     one line in `_extract_markdown` below once rs-trafilatura publishes
-     cp313 wheels.
+     F1 ≈ 0.791 on docs — acceptable quality, no Rust toolchain needed
+     in the image).
   6. Empty-content guard + `_write_raw()` to MinIO
   7. Partial-failure policy: continue; abort only if <50% succeed
 
@@ -235,13 +233,8 @@ def _filter_urls(
 # =============================================================================
 # trafilatura extraction
 # =============================================================================
-# Extractor rationale (2026-04-21): we'd prefer rs-trafilatura (Rust via
-# PyO3, F1 0.859-0.966 on docs) but upstream only ships cp312 wheels as of
-# 0.1.1 — our Dockerfile runs Python 3.13 so uv source-builds fail for
-# lack of Rust+gcc. Pure-Python trafilatura 2.0 is the fallback (F1 ≈
-# 0.791 on docs; still produces usable markdown). Swap is one line when
-# rs-trafilatura publishes cp313 wheels — see Step 5 in the ingestion
-# pipeline plan.
+# Pure-Python trafilatura 2.0, F1 ≈ 0.791 on docs. Good enough for the
+# content-quality gate + downstream planner; no Rust toolchain in the image.
 def _extract_markdown(html: str, url: str) -> Optional[str]:
     """
     Extract main content from HTML as markdown. Returns None on empty

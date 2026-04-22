@@ -1,34 +1,48 @@
 """
-Knowledge Distiller — Integral Docs Ingestion Service (Crawl4AI-powered)
+Knowledge Distiller — Ingestion Dispatcher + Tier 4 Crawl4AI
 
-Writes the entire official docs of a framework to MinIO at
-`<study_root>/research/raw/` using a single-path pipeline:
+This module exposes the public `ingest_framework_docs()` entry point and
+dispatches to one of five tier-specific strategies based on `cfg.tier` and
+`cfg.github_discover` (both set by the resolver in Stage D):
+
+  Tier-GH (github readme_only)  services/knowledge/github_ingest.py
+  Tier 1  (llms-full.txt)       services/knowledge/llms_full_ingest.py
+  Tier 2  (llms.txt)            services/knowledge/llms_txt_ingest.py
+  Tier 3  (sitemap.xml)         services/knowledge/sitemap_ingest.py
+  Tier 4  (Playwright/Crawl4AI) `_ingest_crawl4ai()` below — the default
+                                fallback when tier is None, when higher
+                                tiers raise, or when readme_only discovery
+                                returns no markdown.
+
+TIER 4 PIPELINE (Crawl4AI-powered fallback path in this module):
 
   1. AsyncUrlSeeder discovers URLs from `/sitemap.xml` + Common Crawl index
   2. URL pre-filter (blocklist, non-target-language paths, same-host only)
   3. AsyncWebCrawler.arun_many() fetches each via Playwright Chromium
-  4. Each page goes through the post-fetch quality gate (min chars, link density)
-  5. Write successful markdown to MinIO
+  4. Each page goes through a minimal post-fetch empty-content gate
+     (PruningContentFilter has already removed nav/sidebar upstream)
+  5. Write successful markdown to MinIO at `<study_root>/research/raw/`
 
-Old tier-based code (/llms-full.txt + /llms.txt + sitemap.xml httpx fetches
-+ Crawl4AI fallback) was removed because:
-  - .txt shortcuts are rarely published and prone to soft-404 failures
-  - httpx-based sitemap fetching gets 403'd by Cloudflare on PyTorch/JAX
-  - Crawl4AI via Playwright passes WAF bot checks (real browser fingerprint)
-    and renders JS SPAs (Next.js, React Router, Vue) correctly
-
-With NVIDIA NIM's generous free-tier budget there's no reason to optimize
-for fewer pages — scanning the integral docs and letting the planner drop
-noise via `unused_files` is strictly more reliable.
+Crawl4AI via Playwright is the right last-resort because it passes WAF bot
+checks (real browser fingerprint) and renders JS SPAs (Next.js, React
+Router, Vue) correctly. Higher tiers use plain httpx and skip the browser
+when the site publishes a structured index.
 
 LANGUAGE SCOPING
 Polyglot docs (OpenTelemetry, Kubernetes, gRPC, ...) publish materials for
 many programming languages at once. When the user asks for a specific
 language (signal from the scope classifier), we filter URLs to that
 language's paths plus language-agnostic pages (concepts, specification).
+The same filter helpers (`_build_language_filter`, `_is_polyglot_framework`,
+`_should_keep`) are re-used by Tier 2/3 for uniform behavior.
+
+SHARED HELPERS EXPORTED TO OTHER TIERS
+  `_write_raw`, `_slugify`, `_build_language_filter`, `_is_polyglot_framework`,
+  `_should_keep`, `_matches_any` are imported by Tier 2/3/GH.
 
 References:
   - docs/KNOWLEDGE-DISTILLER-ARCHITECTURE.md (crawl layer)
+  - docs/KNOWLEDGE-DISTILLER-INGESTION-PIPELINE-PLAN.md (tier design)
   - Crawl4AI v0.8 API: AsyncUrlSeeder + SeedingConfig + AsyncWebCrawler
 """
 import asyncio
@@ -346,17 +360,17 @@ async def ingest_framework_docs(
     the hint fields None fall through to Tier 4 (Crawl4AI Playwright) so
     the existing /studies behavior is preserved.
 
-    Strategy table:
-      github_discover == "readme_only"  → Tier-GH  (not implemented yet)
-      tier == 1                         → Tier 1   (not implemented yet)
-      tier == 2                         → Tier 2   (not implemented yet)
-      tier == 3                         → Tier 3   (not implemented yet)
-      tier == 4 | None                  → Tier 4   (existing Crawl4AI path)
+    Strategy table (all implemented):
+      github_discover == "readme_only"  → Tier-GH (GitHub tree + raw.md fetch)
+      tier == 1                         → Tier 1  (one-shot llms-full.txt)
+      tier == 2                         → Tier 2  (llms.txt + .md link fetch)
+      tier == 3                         → Tier 3  (sitemap.xml + httpx + trafilatura)
+      tier == 4 | None                  → Tier 4  (Crawl4AI + Playwright; this file)
 
-    Tier 1/2/3/GH branches will be added in follow-up steps (see
-    docs/KNOWLEDGE-DISTILLER-INGESTION-PIPELINE-PLAN.md). Until each
-    lands, the dispatcher falls through to Tier 4 so the pipeline
-    keeps running on all frameworks.
+    Each higher tier wraps its work in try/except and falls back to Tier 4
+    on any raise (e.g. all llms.txt links off-subtree, repo has no docs/).
+    The fallback means the pipeline always produces a corpus as long as
+    Playwright can reach the docs host.
     """
     # Tier-GH short-circuit: github.com readme-only repos have no docs
     # host to Playwright-crawl; the GitHub API tree + raw.githubusercontent
@@ -391,9 +405,9 @@ async def ingest_framework_docs(
 
     # Tier 3 — sitemap.xml parallel httpx fast path. Resolver D-probe already
     # content-validated the sitemap; Tier 3 expands it, filters to docs
-    # subtree, parallel-fetches pages, and extracts markdown via
-    # rs-trafilatura (F1 0.859-0.966 on docs). ~2-5 min for 100-500 pages
-    # vs ~20 min Tier 4 Playwright.
+    # subtree, parallel-fetches pages, and extracts markdown via trafilatura
+    # (pure Python, F1 ≈ 0.791 on docs). ~2-5 min for 100-500 pages vs
+    # ~20 min Tier 4 Playwright.
     if cfg.tier == 3:
         logger.info(f"[ingest] dispatcher → Tier 3 (sitemap httpx) for {cfg.framework!r}")
         try:

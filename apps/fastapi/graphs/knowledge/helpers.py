@@ -447,14 +447,25 @@ async def _synthesize_attempt(
     llm: ChatOpenAI) -> ChapterSynthesis:
     """
     Single synthesis attempt. Pydantic's ChapterSynthesis schema enforces
-    shape (content + challenges + 8-15 flashcards). If the LLM returns
-    malformed output, with_structured_output raises — caller handles.
+    shape (content + challenges + 8-15 flashcards).
+
+    Why the None guard:
+      `with_structured_output(method="function_calling")` on LangChain's
+      fallback chain can return None when the LLM produced no tool_call
+      (e.g., the model returned a plain-text apology, or emitted malformed
+      arguments that were filtered out). That's NOT raised as an exception
+      by LangChain — it just returns None and moves on. A subsequent
+      `synthesis.content` access then fails with AttributeError at the
+      wrong place (was being caught by the grader's try/except and
+      misreported as "Grader failed"). Raising explicitly here triggers
+      the fallback chain to try the next model and produces a truthful
+      error message if everything ultimately fails.
     """
     chain = SYNTHESIZER_PROMPT | llm.with_structured_output(
         ChapterSynthesis,
         method = "function_calling",
     )
-    return await chain.ainvoke({
+    result = await chain.ainvoke({
         "framework": framework,
         "chapter_number": chapter.number,
         "chapter_title": chapter.title,
@@ -463,6 +474,12 @@ async def _synthesize_attempt(
         "tone_block": tone_block,
         "previous_adjustments": _format_adjustments(previous_adjustments),
     })
+    if result is None:
+        raise RuntimeError(
+            "synthesizer returned None (no tool_call or malformed structured "
+            "output) — fallback chain should retry the next model"
+        )
+    return result
 
 
 async def _grade_attempt(
@@ -476,18 +493,28 @@ async def _grade_attempt(
     structured GraderEvaluation with per-dimension scores, a weighted_score,
     an action ('accept' | 'refine' | 'regenerate'), and a list of specific
     issues to address on the next attempt.
+
+    Same None-guard rationale as _synthesize_attempt — `with_structured_output`
+    can return None silently, and a None GraderEvaluation would crash the
+    argmax logic immediately after.
     """
     chain = GRADER_PROMPT | llm.with_structured_output(
         GraderEvaluation,
         method = "function_calling",
     )
-    return await chain.ainvoke({
+    result = await chain.ainvoke({
         "framework": framework,
         "user_profile_summary": _user_profile_summary(user_profile),
         "acceptance_threshold": user_profile.acceptance_threshold,
         "assigned_files_list": ", ".join(chapter.assigned_files),
         "synthesis_text": synthesis_text[:GRADER_SYNTHESIS_MAX_CHARS],
     })
+    if result is None:
+        raise RuntimeError(
+            "grader returned None (no tool_call or malformed structured "
+            "output) — fallback chain should retry the next model"
+        )
+    return result
 
 
 async def _generate_adjustment(

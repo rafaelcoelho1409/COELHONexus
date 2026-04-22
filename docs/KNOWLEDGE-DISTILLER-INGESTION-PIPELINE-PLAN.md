@@ -33,7 +33,7 @@ All applied to `services/knowledge/ingestion.py` — ~97% success rate (from 55.
 |---|---|---|---|
 | **1** | `/llms-full.txt` content-VALID at host root | httpx GET → save single file | ~3s |
 | **2** | `/llms.txt` content-VALID | Parse llms.txt → parallel fetch `.md` links via httpx | ~1 min |
-| **3** | `/sitemap.xml` content-VALID | Parse `<loc>` entries → filter docs URLs → parallel httpx fetch → rs-trafilatura extract | ~2-5 min |
+| **3** | `/sitemap.xml` content-VALID | Parse `<loc>` entries → filter docs URLs → parallel httpx fetch → trafilatura extract | ~2-5 min |
 | **4** | All three MISSING | Crawl4AI + Playwright (existing code) | ~20 min |
 | **GH** | `source_signals.github_discover == "readme_only"` | GitHub API `/git/trees?recursive=1` → filter `*.md` → parallel `raw.githubusercontent.com` fetch | ~5s |
 
@@ -53,7 +53,7 @@ Tier-GH is a sub-case of Tier 4 (`tier=4 + readme_only`). Dispatcher checks gith
 | Async rate-limiter | `aiolimiter` | 1.2 |
 | Async retries | `tenacity` | 9.x |
 | llms.txt parser | `llms-txt` | 0.0.6 (AnswerDotAI, PyPI) |
-| HTML→markdown (Tier 3 + 4) | `rs-trafilatura` (Rust via PyO3) | latest — 0.931 F1 docs vs Crawl4AI default 0.888 |
+| HTML→markdown (Tier 3) | `trafilatura` | ≥2.0 — pure Python, F1 ≈ 0.791 on docs. rs-trafilatura (F1 0.931) considered but rejected — ships no cp313 wheels, needs Rust toolchain in image. |
 | Tier 4 browser crawler | `crawl4ai` | 0.8.0 (already in stack) |
 | LangGraph (step 7) | `langgraph` | 1.1.x (already in stack) |
 
@@ -129,14 +129,16 @@ Each step is a self-contained session with its own verification. The first 2 shi
 
 **Why fourth**: Tier 3 is the most common classification (~50% of frameworks — FastAPI, Grafana, most docs sites). Cutting 20 min → 2-5 min is a huge UX win.
 
-1. Install `rs-trafilatura` via `uv pip install rs-trafilatura` into `pyproject.toml`.
+1. Install `trafilatura` via `uv pip install trafilatura` (pure Python,
+   no Rust toolchain). rs-trafilatura was considered (higher F1) but
+   dropped — see Step 5 note.
 2. Create `_ingest_sitemap_httpx(cfg, storage)`:
    ```python
    # 1. GET {host_root}/sitemap.xml (already VALID per resolver)
    # 2. Recursively unwrap sitemap indexes (<sitemapindex> → follow sub-sitemaps)
    # 3. Filter <loc> URLs: must be under docs_url path, exclude /blog/, /news/, /release-notes/
-   # 4. Parallel GET with aiolimiter (10/sec) + tenacity retries
-   # 5. For each HTML: rs_trafilatura.extract(html, output_format="markdown")
+   # 4. Parallel GET with Semaphore(10) + tenacity retries
+   # 5. For each HTML: trafilatura.extract(html, output_format="markdown")
    # 6. Apply existing _passes_content_quality() gate
    # 7. _write_raw() to MinIO
    ```
@@ -145,21 +147,18 @@ Each step is a self-contained session with its own verification. The first 2 shi
 
 **Verification**: `POST /studies` with FastAPI → expect 2-5 min, ~50-150 pages. Compare quality vs Tier 4 Playwright output of the same framework.
 
-### Step 5 — rs-trafilatura swap in Tier 4  (~30 LoC, 1h)
+### Step 5 — DROPPED (rs-trafilatura swap)
 
-**Why fifth**: +4.3 F1 on content extraction across every Tier 4 page. One-line swap after rs-trafilatura is installed (step 4 prereq).
+Originally planned as a Tier 3/4 extractor upgrade (pure-Python trafilatura
+F1 ≈ 0.791 → Rust-PyO3 rs-trafilatura F1 ≈ 0.931). **Dropped** because
+rs-trafilatura 0.1.1 only ships `cp312` wheels and our image runs Python
+3.13; source-compile needs `rustc + gcc` added to the Dockerfile. Upstream
+is slow to add cp313 wheels, and we've decided the F1 delta isn't worth
+adding a Rust toolchain to the image. Trafilatura (pure Python) is the
+permanent Tier 3/4 extractor.
 
-1. In `_ingest_crawl4ai()`, replace the markdown extraction line:
-   ```python
-   # BEFORE
-   md = result.markdown.fit_markdown
-   # AFTER
-   from rs_trafilatura import extract
-   md = extract(result.cleaned_html, output_format="markdown") or result.markdown.fit_markdown
-   ```
-2. Keep Crawl4AI's markdown as fallback when rs-trafilatura returns None.
-
-**Verification**: Re-run a Tier 4 framework (TensorRT-LLM) — output should have less nav/footer noise.
+If upstream ships cp313 wheels in the future, revisit as a one-line swap
+inside `_extract_markdown` in sitemap_ingest.py / llms_txt_ingest.py.
 
 ### Step 6 — Tier 2 (`_ingest_llms_txt()`, ~100 LoC, 1-2h)
 

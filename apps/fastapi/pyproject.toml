@@ -39,7 +39,7 @@ dependencies = [
     "playwright",              # Browser automation (connects to remote server)
     "tenacity",                # Retry with exponential backoff
     "crawl4ai>=0.8.0,<0.9",    # LLM-friendly docs crawler (Knowledge Distiller Tier 4)
-    "trafilatura>=2.0",        # HTML → markdown extractor for KD Tier 3 (pure Python, F1≈0.791 on docs; rs-trafilatura would need Rust+gcc in the image, deferred to a separate Dockerfile change)
+    "trafilatura>=2.0",        # HTML → markdown extractor for KD Tier 3/4 (pure Python, F1≈0.791 on docs)
     "llms-txt>=0.0.6",         # Official AnswerDotAI llms.txt parser (KD Tier 2)
     "aioboto3>=13.0",          # Async S3 client for MinIO (Knowledge Distiller storage)
     "pypandoc>=1.13",          # Pandoc Python wrapper (KD exports: PDF/HTML/EPUB). Requires system `pandoc` + `texlive-xetex` for PDF (installed in Dockerfile.fastapi).

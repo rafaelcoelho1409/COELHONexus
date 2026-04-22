@@ -228,8 +228,7 @@ def _looks_like_markdown(url: str) -> bool:
 
 
 def _html_to_markdown(html: str, url: str) -> Optional[str]:
-    """Trafilatura extraction — same path as Tier 3. Swap to rs-trafilatura
-    when cp313 wheels are available (see sitemap_ingest.py)."""
+    """Trafilatura extraction — same pure-Python path as Tier 3."""
     try:
         import trafilatura
     except ImportError:
