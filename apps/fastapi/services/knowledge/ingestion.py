@@ -360,14 +360,21 @@ async def ingest_framework_docs(
     """
     # Tier-GH short-circuit: github.com readme-only repos have no docs
     # host to Playwright-crawl; the GitHub API tree + raw.githubusercontent
-    # fetch produces better results in ~5s instead of ~20 min.
+    # fetch produces better results in ~5s instead of ~20 min. Falls back
+    # to Tier 4 on any failure (e.g. repo with no docs/ + no README) so the
+    # pipeline always produces a corpus.
     if cfg.github_discover == "readme_only":
         logger.info(
-            f"[ingest] dispatcher → Tier-GH (readme_only) for "
-            f"{cfg.framework!r}; not yet implemented, falling back to Tier 4"
+            f"[ingest] dispatcher → Tier-GH (readme_only) for {cfg.framework!r}"
         )
-        # Step 2 of the plan will land `_ingest_github_tree(cfg, storage)` —
-        # until then, fall through to Tier 4 so the pipeline doesn't break.
+        try:
+            from services.knowledge.github_ingest import ingest_github_tree
+            return await ingest_github_tree(cfg, storage)
+        except Exception as e:
+            logger.warning(
+                f"[ingest] Tier-GH failed for {cfg.framework!r} ({e}); "
+                f"falling back to Tier 4 Playwright"
+            )
 
     # Tier 1/2/3 branches: stubbed. Same graceful fallthrough to Tier 4.
     if cfg.tier in (1, 2, 3):

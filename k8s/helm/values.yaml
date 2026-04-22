@@ -113,6 +113,8 @@ secretMappings:
     key: tavily-api-key
   - envName: JINA_API_KEY
     key: jina-api-key
+  - envName: GITHUB_TOKEN
+    key: github-token
 
 # Registry configuration - uses k3d COELHOCloud Registry (same as Skaffold)
 registry:

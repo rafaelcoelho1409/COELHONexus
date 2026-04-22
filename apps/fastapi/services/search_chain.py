@@ -62,7 +62,6 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse, quote as _urlquote
-
 import httpx
 
 from schemas.knowledge.resolver import SearxngHit
