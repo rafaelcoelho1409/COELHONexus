@@ -405,12 +405,21 @@ async def ingest_framework_docs(
                 f"falling back to Tier 4 Playwright"
             )
 
-    # Tier 2 branch: stubbed. Same graceful fallthrough to Tier 4.
+    # Tier 2 — /llms.txt index + parallel link fetch. Resolver D-probe
+    # already content-validated the llms.txt; Tier 2 parses it via
+    # AnswerDotAI's official llms_txt library, filters links to the docs
+    # subtree, and parallel-fetches each (raw-save for *.md links,
+    # trafilatura-extract for HTML links). ~30-90s for typical indexes.
     if cfg.tier == 2:
-        logger.info(
-            f"[ingest] dispatcher → Tier 2 requested for {cfg.framework!r}; "
-            f"not yet implemented, falling back to Tier 4"
-        )
+        logger.info(f"[ingest] dispatcher → Tier 2 (llms.txt) for {cfg.framework!r}")
+        try:
+            from services.knowledge.llms_txt_ingest import ingest_llms_txt
+            return await ingest_llms_txt(cfg, storage)
+        except Exception as e:
+            logger.warning(
+                f"[ingest] Tier 2 failed for {cfg.framework!r} ({e}); "
+                f"falling back to Tier 4 Playwright"
+            )
 
     # Default path: Tier 4 (Crawl4AI Playwright). Handles cfg.tier == 4
     # explicitly AND any None/stubbed case above. Runs the existing
