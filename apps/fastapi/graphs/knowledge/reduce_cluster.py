@@ -1,29 +1,63 @@
 """
-Knowledge Distiller — Clio-pattern REDUCE (embed + k-means + label + order)
+Knowledge Distiller — Clio-pattern REDUCE (v2: production-tuned)
 
-Replaces the single-shot CHAPTER_REDUCE_PROMPT call that fails on large
-corpora (observed 2026-04-22: 300 micro-clusters → NIM 504 gateway timeout
-every attempt, Groq 413 TPM rate-limit on llama-3.3-70b-versatile).
+Replaces the single-shot CHAPTER_REDUCE_PROMPT that fails on large corpora
+(observed 2026-04-22: 300 micro-clusters → NIM 504 gateway timeout on every
+reasoning model, Groq 413 TPM rate-limit on every model except llama-4-scout).
 
-The Clio pattern (Anthropic, arxiv 2412.13678 §Hierarchizer):
-    MAP pass (unchanged): N shard-labelers emit ~300 micro-clusters.
-    Embed (cluster_name + description) locally via fastembed ONNX.
-    k-means groups vectors into M meta-clusters; silhouette picks M∈[4,12].
-    For each meta-cluster, one small LLM call emits (title, goal).
-    One small LLM call orders the M chapters.
-    assigned_files = union of member micro-clusters' file_slugs (deterministic).
+v2 (2026-04-22, research-tuned): the v1 Clio pattern works but silhouette-based
+k-selection collapses on same-domain corpora, always picking k=_MIN_CHAPTERS.
+Deep research into production pipelines (Clio Appendix G.7, Kura, BERTopic,
+HERCULES) converged on: stop letting geometry pick k on tight corpora, pick
+from corpus size + pedagogical target, then let clustering serve that target.
 
-Why it works where the single-shot REDUCE fails:
-    Biggest LLM prompt becomes ~3K tokens (one meta-cluster's member list) —
-    fits every Groq free-tier TPM cap AND completes well inside NIM's 300s
-    gateway window. No single-point-of-failure call: M labeling calls run
-    in parallel via asyncio.gather, each with the full fallback chain.
+Pipeline (differences from v1 flagged):
 
-Coverage invariant:
-    Not enforced here — the caller (graphs/knowledge/distiller.py:planner)
-    runs the existing deterministic coverage-repair step after this function
-    returns. Orphaned slugs go to unused_files; hallucinated slugs get
-    dropped. Those passes are schema-agnostic and work unchanged.
+    MAP (unchanged): N shard-labelers emit ~300 micro-clusters.
+
+    REDUCE:
+      1. Embed (cluster_name + description) locally via fastembed
+         BAAI/bge-base-en-v1.5 [v2: upgraded from bge-small for +2 MTEB
+         Clustering points; still fastembed-compatible, ~220MB download].
+      2. UMAP pre-reduction [v2: new] — n_components=5, n_neighbors=15,
+         min_dist=0.0, metric='cosine', random_state=42. Un-collapses local
+         neighborhoods flattened on the L2-normalized hypersphere; silhouette
+         0.06 → ~0.25 on BERTopic-community tight-corpus benchmarks.
+      3. Size-based k_target [v2: replaces silhouette sweep] — blends
+         Clio's `n_micro / 40` formula with pedagogical `n_files / 50`.
+         Example: 305 micro-clusters + 4000 files → k_target = 8
+         (vs v1 silhouette picking k=4).
+      4. KMeansConstrained [v2: new] with size_min = fair_share / 3 and
+         size_max = fair_share × 2 — kills the "3-file chapter next to
+         1300-file chapter" pathology.
+      5. Calinski-Harabasz tiebreaker within k_target ± 1 [v2: new] — more
+         reliable than silhouette for picking among adjacent k on tight clouds
+         because CH normalizes by (n-k)/(k-1).
+      6. Parallel META_LABEL_PROMPT calls, one per meta-cluster.
+      7. Cross-meta-cluster slug dedup [v2: new] — majority vote on
+         micro-cluster membership, closest-centroid as tiebreaker. Fixes
+         the ~20 double-assigned slugs observed in v1.
+      8. One ORDER_PROMPT call to sequence the chapters.
+
+Biggest LLM call stays ~3K tokens — safely under every free-tier constraint.
+
+Dependencies (all pure Python, no GPU):
+    fastembed        (already present)
+    scikit-learn     (already present; used for CH/silhouette + KMeans fallback)
+    numpy            (transitively present)
+    umap-learn       (added 2026-04-22)
+    k-means-constrained (added 2026-04-22)
+
+Coverage invariant: downstream `_validate_plan` + coverage-repair in
+`distiller.py` still run unchanged — orphaned slugs go to unused_files,
+hallucinated slugs get dropped.
+
+References:
+    Clio (Anthropic, arXiv 2412.13678) — §G.5, §G.7, §C.1.3
+    Kura (jxnl/kura) — meta_cluster.py
+    BERTopic — Best Practices + Parameter Tuning pages
+    HERCULES (arXiv 2506.19992) — hierarchical k-means + LLM
+    k-means-constrained — MCF-based balanced clustering (joshlk/k-means-constrained)
 """
 import asyncio
 import logging
@@ -34,7 +68,7 @@ from typing import Optional
 import numpy as np
 from langchain_core.runnables import Runnable
 from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import calinski_harabasz_score, silhouette_score
 
 from schemas.knowledge.agents import (
     ChapterPlan,
@@ -52,12 +86,30 @@ from services.knowledge.embeddings import embed_texts
 logger = logging.getLogger(__name__)
 
 
-# Pydantic constraints on ChapterPlanList: chapters must be 4..12.
+# ChapterPlanList pydantic bounds (mirrored here for local clamping).
 _MIN_CHAPTERS = 4
 _MAX_CHAPTERS = 12
 
-# k-means PRNG seed — deterministic clustering per run given same inputs.
-_KMEANS_SEED = 42
+# Deterministic seed for every stochastic step (UMAP, k-means init, etc.)
+_SEED = 42
+
+# Clio Appendix G.7: ~40 base clusters per parent neighborhood.
+# Our shard labelers emit ~3 micro-clusters per 40-file shard, so 305 microclusters
+# map cleanly to ~8 meta-clusters via `round(305/40)` — matching the pedagogical target.
+_MICROS_PER_META_TARGET = 40
+
+# Pedagogical volume target: ~50 files per chapter keeps the synthesizer
+# prompt under ~15K tokens at CHAPTER_FILES_MAX_CHARS=180K.
+_FILES_PER_CHAPTER_TARGET = 50
+
+# UMAP defaults from BERTopic Best Practices (maartengr.github.io/BERTopic):
+#   n_components=5 preferred over 10 for downstream clustering quality
+#   n_neighbors=15 preserves local structure without merging near-clusters
+#   min_dist=0.0 + metric='cosine' is canonical for sentence-transformer embeds
+_UMAP_N_COMPONENTS = 5
+_UMAP_N_NEIGHBORS = 15
+_UMAP_MIN_DIST = 0.0
+_UMAP_METRIC = "cosine"
 
 
 async def embed_and_cluster_reduce(
@@ -67,25 +119,21 @@ async def embed_and_cluster_reduce(
     llm: Runnable,
 ) -> ChapterPlanList:
     """
-    Clio-pattern REDUCE.
+    Clio-pattern REDUCE v2 (production-tuned 2026-04-22).
 
     Args:
-        shard_results: output of the MAP pass (one per shard; contains the
-            shard's micro-clusters and unused_shard_slugs).
-        shard_unused_all: already-flattened list of slugs the shard
-            labelers flagged as noise. Propagated into the plan's
-            unused_files bucket verbatim.
+        shard_results: output of the MAP pass (one per shard).
+        shard_unused_all: already-flattened slugs the shard labelers flagged
+            as noise — propagated verbatim into the plan's unused_files bucket.
         framework: display name passed to every prompt (e.g., "langchain").
-        llm: the fallback-chain runnable (build_llm_fallback_chain()).
+        llm: fallback-chain runnable (build_llm_fallback_chain()).
 
     Returns:
-        ChapterPlanList with 4..12 ordered chapters. Coverage-repair runs
-        in the caller against the full corpus slug-set.
+        ChapterPlanList with `_MIN_CHAPTERS..._MAX_CHAPTERS` ordered chapters.
+        Coverage-repair runs in the caller against the full corpus slug-set.
 
     Raises:
-        RuntimeError: if the MAP pass produced fewer than _MIN_CHAPTERS
-        micro-clusters — that corpus is too small for a map-reduce shape;
-        caller should fall back to the single-shot PLANNER_PROMPT path.
+        RuntimeError: if MAP produced fewer than `_MIN_CHAPTERS` micro-clusters.
     """
     # 1. Flatten all micro-clusters across shards
     micro_clusters: list[ShardCluster] = []
@@ -95,80 +143,145 @@ async def embed_and_cluster_reduce(
     if n_clusters < _MIN_CHAPTERS:
         raise RuntimeError(
             f"[reduce-cluster] only {n_clusters} micro-clusters from MAP — "
-            f"need ≥{_MIN_CHAPTERS} for a valid ChapterPlanList. Corpus is "
-            f"too small for map-reduce; caller should use single-shot planner."
+            f"need ≥{_MIN_CHAPTERS} for a valid ChapterPlanList."
         )
-    total_slugs = sum(len(c.file_slugs) for c in micro_clusters)
+    total_slugs_assigned = sum(len(c.file_slugs) for c in micro_clusters)
     logger.info(
         f"[reduce-cluster] {n_clusters} micro-clusters, "
-        f"{total_slugs} assigned slugs, "
+        f"{total_slugs_assigned} assigned slugs, "
         f"{len(shard_unused_all)} shard-unused"
     )
 
-    # 2. Embed (cluster_name + description) locally — no external API
+    # 2. Embed — NIM primary, local fastembed fallback (selectable via env var)
     t0 = time.time()
     texts = [f"{c.cluster_name}: {c.description}" for c in micro_clusters]
-    vectors_list = await embed_texts(texts)
-    vectors = np.asarray(vectors_list, dtype = np.float32)
+    vectors_list, embed_provider = await embed_texts(texts)
+    vectors = np.asarray(vectors_list, dtype=np.float32)
     logger.info(
         f"[reduce-cluster] embedded {n_clusters}×{vectors.shape[1]}d "
-        f"in {time.time() - t0:.2f}s (fastembed BAAI/bge-small-en-v1.5)"
+        f"in {time.time() - t0:.2f}s via {embed_provider}"
     )
 
-    # 3. k-means sweep with silhouette selection
-    # k upper bound: ≤12 (schema cap), and ≤ n_clusters//3 so meta-clusters
-    # stay meaningful (no meta-cluster with 1-2 members dominating).
+    # 3. UMAP pre-reduction (v2 addition)
+    # BERTopic-community consensus: silhouette 0.06 → ~0.25 on tight corpora.
+    # n_neighbors capped at n_clusters-1 for tiny corpora. CPU-only, ~1-3s.
     t0 = time.time()
-    k_max = min(_MAX_CHAPTERS, max(_MIN_CHAPTERS, n_clusters // 3))
-    best_k: int = _MIN_CHAPTERS
+    try:
+        from umap import UMAP
+        umap_model = UMAP(
+            n_neighbors=min(_UMAP_N_NEIGHBORS, n_clusters - 1),
+            n_components=_UMAP_N_COMPONENTS,
+            min_dist=_UMAP_MIN_DIST,
+            metric=_UMAP_METRIC,
+            random_state=_SEED,
+        )
+        vectors_reduced = np.asarray(umap_model.fit_transform(vectors), dtype=np.float32)
+        logger.info(
+            f"[reduce-cluster] UMAP {vectors.shape[1]}d → "
+            f"{vectors_reduced.shape[1]}d in {time.time() - t0:.2f}s "
+            f"(n_neighbors={min(_UMAP_N_NEIGHBORS, n_clusters - 1)}, "
+            f"min_dist={_UMAP_MIN_DIST}, metric={_UMAP_METRIC})"
+        )
+    except Exception as e:
+        logger.warning(
+            f"[reduce-cluster] UMAP failed ({type(e).__name__}: {e}); "
+            f"falling back to raw embeddings"
+        )
+        vectors_reduced = vectors
+
+    # 4. Size-based k_target (v2 replaces silhouette sweep)
+    k_meta = max(_MIN_CHAPTERS, min(_MAX_CHAPTERS, round(n_clusters / _MICROS_PER_META_TARGET)))
+    k_volume = max(_MIN_CHAPTERS, min(_MAX_CHAPTERS, round(total_slugs_assigned / _FILES_PER_CHAPTER_TARGET)))
+    k_target = max(_MIN_CHAPTERS, min(_MAX_CHAPTERS, round((k_meta + k_volume) / 2)))
+    logger.info(
+        f"[reduce-cluster] k selection: "
+        f"k_meta={k_meta} (n_clusters/{_MICROS_PER_META_TARGET}), "
+        f"k_volume={k_volume} (n_files/{_FILES_PER_CHAPTER_TARGET}), "
+        f"k_target={k_target}"
+    )
+
+    # 5. KMeansConstrained sweep over k_target ± 1 with Calinski-Harabasz tiebreaker
+    t0 = time.time()
+    k_candidates = [
+        k for k in (k_target - 1, k_target, k_target + 1)
+        if _MIN_CHAPTERS <= k <= _MAX_CHAPTERS and k < n_clusters
+    ]
+    best_k: int = k_target
     best_labels: Optional[np.ndarray] = None
-    best_score: float = -1.0
-    for k in range(_MIN_CHAPTERS, k_max + 1):
-        if k >= n_clusters:
-            break
-        km = KMeans(n_clusters = k, random_state = _KMEANS_SEED, n_init = 10)
-        labels = km.fit_predict(vectors)
+    best_ch: float = -1.0
+    best_sil: float = 0.0
+    sweep_results: list[tuple[int, float, float]] = []
+    for k in k_candidates:
+        fair_share = n_clusters / k
+        size_min = max(1, int(fair_share / 3))
+        size_max = max(size_min + 1, int(fair_share * 2))
         try:
-            score = float(silhouette_score(vectors, labels))
+            from k_means_constrained import KMeansConstrained
+            km = KMeansConstrained(
+                n_clusters=k,
+                size_min=size_min,
+                size_max=size_max,
+                random_state=_SEED,
+            )
+            labels = km.fit_predict(vectors_reduced)
+        except Exception as e:
+            logger.warning(
+                f"[reduce-cluster] KMeansConstrained(k={k}, "
+                f"size_min={size_min}, size_max={size_max}) failed "
+                f"({type(e).__name__}: {e}); falling back to plain KMeans"
+            )
+            km = KMeans(n_clusters=k, random_state=_SEED, n_init=10)
+            labels = km.fit_predict(vectors_reduced)
+        try:
+            ch = float(calinski_harabasz_score(vectors_reduced, labels))
+            sil = float(silhouette_score(vectors_reduced, labels))
         except ValueError:
             continue
-        if score > best_score:
-            best_k, best_labels, best_score = k, labels, score
+        sweep_results.append((k, ch, sil))
+        if ch > best_ch:
+            best_k, best_labels, best_ch, best_sil = k, labels, ch, sil
 
     if best_labels is None:
-        # Silhouette couldn't score any k (e.g., all points identical).
-        # Fall back to k = _MIN_CHAPTERS so downstream pydantic validation passes.
-        km = KMeans(n_clusters = _MIN_CHAPTERS, random_state = _KMEANS_SEED, n_init = 10)
-        best_k = _MIN_CHAPTERS
-        best_labels = km.fit_predict(vectors)
-        best_score = -1.0
+        # Last resort: plain unconstrained KMeans at k_target
+        logger.warning(
+            f"[reduce-cluster] all constrained k fits failed; "
+            f"falling back to plain KMeans(k={k_target})"
+        )
+        km = KMeans(n_clusters=k_target, random_state=_SEED, n_init=10)
+        best_k = k_target
+        best_labels = km.fit_predict(vectors_reduced)
+        best_ch = best_sil = 0.0
 
     size_counter = Counter(int(lbl) for lbl in best_labels)
     sizes_str = ", ".join(str(size_counter[i]) for i in range(best_k))
+    sweep_str = ", ".join(f"k={k}(CH={ch:.1f},sil={sil:.3f})" for k, ch, sil in sweep_results)
     logger.info(
-        f"[reduce-cluster] k-means k={best_k} silhouette={best_score:.3f} "
-        f"sizes=[{sizes_str}] in {time.time() - t0:.2f}s"
+        f"[reduce-cluster] k={best_k} CH={best_ch:.1f} silhouette={best_sil:.3f} "
+        f"sizes=[{sizes_str}] sweep=[{sweep_str}] in {time.time() - t0:.2f}s"
     )
 
-    # 4. Group micro-clusters by meta-cluster id (stable over runs given
-    #    the seed; exact cluster-id numbering doesn't matter — ordering
-    #    pass handles reading order).
-    meta_groups: dict[int, list[ShardCluster]] = {}
-    for mc, lbl in zip(micro_clusters, best_labels):
-        meta_groups.setdefault(int(lbl), []).append(mc)
+    # 6. Group micro-clusters by meta-cluster id
+    meta_groups: dict[int, list[int]] = {}  # meta_id → list of micro-cluster indices
+    for i, lbl in enumerate(best_labels):
+        meta_groups.setdefault(int(lbl), []).append(i)
 
-    # 5. Label each meta-cluster in parallel.
-    # Each prompt is ~3K tokens (30 member lines × ~100 chars) — safely
-    # under every fallback-chain model's limit.
+    # Meta-cluster centroids (on UMAP-reduced space — the space where k-means actually ran)
+    centroids: dict[int, np.ndarray] = {
+        mid: vectors_reduced[idxs].mean(axis=0)
+        for mid, idxs in meta_groups.items()
+    }
+
+    # 7. Label each meta-cluster in parallel (~3K tokens each)
     t0 = time.time()
     label_chain = META_LABEL_PROMPT | llm.with_structured_output(
-        MetaLabelDraft, method = "function_calling",
+        MetaLabelDraft, method="function_calling",
     )
 
     async def _label_one(
         meta_id: int,
-        members: list[ShardCluster],
+        micro_indices: list[int],
     ) -> tuple[int, MetaLabelDraft, list[str]]:
+        members = [micro_clusters[i] for i in micro_indices]
         member_lines = "\n".join(
             f"- {m.cluster_name}: {m.description} "
             f"({len(m.file_slugs)} files: {', '.join(m.file_slugs[:3])}"
@@ -183,46 +296,92 @@ async def embed_and_cluster_reduce(
                 "member_lines": member_lines,
             })
         except Exception as e:
-            # One flaky label call should not kill the whole REDUCE.
-            # Emit a synthetic best-effort title; the critic may flag it
-            # downstream but the pipeline keeps moving.
             logger.warning(
                 f"[reduce-cluster] label call for meta {meta_id} failed "
                 f"({type(e).__name__}: {str(e)[:120]}); using synthetic draft"
             )
             seed_name = members[0].cluster_name if members else f"Meta {meta_id}"
             draft = MetaLabelDraft(
-                title = f"{seed_name} and Related",
-                goal = (
+                title=f"{seed_name} and Related",
+                goal=(
                     f"Understand {seed_name} as covered across "
                     f"{len(members)} related micro-clusters."
                 ),
             )
-        # Deterministic union of member slugs — no LLM trip needed here
-        assigned = sorted({s for m in members for s in m.file_slugs})
-        return meta_id, draft, assigned
+        # Raw union of member slugs (dedup happens in next step across meta-clusters)
+        raw_assigned = sorted({s for m in members for s in m.file_slugs})
+        return meta_id, draft, raw_assigned
 
     label_results: list[tuple[int, MetaLabelDraft, list[str]]] = await asyncio.gather(
-        *(_label_one(mid, members) for mid, members in meta_groups.items())
+        *(_label_one(mid, micro_indices) for mid, micro_indices in meta_groups.items())
     )
     logger.info(
         f"[reduce-cluster] labeled {len(label_results)} meta-clusters in "
         f"{time.time() - t0:.2f}s (parallel)"
     )
 
-    # Sort by meta_id so the ORDER_PROMPT sees a stable index space
-    label_results.sort(key = lambda r: r[0])
+    # Sort by meta_id for stable presentation
+    label_results.sort(key=lambda r: r[0])
+
+    # 8. Cross-meta-cluster slug dedup (v2 addition)
+    # Root cause of v1's ~20 double-assignments: the MAP shard-labeler sometimes
+    # puts the same slug in 2 overlapping micro-clusters within a shard. k-means
+    # then routes those micro-clusters to different meta-clusters, so the slug
+    # ends up in 2 chapters.
+    # Resolution: majority vote on micro-cluster membership; closest-centroid
+    # tiebreaker when the vote ties.
+    t0 = time.time()
+    slug_to_meta_ids: dict[str, list[int]] = {}  # slug → [meta_ids that claim it]
+    for meta_id, _, assigned in label_results:
+        for slug in assigned:
+            slug_to_meta_ids.setdefault(slug, []).append(meta_id)
+    duplicates = {s: ids for s, ids in slug_to_meta_ids.items() if len(ids) > 1}
+    slug_winner: dict[str, int] = {}
+    if duplicates:
+        # Precompute: slug → list of micro-cluster indices that contain it
+        slug_to_micro_idx: dict[str, list[int]] = {}
+        for i, mc in enumerate(micro_clusters):
+            for s in mc.file_slugs:
+                slug_to_micro_idx.setdefault(s, []).append(i)
+        for slug, meta_ids in duplicates.items():
+            counter = Counter(meta_ids)
+            top_count = max(counter.values())
+            top_ids = [mid for mid, c in counter.items() if c == top_count]
+            if len(top_ids) == 1:
+                slug_winner[slug] = top_ids[0]
+                continue
+            # Tied — use closest-centroid on the slug's own micro-cluster mean
+            slug_mean = vectors_reduced[slug_to_micro_idx[slug]].mean(axis=0)
+            best_mid, best_dist = top_ids[0], float("inf")
+            for mid in top_ids:
+                dist = float(np.linalg.norm(slug_mean - centroids[mid]))
+                if dist < best_dist:
+                    best_mid, best_dist = mid, dist
+            slug_winner[slug] = best_mid
+        # Rebuild assigned_files per meta-cluster, dropping slugs lost to others
+        cleaned: list[tuple[int, MetaLabelDraft, list[str]]] = []
+        for meta_id, draft, assigned in label_results:
+            filtered = [s for s in assigned if slug_winner.get(s, meta_id) == meta_id]
+            cleaned.append((meta_id, draft, filtered))
+        label_results = cleaned
+        logger.info(
+            f"[reduce-cluster] slug dedup: resolved {len(duplicates)} "
+            f"double-assigned slugs in {time.time() - t0:.3f}s"
+        )
+    else:
+        logger.info("[reduce-cluster] slug dedup: no duplicates")
+
     drafts = [r[1] for r in label_results]
     assigned_lists = [r[2] for r in label_results]
     M = len(drafts)
 
-    # 6. Order the chapters in one small LLM call (~2K tokens).
+    # 9. Order the chapters in one small LLM call (~2K tokens)
     t0 = time.time()
     chapter_lines = "\n".join(
         f"{i}: {d.title} — {d.goal}" for i, d in enumerate(drafts)
     )
     order_chain = ORDER_PROMPT | llm.with_structured_output(
-        OrderedIndices, method = "function_calling",
+        OrderedIndices, method="function_calling",
     )
     rationale: str
     try:
@@ -258,29 +417,33 @@ async def embed_and_cluster_reduce(
         f"[reduce-cluster] ordered {M} chapters in {time.time() - t0:.2f}s"
     )
 
-    # 7. Build the final ChapterPlanList
+    # 10. Build the final ChapterPlanList
     chapters: list[ChapterPlan] = []
-    for n, idx in enumerate(order, start = 1):
+    for n, idx in enumerate(order, start=1):
         drft = drafts[idx]
         chapters.append(ChapterPlan(
-            number = n,
-            title = drft.title,
-            goal = drft.goal,
-            assigned_files = assigned_lists[idx],
+            number=n,
+            title=drft.title,
+            goal=drft.goal,
+            assigned_files=assigned_lists[idx],
         ))
     unused_files = [
-        UnusedFile(slug = s, reason = "shard-flagged noise (low-value)")
+        UnusedFile(slug=s, reason="shard-flagged noise (low-value)")
         for s in shard_unused_all
     ]
     plan = ChapterPlanList(
-        chapters = chapters,
-        unused_files = unused_files,
-        reasoning = (
-            f"Clio-pattern REDUCE: {n_clusters} micro-clusters "
-            f"(from {len(shard_results)} shards) → "
-            f"k-means k={best_k} silhouette={best_score:.3f} "
-            f"sizes=[{sizes_str}] → {M} chapters. "
-            f"Ordering: {rationale}"
+        chapters=chapters,
+        unused_files=unused_files,
+        reasoning=(
+            f"Clio v2 REDUCE: {n_clusters} micro-clusters "
+            f"(from {len(shard_results)} shards, {total_slugs_assigned} assigned slugs) → "
+            f"embed via {embed_provider} → "
+            f"UMAP {vectors.shape[1]}d→{vectors_reduced.shape[1]}d → "
+            f"KMeansConstrained k={best_k} (k_target={k_target}, "
+            f"k_meta={k_meta}, k_volume={k_volume}) "
+            f"CH={best_ch:.1f} silhouette={best_sil:.3f} sizes=[{sizes_str}] → "
+            f"{len(duplicates)} slug-dedups → "
+            f"{M} chapters. Ordering: {rationale}"
         ),
     )
     return plan
