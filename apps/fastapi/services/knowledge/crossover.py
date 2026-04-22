@@ -61,7 +61,7 @@ async def decompose(
             f"falling back to single-topic"
         )
         # Deterministic fallback — caller can still run Stages A-D on the
-        # raw framework string. Registry + SearXNG will make the call.
+        # raw framework string. Registry + search providers will make the call.
         return DecompositionResult(
             is_crossover = False,
             topics = [

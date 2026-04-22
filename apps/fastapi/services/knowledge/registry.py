@@ -10,13 +10,13 @@ does NOT derive docs URLs from registries directly. Publishers version their
 docs sites with incompatible conventions (e.g. Airflow uses
 `/docs/apache-airflow/3.0/`, others use `/latest/`, `/stable/`, `/v2/`…), so
 maintaining a hard-coded per-framework map is the wrong abstraction. The LLM
-reads candidate URLs surfaced by SearXNG and picks the version-matching one.
+reads candidate URLs surfaced by search providers and picks the version-matching one.
 
 Return shape (`RegistryHint`, defined in schemas.knowledge.resolver):
   { exists, homepage, repo, latest_version, all_versions, source }
 
 `exists=False` is returned when every registry probed returns 404 OR when
-the registries are unreachable. The resolver then degrades to SearXNG-only
+the registries are unreachable. The resolver then degrades to search-only
 resolution without failing the request.
 
 Zero auth by default, modest traffic, short timeouts. Safe to call
@@ -52,7 +52,7 @@ async def hint_lookup(
     three miss, returns RegistryHint(exists=False).
 
     Network errors surface as exists=False (conservative — the resolver's
-    degraded path uses SearXNG-only candidate generation).
+    degraded path uses search-only candidate generation).
     """
     lang = (language or "").strip().lower()
     if lang in ("python", "py"):

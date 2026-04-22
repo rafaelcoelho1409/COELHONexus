@@ -29,13 +29,14 @@ from typing import Optional
 from langchain_openai import ChatOpenAI
 
 from schemas.knowledge.prompts import RESOLVER_RERANK_PROMPT
+from services.knowledge.canonical_url import normalize_candidates
 from schemas.knowledge.resolver import (
     DecompositionTopic,
     LLMRerankOutput,
     RegistryHint,
     ResolveRequest,
     ResolvedDocs,
-    SearxngHit,
+    SearchHit,
     Tier,
     TierEvidence,
     TierProbe,
@@ -104,16 +105,16 @@ async def _cache_set(redis_aio, key: str, value: ResolvedDocs) -> None:
 def _escape_braces(s: str) -> str:
     """
     LangChain's ChatPromptTemplate treats '{name}' as a variable. User-
-    supplied content (SearXNG titles/snippets, registry homepages) can
+    supplied content (search titles/snippets, registry homepages) can
     legitimately contain braces — escape them to double-braces so the
     template engine sees literals.
     """
     return s.replace("{", "{{").replace("}", "}}")
 
 
-def _format_candidates_block(hits: list[SearxngHit]) -> str:
+def _format_candidates_block(hits: list[SearchHit]) -> str:
     if not hits:
-        return "(no SearXNG candidates — resolver must pick from registry hint only)"
+        return "(no search candidates — resolver must pick from registry hint only)"
     lines = []
     for i, h in enumerate(hits, 1):
         title = _escape_braces((h.title or "(no title)")[:180])
@@ -141,7 +142,7 @@ async def _llm_rerank(
     aliases: list[str],
     version: str | None,
     registry_hint: RegistryHint,
-    hits: list[SearxngHit],
+    hits: list[SearchHit],
     llm: ChatOpenAI) -> LLMRerankOutput:
     """
     Strict-schema LLM pass. Picks the canonical docs_url from candidates.
@@ -202,6 +203,24 @@ async def _resolve_topic(
     )
 
     registry_hint, hits = await asyncio.gather(stage_a_task, stage_b_task)
+
+    # Stage B+ — Canonical URL normalization. Follow 301/302 redirects and
+    # parse <link rel="canonical"> on each hit so legacy / alias docs hosts
+    # collapse onto the publisher-declared URL before the LLM sees them.
+    # Fixes the LangChain case where search returns python.langchain.com
+    # (legacy) alongside docs.langchain.com (canonical) — the former 301s to
+    # the latter, but only if we follow redirects. See canonical_url.py.
+    if hits:
+        try:
+            hits = await normalize_candidates(hits)
+        except Exception as e:
+            # Normalization is best-effort — on any unexpected failure,
+            # fall through with the original hits rather than blocking the
+            # whole resolve.
+            logger.warning(
+                f"[resolver] canonical normalization failed for {canonical!r}: "
+                f"{type(e).__name__}: {e} — continuing with raw hits"
+            )
 
     # Stage C — LLM rerank
     rerank: Optional[LLMRerankOutput] = None
@@ -310,7 +329,7 @@ async def _resolve_topic(
     source_signals = {
         "registry_source": registry_hint.source,
         "registry_exists": registry_hint.exists,
-        "searxng_hits": len(hits),
+        "search_hits": len(hits),
         "llm_rerank": rerank is not None,
         "llm_error": rerank_error,
         "topic_reason": topic.reason or None,

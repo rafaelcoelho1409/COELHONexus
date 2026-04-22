@@ -507,8 +507,9 @@ RESOLVER_DECOMPOSE_PROMPT = ChatPromptTemplate.from_messages([
 # Resolver — LLM rerank (Stage C)
 # =============================================================================
 # Consumes: framework name + aliases + version hint + registry homepage/repo +
-# SearXNG candidates. Returns the canonical docs_url in strict JSON schema.
-# Inspired by Context7's server-side rerank (Upstash, Jan 2026).
+# search candidates (Exa / Tavily / Jina). Returns the canonical docs_url in
+# strict JSON schema. Inspired by Context7's server-side rerank (Upstash,
+# Jan 2026).
 RESOLVER_RERANK_PROMPT = ChatPromptTemplate.from_messages([
     (
         "system",
@@ -517,35 +518,52 @@ RESOLVER_RERANK_PROMPT = ChatPromptTemplate.from_messages([
         "from the evidence provided.\n\n"
         "RULES:\n"
         "1. ONLY pick a URL from the CANDIDATES list. Never invent URLs.\n"
-        "2. Prefer OFFICIAL publisher sites:\n"
-        "   - Vendor-owned domains (e.g. 'fastapi.tiangolo.com', "
-        "     'python.langchain.com')\n"
-        "   - Org GitHub Pages (e.g. 'langchain-ai.github.io/langgraph')\n"
-        "   - Documentation subdomains ('docs.*.{{io,com,dev,org}}')\n"
-        "3. Prefer URLs containing '/docs', '/documentation'.\n"
-        "4. REJECT with a reason:\n"
+        "2. Prefer OFFICIAL publisher sites, in this order:\n"
+        "   a. A `docs.{{domain}}` subdomain (e.g. 'docs.langchain.com', "
+        "      'docs.pydantic.dev', 'docs.nvidia.com') — the 2024+ "
+        "      consolidation pattern for multi-product docs hubs.\n"
+        "   b. A vendor-owned docs root (e.g. 'fastapi.tiangolo.com', "
+        "      'react.dev', 'kubernetes.io/docs').\n"
+        "   c. Org GitHub Pages (e.g. 'langchain-ai.github.io/langgraph').\n"
+        "3. REGISTRY HINT is AUTHORITATIVE for the canonical host. If the "
+        "   REGISTRY HINT block lists a `homepage:` or `Documentation:` URL "
+        "   and any CANDIDATE is on that SAME HOST, pick that candidate "
+        "   (or the closest-matching path on that host). The package "
+        "   publisher declares this host on PyPI / npm / crates.io as the "
+        "   current docs home — trust it over third-party search rankings.\n"
+        "4. Prefer URLs containing '/docs', '/documentation'.\n"
+        "5. REJECT with a reason:\n"
         "   - PyPI / npm / crates.io / rubygems package pages (registry != docs)\n"
         "   - Reddit, HackerNews, StackOverflow, Medium, dev.to, blog posts\n"
         "   - GitHub README anchors (pick the repo root instead, or prefer a "
         "     dedicated docs site if one exists in candidates)\n"
         "   - Mirror or fork orgs with low apparent star count\n"
         "   - 'awesome-*' list pages\n"
-        "5. If the framework has a dedicated docs subdomain AND a project "
+        "   - LEGACY / DEPRECATED docs hosts when a newer canonical exists: "
+        "     if two candidates share the same registrable domain, REJECT "
+        "     a language-specific / version-specific subdomain (e.g. "
+        "     'python.foo.com', 'v1.foo.com', 'old.foo.com') in favor of "
+        "     the `docs.foo.com` or host-root. Publishers commonly leave "
+        "     legacy hosts live as an archive — they are NOT the current "
+        "     canonical.\n"
+        "6. If the framework has a dedicated docs subdomain AND a project "
         "   homepage, prefer the docs subdomain.\n"
-        "6. If multiple locales exist, prefer English unless the user "
+        "7. If multiple locales exist, prefer English unless the user "
         "   specified otherwise.\n"
-        "7. VERSION handling: if a version is requested, prefer URLs whose "
+        "8. VERSION handling: if a version is requested, prefer URLs whose "
         "   path clearly matches (e.g. '/2.11/', '/v3/', '/stable/'). If no "
         "   exact match, fall back to the root or 'latest' variant — do NOT "
-        "   reject just because the URL lacks a version path.\n"
-        "8. Confidence:\n"
+        "   reject just because the URL lacks a version path. When VERSION "
+        "   is 'latest' (the default), prefer `/latest/` or unversioned "
+        "   paths over version-pinned URLs like `/0.3/` or `/v1/`.\n"
+        "9. Confidence:\n"
         "   - 0.9+: one obvious winner, clearly official\n"
         "   - 0.7-0.9: likely correct with one plausible alternative\n"
         "   - 0.4-0.7: ambiguous — multiple plausible candidates\n"
         "   - <0.4: genuine guess; caller will surface fallback_candidates\n"
-        "9. Populate `rejected` with up to 5 'url:reason' entries — short "
-        "   reasons (max 60 chars each) so the caller can surface them as "
-        "   fallback candidates."
+        "10. Populate `rejected` with up to 5 'url:reason' entries — short "
+        "    reasons (max 60 chars each) so the caller can surface them as "
+        "    fallback candidates."
     ),
     (
         "human",

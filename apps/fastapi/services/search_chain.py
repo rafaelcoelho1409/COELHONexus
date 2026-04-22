@@ -24,8 +24,6 @@ EXCLUDED PROVIDERS:
   - Google CSE — 100/day free but requires Programmable Search Engine setup
              with per-site allowlist (too much friction for a generic docs
              resolver).
-  - SearXNG — shared upstream engine throttling makes it unreliable under
-             burst; kept as legacy reference only.
 
 PROVIDER INTERLEAVING: each provider runs on a separate infrastructure with
 independent rate-limit state. A single-provider outage (Exa down, Tavily
@@ -64,7 +62,7 @@ from typing import Optional
 from urllib.parse import urlparse, quote as _urlquote
 import httpx
 
-from schemas.knowledge.resolver import SearxngHit
+from schemas.knowledge.resolver import SearchHit
 
 
 logger = logging.getLogger(__name__)
@@ -99,9 +97,8 @@ class ProviderAuthError(ProviderError):
 # =============================================================================
 # Canonical return shape
 # =============================================================================
-# Reuse SearxngHit from the resolver schemas — the field `engine` carries the
-# provider name ("exa", "tavily", "jina", "brave"). Renaming is a separate
-# cleanup once SearXNG is fully ripped out.
+# Reuse SearchHit from the resolver schemas — the field `engine` carries the
+# provider name ("exa", "tavily", "jina").
 
 
 # =============================================================================
@@ -142,7 +139,7 @@ def _is_bad_host(url: str) -> bool:
 
 
 # =============================================================================
-# Provider adapters — each normalizes its API response into list[SearxngHit]
+# Provider adapters — each normalizes its API response into list[SearchHit]
 # =============================================================================
 @dataclass
 class _BaseProvider:
@@ -151,7 +148,7 @@ class _BaseProvider:
     api_key: str
     timeout_s: float
 
-    async def asearch(self, query: str, num_results: int = 10) -> list[SearxngHit]:
+    async def asearch(self, query: str, num_results: int = 10) -> list[SearchHit]:
         raise NotImplementedError
 
 
@@ -162,7 +159,7 @@ class ExaProvider(_BaseProvider):
     def __init__(self, api_key: str, timeout_s: float = 20.0):
         super().__init__(name = "exa", api_key = api_key, timeout_s = timeout_s)
 
-    async def asearch(self, query: str, num_results: int = 10) -> list[SearxngHit]:
+    async def asearch(self, query: str, num_results: int = 10) -> list[SearchHit]:
         payload = {
             "query": query,
             "numResults": num_results,
@@ -179,13 +176,13 @@ class ExaProvider(_BaseProvider):
         data = r.json()
         return self._normalize(data.get("results", []))
 
-    def _normalize(self, results: list[dict]) -> list[SearxngHit]:
-        hits: list[SearxngHit] = []
+    def _normalize(self, results: list[dict]) -> list[SearchHit]:
+        hits: list[SearchHit] = []
         for h in results:
             url = h.get("url") or ""
             if not url.startswith(("http://", "https://")) or _is_bad_host(url):
                 continue
-            hits.append(SearxngHit(
+            hits.append(SearchHit(
                 url = url,
                 title = (h.get("title") or "").strip(),
                 snippet = (h.get("text") or "").strip()[:500],
@@ -217,7 +214,7 @@ class TavilyProvider(_BaseProvider):
     def __init__(self, api_key: str, timeout_s: float = 20.0):
         super().__init__(name = "tavily", api_key = api_key, timeout_s = timeout_s)
 
-    async def asearch(self, query: str, num_results: int = 10) -> list[SearxngHit]:
+    async def asearch(self, query: str, num_results: int = 10) -> list[SearchHit]:
         payload = {
             "api_key": self.api_key,
             "query": query,
@@ -235,13 +232,13 @@ class TavilyProvider(_BaseProvider):
         data = r.json()
         return self._normalize(data.get("results", []))
 
-    def _normalize(self, results: list[dict]) -> list[SearxngHit]:
-        hits: list[SearxngHit] = []
+    def _normalize(self, results: list[dict]) -> list[SearchHit]:
+        hits: list[SearchHit] = []
         for h in results:
             url = h.get("url") or ""
             if not url.startswith(("http://", "https://")) or _is_bad_host(url):
                 continue
-            hits.append(SearxngHit(
+            hits.append(SearchHit(
                 url = url,
                 title = (h.get("title") or "").strip(),
                 snippet = (h.get("content") or "").strip()[:500],
@@ -273,7 +270,7 @@ class JinaProvider(_BaseProvider):
     def __init__(self, api_key: str, timeout_s: float = 30.0):
         super().__init__(name = "jina", api_key = api_key, timeout_s = timeout_s)
 
-    async def asearch(self, query: str, num_results: int = 10) -> list[SearxngHit]:
+    async def asearch(self, query: str, num_results: int = 10) -> list[SearchHit]:
         # Jina returns markdown by default; Accept: application/json gives
         # structured {data: [{url, title, description, content}]}.
         url = f"{self.URL}/{_urlquote(query, safe='')}"
@@ -292,13 +289,13 @@ class JinaProvider(_BaseProvider):
         data = r.json()
         return self._normalize(data.get("data", []), num_results)
 
-    def _normalize(self, results: list[dict], num_results: int) -> list[SearxngHit]:
-        hits: list[SearxngHit] = []
+    def _normalize(self, results: list[dict], num_results: int) -> list[SearchHit]:
+        hits: list[SearchHit] = []
         for h in results[:num_results]:
             url = h.get("url") or ""
             if not url.startswith(("http://", "https://")) or _is_bad_host(url):
                 continue
-            hits.append(SearxngHit(
+            hits.append(SearchHit(
                 url = url,
                 title = (h.get("title") or "").strip(),
                 # Jina returns cleaned markdown in `content`; keep the first chunk
@@ -363,7 +360,7 @@ class SearchFallbackChain:
     async def asearch(
         self,
         query: str,
-        num_results: int = 10) -> list[SearxngHit]:
+        num_results: int = 10) -> list[SearchHit]:
         """
         Return the first non-empty hit list from any provider. Empty results
         are treated as a soft miss — cascade without cooldown. All-empty
@@ -489,7 +486,7 @@ async def search_candidates(
     chain: SearchFallbackChain,
     framework: str,
     aliases: list[str] | None = None,
-    version: str | None = None) -> list[SearxngHit]:
+    version: str | None = None) -> list[SearchHit]:
     """
     Run ONE search query through the fallback chain. Primary provider (Exa)
     handles the call; fallback cascade triggers only on error / empty result.

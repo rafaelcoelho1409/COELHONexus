@@ -54,7 +54,7 @@ class CreateStudyRequest(BaseModel):
     """
     Kick off a new study. Two-step flow:
       1. Call POST /studies/resolve first to get a proposed docs_url from
-         SearXNG + LLM disambiguation. Returns the resolved URL WITHOUT
+         search + LLM disambiguation. Returns the resolved URL WITHOUT
          enqueueing anything.
       2. Pass that URL (or your own) as `docs_url` to POST /studies. The
          handler HEAD-verifies reachability, runs the scope gate, then
@@ -77,7 +77,7 @@ class CreateStudyRequest(BaseModel):
         description = (
             "REQUIRED. Official documentation root URL. Must be reachable "
             "(HEAD-verified). Use POST /studies/resolve first to have the "
-            "system propose one based on framework name + SearXNG search, "
+            "system propose one based on framework name + search, "
             "or paste the URL directly if you already know it."
         )
     )

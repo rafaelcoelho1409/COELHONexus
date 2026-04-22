@@ -1,9 +1,9 @@
 """
 Knowledge Distiller — Resolver Schemas
 
-Registry existence-only + SearXNG fan-out + LLM rerank + content-validated
-tier classification. See docs/KNOWLEDGE-DISTILLER-RESOLVER-STRATEGY.md for
-design rationale.
+Registry existence-only + search fan-out (Exa / Tavily / Jina) + LLM rerank
++ content-validated tier classification. See
+docs/KNOWLEDGE-DISTILLER-RESOLVER-STRATEGY.md for design rationale.
 
 These models cover three I/O surfaces:
 
@@ -90,7 +90,7 @@ class ResolveRequest(BaseModel):
         default = None,
         description = (
             "Optional version hint. Flows through as a STRING HINT only — it "
-            "biases SearXNG queries and the LLM rerank prompt, but no code "
+            "biases search queries and the LLM rerank prompt, but no code "
             "derives a docs URL from it. Registry publishers version their "
             "docs sites with incompatible conventions, so the LLM reads "
             "candidate URLs and picks the version-matching one."
@@ -148,14 +148,14 @@ class RegistryHint(BaseModel):
 
 
 # =============================================================================
-# SearXNG — Stage B (web-search candidates)
+# Search — Stage B (Exa / Tavily / Jina candidates)
 # =============================================================================
-class SearxngHit(BaseModel):
-    """One SearXNG result, normalized across engines."""
+class SearchHit(BaseModel):
+    """One search result, normalized across providers (Exa / Tavily / Jina)."""
     url: str = Field(description = "Result URL, already validated to start with http(s)://.")
-    title: str = Field(description = "Page title as returned by the engine.")
+    title: str = Field(description = "Page title as returned by the provider.")
     snippet: str = Field(default = "", description = "Page snippet/excerpt; may be empty.")
-    engine: str = Field(default = "", description = "Which search engine produced this hit.")
+    engine: str = Field(default = "", description = "Which search provider produced this hit.")
 
 
 # =============================================================================
@@ -166,7 +166,7 @@ class LLMRerankOutput(BaseModel):
     Strict-schema output from the LLM rerank pass (Stage C).
 
     The LLM receives: framework name + aliases + version hint + registry
-    homepage/repo + SearXNG candidates. It returns the single best canonical
+    homepage/repo + search candidates. It returns the single best canonical
     docs_url plus rejected candidates (so the caller can surface fallbacks
     on low confidence).
     """
@@ -378,7 +378,7 @@ class ResolvedDocs(BaseModel):
     source_signals: dict = Field(
         default_factory = dict,
         description = (
-            "Provenance payload — which registry answered, how many SearXNG "
+            "Provenance payload — which registry answered, how many search "
             "hits, which model produced the rerank. Opaque to consumers but "
             "invaluable for debugging."
         ),
