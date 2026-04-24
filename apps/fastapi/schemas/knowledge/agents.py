@@ -308,9 +308,26 @@ class GraderEvaluation(BaseModel):
         description = "Material depth matches the framework's conceptual load? 1.0 = right theory/API ratio"
     )
     market_analysis: float = Field(
-        ge = 0.0, 
+        ge = 0.0,
         le = 1.0,
         description = "Money-project suggestions realistically monetizable in target_markets? 1.0 = actionable"
+    )
+    code_preservation_ratio: float = Field(
+        ge = 0.0,
+        le = 1.0,
+        default = 1.0,
+        description = (
+            "Tier 2 #19 (2026-04-23): deterministic score computed upstream "
+            "on the assembled chapter. 1.0 = every vault hash appears "
+            "exactly once in the output, distributed logically across "
+            "sections (no duplicates, no orphans). 0.5 = some hashes "
+            "appear multiple times OR some sections have no code despite "
+            "substantive prose. 0.0 = mass duplication or missing blocks. "
+            "Runs alongside the audit — if audit passes, this is ≥0.9 by "
+            "construction; lower only if distribution is uneven. Carries "
+            "2× weight in the composite, same as signal_to_noise + "
+            "citation_integrity."
+        ),
     )
     weighted_score: float = Field(
         ge = 0.0, 
@@ -347,23 +364,114 @@ class Flashcard(BaseModel):
 
 class ChapterSynthesis(BaseModel):
     """
-    Synthesizer output for ONE chapter. Three artifacts produced in a single
-    LLM call via with_structured_output(ChapterSynthesis), then written to
-    MinIO as README.md, challenges.md, flashcards.json.
+    LEGACY synthesizer output schema (free-form markdown). Kept for the
+    assembler's input contract: after the synth node runs with Tier 3 #21's
+    structured output, we build a ChapterSynthesis from the assembled
+    markdown so downstream (grader / critic / artifact writer / curator) see
+    their existing shape.
+
+    Do NOT pass this schema to `with_structured_output` — use
+    ChapterOutput instead (Tier 3 #21, 2026-04-23). Free-form markdown
+    let the LLM strip code blocks bimodally across models (ch03/04/05/08
+    hit 0-21% preservation on the 2026-04-23 smoke test). ChapterOutput
+    removes the strip path by construction.
     """
     content: str = Field(
         description = (
-            "Full chapter markdown. Starts every section with code (NO 'In this chapter...' "
-            "intros). Every API call / feature mentioned gets '# docs: <file_slug>' citation. "
-            "No 'Summary' or 'Conclusion' sections. Dense, code-first, production-focused."
+            "Full chapter markdown (ASSEMBLED from ChapterOutput + code vault)."
         )
     )
     challenges: str = Field(
         description = (
-            "5-10 active-recall questions as a markdown numbered list. Mix of conceptual "
-            "('Why does X block on Y?') and applied ('Write a function that does Z using "
-            "this framework')."
+            "5-10 active-recall questions as a markdown numbered list."
         )
+    )
+    flashcards: list[Flashcard] = Field(
+        min_length = 8,
+        max_length = 15,
+        description = "8-15 Anki-style Q/A pairs. Each pair stands alone."
+    )
+
+
+# =============================================================================
+# Tier 3 #21 — Structured-output synthesizer (2026-04-23)
+# =============================================================================
+# Replaces the free-form `ChapterSynthesis.content` field with a structured
+# list of sections. Each section names which vault-hashes ("code_refs") get
+# interleaved after its prose. The assembler builds the final markdown
+# deterministically — the LLM never emits code itself, so it cannot strip,
+# paraphrase, reformat, or invent fenced code blocks. prose_md is free-form
+# markdown; the audit reports ``` fence presence as a soft-violation to the
+# refine loop, but the schema doesn't enforce it via Pydantic validation
+# (because Pydantic rejection cascades the whole fallback chain before the
+# LLM can see targeted feedback).
+#
+# Escalation trigger: 2026-04-23 smoke (Run 3) showed 4 of 8 reporting
+# chapters at ≥50% iter-0 strip under Tier 0d-3/0d-4 prompts. Roadmap
+# (KNOWLEDGE-DISTILLER-IMPROVEMENTS-ROADMAP.md line 388-396) pre-authorizes
+# escalation to this architecture under that condition.
+class Section(BaseModel):
+    """
+    One section of a chapter: a heading, explanatory prose, and an ordered
+    list of code-block hashes (from the Tier 0a vault) to emit AFTER the
+    prose in the assembled output.
+    """
+    heading: str = Field(
+        description = (
+            "Section heading WITHOUT leading '#' markers — the assembler adds "
+            "the right heading level. 2-8 words. Example: 'Async Client', "
+            "'Dependency Injection'. Avoid 'Introduction', 'Overview', "
+            "'Summary', 'Conclusion'."
+        ),
+    )
+    prose_md: str = Field(
+        description = (
+            "Section body as markdown. RULES:\n"
+            " 1. NO triple-backtick (```) fenced code blocks — put code in "
+            "`code_refs`, the assembler interleaves it.\n"
+            " 2. NO <code-ref hash=\"...\"/> XML tags — copy the 12-hex hash "
+            "value INTO `code_refs` instead.\n"
+            " 3. Include `# docs: <file_slug>` citations for every non-"
+            "trivial claim — as bare lines in prose; the assembler preserves "
+            "them verbatim.\n"
+            " 4. Inline `code` spans (single backtick) are fine.\n"
+            " 5. Dense, production-focused, code-first phrasing."
+        ),
+    )
+    code_refs: list[str] = Field(
+        default_factory = list,
+        description = (
+            "Ordered list of 12-hex-char vault hashes. Take each hash from "
+            "the input's `<code-ref hash=\"<12-hex>\"/>` tags — use only the "
+            "bare 12-char value (no `lf_`/`<`/`\"` wrappers). The assembler "
+            "emits each referenced fenced code block AFTER this section's "
+            "prose_md in the order you list them. Every vault hash that "
+            "conceptually belongs with this section MUST appear here; missing "
+            "hashes fail the preservation audit and force a refine retry."
+        ),
+    )
+
+
+class ChapterOutput(BaseModel):
+    """
+    Structured synthesizer output — replaces ChapterSynthesis in
+    `with_structured_output(ChapterOutput)` calls. Assembler converts to
+    markdown for downstream (grader / critic / curator / artifact writer).
+    """
+    sections: list[Section] = Field(
+        min_length = 1,
+        description = (
+            "Ordered list of chapter sections. First section's heading becomes "
+            "the top content under the chapter's H1 title; subsequent sections "
+            "become H2s."
+        ),
+    )
+    challenges: str = Field(
+        description = (
+            "5-10 active-recall questions as a markdown numbered list. Mix of "
+            "conceptual ('Why does X block on Y?') and applied ('Write a "
+            "function that does Z using this framework')."
+        ),
     )
     flashcards: list[Flashcard] = Field(
         min_length = 8,

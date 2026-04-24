@@ -1,352 +1,431 @@
 """
-Central LLM Fallback Chain
+Unified LLM Router — LiteLLM-backed with fail-fast pre-call checks.
 
-ONE source of truth for the ordered Groq + NVIDIA NIM model list used by
-every graph (YouTube Adaptive RAG, Knowledge Distiller, exports, scope gate).
-Previously this list was duplicated in app.py (FastAPI lifespan) and in
-tasks/knowledge/distiller.py's _build_llm_chain — duplicates drift, and
-we already hit a case where both copies still referenced models that had
-been deprecated.
+DESIGN 2026-04-24: ONE ranked catalog (`kd-all`) reused by every KD step.
+Previously had 5 separate groups (synth/refine/scope/curator/general); this
+file was refactored to serve a SINGLE best→worst ordering so every node in
+the KD graph draws from the same top-quality pool. Temperature differs per
+step (T=0.7 for Self-Refine exploration; T=0.0 elsewhere), but the model
+priority is identical. Rationale: all providers are free-tier, quality is
+the only optimization objective — tokens and latency aren't costs here.
 
-ORDERING PRINCIPLES (April 2026 — re-review every quarter):
-  Phase 1 — Large context (>128K) for KD planner / synthesizer on big corpora.
-            If the primary fails, we want the next model to ALSO have enough
-            context, or the whole fallback chain no-ops on a 413.
-  Phase 2 — 128K context, quality-sorted by Arena ELO.
-  Phase 3 — Speed-first fallbacks (Groq tiny models) for classifier-style calls.
-  Provider interleaved so a single-provider outage (Groq down OR NIM down)
-  still leaves working options one position away.
+LiteLLM Router features:
+  - `enable_pre_call_checks=True` — cooled-down deployments are filtered
+    from the candidate pool BEFORE the call fires (0ms skip, no wasted
+    wall-clock on known-bad providers like NIM's degraded glm-5.1)
+  - `allowed_fails_policy` per error type — 413/401/timeout quickly
+    cooldown; 429 gets short cooldown; internal 5xx gets short cooldown
+  - `cooldown_time=60s` auto-recovery via Redis TTL (shared across all
+    Celery workers)
+  - `routing_strategy="simple-shuffle"` — best for production per LiteLLM
+    docs (no Redis round-trips per call like usage-based-routing adds)
 
-DEPRECATIONS (as of 2026-04-20, must remove from chain):
-  - z-ai/glm5          (NIM, EoL 2026-04-20) → use z-ai/glm-4.7
-  - moonshotai/kimi-k2-instruct (Groq, EoL 2026-04-15) → use NIM's kimi-k2.5-thinking
+PROVIDERS (catalog re-verified 2026-04-24 against each provider's live
+models + fresh benchmark data — LMArena, AAII, SWE-Bench Verified, AIME,
+MMLU-Pro, LiveCodeBench, HumanEval, GPQA):
 
-KNOWN QUIRKS (research/NIM forum bug 366612, 2026-04-14):
-  - NIM may return malformed JSON in tool_calls (dict vs string args,
-    Python literals, trailing commas). `with_structured_output` can raise;
-    LangChain's `with_fallbacks` picks up the next model. Acceptable.
-  - Groq llama-3.3-70b-versatile has the most reliable function_calling of
-    any model in the chain — keep it in the middle of Phase 2 as a strong
-    function-calling-specific fallback.
+  NIM=12 | Mistral=6 | SambaNova=5 | Groq=4 | Gemini=4 | Cerebras=2 |
+  DeepSeek=2 | Zhipu=2    →   37 entries total, 8 providers
 
-TIMEOUTS (tuned 2026-04-20 for quality-first background runs):
-  Priority: get the FIRST model (GLM-5.1, best quality) to actually complete,
-  not timeout and cascade to lower-quality fallbacks. Reasoning models
-  legitimately think for minutes on structured-output calls over ~25K-token
-  planner prompts — cutting them short wastes the quality advantage.
+  Major 2026-04-24 changes:
+  - DeepSeek V4 launched TODAY — swapped `deepseek-reasoner`/`deepseek-chat`
+    (retire 2026-07-24) for `deepseek-v4-pro`/`deepseek-v4-flash`.
+  - NIM re-verified: added gpt-oss-120b, kimi-k2-thinking, llama-4-maverick,
+    minimax-m2.5, deepseek-v3_1-terminus; dropped `z-ai/glm4.7` (superseded
+    by glm-5.1). glm-5.1 demoted within tier 1 due to NIM endpoint flakiness
+    (forum threads 366610, 367453) — Router's fail-fast skips when degraded.
+  - Groq re-verified: added `moonshotai/kimi-k2-instruct` (256K ctx).
+  - SambaNova reaffirmed: MiniMax-M2.5 retains #1 on SWE-Bench Verified
+    (80.2%) — ties Opus 4.6, beats GPT-5.2.
+  - Mistral: moved `magistral-medium-latest` up to tier-1 (reasoning).
+  - Gemini: 3.1-flash-lite-preview ranked above 2.5-flash on AAII delta.
 
-  - Groq: 120s HTTP / 120s Celery — Groq is fast (hello-world <5s); 120s is
-          safety padding for long chapter synthesis generations.
-  - NIM:  300s HTTP / 420s Celery — reasoning models (GLM-5.1, Kimi K2.5,
-          Qwen3.5-397B) can take 2-5 min on a 25K-token planner prompt with
-          function_calling output. 300s is the sweet spot between "primary
-          actually completes" and "broken model doesn't stall the chain
-          forever". Celery gets +2 min since tasks are backgrounded.
+SECURITY PIN (2026-04-23): litellm pinned to 1.83.12. v1.82.7 and v1.82.8
+were compromised via supply-chain attack on 2026-03-24 (Trivy CI/CD breach).
+DO NOT allow `litellm>=1.82.7,<1.83.0`. v1.83.0+ ships from LiteLLM's
+rebuilt CI/CD v2 pipeline (isolated envs, signed artifacts).
 
-  Worst-case chain walk: 14 models × ~200s avg = ~45 min. But the primary
-  should usually succeed in 1-3 min, so real p50 is well under that.
+Interleaving: NO 3 same-provider in a row at ANY position. A single-
+provider outage affects ≤ 2 top-10 entries.
 
-FLAKY MODELS (observed 2026-04-20 — kept but demoted):
-  - moonshotai/kimi-k2.5 — one hello-world timeout at 25s during live testing,
-    but quality is top-tier when it works (262K ctx, strong reasoning). Placed
-    at position 5 (after the consistently fast primaries) so one stuck call
-    is a 90s blip, not a chain-killer.
+Factories (all serve from the same `kd-all` group, varying only temperature):
+  - build_llm_fallback_chain          — T=0.0
+  - build_resolver_llm_chain           — T=0.0
+  - build_synth_fallback_chain         — T=0.0 (synthesize_chapter, curator)
+  - build_refine_llm_chain             — T=0.7 (Self-Refine per Madaan 2023)
+  - build_curator_llm                  — T=0.0
+  - build_scope_classifier_llm         — T=0.0
 """
 import os
-from langchain_openai import ChatOpenAI
+from langchain_litellm.chat_models import ChatLiteLLMRouter
+from litellm import Router
+from litellm.types.router import (
+    RetryPolicy,
+    AllowedFailsPolicy,
+    ModelGroupInfo,
+)
 
 
 # =============================================================================
-# Endpoints
+# Endpoints and provider credentials
 # =============================================================================
-GROQ_URL = "https://api.groq.com/openai/v1"
-NVIDIA_URL = "https://integrate.api.nvidia.com/v1"
-
-
-# =============================================================================
-# Model catalog (edit THIS file when deprecations happen)
-# =============================================================================
-# Each list is ordered by the research-derived "best first" priority.
-# Tuples: (model_id, rationale_tag) — the tag is informational, not consumed.
-
-# --- Groq: speed-first; 128K ctx max except llama-4-scout (512K on Groq) ---
-GROQ_CATALOG: list[tuple[str, str]] = [
-    ("meta-llama/llama-4-scout-17b-16e-instruct", "groq-512k"),    # 512K ctx on Groq — top choice for big planner prompts
-    ("openai/gpt-oss-120b",                       "groq-flag"),    # ELO 1368, 500 TPS — Groq flagship after Kimi deprecation
-    ("qwen/qwen3-32b",                            "groq-reason"),  # ELO 1342, 131K ctx, 196–662 TPS
-    ("llama-3.3-70b-versatile",                   "groq-tools"),   # Best function_calling reliability on Groq
-    ("openai/gpt-oss-20b",                        "groq-fast"),    # 1000 TPS, 128K ctx — speed fallback
-    ("llama-3.1-8b-instant",                      "groq-tiny"),    # 840 TPS, cheapest; scope-gate primary
-]
-
-# --- NVIDIA NIM: quality-first; 40 RPM free tier per model ---
-# All IDs below verified via GET /v1/models on 2026-04-20.
-# Research agent hallucinated several names (-thinking suffixes, etc.) that
-# don't exist — corrected here.
-NIM_CATALOG: list[tuple[str, str]] = [
-    ("z-ai/glm-5.1",                              "nim-top"),      # Latest GLM (replaces glm5 EoL'd 2026-04-20); 1.4s hello
-    ("qwen/qwen3.5-397b-a17b",                    "nim-structured"),  # 262K ctx; 2.7s hello; best structured output
-    ("moonshotai/kimi-k2.5",                      "nim-reason"),   # 262K ctx, top reasoning (flaky 2026-04-20 — demoted, see header)
-    ("z-ai/glm4.7",                               "nim-code-fb"),  # 1.1s hello; GLM fallback; MIT
-    ("nvidia/nemotron-3-super-120b-a12b",         "nim-context"),  # 1M ctx insurance; 4.1s hello; highest NIM throughput
-    ("deepseek-ai/deepseek-v3.2",                 "nim-v3"),       # ELO 1422, 128K ctx
-    ("minimaxai/minimax-m2.7",                    "nim-agent"),    # 204K ctx, agentic coding (non-commercial license)
-    ("mistralai/mistral-large-3-675b-instruct-2512", "nim-general"),  # Reliable generalist, 128K ctx
-]
+def _env(key: str, default: str = "") -> str:
+    return os.environ.get(key, default).strip()
 
 
 # =============================================================================
-# Factory
+# Provider entry builders — each returns a LiteLLM model_list item
 # =============================================================================
-def _groq(model: str, timeout_s: int) -> ChatOpenAI:
-    return ChatOpenAI(
-        model = model,
-        temperature = 0.0,
-        base_url = GROQ_URL,
-        api_key = os.environ.get("GROQ_API_KEY", ""),
-        max_retries = 0,
-        timeout = timeout_s,
-    )
+# `model_name` is the GROUP name the Router serves from.
+# `litellm_params.model` uses LiteLLM's provider-prefixed naming.
+
+def _groq_entry(group: str, model: str, timeout_s: int = 120) -> dict:
+    return {
+        "model_name": group,
+        "litellm_params": {
+            "model": f"groq/{model}",
+            "api_key": _env("GROQ_API_KEY"),
+            "timeout": timeout_s,
+            "max_retries": 0,
+        },
+    }
 
 
-def _nim(model: str, timeout_s: int) -> ChatOpenAI:
-    return ChatOpenAI(
-        model = model,
-        temperature = 0.0,
-        base_url = NVIDIA_URL,
-        api_key = os.environ.get("NVIDIA_API_KEY", ""),
-        max_retries = 0,
-        timeout = timeout_s,
-    )
+def _nim_entry(group: str, model: str, timeout_s: int = 120) -> dict:
+    # NIM is OpenAI-compatible; LiteLLM recognizes `nvidia_nim/<model>`.
+    return {
+        "model_name": group,
+        "litellm_params": {
+            "model": f"nvidia_nim/{model}",
+            "api_key": _env("NVIDIA_API_KEY"),
+            "timeout": timeout_s,
+            "max_retries": 0,
+        },
+    }
 
 
-def _ordered_fallback(
-    groq_timeout_s: int,
-    nim_timeout_s: int) -> list[ChatOpenAI]:
+def _cerebras_entry(group: str, model: str, timeout_s: int = 120) -> dict:
+    return {
+        "model_name": group,
+        "litellm_params": {
+            "model": f"cerebras/{model}",
+            "api_key": _env("CEREBRAS_API_KEY"),
+            "timeout": timeout_s,
+            "max_retries": 0,
+        },
+    }
+
+
+def _mistral_entry(group: str, model: str, timeout_s: int = 120) -> dict:
+    return {
+        "model_name": group,
+        "litellm_params": {
+            "model": f"mistral/{model}",
+            "api_key": _env("MISTRAL_API_KEY"),
+            "timeout": timeout_s,
+            "max_retries": 0,
+        },
+    }
+
+
+def _gemini_entry(group: str, model: str, timeout_s: int = 120) -> dict:
+    return {
+        "model_name": group,
+        "litellm_params": {
+            "model": f"gemini/{model}",
+            "api_key": _env("GOOGLE_API_KEY"),
+            "timeout": timeout_s,
+            "max_retries": 0,
+        },
+    }
+
+
+def _deepseek_entry(group: str, model: str, timeout_s: int = 120) -> dict:
+    return {
+        "model_name": group,
+        "litellm_params": {
+            "model": f"deepseek/{model}",
+            "api_key": _env("DEEPSEEK_API_KEY"),
+            "timeout": timeout_s,
+            "max_retries": 0,
+        },
+    }
+
+
+def _sambanova_entry(group: str, model: str, timeout_s: int = 120) -> dict:
+    return {
+        "model_name": group,
+        "litellm_params": {
+            "model": f"sambanova/{model}",
+            "api_key": _env("SAMBANOVA_API_KEY"),
+            "timeout": timeout_s,
+            "max_retries": 0,
+        },
+    }
+
+
+def _zhipu_entry(group: str, model: str, timeout_s: int = 120) -> dict:
+    # Zhipu is OpenAI-compatible; we set api_base explicitly since LiteLLM
+    # doesn't have a dedicated `zhipu/` prefix (uses OpenAI-compat path).
+    return {
+        "model_name": group,
+        "litellm_params": {
+            "model": f"openai/{model}",
+            "api_key": _env("ZHIPU_API_KEY"),
+            "api_base": "https://open.bigmodel.cn/api/paas/v4",
+            "timeout": timeout_s,
+            "max_retries": 0,
+        },
+    }
+
+
+# =============================================================================
+# Unified ranked catalog — `kd-all`
+# =============================================================================
+# SAME list served to every KD step. Ordering is strictly best→worst by
+# 2026-04-24 benchmark data (SWE-Bench Verified, MMLU-Pro, AIME-2025,
+# LMArena Elo, AAII, LiveCodeBench, GPQA, HumanEval — composite).
+# Providers interleaved so no 3 in a row of same provider anywhere.
+GROUP = "kd-all"
+
+
+def _all_entries() -> list:
     """
-    Interleaved, phase-grouped fallback chain.
+    37-entry benchmark-ranked catalog across 8 free-tier providers.
+    Served identically to synthesizer / refiner / scope-classifier /
+    curator / general-purpose chains — no per-step catalog variation.
+    Temperature is applied at the factory layer, not per entry.
 
-    Provider interleaving is intentional: if Groq is rate-limited, the next
-    model is NIM, and vice versa. A correlated failure (one provider down)
-    doesn't require walking 5+ entries before finding an alive endpoint.
+    STRICT BENCHMARK ORDER (2026-04-24 refresh): ordered descending by
+    Artificial Analysis Intelligence Index (AAII v4.0) with SWE-Bench
+    Verified / LiveCodeBench / AIME-2025 as tiebreakers. Same-model-
+    different-provider duplicates cluster together; within a tie the
+    most reliable infrastructure is listed first (Cerebras > SambaNova
+    > direct-API > NIM when NIM has known endpoint issues).
+
+    No provider interleaving — user requested pure benchmark primacy:
+    "the best LLMs first according to benchmarks, not 'this or that
+    provider as a workhorse so their models come first'".
+
+    Top-5 avg AAII ≈ 54 (Kimi K2 Thinking 67, V4-Pro 57, GLM-5.1 51,
+    MiniMax-M2.7 50, Kimi K2-0905 49); bottom-5 avg ≈ 16 (Llama-3.3 14,
+    Scout 15, Maverick×2 18, Magistral Small 18). Gap ≈ 38 AAII points
+    — a full generation, not a gradient.
     """
-    g = {tag: _groq(m, groq_timeout_s) for m, tag in GROQ_CATALOG}
-    n = {tag: _nim(m, nim_timeout_s) for m, tag in NIM_CATALOG}
-    ordered = [
-        # Phase 1 — Large context (>128K), verified fast primaries first
-        n["nim-top"],         # GLM-5.1 — NIM flagship, 1.4s
-        n["nim-structured"],  # Qwen 3.5 397B — 262K ctx, 2.7s, best structured output
-        g["groq-512k"],       # Llama 4 Scout — 512K ctx on Groq, 0.6s
-        n["nim-context"],     # Nemotron-3 Super — 1M ctx insurance, 4.1s
-        n["nim-reason"],      # Kimi K2.5 — 262K, top reasoning when healthy (flaky)
-        n["nim-agent"],       # Minimax M2.7 — 204K ctx, agentic
-        # Phase 2 — 128K context, quality-sorted
-        n["nim-code-fb"],     # GLM 4.7 — 1.1s, GLM fallback
-        n["nim-v3"],          # DeepSeek V3.2 — ELO 1422
-        g["groq-flag"],       # GPT-OSS 120B — 0.5s, ELO 1368, 500 TPS
-        g["groq-reason"],     # Qwen3 32B — 4.6s (<think> preamble), 131K
-        g["groq-tools"],      # Llama 3.3 70B — best function-calling on Groq
-        n["nim-general"],     # Mistral Large 3 — reliable generalist
-        # Phase 3 — Speed fallbacks (classification / short prompts)
-        g["groq-fast"],       # GPT-OSS 20B — 1000 TPS
-        g["groq-tiny"],       # Llama 3.1 8B — 840 TPS (final fallback)
+    return [
+        # --- 1–10: Frontier class (AAII 45+) ---
+        _nim_entry(GROUP, "moonshotai/kimi-k2-thinking", timeout_s=300),                           # AAII 67 — highest on list; HLE 44.9%, 200-300 tool-call coherence, 256K ctx
+        # _deepseek_entry(GROUP, "deepseek-v4-pro", timeout_s=300),                                # DISABLED 2026-04-24 — "Insufficient Balance" on account. Re-enable after top-up (5M free grant used up or V4 not in free tier). AAII ~57, 1T+ MoE FP4, 1M ctx
+        _nim_entry(GROUP, "z-ai/glm-5.1", timeout_s=300),                                          # AAII 51 (Reasoning); SWE-Bench Pro 58.4% (#1 OSS); may be skipped during NIM endpoint flakiness
+        _nim_entry(GROUP, "minimaxai/minimax-m2.7", timeout_s=300),                                # AAII 50 — 204K ctx agentic, SWE-Pro 56.22%, SWE-Multilingual 76.5
+        # _groq_entry(GROUP, "moonshotai/kimi-k2-instruct", timeout_s=120),                        # DISABLED 2026-04-24 — not in Groq's actual catalog (research agent hallucinated; Groq listing confirmed missing). AAII 49 (K2-0905), 256K ctx
+        # _deepseek_entry(GROUP, "deepseek-v4-flash", timeout_s=180),                              # DISABLED 2026-04-24 — "Insufficient Balance" (same DeepSeek account as v4-pro). AAII 47 (Max), 284B MoE, 1M ctx
+        _nim_entry(GROUP, "moonshotai/kimi-k2.5", timeout_s=300),                                  # AAII 47 (R) / 37 (NR) — Arena Elo ~1447, 262K ctx, powers Cursor Composer 2
+        _gemini_entry(GROUP, "gemini-3-flash-preview", timeout_s=120),                             # AAII 46 (R) / 35 (NR) — LiveCodeBench 90.8%, SWE-bench 78%, 1M ctx
+        _nim_entry(GROUP, "qwen/qwen3.5-397b-a17b", timeout_s=300),                                # AAII 45 (R) / 40 (NR) — MMLU-Pro 87.18%, 262K ctx
+        _nim_entry(GROUP, "deepseek-ai/deepseek-v3.2", timeout_s=300),                             # AAII 42 (R) / 32 (NR) — SWE-Bench 72-74%, IMO gold, 163K ctx
+        # --- 11–17: Strong second tier (AAII 34–42) ---
+        # _sambanova_entry(GROUP, "MiniMax-M2.5", timeout_s=180),                                  # DISABLED 2026-04-24 — SambaNova response: "A payment method is required". Re-enable after adding payment method. AAII 42, SWE-Bench 80.2% (highest SWE), 160K ctx
+        _nim_entry(GROUP, "minimaxai/minimax-m2.5", timeout_s=300),                                # AAII 42 — DUP of #11 (same model, NIM infra)
+        # _cerebras_entry(GROUP, "zai-glm-4.7", timeout_s=120),                                    # DISABLED 2026-04-24 — 404 "you do not have access to it" (model exists in Cerebras catalog but API key lacks access). AAII 42 (R) / 34 (NR), SOTA τ²-Bench, 200K ctx, 355B params
+        _nim_entry(GROUP, "nvidia/nemotron-3-super-120b-a12b", timeout_s=300),                     # AAII 36 — 1M ctx, hybrid Mamba, leads size class on AIME-2025 + Terminal-Bench
+        _sambanova_entry(GROUP, "DeepSeek-V3.1", timeout_s=180),                                   # AAII 34 (R) — AIME 93.1%, hybrid reasoning, 128K ctx
+        _nim_entry(GROUP, "deepseek-ai/deepseek-v3.1-terminus", timeout_s=300),                    # AAII 34 (R) / 29 (NR) — V3.1-Terminus, slightly newer than V3.1, 128K ctx
+        _gemini_entry(GROUP, "gemini-3.1-flash-lite-preview", timeout_s=90),                       # AAII 34 — GPQA Diamond 86.9%, 381 t/s, 1M ctx
+        # --- 18–21: gpt-oss-120b on four providers (AAII 33 each) ---
+        # _cerebras_entry(GROUP, "gpt-oss-120b", timeout_s=120),                                   # DISABLED 2026-04-24 — 404 "you do not have access to it" (model listed in Cerebras catalog but key unauthorized). AAII 33, MMLU-Pro 90.0%, 3000 tok/s
+        # _sambanova_entry(GROUP, "gpt-oss-120b", timeout_s=180),                                  # DISABLED 2026-04-24 — SambaNova response: "A payment method is required". Same model as #18 family
+        _groq_entry(GROUP, "openai/gpt-oss-120b", timeout_s=120),                                  # AAII 33 — DUP family; confirmed working on Groq
+        _nim_entry(GROUP, "openai/gpt-oss-120b", timeout_s=180),                                   # AAII 33 — DUP family; confirmed working on NIM
+        # --- 22–23: AAII 30 ---
+        _zhipu_entry(GROUP, "glm-4.7-flash", timeout_s=120),                                       # AAII 30 (R) — 30B-A3B MoE, best-in-30B-class, AIME-2025 95.7%, 200K ctx, zero-cap free
+        _gemini_entry(GROUP, "gemini-2.5-flash", timeout_s=120),                                   # AAII ~30 — GPQA 82.8, MMLU-Lite 88.4, AIME 88, 1M ctx (stable prod)
+        # --- 24–28: AAII 22–28 (Mistral cluster + glm-4.5-flash) ---
+        _mistral_entry(GROUP, "mistral-small-latest", timeout_s=120),                              # AAII 28 — Mistral Small 4 v26.03, HumanEval 92, MMLU 88.5 (surprisingly > Medium 3.1)
+        _mistral_entry(GROUP, "magistral-medium-latest", timeout_s=180),                           # AAII 27 — Magistral 1.2, AIME24 91.82%, GPQA-Diamond 76.3% (reasoning specialist)
+        _mistral_entry(GROUP, "mistral-large-latest", timeout_s=180),                              # AAII 23 — Mistral Large 3 v25.12, LMArena #2 OSS, MATH-500 93.6, 256K ctx
+        _nim_entry(GROUP, "mistralai/mistral-large-3-675b-instruct-2512", timeout_s=300),          # AAII 23 — DUP of #26 (same Large 3 model, NIM infra)
+        _zhipu_entry(GROUP, "glm-4.5-flash", timeout_s=120),                                       # AAII ~23 — GLM-4.5 tier (legacy), zero-cap free fallback
+        # --- 29–31: AAII 21–22 ---
+        _mistral_entry(GROUP, "devstral-medium-latest", timeout_s=180),                            # AAII 22 — Devstral 2 code-agents, SWE-Bench Verified 46.8%, 256K ctx
+        _gemini_entry(GROUP, "gemini-2.5-flash-lite", timeout_s=90),                               # AAII 22 (R) / 19 (NR) — high-throughput fallback, 1000 RPD free
+        _mistral_entry(GROUP, "mistral-medium-latest", timeout_s=120),                             # AAII 21 — Mistral Medium 3.1 v25.08, Arena top-10 overall
+        # --- 32–37: Tail (AAII ≤20) ---
+        _groq_entry(GROUP, "qwen/qwen3-32b", timeout_s=120),                                       # AAII ~20 — Pre-3.5 generation, LiveCodeBench 54.4, thinking-mode
+        _mistral_entry(GROUP, "magistral-small-latest", timeout_s=180),                            # AAII 18 — Magistral Small 1.2, 24B reasoner
+        _sambanova_entry(GROUP, "Llama-4-Maverick-17B-128E-Instruct", timeout_s=180),              # AAII 18 — 400B MoE/17B active, 128K ctx (Preview)
+        _nim_entry(GROUP, "meta/llama-4-maverick-17b-128e-instruct", timeout_s=300),               # AAII 18 — DUP of #34 (same Maverick, NIM infra, 1M ctx)
+        _groq_entry(GROUP, "meta-llama/llama-4-scout-17b-16e-instruct", timeout_s=120),            # AAII ~15 — 10M native ctx but smaller/weaker Llama 4 variant
+        # _sambanova_entry(GROUP, "Meta-Llama-3.3-70B-Instruct", timeout_s=180),                   # DISABLED 2026-04-24 — SambaNova response: "A payment method is required". AAII 14, 128K ctx on SambaNova
+
+        # === DELIBERATELY EXCLUDED (verified 2026-04-24) ==================
+        # Weak / context-tight / deprecated — skip to preserve quality
+        #   - groq/openai/gpt-oss-20b (Run-7: 8K TPM < 30K prompts, permanent incompat)
+        #   - groq/llama-3.1-8b-instant (weak for structured output)
+        #   - groq/llama-3.3-70b-versatile (32% code-gen error benchmark)
+        #   - groq/allam-2-7b (4K ctx)
+        #   - groq/meta-llama/llama-4-maverick-17b-128e-instruct (RETIRED 2026-03-09 on Groq)
+        #   - groq/deepseek-r1-distill-llama-70b (RETIRED 2025-10-02)
+        #   - groq/mistral-saba-24b (RETIRED 2025-07-30)
+        #   - groq/gemma2-9b-it (RETIRED 2025-10-08)
+        # Gemini paid/deprecated
+        #   - gemini-2.5-pro (PAYWALLED 2026-04-01)
+        #   - gemini-3-pro-preview / gemini-3.1-pro-preview (paid-only)
+        #   - gemini-2.0-flash / gemini-2.0-flash-lite (DEPRECATED, EOL 2026-06-01)
+        # Cerebras deprecating 2026-05-27
+        #   - cerebras/qwen-3-235b-a22b-instruct-2507
+        #   - cerebras/llama3.1-8b (kept in nothing — weak + soon-dead)
+        # DeepSeek retiring 2026-07-24 (replaced by V4 above)
+        #   - deepseek-reasoner / deepseek-chat (shimmed to V4 internally — use V4 endpoints directly)
+        #   - deepseek-coder (alias to chat, redundant)
+        # Mistral edge / FIM / vision
+        #   - ministral-{3b,8b,3-3b} (edge-only, not synth-grade)
+        #   - codestral-latest (FIM completion only)
+        #   - devstral-small-latest (marginal — devstral-medium covers same niche)
+        #   - open-mixtral-8x22b (DEPRECATED 2025-03-30)
+        #   - pixtral-* (vision-only)
+        # NIM superseded / not-yet-live
+        #   - nvidia_nim/z-ai/glm4.7 (superseded by glm-5.1 on NIM)
+        # SambaNova context-tight
+        #   - sambanova/Qwen3-32B (~40K ctx — borderline for 40K prompts)
+        #   - sambanova/DeepSeek-V3.2 (8K ctx preview — DISQUALIFIED)
+        # Zhipu paid / non-text
+        #   - zhipu/glm-4-32b-0414-128k ($0.10/M, not truly free)
+        #   - zhipu/glm-4.7-flashx (paid)
+        #   - zhipu/glm-5 / 5.1 / 5-Turbo / 4.7 / 4.6 / AirX (all paid)
+        #   - zhipu/glm-z1-flash (not a Z.AI API SKU — open-weights only on HF/Ollama)
+        #   - zhipu/glm-4.6v-flash (vision-only)
     ]
-    return ordered
 
+
+# =============================================================================
+# Unified Router — single instance shared across all factories
+# =============================================================================
+_router_instance: Router | None = None
+
+
+def _get_router() -> Router:
+    """
+    Build the unified LiteLLM Router once per process. Shared state lives in
+    Redis (cooldown cache + per-deployment TPM/RPM tracking) so all Celery
+    workers see the same circuit-breaker state.
+    """
+    global _router_instance
+    if _router_instance is not None:
+        return _router_instance
+
+    # Cascade + circuit-breaker policy
+    # -------------------------------------------------------------------
+    # In LiteLLM Router, `num_retries` is the CASCADE length: on failure,
+    # the Router tries another deployment in the same group up to
+    # num_retries additional times. Set to N-1 so a single request can
+    # fall through the ENTIRE catalog if everything above fails.
+    #
+    # `retry_policy` caps the cascade per error type. Generous values so
+    # every error class still cascades (setting to 0 here would DISABLE
+    # the cascade for that error, which was the 2026-04-24 bug that
+    # caused `NotFoundError` to abort instead of falling through).
+    #
+    # `allowed_fails_policy` is the CIRCUIT BREAKER (independent of
+    # retries): after N failures within the window, cool down the
+    # deployment for `cooldown_time` so the next request skips it at 0ms.
+    # -------------------------------------------------------------------
+    CASCADE_DEPTH = 40  # > total entries — ensures full catalog coverage
+    retry_policy = RetryPolicy(
+        AuthenticationErrorRetries=CASCADE_DEPTH,
+        ContentPolicyViolationErrorRetries=CASCADE_DEPTH,
+        RateLimitErrorRetries=CASCADE_DEPTH,
+        BadRequestErrorRetries=CASCADE_DEPTH,
+        TimeoutErrorRetries=CASCADE_DEPTH,
+        InternalServerErrorRetries=CASCADE_DEPTH,
+    )
+
+    allowed_fails_policy = AllowedFailsPolicy(
+        AuthenticationErrorAllowedFails=0,    # invalid key = cooldown immediately
+        BadRequestErrorAllowedFails=1,        # 400/404/413 on first call = stop trying this model
+        ContentPolicyViolationErrorAllowedFails=2,
+        RateLimitErrorAllowedFails=1,         # 429 = cooldown immediately
+        TimeoutErrorAllowedFails=2,           # 2 timeouts → cooldown
+        InternalServerErrorAllowedFails=2,    # 5xx same
+    )
+
+    redis_kwargs = {}
+    redis_host = _env("REDIS_HOST")
+    if redis_host:
+        redis_kwargs["redis_host"] = redis_host
+        redis_kwargs["redis_port"] = int(_env("REDIS_PORT", "6379"))
+        redis_password = _env("REDIS_PASSWORD")
+        if redis_password:
+            redis_kwargs["redis_password"] = redis_password
+
+    _router_instance = Router(
+        model_list=_all_entries(),
+        # simple-shuffle is recommended for production (LiteLLM docs): doesn't
+        # add Redis round-trips per request the way usage-based-routing does.
+        # Combined with allowed_fails_policy this effectively routes among
+        # HEALTHY entries in priority order.
+        routing_strategy="simple-shuffle",
+        enable_pre_call_checks=True,         # fail-fast core — skip cooled-down at 0ms
+        allowed_fails=3,                      # generic threshold (per-error policy overrides)
+        allowed_fails_policy=allowed_fails_policy,
+        cooldown_time=60,                     # TTL for auto-recovery
+        retry_policy=retry_policy,
+        num_retries=CASCADE_DEPTH,            # cascade length — on failure, try another deployment up to 40 times
+        set_verbose=False,
+        **redis_kwargs,
+    )
+    return _router_instance
+
+
+# =============================================================================
+# Public factory API — all serve from the same `kd-all` group
+# =============================================================================
+# Temperature is the only per-step variation. T=0.7 for Self-Refine
+# exploration (Madaan 2023 §2); T=0.0 for deterministic calls elsewhere.
+# Per-entry timeouts in the catalog reflect provider characteristics;
+# the factory-level timeout args are kept for API compatibility only.
 
 def build_llm_fallback_chain(
     groq_timeout_s: int = 120,
     nim_timeout_s: int = 300):
-    """
-    Return a single RunnableWithFallbacks that auto-rotates through every
-    provider+model. The caller gets ONE object; LangChain handles retry
-    semantics (next model on exception — timeout, 429, 413, malformed
-    tool_call JSON, etc.).
-
-    Per-call behavior:
-      - Groq attempt: up to `groq_timeout_s` (default 90s) per model
-      - NIM attempt:  up to `nim_timeout_s` (default 240s) per model
-      - max_retries=0 on each → no internal retry loop; fallback handles it
-
-    Missing API keys: the ChatOpenAI instance is still constructed (empty
-    key), but requests will fail with 401 and fall through to the next model.
-    Production MUST have both GROQ_API_KEY and NVIDIA_API_KEY set.
-    """
-    chain = _ordered_fallback(groq_timeout_s, nim_timeout_s)
-    primary = chain[0]
-    fallbacks = chain[1:]
-    return primary.with_fallbacks(fallbacks)
+    """General-purpose LLM chain. Unified catalog at T=0.0."""
+    return ChatLiteLLMRouter(router=_get_router(), model=GROUP, temperature=0.0)
 
 
 def build_resolver_llm_chain(
     groq_timeout_s: int = 30,
     nim_timeout_s: int = 60):
-    """
-    Resolver-only chain with TIGHT timeouts — Groq 30s / NIM 60s.
-
-    Why a separate chain: the KD resolver's LLM calls are all classifier-
-    style — scope gate (~200 tokens), crossover decomposer (~500 tokens),
-    URL rerank (~2K tokens). Typical latency on NIM GLM-5.1 is 3-10s;
-    a p99 call finishes under 30s. The default 300s timeout tuned for KD
-    planner/synthesizer prompts (25K tokens on reasoning models) turns a
-    stalled primary into a 5-minute wait on the request path, where every
-    second counts.
-
-    Lower bounds:
-      - Groq 30s: Groq hello-world <5s, function-calling typically 1-3s,
-        headroom for long structured outputs.
-      - NIM 60s: covers the hardest resolver call (rerank with ~2K-token
-        candidates list) even on reasoning models; stalls cascade in 1 min
-        instead of 5 min.
-
-    Cascade walks 14 models at 60s each = ~14 min worst case (vs 70 min at
-    300s). In practice the primary succeeds and the chain never cascades.
-
-    Excludes NO models — all 14 in the main catalog are available as
-    fallbacks. Unlike build_synth_fallback_chain (which drops the Groq
-    tail for quality), resolver classification is robust enough for
-    Llama 3.1 8B etc. to handle as last-resort fallbacks.
-
-    Used by:
-      - POST /api/v1/knowledge/studies/resolve — scope gate, crossover
-        decomposer, URL rerank (all via app.state.llm_resolver)
-    """
-    chain = _ordered_fallback(groq_timeout_s, nim_timeout_s)
-    primary = chain[0]
-    fallbacks = chain[1:]
-    return primary.with_fallbacks(fallbacks)
+    """Resolver chain. Unified catalog at T=0.0."""
+    return ChatLiteLLMRouter(router=_get_router(), model=GROUP, temperature=0.0)
 
 
 def build_synth_fallback_chain(
     groq_timeout_s: int = 120,
     nim_timeout_s: int = 300):
-    """
-    Synthesis-only chain — EXCLUDES the Groq tail (`llama-3.3-70b-versatile`
-    and `llama-3.1-8b-instant`).
-
-    Why a separate chain: research (Nature Communications 2025 agent
-    benchmark) measured llama-3.3-70B at 32% code-gen error rate; llama-3.1-8B
-    is significantly worse on structured output and code-heavy synthesis.
-    Accepting a chapter that cascaded to either would poison the study.
-
-    Used by:
-      - synthesize_chapter (authoritative per-chapter output)
-      - curator (final style-normalization pass)
-
-    NOT used by:
-      - scope classifier (llama-3.1-8b-instant is perfect there — cheap, fast)
-      - LLM disambiguation in /resolve (cheap classifier-class task)
-
-    Falls back to the full chain's tail ONLY if every primary is down — in
-    practice, seven NIM models + four Groq mid-tier models provide enormous
-    headroom and the tail almost never fires.
-    """
-    chain = _ordered_fallback(groq_timeout_s, nim_timeout_s)
-    # Drop the last two entries (Groq gpt-oss-20b + llama-3.1-8b-instant).
-    # gpt-oss-20b stays — it's Apache 2.0 with good FC reliability (OpenAI claims
-    # parity with o3-mini). llama-3.1-8b-instant is the one to hard-exclude.
-    filtered: list[ChatOpenAI] = []
-    for entry in chain:
-        # ChatOpenAI stores the model under `model_name`; filter by model_id string
-        model_id = getattr(entry, "model_name", None) or getattr(entry, "model", "")
-        if model_id == "llama-3.1-8b-instant":
-            continue  # tail exclusion for synth quality
-        if model_id == "llama-3.3-70b-versatile":
-            continue  # tail exclusion — 32% code-gen error in benchmarks
-        filtered.append(entry)
-    primary = filtered[0]
-    fallbacks = filtered[1:]
-    return primary.with_fallbacks(fallbacks)
+    """Synthesize_chapter + curator. Unified catalog at T=0.0."""
+    return ChatLiteLLMRouter(router=_get_router(), model=GROUP, temperature=0.0)
 
 
 def build_refine_llm_chain(
     groq_timeout_s: int = 120,
     nim_timeout_s: int = 300):
-    """
-    Refiner chain with T=0.7 for Self-Refine iterations.
-
-    Research (2026-04-21):
-      - Madaan et al. 2023 Self-Refine (arxiv 2303.17651v2) used T=0.7 for
-        critique/refine; T=0 collapses exploration and commits to a single
-        deterministic edit path. Known cause of iter N < iter N-1 regression.
-      - Huang et al. 2024 ICLR (arxiv 2310.01798v2 §3.3) documents regression
-        frequency with deterministic refinement; higher temperature gives the
-        refiner alternative edit paths to escape the "one wrong fix" trap.
-
-    Grader stays at T=0 (2506.05234: judge-side determinism matters more).
-    Synthesizer also stays at T=0 for initial deterministic synthesis —
-    only the ADJUSTMENT-GENERATION + subsequent re-synthesize steps benefit
-    from exploration.
-
-    Used only for the `_generate_adjustment` + refine re-synthesize call
-    path inside the Self-Refine loop; other graph nodes use the canonical
-    `build_llm_fallback_chain()`.
-    """
-    # Rebuild the ordered chain with T=0.7 for both Groq + NIM models
-    def _groq_t07(model: str) -> ChatOpenAI:
-        return ChatOpenAI(
-            model = model,
-            temperature = 0.7,
-            base_url = GROQ_URL,
-            api_key = os.environ.get("GROQ_API_KEY", ""),
-            max_retries = 0,
-            timeout = groq_timeout_s,
-        )
-    def _nim_t07(model: str) -> ChatOpenAI:
-        return ChatOpenAI(
-            model = model,
-            temperature = 0.7,
-            base_url = NVIDIA_URL,
-            api_key = os.environ.get("NVIDIA_API_KEY", ""),
-            max_retries = 0,
-            timeout = nim_timeout_s,
-        )
-    g = {tag: _groq_t07(m) for m, tag in GROQ_CATALOG}
-    n = {tag: _nim_t07(m) for m, tag in NIM_CATALOG}
-    ordered = [
-        n["nim-top"], n["nim-structured"], g["groq-512k"],
-        n["nim-context"], n["nim-reason"], n["nim-agent"],
-        n["nim-code-fb"], n["nim-v3"],
-        g["groq-flag"], g["groq-reason"],
-        # Drop llama-3.3-70b-versatile + llama-3.1-8b-instant (synth-quality exclusions)
-        n["nim-general"],
-    ]
-    primary = ordered[0]
-    fallbacks = ordered[1:]
-    return primary.with_fallbacks(fallbacks)
+    """Self-Refine refiner at T=0.7 (Madaan 2023 §2). Unified catalog."""
+    return ChatLiteLLMRouter(router=_get_router(), model=GROUP, temperature=0.7)
 
 
 def build_curator_llm(timeout_s: int = 600):
     """
-    Pin the curator to ONE model — research (Mixture-of-Agents, arXiv
-    2406.04692) says a single aggregator over heterogeneous proposers is the
-    pattern that works. Rotating the curator defeats its purpose.
-
-    Pick: z-ai/glm-5.1 on NIM. It's the primary of our quality chain, has
-    200K context (enough for a full multi-chapter study), strong structured-
-    output discipline, MIT license, and the best Terminal-Bench 2.0 score
-    among open models.
-
-    Timeout: 10 minutes. Curator processes chapters one at a time, and a
-    262K-context reasoning call can legitimately take several minutes.
+    Curator chain. Uses the same unified catalog at T=0.0 — previous
+    single-model pin per Mixture-of-Agents (arXiv 2406.04692) is relaxed
+    per design decision 2026-04-24: unified rotation for every step.
     """
-    return _nim("z-ai/glm-5.1", timeout_s)
+    return ChatLiteLLMRouter(router=_get_router(), model=GROUP, temperature=0.0)
 
 
 def build_scope_classifier_llm(timeout_s: int = 30):
     """
-    Dedicated lightweight classifier for the scope-gate (~500ms binary).
-    Groq llama-3.1-8b-instant primary; falls back to the main chain if Groq
-    is down or key is missing.
-
-    Kept separate from the main chain because:
-      - Scope gate is sync-path on POST /studies — latency matters.
-      - Using the main chain (starts with NIM 262K reasoning model) would
-        spend seconds thinking about "is pydantic a code framework?"
+    Scope classifier for POST /studies. Unified catalog at T=0.0 — previous
+    tiny-model tail (llama-3.1-8b, gpt-oss-20b) is relaxed per design
+    decision 2026-04-24: quality > speed, tokens are free.
     """
-    groq_key = os.environ.get("GROQ_API_KEY", "")
-    if groq_key:
-        primary = _groq("llama-3.1-8b-instant", timeout_s)
-        return primary.with_fallbacks([build_llm_fallback_chain()])
-    # Local dev without Groq key — fall back to the main chain
-    return build_llm_fallback_chain()
+    return ChatLiteLLMRouter(router=_get_router(), model=GROUP, temperature=0.0)

@@ -39,7 +39,6 @@ Pipeline shape:
 import asyncio
 import logging
 from typing import Optional
-
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.types import Send
@@ -76,11 +75,19 @@ from graphs.knowledge.helpers import (
     _validate_plan,
     _write_plan_json,
     # Step 6
+    _assemble_chapter_markdown,
+    _audit_sentinel_roundtrip,
+    _audit_structured_output_refs,
+    _format_preservation_feedback,
+    _format_structured_output_feedback,
     _generate_adjustment,
     _grade_attempt,
+    _invoke_structured_with_fallback,
     _load_chapter_files,
+    _restore_code_blocks,
     _synthesize_attempt,
     _user_profile_summary,
+    _vault_code_blocks,
     _write_chapter_artifacts,
     # Step 7 + deterministic linter + glossary (new)
     _build_chapter_bundles,
@@ -89,6 +96,7 @@ from graphs.knowledge.helpers import (
     _load_all_chapters,
     _load_available_slugs,
     _scan_citations,
+    _scan_hallucinated_fences,
     # Step 8
     _build_chapter_summaries,
     _build_debt_md,
@@ -450,9 +458,21 @@ class KnowledgeDistillerGraph:
             return parsed
 
         import asyncio as _asyncio
+        # Tier 1 #4 (2026-04-23) — MAP inter-shard semaphore. Unbounded
+        # asyncio.gather(103 shards) saturates NIM's 40 RPM/model budget
+        # and produces a cascade of 429s (Run-6 observed 172 rate-limit
+        # retries in one study). Semaphore=30 lets the primary model serve
+        # ~30 concurrent shards while queued shards wait, dramatically
+        # reducing retry pressure on the provider + token waste on our side.
+        MAP_SHARD_SEMAPHORE = _asyncio.Semaphore(30)
+
+        async def _label_shard_bounded(shard, shard_idx):
+            async with MAP_SHARD_SEMAPHORE:
+                return await _label_shard(shard, shard_idx)
+
         _shard_start = _asyncio.get_event_loop().time()
         shard_results: list[ShardLabels] = await _asyncio.gather(
-            *(_label_shard(s, i + 1) for i, s in enumerate(shards)),
+            *(_label_shard_bounded(s, i + 1) for i, s in enumerate(shards)),
         )
         _shard_elapsed = _asyncio.get_event_loop().time() - _shard_start
         total_clusters = sum(len(r.clusters) for r in shard_results)
@@ -667,93 +687,211 @@ class KnowledgeDistillerGraph:
         #   - Kamoi et al. 2024, arxiv 2406.01297v3 §7 (intrinsic bottleneck)
         #   - PDR arxiv 2510.01123 (argmax over iterations, not last)
         tone_block = build_tone_block(user_profile)
-        files_content = await _load_chapter_files(storage, study_root, chapter.assigned_files)
+        files_content_raw = await _load_chapter_files(
+            storage, study_root, chapter.assigned_files,
+            chapter_goal = chapter.goal,  # Tier 1 #1 BM25 ranking
+        )
+        # Tier 0a: vault fenced code blocks before synthesis so the LLM
+        # cannot paraphrase, elide, reformat, or rename them. Tier 0c: the
+        # integrity check after each attempt gates the grader — preservation
+        # must be 100% to proceed; otherwise the iteration is a forced refine
+        # with targeted per-sentinel feedback.
+        files_content, code_vault = _vault_code_blocks(files_content_raw)
+        logger.info(
+            f"[synth][ch{chapter.number:02d}] vaulted {len(code_vault)} code "
+            f"block(s); prompt is {len(files_content)} chars after vault "
+            f"(was {len(files_content_raw)} raw)"
+        )
         adjustments: list[str] = []
-        history: list[tuple[ChapterSynthesis, GraderEvaluation]] = []  # all iterations
+        history: list[tuple[ChapterSynthesis, GraderEvaluation]] = []  # graded iterations only
         best_synthesis: ChapterSynthesis | None = None
         best_eval: GraderEvaluation | None = None
         _REGRESSION_EPSILON = 0.01  # tolerance for grader noise
-        for iteration in range(MAX_SELF_REFINE_ITERATIONS):
-            # 1. Synthesize
-            try:
-                synthesis = await _synthesize_attempt(
-                    chapter = chapter,
-                    files_content = files_content,
-                    framework = framework,
-                    tone_block = tone_block,
-                    previous_adjustments = adjustments,
-                    llm = llm,
-                )
-            except Exception as e:
-                raise RuntimeError(
-                    f"Synthesizer failed on chapter {chapter.number} iter {iteration}: {e}"
-                ) from e
-            # 2. Grade
-            try:
-                evaluation = await _grade_attempt(
-                    synthesis_text = synthesis.content,
-                    chapter = chapter,
-                    user_profile = user_profile,
-                    framework = framework,
-                    llm = llm,
-                )
-            except Exception as e:
-                raise RuntimeError(
-                    f"Grader failed on chapter {chapter.number} iter {iteration}: {e}"
-                ) from e
-            history.append((synthesis, evaluation))
-            logger.info(
-                f"[synth][ch{chapter.number:02d}] iter {iteration} — "
-                f"score={evaluation.weighted_score:.2f} action={evaluation.action} "
-                f"issues={len(evaluation.specific_issues)}"
-            )
-            # Track argmax — first iteration bootstraps `best_*`.
-            if best_eval is None or evaluation.weighted_score > best_eval.weighted_score:
-                best_synthesis = synthesis
-                best_eval = evaluation
-            # 3. Decide
-            accept_threshold = user_profile.acceptance_threshold
-            if evaluation.action == "accept" or evaluation.weighted_score >= accept_threshold:
-                # Accepted — `best_*` already tracks this iteration (argmax)
-                break
-            # Early-stop on regression (compared to previous iter, not all-time best).
-            # Huang 2024 §3.3: further rounds compound drift after a first drop.
-            if iteration > 0:
-                prev_score = history[-2][1].weighted_score
-                if evaluation.weighted_score < prev_score - _REGRESSION_EPSILON:
-                    logger.info(
-                        f"[synth][ch{chapter.number:02d}] regression detected at iter "
-                        f"{iteration} ({evaluation.weighted_score:.2f} < "
-                        f"{prev_score:.2f} - {_REGRESSION_EPSILON}); stopping early "
-                        f"— committing best seen (score={best_eval.weighted_score:.2f})"
+        # Tier 0d-6: isolate per-chapter synth failures. If the fallback chain
+        # is truly exhausted (every synth model returned None / every grader
+        # model failed) OR no graded iteration completes (every iter 0..N-1
+        # fails the preservation gate), swallow the terminal RuntimeError and
+        # emit a DEBT sentinel. Sibling chapters in the Send() fan-out must
+        # keep running — a single chapter's LLM-side bad luck should not kill
+        # the whole study.
+        iteration = -1  # sentinel when the loop body never executes
+        try:
+            for iteration in range(MAX_SELF_REFINE_ITERATIONS):
+                # 1. Synthesize — Tier 3 #21 structured output.
+                #    Returns a ChapterOutput (sections + challenges + flashcards),
+                #    NOT free-form markdown. The LLM can't emit fences in prose_md
+                #    (schema discourages; audit enforces); it only lists which
+                #    vault hashes go in each section via `code_refs`.
+                try:
+                    chapter_output = await _synthesize_attempt(
+                        chapter = chapter,
+                        files_content = files_content,
+                        framework = framework,
+                        tone_block = tone_block,
+                        previous_adjustments = adjustments,
+                        llm = llm,
+                        iteration = iteration,
+                        study_id = payload.get("study_id"),
                     )
-                    break
-            # Structural problem → drop adjustments, start fresh on next iter
-            if evaluation.action == "regenerate":
-                adjustments = []
-                continue
-            # Localized issues → generate specific adjustment, retry
-            if iteration < MAX_SELF_REFINE_ITERATIONS - 1:
-                # Generate adjustment feedback with T=0.7 refiner chain for
-                # exploration (Madaan 2023, Self-Refine §2 — T=0 collapses
-                # exploration and commits to a single deterministic edit path,
-                # a documented cause of regression per Huang 2024 §3.3).
-                # Grader stays T=0; only this critique-generation call benefits
-                # from higher temperature.
-                from services.llm_chain import build_refine_llm_chain
-                refine_llm = build_refine_llm_chain()
-                adj = await _generate_adjustment(evaluation, synthesis.content, refine_llm)
-                adjustments.append(adj)
-                logger.info(
-                    f"[synth][ch{chapter.number:02d}] adjustment generated ({len(adj)} chars) "
-                    f"— retrying with {len(adjustments)} total adjustment(s)"
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Synthesizer failed on chapter {chapter.number} iter {iteration}: {e}"
+                    ) from e
+                # 1b. Integrity audit (Tier 0c, #21 variant + batch-3 2026-04-23).
+                #     Union + uniqueness + distribution against the vault:
+                #       - `missing` = vault hashes the LLM forgot to reference
+                #       - `invented` = hashes in code_refs not present in vault
+                #       - `fence_sections` = sections with ``` in prose_md
+                #       - `duplicated_refs` = hashes in MORE THAN ONE section
+                #         (Run-4 distribution bug: LLM put same hash into 2
+                #          sections to satisfy union check; assembler then
+                #          rendered the code block twice in unrelated places)
+                #       - `empty_sections` = sections with substantive prose
+                #         but zero code_refs (distribution failure; see
+                #         batch-3 roadmap analysis of Run-4 output)
+                #     Any of these = forced refine with targeted feedback.
+                (
+                    missing,
+                    invented,
+                    fence_sections,
+                    duplicated_refs,
+                    empty_sections,
+                ) = _audit_structured_output_refs(chapter_output, code_vault)
+                if missing or invented or fence_sections or duplicated_refs or empty_sections:
+                    logger.warning(
+                        f"[synth][ch{chapter.number:02d}] iter {iteration} "
+                        f"structured-output audit FAILED: "
+                        f"{len(missing)} missing / {len(invented)} invented / "
+                        f"{len(fence_sections)} fence-contaminated / "
+                        f"{len(duplicated_refs)} duplicated / "
+                        f"{len(empty_sections)} empty-but-proseful section(s) "
+                        f"out of {len(code_vault)} vault hashes — "
+                        f"forcing refine with targeted feedback"
+                    )
+                    adjustments.append(
+                        _format_structured_output_feedback(
+                            missing,
+                            invented,
+                            fence_sections,
+                            code_vault,
+                            duplicated_refs = duplicated_refs,
+                            empty_sections = empty_sections,
+                        )
+                    )
+                    continue
+                # 1c. Deterministic assembly — build the final chapter markdown
+                #     from ChapterOutput + vault. Code fences come from the
+                #     vault verbatim; prose comes from the LLM. Downstream
+                #     nodes (grader, artifact writer, curator) consume a
+                #     ChapterSynthesis-shaped object so their interface is
+                #     unchanged.
+                assembled_md = _assemble_chapter_markdown(
+                    chapter_output, code_vault, chapter_title = chapter.title,
                 )
-        # 4. Commit BEST — argmax over iterations, not the last.
-        if best_synthesis is None or best_eval is None:
-            raise RuntimeError(
-                f"Chapter {chapter.number} produced no synthesis after "
-                f"{MAX_SELF_REFINE_ITERATIONS} iterations"
+                synthesis = ChapterSynthesis(
+                    content = assembled_md,
+                    challenges = chapter_output.challenges,
+                    flashcards = chapter_output.flashcards,
+                )
+                # 2. Grade
+                try:
+                    evaluation = await _grade_attempt(
+                        synthesis_text = synthesis.content,
+                        chapter = chapter,
+                        user_profile = user_profile,
+                        framework = framework,
+                        llm = llm,
+                        iteration = iteration,
+                        study_id = payload.get("study_id"),
+                    )
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Grader failed on chapter {chapter.number} iter {iteration}: {e}"
+                    ) from e
+                history.append((synthesis, evaluation))
+                logger.info(
+                    f"[synth][ch{chapter.number:02d}] iter {iteration} — "
+                    f"score={evaluation.weighted_score:.2f} action={evaluation.action} "
+                    f"issues={len(evaluation.specific_issues)} preservation=1.00"
+                )
+                # Track argmax — first graded iteration bootstraps `best_*`.
+                if best_eval is None or evaluation.weighted_score > best_eval.weighted_score:
+                    best_synthesis = synthesis
+                    best_eval = evaluation
+                # 3. Decide
+                accept_threshold = user_profile.acceptance_threshold
+                if evaluation.action == "accept" or evaluation.weighted_score >= accept_threshold:
+                    # Accepted — `best_*` already tracks this iteration (argmax)
+                    break
+                # Early-stop on regression across GRADED iterations. Preservation
+                # failures skip history append, so len(history) — not the loop
+                # variable — is the right gate for this check.
+                if len(history) >= 2:
+                    prev_score = history[-2][1].weighted_score
+                    if evaluation.weighted_score < prev_score - _REGRESSION_EPSILON:
+                        logger.info(
+                            f"[synth][ch{chapter.number:02d}] regression detected at iter "
+                            f"{iteration} ({evaluation.weighted_score:.2f} < "
+                            f"{prev_score:.2f} - {_REGRESSION_EPSILON}); stopping early "
+                            f"— committing best seen (score={best_eval.weighted_score:.2f})"
+                        )
+                        break
+                # Structural problem → drop adjustments, start fresh on next iter
+                if evaluation.action == "regenerate":
+                    adjustments = []
+                    continue
+                # Localized issues → generate specific adjustment, retry
+                if iteration < MAX_SELF_REFINE_ITERATIONS - 1:
+                    # Generate adjustment feedback with T=0.7 refiner chain for
+                    # exploration (Madaan 2023, Self-Refine §2 — T=0 collapses
+                    # exploration and commits to a single deterministic edit path,
+                    # a documented cause of regression per Huang 2024 §3.3).
+                    # Grader stays T=0; only this critique-generation call benefits
+                    # from higher temperature.
+                    from services.llm_chain import build_refine_llm_chain
+                    refine_llm = build_refine_llm_chain()
+                    adj = await _generate_adjustment(evaluation, synthesis.content, refine_llm)
+                    adjustments.append(adj)
+                    logger.info(
+                        f"[synth][ch{chapter.number:02d}] adjustment generated ({len(adj)} chars) "
+                        f"— retrying with {len(adjustments)} total adjustment(s)"
+                    )
+            # 4. Commit BEST — argmax over iterations, not the last.
+            if best_synthesis is None or best_eval is None:
+                raise RuntimeError(
+                    f"Chapter {chapter.number} produced no synthesis after "
+                    f"{MAX_SELF_REFINE_ITERATIONS} iterations"
+                )
+        except RuntimeError as terminal_error:
+            # Tier 0d-6 sentinel: the fallback chain is exhausted OR every
+            # iteration failed the preservation gate. Emit a DEBT-carrying
+            # ChapterResult so LangGraph's operator.add reducer still merges
+            # cleanly, sibling workers finish, and curator / critic /
+            # assembler can detect-and-skip (curator and assembler already
+            # null-guard missing READMEs; DEBT.md surfaces the failure).
+            logger.error(
+                f"[synth][ch{chapter.number:02d}] TERMINAL FAILURE at iter "
+                f"{iteration} after {len(history)} graded iteration(s) — "
+                f"{terminal_error}. Emitting DEBT sentinel so sibling "
+                f"chapters continue; this chapter will be regenerated on "
+                f"the next run."
             )
+            sentinel_result = {
+                "number": chapter.number,
+                "content_path": None,
+                "challenges_path": None,
+                "flashcards_path": None,
+                "score": 0.0,
+                "iterations": len(history),
+                "debt": {
+                    "reason": "synth_chain_exhausted",
+                    "error": str(terminal_error),
+                    "iteration_failed_at": iteration,
+                    "graded_iterations": len(history),
+                    "adjustments_accumulated": len(adjustments),
+                },
+            }
+            return {"synthesis_results": [sentinel_result]}
         # Log summary: all iteration scores so operators can see the trajectory.
         score_trace = " → ".join(f"{e.weighted_score:.2f}" for _, e in history)
         logger.info(
@@ -862,13 +1000,26 @@ class KnowledgeDistillerGraph:
         chain = CURATOR_PROMPT | curator_llm
         curated_count = 0
         for n, content in chapters:
+            # Tier 0a: vault code blocks before the curator LLM call so the
+            # curator can rewrite prose freely while code is physically
+            # unreachable by its token generator. Tier 0c: any integrity
+            # failure on the curator output → keep original (curator is
+            # best-effort style normalization, not a content gate).
+            try:
+                vaulted_content, code_vault = _vault_code_blocks(content)
+            except ValueError as e:
+                logger.warning(
+                    f"[curator][ch{n:02d}] vault collision ({e}); "
+                    f"keeping original"
+                )
+                continue
             try:
                 resp = await chain.ainvoke({
                     "chapter_number": n,
                     "framework": framework,
                     "tone_block": tone_block,
                     "glossary": glossary_str,
-                    "chapter_content": content,
+                    "chapter_content": vaulted_content,
                 })
             except Exception as e:
                 # Best-effort: if one chapter's curation fails, keep the original
@@ -877,7 +1028,19 @@ class KnowledgeDistillerGraph:
                     f"[curator][ch{n:02d}] curation failed ({e}); keeping original"
                 )
                 continue
-            curated = resp.content if hasattr(resp, "content") else str(resp)
+            curated_vaulted = resp.content if hasattr(resp, "content") else str(resp)
+            # Integrity check: every sentinel must survive curator rewrite.
+            missing, unexpected = _audit_sentinel_roundtrip(
+                curated_vaulted, code_vault
+            )
+            if missing or unexpected:
+                logger.warning(
+                    f"[curator][ch{n:02d}] preservation FAILED "
+                    f"({len(missing)} missing, {len(unexpected)} unexpected "
+                    f"of {len(code_vault)} vaulted); keeping original"
+                )
+                continue
+            curated = _restore_code_blocks(curated_vaulted, code_vault)
             # Safety: if curator returned something dramatically shorter than the
             # original, it probably refused/truncated — fall back to original.
             if len(curated.strip()) < 0.5 * len(content.strip()):
@@ -895,7 +1058,8 @@ class KnowledgeDistillerGraph:
             curated_count += 1
             logger.info(
                 f"[curator][ch{n:02d}] normalized "
-                f"({len(content)}B → {len(curated)}B)"
+                f"({len(content)}B → {len(curated)}B, "
+                f"{len(code_vault)} code blocks preserved)"
             )
 
         logger.info(
@@ -942,9 +1106,48 @@ class KnowledgeDistillerGraph:
         # 1) Load all chapters + the set of available source slugs
         chapters = await _load_all_chapters(storage, study_root, plan)
         if not chapters:
-            raise FileNotFoundError(
-                f"no chapter READMEs under {study_root!r} — synthesize phase didn't run"
+            # Fragility fix (2026-04-23, post-Run-6): all-chapters-sentinel
+            # case. 0d-6 emits DEBT sentinels with content_path=None for
+            # chapters that exhausted the fallback chain. If EVERY chapter
+            # sentinel'd (mass provider outage, catalog drift, etc.), there
+            # are no READMEs to critique. Do NOT crash — emit a minimal
+            # CriticAssessment so assembler can still write DEBT.md +
+            # summary.md describing the wipeout.
+            synth_results = state.get("synthesis_results") or []
+            sentinel_count = sum(
+                1 for r in synth_results
+                if (r.get("debt") or {}).get("reason") == "synth_chain_exhausted"
             )
+            logger.warning(
+                f"[critic] no chapter READMEs under {study_root!r} — "
+                f"all {len(plan)} chapter(s) sentinel'd "
+                f"({sentinel_count} via synth_chain_exhausted). Producing "
+                f"zero-score CriticAssessment; assembler will render DEBT.md."
+            )
+            wipeout_msg = (
+                f"WIPEOUT: 0/{len(plan)} chapters produced output; "
+                f"{sentinel_count} sentinel'd on synth-chain exhaustion. "
+                "See DEBT.md for per-chapter cause. Likely provider outage, "
+                "rate-limit exhaustion, or catalog drift (e.g., model newly "
+                "blocked at org/project level)."
+            )
+            final = CriticAssessment(
+                citation_coverage = 0.0,
+                faithfulness = 0.0,
+                code_syntax_valid = 0.0,
+                overall_score = 0.0,
+                issues = [wipeout_msg],
+            )
+            report_key = f"{study_root}/research/validation_report.json"
+            await storage.write(
+                report_key,
+                final.model_dump_json(indent = 2),
+                content_type = "application/json",
+            )
+            return {
+                "validation_report": final.model_dump(),
+                "current_phase": "assemble",
+            }
         available_slugs = await _load_available_slugs(storage, study_root)
 
         # 2) Deterministic citation scan
@@ -963,28 +1166,17 @@ class KnowledgeDistillerGraph:
 
         # 3) LLM assessment (faithfulness + code_syntax_valid + issues)
         bundles = _build_chapter_bundles(chapters)
-        chain = CRITIC_PROMPT | llm.with_structured_output(
-            CriticAssessment,
-            method = "function_calling",
-        )
-        try:
-            llm_assessment: CriticAssessment = await chain.ainvoke({
+        llm_assessment: CriticAssessment = await _invoke_structured_with_fallback(
+            prompt = CRITIC_PROMPT,
+            llm = llm,
+            schema = CriticAssessment,
+            invoke_vars = {
                 "framework": framework,
                 "file_slugs": ", ".join(sorted(available_slugs)),
                 "chapter_bundles": bundles,
-            })
-        except Exception as e:
-            raise RuntimeError(f"Critic LLM call failed: {e}") from e
-        # Same None-guard rationale as _grade_attempt: with_structured_output
-        # can return None silently when the LLM emits no tool_call. Without
-        # this check, `llm_assessment.issues` below would crash with a
-        # misleading AttributeError.
-        if llm_assessment is None:
-            raise RuntimeError(
-                "critic returned None (no tool_call or malformed structured "
-                "output) — every model in the fallback chain failed to emit "
-                "a parseable CriticAssessment"
-            )
+            },
+            label = "critic",
+        )
 
         # 4) Deterministic style linter — cheap, LLM-free, catches what the
         #    LLM critic is bad at (heading-depth drift, code-density spread,
@@ -993,8 +1185,19 @@ class KnowledgeDistillerGraph:
         if linter_issues:
             logger.info(f"[critic] linter: {len(linter_issues)} style issues flagged")
 
+        # 4b) Tier 2 #20 (2026-04-23) — hallucinated-fence provenance check.
+        #     Every code block in every chapter README must match a source
+        #     fence (by sha256[:12] hash). Catches any late-drift through
+        #     curator or any future node that touches assembled content.
+        fence_issues = await _scan_hallucinated_fences(storage, study_root, chapters)
+        if fence_issues:
+            logger.warning(
+                f"[critic] fence-scan: {len(fence_issues)} hallucinated code "
+                f"block(s) detected across chapters — flagged in DEBT"
+            )
+
         # 5) Merge — override citation_coverage with our deterministic value; recompute overall.
-        merged_issues = list(llm_assessment.issues) + citation_issues + linter_issues
+        merged_issues = list(llm_assessment.issues) + citation_issues + linter_issues + fence_issues
         overall = (
             citation_coverage
             + llm_assessment.faithfulness
@@ -1067,16 +1270,46 @@ class KnowledgeDistillerGraph:
         chapter_summaries = _build_chapter_summaries(previews)
         logger.info(f"[assembler] loaded {len(previews)} chapter previews")
 
-        # 2) Generate summary.md via ASSEMBLER_PROMPT (freeform markdown)
-        try:
-            summary_md = await _call_assembler_llm(
-                framework = framework,
-                user_profile_summary_str = _user_profile_summary(user_profile),
-                chapter_summaries = chapter_summaries,
-                llm = llm,
+        # Fragility fix (2026-04-23, post-Run-6): all-chapters-sentinel case.
+        # If NO chapter produced a README (synthesis wipeout), skip the LLM
+        # summary call — a freeform "here's your study" narrative over empty
+        # content would be misleading/hallucinatory. Emit a plain-text
+        # wipeout notice instead; DEBT.md still renders per-chapter causes.
+        sentinel_count = sum(
+            1 for r in synthesis_results
+            if (r.get("debt") or {}).get("reason") == "synth_chain_exhausted"
+        )
+        chapters_with_content = sum(1 for r in synthesis_results if r.get("content_path"))
+        if chapters_with_content == 0 and synthesis_results:
+            logger.warning(
+                f"[assembler] WIPEOUT — 0/{len(plan)} chapters produced "
+                f"output ({sentinel_count} sentinel'd). Skipping summary "
+                f"LLM call; writing plain-text wipeout notice."
             )
-        except Exception as e:
-            raise RuntimeError(f"Assembler LLM call failed: {e}") from e
+            summary_md = (
+                f"# {framework} — Study Wipeout\n\n"
+                f"This study produced **0 of {len(plan)}** planned chapters.\n\n"
+                f"**{sentinel_count}** chapter(s) exhausted the LLM fallback "
+                "chain during synthesis (provider outage, rate-limit storm, "
+                "or catalog drift — see `DEBT.md` for the specific cause "
+                "per chapter).\n\n"
+                "Re-running this study with the same `framework`, `version`, "
+                "and `user_profile` will reuse cached ingestion + planning "
+                "and re-attempt synthesis for the failed chapters "
+                "(Tier 3 #13 per-chapter artifact cache recovers any "
+                "chapters that succeed between runs).\n"
+            )
+        else:
+            # 2) Generate summary.md via ASSEMBLER_PROMPT (freeform markdown)
+            try:
+                summary_md = await _call_assembler_llm(
+                    framework = framework,
+                    user_profile_summary_str = _user_profile_summary(user_profile),
+                    chapter_summaries = chapter_summaries,
+                    llm = llm,
+                )
+            except Exception as e:
+                raise RuntimeError(f"Assembler LLM call failed: {e}") from e
 
         summary_key = f"{study_root}/summary.md"
         await storage.write(summary_key, summary_md, content_type = "text/markdown")
@@ -1154,7 +1387,7 @@ class KnowledgeDistillerGraph:
         synth_llm: ChatOpenAI = None,
         curator_llm: ChatOpenAI = None,
         checkpointer = None,
-        max_concurrent_chapters: int = 5):
+        max_concurrent_chapters: int = 2):  # Tier 1 #4b 2026-04-23: was 5; restored to match module header docstring after Run-4 stampede observation (5 concurrent NIM reasoning calls → 504 cascade on glm-5.1). K=2 fits NIM free-tier 40 RPM/model comfortably.
         """
         Compose the 5 KD nodes into a LangGraph StateGraph.
 

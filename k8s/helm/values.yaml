@@ -97,6 +97,16 @@ secretMappings:
     key: nvidia-api-key
   - envName: SAMBANOVA_API_KEY
     key: sambanova-api-key
+  - envName: CEREBRAS_API_KEY
+    key: cerebras-api-key
+  - envName: MISTRAL_API_KEY
+    key: mistral-api-key
+  - envName: GOOGLE_API_KEY
+    key: google-api-key
+  - envName: DEEPSEEK_API_KEY
+    key: deepseek-api-key
+  - envName: ZHIPU_API_KEY
+    key: zhipu-api-key
   - envName: ELASTICSEARCH_PASSWORD
     key: elasticsearch-password
   - envName: QDRANT_API_KEY

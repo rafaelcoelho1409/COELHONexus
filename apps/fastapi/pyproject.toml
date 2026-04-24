@@ -20,6 +20,11 @@ dependencies = [
     "langchain-qdrant",        # Qdrant vector store
     "langchain-experimental",  # LLMGraphTransformer
     "langchain-text-splitters", # Text chunking
+    "tiktoken",                # Token counting for KD synth budget (Tier 1 #2 — replaces char-based cap)
+    "langfuse",                # LLM observability (Tier 3 #14 + 0d-5): per-model preservation rate, prompt versioning, trace replay
+    "litellm==1.83.12",        # LLM Router w/ fail-fast (enable_pre_call_checks + cooldown + retry policy). PINNED EXACT — v1.82.7 and v1.82.8 were COMPROMISED via Trivy CI/CD supply-chain attack on 2026-03-24. Do NOT allow >=1.82.7,<1.83.0. v1.83.0+ ships from the rebuilt CI/CD v2 pipeline (isolated envs, signed). Bump manually after checking https://docs.litellm.ai/blog for security notices.
+    "langchain-litellm==0.6.4", # LangChain wrapper around LiteLLM Router (ChatLiteLLMRouter). Pin matches the clean litellm 1.83.x line.
+    "langchain-google-genai",  # Native Gemini integration — more reliable function calling than the OAI-compat endpoint
     "langgraph-checkpoint-redis",
     "langgraph-checkpoint-postgres",  # PostgreSQL checkpointer for conversation persistence
     "psycopg[binary]",               # PostgreSQL async driver (binary — no libpq needed)

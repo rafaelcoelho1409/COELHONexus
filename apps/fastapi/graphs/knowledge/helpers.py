@@ -16,6 +16,7 @@ data-shape work. Caps/thresholds defined as module constants below so they
 can be tuned without hunting through function bodies.
 """
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -24,6 +25,7 @@ from typing import Optional
 from langchain_openai import ChatOpenAI
 
 from schemas.knowledge.agents import (
+    ChapterOutput,
     ChapterPlan,
     ChapterPlanList,
     ChapterSynthesis,
@@ -73,9 +75,22 @@ CORPUS_PREVIEW_CHARS = 80  # was 200 — reduced 2026-04-21 to keep planner
 # case where /llms-full.txt arrived as a single monolithic object.
 MONOLITH_SPLIT_THRESHOLD_BYTES = 50_000
 
-# Cap on assembled raw-file content fed to the synthesizer in one call. Prevents
-# blow-ups when a chapter is assigned many large pages. 40k chars ≈ 10k tokens.
-CHAPTER_FILES_MAX_CHARS = 180_000
+# Cap on assembled raw-file content fed to the synthesizer in one call —
+# TOKEN-based (Tier 1 #2), not char-based. Char-based was unsafe for three
+# reasons:
+#   1. Off-by-one cap-after-append: a single 10 MB file appended before the
+#      budget check produced 1M-token prompts (ch02 2026-04-23 run).
+#   2. Providers enforce context windows + TPM in TOKENS; chars are a proxy
+#      that systematically under-counts code (~5-6 chars/token) vs prose (~4).
+#   3. Tier 0 vault compresses fenced code to ~20-char sentinels BEFORE this
+#      content reaches the LLM — so the raw content we pack here can be 25-30%
+#      larger in chars than the post-vault prompt we actually send.
+# 40_000 tokens post-vault is a comfortable fit inside NIM/Groq context
+# windows (128K-262K) and well under rate-limit ceilings for primaries.
+# Tiktoken cl100k_base OVER-counts for Qwen/GLM/Kimi/Llama tokenizers, so the
+# cap is a conservative upper bound — real token count to the provider is
+# typically 10-30% lower.
+CHAPTER_FILES_MAX_TOKENS = 40_000
 
 # Cap on synthesis-text length sent to the grader. The grader scores presentation
 # style; it doesn't need the full chapter to do that. Keeps grader inputs cheap.
@@ -96,6 +111,407 @@ _CITATION_RE = re.compile(r"#\s*docs:\s*([^\s\n`)]+)", re.MULTILINE)
 # Per-chapter preview length used by the assembler when building summary.md.
 # Short enough that the whole index fits easily in one LLM call.
 ASSEMBLER_PREVIEW_CHARS = 500
+
+
+# =============================================================================
+# Code-vault primitives (Tier 0a — code preservation)
+# =============================================================================
+# Extract fenced code blocks from markdown before sending to an LLM, replace
+# each with an opaque hash-addressed sentinel, then restore byte-exact after
+# the LLM returns. Foundation of the code-preservation invariant documented
+# in docs/KNOWLEDGE-DISTILLER-IMPROVEMENTS-ROADMAP.md Tier 0.
+#
+# Why placeholder substitution vs. "please preserve verbatim" prompting: the
+# latter is probabilistic and silently corrupts code (rename identifiers,
+# strip comments, elide with ..., reformat whitespace). Placeholders make
+# code physically unreachable by the LLM's token generator.
+#
+# Sentinel shape: <code-ref hash="{sha256[:12]}"/>
+#   - Self-closing XML tag: Claude is explicitly trained on XML tags as
+#     structural primitives; every mainstream model (GPT, Gemini,
+#     open-weights) treats XML tags as pass-through structure, not
+#     content to rewrite. Self-closing form signals "no inner content
+#     to modify".
+#   - 12-char SHA256 prefix of the original fenced block (including fence
+#     markers and info string): opaque, hash-addressable, collision space
+#     of 2^48 keeps per-document collisions statistically impossible.
+#   - Chosen 2026-04-23 AFTER the prior ZWS-wrapped hash shape failed
+#     catastrophically on a fastapi smoke test (100% sentinel strip
+#     across 4 chapters in the NIM/Groq fallback chain). See
+#     KNOWLEDGE-DISTILLER-IMPROVEMENTS-ROADMAP.md Tier 0d for RCA.
+# =============================================================================
+
+# Matches the exact sentinel shape this module emits. Used for collision
+# detection on input and for unexpected-sentinel detection on LLM output.
+_VAULT_SENTINEL_RE = re.compile(r'<code-ref hash="[0-9a-f]{12}"/>')
+
+
+def _make_sentinel(original: str, salt: int = 0) -> str:
+    # salt lets the caller rehash on the astronomically rare per-doc collision
+    # (two distinct fences whose sha256[:12] prefixes collide).
+    payload = original if salt == 0 else f"{original}|{salt}"
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f'<code-ref hash="{digest}"/>'
+
+
+def _vault_code_blocks(content: str) -> tuple[str, dict[str, str]]:
+    """
+    Extract every fenced code block from `content`, replace each with an
+    opaque sentinel, return (vaulted_text, vault) where vault maps
+    sentinel -> original fenced-block text (fence markers + info string +
+    body preserved byte-exactly).
+
+    Scope: fenced blocks only (``` and ~~~). Indented code blocks and
+    inline `code` spans are NOT vaulted — too common in prose to vault
+    safely and lower paraphrasing risk.
+
+    Idempotent on content: same input -> same (vaulted_text, vault).
+
+    Raises ValueError if `content` already contains a vault sentinel
+    (indicates a double-vault bug or adversarial input).
+    """
+    if _VAULT_SENTINEL_RE.search(content):
+        raise ValueError(
+            "source already contains vault sentinels — cannot safely vault "
+            "(possible double-vault or adversarial input)"
+        )
+
+    # Local import: markdown-it-py is transitively present via LangChain's
+    # text-splitters, but pulling it at module-import time widens the
+    # graph-build dep chain unnecessarily.
+    from markdown_it import MarkdownIt
+
+    md = MarkdownIt("commonmark")
+    tokens = md.parse(content)
+
+    # split("\n") (NOT splitlines()) preserves a trailing empty element when
+    # the doc ends with \n, so "\n".join(...) round-trips byte-exactly.
+    lines = content.split("\n")
+
+    fence_ranges: list[tuple[int, int, str]] = []
+    for tok in tokens:
+        if tok.type == "fence" and tok.map is not None:
+            start, end = tok.map
+            fence_ranges.append((start, end, "\n".join(lines[start:end])))
+
+    if not fence_ranges:
+        return content, {}
+
+    fence_ranges.sort(key=lambda r: r[0])
+
+    vault: dict[str, str] = {}
+    out_lines: list[str] = []
+    i = 0
+    fi = 0
+    while i < len(lines):
+        if fi < len(fence_ranges) and i == fence_ranges[fi][0]:
+            _, end, original = fence_ranges[fi]
+            sentinel = _make_sentinel(original)
+            salt = 0
+            while sentinel in vault and vault[sentinel] != original:
+                salt += 1
+                sentinel = _make_sentinel(original, salt=salt)
+            vault[sentinel] = original
+            out_lines.append(sentinel)
+            i = end
+            fi += 1
+        else:
+            out_lines.append(lines[i])
+            i += 1
+
+    return "\n".join(out_lines), vault
+
+
+def _restore_code_blocks(text: str, vault: dict[str, str]) -> str:
+    """
+    Reverse `_vault_code_blocks`. Replace every sentinel in `text` with the
+    original fenced-block text from `vault`. Sentinels not present in `text`
+    are silently skipped — use `_audit_sentinel_roundtrip` to detect drops.
+    """
+    for sentinel, original in vault.items():
+        text = text.replace(sentinel, original)
+    return text
+
+
+def _audit_sentinel_roundtrip(
+    llm_output: str,
+    vault: dict[str, str]) -> tuple[list[str], list[str]]:
+    """
+    Report vault integrity on an LLM output BEFORE restoration. Returns
+    (missing, unexpected):
+      - missing: sentinels present in vault but absent from llm_output
+                 (LLM dropped or paraphrased a code block — feed to
+                 Self-Refine as targeted correction).
+      - unexpected: sentinel-shaped tokens in llm_output not in vault
+                    (LLM hallucinated or malformed a sentinel).
+
+    Both lists empty <=> perfect round-trip, preservation_ratio == 1.0.
+    """
+    missing = [s for s in vault if s not in llm_output]
+    found = set(_VAULT_SENTINEL_RE.findall(llm_output))
+    unexpected = [s for s in found if s not in vault]
+    return missing, unexpected
+
+
+# =============================================================================
+# Tier 3 #21 — Structured-output synth audit + assembler
+# =============================================================================
+# Replaces _audit_sentinel_roundtrip for the structured-output synth path.
+# The LLM no longer emits free-form markdown with embedded sentinels — it
+# emits ChapterOutput(sections=[Section(heading, prose_md, code_refs)]).
+# Audit compares the union of code_refs across sections against the vault's
+# bare-hash set; assembler builds final markdown.
+_VAULT_HASH_RE = re.compile(r'<code-ref hash="([0-9a-f]{12})"/>')
+
+
+def _vault_bare_hashes(vault: dict[str, str]) -> set[str]:
+    """Extract the 12-hex hash from each sentinel key in the vault."""
+    hashes: set[str] = set()
+    for sentinel in vault:
+        m = _VAULT_HASH_RE.fullmatch(sentinel)
+        if m:
+            hashes.add(m.group(1))
+    return hashes
+
+
+def _audit_structured_output_refs(
+    output,  # ChapterOutput (typed loosely to avoid a schema import cycle)
+    vault: dict[str, str],
+) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
+    """
+    Audit a ChapterOutput against the vault. Returns
+    (missing, invented, fence_sections, duplicated_refs, empty_sections):
+      - missing: bare-hash values in the vault that no Section.code_refs
+                 mentions (LLM didn't reference a code block — unusable
+                 output, force refine with targeted preview feedback).
+      - invented: bare-hash values that appear in code_refs but NOT in the
+                  vault (LLM fabricated a hash).
+      - fence_sections: headings of Section entries whose prose_md contains
+                       a ``` fence (schema rule violation).
+      - duplicated_refs: bare-hash values that appear in MORE THAN ONE
+                        section's code_refs — the LLM's audit-loophole
+                        exploitation observed on Run-4 (batch-3 fix).
+                        Every vault hash must appear in exactly ONE section.
+      - empty_sections: headings of Section entries with zero code_refs
+                       AND non-trivial prose. Pure-transition sections
+                       (≤40 chars of prose) are allowed to be empty; flag
+                       substantive prose-only sections as distribution
+                       failures so the LLM redistributes on refine.
+
+    All five lists empty <=> perfect output, ready for assembly.
+    """
+    vault_hashes = _vault_bare_hashes(vault)
+    referenced: set[str] = set()
+    ref_counts: dict[str, int] = {}
+    fence_sections: list[str] = []
+    empty_sections: list[str] = []
+    for section in output.sections:
+        for ref in section.code_refs:
+            referenced.add(ref)
+            ref_counts[ref] = ref_counts.get(ref, 0) + 1
+        # Fence check — schema discourages but doesn't reject at Pydantic
+        # level (see schema module docstring for rationale).
+        if "```" in section.prose_md:
+            fence_sections.append(section.heading or "<unnamed>")
+        # Distribution check — non-trivial section with no code is a
+        # prose-stuffing tell. 40 chars ≈ "See section X for details."
+        # which is a legit transition; anything longer is content that
+        # should have had a code_ref alongside.
+        if not section.code_refs and len(section.prose_md.strip()) > 40 and vault_hashes:
+            empty_sections.append(section.heading or "<unnamed>")
+    missing = sorted(vault_hashes - referenced)
+    invented = sorted(referenced - vault_hashes)
+    duplicated_refs = sorted(h for h, c in ref_counts.items() if c > 1)
+    return missing, invented, fence_sections, duplicated_refs, empty_sections
+
+
+def _format_structured_output_feedback(
+    missing: list[str],
+    invented: list[str],
+    fence_sections: list[str],
+    vault: dict[str, str],
+    duplicated_refs: list[str] | None = None,
+    empty_sections: list[str] | None = None,
+) -> str:
+    """
+    Build targeted adjustment text for the Self-Refine loop when a
+    ChapterOutput audit fails. Consumed via `_format_adjustments`.
+    Mirrors `_format_preservation_feedback` but speaks the schema's
+    language: bare hashes + section headings.
+    """
+    # bare_hash -> sentinel -> vault[sentinel] (original fenced-block text)
+    hash_to_sentinel = {
+        m.group(1): sentinel
+        for sentinel in vault
+        for m in [_VAULT_HASH_RE.fullmatch(sentinel)] if m
+    }
+    parts = [
+        "**STRUCTURED OUTPUT FAILURE (hard requirement — forces a retry "
+        "even if other grader dimensions scored well).**"
+    ]
+    if missing:
+        parts.append(
+            f"\nYour sections' `code_refs` did not reference "
+            f"{len(missing)} of {len(hash_to_sentinel)} vault hashes. "
+            "Every `<code-ref hash=\"<12-hex>\"/>` in the input MUST have "
+            "its 12-hex hash appear in at least one section's `code_refs` "
+            "list — the system substitutes the real code block back AFTER "
+            "your response using that hash. Missing hashes (preview shows "
+            "the original block so you can place it in the right section):"
+        )
+        for h in missing[:8]:
+            original = vault.get(hash_to_sentinel.get(h, ""), "")
+            preview = original.replace("\n", " ⏎ ")[:120]
+            parts.append(f"  - `{h}` → was: {preview}")
+        if len(missing) > 8:
+            parts.append(f"  - (+{len(missing) - 8} more not shown)")
+        parts.append(
+            "Add each missing hash to the `code_refs` list of the section "
+            "where the code logically belongs, in the order the reader "
+            "should encounter it."
+        )
+    if invented:
+        parts.append(
+            f"\nYour output invented {len(invented)} hash value(s) not in "
+            "the input: "
+            f"{', '.join(repr(h) for h in invented[:5])}"
+            f"{' ...' if len(invented) > 5 else ''}. "
+            "Only use 12-hex hashes that appeared inside "
+            "`<code-ref hash=\"...\"/>` tags in the input. Do not invent "
+            "new ones — invented hashes can't be resolved and fail the chapter."
+        )
+    if fence_sections:
+        parts.append(
+            f"\nThese section(s) contained triple-backtick ``` fences in "
+            f"`prose_md`, which is forbidden — use `code_refs` instead: "
+            f"{', '.join(repr(h) for h in fence_sections[:5])}"
+            f"{' ...' if len(fence_sections) > 5 else ''}."
+        )
+    if duplicated_refs:
+        parts.append(
+            f"\nYour output placed {len(duplicated_refs)} hash(es) in MORE "
+            f"THAN ONE section's `code_refs`. Every vault hash must appear "
+            "in EXACTLY ONE section — the one where the code is topically "
+            "most relevant. Duplicated hashes cause the same code block to "
+            "be rendered repeatedly in unrelated sections (observed "
+            f"distribution failure). Hashes appearing >1x: "
+            f"{', '.join(repr(h) for h in duplicated_refs[:5])}"
+            f"{' ...' if len(duplicated_refs) > 5 else ''}. Pick the single "
+            "best section for each and remove from the others."
+        )
+    if empty_sections:
+        parts.append(
+            f"\nThese section(s) have substantive prose but zero `code_refs`: "
+            f"{', '.join(repr(h) for h in empty_sections[:5])}"
+            f"{' ...' if len(empty_sections) > 5 else ''}. Either (a) add "
+            "the relevant vault hash(es) to each section's code_refs, or "
+            "(b) merge the section's prose into a neighboring section that "
+            "has code, or (c) shorten the prose to a ≤40-char transition. "
+            "Prose-only sections in a code-framework study are a "
+            "distribution failure."
+        )
+    return "\n".join(parts)
+
+
+def _assemble_chapter_markdown(
+    output,  # ChapterOutput
+    vault: dict[str, str],
+    chapter_title: str | None = None,
+) -> str:
+    """
+    Build the final chapter markdown from a ChapterOutput + the vault:
+      # <chapter_title>      (only if provided — curator preserves)
+      ## <section.heading>
+      <section.prose_md>
+      <fence for code_refs[0]>
+      <fence for code_refs[1]>
+      ...
+    Code fences are resolved deterministically from the vault; a code_ref
+    whose bare hash isn't in the vault is skipped (audit would've caught
+    this — if we're assembling, it means the audit passed). Blank lines
+    separate each block.
+    """
+    hash_to_sentinel = {
+        m.group(1): sentinel
+        for sentinel in vault
+        for m in [_VAULT_HASH_RE.fullmatch(sentinel)] if m
+    }
+    parts: list[str] = []
+    # Batch-3 defense (2026-04-23): even if the LLM put the same hash in
+    # multiple sections' code_refs (audit-loophole observed Run-4), each
+    # vault block is emitted at MOST once. First occurrence wins — the
+    # placement is usually the LLM's first/best choice. Audit flags
+    # duplicated_refs on the same iteration so refine catches the root
+    # cause; this dedup prevents the visible duplicate even if audit is
+    # bypassed by a future schema change.
+    emitted_refs: set[str] = set()
+    if chapter_title:
+        parts.append(f"# {chapter_title}\n")
+    for section in output.sections:
+        heading = (section.heading or "").strip()
+        if heading:
+            parts.append(f"## {heading}\n")
+        prose = section.prose_md.strip()
+        if prose:
+            parts.append(prose + "\n")
+        for ref in section.code_refs:
+            if ref in emitted_refs:
+                continue  # defensive dedup — see comment above
+            sentinel = hash_to_sentinel.get(ref)
+            if not sentinel:
+                continue  # audit already flagged invented refs
+            parts.append(vault[sentinel] + "\n")
+            emitted_refs.add(ref)
+    return "\n".join(parts).rstrip() + "\n"
+
+
+def _format_preservation_feedback(
+    missing: list[str],
+    unexpected: list[str],
+    vault: dict[str, str]) -> str:
+    """
+    Build a targeted adjustment string for the Self-Refine loop when the
+    synthesizer or curator fails to preserve code-block sentinels.
+    Feeds into the `adjustments` list consumed by `_format_adjustments`.
+
+    Each missing sentinel includes a short preview of its original fenced
+    block so the LLM can re-insert the sentinel near its correct position.
+    Cap at 8 previews to keep the retry prompt small.
+    """
+    parts = [
+        "**PRESERVATION FAILURE (hard requirement — forces a retry even "
+        "if other grader dimensions scored well).**"
+    ]
+    if missing:
+        parts.append(
+            f"\nYour previous output dropped {len(missing)} of "
+            f"{len(vault)} code-block sentinels. You MUST reproduce every "
+            "`<code-ref hash=\"...\"/>` tag from the input byte-for-byte "
+            "in your `content` output. The following sentinels were "
+            "missing (preview shows the original block they stand in for):"
+        )
+        for sentinel in missing[:8]:
+            original = vault[sentinel]
+            preview = original.replace("\n", " ⏎ ")[:120]
+            parts.append(f"  - `{sentinel}` → was: {preview}")
+        if len(missing) > 8:
+            parts.append(f"  - (+{len(missing) - 8} more not shown)")
+        parts.append(
+            "Copy each sentinel byte-for-byte where the code should "
+            "appear. Do not paraphrase, summarize, or replace them with "
+            "actual code — the system substitutes real code back after "
+            "your response."
+        )
+    if unexpected:
+        parts.append(
+            f"\nYour previous output contained {len(unexpected)} "
+            "sentinel-shaped tokens that were NOT in the input — you "
+            "invented them. Sentinels can only be COPIED from the input; "
+            "never fabricate sentinel hashes. Invented sentinels cannot "
+            "be restored and fail the chapter. Invented tokens (sample): "
+            f"{', '.join(repr(s) for s in unexpected[:3])}."
+        )
+    return "\n".join(parts)
 
 
 # =============================================================================
@@ -422,22 +838,68 @@ def _extract_glossary_terms(
     chapters: list[tuple[int, str]],
     max_terms: int = 12) -> list[str]:
     """
-    Pull the most-used CamelCase / snake_case identifiers from the first
-    accepted chapter, to serve as a cross-chapter glossary for the curator.
-    Purely heuristic, no LLM — gives the curator a list to normalize against.
+    Tier 2 #7 (2026-04-23): TF-IDF glossary extraction across ALL chapters.
+    Replaces the chapter-0-only CamelCase heuristic that missed terminology
+    introduced in later chapters.
+
+    Strategy:
+      1. Treat each chapter body as a document.
+      2. Keep only identifier-shaped tokens (CamelCase / snake_case /
+         dotted.paths) — these are the API/domain vocabulary.
+      3. Compute TF-IDF across chapters; top-N scores = most-distinctive
+         terms (appearing across multiple chapters but not so common as
+         to be generic).
+      4. Return top N unique terms. Falls back to the chapter-0 counter
+         heuristic on any failure (defensive).
     """
     if not chapters:
         return []
-    first_content = chapters[0][1]
-    # Find identifier-looking tokens: CamelCase, snake_case, or dotted.paths
     import re as _re
-    tokens = _re.findall(
-        r"\b([A-Z][a-zA-Z0-9]+(?:[A-Z][a-zA-Z0-9]+)+|[a-z]+(?:_[a-z0-9]+){1,})\b",
-        first_content,
+    # Token filter — only identifier-shaped strings matter for glossary
+    token_re = _re.compile(
+        r"\b([A-Z][a-zA-Z0-9]+(?:[A-Z][a-zA-Z0-9]+)+|[a-z]+(?:_[a-z0-9]+){1,})\b"
     )
-    from collections import Counter
-    counts = Counter(tokens)
-    return [t for t, _ in counts.most_common(max_terms)]
+
+    def _extract_tokens(text: str) -> str:
+        return " ".join(token_re.findall(text))
+
+    try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        # Pre-tokenize: documents are whitespace-joined identifier tokens
+        # per chapter. TF-IDF uses default whitespace tokenizer on these.
+        docs = [_extract_tokens(body) for _, body in chapters]
+        # Drop empty docs — sklearn crashes on empty corpus
+        docs = [d for d in docs if d.strip()]
+        if not docs:
+            raise ValueError("no identifier tokens across chapters")
+        vec = TfidfVectorizer(
+            lowercase = False,  # preserve CamelCase
+            token_pattern = r"\S+",  # whitespace-split; we pre-tokenized
+            min_df = 1,
+            max_df = 0.9,  # drop terms in >90% of chapters (too generic)
+        )
+        X = vec.fit_transform(docs)
+        # Rank terms by max TF-IDF score across all docs (captures
+        # "term distinctive to any chapter", which is what we want)
+        import numpy as np
+        scores = X.max(axis = 0).toarray().flatten()
+        terms = vec.get_feature_names_out()
+        ranked = sorted(
+            zip(terms, scores),
+            key = lambda x: x[1],
+            reverse = True,
+        )
+        return [t for t, _ in ranked[:max_terms]]
+    except Exception as e:
+        # Fallback: chapter-0 counter heuristic
+        logger.info(
+            f"[glossary] TF-IDF extraction failed ({e}); "
+            f"falling back to chapter-0 counter"
+        )
+        first_content = chapters[0][1]
+        from collections import Counter
+        counts = Counter(token_re.findall(first_content))
+        return [t for t, _ in counts.most_common(max_terms)]
 
 
 async def _write_plan_json(
@@ -477,32 +939,325 @@ async def _write_manifest_json(
 # =============================================================================
 # Step 6 — synthesizer + grader + adjustment helpers
 # =============================================================================
+async def _invoke_structured_with_fallback(
+    *,
+    prompt,
+    llm,
+    schema,
+    invoke_vars: dict,
+    label: str,
+    langfuse_metadata: dict | None = None,
+    langfuse_tags: list[str] | None = None):
+    """
+    Invoke `prompt | model.with_structured_output(schema)` across a
+    RunnableWithFallbacks chain, treating a None result as an escalation
+    signal (same as a raised exception).
+
+    Why this exists:
+      LangChain's RunnableWithFallbacks only retries on raised exceptions.
+      `with_structured_output(method="function_calling")` can return None
+      when the model responds without a tool_call (plain-text apology,
+      malformed tool arguments filtered out by the parser, etc.) — from
+      LangChain's perspective that is a successful invocation, so no
+      fallback fires and None propagates to the caller. We unpack
+      `runnable` + `fallbacks` and walk the models manually so a None
+      at any step escalates to the next model, matching the intent
+      documented in _synthesize_attempt / _grade_attempt.
+    """
+    # Tier 3 #14 + 0d-5 (2026-04-23): LangFuse telemetry. The LiteLLM
+    # Router behind `llm` handles provider cascade + fail-fast + cooldown
+    # internally — we don't iterate models here anymore. Caller gets ONE
+    # ainvoke() that walks healthy deployments and auto-cools down the
+    # broken ones via Redis TTL cache.
+    #
+    # What this wrapper still does:
+    #   1. Attaches LangFuse callback for per-request tracing
+    #   2. Outer timeout belt-and-suspenders (router's own timeouts +
+    #      our eager 120s cap per-deployment — router already enforces
+    #      per-entry timeouts defined in llm_chain.py)
+    #   3. None-guard for the LangChain `with_structured_output` quirk:
+    #      `method="function_calling"` can return None when a provider
+    #      emits a tool_call the parser rejects. Router's pre-call
+    #      checks can't know this; we still need to raise so the caller
+    #      (Self-Refine loop) treats it as a failure, not a success.
+    from services.knowledge.langfuse_client import langfuse_config
+    OUTER_TIMEOUT_SECONDS = 600  # router fast-fails individual models at 120-300s;
+                                  # 600s outer cap guards against full-cascade hangs
+
+    per_attempt_config = langfuse_config(
+        metadata = {**(langfuse_metadata or {}), "label": label},
+        tags = [label.split()[0], *(langfuse_tags or [])],
+    )
+
+    try:
+        chain = prompt | llm.with_structured_output(
+            schema,
+            method = "function_calling",
+        )
+        result = await asyncio.wait_for(
+            chain.ainvoke(
+                invoke_vars,
+                config = per_attempt_config or None,
+            ),
+            timeout = OUTER_TIMEOUT_SECONDS,
+        )
+        if result is None:
+            raise RuntimeError(
+                f"[{label}] LiteLLM Router returned None (all healthy models "
+                f"emitted non-parseable output). Triggers Self-Refine retry."
+            )
+        return result
+    except asyncio.TimeoutError as e:
+        raise RuntimeError(
+            f"[{label}] exceeded outer {OUTER_TIMEOUT_SECONDS}s timeout — "
+            f"LiteLLM Router exhausted its cascade or got stuck. "
+            f"Last exception: {e}"
+        ) from e
+
+
+# =============================================================================
+# Tier 1 #1 (2026-04-23) — BM25 file ranking
+# =============================================================================
+# Minimal BM25 ranker against `chapter.goal`. Ranks a chapter's assigned
+# files by topical relevance so the 40K token budget (#2) is spent on the
+# MOST pedagogically relevant files rather than planner-alphabetical order.
+# Hand-rolled, no new deps — <500 files per chapter is tiny for BM25.
+# Falls back to the caller's original order on any exception (defensive).
+_BM25_TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_]{1,}")
+# Minimal English stopwords — these add noise to chapter.goal matching.
+# Kept small; we don't want to strip domain terms like `client` / `server`.
+_BM25_STOPWORDS = frozenset({
+    "a", "an", "the", "this", "that", "these", "those",
+    "is", "are", "was", "were", "be", "been", "being",
+    "of", "in", "on", "at", "to", "for", "with", "from",
+    "and", "or", "but", "if", "then", "else", "so",
+    "do", "does", "did", "have", "has", "had",
+    "it", "its", "they", "them", "their", "there",
+    "by", "as", "not", "no", "yes",
+    "learn", "use", "using",  # chapter.goal often starts with these
+})
+
+
+def _bm25_tokenize(text: str) -> list[str]:
+    """Lowercase, alphanumeric-prefixed tokens ≥ 2 chars, stopwords dropped."""
+    tokens = [t.lower() for t in _BM25_TOKEN_RE.findall(text)]
+    return [t for t in tokens if t not in _BM25_STOPWORDS]
+
+
+def _rank_files_by_bm25(
+    goal: str,
+    files: list[tuple[str, str]],  # (slug, body)
+    k1: float = 1.5,
+    b: float = 0.75,
+) -> list[tuple[str, str]]:
+    """
+    Return `files` sorted by BM25 score against `goal`, highest first.
+    On any exception, returns the input unchanged (defensive — never let
+    ranker bugs kill a chapter).
+    """
+    try:
+        if len(files) <= 1:
+            return files
+        query_tokens = _bm25_tokenize(goal)
+        if not query_tokens:
+            return files
+        doc_tokens = [_bm25_tokenize(body) for _, body in files]
+        doc_lens = [len(t) for t in doc_tokens]
+        avg_dl = sum(doc_lens) / len(doc_lens) if doc_lens else 0.0
+        if avg_dl == 0:
+            return files
+        # IDF per term
+        import math
+        N = len(files)
+        df: dict[str, int] = {}
+        for tokens in doc_tokens:
+            for term in set(tokens):
+                df[term] = df.get(term, 0) + 1
+        idf = {
+            term: math.log(1 + (N - df[term] + 0.5) / (df[term] + 0.5))
+            for term in df
+        }
+        # BM25 score per doc
+        scores: list[tuple[int, float]] = []
+        for i, tokens in enumerate(doc_tokens):
+            score = 0.0
+            from collections import Counter
+            tf = Counter(tokens)
+            dl = doc_lens[i]
+            norm_dl = 1 - b + b * (dl / avg_dl) if avg_dl > 0 else 1.0
+            for qt in set(query_tokens):
+                if qt not in tf:
+                    continue
+                freq = tf[qt]
+                score += idf.get(qt, 0.0) * (freq * (k1 + 1)) / (freq + k1 * norm_dl)
+            scores.append((i, score))
+        scores.sort(key = lambda x: x[1], reverse = True)
+        return [files[i] for i, _ in scores]
+    except Exception as e:  # pragma: no cover — defensive fallback
+        logger.warning(f"[bm25] ranking failed ({e}); keeping input order")
+        return files
+
+
+def _tiktoken_count(text: str) -> int:
+    """
+    Count tokens via cl100k_base (OpenAI's GPT-4 tokenizer). Safe upper bound
+    for every model in the fallback chain — Qwen/GLM/Kimi/Llama/DeepSeek all
+    tokenize more efficiently than cl100k, so a 40K cl100k count becomes
+    ~30-36K real tokens on the wire. Local import + module-level cache keeps
+    the first call fast and subsequent calls sub-millisecond.
+    """
+    import tiktoken
+    enc = _tiktoken_count._enc if hasattr(_tiktoken_count, "_enc") else None
+    if enc is None:
+        enc = tiktoken.get_encoding("cl100k_base")
+        _tiktoken_count._enc = enc
+    return len(enc.encode(text))
+
+
+def _fence_safe_split(content: str) -> list[str]:
+    """
+    Split a markdown document on H1/H2/H3 boundaries that are NOT inside
+    fenced code blocks. Used by `_load_chapter_files` when a single assigned
+    file alone exceeds the token budget — we pack as many sections as fit,
+    never mid-fence.
+
+    Uses the SAME CommonMark-aware splitter as `_maybe_split_monolith` — the
+    line-anchored regex alternative cuts mid-fence on code comments like
+    `# ...` or `## TODO` inside python / bash blocks (13% corruption rate
+    measured on a real llms-full.txt — see `_maybe_split_monolith` docstring).
+    """
+    from langchain_text_splitters.markdown import (
+        ExperimentalMarkdownSyntaxTextSplitter,
+    )
+    splitter = ExperimentalMarkdownSyntaxTextSplitter(
+        headers_to_split_on = [("#", "H1"), ("##", "H2"), ("###", "H3")],
+        strip_headers = False,
+    )
+    docs = splitter.split_text(content)
+    return [d.page_content for d in docs if d.page_content.strip()]
+
+
 async def _load_chapter_files(
     storage: MinIOStudyStorage,
     study_root: str,
-    slugs: list[str]) -> str:
+    slugs: list[str],
+    chapter_goal: str | None = None) -> str:
     """
-    Concatenate raw file content for a chapter, labeled by slug, capped at
-    CHAPTER_FILES_MAX_CHARS. Returns text formatted for SYNTHESIZER_PROMPT's
+    Concatenate raw file content for a chapter, labeled by slug, token-capped
+    at CHAPTER_FILES_MAX_TOKENS. Returns text formatted for SYNTHESIZER_PROMPT's
     {assigned_files_content} placeholder.
+
+    Packing strategy (Tier 1 #2, 2026-04-23; Tier 1 #1 added 2026-04-23):
+      0. If `chapter_goal` is provided, rank files by BM25 against the goal
+         before packing so the 40K token budget is spent on the most
+         topically relevant files. Falls back to planner order on any
+         ranker exception. (Tier 1 #1.)
+      1. Iterate files in (ranked or planner) order.
+      2. For each file: count tokens BEFORE appending (fixes the cap-after-
+         append off-by-one that let ch02 get a 10 MB single file under a
+         180K-char cap).
+      3. If the whole file fits the remaining budget → append whole.
+      4. If it doesn't fit but is the FIRST file of the chapter (current
+         total == 0) and too large on its own → fence-safely split it into
+         H1/H2/H3 sections and greedy-pack sections until budget. Never
+         truncates inside a fenced code block.
+      5. If it doesn't fit and we already have content → stop iterating.
     """
-    sections: list[str] = []
-    total = 0
+    # Tier 1 #1: pre-read all files so we can rank them before packing.
+    # Previously we read lazily per-iter; reading upfront costs the same
+    # (MinIO reads are parallel under _read_many) and unlocks BM25.
+    preloaded: list[tuple[str, str]] = []
     for slug in slugs:
         key = f"{study_root}/research/raw/{slug}.md"
         try:
-            body = await storage.read_text(key)
+            body = (await storage.read_text(key)).strip()
+            preloaded.append((slug, body))
         except Exception as e:
             logger.warning(f"[synth] could not read {key}: {e}")
             continue
-        snippet = body.strip()
-        sections.append(f"--- {slug}.md ---\n{snippet}\n")
-        total += len(snippet)
-        if total > CHAPTER_FILES_MAX_CHARS:
+
+    if chapter_goal and preloaded:
+        ranked = _rank_files_by_bm25(chapter_goal, preloaded)
+        if ranked and [s for s, _ in ranked] != [s for s, _ in preloaded]:
             logger.info(
-                f"[synth] capping chapter corpus at {total} chars after {len(sections)} files"
+                f"[synth] BM25-ranked {len(preloaded)} files for goal "
+                f"{chapter_goal[:60]!r}; top-3: "
+                f"{[s for s, _ in ranked[:3]]}"
             )
+        preloaded = ranked
+
+    sections: list[str] = []
+    total_tokens = 0
+    skipped = 0
+
+    for idx, (slug, body) in enumerate(preloaded):
+        remaining = CHAPTER_FILES_MAX_TOKENS - total_tokens
+        if remaining <= 0:
+            skipped = len(preloaded) - idx
             break
+
+        header = f"--- {slug}.md ---\n"
+        section_text = header + body + "\n"
+        section_tokens = _tiktoken_count(section_text)
+
+        if section_tokens <= remaining:
+            # Whole file fits in the remaining budget.
+            sections.append(section_text)
+            total_tokens += section_tokens
+            continue
+
+        if total_tokens == 0:
+            # First file and too big by itself — fence-safe split + pack.
+            try:
+                chunks = _fence_safe_split(body)
+            except Exception as e:
+                logger.warning(
+                    f"[synth] fence-safe split failed for {slug!r} ({e}); "
+                    f"skipping whole file"
+                )
+                skipped = len(preloaded) - idx
+                break
+            packed_chunks: list[str] = []
+            packed_tokens = _tiktoken_count(header)
+            for chunk in chunks:
+                chunk_tokens = _tiktoken_count(chunk + "\n\n")
+                if packed_tokens + chunk_tokens > remaining:
+                    break
+                packed_chunks.append(chunk)
+                packed_tokens += chunk_tokens
+            if packed_chunks:
+                sections.append(header + "\n\n".join(packed_chunks) + "\n")
+                total_tokens += packed_tokens
+                logger.info(
+                    f"[synth] file {slug!r} too large (~{section_tokens} tok "
+                    f"> {remaining} tok budget) — fence-split into {len(chunks)} "
+                    f"sections, packed {len(packed_chunks)} "
+                    f"(~{packed_tokens} tok). Remaining {len(preloaded) - idx - 1} "
+                    f"file(s) skipped."
+                )
+                skipped = len(preloaded) - idx - 1
+                break
+            # Even one section doesn't fit — the corpus is pathologically
+            # large. Emit an empty result and let the synth hit an empty
+            # prompt; Self-Refine will bail out cleanly.
+            logger.warning(
+                f"[synth] file {slug!r}: no section fits within "
+                f"{remaining} tok budget — chapter will synth on empty corpus"
+            )
+            skipped = len(preloaded) - idx
+            break
+
+        # Not the first file, and it doesn't fit. Stop here rather than
+        # silently truncating — planner-assigned files come in priority
+        # order, so the later ones can wait for the next run.
+        skipped = len(preloaded) - idx
+        break
+
+    if skipped > 0:
+        logger.info(
+            f"[synth] budget cap hit at {total_tokens} tok; "
+            f"packed {len(sections)} of {len(preloaded)} files, skipped {skipped}"
+        )
     return "\n".join(sections)
 
 
@@ -531,42 +1286,41 @@ async def _synthesize_attempt(
     framework: str,
     tone_block: str,
     previous_adjustments: list[str],
-    llm: ChatOpenAI) -> ChapterSynthesis:
+    llm,
+    iteration: int | None = None,
+    study_id: str | None = None):
     """
-    Single synthesis attempt. Pydantic's ChapterSynthesis schema enforces
-    shape (content + challenges + 8-15 flashcards).
+    Single synthesis attempt — Tier 3 #21 structured output.
 
-    Why the None guard:
-      `with_structured_output(method="function_calling")` on LangChain's
-      fallback chain can return None when the LLM produced no tool_call
-      (e.g., the model returned a plain-text apology, or emitted malformed
-      arguments that were filtered out). That's NOT raised as an exception
-      by LangChain — it just returns None and moves on. A subsequent
-      `synthesis.content` access then fails with AttributeError at the
-      wrong place (was being caught by the grader's try/except and
-      misreported as "Grader failed"). Raising explicitly here triggers
-      the fallback chain to try the next model and produces a truthful
-      error message if everything ultimately fails.
+    Returns a ChapterOutput (sections + challenges + flashcards). The caller
+    audits `code_refs` against the vault, then assembles final markdown via
+    `_assemble_chapter_markdown`.
+
+    Escalates across the fallback chain via `_invoke_structured_with_fallback`
+    so a model that returns no tool_call is treated the same as one that raised.
     """
-    chain = SYNTHESIZER_PROMPT | llm.with_structured_output(
-        ChapterSynthesis,
-        method = "function_calling",
+    return await _invoke_structured_with_fallback(
+        prompt = SYNTHESIZER_PROMPT,
+        llm = llm,
+        schema = ChapterOutput,
+        invoke_vars = {
+            "framework": framework,
+            "chapter_number": chapter.number,
+            "chapter_title": chapter.title,
+            "chapter_goal": chapter.goal,
+            "assigned_files_content": files_content,
+            "tone_block": tone_block,
+            "previous_adjustments": _format_adjustments(previous_adjustments),
+        },
+        label = f"synth ch{chapter.number:02d}",
+        langfuse_metadata = {
+            "framework": framework,
+            "chapter_number": chapter.number,
+            "iteration": iteration,
+            "study_id": study_id,
+        },
+        langfuse_tags = [f"ch{chapter.number:02d}", "synth"],
     )
-    result = await chain.ainvoke({
-        "framework": framework,
-        "chapter_number": chapter.number,
-        "chapter_title": chapter.title,
-        "chapter_goal": chapter.goal,
-        "assigned_files_content": files_content,
-        "tone_block": tone_block,
-        "previous_adjustments": _format_adjustments(previous_adjustments),
-    })
-    if result is None:
-        raise RuntimeError(
-            "synthesizer returned None (no tool_call or malformed structured "
-            "output) — fallback chain should retry the next model"
-        )
-    return result
 
 
 async def _grade_attempt(
@@ -574,34 +1328,36 @@ async def _grade_attempt(
     chapter: ChapterPlan,
     user_profile: UserProfile,
     framework: str,
-    llm: ChatOpenAI) -> GraderEvaluation:
+    llm,
+    iteration: int | None = None,
+    study_id: str | None = None) -> GraderEvaluation:
     """
     Run the 8-dimensional adaptive grader on one synthesis attempt. Returns
     structured GraderEvaluation with per-dimension scores, a weighted_score,
     an action ('accept' | 'refine' | 'regenerate'), and a list of specific
-    issues to address on the next attempt.
-
-    Same None-guard rationale as _synthesize_attempt — `with_structured_output`
-    can return None silently, and a None GraderEvaluation would crash the
-    argmax logic immediately after.
+    issues to address on the next attempt. Escalates across the fallback
+    chain via `_invoke_structured_with_fallback`.
     """
-    chain = GRADER_PROMPT | llm.with_structured_output(
-        GraderEvaluation,
-        method = "function_calling",
+    return await _invoke_structured_with_fallback(
+        prompt = GRADER_PROMPT,
+        llm = llm,
+        schema = GraderEvaluation,
+        invoke_vars = {
+            "framework": framework,
+            "user_profile_summary": _user_profile_summary(user_profile),
+            "acceptance_threshold": user_profile.acceptance_threshold,
+            "assigned_files_list": ", ".join(chapter.assigned_files),
+            "synthesis_text": synthesis_text[:GRADER_SYNTHESIS_MAX_CHARS],
+        },
+        label = f"grade ch{chapter.number:02d}",
+        langfuse_metadata = {
+            "framework": framework,
+            "chapter_number": chapter.number,
+            "iteration": iteration,
+            "study_id": study_id,
+        },
+        langfuse_tags = [f"ch{chapter.number:02d}", "grader"],
     )
-    result = await chain.ainvoke({
-        "framework": framework,
-        "user_profile_summary": _user_profile_summary(user_profile),
-        "acceptance_threshold": user_profile.acceptance_threshold,
-        "assigned_files_list": ", ".join(chapter.assigned_files),
-        "synthesis_text": synthesis_text[:GRADER_SYNTHESIS_MAX_CHARS],
-    })
-    if result is None:
-        raise RuntimeError(
-            "grader returned None (no tool_call or malformed structured "
-            "output) — fallback chain should retry the next model"
-        )
-    return result
 
 
 async def _generate_adjustment(
@@ -702,6 +1458,13 @@ def _scan_citations(
     Regex-scan every chapter body for '# docs: <slug>' citations. Compare
     against available_slugs.
 
+    Tier 1 #10 (2026-04-23): to eliminate critic false-positives like
+    `# docs: api(utils)` capturing the literal `api` as a slug, we build
+    an exact-match whitelist regex from `available_slugs` when non-empty
+    and use it as the authoritative scanner. Falls back to the legacy
+    greedy `_CITATION_RE` when the slug set is empty (e.g., no corpus
+    files, edge case).
+
     Returns:
         (all_cited_slugs, per_chapter_broken_issues)
         where each broken_issue is a string formatted for CriticAssessment.issues
@@ -709,10 +1472,38 @@ def _scan_citations(
     """
     all_cited: set[str] = set()
     issues: list[str] = []
+
+    # Build a whitelist regex: `# docs: (slug-alternation)` with word-boundary
+    # end so `api` doesn't match `api/reference`. Sort by length descending
+    # so longer slugs match first (disambiguates nested slug families).
+    if available_slugs:
+        sorted_slugs = sorted(available_slugs, key = lambda s: (-len(s), s))
+        alt = "|".join(re.escape(s) for s in sorted_slugs)
+        whitelist_re = re.compile(
+            rf"#\s*docs:\s*({alt})(?:\.md|\.txt)?(?![\w./-])",
+            re.MULTILINE,
+        )
+        for number, _title, body in chapters:
+            for match in whitelist_re.finditer(body):
+                all_cited.add(match.group(1))
+            # Also scan for ATTEMPTED citations that didn't match the
+            # whitelist — those are broken references.
+            for match in _CITATION_RE.finditer(body):
+                raw = match.group(1).strip().rstrip(".,;:)(]}")
+                slug = raw.removesuffix(".md").removesuffix(".txt")
+                if not slug:
+                    continue
+                if slug not in available_slugs:
+                    issues.append(
+                        f"chapter{number:02d}: '# docs: {raw}' — source not "
+                        "found in research/raw/"
+                    )
+        return all_cited, issues
+
+    # Legacy fallback — no slug whitelist available
     for number, _title, body in chapters:
         for match in _CITATION_RE.finditer(body):
             raw = match.group(1).strip().rstrip(".,;:)(]}")
-            # Strip common extensions
             slug = raw.removesuffix(".md").removesuffix(".txt")
             if not slug:
                 continue
@@ -722,6 +1513,67 @@ def _scan_citations(
                     f"chapter{number:02d}: '# docs: {raw}' — source not found in research/raw/"
                 )
     return all_cited, issues
+
+
+async def _scan_hallucinated_fences(
+    storage: MinIOStudyStorage,
+    study_root: str,
+    chapters: list[tuple[int, str, str]],
+) -> list[str]:
+    """
+    Tier 2 #20 (2026-04-23) — deterministic end-to-end code-provenance check.
+
+    For every fenced code block in the assembled chapter READMEs, compute
+    its sha256[:12] (same hash function the vault uses). Build the union
+    of source-file code-block hashes by re-vaulting every research/raw/*.md.
+    Any chapter-fence hash NOT present in the source set = hallucinated code
+    (code the synthesizer invented that didn't come from the docs).
+
+    Runs AFTER the curator, so it catches late-drift: a clean synth output
+    could theoretically get corrupted by a curator rewrite that invents new
+    fences. With Tier 3 #21 structured output this should be impossible at
+    synth time, but the critic backstop is cheap insurance and runs once
+    per study.
+
+    Returns a list of issue strings for CriticAssessment.issues.
+    """
+    # 1. Union of all source code-block hashes
+    source_hashes: set[str] = set()
+    raw_prefix = f"{study_root}/research/raw/"
+    raw_keys = await storage.list(raw_prefix)
+    for k in sorted(raw_keys):
+        if not k.endswith(".md"):
+            continue
+        try:
+            body = await storage.read_text(k)
+            _, source_vault = _vault_code_blocks(body)
+            source_hashes.update(_vault_bare_hashes(source_vault))
+        except Exception as e:
+            logger.warning(f"[critic][fence-scan] could not vault source {k}: {e}")
+
+    # 2. Scan each chapter for fences; report any whose hash is not in source
+    issues: list[str] = []
+    for num, _title, chapter_body in chapters:
+        try:
+            _, chapter_vault = _vault_code_blocks(chapter_body)
+        except ValueError:
+            # Body already contains a sentinel (shouldn't happen post-assembly,
+            # but defensive — skip rather than crash critic).
+            logger.warning(
+                f"[critic][fence-scan] ch{num:02d} contains vault-shaped "
+                f"sentinels in assembled output; skipping fence scan"
+            )
+            continue
+        chapter_hashes = _vault_bare_hashes(chapter_vault)
+        hallucinated = sorted(chapter_hashes - source_hashes)
+        for h in hallucinated:
+            sentinel = f'<code-ref hash="{h}"/>'
+            preview = chapter_vault.get(sentinel, "")[:100].replace("\n", " ⏎ ")
+            issues.append(
+                f"chapter{num:02d}: hallucinated code fence (hash={h}) "
+                f"not present in any research/raw/ source — preview: {preview!r}"
+            )
+    return issues
 
 
 def _build_chapter_bundles(chapters: list[tuple[int, str, str]]) -> str:
@@ -825,13 +1677,27 @@ def _build_debt_md(
     lines: list[str] = ["# DEBT — Unresolved Issues", ""]
     dirty = False
 
-    # --- Section 1: grader debts ---------------------------------------------
-    grader_debts = [r for r in synthesis_results if r.get("debt")]
-    if grader_debts:
+    # --- Section 1: grader debts (chapters below acceptance threshold) ------
+    # Partition by `debt.reason` so the two failure modes render with the
+    # right fields. `score_below_threshold` carries final_score + threshold +
+    # span-anchored specific_issues (grader output). `synth_chain_exhausted`
+    # (Tier 0d-6) carries error + iteration_failed_at + counters — there is
+    # no final_score because no iteration ever reached a graded state.
+    below_threshold = [
+        r for r in synthesis_results
+        if (r.get("debt") or {}).get("reason", "score_below_threshold")
+        == "score_below_threshold"
+        and r.get("debt")
+    ]
+    exhausted = [
+        r for r in synthesis_results
+        if (r.get("debt") or {}).get("reason") == "synth_chain_exhausted"
+    ]
+    if below_threshold:
         dirty = True
         lines.append("## Chapters Below Grader Threshold")
         lines.append("")
-        for r in grader_debts:
+        for r in below_threshold:
             d = r["debt"]
             lines.append(
                 f"- **Chapter {r['number']:02d}** — score "
@@ -849,6 +1715,31 @@ def _build_debt_md(
                     lines.append(f"  - **{dim}** — `{quote}` → {suggestion}")
                 else:
                     lines.append(f"  - {issue}")
+        lines.append("")
+
+    if exhausted:
+        dirty = True
+        lines.append("## Chapters With Exhausted Synthesis Fallback Chain")
+        lines.append("")
+        lines.append(
+            "The LLM fallback chain was exhausted (every model either raised "
+            "or returned None / malformed structured output) OR every "
+            "Self-Refine iteration failed the code-preservation integrity "
+            "gate. The chapter has no README and will be regenerated on the "
+            "next run of the same study identity."
+        )
+        lines.append("")
+        for r in exhausted:
+            d = r["debt"]
+            lines.append(
+                f"- **Chapter {r['number']:02d}** — failed at iter "
+                f"{d.get('iteration_failed_at', '?')} "
+                f"({d.get('graded_iterations', 0)} graded, "
+                f"{d.get('adjustments_accumulated', 0)} adjustment(s) accumulated)"
+            )
+            err = d.get("error", "")
+            if err:
+                lines.append(f"  - error: `{err[:200]}`")
         lines.append("")
 
     # --- Section 2: critic findings ------------------------------------------

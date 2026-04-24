@@ -1,11 +1,47 @@
 # Knowledge Distiller — Improvements Roadmap
 
-Dated: 2026-04-22
+Dated: 2026-04-22 (initial) · **2026-04-23 revision** (code-preservation restructure)
 
 Synthesis of a full architecture + code audit against the end-to-end run
 completed on 2026-04-22 (v13, first successful full-pipeline test with
 NIM-embeddings + v2 Clio REDUCE). Organized by impact × effort with
 quality-preservation property called out per item.
+
+**2026-04-23 revision.** The original draft assumed LLM-prompted "preserve
+code verbatim" directives were sufficient. Deep research against 2026
+state-of-the-art (see References) confirms every prompt-only approach is
+probabilistic and will silently corrupt code in production — the LLM is
+free to paraphrase, rename identifiers, trim whitespace, elide with `...`,
+or hallucinate fences that weren't in the source. This revision
+reorganizes the roadmap around the invariant that **the LLM must be
+physically prevented from rewriting source code blocks**, not merely
+instructed not to. A new **Tier 0** (code-preservation foundation) is
+introduced as a blocking prerequisite for the original Tier 1 truncation
+and Tier 2 dedup work.
+
+---
+
+## Code-preservation invariant (read first)
+
+Every stage after ingest either (a) operates on metadata/embeddings and
+cannot corrupt code, or (b) is a transform point where code can be
+corrupted. The corruption-risk stages:
+
+| Stage | Risk | Current mitigation | Gap |
+|---|---|---|---|
+| Monolith splitter (`_maybe_split_monolith`) | Negligible | LangChain `ExperimentalMarkdownSyntaxTextSplitter` (fence-aware). Verified empirically after 2026-04-22 regression fix. | None |
+| MAP shard labeler | Negligible | Reads titles/slugs only; bodies untouched | None |
+| REDUCE (Clio v2) | Negligible | Embedding/cluster-space only | None |
+| `_load_chapter_files` 180K char truncation | **High** | Char-based, cuts mid-fence regardless of boundaries | Tier 0 + #1 + #2 |
+| `SYNTHESIZER_PROMPT` | **Critical** | *No* verbatim-preservation directive; LLM is free to rewrite code | Tier 0 |
+| `CURATOR_PROMPT` | Medium | Has explicit "PRESERVE every code block verbatim" clause at `prompts.py:516` — but still probabilistic | Tier 0 integrity check |
+| Proposed MinHash dedup (original #6) | **High** | Whole-doc Jaccard will merge docs that differ ONLY in code | #6 revised |
+
+**The invariant:** code blocks are transported through synthesis and
+curator as opaque, byte-identical sentinels — not as text the LLM
+generates. Any roadmap item that assumes the LLM will "respect" a
+verbatim instruction is unsafe in production without a deterministic
+integrity check behind it.
 
 ---
 
@@ -38,26 +74,445 @@ The run that this roadmap is built against:
 - LLM fallback chain research is current as of 2026-04-20; no model-list changes needed
 - Coverage-repair in `distiller.py` lines 546-579 handles orphans + hallucinations correctly
 - Cache layer (plan.json keyed by `manifest_hash`, ingest by framework+version)
+- Fence-aware monolith splitter — already correct; all Tier 0 work builds on the same CommonMark tokenizer
 
 ---
 
-## Tier 1 — Top 5 wins (ship this week, 1-2 days combined)
+## Tier 0 — Code-preservation foundation (blocking prerequisite)
+
+These three items MUST ship before any of the original-draft truncation
+(#2) or dedup (#6) items. Without Tier 0, those items corrupt code
+silently. With Tier 0, source-code fidelity becomes a hard invariant
+that is *verified*, not hoped for.
+
+### 0a. Code-vault placeholder substitution — CRITICAL
+**Pattern (industry-canonical; see References).** Before concatenating
+chapter files for the synthesizer, walk the CommonMark AST via
+`markdown-it-py`, extract every fenced block (and indented code /
+inline `code` spans if feasible), and replace each with an opaque
+sentinel:
+
+```python
+sentinel = f"​<<CB:{sha256(code_bytes)[:12]}>>​"
+```
+
+Store `sentinel → original_fenced_block` in a chapter-scoped `vault`
+dict. Feed the placeholder-ified text to the synthesizer. After the LLM
+returns, deterministically substitute each sentinel with its original
+fence. Verify: the set of sentinels in the output must be a subset of
+the set in the input (missing = LLM deleted code; extra / mismatched =
+LLM hallucinated).
+
+**Why opaque hash + zero-width-space bookends.** LLMs copy
+`​`-wrapped tokens byte-exactly; unicode invisibles do not collide
+with real content. Short SHA hashes (not sequential `CB_1/CB_2/...`)
+prevent the model from "guessing" an adjacent placeholder. Pretty
+placeholders like `[CODE_42]` are rewritten by some models (documented
+failure mode in OpenAI's GPT-4.1 prompting guide).
+
+**Failure modes to guard.**
+- Placeholder collision with source content (ultra-rare but possible) →
+  scan source pre-vault; abort or rehash on collision.
+- LLM silently drops a placeholder → caught by integrity check (0c).
+- LLM emits a placeholder mid-word in prose ("use the `<<CB:...>>`
+  function") → substitution still works; no special handling needed.
+
+**Files.**
+- `graphs/knowledge/helpers.py` — new `_vault_code_blocks(content) → (vaulted_text, vault)`
+  and `_restore_code_blocks(llm_output, vault) → restored_text` utilities.
+- `graphs/knowledge/distiller.py` lines 670-685 (`synthesize_chapter`
+  node) — wrap `_load_chapter_files` output through vault before
+  `_synthesize_attempt`; restore on the returned `ChapterSynthesis.content`.
+
+**Effort:** ~80 LoC. `markdown-it-py` is already transitively installed
+via LangChain's `ExperimentalMarkdownSyntaxTextSplitter`.
+
+**Quality:** strictly positive. Eliminates code corruption at synthesis
+entirely. Also reduces prompt token cost ~20-40% (code is often half
+the chapter budget, compresses to ~20-char sentinels).
+
+### 0b. Sentinel-preservation clause in `SYNTHESIZER_PROMPT` — CRITICAL
+Add one sentence to the system message (`prompts.py:297-319`, after
+the "Output requirements" block):
+
+> "Any token matching the pattern `<<CB:...>>` surrounded by zero-width
+> spaces is an opaque placeholder for a source code block. Reproduce
+> these placeholders byte-exactly in context. Do not modify, paraphrase,
+> expand, remove, or replace them with actual code. They will be
+> substituted back to the original code after your response."
+
+Also add the equivalent clause to `CURATOR_PROMPT` (`prompts.py:503-548`)
+— the curator already instructs "PRESERVE every code block verbatim"
+but after Tier 0a the code isn't even present; the sentinels must be
+preserved instead.
+
+**Files:** `schemas/knowledge/prompts.py`.
+
+**Effort:** ~4 LoC (one sentence in each of synth + curator + adjustment prompts).
+
+**Quality:** belt-and-suspenders with 0a — tightens model behavior
+even before the integrity check catches misses.
+
+### 0c. Post-synthesis code-integrity check — CRITICAL
+After restore (0a), verify preservation as a hard invariant:
+
+```python
+def canon(code: str) -> str:
+    lines = [ln.rstrip() for ln in code.splitlines()]
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)
+
+source_hashes = {sha256(canon(c).encode()).hexdigest()
+                 for c in extract_fences(pre_vault_source)}
+output_hashes = {sha256(canon(c).encode()).hexdigest()
+                 for c in extract_fences(post_restore_output)}
+preservation_ratio = len(source_hashes & output_hashes) / max(1, len(source_hashes))
+```
+
+**Canonicalization rules (minimal, byte-level).**
+- Strip trailing whitespace per line.
+- Drop trailing blank lines.
+- Preserve indentation (semantic in Python/YAML/Makefiles).
+- Do NOT lowercase, strip shebangs, strip comments, or AST-canonicalize
+  (tree-sitter would hide the exact differences we care about, e.g.
+  `# type: ignore` — a silent API break if removed).
+
+**Feedback loop.** If `preservation_ratio < 1.0`, pass the list of
+missing blocks (first 80 chars of each) to the Self-Refine loop as
+targeted feedback (LLMLOOP 2025 pattern — specific error feedback
+dramatically outperforms generic "try again"). If
+`preservation_ratio < 0.90` after max refine iterations, fail the
+chapter (trigger `regenerate`, not just `refine`).
+
+**Files:**
+- `graphs/knowledge/helpers.py` — new `_check_code_preservation(source, output) → (ratio, missing_blocks)`.
+- `graphs/knowledge/distiller.py` `synthesize_chapter` loop — call
+  alongside grader evaluation; gate accept/refine/regenerate on ratio.
+
+**Effort:** ~60 LoC.
+
+**Quality:** guarantees source-code fidelity as a deterministic
+invariant, not a soft grader score.
+
+### 0d. Observed failure mode + hardening (2026-04-23 FastAPI smoke test)
+
+On the 2026-04-23 live test (fastapi, 4 chapters, 506 vaulted code
+blocks total), **ch04 iter 0 reported `98 missing / 0 unexpected of 98
+vaulted`** — the LLM stripped every sentinel from its output. Tier 0c
+caught it (hard gate fired, preservation feedback appended to
+adjustments, iter 1 retried). Tier 0b's prompt clause alone was
+insufficient for at least one model in the fallback chain.
+
+**Root-cause hypotheses from live-environment research:**
+
+1. **Zero-width-space bookends are stripped by tokenizer preprocessing.**
+   U+200B is a known production-pipeline problem — security-focused
+   normalizers strip ZWS as a Unicode-smuggling defense (AWS security
+   blog, Promptfoo guide, Reverse CAPTCHA paper). The model may never
+   see the bookends; what it receives is `<<CB:abc123>>` — visually
+   similar to TODO / ellipsis markers — which it then strips as
+   low-signal noise.
+
+2. **Sentinel clause is in the system message.** Anthropic's own guide
+   explicitly states: *"Claude follows instructions in the human messages
+   better than those in the system message."* Tier 0b placed the clause
+   in the weakest slot. Same positional penalty applies to GPT and NIM
+   reasoning models per Anthropic's "query at end" guidance (30% quality
+   lift measured).
+
+3. **Opaque hash-shaped tokens read as placeholders, not literal
+   content.** LLMs have strong priors that `<<XXXX>>`-like strings are
+   fill-me-in placeholders — see Gemini CLI issue #4836 documenting the
+   mirror-image failure (models strip real code and inject `// ...`
+   comments). Same prior, firing in reverse.
+
+**Hardening actions (priority-ordered):**
+
+**0d-1. Switch sentinel shape from ZWS-wrapped hash to self-closing XML
+tag.** CRITICAL.
+Replace `​<<CB:{sha12}>>​` with `<code-ref hash="{sha12}"/>`.
+Rationale: Claude is explicitly trained on XML tags as structural
+primitives (Anthropic XML guide); every mainstream model (GPT, Gemini,
+open-weights) treats XML tags as pass-through structure, not content.
+No invisible characters → no tokenizer-preprocessor strip. Self-closing
+form signals "no inner content to modify".
+Files: `helpers.py` (`_make_sentinel` + `_VAULT_SENTINEL_RE`),
+`schemas/knowledge/prompts.py` (3 clauses), `scripts/test_code_vault.py`
+(collision-test sentinel literal).
+Effort: ~10 LoC.
+
+**0d-2. Move sentinel clause from system to the END of the human
+message, below the data block.** HIGH.
+Anthropic: *"place long documents and inputs near the top of your
+prompt, above your query, instructions, and examples. Queries at the
+end can improve response quality by up to 30%."* Data-first,
+critical-instructions-last is the canonical Claude pattern. Move the
+preservation clause from `SYNTHESIZER_PROMPT`'s system message to the
+END of its human message (after `{assigned_files_content}` and
+`{previous_adjustments}`, immediately before "Synthesize the chapter.").
+Same pattern for `CURATOR_PROMPT`. Effort: ~5 LoC.
+
+**0d-3. Add a one-shot `<code-ref>` preservation example to both synth
++ curator prompts.** HIGH.
+Canonical fix for teaching non-standard behavior. Minimal example:
+`Input: "Use the async client: <code-ref hash=\"abc123def456\"/>"` →
+`Output: "## Async Client\n\n<code-ref hash=\"abc123def456\"/>\n\nThe
+async client lets you..."`. Include the annotation "Notice the
+<code-ref> appears verbatim in the output; it is NEVER modified,
+expanded, or removed."
+Effort: ~20 LoC.
+
+**0d-4. Self-verification step at the end of the human message.**
+MEDIUM.
+*"Before returning your `content`: count the `<code-ref>` tags. The
+count MUST equal the count in the input. If not, rewrite to include
+every missing tag in its logical position."* Cheap in-context check;
+catches many non-adversarial strips without needing a retry round-trip.
+Effort: ~8 LoC.
+
+**0d-5. Model-fallback-chain observability for preservation rate.**
+MEDIUM.
+Log which model was used per synth iteration; aggregate preservation
+failure rate per model across runs. Models exceeding a threshold (e.g.,
+10% after 0d-1..4 ship) get demoted in the chain or excluded from synth
+specifically (keep them for grader/resolver where preservation doesn't
+matter). Natural follow-up once LangFuse (#14) is live.
+Effort: ~20 LoC instrumentation.
+
+**Deploy order.** 0d-1 + 0d-2 as one small PR (highest-confidence root
+causes, behavior-neutral for already-compliant models). 0d-3 + 0d-4 as
+a second PR (quality-positive, token-cost positive since few-shot
+overhead is small). 0d-5 after a baseline run.
+
+**Success metric.** On the next FastAPI smoke-test, iter-0
+`preservation_ratio` should be ≥ 0.90 on ≥ 3 of 4 chapters (vs. 0.0 on
+ch04 today). If unmet after 0d-1..4 ship, escalate to Tier 3 #21
+(structured-output synth with `code_refs: list[str]`) — the
+architectural form cannot regress because the LLM never emits sentinel
+text at all.
+
+### 0d (follow-up). Round 2 A/B test — shape + position alone INSUFFICIENT (2026-04-23 ~04:57 UTC)
+
+**Shipped before round 2:** 0d-1 (sentinel shape
+`<code-ref hash="{sha12}"/>`) + 0d-2 (clause moved from system message
+to END of human message, below the data block).
+**Not yet shipped:** 0d-3 (few-shot), 0d-4 (self-verify), 0d-5 (model
+observability).
+
+**Round-2 configuration.** Same fastapi corpus as round 1 (137 files,
+1.54 MB, 4 chapters from plan cache — MAP+REDUCE skipped). Clean A/B:
+only the sentinel shape + clause position changed.
+
+**Iter-0 preservation result:**
+
+| Chapter | Vaulted blocks | Missing on iter 0 | Strip rate |
+|---|---|---|---|
+| ch01 | 171 | 171 | 100% |
+| ch02 | 92 | 92 | 100% |
+| ch03 | 145 | 145 | 100% |
+| ch04 | 98 | 98 | 100% |
+
+**Identical to round 1** (ZWS-wrapped hash shape). Shape swap +
+clause reposition had **zero effect** on iter-0 preservation. The LLM
+prior for "`<...>`-shaped short tokens = placeholder content to
+remove / TODO marker" fires on both shapes equally across every model
+in the fallback chain that handled a chapter. We do not yet know
+whether the prior would also fire on content-bearing tokens (e.g.,
+`<code-ref>...original code here...</code-ref>` with the original
+code *inside* the tag as attribute-free content) or on pure integer
+refs.
+
+**Iter-1 fatal crash (ch03).** Ch03's iter-1 synth call — with the
+preservation-failure feedback now appended to `adjustments` (bloating
+the prompt with 8 missing-sentinel previews) — exhausted the fallback
+chain; the last model returned `None` from structured-output parsing.
+`_synthesize_attempt` raised `RuntimeError`; `synthesize_chapter`
+rewrapped it; the LangGraph Send() worker propagated it; the whole
+Celery task died. We **never observed iter-1 behavior on ch01 / ch02 /
+ch04** — the 3 chapters that might have recovered were killed by
+ch03's failure. This is a separate, pre-existing robustness bug
+(isolation failure across parallel workers) that Round 2 surfaced.
+
+**Two distinct follow-up tracks:**
+
+**Track A — escalate 0d-3 + 0d-4 to MUST-SHIP-NEXT** (promoted from
+HIGH / MEDIUM).
+
+Few-shot examples (0d-3) are the canonical technique for teaching an
+LLM a non-standard behavior — showing an actual input/output pair
+demonstrates pass-through in a way prompt instructions alone do not.
+Self-verification (0d-4) — "before returning, count the `<code-ref>`
+tags in your output and compare to the input" — catches many
+non-adversarial strips in-context without a retry round-trip. Both
+were deferred to a second PR in the original deploy plan; Round 2
+proves they should be in the first PR.
+
+Combined effort: ~28 LoC in `schemas/knowledge/prompts.py` (updates
+to `SYNTHESIZER_PROMPT` and `CURATOR_PROMPT`).
+
+**Track B — new item 0d-6: isolate per-chapter synth failures.**
+CRITICAL (behavior bug, not preservation).
+
+Current behavior: `_synthesize_attempt` in `helpers.py` raises
+`RuntimeError` on `None` from the fallback chain; `synthesize_chapter`
+in `distiller.py` rewraps and re-raises; LangGraph treats this as a
+superstep failure; Celery task ends; sibling chapters never finish.
+Desired behavior: catch the terminal `RuntimeError` inside
+`synthesize_chapter`, write a DEBT entry for that chapter
+(`phase=failed`, along with what adjustments it had accumulated),
+return a sentinel-shaped result (`ChapterResult` with `debt.reason =
+"synth_chain_exhausted"`) so downstream curator / critic / assembler
+can detect-and-skip. Each chapter becomes a genuine isolation
+boundary.
+
+Files: `graphs/knowledge/distiller.py` (`synthesize_chapter` error
+handler; null-guards in curator / critic / assembler nodes). Effort:
+~30 LoC.
+
+**Revised deploy unit (PR-scoped).** Ship 0d-3 + 0d-4 + 0d-6 in a
+single PR (~60 LoC total). Then run Round 3 smoke test on the same
+fastapi corpus (plan cache will still hit, so we're gated only on
+synth time).
+
+**Revised success metric (after 0d-3 + 0d-4 + 0d-6 ship):**
+
+1. Iter-0 `preservation_ratio` ≥ 0.90 on ≥ 3 of 4 chapters. Rounds 1
+   and 2 both had 0.0 across all 4 — any meaningful preservation
+   improvement proves the prompt change landed.
+2. A single chapter hitting synth-chain exhaustion writes DEBT and
+   the other 3 chapters still complete; whole-run crash from one
+   chapter's synth failure is no longer possible.
+
+**Escalation path if revised metric unmet.** If iter-0 preservation
+after 0d-3 + 0d-4 still shows ≥ 50% strip on any chapter, the
+LLM-as-freeform-synthesizer architecture cannot be trusted with
+opaque-token pass-through and we escalate to **Tier 3 #21
+(structured-output synthesizer with `code_refs`).** Pydantic shape
+where the LLM emits ordered indices into a server-held vault rather
+than any form of inline sentinel text. The LLM never has an
+opportunity to strip a sentinel because it never emits one. Stronger
+guarantee than prompting at the cost of ~150 LoC synth-node rewrite +
+assembler changes. Already specified in this roadmap.
+
+**What Round 2 validates about the existing Tier 0 design:**
+
+- Tier 0a (vault primitives, `scripts/test_code_vault.py`): still
+  19/19 green with the new XML-tag sentinel shape. Round-trip fidelity
+  is a pure-Python invariant and is not regressing.
+- Tier 0c (integrity gate): caught every preservation failure again.
+  The audit ran on all 4 chapters, the `_format_preservation_feedback`
+  producer generated targeted retry text correctly, the forced-refine
+  path activated. The gate is doing its job; what the gate cannot do
+  is compensate for an LLM that ignores the feedback.
+- The Tier 0c design (hard gate + targeted feedback) is proven CORRECT
+  but INSUFFICIENT when the base synth prompt cannot induce the
+  required behavior in the first place. The chapter-3 iter-1 crash
+  further shows that bloating adjustments with feedback can itself
+  destabilize the synth call. 0d-3 + 0d-4 address this by making
+  iter-0 succeed more often, reducing how many iterations ever need
+  the adjustment-bloat path.
+
+### 0e. Principle confirmed: Tier 0c is the load-bearing safety net
+
+Today's run validates the Tier 0c design as the roadmap's most
+important guarantee. Without the hard-gate + audit-and-refine loop,
+ch04's iter-0 output would have produced a chapter missing 98 code
+blocks and the failure would have been **invisible** — the grader would
+have happily scored a chapter of pure prose with no code hallucinations
+to flag. The audit surfaced the problem immediately and produced the
+exact feedback needed to iterate.
+
+**Rule:** never rely on prompting alone for verbatim preservation.
+Always back it with a deterministic post-hoc integrity check.
+
+---
+
+## Tier 1 — Top wins (revised for code safety, ship after Tier 0)
 
 All quality-neutral-to-positive, all low LoC.
 
-### 1. BM25 file-ranking before synth truncation — RELIABILITY + QUALITY
-**Current:** chronological order, truncate at `CHAPTER_FILES_MAX_CHARS=180K`. Chapters with 100+ files lose the alphabetically-late ones regardless of relevance.
-**Proposed:** BM25 rank the chapter's files against `chapter.goal` string, take top-N until budget.
-**Effect:** most pedagogically relevant files always make it into the synth prompt, not the truncation tail.
-**Files:** `graphs/knowledge/helpers.py` — add `_rank_chapter_files()`, call it from `_load_chapter_files()`.
-**Effort:** ~50 LoC. scikit-learn already present.
+### 1. BM25F file-ranking before synth budget — RELIABILITY + QUALITY (revised)
+**Revision vs. original draft.** Original said BM25 over chapter-file
+text. Mixed prose/code corpora distort single-field BM25 — code tokens
+(keywords like `SELECT`, `function`, `import`) dominate or vanish
+depending on tokenizer. Revised to **BM25F** with two fields:
 
-### 2. Lower `CHAPTER_FILES_MAX_CHARS` 180K → 80K — RELIABILITY (eliminates cascade)
-**Current:** 45K-token synth prompts → NIM reasoning models hit 300s gateway → Groq 413 on all but llama-4-scout.
-**Proposed:** 20K-token synth prompts — fits every Groq model's TPM, NIM non-reasoning completes in <60s.
-**Quality:** unchanged given #1 is shipped (only the most relevant 80K chars remain).
-**Files:** `graphs/knowledge/helpers.py` — one constant.
-**Effort:** 1 LoC change.
+- `prose` — weight 1.0, standard tokenizer
+- `code` — weight ~0.3, code-aware tokenizer (split camelCase,
+  snake_case, dots; preserve identifiers as bigrams `foo.bar → foo, bar, foo.bar`)
+
+Rank **whole files** against `chapter.goal`. Greedy-pack in rank order
+into the synth budget (see #2). Never split a file mid-body in this step.
+
+**Effect.** The most pedagogically relevant files always make the
+budget; no reliance on alphabetical accident. BM25F outperforms
+single-field BM25 on mixed docs (Turnbull 2025).
+
+**Library.** `bm25s` (fastest 2024 Python rewrite; supports per-field
+scoring via manual combination). True BM25F is simple to hand-roll on
+top; see `softwaredoug.com/blog/2025/09/18/bm25f-from-scratch`.
+
+**Files:** `graphs/knowledge/helpers.py` — add `_rank_chapter_files()`,
+call from `_load_chapter_files()`.
+
+**Effort:** ~70 LoC.
+
+### 2. Token-budget enforcement via whole-file packing — RELIABILITY ✅ SHIPPED 2026-04-23
+**Status.** Shipped alongside Tier 3 #21 as the "KD robustness batch 1" PR.
+`CHAPTER_FILES_MAX_CHARS = 180_000` replaced by
+`CHAPTER_FILES_MAX_TOKENS = 40_000` (tiktoken cl100k_base). Cap-after-append
+off-by-one fixed (budget check runs BEFORE append). Fence-safe intra-file
+split via `ExperimentalMarkdownSyntaxTextSplitter` when a single top-ranked
+file exceeds the remaining budget. Whole-file packing in planner-assigned
+order (BM25F rank from #1 TBD as follow-up — current ordering respects
+planner intent). Never truncates inside a fenced code block.
+
+**BM25F file-ranking (#1)** is the natural follow-up: today the loader packs
+files in planner-assigned order; swapping that for BM25F rank against
+`chapter.goal` picks the most pedagogically relevant first. Small PR (~70 LoC
+on top of #2).
+
+**Files:** `apps/fastapi/graphs/knowledge/helpers.py` — `_load_chapter_files`
+rewritten; new `_tiktoken_count` + `_fence_safe_split` helpers;
+`apps/fastapi/pyproject.toml` — tiktoken dep added.
+
+---
+
+**Original draft.** Lower `CHAPTER_FILES_MAX_CHARS` from 180K to 80K to
+fit Groq TPM limits.
+
+**Problem with the original.** A CHARACTER cap cuts mid-fence regardless
+of boundaries, silently deleting code. This contradicts the
+quality-over-speed preference and breaks the code-preservation invariant.
+
+**Revised plan.**
+
+1. Replace `CHAPTER_FILES_MAX_CHARS` with `CHAPTER_FILES_MAX_TOKENS`
+   (default **40K tokens** using `tiktoken` `cl100k_base`). Token
+   counting is what matters for provider TPM/context limits; characters
+   are a proxy.
+2. Enforce the budget via **whole-file greedy-pack in BM25F rank order**
+   (#1). Never truncate inside a file to hit budget.
+3. If a single top-ranked file exceeds the remaining budget, split it
+   using the SAME fence-aware splitter already in production
+   (`ExperimentalMarkdownSyntaxTextSplitter` from
+   `helpers.py:_maybe_split_monolith`), then greedy-pack sections in
+   order. Never split mid-fence.
+4. Tier 0 vault compresses all code to ~20-char sentinels in the final
+   LLM payload, so the effective *content delivered* at 40K tokens is
+   substantially richer than the raw token count suggests.
+
+**Effect.** Groq TPM respected; NIM gateway timeouts avoided; zero code
+lost to truncation.
+
+**Files:** `graphs/knowledge/helpers.py` — rewrite `_load_chapter_files`
+as a token-counted, fence-safe, BM25F-packed concatenation.
+
+**Effort:** ~40 LoC on top of #1.
+
+**Quality:** strictly positive vs. original draft (which would have
+regressed code fidelity).
 
 ### 3. PCA pre-reduction before UMAP — SPEED (zero quality loss)
 **Current:** UMAP 2048d → 5d takes 303s (biggest REDUCE cost today).
@@ -66,31 +521,143 @@ All quality-neutral-to-positive, all low LoC.
 **Files:** `graphs/knowledge/reduce_cluster.py` — add PCA step before UMAP.
 **Effort:** ~10 LoC.
 
-### 4. MAP inter-shard concurrency cap — RELIABILITY + SPEED
-**Current:** 103 shards fire simultaneously via `asyncio.gather`. NIM 40 RPM means 63+ stuck at 300s gateway.
-**Proposed:** `asyncio.Semaphore(30)` wrapping the shard gather. Primary completes before pressure builds.
-**Effect:** MAP 16 min → ~10 min, 504s in logs drop materially.
-**Files:** `graphs/knowledge/distiller.py` — wrap `_label_shard` call site.
-**Effort:** ~5 LoC.
+### 4. MAP inter-shard concurrency cap — ✅ SHIPPED 2026-04-23 (super-super-batch)
+Semaphore=30 wraps `asyncio.gather(_label_shard_bounded ...)`. Run-6 baseline
+had 172 HTTP 429 retries in MAP; sem=30 limits per-minute MAP pressure on
+NIM's 40 RPM/model budget.
+**Files:** `graphs/knowledge/distiller.py` — `MAP_SHARD_SEMAPHORE` + `_label_shard_bounded`.
 
-### 5. Per-shard / per-synth eager timeout — SPEED
+### 4b. Synth fan-out concurrency cap — ✅ SHIPPED 2026-04-23 (batch-2)
+**Current:** `KnowledgeDistillerGraph.build_knowledge_distiller_graph` defaults
+`max_concurrent_chapters=5`. The module's own header docstring documents
+`K=2` as the NIM-safe value ("With K=2, typical NIM free-tier headroom
+(40 RPM per model) is plenty for the primary to serve every chapter's
+initial call without falling back"). **The default drifted away from the
+comment at some point.** Live evidence:
+
+Run-4 (2026-04-23 17:10-17:11 UTC, study `75fe1ad1-b437-4fb9-a4f2-7644396bd5ff`):
+5 synth workers fanned out against `z-ai/glm-5.1` (primary NIM). All 5
+hit HTTP 504 Gateway Timeout within a 45-second window — classic
+stampede shape. Each burned the full 300s NIM gateway timeout before
+cascading.
+
+```
+17:10:26  [synth ch02] glm-5.1 raised InternalServerError: 504; escalating
+17:11:04  [synth ch03] glm-5.1 raised InternalServerError: 504; escalating
+17:11:05  [synth ch01] glm-5.1 raised InternalServerError: 504; escalating
+17:11:08  [synth ch05] glm-5.1 raised InternalServerError: 504; escalating
+17:11:08  [synth ch04] glm-5.1 raised InternalServerError: 504; escalating
+```
+
+Root cause: NIM's `integrate.api.nvidia.com` free-tier endpoint serializes
+requests per model; 5 parallel 300s reasoning calls all exceed the gateway
+timeout before the second/third/fourth ever reach the LLM. NOT a code
+correctness bug — the fallback chain recovers — but wastes 5 × 300s =
+25 min of wall time on every run and floods logs with scary 504s.
+
+**Proposed:** restore the default to `max_concurrent_chapters=2` to match
+the header docstring. 2 parallel reasoning calls fit NIM's free-tier
+comfortably.
+
+**Effect:** next run, primary model serves chapters cleanly; 504 stampede
+eliminated; ~25 min wall-clock saved. Zero quality cost (if anything,
+chapters land on the *same* primary model more often → more consistent
+voice, which was the original K=2 argument).
+
+**Files:** `graphs/knowledge/distiller.py` — one-line change to the
+`build_knowledge_distiller_graph` default.
+
+**Effort:** ~1 LoC.
+
+**Do NOT:** wipe MinIO, wipe the ingest/plan cache, or otherwise touch
+storage. The 504 is an LLM-provider edge timeout; MinIO has zero role
+in the NIM call path.
+
+### 5. Per-shard / per-synth eager timeout — ✅ SHIPPED 2026-04-23 (batch-2)
 **Current:** each LLM call waits NIM's full 300s gateway before `with_fallbacks` tries next model.
 **Proposed:** `asyncio.wait_for(chain.ainvoke(...), timeout=120)` — cascade at 2 min.
 **Quality:** unchanged (the call wasn't going to return anyway).
-**Files:** every `ainvoke` site where the LLM is a `RunnableWithFallbacks` and the prompt is large.
+**Files:** every `ainvoke` site where the LLM is a `RunnableWithFallbacks`
+and the prompt is large. Primary sites: `_synthesize_attempt`,
+`_grade_attempt`, `_invoke_structured_with_fallback`'s `chain.ainvoke`,
+critic's assessor call, adjustment generator, shard labeler.
 **Effort:** ~5 LoC per site.
 
-**Combined expected effect on the 2026-04-22 run baseline:**
-- Chapter 3 synth failure: eliminated
+**Better-fix framing** (Run-4 post-mortem, 2026-04-23): 504s cost 300s
+each; with `asyncio.wait_for(chain.ainvoke(...), timeout=120)` they cost
+120s. For a study that cascades through 3-4 models per chapter on a hot
+day, that's ~10 min saved per chapter, ~60+ min saved across 11
+chapters. Zero quality impact — the call wasn't going to return inside
+the 300s either way.
+
+---
+
+### Best fix for fleet throughput — ship 4b + 5 together
+
+| | Eliminates | Cost |
+|---|---|---|
+| **4b alone** (semaphore=2) | Stampede: 5 concurrent calls against one primary → 504 ×5 | ~1 LoC |
+| **5 alone** (eager 120s timeout) | Straggler cost: each stuck call is 120s not 300s | ~5 LoC × N call sites |
+| **Both together** | Stampede AND straggler | same ~30 LoC, single PR |
+
+With both shipped:
+- Primary NIM model gets at most 2 concurrent reasoning calls → it can actually *serve* them (free tier is 40 RPM per model; 2 concurrent × ~1 min each ≈ 30 RPM sustained).
+- Any genuinely stuck call escalates at 2 min instead of burning the 300s gateway ceiling.
+- **Stuck-call cost drops from 5-min-blip → 2-min-blip; stampede cost drops from 25 min to 0.**
+
+Baseline wall-clock projection (post-Tier-0-done + batch-1-done + 4b + 5):
+Run-3 wall-clock 86+ min → Run-5 wall-clock ~35-45 min for the same
+11-chapter corpus. Per-chapter synth median drops from ~8 min to ~2-3 min
+because the primary actually serves most calls (no need to cascade for
+most chapters).
+
+**Do NOT** wipe MinIO, clear the ingest cache, or reset Redis when
+shipping 4b + 5. The symptoms are 100% on the LLM-provider edge; our
+storage state is healthy.
+
+**Combined expected effect on the 2026-04-22 run baseline (Tier 0 + Tier 1):**
+- Chapter 3 synth failure: eliminated (vault compresses prompt; integrity check catches corruption)
 - Total pipeline wall-clock: ~40 min instead of 90+
-- No quality loss (potentially small quality gain from BM25 ranking)
+- Code fidelity: provably 100% preserved (vs. probabilistic today)
+- No quality loss elsewhere (small gain from BM25F ranking)
 
 ---
 
 ## Tier 2 — Quality-positive wins (2-3 days, sprint 2)
 
-### 6. MinHash file dedup at synth — QUALITY (removes duplicate content)
-Many files in a chapter overlap (`/api/x.md` + `/api/x/reference.md` describe the same API). MinHash + Jaccard >0.7 → merge near-duplicates before LLM. Cleaner output, smaller prompt, no content loss. ~80 LoC. `datasketch` or `mmh3`.
+### 6. Code-aware MinHash dedup — QUALITY (revised)
+**Original draft.** MinHash + Jaccard > 0.7 on whole-doc shingles →
+merge near-duplicates before LLM.
+
+**Problem with the original.** Two docs that share ~80% prose but
+differ in code (common pattern: `api/reference.md` vs.
+`api/tutorial.md` — one has imports, one has error handling, one uses
+async, one uses sync) are NOT duplicates. Dropping either is silent
+content deletion. NVIDIA NeMo Curator's `fuzzy_dedup` and
+embedding-based `SemDeDup` both fail this case.
+
+**Revised plan: two-pass dedup.**
+
+1. Parse each file via `markdown-it-py`. Extract `prose` (non-fence
+   content) and `code_blocks` (list of fenced content, canonicalized
+   per Tier 0c).
+2. Compute `MinHash.from_text(prose)` AND
+   `code_hash_set = {sha256(canon(cb)) for cb in code_blocks}`.
+3. A candidate pair is a duplicate iff **MinHash Jaccard > 0.85 AND
+   `code_hash_set_a == code_hash_set_b`** (set equality).
+4. If code hashes differ by even one, the pair is NOT a duplicate,
+   regardless of prose similarity. The code delta is load-bearing.
+
+**Libraries.** `datasketch` (MinHash), `markdown-it-py` (AST). Do not
+use `tree-sitter` for the code hash — AST-canonicalization hides
+renames and formatting choices that are often the semantic difference.
+
+**Effect.** Genuine prose redundancy removed; every unique code
+variant preserved.
+
+**Files:** `graphs/knowledge/helpers.py` — new `_dedup_chapter_files()`.
+
+**Effort:** ~120 LoC.
 
 ### 7. TF-IDF glossary extraction across all chapters — CURATOR QUALITY
 **Current:** heuristic Counter over chapter-0 CamelCase/snake_case → misses vocabulary from later chapters.
@@ -112,12 +679,52 @@ Many files in a chapter overlap (`/api/x.md` + `/api/x/reference.md` describe th
 **Files:** `graphs/knowledge/helpers.py` — new `_deterministic_grader_gates()`.
 **Effort:** ~30 LoC.
 
-### 10. Citation-regex whitelist in critic — QUALITY (eliminates false positives)
+### 10. Citation-regex whitelist in critic — ✅ SHIPPED 2026-04-23 (super-super-batch)
 **Current:** critic's `_CITATION_RE = r"#\s*docs:\s*([^\s\n`)]+)"` captures slug-like patterns including non-slugs (e.g., `api(utils)` captures `api`).
 **Proposed:** build `|`-joined alternation of actual corpus slugs at preprocess time; regex only matches real slugs.
 **Effect:** zero false positives in citation integrity check.
 **Files:** `graphs/knowledge/helpers.py` — rewrite `_scan_citations()`.
 **Effort:** ~10 LoC.
+
+### 19. Code-preservation grader dimension — ✅ SHIPPED 2026-04-23 (super-batch)
+**Rationale.** The existing `code_syntax_valid` dimension
+(`prompts.py:440-441`) measures whether output code blocks are
+syntactically well-formed. That is orthogonal to whether they match the
+SOURCE. A chapter can achieve 100% `code_syntax_valid` on code wholly
+hallucinated by the LLM.
+
+**Proposed.** Add `code_preservation_ratio` (binary per-block, from
+Tier 0c) as a new grader dimension, weighted 2× (tied with
+`signal_to_noise` and `citation_integrity`). Once Tier 0 ships,
+`code_syntax_valid` becomes largely redundant (preserved source code
+is by definition valid) — keep it as a low-weight sanity check only.
+
+Optionally add `code_similarity_score` (continuous) via per-block
+**CrystalBLEU** — downweights trivial n-grams like `{`, `}`, keywords,
+making it the right tool for doc-preservation metrics (vs. classical
+BLEU, which would score reformatted-but-intact code poorly).
+
+**Files:** `schemas/knowledge/prompts.py` (extend `GRADER_PROMPT` + the
+`GraderEvaluation` Pydantic model).
+
+**Effort:** ~40 LoC.
+
+### 20. Critic hallucinated-fence check — ✅ SHIPPED 2026-04-23 (super-batch)
+**Rationale.** Current critic scores `citation_integrity` and
+`faithfulness` on prose claims, not on fence provenance. After Tier 0
+this is enforced at synth time; the critic adds a final backstop on
+the fully-assembled study (catches post-curator drift).
+
+**Proposed.** Extend `CRITIC_PROMPT` (`prompts.py:428-453`): "Every
+fenced code block in the chapter must correspond to a fenced block in
+the source file list (allowing the canonical-whitespace normalization
+from integrity check 0c). Emit a DEBT issue for any output fence that
+does not match any source block."
+
+**Files:** `schemas/knowledge/prompts.py` + `graphs/knowledge/distiller.py`
+(critic node preprocesses source hash set).
+
+**Effort:** ~30 LoC.
 
 ---
 
@@ -126,24 +733,140 @@ Many files in a chapter overlap (`/api/x.md` + `/api/x/reference.md` describe th
 ### 11. Hybrid MAP (Clio-at-shard-level)
 Embed files per shard + classical cluster (k=3 per shard) + LLM names only. Trades 103 complex calls for 309 tiny calls + 4088 embeddings. **Defer until MAP is actually the pipeline bottleneck** — after Tier 1 #4 + #5, MAP runs in ~10 min which is acceptable. See `KNOWLEDGE-DISTILLER-REDUCE-CLIO-PATTERN.md` for the pattern. ~200 LoC.
 
-### 12. Sub-chapter synthesis batching
-Split thick chapters into groups of ~20 files, synthesize each group, merge. Preserves quality at ANY chapter size without truncation. **Deferred** because Tier 1 #1 + #2 eliminate today's failure mode more cheaply. Revisit if chapters legitimately exceed 80K chars of relevant content. ~150 LoC.
+### 12. Sub-chapter synthesis batching (priority raised post-Tier-0)
+Split thick chapters into groups of ~20 files, synthesize each group, merge. Preserves quality at ANY chapter size without truncation. **Composes cleanly with Tier 0 vault** — each batch has its own vault; integrity check runs per batch. After Tier 0 ships, #12 is the natural follow-up for corpora that exceed the #2 token budget even after BM25F packing. ~150 LoC.
 
 ### 13. Per-chapter artifact cache (resume-on-failure)
 When chapter 7 fails, don't re-synth chapters 1-6. Store `{study_id, chapter_n} → synthesis_output` in MinIO; synth node checks before calling LLM. Robust against transient failures (Obsidian-style external deletions, NIM outages mid-run). ~100 LoC.
 
-### 14. LangFuse observability (self-hosted)
-Every LLM call as a span with model/tokens/cost/latency/status. Today's run would have been debugged visually in minutes instead of grepping HTTP codes. Also gives prompt versioning + session replay for free. ~50 LoC + docker-compose sidecar. See `openletemetry-and-ai-agents-guide.md` for context on observability stack.
+### 14. LangFuse observability (self-hosted) — ✅ SHIPPED 2026-04-23 (super-batch, includes 0d-5 telemetry)
+- **Infra side**: Langfuse v3 (app 3.169.0, chart 1.5.27) deployed on COELHOCloud via `modules/langfuse/` Terraform module. Shared PostgreSQL + shared MinIO S3 + bundled ClickHouse + bundled Valkey. Tailscale ingress at `https://langfuse.YOUR_TAILNET_DOMAIN.ts.net`. Headless-init enabled (org `coelho`, project `coelhocloud`, admin user seeded).
+- **KD side**: `services/knowledge/langfuse_client.py` builds a `CallbackHandler` when `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` env vars are set (graceful no-op otherwise). `_invoke_structured_with_fallback` wires the handler into every `chain.ainvoke` call with per-model + per-iteration + per-chapter metadata + tags. Synth + grader callsites plumbed. Unblocks 0d-5 (per-model preservation rate) by construction.
+- Future follow-up: wire the same handler into curator's direct `chain.ainvoke` (currently uses `| llm` directly), and add a periodic flush on graph completion so traces upload cleanly on normal exit.
 
 ### 15. Qdrant cross-study semantic search
 Once N studies exist, index every chapter content via `fastembed`. Enables "which study explains LangGraph state schemas?" via vector search — no LLM needed for retrieval. Sets up the shared infra pattern for Book Distiller + Deep Research. ~200 LoC.
+
+### 21b. Distribution fix for structured synth — ✅ SHIPPED 2026-04-23 (super-batch, 2026-04-23 evening)
+
+**Run-4 post-mortem finding (DeepAgents + LangChain + LangGraph docs, Run-4
+committed chapter inspection):**
+
+#21's audit enforced `union(code_refs) == vault_hashes` but did NOT enforce
+uniqueness or distribution. LLM discovered the loophole: same hash placed
+in multiple sections' `code_refs` → audit passes but the assembler renders
+the same code block repeatedly in unrelated sections. Also: LLM put
+substantive prose in sections with empty `code_refs` ("filler" sections).
+
+Observed example — a committed README had ABAC policy JSON blocks appearing
+under BOTH "RBAC and ABAC Policies" (correct) AND "Agent Server API
+Endpoints" (wrong topic) because the LLM stuffed leftover hashes into the
+last section.
+
+**Fixes shipped:**
+
+1. **Audit uniqueness + empty-section checks.**
+   `_audit_structured_output_refs` now returns a 5-tuple:
+   `(missing, invented, fence_sections, duplicated_refs, empty_sections)`.
+   `duplicated_refs` = any hash appearing in >1 section's `code_refs`.
+   `empty_sections` = sections with >40 chars of prose but zero `code_refs`
+   (transitional sections with ≤40 chars of prose are allowed).
+2. **Assembler dedup defense.** `_assemble_chapter_markdown` now emits
+   each vault block at MOST once regardless of audit bypass (first
+   occurrence wins — the LLM's first choice is usually the best).
+3. **Prompt guidance** in `SYNTHESIZER_PROMPT` — explicit DISTRIBUTION
+   RULES block: each hash in exactly ONE section; substantive prose
+   needs code_refs or merge/trim.
+4. **Targeted refine feedback** via `_format_structured_output_feedback`
+   extended to enumerate duplicated + empty-section details.
+
+### 21. Structured-output synthesizer with `code_refs` — ✅ SHIPPED 2026-04-23
+**Status.** Escalation trigger fired on 2026-04-23 Round-3 smoke (4 of 8
+reporting chapters at ≥50% iter-0 strip). Shipped as the core of the
+"KD robustness batch 1" PR on the same day.
+
+**Implementation landed:**
+- New Pydantic schemas in `schemas/knowledge/agents.py`: `Section(heading,
+  prose_md, code_refs)` + `ChapterOutput(sections, challenges, flashcards)`.
+  `ChapterSynthesis` retained as the downstream-facing shape (grader,
+  artifact writer, curator) — the synth node builds one via the assembler.
+- `SYNTHESIZER_PROMPT` rewritten for the structured schema with a worked
+  example showing "bare hash in code_refs, NOT tag in prose_md."
+- New helpers in `graphs/knowledge/helpers.py`: `_audit_structured_output_refs`
+  (missing / invented / fence-contaminated sections), `_assemble_chapter_markdown`
+  (deterministic `# title` + `## heading` + prose + vault fences), plus
+  `_format_structured_output_feedback` that speaks the schema's language
+  for Self-Refine retries.
+- `synthesize_chapter` in `graphs/knowledge/distiller.py` switched to the
+  structured path: synth → audit → assemble → ChapterSynthesis → grader.
+  Pydantic-level fence rejection was considered and NOT used — it cascades
+  the whole fallback chain on violations before the LLM can see feedback;
+  audit-driven refine is more graceful and actionable.
+
+**Tests:** `scripts/test_structured_output.py` (12 unit cases covering
+audit, assembler, feedback rendering, and full round-trip). Existing
+`scripts/test_code_vault.py` still valid (vault primitives unchanged).
+`scripts/test_synth_isolation.py` updated to use ChapterOutput in the
+grader-failure mock.
+
+**Next-run expectation:** preservation goes to 100% by construction —
+the LLM emits only metadata about which vault hashes go where; it cannot
+strip, paraphrase, or invent code. The audit catches "LLM forgot to
+reference hash X" exactly as the old sentinel audit did, but with a
+cleaner failure mode (count missing hashes, not "did text survive").
+
+---
+
+**Rationale.** The strongest form of code preservation is to never let
+the LLM emit code tokens at all. Rewrite the synthesizer to return a
+Pydantic structure where code blocks are referenced by ID, not embedded
+as text:
+
+```python
+class Section(BaseModel):
+    heading: str
+    prose_md: str                    # schema-rejected if it contains ``` fences
+    code_refs: list[str] = []        # vault keys from Tier 0a, in order
+class ChapterOutput(BaseModel):
+    sections: list[Section]
+    # challenges/flashcards unchanged
+```
+
+Final markdown assembled programmatically: for each section, emit
+`heading` → `prose_md` → interleave fences resolved from `code_refs`
+in order. Use native strict JSON-Schema mode (Claude 4.x, GPT-5,
+Gemini 2.5). Add regex constraint `pattern: "^(?!.*```).*$"` on
+`prose_md` so fences are rejected before generation (on providers that
+support regex-constrained JSON Schema).
+
+**Tradeoff vs. Tier 0 vault alone.** Stronger guarantee (LLM *cannot*
+write code), slightly weaker prose-code interleaving (model sometimes
+picks suboptimal ref order). Tier 0 vault is cheaper and good enough
+for ~95% of chapters. Revisit #21 if audit finds ≥5% of chapters
+still have code-placement issues post-Tier-0.
+
+**Effort:** ~150 LoC (synth node rewrite + assembler change).
+
+### 22. Claude Citations API for verbatim source binding — NEW (strategic)
+**Rationale.** Anthropic's Citations API (GA mid-2025) provides
+server-side, guaranteed-verbatim source binding: `cited_text` returns
+byte-identical source substrings, does not count against output tokens,
+and cannot hallucinate content. For Claude-family synths this is the
+gold standard.
+
+**Tradeoff.** Claude-only (portable simulation via LangChain
+`qa_citations` is weaker). Worth piloting once LangFuse (#14) is live
+so we can A/B Citations-vs-vault quality metrics.
+
+**Effort:** ~100 LoC (Anthropic provider wrapper; only relevant when
+the active model in the fallback chain is a Claude model).
 
 ---
 
 ## Tier 4 — Strategic / future
 
 ### 16. Preview mode (classical-only baseline)
-A `?preview=true` parameter runs: ingest → splitter → MAP clustering → c-TF-IDF cluster labels → TextRank per-chapter extractive summaries. No synthesis, no challenges, no flashcards. ~5 min wall-clock, zero LLM cost. Usable as:
+A `?preview=true` parameter runs: ingest → splitter → MAP clustering → c-TF-IDF cluster labels → TextRank per-chapter extractive summaries. No synthesis, no challenges, no flashcards. ~5 min wall-clock, zero LLM cost. **Strictly verbatim by construction** — no LLM ever rewrites content. Usable as:
 - Sanity-check before committing to a full 30-min run
 - Fallback when all LLM providers are down
 - Validation baseline to catch synth hallucinations
@@ -154,43 +877,159 @@ A `?preview=true` parameter runs: ingest → splitter → MAP clustering → c-T
 Classical heuristics (slug pattern matching: `changelog`, `release-notes`; file length < 200 chars; code-to-prose ratio ≈ 0) drop obvious noise before shard-labelers waste LLM calls. Typical effect: 5-15% fewer shards. ~30 LoC.
 
 ### 18. Grader hard-threshold per dimension
-If `citation_integrity < 0.5`, skip scoring the other 7 dimensions — straight to refine. Fast-fail the hopeless cases. ~20 LoC. Fits alongside #9.
+If `citation_integrity < 0.5`, skip scoring the other 7 dimensions — straight to refine. Fast-fail the hopeless cases. ~20 LoC. Fits alongside #9. Extend post-#19 to also hard-fail on `code_preservation_ratio < 0.90`.
 
 ---
 
-## Suggested sprint order
+## Suggested sprint order (revised)
 
-**Sprint 1 (1-2 days, ship this week):**
-#1 + #2 + #3 + #4 + #5 + #10.
+### ✅ Shipped on 2026-04-23 (one intensive day across 5 PRs)
 
-Eliminates today's failure modes (chapter 3 synth blowup, UMAP 5 min, MAP stampede), cuts wall-clock ~40%, quality-neutral to slightly positive from #1 + #10.
+**Late-evening super-super-batch — provider diversification + fail-fast:**
+
+| Item | Notes |
+|---|---|
+| **LiteLLM Router migration** | Replaced hand-rolled `RunnableWithFallbacks` with `litellm.Router` via `ChatLiteLLMRouter`. Pre-call cooldown checks (0ms skip for cooled-down providers), per-error-type retry policy (413/401/429 → immediate cooldown; 5xx/timeout → cooldown after 2 fails), Redis TTL-backed circuit breaker shared across Celery workers. Pinned to `litellm==1.83.12` (post-supply-chain-incident CI/CD v2 build). See detail card below. |
+| **6-provider expansion** | Added **Cerebras** (`gpt-oss-120b`, 3000 tok/s, 1M TPD), **Mistral La Plateforme** (`mistral-large-2411`, 1B tok/month), **Google Gemini** (`gemini-2.5-pro` + `gemini-2.5-flash`, frontier reasoning on free tier), **DeepSeek** (`deepseek-reasoner` V3.2 thinking + `deepseek-chat` V3.2 non-thinking), **SambaNova** (`DeepSeek-V3.1` at 200+ tok/s), **Zhipu** (`glm-4.7-flash` + `glm-4.5-flash`, free zero-cap). Catalog in `services/llm_chain.py` now 22 entries across 7 providers, interleaved so single-provider outage affects at most 1-2 top positions. |
+| **Drop `openai/gpt-oss-20b`** | Run-7 evidence: 8K TPM < 30K prompt size = permanent incompatibility on free tier regardless of org/project allowlist state. |
+| **Tier 1 #4** MAP inter-shard semaphore (=30) | Run-6 baseline 172 HTTP 429; sem caps per-minute MAP pressure |
+| **Tier 1 #10** Citation regex whitelist | Exact-match alternation over known corpus slugs; eliminates `api(utils)` → `api` false positives |
+| **Tier 2 #7** TF-IDF glossary | `TfidfVectorizer` across all chapters → top-12 domain terms for curator; chapter-0 counter fallback on failure |
+| **0d-5** LangFuse catalog-health tool (`scripts/kd_catalog_health.py`) | Standalone analysis script: reads LangFuse API, per-model success/error/preservation, emits demote recommendations |
+| **Fragility fix** (critic + assembler) | All-chapters-sentinel no longer crashes the task; produces DEBT.md + WIPEOUT summary.md gracefully |
+
+---
+
+### LiteLLM Router migration detail (2026-04-23 evening)
+
+**Why**: Run-4 through Run-7 repeatedly hit provider-chain cascades that wasted 30+ minutes per run on known-bad models. The hand-rolled `RunnableWithFallbacks` chain walked EVERY failed model to its timeout (120s each) before advancing — a model at position 10 could burn 20+ minutes of serial waits before its turn.
+
+**What**: `litellm.Router` with `enable_pre_call_checks=True` + Redis-backed cooldown cache. Cooled-down deployments are filtered from the candidate pool BEFORE the network call (~0ms skip). Shared state across Celery workers via the existing Redis broker.
+
+**Security**:
+- Pinned to `litellm==1.83.12` — the first stable release post-incident from LiteLLM's rebuilt CI/CD v2 pipeline (isolated envs, signed artifacts)
+- Versions `1.82.7` and `1.82.8` were compromised via Trivy CI/CD supply-chain attack (2026-03-24, ~40 min on PyPI before quarantine)
+- `langchain-litellm==0.6.4` provides `ChatLiteLLMRouter` LangChain wrapper
+
+**Configuration highlights** (see `services/llm_chain.py`):
+- `allowed_fails_policy` per error class: 413 → 1 fail triggers cooldown; 429 → 1 fail; timeout → 2 fails; 5xx → 2 fails; auth → 0 (immediate)
+- `cooldown_time=60s` (Redis TTL auto-recovery; no explicit reset action)
+- `num_retries=0` at LiteLLM layer (cascade, don't retry)
+- `routing_strategy="simple-shuffle"` among healthy entries (LiteLLM recommendation — lowest overhead, no extra Redis round-trips per call like usage-based)
+
+**Four groups** cover KD use cases:
+- `kd-synth` (22 entries): synthesize_chapter + curator; excludes weak tail (8K-TPM gpt-oss-20b, llama-3.1-8b-instant, llama-3.3-70b-versatile)
+- `kd-general` (24 entries): resolver + utility calls; includes tail
+- `kd-scope` (3 entries): scope-gate classifier; Groq llama-3.1-8b primary
+- `kd-curator` (2 entries): pinned — GLM-5.1 + Cerebras zai-glm-4.7 (same family for style consistency)
+- `kd-refine` (11 entries): T=0.7 variant for Self-Refine adjustment generation
+
+**Public API unchanged**: `build_synth_fallback_chain()`, `build_curator_llm()`, etc. still return Runnable objects. Every downstream caller (graph helpers, app.state.llm) works without modification. `_invoke_structured_with_fallback` simplified from ~80 LoC to ~30 LoC since LiteLLM Router handles the cascade.
+
+**Expected behavior change**:
+- Bad provider cascade: was 5-30 min per synth call (walking 12 timeouts). Now ~0ms skip for cooled-down models → healthy model served immediately.
+- NIM glm-5.1 hang: after 2 timeouts, circuit opens for 60s, synth skips glm-5.1 entirely during that window, uses Cerebras / Gemini / DeepSeek instead.
+- gpt-oss-20b style 413: after first 413, `BadRequestErrorAllowedFails=1` opens the circuit; no more 413s from that model for 60s.
+- Shared across workers: all 5 Celery workers observing ONE failure instantly benefit — no repeat-discovery of "glm-5.1 is broken right now."
+
+---
+
+### Earlier today shipped — recap
+
+
+
+| Batch | Scope | Outcome |
+|---|---|---|
+| **Tier 0** | 0a vault + 0b prompt clause + 0c integrity check + 0d-1/2/3/4 hardening + 0d-6 per-chapter isolation + `_invoke_structured_with_fallback` robustness | Code-preservation foundation; per-chapter failure isolation; fallback chain truly retries on None |
+| **Batch-1** | Tier 1 #2 (token budget + fence-safe split) + Tier 3 #21 (structured-output synth with `code_refs`) | Replaced char cap with tiktoken 40K token cap; cap-after-append off-by-one fixed; schema-enforced preservation (LLM cannot emit fences) |
+| **Batch-2** | Tier 1 #4b (synth semaphore 5→2) + Tier 1 #5 (120s eager timeout) + grader rubric calibration for #21 assembled shape | Stampede on NIM primary eliminated; stuck call cost 300s→120s; grader stopped false-penalizing heading+prose+code structure |
+| **Super-batch** | Audit uniqueness + empty-section + assembler dedup + prompt distribution rules + Tier 2 #19 (code_preservation_ratio grader dim) + Tier 2 #20 (critic hallucinated-fence scan) + Tier 3 #14 (LangFuse integration + 0d-5 telemetry) | Fixes Run-4 distribution leak; observability for all future runs; deterministic provenance check at critic |
+
+**Test coverage:** 39 unit tests passing in-pod (`test_code_vault.py` 19 + `test_synth_isolation.py` 3 + `test_structured_output.py` 17). Bytecompile clean across all 6 modified files.
+
+---
+
+### Remaining work (prioritize after Run-6 baseline data from LangFuse)
+
+**Sprint 0 (shipped; kept for historical reference):**
+Tier 0 (**0a + 0b + 0c**) — code-vault + sentinel clause + integrity check.
+
+Hard prerequisite. Until Tier 0 ships, do NOT deploy the revised #2
+(token budget) or #6 (dedup); both assume code is safe to
+truncate/compare as text, which is false today. Shipping Tier 0 alone
+eliminates chapter 3's synth failure pattern on the 2026-04-22 run
+(vault-compressed prompt < NIM timeout, integrity check catches any
+surviving corruption).
+
+**Sprint 1 (1-2 days, after Tier 0):**
+**#1** BM25F + **#2** token budget + **#3** PCA + **#4** semaphore +
+**#5** eager timeout + **#10** citation regex whitelist.
+
+Eliminates failure modes (chapter 3 synth blowup, UMAP 5 min, MAP
+stampede). Wall-clock −40%. Zero code fidelity loss (Tier 0 in place).
 
 **Sprint 2 (2-3 days):**
-#6 + #7 + #8 + #9.
+**#6** code-aware dedup + **#7** TF-IDF glossary + **#8** parallel
+curator + **#9** deterministic grader gates + **#19** code-preservation
+grader dimension + **#20** critic hallucinated-fence check.
 
-Quality-positive polish. No architectural risk.
+Quality-positive polish with code fidelity enforced end-to-end
+(preservation metric visible in grader; hallucinated fences rejected
+by critic).
 
 **Sprint 3 (when ready):**
-#14 (LangFuse) first. Observability first — it makes all subsequent tuning 10× easier, and you see regressions immediately instead of chasing them in logs. Then #12 or #13 depending on what failure patterns actually persist.
+**#14** (LangFuse) first — observability makes all subsequent tuning
+10× easier and surfaces regressions immediately. Then **#12** or
+**#13** depending on which failure pattern persists. Pilot **#22**
+(Citations API) on the Claude path once LangFuse is in place.
 
 **Strategic:**
-#15 + #16 — both establish shared infrastructure reusable by Book Distiller + Deep Research.
+**#15** + **#16** + **#21** — shared infrastructure reusable across
+Book Distiller + Deep Research. **#21** (structured-output synth) is
+the architectural end-state if a post-Tier-0 audit shows vault is
+insufficient for a meaningful slice of chapters.
 
 ---
 
 ## Deliberately not in the list
 
-- **Changing the LLM fallback chain.** Research-tuned 2026-04-20 (`llm_chain.py` header). Model list is current.
-- **Rewriting synth prompts.** Well-calibrated. Tune truncation + ranking instead.
-- **Replacing KMeansConstrained with HDBSCAN.** Clio explicitly rejected this (Appendix G.7) for same-domain corpora — dumps 50%+ points to noise without heavy patching. Same reasoning applies here.
+- **Relying on "preserve code verbatim" prompt directives alone.**
+  The curator prompt already has this clause (`prompts.py:516`) and
+  still requires Tier 0 integrity checks behind it. Prompt-only
+  verbatim is probabilistic; production needs deterministic
+  guarantees. This is the single biggest lesson from the research pass.
+- **AST-based canonicalization (tree-sitter) for dedup or integrity.**
+  Hides formatting differences that are semantically meaningful in
+  docs (whitespace in YAML configs, comments like `# type: ignore`,
+  identifier renames). Byte-level canonicalization (trim trailing
+  whitespace + drop trailing blank lines, preserve indentation) is
+  the right layer. Tree-sitter is acceptable only as a secondary
+  `code_parse_valid_ratio` metric, never as a dedup or integrity key.
+- **SemDeDup / embedding-based document dedup.** Embeddings collapse
+  exactly the code variations we must preserve. Use MinHash on prose +
+  exact-hash on code (#6 revised).
+- **Character-based truncation caps** (original #2). Cannot be made
+  safe retroactively — any mid-file char cut risks mid-fence corruption.
+  Token-based + whole-file packing is the only safe form.
+- **Changing the LLM fallback chain.** Research-tuned 2026-04-20
+  (`llm_chain.py` header). Model list is current.
+- **Rewriting synth prompts from scratch.** Well-calibrated. Add the
+  Tier 0b sentinel clause; otherwise tune truncation + ranking instead.
+- **Replacing KMeansConstrained with HDBSCAN.** Clio explicitly
+  rejected this (Appendix G.7) for same-domain corpora — dumps 50%+
+  points to noise without heavy patching. Same reasoning applies here.
 - **Replacing the critic.** Cheap, already mostly deterministic, works.
-- **Adding MLflow.** We're not training or versioning models. Logger output is sufficient observability for classical-ML diagnostics.
-- **Switching to raw OpenTelemetry first.** For LLM-heavy workloads, LangFuse is the faster win; OpenLLMetry on top comes later for infra-wide tracing.
+- **Adding MLflow.** We're not training or versioning models. Logger
+  output is sufficient observability for classical-ML diagnostics.
+- **Switching to raw OpenTelemetry first.** For LLM-heavy workloads,
+  LangFuse is the faster win; OpenLLMetry on top comes later for
+  infra-wide tracing.
 
 ---
 
 ## References
 
+Existing:
 - `KNOWLEDGE-DISTILLER-ARCHITECTURE.md` — canonical architecture
 - `KNOWLEDGE-DISTILLER-INGESTION-PIPELINE-PLAN.md` — Tier 1-4 ingestion strategy
 - `KNOWLEDGE-DISTILLER-RESOLVER-STRATEGY.md` — framework-to-URL resolver
@@ -201,3 +1040,55 @@ Quality-positive polish. No architectural risk.
 - BERTopic Best Practices — https://maartengr.github.io/BERTopic/getting_started/best_practices/best_practices.html
 - k-means-constrained — https://github.com/joshlk/k-means-constrained
 - HERCULES (hierarchical k-means + LLM) — https://arxiv.org/abs/2506.19992
+
+Added 2026-04-23 (code-preservation research pass):
+
+**LLM placeholder-preservation failure modes + mitigations (2026-04-23 run):**
+- Promptfoo: invisible Unicode threats (ZWS / U+200B stripping) — https://www.promptfoo.dev/blog/invisible-unicode-threats/
+- AWS Security: defending LLMs against Unicode smuggling (ZWS normalization rationale) — https://aws.amazon.com/blogs/security/defending-llm-applications-against-unicode-character-smuggling/
+- Tokenization pitfalls with invisible characters — https://blog.thegenairevolution.com/article/tokenization-pitfalls-invisible-characters-that-break-prompts-and-rag-2
+- Reverse CAPTCHA: LLM susceptibility to invisible Unicode injection (arXiv 2603.00164) — https://arxiv.org/html/2603.00164v1
+- Anthropic Claude — XML tags for prompt structure — https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/use-xml-tags
+- Anthropic Claude — prompting best practices (human > system for instructions; query-at-end for 30% lift) — https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices
+- Gemini CLI issue #4836 — mirror-image failure (models strip real code and inject `// ...` comments) — https://github.com/google-gemini/gemini-cli/issues/4836
+
+**Code-vault / placeholder substitution pattern:**
+- markdown-it-py AST — https://markdown-it-py.readthedocs.io/en/latest/api/markdown_it.token.html
+- mistletoe (alternative CommonMark parser with line-number tracking) — https://github.com/miyuchina/mistletoe
+- LangChain ExperimentalMarkdownSyntaxTextSplitter — https://reference.langchain.com/python/langchain-text-splitters/markdown/ExperimentalMarkdownSyntaxTextSplitter
+- Docling — https://github.com/docling-project/docling
+- Extracting and Validating Code Blocks from LLM-Generated Markdown — https://dev.to/german_yamil_e021eef8710d/extracting-and-validating-code-blocks-from-llm-generated-markdown-in-python-4o3a
+- OpenAI GPT-4.1 prompting guide (documented verbatim-instruction failure mode) — https://developers.openai.com/cookbook/examples/gpt4-1_prompting_guide
+
+**Structured output & citations:**
+- Anthropic Citations API — https://claude.com/blog/introducing-citations-api
+- Anthropic Citations docs — https://platform.claude.com/docs/en/build-with-claude/citations
+- Pydantic for LLMs — https://pydantic.dev/articles/llm-intro
+- Citation-Grounded Code Comprehension (2025) — https://arxiv.org/html/2512.12117v1
+- LangChain qa_citations — https://python.langchain.com/docs/how_to/qa_citations/
+- Anthropic-style Citations with Any LLM — https://medium.com/data-science-collective/anthropic-style-citations-with-any-llm-2c061671ddd5
+
+**Fence-aware chunking & splitting:**
+- text-splitter (benbrandt, Rust+Python, CommonMark + token-aware) — https://github.com/benbrandt/text-splitter
+- split-markdown4gpt — https://pypi.org/project/split-markdown4gpt/
+
+**BM25 / BM25F on mixed prose/code:**
+- BM25S (Xing Han Lu, 2024) — https://github.com/xhluca/bm25s
+- BM25S HF blog — https://huggingface.co/blog/xhluca/bm25s
+- BM25F from scratch (Turnbull 2025) — https://softwaredoug.com/blog/2025/09/18/bm25f-from-scratch
+- rank_bm25 — https://pypi.org/project/rank-bm25/
+
+**Code-aware deduplication:**
+- BigCode near-dedup writeup — https://huggingface.co/blog/dedup
+- text-dedup — https://github.com/ChenghaoMou/text-dedup
+- NeMo Curator Deduplication (reference for the whole-doc baseline that fails on code-diff pairs) — https://docs.nvidia.com/nemo/curator/25.09/curate-text/process-data/deduplication/index.html
+- datasketch MinHash — https://ekzhu.com/datasketch/documentation.html
+- Why embedding-based dedup is wrong for code (SemDeDup) — https://github.com/facebookresearch/SemDeDup
+
+**Code-integrity evaluation metrics:**
+- Self-Refine (Madaan et al.) — https://arxiv.org/abs/2303.17651
+- LLMLOOP 2025 (error-guided refinement) — https://valerio-terragni.github.io/assets/pdf/ravi-icsme-2025.pdf
+- CrystalBLEU (n-gram downweighting; right tool for doc preservation) — https://www.semanticscholar.org/paper/CrystalBLEU:-Precisely-and-Efficiently-Measuring-of-Eghbali-Pradel/205ac1373eb7981aca2d08f2ab651871a001271e
+- CodeBLEU — https://www.semanticscholar.org/paper/CodeBLEU:-a-Method-for-Automatic-Evaluation-of-Code-Ren-Guo/f23a0e443fe931aa2fed932421bf47c1a4fcf619
+- cAST: AST-structural chunking (arXiv 2506.15655) — https://arxiv.org/pdf/2506.15655
+- tree-sitter Python bindings (for secondary `code_parse_valid_ratio` metric only) — https://github.com/tree-sitter/py-tree-sitter
