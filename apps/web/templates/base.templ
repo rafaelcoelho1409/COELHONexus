@@ -1,0 +1,68 @@
+// Package templates — COELHONexus GOTTH layouts.
+//
+// Memos-inspired base shell: sidebar-left + main, with command-palette shortcut,
+// dark-mode toggle, and HTMX + Shiki + Lucide wired at the head.
+package templates
+
+// Base is the shell every page renders inside. Content goes in `body`.
+// `title` is the browser tab title; `activeNav` highlights the current nav item
+// in the sidebar (match one of: "home", "library", "youtube", "catalog", "settings").
+templ Base(title string, activeNav string) {
+	<!DOCTYPE html>
+	<html lang="en" data-theme="memos">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<meta name="theme-color" content="#16a34a"/>
+			<title>{ title } · COELHONexus</title>
+			<link rel="manifest" href="/static/manifest.json"/>
+			<link rel="stylesheet" href="/static/css/main.css"/>
+			<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+			<script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js" defer></script>
+			<script src="https://unpkg.com/lucide@latest" defer></script>
+			<script>
+				if ("serviceWorker" in navigator) {
+					window.addEventListener("load", () => navigator.serviceWorker.register("/static/sw.js"));
+				}
+			</script>
+		</head>
+		<body class="min-h-screen bg-base-200 text-base-content">
+			<div class="flex min-h-screen">
+				@Sidebar(activeNav)
+				<main class="flex-1 ml-64">
+					{ children... }
+				</main>
+			</div>
+			<script>
+				// Re-init Lucide icons after any HTMX swap
+				document.body.addEventListener("htmx:afterSwap", () => {
+					if (window.lucide) window.lucide.createIcons();
+				});
+				document.addEventListener("DOMContentLoaded", () => {
+					if (window.lucide) window.lucide.createIcons();
+				});
+				// Dark-mode toggle (persisted)
+				const themeKey = "coelhonexus:theme";
+				const saved = localStorage.getItem(themeKey);
+				if (saved) document.documentElement.setAttribute("data-theme", saved);
+				window.toggleTheme = () => {
+					const cur = document.documentElement.getAttribute("data-theme");
+					const next = cur === "memos-dark" ? "memos" : "memos-dark";
+					document.documentElement.setAttribute("data-theme", next);
+					localStorage.setItem(themeKey, next);
+				};
+				// Cmd/Ctrl+K focuses the search input if present
+				document.addEventListener("keydown", (e) => {
+					if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+						const el = document.querySelector("[data-cmdk-input]");
+						if (el) { e.preventDefault(); el.focus(); }
+					}
+					if (e.key === "/" && !/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) {
+						const el = document.querySelector("[data-search-input]");
+						if (el) { e.preventDefault(); el.focus(); }
+					}
+				});
+			</script>
+		</body>
+	</html>
+}

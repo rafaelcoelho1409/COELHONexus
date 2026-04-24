@@ -1,0 +1,142 @@
+package templates
+
+// YouTubeAsk — RAG search over the indexed corpus. The MVP screen from the
+// frontend-stack doc: Perplexity-flavored query → SSE streaming agent
+// progress → structured answer with citation cards.
+templ YouTubeAsk() {
+	@Base("Ask the Corpus", "youtube") {
+		<div class="max-w-4xl mx-auto px-8 py-10">
+			<!-- Query panel -->
+			<section class="mb-6">
+				<h1 class="text-2xl font-bold tracking-tight mb-1">Ask the YouTube corpus</h1>
+				<p class="text-sm text-base-content/60 mb-5">
+					RAG over everything you've indexed. Pick a mode and ask in plain language.
+				</p>
+
+				<form
+					hx-post="/api/youtube/ask"
+					hx-target="#rag-progress"
+					hx-swap="innerHTML"
+					hx-disabled-elt="#ask-submit, #ask-input"
+					class="flex flex-col gap-3"
+				>
+					<div class="relative">
+						<input
+							id="ask-input"
+							data-search-input
+							name="question"
+							type="text"
+							class="input input-bordered w-full pr-20 text-base"
+							placeholder="e.g. How does LangGraph handle state across nodes?"
+							autofocus
+							required
+						/>
+						<kbd class="kbd kbd-sm absolute right-3 top-1/2 -translate-y-1/2 text-base-content/50">
+							/
+						</kbd>
+					</div>
+
+					<div class="flex items-center justify-between gap-3">
+						<!-- Mode toggle -->
+						<div class="join">
+							<input
+								type="radio" name="mode"
+								class="join-item btn btn-sm"
+								aria-label="Standard"
+								value="" checked
+							/>
+							<input
+								type="radio" name="mode"
+								class="join-item btn btn-sm"
+								aria-label="Deep"
+								value="deep"
+							/>
+						</div>
+
+						<!-- Submit -->
+						<button id="ask-submit" type="submit" class="btn btn-primary btn-sm gap-2">
+							<i data-lucide="sparkles" class="w-4 h-4"></i>
+							Ask
+						</button>
+					</div>
+				</form>
+			</section>
+
+			<!-- Agent progress (SSE) -->
+			<section
+				id="rag-progress"
+				class="memo-card mb-4 hidden"
+				data-progress-panel
+			>
+				<!-- Populated by SSE stream: one agent-node per graph node update -->
+			</section>
+
+			<!-- Answer pane (re-initialized by Shiki on htmx:afterSwap) -->
+			<article
+				id="rag-answer"
+				class="prose prose-zinc dark:prose-invert max-w-none hidden"
+			></article>
+
+			<!-- Sources list -->
+			<section id="rag-sources" class="mt-6 flex flex-col gap-3"></section>
+		</div>
+
+		<!-- Shiki init on swap -->
+		<script type="module">
+			import { codeToHtml } from "https://esm.sh/shiki@1.0.0";
+			document.body.addEventListener("htmx:afterSwap", async (e) => {
+				if (!e.target.matches("#rag-answer")) return;
+				for (const pre of e.target.querySelectorAll("pre code")) {
+					const lang = (pre.className.match(/language-(\w+)/) || [,"text"])[1];
+					const html = await codeToHtml(pre.textContent, { lang, theme: "github-light" });
+					pre.parentElement.outerHTML = html;
+				}
+			});
+		</script>
+	}
+}
+
+// AgentNode — one SSE event rendered as a Memos-style timeline row.
+// Emit from the server handler as the SSE stream fires.
+templ AgentNode(label string, detail string, status string) {
+	<div class="agent-node">
+		<span class={
+			"agent-node-dot",
+			templ.KV("bg-warning", status == "pending"),
+			templ.KV("bg-primary", status == "running"),
+			templ.KV("bg-success", status == "done"),
+			templ.KV("bg-error", status == "error"),
+		}></span>
+		<div class="min-w-0">
+			<div class="font-medium text-base-content">{ label }</div>
+			if detail != "" {
+				<div class="text-xs text-base-content/60 mt-0.5">{ detail }</div>
+			}
+		</div>
+	</div>
+}
+
+// SourceCard — one citation rendered under the answer.
+templ SourceCard(idx int, title string, channel string, url string, timestamp string) {
+	<a
+		href={ templ.URL(url) }
+		target="_blank" rel="noopener"
+		class="memo-card flex items-start gap-3 no-underline"
+	>
+		<span class="citation shrink-0 !static !align-baseline !min-w-[1.5rem] !h-6 !text-xs">
+			{ formatIdx(idx) }
+		</span>
+		<div class="min-w-0">
+			<div class="font-medium text-sm text-base-content truncate">{ title }</div>
+			<div class="text-xs text-base-content/60 mt-1 flex items-center gap-2">
+				<i data-lucide="youtube" class="w-3.5 h-3.5"></i>
+				<span class="truncate">{ channel }</span>
+				if timestamp != "" {
+					<span>·</span>
+					<span>{ timestamp }</span>
+				}
+			</div>
+		</div>
+		<i data-lucide="external-link" class="w-3.5 h-3.5 text-base-content/40 shrink-0 mt-1"></i>
+	</a>
+}

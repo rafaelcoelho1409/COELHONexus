@@ -246,7 +246,16 @@ def _audit_sentinel_roundtrip(
                     (LLM hallucinated or malformed a sentinel).
 
     Both lists empty <=> perfect round-trip, preservation_ratio == 1.0.
+
+    OP-21 defensive coerce (2026-04-24): accept non-string input gracefully.
+    Some LangChain LLM responses arrive as content-block lists; callers
+    should flatten them first, but guard here too.
     """
+    if not isinstance(llm_output, str):
+        if isinstance(llm_output, list):
+            llm_output = "\n".join(str(x) for x in llm_output)
+        else:
+            llm_output = str(llm_output)
     missing = [s for s in vault if s not in llm_output]
     found = set(_VAULT_SENTINEL_RE.findall(llm_output))
     unexpected = [s for s in found if s not in vault]
@@ -314,10 +323,19 @@ def _audit_structured_output_refs(
         if "```" in section.prose_md:
             fence_sections.append(section.heading or "<unnamed>")
         # Distribution check — non-trivial section with no code is a
-        # prose-stuffing tell. 40 chars ≈ "See section X for details."
-        # which is a legit transition; anything longer is content that
-        # should have had a code_ref alongside.
-        if not section.code_refs and len(section.prose_md.strip()) > 40 and vault_hashes:
+        # prose-stuffing tell.
+        #
+        # OP-9 (2026-04-24, post-Run-9): raised threshold 40 → 120 chars.
+        # Run-9 ch07 sentinel'd at iter 4 with audit = (0, 0, 0, 0, 2 empty)
+        # — the two "empty" sections were legit 60-90 char transition
+        # paragraphs like "Let's now tie these concepts together before
+        # examining the runtime." That's valid chapter narrative, not a
+        # prose-stuffing failure. 120 chars ≈ 20-25 words ≈ a full
+        # concrete sentence; below that, prose-only is fine.
+        _EMPTY_SECTION_MIN_PROSE = 120
+        if (not section.code_refs
+                and len(section.prose_md.strip()) > _EMPTY_SECTION_MIN_PROSE
+                and vault_hashes):
             empty_sections.append(section.heading or "<unnamed>")
     missing = sorted(vault_hashes - referenced)
     invented = sorted(referenced - vault_hashes)
@@ -939,7 +957,11 @@ def _validate_plan(
     return warnings
 
 
-def _deterministic_linter(chapters: list[tuple[int, str]]) -> list[str]:
+def _deterministic_linter(chapters: list[tuple[int, str, str]]) -> list[str]:
+    """Callers now pass `(number, title, body)` 3-tuples from `_load_all_chapters`.
+    Normalize to `(number, body)` internally so the rest of this function stays
+    unchanged. Title is only used by the citation scan, not here."""
+    chapters = [(n, b) for n, _t, b in chapters] if chapters and len(chapters[0]) == 3 else chapters
     """
     Cheap, LLM-free quality check across all accepted chapters — runs inside
     the critic node alongside the RAGAS-style LLM judge.
@@ -1012,8 +1034,12 @@ def _deterministic_linter(chapters: list[tuple[int, str]]) -> list[str]:
 
 
 def _extract_glossary_terms(
-    chapters: list[tuple[int, str]],
+    chapters: list[tuple[int, str, str]] | list[tuple[int, str]],
     max_terms: int = 12) -> list[str]:
+    # Callers now pass (number, title, body) 3-tuples from _load_all_chapters.
+    # Project to (number, body) 2-tuples so the rest stays unchanged.
+    if chapters and len(chapters[0]) == 3:
+        chapters = [(n, b) for n, _t, b in chapters]
     """
     Tier 2 #7 (2026-04-23): TF-IDF glossary extraction across ALL chapters.
     Replaces the chapter-0-only CamelCase heuristic that missed terminology

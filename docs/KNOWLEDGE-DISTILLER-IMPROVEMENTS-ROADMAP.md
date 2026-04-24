@@ -883,6 +883,87 @@ If `citation_integrity < 0.5`, skip scoring the other 7 dimensions — straight 
 
 ## Suggested sprint order (revised)
 
+### 📋 Run-9 post-mortem (2026-04-24 late)
+
+See [`KD-RUN-9-POST-MORTEM.md`](KD-RUN-9-POST-MORTEM.md) for the full diagnostic. Highlights:
+
+- **2/11 chapters committed** (ch03 synth, ch08 below-threshold via KEEP-BEST) vs Run-8's 0/9.
+- **Crashed in curator** on a latent `_load_all_chapters` → 3-tuple bug (fixed on disk, awaiting commit).
+- **Dominant failure mode** (6/11): distribution collapse on chapters with 50-117 vault hashes — LLM regresses on "fix empty sections" feedback.
+- **Provider MVP**: Mistral at 98% success (114/116 calls) after OP-3 removed Groq small-TPM entries.
+- **OP-1 regression**: `MAP_SHARD_SEMAPHORE 30→15` caused 30-min MAP (vs Run-8's 10 min) via straggler pileup. OP-5 below rolls it back partway.
+- **Component validation**: Tier 3 #13 partial cache, BM25F, PCA, MinHash dedup, noise pre-filter, `PydanticValidationError` handler — all behaved as designed.
+
+**New improvement candidates from Run-9 (not yet in a sprint):**
+
+*First wave — micro-ops (ship together):*
+
+| # | Proposal | Effort | Est. impact |
+|---|---|---|---|
+| **OP-5** | Revert `MAP_SHARD_SEMAPHORE` to 20-25 + add per-shard 180s time-box | ~5 LoC | MAP back to ~12-15 min (Run-9 hit 30 min due to stragglers under sem=15) |
+| **OP-6** | Lenient-accept on iteration exhaustion (commit least-bad audit iter if ≤3 missing / ≤2 empty / ≤2 invented) | ~20 LoC | +30% committed-chapter rate; **superseded by OP-12 below (stronger)** |
+| **OP-7** | Regression detection on audit-issue count (not just graded score) | ~15 LoC | Early-stop + commit best-audit iter when loop drifts (ch10 case) |
+| **OP-8** | Raw-corpus-leakage detector in `_audit_structured_output_refs` (flag `--- filename.md ---` patterns in prose) | ~10 LoC | Catches ch03-style tail degradation |
+| **OP-9** | Relax `empty_sections` threshold 40 → 80 chars OR allow ≤2 per chapter | ~5 LoC | Saves ch07-class chapters (valid transition sections) |
+| **OP-10** | Synth prompt: "if nearing output budget, prefer `code_refs: [...]` + 1-line pointer over verbatim paste" | ~5 LoC | Reduces tail-degradation |
+| **OP-11** | Refine anchor = best-seen iter, not last-seen | ~30 LoC | Reduces Self-Refine drift regression |
+
+*Run-10 emergency fixes (shipped 2026-04-24 late):*
+
+| # | Proposal | Status | Effect |
+|---|---|---|---|
+| **OP-19** | Move OP-12 rescue INSIDE the `except RuntimeError` handler so synth-timeout / cascade-exhaustion terminal errors also commit best_audit_iter as best-effort | ✅ **SHIPPED** | Would have saved ch01, ch04, ch07 in Run-10 — all 3 had clean early iters (18-29 issues) that were discarded when later iters hit the 1200s outer timeout. Converts 3 sentinels to 3 best-effort commits. |
+| **OP-21** | Normalize LLM `resp.content` in curator `_curate_one` — flatten list-of-blocks responses (Mistral reasoning tokens, Claude-style content blocks) to string before `_audit_sentinel_roundtrip`. Also defensive coerce inside the audit helper itself. | ✅ **SHIPPED** | Fixes Run-10 crash `TypeError: expected string or bytes-like object, got 'list'` during curator pass on 8th chapter. Covered: list-of-dicts with `type: text`, list-of-strings, arbitrary. |
+| **OP-20** | Align router `create_study` `max_concurrent_chapters` default 5 → 2 (or env-var-configurable). Currently router overrides the graph's documented safe K=2 with 5 silently. | ❌ PROPOSED | 1 LoC — low priority since OP-3 removed the stampede-target entries and cooldown handles parallel hits |
+
+*Run-10 material-quality improvements — driven by chapter review (added 2026-04-24 late):*
+
+Run-10 committed 8/11 chapters (ch02/03/05/06/08/10/11 + the ch09 that was mid-flight). Verification against the source corpus showed the earlier "hallucinated model names" concern (`gpt-5.4`, `claude-sonnet-4-6`, etc.) was **incorrect** — those are real 2026 model IDs and appear 5-772× in the ingested `llms-full.txt`. Code blocks are verbatim from source per Tier 0a — **code itself is trustworthy**. The real defects are structural:
+
+| # | Proposal | Priority | Effort | Effect |
+|---|---|---|---|---|
+| **OP-22** | **Mintlify-tag + raw-corpus-leak scrubber in assembler.** Regex-delete: lines matching `^--- docs-[^ ]+\.md ---$`; orphan `<Tabs>` / `<Accordion>` / `<Expandable>` / `<Warning>` / `<Tip>` / `<Note>` / `<CodeGroup>` blocks with no paired close; imbalanced ``` fence counts (rebalance or trim trailing content). | **P0** | ~25 LoC in `_assemble_chapter_markdown` | Run-10 had raw corpus leaks in ch02, ch03 (×3), ch08 (×2) — each leak bled entire unsynthesized doc pages into the output. OP-22 removes them at assembly time, cheaper than regenerating the chapter. |
+| **OP-23** | **Per-section quality gate.** Extend `_audit_structured_output_refs` to also flag: (a) sections with <40 words of prose per code_ref, (b) any chapter emitting zero `# docs:` citations total. Force refine when triggered. | **P0** | ~50 LoC | Run-10 ch06 had 26 H2 sections and **zero citations** — unbacked claims. Run-10 ch03 had sections with 4-5 consecutive code blocks and one filler sentence between. Both indicate synth-quality drift the existing audit doesn't catch. |
+| **OP-24** | **Planner topic exclusivity.** After REDUCE produces the chapter plan, run a topic-overlap detector (TF-IDF cosine between chapter goals + file-assignment Jaccard). If two chapters have similarity > 0.4 on goals OR share >20% of assigned files, merge them or reassign. Memory/Store appeared in 4 chapters in Run-10; env vars in 3; createAgent examples in 3. | P1 | ~100 LoC in planner | Shrinks cross-chapter redundancy ~20%, raises signal-to-noise. Bigger wall-clock benefit on the synth phase (fewer chapters to synthesize at all, each larger but more complete). |
+| **OP-25** | **Per-model timeout tuning via LangFuse data.** Post-run, use Langfuse's `scripts/kd_catalog_health.py` output to identify which models consistently burn their full 120s budget. Demote those (drop from catalog) OR lower their per-entry `timeout_s` to 60. Prevents 1200s outer timeouts from stacking on unresponsive entries. | P1 | ~10 LoC in `services/llm_chain.py` (adjust timeouts per findings) | Run-10 lost ch01/04/07 to 1200s outer-timeout cascades — OP-19 rescues them now, but preventing the timeout entirely is better than rescuing from it. |
+| **OP-26** | **`skip_below_threshold: bool` flag** on `CreateStudyRequest`. When true, below-threshold committed chapters ALSO write to full cache with a `best_effort=true` marker. Next run skips them unless user explicitly unsets. | P1 | ~10 LoC in router + cache.set_chapter | User feedback: re-running the same study currently re-synthesizes all below-threshold chapters (risk of worse output). Flag gives user control: "lock in Run-10 outputs, only retry the 3 sentinels" vs "retry everything hoping for better". |
+| **OP-14 (re-prioritized)** | **1-chapter canary before full Send() fan-out.** Synth the smallest chapter first; if it crashes, abort with clear error. | P1 | ~30 LoC | Would have caught Run-10's OP-21 curator crash (and Run-9's 3-tuple crash) at 1 wasted chapter instead of 8. Critical safety net. |
+| **OP-27** | **Flashcard quality review in audit.** Current `_audit_structured_output_refs` only checks code_refs distribution. Add a pass that validates flashcards: no repeated questions across cards, no Q==A (tautology), answer length ≥ 20 chars, no generic "What is X?" with one-word answer. Reject chapter if >20% of flashcards fail these gates. | P2 | ~30 LoC | Run-10's flashcards were never reviewed — they may be high-value OR stub-quality. Easy to add objective gates. |
+| **OP-28** | **Fence-count integrity gate in assembler.** Before writing chapter README to MinIO, count opening vs closing triple-backtick fences. If imbalanced, either trim trailing content OR append a closing fence. Reject if rebalance fails (chapter has a truly broken structure). | P2 | ~15 LoC | Run-10 ch08 had 33 closing fences vs 29 opening — rendered markdown breaks in viewers. |
+| **OP-29** | **Inline-code-backtick sanity.** Scan prose_md for `\`\`\`` patterns that escaped the fence-contamination audit. Current audit checks for `\`\`\`` at line start; inline ones slip through. | P3 | ~5 LoC | Catches edge case where LLM embeds fenced code in a markdown table or blockquote. Rare but nonzero rate in Run-10. |
+
+**Top-4 shipping order** for the highest material-quality impact:
+
+1. **OP-22** (~25 LoC, 10 min work) — immediate visible quality win; raw leaks gone from all future chapters
+2. **OP-23** (~50 LoC, 30 min work) — catches synth-quality drift early; fixes ch06-style zero-citation outputs
+3. **OP-28 + OP-29** (~20 LoC combined) — markdown hygiene on write; prevents rendering breaks
+4. **OP-26** (~10 LoC) — user control over below-threshold re-synth
+
+*Second wave — architectural (ship after first-wave data):*
+
+| # | Proposal | Effort | Est. impact |
+|---|---|---|---|
+| **OP-12** | **Commit-best-seen ALWAYS** — at Self-Refine end, commit the LEAST-BAD audit iter with DEBT flag. Never sentinel unless iter 0 produced literally no ChapterOutput at all | ~15 LoC (subsumes OP-6) | **Eliminates "0 graded iterations" sentinel class entirely.** Run-10 projected ≥8/11 committed |
+| **OP-13** | Auto-route chapters with >80 vault hashes to sub-chapter batching (per-chapter opt-in vs #12's global switch) | ~20 LoC on top of Tier 3 #12 | Converts 100+ hash failures (ch04/09/11) into successes |
+| **OP-14** | 1-chapter canary before full fan-out — synth the SMALLEST chapter first; if it crashes, abort Send() with clear error | ~30 LoC | Would have caught today's 3-tuple bug at 1 wasted chapter instead of 11. Safety net for future regressions |
+| **OP-15** | Partial cache `code_version_hash` invalidation — include git rev SHA (or module-level checksum) in partial state; invalidate on mismatch | ~10 LoC | Safe partial-cache resumes across code changes (avoids stale-schema bootstrap failures) |
+| **OP-16** | TextRank prose compression for files >5K tokens before synth | ~40 LoC (reuses `preview.py` TextRank) | 20-30% more hashes fit in budget; fewer >80-hash chapters |
+| **OP-17** | Grader sees audit report — pass `audit_summary` (missing / empty / leakage counts) into grader prompt alongside text | ~25 LoC | Better accept/refine decisions when audit is borderline |
+| **OP-18** | Adaptive iteration budget per chapter (≤30 hashes → 3, 30-80 → 5, >80 → 8, with wall-clock cap) | ~20 LoC | Better iter allocation; hard chapters get more refine budget |
+| **Tier 3 #12** | Sub-chapter synthesis batching (escalated from DEFERRED; Run-9 proves the bottleneck shifted) | ~150 LoC | Unblocks chapters with >100 vault hashes |
+
+**Priority ordering:**
+1. **OP-5** — single biggest SPEED win (MAP 30min → ~12min)
+2. **OP-12** — single biggest QUALITY win (subsumes OP-6, eliminates sentinel class)
+3. **OP-7** — compounds with OP-12 (early-stop + commit best-seen)
+4. **OP-9** — trivial, saves a class of sentinels
+5. **OP-14** — safety net for all future runs
+6. **OP-15** — safety for partial cache (must land before next partial-cache-resume run)
+7. **Tier 3 #12 + OP-13 + OP-16** — architectural batch for >80-hash chapter class
+8. **OP-8 / OP-10 / OP-11 / OP-17 / OP-18** — quality polish after the architectural fixes
+
+---
+
 ### ✅ Shipped on 2026-04-24 (Run-8 post-mortem + roadmap completion)
 
 **Run-8 RCA fixes** (9/9 chapters sentinel'd in a 72-min wipeout — root causes + fixes):

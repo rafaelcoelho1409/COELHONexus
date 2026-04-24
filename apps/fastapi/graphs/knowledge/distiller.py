@@ -493,19 +493,42 @@ class KnowledgeDistillerGraph:
         # RPM budget and produces 429 storms (Run-6 observed 172 rate-
         # limit retries in one study).
         #
-        # OP-1 (2026-04-24, post-Run-8): lowered 30 → 15. Run-8 evidence
-        # showed 30 parallel shards racing on the SAME cascade position
-        # (Zhipu glm-4.7-flash / Groq qwen3-32b) BEFORE any of them
-        # finished and wrote a cooldown marker to Redis. The circuit
-        # breaker "after N failures" can't distinguish 30 in-flight
-        # parallel failures from 30 sequential. Halving the burst size
-        # lets the cooldown cache bite earlier — cascade moves on to
-        # healthy entries sooner, total MAP wall-clock roughly unchanged.
-        MAP_SHARD_SEMAPHORE = _asyncio.Semaphore(15)
+        # Evolution:
+        #   - Tier 1 #4 (2026-04-23): sem=30. OK for Run-5/6/7.
+        #   - OP-1 (2026-04-24, post-Run-8): sem=15 to reduce burst-races
+        #     on rate-limited providers. Side effect in Run-9: individual
+        #     straggler shards (5-9 min each) pile up under the tight slot
+        #     count → MAP took 30 min vs Run-8's 10.
+        #   - OP-5 (2026-04-24, post-Run-9): sem=22 middle ground + a
+        #     per-shard 180s time-box inside the semaphore slot. Prevents
+        #     both burst-races (via bounded concurrency) AND long-tail
+        #     stragglers (via wait_for). A timed-out shard returns empty
+        #     ShardLabels so the overall pipeline advances — losing ~30
+        #     slugs is better than blowing 10 min on one stuck cascade.
+        MAP_SHARD_SEMAPHORE = _asyncio.Semaphore(22)
+        _MAP_SHARD_TIMEOUT_SECONDS = 180  # OP-5
 
         async def _label_shard_bounded(shard, shard_idx):
             async with MAP_SHARD_SEMAPHORE:
-                return await _label_shard(shard, shard_idx)
+                try:
+                    return await _asyncio.wait_for(
+                        _label_shard(shard, shard_idx),
+                        timeout = _MAP_SHARD_TIMEOUT_SECONDS,
+                    )
+                except _asyncio.TimeoutError:
+                    logger.warning(
+                        f"[planner][shard {shard_idx}/{len(shards)}] "
+                        f"exceeded {_MAP_SHARD_TIMEOUT_SECONDS}s time-box "
+                        f"— emitting empty ShardLabels so MAP advances "
+                        f"(slugs from this shard will be auto-parked to "
+                        f"unused_shard_slugs by downstream REDUCE)"
+                    )
+                    # ShardLabels(clusters=[], unused_shard_slugs=[...all slugs])
+                    # so the corpus still flows to the REDUCE fallback path.
+                    return ShardLabels(
+                        clusters = [],
+                        unused_shard_slugs = [slug for slug, _ in shard],
+                    )
 
         _shard_start = _asyncio.get_event_loop().time()
         shard_results: list[ShardLabels] = await _asyncio.gather(
@@ -746,6 +769,24 @@ class KnowledgeDistillerGraph:
         resume_from_iter: int = 0  # default cold start
         _REGRESSION_EPSILON = 0.01  # tolerance for grader noise
 
+        # OP-12 (2026-04-24, post-Run-9) — commit-best-seen always.
+        # Track the LEAST-BAD audit-failed iteration so we can commit it as
+        # best-effort if the Self-Refine loop exhausts its budget without
+        # any graded iter. Run-9 sentinel'd 6 chapters that each had a
+        # near-clean audit-failed iter (ch07: 2 empty at iter 4; ch09:
+        # 3 missing + 1 invented at iter 4; ch10: iter 1 clean except
+        # 1 empty, regressed to 44 issues later). With OP-12 those become
+        # "accepted below threshold with DEBT" instead of sentinels.
+        best_audit_iter: dict | None = None   # {"output": ChapterOutput, "assembled": str, "n_issues": int, "iteration": int}
+        # OP-7 (2026-04-24, post-Run-9) — audit-regression early-stop.
+        # Track per-iter total audit issue count so we can break out of the
+        # Self-Refine loop when the LLM starts drifting (iter N issues >
+        # 3× iter N-1 issues). Without this, ch10 went iter 1 (1 empty) →
+        # iter 2 (16 missing, an over-correction) → iter 3 (5 issues) →
+        # iter 4 (44 issues) — budget wasted and best-seen lost.
+        prev_n_issues: int | None = None
+        _AUDIT_REGRESSION_FACTOR = 3
+
         # 0b) Tier 3 #13 extension (2026-04-24) — per-iteration partial cache.
         # Run-8 lost chapters that reached real grader scores (0.71 / 0.73)
         # at iter 1 but died on later-iter cascade timeouts. Partial cache
@@ -860,6 +901,10 @@ class KnowledgeDistillerGraph:
                     duplicated_refs,
                     empty_sections,
                 ) = _audit_structured_output_refs(chapter_output, code_vault)
+                n_issues = (
+                    len(missing) + len(invented) + len(fence_sections)
+                    + len(duplicated_refs) + len(empty_sections)
+                )
                 if missing or invented or fence_sections or duplicated_refs or empty_sections:
                     logger.warning(
                         f"[synth][ch{chapter.number:02d}] iter {iteration} "
@@ -871,6 +916,49 @@ class KnowledgeDistillerGraph:
                         f"out of {len(code_vault)} vault hashes — "
                         f"forcing refine with targeted feedback"
                     )
+                    # OP-12: track least-bad audit-failed iter for best-effort
+                    # commit if Self-Refine budget exhausts without any graded
+                    # iter. Assemble markdown now so a later commit can skip
+                    # the assembly step entirely.
+                    try:
+                        assembled_audit_fail = _assemble_chapter_markdown(
+                            chapter_output, code_vault, chapter_title = chapter.title,
+                        )
+                    except Exception as _ae:
+                        assembled_audit_fail = None
+                    if assembled_audit_fail is not None and (
+                        best_audit_iter is None
+                        or n_issues < best_audit_iter["n_issues"]
+                    ):
+                        best_audit_iter = {
+                            "output": chapter_output,
+                            "assembled": assembled_audit_fail,
+                            "n_issues": n_issues,
+                            "iteration": iteration,
+                            "missing": missing,
+                            "invented": invented,
+                            "fence_sections": fence_sections,
+                            "duplicated_refs": duplicated_refs,
+                            "empty_sections": empty_sections,
+                        }
+                    # OP-7: audit-regression early-stop. If this iter is
+                    # dramatically worse than the previous iter's audit,
+                    # break early — the LLM is drifting (classic Self-Refine
+                    # over-correction, Huang 2024 §3.3). Commits whatever
+                    # best_audit_iter / best_synthesis we have so far.
+                    if (prev_n_issues is not None
+                            and prev_n_issues > 0
+                            and n_issues > _AUDIT_REGRESSION_FACTOR * prev_n_issues):
+                        logger.info(
+                            f"[synth][ch{chapter.number:02d}] iter {iteration} "
+                            f"audit REGRESSED {prev_n_issues} → {n_issues} "
+                            f"issues ({n_issues / max(1, prev_n_issues):.1f}× > "
+                            f"{_AUDIT_REGRESSION_FACTOR}× threshold); "
+                            f"stopping Self-Refine early"
+                        )
+                        prev_n_issues = n_issues
+                        break
+                    prev_n_issues = n_issues
                     adjustments.append(
                         _format_structured_output_feedback(
                             missing,
@@ -882,6 +970,9 @@ class KnowledgeDistillerGraph:
                         )
                     )
                     continue
+                # Audit passed — clear regression tracker so next iter
+                # doesn't compare against a stale value.
+                prev_n_issues = 0
                 # 1c. Deterministic assembly — build the final chapter markdown
                 #     from ChapterOutput + vault. Code fences come from the
                 #     vault verbatim; prose comes from the LLM. Downstream
@@ -989,6 +1080,61 @@ class KnowledgeDistillerGraph:
                         f"— retrying with {len(adjustments)} total adjustment(s)"
                     )
             # 4. Commit BEST — argmax over iterations, not the last.
+            # OP-12 (2026-04-24, post-Run-9): if no iter reached the grader
+            # (best_synthesis/best_eval still None) BUT at least one iter
+            # produced a valid ChapterOutput we could assemble, commit that
+            # least-bad audit-failed iter as a best-effort with a DEBT flag.
+            # Rationale: Run-9 sentinel'd 6 chapters that each had a viable
+            # near-clean audit-failed iter; shipping those as "below-threshold
+            # + DEBT" is strictly better than shipping nothing.
+            if (best_synthesis is None or best_eval is None) and best_audit_iter is not None:
+                logger.warning(
+                    f"[synth][ch{chapter.number:02d}] OP-12 RESCUE — no graded "
+                    f"iter but audit-failed iter {best_audit_iter['iteration']} "
+                    f"has only {best_audit_iter['n_issues']} issue(s) "
+                    f"(missing={len(best_audit_iter['missing'])} / "
+                    f"invented={len(best_audit_iter['invented'])} / "
+                    f"empty={len(best_audit_iter['empty_sections'])}). "
+                    f"Committing as best-effort with DEBT flag."
+                )
+                best_synthesis = ChapterSynthesis(
+                    content = best_audit_iter["assembled"],
+                    challenges = best_audit_iter["output"].challenges,
+                    flashcards = best_audit_iter["output"].flashcards,
+                )
+                # Synthesize a minimal GraderEvaluation reflecting the audit
+                # state so downstream assembler/critic see something coherent.
+                # Score is 0.0 (below threshold) → chapter will be re-graded
+                # on next run anyway via the sentinel-retry cache path.
+                from schemas.knowledge.agents import Issue as _Issue
+                best_eval = GraderEvaluation(
+                    signal_to_noise = 0.0,
+                    assumption_match = 0.0,
+                    job_alignment = 0.0,
+                    citation_integrity = 0.0,
+                    code_density = 0.0,
+                    portfolio_synergy = 0.0,
+                    complexity_appropriate = 0.0,
+                    market_analysis = 0.0,
+                    code_preservation_ratio = max(
+                        0.0,
+                        1.0 - (len(best_audit_iter["missing"]) + len(best_audit_iter["invented"]))
+                            / max(1, len(code_vault)),
+                    ),
+                    weighted_score = 0.0,
+                    specific_issues = [_Issue(
+                        span_quote = best_audit_iter["assembled"][:200],
+                        dimension = "signal_to_noise",
+                        suggestion = (
+                            f"OP-12 best-effort commit — audit had "
+                            f"{best_audit_iter['n_issues']} unresolved issues "
+                            f"(missing={len(best_audit_iter['missing'])}, "
+                            f"empty={len(best_audit_iter['empty_sections'])}). "
+                            f"Regenerate on next run."
+                        ),
+                    )],
+                    action = "refine",
+                )
             if best_synthesis is None or best_eval is None:
                 raise RuntimeError(
                     f"Chapter {chapter.number} produced no synthesis after "
@@ -1013,12 +1159,90 @@ class KnowledgeDistillerGraph:
                     f"failed (non-fatal): {e}"
                 )
         except RuntimeError as terminal_error:
-            # Tier 0d-6 sentinel: the fallback chain is exhausted OR every
-            # iteration failed the preservation gate. Emit a DEBT-carrying
-            # ChapterResult so LangGraph's operator.add reducer still merges
-            # cleanly, sibling workers finish, and curator / critic /
-            # assembler can detect-and-skip (curator and assembler already
-            # null-guard missing READMEs; DEBT.md surfaces the failure).
+            # OP-19 (2026-04-24, post-Run-10) — before surrendering to the
+            # sentinel path, check whether we have a viable best_audit_iter
+            # from a PRIOR iteration of the same chapter. Run-10 lost ch07,
+            # ch01, ch04 to this exact edge case: early iters produced near-
+            # clean audit-failed ChapterOutputs (18-29 issues) but a later
+            # iter's synth call hit the 1200s outer timeout, which throws,
+            # which bypasses the post-loop OP-12 rescue and drops straight
+            # to sentinel. OP-19 duplicates the rescue check here so a synth
+            # timeout / cascade exhaustion doesn't discard good earlier work.
+            if best_synthesis is None and best_audit_iter is not None:
+                logger.warning(
+                    f"[synth][ch{chapter.number:02d}] OP-19 RESCUE — synth "
+                    f"exception bypassed post-loop; recovering best_audit_iter "
+                    f"{best_audit_iter['iteration']} with "
+                    f"{best_audit_iter['n_issues']} issue(s) "
+                    f"(missing={len(best_audit_iter['missing'])} / "
+                    f"invented={len(best_audit_iter['invented'])} / "
+                    f"empty={len(best_audit_iter['empty_sections'])}). "
+                    f"Committing as best-effort with DEBT flag; synth error was: "
+                    f"{str(terminal_error)[:160]}"
+                )
+                best_synthesis = ChapterSynthesis(
+                    content = best_audit_iter["assembled"],
+                    challenges = best_audit_iter["output"].challenges,
+                    flashcards = best_audit_iter["output"].flashcards,
+                )
+                from schemas.knowledge.agents import Issue as _Issue
+                best_eval = GraderEvaluation(
+                    signal_to_noise = 0.0,
+                    assumption_match = 0.0,
+                    job_alignment = 0.0,
+                    citation_integrity = 0.0,
+                    code_density = 0.0,
+                    portfolio_synergy = 0.0,
+                    complexity_appropriate = 0.0,
+                    market_analysis = 0.0,
+                    code_preservation_ratio = max(
+                        0.0,
+                        1.0 - (len(best_audit_iter["missing"]) + len(best_audit_iter["invented"]))
+                            / max(1, len(code_vault)),
+                    ),
+                    weighted_score = 0.0,
+                    specific_issues = [_Issue(
+                        span_quote = best_audit_iter["assembled"][:200],
+                        dimension = "signal_to_noise",
+                        suggestion = (
+                            f"OP-19 best-effort commit after synth exception "
+                            f"({best_audit_iter['n_issues']} audit issues in iter "
+                            f"{best_audit_iter['iteration']}). "
+                            f"Regenerate on next run."
+                        ),
+                    )],
+                    action = "refine",
+                )
+                # Fall through to the normal post-loop commit path by
+                # mutating iteration so the score_trace log uses a sensible
+                # number, then RAISING OUT of the except handler into the
+                # success branch is not possible — so we inline the commit
+                # logic here.
+                iteration = best_audit_iter["iteration"]
+                # Partial-cache behavior: keep it (next run may still want
+                # to refine), same as the normal sentinel path previously did.
+                score_trace = f"(audit-rescue at iter {best_audit_iter['iteration']})"
+                logger.info(
+                    f"[synth][ch{chapter.number:02d}] best score=0.00 via OP-19 "
+                    f"(0 graded iters; trajectory: {score_trace})"
+                )
+                result = await _write_chapter_artifacts(
+                    storage, study_root, chapter.number, best_synthesis
+                )
+                result["score"] = 0.0
+                result["iterations"] = 0
+                result["debt"] = {
+                    "reason": "op19_rescue_audit_failed_but_close",
+                    "synth_error": str(terminal_error),
+                    "audit_issues": best_audit_iter["n_issues"],
+                    "missing": len(best_audit_iter["missing"]),
+                    "invented": len(best_audit_iter["invented"]),
+                    "empty": len(best_audit_iter["empty_sections"]),
+                    "rescued_iter": best_audit_iter["iteration"],
+                }
+                return {"synthesis_results": [result]}
+
+            # True sentinel path — no best_audit_iter either, truly no output.
             logger.error(
                 f"[synth][ch{chapter.number:02d}] TERMINAL FAILURE at iter "
                 f"{iteration} after {len(history)} graded iteration(s) — "
@@ -1186,7 +1410,36 @@ class KnowledgeDistillerGraph:
                         f"[curator][ch{n:02d}] curation failed ({e}); keeping original"
                     )
                     return False
-                curated_vaulted = resp.content if hasattr(resp, "content") else str(resp)
+                # OP-21 (2026-04-24, post-Run-10) — normalize LLM response
+                # content to a plain string. Some providers (notably Mistral
+                # with reasoning tokens, and Claude-style content-block
+                # responses) return `resp.content` as a list of blocks:
+                #   [{"type": "text", "text": "..."}, {"type": "thinking", ...}]
+                # The downstream regex `_audit_sentinel_roundtrip` needs a
+                # string. Without this flattener, Run-10 crashed on ch09's
+                # curator pass with `TypeError: expected string or bytes-like
+                # object, got 'list'`. Safe fallback: coerce anything that
+                # isn't already a string to text.
+                raw_content = resp.content if hasattr(resp, "content") else resp
+                if isinstance(raw_content, list):
+                    parts: list[str] = []
+                    for block in raw_content:
+                        if isinstance(block, str):
+                            parts.append(block)
+                        elif isinstance(block, dict):
+                            # Most SDKs emit {"type": "text", "text": "..."}
+                            # Keep only text-like blocks; drop "thinking" /
+                            # "tool_use" blocks that don't belong in prose.
+                            btype = block.get("type", "")
+                            if btype in ("text", "output_text") or btype == "":
+                                parts.append(str(block.get("text", "")))
+                        else:
+                            parts.append(str(block))
+                    curated_vaulted = "\n".join(p for p in parts if p)
+                elif isinstance(raw_content, str):
+                    curated_vaulted = raw_content
+                else:
+                    curated_vaulted = str(raw_content)
                 missing, unexpected = _audit_sentinel_roundtrip(
                     curated_vaulted, code_vault
                 )
@@ -1216,8 +1469,10 @@ class KnowledgeDistillerGraph:
                 )
                 return True
 
+        # `_load_all_chapters` returns `(number, title, body)` — 3-tuples.
+        # Ignore title (used only by the critic's deterministic coverage scan).
         results = await asyncio.gather(
-            *(_curate_one(n, c) for n, c in chapters),
+            *(_curate_one(n, body) for n, _title, body in chapters),
             return_exceptions = False,
         )
         curated_count = sum(1 for r in results if r)
