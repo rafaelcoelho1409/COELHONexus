@@ -444,6 +444,8 @@ async def create_study(
             "github_repo": payload.github_repo,
             "github_default_branch": payload.github_default_branch,
             "repo_url": payload.repo_url,
+            # Tier 4 #16: classical-only preview mode short-circuit
+            "preview": payload.preview,
         },
         task_id = study_id,
         # Safety net: discard if the message has been sitting in the broker

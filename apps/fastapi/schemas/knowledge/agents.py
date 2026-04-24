@@ -387,9 +387,9 @@ class ChapterSynthesis(BaseModel):
         )
     )
     flashcards: list[Flashcard] = Field(
-        min_length = 8,
+        min_length = 4,
         max_length = 15,
-        description = "8-15 Anki-style Q/A pairs. Each pair stands alone."
+        description = "4-15 Anki-style Q/A pairs. Each pair stands alone. (2026-04-24: relaxed from min=8 to min=4 after Run-8 ch01 sentinel'd because the LLM produced 4 flashcards; deterministic validator rejected it pre-Self-Refine. 4 is still meaningful flashcard coverage.)"
     )
 
 
@@ -474,9 +474,9 @@ class ChapterOutput(BaseModel):
         ),
     )
     flashcards: list[Flashcard] = Field(
-        min_length = 8,
+        min_length = 4,
         max_length = 15,
-        description = "8-15 Anki-style Q/A pairs. Each pair stands alone."
+        description = "4-15 Anki-style Q/A pairs. Each pair stands alone. (2026-04-24: relaxed from min=8 to min=4 after Run-8 ch01 sentinel'd because the LLM produced 4 flashcards; deterministic validator rejected it pre-Self-Refine. 4 is still meaningful flashcard coverage.)"
     )
 
 

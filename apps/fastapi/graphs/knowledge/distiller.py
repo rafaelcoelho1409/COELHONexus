@@ -39,6 +39,7 @@ Pipeline shape:
 import asyncio
 import logging
 from typing import Optional
+from pydantic import ValidationError as PydanticValidationError
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.types import Send
@@ -47,6 +48,7 @@ from schemas.knowledge.agents import (
     ChapterPlan,
     ChapterSynthesis,
     CriticAssessment,
+    Flashcard,
     GraderEvaluation,
     ShardLabels,
 )
@@ -70,6 +72,8 @@ from services.knowledge.storage import MinIOStudyStorage
 from graphs.knowledge.helpers import (
     # Step 5
     _build_corpus_summary,
+    _dedup_chapter_files,
+    _filter_noise_files,
     _maybe_split_monolith,
     _read_raw_prefix,
     _validate_plan,
@@ -258,6 +262,32 @@ class KnowledgeDistillerGraph:
         if not entries:
             raise FileNotFoundError(f"research/raw/ is empty at prefix {study_root!r}")
         entries = await _maybe_split_monolith(storage, study_root, entries)
+        # Tier 4 #17 (2026-04-24) — noise pre-filter before MAP.
+        # Drops obvious non-pedagogical slugs (changelog / release-notes /
+        # stubs with <200 chars of prose / files with ~0 code-to-prose ratio)
+        # BEFORE MAP shards burn LLM calls on them. Typical effect: 5-15%
+        # fewer shards, zero pedagogical loss.
+        before_filter = len(entries)
+        entries = _filter_noise_files(entries)
+        filtered = before_filter - len(entries)
+        if filtered > 0:
+            logger.info(
+                f"[planner] noise pre-filter dropped {filtered}/{before_filter} "
+                f"entries ({filtered * 100 // max(1, before_filter)}%)"
+            )
+        # Tier 2 #6 (2026-04-24) — code-aware near-dup filter.
+        # Drops files that share >85% prose AND have identical code block
+        # sets (keeps the longer of the pair). A single code-block difference
+        # means the pair is NOT a dup — protects tutorial-vs-reference pairs
+        # with meaningful code variations. Defensive fallback on any error.
+        before_dedup = len(entries)
+        entries = _dedup_chapter_files(entries)
+        deduped = before_dedup - len(entries)
+        if deduped > 0:
+            logger.info(
+                f"[planner] code-aware dedup dropped {deduped}/{before_dedup} "
+                f"near-duplicate entries ({deduped * 100 // max(1, before_dedup)}%)"
+            )
         slugs = [slug for slug, _ in entries]
         manifest_hash = compute_manifest_hash(slugs)
 
@@ -458,13 +488,20 @@ class KnowledgeDistillerGraph:
             return parsed
 
         import asyncio as _asyncio
-        # Tier 1 #4 (2026-04-23) — MAP inter-shard semaphore. Unbounded
-        # asyncio.gather(103 shards) saturates NIM's 40 RPM/model budget
-        # and produces a cascade of 429s (Run-6 observed 172 rate-limit
-        # retries in one study). Semaphore=30 lets the primary model serve
-        # ~30 concurrent shards while queued shards wait, dramatically
-        # reducing retry pressure on the provider + token waste on our side.
-        MAP_SHARD_SEMAPHORE = _asyncio.Semaphore(30)
+        # Tier 1 #4 (2026-04-23) — MAP inter-shard semaphore.
+        # Unbounded asyncio.gather(103 shards) saturates any free-tier
+        # RPM budget and produces 429 storms (Run-6 observed 172 rate-
+        # limit retries in one study).
+        #
+        # OP-1 (2026-04-24, post-Run-8): lowered 30 → 15. Run-8 evidence
+        # showed 30 parallel shards racing on the SAME cascade position
+        # (Zhipu glm-4.7-flash / Groq qwen3-32b) BEFORE any of them
+        # finished and wrote a cooldown marker to Redis. The circuit
+        # breaker "after N failures" can't distinguish 30 in-flight
+        # parallel failures from 30 sequential. Halving the burst size
+        # lets the cooldown cache bite earlier — cascade moves on to
+        # healthy entries sooner, total MAP wall-clock roughly unchanged.
+        MAP_SHARD_SEMAPHORE = _asyncio.Semaphore(15)
 
         async def _label_shard_bounded(shard, shard_idx):
             async with MAP_SHARD_SEMAPHORE:
@@ -706,7 +743,51 @@ class KnowledgeDistillerGraph:
         history: list[tuple[ChapterSynthesis, GraderEvaluation]] = []  # graded iterations only
         best_synthesis: ChapterSynthesis | None = None
         best_eval: GraderEvaluation | None = None
+        resume_from_iter: int = 0  # default cold start
         _REGRESSION_EPSILON = 0.01  # tolerance for grader noise
+
+        # 0b) Tier 3 #13 extension (2026-04-24) — per-iteration partial cache.
+        # Run-8 lost chapters that reached real grader scores (0.71 / 0.73)
+        # at iter 1 but died on later-iter cascade timeouts. Partial cache
+        # restores the best-so-far synthesis + accumulated adjustments +
+        # iteration counter, so the next run resumes at iter N instead of
+        # starting fresh at iter 0. Same identity check as full cache — a
+        # replan that changes chapter title or assigned files invalidates.
+        partial = await cache.get_chapter_partial(
+            framework = framework,
+            version = version,
+            profile_hash = profile_hash,
+            chapter_num = chapter.number,
+            chapter_title = chapter.title,
+            assigned_files = chapter.assigned_files,
+        )
+        if partial is not None:
+            try:
+                best_synthesis = ChapterSynthesis(
+                    content = partial["best_synthesis_md"],
+                    challenges = partial["best_challenges"],
+                    flashcards = [
+                        Flashcard(**f) for f in partial["best_flashcards_json"]
+                    ],
+                )
+                best_eval = GraderEvaluation(**partial["best_evaluation_json"])
+                adjustments = list(partial.get("adjustments") or [])
+                resume_from_iter = int(partial["iteration_reached"])
+                logger.info(
+                    f"[synth][ch{chapter.number:02d}] PARTIAL CACHE HIT — "
+                    f"resuming at iter {resume_from_iter} "
+                    f"(best_score so far = {best_eval.weighted_score:.2f}, "
+                    f"{len(adjustments)} adjustment(s) preserved)"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[synth][ch{chapter.number:02d}] partial cache decode "
+                    f"failed ({e}); falling back to cold start"
+                )
+                best_synthesis = None
+                best_eval = None
+                adjustments = []
+                resume_from_iter = 0
         # Tier 0d-6: isolate per-chapter synth failures. If the fallback chain
         # is truly exhausted (every synth model returned None / every grader
         # model failed) OR no graded iteration completes (every iter 0..N-1
@@ -714,9 +795,9 @@ class KnowledgeDistillerGraph:
         # emit a DEBT sentinel. Sibling chapters in the Send() fan-out must
         # keep running — a single chapter's LLM-side bad luck should not kill
         # the whole study.
-        iteration = -1  # sentinel when the loop body never executes
+        iteration = resume_from_iter - 1  # pre-loop sentinel
         try:
-            for iteration in range(MAX_SELF_REFINE_ITERATIONS):
+            for iteration in range(resume_from_iter, MAX_SELF_REFINE_ITERATIONS):
                 # 1. Synthesize — Tier 3 #21 structured output.
                 #    Returns a ChapterOutput (sections + challenges + flashcards),
                 #    NOT free-form markdown. The LLM can't emit fences in prose_md
@@ -733,6 +814,28 @@ class KnowledgeDistillerGraph:
                         iteration = iteration,
                         study_id = payload.get("study_id"),
                     )
+                except PydanticValidationError as ve:
+                    # 2026-04-24 (Run-8 ch01): LLM produced structured output
+                    # that violated a Pydantic constraint (e.g., flashcards
+                    # min_length). Treat as a Self-Refine signal instead of
+                    # terminal — append targeted feedback and continue so
+                    # the next iteration gets a chance to fix it.
+                    ve_msg = "; ".join(
+                        f"{'.'.join(str(p) for p in err.get('loc', []))}: {err.get('msg', '')}"
+                        for err in ve.errors()[:5]
+                    )
+                    logger.warning(
+                        f"[synth][ch{chapter.number:02d}] iter {iteration} "
+                        f"Pydantic schema violation — forcing refine: {ve_msg}"
+                    )
+                    adjustments.append(
+                        "SCHEMA VIOLATION in prior output:\n"
+                        f"{ve_msg}\n\n"
+                        "Your next attempt MUST satisfy every field's "
+                        "constraints (min_length, max_length, required fields, "
+                        "etc.) — read the schema's field descriptions carefully."
+                    )
+                    continue
                 except Exception as e:
                     raise RuntimeError(
                         f"Synthesizer failed on chapter {chapter.number} iter {iteration}: {e}"
@@ -818,6 +921,35 @@ class KnowledgeDistillerGraph:
                 if best_eval is None or evaluation.weighted_score > best_eval.weighted_score:
                     best_synthesis = synthesis
                     best_eval = evaluation
+                # Tier 3 #13 (2026-04-24) — persist partial progress after every
+                # graded iteration so a later-iter cascade timeout / cancel
+                # doesn't destroy the `best_*` work. Next run resumes from
+                # `iteration + 1` with the same `adjustments` + `best_*`.
+                # Best-effort; storage hiccup shouldn't abort synthesis.
+                try:
+                    await cache.set_chapter_partial(
+                        framework = framework,
+                        version = version,
+                        profile_hash = profile_hash,
+                        chapter_num = chapter.number,
+                        chapter_title = chapter.title,
+                        assigned_files = chapter.assigned_files,
+                        iteration_reached = iteration + 1,
+                        best_score = best_eval.weighted_score,
+                        best_synthesis_md = best_synthesis.content,
+                        best_challenges = best_synthesis.challenges,
+                        best_flashcards_json = [
+                            f.model_dump() for f in best_synthesis.flashcards
+                        ],
+                        best_evaluation_json = best_eval.model_dump(),
+                        adjustments = adjustments,
+                        history_scores = [e.weighted_score for _, e in history],
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[synth][ch{chapter.number:02d}] partial cache persist "
+                        f"failed (continuing): {e}"
+                    )
                 # 3. Decide
                 accept_threshold = user_profile.acceptance_threshold
                 if evaluation.action == "accept" or evaluation.weighted_score >= accept_threshold:
@@ -861,6 +993,24 @@ class KnowledgeDistillerGraph:
                 raise RuntimeError(
                     f"Chapter {chapter.number} produced no synthesis after "
                     f"{MAX_SELF_REFINE_ITERATIONS} iterations"
+                )
+            # Tier 3 #13 (2026-04-24) — normal completion reached (whether
+            # above- or below-threshold). Clear the partial cache — the
+            # next run either hits the full-accept cache (if above) or
+            # starts fresh (if below), not resumes mid-refine.
+            # NB: on the sentinel path below, we DON'T clear — next run
+            # needs to resume to have a shot at finishing.
+            try:
+                await cache.clear_chapter_partial(
+                    framework = framework,
+                    version = version,
+                    profile_hash = profile_hash,
+                    chapter_num = chapter.number,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[synth][ch{chapter.number:02d}] partial cache clear "
+                    f"failed (non-fatal): {e}"
                 )
         except RuntimeError as terminal_error:
             # Tier 0d-6 sentinel: the fallback chain is exhausted OR every
@@ -998,70 +1148,79 @@ class KnowledgeDistillerGraph:
         tone_block = build_tone_block(user_profile)
 
         chain = CURATOR_PROMPT | curator_llm
-        curated_count = 0
-        for n, content in chapters:
-            # Tier 0a: vault code blocks before the curator LLM call so the
-            # curator can rewrite prose freely while code is physically
-            # unreachable by its token generator. Tier 0c: any integrity
-            # failure on the curator output → keep original (curator is
-            # best-effort style normalization, not a content gate).
-            try:
-                vaulted_content, code_vault = _vault_code_blocks(content)
-            except ValueError as e:
-                logger.warning(
-                    f"[curator][ch{n:02d}] vault collision ({e}); "
-                    f"keeping original"
-                )
-                continue
-            try:
-                resp = await chain.ainvoke({
-                    "chapter_number": n,
-                    "framework": framework,
-                    "tone_block": tone_block,
-                    "glossary": glossary_str,
-                    "chapter_content": vaulted_content,
-                })
-            except Exception as e:
-                # Best-effort: if one chapter's curation fails, keep the original
-                # and move on. Don't crash the whole study.
-                logger.warning(
-                    f"[curator][ch{n:02d}] curation failed ({e}); keeping original"
-                )
-                continue
-            curated_vaulted = resp.content if hasattr(resp, "content") else str(resp)
-            # Integrity check: every sentinel must survive curator rewrite.
-            missing, unexpected = _audit_sentinel_roundtrip(
-                curated_vaulted, code_vault
-            )
-            if missing or unexpected:
-                logger.warning(
-                    f"[curator][ch{n:02d}] preservation FAILED "
-                    f"({len(missing)} missing, {len(unexpected)} unexpected "
-                    f"of {len(code_vault)} vaulted); keeping original"
-                )
-                continue
-            curated = _restore_code_blocks(curated_vaulted, code_vault)
-            # Safety: if curator returned something dramatically shorter than the
-            # original, it probably refused/truncated — fall back to original.
-            if len(curated.strip()) < 0.5 * len(content.strip()):
-                logger.warning(
-                    f"[curator][ch{n:02d}] output shrank drastically "
-                    f"({len(curated)} < 0.5×{len(content)}); keeping original"
-                )
-                continue
-            # Write back to the same MinIO key
-            await storage.write(
-                f"{study_root}/chapter{n:02d}/README.md",
-                curated.strip() + "\n",
-                content_type = "text/markdown",
-            )
-            curated_count += 1
-            logger.info(
-                f"[curator][ch{n:02d}] normalized "
-                f"({len(content)}B → {len(curated)}B, "
-                f"{len(code_vault)} code blocks preserved)"
-            )
 
+        # Tier 2 #8 (2026-04-24) — parallel curator over chapters.
+        # Was sequential (~10 min for 9 chapters on GLM-5.1); with
+        # Semaphore(2) = 2 concurrent chapters we halve wall-clock
+        # without overloading rate limits (Router cascades on 429 anyway).
+        # Same single pinned-style model is still used per chapter, just
+        # overlapped — style consistency is per-chapter, not per-study.
+        _CURATOR_SEMAPHORE = asyncio.Semaphore(2)
+
+        async def _curate_one(n: int, content: str) -> bool:
+            """Curate one chapter. Returns True on successful write-back."""
+            async with _CURATOR_SEMAPHORE:
+                # Tier 0a: vault code blocks before the curator LLM call so the
+                # curator can rewrite prose freely while code is physically
+                # unreachable by its token generator. Tier 0c: any integrity
+                # failure on the curator output → keep original (curator is
+                # best-effort style normalization, not a content gate).
+                try:
+                    vaulted_content, code_vault = _vault_code_blocks(content)
+                except ValueError as e:
+                    logger.warning(
+                        f"[curator][ch{n:02d}] vault collision ({e}); "
+                        f"keeping original"
+                    )
+                    return False
+                try:
+                    resp = await chain.ainvoke({
+                        "chapter_number": n,
+                        "framework": framework,
+                        "tone_block": tone_block,
+                        "glossary": glossary_str,
+                        "chapter_content": vaulted_content,
+                    })
+                except Exception as e:
+                    logger.warning(
+                        f"[curator][ch{n:02d}] curation failed ({e}); keeping original"
+                    )
+                    return False
+                curated_vaulted = resp.content if hasattr(resp, "content") else str(resp)
+                missing, unexpected = _audit_sentinel_roundtrip(
+                    curated_vaulted, code_vault
+                )
+                if missing or unexpected:
+                    logger.warning(
+                        f"[curator][ch{n:02d}] preservation FAILED "
+                        f"({len(missing)} missing, {len(unexpected)} unexpected "
+                        f"of {len(code_vault)} vaulted); keeping original"
+                    )
+                    return False
+                curated = _restore_code_blocks(curated_vaulted, code_vault)
+                if len(curated.strip()) < 0.5 * len(content.strip()):
+                    logger.warning(
+                        f"[curator][ch{n:02d}] output shrank drastically "
+                        f"({len(curated)} < 0.5×{len(content)}); keeping original"
+                    )
+                    return False
+                await storage.write(
+                    f"{study_root}/chapter{n:02d}/README.md",
+                    curated.strip() + "\n",
+                    content_type = "text/markdown",
+                )
+                logger.info(
+                    f"[curator][ch{n:02d}] normalized "
+                    f"({len(content)}B → {len(curated)}B, "
+                    f"{len(code_vault)} code blocks preserved)"
+                )
+                return True
+
+        results = await asyncio.gather(
+            *(_curate_one(n, c) for n, c in chapters),
+            return_exceptions = False,
+        )
+        curated_count = sum(1 for r in results if r)
         logger.info(
             f"[curator] pass complete — {curated_count}/{len(chapters)} "
             f"chapters rewritten for style consistency"

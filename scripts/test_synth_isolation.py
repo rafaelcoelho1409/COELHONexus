@@ -62,8 +62,16 @@ class _FakeStorage:
 
 
 class _FakeCache:
-    """Cache miss for every lookup."""
+    """Cache miss for every lookup. Tier 3 #13 partial stubs added 2026-04-24."""
     async def get_chapter(self, **_kwargs):
+        return None
+    async def get_chapter_partial(self, **_kwargs):
+        return None
+    async def set_chapter_partial(self, **_kwargs):
+        return None
+    async def clear_chapter_partial(self, **_kwargs):
+        return None
+    async def set_chapter(self, **_kwargs):
         return None
 
 

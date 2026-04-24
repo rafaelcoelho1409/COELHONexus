@@ -820,3 +820,147 @@ class StudyCache:
         logger.info(
             f"[cache] wrote chapter cache {prefix} (score={score:.2f})"
         )
+
+    # =========================================================================
+    # Tier 3 #13 extension — per-iteration partial cache (2026-04-24)
+    # =========================================================================
+    # Rationale. The full-accept cache above only fires when a chapter
+    # reaches `action="accept"` OR hits MAX_SELF_REFINE_ITERATIONS. Run-8
+    # showed the pathology: ch08 reached iter 1 with grader score=0.71
+    # (real progress) and ch09 reached iter 1 with score=0.73 — both lost
+    # to 600s cascade timeout at later iterations. On the next run those
+    # chapters restart at iter 0 with zero context.
+    #
+    # Partial cache stores everything a synth node needs to resume mid-
+    # Self-Refine: the best assembled synthesis so far, its grader
+    # evaluation, the accumulated adjustments, and the iteration counter.
+    # A subsequent run skips forward to the next unfinished iteration,
+    # reusing the best-seen synthesis as the fallback if later iterations
+    # also fail.
+    #
+    # Key: `_cache/synthesis_partial/{framework}/{version}/{phash}/chNN/state.json`
+    # Invalidated when (title, assigned_files) differ — same identity check
+    # as the full cache.
+    def _synth_partial_prefix(
+        self,
+        framework: str,
+        version: str | None,
+        profile_hash: str,
+        chapter_num: int) -> str:
+        return (
+            f"_cache/synthesis_partial/{_slug(framework)}/{_version_slug(version)}/"
+            f"{profile_hash}/chapter{chapter_num:02d}"
+        )
+
+    async def get_chapter_partial(
+        self,
+        framework: str,
+        version: str | None,
+        profile_hash: str,
+        chapter_num: int,
+        chapter_title: str,
+        assigned_files: list[str]) -> Optional[dict]:
+        """
+        Return a partial-progress dict or None if no usable partial state
+        exists. Schema:
+          {
+            "iteration_reached": int,    # next iter to attempt
+            "best_score": float,
+            "best_synthesis_md": str,
+            "best_challenges": str,
+            "best_flashcards_json": list,  # serialized Flashcard list
+            "best_evaluation_json": dict,  # serialized GraderEvaluation
+            "adjustments": list[str],
+            "history_scores": list[float],
+          }
+        Freshness + identity match required; corrupted/mismatched reads
+        return None defensively (caller falls back to iter 0 cold start).
+        """
+        prefix = self._synth_partial_prefix(framework, version, profile_hash, chapter_num)
+        state_key = f"{prefix}/state.json"
+        if not await self.storage.exists(state_key):
+            return None
+        try:
+            body = await self.storage.read_text(state_key)
+            data = json.loads(body)
+        except Exception as e:
+            logger.warning(f"[cache] partial read failed at {state_key}: {e}")
+            return None
+        # Identity check — same rules as full cache
+        identity = data.get("identity") or {}
+        if identity.get("title") != chapter_title:
+            return None
+        if sorted(identity.get("assigned_files") or []) != sorted(assigned_files):
+            return None
+        # Freshness — reuse full-cache TTL logic via CacheState proxy
+        cached_at = data.get("cached_at")
+        if not cached_at:
+            return None
+        try:
+            dt = datetime.fromisoformat(cached_at)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo = timezone.utc)
+            age = (datetime.now(timezone.utc) - dt).total_seconds()
+            if age > self._ttl_seconds:
+                return None
+        except Exception:
+            return None
+        return data
+
+    async def set_chapter_partial(
+        self,
+        framework: str,
+        version: str | None,
+        profile_hash: str,
+        chapter_num: int,
+        chapter_title: str,
+        assigned_files: list[str],
+        iteration_reached: int,
+        best_score: float,
+        best_synthesis_md: str,
+        best_challenges: str,
+        best_flashcards_json: list,
+        best_evaluation_json: dict,
+        adjustments: list[str],
+        history_scores: list[float]) -> None:
+        """Persist partial Self-Refine progress. Write-through, best-effort."""
+        prefix = self._synth_partial_prefix(framework, version, profile_hash, chapter_num)
+        state_key = f"{prefix}/state.json"
+        payload = {
+            "iteration_reached": iteration_reached,
+            "best_score": best_score,
+            "best_synthesis_md": best_synthesis_md,
+            "best_challenges": best_challenges,
+            "best_flashcards_json": best_flashcards_json,
+            "best_evaluation_json": best_evaluation_json,
+            "adjustments": adjustments,
+            "history_scores": history_scores,
+            "identity": {
+                "title": chapter_title,
+                "assigned_files": sorted(assigned_files),
+            },
+            "cached_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            await self.storage.write(
+                state_key,
+                json.dumps(payload, indent = 2),
+                content_type = "application/json",
+            )
+        except Exception as e:
+            logger.warning(f"[cache] partial write failed at {state_key}: {e}")
+
+    async def clear_chapter_partial(
+        self,
+        framework: str,
+        version: str | None,
+        profile_hash: str,
+        chapter_num: int) -> None:
+        """Drop partial state — called after a successful accept writes the full cache."""
+        prefix = self._synth_partial_prefix(framework, version, profile_hash, chapter_num)
+        state_key = f"{prefix}/state.json"
+        try:
+            if await self.storage.exists(state_key):
+                await self.storage.delete(state_key)
+        except Exception as e:
+            logger.warning(f"[cache] partial clear failed at {state_key}: {e}")

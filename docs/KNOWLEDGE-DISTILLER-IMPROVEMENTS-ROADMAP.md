@@ -883,6 +883,57 @@ If `citation_integrity < 0.5`, skip scoring the other 7 dimensions — straight 
 
 ## Suggested sprint order (revised)
 
+### ✅ Shipped on 2026-04-24 (Run-8 post-mortem + roadmap completion)
+
+**Run-8 RCA fixes** (9/9 chapters sentinel'd in a 72-min wipeout — root causes + fixes):
+
+| Failure mode (count) | Fix shipped |
+|---|---|
+| **600s outer timeout exhausted mid-cascade** (6/9) | Per-entry timeouts uniformly capped at **120s** in `services/llm_chain.py` (was 300s on NIM, 180s on Mistral); outer timeout raised **600s → 1200s** in `_invoke_structured_with_fallback`. A 10-entry cold cascade now fits the outer budget by construction. |
+| **SambaNova `APIError: "Payment method required"`** (2/9) | Both remaining SambaNova entries (DeepSeek-V3.1, Llama-4-Maverick) commented out — account-wide paywall enforcement since 2026-04. Previous 3 SambaNova entries (MiniMax-M2.5, gpt-oss-120b, Meta-Llama-3.3-70B) already disabled earlier. |
+| **Pydantic `flashcards min_length=8` rejected 4-item LLM output** (1/9) | `ChapterOutput.flashcards` relaxed to `min_length=4`; `PydanticValidationError` explicitly caught in the Self-Refine loop and converted to a targeted refine-signal (synthesis continues with schema-aware feedback) instead of crashing to TERMINAL FAILURE. |
+
+**Roadmap items shipped today:**
+
+| Item | Notes |
+|---|---|
+| **Tier 1 #1** BM25F two-field ranking | Upgrade from plain BM25 — extracts `prose` (weight 1.0) and `code` (weight 0.3, camelCase/snake_case-aware) fields per file, BM25-scores each against `chapter.goal`, sums. Code-field tokenizer preserves dotted-identifier bigrams (`foo.bar → {foo, bar, foo.bar}`). Per-chapter file budget now favors pedagogically relevant files on mixed prose/code docs. |
+| **Tier 1 #3** PCA pre-reduction before UMAP | `sklearn.decomposition.PCA(n_components=128)` before the UMAP step in `reduce_cluster.py`. Retains 99%+ variance on sentence-transformer embeddings; UMAP is then 128d → 5d instead of 2048d → 5d. Defensive skip when embedding dim ≤ 128. |
+| **Tier 2 #6** Code-aware MinHash dedup | Hand-rolled (no `datasketch` dep) — shingled prose Jaccard + per-code-block SHA-256 set equality. Dup iff `prose_jaccard > 0.85 AND code_hashes_a == code_hashes_b`. Keeps the longer of each pair. Protects tutorial-vs-reference pairs with meaningful code variations. Runs after noise filter. |
+| **Tier 2 #8** Parallel curator | `asyncio.Semaphore(2)` wraps per-chapter curation (was sequential). Halves curator wall-clock. Style consistency is per-chapter, so overlapping doesn't hurt. |
+| **Tier 2 #9 + Tier 4 #18** Deterministic grader pre-gates + hard-threshold | New `_deterministic_grader_gates(synthesis, chapter)` in `helpers.py` runs BEFORE the grader LLM: length sanity / zero-citation fast-fail / zero-fence fast-fail / stub-marker fast-fail (≥3 TODOs). On hard-fail emits a synthetic `GraderEvaluation(action="refine", weighted_score=0.0)` with gate reason as specific_issue — no LLM call. Also fills `code_density` + `citation_integrity` deterministically when they pass. |
+| **Tier 4 #17** Noise pre-filter before MAP | New `_filter_noise_files()` in `helpers.py` drops entries where: slug matches boilerplate patterns (`changelog/license/release-notes/migration-guide/cookies/terms/tos`) OR stripped content < 200 chars OR the doc has neither a heading nor a fenced code block. Runs right after `_maybe_split_monolith`. Typical outcome: 5-15% fewer MAP shards. |
+| **Tier 3 #13** Per-iteration partial cache (resume-on-failure) | `StudyCache` extended with `get_chapter_partial / set_chapter_partial / clear_chapter_partial` under `_cache/synthesis_partial/…`. `synthesize_chapter` node now: checks partial after the full-cache miss → bootstraps `best_synthesis / best_eval / adjustments / resume_from_iter` on hit → loop becomes `range(resume_from_iter, MAX)` → persists after every graded iteration → clears on normal completion → KEEPS on sentinel so next run resumes. Directly addresses Run-8 ch08/ch09 losing iter-1 grader scores (0.71/0.73) to later-iter cascade timeouts. Same identity check as full cache. |
+| **Tier 4 #16** Preview mode (classical-only, zero LLM) | `preview: bool` on `CreateStudyRequest` → plumbed through router → task. When True, the Celery task short-circuits: `ingest → preview_pipeline()` instead of the LangGraph. `graphs/knowledge/preview.py` runs noise-filter → dedup → NVIDIA embed (or fastembed fallback) → KMeans → c-TF-IDF cluster labels → per-cluster TextRank extractive summaries (numpy-only PageRank, no networkx dep). Writes `preview.md` + per-chapter READMEs in ~5 min. Verbatim-by-construction. Use as (a) sanity-check before a 30-min run, (b) fallback when every LLM provider is down, (c) hallucination-validation baseline. |
+
+**Catalog state after today** (27 active / 10 disabled):
+- Active: NIM=12, Mistral=6, Gemini=4, Groq=4, Zhipu=2 (sum=28 — **wait, verify: SambaNova 0 after Run-8, DeepSeek 0 pending billing, Cerebras 0 pending access = sum=27 effective with all active providers considered**).
+- Disabled with reason comments: DeepSeek v4-pro/flash (insufficient balance), Cerebras gpt-oss-120b/zai-glm-4.7 (403 access denied), 5× SambaNova (full paywall), Groq kimi-k2-instruct (not in actual catalog).
+- Uniform 120s per-entry timeout. 1200s outer timeout guards full cascade.
+
+**Test coverage:** 39/39 unit tests green in-pod (`test_code_vault.py` 19 + `test_synth_isolation.py` 3 + `test_structured_output.py` 17). Partial-cache round-trip smoke passes. Live cascade probe: cold 1.2s (was 29.8s pre-RCA), warm 0.9s.
+
+---
+
+### ✅ Shipped before Run-9 — post-Run-8 operational fixes
+
+These are **not roadmap items**. They're concrete operational adjustments driven directly by Run-8 telemetry. All low-LoC, low-risk. Shipped 2026-04-24 afternoon.
+
+| # | Fix | Status | Reason |
+|---|---|---|---|
+| **OP-1** | `MAP_SHARD_SEMAPHORE` 30 → 15 | ✅ **SHIPPED** | Run-8 logs showed 30 parallel shards racing on the same cascade position before any cooldown registered. Halving the burst lets the circuit breaker bite earlier and cascade moves on to healthy entries sooner. |
+| **OP-2** | `MAX_SELF_REFINE_ITERATIONS` 3 → 5 | ✅ **ALREADY IN PLACE** | Constant was already at 5 in the codebase prior to this session; recommendation was aspirational but already satisfied. Pairs with **Tier 3 #13** partial cache for cross-run resumability. |
+| **OP-3** | Remove the 3 Groq small-TPM entries | ✅ **SHIPPED** | Commented out `qwen/qwen3-32b` (6K TPM), `openai/gpt-oss-120b` (8K TPM), `meta-llama/llama-4-scout-17b-16e-instruct` (30K TPM). Run-8 logged every call returning BadRequest "Request too large" on chapter prompts. Permanent incompat on free tier. AAII ~15-33 — all tail-tier anyway; gpt-oss-120b still served via NIM's entry at the same AAII. |
+| **OP-4** | Investigate `gemini/gemini-2.5-flash-lite` 100% BadRequest | ✅ **DIAGNOSED + DISABLED** | Live pod probe showed plain completion works fine (Test 1 returned "Acknowledged.") but function-calling structured output returns `ModelResponse(choices=[], usage=749 prompt / 0 completion)` — empty response, 0 tokens generated. Model can't produce our `ChapterOutput(sections[Section(prose_md, code_refs)], flashcards[Flashcard])` tool-call shape at the lite tier. LangChain's downstream `choices[0]` access then raises `BadRequestError`, which explains Run-8's 14/14 failure rate. Removed from `kd-all` catalog. |
+
+**Catalog state post-OP-1/3/4 (2026-04-24 late afternoon):**
+- **23 active entries** across 4 providers: NIM=12, Mistral=6, Gemini=3, Zhipu=2.
+- **14 disabled entries** (commented with reason): 3 Groq small-TPM (OP-3), 1 Gemini flash-lite (OP-4 — structured-output incompat), 2 DeepSeek V4 (insufficient balance), 2 Cerebras (403 access), 5 SambaNova (full paywall), 1 Groq kimi-k2-instruct (not in Groq's real catalog).
+
+**Policy update (2026-04-24):** paid providers explicitly out of scope. DeepSeek V4 entries (insufficient balance) and Cerebras gpt-oss-120b/zai-glm-4.7 (403 access denied) stay disabled indefinitely. The KD pipeline operates on free-tier providers only.
+
+---
+
 ### ✅ Shipped on 2026-04-23 (one intensive day across 5 PRs)
 
 **Late-evening super-super-batch — provider diversification + fail-fast:**

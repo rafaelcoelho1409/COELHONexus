@@ -118,6 +118,12 @@ def run_knowledge_distiller(
     # Workaround for celery/celery#2416 (open since 2015 — "continue chain
     # on failure after retries" is not a built-in Celery feature).
     is_chained: bool = False,
+    # Tier 4 #16 (2026-04-24): classical-only preview mode. When True, the
+    # task runs ingest → noise-filter → embed → KMeans → c-TF-IDF → TextRank
+    # and skips the entire LLM graph (planner / MAP / synthesize / grader /
+    # curator / critic / assembler). Produces preview.md + extractive READMEs
+    # in ~5 min with zero LLM cost.
+    preview: bool = False,
 ) -> dict:
     """
     Run the full Knowledge Distiller pipeline for one framework.
@@ -194,6 +200,68 @@ def run_knowledge_distiller(
         # TTL for "latest" entries defaults to 14 days; pinned versions
         # are immutable.
         cache = StudyCache(storage = storage, latest_ttl_days = 14)
+
+        # ---------------------------------------------------------------
+        # Tier 4 #16 (2026-04-24) — preview mode short-circuit.
+        # Run ingest + classical summarization only; skip the LLM graph.
+        # ---------------------------------------------------------------
+        if preview:
+            from graphs.knowledge.preview import run_preview_pipeline
+            from services.knowledge.ingestion import ingest_framework_docs
+            from schemas.knowledge.ingestion import DocsIngestionConfig
+            from graphs.knowledge.helpers import _write_manifest_json
+
+            self.update_state(
+                state = "PROGRESS",
+                meta = {
+                    "study_id": study_id,
+                    "study_root": study_root,
+                    "phase": "ingest (preview mode)",
+                    "last_node": None,
+                    "nodes_seen": 0,
+                },
+            )
+            cfg = DocsIngestionConfig(
+                framework = framework,
+                version = version,
+                docs_url = docs_url,
+                language = language,
+                study_root = study_root,
+                study_id = study_id,
+                tier = tier,
+                github_discover = github_discover,
+                github_org = github_org,
+                github_repo = github_repo,
+                github_default_branch = github_default_branch,
+            )
+            ingest_result = await ingest_framework_docs(cfg, storage, cache = cache)
+            await _write_manifest_json(storage, study_root, ingest_result.manifest)
+            logger.info(
+                f"[KD:{study_id}][preview] ingest tier={ingest_result.tier_used} "
+                f"files={ingest_result.total_files} bytes={ingest_result.total_bytes}"
+            )
+            self.update_state(
+                state = "PROGRESS",
+                meta = {
+                    "study_id": study_id,
+                    "study_root": study_root,
+                    "phase": "preview_synthesize",
+                    "last_node": "ingest",
+                    "nodes_seen": 1,
+                },
+            )
+            preview_result = await run_preview_pipeline(storage, study_root)
+            return {
+                "study_id": study_id,
+                "study_root": study_root,
+                "phase": "complete_preview",
+                "ingest_tier_used": ingest_result.tier_used,
+                "num_chapters": preview_result.get("num_chapters", 0),
+                "summary_path": preview_result.get("summary_path"),
+                "debt_path": None,
+                "validation_report": None,
+                "preview": True,
+            }
 
         # Three LLM chains with distinct policies:
         #   llm         — main fallback chain (14 models). Used for the

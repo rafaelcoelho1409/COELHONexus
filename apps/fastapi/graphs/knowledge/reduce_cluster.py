@@ -162,7 +162,34 @@ async def embed_and_cluster_reduce(
         f"in {time.time() - t0:.2f}s via {embed_provider}"
     )
 
-    # 3. UMAP pre-reduction (v2 addition)
+    # 3a. PCA pre-reduction (Tier 1 #3, 2026-04-24) — SPEED, zero quality loss.
+    # UMAP on 2048d embeddings is O(n_clusters × d × iterations); PCA first
+    # collapses 2048 → 128 (retaining 99%+ variance on sentence-transformer
+    # outputs), then UMAP 128 → 5 runs an order of magnitude faster. Skip
+    # PCA when the embedding dim is already ≤ 128 (nothing to reduce).
+    _PCA_COMPONENTS = 128
+    vectors_for_umap = vectors
+    if vectors.shape[1] > _PCA_COMPONENTS and n_clusters > _PCA_COMPONENTS:
+        t0 = time.time()
+        try:
+            from sklearn.decomposition import PCA
+            # n_components capped by min(samples, features); PCA raises otherwise.
+            pca_n = min(_PCA_COMPONENTS, n_clusters - 1, vectors.shape[1])
+            pca_model = PCA(n_components=pca_n, random_state=_SEED)
+            vectors_for_umap = np.asarray(pca_model.fit_transform(vectors), dtype=np.float32)
+            variance_kept = float(pca_model.explained_variance_ratio_.sum())
+            logger.info(
+                f"[reduce-cluster] PCA {vectors.shape[1]}d → {vectors_for_umap.shape[1]}d "
+                f"in {time.time() - t0:.2f}s (explained variance: {variance_kept:.3f})"
+            )
+        except Exception as e:
+            logger.warning(
+                f"[reduce-cluster] PCA pre-reduction failed ({type(e).__name__}: {e}); "
+                f"proceeding with raw embeddings"
+            )
+            vectors_for_umap = vectors
+
+    # 3b. UMAP pre-reduction (v2 addition)
     # BERTopic-community consensus: silhouette 0.06 → ~0.25 on tight corpora.
     # n_neighbors capped at n_clusters-1 for tiny corpora. CPU-only, ~1-3s.
     t0 = time.time()
@@ -175,9 +202,9 @@ async def embed_and_cluster_reduce(
             metric=_UMAP_METRIC,
             random_state=_SEED,
         )
-        vectors_reduced = np.asarray(umap_model.fit_transform(vectors), dtype=np.float32)
+        vectors_reduced = np.asarray(umap_model.fit_transform(vectors_for_umap), dtype=np.float32)
         logger.info(
-            f"[reduce-cluster] UMAP {vectors.shape[1]}d → "
+            f"[reduce-cluster] UMAP {vectors_for_umap.shape[1]}d → "
             f"{vectors_reduced.shape[1]}d in {time.time() - t0:.2f}s "
             f"(n_neighbors={min(_UMAP_N_NEIGHBORS, n_clusters - 1)}, "
             f"min_dist={_UMAP_MIN_DIST}, metric={_UMAP_METRIC})"
@@ -185,9 +212,9 @@ async def embed_and_cluster_reduce(
     except Exception as e:
         logger.warning(
             f"[reduce-cluster] UMAP failed ({type(e).__name__}: {e}); "
-            f"falling back to raw embeddings"
+            f"falling back to PCA-reduced (or raw) embeddings"
         )
-        vectors_reduced = vectors
+        vectors_reduced = vectors_for_umap
 
     # 4. Size-based k_target (v2 replaces silhouette sweep)
     k_meta = max(_MIN_CHAPTERS, min(_MAX_CHAPTERS, round(n_clusters / _MICROS_PER_META_TARGET)))

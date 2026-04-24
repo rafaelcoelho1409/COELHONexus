@@ -129,6 +129,19 @@ class CreateStudyRequest(BaseModel):
         default = None,
         description = "Default branch reported by the GitHub API. Used by Tier-GH to build raw.githubusercontent.com URLs."
     )
+    preview: bool = Field(
+        default = False,
+        description = (
+            "Tier 4 #16 (2026-04-24): when True, run the CLASSICAL-ONLY preview "
+            "pipeline — ingest → classical clustering (embed + k-means) → "
+            "c-TF-IDF cluster labels → TextRank extractive summaries. NO LLM "
+            "calls at any stage. Produces a ~5-min sketch with preview.md + "
+            "per-chapter extractive READMEs. Useful as (a) a sanity-check "
+            "before committing to the full ~30 min synthesis run, (b) a "
+            "fallback when all LLM providers are down, (c) a verbatim-by-"
+            "construction baseline for validating synth outputs."
+        ),
+    )
 
 
 # =============================================================================

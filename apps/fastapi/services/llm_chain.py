@@ -214,49 +214,49 @@ def _all_entries() -> list:
     """
     return [
         # --- 1–10: Frontier class (AAII 45+) ---
-        _nim_entry(GROUP, "moonshotai/kimi-k2-thinking", timeout_s=300),                           # AAII 67 — highest on list; HLE 44.9%, 200-300 tool-call coherence, 256K ctx
-        # _deepseek_entry(GROUP, "deepseek-v4-pro", timeout_s=300),                                # DISABLED 2026-04-24 — "Insufficient Balance" on account. Re-enable after top-up (5M free grant used up or V4 not in free tier). AAII ~57, 1T+ MoE FP4, 1M ctx
-        _nim_entry(GROUP, "z-ai/glm-5.1", timeout_s=300),                                          # AAII 51 (Reasoning); SWE-Bench Pro 58.4% (#1 OSS); may be skipped during NIM endpoint flakiness
-        _nim_entry(GROUP, "minimaxai/minimax-m2.7", timeout_s=300),                                # AAII 50 — 204K ctx agentic, SWE-Pro 56.22%, SWE-Multilingual 76.5
+        _nim_entry(GROUP, "moonshotai/kimi-k2-thinking", timeout_s=120),                           # AAII 67 — highest on list; HLE 44.9%, 200-300 tool-call coherence, 256K ctx
+        # _deepseek_entry(GROUP, "deepseek-v4-pro", timeout_s=120),                                # DISABLED 2026-04-24 — "Insufficient Balance" on account. Re-enable after top-up (5M free grant used up or V4 not in free tier). AAII ~57, 1T+ MoE FP4, 1M ctx
+        _nim_entry(GROUP, "z-ai/glm-5.1", timeout_s=120),                                          # AAII 51 (Reasoning); SWE-Bench Pro 58.4% (#1 OSS); may be skipped during NIM endpoint flakiness
+        _nim_entry(GROUP, "minimaxai/minimax-m2.7", timeout_s=120),                                # AAII 50 — 204K ctx agentic, SWE-Pro 56.22%, SWE-Multilingual 76.5
         # _groq_entry(GROUP, "moonshotai/kimi-k2-instruct", timeout_s=120),                        # DISABLED 2026-04-24 — not in Groq's actual catalog (research agent hallucinated; Groq listing confirmed missing). AAII 49 (K2-0905), 256K ctx
-        # _deepseek_entry(GROUP, "deepseek-v4-flash", timeout_s=180),                              # DISABLED 2026-04-24 — "Insufficient Balance" (same DeepSeek account as v4-pro). AAII 47 (Max), 284B MoE, 1M ctx
-        _nim_entry(GROUP, "moonshotai/kimi-k2.5", timeout_s=300),                                  # AAII 47 (R) / 37 (NR) — Arena Elo ~1447, 262K ctx, powers Cursor Composer 2
+        # _deepseek_entry(GROUP, "deepseek-v4-flash", timeout_s=120),                              # DISABLED 2026-04-24 — "Insufficient Balance" (same DeepSeek account as v4-pro). AAII 47 (Max), 284B MoE, 1M ctx
+        _nim_entry(GROUP, "moonshotai/kimi-k2.5", timeout_s=120),                                  # AAII 47 (R) / 37 (NR) — Arena Elo ~1447, 262K ctx, powers Cursor Composer 2
         _gemini_entry(GROUP, "gemini-3-flash-preview", timeout_s=120),                             # AAII 46 (R) / 35 (NR) — LiveCodeBench 90.8%, SWE-bench 78%, 1M ctx
-        _nim_entry(GROUP, "qwen/qwen3.5-397b-a17b", timeout_s=300),                                # AAII 45 (R) / 40 (NR) — MMLU-Pro 87.18%, 262K ctx
-        _nim_entry(GROUP, "deepseek-ai/deepseek-v3.2", timeout_s=300),                             # AAII 42 (R) / 32 (NR) — SWE-Bench 72-74%, IMO gold, 163K ctx
+        _nim_entry(GROUP, "qwen/qwen3.5-397b-a17b", timeout_s=120),                                # AAII 45 (R) / 40 (NR) — MMLU-Pro 87.18%, 262K ctx
+        _nim_entry(GROUP, "deepseek-ai/deepseek-v3.2", timeout_s=120),                             # AAII 42 (R) / 32 (NR) — SWE-Bench 72-74%, IMO gold, 163K ctx
         # --- 11–17: Strong second tier (AAII 34–42) ---
-        # _sambanova_entry(GROUP, "MiniMax-M2.5", timeout_s=180),                                  # DISABLED 2026-04-24 — SambaNova response: "A payment method is required". Re-enable after adding payment method. AAII 42, SWE-Bench 80.2% (highest SWE), 160K ctx
-        _nim_entry(GROUP, "minimaxai/minimax-m2.5", timeout_s=300),                                # AAII 42 — DUP of #11 (same model, NIM infra)
+        # _sambanova_entry(GROUP, "MiniMax-M2.5", timeout_s=120),                                  # DISABLED 2026-04-24 — SambaNova response: "A payment method is required". Re-enable after adding payment method. AAII 42, SWE-Bench 80.2% (highest SWE), 160K ctx
+        _nim_entry(GROUP, "minimaxai/minimax-m2.5", timeout_s=120),                                # AAII 42 — DUP of #11 (same model, NIM infra)
         # _cerebras_entry(GROUP, "zai-glm-4.7", timeout_s=120),                                    # DISABLED 2026-04-24 — 404 "you do not have access to it" (model exists in Cerebras catalog but API key lacks access). AAII 42 (R) / 34 (NR), SOTA τ²-Bench, 200K ctx, 355B params
-        _nim_entry(GROUP, "nvidia/nemotron-3-super-120b-a12b", timeout_s=300),                     # AAII 36 — 1M ctx, hybrid Mamba, leads size class on AIME-2025 + Terminal-Bench
-        _sambanova_entry(GROUP, "DeepSeek-V3.1", timeout_s=180),                                   # AAII 34 (R) — AIME 93.1%, hybrid reasoning, 128K ctx
-        _nim_entry(GROUP, "deepseek-ai/deepseek-v3.1-terminus", timeout_s=300),                    # AAII 34 (R) / 29 (NR) — V3.1-Terminus, slightly newer than V3.1, 128K ctx
+        _nim_entry(GROUP, "nvidia/nemotron-3-super-120b-a12b", timeout_s=120),                     # AAII 36 — 1M ctx, hybrid Mamba, leads size class on AIME-2025 + Terminal-Bench
+        # _sambanova_entry(GROUP, "DeepSeek-V3.1", timeout_s=120),                                 # DISABLED 2026-04-24 (Run-8 evidence) — full SambaNova account now paywalled; whole provider returns "A payment method is required" even for previously-free models. AAII 34 (R) when/if re-enabled.
+        _nim_entry(GROUP, "deepseek-ai/deepseek-v3.1-terminus", timeout_s=120),                    # AAII 34 (R) / 29 (NR) — V3.1-Terminus, slightly newer than V3.1, 128K ctx
         _gemini_entry(GROUP, "gemini-3.1-flash-lite-preview", timeout_s=90),                       # AAII 34 — GPQA Diamond 86.9%, 381 t/s, 1M ctx
         # --- 18–21: gpt-oss-120b on four providers (AAII 33 each) ---
         # _cerebras_entry(GROUP, "gpt-oss-120b", timeout_s=120),                                   # DISABLED 2026-04-24 — 404 "you do not have access to it" (model listed in Cerebras catalog but key unauthorized). AAII 33, MMLU-Pro 90.0%, 3000 tok/s
-        # _sambanova_entry(GROUP, "gpt-oss-120b", timeout_s=180),                                  # DISABLED 2026-04-24 — SambaNova response: "A payment method is required". Same model as #18 family
-        _groq_entry(GROUP, "openai/gpt-oss-120b", timeout_s=120),                                  # AAII 33 — DUP family; confirmed working on Groq
-        _nim_entry(GROUP, "openai/gpt-oss-120b", timeout_s=180),                                   # AAII 33 — DUP family; confirmed working on NIM
+        # _sambanova_entry(GROUP, "gpt-oss-120b", timeout_s=120),                                  # DISABLED 2026-04-24 — SambaNova response: "A payment method is required". Same model as #18 family
+        # _groq_entry(GROUP, "openai/gpt-oss-120b", timeout_s=120),                                # DISABLED 2026-04-24 (OP-3) — 8K TPM ceiling permanently incompatible with 30K-token chapter prompts. Run-8 logged every call returning BadRequest("Request too large: Limit 8000, Requested 34127"). AAII 33 still served via NIM's `openai/gpt-oss-120b` entry.
+        _nim_entry(GROUP, "openai/gpt-oss-120b", timeout_s=120),                                   # AAII 33 — DUP family; confirmed working on NIM
         # --- 22–23: AAII 30 ---
         _zhipu_entry(GROUP, "glm-4.7-flash", timeout_s=120),                                       # AAII 30 (R) — 30B-A3B MoE, best-in-30B-class, AIME-2025 95.7%, 200K ctx, zero-cap free
         _gemini_entry(GROUP, "gemini-2.5-flash", timeout_s=120),                                   # AAII ~30 — GPQA 82.8, MMLU-Lite 88.4, AIME 88, 1M ctx (stable prod)
         # --- 24–28: AAII 22–28 (Mistral cluster + glm-4.5-flash) ---
         _mistral_entry(GROUP, "mistral-small-latest", timeout_s=120),                              # AAII 28 — Mistral Small 4 v26.03, HumanEval 92, MMLU 88.5 (surprisingly > Medium 3.1)
-        _mistral_entry(GROUP, "magistral-medium-latest", timeout_s=180),                           # AAII 27 — Magistral 1.2, AIME24 91.82%, GPQA-Diamond 76.3% (reasoning specialist)
-        _mistral_entry(GROUP, "mistral-large-latest", timeout_s=180),                              # AAII 23 — Mistral Large 3 v25.12, LMArena #2 OSS, MATH-500 93.6, 256K ctx
-        _nim_entry(GROUP, "mistralai/mistral-large-3-675b-instruct-2512", timeout_s=300),          # AAII 23 — DUP of #26 (same Large 3 model, NIM infra)
+        _mistral_entry(GROUP, "magistral-medium-latest", timeout_s=120),                           # AAII 27 — Magistral 1.2, AIME24 91.82%, GPQA-Diamond 76.3% (reasoning specialist)
+        _mistral_entry(GROUP, "mistral-large-latest", timeout_s=120),                              # AAII 23 — Mistral Large 3 v25.12, LMArena #2 OSS, MATH-500 93.6, 256K ctx
+        _nim_entry(GROUP, "mistralai/mistral-large-3-675b-instruct-2512", timeout_s=120),          # AAII 23 — DUP of #26 (same Large 3 model, NIM infra)
         _zhipu_entry(GROUP, "glm-4.5-flash", timeout_s=120),                                       # AAII ~23 — GLM-4.5 tier (legacy), zero-cap free fallback
         # --- 29–31: AAII 21–22 ---
-        _mistral_entry(GROUP, "devstral-medium-latest", timeout_s=180),                            # AAII 22 — Devstral 2 code-agents, SWE-Bench Verified 46.8%, 256K ctx
-        _gemini_entry(GROUP, "gemini-2.5-flash-lite", timeout_s=90),                               # AAII 22 (R) / 19 (NR) — high-throughput fallback, 1000 RPD free
+        _mistral_entry(GROUP, "devstral-medium-latest", timeout_s=120),                            # AAII 22 — Devstral 2 code-agents, SWE-Bench Verified 46.8%, 256K ctx
+        # _gemini_entry(GROUP, "gemini-2.5-flash-lite", timeout_s=90),                             # DISABLED 2026-04-24 (OP-4) — returns empty `choices=[]` (0 completion tokens) when given our ChapterOutput tool schema; model can't produce structured output for the nested Section + Flashcard shape at the lite tier. Run-8 logged 14/14 BadRequest from LangChain's downstream parse of the empty response. Plain completion works fine, so NOT a credential / safety issue — structural tool-schema incompatibility. AAII 22/19.
         _mistral_entry(GROUP, "mistral-medium-latest", timeout_s=120),                             # AAII 21 — Mistral Medium 3.1 v25.08, Arena top-10 overall
         # --- 32–37: Tail (AAII ≤20) ---
-        _groq_entry(GROUP, "qwen/qwen3-32b", timeout_s=120),                                       # AAII ~20 — Pre-3.5 generation, LiveCodeBench 54.4, thinking-mode
-        _mistral_entry(GROUP, "magistral-small-latest", timeout_s=180),                            # AAII 18 — Magistral Small 1.2, 24B reasoner
-        _sambanova_entry(GROUP, "Llama-4-Maverick-17B-128E-Instruct", timeout_s=180),              # AAII 18 — 400B MoE/17B active, 128K ctx (Preview)
-        _nim_entry(GROUP, "meta/llama-4-maverick-17b-128e-instruct", timeout_s=300),               # AAII 18 — DUP of #34 (same Maverick, NIM infra, 1M ctx)
-        _groq_entry(GROUP, "meta-llama/llama-4-scout-17b-16e-instruct", timeout_s=120),            # AAII ~15 — 10M native ctx but smaller/weaker Llama 4 variant
-        # _sambanova_entry(GROUP, "Meta-Llama-3.3-70B-Instruct", timeout_s=180),                   # DISABLED 2026-04-24 — SambaNova response: "A payment method is required". AAII 14, 128K ctx on SambaNova
+        # _groq_entry(GROUP, "qwen/qwen3-32b", timeout_s=120),                                     # DISABLED 2026-04-24 (OP-3) — 6K TPM ceiling; Run-8 logged repeated "Request too large: Limit 6000, Requested 33950" on chapter synth. Permanent incompat. AAII ~20 (tail-tier anyway).
+        _mistral_entry(GROUP, "magistral-small-latest", timeout_s=120),                            # AAII 18 — Magistral Small 1.2, 24B reasoner
+        # _sambanova_entry(GROUP, "Llama-4-Maverick-17B-128E-Instruct", timeout_s=120),            # DISABLED 2026-04-24 — same SambaNova account-wide paywall. AAII 18 when/if re-enabled.
+        _nim_entry(GROUP, "meta/llama-4-maverick-17b-128e-instruct", timeout_s=120),               # AAII 18 — DUP of #34 (same Maverick, NIM infra, 1M ctx)
+        # _groq_entry(GROUP, "meta-llama/llama-4-scout-17b-16e-instruct", timeout_s=120),          # DISABLED 2026-04-24 (OP-3) — 30K TPM barely covers our chapter-sized prompts; Run-8 logged 33615 / 30507 / 33950-token requests all rejected with "Request too large". Sometimes works when prompt is under 30K but unreliable. AAII ~15 (tail-tier). Same Llama-4 family served via SambaNova/NIM entries when those are enabled.
+        # _sambanova_entry(GROUP, "Meta-Llama-3.3-70B-Instruct", timeout_s=120),                   # DISABLED 2026-04-24 — SambaNova response: "A payment method is required". AAII 14, 128K ctx on SambaNova
 
         # === DELIBERATELY EXCLUDED (verified 2026-04-24) ==================
         # Weak / context-tight / deprecated — skip to preserve quality
