@@ -99,6 +99,14 @@ class KnowledgeDistillerState(TypedDict):
     manifest: list[dict]            # [{url, slug, tier, bytes, fetched_at}, ...]
     # -- Plan outputs --
     plan: list[ChapterPlan]         # 4-12 ChapterPlan Pydantic models
+    # -- OP-14 canary output (2026-04-24) --
+    # Chapter number (1-indexed) that was synthesized by the canary_synth
+    # node BEFORE the Send() fan-out. If the canary crashes, the whole graph
+    # aborts with a clear error BEFORE wasting compute on 10+ sibling
+    # chapters (safety net for code regressions like Run-9's 3-tuple bug
+    # or Run-10's OP-21 list-coerce bug). fan_out_chapters uses this to
+    # skip re-synthesizing the canary chapter.
+    canary_chapter_number: Optional[int]
     # -- Synth outputs — accumulated from N parallel Send() workers --
     synthesis_results: Annotated[list[ChapterResult], operator.add]
     # -- Critic outputs --

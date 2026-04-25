@@ -283,13 +283,30 @@ def _vault_bare_hashes(vault: dict[str, str]) -> set[str]:
     return hashes
 
 
+# OP-23 (2026-04-24 late) — per-section quality thresholds.
+# A section with many code_refs but anemic prose is a "code dump" — the LLM
+# listed hashes without explaining anything. Run-10 ch03 had sections with
+# 4-5 consecutive code blocks and one filler sentence between. Force refine
+# when (prose_words / max(1, len(code_refs))) < _MIN_WORDS_PER_CODEREF.
+# 40 words ≈ 2-3 complete sentences per code block, which is the minimum
+# "teach, don't dump" bar.
+_MIN_WORDS_PER_CODEREF = 40
+# If the whole chapter has zero `# docs:` citation markers across ALL prose
+# AND there are non-trivial sections, that's an unbacked-claims failure
+# (Run-10 ch06 had 26 H2s and zero citations). Synthesized as a special
+# thin_sections entry "__zero_citations__" so format_feedback handles it.
+_CITATION_MARKER_RE = re.compile(r"^\s*#\s*docs:\s*\S+", re.MULTILINE)
+_ZERO_CITATIONS_MARKER = "__zero_citations__"
+
+
 def _audit_structured_output_refs(
     output,  # ChapterOutput (typed loosely to avoid a schema import cycle)
     vault: dict[str, str],
-) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[str], list[str], list[str]]:
     """
-    Audit a ChapterOutput against the vault. Returns
-    (missing, invented, fence_sections, duplicated_refs, empty_sections):
+    Audit a ChapterOutput against the vault. Returns 6 lists:
+    (missing, invented, fence_sections, duplicated_refs, empty_sections,
+     thin_sections):
       - missing: bare-hash values in the vault that no Section.code_refs
                  mentions (LLM didn't reference a code block — unusable
                  output, force refine with targeted preview feedback).
@@ -306,14 +323,23 @@ def _audit_structured_output_refs(
                        (≤40 chars of prose) are allowed to be empty; flag
                        substantive prose-only sections as distribution
                        failures so the LLM redistributes on refine.
+      - thin_sections: OP-23 (2026-04-24). Headings of Section entries
+                      where prose_words / max(1, len(code_refs)) < 40
+                      (code dumps with insufficient explanation). Also
+                      contains the sentinel "__zero_citations__" if the
+                      entire chapter has zero `# docs:` markers despite
+                      having ≥3 sections with non-trivial prose.
 
-    All five lists empty <=> perfect output, ready for assembly.
+    All six lists empty <=> perfect output, ready for assembly.
     """
     vault_hashes = _vault_bare_hashes(vault)
     referenced: set[str] = set()
     ref_counts: dict[str, int] = {}
     fence_sections: list[str] = []
     empty_sections: list[str] = []
+    thin_sections: list[str] = []
+    nontrivial_section_count = 0
+    total_citation_markers = 0
     for section in output.sections:
         for ref in section.code_refs:
             referenced.add(ref)
@@ -333,14 +359,39 @@ def _audit_structured_output_refs(
         # prose-stuffing failure. 120 chars ≈ 20-25 words ≈ a full
         # concrete sentence; below that, prose-only is fine.
         _EMPTY_SECTION_MIN_PROSE = 120
+        prose_stripped = section.prose_md.strip()
         if (not section.code_refs
-                and len(section.prose_md.strip()) > _EMPTY_SECTION_MIN_PROSE
+                and len(prose_stripped) > _EMPTY_SECTION_MIN_PROSE
                 and vault_hashes):
             empty_sections.append(section.heading or "<unnamed>")
+        # OP-23a — thin-section check. Only applies when the section HAS
+        # code_refs (code dumps with no teaching). Words are space-split
+        # tokens in prose_md minus the citation marker lines which don't
+        # count as teaching prose.
+        if section.code_refs:
+            prose_no_citations = _CITATION_MARKER_RE.sub("", prose_stripped)
+            word_count = len(prose_no_citations.split())
+            ratio = word_count / max(1, len(section.code_refs))
+            if ratio < _MIN_WORDS_PER_CODEREF:
+                thin_sections.append(
+                    f"{section.heading or '<unnamed>'} "
+                    f"({word_count}w/{len(section.code_refs)}refs="
+                    f"{ratio:.0f}w/ref)"
+                )
+        # Track chapter-level stats for zero-citation gate.
+        if len(prose_stripped) > _EMPTY_SECTION_MIN_PROSE:
+            nontrivial_section_count += 1
+        total_citation_markers += len(_CITATION_MARKER_RE.findall(section.prose_md))
+    # OP-23b — chapter-level zero-citation gate. Any chapter with ≥3
+    # non-trivial sections but zero `# docs:` citations is unbacked
+    # claims — force refine. Run-10 ch06 was the canonical failure case.
+    if nontrivial_section_count >= 3 and total_citation_markers == 0:
+        thin_sections.append(_ZERO_CITATIONS_MARKER)
     missing = sorted(vault_hashes - referenced)
     invented = sorted(referenced - vault_hashes)
     duplicated_refs = sorted(h for h, c in ref_counts.items() if c > 1)
-    return missing, invented, fence_sections, duplicated_refs, empty_sections
+    return (missing, invented, fence_sections, duplicated_refs,
+            empty_sections, thin_sections)
 
 
 def _format_structured_output_feedback(
@@ -350,6 +401,7 @@ def _format_structured_output_feedback(
     vault: dict[str, str],
     duplicated_refs: list[str] | None = None,
     empty_sections: list[str] | None = None,
+    thin_sections: list[str] | None = None,
 ) -> str:
     """
     Build targeted adjustment text for the Self-Refine loop when a
@@ -428,7 +480,171 @@ def _format_structured_output_feedback(
             "Prose-only sections in a code-framework study are a "
             "distribution failure."
         )
+    if thin_sections:
+        # OP-23 (2026-04-24). Two feedback paths share this list: (a) code-
+        # dump sections with <40 words/code_ref, (b) the chapter-level
+        # zero-citation sentinel "__zero_citations__".
+        real_thin = [h for h in thin_sections if h != _ZERO_CITATIONS_MARKER]
+        has_zero_cit = _ZERO_CITATIONS_MARKER in thin_sections
+        if real_thin:
+            parts.append(
+                f"\nThese section(s) are **code dumps** — they list multiple "
+                f"code_refs but have insufficient explanatory prose "
+                f"(<{_MIN_WORDS_PER_CODEREF} words per code block): "
+                f"{', '.join(repr(h) for h in real_thin[:5])}"
+                f"{' ...' if len(real_thin) > 5 else ''}. "
+                "For each listed section, add 2-3 sentences of concrete "
+                "explanation BEFORE each code block: what the snippet does, "
+                "when to use it, what the non-obvious parameter/return is. "
+                "Do NOT pad with generic filler — each sentence must add "
+                "information the reader cannot see from the code alone."
+            )
+        if has_zero_cit:
+            parts.append(
+                "\nThis chapter has **zero `# docs:` citation markers** "
+                "across all sections, despite having substantive prose. "
+                "Every non-trivial claim must cite a source file from the "
+                "input corpus. Add `# docs: <file_slug>` lines to the "
+                "prose_md of each section — pick the file slug(s) that "
+                "the prose's factual claims actually came from. Bare "
+                "citation lines are preserved by the assembler; without "
+                "them the chapter is unbacked opinion."
+            )
     return "\n".join(parts)
+
+
+# =============================================================================
+# OP-22 + OP-28 + OP-29 (2026-04-24 late) — assembled-markdown hygiene scrubber
+# =============================================================================
+# Runs once per chapter AFTER _assemble_chapter_markdown. Three passes:
+#
+#   OP-22 — raw-corpus + Mintlify-tag leakage (Run-10: ch02, ch03×3, ch08×2).
+#           The synth LLM occasionally bleeds unsynthesized corpus fragments
+#           into prose_md: bare `--- docs-foo.md ---` file-boundary markers
+#           from the MAP-shard input format, or orphan Mintlify tags like
+#           `<Tabs>` / `<CodeGroup>` that don't render outside Mintlify.
+#
+#   OP-28 — fence-count integrity (Run-10: ch08 had 33 close vs 29 open).
+#           Imbalanced ``` fences break markdown rendering in every viewer.
+#           We trim trailing content past the last unmatched open fence, or
+#           append a closing fence if the trailing region is short.
+#
+#   OP-29 — inline backtick sanity. The fence-contamination audit in
+#           _audit_structured_output_refs checks for `^```` line-start
+#           fences only. Stray ``` embedded in a markdown table cell or
+#           blockquote body (e.g. `> some prose ``` inline`) slips through.
+#           Rare but nonzero; normalize to inline-code span.
+#
+# Defensive: on any exception the input is returned unchanged (a partially
+# broken chapter is better than no chapter at all).
+
+_RAW_CORPUS_BOUNDARY_RE = re.compile(
+    r"^\s*-{3,}\s*docs[\-_][^\s]+\.(?:md|txt|rst)\s*-{3,}\s*$",
+    re.MULTILINE,
+)
+# Mintlify-specific structural tags (used by Stripe/Mintlify/docs platforms).
+# These only render inside Mintlify — anywhere else they're noise that signals
+# the LLM re-emitted raw corpus instead of rewriting.
+_MINTLIFY_TAGS = (
+    "Tabs", "Tab", "Accordion", "AccordionGroup",
+    "Warning", "Tip", "Note", "Info", "Caution",
+    "CodeGroup", "Expandable", "ParamField", "ResponseField",
+    "Card", "CardGroup", "Frame", "Check",
+)
+_MINTLIFY_ORPHAN_RE = re.compile(
+    r"<(?:" + "|".join(_MINTLIFY_TAGS) + r")(?:\s[^>]*)?>"
+    r"|</(?:" + "|".join(_MINTLIFY_TAGS) + r")>",
+    re.IGNORECASE,
+)
+
+
+def _scrub_assembled_markdown(md: str) -> tuple[str, dict[str, int]]:
+    """
+    OP-22/28/29 post-assembly hygiene. Returns (cleaned_md, stats) where
+    stats counts what was removed/fixed per pass. Non-raising — on
+    unexpected failure the original md comes back with empty stats.
+    """
+    stats = {
+        "raw_corpus_boundaries": 0,
+        "mintlify_orphans": 0,
+        "fence_balance_fixed": 0,
+        "inline_fence_sanitized": 0,
+    }
+    try:
+        # Pass 1 (OP-22a) — raw `--- docs-foo.md ---` boundary markers.
+        boundaries = _RAW_CORPUS_BOUNDARY_RE.findall(md)
+        if boundaries:
+            md = _RAW_CORPUS_BOUNDARY_RE.sub("", md)
+            stats["raw_corpus_boundaries"] = len(boundaries)
+
+        # Pass 2 (OP-22b) — orphan Mintlify tags. A tag is "orphan" if it
+        # appears OUTSIDE a fenced code block (inside code is legit —
+        # doc snippets). We scan line-by-line and only strip tags in
+        # prose regions. We don't try to pair open/close tags — just
+        # drop every occurrence; since we're reassembling prose, the
+        # LLM's intent is the prose around the tag, not the tag itself.
+        out_lines: list[str] = []
+        in_fence = False
+        mintlify_hits = 0
+        for line in md.splitlines():
+            stripped = line.strip()
+            # Fence-toggle line starts with ``` (allow language tag after).
+            if stripped.startswith("```"):
+                in_fence = not in_fence
+                out_lines.append(line)
+                continue
+            if in_fence:
+                out_lines.append(line)
+                continue
+            # Prose region — strip orphan Mintlify tags. We collapse
+            # lines that become empty after stripping to preserve
+            # paragraph spacing.
+            new_line, n = _MINTLIFY_ORPHAN_RE.subn("", line)
+            if n:
+                mintlify_hits += n
+                if new_line.strip() == "":
+                    # entire line was a tag-only line — drop it.
+                    continue
+            out_lines.append(new_line)
+        md = "\n".join(out_lines)
+        stats["mintlify_orphans"] = mintlify_hits
+
+        # Pass 3 (OP-28) — fence-count integrity. Count top-of-line ``` fences.
+        # If odd, we have an unclosed fence → append one. Excess closings we
+        # leave alone (they'll rarely render wrong on their own).
+        fence_lines = [ln for ln in md.splitlines() if ln.lstrip().startswith("```")]
+        if len(fence_lines) % 2 == 1:
+            md = md.rstrip() + "\n```\n"
+            stats["fence_balance_fixed"] = 1
+
+        # Pass 4 (OP-29) — inline ``` that somehow survived line-start audit.
+        # Only sanitize OUTSIDE fenced blocks; inside a block they're legit.
+        # We scan again with the in_fence state to replace stray non-line-
+        # start ``` occurrences with a visible marker (single backtick span).
+        out2: list[str] = []
+        in_fence = False
+        inline_hits = 0
+        for line in md.splitlines():
+            stripped = line.lstrip()
+            if stripped.startswith("```"):
+                in_fence = not in_fence
+                out2.append(line)
+                continue
+            if in_fence:
+                out2.append(line)
+                continue
+            # In prose. Any remaining ``` here is stray.
+            if "```" in line:
+                line = line.replace("```", "`")
+                inline_hits += 1
+            out2.append(line)
+        md = "\n".join(out2)
+        stats["inline_fence_sanitized"] = inline_hits
+
+        return md, stats
+    except Exception as e:  # pragma: no cover — defensive
+        logger.warning(f"[scrub] _scrub_assembled_markdown failed: {e}")
+        return md, stats
 
 
 def _assemble_chapter_markdown(
@@ -448,6 +664,12 @@ def _assemble_chapter_markdown(
     whose bare hash isn't in the vault is skipped (audit would've caught
     this — if we're assembling, it means the audit passed). Blank lines
     separate each block.
+
+    OP-22/28/29 (2026-04-24 late): after assembly, runs `_scrub_assembled_markdown`
+    to strip raw-corpus leakage, orphan Mintlify tags, rebalance unmatched
+    fences, and sanitize stray inline ``` in prose. Stats are logged at INFO
+    level so Run-N post-mortems can see whether the LLM is improving or if
+    scrubbing is doing heavy lifting.
     """
     hash_to_sentinel = {
         m.group(1): sentinel
@@ -480,7 +702,17 @@ def _assemble_chapter_markdown(
                 continue  # audit already flagged invented refs
             parts.append(vault[sentinel] + "\n")
             emitted_refs.add(ref)
-    return "\n".join(parts).rstrip() + "\n"
+    assembled = "\n".join(parts).rstrip() + "\n"
+    cleaned, scrub_stats = _scrub_assembled_markdown(assembled)
+    if any(scrub_stats.values()):
+        logger.info(
+            "[assembler] scrub applied: "
+            f"raw_corpus_boundaries={scrub_stats['raw_corpus_boundaries']} "
+            f"mintlify_orphans={scrub_stats['mintlify_orphans']} "
+            f"fence_balance_fixed={scrub_stats['fence_balance_fixed']} "
+            f"inline_fence_sanitized={scrub_stats['inline_fence_sanitized']}"
+        )
+    return cleaned
 
 
 def _format_preservation_feedback(
@@ -1702,7 +1934,8 @@ async def _grade_attempt(
     framework: str,
     llm,
     iteration: int | None = None,
-    study_id: str | None = None) -> GraderEvaluation:
+    study_id: str | None = None,
+    audit_summary: str | None = None) -> GraderEvaluation:
     """
     Run the 8-dimensional adaptive grader on one synthesis attempt. Returns
     structured GraderEvaluation with per-dimension scores, a weighted_score,
@@ -1753,6 +1986,10 @@ async def _grade_attempt(
             "acceptance_threshold": user_profile.acceptance_threshold,
             "assigned_files_list": ", ".join(chapter.assigned_files),
             "synthesis_text": synthesis_text[:GRADER_SYNTHESIS_MAX_CHARS],
+            # OP-17 (2026-04-25) — pass deterministic audit signals to
+            # the grader so it can calibrate borderline accept decisions
+            # against verified facts instead of re-deriving them.
+            "audit_summary": audit_summary or "(no audit summary provided)",
         },
         label = f"grade ch{chapter.number:02d}",
         langfuse_metadata = {

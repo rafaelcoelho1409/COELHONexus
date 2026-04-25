@@ -94,7 +94,7 @@ def run_knowledge_distiller(
     user_id: str = "default",
     user_profile: dict | None = None,
     study_root: str | None = None,
-    max_concurrent_chapters: int = 5,
+    max_concurrent_chapters: int = 2,  # OP-20: aligned 5 → 2 (2026-04-24 late)
     # Resolver hints (all optional; forwarded by the /studies router when
     # the call originates from a prior /resolve — None on legacy paths)
     tier: int | None = None,
@@ -124,6 +124,10 @@ def run_knowledge_distiller(
     # curator / critic / assembler). Produces preview.md + extractive READMEs
     # in ~5 min with zero LLM cost.
     preview: bool = False,
+    # OP-26 (2026-04-24 late): when True, below-threshold best-effort chapters
+    # also write to the full cache so subsequent runs skip re-synthesizing
+    # them. Default False preserves historical behavior.
+    skip_below_threshold: bool = False,
 ) -> dict:
     """
     Run the full Knowledge Distiller pipeline for one framework.
@@ -298,6 +302,7 @@ def run_knowledge_distiller(
                 curator_llm = curator_llm,
                 checkpointer = checkpointer,
                 max_concurrent_chapters = max_concurrent_chapters,
+                skip_below_threshold = skip_below_threshold,
             )
 
             initial_state = {
@@ -331,6 +336,9 @@ def run_knowledge_distiller(
                 "raw_files": [],
                 "manifest": [],
                 "plan": [],
+                # OP-14 canary (2026-04-24): populated by canary_synth node
+                # pre-fan-out; fan_out_chapters reads it to skip that chapter.
+                "canary_chapter_number": None,
                 "synthesis_results": [],
                 "validation_report": None,
                 "summary_path": None,

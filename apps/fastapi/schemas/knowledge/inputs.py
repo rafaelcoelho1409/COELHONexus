@@ -142,6 +142,21 @@ class CreateStudyRequest(BaseModel):
             "construction baseline for validating synth outputs."
         ),
     )
+    skip_below_threshold: bool = Field(
+        default = False,
+        description = (
+            "OP-26 (2026-04-24 late): when True, BELOW-THRESHOLD best-effort "
+            "chapters (committed with DEBT flag because Self-Refine exhausted "
+            "without a passing graded iter) also write to the full cache "
+            "with best_effort=true. Subsequent runs hit the cache and skip "
+            "re-synthesizing them. Useful when you already have Run-N "
+            "outputs you want to lock in, and only want to retry the "
+            "sentinel'd chapters (3-tuple of risk vs runtime). Default "
+            "False preserves historical behavior — below-threshold chapters "
+            "are re-synthesized on every run, betting the next one lands a "
+            "better output."
+        ),
+    )
 
 
 # =============================================================================
@@ -186,7 +201,7 @@ class CreateBatchRequest(BaseModel):
     )
     user_profile: UserProfile = Field(default_factory = UserProfile)
     max_concurrent_chapters: int = Field(
-        default = 5,
+        default = 2,  # OP-20 (2026-04-24 late): was 5; aligned with graph default
         ge = 1,
         le = 10,
         description = (

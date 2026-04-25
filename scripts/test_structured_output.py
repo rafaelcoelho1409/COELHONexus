@@ -68,9 +68,9 @@ def t_empty_vault():
         Section(heading = "Intro", prose_md = "Hello world.", code_refs = []),
     ])
     result = _audit_structured_output_refs(output, {})
-    # Tier batch-3: audit returns 5-tuple (missing, invented, fence_sections,
-    # duplicated_refs, empty_sections)
-    assert len(result) == 5
+    # OP-23 (2026-04-24): audit returns 6-tuple (missing, invented,
+    # fence_sections, duplicated_refs, empty_sections, thin_sections).
+    assert len(result) == 6
     for lst in result:
         assert lst == []
 
@@ -83,7 +83,7 @@ def t_all_referenced():
     output = _build_output([
         Section(heading = "Intro", prose_md = "Call print.", code_refs = [bare_hash]),
     ])
-    missing, invented, fence_sections, duplicated_refs, empty_sections = (
+    missing, invented, fence_sections, duplicated_refs, empty_sections, thin_sections = (
         _audit_structured_output_refs(output, vault)
     )
     assert missing == []
@@ -101,7 +101,7 @@ def t_missing_ref():
     output = _build_output([
         Section(heading = "Intro", prose_md = "No code here.", code_refs = []),
     ])
-    missing, invented, fence_sections, duplicated_refs, empty_sections = (
+    missing, invented, fence_sections, duplicated_refs, empty_sections, thin_sections = (
         _audit_structured_output_refs(output, vault)
     )
     assert missing == [bare_hash], f"expected [{bare_hash!r}], got {missing}"
@@ -121,7 +121,7 @@ def t_invented_ref():
             code_refs = [real_hash, fake_hash],
         ),
     ])
-    missing, invented, _, _, _ = _audit_structured_output_refs(output, vault)
+    missing, invented, _, _, _, _ = _audit_structured_output_refs(output, vault)
     assert missing == []
     assert invented == [fake_hash], f"expected [{fake_hash!r}], got {invented}"
 
@@ -140,7 +140,7 @@ def t_fence_in_prose():
             code_refs = [],
         ),
     ])
-    _, _, fence_sections, _, _ = _audit_structured_output_refs(output, {})
+    _, _, fence_sections, _, _, _ = _audit_structured_output_refs(output, {})
     assert fence_sections == ["Bad"], f"got {fence_sections}"
 
 
@@ -159,7 +159,7 @@ def t_union_across_sections():
         Section(heading = "JS", prose_md = ".", code_refs = [hashes[1]]),
         # ch_refs misses the third hash → audit flags missing
     ])
-    missing, invented, _, _, _ = _audit_structured_output_refs(output, vault)
+    missing, invented, _, _, _, _ = _audit_structured_output_refs(output, vault)
     assert missing == [hashes[2]], f"expected [{hashes[2]!r}], got {missing}"
     assert invented == []
 
@@ -267,11 +267,12 @@ def t_round_trip():
         ),
     ])
     # Audit passes
-    missing, invented, fence_sections, duplicated, empty = (
+    missing, invented, fence_sections, duplicated, empty, thin = (
         _audit_structured_output_refs(output, vault)
     )
     assert missing == [] and invented == [] and fence_sections == []
     assert duplicated == [] and empty == []
+    assert thin == []
     # Assembly produces valid markdown containing both code blocks
     md = _assemble_chapter_markdown(output, vault, chapter_title = "Chapter Title")
     assert "# Chapter Title" in md
@@ -295,7 +296,7 @@ def t_duplicated_refs():
         Section(heading = "B", prose_md = "second.", code_refs = [hashes[0], hashes[1]]),
         # hashes[0] in both A and B → duplicated
     ])
-    missing, invented, _, duplicated, _ = _audit_structured_output_refs(output, vault)
+    missing, invented, _, duplicated, _, _ = _audit_structured_output_refs(output, vault)
     assert missing == []
     assert invented == []
     assert duplicated == [hashes[0]], f"expected [{hashes[0]!r}], got {duplicated}"
@@ -314,7 +315,7 @@ def t_empty_section_with_prose():
             code_refs = [],
         ),
     ])
-    _, _, _, _, empty = _audit_structured_output_refs(output, vault)
+    _, _, _, _, empty, _ = _audit_structured_output_refs(output, vault)
     assert empty == ["Filler"], f"got {empty}"
 
 
@@ -327,7 +328,7 @@ def t_transitional_section_ok():
         Section(heading = "A", prose_md = "See next section.", code_refs = []),
         Section(heading = "B", prose_md = "Use it.", code_refs = [bare]),
     ])
-    _, _, _, _, empty = _audit_structured_output_refs(output, vault)
+    _, _, _, _, empty, _ = _audit_structured_output_refs(output, vault)
     assert empty == [], f"transitional should not flag; got {empty}"
 
 

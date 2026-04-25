@@ -456,9 +456,14 @@ GRADER_PROMPT = ChatPromptTemplate.from_messages([
         "Acceptance threshold: {acceptance_threshold}\n\n"
         "Assigned files this chapter should cover:\n"
         "{assigned_files_list}\n\n"
+        "Pre-grader audit signals (deterministic, OP-17 2026-04-25):\n"
+        "{audit_summary}\n\n"
         "Chapter content to evaluate:\n"
         "{synthesis_text}\n\n"
-        "Score across the 8 dimensions and emit specific issues if below threshold."
+        "Score across the 8 dimensions and emit specific issues if below "
+        "threshold. The audit signals above are deterministic facts about "
+        "this exact chapter — use them to calibrate code_preservation_ratio "
+        "and citation_integrity rather than re-deriving them by inspection."
     ),
 ])
 

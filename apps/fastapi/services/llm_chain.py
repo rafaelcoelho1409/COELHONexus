@@ -239,7 +239,7 @@ def _all_entries() -> list:
         _nim_entry(GROUP, "openai/gpt-oss-120b", timeout_s=120),                                   # AAII 33 — DUP family; confirmed working on NIM
         # --- 22–23: AAII 30 ---
         _zhipu_entry(GROUP, "glm-4.7-flash", timeout_s=120),                                       # AAII 30 (R) — 30B-A3B MoE, best-in-30B-class, AIME-2025 95.7%, 200K ctx, zero-cap free
-        _gemini_entry(GROUP, "gemini-2.5-flash", timeout_s=120),                                   # AAII ~30 — GPQA 82.8, MMLU-Lite 88.4, AIME 88, 1M ctx (stable prod)
+        _gemini_entry(GROUP, "gemini-2.5-flash", timeout_s=60),                                    # OP-25 (2026-04-25): timeout 120→60 — Gemini free tier is 20 req/DAY/model; once exhausted, stays exhausted ~24h. LiteLLM's 60s cooldown can't recover; shorter timeout at least makes the cascade walk past it faster instead of burning the outer 1200s budget. AAII ~30 — GPQA 82.8, MMLU-Lite 88.4, AIME 88, 1M ctx
         # --- 24–28: AAII 22–28 (Mistral cluster + glm-4.5-flash) ---
         _mistral_entry(GROUP, "mistral-small-latest", timeout_s=120),                              # AAII 28 — Mistral Small 4 v26.03, HumanEval 92, MMLU 88.5 (surprisingly > Medium 3.1)
         _mistral_entry(GROUP, "magistral-medium-latest", timeout_s=120),                           # AAII 27 — Magistral 1.2, AIME24 91.82%, GPQA-Diamond 76.3% (reasoning specialist)
@@ -249,7 +249,7 @@ def _all_entries() -> list:
         # --- 29–31: AAII 21–22 ---
         _mistral_entry(GROUP, "devstral-medium-latest", timeout_s=120),                            # AAII 22 — Devstral 2 code-agents, SWE-Bench Verified 46.8%, 256K ctx
         # _gemini_entry(GROUP, "gemini-2.5-flash-lite", timeout_s=90),                             # DISABLED 2026-04-24 (OP-4) — returns empty `choices=[]` (0 completion tokens) when given our ChapterOutput tool schema; model can't produce structured output for the nested Section + Flashcard shape at the lite tier. Run-8 logged 14/14 BadRequest from LangChain's downstream parse of the empty response. Plain completion works fine, so NOT a credential / safety issue — structural tool-schema incompatibility. AAII 22/19.
-        _mistral_entry(GROUP, "mistral-medium-latest", timeout_s=120),                             # AAII 21 — Mistral Medium 3.1 v25.08, Arena top-10 overall
+        _mistral_entry(GROUP, "mistral-medium-latest", timeout_s=60),                              # OP-25 (2026-04-25): timeout 120→60 — Run-11 logs show frequent RateLimitError during synth+grader iters; shorter timeout demotes faster, lets cascade reach healthier entries. AAII 21 — Mistral Medium 3.1 v25.08, Arena top-10 overall
         # --- 32–37: Tail (AAII ≤20) ---
         # _groq_entry(GROUP, "qwen/qwen3-32b", timeout_s=120),                                     # DISABLED 2026-04-24 (OP-3) — 6K TPM ceiling; Run-8 logged repeated "Request too large: Limit 6000, Requested 33950" on chapter synth. Permanent incompat. AAII ~20 (tail-tier anyway).
         _mistral_entry(GROUP, "magistral-small-latest", timeout_s=120),                            # AAII 18 — Magistral Small 1.2, 24B reasoner

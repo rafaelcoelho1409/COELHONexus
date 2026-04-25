@@ -314,7 +314,7 @@ async def resolve_study(
 async def create_study(
     payload: CreateStudyRequest,
     request: Request,
-    max_concurrent_chapters: int = 5):
+    max_concurrent_chapters: int = 2):  # OP-20 (2026-04-24 late): aligned 5 → 2 to match graph default + module docstring. K=2 fits NIM free-tier 40 RPM/model without stampede.
     """
     Create a Knowledge Distiller study. Requires `docs_url` — use
     POST /studies/resolve first if you don't already know the URL.
@@ -446,6 +446,8 @@ async def create_study(
             "repo_url": payload.repo_url,
             # Tier 4 #16: classical-only preview mode short-circuit
             "preview": payload.preview,
+            # OP-26: skip below-threshold re-synth across runs
+            "skip_below_threshold": payload.skip_below_threshold,
         },
         task_id = study_id,
         # Safety net: discard if the message has been sitting in the broker

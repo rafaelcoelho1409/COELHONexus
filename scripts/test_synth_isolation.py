@@ -196,7 +196,7 @@ def t_sentinel_on_grader_failure():
     dist._synthesize_attempt = _fake_synth
     # Audit is sync; wrap to sync lambda returning empty 5-tuple (batch-3
     # 2026-04-23: added duplicated_refs + empty_sections).
-    dist._audit_structured_output_refs = lambda *a, **k: ([], [], [], [], [])
+    dist._audit_structured_output_refs = lambda *a, **k: ([], [], [], [], [], [])
     dist._grade_attempt = _fake_grader
     try:
         graph = KnowledgeDistillerGraph()

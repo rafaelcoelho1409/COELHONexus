@@ -773,8 +773,18 @@ class StudyCache:
         assigned_files: list[str],
         study_root: str,
         score: float,
-        iterations: int) -> None:
-        """Copy accepted-chapter artifacts from study_root into cache."""
+        iterations: int,
+        best_effort: bool = False) -> None:
+        """
+        Copy accepted-chapter artifacts from study_root into cache.
+
+        OP-26 (2026-04-24 late): when best_effort=True, the chapter was
+        committed below-threshold with a DEBT flag (Self-Refine exhausted
+        without a passing graded iter). The cache still stores it so that
+        subsequent runs with skip_below_threshold=True skip re-synth, but
+        the _grader.json records best_effort=true so consumers can
+        distinguish accepted vs best-effort.
+        """
         prefix = self._synth_prefix(framework, version, profile_hash, chapter_num)
         src_prefix = f"{study_root}/chapter{chapter_num:02d}"
 
@@ -806,6 +816,7 @@ class StudyCache:
             json.dumps({
                 "score": score,
                 "iterations": iterations,
+                "best_effort": bool(best_effort),
             }, indent = 2),
             content_type = "application/json",
         )

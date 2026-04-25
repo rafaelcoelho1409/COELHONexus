@@ -91,6 +91,8 @@ from graphs.knowledge.helpers import (
     _restore_code_blocks,
     _synthesize_attempt,
     _user_profile_summary,
+    # OP-31 (2026-04-25) — sentinel for chapter-level zero-citation gate
+    _ZERO_CITATIONS_MARKER,
     _vault_code_blocks,
     _write_chapter_artifacts,
     # Step 7 + deterministic linter + glossary (new)
@@ -119,9 +121,29 @@ logger = logging.getLogger(__name__)
 # Module-level constants
 # =============================================================================
 # Self-Refine iteration budget. 0-indexed: attempt 0 is the first try, 1/2 are
-# retries. 3 total attempts per chapter (initial + 2 refinements). Matches the
-# bound recommended by Madaan et al. in the Self-Refine paper.
+# retries. Matches the bound recommended by Madaan et al. in the Self-Refine
+# paper. Used as the FALLBACK when adaptive sizing is bypassed.
 MAX_SELF_REFINE_ITERATIONS = 5
+
+
+# OP-18 (2026-04-25) — adaptive iteration budget per chapter.
+# Run-11 evidence: ch04 hit 14 issues at iter 0 (very clean), wasted 4 more
+# iters. ch01 hit 83 issues at iter 0, plateaued by iter 4. Easy chapters
+# don't need many refines; hard ones need more headroom. Pick budget by
+# vault-hash count, which correlates with chapter complexity.
+def _adaptive_iter_budget(n_vault_hashes: int) -> int:
+    """
+    Tier-bucketed iteration budget. Bigger chapters get more iterations.
+      - ≤30 hashes  → 3 iters (typical clean chapter; converges fast)
+      - 31-80 hashes → 5 iters (current default; room for one regression+recovery)
+      - >80 hashes  → 7 iters (hard chapters need more refine budget)
+    Hard cap at 7 — beyond that the LLM diverges (Self-Refine paper §3.3).
+    """
+    if n_vault_hashes <= 30:
+        return 3
+    if n_vault_hashes <= 80:
+        return 5
+    return 7
 
 
 class KnowledgeDistillerGraph:
@@ -519,15 +541,30 @@ class KnowledgeDistillerGraph:
                     logger.warning(
                         f"[planner][shard {shard_idx}/{len(shards)}] "
                         f"exceeded {_MAP_SHARD_TIMEOUT_SECONDS}s time-box "
-                        f"— emitting empty ShardLabels so MAP advances "
-                        f"(slugs from this shard will be auto-parked to "
-                        f"unused_shard_slugs by downstream REDUCE)"
+                        f"— emitting synthetic timed-out cluster so MAP "
+                        f"advances (slugs will park to unused via REDUCE)"
                     )
-                    # ShardLabels(clusters=[], unused_shard_slugs=[...all slugs])
-                    # so the corpus still flows to the REDUCE fallback path.
+                    # Run-11 RCA (2026-04-24 late): original return used
+                    # clusters=[] but ShardLabels.clusters has min_length=1.
+                    # Pydantic rejects empty list → whole task fails. Instead
+                    # emit ONE synthetic "timed-out" cluster carrying the
+                    # shard's slugs so the schema validates. REDUCE's Clio
+                    # v2 re-clustering treats this cluster like any other
+                    # micro-cluster; if it's semantically incoherent, KMeans
+                    # scatters its files across real clusters anyway.
+                    from schemas.knowledge.agents import ShardCluster
+                    shard_slugs = [slug for slug, _ in shard]
                     return ShardLabels(
-                        clusters = [],
-                        unused_shard_slugs = [slug for slug, _ in shard],
+                        clusters = [ShardCluster(
+                            cluster_name = f"Shard {shard_idx} (timed out)",
+                            description = (
+                                f"Shard exceeded {_MAP_SHARD_TIMEOUT_SECONDS}s "
+                                "labeler time-box; slugs forwarded for REDUCE "
+                                "to re-cluster semantically."
+                            ),
+                            file_slugs = shard_slugs,
+                        )],
+                        unused_shard_slugs = [],
                     )
 
         _shard_start = _asyncio.get_event_loop().time()
@@ -837,8 +874,16 @@ class KnowledgeDistillerGraph:
         # keep running — a single chapter's LLM-side bad luck should not kill
         # the whole study.
         iteration = resume_from_iter - 1  # pre-loop sentinel
+        # OP-18 (2026-04-25) — adaptive iteration budget by vault-hash count.
+        # Easy chapters converge fast; hard ones need more iterations.
+        _iter_budget = _adaptive_iter_budget(len(code_vault))
+        if _iter_budget != MAX_SELF_REFINE_ITERATIONS:
+            logger.info(
+                f"[synth][ch{chapter.number:02d}] adaptive budget: "
+                f"{_iter_budget} iters (vault has {len(code_vault)} hashes)"
+            )
         try:
-            for iteration in range(resume_from_iter, MAX_SELF_REFINE_ITERATIONS):
+            for iteration in range(resume_from_iter, _iter_budget):
                 # 1. Synthesize — Tier 3 #21 structured output.
                 #    Returns a ChapterOutput (sections + challenges + flashcards),
                 #    NOT free-form markdown. The LLM can't emit fences in prose_md
@@ -900,19 +945,42 @@ class KnowledgeDistillerGraph:
                     fence_sections,
                     duplicated_refs,
                     empty_sections,
+                    thin_sections,
                 ) = _audit_structured_output_refs(chapter_output, code_vault)
                 n_issues = (
                     len(missing) + len(invented) + len(fence_sections)
                     + len(duplicated_refs) + len(empty_sections)
+                    + len(thin_sections)
                 )
-                if missing or invented or fence_sections or duplicated_refs or empty_sections:
+                # OP-31 (2026-04-25) — thin-section ACCEPT allowance.
+                # Run-11 evidence: ch04/ch08/ch10 reached iters with the
+                # shape (0/0/0/0/0/N thin) and were perfect on every other
+                # dimension — but the gate forced refine and the LLM
+                # subsequently regressed (OP-7 had to fire). Thin alone
+                # is "could be better prose density", not a structural
+                # defect. Allow up to N=3 real-thin sections to ACCEPT
+                # provided every other dimension is clean. The chapter-
+                # level zero-citation sentinel (__zero_citations__) is
+                # special — it ALWAYS forces refine regardless of count.
+                _THIN_SECTIONS_ACCEPT_LIMIT = 3
+                _real_thin_count = sum(
+                    1 for h in thin_sections if h != _ZERO_CITATIONS_MARKER
+                )
+                _has_zero_citations = _ZERO_CITATIONS_MARKER in thin_sections
+                _thin_blocks_accept = (
+                    _has_zero_citations
+                    or _real_thin_count > _THIN_SECTIONS_ACCEPT_LIMIT
+                )
+                if (missing or invented or fence_sections or duplicated_refs
+                        or empty_sections or _thin_blocks_accept):
                     logger.warning(
                         f"[synth][ch{chapter.number:02d}] iter {iteration} "
                         f"structured-output audit FAILED: "
                         f"{len(missing)} missing / {len(invented)} invented / "
                         f"{len(fence_sections)} fence-contaminated / "
                         f"{len(duplicated_refs)} duplicated / "
-                        f"{len(empty_sections)} empty-but-proseful section(s) "
+                        f"{len(empty_sections)} empty-but-proseful / "
+                        f"{len(thin_sections)} thin/zero-citation section(s) "
                         f"out of {len(code_vault)} vault hashes — "
                         f"forcing refine with targeted feedback"
                     )
@@ -940,6 +1008,7 @@ class KnowledgeDistillerGraph:
                             "fence_sections": fence_sections,
                             "duplicated_refs": duplicated_refs,
                             "empty_sections": empty_sections,
+                            "thin_sections": thin_sections,
                         }
                     # OP-7: audit-regression early-stop. If this iter is
                     # dramatically worse than the previous iter's audit,
@@ -959,6 +1028,79 @@ class KnowledgeDistillerGraph:
                         prev_n_issues = n_issues
                         break
                     prev_n_issues = n_issues
+                    # OP-11 (2026-04-25) — refine from best-seen iter, not
+                    # last. Run-11 evidence: ch01 best=iter 1 (19 issues),
+                    # iter 2/3 worse → iter 3 hit 4× regression and OP-7
+                    # killed the loop. ch08 went 26 → 5 → 31 (6.2× regression).
+                    # The Self-Refine LLM has no visibility into earlier
+                    # iters' quality and keeps drifting from whatever the
+                    # immediate-previous iter looked like. Inject a
+                    # best-seen anchor message when a prior iter was clearly
+                    # better than the current one — text-level reference,
+                    # since the LLM regenerates fresh each iter and doesn't
+                    # see prior structured output directly.
+                    _best_anchor = ""
+                    if (best_audit_iter is not None
+                            and best_audit_iter["iteration"] < iteration
+                            and best_audit_iter["n_issues"] < n_issues):
+                        _best_anchor = (
+                            f"\n\n**ANCHOR — your iter {best_audit_iter['iteration']} "
+                            f"was your best attempt** ({best_audit_iter['n_issues']} "
+                            f"audit issue(s) vs this iter's {n_issues}). "
+                            f"In that iter you had: "
+                            f"{len(best_audit_iter['missing'])} missing, "
+                            f"{len(best_audit_iter['invented'])} invented, "
+                            f"{len(best_audit_iter['fence_sections'])} fence, "
+                            f"{len(best_audit_iter['duplicated_refs'])} duplicated, "
+                            f"{len(best_audit_iter['empty_sections'])} empty, "
+                            f"{len(best_audit_iter['thin_sections'])} thin. "
+                            "Recover to that quality level: keep the structural "
+                            "discipline of iter "
+                            f"{best_audit_iter['iteration']} and apply ONLY the "
+                            "targeted fixes below — do not rewrite from scratch."
+                        )
+                    # OP-32 (2026-04-25) — hierarchical refine feedback.
+                    # Run-11 evidence: ch01 thin sections grew 7 → 12 → 18
+                    # monotonically. The LLM was simultaneously told "fix
+                    # empty sections" (which redistributes refs across more
+                    # sections) AND "fix thin sections" (which needs MORE
+                    # prose per ref). Conflicting directions = the LLM
+                    # makes both worse. Tier the feedback: only include
+                    # thin-section feedback once the structural defects
+                    # are mostly fixed (combined < 5). Until then, focus
+                    # the refine prompt on the structural issues alone.
+                    _structural_defects = (
+                        len(missing) + len(invented) + len(fence_sections)
+                        + len(duplicated_refs) + len(empty_sections)
+                    )
+                    _thin_feedback = (
+                        thin_sections if _structural_defects < 5 else []
+                    )
+                    # OP-33 (2026-04-25) — anti-hallucination prompt
+                    # hardening. When iter N had invented > 0, iter N+1
+                    # MUST get a strict whitelist of valid 12-hex hashes.
+                    # Run-11 ch02 iter 1 invented 76 hashes; recovered on
+                    # iter 2 with strong feedback but cost a full iter
+                    # of compute. Generic "don't invent" wasn't enough;
+                    # explicit "ONLY these are valid" is.
+                    _hallucination_guard = ""
+                    if invented:
+                        _valid_bare_hashes = sorted({
+                            sentinel[3:15] for sentinel in code_vault
+                            if len(sentinel) >= 15
+                        })
+                        _hallucination_guard = (
+                            "\n\n**STRICT WHITELIST (HARD RULE):** the only "
+                            "valid 12-hex `code_refs` values for this chapter "
+                            f"are exactly these {len(_valid_bare_hashes)} "
+                            "hashes. Any value not in this list is a "
+                            "hallucinated hash that fails the chapter:\n"
+                            + ", ".join(f"`{h}`" for h in _valid_bare_hashes[:50])
+                            + (f", ...({len(_valid_bare_hashes) - 50} more)"
+                               if len(_valid_bare_hashes) > 50 else "")
+                            + "\n\nIf you cannot place a code block, omit it "
+                            "from `code_refs` rather than fabricating a hash."
+                        )
                     adjustments.append(
                         _format_structured_output_feedback(
                             missing,
@@ -967,7 +1109,10 @@ class KnowledgeDistillerGraph:
                             code_vault,
                             duplicated_refs = duplicated_refs,
                             empty_sections = empty_sections,
+                            thin_sections = _thin_feedback,
                         )
+                        + _hallucination_guard
+                        + _best_anchor
                     )
                     continue
                 # Audit passed — clear regression tracker so next iter
@@ -988,6 +1133,20 @@ class KnowledgeDistillerGraph:
                     flashcards = chapter_output.flashcards,
                 )
                 # 2. Grade
+                # OP-17 (2026-04-25) — pass audit signals to the grader so
+                # it can calibrate borderline accept calls (especially
+                # citation_integrity + code_preservation_ratio) against
+                # deterministic facts instead of re-deriving by inspection.
+                _audit_summary_str = (
+                    f"hashes_total={len(code_vault)}, "
+                    f"missing={len(missing)}, invented={len(invented)}, "
+                    f"fence_contaminated={len(fence_sections)}, "
+                    f"duplicated={len(duplicated_refs)}, "
+                    f"empty_but_proseful={len(empty_sections)}, "
+                    f"thin_sections={len(thin_sections)} "
+                    f"(real_thin={_real_thin_count}, "
+                    f"zero_citations={'yes' if _has_zero_citations else 'no'})"
+                )
                 try:
                     evaluation = await _grade_attempt(
                         synthesis_text = synthesis.content,
@@ -997,6 +1156,7 @@ class KnowledgeDistillerGraph:
                         llm = llm,
                         iteration = iteration,
                         study_id = payload.get("study_id"),
+                        audit_summary = _audit_summary_str,
                     )
                 except Exception as e:
                     raise RuntimeError(
@@ -1299,11 +1459,19 @@ class KnowledgeDistillerGraph:
                 "specific_issues": _issues_serialized,
             }
 
-        # 2) Populate cache ONLY when the chapter was accepted above threshold.
-        #    Below-threshold "best effort" chapters should NOT poison the cache
-        #    for future runs — they stay in study_root with DEBT flag but are
-        #    regenerated on the next same-identity run.
-        if accepted_above_threshold:
+        # 2) Populate cache when the chapter was accepted above threshold,
+        #    OR when OP-26 skip_below_threshold is True and the chapter was
+        #    committed below threshold with DEBT. Default (False) preserves
+        #    historical behavior — below-threshold chapters stay in
+        #    study_root with DEBT flag but are regenerated on the next
+        #    same-identity run.
+        skip_below_flag = bool(payload.get("skip_below_threshold", False))
+        should_cache = accepted_above_threshold or (
+            skip_below_flag
+            and "content_path" in result
+            and not result.get("content_path", "").startswith("SENTINEL:")
+        )
+        if should_cache:
             try:
                 await cache.set_chapter(
                     framework = framework,
@@ -1315,6 +1483,7 @@ class KnowledgeDistillerGraph:
                     study_root = study_root,
                     score = best_eval.weighted_score,
                     iterations = len(history),
+                    best_effort = (not accepted_above_threshold),
                 )
             except Exception as e:
                 logger.warning(
@@ -1579,18 +1748,115 @@ class KnowledgeDistillerGraph:
         )
 
         # 3) LLM assessment (faithfulness + code_syntax_valid + issues)
+        #
+        # OP-30 (2026-04-25, post-Run-11): wrap the LLM critic call in
+        # try/except. Run-11 had 9 chapters successfully written to MinIO
+        # then this call raised RuntimeError (LiteLLM Router returned None
+        # — all healthy models emitted non-parseable output). The exception
+        # bubbled up through critic → assembler never ran → Celery task
+        # failed → no summary.md, no DEBT.md. Deterministic fallback:
+        # treat faithfulness + code_syntax_valid as 0.0 and add an issue
+        # flagging the LLM-critic outage. The chapter content is still on
+        # disk; assembler will still produce summary + DEBT from the
+        # deterministic signals (citation_coverage, linter, fence_scan).
         bundles = _build_chapter_bundles(chapters)
-        llm_assessment: CriticAssessment = await _invoke_structured_with_fallback(
-            prompt = CRITIC_PROMPT,
-            llm = llm,
-            schema = CriticAssessment,
-            invoke_vars = {
-                "framework": framework,
-                "file_slugs": ", ".join(sorted(available_slugs)),
-                "chapter_bundles": bundles,
-            },
-            label = "critic",
-        )
+        try:
+            llm_assessment: CriticAssessment = await _invoke_structured_with_fallback(
+                prompt = CRITIC_PROMPT,
+                llm = llm,
+                schema = CriticAssessment,
+                invoke_vars = {
+                    "framework": framework,
+                    "file_slugs": ", ".join(sorted(available_slugs)),
+                    "chapter_bundles": bundles,
+                },
+                label = "critic",
+            )
+        except Exception as e:
+            # OP-35 (2026-04-25) — per-chapter fallback BEFORE the
+            # deterministic-only OP-30 fallback. Run-11 evidence: the
+            # 50KB 5-chapter bundle was too large/complex for any model
+            # in the cascade to emit parseable structured output. Per-
+            # chapter prompts are 5-10× smaller and far less likely to
+            # blow the cascade. Try each chapter in isolation; skip
+            # individual failures; aggregate what comes back.
+            logger.warning(
+                f"[critic] bundle LLM assessment failed ({type(e).__name__}: "
+                f"{str(e)[:120]}) — attempting OP-35 per-chapter fallback"
+            )
+            per_ch_faith: list[float] = []
+            per_ch_code: list[float] = []
+            per_ch_issues: list[str] = []
+            per_ch_ok = 0
+            for ch_num, ch_title, ch_body in chapters:
+                try:
+                    snippet_body = ch_body[:8000]  # tight per-chapter cap
+                    one_bundle = (
+                        f"=== Chapter {ch_num:02d} — {ch_title} ===\n"
+                        f"{snippet_body}\n"
+                    )
+                    one_assess = await _invoke_structured_with_fallback(
+                        prompt = CRITIC_PROMPT,
+                        llm = llm,
+                        schema = CriticAssessment,
+                        invoke_vars = {
+                            "framework": framework,
+                            "file_slugs": ", ".join(sorted(available_slugs)),
+                            "chapter_bundles": one_bundle,
+                        },
+                        label = f"critic-ch{ch_num:02d}",
+                    )
+                    per_ch_faith.append(float(one_assess.faithfulness))
+                    per_ch_code.append(float(one_assess.code_syntax_valid))
+                    per_ch_issues.extend(
+                        f"[ch{ch_num:02d}] {iss}" for iss in one_assess.issues
+                    )
+                    per_ch_ok += 1
+                except Exception as e_one:
+                    logger.warning(
+                        f"[critic-ch{ch_num:02d}] OP-35 per-chapter fallback "
+                        f"also failed ({type(e_one).__name__}); skipping"
+                    )
+                    per_ch_issues.append(
+                        f"[ch{ch_num:02d}] critic LLM unavailable for this "
+                        f"chapter; deterministic checks still applied"
+                    )
+            if per_ch_ok > 0:
+                llm_assessment = CriticAssessment(
+                    citation_coverage = citation_coverage,
+                    faithfulness = sum(per_ch_faith) / len(per_ch_faith),
+                    code_syntax_valid = sum(per_ch_code) / len(per_ch_code),
+                    overall_score = 0.0,  # recomputed below
+                    issues = per_ch_issues,
+                )
+                logger.info(
+                    f"[critic] OP-35 per-chapter fallback succeeded on "
+                    f"{per_ch_ok}/{len(chapters)} chapters: "
+                    f"faith={llm_assessment.faithfulness:.2f} "
+                    f"code_syntax={llm_assessment.code_syntax_valid:.2f}"
+                )
+            else:
+                # OP-30 — deterministic-only fallback when even per-chapter
+                # calls cannot reach a working model. Chapter content on
+                # disk is still intact; only the LLM-side judgment is lost.
+                logger.warning(
+                    f"[critic] OP-30 FALLBACK — no per-chapter LLM calls "
+                    f"succeeded either. Using deterministic-only assessment."
+                )
+                llm_assessment = CriticAssessment(
+                    citation_coverage = citation_coverage,
+                    faithfulness = 0.0,
+                    code_syntax_valid = 0.0,
+                    overall_score = 0.0,
+                    issues = [
+                        f"OP-30 RESCUE: every LLM critic call (bundle + "
+                        f"per-chapter) failed. Citation coverage and "
+                        f"deterministic linter ran successfully; LLM-only "
+                        f"faithfulness + code_syntax_valid scored 0.0. "
+                        f"Original bundle error: {type(e).__name__}: "
+                        f"{str(e)[:160]}"
+                    ],
+                )
 
         # 4) Deterministic style linter — cheap, LLM-free, catches what the
         #    LLM critic is bad at (heading-depth drift, code-density spread,
@@ -1750,15 +2016,88 @@ class KnowledgeDistillerGraph:
         }
 
     # =========================================================================
+    # Node: canary_synth — 1-chapter smoke test before Send() fan-out
+    # =========================================================================
+    async def canary_synth(
+        self,
+        state: KnowledgeDistillerState,
+        synth_llm: ChatOpenAI,
+        storage: MinIOStudyStorage,
+        cache) -> dict:
+        """
+        OP-14 (2026-04-24). Safety net: synthesize the SMALLEST chapter first
+        (fewest assigned_files). If the call raises, LangGraph bubbles the
+        exception up and the whole study fails with a clear error at cost
+        of ~1 chapter of compute instead of 8-12.
+
+        Would have caught Run-9's 3-tuple unpack bug and Run-10's OP-21
+        list-coerce bug before wasting 8-11 chapters.
+
+        On success: returns the synthesis result AND sets
+        `canary_chapter_number` so `fan_out_chapters` skips that chapter.
+
+        On full-cache hit (chapter already synthesized in a prior run):
+        synthesize_chapter short-circuits trivially — near-zero cost.
+        """
+        plan: list = state["plan"]
+        if not plan:
+            return {"canary_chapter_number": None}
+        # Smallest chapter = fewest assigned_files (proxy for vault hash count
+        # and prompt size). Ties broken by lower chapter number.
+        canary_ch = min(plan, key = lambda c: (len(c.assigned_files), c.number))
+        logger.info(
+            f"[canary] running smoke test on smallest chapter: "
+            f"ch{canary_ch.number:02d} '{canary_ch.title}' "
+            f"({len(canary_ch.assigned_files)} files)"
+        )
+        user_profile = state["user_profile"]
+        profile_dict = (
+            user_profile.model_dump()
+            if hasattr(user_profile, "model_dump")
+            else dict(user_profile)
+        )
+        profile_hash = canonical_profile_hash(profile_dict)
+        version = state.get("version") or "latest"
+        payload = {
+            "chapter": canary_ch,
+            "framework": state["framework"],
+            "version": version,
+            "profile_hash": profile_hash,
+            "user_profile": user_profile,
+            "study_root": state["study_root"],
+            # OP-26 — honor the same cache-write flag as the fan-out workers.
+            "skip_below_threshold": state.get("skip_below_threshold", False),
+        }
+        # Call synthesize_chapter directly — no semaphore, no concurrency.
+        # Any exception raised here propagates out of the graph and fails
+        # the whole Celery task with a clean traceback pointing at the bug.
+        result_dict = await self.synthesize_chapter(
+            payload, synth_llm, storage, cache,
+        )
+        # synthesize_chapter returns {"synthesis_results": [result]} — we
+        # forward that verbatim (operator.add reducer accumulates it) and
+        # tag the chapter number so fan-out skips it.
+        synth_results = result_dict.get("synthesis_results", [])
+        logger.info(
+            f"[canary] ch{canary_ch.number:02d} smoke test passed — "
+            f"proceeding to Send() fan-out on remaining "
+            f"{len(plan) - 1} chapter(s)"
+        )
+        return {
+            "synthesis_results": synth_results,
+            "canary_chapter_number": canary_ch.number,
+        }
+
+    # =========================================================================
     # Conditional Edges
     # =========================================================================
     def fan_out_chapters(
         self,
-        state: KnowledgeDistillerState) -> list[Send]:
+        state: KnowledgeDistillerState) -> list[Send] | str:
         """
-        Conditional-edge function. After planner produces state['plan'],
-        emit one Send() per chapter so synthesize_chapter runs in parallel
-        for N chapters (N ∈ [4, 12]).
+        Conditional-edge function. After canary_synth produces
+        state['canary_chapter_number'], emit one Send() per remaining
+        chapter so synthesize_chapter runs in parallel for N-1 chapters.
 
         Each Send carries a MINIMAL payload — just what one worker needs.
         Workers share nothing except what they return via the `operator.add`
@@ -1766,6 +2105,12 @@ class KnowledgeDistillerGraph:
 
         `profile_hash` is computed ONCE here and threaded into every worker
         so the synthesis cache's keys stay consistent across all N chapters.
+
+        OP-14 (2026-04-24): skip the chapter already synthesized by the
+        canary node (state['canary_chapter_number']) to avoid double work.
+        If only 1 chapter exists in the plan (canary already handled it),
+        return "curator" directly — LangGraph routes to that node instead
+        of an empty Send() list (which would stall the graph).
         """
         user_profile = state["user_profile"]
         profile_dict = (
@@ -1775,6 +2120,10 @@ class KnowledgeDistillerGraph:
         )
         profile_hash = canonical_profile_hash(profile_dict)
         version = state.get("version") or "latest"
+        canary_num = state.get("canary_chapter_number")
+        remaining = [ch for ch in state["plan"] if ch.number != canary_num]
+        if not remaining:
+            return "curator"
         return [
             Send(
                 "synthesize_chapter",
@@ -1787,7 +2136,7 @@ class KnowledgeDistillerGraph:
                     "study_root": state["study_root"],
                 },
             )
-            for ch in state["plan"]
+            for ch in remaining
         ]
 
     # =========================================================================
@@ -1801,7 +2150,8 @@ class KnowledgeDistillerGraph:
         synth_llm: ChatOpenAI = None,
         curator_llm: ChatOpenAI = None,
         checkpointer = None,
-        max_concurrent_chapters: int = 2):  # Tier 1 #4b 2026-04-23: was 5; restored to match module header docstring after Run-4 stampede observation (5 concurrent NIM reasoning calls → 504 cascade on glm-5.1). K=2 fits NIM free-tier 40 RPM/model comfortably.
+        max_concurrent_chapters: int = 2,  # Tier 1 #4b 2026-04-23: was 5; restored to match module header docstring after Run-4 stampede observation (5 concurrent NIM reasoning calls → 504 cascade on glm-5.1). K=2 fits NIM free-tier 40 RPM/model comfortably.
+        skip_below_threshold: bool = False):  # OP-26 (2026-04-24 late): closure-captured flag — when True, below-threshold best-effort chapters also write to the full cache so subsequent runs skip them.
         """
         Compose the 5 KD nodes into a LangGraph StateGraph.
 
@@ -1869,8 +2219,24 @@ class KnowledgeDistillerGraph:
             # This keeps at most `max_concurrent_chapters` chapter syntheses
             # in flight — so the primary model serves them consistently and
             # the fallback chain fires only when the primary is truly down.
+            #
+            # OP-26: inject the graph-level skip_below_threshold flag into
+            # the per-worker payload so synthesize_chapter decides whether
+            # to cache below-threshold best-effort outputs for next run.
+            payload = {**payload, "skip_below_threshold": skip_below_threshold}
             async with synth_semaphore:
                 return await self.synthesize_chapter(payload, effective_synth, storage, cache)
+
+        async def _canary_synth(state):
+            # OP-14: safety-net node that synthesizes the smallest chapter
+            # before the full Send() fan-out. Any exception here aborts the
+            # whole study cheaply instead of after 8-12 wasted chapters.
+            # OP-26: propagate skip_below_threshold via state so the canary's
+            # own synth can cache below-threshold outputs when flagged.
+            return await self.canary_synth(
+                {**state, "skip_below_threshold": skip_below_threshold},
+                effective_synth, storage, cache,
+            )
 
         async def _curator(state):
             return await self.curator(state, effective_curator, storage)
@@ -1886,6 +2252,7 @@ class KnowledgeDistillerGraph:
         # --------------------------------------------------------------------
         workflow.add_node("ingest", _ingest)
         workflow.add_node("planner", _planner)
+        workflow.add_node("canary_synth", _canary_synth)
         workflow.add_node("synthesize_chapter", _synthesize_chapter)
         workflow.add_node("curator", _curator)
         workflow.add_node("critic", _critic)
@@ -1893,20 +2260,27 @@ class KnowledgeDistillerGraph:
 
         # --------------------------------------------------------------------
         # Entry point + linear edges
-        # Pipeline: ingest → planner → [fan-out synthesize_chapter ×N]
+        # Pipeline: ingest → planner → canary_synth (OP-14 safety net,
+        #           smallest chapter only) → [fan-out synthesize_chapter ×(N-1)]
         #           → curator → critic → assembler → END
         # Curator runs BEFORE critic so the critic judges the final
         # (style-normalized) text, not the raw drafts — otherwise the
         # curator's post-critic rewrites could silently drift facts.
+        #
+        # OP-14: if canary_synth raises, LangGraph fails the run fast with
+        # a clear error and zero wasted fan-out compute.
         # --------------------------------------------------------------------
         workflow.set_entry_point("ingest")
         workflow.add_edge("ingest", "planner")
+        workflow.add_edge("planner", "canary_synth")
 
-        # Dynamic fan-out: planner → N synthesize_chapter workers via Send()
+        # Dynamic fan-out: canary_synth → (N-1) synthesize_chapter workers
+        # via Send(). canary's own chapter number is skipped in
+        # fan_out_chapters via state['canary_chapter_number'].
         workflow.add_conditional_edges(
-            "planner",
+            "canary_synth",
             self.fan_out_chapters,
-            ["synthesize_chapter"],   # list of possible target node names
+            ["synthesize_chapter", "curator"],  # canary-only plan (1 chapter) skips fan-out
         )
 
         # Merge: LangGraph waits for ALL N workers (operator.add reducer accumulates
