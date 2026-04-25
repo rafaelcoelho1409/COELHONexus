@@ -84,6 +84,7 @@ from graphs.knowledge.helpers import (
     _assemble_prose_chapter_markdown,  # OP-46 (2026-04-25)
     _audit_sentinel_roundtrip,
     _audit_structured_output_refs,
+    _compute_code_syntax_valid_score,  # OP-59 (2026-04-25)
     _format_preservation_feedback,
     _format_structured_output_feedback,
     _generate_adjustment,
@@ -425,10 +426,21 @@ class KnowledgeDistillerGraph:
                     },
                 })
                 strict_chain = SHARD_LABEL_PROMPT | strict_llm
-                raw_msg = await strict_chain.ainvoke({
-                    "framework": framework,
-                    "shard_summary": shard_summary,
-                })
+                from services.knowledge.langfuse_client import langfuse_config as _lf_cfg
+                raw_msg = await strict_chain.ainvoke(
+                    {
+                        "framework": framework,
+                        "shard_summary": shard_summary,
+                    },
+                    config = _lf_cfg(
+                        metadata = {
+                            "framework": framework,
+                            "shard_idx": shard_idx,
+                            "label": "planner-shard-strict",
+                        },
+                        tags = ["planner", "shard", "strict"],
+                    ) or None,
+                )
                 # raw_msg is an AIMessage; content is the strict JSON
                 content = getattr(raw_msg, "content", "") or ""
                 if content:
@@ -446,10 +458,20 @@ class KnowledgeDistillerGraph:
                     ShardLabels, method = "function_calling", include_raw = True,
                 )
                 try:
-                    resp = await shard_chain.ainvoke({
-                        "framework": framework,
-                        "shard_summary": shard_summary,
-                    })
+                    resp = await shard_chain.ainvoke(
+                        {
+                            "framework": framework,
+                            "shard_summary": shard_summary,
+                        },
+                        config = _lf_cfg(
+                            metadata = {
+                                "framework": framework,
+                                "shard_idx": shard_idx,
+                                "label": "planner-shard-fallback",
+                            },
+                            tags = ["planner", "shard", "fallback"],
+                        ) or None,
+                    )
                 except Exception as e:
                     logger.warning(
                         f"[planner][shard {shard_idx}/{len(shards)}] failed ({e}); "
@@ -1088,11 +1110,16 @@ class KnowledgeDistillerGraph:
                 # dimension — but the gate forced refine and the LLM
                 # subsequently regressed (OP-7 had to fire). Thin alone
                 # is "could be better prose density", not a structural
-                # defect. Allow up to N=3 real-thin sections to ACCEPT
-                # provided every other dimension is clean. The chapter-
-                # level zero-citation sentinel (__zero_citations__) is
-                # special — it ALWAYS forces refine regardless of count.
-                _THIN_SECTIONS_ACCEPT_LIMIT = 3
+                # defect.
+                #
+                # OP-31-tweak (2026-04-25 post-Run-13): raised limit 3 → 5.
+                # Run-13 evidence: ch02 + ch04 BOTH reached the exact shape
+                # (0/0/0/0/0/5 thin) — perfect on every other dimension but
+                # 2 over the previous ≤3 limit, forcing them to DEBT instead
+                # of ACCEPT. Raising to ≤5 converts both immediately to real
+                # ACCEPT-eligible (subject to grader). 5 is still tight enough
+                # that genuinely code-dump-shape chapters still force refine.
+                _THIN_SECTIONS_ACCEPT_LIMIT = 5
                 _real_thin_count = sum(
                     1 for h in thin_sections if h != _ZERO_CITATIONS_MARKER
                 )
@@ -1697,13 +1724,24 @@ class KnowledgeDistillerGraph:
                     )
                     return False
                 try:
-                    resp = await chain.ainvoke({
-                        "chapter_number": n,
-                        "framework": framework,
-                        "tone_block": tone_block,
-                        "glossary": glossary_str,
-                        "chapter_content": vaulted_content,
-                    })
+                    from services.knowledge.langfuse_client import langfuse_config as _lf_cfg
+                    resp = await chain.ainvoke(
+                        {
+                            "chapter_number": n,
+                            "framework": framework,
+                            "tone_block": tone_block,
+                            "glossary": glossary_str,
+                            "chapter_content": vaulted_content,
+                        },
+                        config = _lf_cfg(
+                            metadata = {
+                                "framework": framework,
+                                "chapter_number": n,
+                                "label": f"curator-ch{n:02d}",
+                            },
+                            tags = [f"ch{n:02d}", "curator"],
+                        ) or None,
+                    )
                 except Exception as e:
                     logger.warning(
                         f"[curator][ch{n:02d}] curation failed ({e}); keeping original"
@@ -1750,6 +1788,35 @@ class KnowledgeDistillerGraph:
                     )
                     return False
                 curated = _restore_code_blocks(curated_vaulted, code_vault)
+                # OP-72A (2026-04-25, post-Run-13) — force fence-isolated
+                # newlines. Run-13 ch04 had patterns like "prose. ``` $ cmd
+                # ``` ``` next" — curator's prose-then-fence concatenation.
+                # markdown-it-py later parses these as different fence
+                # boundaries than source had, breaking _scan_hallucinated_fences
+                # (false positives) and visibly malforming the rendered output.
+                # Pure regex post-pass that puts every ``` on its own line.
+                curated = re.sub(r"(\S)\s*```", r"\1\n\n```", curated)
+                curated = re.sub(r"```([a-zA-Z0-9_+\-]*)\s+(\S)", r"```\1\n\2", curated)
+                curated = re.sub(r"```\s*```", "```\n\n```", curated)
+                # OP-60 (2026-04-25, post-Run-13) — mdformat syntax-level
+                # normalization. Pure-Python (MIT) markdown formatter that
+                # handles heading depth, list markers, fence languages,
+                # link normalization, line-wrap consistency. Idempotent —
+                # safe to run unconditionally. Defensive: on any exception,
+                # keep curator's output as-is (formatting is best-effort).
+                try:
+                    import mdformat
+                    curated = mdformat.text(
+                        curated,
+                        options = {"wrap": "no"},  # don't reflow; preserve LLM line breaks
+                    )
+                except ImportError:
+                    pass  # mdformat not installed — silently skip
+                except Exception as _md_e:
+                    logger.warning(
+                        f"[curator][ch{n:02d}] mdformat failed ({_md_e}); "
+                        f"keeping pre-format output"
+                    )
                 if len(curated.strip()) < 0.5 * len(content.strip()):
                     logger.warning(
                         f"[curator][ch{n:02d}] output shrank drastically "
@@ -1998,17 +2065,32 @@ class KnowledgeDistillerGraph:
                 f"block(s) detected across chapters — flagged in DEBT"
             )
 
-        # 5) Merge — override citation_coverage with our deterministic value; recompute overall.
+        # OP-59 (2026-04-25, post-Run-13) — deterministic code_syntax_valid
+        # via tree-sitter parse-rate. Strictly more reliable than LLM
+        # judgment ("does this code parse?" — a parser is ground truth).
+        # OVERRIDES whatever the LLM critic returned.
+        det_code_syntax, ts_stats = _compute_code_syntax_valid_score(chapters)
+        if ts_stats["parsed"] + ts_stats["failed"] > 0:
+            logger.info(
+                f"[critic] OP-59 tree-sitter code_syntax: "
+                f"parsed={ts_stats['parsed']} failed={ts_stats['failed']} "
+                f"skipped(no_lang/unknown/output)={ts_stats['skipped_no_lang']}/"
+                f"{ts_stats['skipped_unknown_lang']}/{ts_stats['skipped_output']} "
+                f"→ score={det_code_syntax:.2f} "
+                f"(was LLM={llm_assessment.code_syntax_valid:.2f})"
+            )
+        # 5) Merge — override citation_coverage AND code_syntax_valid with
+        # deterministic values; recompute overall.
         merged_issues = list(llm_assessment.issues) + citation_issues + linter_issues + fence_issues
         overall = (
             citation_coverage
             + llm_assessment.faithfulness
-            + llm_assessment.code_syntax_valid
+            + det_code_syntax
         ) / 3.0
         final = CriticAssessment(
             citation_coverage = citation_coverage,
             faithfulness = llm_assessment.faithfulness,
-            code_syntax_valid = llm_assessment.code_syntax_valid,
+            code_syntax_valid = det_code_syntax,
             overall_score = overall,
             issues = merged_issues,
         )
@@ -2330,11 +2412,26 @@ class KnowledgeDistillerGraph:
         effective_synth = synth_llm or llm
         effective_curator = curator_llm or llm
 
+        # OP-44 hardening (2026-04-25 post-Run-13/14) — flush LangFuse at
+        # the end of EVERY node, regardless of return path or exception.
+        # The Celery worker is long-running; without these flushes traces
+        # only appear in the UI at process exit OR after the auto-batch
+        # threshold (~100 events) — invisible in real-time during a study.
+        # Combined with the 15s background flush thread (in langfuse_client),
+        # this gives three independent paths to UI visibility.
+        from services.knowledge.langfuse_client import flush_langfuse
+
         async def _ingest(state):
-            return await self.ingest(state, storage, cache)
+            try:
+                return await self.ingest(state, storage, cache)
+            finally:
+                flush_langfuse(reason = "node:ingest")
 
         async def _planner(state):
-            return await self.planner(state, llm, storage, cache)
+            try:
+                return await self.planner(state, llm, storage, cache)
+            finally:
+                flush_langfuse(reason = "node:planner")
 
         async def _synthesize_chapter(payload):
             # Acquire the semaphore before kicking off any LLM calls.
@@ -2346,8 +2443,12 @@ class KnowledgeDistillerGraph:
             # the per-worker payload so synthesize_chapter decides whether
             # to cache below-threshold best-effort outputs for next run.
             payload = {**payload, "skip_below_threshold": skip_below_threshold}
-            async with synth_semaphore:
-                return await self.synthesize_chapter(payload, effective_synth, storage, cache)
+            try:
+                async with synth_semaphore:
+                    return await self.synthesize_chapter(payload, effective_synth, storage, cache)
+            finally:
+                ch_num = getattr(payload.get("chapter"), "number", "?")
+                flush_langfuse(reason = f"node:synth-ch{ch_num}")
 
         async def _canary_synth(state):
             # OP-14: safety-net node that synthesizes the smallest chapter
@@ -2355,19 +2456,31 @@ class KnowledgeDistillerGraph:
             # whole study cheaply instead of after 8-12 wasted chapters.
             # OP-26: propagate skip_below_threshold via state so the canary's
             # own synth can cache below-threshold outputs when flagged.
-            return await self.canary_synth(
-                {**state, "skip_below_threshold": skip_below_threshold},
-                effective_synth, storage, cache,
-            )
+            try:
+                return await self.canary_synth(
+                    {**state, "skip_below_threshold": skip_below_threshold},
+                    effective_synth, storage, cache,
+                )
+            finally:
+                flush_langfuse(reason = "node:canary")
 
         async def _curator(state):
-            return await self.curator(state, effective_curator, storage)
+            try:
+                return await self.curator(state, effective_curator, storage)
+            finally:
+                flush_langfuse(reason = "node:curator")
 
         async def _critic(state):
-            return await self.critic(state, llm, storage)
+            try:
+                return await self.critic(state, llm, storage)
+            finally:
+                flush_langfuse(reason = "node:critic")
 
         async def _assembler(state):
-            return await self.assembler(state, llm, storage)
+            try:
+                return await self.assembler(state, llm, storage)
+            finally:
+                flush_langfuse(reason = "node:assembler")
 
         # --------------------------------------------------------------------
         # Register nodes

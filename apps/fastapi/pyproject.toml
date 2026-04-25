@@ -53,6 +53,12 @@ dependencies = [
     "pypandoc>=1.13",          # Pandoc Python wrapper (KD exports: PDF/HTML/EPUB). Requires system `pandoc` + `texlive-xetex` for PDF (installed in Dockerfile.fastapi).
     "genanki>=0.13",           # Anki .apkg generator (KD exports: flashcards per chapter)
     "py-spy>=0.4",             # Live Python process sampler (attach to Celery worker pid to dump a hung task's stack without restarting)
+    "mdformat>=0.7",           # OP-60 (2026-04-25): pure-Python markdown formatter — post-curator syntax normalization (heading depth, fence languages, list markers)
+    "mdformat-gfm>=0.3",       # OP-60: GitHub Flavored Markdown plugin (tables, strikethrough)
+    "tree-sitter>=0.23,<0.25",       # OP-59 (2026-04-25): universal parser library. <0.25 to avoid ABI breaks
+    # OP-59 (2026-04-25): pre-compiled tree-sitter grammars (~305 languages) — replaces LLM code_syntax_valid critic.
+    # Upper bound <1.6 because v1.6.2/1.6.3 only ship cp314 wheels; cp313 wheels start again at older releases. Pin below the broken band.
+    "tree-sitter-language-pack>=0.4,<1.6",
 ]
 
 [build-system]

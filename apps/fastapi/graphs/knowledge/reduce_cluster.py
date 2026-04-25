@@ -316,12 +316,23 @@ async def embed_and_cluster_reduce(
             for m in members
         )
         try:
-            draft: MetaLabelDraft = await label_chain.ainvoke({
-                "framework": framework,
-                "meta_id": meta_id,
-                "n_members": len(members),
-                "member_lines": member_lines,
-            })
+            from services.knowledge.langfuse_client import langfuse_config as _lf_cfg
+            draft: MetaLabelDraft = await label_chain.ainvoke(
+                {
+                    "framework": framework,
+                    "meta_id": meta_id,
+                    "n_members": len(members),
+                    "member_lines": member_lines,
+                },
+                config = _lf_cfg(
+                    metadata = {
+                        "framework": framework,
+                        "meta_id": meta_id,
+                        "label": f"reduce-meta-label-{meta_id}",
+                    },
+                    tags = ["planner", "reduce", "meta-label"],
+                ) or None,
+            )
         except Exception as e:
             logger.warning(
                 f"[reduce-cluster] label call for meta {meta_id} failed "
@@ -412,10 +423,20 @@ async def embed_and_cluster_reduce(
     )
     rationale: str
     try:
-        ordering: OrderedIndices = await order_chain.ainvoke({
-            "framework": framework,
-            "chapter_lines": chapter_lines,
-        })
+        from services.knowledge.langfuse_client import langfuse_config as _lf_cfg
+        ordering: OrderedIndices = await order_chain.ainvoke(
+            {
+                "framework": framework,
+                "chapter_lines": chapter_lines,
+            },
+            config = _lf_cfg(
+                metadata = {
+                    "framework": framework,
+                    "label": "reduce-order-chapters",
+                },
+                tags = ["planner", "reduce", "order"],
+            ) or None,
+        )
         proposed = [int(i) for i in ordering.order]
         if len(proposed) == M and set(proposed) == set(range(M)):
             order = proposed

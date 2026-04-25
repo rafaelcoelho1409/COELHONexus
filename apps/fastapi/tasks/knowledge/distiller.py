@@ -405,6 +405,14 @@ def run_knowledge_distiller(
         result = asyncio.run(_run())
     except Exception as e:
         logger.exception(f"[KD:{study_id}] failed: {e}")
+        # OP-44 hardening: flush LangFuse before any error path so
+        # mid-task traces are guaranteed visible in the UI even when
+        # the task crashes.
+        try:
+            from services.knowledge.langfuse_client import flush_langfuse
+            flush_langfuse(reason = f"task:{study_id}:exception")
+        except Exception:
+            pass
         if not is_chained:
             # Legacy single-study path — Celery marks the task FAILURE and
             # records the traceback. The router surfaces it via /tasks/{id}.
@@ -433,4 +441,14 @@ def run_knowledge_distiller(
         f"chapters={result.get('num_chapters')} "
         f"summary={result.get('summary_path')}"
     )
+    # OP-44 hardening (2026-04-25 post-Run-13/14) — final flush on
+    # successful task completion. Guarantees every trace from the
+    # full study is visible in the LangFuse UI before the task
+    # returns to the broker. Background flush thread runs every 15s
+    # but explicit flush here closes the visibility gap to ~0ms.
+    try:
+        from services.knowledge.langfuse_client import flush_langfuse
+        flush_langfuse(reason = f"task:{study_id}:complete")
+    except Exception as _e:
+        logger.warning(f"[KD:{study_id}] langfuse final-flush failed: {_e}")
     return result

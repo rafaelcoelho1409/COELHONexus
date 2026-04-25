@@ -389,6 +389,42 @@ def _audit_structured_output_refs(
     # claims — force refine. Run-10 ch06 was the canonical failure case.
     if nontrivial_section_count >= 3 and total_citation_markers == 0:
         thin_sections.append(_ZERO_CITATIONS_MARKER)
+    # OP-73 (2026-04-25, post-Run-13) — stricter citation-density gate.
+    # Run-13 ch06 had ZERO `# docs:` citations across 1543 lines and slipped
+    # past the OP-23b gate (likely because nontrivial_section_count was off
+    # for that chapter). Tighten: require minimum citation density of
+    # ≥3 citations per 1000 prose words. Falls back to OP-23b's binary
+    # zero-check for very short chapters where density math is noisy.
+    _total_prose_words = sum(
+        len(_CITATION_MARKER_RE.sub("", s.prose_md.strip()).split())
+        for s in output.sections
+    )
+    if _total_prose_words >= 500:
+        _citations_per_1000 = (total_citation_markers * 1000) / _total_prose_words
+        if _citations_per_1000 < 3.0 and _ZERO_CITATIONS_MARKER not in thin_sections:
+            thin_sections.append(_ZERO_CITATIONS_MARKER)
+    # OP-57 (2026-04-25, post-Run-13) — chapter-intro enforcement.
+    # OP-38 added a synth-prompt instruction for first section to open with
+    # a 2-3 sentence orientation paragraph BEFORE any code. Run-13 evidence:
+    # only ch06 followed it; ch01/03/05 dive straight into prose-then-code.
+    # Add an audit check: first section's prose_md must have ≥2 complete
+    # sentences (≥40 chars each, ending in `.!?`) before any inline `code`
+    # span or `# docs:` citation marker. Sentinel marker: `__no_chapter_intro__`.
+    if output.sections:
+        _first_prose = output.sections[0].prose_md.strip()
+        # Grab the prefix BEFORE any inline backtick or citation marker.
+        _prefix_match = re.match(
+            r"((?:[^`\n]|\n(?!\s*#\s*docs:))*?)(?=`|\n\s*#\s*docs:|$)",
+            _first_prose, re.DOTALL,
+        )
+        _prefix = _prefix_match.group(1).strip() if _prefix_match else ""
+        # Count complete sentences in the prefix.
+        _sentences = [
+            s.strip() for s in re.split(r"(?<=[.!?])\s+", _prefix)
+            if len(s.strip()) >= 40 and s.strip().endswith((".", "!", "?"))
+        ]
+        if len(_sentences) < 2:
+            thin_sections.append("__no_chapter_intro__")
     missing = sorted(vault_hashes - referenced)
     invented = sorted(referenced - vault_hashes)
     duplicated_refs = sorted(h for h, c in ref_counts.items() if c > 1)
@@ -483,11 +519,14 @@ def _format_structured_output_feedback(
             "distribution failure."
         )
     if thin_sections:
-        # OP-23 (2026-04-24). Two feedback paths share this list: (a) code-
-        # dump sections with <40 words/code_ref, (b) the chapter-level
-        # zero-citation sentinel "__zero_citations__".
-        real_thin = [h for h in thin_sections if h != _ZERO_CITATIONS_MARKER]
+        # OP-23 (2026-04-24). Three feedback paths share this list:
+        # (a) code-dump sections with <40 words/code_ref,
+        # (b) chapter-level zero-citation sentinel "__zero_citations__",
+        # (c) OP-57 missing-chapter-intro sentinel "__no_chapter_intro__".
+        real_thin = [h for h in thin_sections
+                     if h not in (_ZERO_CITATIONS_MARKER, "__no_chapter_intro__")]
         has_zero_cit = _ZERO_CITATIONS_MARKER in thin_sections
+        has_no_intro = "__no_chapter_intro__" in thin_sections
         if real_thin:
             parts.append(
                 f"\nThese section(s) are **code dumps** — they list multiple "
@@ -511,6 +550,17 @@ def _format_structured_output_feedback(
                 "the prose's factual claims actually came from. Bare "
                 "citation lines are preserved by the assembler; without "
                 "them the chapter is unbacked opinion."
+            )
+        if has_no_intro:
+            parts.append(
+                "\nThe **first section is missing its orientation paragraph** "
+                "(OP-38). It must open with 2-3 complete sentences (each ≥40 "
+                "chars, ending in `.` `!` `?`) BEFORE any `code` span or "
+                "`# docs:` citation marker. Cover: what the reader will "
+                "learn in this chapter, why it matters in production, what "
+                "prerequisites are assumed. THEN dive into prose-then-code "
+                "sections. Without this orientation, cold readers can't "
+                "enter the chapter."
             )
     return "\n".join(parts)
 
@@ -589,6 +639,9 @@ def _scrub_assembled_markdown(md: str) -> tuple[str, dict[str, int]]:
         "fence_balance_fixed": 0,
         "inline_fence_sanitized": 0,
         "stacked_citations_split": 0,
+        "literal_newlines_fixed": 0,        # OP-55
+        "citation_extensions_stripped": 0,  # OP-69
+        "truncated_blocks_repaired": 0,     # OP-70
     }
     try:
         # Pass 0 (OP-36) — Mintlify fence metadata stripper. Runs FIRST so
@@ -709,6 +762,92 @@ def _scrub_assembled_markdown(md: str) -> tuple[str, dict[str, int]]:
         md = "\n".join(out3)
         stats["stacked_citations_split"] = stacked_hits
 
+        # Pass 6 (OP-55, 2026-04-25 post-Run-13) — literal `\n\n` → real newlines.
+        # Run-13 evidence: synth LLM occasionally emits JSON escape sequences
+        # in prose_md strings (`# docs: foo.md\n\nNext paragraph...`) that get
+        # preserved literally during assembly and render as 4 visible chars
+        # instead of paragraph breaks. Convert in PROSE only (not inside
+        # fenced code where they may be intentional like in `printf "\n"`).
+        out4: list[str] = []
+        in_fence = False
+        literal_nl_hits = 0
+        for line in md.splitlines():
+            stripped = line.lstrip()
+            if stripped.startswith("```"):
+                in_fence = not in_fence
+                out4.append(line)
+                continue
+            if in_fence:
+                out4.append(line)
+                continue
+            if "\\n" in line:
+                # Replace literal \n\n → blank line, single \n → linebreak.
+                # Splitlines handles the actual newline insertion.
+                new_line = line.replace("\\n\\n", "\n\n").replace("\\n", "\n")
+                if new_line != line:
+                    literal_nl_hits += new_line.count("\n") - line.count("\n")
+                    out4.extend(new_line.split("\n"))
+                    continue
+            out4.append(line)
+        md = "\n".join(out4)
+        stats["literal_newlines_fixed"] = literal_nl_hits
+
+        # Pass 7 (OP-69, 2026-04-25 post-Run-13) — citation slug normalizer.
+        # Run-13 ch01 had `# docs: docs-docker-com-engine-manage-resources-contexts.md`
+        # — the slug should be without `.md`/`.txt`/`.rst` extension to match
+        # the resolver-emitted slug format used in research/raw/. Strip
+        # extensions from any citation marker line.
+        _citation_ext_re = re.compile(
+            r"(#\s*docs:\s*\S+?)\.(?:md|txt|rst)\b"
+        )
+        ext_hits = len(_citation_ext_re.findall(md))
+        if ext_hits:
+            md = _citation_ext_re.sub(r"\1", md)
+            stats["citation_extensions_stripped"] = ext_hits
+
+        # Pass 8 (OP-70, 2026-04-25 post-Run-13) — truncated code block detector.
+        # Run-13 ch01 had `--icc Enab` at end of code block (truncated mid-word
+        # before closing fence); ch07 had `RUN ap` similar. Detect: any code
+        # block whose LAST content line ends in a partial token (no whitespace
+        # at end + line under 60 chars) AND no period/quote/semicolon at end.
+        # Repair by appending `…` placeholder to make the truncation visible.
+        out5: list[str] = []
+        in_fence = False
+        fence_buffer: list[str] = []
+        truncated_hits = 0
+        for line in md.splitlines():
+            stripped = line.lstrip()
+            if stripped.startswith("```"):
+                if in_fence and fence_buffer:
+                    # Closing fence — inspect last content line for truncation
+                    last = fence_buffer[-1]
+                    last_stripped = last.rstrip()
+                    # OK terminators: balanced punctuation + numerics + common
+                    # closer chars suggesting "this is a complete statement".
+                    _OK_END_CHARS = set("}.\";)$|>0123456789]'`/-+=:!?")
+                    looks_truncated = (
+                        last_stripped
+                        and len(last_stripped) < 60
+                        and last_stripped[-1] not in _OK_END_CHARS
+                    )
+                    if looks_truncated:
+                        fence_buffer[-1] = last_stripped + " # ...(truncated)"
+                        truncated_hits += 1
+                    out5.extend(fence_buffer)
+                    fence_buffer = []
+                in_fence = not in_fence
+                out5.append(line)
+                continue
+            if in_fence:
+                fence_buffer.append(line)
+            else:
+                out5.append(line)
+        if fence_buffer:
+            # Unclosed fence at EOF — flush as-is (OP-28 will close it)
+            out5.extend(fence_buffer)
+        md = "\n".join(out5)
+        stats["truncated_blocks_repaired"] = truncated_hits
+
         return md, stats
     except Exception as e:  # pragma: no cover — defensive
         logger.warning(f"[scrub] _scrub_assembled_markdown failed: {e}")
@@ -780,7 +919,10 @@ def _assemble_chapter_markdown(
             f"mintlify_fence_meta={scrub_stats['mintlify_fence_meta']} "
             f"fence_balance_fixed={scrub_stats['fence_balance_fixed']} "
             f"inline_fence_sanitized={scrub_stats['inline_fence_sanitized']} "
-            f"stacked_citations_split={scrub_stats['stacked_citations_split']}"
+            f"stacked_citations_split={scrub_stats['stacked_citations_split']} "
+            f"literal_newlines_fixed={scrub_stats['literal_newlines_fixed']} "
+            f"citation_extensions_stripped={scrub_stats['citation_extensions_stripped']} "
+            f"truncated_blocks_repaired={scrub_stats['truncated_blocks_repaired']}"
         )
     return cleaned
 
@@ -1994,7 +2136,10 @@ def _assemble_prose_chapter_markdown(
             f"mintlify_fence_meta={scrub_stats['mintlify_fence_meta']} "
             f"fence_balance_fixed={scrub_stats['fence_balance_fixed']} "
             f"inline_fence_sanitized={scrub_stats['inline_fence_sanitized']} "
-            f"stacked_citations_split={scrub_stats['stacked_citations_split']}"
+            f"stacked_citations_split={scrub_stats['stacked_citations_split']} "
+            f"literal_newlines_fixed={scrub_stats['literal_newlines_fixed']} "
+            f"citation_extensions_stripped={scrub_stats['citation_extensions_stripped']} "
+            f"truncated_blocks_repaired={scrub_stats['truncated_blocks_repaired']}"
         )
     return cleaned
 
@@ -2306,6 +2451,128 @@ def _scan_citations(
     return all_cited, issues
 
 
+# =============================================================================
+# OP-59 (2026-04-25, post-Run-13) — tree-sitter code_syntax_valid replacement
+# =============================================================================
+# Replaces the LLM critic's `code_syntax_valid` score with deterministic
+# parse-rate via tree-sitter. The parser is ground truth for "does this
+# parse?" — strictly more reliable than LLM judgment which can hallucinate
+# false errors on valid code or miss real syntax errors. Free, fast,
+# CPU-only via tree-sitter-language-pack (305 languages).
+#
+# Heuristics:
+# - Fence with empty language tag → skip (can't validate)
+# - Output-style blocks (no language, body has shell prompt `$ `) → skip
+# - Unknown language → skip (don't penalize)
+# - Score = parsed / parse_attempted (NOT total fences)
+# - Returns 1.0 if no parse-attemptable blocks (vacuously valid)
+_TREE_SITTER_LANG_ALIASES = {
+    "py": "python", "python3": "python",
+    "js": "javascript", "ts": "typescript", "tsx": "tsx", "jsx": "jsx",
+    "sh": "bash", "shell": "bash", "zsh": "bash",
+    "yml": "yaml",
+    "rs": "rust", "go": "go",
+    "rb": "ruby",
+    "kt": "kotlin",
+    "cs": "c_sharp",
+    "cpp": "cpp", "cxx": "cpp", "cc": "cpp", "c++": "cpp",
+    "hcl": "hcl", "tf": "hcl", "terraform": "hcl",
+    "dockerfile": "dockerfile", "docker": "dockerfile",
+    "json": "json", "json5": "json",
+    "html": "html", "css": "css", "scss": "css",
+    "sql": "sql",
+    "md": "markdown", "markdown": "markdown",
+    "toml": "toml",
+    "java": "java",
+    "lua": "lua",
+}
+_TREE_SITTER_FENCE_RE = re.compile(
+    r"```([a-zA-Z0-9_+\-]*)\n(.*?)\n```", re.DOTALL,
+)
+
+
+def _compute_code_syntax_valid_score(chapters: list[tuple[int, str, str]]) -> tuple[float, dict]:
+    """
+    OP-59: deterministic code_syntax_valid score via tree-sitter parse-rate
+    across all chapters. Returns (score, stats) where:
+      - score: parsed / parse_attempted (1.0 if nothing parse-attemptable)
+      - stats: per-language pass/fail counts, total skipped
+    """
+    stats = {"parsed": 0, "failed": 0, "skipped_no_lang": 0,
+             "skipped_unknown_lang": 0, "skipped_output": 0,
+             "by_lang": {}}
+    try:
+        from tree_sitter_language_pack import get_parser  # type: ignore
+    except ImportError:
+        logger.warning("[critic] tree-sitter-language-pack not installed; "
+                       "OP-59 deterministic code_syntax falls back to neutral 1.0")
+        return 1.0, stats
+    for _num, _title, body in chapters:
+        for lang_tag, code in _TREE_SITTER_FENCE_RE.findall(body):
+            lang_tag = lang_tag.lower().strip()
+            if not lang_tag:
+                # Bare ``` — likely shell output, dataframe dump, etc.
+                # Heuristic: if first content line starts with `$ ` or
+                # numeric prefix, treat as output and skip; otherwise
+                # try to detect language from content.
+                first_line = code.lstrip().split("\n", 1)[0]
+                if first_line.startswith(("$", "#", "%", ">>>", "...")):
+                    stats["skipped_output"] += 1
+                    continue
+                stats["skipped_no_lang"] += 1
+                continue
+            lang = _TREE_SITTER_LANG_ALIASES.get(lang_tag, lang_tag)
+            try:
+                parser = get_parser(lang)
+            except Exception:
+                stats["skipped_unknown_lang"] += 1
+                continue
+            try:
+                tree = parser.parse(code.encode("utf-8"))
+                ok = not tree.root_node.has_error
+            except Exception:
+                ok = False
+            lang_stats = stats["by_lang"].setdefault(lang, {"parsed": 0, "failed": 0})
+            if ok:
+                stats["parsed"] += 1
+                lang_stats["parsed"] += 1
+            else:
+                stats["failed"] += 1
+                lang_stats["failed"] += 1
+    attempted = stats["parsed"] + stats["failed"]
+    score = (stats["parsed"] / attempted) if attempted > 0 else 1.0
+    return score, stats
+
+
+def _fence_content_hash(fence_text: str) -> str:
+    """
+    OP-72B (2026-04-25, post-Run-13) — content-only fence hash.
+
+    Strip the opening line (``` + language tag + attrs) and the closing line
+    (```), keep only the body. Hash the body via sha256[:12]. Whitespace-
+    normalized: trailing whitespace stripped per line, trailing blank lines
+    dropped. Return empty string for malformed fences (no clear body).
+
+    Why content-only: Run-13 ch04 had 9 false-positive "hallucinated" flags
+    because the curator's prose-fence concatenation produced different fence
+    framing than source had — same code body, different markers. Hashing
+    body-only makes hash invariant to fence-marker formatting differences.
+    """
+    lines = fence_text.split("\n")
+    # Strip opening fence line (must start with ``` or ~~~)
+    if lines and (lines[0].lstrip().startswith("```") or lines[0].lstrip().startswith("~~~")):
+        lines = lines[1:]
+    # Strip closing fence line (last non-empty line that's just ``` or ~~~)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if lines and (lines[-1].strip() == "```" or lines[-1].strip() == "~~~"):
+        lines = lines[:-1]
+    body = "\n".join(line.rstrip() for line in lines).strip("\n")
+    if not body:
+        return ""
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:12]
+
+
 async def _scan_hallucinated_fences(
     storage: MinIOStudyStorage,
     study_root: str,
@@ -2315,10 +2582,11 @@ async def _scan_hallucinated_fences(
     Tier 2 #20 (2026-04-23) — deterministic end-to-end code-provenance check.
 
     For every fenced code block in the assembled chapter READMEs, compute
-    its sha256[:12] (same hash function the vault uses). Build the union
-    of source-file code-block hashes by re-vaulting every research/raw/*.md.
-    Any chapter-fence hash NOT present in the source set = hallucinated code
-    (code the synthesizer invented that didn't come from the docs).
+    its sha256[:12] CONTENT hash (OP-72B 2026-04-25 — body only, fence
+    markers stripped). Build the union of source-file code-content hashes
+    by re-vaulting every research/raw/*.md. Any chapter-fence hash NOT
+    present in the source set = hallucinated code (the synthesizer
+    invented content that didn't come from the docs).
 
     Runs AFTER the curator, so it catches late-drift: a clean synth output
     could theoretically get corrupted by a curator rewrite that invents new
@@ -2328,7 +2596,7 @@ async def _scan_hallucinated_fences(
 
     Returns a list of issue strings for CriticAssessment.issues.
     """
-    # 1. Union of all source code-block hashes
+    # 1. Union of all source code CONTENT hashes (OP-72B body-only)
     source_hashes: set[str] = set()
     raw_prefix = f"{study_root}/research/raw/"
     raw_keys = await storage.list(raw_prefix)
@@ -2338,11 +2606,14 @@ async def _scan_hallucinated_fences(
         try:
             body = await storage.read_text(k)
             _, source_vault = _vault_code_blocks(body)
-            source_hashes.update(_vault_bare_hashes(source_vault))
+            for fence_text in source_vault.values():
+                h = _fence_content_hash(fence_text)
+                if h:
+                    source_hashes.add(h)
         except Exception as e:
             logger.warning(f"[critic][fence-scan] could not vault source {k}: {e}")
 
-    # 2. Scan each chapter for fences; report any whose hash is not in source
+    # 2. Scan each chapter for fences; report any whose content-hash is not in source
     issues: list[str] = []
     for num, _title, chapter_body in chapters:
         try:
@@ -2355,15 +2626,16 @@ async def _scan_hallucinated_fences(
                 f"sentinels in assembled output; skipping fence scan"
             )
             continue
-        chapter_hashes = _vault_bare_hashes(chapter_vault)
-        hallucinated = sorted(chapter_hashes - source_hashes)
-        for h in hallucinated:
-            sentinel = f'<code-ref hash="{h}"/>'
-            preview = chapter_vault.get(sentinel, "")[:100].replace("\n", " ⏎ ")
-            issues.append(
-                f"chapter{num:02d}: hallucinated code fence (hash={h}) "
-                f"not present in any research/raw/ source — preview: {preview!r}"
-            )
+        for sentinel, fence_text in chapter_vault.items():
+            h = _fence_content_hash(fence_text)
+            if not h:
+                continue  # empty fence body — not actionable
+            if h not in source_hashes:
+                preview = fence_text[:100].replace("\n", " ⏎ ")
+                issues.append(
+                    f"chapter{num:02d}: hallucinated code fence (content-hash={h}) "
+                    f"not present in any research/raw/ source — preview: {preview!r}"
+                )
     return issues
 
 
@@ -2445,7 +2717,20 @@ async def _call_assembler_llm(
         "user_profile_summary": user_profile_summary_str,
         "chapter_summaries": chapter_summaries,
     })
-    return response.content.strip()
+    raw_content = response.content if hasattr(response, "content") else response
+    if isinstance(raw_content, list):
+        parts: list[str] = []
+        for block in raw_content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                btype = block.get("type", "")
+                if btype in ("text", "output_text") or btype == "":
+                    parts.append(str(block.get("text", "")))
+        raw_content = "".join(parts)
+    elif not isinstance(raw_content, str):
+        raw_content = str(raw_content)
+    return raw_content.strip()
 
 
 def _build_debt_md(

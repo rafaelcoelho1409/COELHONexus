@@ -223,6 +223,76 @@ def _celery_snapshot(study_id: str) -> dict:
 #
 # Cache: Redis with confidence-based TTL (7 days on conf ≥ 0.7, else 1 hour).
 # Reference: docs/KNOWLEDGE-DISTILLER-RESOLVER-STRATEGY.md
+# =============================================================================
+# DEBUG — GET /studies/_debug/langfuse — verify telemetry wiring
+# =============================================================================
+# OP-44 hardening (2026-04-25): one-shot probe + flush. Use to diagnose
+# "why don't I see traces in the UI?" without exec'ing into pods.
+#
+# Behavior:
+#   1. Reports env-var presence + langfuse-host + auth-check status
+#   2. Sends a synthetic test trace tagged `debug-probe` (no LLM call)
+#   3. Force-flushes the queue
+#   4. Returns the trace_id so you can search for it in the UI
+@router.get("/studies/_debug/langfuse")
+async def debug_langfuse():
+    from services.knowledge.langfuse_client import (
+        probe_langfuse,
+        flush_langfuse,
+        build_langfuse_handler,
+    )
+    result = probe_langfuse()
+    if not result["enabled"] or not result["auth_ok"]:
+        return result
+    # Send a probe trace via the SAME path real KD calls use:
+    # ChatPromptTemplate + ChatOpenAI + langfuse_config callback. This
+    # exercises the production code path end-to-end (handler creation
+    # + LangChain callback propagation + flush).
+    import os
+    try:
+        h = build_langfuse_handler()
+        result["handler_built"] = h is not None
+        if h is None:
+            result["test_trace_error"] = "handler build returned None"
+            return result
+        # Smallest possible LangChain call that exercises the callback path.
+        # Uses Gemini (cheap, fast, free tier). Works even when KD pipeline
+        # isn't running. If this trace appears in LangFuse UI, the entire
+        # callback chain is sound.
+        from langchain_openai import ChatOpenAI
+        from langchain_core.prompts import ChatPromptTemplate
+        cfg = {
+            "callbacks": [h],
+            "metadata": {"source": "debug_langfuse_endpoint"},
+            "tags": ["debug-probe"],
+        }
+        gemini_key = os.environ.get("GOOGLE_API_KEY", "").strip()
+        if gemini_key:
+            llm = ChatOpenAI(
+                model = "gemini-2.5-flash",
+                api_key = gemini_key,
+                base_url = "https://generativelanguage.googleapis.com/v1beta/openai/",
+                temperature = 0,
+                max_tokens = 8,
+            )
+            prompt = ChatPromptTemplate.from_messages([
+                ("human", "Reply with exactly the word: PONG"),
+            ])
+            chain = prompt | llm
+            resp = await chain.ainvoke({}, config = cfg)
+            result["llm_response"] = resp.content[:30] if hasattr(resp, "content") else str(resp)[:30]
+        else:
+            result["llm_response"] = "(GOOGLE_API_KEY not set; skipped LLM probe — handler still wired)"
+        flush_langfuse(reason = "debug-endpoint")
+        result["test_trace_sent"] = True
+        result["where_to_look"] = (
+            f"Filter UI traces by tag='debug-probe' at {result['host']}"
+        )
+    except Exception as e:
+        result["test_trace_error"] = f"{type(e).__name__}: {e}"
+    return result
+
+
 @router.post("/studies/resolve")
 async def resolve_study(
     payload: ResolveRequest,

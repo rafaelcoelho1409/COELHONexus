@@ -111,6 +111,18 @@ secretMappings:
     key: elasticsearch-password
   - envName: QDRANT_API_KEY
     key: qdrant-api-key
+  # OP-44 (2026-04-25, post-Run-13) — LangFuse observability credentials.
+  # Sourced from COELHOCloud terraform/modules/langfuse outputs:
+  #   terraform output -raw langfuse_init_project_public_key
+  #   terraform output -raw langfuse_init_project_secret_key
+  # Add to coelhonexus-secret via upload_env_to_k3d.sh, keys:
+  #   langfuse-public-key, langfuse-secret-key, langfuse-host
+  - envName: LANGFUSE_PUBLIC_KEY
+    key: langfuse-public-key
+  - envName: LANGFUSE_SECRET_KEY
+    key: langfuse-secret-key
+  - envName: LANGFUSE_HOST
+    key: langfuse-host
   - envName: POSTGRES_PASSWORD
     key: postgres-password
   - envName: WARP_PROXY_USER

@@ -1031,6 +1031,118 @@ Before kicking Run-13, ensure:
 6. **OP-25 timeouts** halve the cascade pause on Gemini 2.5-flash and Mistral medium. If those providers are quota-dead today, you'll see them skipped faster (~60s vs 120s). Alternatively: if Gemini quota has reset, runs perfectly normally.
 7. **OP-33 hallucination guard** activates only when iter N had `invented > 0`. If the cascade is healthy, you may not see it fire at all this run.
 
+---
+
+### 📋 Run-13 post-mortem (Docker, 2026-04-25)
+
+**Result: FIRST end-to-end successful run across 13 attempts.** 8/8 chapters committed (zero sentinels), wall-clock 3h 21min, critic produced real numbers (overall=0.88, citation_coverage=1.00, faithfulness=0.78, code_syntax_valid=0.86) — above the 0.85 acceptance threshold. summary.md + DEBT.md written. OP-50 + OP-46 + OP-30 + OP-45 all validated in production.
+
+**Per-chapter chapter-review grades** (manual read of all 8 + summary + DEBT):
+
+| Ch | Title | Lines | Grade | Notable |
+|---|---|---|---|---|
+| 01 | Docker CLI & Management | 909 | A− | Clean `docker context`/`attach`/swarm flows |
+| 02 | Engine, Storage, Extensions | 737 | B− | 7 broken citation slugs, 1 Go syntax error, 1 TS dup decl |
+| 03 | Development & Deployment | 2222 | A− | Largest. Multi-stage Dockerfile + Compose dev/prod profiles. |
+| 04 | Setup, Config & Orchestration | 295 | **D** | **9 hallucinated code fences** + thin chapter |
+| 05 | Docker CLI Operations | 1668 | A | Container lifecycle, signals, networks/DNS |
+| 06 | Build System & AI Tools | 1543 | C+ | OP-38 chapter intro present BUT zero `# docs:` citations across whole chapter |
+| 07 | Secure Builds & Supply Chain | 1213 | A− | Docker Scout / SLSA / SBOM with real CLI output |
+| 08 | Ecosystem, Extensions, Security | 1103 | B+ | DHI overview, extensions security |
+
+**Material-quality findings driving next-batch improvements:**
+
+| # | Defect observed | Priority | Effort | Effect |
+|---|---|---|---|---|
+| **OP-72** | **CRITICAL: Tier 0a vault invariant violated.** Ch04 had 9 hallucinated code fences flagged by `_scan_hallucinated_fences` (sha256[:12] not present in any research/raw/ source). Tier 0a code-vault is supposed to make this physically impossible — the LLM never sees actual code, only sentinels. So either (a) curator embedded fences in `prose_md` from its own generation (not a vault round-trip), (b) synth fallback path bypassed the vault entirely on cascade exhaustion, or (c) scrubber Pass 4 OP-29 inserted `\`\`\`` somewhere it shouldn't. **Investigation step required before any code change.** Read `_curate_one` flow + `_assemble_chapter_markdown` flow + `_scrub_assembled_markdown` Pass 3/4 with ch04's actual content. ~30 min investigation. | **P0 BLOCKER** | ~30 min investigation, then unknown LoC | This is the most serious quality defect in Run-13. Tier 0a is the load-bearing safety net for "code is verbatim from source"; if it can be bypassed, every future chapter has an unbounded hallucination risk. Must investigate before adding more code. |
+| **OP-73** | **Stricter zero-citation enforcement.** Ch06 (1543 lines) had ZERO `# docs:` citations across the whole chapter. OP-23's `__zero_citations__` sentinel was added precisely for this case but didn't trigger. Investigate why: maybe ch06 had `total_citation_markers > 0` from its first section but was unequal across sections, OR `nontrivial_section_count` heuristic was off. Tighten the gate to require minimum-citations-per-1000-prose-words, e.g. ≥3. | **P0** | ~15 LoC in `_audit_structured_output_refs` | Ch06's content is otherwise good (real DMR API examples, OP-38 intro present), but zero citations = unbacked claims. This is a structural quality fail that rejects the whole chapter on principle. |
+| **OP-69** | **Citation slug normalizer at assembly.** Ch01 had 4 citations with stale `.md` extension (`# docs: docs-docker-com-engine-manage-resources-contexts.md` should be `...contexts` to match the resolver-emitted slug format). Strip `.md`/`.txt`/`.rst` extensions from any `# docs:` line during assembly. | P1 | ~5 LoC in scrubber Pass 6 | Cosmetic but breaks downstream tooling: citation-coverage scan strips by extension OR by exact match — inconsistency means coverage might over- or under-count. |
+| **OP-70** | **Code-block truncation detector.** Ch01 ended a code block mid-word (`--icc Enab`); ch07 had `RUN ap` truncated. OP-22's fence-balance detector only counts ` ``` ` openers vs closers, not whether content ends abruptly. Add Pass 7: detect code blocks ending in mid-word/mid-line (no terminating newline-then-closing-fence) and trim trailing partial line. | P1 | ~20 LoC | Truncated code blocks confuse readers and break copy-paste. Visible quality defect. |
+| **OP-71** | **Pre-flight citation-slug existence check at synth.** Ch02 had 7 broken citation slugs (cited files that don't exist as research/raw/*.md). The synth LLM may invent slug names. Add to audit: parse all `# docs:` from prose_md, intersect with `chapter.assigned_files` slug list, force refine if any not found. | P1 | ~25 LoC in audit + feedback | Catches the bug at synth time (LLM can correct on iter N+1), not at critic time (too late to fix). |
+| **OP-74** | **Topic-overlap detector (planner-time).** Run-13 had ch01 + ch05 both about CLI, ch02 + ch08 both about extensions. This is the OP-24 idea (TF-IDF cosine + Jaccard) but observed empirically again. Reraise priority. | P1 | ~100 LoC in planner (was OP-24, re-prioritized) | Reduces cross-chapter redundancy and chapter-content overlap. Run-13 evidence supports it strongly. |
+| **OP-75** | **Audit-time minimum chapter length floor.** Ch04 was 295 lines (vs Run-13 average 1212). Pure-canary path didn't apply minimum length. Add: any chapter < 800 lines (assembled markdown) AND <30% of average across siblings → force regenerate at planner time (split larger sibling, reassign files). | P2 | ~30 LoC in planner + audit | Prevents skeletal chapters that don't justify their slot in the study. Ch04 D grade is largely about thinness. |
+
+**Cross-cutting confirmation of earlier-proposed OPs from Run-13 evidence:**
+
+- **OP-55** (literal `\n` scrubber): some `\n\n` leakage observed in ch04 — confirmed needed.
+- **OP-31 tweak (≤3 → ≤5)**: would have converted ch04 + ch08's 5-thin commits to ACCEPT. Confirmed.
+- **OP-57** (chapter-intro audit gate): ch06 has perfect intro (OP-38 prompt landed); ch01/03/05 don't. Audit gate would force the laggards. Confirmed needed.
+- **OP-44** (LangFuse keys): every "what would this cost on Anthropic?" / "which model failed most?" question is unanswerable without it. Confirmed urgent.
+- **OP-58** (bm25s migration), **OP-59** (tree-sitter code_syntax), **OP-65** (DeBERTa-v3-NLI faithfulness pre-filter): see `KD-CLASSICAL-OPTIMIZATION.md` for full SOTA-classical-replacement plan; would address the critic's faithfulness=0.78 + code_syntax=0.86 gaps with deterministic ground truth instead of LLM judgment.
+
+**Strict-priority Run-14 batch (after Run-13 review):**
+
+1. **OP-72 investigation** — read curator + assembler + scrubber paths; identify how ch04's hallucinated fences slipped past Tier 0a. Block all other work until understood.
+2. **OP-73** — stricter zero-citation gate (closes the ch06 gap).
+3. **OP-31 tweak** — ≤3 → ≤5 thin sections to ACCEPT (converts current DEBT chapters to real ACCEPT).
+4. **OP-55** — literal `\n` scrubber.
+5. **OP-69 + OP-70** — citation slug normalizer + code-truncation detector.
+6. **OP-57** — chapter-intro audit gate.
+7. **OP-44** — LangFuse keys to secret (operational unlock).
+
+Total ~150 LoC (after OP-72 investigation). Conservative estimate: 4 of Run-14's chapters would commit as real ACCEPT (vs Run-13's 0).
+
+---
+
+### ✅ Shipped on 2026-04-25 (Run-13 post-mortem batch + classical optimization start)
+
+OP-72 investigation result: **NOT a Tier 0a violation**. The 9 "hallucinated fences" on Run-13 ch04 were FALSE POSITIVES — curator's prose-then-fence concatenation produced different fence framing (e.g., ` ```\n``` ``` `) that markdown-it-py later parsed as different fence boundaries than source had. Code content WAS verbatim-from-source per Tier 0a guarantee. Two sub-fixes shipped together (OP-72A curator-side + OP-72B critic-side).
+
+Eleven OPs shipped in one batch (~250 LoC across 6 files):
+
+| # | What shipped | Files touched |
+|---|---|---|
+| **OP-72A** | Curator regex post-pass forces fence-isolated newlines: `re.sub(r"(\S)\s*```", r"\1\n\n```", curated)` etc. Eliminates `\`\`\`\n\`\`\` \`\`\`\n` malformedness. | `graphs/knowledge/distiller.py::_curate_one` |
+| **OP-72B** | `_scan_hallucinated_fences` now hashes fence CONTENT only (body-between-markers), via new helper `_fence_content_hash`. Markdown-formatting differences no longer false-positive flag. | `graphs/knowledge/helpers.py` |
+| **OP-31 tweak** | Thin-section ACCEPT threshold ≤3 → **≤5** (3 LoC). Run-13 ch02+ch04 both committed at 5-thin shape; raising lets them ACCEPT in Run-14. | `graphs/knowledge/distiller.py` (Self-Refine gate) |
+| **OP-73** | Stricter citation-density gate: any chapter with ≥500 prose words AND <3 citations per 1000 words triggers `__zero_citations__` sentinel. Closes Run-13 ch06's zero-citation slip. | `graphs/knowledge/helpers.py::_audit_structured_output_refs` |
+| **OP-55** | Pass 6 of `_scrub_assembled_markdown`: literal `\n\n` → real newlines (in prose only, not inside fences). | `graphs/knowledge/helpers.py` |
+| **OP-69** | Pass 7: citation slug `.md`/`.txt`/`.rst` extension stripper. Normalizes `# docs: foo.md` → `# docs: foo`. | `graphs/knowledge/helpers.py` |
+| **OP-70** | Pass 8: code-block truncation detector. Detects fences ending mid-word (`RUN ap` / `--icc Enab`) and appends visible `# ...(truncated)` marker. | `graphs/knowledge/helpers.py` |
+| **OP-57** | Chapter-intro audit gate: first section's `prose_md` MUST contain ≥2 complete sentences (each ≥40 chars, ending in `.!?`) BEFORE any inline `code` span or `# docs:` citation. New sentinel `__no_chapter_intro__`. | `graphs/knowledge/helpers.py::_audit_structured_output_refs` + `_format_structured_output_feedback` |
+| **OP-44** | LangFuse secret mappings added to `k8s/helm/values.yaml`: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`. User adds keys to `coelhonexus-secret` via `upload_env_to_k3d.sh` (sourced from COELHOCloud `terraform output -raw langfuse_init_project_*`). | `k8s/helm/values.yaml` |
+| **OP-60** | mdformat post-curator pass for syntax-level normalization (heading depth, list markers, fence languages, line wrapping). Pure-Python (MIT). Defensive try/except. | `graphs/knowledge/distiller.py::_curate_one` + `pyproject.toml` |
+| **OP-59** | tree-sitter REPLACES LLM `code_syntax_valid` critic dimension. New helper `_compute_code_syntax_valid_score(chapters)` parses every fenced block with tree-sitter (305 languages via `tree-sitter-language-pack`). Score = parsed/attempted. Strictly more reliable than LLM judgment. | `graphs/knowledge/helpers.py` + `distiller.py::critic` + `pyproject.toml` |
+
+**Deferred:** OP-58 (bm25s migration) — current BM25F is hand-rolled pure-Python, not using `rank-bm25`; bm25s's 100-500× speedup matters at >10k docs scale, our 100-300 docs/chapter scale = 0.1s saving. Defer until BM25 is actually hot.
+
+**New deps added to pyproject.toml**: `mdformat>=0.7`, `mdformat-gfm>=0.3`, `tree-sitter>=0.23`, `tree-sitter-language-pack>=0.4` (pinned `<1.6` because v1.6.2/1.6.3 only ship cp314 wheels). All MIT/Apache-2.0, all CPU-only.
+
+### ✅ Shipped on 2026-04-25 — LangFuse trace-delivery hardening (post-Run-14 attempt)
+
+Run-14 attempt revealed: **traces not appearing in UI** despite valid keys (auth_check=True from in-pod probe) and correct CallbackHandler creation. Root cause: long-running Celery worker process never triggers LangFuse SDK's auto-flush (default = process exit OR ~100-event threshold). Mid-run trace visibility was effectively zero.
+
+Six independent fixes shipped together as **OP-44 hardening batch**:
+
+| # | What shipped | Why |
+|---|---|---|
+| **OP-44b** | Singleton `CallbackHandler` (was per-call instantiation). Reuses one instance across all calls; LangFuse SDK's internal trace-context tracking now consistent. | Per-call handlers worked but each created overhead + potential context confusion |
+| **OP-44c** | Background flush thread (15s interval, daemon). Started ONCE on first `build_langfuse_handler()` call. | Eliminates the worst-case "traces invisible until process exit" scenario |
+| **OP-44d** | Explicit `flush_langfuse(reason=...)` in EVERY LangGraph node wrapper closure (try/finally pattern around `_ingest`, `_planner`, `_synthesize_chapter`, `_canary_synth`, `_curator`, `_critic`, `_assembler`). | Per-node flush = per-node UI visibility within ~200ms of node completion |
+| **OP-44e** | Celery task `after_return` flush hook — explicit flush at task success AND in exception handler before re-raise. | Final flush guarantees all traces visible in UI before task returns to broker, even on crash |
+| **OP-44f** | Init-time `_force_init_log()` showing host + masked public_key + auth_check status. One log line at first handler build for project-id verification. | Lets user verify "is this pointing at the project I'm looking at in the UI?" without exec'ing into pod |
+| **OP-44g** | New debug endpoint `GET /api/v1/knowledge/studies/_debug/langfuse`. Reports env+auth status + sends a synthetic test trace tagged `debug-probe` + force-flushes. Returns trace_id and "where to look" hint. | Single curl from laptop verifies end-to-end pipeline without needing to run a study |
+| **OP-44h** | Optional verbose-flush mode via `LANGFUSE_FLUSH_VERBOSE=1` env var. Logs every flush attempt for deep debugging. | Off by default (noisy); on when you need to count flush events |
+
+**Result**: three independent paths to UI visibility (per-node + 15s background + per-task), so even if one fails the other two cover it. Telemetry failures are logged at WARN, never crash the worker.
+
+**How to verify after worker bounce:**
+```bash
+# 1. One-shot probe (no study needed)
+curl http://localhost:23020/api/v1/knowledge/studies/_debug/langfuse
+# Returns: enabled, auth_ok, test_trace_sent, where_to_look
+
+# 2. Open UI, filter by tag=debug-probe → should see the test trace within 5s
+
+# 3. Run a study, watch traces appear in UI within 15-30s of MAP-shard completion
+```
+
+**Bytecompile clean** on every modified file.
+
+### Run-14 forecast
+
+With OP-31 tweak alone, Run-13's ch02 + ch04 (both at `0/0/0/0/0/5 thin`) would have ACCEPTed instead of DEBT. Add OP-73 + OP-72B (faster correct critic) and Run-14 should produce **2-4 real ACCEPT chapters** + significantly cleaner critic scoring (no false-positive hallucinated-fence flags, deterministic code_syntax_valid via parser).
+
 *Second wave — architectural (ship after first-wave data):*
 
 | # | Proposal | Effort | Est. impact |
@@ -1212,6 +1324,69 @@ by critic).
 Book Distiller + Deep Research. **#21** (structured-output synth) is
 the architectural end-state if a post-Tier-0 audit shows vault is
 insufficient for a meaningful slice of chapters.
+
+---
+
+## Run-16 post-mortem — heterogeneous chapter outcomes (2026-04-25)
+
+**Observed**: 9/10 DEBT + 1 sentinel (ch03 terminal timeout). Zero ACCEPT. The
+Self-Refine loop oscillated rather than converged on chapters with vault > 50
+hashes — iter N often regressed worse than iter N-1, with iter 1 frequently
+the local minimum. OP-7 early-stop and OP-12 commit-best-seen + OP-19 rescue
+worked correctly; the pipeline didn't deadlock, but quality varied wildly
+chapter-to-chapter (ch04 = good despite DEBT flag, ch01/06 = genuinely thin).
+
+**Root causes (hypotheses, ranked by probable impact)**:
+  1. **Vault-size overload**: structured-output models (NIM Kimi/DeepSeek,
+     Mistral Devstral, Gemini Flash) reliably struggle past ~50 vault hashes
+     per call. Run-13 (Docker) had ~30 hashes/chapter and converged cleanly;
+     Run-16 (LangChain stack) had 51-118 hashes and oscillated.
+  2. **Self-Refine feedback loop drives the wrong direction**: iter N's
+     "fix this thin section" prompt makes iter N+1 drop hashes to zero out
+     thin sections (perverse trade-off — see ch07 iter 4: 60 missing / 0 thin).
+  3. **Provider quota collapse mid-run**: Gemini RESOURCE_EXHAUSTED hit ~2h
+     in, narrowing the cascade just as ch10 (118-hash monster) needed it.
+  4. **OP-73 zero-citation gate is harsher than synth model can satisfy**:
+     several chapters had 0 missing / 0 invented but 8-16 thin sections —
+     pre-OP-73 these would have ACCEPTed. The gate caught real quality issues
+     but at a rate the model can't reliably hit on large vaults.
+
+**Required improvements (don't focus now — reinforce as future tier)**:
+  - **OP-CHUNK-VAULT (highest-leverage)**: split synth into vault-size
+    sub-batches (~30 hashes each), then merge. Trades 1 LLM call per
+    chapter for 3-4 calls but each operates in the structured-output
+    sweet spot. Likely fixes 80% of the oscillation pattern.
+  - **OP-ADAPT-THRESHOLD**: scale OP-31 ACCEPT thin-section limit by
+    chapter size (currently fixed at 5; should be `max(5, vault_size//10)`
+    so a 100-hash chapter tolerates up to 10 thin sections).
+  - **OP-ANTI-OSCILLATE**: detect oscillation explicitly (iter N regresses
+    AND iter N-1 also regressed) and bail early to OP-12 commit-best-seen
+    instead of burning iters 3-5 on Self-Refine that's gone the wrong way.
+  - **OP-LARGE-MODEL-ESCALATE**: when vault > 50, route synth to a
+    larger-context structured-output model (Gemini 2.5 Pro, Claude Opus,
+    GPT-4o) instead of the standard NIM/Mistral cascade. Cost premium
+    ~5-10× per chapter but avoids the oscillation entirely.
+  - **OP-CACHE-DEBT-OUTPUT**: write DEBT chapters to the synth cache by
+    default (not gated behind `skip_below_threshold=true`), so re-runs
+    only re-attempt the genuinely failed (sentinel) chapters. Currently
+    a re-run after a Run-16-class outcome re-synthesizes ALL 10 chapters
+    even though 9 have committed content.
+  - **OP-PROVIDER-PRESHIELD**: track per-provider cooldown signals
+    (Gemini quota, NIM 502 rate) and pre-emptively reorder the cascade
+    so a known-degraded provider isn't retried 3× in a row mid-iter.
+
+**LangFuse instrumentation gaps surfaced by Run-16** (separate from above):
+  - Per-model/provider success/fail counters need price-table loading
+    in LangFuse Settings → Models for cost tracking to work.
+  - `metadata.langfuse_session_id = study_id` binding so all spans for
+    one study chain into a single drilldown view.
+  - Cast int metadata (shard_idx, chapter_number, meta_id) to str so
+    OTel doesn't drop them with "Propagated attribute is not a string".
+  - `litellm.success_callback=["langfuse"]` for per-provider attempt
+    spans — currently we only see the LangChain wrapper's combined span,
+    losing visibility into the cascade ("tried NIM → 502 → fell to Gemini").
+  - Failure tags: `error`, `timeout`, `op19-rescue`, `op7-early-stop`,
+    `sentinel`, `debt` so dashboards can count failure rates per chapter.
 
 ---
 
