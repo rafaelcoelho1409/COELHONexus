@@ -335,6 +335,19 @@ SYNTHESIZER_PROMPT = ChatPromptTemplate.from_messages([
         "   function that does Z using this framework').\n"
         "3. flashcards — 8-15 Anki-style Q/A pairs. Front = concise prompt, "
         "   back = precise answer. Each pair should stand alone.\n\n"
+        "PROSE-DENSITY RULES (OP-38 + OP-40, 2026-04-25):\n"
+        "  - The FIRST section of the chapter MUST open with 2-3 sentences of "
+        "ORIENTATION before any code block: what the reader will learn, why "
+        "it matters, what prerequisites are assumed. This is non-negotiable "
+        "for cold-read entry.\n"
+        "  - For EVERY code_ref a section places, write 2-3 sentences of "
+        "explanation BEFORE that code in prose_md: what the snippet does, "
+        "when to use it, the non-obvious parameter or return value. Don't "
+        "pad — each sentence must add information the reader cannot see "
+        "from the code alone.\n"
+        "  - A section with N code_refs needs roughly 2N-3N concrete "
+        "sentences of teaching prose. Sections with code-dump shape "
+        "(many refs, few words) fail the audit and force a refine.\n\n"
         "{tone_block}\n\n"
         "If previous_adjustments is non-empty, apply those corrections — the "
         "audit or grader flagged issues on a prior attempt."
@@ -380,6 +393,58 @@ SYNTHESIZER_PROMPT = ChatPromptTemplate.from_messages([
         "`code_refs` lists. If lower, add the missing hashes to the sections "
         "where the code logically belongs before returning.\n\n"
         "Synthesize the chapter."
+    ),
+])
+
+
+# =============================================================================
+# OP-46 (2026-04-25, post-Run-12) — prose-only synthesizer prompt
+# =============================================================================
+# Used when the chapter's source files contain ZERO fenced code blocks
+# (security policies, compliance docs, design philosophy, best-practices
+# narratives). Run-12 evidence: Docker chapters had code_vault={} → the
+# regular synth prompt forced the LLM to invent code_refs from nothing,
+# which cascaded to None across all healthy models. This variant skips
+# all hash-related instructions and audits.
+SYNTHESIZER_PROSE_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are the Chapter Synthesizer, prose-only variant. The source "
+        "documentation for this chapter contains NO fenced code blocks — "
+        "this is a prose-heavy chapter (security policy, compliance, design "
+        "philosophy, organizational practice, etc.). Your output is a "
+        "structured ProseChapterOutput with sections, challenges, and "
+        "flashcards. NO code_refs field. NO ``` fenced code blocks.\n\n"
+        "Output shape:\n"
+        "1. sections — ordered list of ProseSection objects. Each Section has:\n"
+        "     - heading: 2-8 words, concrete, no leading '#' markers.\n"
+        "     - prose_md: body markdown. NO triple-backtick (```) fenced "
+        "code blocks (the source had none). Inline `code` spans (single "
+        "backtick) for short identifiers are fine. Include `# docs: "
+        "<file_slug>` citations on their own lines for every non-trivial "
+        "claim.\n"
+        "2. challenges — 5-10 active-recall questions; mix conceptual and "
+        "applied where the domain allows.\n"
+        "3. flashcards — 4-15 Anki Q/A pairs.\n\n"
+        "PROSE-DENSITY RULES:\n"
+        "  - First section opens with 2-3 sentences of orientation: what "
+        "the reader will learn, why it matters, prerequisites.\n"
+        "  - Every substantive claim cites its source with `# docs: <slug>`.\n"
+        "  - Dense, production-focused phrasing. Concrete > abstract. "
+        "Specific examples > generic principles.\n\n"
+        "{tone_block}\n\n"
+        "If previous_adjustments is non-empty, apply those corrections."
+    ),
+    (
+        "human",
+        "Framework: {framework}\n"
+        "Chapter: {chapter_number} — {chapter_title}\n"
+        "Goal: {chapter_goal}\n\n"
+        "Assigned documentation files (prose-only, no fenced code):\n"
+        "{assigned_files_content}\n\n"
+        "Previous adjustments (empty on first attempt):\n"
+        "{previous_adjustments}\n\n"
+        "Synthesize the chapter as ProseChapterOutput."
     ),
 ])
 

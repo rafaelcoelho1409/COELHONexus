@@ -481,6 +481,64 @@ class ChapterOutput(BaseModel):
 
 
 # =============================================================================
+# OP-46 (2026-04-25, post-Run-12) — prose-only chapter output
+# =============================================================================
+# Variant of ChapterOutput for chapters whose source files contain ZERO
+# fenced code blocks (security policies, compliance docs, design philosophy,
+# best-practices narratives). Run-12 evidence: 7/7 Docker chapters had
+# code_vault={} → ChapterOutput's code_refs constraint forced the LLM to
+# either return None (cascade exhaustion) or hallucinate hashes. Prose-only
+# path skips code_refs entirely; audit becomes citation + length checks.
+class ProseSection(BaseModel):
+    """Section variant for chapters with no fenced code blocks. Prose only."""
+    heading: str = Field(
+        description = (
+            "Section heading WITHOUT leading '#' markers — the assembler adds "
+            "the right heading level. 2-8 words. Avoid 'Introduction', "
+            "'Overview', 'Summary', 'Conclusion'."
+        ),
+    )
+    prose_md: str = Field(
+        description = (
+            "Section body as markdown. RULES:\n"
+            " 1. NO triple-backtick (```) fenced code blocks — this chapter's "
+            "source had none, so the synthesizer must not invent any. Use "
+            "inline `code` spans (single backtick) for short identifiers.\n"
+            " 2. Include `# docs: <file_slug>` citations on their own lines for "
+            "every non-trivial claim. The assembler preserves them verbatim.\n"
+            " 3. Dense, production-focused phrasing. Concrete > abstract."
+        ),
+    )
+
+
+class ProseChapterOutput(BaseModel):
+    """
+    Prose-only structured output for chapters whose vault is empty.
+    No code_refs field; no hash placement audit. Returned by
+    `_synthesize_attempt` when `len(code_vault) == 0`.
+    """
+    sections: list[ProseSection] = Field(
+        min_length = 1,
+        description = (
+            "Ordered list of chapter sections. First section's heading becomes "
+            "the top content under the chapter's H1 title; subsequent sections "
+            "become H2s."
+        ),
+    )
+    challenges: str = Field(
+        description = (
+            "5-10 active-recall questions as a markdown numbered list. Mix of "
+            "conceptual and applied (where applicable to a code-free domain)."
+        ),
+    )
+    flashcards: list[Flashcard] = Field(
+        min_length = 4,
+        max_length = 15,
+        description = "4-15 Anki-style Q/A pairs."
+    )
+
+
+# =============================================================================
 # Critic — post-synthesis RAGAS-style verification (runs ONCE after all chapters)
 # =============================================================================
 class CriticAssessment(BaseModel):

@@ -394,9 +394,30 @@ async def ingest_framework_docs(
     # already content-validated the file; Tier 1 just fetches it.
     if cfg.tier == 1:
         logger.info(f"[ingest] dispatcher → Tier 1 (llms-full.txt) for {cfg.framework!r}")
+        from services.knowledge.llms_full_ingest import (
+            ingest_llms_full_txt,
+            TierOneManifestDetected,
+        )
         try:
-            from services.knowledge.llms_full_ingest import ingest_llms_full_txt
             return await ingest_llms_full_txt(cfg, storage)
+        except TierOneManifestDetected as md:
+            # OP-50 (2026-04-25, post-Run-12) — Docker case: llms-full.txt
+            # was actually a llms.txt manifest. Falls through to Tier 2
+            # (llms.txt parallel fetch) which knows how to consume the
+            # URL: + Markdown: pointers natively. Skip Tier 4 Playwright
+            # for this branch — Tier 2 is the right tool.
+            logger.warning(
+                f"[ingest] Tier 1 → Tier 2 downgrade for {cfg.framework!r}: {md}"
+            )
+            try:
+                from services.knowledge.llms_txt_ingest import ingest_llms_txt
+                return await ingest_llms_txt(cfg, storage)
+            except Exception as e2:
+                logger.warning(
+                    f"[ingest] Tier 2 (after Tier 1 manifest downgrade) "
+                    f"failed for {cfg.framework!r} ({e2}); "
+                    f"falling back to Tier 4 Playwright"
+                )
         except Exception as e:
             logger.warning(
                 f"[ingest] Tier 1 failed for {cfg.framework!r} ({e}); "

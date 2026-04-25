@@ -30,6 +30,7 @@ from schemas.knowledge.agents import (
     ChapterPlanList,
     ChapterSynthesis,
     GraderEvaluation,
+    ProseChapterOutput,  # OP-46 (2026-04-25)
 )
 from schemas.knowledge.ingestion import ManifestEntry
 from schemas.knowledge.inputs import UserProfile
@@ -38,6 +39,7 @@ from schemas.knowledge.prompts import (
     ASSEMBLER_PROMPT,
     GRADER_PROMPT,
     SYNTHESIZER_PROMPT,
+    SYNTHESIZER_PROSE_PROMPT,  # OP-46 (2026-04-25)
 )
 from services.knowledge.storage import MinIOStudyStorage
 
@@ -557,6 +559,22 @@ _MINTLIFY_ORPHAN_RE = re.compile(
     re.IGNORECASE,
 )
 
+# OP-36 (2026-04-25) — Mintlify code-fence metadata scrubber.
+# Run-11 evidence: every code block in LangChain output had
+# `theme={"theme":{"light":"catppuccin-latte","dark":"catppuccin-mocha"}}`
+# trailing the language tag on the fence opener line. Mintlify renders this
+# (it's their syntax-highlight theme switcher), but anywhere else it's
+# noise on every single code block. Also catches: `expandable`, `lines`,
+# `title="..."`, `wrap`, `icon="..."`, `actions={...}`, and other Mintlify
+# fence attributes. Strips everything from the language tag onward.
+_MINTLIFY_FENCE_META_RE = re.compile(
+    # Anchors at line start, captures: leading whitespace + ``` + optional
+    # language tag, then captures everything else on the line up to EOL.
+    # Replacement keeps the prefix (whitespace + ``` + lang) and drops the rest.
+    r"^(\s*```[a-zA-Z0-9_+\-]*)\s+(?:theme=|expandable\b|lines\b|title=|wrap\b|icon=|actions=|highlight=|focus=|filename=|copy=)[^\n]*$",
+    re.MULTILINE,
+)
+
 
 def _scrub_assembled_markdown(md: str) -> tuple[str, dict[str, int]]:
     """
@@ -567,10 +585,21 @@ def _scrub_assembled_markdown(md: str) -> tuple[str, dict[str, int]]:
     stats = {
         "raw_corpus_boundaries": 0,
         "mintlify_orphans": 0,
+        "mintlify_fence_meta": 0,
         "fence_balance_fixed": 0,
         "inline_fence_sanitized": 0,
+        "stacked_citations_split": 0,
     }
     try:
+        # Pass 0 (OP-36) — Mintlify fence metadata stripper. Runs FIRST so
+        # subsequent passes see clean fence opener lines. Replaces lines like
+        # ` ```python theme={"theme":{...}} `  →  ` ```python `. Same for
+        # `expandable`, `lines`, `title=`, `wrap`, `icon=`, `actions=`, etc.
+        meta_matches = _MINTLIFY_FENCE_META_RE.findall(md)
+        if meta_matches:
+            md = _MINTLIFY_FENCE_META_RE.sub(r"\1", md)
+            stats["mintlify_fence_meta"] = len(meta_matches)
+
         # Pass 1 (OP-22a) — raw `--- docs-foo.md ---` boundary markers.
         boundaries = _RAW_CORPUS_BOUNDARY_RE.findall(md)
         if boundaries:
@@ -641,6 +670,45 @@ def _scrub_assembled_markdown(md: str) -> tuple[str, dict[str, int]]:
         md = "\n".join(out2)
         stats["inline_fence_sanitized"] = inline_hits
 
+        # Pass 5 (OP-37, 2026-04-25) — stacked citation reformatter.
+        # Run-11 evidence: prose lines often had `# docs: foo.md # docs: bar.md
+        # # docs: baz.md` — 4-6 citations concatenated on one line, hurting
+        # readability. Split each `# docs: ...` onto its own line. Skip lines
+        # inside fenced code blocks (citations inside code are intentional).
+        out3: list[str] = []
+        in_fence = False
+        stacked_hits = 0
+        _stacked_re = re.compile(r"\s+(?=#\s*docs:\s*\S)")
+        for line in md.splitlines():
+            stripped = line.lstrip()
+            if stripped.startswith("```"):
+                in_fence = not in_fence
+                out3.append(line)
+                continue
+            if in_fence:
+                out3.append(line)
+                continue
+            # Prose region. Count `# docs:` markers; if >1, split.
+            n_markers = len(re.findall(r"#\s*docs:\s*\S", line))
+            if n_markers > 1:
+                # Use single-marker split: insert newlines BEFORE each
+                # `# docs:` marker except the first occurrence on the line.
+                first_idx = line.find("#")
+                # Apply the split to the part AFTER the first marker.
+                if first_idx >= 0:
+                    head = line[:first_idx]
+                    tail = line[first_idx:]
+                    pieces = _stacked_re.split(tail)
+                    if len(pieces) > 1:
+                        out3.append((head + pieces[0]).rstrip())
+                        for p in pieces[1:]:
+                            out3.append(p.rstrip())
+                        stacked_hits += len(pieces) - 1
+                        continue
+            out3.append(line)
+        md = "\n".join(out3)
+        stats["stacked_citations_split"] = stacked_hits
+
         return md, stats
     except Exception as e:  # pragma: no cover — defensive
         logger.warning(f"[scrub] _scrub_assembled_markdown failed: {e}")
@@ -709,8 +777,10 @@ def _assemble_chapter_markdown(
             "[assembler] scrub applied: "
             f"raw_corpus_boundaries={scrub_stats['raw_corpus_boundaries']} "
             f"mintlify_orphans={scrub_stats['mintlify_orphans']} "
+            f"mintlify_fence_meta={scrub_stats['mintlify_fence_meta']} "
             f"fence_balance_fixed={scrub_stats['fence_balance_fixed']} "
-            f"inline_fence_sanitized={scrub_stats['inline_fence_sanitized']}"
+            f"inline_fence_sanitized={scrub_stats['inline_fence_sanitized']} "
+            f"stacked_citations_split={scrub_stats['stacked_citations_split']}"
         )
     return cleaned
 
@@ -1848,6 +1918,85 @@ async def _synthesize_attempt(
         },
         langfuse_tags = [f"ch{chapter.number:02d}", "synth"],
     )
+
+
+# OP-46 (2026-04-25, post-Run-12) — prose-only synth helper for chapters
+# whose source files have ZERO fenced code blocks. Bypasses code_refs entirely;
+# returns a ProseChapterOutput which is then assembled by
+# _assemble_prose_chapter_markdown into a code-free chapter README.
+async def _synthesize_prose_attempt(
+    chapter: ChapterPlan,
+    files_content: str,
+    framework: str,
+    tone_block: str,
+    previous_adjustments: list[str],
+    llm,
+    iteration: int | None = None,
+    study_id: str | None = None) -> ProseChapterOutput:
+    """
+    Single prose-only synthesis attempt. Used by `synthesize_chapter` when
+    `len(code_vault) == 0`. Returns a `ProseChapterOutput` (sections w/
+    heading + prose_md only, NO code_refs); caller assembles the markdown
+    via `_assemble_prose_chapter_markdown`.
+    """
+    return await _invoke_structured_with_fallback(
+        prompt = SYNTHESIZER_PROSE_PROMPT,
+        llm = llm,
+        schema = ProseChapterOutput,
+        invoke_vars = {
+            "framework": framework,
+            "chapter_number": chapter.number,
+            "chapter_title": chapter.title,
+            "chapter_goal": chapter.goal,
+            "assigned_files_content": files_content,
+            "tone_block": tone_block,
+            "previous_adjustments": _format_adjustments(previous_adjustments),
+        },
+        label = f"synth-prose ch{chapter.number:02d}",
+        langfuse_metadata = {
+            "framework": framework,
+            "chapter_number": chapter.number,
+            "iteration": iteration,
+            "study_id": study_id,
+            "prose_only": True,
+        },
+        langfuse_tags = [f"ch{chapter.number:02d}", "synth", "prose-only"],
+    )
+
+
+def _assemble_prose_chapter_markdown(
+    output,  # ProseChapterOutput
+    chapter_title: str | None = None,
+) -> str:
+    """
+    OP-46 — assemble prose-only chapter (no fenced code blocks). Mirrors
+    `_assemble_chapter_markdown` shape but emits ONLY heading + prose.
+    Runs through the same `_scrub_assembled_markdown` post-processor for
+    Mintlify orphans / fence balance / inline-backtick sanity.
+    """
+    parts: list[str] = []
+    if chapter_title:
+        parts.append(f"# {chapter_title}\n")
+    for section in output.sections:
+        heading = (section.heading or "").strip()
+        if heading:
+            parts.append(f"## {heading}\n")
+        prose = section.prose_md.strip()
+        if prose:
+            parts.append(prose + "\n")
+    assembled = "\n".join(parts).rstrip() + "\n"
+    cleaned, scrub_stats = _scrub_assembled_markdown(assembled)
+    if any(scrub_stats.values()):
+        logger.info(
+            "[assembler-prose] scrub applied: "
+            f"raw_corpus_boundaries={scrub_stats['raw_corpus_boundaries']} "
+            f"mintlify_orphans={scrub_stats['mintlify_orphans']} "
+            f"mintlify_fence_meta={scrub_stats['mintlify_fence_meta']} "
+            f"fence_balance_fixed={scrub_stats['fence_balance_fixed']} "
+            f"inline_fence_sanitized={scrub_stats['inline_fence_sanitized']} "
+            f"stacked_citations_split={scrub_stats['stacked_citations_split']}"
+        )
+    return cleaned
 
 
 def _deterministic_grader_gates(

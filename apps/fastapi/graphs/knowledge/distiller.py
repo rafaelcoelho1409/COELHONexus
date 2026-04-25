@@ -38,6 +38,7 @@ Pipeline shape:
 """
 import asyncio
 import logging
+import re  # OP-46 (2026-04-25) — citation regex for prose-only path
 from typing import Optional
 from pydantic import ValidationError as PydanticValidationError
 from langchain_openai import ChatOpenAI
@@ -80,6 +81,7 @@ from graphs.knowledge.helpers import (
     _write_plan_json,
     # Step 6
     _assemble_chapter_markdown,
+    _assemble_prose_chapter_markdown,  # OP-46 (2026-04-25)
     _audit_sentinel_roundtrip,
     _audit_structured_output_refs,
     _format_preservation_feedback,
@@ -90,6 +92,7 @@ from graphs.knowledge.helpers import (
     _load_chapter_files,
     _restore_code_blocks,
     _synthesize_attempt,
+    _synthesize_prose_attempt,  # OP-46 (2026-04-25)
     _user_profile_summary,
     # OP-31 (2026-04-25) — sentinel for chapter-level zero-citation gate
     _ZERO_CITATIONS_MARKER,
@@ -794,11 +797,138 @@ class KnowledgeDistillerGraph:
         # must be 100% to proceed; otherwise the iteration is a forced refine
         # with targeted per-sentinel feedback.
         files_content, code_vault = _vault_code_blocks(files_content_raw)
+        # OP-47 (2026-04-25, post-Run-12) — diagnostic logging that surfaces
+        # WHY the vault is the size it is. Run-12 lost time chasing
+        # "0 vault hashes" without knowing if the source had no code OR
+        # the extractor missed it. Now we log: source file count, raw
+        # body size, fence-language sample. Future "0 hashes" cases are
+        # immediately diagnosable from this single log line.
+        import re as _re_diag
+        _raw_fence_count = len(_re_diag.findall(r"(?m)^```", files_content_raw))
+        _languages = sorted(set(_re_diag.findall(
+            r"(?m)^```([a-zA-Z0-9_+-]+)", files_content_raw
+        )))[:8]
+        _languages_str = ",".join(_languages) if _languages else "<none>"
         logger.info(
             f"[synth][ch{chapter.number:02d}] vaulted {len(code_vault)} code "
-            f"block(s); prompt is {len(files_content)} chars after vault "
+            f"block(s) from {len(chapter.assigned_files)} source files; "
+            f"raw_fences={_raw_fence_count}, langs=[{_languages_str}]; "
+            f"prompt is {len(files_content)} chars after vault "
             f"(was {len(files_content_raw)} raw)"
         )
+
+        # =====================================================================
+        # OP-46 (2026-04-25, post-Run-12) — empty-vault prose-only short-circuit
+        # =====================================================================
+        # Run-12 evidence: Docker chapters had code_vault={} (security policies,
+        # compliance, design narrative). The regular Self-Refine path forced the
+        # LLM to invent code_refs from nothing → cascade exhaustion / hallucination.
+        # When the vault is empty, route to a single-call prose-only synthesis
+        # that uses ProseChapterOutput (no code_refs field) and skips the audit
+        # entirely. Chapter is committed if the prose passes minimum gates;
+        # falls through to DEBT sentinel on synth failure.
+        if len(code_vault) == 0:
+            logger.info(
+                f"[synth][ch{chapter.number:02d}] OP-46 PROSE-ONLY PATH — "
+                f"vault is empty, bypassing Self-Refine + code_refs audit"
+            )
+            try:
+                prose_output = await _synthesize_prose_attempt(
+                    chapter = chapter,
+                    files_content = files_content_raw,  # raw — vault has no work to do
+                    framework = framework,
+                    tone_block = tone_block,
+                    previous_adjustments = [],
+                    llm = llm,
+                    iteration = 0,
+                    study_id = payload.get("study_id"),
+                )
+                assembled_md = _assemble_prose_chapter_markdown(
+                    prose_output, chapter_title = chapter.title,
+                )
+                # Minimum quality gate: must have ≥500 chars + at least one
+                # `# docs:` citation. If not, fall through to DEBT sentinel.
+                if len(assembled_md) < 500:
+                    raise RuntimeError(
+                        f"OP-46 prose output too short ({len(assembled_md)} "
+                        f"chars); rejecting as DEBT sentinel"
+                    )
+                citation_count = len(re.findall(
+                    r"#\s*docs:\s*[\w/.\-]+", assembled_md
+                ))
+                if citation_count == 0:
+                    raise RuntimeError(
+                        "OP-46 prose output has zero `# docs:` citations; "
+                        "rejecting as DEBT sentinel"
+                    )
+                synthesis = ChapterSynthesis(
+                    content = assembled_md,
+                    challenges = prose_output.challenges,
+                    flashcards = prose_output.flashcards,
+                )
+                result = await _write_chapter_artifacts(
+                    storage, study_root, chapter.number, synthesis,
+                )
+                result["score"] = 0.0
+                result["iterations"] = 1
+                result["debt"] = {
+                    "reason": "op46_prose_only_chapter",
+                    "vault_size": 0,
+                    "source_files": len(chapter.assigned_files),
+                    "citations_found": citation_count,
+                    "assembled_chars": len(assembled_md),
+                    "note": (
+                        "Source files contained no fenced code; emitted via "
+                        "prose-only synth path (no audit / no Self-Refine)."
+                    ),
+                }
+                logger.info(
+                    f"[synth][ch{chapter.number:02d}] OP-46 prose-only commit "
+                    f"({len(assembled_md)} chars, {citation_count} citations)"
+                )
+                # Cache: only on explicit skip_below_threshold flag — same
+                # rule as the structured path's below-threshold commits.
+                if bool(payload.get("skip_below_threshold", False)):
+                    try:
+                        await cache.set_chapter(
+                            framework = framework,
+                            version = version,
+                            profile_hash = profile_hash,
+                            chapter_num = chapter.number,
+                            chapter_title = chapter.title,
+                            assigned_files = chapter.assigned_files,
+                            study_root = study_root,
+                            score = 0.0,
+                            iterations = 1,
+                            best_effort = True,
+                        )
+                    except Exception as e_c:
+                        logger.warning(
+                            f"[synth][ch{chapter.number:02d}] OP-46 cache write "
+                            f"failed (continuing): {e_c}"
+                        )
+                return {"synthesis_results": [result]}
+            except Exception as op46_err:
+                logger.error(
+                    f"[synth][ch{chapter.number:02d}] OP-46 prose-only path "
+                    f"FAILED ({type(op46_err).__name__}: {op46_err}); emitting "
+                    f"DEBT sentinel"
+                )
+                sentinel_result = {
+                    "number": chapter.number,
+                    "content_path": None,
+                    "challenges_path": None,
+                    "flashcards_path": None,
+                    "score": 0.0,
+                    "iterations": 0,
+                    "debt": {
+                        "reason": "op46_prose_path_failed",
+                        "error": str(op46_err)[:240],
+                        "vault_size": 0,
+                    },
+                }
+                return {"synthesis_results": [sentinel_result]}
+
         adjustments: list[str] = []
         history: list[tuple[ChapterSynthesis, GraderEvaluation]] = []  # graded iterations only
         best_synthesis: ChapterSynthesis | None = None
@@ -1747,116 +1877,108 @@ class KnowledgeDistillerGraph:
             f"coverage={citation_coverage:.2f}"
         )
 
-        # 3) LLM assessment (faithfulness + code_syntax_valid + issues)
+        # 3) LLM assessment — per-chapter parallel (OP-45, primary path).
         #
-        # OP-30 (2026-04-25, post-Run-11): wrap the LLM critic call in
-        # try/except. Run-11 had 9 chapters successfully written to MinIO
-        # then this call raised RuntimeError (LiteLLM Router returned None
-        # — all healthy models emitted non-parseable output). The exception
-        # bubbled up through critic → assembler never ran → Celery task
-        # failed → no summary.md, no DEBT.md. Deterministic fallback:
-        # treat faithfulness + code_syntax_valid as 0.0 and add an issue
-        # flagging the LLM-critic outage. The chapter content is still on
-        # disk; assembler will still produce summary + DEBT from the
-        # deterministic signals (citation_coverage, linter, fence_scan).
-        bundles = _build_chapter_bundles(chapters)
-        try:
-            llm_assessment: CriticAssessment = await _invoke_structured_with_fallback(
-                prompt = CRITIC_PROMPT,
-                llm = llm,
-                schema = CriticAssessment,
-                invoke_vars = {
-                    "framework": framework,
-                    "file_slugs": ", ".join(sorted(available_slugs)),
-                    "chapter_bundles": bundles,
-                },
-                label = "critic",
-            )
-        except Exception as e:
-            # OP-35 (2026-04-25) — per-chapter fallback BEFORE the
-            # deterministic-only OP-30 fallback. Run-11 evidence: the
-            # 50KB 5-chapter bundle was too large/complex for any model
-            # in the cascade to emit parseable structured output. Per-
-            # chapter prompts are 5-10× smaller and far less likely to
-            # blow the cascade. Try each chapter in isolation; skip
-            # individual failures; aggregate what comes back.
-            logger.warning(
-                f"[critic] bundle LLM assessment failed ({type(e).__name__}: "
-                f"{str(e)[:120]}) — attempting OP-35 per-chapter fallback"
-            )
-            per_ch_faith: list[float] = []
-            per_ch_code: list[float] = []
-            per_ch_issues: list[str] = []
-            per_ch_ok = 0
-            for ch_num, ch_title, ch_body in chapters:
-                try:
-                    snippet_body = ch_body[:8000]  # tight per-chapter cap
-                    one_bundle = (
-                        f"=== Chapter {ch_num:02d} — {ch_title} ===\n"
-                        f"{snippet_body}\n"
-                    )
-                    one_assess = await _invoke_structured_with_fallback(
-                        prompt = CRITIC_PROMPT,
-                        llm = llm,
-                        schema = CriticAssessment,
-                        invoke_vars = {
-                            "framework": framework,
-                            "file_slugs": ", ".join(sorted(available_slugs)),
-                            "chapter_bundles": one_bundle,
-                        },
-                        label = f"critic-ch{ch_num:02d}",
-                    )
-                    per_ch_faith.append(float(one_assess.faithfulness))
-                    per_ch_code.append(float(one_assess.code_syntax_valid))
-                    per_ch_issues.extend(
-                        f"[ch{ch_num:02d}] {iss}" for iss in one_assess.issues
-                    )
-                    per_ch_ok += 1
-                except Exception as e_one:
-                    logger.warning(
-                        f"[critic-ch{ch_num:02d}] OP-35 per-chapter fallback "
-                        f"also failed ({type(e_one).__name__}); skipping"
-                    )
-                    per_ch_issues.append(
-                        f"[ch{ch_num:02d}] critic LLM unavailable for this "
-                        f"chapter; deterministic checks still applied"
-                    )
-            if per_ch_ok > 0:
-                llm_assessment = CriticAssessment(
-                    citation_coverage = citation_coverage,
-                    faithfulness = sum(per_ch_faith) / len(per_ch_faith),
-                    code_syntax_valid = sum(per_ch_code) / len(per_ch_code),
-                    overall_score = 0.0,  # recomputed below
-                    issues = per_ch_issues,
+        # OP-45 (2026-04-25, post-Run-12) — per-chapter critic by DEFAULT.
+        # Old path (Run-11 era): build a 5-chapter bundle, one LLM call,
+        # cascade-fail if any model can't parse the 50KB combined prompt.
+        # Run-11 hit this exactly: every healthy model returned None; OP-30
+        # had to deterministic-fallback. New path: kick N solo-chapter LLM
+        # calls in PARALLEL via asyncio.gather; aggregate per-chapter scores.
+        # Smaller per-call token pressure = far less likely to fail; parallel
+        # = faster than the previous serial OP-35 retry loop. OP-30
+        # deterministic-only is still the floor when EVERY per-chapter call
+        # also fails (catastrophic provider outage).
+        async def _critic_one_chapter(
+            ch_num: int, ch_title: str, ch_body: str,
+        ) -> tuple[bool, CriticAssessment | None, str]:
+            """Returns (ok, assessment, error_str). Never raises."""
+            try:
+                snippet_body = ch_body[:8000]  # tight per-chapter cap
+                one_bundle = (
+                    f"=== Chapter {ch_num:02d} — {ch_title} ===\n"
+                    f"{snippet_body}\n"
                 )
-                logger.info(
-                    f"[critic] OP-35 per-chapter fallback succeeded on "
-                    f"{per_ch_ok}/{len(chapters)} chapters: "
-                    f"faith={llm_assessment.faithfulness:.2f} "
-                    f"code_syntax={llm_assessment.code_syntax_valid:.2f}"
+                a = await _invoke_structured_with_fallback(
+                    prompt = CRITIC_PROMPT,
+                    llm = llm,
+                    schema = CriticAssessment,
+                    invoke_vars = {
+                        "framework": framework,
+                        "file_slugs": ", ".join(sorted(available_slugs)),
+                        "chapter_bundles": one_bundle,
+                    },
+                    label = f"critic-ch{ch_num:02d}",
                 )
-            else:
-                # OP-30 — deterministic-only fallback when even per-chapter
-                # calls cannot reach a working model. Chapter content on
-                # disk is still intact; only the LLM-side judgment is lost.
+                return True, a, ""
+            except Exception as e_one:
                 logger.warning(
-                    f"[critic] OP-30 FALLBACK — no per-chapter LLM calls "
-                    f"succeeded either. Using deterministic-only assessment."
+                    f"[critic-ch{ch_num:02d}] LLM call failed "
+                    f"({type(e_one).__name__}: {str(e_one)[:80]}); "
+                    f"skipping this chapter in aggregate"
                 )
-                llm_assessment = CriticAssessment(
-                    citation_coverage = citation_coverage,
-                    faithfulness = 0.0,
-                    code_syntax_valid = 0.0,
-                    overall_score = 0.0,
-                    issues = [
-                        f"OP-30 RESCUE: every LLM critic call (bundle + "
-                        f"per-chapter) failed. Citation coverage and "
-                        f"deterministic linter ran successfully; LLM-only "
-                        f"faithfulness + code_syntax_valid scored 0.0. "
-                        f"Original bundle error: {type(e).__name__}: "
-                        f"{str(e)[:160]}"
-                    ],
+                return False, None, f"{type(e_one).__name__}: {str(e_one)[:160]}"
+
+        per_ch_results = await asyncio.gather(
+            *(_critic_one_chapter(n, t, b) for (n, t, b) in chapters),
+            return_exceptions = False,
+        )
+        per_ch_faith: list[float] = []
+        per_ch_code: list[float] = []
+        per_ch_issues: list[str] = []
+        per_ch_ok = 0
+        per_ch_failures: list[str] = []
+        for (ch_num, _ct, _cb), (ok, assess, err) in zip(chapters, per_ch_results):
+            if ok and assess is not None:
+                per_ch_faith.append(float(assess.faithfulness))
+                per_ch_code.append(float(assess.code_syntax_valid))
+                per_ch_issues.extend(
+                    f"[ch{ch_num:02d}] {iss}" for iss in assess.issues
                 )
+                per_ch_ok += 1
+            else:
+                per_ch_failures.append(f"ch{ch_num:02d}: {err}")
+                per_ch_issues.append(
+                    f"[ch{ch_num:02d}] critic LLM unavailable for this "
+                    f"chapter; deterministic checks still applied "
+                    f"(err: {err[:80]})"
+                )
+        if per_ch_ok > 0:
+            llm_assessment = CriticAssessment(
+                citation_coverage = citation_coverage,
+                faithfulness = sum(per_ch_faith) / len(per_ch_faith),
+                code_syntax_valid = sum(per_ch_code) / len(per_ch_code),
+                overall_score = 0.0,  # recomputed below
+                issues = per_ch_issues,
+            )
+            logger.info(
+                f"[critic] OP-45 per-chapter parallel succeeded on "
+                f"{per_ch_ok}/{len(chapters)} chapters: "
+                f"faith={llm_assessment.faithfulness:.2f} "
+                f"code_syntax={llm_assessment.code_syntax_valid:.2f}"
+            )
+        else:
+            # OP-30 — deterministic-only fallback when EVERY per-chapter
+            # call failed. Chapter content on disk is still intact; only
+            # LLM-side judgment is lost.
+            logger.warning(
+                f"[critic] OP-30 FALLBACK — every per-chapter LLM call "
+                f"failed across {len(chapters)} chapters. Using "
+                f"deterministic-only assessment."
+            )
+            llm_assessment = CriticAssessment(
+                citation_coverage = citation_coverage,
+                faithfulness = 0.0,
+                code_syntax_valid = 0.0,
+                overall_score = 0.0,
+                issues = [
+                    f"OP-30 RESCUE: all {len(chapters)} per-chapter LLM "
+                    f"critic calls failed. Citation coverage and "
+                    f"deterministic linter ran successfully; LLM-only "
+                    f"faithfulness + code_syntax_valid scored 0.0. "
+                    f"Sample failures: {per_ch_failures[:3]}"
+                ],
+            )
 
         # 4) Deterministic style linter — cheap, LLM-free, catches what the
         #    LLM critic is bad at (heading-depth drift, code-density spread,

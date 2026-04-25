@@ -104,9 +104,6 @@ const homePage = `<!DOCTYPE html>
         </div>
       </div>
       <nav class="flex-1 px-3 py-4 flex flex-col gap-1 overflow-y-auto">
-        <a href="/" class="nav-item nav-item-active">
-          <i data-lucide="home" class="w-4 h-4"></i><span>Home</span>
-        </a>
         <a href="#kd" class="nav-item">
           <i data-lucide="book-open-text" class="w-4 h-4"></i><span>Knowledge Distiller</span>
         </a>
