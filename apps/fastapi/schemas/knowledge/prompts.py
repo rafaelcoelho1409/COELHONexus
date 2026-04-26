@@ -450,6 +450,174 @@ SYNTHESIZER_PROSE_PROMPT = ChatPromptTemplate.from_messages([
 
 
 # =============================================================================
+# OP-HIERARCHICAL-SYNTH (2026-04-26, Round 2) — Phase A outline prompt
+# =============================================================================
+# Generates a ChapterOutline (sections + challenges + flashcards) BEFORE any
+# code is placed. No enum constraint, no code_refs field — pure prose
+# generation. Eliminates the "constraint-vs-prose attention competition"
+# that monolithic synth suffers on chapters with vault > 50 hashes
+# (Run-16/Run-20 evidence: ch01=183, ch03=91, ch04=68 hashes all DEBT'd
+# despite the existing OP-7/OP-11/OP-12/OP-31/OP-33 mitigations).
+#
+# Per-section vault hash assignment happens in Phase B (deterministic,
+# no LLM). The LLM here only decides:
+#   1. How to decompose the chapter into 4-15 sections (heading + goal)
+#   2. What each section assumes from prior sections (cross-section contract)
+#   3. What challenges + flashcards summarize the chapter as a whole
+OUTLINE_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are the Chapter Outliner — Phase A of the hierarchical chapter "
+        "synthesizer. Your job is to PRE-DECOMPOSE the chapter into 4-15 "
+        "sections WITHOUT writing any prose body or placing any code blocks. "
+        "A separate per-section synthesizer (Phase C) will fill each section "
+        "in parallel, using the assigned vault hashes that Phase B (a "
+        "deterministic router) computes from your section headings + goals.\n\n"
+        "Why this split exists:\n"
+        "Monolithic chapter synth on large vaults (>50 hashes) reliably "
+        "oscillates between 'thin sections' (too few words per code block) "
+        "and 'missing hashes' (forgot to reference half the vault) because "
+        "constrained decoding pulls the model toward enum tokens at the "
+        "expense of prose density. Splitting outline → routing → per-section "
+        "synth keeps each constrained-decode call's enum well below the "
+        "30-distractor reliability cliff (Chroma context-rot 2024).\n\n"
+        "Output shape — ChapterOutline:\n"
+        "1. sections — ordered list of 4-15 OutlineSection objects:\n"
+        "     - heading: 2-8 words, concrete, code-y. Examples: 'Async "
+        "Client', 'Dependency Injection'. Avoid 'Introduction', 'Overview', "
+        "'Summary', 'Conclusion'.\n"
+        "     - goal: 1-line description of what this section will teach. "
+        "Phase B uses this string (with the heading) as the embedding "
+        "target for routing vault hashes — be SPECIFIC about what code "
+        "concepts belong here. Examples: 'how to wire DI overrides for "
+        "tests' or 'the streaming response shape for tool calls'.\n"
+        "     - assumes_from_prior_sections: empty for the FIRST section. "
+        "For later sections, name what the reader has already absorbed in "
+        "PRIOR sections of THIS chapter. Examples: 'reader knows the basic "
+        "agent loop from section 1' or 'reader has seen the streaming "
+        "response shape'. Used by Phase C to maintain narrative flow.\n"
+        "2. challenges — 5-10 active-recall questions (markdown numbered "
+        "list). Mix conceptual + applied.\n"
+        "3. flashcards — 4-15 Anki Q/A pairs, each stand-alone.\n\n"
+        "DECOMPOSITION RULES:\n"
+        "  - Aim for sections that each cover ~5-15 vault hashes (you can "
+        "estimate by skimming the source for natural topical clusters: "
+        "fenced blocks under the same heading, blocks demonstrating one "
+        "API surface, blocks for one configuration concern, etc.).\n"
+        "  - DON'T create 'Setup' / 'Examples' / 'Reference' meta-sections. "
+        "Each section should be a TOPIC, not a content type.\n"
+        "  - DON'T duplicate topics across sections — Phase B routing assigns "
+        "each vault hash to exactly ONE section. Overlapping headings will "
+        "force the router to pick arbitrarily.\n"
+        "  - The reader reads sections in order. Earlier sections should "
+        "introduce concepts that later sections build on (signaled via "
+        "`assumes_from_prior_sections`).\n\n"
+        "{tone_block}"
+    ),
+    (
+        "human",
+        "Framework: {framework}\n"
+        "Chapter: {chapter_number} — {chapter_title}\n"
+        "Chapter goal: {chapter_goal}\n"
+        "Estimated vault size: {n_vault_hashes} code blocks across "
+        "{n_assigned_files} source files\n\n"
+        "Source documentation (with `<code-ref hash=\"<12-hex>\"/>` placeholders "
+        "marking where code blocks live — do NOT reference any hash here, "
+        "Phase B routes them deterministically):\n"
+        "{assigned_files_content}\n\n"
+        "Produce a ChapterOutline with 4-15 sections that decomposes this "
+        "material. Each section's `goal` should be specific enough that a "
+        "deterministic router can match vault hashes to it by topical "
+        "embedding similarity. Also produce challenges + flashcards that "
+        "summarize the WHOLE chapter (not any single section)."
+    ),
+])
+
+
+# =============================================================================
+# OP-HIERARCHICAL-SYNTH (2026-04-26, Round 2) — Phase C per-section synth prompt
+# =============================================================================
+# Synthesizes ONE section of a chapter, given:
+#   - the OutlineSection (heading + goal + cross-section contract)
+#   - a small whitelist of vault hashes Phase B routed to this section
+#     (typically 5-15 values; well under the 30-distractor cliff)
+#   - the surrounding source content (for context, not for hash extraction)
+#
+# Returns a regular `Section` (heading + prose_md + code_refs) — Phase D
+# concatenates section drafts into a ChapterOutput for the existing
+# assembler / grader / critic / curator pipeline.
+#
+# Per-section enum is small enough that constrained decoding doesn't
+# starve prose generation — the Self-Refine pathology that Run-16/Run-20
+# exposed on whole-chapter synth doesn't apply here.
+SECTION_SYNTH_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are the Section Synthesizer — Phase C of the hierarchical "
+        "chapter synth pipeline. You write ONE section of a chapter, given "
+        "(a) the section's heading + goal from the outline, (b) what the "
+        "reader already knows from prior sections, and (c) a SMALL "
+        "WHITELIST of vault code hashes that the deterministic router "
+        "(Phase B) has assigned to this section.\n\n"
+        "Output shape — Section:\n"
+        "  - heading: copy the outline-provided heading EXACTLY. Do not "
+        "reword it. Do not add '#' markers.\n"
+        "  - prose_md: body markdown. RULES:\n"
+        "      * NO triple-backtick (```) fenced code blocks — put code in "
+        "`code_refs`, the assembler interleaves it.\n"
+        "      * NO <code-ref hash=\"...\"/> XML tags — copy the bare "
+        "12-hex hash value INTO `code_refs` instead.\n"
+        "      * Include `# docs: <file_slug>` citations on their own "
+        "lines for every non-trivial claim.\n"
+        "      * Inline `code` spans (single backtick) are fine.\n"
+        "      * Dense, production-focused, code-first phrasing.\n"
+        "  - code_refs: ordered list of 12-hex-char vault hashes. ONLY "
+        "values from the WHITELIST below are valid. Listing a hash NOT "
+        "in the whitelist is a hard violation that fails the audit.\n\n"
+        "PROSE-DENSITY RULES (OP-38 + OP-40):\n"
+        "  - {orientation_clause}\n"
+        "  - For EVERY code_ref this section places, write 2-3 sentences "
+        "of explanation BEFORE that code in prose_md: what the snippet "
+        "does, when to use it, the non-obvious parameter or return value. "
+        "Don't pad — each sentence must add information the reader "
+        "cannot see from the code alone.\n"
+        "  - A section with N code_refs needs roughly 2N-3N concrete "
+        "sentences of teaching prose. Code-dump shape (many refs, few "
+        "words) fails the audit.\n\n"
+        "CONTEXT FROM OUTLINE:\n"
+        "  - This section's goal: {section_goal}\n"
+        "  - What prior sections already covered (do NOT re-explain): "
+        "{assumes_from_prior_sections}\n\n"
+        "{tone_block}"
+    ),
+    (
+        "human",
+        "Framework: {framework}\n"
+        "Chapter: {chapter_number} — {chapter_title}\n"
+        "Section heading: {section_heading}\n\n"
+        "WHITELIST — the ONLY valid 12-hex hashes for this section's "
+        "code_refs (Phase B router assigned these by topical proximity "
+        "to your section heading + goal):\n"
+        "{valid_hashes_csv}\n\n"
+        "Source documentation (use for prose context — but emit hashes "
+        "ONLY from the whitelist above; vault hashes outside the "
+        "whitelist were assigned to OTHER sections and will appear there):\n"
+        "{assigned_files_content}\n\n"
+        "Self-verify before returning:\n"
+        "  1. Every entry in code_refs is in the WHITELIST above (exact "
+        "string match on the 12-hex value, no `lf_`/`<`/`\"` wrappers).\n"
+        "  2. Every WHITELIST hash that conceptually belongs in this "
+        "section appears in code_refs (it's OK to omit a whitelist hash "
+        "if it truly doesn't fit, but Phase B picked these because they "
+        "DO fit — be skeptical of omissions).\n"
+        "  3. Per-code-ref prose density: 2-3 explanatory sentences "
+        "BEFORE each code reference.\n\n"
+        "Synthesize this one section."
+    ),
+])
+
+
+# =============================================================================
 # Adaptive Grader — 8-dimensional evaluation of one synthesized chapter
 # =============================================================================
 GRADER_PROMPT = ChatPromptTemplate.from_messages([

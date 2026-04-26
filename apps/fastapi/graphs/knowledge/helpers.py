@@ -1594,7 +1594,10 @@ async def _invoke_structured_with_fallback(
     invoke_vars: dict,
     label: str,
     langfuse_metadata: dict | None = None,
-    langfuse_tags: list[str] | None = None):
+    langfuse_tags: list[str] | None = None,
+    langfuse_session_id: str | None = None,
+    langfuse_user_id: str | None = None,
+    langfuse_run_name: str | None = None):
     """
     Invoke `prompt | model.with_structured_output(schema)` across a
     RunnableWithFallbacks chain, treating a None result as an escalation
@@ -1638,6 +1641,9 @@ async def _invoke_structured_with_fallback(
     per_attempt_config = langfuse_config(
         metadata = {**(langfuse_metadata or {}), "label": label},
         tags = [label.split()[0], *(langfuse_tags or [])],
+        session_id = langfuse_session_id,
+        user_id = langfuse_user_id,
+        run_name = langfuse_run_name or f"kd-{label.replace(' ', '-')}",
     )
 
     try:
@@ -2027,7 +2033,8 @@ async def _synthesize_attempt(
     previous_adjustments: list[str],
     llm,
     iteration: int | None = None,
-    study_id: str | None = None):
+    study_id: str | None = None,
+    user_id: str | None = None):
     """
     Single synthesis attempt — Tier 3 #21 structured output.
 
@@ -2054,11 +2061,13 @@ async def _synthesize_attempt(
         label = f"synth ch{chapter.number:02d}",
         langfuse_metadata = {
             "framework": framework,
-            "chapter_number": chapter.number,
-            "iteration": iteration,
-            "study_id": study_id,
+            "chapter_number": str(chapter.number),
+            "iteration": str(iteration),
         },
         langfuse_tags = [f"ch{chapter.number:02d}", "synth"],
+        langfuse_session_id = study_id,
+        langfuse_user_id = user_id,
+        langfuse_run_name = f"kd-synth-ch{chapter.number:02d}-iter{iteration}",
     )
 
 
@@ -2074,7 +2083,8 @@ async def _synthesize_prose_attempt(
     previous_adjustments: list[str],
     llm,
     iteration: int | None = None,
-    study_id: str | None = None) -> ProseChapterOutput:
+    study_id: str | None = None,
+    user_id: str | None = None) -> ProseChapterOutput:
     """
     Single prose-only synthesis attempt. Used by `synthesize_chapter` when
     `len(code_vault) == 0`. Returns a `ProseChapterOutput` (sections w/
@@ -2095,12 +2105,14 @@ async def _synthesize_prose_attempt(
             "previous_adjustments": _format_adjustments(previous_adjustments),
         },
         label = f"synth-prose ch{chapter.number:02d}",
+        langfuse_session_id = study_id,
+        langfuse_user_id = user_id,
+        langfuse_run_name = f"kd-synth-prose-ch{chapter.number:02d}-iter{iteration}",
         langfuse_metadata = {
             "framework": framework,
-            "chapter_number": chapter.number,
-            "iteration": iteration,
-            "study_id": study_id,
-            "prose_only": True,
+            "chapter_number": str(chapter.number),
+            "iteration": str(iteration),
+            "prose_only": "true",
         },
         langfuse_tags = [f"ch{chapter.number:02d}", "synth", "prose-only"],
     )
@@ -2229,6 +2241,7 @@ async def _grade_attempt(
     llm,
     iteration: int | None = None,
     study_id: str | None = None,
+    user_id: str | None = None,
     audit_summary: str | None = None) -> GraderEvaluation:
     """
     Run the 8-dimensional adaptive grader on one synthesis attempt. Returns
@@ -2286,11 +2299,13 @@ async def _grade_attempt(
             "audit_summary": audit_summary or "(no audit summary provided)",
         },
         label = f"grade ch{chapter.number:02d}",
+        langfuse_session_id = study_id,
+        langfuse_user_id = user_id,
+        langfuse_run_name = f"kd-grade-ch{chapter.number:02d}-iter{iteration}",
         langfuse_metadata = {
             "framework": framework,
-            "chapter_number": chapter.number,
-            "iteration": iteration,
-            "study_id": study_id,
+            "chapter_number": str(chapter.number),
+            "iteration": str(iteration),
         },
         langfuse_tags = [f"ch{chapter.number:02d}", "grader"],
     )

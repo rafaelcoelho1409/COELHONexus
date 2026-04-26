@@ -56,9 +56,12 @@ Factories (all serve from the same `kd-all` group, varying only temperature):
   - build_curator_llm                  — T=0.0
   - build_scope_classifier_llm         — T=0.0
 """
+import logging
 import os
 from langchain_litellm.chat_models import ChatLiteLLMRouter
 from litellm import Router
+
+logger = logging.getLogger(__name__)
 from litellm.types.router import (
     RetryPolicy,
     AllowedFailsPolicy,
@@ -238,14 +241,14 @@ def _all_entries() -> list:
         # _groq_entry(GROUP, "openai/gpt-oss-120b", timeout_s=120),                                # DISABLED 2026-04-24 (OP-3) — 8K TPM ceiling permanently incompatible with 30K-token chapter prompts. Run-8 logged every call returning BadRequest("Request too large: Limit 8000, Requested 34127"). AAII 33 still served via NIM's `openai/gpt-oss-120b` entry.
         _nim_entry(GROUP, "openai/gpt-oss-120b", timeout_s=120),                                   # AAII 33 — DUP family; confirmed working on NIM
         # --- 22–23: AAII 30 ---
-        _zhipu_entry(GROUP, "glm-4.7-flash", timeout_s=120),                                       # AAII 30 (R) — 30B-A3B MoE, best-in-30B-class, AIME-2025 95.7%, 200K ctx, zero-cap free
+        # _zhipu_entry(GROUP, "glm-4.7-flash", timeout_s=120),                                     # DISABLED 2026-04-25 (OP-PROVIDER-PRUNE) — Run-16 logged 0/14 success (100% fail), every call returned BadRequestError or NotFoundError. Likely auth or model-name mismatch on the Zhipu OpenAI-compat endpoint; burning a cascade slot for guaranteed failure. AAII 30 (R) was 30B-A3B MoE if it ever worked.
         _gemini_entry(GROUP, "gemini-2.5-flash", timeout_s=60),                                    # OP-25 (2026-04-25): timeout 120→60 — Gemini free tier is 20 req/DAY/model; once exhausted, stays exhausted ~24h. LiteLLM's 60s cooldown can't recover; shorter timeout at least makes the cascade walk past it faster instead of burning the outer 1200s budget. AAII ~30 — GPQA 82.8, MMLU-Lite 88.4, AIME 88, 1M ctx
         # --- 24–28: AAII 22–28 (Mistral cluster + glm-4.5-flash) ---
         _mistral_entry(GROUP, "mistral-small-latest", timeout_s=120),                              # AAII 28 — Mistral Small 4 v26.03, HumanEval 92, MMLU 88.5 (surprisingly > Medium 3.1)
         _mistral_entry(GROUP, "magistral-medium-latest", timeout_s=120),                           # AAII 27 — Magistral 1.2, AIME24 91.82%, GPQA-Diamond 76.3% (reasoning specialist)
         _mistral_entry(GROUP, "mistral-large-latest", timeout_s=120),                              # AAII 23 — Mistral Large 3 v25.12, LMArena #2 OSS, MATH-500 93.6, 256K ctx
         _nim_entry(GROUP, "mistralai/mistral-large-3-675b-instruct-2512", timeout_s=120),          # AAII 23 — DUP of #26 (same Large 3 model, NIM infra)
-        _zhipu_entry(GROUP, "glm-4.5-flash", timeout_s=120),                                       # AAII ~23 — GLM-4.5 tier (legacy), zero-cap free fallback
+        # _zhipu_entry(GROUP, "glm-4.5-flash", timeout_s=120),                                     # DISABLED 2026-04-25 (OP-PROVIDER-PRUNE) — Run-16 logged 1/4 success (25%); same Zhipu endpoint failure pattern as glm-4.7-flash. AAII ~23.
         # --- 29–31: AAII 21–22 ---
         _mistral_entry(GROUP, "devstral-medium-latest", timeout_s=120),                            # AAII 22 — Devstral 2 code-agents, SWE-Bench Verified 46.8%, 256K ctx
         # _gemini_entry(GROUP, "gemini-2.5-flash-lite", timeout_s=90),                             # DISABLED 2026-04-24 (OP-4) — returns empty `choices=[]` (0 completion tokens) when given our ChapterOutput tool schema; model can't produce structured output for the nested Section + Flashcard shape at the lite tier. Run-8 logged 14/14 BadRequest from LangChain's downstream parse of the empty response. Plain completion works fine, so NOT a credential / safety issue — structural tool-schema incompatibility. AAII 22/19.
@@ -374,6 +377,30 @@ def _get_router() -> Router:
         set_verbose=False,
         **redis_kwargs,
     )
+
+    # OP-LF-LITELLM-CALLBACK (2026-04-25 post-Run-16) — DISABLED 2026-04-25
+    # mid-Run-17. The LiteLLM bundled langfuse integration
+    # (`litellm/integrations/langfuse/langfuse.py:144`) reads
+    # `langfuse.version.__version__` which DOES NOT EXIST on the langfuse v3+
+    # SDK we have installed (the v3 module has no `.version` submodule;
+    # `langfuse.__version__` directly OR `importlib.metadata.version` is the
+    # new API). When `litellm.success_callback=["langfuse"]` is set, every
+    # acompletion call eagerly initializes the langfuse logger and hits this
+    # AttributeError. The errors are "Non-Blocking" per LiteLLM so calls
+    # complete, but they spam logs AND emit zero traces (the integration
+    # never finishes init). Net: pure noise, no cascade visibility.
+    #
+    # To re-enable: either (a) wait for LiteLLM upstream to fix the
+    # `langfuse.version` reference (track at github.com/BerriAI/litellm),
+    # OR (b) pin `langfuse<3` (would lose v4 features we already use), OR
+    # (c) write a custom LiteLLM logger that calls our existing langfuse
+    # client directly. Option (c) is the right path post-OP-HIERARCHICAL-
+    # SYNTH if cascade visibility becomes critical.
+    #
+    # Cascade behavior is still observable via the existing LangChain
+    # CallbackHandler (registered per-call via langfuse_config) — we lose
+    # the per-provider attempt detail but keep the overall call timing +
+    # cost (computed from token counts + LangFuse model price table).
     return _router_instance
 
 

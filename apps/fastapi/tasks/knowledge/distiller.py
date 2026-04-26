@@ -124,10 +124,12 @@ def run_knowledge_distiller(
     # curator / critic / assembler). Produces preview.md + extractive READMEs
     # in ~5 min with zero LLM cost.
     preview: bool = False,
-    # OP-26 (2026-04-24 late): when True, below-threshold best-effort chapters
+    # OP-26 (2026-04-24): when True, below-threshold best-effort chapters
     # also write to the full cache so subsequent runs skip re-synthesizing
-    # them. Default False preserves historical behavior.
-    skip_below_threshold: bool = False,
+    # them. OP-CACHE-DEBT-OUTPUT (2026-04-25, post-Run-16): default flipped
+    # to True so re-runs after partial success only re-attempt sentinel'd
+    # chapters instead of re-synthesizing every DEBT-flagged one.
+    skip_below_threshold: bool = True,
 ) -> dict:
     """
     Run the full Knowledge Distiller pipeline for one framework.

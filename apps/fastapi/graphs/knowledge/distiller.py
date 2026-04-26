@@ -116,6 +116,11 @@ from graphs.knowledge.helpers import (
     # Step 9
     _write_manifest_json,
 )
+from .hierarchical_synth import (
+    HIERARCHICAL_VAULT_THRESHOLD,
+    HierarchicalSynthFailed,
+    synthesize_hierarchical,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -435,10 +440,13 @@ class KnowledgeDistillerGraph:
                     config = _lf_cfg(
                         metadata = {
                             "framework": framework,
-                            "shard_idx": shard_idx,
+                            "shard_idx": str(shard_idx),
                             "label": "planner-shard-strict",
                         },
                         tags = ["planner", "shard", "strict"],
+                        session_id = state.get("study_id"),
+                        user_id = state.get("user_id"),
+                        run_name = f"kd-planner-shard-{shard_idx:02d}-strict",
                     ) or None,
                 )
                 # raw_msg is an AIMessage; content is the strict JSON
@@ -466,10 +474,13 @@ class KnowledgeDistillerGraph:
                         config = _lf_cfg(
                             metadata = {
                                 "framework": framework,
-                                "shard_idx": shard_idx,
+                                "shard_idx": str(shard_idx),
                                 "label": "planner-shard-fallback",
                             },
                             tags = ["planner", "shard", "fallback"],
+                            session_id = state.get("study_id"),
+                            user_id = state.get("user_id"),
+                            run_name = f"kd-planner-shard-{shard_idx:02d}-fallback",
                         ) or None,
                     )
                 except Exception as e:
@@ -630,6 +641,8 @@ class KnowledgeDistillerGraph:
                 shard_unused_all = shard_unused_all,
                 framework = framework,
                 llm = llm,
+                study_id = state.get("study_id"),
+                user_id = state.get("user_id"),
             )
         except Exception as e:
             raise RuntimeError(f"Planner REDUCE (Clio pattern) failed: {e}") from e
@@ -864,6 +877,7 @@ class KnowledgeDistillerGraph:
                     llm = llm,
                     iteration = 0,
                     study_id = payload.get("study_id"),
+                    user_id = payload.get("user_id"),
                 )
                 assembled_md = _assemble_prose_chapter_markdown(
                     prose_output, chapter_title = chapter.title,
@@ -1034,6 +1048,23 @@ class KnowledgeDistillerGraph:
                 f"[synth][ch{chapter.number:02d}] adaptive budget: "
                 f"{_iter_budget} iters (vault has {len(code_vault)} hashes)"
             )
+        # OP-HIERARCHICAL-SYNTH (2026-04-26, Round 2 post-Run-20) — gate on
+        # vault size. Run-16/Run-20 evidence: chapters with vault > ~50
+        # hashes reliably oscillate under monolithic synth (constraint-vs-
+        # prose attention competition; Chroma context-rot 2024). Below the
+        # threshold, monolithic synth is reliable (Run-20 ch02 ACCEPT at
+        # vault=11). Above it, route through the 4-phase hierarchical
+        # pipeline. _hierarchical_disabled flips True on first phase
+        # failure so subsequent iters of THIS chapter fall back to flat
+        # synth without re-paying the outline LLM cost.
+        _use_hierarchical = len(code_vault) > HIERARCHICAL_VAULT_THRESHOLD
+        _hierarchical_disabled = False
+        if _use_hierarchical:
+            logger.info(
+                f"[synth][ch{chapter.number:02d}] OP-HIERARCHICAL-SYNTH "
+                f"engaged (vault={len(code_vault)} > "
+                f"threshold={HIERARCHICAL_VAULT_THRESHOLD})"
+            )
         try:
             for iteration in range(resume_from_iter, _iter_budget):
                 # 1. Synthesize — Tier 3 #21 structured output.
@@ -1042,16 +1073,63 @@ class KnowledgeDistillerGraph:
                 #    (schema discourages; audit enforces); it only lists which
                 #    vault hashes go in each section via `code_refs`.
                 try:
-                    chapter_output = await _synthesize_attempt(
-                        chapter = chapter,
-                        files_content = files_content,
-                        framework = framework,
-                        tone_block = tone_block,
-                        previous_adjustments = adjustments,
-                        llm = llm,
-                        iteration = iteration,
-                        study_id = payload.get("study_id"),
-                    )
+                    if _use_hierarchical and not _hierarchical_disabled:
+                        try:
+                            chapter_output = await synthesize_hierarchical(
+                                chapter = chapter,
+                                files_content = files_content,
+                                code_vault = code_vault,
+                                framework = framework,
+                                tone_block = tone_block,
+                                previous_adjustments = adjustments,
+                                llm = llm,
+                                iteration = iteration,
+                                study_id = payload.get("study_id"),
+                                user_id = payload.get("user_id"),
+                            )
+                        except HierarchicalSynthFailed as he:
+                            logger.warning(
+                                f"[synth][ch{chapter.number:02d}] iter "
+                                f"{iteration} hierarchical synth failed "
+                                f"({he}) — falling back to flat synth for "
+                                f"this and remaining iterations of this "
+                                f"chapter"
+                            )
+                            try:
+                                from services.knowledge.langfuse_client import emit_failure_event
+                                emit_failure_event(
+                                    chapter_number = chapter.number,
+                                    failure_mode = "hierarchical-fallback",
+                                    framework = framework,
+                                    iteration = iteration,
+                                    extra = {"reason": str(he)[:200]},
+                                )
+                            except Exception:
+                                pass
+                            _hierarchical_disabled = True
+                            chapter_output = await _synthesize_attempt(
+                                chapter = chapter,
+                                files_content = files_content,
+                                framework = framework,
+                                tone_block = tone_block,
+                                previous_adjustments = adjustments,
+                                llm = llm,
+                                iteration = iteration,
+                                study_id = payload.get("study_id"),
+                                user_id = payload.get("user_id"),
+                            )
+                    else:
+                        chapter_output = await _synthesize_attempt(
+                            chapter = chapter,
+                            files_content = files_content,
+                            framework = framework,
+                            tone_block = tone_block,
+                            previous_adjustments = adjustments,
+                            llm = llm,
+                            iteration = iteration,
+                            study_id = payload.get("study_id"),
+                            user_id = payload.get("user_id"),
+                        )
                 except PydanticValidationError as ve:
                     # 2026-04-24 (Run-8 ch01): LLM produced structured output
                     # that violated a Pydantic constraint (e.g., flashcards
@@ -1182,6 +1260,17 @@ class KnowledgeDistillerGraph:
                             f"{_AUDIT_REGRESSION_FACTOR}× threshold); "
                             f"stopping Self-Refine early"
                         )
+                        try:
+                            from services.knowledge.langfuse_client import emit_failure_event
+                            emit_failure_event(
+                                chapter_number = chapter.number,
+                                failure_mode = "op7-early-stop",
+                                framework = framework,
+                                iteration = iteration,
+                                extra = {"prev_issues": prev_n_issues, "curr_issues": n_issues},
+                            )
+                        except Exception:
+                            pass
                         prev_n_issues = n_issues
                         break
                     prev_n_issues = n_issues
@@ -1313,6 +1402,7 @@ class KnowledgeDistillerGraph:
                         llm = llm,
                         iteration = iteration,
                         study_id = payload.get("study_id"),
+                        user_id = payload.get("user_id"),
                         audit_summary = _audit_summary_str,
                     )
                 except Exception as e:
@@ -1414,6 +1504,22 @@ class KnowledgeDistillerGraph:
                     f"empty={len(best_audit_iter['empty_sections'])}). "
                     f"Committing as best-effort with DEBT flag."
                 )
+                try:
+                    from services.knowledge.langfuse_client import emit_failure_event
+                    emit_failure_event(
+                        chapter_number = chapter.number,
+                        failure_mode = "op12-best-seen",
+                        framework = framework,
+                        iteration = best_audit_iter["iteration"],
+                        extra = {
+                            "n_issues": best_audit_iter["n_issues"],
+                            "missing": len(best_audit_iter["missing"]),
+                            "invented": len(best_audit_iter["invented"]),
+                            "empty": len(best_audit_iter["empty_sections"]),
+                        },
+                    )
+                except Exception:
+                    pass
                 best_synthesis = ChapterSynthesis(
                     content = best_audit_iter["assembled"],
                     challenges = best_audit_iter["output"].challenges,
@@ -1486,6 +1592,23 @@ class KnowledgeDistillerGraph:
             # to sentinel. OP-19 duplicates the rescue check here so a synth
             # timeout / cascade exhaustion doesn't discard good earlier work.
             if best_synthesis is None and best_audit_iter is not None:
+                try:
+                    from services.knowledge.langfuse_client import emit_failure_event
+                    emit_failure_event(
+                        chapter_number = chapter.number,
+                        failure_mode = "op19-rescue",
+                        framework = framework,
+                        iteration = best_audit_iter["iteration"],
+                        extra = {
+                            "n_issues": best_audit_iter["n_issues"],
+                            "missing": len(best_audit_iter["missing"]),
+                            "invented": len(best_audit_iter["invented"]),
+                            "empty": len(best_audit_iter["empty_sections"]),
+                            "synth_error": str(terminal_error)[:200],
+                        },
+                    )
+                except Exception:
+                    pass
                 logger.warning(
                     f"[synth][ch{chapter.number:02d}] OP-19 RESCUE — synth "
                     f"exception bypassed post-loop; recovering best_audit_iter "
@@ -1560,6 +1683,20 @@ class KnowledgeDistillerGraph:
                 return {"synthesis_results": [result]}
 
             # True sentinel path — no best_audit_iter either, truly no output.
+            try:
+                from services.knowledge.langfuse_client import emit_failure_event
+                emit_failure_event(
+                    chapter_number = chapter.number,
+                    failure_mode = "sentinel",
+                    framework = framework,
+                    iteration = iteration,
+                    extra = {
+                        "graded_iters": len(history),
+                        "synth_error": str(terminal_error)[:200],
+                    },
+                )
+            except Exception:
+                pass
             logger.error(
                 f"[synth][ch{chapter.number:02d}] TERMINAL FAILURE at iter "
                 f"{iteration} after {len(history)} graded iteration(s) — "
@@ -1601,6 +1738,20 @@ class KnowledgeDistillerGraph:
                 f"(score={best_eval.weighted_score:.2f} < {user_profile.acceptance_threshold}) "
                 f"after {len(history)} iterations — DEBT flagged for Assembler"
             )
+            try:
+                from services.knowledge.langfuse_client import emit_failure_event
+                emit_failure_event(
+                    chapter_number = chapter.number,
+                    failure_mode = "debt-commit",
+                    framework = framework,
+                    iteration = len(history),
+                    extra = {
+                        "score": f"{best_eval.weighted_score:.3f}",
+                        "threshold": f"{user_profile.acceptance_threshold:.3f}",
+                    },
+                )
+            except Exception:
+                pass
             # Pass debt signal for Assembler to write into DEBT.md.
             # Serialize Issue models to plain dicts so downstream JSON + the
             # operator.add reducer handle them cleanly (Pydantic models can
@@ -1718,6 +1869,16 @@ class KnowledgeDistillerGraph:
                 try:
                     vaulted_content, code_vault = _vault_code_blocks(content)
                 except ValueError as e:
+                    try:
+                        from services.knowledge.langfuse_client import emit_failure_event
+                        emit_failure_event(
+                            chapter_number = n,
+                            failure_mode = "curator-skip",
+                            framework = framework,
+                            extra = {"reason": "vault-collision", "error": str(e)[:160]},
+                        )
+                    except Exception:
+                        pass
                     logger.warning(
                         f"[curator][ch{n:02d}] vault collision ({e}); "
                         f"keeping original"
@@ -1736,10 +1897,13 @@ class KnowledgeDistillerGraph:
                         config = _lf_cfg(
                             metadata = {
                                 "framework": framework,
-                                "chapter_number": n,
+                                "chapter_number": str(n),
                                 "label": f"curator-ch{n:02d}",
                             },
                             tags = [f"ch{n:02d}", "curator"],
+                            session_id = state.get("study_id"),
+                            user_id = state.get("user_id"),
+                            run_name = f"kd-curator-ch{n:02d}",
                         ) or None,
                     )
                 except Exception as e:
@@ -1781,6 +1945,21 @@ class KnowledgeDistillerGraph:
                     curated_vaulted, code_vault
                 )
                 if missing or unexpected:
+                    try:
+                        from services.knowledge.langfuse_client import emit_failure_event
+                        emit_failure_event(
+                            chapter_number = n,
+                            failure_mode = "curator-skip",
+                            framework = framework,
+                            extra = {
+                                "reason": "preservation-failed",
+                                "missing": len(missing),
+                                "unexpected": len(unexpected),
+                                "vault_size": len(code_vault),
+                            },
+                        )
+                    except Exception:
+                        pass
                     logger.warning(
                         f"[curator][ch{n:02d}] preservation FAILED "
                         f"({len(missing)} missing, {len(unexpected)} unexpected "
@@ -2081,12 +2260,24 @@ class KnowledgeDistillerGraph:
             )
         # 5) Merge — override citation_coverage AND code_syntax_valid with
         # deterministic values; recompute overall.
+        # OP-59-WEIGHT-DROP (2026-04-26, post-Run-20) — drop code_syntax_valid
+        # weight from 1.0 → 0.5 in the overall composite. Rationale per
+        # roadmap doc deprioritized section: "most code blocks fail because
+        # they lack lang tags, not because they're broken. Score is
+        # misleading but doesn't gate anything important." Tree-sitter
+        # parser also skips no-lang blocks entirely (OP-59 logic), which
+        # tends to inflate the score artificially when many blocks are
+        # bare ``` without a language tag. Halving the weight keeps the
+        # signal but stops it from masking real faithfulness/citation
+        # issues. Effective weights now: citation=1.0, faithfulness=1.0,
+        # code_syntax=0.5; divisor=2.5.
         merged_issues = list(llm_assessment.issues) + citation_issues + linter_issues + fence_issues
+        _CODE_SYNTAX_WEIGHT = 0.5
         overall = (
             citation_coverage
             + llm_assessment.faithfulness
-            + det_code_syntax
-        ) / 3.0
+            + _CODE_SYNTAX_WEIGHT * det_code_syntax
+        ) / (2.0 + _CODE_SYNTAX_WEIGHT)
         final = CriticAssessment(
             citation_coverage = citation_coverage,
             faithfulness = llm_assessment.faithfulness,
@@ -2269,6 +2460,8 @@ class KnowledgeDistillerGraph:
             "profile_hash": profile_hash,
             "user_profile": user_profile,
             "study_root": state["study_root"],
+            "study_id": state.get("study_id"),
+            "user_id": state.get("user_id"),
             # OP-26 — honor the same cache-write flag as the fan-out workers.
             "skip_below_threshold": state.get("skip_below_threshold", False),
         }
@@ -2338,6 +2531,8 @@ class KnowledgeDistillerGraph:
                     "profile_hash": profile_hash,
                     "user_profile": user_profile,
                     "study_root": state["study_root"],
+                    "study_id": state.get("study_id"),
+                    "user_id": state.get("user_id"),
                 },
             )
             for ch in remaining

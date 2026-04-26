@@ -152,23 +152,45 @@ def langfuse_config(
     *,
     metadata: dict | None = None,
     tags: list[str] | None = None,
+    session_id: str | None = None,
+    user_id: str | None = None,
+    run_name: str | None = None,
 ) -> dict:
     """
     Build a LangChain `config` dict carrying the CallbackHandler + metadata
-    + tags. Returns an empty dict when Langfuse is disabled — callers can
-    splat it with `chain.ainvoke(inputs, config=langfuse_config(...) or None)`.
+    + tags + session/user/run_name binding. Returns an empty dict when
+    Langfuse is disabled — callers can splat it with
+    `chain.ainvoke(inputs, config=langfuse_config(...) or None)`.
 
-    LangFuse v4 reads `metadata` and `tags` from the LangChain config; they
-    show up on the trace + every nested span.
+    LangFuse v4 reads:
+      - `metadata` and `tags` from the LangChain config (shown on trace +
+        every nested span)
+      - `metadata.langfuse_session_id` → groups all traces under one study
+      - `metadata.langfuse_user_id` → per-user cost rollups
+      - `run_name` (LangChain top-level) → trace name in UI
+
+    OP-LF-SESSION-ID / OP-LF-USER-ID / OP-LF-RUN-NAME (2026-04-25,
+    post-Run-16): three new args. `session_id` and `user_id` get auto-
+    injected into `metadata` under the LangFuse-recognized keys without
+    callers having to remember the prefix. `run_name` becomes the
+    searchable trace name (e.g. "kd-planner-shard-04" instead of the
+    default "RunnableSequence").
     """
     handler = build_langfuse_handler()
     if handler is None:
         return {}
     cfg: dict = {"callbacks": [handler]}
-    if metadata:
-        cfg["metadata"] = metadata
+    md = dict(metadata) if metadata else {}
+    if session_id:
+        md["langfuse_session_id"] = str(session_id)
+    if user_id:
+        md["langfuse_user_id"] = str(user_id)
+    if md:
+        cfg["metadata"] = md
     if tags:
         cfg["tags"] = tags
+    if run_name:
+        cfg["run_name"] = run_name
     return cfg
 
 
@@ -193,6 +215,71 @@ def flush_langfuse(reason: str = "explicit") -> None:
             logger.info(f"[langfuse] flushed (reason={reason})")
     except Exception as e:
         logger.warning(f"[langfuse] flush failed (reason={reason}): {e}")
+
+
+def emit_failure_event(
+    *,
+    chapter_number: int,
+    failure_mode: str,
+    framework: str | None = None,
+    iteration: int | None = None,
+    extra: dict | None = None,
+) -> None:
+    """
+    OP-LF-FAILURE-TAGS (2026-04-25 post-Run-16) — emit a standalone LangFuse
+    event tagged with the failure mode at the moment a synth chapter falls
+    into a non-happy-path commit (OP-7 early-stop, OP-12 best-seen rescue,
+    OP-19 exception rescue, sentinel emission, accepted-below-threshold).
+
+    These events are independent of the LangChain CallbackHandler trace tree
+    — they show up as their own events in the LangFuse UI and can be filtered
+    by tag (e.g. tag=op19-rescue, tag=ch04). Used to count failure rates per
+    chapter / per failure-mode without log-scraping.
+
+    Non-raising: telemetry must never crash the pipeline.
+
+    `failure_mode` should be one of:
+      - "op7-early-stop"    — audit-regression early-stop (OP-7)
+      - "op12-best-seen"    — no graded iter, best audit-failed iter committed (OP-12)
+      - "op19-rescue"       — synth exception bypassed; best_audit_iter committed (OP-19)
+      - "sentinel"          — terminal failure, sentinel emitted for siblings
+      - "debt-commit"       — accepted below acceptance_threshold, DEBT flag set
+      - "curator-skip"      — curator skipped (vault collision or preservation fail)
+    """
+    if not langfuse_enabled():
+        return
+    try:
+        client = _get_client()
+        metadata = {"chapter_number": str(chapter_number)}
+        if framework is not None:
+            metadata["framework"] = framework
+        if iteration is not None:
+            metadata["iteration"] = str(iteration)
+        if extra:
+            for k, v in extra.items():
+                metadata[k] = str(v) if not isinstance(v, str) else v
+        tags = [f"ch{chapter_number:02d}", failure_mode, "failure-event"]
+        # Use start_observation if available (v3+), else fallback to span-then-end
+        try:
+            obs = client.start_observation(
+                name = f"failure:{failure_mode}:ch{chapter_number:02d}",
+                as_type = "event",
+                metadata = metadata,
+            )
+            obs.update(tags = tags)
+            obs.end()
+        except Exception:
+            # Fallback: span-and-end if start_observation isn't on this SDK ver
+            with client.start_as_current_span(
+                name = f"failure:{failure_mode}:ch{chapter_number:02d}",
+                metadata = metadata,
+            ) as span:
+                span.update_trace(tags = tags)
+    except Exception as e:
+        logger.warning(
+            f"[langfuse] emit_failure_event(ch{chapter_number:02d}, "
+            f"{failure_mode}) failed: {e}"
+        )
 
 
 def probe_langfuse() -> dict:

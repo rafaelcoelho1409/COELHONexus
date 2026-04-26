@@ -1329,12 +1329,15 @@ insufficient for a meaningful slice of chapters.
 
 ## Run-16 post-mortem — heterogeneous chapter outcomes (2026-04-25)
 
-**Observed**: 9/10 DEBT + 1 sentinel (ch03 terminal timeout). Zero ACCEPT. The
+**Observed**: 9/10 DEBT + 1 sentinel (ch03 terminal timeout). Zero ACCEPT.
+Assembler also crashed at the very end on a list/string content-type mismatch.
 Self-Refine loop oscillated rather than converged on chapters with vault > 50
 hashes — iter N often regressed worse than iter N-1, with iter 1 frequently
 the local minimum. OP-7 early-stop and OP-12 commit-best-seen + OP-19 rescue
 worked correctly; the pipeline didn't deadlock, but quality varied wildly
 chapter-to-chapter (ch04 = good despite DEBT flag, ch01/06 = genuinely thin).
+Critic final: overall=0.85, faithfulness=0.84, code_syntax=0.71, 209 issues,
+119 hallucinated fences.
 
 **Root causes (hypotheses, ranked by probable impact)**:
   1. **Vault-size overload**: structured-output models (NIM Kimi/DeepSeek,
@@ -1346,47 +1349,334 @@ chapter-to-chapter (ch04 = good despite DEBT flag, ch01/06 = genuinely thin).
      thin sections (perverse trade-off — see ch07 iter 4: 60 missing / 0 thin).
   3. **Provider quota collapse mid-run**: Gemini RESOURCE_EXHAUSTED hit ~2h
      in, narrowing the cascade just as ch10 (118-hash monster) needed it.
+     openai/glm-4.7-flash deployment was 0/14 — 100% broken; should be
+     dropped from the router. openai/glm-4.5-flash 25% — borderline broken.
   4. **OP-73 zero-citation gate is harsher than synth model can satisfy**:
      several chapters had 0 missing / 0 invented but 8-16 thin sections —
      pre-OP-73 these would have ACCEPTed. The gate caught real quality issues
      but at a rate the model can't reliably hit on large vaults.
 
-**Required improvements (don't focus now — reinforce as future tier)**:
-  - **OP-CHUNK-VAULT (highest-leverage)**: split synth into vault-size
-    sub-batches (~30 hashes each), then merge. Trades 1 LLM call per
-    chapter for 3-4 calls but each operates in the structured-output
-    sweet spot. Likely fixes 80% of the oscillation pattern.
-  - **OP-ADAPT-THRESHOLD**: scale OP-31 ACCEPT thin-section limit by
-    chapter size (currently fixed at 5; should be `max(5, vault_size//10)`
-    so a 100-hash chapter tolerates up to 10 thin sections).
-  - **OP-ANTI-OSCILLATE**: detect oscillation explicitly (iter N regresses
-    AND iter N-1 also regressed) and bail early to OP-12 commit-best-seen
-    instead of burning iters 3-5 on Self-Refine that's gone the wrong way.
-  - **OP-LARGE-MODEL-ESCALATE**: when vault > 50, route synth to a
-    larger-context structured-output model (Gemini 2.5 Pro, Claude Opus,
-    GPT-4o) instead of the standard NIM/Mistral cascade. Cost premium
-    ~5-10× per chapter but avoids the oscillation entirely.
-  - **OP-CACHE-DEBT-OUTPUT**: write DEBT chapters to the synth cache by
-    default (not gated behind `skip_below_threshold=true`), so re-runs
-    only re-attempt the genuinely failed (sentinel) chapters. Currently
-    a re-run after a Run-16-class outcome re-synthesizes ALL 10 chapters
-    even though 9 have committed content.
-  - **OP-PROVIDER-PRESHIELD**: track per-provider cooldown signals
-    (Gemini quota, NIM 502 rate) and pre-emptively reorder the cascade
-    so a known-degraded provider isn't retried 3× in a row mid-iter.
+### ✅ Shipped on 2026-04-26 (Round 2 post-Run-20)
 
-**LangFuse instrumentation gaps surfaced by Run-16** (separate from above):
-  - Per-model/provider success/fail counters need price-table loading
-    in LangFuse Settings → Models for cost tracking to work.
-  - `metadata.langfuse_session_id = study_id` binding so all spans for
-    one study chain into a single drilldown view.
-  - Cast int metadata (shard_idx, chapter_number, meta_id) to str so
-    OTel doesn't drop them with "Propagated attribute is not a string".
-  - `litellm.success_callback=["langfuse"]` for per-provider attempt
-    spans — currently we only see the LangChain wrapper's combined span,
-    losing visibility into the cascade ("tried NIM → 502 → fell to Gemini").
-  - Failure tags: `error`, `timeout`, `op19-rescue`, `op7-early-stop`,
-    `sentinel`, `debt` so dashboards can count failure rates per chapter.
+Run-20 result (FastAPI Tier 3): overall=0.92 ✓ but only 1/5 ACCEPT
+(ch02, vault=11) + 4 DEBT (ch01=183, ch03=91, ch04=68, ch05=63 hashes).
+Exact "vault > 50 → constraint-vs-prose oscillation" pattern from Run-16
+persists despite Round-1 mitigations. 171 hallucinated fences in 191
+critic issues confirm the constraint-vs-prose attention competition is
+still firing. Round 2 ships the architectural fix.
+
+  - **OP-HIERARCHICAL-SYNTH** — replaces monolithic chapter synth with a
+    4-phase hierarchical pipeline on chapters whose vault exceeds the
+    `HIERARCHICAL_VAULT_THRESHOLD` (default 50 hashes). Below threshold,
+    monolithic synth runs unchanged (Run-13/Run-20 small-chapter evidence
+    shows it converges reliably there).
+
+    New code surfaces:
+      - `apps/fastapi/graphs/knowledge/hierarchical_synth.py` (~470 LoC)
+        — single module with all 4 phases as small async functions plus
+        the `synthesize_hierarchical()` orchestrator.
+      - `schemas/knowledge/agents.py` — added `OutlineSection` +
+        `ChapterOutline` Pydantic schemas (Phase A output). Phase C
+        re-uses the existing `Section` and Phase D re-uses `ChapterOutput`,
+        so downstream audit / grader / curator / critic / assembler are
+        unchanged.
+      - `schemas/knowledge/prompts.py` — added `OUTLINE_PROMPT` (Phase A,
+        prose-only, no enum) and `SECTION_SYNTH_PROMPT` (Phase C, small
+        per-section enum from a strict whitelist).
+      - `graphs/knowledge/distiller.py` — gate added in the Self-Refine
+        outer loop: vault > threshold routes to `synthesize_hierarchical`;
+        on `HierarchicalSynthFailed` the chapter falls back to flat synth
+        for its remaining iterations (per-chapter `_hierarchical_disabled`
+        flag prevents re-paying outline cost).
+
+    Phase mechanics (one paragraph each):
+      - **Phase A (outline)**: one prose-only LLM call produces a
+        `ChapterOutline` with 4-15 `OutlineSection`s (heading + goal +
+        cross-section "assumes_from_prior_sections" contract). Holistic
+        challenges + flashcards generated here too — they don't depend
+        on per-section decisions. Cheap deterministic critic on the
+        outline (`validate_outline()`) gates fan-out: rejects banned
+        headings, duplicates, too-short goals, and out-of-range section
+        counts. Failure raises `HierarchicalSynthFailed` → caller falls
+        back to flat synth.
+      - **Phase B (deterministic hash routing)**: no LLM. For each vault
+        hash, extract a local context = (most recent preceding markdown
+        heading + first non-blank line of the code body). Embed contexts
+        + section (heading + goal) strings via the existing
+        `embed_texts()` service. Cosine-similarity matrix → assign each
+        hash to its argmax section. Identify shared_core (top-K
+        highest-entropy hashes = those roughly equally similar to all
+        sections) and emit them in every section's whitelist. Hard-cap
+        orphan rate (max-similarity below 0.20 = orphan) at 5%; if
+        exceeded, raise `HierarchicalSynthFailed`. Best-effort rebalance
+        ensures every section gets ≥1 non-shared hash.
+      - **Phase C (parallel per-section synth)**: `asyncio.gather` over
+        `synthesize_one_section()`, capped at 6 concurrent calls. Each
+        call's enum = `assigned_hashes ∪ shared_core` (typically 5-15
+        hashes — well under the 30-distractor reliability cliff per
+        Chroma context-rot 2024). Reuses the existing
+        `_invoke_structured_with_fallback` (LiteLLM router cascade,
+        outer 1200s timeout, langfuse trace tagging). Failed sections
+        degrade into prose-only placeholder Sections (heading + goal
+        prose + assigned hashes preserved as code_refs) rather than
+        crashing the chapter; only > N/2 simultaneous failures raise.
+        Defensive whitelist filter on returned `code_refs` strips any
+        out-of-whitelist hash the model still hallucinated.
+      - **Phase D (merge)**: concatenate Section drafts into
+        `ChapterOutput`; challenges + flashcards from Phase A. The
+        existing 6-tuple `_audit_structured_output_refs` runs on the
+        merged output exactly as before — same accept/refine/regenerate
+        decision tree applies. Outer chapter-level Self-Refine still
+        operates: a hierarchical run that audits cleanly is committed;
+        one with structural defects retries (whole pipeline) up to the
+        adaptive iter budget.
+
+    LangFuse instrumentation:
+      - Phase A spans tagged `phase-a-outline`, run_name
+        `kd-hierarchical-outline-ch{NN}-iter{i}`
+      - Phase C spans tagged `phase-c-section`, run_name
+        `kd-hierarchical-section-ch{NN}-sec{ss}-iter{i}`
+      - On hierarchical→flat fallback, emits a `hierarchical-fallback`
+        failure event via `emit_failure_event()` for dashboard counting.
+
+    Why this beats the alternatives we considered:
+      - eliminates the failure mode rather than mitigating it (per-section
+        enum is structurally small, regardless of total chapter vault size)
+      - parallel via gather = wall time DOWN not up; cost ~K (sections)
+        calls per iteration vs the current 5×failed-refine cycle
+      - reuses the entire downstream pipeline (audit / grader / curator
+        / critic / assembler) — no schema changes required there
+      - graceful degradation at every phase: outline can fail → flat
+        synth runs; routing can orphan → flat synth runs; section can
+        fail → placeholder Section keeps the chapter assembleable
+
+    Validation: pending Run-21 (single FastAPI Tier 3 study). Expected
+    deltas vs Run-20: more ACCEPTs (≥3/5 instead of 1/5), faithfulness
+    ↑ to ≥ 0.85 on chapters with vault > 50.
+
+  - **OP-59-WEIGHT-DROP** (`graphs/knowledge/distiller.py::critic`) —
+    halved tree-sitter `code_syntax_valid` weight in the overall composite
+    (was 1.0, now 0.5; effective weights citation=1.0 + faithfulness=1.0
+    + code_syntax=0.5 over divisor 2.5). Per the deprioritized note in
+    the doc: "most code blocks fail because they lack lang tags, not
+    because they're broken. Score is misleading but doesn't gate anything
+    important." OP-59 also skips no-lang blocks entirely, which inflates
+    the score artificially when the corpus has many bare ``` fences.
+    Halving keeps the signal but stops it from masking real
+    faithfulness/citation issues (Run-20: code_syntax=1.00 contributed
+    +0.33 to overall=0.92 even though most chapters DEBT'd).
+
+### ✅ Shipped this session (2026-04-25 post-Run-16)
+
+  - **OP-21b — assembler list/string flatten** (`helpers.py:_call_assembler_llm`):
+    same OP-21 list-of-content-blocks fix that was applied to curator on
+    Run-10 was missing from the assembler. Run-16's only TASK-LEVEL crash
+    was here. Patched to flatten `response.content` whether str / list of
+    dicts / list of str / other. Next run won't crash at this step.
+  - **OP-PROVIDER-PRUNE** (`services/llm_chain.py`): disabled
+    `_zhipu_entry("glm-4.7-flash")` (0/14 success in Run-16, 100% failure)
+    and `_zhipu_entry("glm-4.5-flash")` (1/4 success, 25%). Both wasting
+    cascade slots on guaranteed BadRequest/NotFound. Kept commented with
+    DISABLED 2026-04-25 OP-PROVIDER-PRUNE breadcrumb so a future re-enable
+    is obvious.
+  - **OP-CACHE-DEBT-OUTPUT** (`schemas/knowledge/inputs.py` +
+    `tasks/knowledge/distiller.py`): flipped `skip_below_threshold`
+    default from `False → True` in both the request schema and the Celery
+    task signature. Re-runs after a partial-success outcome (Run-16-class)
+    now only re-attempt sentinel'd chapters instead of re-synthesizing
+    every DEBT-flagged one. Saves ~2h on a 10-chapter re-run.
+  - **OP-LF-STR-METADATA** (`graphs/knowledge/distiller.py`,
+    `reduce_cluster.py`, `helpers.py`): cast 7 int metadata fields to
+    `str(...)` (shard_idx ×2, chapter_number ×2, meta_id, iteration ×3,
+    plus `prose_only` bool→"true"). Eliminates 100+ "Propagated attribute
+    is not a string. Dropping value." warnings per run; preserves
+    filterable metadata in LangFuse UI.
+  - **OP-LF-FAILURE-TAGS** (`services/knowledge/langfuse_client.py` +
+    `graphs/knowledge/distiller.py`): added `emit_failure_event(...)`
+    helper that creates a tagged LangFuse event whenever a chapter falls
+    into a non-happy-path commit. Wired at 7 sites: OP-7 early-stop,
+    OP-12 best-seen rescue, OP-19 exception rescue, sentinel emission,
+    DEBT commit, curator vault-collision skip, curator preservation-
+    failed skip. Each event carries chapter + framework + failure-mode
+    tag for dashboard counting without log-scraping.
+  - **OP-LF-SESSION-ID + OP-LF-USER-ID + OP-LF-RUN-NAME** (extended
+    `langfuse_config()` helper + threaded through all 9 langfuse_config
+    call sites + `_invoke_structured_with_fallback` signature + payload
+    state): `metadata.langfuse_session_id = study_id` chains every span
+    of one study into one drilldown view; `metadata.langfuse_user_id =
+    user_id` enables per-user cost rollups; `run_name` overrides generic
+    "RunnableSequence" with searchable names (`kd-planner-shard-12-strict`,
+    `kd-curator-ch04`, `kd-synth-ch07-iter2`, `kd-grade-ch01-iter0`,
+    `kd-reduce-meta-label-03`, `kd-reduce-order-chapters`).
+  - **OP-LF-LITELLM-CALLBACK** (`services/llm_chain.py` Router init):
+    SHIPPED THEN REVERTED 2026-04-25 mid-Run-17. The LiteLLM bundled
+    langfuse integration (`litellm/integrations/langfuse/langfuse.py:144`
+    + `langfuse_prompt_management.py:121`) reads `langfuse.version.__version__`
+    which DOES NOT EXIST on the langfuse v3+ SDK we have installed (v3
+    module has no `.version` submodule; uses `langfuse.__version__` or
+    `importlib.metadata.version` directly). Setting
+    `litellm.success_callback=["langfuse"]` made every acompletion eagerly
+    init the langfuse logger and hit AttributeError. Errors were
+    "Non-Blocking" per LiteLLM (calls completed) but they spammed logs
+    AND emitted zero traces — pure noise. Re-enable path: (a) wait for
+    LiteLLM upstream fix at github.com/BerriAI/litellm; (b) pin
+    `langfuse<3` (loses v4 features we use); (c) write a custom LiteLLM
+    logger that delegates to our `services.knowledge.langfuse_client`.
+    Option (c) is the right path post-OP-HIERARCHICAL-SYNTH if cascade
+    visibility becomes critical. For now: cascade behavior is observable
+    via the existing LangChain CallbackHandler — we lose per-provider
+    attempt detail but keep overall call timing + cost (computed from
+    token counts + LangFuse model price table).
+
+### Still on roadmap (manual / multi-day / paid-decision)
+
+  - **OP-LF-PRICE-TABLE** — manual UI work in LangFuse Settings → Models:
+    load Anthropic / NIM / Groq / Gemini / Mistral per-1M-token prices
+    (input / output / cache-write / cache-read tiers) so cost dashboards
+    auto-populate from the per-provider attempt spans now flowing in.
+    Cannot be code-shipped; needs you to enter prices in the UI once.
+
+### Ship next (high ROI, in this priority order)
+
+  *(OP-HIERARCHICAL-SYNTH shipped 2026-04-26 — see "Shipped on 2026-04-26"
+  section above. Round 2's primary lever is now in production pending
+  Run-21 validation.)*
+
+  1. ~~**OP-HIERARCHICAL-SYNTH (was OP-CHUNK-VAULT, redesigned 2026-04-25
+     post-research)**~~ — SHIPPED 2026-04-26. Original spec preserved
+     below for future reference / Round 3 iteration:
+
+     Replaces the current monolithic chapter synth with a 4-phase
+     hierarchical pipeline that keeps each constrained-decode call's
+     enum well below the empirical 30-50 distractor cliff. Effort:
+     2-3 days + 1 validation run.
+
+     **Why the old "chunk by N hashes" framing was wrong**: the failure
+     is NOT enum size (function_calling supports 1000+ enum values per
+     OpenAI 2024-12 raise). It's **constraint-vs-prose attention
+     competition** — constrained decoding preserves enum mass but
+     doesn't pull prose toward those tokens, so prose gradient and
+     enum gradient fight each other. ch07 iter 4 (60 missing / 0 thin)
+     is the textbook perverse trade-off. Plus documented "context rot"
+     (Chroma 2024) — distractors degrade reliability monotonically with
+     input length, regardless of retrieval correctness.
+
+     **Reference architecture** (validated by SurveyG arxiv:2510.07733
+     and LongRefiner arxiv:2505.10413, 2025 production patterns):
+
+     - **Phase A — outline (no enum, prose-only)**: emit 5-15 sections
+       with title, 1-line goal, and a "what this section assumes from
+       prior sections" contract. Critic-on-outline gates this cheaply
+       (no enum, fast) before fan-out. Hallucination floor/ceiling
+       on section count: 5-15.
+     - **Phase B — deterministic hash routing (no LLM)**: cluster vault
+       hashes by source-file proximity (sklearn KMeans on file-path
+       embeddings, or hand-rolled prefix grouping). Assign clusters to
+       sections by name/goal affinity. Compute a "shared core" of the
+       top-k (~5) globally-relevant hashes that all sections may
+       reference. Hard cap orphan rate <5%; if exceeded for a chapter,
+       fall back to ordinal chunking for THAT chapter only.
+     - **Phase C — parallel per-section synth (LangGraph Send API)**:
+       each section's enum = `assigned_hashes ∪ shared_core` (typically
+       8-15 values, well under the 30-distractor cliff). Self-Refine
+       runs PER-SECTION, not per-chapter — one thin section retries
+       cheaply without disturbing 14 working ones. Reuses the existing
+       `_invoke_structured_with_fallback` + LiteLLM cascade.
+     - **Phase D — deterministic assembly + critic on whole chapter**
+       (already built; no change).
+
+     **Why this beats the alternatives**:
+     - eliminates the failure mode rather than mitigating it
+     - per-section enum stays under the cliff regardless of total vault size
+     - parallel via Send = wall time DOWN not up; cost ~K (sections)
+       calls vs current 5×failed-refine
+     - reuses existing Self-Refine + critic; only synth phase is
+       restructured
+
+     **Failure modes to design for** (each with mitigation):
+     - bad clustering → orphan-rate cap → ordinal fallback per-chapter
+     - cross-section coherence loss → outline contract passed to each
+       section synth
+     - outline hallucinates → cheap critic on outline before fan-out
+     - N× cost growth → already mitigated by parallelization
+
+     **Explicitly REJECTED alternatives** (research evidence):
+     - skeleton + ref-injection second pass: inject step recreates the
+       enum-cardinality problem in a single call — still fails
+     - GBNF / Outlines grammar-constrained generation: 40s-10min
+       compile time per request on hosted endpoints (arxiv:2501.10868);
+       not viable for our cascade
+     - self-consistency / N-sample vote: votes on hash-assignment
+       consistency, doesn't address prose/constraint conflict
+     - larger-model-only escalate without chunking: works but
+       expensive; keep as escalation safety net for orphan-rate
+       blowouts only (not primary path)
+
+     **Required new code surfaces**:
+     - `graphs/knowledge/synth_outline.py` — Phase A LLM call + critic
+     - `graphs/knowledge/hash_routing.py` — Phase B deterministic clustering
+     - `graphs/knowledge/synth_section.py` — Phase C per-section synth
+       wrapper around `_invoke_structured_with_fallback`
+     - LangGraph subgraph for sections (Send fan-out, gather merge)
+     - new schema `SectionDraft` (per-section equivalent of current
+       `ChapterOutput.sections[i]`) + `ChapterOutline`
+     - assembler updates to consume merged section drafts (small)
+
+     **Primary research sources** (2025, all production-validated):
+     - [SurveyG 2510.07733](https://arxiv.org/html/2510.07733v2) —
+       multi-agent hierarchical citation-graph synthesis
+     - [LongRefiner 2505.10413](https://arxiv.org/html/2505.10413v1) —
+       hierarchical refinement for long-context RAG with grounded
+       citations
+     - [Chroma "Context Rot"](https://www.trychroma.com/research/context-rot)
+       — distractors degrade reliability monotonically
+     - [STED 2512.23712](https://arxiv.org/abs/2512.23712) — structured
+       output reliability benchmark; small-enum > large-enum for
+       fixed prose budget
+     - [Brenndoerfer — Constrained Decoding](https://mbrenndoerfer.com/writing/constrained-decoding-structured-llm-output)
+       — explains the prose/constraint preference-ratio mechanism
+  *(Items 2 and 3 — OP-CACHE-DEBT-OUTPUT and OP-PROVIDER-PRUNE — both
+  shipped 2026-04-25; see "Shipped this session" above.)*
+
+### Maybe later (medium ROI)
+
+  4. **OP-LARGE-MODEL-ESCALATE**: when vault > 50, route synth to a
+     larger-context structured-output model (Gemini 2.5 Pro, Claude
+     Opus, GPT-4o) instead of the standard NIM/Mistral cascade. Cost
+     premium ~5-10× per chapter but avoids the oscillation entirely.
+     Tradeoff: introduces paid APIs into the free stack. Only ship if
+     OP-HIERARCHICAL-SYNTH alone doesn't reach Run-13-class quality.
+  5. **OP-ADAPT-THRESHOLD**: scale OP-31 ACCEPT thin-section limit by
+     chapter size (currently fixed at 5; should be `max(5, vault_size//10)`
+     so a 100-hash chapter tolerates up to 10 thin sections). 1-line
+     change but easy to over-tune; ship after OP-HIERARCHICAL-SYNTH to see
+     whether the new sub-batch chapter sizes still need it.
+
+### Deprioritized (low ROI given existing guardrails)
+
+  - **OP-ANTI-OSCILLATE** (regress-twice early-stop): saves wall-clock
+    only, not quality. OP-7 + OP-12 already commit best-seen on
+    regression. Skip.
+  - **OP-PROVIDER-PRESHIELD**: existing LiteLLM cooldown TTL handles
+    most of this. Tracking per-provider cooldown signals manually is
+    duplicate work for marginal gain. Skip until OP-3 (provider rotation
+    intelligence) is contemplated as a real architecture change.
+  - ~~**Reweight OP-59 tree-sitter score**~~ — SHIPPED 2026-04-26 as
+    OP-59-WEIGHT-DROP (see "Shipped on 2026-04-26" above). Halved the
+    weight from 1.0 → 0.5 in the critic overall composite.
+
+### LangFuse / observability hardening (parallel track — doesn't change quality)
+
+  *(All code-side LF items — STR-METADATA, FAILURE-TAGS, SESSION-ID,
+  USER-ID, RUN-NAME, LITELLM-CALLBACK — shipped 2026-04-25; see
+  "Shipped this session" above.)*
+
+  - **OP-LF-PRICE-TABLE** (only remaining LF item, manual UI work):
+    load Anthropic / NIM / Groq / Gemini / Mistral per-1M-token prices
+    (input / output / cache-write / cache-read tiers) into LangFuse
+    Settings → Models for auto cost calculation per trace and per-day
+    cost dashboards. Once loaded, the per-provider attempt spans now
+    flowing in (post OP-LF-LITELLM-CALLBACK) will auto-aggregate $$.
 
 ---
 

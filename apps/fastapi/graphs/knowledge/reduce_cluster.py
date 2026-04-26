@@ -117,6 +117,8 @@ async def embed_and_cluster_reduce(
     shard_unused_all: list[str],
     framework: str,
     llm: Runnable,
+    study_id: str | None = None,
+    user_id: str | None = None,
 ) -> ChapterPlanList:
     """
     Clio-pattern REDUCE v2 (production-tuned 2026-04-22).
@@ -315,9 +317,10 @@ async def embed_and_cluster_reduce(
             f"{'...' if len(m.file_slugs) > 3 else ''})"
             for m in members
         )
+        draft: MetaLabelDraft | None = None
         try:
             from services.knowledge.langfuse_client import langfuse_config as _lf_cfg
-            draft: MetaLabelDraft = await label_chain.ainvoke(
+            draft = await label_chain.ainvoke(
                 {
                     "framework": framework,
                     "meta_id": meta_id,
@@ -327,12 +330,25 @@ async def embed_and_cluster_reduce(
                 config = _lf_cfg(
                     metadata = {
                         "framework": framework,
-                        "meta_id": meta_id,
+                        "meta_id": str(meta_id),
                         "label": f"reduce-meta-label-{meta_id}",
                     },
                     tags = ["planner", "reduce", "meta-label"],
+                    session_id = study_id,
+                    user_id = user_id,
+                    run_name = f"kd-reduce-meta-label-{meta_id:02d}",
                 ) or None,
             )
+            # OP-21c (2026-04-25, mid-Run-18) — `with_structured_output(method=
+            # "function_calling")` silently returns None when the LLM's tool_call
+            # doesn't parse (no exception raised). Same quirk that
+            # `_invoke_structured_with_fallback` guards against in the synth path.
+            # Without this None-check, downstream `d.title` blows up the planner.
+            if draft is None:
+                raise RuntimeError(
+                    f"label_chain returned None for meta {meta_id} "
+                    f"(LLM tool_call non-parseable)"
+                )
         except Exception as e:
             logger.warning(
                 f"[reduce-cluster] label call for meta {meta_id} failed "
@@ -435,6 +451,9 @@ async def embed_and_cluster_reduce(
                     "label": "reduce-order-chapters",
                 },
                 tags = ["planner", "reduce", "order"],
+                session_id = study_id,
+                user_id = user_id,
+                run_name = "kd-reduce-order-chapters",
             ) or None,
         )
         proposed = [int(i) for i in ordering.order]
