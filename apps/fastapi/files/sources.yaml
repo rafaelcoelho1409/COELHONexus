@@ -97,6 +97,26 @@ docs_url:
     url: https://docs.crawl4ai.com
   - name: LiteLLM
     url: https://docs.litellm.ai
+  - name: NVIDIA GPU Operator
+    url: https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/index.html
+  - name: NVIDIA DCGM Exporter
+    url: https://docs.nvidia.com/datacenter/dcgm/latest/gpu-telemetry/dcgm-exporter.html
+  - name: TensorRT 
+    url: https://docs.nvidia.com/deeplearning/tensorrt/latest/index.html
+  - name: TensorRT-LLM
+    url: https://nvidia.github.io/TensorRT-LLM
+  - name: NVIDIA Triton Inference Server
+    url: https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/index.html
+  - name: vLLM 
+    url: https://docs.vllm.ai/en/latest/
+  - name: SGLang
+    url: https://docs.sglang.io
+  - name: TRL 
+    url: https://huggingface.co/docs/trl/index
+  - name: Optimum
+    url: https://huggingface.co/docs/optimum/index
+  - name: Kubeflow
+    url: https://www.kubeflow.org/docs/
 
 llms_full_txt:
   - name: Docker
@@ -123,6 +143,12 @@ llms_full_txt:
     url: https://docs.browser-use.com/open-source/llms-full.txt
   - name: LiteLLM
     url: https://docs.litellm.ai/llms-full.txt
+  - name: SGLang
+    url: https://docs.sglang.io/llms-full.txt
+  - name: TRL 
+    url: https://huggingface.co/docs/trl/llms-full.txt
+  - name: Optimum 
+    url: https://huggingface.co/docs/optimum/llms-full.txt
 
 llms_txt:
   - name: Docker
@@ -161,6 +187,12 @@ llms_txt:
     url: https://docs.browser-use.com/open-source/llms.txt
   - name: LiteLLM
     url: https://docs.litellm.ai/llms.txt
+  - name: SGLang 
+    url: https://docs.sglang.io/llms.txt
+  - name: TRL 
+    url: https://huggingface.co/docs/trl/llms.txt
+  - name: Optimum 
+    url: https://huggingface.co/docs/optimum/llms.txt
 
 sitemap_xml:
   - name: Docker
@@ -223,6 +255,10 @@ sitemap_xml:
     url: https://docs.crawl4ai.com/sitemap.xml
   - name: LiteLLM
     url: https://docs.litellm.ai/sitemap.xml
+  - name: vLLM 
+    url: https://docs.vllm.ai/sitemap.xml
+  - name: SGLang 
+    url: https://docs.sglang.io/sitemap.xml
 
 github_repo:
   - name: Docker
@@ -313,6 +349,26 @@ github_repo:
     url: https://github.com/unclecode/crawl4ai
   - name: LiteLLM
     url: https://github.com/BerriAI/litellm
+  - name: NVIDIA GPU Operator
+    url: https://github.com/nvidia/gpu-operator
+  - name: NVIDIA DCGM Exporter
+    url: https://github.com/NVIDIA/dcgm-exporter
+  - name: TensorRT
+    url: https://github.com/nvidia/tensorrt
+  - name: TensorRT-LLM
+    url: https://github.com/NVIDIA/TensorRT-LLM
+  - name: NVIDIA Triton Inference Server
+    url: https://github.com/triton-inference-server/server
+  - name: vLLM 
+    url: https://github.com/vllm-project/vllm
+  - name: SGLang 
+    url: https://github.com/sgl-project/sglang
+  - name: TRL 
+    url: https://github.com/huggingface/trl
+  - name: Optimum 
+    url: https://github.com/huggingface/optimum
+  - name: Kubeflow 
+    url: https://github.com/kubeflow/kubeflow
 
 categories:
   - name: Python
@@ -366,4 +422,12 @@ categories:
   - name: Crawl4AI
     category: Python
   - name: LiteLLM
+    category: Python
+  - name: vLLM 
+    category: Python
+  - name: SGLang
+    category: Python
+  - name: TRL 
+    category: Python
+  - name: Optimum
     category: Python
