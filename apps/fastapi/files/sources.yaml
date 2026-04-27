@@ -53,6 +53,50 @@ docs_url:
     url: https://neo4j.com/docs/python-manual/current/
   - name: ElasticSearch (Python)
     url: https://elasticsearch-py.readthedocs.io/en/stable/
+  - name: Qdrant
+    url: https://qdrant.tech/documentation/
+  - name: Redis
+    url: https://redis.io/docs/latest/
+  - name: Neo4j
+    url: https://neo4j.com/docs/
+  - name: ElasticSearch
+    url: https://www.elastic.co/docs
+  - name: OpenTelemetry (Python)
+    url: https://opentelemetry.io/docs/languages/python/
+  - name: OpenTelemetry
+    url: https://opentelemetry.io/docs/
+  - name: LangFuse
+    url: https://langfuse.com/docs
+  - name: Grafana 
+    url: https://grafana.com/docs/grafana/latest/
+  - name: Loki
+    url: https://grafana.com/docs/loki/latest/
+  - name: Mimir
+    url: https://grafana.com/docs/mimir/latest/
+  - name: Tempo 
+    url: https://grafana.com/docs/tempo/latest/
+  - name: Alloy
+    url: https://grafana.com/docs/alloy/latest/
+  - name: FastAPI
+    url: https://fastapi.tiangolo.com
+  - name: Pydantic
+    url: https://pydantic.dev/docs/validation/latest/get-started
+  - name: MLflow
+    url: https://mlflow.org/docs/latest/
+  - name: Asyncio
+    url: https://docs.python.org/3/library/asyncio.html
+  - name: Celery (Python)
+    url: https://docs.celeryq.dev/en/stable/
+  - name: Claude Code
+    url: https://code.claude.com/docs/en/overview
+  - name: Playwright (Python)
+    url: https://playwright.dev/python/docs/api/class-playwright
+  - name: Browser Use
+    url: https://docs.browser-use.com/open-source/introduction
+  - name: Crawl4AI
+    url: https://docs.crawl4ai.com
+  - name: LiteLLM
+    url: https://docs.litellm.ai
 
 llms_full_txt:
   - name: Docker
@@ -67,8 +111,20 @@ llms_full_txt:
     url: https://docs.langchain.com/llms-full.txt
   - name: FastMCP 
     url: https://gofastmcp.com/llms-full.txt
+  - name: Qdrant
+    url: https://qdrant.tech/llms-full.txt
+  - name: Neo4j
+    url: https://neo4j.com/llms-full.txt
+  - name: Pydantic
+    url: https://pydantic.dev/docs/validation/llms-full.txt
+  - name: Claude Code 
+    url: https://code.claude.com/docs/llms-full.txt
+  - name: Browser Use
+    url: https://docs.browser-use.com/open-source/llms-full.txt
+  - name: LiteLLM
+    url: https://docs.litellm.ai/llms-full.txt
 
-llms_full:
+llms_txt:
   - name: Docker
     url: https://docs.docker.com/llms.txt
   - name: Terragrunt
@@ -83,6 +139,28 @@ llms_full:
     url: https://docs.langchain.com/llms.txt
   - name: FastMCP
     url: https://gofastmcp.com/llms.txt
+  - name: Qdrant
+    url: https://qdrant.tech/llms.txt
+  - name: Redis
+    url: https://redis.io/llms.txt
+  - name: Neo4j
+    url: https://neo4j.com/llms.txt
+  - name: ElasticSearch
+    url: https://www.elastic.co/docs/llms.txt
+  - name: OpenTelemetry
+    url: https://opentelemetry.io/llms.txt
+  - name: LangFuse
+    url: https://langfuse.com/llms.txt
+  - name: Pydantic
+    url: https://pydantic.dev/docs/validation/llms.txt
+  - name: MLflow
+    url: https://mlflow.org/llms.txt
+  - name: Claude Code
+    url: https://code.claude.com/docs/llms.txt
+  - name: Browser Use
+    url: https://docs.browser-use.com/open-source/llms.txt
+  - name: LiteLLM
+    url: https://docs.litellm.ai/llms.txt
 
 sitemap_xml:
   - name: Docker
@@ -107,6 +185,44 @@ sitemap_xml:
     url: https://docs.langchain.com/sitemap.xml
   - name: FastMCP
     url: https://gofastmcp.com/sitemap.xml
+  - name: Qdrant
+    url: https://qdrant.tech/sitemap.xml
+  - name: Redis
+    url: https://redis.io/sitemap.xml
+  - name: Neo4j
+    url: https://neo4j.com/sitemap_index.xml
+  - name: ElasticSearch
+    url: https://www.elastic.co/docs/sitemap.xml
+  - name: OpenTelemetry
+    url: https://opentelemetry.io/en/sitemap.xml
+  - name: LangFuse
+    url: https://langfuse.com/sitemap-0.xml
+  - name: Grafana
+    url: https://grafana.com/en/sitemap.xml
+  - name: Loki
+    url: https://grafana.com/en/sitemap.xml
+  - name: Mimir
+    url: https://grafana.com/en/sitemap.xml
+  - name: Tempo 
+    url: https://grafana.com/en/sitemap.xml
+  - name: Alloy 
+    url: https://grafana.com/en/sitemap.xml
+  - name: FastAPI
+    url: https://fastapi.tiangolo.com/sitemap.xml
+  - name: MLflow
+    url: https://mlflow.org/docs/latest/sitemap.xml
+  - name: Celery (Python)
+    url: https://docs.celeryq.dev/sitemap.xml
+  - name: Claude Code
+    url: https://code.claude.com/docs/sitemap.xml
+  - name: Playwright (Python)
+    url: https://playwright.dev/sitemap.xml
+  - name: Browser Use
+    url: https://docs.browser-use.com/sitemap.xml
+  - name: Crawl4AI
+    url: https://docs.crawl4ai.com/sitemap.xml
+  - name: LiteLLM
+    url: https://docs.litellm.ai/sitemap.xml
 
 github_repo:
   - name: Docker
@@ -155,7 +271,48 @@ github_repo:
     url: https://github.com/redis/redis-py
   - name: ElasticSearch (Python)
     url: https://github.com/elastic/elasticsearch-py
-
+  - name: Qdrant
+    url: https://github.com/qdrant/qdrant
+  - name: Redis
+    url: https://github.com/redis/redis
+  - name: Neo4j
+    url: https://github.com/neo4j/neo4j
+  - name: ElasticSearch
+    url: https://github.com/elastic/elasticsearch
+  - name: OpenTelemetry (Python)
+    url: https://github.com/open-telemetry/opentelemetry-python
+  - name: OpenTelemetry
+    url: https://github.com/open-telemetry
+  - name: LangFuse
+    url: https://github.com/langfuse/langfuse
+  - name: Grafana
+    url: https://github.com/grafana/grafana
+  - name: Loki 
+    url: https://github.com/grafana/loki
+  - name: Mimir
+    url: https://github.com/grafana/mimir
+  - name: Tempo
+    url: https://github.com/grafana/tempo
+  - name: Alloy 
+    url: https://github.com/grafana/alloy
+  - name: FastAPI
+    url: https://github.com/fastapi/fastapi
+  - name: Pydantic
+    url: https://github.com/pydantic/pydantic
+  - name: MLflow
+    url: https://github.com/mlflow/mlflow
+  - name: Celery (Python)
+    url: https://github.com/celery/celery
+  - name: Claude Code 
+    url: https://github.com/anthropics/claude-code
+  - name: Playwright (Python)
+    url: https://github.com/microsoft/playwright-python
+  - name: Browser Use
+    url: https://github.com/browser-use/browser-use
+  - name: Crawl4AI
+    url: https://github.com/unclecode/crawl4ai
+  - name: LiteLLM
+    url: https://github.com/BerriAI/litellm
 
 categories:
   - name: Python
@@ -187,4 +344,26 @@ categories:
   - name: Neo4j (Python)
     category: Python
   - name: ElasticSearch (Python)
+    category: Python
+  - name: OpenTelemetry (Python)
+    category: Python
+  - name: LangFuse
+    category: Python
+  - name: FastAPI
+    category: Python
+  - name: Pydantic
+    category: Python
+  - name: MLflow
+    category: Python
+  - name: Asyncio
+    category: Python
+  - name: Celery (Python)
+    category: Python
+  - name: Playwright (Python)
+    category: Python
+  - name: Browser Use
+    category: Python
+  - name: Crawl4AI
+    category: Python
+  - name: LiteLLM
     category: Python
