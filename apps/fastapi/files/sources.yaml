@@ -117,6 +117,23 @@ docs_url:
     url: https://huggingface.co/docs/optimum/index
   - name: Kubeflow
     url: https://www.kubeflow.org/docs/
+  - name: PySpark
+    url: https://spark.apache.org/docs/latest/api/python/index.html
+  - name: Delta Lake (Python)
+    url: https://docs.delta.io/api/latest/python/spark/
+  - name: PyIceberg 
+    url: https://py.iceberg.apache.org
+  - name: Kafka (Python)
+    url: https://kafka-python.readthedocs.io/en/master/
+  - name: DuckDB
+    url: https://duckdb.org/docs/current/
+  - name: dbt 
+    url: https://docs.getdbt.com
+  - name: Plotly (Python)
+    url: https://plotly.com/python/
+  - name: Seaborn
+    url: https://seaborn.pydata.org
+
 
 llms_full_txt:
   - name: Docker
@@ -149,6 +166,9 @@ llms_full_txt:
     url: https://huggingface.co/docs/trl/llms-full.txt
   - name: Optimum 
     url: https://huggingface.co/docs/optimum/llms-full.txt
+  - name: dbt 
+    url: https://docs.getdbt.com/llms-full.txt
+
 
 llms_txt:
   - name: Docker
@@ -193,6 +213,11 @@ llms_txt:
     url: https://huggingface.co/docs/trl/llms.txt
   - name: Optimum 
     url: https://huggingface.co/docs/optimum/llms.txt
+  - name: DuckDB 
+    url: https://duckdb.org/llms.txt
+  - name: dbt 
+    url: https://docs.getdbt.com/llms.txt
+
 
 sitemap_xml:
   - name: Docker
@@ -259,6 +284,17 @@ sitemap_xml:
     url: https://docs.vllm.ai/sitemap.xml
   - name: SGLang 
     url: https://docs.sglang.io/sitemap.xml
+  - name: PyIceberg 
+    url: https://py.iceberg.apache.org/sitemap.xml
+  - name: Kafka (Python)
+    url: https://kafka-python.readthedocs.io/sitemap.xml
+  - name: DuckDB 
+    url: https://duckdb.org/sitemap.xml
+  - name: dbt 
+    url: https://docs.getdbt.com/sitemap.xml
+  - name: Plotly (Python)
+    url: https://plotly.com/python/sitemap.xml
+
 
 github_repo:
   - name: Docker
@@ -369,6 +405,19 @@ github_repo:
     url: https://github.com/huggingface/optimum
   - name: Kubeflow 
     url: https://github.com/kubeflow/kubeflow
+  - name: PyIceberg 
+    url: https://github.com/apache/iceberg-python
+  - name: Kafka (Python)
+    url: https://github.com/dpkp/kafka-python
+  - name: DuckDB 
+    url: https://github.com/duckdb/duckdb
+  - name: dbt 
+    url: https://github.com/dbt-labs/dbt-core
+  - name: Plotly (Python)
+    url: https://github.com/plotly/plotly.py
+  - name: Seaborn 
+    url: https://github.com/mwaskom/seaborn
+
 
 categories:
   - name: Python
@@ -430,4 +479,18 @@ categories:
   - name: TRL 
     category: Python
   - name: Optimum
+    category: Python
+  - name: PySpark
+    category: Python
+  - name: Delta Lake (Python)
+    category: Python
+  - name: PyIceberg 
+    category: Python
+  - name: Kafka (Python)
+    category: Python
+  - name: DuckDB 
+    category: Python
+  - name: Plotly (Python)
+    category: Python
+  - name: Seaborn 
     category: Python
