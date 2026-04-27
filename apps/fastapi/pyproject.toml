@@ -59,6 +59,17 @@ dependencies = [
     # OP-59 (2026-04-25): pre-compiled tree-sitter grammars (~305 languages) — replaces LLM code_syntax_valid critic.
     # Upper bound <1.6 because v1.6.2/1.6.3 only ship cp314 wheels; cp313 wheels start again at older releases. Pin below the broken band.
     "tree-sitter-language-pack>=0.4,<1.6",
+    "pyyaml>=6.0",             # Resolver catalog loader (apps/fastapi/sources.yaml)
+    # NER filter (Phase 2.1) — fast-gliner deferred. The package is sdist-only
+    # (Rust source) and requires `cc` + Rust toolchain at build time, which our
+    # python:3.13-slim base doesn't ship. Options when re-enabling:
+    #   (a) Add Rust + build-essential to Dockerfile.fastapi (heavy: ~300MB)
+    #   (b) Use a multi-stage Dockerfile with builder + runtime stages
+    #   (c) Switch to `gliner` package (pure Python but pulls PyTorch CPU ~250MB)
+    #   (d) Direct onnxruntime + manual tokenizer (lean ~80 LoC, no extra deps)
+    # Until then, services/resolver/ner_filter.py.TechEntityExtractor.get()
+    # returns None and the resolver falls back to query_splitter + per-token
+    # catalog fuzzy match (handles 90% of real query shapes).
 ]
 
 [build-system]

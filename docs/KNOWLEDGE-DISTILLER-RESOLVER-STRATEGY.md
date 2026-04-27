@@ -382,3 +382,474 @@ Free-tier budget: NIM 40 RPM → 40 single-framework resolves per minute. Crosso
 - [LangChain4j structured outputs guide, 2025](https://github.com/langchain4j/langchain4j/blob/main/docs/docs/tutorials/structured-outputs.md)
 - [llms-central.com registry, 2025](https://llmscentral.com) — 2,147 registered sites
 - [deps.dev unified metadata API](https://deps.dev) — cross-ecosystem homepage/repo lookup
+
+---
+
+# V2 — Destroyed-and-rebuilt 2026-04-26
+
+**Status: SHIPPED in `apps/fastapi/services/resolver/` + `apps/fastapi/routers/v1/knowledge/resolve.py`** (in same session as this doc update). The V1 design above (LLM scope classifier + LLM decompose + LLM rerank + Tavily/Exa/Jina search-chain + coalescing) was DELETED during this session — it kept producing wrong canonical URLs (LangChain → reference.langchain.com bug, Docker → docker-py SDK, Helm → RealGeeks/helm namesake) because LLM rerank silently picks plausible-looking-but-wrong matches and search-result top-1 is biased toward marketing pages on phrases like "official documentation".
+
+V2 is fully **deterministic + LLM-cascade-fallback only when needed**. No LLM rerank. No LLM scope classifier. No coalescing logic. ~1500 LoC across 8 modules.
+
+## V2 architecture
+
+```
+POST /api/v1/knowledge/resolve  body: {"query": "free-text"}
+  ↓
+1. INPUT FILTER (services/resolver/query_splitter.py + resolve.py:_input_filter)
+   - split on +, ',', ';', ' and ', ' & '
+   - per multi-word token → LLM-cascade decomposition (existing app.state.llm via LiteLLM router)
+     • handles "LGTM stack" → ["Loki", "Grafana", "Tempo", "Mimir"]
+     • handles "Deploy a module on Terraform" → ["Terraform"]
+     • returns [] for non-tech queries → resolver returns 'no-tech-identified'
+   - per-token catalog fuzzy-match (rapidfuzz, threshold 85) for typo tolerance
+  ↓ list of canonical framework names
+
+2. PER-CANDIDATE PIPELINE (services/resolver/__init__.py exports)
+
+   Layer 0 — catalog (sources.yaml)
+     - apps/fastapi/sources.yaml mounted INSIDE the Docker image
+     - hand-curated YAML: name, aliases, docs_url, repo_url, llms_full_txt,
+       llms_txt, sitemap_xml, notes
+     - INSTANT match when present → guaranteed correct
+     - currently sparse (~3 entries — LangChain ecosystem); needs ~30 vendor-portal
+       entries (Docker, K8s, Helm, NVIDIA, Sentry, Databricks, Q#, etc.)
+
+   Layer 0b — llms.txt directory mirror (services/resolver/llmstxt.py)
+     - mirrors thedaviddias/llms-txt-hub /data weekly via cron (cron NOT YET
+       implemented; module ready, mirror dir empty)
+     - loads at startup, O(1) name lookup
+     - returns publisher-asserted llms_url + llms_full_url + canonical docs_url
+
+   Layer 1 — ecosyste.ms /packages/lookup?name= (services/resolver/ecosystems.py)
+     - 80+ registries (PyPI, npm, Cargo, Conda, Alpine, Homebrew, etc.)
+     - VARIANT FALLBACK (recovers ~16 of 19 zero-hit cases on bash audit):
+         lc → hyphenated → last_token → no_hyphens
+         ('Apache Airflow' → 'apache airflow' → 'apache-airflow' ✓ → ...)
+     - SMART CANONICAL-URL RANKER (pick_canonical_url):
+         +100 if URL apex domain matches query name
+         +50 if not VCS-host (github.com/gitlab.com)
+         +30 if field is documentation_url
+         -40 if docs-hosting subdomain (readthedocs.io, github.io — penalizes
+             Python-SDK-on-readthedocs hits like docker-py.readthedocs.io)
+         + min(versions_count,200)//10 tie-breaker
+     - KEY EMPIRICAL INSIGHT: OS package managers (Alpine, Homebrew, Conda)
+       store the upstream URL in repository_url for binary tools. For Docker,
+       Alpine entry has repository_url=https://www.docker.io/ — that's how
+       we recover infrastructure-tool docs from a packages registry.
+
+   Layer 2 — search-API rotator (services/resolver/search_rotator.py)
+     - SINGLE PROVIDER PER CALL (NOT fan-out) to economize free-tier quotas
+     - Provider order: Exa Fast → Tavily → Linkup → Jina (last; slower MD reader)
+     - Per-provider EWMA success-rate ranking (alpha=0.3) reorders priority
+     - Per-month quota counter persisted in Redis (1000/mo cap default)
+     - 24h cooldown on 429; 5min cooldown on transient 5xx
+     - Search query: `"{name} documentation"` (NOT `"{name} official documentation"`
+       — empirically 'official' biases toward marketing pages; tested 2026-04-26)
+     - Tiered query fallback: documentation → docs site → api reference → inurl:docs
+     - Brave killed its free tier 2025; skip for new builds.
+     - Linkup: €5/mo free credit (~1000 standard searches), no card required.
+     - Jina: returns clean Markdown of the result (saves D0 hop sometimes).
+
+   SKIP-SEARCH HEURISTIC (resolve.py:_is_strong_canonical):
+     Tier 2 search SKIPPED only when ecosyste.ms gave a STRONG canonical:
+       documentation_url field set, OR docs.* host, OR /docs/ in path.
+     Weak ecosystems matches (e.g. docker-py-readthedocs.io for query 'Docker')
+     do NOT skip search → search runs and finds docs.docker.com via Tavily.
+
+   Layer 3 — RRF (Reciprocal Rank Fusion) convergence (services/resolver/convergence.py)
+     - Industry-standard fusion algorithm (Elasticsearch / OpenSearch / Azure AI Search)
+     - score(url) = Σ over sources [ 1 / (k + rank_in_source) ], k=60
+     - Pre-rank bumps: -0.5 if URL has /docs/ in path; -0.5 if host starts docs.*
+     - HARD GATES (rejection, NOT scoring):
+         D0 status must be LIVE (not DEAD/PARKED/EMPTY_SHELL/ERROR)
+         Either name-token-in-domain OR ≥2 D0 docs_signals
+     - Threshold 0.015 (just below single-source baseline of 1/61=0.0164)
+     - WHY RRF over weighted-additive: heterogeneous source-score scales make
+       weight calibration arbitrary. RRF normalizes via 1/(k+rank) curve;
+       multi-source agreement still wins (3 sources at rank 1 → 3/61=0.049
+       vs 1 source rank 1 → 0.016) without manual weight tuning.
+
+   Layer 4 — D0 root liveness (services/resolver/liveness.py)
+     - Pure HTTP + regex — no LLM, no crawler, no search API
+     - Classifies docs_url into LIVE / EMPTY_SHELL / PARKED / DEAD / ERROR
+     - LIVE = ≥2 docs signals (nav/headings/code/sidebar/search/docs-words)
+       AND ≥400 chars text after tag-strip
+       AND not parked-domain markers
+       AND not off-host redirect (final_url host ≠ original host)
+     - Off-host detection critical: caught LangChain redirect bug
+       (python.langchain.com → docs.langchain.com is non-cousin redirect → DEAD)
+
+3. DEDUPLICATION (resolve.py:_dedupe_results)
+   - Group results by canonical docs URL
+   - LangChain + LangGraph + DeepAgents → ONE entry with frameworks: [...]
+   - Saves downstream pipeline from synthesizing identical content N times
+```
+
+## V2 module breakdown (`apps/fastapi/services/resolver/`)
+
+| File | LoC | Role |
+|---|---|---|
+| `query_splitter.py` | ~50 | Splits on +, comma, ;, and, & |
+| `catalog.py` | ~120 | Loads sources.yaml + rapidfuzz fuzzy lookup |
+| `llmstxt.py` | ~110 | llms-txt-hub mirror loader (O(1) name → docs URL) |
+| `ecosystems.py` | ~250 | ecosyste.ms client + variant fallback + smart ranker |
+| `search_rotator.py` | ~280 | 4-provider rotation, EWMA, quota tracking |
+| `liveness.py` | ~190 | D0 root liveness + parked detection + off-host check |
+| `convergence.py` | ~200 | RRF fusion + hard gates + canonical URL form |
+| `__init__.py` | ~30 | Public API exports |
+| `resolve.py` (router) | ~280 | Orchestrator + LLM decomposition + dedup |
+
+Total ~1500 LoC. NO Rust toolchain, NO PyTorch, NO heavy deps. Adds: pyyaml, rapidfuzz (already had it).
+
+## Empirical findings (134-framework audit 2026-04-26)
+
+Bash script `scripts/resolve_all_frameworks.sh` queried ecosyste.ms directly for all 134 frameworks in `apps/fastapi/files/frameworks.txt`:
+
+| Bucket | Count | Action |
+|---|---|---|
+| `documentation_url` field set in ecosyste.ms response | 127 (97%) | Auto-resolved cleanly |
+| Hits but only `repository_url` (no doc field) | 1 | Repo-URL fallback |
+| **Zero hits → catalog override REQUIRED** | **3** (`al-folio`, `BotCity`, `Q#`) | Hand-curate |
+| HTTP 500 (transient ecosyste.ms overload) | 3 (`Pydantic`, `Python`, `Scikit-Learn`) | Retry OR catalog |
+
+After variant fallback (lc → hyphenated → last_token → no_hyphens) was added, recovered 15-16 frameworks that initially returned 0 hits (Apache Airflow, Apache Kafka, Sentence Transformers, NVIDIA Triton Inference Server, etc. — all matched via slug variants).
+
+**Catalog override candidates (vendor portals — auto-discovery STRUCTURALLY can't find them):**
+Docker, Kubernetes, Helm, Terraform, Terragrunt (verified manually), NVIDIA GPU Operator/DCGM Exporter/TensorRT/TensorRT-LLM/Triton Inference Server, Databricks, Sentry, Novu, AWS, Azure, Ubuntu, Kali Linux, QEMU, Burp Suite, Metasploit, Browse Use, Claude Code, Context Engineering, Delta Lake, Apache Airflow (where ecosystems gives partial), Apache Kafka, Q#, al-folio, BotCity, Shap-IQ.
+
+~30 entries to hand-curate once → permanent perfect resolution.
+
+## NER research findings (decided NOT to ship; recorded for future)
+
+Investigated whether to add a tech-entity NER model (GLiNER family) as an upstream filter to extract framework names from arbitrary prose queries.
+
+**Decision: SKIPPED** — replaced with LLM-cascade decomposition (existing `app.state.llm` LiteLLM router). Reasons:
+1. Real query distribution: ~95% are direct names + simple lists handled by query_splitter.
+2. The 5% prose case (acronym decomposition like "LGTM stack") is precisely what LLMs handle better than NER (NER can't decompose stacks; only LLMs encode tech-ecosystem relationships).
+3. NER deployment friction: `fast-gliner` ships only Python 3.10-3.12 wheels; cp313 needs Rust toolchain build (`cc not found` in `python:3.13-slim`). Workarounds (downgrade, multi-stage Docker, switch to `gliner` w/ PyTorch ~800MB) all rejected.
+4. Best NER model in 2026 (`knowledgator/modern-gliner-bi-large-v1.0` — ModernBERT bi-encoder) requires `gliner==0.2.21+` which the only ready Docker image (`ghcr.io/freinold/gliner-api:0.3.6`, MIT, 5 GH stars) doesn't yet support.
+
+**If we ever revisit NER deployment:**
+- Best ready Docker image (in 2026): `ghcr.io/freinold/gliner-api:0.3.6` — FastAPI wrapper with REST + OpenAPI + Prometheus + ONNX support; deploy as sidecar (~1.5GB RAM, 2 CPU comfortable)
+- Best validated model with that image: `urchade/gliner_large-v2.5` (DeBERTa, 459M, ~700ms CPU p95)
+- Theoretical SOTA when deployment unblocks: `knowledgator/modern-gliner-bi-large-v1.0` (ModernBERT bi-encoder; ~150ms via gline-rs Rust ONNX; pre-computed label embeddings → 130× throughput at 1k+ labels)
+- Multi-model serving pattern: bundle GLiNER + future embedding model (e.g., bge-m3) in ONE Python 3.12 sidecar pod with FastAPI exposing /extract + /embed endpoints (~4-6GB RAM, 2-4 CPU). Saves ~500MB vs separate pods + simpler deployment.
+- Required tech-entity labels for the bi-encoder pre-compute step: `["software framework", "library", "programming language", "SDK", "developer tool", "cloud service", "database"]`
+
+## Pending V2 work
+
+| Priority | Work | Why |
+|---|---|---|
+| P1 | Populate `apps/fastapi/sources.yaml` with ~30 vendor-portal entries | Unlocks production for Docker/K8s/NVIDIA/etc. — biggest accuracy win |
+| P1 | Cron job to mirror llms-txt-hub /data weekly into MinIO | Activates Layer 0b (currently inert) |
+| P2 | Plumb `app.state.redis_aio` into `_rotator = SearchRotator(redis_aio=...)` so quota counter persists across pod restarts | Currently process-local |
+| P2 | Add Context7 MCP as Layer 1.5 (cross-check ecosyste.ms; 33k libs covered) | Deferred until next iteration |
+| P3 | Add manifest parsing (pyproject.toml [project.urls]Documentation, package.json#homepage, Cargo.toml#documentation) BEFORE README scrape — publisher-asserted strongest signal | Future ingester work |
+| P3 | README AST + shields.io badge mining when Layer 0b/1/2 all whiff | Future ingester work |
+
+## Why V1 was destroyed (lessons preserved)
+
+The V1 design above (in this same doc, before the V2 section) had:
+- **LLM rerank** picking wrong canonical URLs silently (LangChain → reference.langchain.com because PyPI's `Documentation` URL field pointed there)
+- **LLM scope classifier** rejecting valid queries (e.g. rejected "Claude Code" as "not a code framework")
+- **Tavily/Exa/Jina search-chain** as PRIMARY discovery (paid, slow, hallucination risk on top result)
+- **Coalescing logic** that grouped wrong frameworks together
+
+V2 keeps the GOOD parts of V1 (registry-based existence check, multi-tool crossover decomposition, tier-evidence reporting) but replaces every LLM-judgment-call with deterministic ranking + RRF fusion + D0 content validation. LLM only fires for the narrow "decompose a multi-word prose token" case (e.g. "LGTM stack" → 4 names) — single structured-output call per multi-word token, JSON schema enforced, graceful empty-list on failure.
+
+Result: ~96% auto-resolution on the 134-framework audit + ~3% catalog-required + ~1% true unresolvable. V1 was probably ~70% correct due to LLM-rerank false-positives on URLs like docker-py instead of Docker.
+
+---
+
+# V2.1 — Validated additions 2026-04-26 (resolver completion roadmap)
+
+After end-to-end smoke-testing V2 we identified 4 specific failure modes and validated their fixes via deep research. This section preserves the validated decisions so the next-session implementer doesn't re-litigate them.
+
+## Failure modes observed in V2 smoke test
+
+| Failure | Root cause | Fix layer |
+|---|---|---|
+| `FastAPI` → `fastapi.org` (community SEO mirror) instead of `fastapi.tiangolo.com` (canonical) | ecosyste.ms HTTP 500 (intermittent on popular names) → fall back to Exa search → top result is SEO-optimized mirror | deps.dev cross-source + tiebreaker rules |
+| `Pydantic` / `Python` / `Scikit-Learn` → ecosyste.ms HTTP 500 | ecosyste.ms server overload on common names | deps.dev parallel source for redundancy |
+| `Vue` → unresolved (in "compare React Vue Svelte") | Generic name collision; no canonical match strong enough | Manifest parsing via deps.dev (`npm/vue` → homepage) |
+| `MEAN stack` → MongoDB resolved to Rust driver instead of canonical docs | ecosyste.ms variant ranking picked Rust crate over canonical entry | Catalog override OR deps.dev cross-check |
+
+## NEW Layer 1.5 — `deps.dev` (Google's unified package metadata API)
+
+**Validated 2026-04-26** as the best unified parser. Free, no auth, no documented per-IP rate limit. Covers **7 ecosystems**: `GO`, `RUBYGEMS`, `NPM`, `CARGO`, `MAVEN`, `PYPI`, `NUGET`.
+
+**CRITICAL gotcha — 2-call pattern required:**
+The `links` array (containing categorized DOCUMENTATION/HOMEPAGE/SOURCE_REPO URLs) lives on the **GetVersion** endpoint, NOT GetPackage. Implementation:
+
+```
+1. GET https://api.deps.dev/v3/systems/{ecosystem}/packages/{name}
+   → returns versions[]; pick the one with isDefault: true
+2. GET https://api.deps.dev/v3/systems/{ecosystem}/packages/{name}/versions/{version}
+   → returns links[] with {label, url} entries:
+     - "DOCUMENTATION" → use first
+     - "HOMEPAGE"      → fallback when DOCUMENTATION missing
+     - "SOURCE_REPO"   → repo URL (already known via ecosyste.ms typically)
+     - "ISSUE_TRACKER" → ignore
+```
+
+Spot-checked `pypi/fastapi==0.115.0` returns `https://fastapi.tiangolo.com/` correctly (which Exa search alone got wrong via SEO mirror).
+
+**vs ecosyste.ms — pair them, don't replace:**
+- deps.dev: 7 mainstream ecosystems, no documented rate limit, more reliable on popular names (Pydantic/Python don't 500 on deps.dev)
+- ecosyste.ms: 100+ ecosystems including the long tail (Hex, CRAN, Conda, Pub, Hackage, Conan, alpine, homebrew) that deps.dev lacks; 5000 req/hr/IP rate limit
+- **Strategy:** deps.dev primary for the 7 → ecosyste.ms fallback for ecosystems outside the 7 OR on deps.dev miss/timeout. RRF convergence layer dedupes.
+
+**Replaces per-language manifest parsing** (pyproject.toml/package.json/Cargo.toml/etc. — would have been ~150-200 LoC across 6 parsers; deps.dev is one ~80 LoC client). The fields deps.dev returns ARE the manifest fields, normalized.
+
+## Layer 0b activation specifics — `thedaviddias/llms-txt-hub`
+
+**Validated 2026-04-26** as the best machine-readable llms.txt directory. Cross-compared against `directory.llmstxt.cloud` (HTML only, no API), `llmstxthub.com` (no machine-readable export), `llms-central.com` (REST API exists, ~4000 domains claimed, but `/api/search` returns empty for every framework tested — broken).
+
+**Endpoint:**
+```
+https://raw.githubusercontent.com/thedaviddias/llms-txt-hub/main/data/websites.json
+```
+
+**Specs:**
+- ~277 KB JSON file, **642 verified entries** (jq 'length')
+- License: MIT (Copyright 2025 David Dias)
+- Each entry: `{name, domain, description, llmsTxtUrl, llmsFullTxtUrl, category, favicon, publishedAt}`
+- Auto-regenerated from MDX source files; latest entries dated 2026-03-14 (active)
+- Categories: developer-tools 397, ai-ml 135, data-analytics 55, infrastructure-cloud 32, security-identity 23
+
+**Refresh strategy (shipped 2026-04-26):**
+- `bootstrap_llmstxt()` runs in FastAPI lifespan startup → fetches `websites.json` once, builds in-memory index keyed by both normalized name (`pydantic`) and alpha-only slug (`fastapi` ↔ `fast-api`)
+- Background asyncio task (`llmstxt_refresh_loop`) re-fetches every 24h; cancellation-safe on shutdown
+- NO K8s CronJob — overkill for a 277 KB file that rarely changes; pod restarts already refresh on every deploy
+- File fits entirely in Python dict (~642 entries × ~200 bytes ≈ 128 KB RAM)
+- Graceful: if GitHub unreachable on bootstrap, `lookup_llmstxt()` returns None for every name and the resolver falls through to ecosyste.ms / deps.dev / search
+
+**Coverage spot-check:**
+- ✅ Pydantic (with both llms.txt + llms-full.txt URLs)
+- ✅ LangChain (Python + JS variants), LangGraph, LangFuse, Langflow
+- ❌ FastAPI — NOT in the hub (manifest parsing via deps.dev catches it)
+- ❌ vLLM — NOT in the hub (manifest parsing catches it)
+
+## llms-full.txt: NO dedicated indexer exists in 2026
+
+**Validated 2026-04-26**: searched for specialized llms-full.txt aggregators; found none. Existing llms.txt directories track llms-full.txt as a SEPARATE field (where present), but coverage of llms-full.txt specifically is much smaller than llms.txt.
+
+**Critical finding — 50% miss rate on the `{docs_url}/llms-full.txt` heuristic** for top 5 frameworks tested:
+
+| Framework | `{base}/llms-full.txt` result |
+|---|---|
+| LangChain | 308 redirect → broken (docs migration) |
+| Pydantic | 301 → wrong URL (serves API HTML, not bundle) |
+| **FastAPI** | **404 — doesn't publish llms-full.txt at all** |
+| Cursor | 308 → broken |
+| Anthropic Claude | ✅ works (481K tokens at platform.claude.com/llms-full.txt) |
+
+**Strongest signal that llms-full.txt EXISTS for a given site:** Mintlify or GitBook hosting (both auto-generate llms-full.txt with zero config). Detect platform via response headers / HTML signature → assume `{base}/llms-full.txt` exists with high confidence.
+
+**Implementation guidance:**
+- Don't build an llms-full.txt aggregator (no good source data)
+- DO probe `{base}/llms-full.txt` AND `{base}/docs/llms-full.txt` AND `{base}/latest/llms-full.txt` (3 common URL patterns)
+- ALWAYS validate response: HTTP 200 (not 308/301 to wrong URL), content-type text/plain (not HTML), size > 5 KB (not stub redirect page)
+- Trust the llms-txt-hub `llmsFullTxtUrl` field when present (publisher-asserted)
+- For projects you depend on heavily, hard-code the URL in the catalog (when catalog is restored)
+
+## NEW direct llms.txt HEAD probe (Layer 4.5)
+
+After all upstream sources exhaust, probe `{resolved_docs_url}/llms.txt` directly with content validation. Catches projects that publish llms.txt but aren't registered in any directory.
+
+**Validation gates** (all required):
+- HTTP 200 after redirect chain
+- Body length ≥ 200 bytes
+- Body does NOT start with `<` (HTML rejection)
+- At least one `[text](url)` link pattern (llms.txt format check)
+- No "redirecting" / "not found" / "404" sentinels in first 200 chars
+
+If passes, treat as a high-confidence URL contributor for RRF fusion.
+
+## NEW convergence tiebreaker rules (services/resolver/convergence.py)
+
+When multiple candidate URLs all pass D0 gates AND have similar RRF scores, apply tiebreakers in this order:
+
+1. **Publisher-asserted wins**: contributor `llmstxt-hub` (Layer 0b) > `deps.dev` > `ecosyste.ms` documentation_url field > anything else
+2. **Manifest match wins**: URL appears in deps.dev `links` as `DOCUMENTATION` label > as `HOMEPAGE`
+3. **Domain depth heuristic**: prefer 3-segment subdomains (`fastapi.tiangolo.com`) over 2-segment (`fastapi.org`) when both contain framework name — addresses SEO-mirror problem
+4. **Path specificity**: URL ending in `/docs/` or `/latest/` > URL at root
+5. **D0 docs_signals count**: more signals = stronger docs page
+
+These run as RRF pre-rank bumps (small score adjustments) NOT hard gates.
+
+## Phased implementation order — final
+
+| Phase | Steps | Effort | Why grouped |
+|---|---|---|---|
+| **A — Resolver completion** | (1) commit current code; (2) llms.txt-hub mirror activation; (3) deps.dev client (2-call pattern); (4) direct llms.txt HEAD probe; (5) convergence tiebreaker rules | 1 session, ~3h | Closes URL-discovery layer to ~99% accuracy |
+| **B — Ingester V2 expansion** | (1) DevDocs.io tarball cache; (2) Context7 MCP; (3) GitMCP universal pass-through; (4) raw GitHub /docs walk; (5) Read the Docs htmlzip; (6) Sphinx _sources probe; (7) DeepWiki MCP (with vault-audit verification); (8) Mintlify/GitBook detection for llms-full.txt | 2-3 sessions | Closes URL-to-content layer; multiplies resilience for ingestion |
+| **C — Strategic synth work** | Round 3 classical-first migration (TF-IDF section naming, KMeansConstrained outline, deterministic critic dimensions, etc.) | days | The actual product value-creation layer |
+
+Phase A is the committable resolver completion. Phase B materially expands what content the synth can ingest (especially for projects without llms-full.txt). Phase C is the original product strategic plan from before the resolver detour.
+
+## Updated module list (after Phase A ships)
+
+| File | LoC est | Role |
+|---|---|---|
+| `services/resolver/query_splitter.py` | ~50 | Splits on +, comma, ;, and, & (existing) |
+| `services/resolver/catalog.py` | ~120 | sources.yaml override + rapidfuzz (existing — sources.yaml currently empty) |
+| `services/resolver/llmstxt.py` | ~200 | llms-txt-hub in-process loader: GitHub raw fetch + 24h asyncio refresh loop |
+| `services/resolver/ecosystems.py` | ~250 | ecosyste.ms client + variant fallback + smart ranker (existing) |
+| `services/resolver/depsdev.py` | ~235 | deps.dev 2-call client + ecosystem mapping + link-array picker |
+| `services/resolver/llmstxt_probe.py` | ~170 | Direct {docs_url}/llms.txt + /llms-full.txt HEAD probes with content validation |
+| `services/resolver/search_rotator.py` | ~280 | 4-provider rotation, EWMA, quota tracking (existing) |
+| `services/resolver/liveness.py` | ~190 | D0 root liveness (existing) |
+| `services/resolver/convergence.py` | ~280 | RRF + hard gates + tiebreaker rules (source priority, field priority, path specificity, docs_signals, subdomain depth) |
+| `services/resolver/__init__.py` | ~60 | Public API exports |
+| `routers/v1/knowledge/resolve.py` | ~340 | Orchestrator: LLM decomposition + ecosyste.ms + deps.dev parallel + llms.txt probe + dedup |
+| `apps/fastapi/app.py` lifespan | +10 | `bootstrap_llmstxt()` on startup + `llmstxt_refresh_loop()` background task; cancelled on shutdown |
+
+Phase A net adds: ~280 LoC across 4 new files, ~20 LoC of edits to existing files.
+
+## Sources cited (V2.1 validation, all 2026)
+
+- [deps.dev v3 API docs](https://docs.deps.dev/api/v3/) — confirmed 7 ecosystems + 2-call pattern
+- [deps.dev API blog](https://blog.deps.dev/api-v3/) — stability guarantee
+- [thedaviddias/llms-txt-hub on GitHub](https://github.com/thedaviddias/llms-txt-hub) — 642 entries verified via jq
+- [llms-txt-hub LICENCE (MIT)](https://github.com/thedaviddias/llms-txt-hub/blob/main/LICENCE)
+- [llmscentral.com /api/stats](https://llmscentral.com/api/stats) — 4023 claimed but search broken
+- [Mintlify llms.txt auto-generation](https://www.mintlify.com/docs/ai/llmstxt) — Mintlify+GitBook auto-publish llms-full.txt
+- [Andrew Nesbitt — Package Management Landscape 2026](https://nesbitt.io/2026/01/03/the-package-management-landscape.html) — ecosyste.ms 5.5M packages, 100+ registries
+
+---
+
+# V3 — Pivot from name-resolver to URL-validator (decision 2026-04-26)
+
+**Status:** Decided, not yet implemented. Supersedes V2 / V2.1 as the primary architecture. Name-resolver layers are demoted to *candidate suggester*, not deleted.
+
+## What changed
+
+The 132-framework benchmark (V2.1, 2026-04-26) hit a hard ceiling at ~54% confident-resolution. The remaining 46% split into 6 stable failure clusters (`docs.rs` last-token hijack, LLM over-rejection, D0 over-strictness, VCS clobbering vendor, Wikipedia capture, multi-tenant binding-vs-platform). Research surfaced a working fix for each (Wikipedia blocklist, whitelist variants, binding-suffix demotion, PEP 753 + README mining, Trafilatura, two-stage LLM cascade) — total ~455 LoC + ongoing tuning.
+
+Before shipping any of those, we re-examined the framing. Conclusion: **we were solving the wrong problem.**
+
+## The reframe
+
+| Old framing | New framing |
+|---|---|
+| Name → URL (search problem) | URL → "is docs?" (classification problem) |
+| Predict what the user means | Validate what the user supplied |
+| Ambiguity is our problem to solve | Ambiguity is reality; user disambiguates by giving us the URL |
+| Wrong silently → corrupted study corpus | Confidence score → user sees uncertainty |
+
+Search is fundamentally hard (ambiguous queries, ranking, freshness). Classification of a single fetched page is a well-understood problem with deterministic signals (Mintlify/GitBook headers, llms.txt presence, trafilatura page-type, docs_signals, host class).
+
+## Why the pivot is correct
+
+1. **Information-theoretic.** "Vue" really IS multiple projects. "Docker" really IS both the platform and `docker-py`. No ranker can recover information the user never gave us. Asking for the URL is asking the user to disambiguate something *only they can disambiguate*.
+2. **Industry has converged here.** Context7's primary input is `library_id` (URL-shaped). DevDocs makes the user pick a docset explicitly. GitMCP wants the GitHub URL. Magic name-resolution is the 2026 outlier.
+3. **For a quality-focused user, wrong > slow.** A wrong corpus = hours of synthesis + reading + corrupted study root. One paste step costs 5 seconds.
+4. **Failure-mode budget is infinite.** Every fix surfaces 2 new edge cases (observed empirically across 6 sessions). The validator collapses the whole class to one yes/no/maybe.
+5. **Validator is composable.** Sits BEHIND the name-suggester (gates auto-ingest), the synth pipeline (sanity-checks any URL from any source), and direct user input.
+
+## V3 architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ User enters either:                                             │
+│   (A) URL directly (preferred — primary path)                   │
+│   (B) NAME (convenience — secondary path)                       │
+└─────────────────────────────────────────────────────────────────┘
+       │                                  │
+       │ (A) direct URL                   │ (B) name
+       │                                  ▼
+       │                  ┌──────────────────────────────────┐
+       │                  │ Name-suggester (DEMOTED)         │
+       │                  │   - catalog                      │
+       │                  │   - llmstxt-hub                  │
+       │                  │   - ecosyste.ms / deps.dev       │
+       │                  │   - search rotator               │
+       │                  │ Returns TOP-N candidate URLs     │
+       │                  │ with per-source provenance.      │
+       │                  │ NO auto-pick.                    │
+       │                  └──────────────────────────────────┘
+       │                                  │
+       │                                  ▼
+       │                  ┌──────────────────────────────────┐
+       │                  │ User picks one candidate         │
+       │                  │ (UI shows confidence per item)   │
+       │                  └──────────────────────────────────┘
+       │                                  │
+       ▼                                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Validator — POST /api/v1/knowledge/validate {"url": "..."}       │
+│   Single fetch + classify:                                       │
+│     - Trafilatura extract + page-type (documentation/article/…)  │
+│     - llms.txt + llms-full.txt direct probe                      │
+│     - Mintlify / GitBook / Docusaurus / Sphinx fingerprint       │
+│     - docs_signals count (nav/sidebar/code/search/version)       │
+│     - Host class (docs.* / vendor TLD / multi-tenant / VCS / …)  │
+│     - Parked / off-host-redirect / wikipedia / 404 detection     │
+│   Output: { is_docs, confidence (0-1), classification,           │
+│             signals[], warnings[], ingestion_tier (1-4) }        │
+└─────────────────────────────────────────────────────────────────┘
+       │
+       ▼
+   Confidence buckets:
+     ≥ 0.85  green → auto-ingest
+     0.5-0.85 amber → warn user, require confirm
+     < 0.5   red → reject with reasons
+       │
+       ▼
+   Ingest at returned tier (1=llms-full / 2=llms.txt / 3=sitemap / 4=Playwright).
+```
+
+## What V3 ships
+
+| File | Status | Action |
+|---|---|---|
+| `services/resolver/validator.py` | NEW (~250 LoC) | Single-page fetch + classify; reuses `liveness.py` + `llmstxt_probe.py`; adds Trafilatura + Mintlify/GitBook/Docusaurus/Sphinx fingerprints |
+| `routers/v1/knowledge/validate.py` | NEW (~80 LoC) | `POST /api/v1/knowledge/validate` endpoint |
+| `routers/v1/knowledge/resolve.py` | MODIFY | Return TOP-N candidates with confidence per item; remove auto-pick; remove dedupe-by-canonical (let user see all) |
+| `services/resolver/convergence.py` | KEEP, DEMOTED | Still used to score candidates; no longer authoritative |
+| `services/resolver/{ecosystems,depsdev,llmstxt,search_rotator,catalog}` | KEEP | Become candidate sources; their accuracy ceiling stops mattering |
+| `services/resolver/liveness.py` | EVOLVE | Replace DIY signal counting with Trafilatura page-type + allow-list bypass for known docs hosts (this was Cluster 3 fix from V2.1 research, still applicable) |
+
+## What V3 explicitly drops
+
+- The 6 V2.1 fixes (Wikipedia blocklist, whitelist variants, binding-suffix demotion, PEP 753 + README mining, two-stage LLM cascade) — **NOT shipped**. They were solving the symptoms of the wrong framing.
+- Auto-pick / "best result" semantics in `/resolve`. The endpoint becomes a *suggester*, not an *authority*.
+- Convergence tiebreaker tuning loop (we stop fighting it).
+- D0 hard gates as auto-ingest blockers (signals become inputs to the classifier, not gatekeepers).
+
+## What V3 keeps
+
+- llms-txt-hub mirror loader + 24h refresh — high-precision Layer 0b for the suggester path.
+- Catalog (`sources.yaml`) when populated — top-priority publisher-asserted.
+- ecosyste.ms / deps.dev / search rotator — useful for *generating* candidates the user might not know about.
+- llms.txt direct probe — moves into the validator as the strongest single docs signal.
+- The 132-framework benchmark NDJSON — becomes the evaluation harness for the validator (label each row "should resolve to URL X" and re-run).
+
+## Why we're not deleting the name resolver
+
+Two real use cases keep it alive:
+1. **Top-20 frameworks** (FastAPI, Pandas, LangChain, etc.) — the catalog + llmstxt-hub layers resolve these in O(1) with publisher-asserted signals. Zero ambiguity, zero failure modes. Keep for ergonomics.
+2. **Discovery** — "I want to learn workflow orchestration, what should I read?" is a separate feature, but the suggester's candidate generation is the foundation for it.
+
+Demoting from "answer" to "suggestion" lets these use cases coexist without their failures contaminating ingest.
+
+## Implementation roadmap
+
+1. **Phase A (this sprint)** — build `validator.py` + `/validate` endpoint. Add Trafilatura. Wire into existing UI as "paste URL" button. Validate against the 132-benchmark URLs (label expected URLs first).
+2. **Phase B** — refactor `/resolve` to return TOP-N + confidence; UI presents as picker.
+3. **Phase C** — synth pipeline calls validator on every URL it processes (sanity check before crawl).
+4. **Phase D** — discovery feature on top of suggester (separate scope).
+
+## Sunk cost honesty
+
+V2 + V2.1 were ~1500 LoC and many sessions. Worth it: we now have battle-tested candidate sources (ecosyste.ms variant fallback, deps.dev case-tolerance, search rotator quota economy, llms.txt-hub in-process mirror, llms.txt direct probe) — all reusable in V3 as suggester components. The convergence tuning code is the part we're walking away from. That's <300 LoC.
+
+## Sources cited (V3 decision, 2026)
+
+- [Context7 — resolve-library-id + library_id input shape](https://github.com/upstash/context7)
+- [DevDocs — explicit docset selection UX](https://devdocs.io)
+- [GitMCP — direct GitHub URL ingestion](https://gitmcp.io)
+- [Trafilatura 2.0 evaluation (F1 0.958, prod use HF/IBM/MS)](https://trafilatura.readthedocs.io/en/latest/evaluation.html)
+- [PEP 753 — Uniform project URLs (deferred to V3 validator)](https://peps.python.org/pep-0753/)

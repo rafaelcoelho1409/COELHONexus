@@ -1,0 +1,190 @@
+docs_url:
+  - name: Docker
+    url: https://docs.docker.com/
+  - name: Kubernetes
+    url: https://kubernetes.io/docs/home/
+  - name: Helm
+    url: https://helm.sh/docs/
+  - name: Terraform
+    url: https://developer.hashicorp.com/terraform/docs
+  - name: Terragrunt
+    url: https://docs.terragrunt.com/getting-started/quick-start/
+  - name: Ansible
+    url: https://docs.ansible.com
+  - name: Git 
+    url: https://git-scm.com/docs/git
+  - name: GitHub 
+    url: https://docs.github.com/en
+  - name: GitLab 
+    url: https://docs.gitlab.com
+  - name: Argo CD
+    url: https://argo-cd.readthedocs.io/en/stable/
+  - name: k3d
+    url: https://k3d.io/stable/
+  - name: Skaffold
+    url: https://skaffold.dev/docs/
+  - name: Python
+    url: https://docs.python.org/3/
+  - name: Bash
+    url: https://www.gnu.org/software/bash/manual/bash.html
+  - name: Go 
+    url: https://go.dev/doc/
+  - name: Rust 
+    url: https://doc.rust-lang.org/book/
+  - name: PostgreSQL
+    url: https://www.postgresql.org/docs/current/index.html
+  - name: DeepAgents
+    url: https://docs.langchain.com/oss/python/deepagents/overview
+  - name: LangChain
+    url: https://docs.langchain.com/oss/python/langchain/overview
+  - name: LangGraph
+    url: https://docs.langchain.com/oss/python/langgraph/overview
+  - name: FastMCP
+    url: https://gofastmcp.com/getting-started/welcome
+  - name: Sentence Transformers
+    url: https://sbert.net/
+  - name: FastEmbed
+    url: https://qdrant.github.io/fastembed/
+  - name: Qdrant (Python)
+    url: https://python-client.qdrant.tech
+  - name: Redis (Python)
+    url: https://redis.io/docs/latest/develop/clients/redis-py/
+  - name: Neo4j (Python)
+    url: https://neo4j.com/docs/python-manual/current/
+  - name: ElasticSearch (Python)
+    url: https://elasticsearch-py.readthedocs.io/en/stable/
+
+llms_full_txt:
+  - name: Docker
+    url: https://docs.docker.com/llms-full.txt
+  - name: Terragrunt
+    url: https://docs.terragrunt.com/llms-full.txt
+  - name: DeepAgents
+    url: https://docs.langchain.com/llms-full.txt
+  - name: LangChain
+    url: https://docs.langchain.com/llms-full.txt
+  - name: LangGraph
+    url: https://docs.langchain.com/llms-full.txt
+  - name: FastMCP 
+    url: https://gofastmcp.com/llms-full.txt
+
+llms_full:
+  - name: Docker
+    url: https://docs.docker.com/llms.txt
+  - name: Terragrunt
+    url: https://docs.terragrunt.com/llms.txt
+  - name: GitHub
+    url: https://docs.github.com/llms.txt
+  - name: DeepAgents
+    url: https://docs.langchain.com/llms.txt
+  - name: LangChain
+    url: https://docs.langchain.com/llms.txt
+  - name: LangGraph
+    url: https://docs.langchain.com/llms.txt
+  - name: FastMCP
+    url: https://gofastmcp.com/llms.txt
+
+sitemap_xml:
+  - name: Docker
+    url: https://docs.docker.com/sitemap.xml
+  - name: Kubernetes
+    url: https://kubernetes.io/en/sitemap.xml
+  - name: Helm 
+    url: https://helm.sh/sitemap.xml
+  - name: GitLab
+    url: https://docs.gitlab.com/en-us/sitemap.xml
+  - name: Argo CD
+    url: https://argo-cd.readthedocs.io/sitemap.xml
+  - name: Skaffold
+    url: https://skaffold.dev/sitemap.xml
+  - name: PostgreSQL
+    url: https://www.postgresql.org/sitemap.xml
+  - name: DeepAgents
+    url: https://docs.langchain.com/sitemap.xml
+  - name: LangChain
+    url: https://docs.langchain.com/sitemap.xml
+  - name: LangGraph
+    url: https://docs.langchain.com/sitemap.xml
+  - name: FastMCP
+    url: https://gofastmcp.com/sitemap.xml
+
+github_repo:
+  - name: Docker
+    url: https://github.com/docker/cli
+  - name: Kubernetes
+    url: https://github.com/kubernetes/kubernetes
+  - name: Helm 
+    url: https://github.com/helm/helm
+  - name: Terraform
+    url: https://github.com/hashicorp/terraform
+  - name: Terragrunt
+    url: https://github.com/gruntwork-io/terragrunt
+  - name: Ansible
+    url: https://github.com/ansible/ansible
+  - name: Git
+    url: https://github.com/git/git
+  - name: GitLab
+    url: https://github.com/gitlabhq/gitlabhq
+  - name: Argo CD
+    url: https://github.com/argoproj/argo-cd
+  - name: k3d
+    url: https://github.com/k3d-io/k3d
+  - name: Skaffold
+    url: https://github.com/GoogleContainerTools/skaffold
+  - name: Go
+    url: https://github.com/golang/go
+  - name: Rust 
+    url: https://github.com/rust-lang/rust
+  - name: PostgreSQL
+    url: https://github.com/postgres/postgres
+  - name: DeepAgents 
+    url: https://github.com/langchain-ai/deepagents
+  - name: LangChain
+    url: https://github.com/langchain-ai/langchain
+  - name: LangGraph
+    url: https://github.com/langchain-ai/langgraph
+  - name: FastMCP
+    url: https://github.com/prefecthq/fastmcp
+  - name: Sentence Transformers
+    url: https://github.com/huggingface/sentence-transformers
+  - name: FastEmbed
+    url: https://github.com/qdrant/fastembed
+  - name: Qdrant (Python)
+    url: https://github.com/qdrant/qdrant-client
+  - name: Redis (Python)
+    url: https://github.com/redis/redis-py
+  - name: ElasticSearch (Python)
+    url: https://github.com/elastic/elasticsearch-py
+
+
+categories:
+  - name: Python
+    category: Programming Language
+  - name: Bash
+    category: Programming Language
+  - name: Go 
+    category: Programming Language
+  - name: Rust 
+    category: Programming Language
+  - name: PostgreSQL
+    category: Programming Language
+  - name: DeepAgents
+    category: Python
+  - name: LangChain
+    category: Python
+  - name: LangGraph
+    category: Python
+  - name: FastMCP
+    category: Python 
+  - name: Sentence Transformers
+    category: Python
+  - name: FastEmbed
+    category: Python
+  - name: Qdrant (Python)
+    category: Python
+  - name: Redis (Python)
+    category: Python
+  - name: Neo4j (Python)
+    category: Python
+  - name: ElasticSearch (Python)
+    category: Python
