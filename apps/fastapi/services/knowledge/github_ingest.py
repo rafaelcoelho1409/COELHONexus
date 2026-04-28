@@ -308,14 +308,6 @@ async def ingest_github_tree(
                 f"to Tier 4 Playwright for a last-resort attempt."
             )
 
-        # Apply max_pages cap
-        if len(md_paths) > cfg.max_pages:
-            logger.info(
-                f"[tier-gh] capping {len(md_paths)} → {cfg.max_pages} files "
-                f"(cfg.max_pages)"
-            )
-            md_paths = md_paths[: cfg.max_pages]
-
         # -----------------------------------------------------------------
         # Step 2 — parallel raw fetches with a semaphore cap
         # -----------------------------------------------------------------

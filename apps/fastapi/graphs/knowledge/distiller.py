@@ -75,7 +75,6 @@ from graphs.knowledge.helpers import (
     _build_corpus_summary,
     _dedup_chapter_files,
     _filter_noise_files,
-    _maybe_split_monolith,
     _read_raw_prefix,
     _validate_plan,
     _write_plan_json,
@@ -288,11 +287,12 @@ class KnowledgeDistillerGraph:
         framework = state["framework"]
         version = state.get("version") or "latest"
 
-        # 1) Read corpus from MinIO, normalize Tier-1 monolith if present
+        # 1) Read corpus from MinIO. Monolith→per-section split has already
+        #    happened at ingest time (services.knowledge.post_ingest), so the
+        #    corpus on disk is already normalized.
         entries = await _read_raw_prefix(storage, study_root)
         if not entries:
             raise FileNotFoundError(f"research/raw/ is empty at prefix {study_root!r}")
-        entries = await _maybe_split_monolith(storage, study_root, entries)
         # Tier 4 #17 (2026-04-24) — noise pre-filter before MAP.
         # Drops obvious non-pedagogical slugs (changelog / release-notes /
         # stubs with <200 chars of prose / files with ~0 code-to-prose ratio)

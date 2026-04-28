@@ -2,19 +2,18 @@
 Knowledge Distiller — Tier 2 Ingestion (llms.txt index + parallel link fetch)
 
 Dispatched by `services/knowledge/ingestion.py` when the resolver assigned
-`tier == 2` — meaning Stage D's content-validated probe confirmed the site
-publishes a real `/llms.txt` (markdown headings and/or .md URL references)
-but no `/llms-full.txt`.
+`tier == 2` — meaning sources.yaml has a curated `llms.txt` URL for this
+framework but no `llms-full.txt`.
 
 PIPELINE (~30-90s for typical 20-100 link indexes, vs ~20 min Tier 4 Playwright):
-  1. GET host-root `/llms.txt` (resolver confirmed VALID)
+  1. GET `cfg.docs_url` (the curated llms.txt URL) directly — no construction
   2. Parse via the official AnswerDotAI `llms_txt` PyPI parser — returns
      .title / .summary / .sections{name: [{title, url, desc}]}
   3. Collect all link URLs across every section
-  4. Filter to http(s) + under docs_url subtree (reuse Tier 3 filters)
+  4. Filter to http(s) + under the llms.txt URL's directory (subtree)
   5. Parallel fetch each URL with Semaphore(10) + tenacity retries:
      - URLs ending in .md / .mdx / .markdown → save raw body (already MD)
-     - URLs ending in anything else (HTML) → trafilatura extract → MD
+     - URLs ending in anything else (HTML) → Crawl4AI markdown extract
   6. `_write_raw()` each result to MinIO
   7. Partial-failure policy: abort if <50% succeed → dispatcher falls back
 
@@ -183,7 +182,14 @@ def _filter_urls(
     """Keep URLs under docs_url + honor language scope + allow/deny patterns."""
     parsed = urlparse(cfg.docs_url)
     target_host = (parsed.netloc or "").lower()
-    docs_path = (parsed.path or "/").rstrip("/")
+    # cfg.docs_url is the curated llms.txt URL — the docs subtree is the
+    # directory containing it (strip filename). For host-root files the
+    # subtree collapses to "/" → matches everything on the host.
+    raw_path = parsed.path or "/"
+    docs_path = raw_path.rsplit("/", 1)[0] if "/" in raw_path else ""
+    docs_path = docs_path or "/"
+    if docs_path == "/":
+        docs_path = ""  # treat as no path constraint
 
     allow, deny = _build_language_filter(cfg.language)
     allow.extend(cfg.extra_allow_patterns)
@@ -228,24 +234,16 @@ def _looks_like_markdown(url: str) -> bool:
 
 
 def _html_to_markdown(html: str, url: str) -> Optional[str]:
-    """Trafilatura extraction — same pure-Python path as Tier 3."""
-    try:
-        import trafilatura
-    except ImportError:
-        return html if html.strip() else None
-    try:
-        md = trafilatura.extract(
-            html,
-            output_format = "markdown",
-            url = url,
-            include_comments = False,
-            include_tables = True,
-            favor_recall = True,
-        )
-    except Exception as e:
-        logger.warning(f"[tier-2] trafilatura failed for {url}: {e}")
-        return None
-    return md if (md and md.strip()) else None
+    """
+    HTML → markdown via Crawl4AI's PruningContentFilter +
+    DefaultMarkdownGenerator (configured for code-preservation).
+
+    See services/knowledge/markdown_extractor.py for the singleton
+    converter and docs/KNOWLEDGE-DISTILLER-MARKDOWN-EXTRACTOR-MIGRATION.md
+    for the rationale (replaces trafilatura, 2026-04-28).
+    """
+    from services.knowledge.markdown_extractor import html_to_markdown
+    return html_to_markdown(html, url)
 
 
 # =============================================================================
@@ -256,63 +254,42 @@ async def ingest_llms_txt(
     storage: MinIOStudyStorage) -> IngestResult:
     """
     Tier 2 ingestion. Called by the dispatcher when `cfg.tier == 2`.
-    Raises RuntimeError on total failure so the dispatcher can fall back
-    to Tier 4 Playwright.
+    Fetches `cfg.docs_url` directly — the resolver supplies the exact
+    llms.txt URL from sources.yaml; no construction. Raises RuntimeError
+    on total failure so the dispatcher can fall back to Tier 4 Playwright.
     """
-    parsed = urlparse(cfg.docs_url)
+    llms_txt_url = cfg.docs_url
+    parsed = urlparse(llms_txt_url)
     host = (parsed.netloc or "").lower()
     if not host:
-        raise RuntimeError(f"Tier 2: cannot parse host from docs_url={cfg.docs_url!r}")
-    host_root = f"{parsed.scheme}://{parsed.netloc}"
-    deep_base = cfg.docs_url.rstrip("/")
+        raise RuntimeError(f"Tier 2: cannot parse host from docs_url={llms_txt_url!r}")
 
     logger.info(
-        f"[tier-2] start framework={cfg.framework!r} host={host} "
+        f"[tier-2] start framework={cfg.framework!r} url={llms_txt_url} "
         f"language={cfg.language!r}"
     )
-
-    # -----------------------------------------------------------------
-    # Step 1 — Fetch + parse llms.txt
-    # -----------------------------------------------------------------
-    # Try host-root first (llmstxt.org canonical location), then fall back
-    # to the deep docs_url path. Examples of deep-path publishers in the
-    # wild: www.fastht.ml/docs/llms.txt, some MkDocs-material projects.
-    candidates = [f"{host_root}/llms.txt"]
-    if deep_base != host_root.rstrip("/"):
-        candidates.append(f"{deep_base}/llms.txt")
 
     async with httpx.AsyncClient(
         timeout = httpx.Timeout(_HTTP_TIMEOUT, connect = 10.0),
         follow_redirects = True,
     ) as client:
-        llms_txt_url: str | None = None
-        llms_body: str | None = None
-        last_error: str | None = None
-        for candidate in candidates:
-            try:
-                resp = await _fetch(client, candidate)
-            except Exception as e:
-                last_error = f"{type(e).__name__}: {e}"
-                logger.info(f"[tier-2] {candidate} fetch failed: {last_error}")
-                continue
-            if resp.status_code != 200:
-                last_error = f"HTTP {resp.status_code}"
-                logger.info(f"[tier-2] {candidate} → {last_error}")
-                continue
-            body = resp.text
-            if len(body) < 50:
-                last_error = f"body too short ({len(body)} bytes)"
-                logger.info(f"[tier-2] {candidate} → {last_error}")
-                continue
-            llms_txt_url = candidate
-            llms_body = body
-            logger.info(f"[tier-2] using llms.txt at {candidate}")
-            break
-        if llms_body is None or llms_txt_url is None:
+        try:
+            resp = await _fetch(client, llms_txt_url)
+        except Exception as e:
             raise RuntimeError(
-                f"Tier 2: no reachable llms.txt across {candidates}; "
-                f"last error: {last_error}"
+                f"Tier 2 fetch failed for {cfg.framework!r} at {llms_txt_url}: "
+                f"{type(e).__name__}: {e}"
             )
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Tier 2: {llms_txt_url} → HTTP {resp.status_code}"
+            )
+        llms_body = resp.text
+        if len(llms_body) < 50:
+            raise RuntimeError(
+                f"Tier 2: {llms_txt_url} body too short ({len(llms_body)} bytes)"
+            )
+        logger.info(f"[tier-2] using llms.txt at {llms_txt_url}")
 
         # Parse — relative URLs resolved against the llms.txt URL itself
         # (per the spec, relative links are relative to the document).
@@ -338,11 +315,6 @@ async def ingest_llms_txt(
                 f"Tier 2: 0 URLs after filtering. llms.txt for {cfg.framework!r} "
                 f"may link exclusively off-subtree — falling back to Tier 4."
             )
-        if len(filtered) > cfg.max_pages:
-            logger.info(
-                f"[tier-2] capping {len(filtered)} → {cfg.max_pages} (cfg.max_pages)"
-            )
-            filtered = filtered[: cfg.max_pages]
 
         # -----------------------------------------------------------------
         # Step 3 — Parallel fetch + extract + write

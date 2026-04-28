@@ -35,7 +35,6 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from graphs.knowledge.helpers import (
     _dedup_chapter_files,
     _filter_noise_files,
-    _maybe_split_monolith,
     _read_raw_prefix,
 )
 from services.knowledge.embeddings import embed_texts
@@ -165,11 +164,12 @@ async def run_preview_pipeline(
     """
     t_start = time.time()
 
-    # 1) Load corpus — same as planner does
+    # 1) Load corpus — already normalized at ingest time
+    #    (services.knowledge.post_ingest splits monoliths). Just filter
+    #    + dedup; no further shape changes here.
     entries = await _read_raw_prefix(storage, study_root)
     if not entries:
         raise FileNotFoundError(f"research/raw/ is empty at prefix {study_root!r}")
-    entries = await _maybe_split_monolith(storage, study_root, entries)
     entries = _filter_noise_files(entries)
     entries = _dedup_chapter_files(entries)
     if not entries:

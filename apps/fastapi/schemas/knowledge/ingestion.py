@@ -37,7 +37,6 @@ class DocsIngestionConfig(BaseModel):
     language: Optional[NonEmptyStr] = None   # from ScopeValidation.language — drives filtering
     study_root: NonEmptyStr                  # MinIO object key prefix; raw files land at <study_root>/research/raw/<slug>.md
     study_id: Optional[str] = None           # UUID of this study; feeds IngestProgress → Redis so /stream can emit per-page events. None → progress reporting is a no-op (legacy callers unaffected).
-    max_pages: int = Field(default = 10_000, ge = 10, le = 50_000)  # effectively "no cap" for sitemaps; Tier 4 BFS still respects it
     max_depth: int = Field(default = 5, ge = 1, le = 10)           # Tier 4 depth
     http_timeout: int = Field(default = 30, ge = 5, le = 120)      # per-request timeout (s)
     concurrent_fetches: int = Field(default = 8, ge = 1, le = 20)  # Tier 2/3 parallelism (raised 5→8 for uncapped sitemaps)

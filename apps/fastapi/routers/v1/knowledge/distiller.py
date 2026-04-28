@@ -58,11 +58,8 @@ from schemas.knowledge.inputs import (
     ExportRequest,
 )
 from schemas.knowledge.resolver import ResolveRequest, ResolvedStudy
-from services.knowledge.docs_resolver import (
-    coalesce_studies,
-    resolve as resolve_docs,
-)
 from services.knowledge.scope import classify_scope
+from services.resolver import lookup as resolver_lookup
 
 
 logger = logging.getLogger(__name__)
@@ -298,83 +295,27 @@ async def resolve_study(
     payload: ResolveRequest,
     request: Request):
     """
-    Resolve docs for a single framework OR a crossover request.
+    DEPRECATED — pending refactor.
 
-    Returns:
-        {
-          "input": <raw framework arg>,
-          "is_crossover": bool,
-          "total_topics": int,
-          "results": [ResolvedDocs, ...]
-        }
+    The old multi-stage resolver (registry + search + LLM rerank + tier
+    probes) has been replaced by the curated-list resolver at
+    POST /api/v1/knowledge/resolve, which reads from sources.yaml.
 
-    ResolvedDocs carries: canonical_name, docs_url, repo_url, version,
-    tier (1-4), tier_evidence (per-file probes + D0 liveness + D2
-    spot-check), confidence (0-1), fallback_candidates (rejected URLs
-    with reasons), source_signals (provenance).
+    The next refactor step rewires this endpoint to:
+      1. Look the framework up via services.resolver.lookup()
+      2. Build a ResolvedStudy directly from the SourceEntry tiers
+      3. Hand off to ingestion as before
 
-    Error codes:
-        400: scope gate rejected the input.
-        503: scope classifier itself failed.
+    Until that work lands, callers should use POST /api/v1/knowledge/resolve
+    and pass the returned URLs into POST /studies directly.
     """
-    app = request.app
-    # Scope gate + decomposer + rerank all share the resolver LLM chain
-    # (same 14-model order as app.state.llm but with 30s Groq / 60s NIM
-    # timeouts — stalled primaries cascade in 1 min instead of 5). Groq 8B
-    # is excluded as primary because its training cutoff misclassifies
-    # 2025-2026 frameworks; NIM GLM-5.1 is the primary, which knows them.
-    scope_llm = app.state.llm_resolver
-
-    try:
-        scope = await classify_scope(payload.framework, scope_llm)
-    except RuntimeError as e:
-        logger.warning(f"[knowledge] resolve scope failed: {e}")
-        raise HTTPException(
-            status_code = 503,
-            detail = f"Scope classifier unavailable: {e}",
-        )
-    if not scope.is_code_framework:
-        raise HTTPException(
-            status_code = 400,
-            detail = {
-                "message": scope.rejection_reason or "Not a code framework",
-                "detected_topic": scope.detected_topic,
-                "framework": payload.framework,
-            },
-        )
-
-    # Decompose + rerank share the same resolver LLM chain as scope gate.
-    rerank_llm = app.state.llm_resolver
-    if app.state.search_chain is None:
-        raise HTTPException(
-            status_code = 503,
-            detail = (
-                "No search provider keys configured. Set at least one of: "
-                "EXA_API_KEY, TAVILY_API_KEY, JINA_API_KEY."
-            ),
-        )
-    results = await resolve_docs(
-        request = payload,
-        llm = rerank_llm,
-        search_chain = app.state.search_chain,
-        redis_aio = app.state.redis_aio,
+    raise HTTPException(
+        status_code = 503,
+        detail = (
+            "Endpoint pending refactor — use POST /api/v1/knowledge/resolve "
+            "for the new curated-list resolver."
+        ),
     )
-
-    # Coalesce topics that share the same ingestion source. A crossover like
-    # "DeepAgents + LangChain + LangGraph" where all three land on the same
-    # docs.langchain.com/llms-full.txt collapses from 3 ResolvedDocs into 1
-    # ResolvedStudy — the downstream pipeline ingests + synthesizes once
-    # instead of 3 identical times. Length-1 groups pass through unchanged.
-    studies = coalesce_studies(results)
-
-    return {
-        "input": payload.framework,
-        "is_crossover": len(results) > 1,
-        "total_topics": len(results),
-        "total_studies": len(studies),
-        "results": [r.model_dump() for r in results],
-        "studies": [s.model_dump() for s in studies],
-    }
 
 
 # =============================================================================
@@ -384,14 +325,14 @@ async def resolve_study(
 async def create_study(
     payload: CreateStudyRequest,
     request: Request,
-    max_concurrent_chapters: int = 2):  # OP-20 (2026-04-24 late): aligned 5 → 2 to match graph default + module docstring. K=2 fits NIM free-tier 40 RPM/model without stampede.
+    max_concurrent_chapters: int = 2):  # OP-20: K=2 fits NIM free-tier 40 RPM/model without stampede.
     """
-    Create a Knowledge Distiller study. Requires `docs_url` — use
-    POST /studies/resolve first if you don't already know the URL.
+    Create a Knowledge Distiller study. Framework name must exist in the
+    curated catalog (apps/fastapi/files/sources.yaml).
 
     Steps:
-      1. Scope gate (Groq 8B classifier, ~500ms): reject non-code-frameworks.
-      2. HEAD-verify docs_url is reachable.
+      1. Resolver lookup: derive docs_url, tier, github metadata from sources.yaml.
+      2. Scope gate (LLM classifier): detect language for downstream metadata.
       3. Generate study_id (uuid4), compute study_root prefix.
       4. Stash registry entry in Redis.
       5. Enqueue Celery task (task_id == study_id).
@@ -399,23 +340,42 @@ async def create_study(
     Query params:
         max_concurrent_chapters (int, default 2): cap on parallel
         synthesize_chapter workers. Lower = more consistent voice across
-        chapters (primary LLM serves every chapter), slower overall. Set
-        to 1 for strict serialization. Values 1-3 recommended; higher
-        values risk rate-limiting the primary model and fanning out to
-        different fallbacks → inconsistent tone between chapters.
+        chapters; values 1-3 recommended.
 
     Error codes:
-        400: scope gate rejected the input. detail contains the rejection_reason.
-        422: docs_url not reachable (HEAD returned non-2xx/3xx).
+        400: scope gate rejected the framework as non-code.
+        404: framework name not in sources.yaml catalog.
         503: scope classifier itself failed.
     """
     app = request.app
-    # 1) Scope gate
+
+    # 1) Resolver lookup — must hit the curated catalog.
+    entry = resolver_lookup(payload.framework)
+    if entry is None or not entry.tiers:
+        raise HTTPException(
+            status_code = 404,
+            detail = {
+                "message": (
+                    f"'{payload.framework}' is not in the curated catalog. "
+                    "GET /api/v1/knowledge/resolve/sources lists every "
+                    "available technology."
+                ),
+                "framework": payload.framework,
+            },
+        )
+    docs_url = entry.best.url
+    tier = entry.best.tier
+    repo_url = entry.github_repo
+    github_org, github_repo = entry.github_org_repo
+
+    # 2) Scope gate — kept for language detection. Curated names should
+    #    always pass the is_code_framework check; if one rejects, treat it
+    #    as a sources.yaml curation issue and surface the reason.
     scope_llm = getattr(app.state, "llm_scope", None) or app.state.llm
     try:
-        scope = await classify_scope(payload.framework, scope_llm)
+        scope = await classify_scope(entry.name, scope_llm)
     except RuntimeError as e:
-        logger.warning(f"[knowledge] scope classifier failed for '{payload.framework}': {e}")
+        logger.warning(f"[knowledge] scope classifier failed for '{entry.name}': {e}")
         raise HTTPException(
             status_code = 503,
             detail = f"Scope classifier unavailable: {e}",
@@ -426,43 +386,15 @@ async def create_study(
             detail = {
                 "message": scope.rejection_reason or "Not a code framework",
                 "detected_topic": scope.detected_topic,
-                "framework": payload.framework,
+                "framework": entry.name,
             },
         )
 
-    # 2) HEAD-verify docs_url is reachable before enqueueing expensive work
-    async with httpx.AsyncClient(
-        timeout = httpx.Timeout(5.0, connect = 5.0),
-        headers = {"User-Agent": "COELHONexus-KnowledgeDistiller/1.0"},
-    ) as client:
-        reachable = False
-        try:
-            r = await client.head(payload.docs_url, follow_redirects = True)
-            if 200 <= r.status_code < 400:
-                reachable = True
-            elif r.status_code == 405:
-                # Some servers reject HEAD — retry with GET (no body read)
-                r = await client.get(payload.docs_url, follow_redirects = True)
-                reachable = 200 <= r.status_code < 400
-        except (httpx.RequestError, httpx.HTTPError) as e:
-            logger.info(f"[knowledge] docs_url HEAD failed for {payload.docs_url}: {e}")
-    if not reachable:
-        raise HTTPException(
-            status_code = 422,
-            detail = {
-                "message": (
-                    "The supplied docs_url is not reachable. Verify the URL "
-                    "or call POST /studies/resolve to find one automatically."
-                ),
-                "docs_url": payload.docs_url,
-            },
-        )
-
-    # 3) Build study identity — slug = {framework}-{version|"latest"}-{level}-{ts}
+    # 3) Build study identity.
     study_id = str(uuid.uuid4())
     study_root = _make_study_root(
         user_id = payload.user_id,
-        framework = payload.framework,
+        framework = entry.name,
         version = payload.version,
         level = payload.user_profile.level,
     )
@@ -470,68 +402,59 @@ async def create_study(
         "study_id": study_id,
         "study_root": study_root,
         "user_id": payload.user_id,
-        "framework": payload.framework,
-        "version": payload.version or "latest",   # normalize for downstream cache key
+        "framework": entry.name,
+        "version": payload.version or "latest",
         "level": payload.user_profile.level,
         "language": scope.language,
         "detected_topic": scope.detected_topic,
-        "docs_url": payload.docs_url,
-        "docs_url_source": "user",
-        "tier": payload.tier,
-        "github_discover": payload.github_discover,
-        "github_org": payload.github_org,
-        "github_repo": payload.github_repo,
-        "github_default_branch": payload.github_default_branch,
-        "repo_url": payload.repo_url,
+        "category": entry.category,
+        "docs_url": docs_url,
+        "docs_url_source": "catalog",
+        "tier": tier,
+        "tier_kind": entry.best.kind,
+        "available_tiers": [
+            {"tier": t.tier, "kind": t.kind, "url": t.url} for t in entry.tiers
+        ],
+        "github_org": github_org,
+        "github_repo": github_repo,
+        "github_default_branch": None,  # discovered by Celery task if needed
+        "repo_url": repo_url,
         "user_profile": payload.user_profile.model_dump(),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    # 4) Persist study registry entry
+    # 4) Persist study registry entry.
     await _save_study_record(app.state.redis_aio, study_id, record)
 
-    # 5) Enqueue Celery task — task_id == study_id so /studies/{id} can read
-    #    AsyncResult by the same identifier. Forward the resolver's tier +
-    #    GitHub metadata when present so the ingestion dispatcher picks the
-    #    right strategy (Tier 1 / 2 / 3 / 4 / Tier-GH); legacy callers that
-    #    POST without these fields fall through to Tier 4 Playwright.
+    # 5) Enqueue Celery task.
     from tasks.knowledge.distiller import run_knowledge_distiller
     run_knowledge_distiller.apply_async(
         kwargs = {
             "study_id": study_id,
-            "framework": payload.framework,
+            "framework": entry.name,
             "version": payload.version,
-            "docs_url": payload.docs_url,
+            "docs_url": docs_url,
             "language": scope.language,
             "user_id": payload.user_id,
             "user_profile": payload.user_profile.model_dump(),
             "study_root": study_root,
             "max_concurrent_chapters": max_concurrent_chapters,
-            # Resolver hints (all optional, None by default)
-            "tier": payload.tier,
-            "github_discover": payload.github_discover,
-            "github_org": payload.github_org,
-            "github_repo": payload.github_repo,
-            "github_default_branch": payload.github_default_branch,
-            "repo_url": payload.repo_url,
-            # Tier 4 #16: classical-only preview mode short-circuit
+            "tier": tier,
+            "github_discover": "homepage" if repo_url else None,
+            "github_org": github_org,
+            "github_repo": github_repo,
+            "github_default_branch": None,
+            "repo_url": repo_url,
             "preview": payload.preview,
-            # OP-26: skip below-threshold re-synth across runs
             "skip_below_threshold": payload.skip_below_threshold,
         },
         task_id = study_id,
-        # Safety net: discard if the message has been sitting in the broker
-        # unconsumed for >2h. With acks_late=False on the distiller decorator,
-        # a stuck unacked message can't exist in the first place — this is
-        # belt-and-suspenders against future config regressions and ancient-
-        # message replay after broker surgery. 2h comfortably exceeds even
-        # the p99 distiller runtime of ~25 min.
+        # Safety net: drop any message stuck in the broker > 2h.
         expires = 7200,
     )
     logger.info(
         f"[knowledge] study queued: id={study_id} root={study_root} "
-        f"framework={payload.framework} docs_url={payload.docs_url} "
-        f"tier={payload.tier} github_discover={payload.github_discover}"
+        f"framework={entry.name} docs_url={docs_url} tier={tier}"
     )
 
     return {
@@ -541,9 +464,16 @@ async def create_study(
         "status": "queued",
         "endpoint": f"/api/v1/tasks/{study_id}",
         "stream_endpoint": f"/api/v1/knowledge/studies/{study_id}/stream",
+        "framework": entry.name,
+        "category": entry.category,
         "detected_topic": scope.detected_topic,
         "language": scope.language,
-        "docs_url": payload.docs_url,
+        "tier": tier,
+        "tier_kind": entry.best.kind,
+        "docs_url": docs_url,
+        "available_tiers": [
+            {"tier": t.tier, "kind": t.kind, "url": t.url} for t in entry.tiers
+        ],
     }
 
 

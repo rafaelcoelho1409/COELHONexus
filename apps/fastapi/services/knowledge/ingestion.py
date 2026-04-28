@@ -228,7 +228,15 @@ def _build_language_filter(language: Optional[str]) -> tuple[list[str], list[str
       - If no language: use conservative defaults
     """
     if not language:
-        return (list(DEFAULT_ALLOW_PATTERNS), list(DEFAULT_DENY_PATTERNS))
+        # Deny-only when no language hint. The DEFAULT_ALLOW_PATTERNS
+        # whitelist (`*docs*`, `*guide*`, ...) was over-restrictive for
+        # frameworks that path their docs under unusual prefixes
+        # (e.g., k3d uses `/stable/usage/...` and `/stable/design/...`,
+        # neither of which matches the allow-list — leading to 52/53
+        # URLs dropped at post-filter despite being legitimate docs).
+        # Deny patterns alone (blog/marketing/legal/non-HTML) catch the
+        # real noise without accidentally rejecting real docs.
+        return ([], list(DEFAULT_DENY_PATTERNS))
     key = language.strip().lower()
     target_slugs = LANGUAGE_PATH_MAP.get(key, [key])
     other_slugs = [
@@ -348,9 +356,39 @@ async def _write_raw(
 
 
 # =============================================================================
-# Public API — tier-aware dispatcher
+# Public API — tier-aware dispatcher with post-ingest normalization
 # =============================================================================
 async def ingest_framework_docs(
+    cfg: DocsIngestionConfig,
+    storage: MinIOStudyStorage,
+    cache = None) -> IngestResult:
+    """
+    Tier-dispatch + post-ingest normalization. Returns the FINAL corpus
+    shape — tier-specific ingester runs, then post-ingest steps
+    (currently: monolith → per-section split for Tier 1) rewrite the
+    manifest before the result is returned. Downstream consumers see a
+    normalized corpus; cache finalize captures the normalized state.
+    """
+    result = await _dispatch_tier(cfg, storage, cache)
+    # Post-ingest normalization — split monolithic Tier 1 outputs on
+    # H1/H2 boundaries so the planner sees per-section pages. Idempotent
+    # on multi-file manifests.
+    from services.knowledge.post_ingest import split_monolith_if_needed
+    new_manifest = await split_monolith_if_needed(
+        storage, cfg.study_root, list(result.manifest),
+    )
+    if len(new_manifest) == len(result.manifest):
+        return result
+    return IngestResult(
+        tier_used = result.tier_used,
+        total_files = len(new_manifest),
+        total_bytes = sum(e.bytes for e in new_manifest),
+        manifest = new_manifest,
+        skipped_urls = result.skipped_urls,
+    )
+
+
+async def _dispatch_tier(
     cfg: DocsIngestionConfig,
     storage: MinIOStudyStorage,
     cache = None) -> IngestResult:
@@ -364,7 +402,7 @@ async def ingest_framework_docs(
       github_discover == "readme_only"  → Tier-GH (GitHub tree + raw.md fetch)
       tier == 1                         → Tier 1  (one-shot llms-full.txt)
       tier == 2                         → Tier 2  (llms.txt + .md link fetch)
-      tier == 3                         → Tier 3  (sitemap.xml + httpx + trafilatura)
+      tier == 3                         → Tier 3  (sitemap.xml + httpx + Crawl4AI md extract)
       tier == 4 | None                  → Tier 4  (Crawl4AI + Playwright; this file)
 
     Each higher tier wraps its work in try/except and falls back to Tier 4
@@ -424,11 +462,11 @@ async def ingest_framework_docs(
                 f"falling back to Tier 4 Playwright"
             )
 
-    # Tier 3 — sitemap.xml parallel httpx fast path. Resolver D-probe already
-    # content-validated the sitemap; Tier 3 expands it, filters to docs
-    # subtree, parallel-fetches pages, and extracts markdown via trafilatura
-    # (pure Python, F1 ≈ 0.791 on docs). ~2-5 min for 100-500 pages vs
-    # ~20 min Tier 4 Playwright.
+    # Tier 3 — sitemap.xml parallel httpx fast path. Expands the sitemap,
+    # filters to docs subtree, parallel-fetches pages, and extracts markdown
+    # via Crawl4AI's PruningContentFilter + DefaultMarkdownGenerator (see
+    # services/knowledge/markdown_extractor.py). ~2-5 min for 100-500 pages
+    # vs ~20 min Tier 4 Playwright.
     if cfg.tier == 3:
         logger.info(f"[ingest] dispatcher → Tier 3 (sitemap httpx) for {cfg.framework!r}")
         try:
@@ -440,11 +478,11 @@ async def ingest_framework_docs(
                 f"falling back to Tier 4 Playwright"
             )
 
-    # Tier 2 — /llms.txt index + parallel link fetch. Resolver D-probe
-    # already content-validated the llms.txt; Tier 2 parses it via
+    # Tier 2 — /llms.txt index + parallel link fetch. Parses via
     # AnswerDotAI's official llms_txt library, filters links to the docs
     # subtree, and parallel-fetches each (raw-save for *.md links,
-    # trafilatura-extract for HTML links). ~30-90s for typical indexes.
+    # Crawl4AI markdown extract for HTML links — see markdown_extractor.py).
+    # ~30-90s for typical indexes.
     if cfg.tier == 2:
         logger.info(f"[ingest] dispatcher → Tier 2 (llms.txt) for {cfg.framework!r}")
         try:
@@ -456,10 +494,16 @@ async def ingest_framework_docs(
                 f"falling back to Tier 4 Playwright"
             )
 
-    # Default path: Tier 4 (Crawl4AI Playwright). Handles cfg.tier == 4
-    # explicitly AND any None/stubbed case above. Runs the existing
-    # 700-LoC Crawl4AI block as-is.
-    return await _ingest_crawl4ai(cfg, storage, cache)
+    # Default path: Tier 4. Routes through `ingest_tier4` (httpx-first
+    # orchestrator with Crawl4AI Playwright fallback for SPA shells).
+    # Handles cfg.tier == 4 explicitly AND any None/stubbed case above.
+    # Quality is identical to the all-Playwright path — same Crawl4AI
+    # extractor — but most static-but-no-sitemap sites take the much
+    # faster httpx path. SPA-shell detection ensures correctness.
+    # Deferred import avoids the import cycle (tier4_httpx imports
+    # several helpers from this module).
+    from services.knowledge.tier4_httpx import ingest_tier4
+    return await ingest_tier4(cfg, storage, cache)
 
 
 async def _ingest_crawl4ai(
@@ -534,10 +578,13 @@ async def _ingest_crawl4ai(
         cleaned = docs_path.rstrip("/")
         seed_pattern = f"*{cleaned}*"
 
+    # Crawl4AI's SeedingConfig requires an int — pass an effectively-unlimited
+    # value. Bounded in practice by the seed_pattern subtree filter (which
+    # comes from the curated docs_url's path) and the host filter below.
     seeder_cfg = SeedingConfig(
         source = "sitemap+cc",
         pattern = seed_pattern,
-        max_urls = cfg.max_pages,
+        max_urls = 10_000_000,
         extract_head = False,   # skip <title>/<meta> fetch to save time
     )
     discovered_urls: list[str] = []
@@ -952,10 +999,12 @@ async def _ingest_crawl4ai(
                     )
                 )
             # Use Crawl4AI's clone() to avoid leaking private attrs into __init__.
+            # max_pages required by API — pass effectively-unlimited; BFS bounds
+            # are enforced by max_depth, host filter, and subtree filter instead.
             bfs_strategy = BFSDeepCrawlStrategy(
                 max_depth = cfg.max_depth,
                 include_external = False,
-                max_pages = cfg.max_pages,
+                max_pages = 10_000_000,
                 filter_chain = FilterChain(filter_chain_items),
                 url_scorer = KeywordRelevanceScorer(
                     keywords = DEFAULT_SCORER_KEYWORDS,

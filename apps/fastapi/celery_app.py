@@ -74,6 +74,9 @@ app.config_from_object({
         "tasks.youtube.pipeline.*": {"queue": Q_CRAWLER},
         # Knowledge Distiller — LLM-heavy pipeline, same queue as graph extraction
         "tasks.knowledge.distiller.*": {"queue": Q_LLM},
+        # KD ingestion-only (no LLM, but I/O-heavy — shares the llm queue's prefetch=1
+        # behavior so a Tier-4 Playwright crawl doesn't starve a synth task waiting for an LLM slot)
+        "tasks.knowledge.ingestion.*": {"queue": Q_LLM},
         # KD exports (Pandoc/xelatex/genanki) — CPU-bound but short; share the llm queue.
         "tasks.knowledge.export.*": {"queue": Q_LLM},
     },
@@ -109,5 +112,6 @@ app.conf.include = [
     "tasks.youtube.neo4j",
     "tasks.youtube.pipeline",
     "tasks.knowledge.distiller",
+    "tasks.knowledge.ingestion",
     "tasks.knowledge.export",
 ]

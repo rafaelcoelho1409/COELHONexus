@@ -2,25 +2,23 @@
 Knowledge Distiller — Tier 3 Ingestion (sitemap.xml httpx fast path)
 
 Dispatched by `services/knowledge/ingestion.py` when the resolver assigned
-`tier == 3` — meaning Stage D's content-validated probe confirmed the site
-publishes a real `/sitemap.xml` but no `/llms-full.txt` or `/llms.txt`.
+`tier == 3` — meaning sources.yaml has a curated `sitemap.xml` URL for this
+framework but no `llms-full.txt` or `llms.txt`.
 
 PIPELINE (~2-5 min for typical ~100-500 page docs, vs ~20 min Tier 4 Playwright):
-  1. GET host-root `/sitemap.xml` (resolver confirmed VALID)
+  1. GET `cfg.docs_url` (the curated sitemap.xml URL) directly — no construction
   2. Parse <loc> entries; recursively unwrap <sitemapindex> → sub-sitemaps
-  3. Filter URLs to the docs subtree + language + extra allow/deny patterns
+  3. Filter URLs to the sitemap's directory subtree + language + allow/deny
   4. Parallel httpx GET each URL (Semaphore cap) with tenacity retries
-  5. trafilatura extracts markdown from each HTML response (pure-Python,
-     F1 ≈ 0.791 on docs — acceptable quality, no Rust toolchain needed
-     in the image).
+  5. Crawl4AI's PruningContentFilter + DefaultMarkdownGenerator extracts
+     markdown from each HTML response (purpose-built for code preservation;
+     see markdown_extractor.py).
   6. Empty-content guard + `_write_raw()` to MinIO
   7. Partial-failure policy: continue; abort only if <50% succeed
 
-WHY NO PLAYWRIGHT: the resolver's D-probe ALREADY verified this host serves
-a real sitemap + root-liveness is LIVE (≥2 docs signals, ≥400 chars of text,
-not parked/SPA-shell). Sites that land on Tier 3 are by construction static
-HTML — no JS rendering needed. httpx beats Playwright by ~10x wall time
-with identical content quality.
+WHY NO PLAYWRIGHT: sites that land on Tier 3 are static HTML by construction
+(the publisher curates a working sitemap, so no JS rendering is needed).
+httpx beats Playwright by ~10× wall time with identical content quality.
 
 LANGUAGE SCOPING: reuses the same polyglot detection and path filters as
 Tier 4 (`_build_language_filter`, `_is_polyglot_framework`, `_should_keep`
@@ -199,7 +197,13 @@ def _filter_urls(
     """
     parsed = urlparse(cfg.docs_url)
     target_host = (parsed.netloc or "").lower()
-    docs_path = (parsed.path or "/").rstrip("/")
+    # cfg.docs_url is the curated sitemap.xml URL — the docs subtree is the
+    # directory containing it (strip filename). Host-root sitemaps collapse
+    # to "/" → no path constraint.
+    raw_path = parsed.path or "/"
+    docs_path = raw_path.rsplit("/", 1)[0] if "/" in raw_path else ""
+    if docs_path == "/" or not docs_path:
+        docs_path = ""  # no path constraint when sitemap lives at host root
 
     allow, deny = _build_language_filter(cfg.language)
     # Extra patterns from cfg
@@ -231,40 +235,20 @@ def _filter_urls(
 
 
 # =============================================================================
-# trafilatura extraction
+# HTML → markdown extraction (Crawl4AI pipeline; see markdown_extractor.py)
 # =============================================================================
-# Pure-Python trafilatura 2.0, F1 ≈ 0.791 on docs. Good enough for the
-# content-quality gate + downstream planner; no Rust toolchain in the image.
 def _extract_markdown(html: str, url: str) -> Optional[str]:
     """
-    Extract main content from HTML as markdown. Returns None on empty
-    extraction or import failure (caller treats as a soft-fail, logs and
-    skips the page).
+    HTML → markdown via Crawl4AI's PruningContentFilter +
+    DefaultMarkdownGenerator (configured for code-preservation). Returns
+    None on empty extraction; caller treats as a soft-fail (logs + skips).
+
+    See services/knowledge/markdown_extractor.py for the singleton
+    converter and docs/KNOWLEDGE-DISTILLER-MARKDOWN-EXTRACTOR-MIGRATION.md
+    for the rationale (replaces trafilatura, 2026-04-28).
     """
-    try:
-        import trafilatura
-    except ImportError:
-        logger.warning(
-            "[tier-3] trafilatura not installed — falling back to raw "
-            "body. Install via `uv pip install trafilatura`."
-        )
-        return html if html.strip() else None
-    try:
-        md = trafilatura.extract(
-            html,
-            output_format = "markdown",
-            url = url,
-            include_comments = False,
-            include_tables = True,
-            favor_precision = False,
-            favor_recall = True,    # docs pages — grab as much content as possible
-        )
-    except Exception as e:
-        logger.warning(f"[tier-3] trafilatura extract failed for {url}: {e}")
-        return None
-    if not md or not md.strip():
-        return None
-    return md
+    from services.knowledge.markdown_extractor import html_to_markdown
+    return html_to_markdown(html, url)
 
 
 # =============================================================================
@@ -275,19 +259,20 @@ async def ingest_sitemap_httpx(
     storage: MinIOStudyStorage) -> IngestResult:
     """
     Tier 3 ingestion. Called by the dispatcher when `cfg.tier == 3`.
-    Never raises on partial failure — only when the fail rate exceeds
-    _MIN_OK_RATIO, which lets the dispatcher fall back to Tier 4 for a
-    retry on the genuinely stuck sites.
+    Uses `cfg.docs_url` directly as the sitemap URL — the resolver
+    supplies the exact sitemap.xml URL from sources.yaml; no construction.
+    Raises only when the fail rate exceeds _MIN_OK_RATIO so the dispatcher
+    can fall back to Tier 4 for genuinely stuck sites.
     """
-    parsed = urlparse(cfg.docs_url)
+    sitemap_url = cfg.docs_url
+    parsed = urlparse(sitemap_url)
     host = (parsed.netloc or "").lower()
     if not host:
-        raise RuntimeError(f"Tier 3: cannot parse host from docs_url={cfg.docs_url!r}")
-    host_root = f"{parsed.scheme}://{parsed.netloc}"
+        raise RuntimeError(f"Tier 3: cannot parse host from docs_url={sitemap_url!r}")
 
     logger.info(
-        f"[tier-3] start framework={cfg.framework!r} host={host} "
-        f"docs_url={cfg.docs_url!r} language={cfg.language!r}"
+        f"[tier-3] start framework={cfg.framework!r} sitemap_url={sitemap_url!r} "
+        f"language={cfg.language!r}"
     )
 
     async with httpx.AsyncClient(
@@ -297,7 +282,6 @@ async def ingest_sitemap_httpx(
         # -----------------------------------------------------------------
         # Step 1 — Expand sitemap (recursive sitemapindex unwrap)
         # -----------------------------------------------------------------
-        sitemap_url = f"{host_root}/sitemap.xml"
         all_urls = await _expand_sitemap(client, sitemap_url)
         logger.info(
             f"[tier-3] {sitemap_url}: {len(all_urls)} total URLs after expansion"
@@ -322,12 +306,6 @@ async def ingest_sitemap_httpx(
                 f"(docs_url={cfg.docs_url}). Likely the sitemap doesn't "
                 f"include the docs subtree. Falling back to Tier 4."
             )
-        if len(filtered) > cfg.max_pages:
-            logger.info(
-                f"[tier-3] capping {len(filtered)} → {cfg.max_pages} "
-                f"(cfg.max_pages)"
-            )
-            filtered = filtered[: cfg.max_pages]
 
         # -----------------------------------------------------------------
         # Step 3 — Parallel page fetch + extract + write

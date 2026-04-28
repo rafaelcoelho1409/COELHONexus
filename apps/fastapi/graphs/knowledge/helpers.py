@@ -72,11 +72,6 @@ CORPUS_PREVIEW_CHARS = 80  # was 200 — reduced 2026-04-21 to keep planner
 # (docs/KNOWLEDGE-DISTILLER-PLANNER-FIXES.md). 80-char preview is the
 # pragmatic interim that lets single-prompt planner succeed on NIM.
 
-# If the raw prefix contains exactly ONE object larger than this (bytes), split
-# it on top-level markdown headings before planning. This handles the Tier 1
-# case where /llms-full.txt arrived as a single monolithic object.
-MONOLITH_SPLIT_THRESHOLD_BYTES = 50_000
-
 # Cap on assembled raw-file content fed to the synthesizer in one call —
 # TOKEN-based (Tier 1 #2), not char-based. Char-based was unsafe for three
 # reasons:
@@ -1180,140 +1175,6 @@ async def _read_raw_prefix(
     ]
 
 
-async def _maybe_split_monolith(
-    storage: MinIOStudyStorage,
-    study_root: str,
-    entries: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    """
-    If there's exactly ONE object and it's large, split it on H1/H2 boundaries
-    that are NOT inside fenced code blocks, delete the original, write the
-    per-section outputs. Idempotent: a pre-split corpus (len != 1) returns
-    unchanged.
-
-    Why: Tier 1 (/llms-full.txt) writes a single monolithic object (often
-    multi-MB — the publisher's full family docs in one file). The planner
-    works better with N small "pseudo-files" it can chapter-ize around
-    instead of one giant blob.
-
-    BUG FIX (2026-04-22): The previous implementation used a line-anchored
-    regex `re.split(r"(?=^#{1,2}\\s+)", ..., flags=re.MULTILINE)`. That
-    regex matches ANY line starting with 1-2 hashes + whitespace — which
-    includes Python / Bash / YAML comment lines INSIDE fenced code blocks
-    (e.g. `# 1. Add resource authorization`, `## TODO`, `# bash comment`).
-    Measurement on a real LangChain-family llms-full.txt (3125 splits):
-    414 output files (13%) had an unbalanced fence count — mathematical
-    proof that the regex cut mid-code-block. The monolith's code was
-    corrupted, later synthesizer chapters cited broken code, and the
-    apparent "trafilatura is stripping code" symptom was actually THIS
-    post-ingest splitter truncating fenced sections.
-
-    New implementation uses LangChain's
-    `ExperimentalMarkdownSyntaxTextSplitter`, a CommonMark-aware tokenizer
-    that tracks fenced-code-block state and never treats comments inside
-    fences as heading boundaries. Verified empirically: Python `# 1. foo`,
-    `## TODO`, and bash `# comment` lines inside ```python / ```bash
-    fences are preserved intact as part of the surrounding section.
-    """
-    if len(entries) != 1:
-        return entries
-    slug, content = entries[0]
-    if len(content.encode("utf-8")) < MONOLITH_SPLIT_THRESHOLD_BYTES:
-        return entries
-
-    # Local import — the splitter module triggers a sizable dependency chain
-    # that we don't want loaded at graph-build time. Only the monolith
-    # path (Tier 1 with a large llms-full.txt) needs it.
-    from langchain_text_splitters.markdown import (
-        ExperimentalMarkdownSyntaxTextSplitter,
-    )
-
-    splitter = ExperimentalMarkdownSyntaxTextSplitter(
-        headers_to_split_on = [("#", "H1"), ("##", "H2")],
-        strip_headers = False,   # keep the heading text inside page_content so
-                                 # the output file opens with "# Heading Name"
-    )
-    chunks = splitter.split_text(content)
-    if len(chunks) < 3:
-        logger.info(
-            f"[planner] monolith {slug}.md has too few headings to split; keeping as-is"
-        )
-        return entries
-
-    # Group chunks by (H1, H2) — the splitter emits one chunk per distinct
-    # block (heading, prose-between-codes, fenced code, ...). Chunks sharing
-    # the same (H1, H2) metadata belong to the SAME section and must be
-    # concatenated in document order so code blocks land back inside their
-    # surrounding section.
-    grouped: list[tuple[tuple[str, str], list[str]]] = []
-    current_key: tuple[str, str] | None = None
-    current_parts: list[str] = []
-    for ch in chunks:
-        key = (ch.metadata.get("H1", ""), ch.metadata.get("H2", ""))
-        if current_key is None:
-            current_key = key
-        if key != current_key and current_parts:
-            grouped.append((current_key, current_parts))
-            current_parts = []
-            current_key = key
-        current_parts.append(ch.page_content)
-    if current_parts and current_key is not None:
-        grouped.append((current_key, current_parts))
-
-    if len(grouped) < 3:
-        logger.info(
-            f"[planner] monolith {slug}.md produced {len(grouped)} sections "
-            f"(under minimum of 3); keeping as-is"
-        )
-        return entries
-
-    prefix = f"{study_root}/research/raw/"
-    # Delete the original; write each section as its own object.
-    await storage.delete(f"{prefix}{slug}.md")
-
-    # Phase 1 (pure Python, sequential — fast) — compute unique slug + body
-    # for every section. Sequential ordering is REQUIRED here because slug
-    # de-duplication (when two H2 "Overview" appear under different H1s)
-    # depends on order-of-arrival via `used_slugs`. This pass is CPU-bound
-    # at thousands of iters/sec; no I/O.
-    writes: list[tuple[str, str]] = []
-    used_slugs: set[str] = set()
-    for i, ((h1, h2), parts) in enumerate(grouped):
-        # Prefer the deepest heading (H2 > H1) for the slug; fall back to
-        # a stable positional label when a group precedes any heading.
-        heading_text = h2 or h1 or f"section-{i:04d}"
-        sub = re.sub(r"[^a-z0-9]+", "-", heading_text.lower()).strip("-")[:60]
-        if not sub:
-            sub = f"section-{i:04d}"
-        full_slug = sub if sub.startswith(slug) else f"{slug}-{sub}"
-        # Disambiguate collisions (e.g. two H2 "Overview" under different H1s).
-        candidate = full_slug
-        dedup_n = 2
-        while candidate in used_slugs:
-            candidate = f"{full_slug}-{dedup_n}"
-            dedup_n += 1
-        used_slugs.add(candidate)
-        writes.append((candidate, "".join(parts)))
-
-    # Phase 2 (async, parallel via SHARED aioboto3 client) — write every
-    # section through storage.write_many so the TLS + SigV4 handshake cost
-    # is paid ONCE for the batch instead of per-file. Measured 2026-04-22:
-    # per-call client (3700 writes, Semaphore(8)) ≈ 1h wall-clock due to
-    # handshake serialization; shared-client batch at the same concurrency
-    # targets ~90s. File keys are independent; the write_many internal
-    # Semaphore(8) caps in-flight PUTs to the aioboto3-stable threshold.
-    await storage.write_many(
-        [(f"{prefix}{candidate}.md", body, "text/markdown")
-         for candidate, body in writes]
-    )
-
-    logger.info(
-        f"[planner] split monolith {slug}.md into {len(writes)} sections "
-        f"(CommonMark tokenizer; fence-aware — code blocks preserved; "
-        f"parallel MinIO writes × 32)"
-    )
-    return writes
-
-
 def _build_corpus_summary(entries: list[tuple[str, str]]) -> str:
     """
     Produce the {corpus_summary} interpolation for PLANNER_PROMPT.
@@ -1866,10 +1727,11 @@ def _fence_safe_split(content: str) -> list[str]:
     file alone exceeds the token budget — we pack as many sections as fit,
     never mid-fence.
 
-    Uses the SAME CommonMark-aware splitter as `_maybe_split_monolith` — the
+    Uses the same CommonMark-aware splitter as
+    `services.knowledge.post_ingest.split_monolith_if_needed` — the
     line-anchored regex alternative cuts mid-fence on code comments like
     `# ...` or `## TODO` inside python / bash blocks (13% corruption rate
-    measured on a real llms-full.txt — see `_maybe_split_monolith` docstring).
+    measured on a real llms-full.txt during the prior implementation).
     """
     from langchain_text_splitters.markdown import (
         ExperimentalMarkdownSyntaxTextSplitter,

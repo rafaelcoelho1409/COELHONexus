@@ -13,6 +13,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from routers.v1.youtube import agents as youtube_agents
 from routers.v1.youtube import content as youtube_content
 from routers.v1.knowledge import distiller as knowledge_distiller
+from routers.v1.knowledge import ingestion as knowledge_ingestion
 from routers.v1.knowledge import resolve as knowledge_resolve
 from routers.v1 import tasks as tasks_router
 from routers.v1.youtube.helpers import (
@@ -162,23 +163,11 @@ async def lifespan(app: FastAPI):
     # general chain tuned for KD planner/synthesizer).
     app.state.llm_resolver = build_resolver_llm_chain()
     print("LLM chain loaded (see services/llm_chain.py for model order).", flush = True)
-    # Search API Fallback Chain — Exa → Tavily → Jina (see services/search_chain.py)
-    # Used by the Knowledge Distiller resolver Stage B (candidate URL search).
-    # Missing keys skip their provider; RuntimeError if zero are configured.
-    from services.search_chain import build_search_fallback_chain
-    try:
-        app.state.search_chain = build_search_fallback_chain()
-        print("Search chain loaded (see services/search_chain.py for provider order).", flush = True)
-    except RuntimeError as _search_e:
-        app.state.search_chain = None
-        print(f"WARNING: search chain unavailable — {_search_e}", flush = True)
-    # Resolver Layer 0b: llms.txt-hub mirror — fetch once on startup, refresh
-    # every 24h via background asyncio task. Graceful: if GitHub unreachable,
-    # bootstrap returns 0 and the resolver falls through to other layers.
-    from services.resolver import bootstrap_llmstxt, llmstxt_refresh_loop
-    _llmstxt_n = await bootstrap_llmstxt()
-    print(f"llms.txt-hub mirror loaded: {_llmstxt_n} entries (24h refresh).", flush = True)
-    app.state.llmstxt_refresh_task = asyncio.create_task(llmstxt_refresh_loop())
+    # Resolver: load curated catalog from apps/fastapi/files/sources.yaml.
+    # No online discovery; only names in this file are accepted.
+    from services.resolver import bootstrap_sources
+    _sources_n = bootstrap_sources()
+    print(f"Resolver catalog loaded: {_sources_n} entries from sources.yaml.", flush = True)
     # MinIO object storage for Knowledge Distiller artifacts (bucket self-provisions)
     from services.knowledge.storage import MinIOStudyStorage
     MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "https://minio-api.YOUR_TAILNET_DOMAIN.ts.net")
@@ -204,14 +193,6 @@ async def lifespan(app: FastAPI):
         print("FastAPI startup complete.", flush = True)
         yield  # App runs here - connection stays open
         print("FastAPI shutting down...", flush = True)
-        # Cancel the llms.txt mirror refresh background task.
-        _llmstxt_task = getattr(app.state, "llmstxt_refresh_task", None)
-        if _llmstxt_task is not None and not _llmstxt_task.done():
-            _llmstxt_task.cancel()
-            try:
-                await _llmstxt_task
-            except (asyncio.CancelledError, Exception):
-                pass
         await close_transcript_service()
         print("Playwright transcript service closed.", flush = True)
         await app.state.qdrant.close()
@@ -269,6 +250,12 @@ app.include_router(
     knowledge_resolve.router,
     prefix = "/api/v1/knowledge",
     tags = ["Knowledge — resolver (deterministic)"],
+)
+
+app.include_router(
+    knowledge_ingestion.router,
+    prefix = "/api/v1/knowledge",
+    tags = ["Knowledge — ingestion (corpus only)"],
 )
 
 app.include_router(

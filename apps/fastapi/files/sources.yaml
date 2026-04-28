@@ -2,25 +2,25 @@ docs_url:
   - name: Docker
     url: https://docs.docker.com/
   - name: Kubernetes
-    url: https://kubernetes.io/docs/home/
+    url: https://kubernetes.io/docs/
   - name: Helm
     url: https://helm.sh/docs/
   - name: Terraform
-    url: https://developer.hashicorp.com/terraform/docs
+    url: https://developer.hashicorp.com/terraform/docs/
   - name: Terragrunt
-    url: https://docs.terragrunt.com/getting-started/quick-start/
+    url: https://docs.terragrunt.com/
   - name: Ansible
-    url: https://docs.ansible.com
+    url: https://docs.ansible.com/
   - name: Git 
     url: https://git-scm.com/docs/git
   - name: GitHub 
     url: https://docs.github.com/en
   - name: GitLab 
-    url: https://docs.gitlab.com
+    url: https://docs.gitlab.com/
   - name: Argo CD
-    url: https://argo-cd.readthedocs.io/en/stable/
+    url: https://argo-cd.readthedocs.io/
   - name: k3d
-    url: https://k3d.io/stable/
+    url: https://k3d.io/
   - name: Skaffold
     url: https://skaffold.dev/docs/
   - name: Python
@@ -32,15 +32,15 @@ docs_url:
   - name: Rust 
     url: https://doc.rust-lang.org/book/
   - name: PostgreSQL
-    url: https://www.postgresql.org/docs/current/index.html
+    url: https://www.postgresql.org/docs/
   - name: DeepAgents
-    url: https://docs.langchain.com/oss/python/deepagents/overview
+    url: https://docs.langchain.com/oss/python/deepagents/
   - name: LangChain
-    url: https://docs.langchain.com/oss/python/langchain/overview
+    url: https://docs.langchain.com/oss/python/langchain/
   - name: LangGraph
-    url: https://docs.langchain.com/oss/python/langgraph/overview
+    url: https://docs.langchain.com/oss/python/langgraph/
   - name: FastMCP
-    url: https://gofastmcp.com/getting-started/welcome
+    url: https://gofastmcp.com/
   - name: Sentence Transformers
     url: https://sbert.net/
   - name: FastEmbed
@@ -50,13 +50,13 @@ docs_url:
   - name: Redis (Python)
     url: https://redis.io/docs/latest/develop/clients/redis-py/
   - name: Neo4j (Python)
-    url: https://neo4j.com/docs/python-manual/current/
+    url: https://neo4j.com/docs/python-manual/
   - name: ElasticSearch (Python)
-    url: https://elasticsearch-py.readthedocs.io/en/stable/
+    url: https://elasticsearch-py.readthedocs.io/
   - name: Qdrant
     url: https://qdrant.tech/documentation/
   - name: Redis
-    url: https://redis.io/docs/latest/
+    url: https://redis.io/docs/
   - name: Neo4j
     url: https://neo4j.com/docs/
   - name: ElasticSearch
@@ -68,53 +68,53 @@ docs_url:
   - name: LangFuse
     url: https://langfuse.com/docs
   - name: Grafana 
-    url: https://grafana.com/docs/grafana/latest/
+    url: https://grafana.com/docs/grafana/
   - name: Loki
-    url: https://grafana.com/docs/loki/latest/
+    url: https://grafana.com/docs/loki/
   - name: Mimir
-    url: https://grafana.com/docs/mimir/latest/
+    url: https://grafana.com/docs/mimir/
   - name: Tempo 
-    url: https://grafana.com/docs/tempo/latest/
+    url: https://grafana.com/docs/tempo/
   - name: Alloy
-    url: https://grafana.com/docs/alloy/latest/
+    url: https://grafana.com/docs/alloy/
   - name: FastAPI
-    url: https://fastapi.tiangolo.com
+    url: https://fastapi.tiangolo.com/
   - name: Pydantic
-    url: https://pydantic.dev/docs/validation/latest/get-started
+    url: https://pydantic.dev/docs/validation/
   - name: MLflow
     url: https://mlflow.org/docs/latest/
   - name: Asyncio
     url: https://docs.python.org/3/library/asyncio.html
   - name: Celery (Python)
-    url: https://docs.celeryq.dev/en/stable/
+    url: https://docs.celeryq.dev/en/
   - name: Claude Code
-    url: https://code.claude.com/docs/en/overview
+    url: https://code.claude.com/docs/en/
   - name: Playwright (Python)
-    url: https://playwright.dev/python/docs/api/class-playwright
+    url: https://playwright.dev/python/docs/intro
   - name: Browser Use
-    url: https://docs.browser-use.com/open-source/introduction
+    url: https://docs.browser-use.com/open-source/
   - name: Crawl4AI
-    url: https://docs.crawl4ai.com
+    url: https://docs.crawl4ai.com/
   - name: LiteLLM
-    url: https://docs.litellm.ai
+    url: https://docs.litellm.ai/
   - name: NVIDIA GPU Operator
-    url: https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/index.html
+    url: https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/
   - name: NVIDIA DCGM Exporter
     url: https://docs.nvidia.com/datacenter/dcgm/latest/gpu-telemetry/dcgm-exporter.html
   - name: TensorRT 
-    url: https://docs.nvidia.com/deeplearning/tensorrt/latest/index.html
+    url: https://docs.nvidia.com/deeplearning/tensorrt/
   - name: TensorRT-LLM
     url: https://nvidia.github.io/TensorRT-LLM
   - name: NVIDIA Triton Inference Server
-    url: https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/index.html
+    url: https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/
   - name: vLLM 
-    url: https://docs.vllm.ai/en/latest/
+    url: https://docs.vllm.ai/en/
   - name: SGLang
-    url: https://docs.sglang.io
+    url: https://docs.sglang.io/
   - name: TRL 
-    url: https://huggingface.co/docs/trl/index
+    url: https://huggingface.co/docs/trl/
   - name: Optimum
-    url: https://huggingface.co/docs/optimum/index
+    url: https://huggingface.co/docs/optimum/
   - name: Kubeflow
     url: https://www.kubeflow.org/docs/
   - name: NumPy 
@@ -122,111 +122,109 @@ docs_url:
   - name: Pandas 
     url: https://pandas.pydata.org/docs/
   - name: PySpark
-    url: https://spark.apache.org/docs/latest/api/python/index.html
+    url: https://spark.apache.org/docs/latest/api/python/
   - name: Delta Lake (Python)
     url: https://docs.delta.io/api/latest/python/spark/
   - name: PyIceberg 
-    url: https://py.iceberg.apache.org
+    url: https://py.iceberg.apache.org/
   - name: Kafka (Python)
-    url: https://kafka-python.readthedocs.io/en/master/
+    url: https://kafka-python.readthedocs.io/en/
   - name: DuckDB
-    url: https://duckdb.org/docs/current/
+    url: https://duckdb.org/docs/
   - name: dbt 
-    url: https://docs.getdbt.com
+    url: https://docs.getdbt.com/
   - name: Plotly (Python)
     url: https://plotly.com/python/
   - name: Seaborn
-    url: https://seaborn.pydata.org
+    url: https://seaborn.pydata.org/
   - name: PyTorch 
-    url: https://docs.pytorch.org/tutorials/
+    url: https://docs.pytorch.org/
   - name: PyTorch Lightning 
-    url: https://lightning.ai/docs/pytorch/stable/
-  - name: PyTorch/XLA 
-    url: https://docs.pytorch.org/xla/release/r2.8/index.html
+    url: https://lightning.ai/docs/pytorch/
   - name: Ray 
-    url: https://docs.ray.io/en/latest/index.html
+    url: https://docs.ray.io/en/
   - name: XGBoost 
     url: https://xgboost.readthedocs.io/
   - name: CatBoost 
     url: https://catboost.ai/docs/en/
   - name: Optuna 
-    url: https://optuna.readthedocs.io/en/stable/
+    url: https://optuna.readthedocs.io/en/
   - name: Statsmodels 
-    url: https://www.statsmodels.org/stable/index.html
+    url: https://www.statsmodels.org/
   - name: Skforecast 
-    url: https://skforecast.org/latest/
+    url: https://skforecast.org/
   - name: SHAP 
-    url: https://shap.readthedocs.io/en/latest/
+    url: https://shap.readthedocs.io/en/
   - name: SHAP-IQ 
-    url: https://shapiq.readthedocs.io/en/latest/
+    url: https://shapiq.readthedocs.io/en/
   - name: Numba 
-    url: https://numba.readthedocs.io/en/stable/index.html
+    url: https://numba.readthedocs.io/en/
   - name: Scikit-Survival 
-    url: https://scikit-survival.readthedocs.io/en/stable/
+    url: https://scikit-survival.readthedocs.io/en/
   - name: Scikit-Learn
-    url: https://scikit-learn.org/stable/
+    url: https://scikit-learn.org/
   - name: Scikit-Learn Extra 
-    url: https://scikit-learn-extra.readthedocs.io/en/stable/
+    url: https://scikit-learn-extra.readthedocs.io/en/
   - name: River 
-    url: https://riverml.xyz/latest/
+    url: https://riverml.xyz/
   - name: Yellowbrick 
-    url: https://www.scikit-yb.org/en/latest/
+    url: https://www.scikit-yb.org/en/
   - name: UMAP 
-    url: https://umap-learn.readthedocs.io/en/latest/
+    url: https://umap-learn.readthedocs.io/en/
   - name: NeuralProphet 
-    url: https://neuralprophet.com/contents.html
+    url: https://neuralprophet.com/
   - name: ADTK 
-    url: https://adtk.readthedocs.io/en/stable/
+    url: https://adtk.readthedocs.io/en/
   - name: VectorBT 
-    url: https://vectorbt.dev
+    url: https://vectorbt.dev/
   - name: Evidently 
-    url: https://docs.evidentlyai.com/introduction
+    url: https://docs.evidentlyai.com/
   - name: Alibi Explain 
     url: https://docs.seldon.ai/alibi-explain
   - name: Dagster 
     url: https://docs.dagster.io
   - name: NVIDIA Merlin 
-    url: https://nvidia-merlin.github.io/Merlin/main/README.html
+    url: https://nvidia-merlin.github.io/Merlin/
   - name: RecBole 
     url: https://recbole.io/docs/
   - name: NetworkX
-    url: https://networkx.org/documentation/stable/index.html
+    url: https://networkx.org/documentation/
   - name: PyTorch Geometric 
-    url: https://pytorch-geometric.readthedocs.io/en/latest/
+    url: https://pytorch-geometric.readthedocs.io/en/
   - name: TerraTorch 
-    url: https://terrastackai.github.io/terratorch/stable/
+    url: https://terrastackai.github.io/terratorch/
   - name: Roboflow 
-    url: https://docs.roboflow.com
+    url: https://docs.roboflow.com/
   - name: Inference (Roboflow)
-    url: https://inference.roboflow.com
+    url: https://inference.roboflow.com/
   - name: Supervision (Roboflow)
-    url: https://supervision.roboflow.com/latest/
+    url: https://supervision.roboflow.com/
   - name: Ultralytics 
-    url: https://docs.ultralytics.com
+    url: https://docs.ultralytics.com/
   - name: MediaPipe 
-    url: https://ai.google.dev/edge/mediapipe/solutions/guide
+    url: https://ai.google.dev/edge/mediapipe/
   - name: OpenCV (Python)
     url: https://docs.opencv.org/4.x/d6/d00/tutorial_py_root.html
   - name: OpenVINO 
-    url: https://docs.openvino.ai/2026/index.html
+    url: https://docs.openvino.ai/2026/
   - name: Qiskit 
     url: https://quantum.cloud.ibm.com/docs/en/api/qiskit
   - name: Pennylane 
-    url: https://docs.pennylane.ai/en/stable/
+    url: https://docs.pennylane.ai/en/
   - name: Novu (Python)
-    url: https://novu-python.readthedocs.io/en/latest/
+    url: https://novu-python.readthedocs.io/en/
   - name: Streamlit 
-    url: https://docs.streamlit.io
+    url: https://docs.streamlit.io/
   - name: Apache Airflow 
     url: https://airflow.apache.org/docs/
   - name: Luigi 
-    url: https://luigi.readthedocs.io/en/stable/
+    url: https://luigi.readthedocs.io/en/
   - name: Metasploit 
-    url: https://docs.metasploit.com
+    url: https://docs.metasploit.com/
   - name: NMAP 
     url: https://nmap.org/docs.html
   - name: Project Discovery 
-    url: https://docs.projectdiscovery.io/home
+    url: https://docs.projectdiscovery.io/
 
 
 llms_full_txt:
@@ -329,8 +327,6 @@ llms_txt:
     url: https://duckdb.org/llms.txt
   - name: dbt 
     url: https://docs.getdbt.com/llms.txt
-  - name: PyTorch 
-    url: https://docs.pytorch.org/tutorials/llms.txt
   - name: Dask 
     url: https://docs.dask.org/llms.txt
   - name: Skforecast
@@ -428,8 +424,6 @@ sitemap_xml:
     url: https://docs.getdbt.com/sitemap.xml
   - name: Plotly (Python)
     url: https://plotly.com/python/sitemap.xml
-  - name: PyTorch 
-    url: https://docs.pytorch.org/tutorials/sitemap.xml
   - name: Ray 
     url: https://docs.ray.io/sitemap.xml
   - name: CatBoost 

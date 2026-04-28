@@ -2,11 +2,10 @@
 Knowledge Distiller — Tier 1 Ingestion (/llms-full.txt single-file fast path)
 
 Dispatched by `services/knowledge/ingestion.py` when the resolver assigned
-`tier == 1` — meaning Stage D's content-validated probe confirmed the site
-publishes a real `/llms-full.txt` (markdown headings, ≥500 bytes, not a
-SPA shell). This is the fastest ingestion strategy in the pipeline:
+`tier == 1` — meaning sources.yaml has a curated `llms-full.txt` URL for
+this framework. This is the fastest ingestion strategy in the pipeline:
 
-  1. One HTTP GET of `/llms-full.txt` at the host root
+  1. One HTTP GET of `cfg.docs_url` (the curated llms-full.txt URL)
   2. `_write_raw()` the entire body to MinIO as ONE file
 
 Typical wall time: 1-3 seconds, vs ~20 minutes for Tier 4 Playwright on
@@ -14,12 +13,9 @@ the same docs. A llms-full.txt is a publisher-curated, single-file,
 LLM-ready dump of the entire documentation — exactly what we want.
 
 URL STRATEGY:
-  The resolver's D-probe fetches llms-full.txt at BOTH the docs_url and
-  its host root, merging the best result per file. For Tier 1 assignment,
-  at least one of those URLs returned VALID. We don't know which, so we
-  try in order: host_root first (by far the most common convention per
-  the llmstxt.org spec), then the deep docs_url path. Both-fail raises
-  RuntimeError — dispatcher catches and falls back to Tier 4.
+  The URL comes from sources.yaml (`llms_full_txt` section) and is used
+  directly with no construction. Failure raises RuntimeError — dispatcher
+  catches and falls back to Tier 4.
 
 OUTPUT LAYOUT (same as other tiers):
   <study_root>/research/raw/<slug>-llms-full.md       — the file
@@ -128,108 +124,94 @@ async def ingest_llms_full_txt(
     """
     Tier 1 ingestion. Called by the dispatcher when `cfg.tier == 1`.
 
-    Tries host-root `/llms-full.txt` first (llmstxt.org convention), then
-    falls back to the deep-path variant `docs_url/llms-full.txt`. Both-fail
-    raises RuntimeError so the dispatcher falls back to Tier 4 Playwright.
+    Fetches `cfg.docs_url` directly — the resolver supplies the exact
+    llms-full.txt URL from sources.yaml; no construction. Failure raises
+    RuntimeError so the dispatcher falls back to Tier 4 Playwright.
 
     OP-50 (2026-04-25): on a successful fetch, checks if the body is a
     manifest (URL/Markdown pointers, no fences). If so, raises
     `TierOneManifestDetected` so the dispatcher can fall through to Tier 2
     instead of treating the manifest as content.
     """
-    parsed = urlparse(cfg.docs_url)
+    url = cfg.docs_url
+    parsed = urlparse(url)
     host = (parsed.netloc or "").lower()
     if not host:
-        raise RuntimeError(f"Tier 1: cannot parse host from docs_url={cfg.docs_url!r}")
+        raise RuntimeError(f"Tier 1: cannot parse host from docs_url={url!r}")
 
-    host_root = f"{parsed.scheme}://{parsed.netloc}"
-    deep_base = cfg.docs_url.rstrip("/")
-    # Candidate URLs in descending probability order
-    candidates = [f"{host_root}/llms-full.txt"]
-    if deep_base != host_root.rstrip("/"):
-        candidates.append(f"{deep_base}/llms-full.txt")
-
-    logger.info(
-        f"[tier-1] start framework={cfg.framework!r} host={host} "
-        f"candidates={candidates}"
-    )
+    logger.info(f"[tier-1] start framework={cfg.framework!r} url={url}")
 
     progress = IngestProgress(cfg.study_id)
     await progress.start(tier = "llms_full_txt", total = 1)
-    last_error: str | None = None
     try:
         async with httpx.AsyncClient(
             timeout = httpx.Timeout(_HTTP_TIMEOUT, connect = 10.0),
             follow_redirects = True,
         ) as client:
-            for url in candidates:
-                try:
-                    resp = await _fetch(client, url)
-                except Exception as e:
-                    last_error = f"{type(e).__name__}: {e}"
-                    logger.info(f"[tier-1] {url} failed: {last_error}")
-                    continue
-                if resp.status_code != 200:
-                    last_error = f"HTTP {resp.status_code}"
-                    logger.info(f"[tier-1] {url} → {last_error}")
-                    continue
-                body = resp.text
-                if len(body) < _MIN_OK_BYTES:
-                    last_error = f"body too short ({len(body)} bytes)"
-                    logger.info(f"[tier-1] {url} → {last_error}")
-                    continue
-                # OP-50 (2026-04-25) — manifest detection. If the file is
-                # actually a llms.txt-style link index disguised as
-                # llms-full.txt, raise the dispatcher signal so we fall
-                # through to Tier 2 instead of writing useless content.
-                is_manifest, m_stats = _looks_like_manifest(body)
-                if is_manifest:
-                    logger.warning(
-                        f"[tier-1] {url} looks like a MANIFEST "
-                        f"(fences={m_stats['fence_count']}, "
-                        f"url_lines={m_stats['url_lines']}, "
-                        f"md_pointers={m_stats['md_pointers']}) — "
-                        f"raising TierOneManifestDetected so dispatcher "
-                        f"falls through to Tier 2 (llms.txt parallel fetch)"
-                    )
-                    await progress.finish(status = "downgrade")
-                    raise TierOneManifestDetected(
-                        f"{url}: {m_stats}"
-                    )
-                # Success — write single file
-                slug = _derive_slug(host)
-                entry = await _write_raw(
-                    storage = storage,
-                    study_root = cfg.study_root,
-                    slug = slug,
-                    content = body,
-                    url = url,
-                    tier = "llms_full_txt",
-                    cfg = cfg,
+            try:
+                resp = await _fetch(client, url)
+            except Exception as e:
+                await progress.finish(status = "failed")
+                raise RuntimeError(
+                    f"Tier 1 fetch failed for {cfg.framework!r} at {url}: "
+                    f"{type(e).__name__}: {e}"
                 )
-                if entry is None:
-                    last_error = "failed content-quality gate"
-                    logger.warning(f"[tier-1] {url} → {last_error}")
-                    continue
-                await progress.update(current = 1, last_url = url)
-                logger.info(
-                    f"[tier-1] OK — 1 file, {entry.bytes} bytes "
-                    f"(source={url})"
+            if resp.status_code != 200:
+                await progress.finish(status = "failed")
+                raise RuntimeError(
+                    f"Tier 1: {url} → HTTP {resp.status_code}"
                 )
-                await progress.finish(status = "done")
-                return IngestResult(
-                    tier_used = "llms_full_txt",
-                    total_files = 1,
-                    total_bytes = entry.bytes,
-                    manifest = [entry],
-                    skipped_urls = [],
+            body = resp.text
+            if len(body) < _MIN_OK_BYTES:
+                await progress.finish(status = "failed")
+                raise RuntimeError(
+                    f"Tier 1: {url} body too short ({len(body)} bytes < "
+                    f"{_MIN_OK_BYTES})"
                 )
-        await progress.finish(status = "failed")
-        raise RuntimeError(
-            f"Tier 1 exhausted candidates for {cfg.framework!r}: "
-            f"tried {candidates}, last error: {last_error}. "
-            f"Dispatcher will fall back to Tier 4."
-        )
+            # OP-50 (2026-04-25) — manifest detection. If the file is
+            # actually a llms.txt-style link index disguised as
+            # llms-full.txt, raise the dispatcher signal so we fall
+            # through to Tier 2 instead of writing useless content.
+            is_manifest, m_stats = _looks_like_manifest(body)
+            if is_manifest:
+                logger.warning(
+                    f"[tier-1] {url} looks like a MANIFEST "
+                    f"(fences={m_stats['fence_count']}, "
+                    f"url_lines={m_stats['url_lines']}, "
+                    f"md_pointers={m_stats['md_pointers']}) — "
+                    f"raising TierOneManifestDetected so dispatcher "
+                    f"falls through to Tier 2"
+                )
+                await progress.finish(status = "downgrade")
+                raise TierOneManifestDetected(f"{url}: {m_stats}")
+
+            slug = _derive_slug(host)
+            entry = await _write_raw(
+                storage = storage,
+                study_root = cfg.study_root,
+                slug = slug,
+                content = body,
+                url = url,
+                tier = "llms_full_txt",
+                cfg = cfg,
+            )
+            if entry is None:
+                await progress.finish(status = "failed")
+                raise RuntimeError(
+                    f"Tier 1: {url} failed content-quality gate"
+                )
+            await progress.update(current = 1, last_url = url)
+            logger.info(
+                f"[tier-1] OK — 1 file, {entry.bytes} bytes (source={url})"
+            )
+            await progress.finish(status = "done")
+            return IngestResult(
+                tier_used = "llms_full_txt",
+                total_files = 1,
+                total_bytes = entry.bytes,
+                manifest = [entry],
+                skipped_urls = [],
+            )
     finally:
         await progress.close()
 
