@@ -117,6 +117,10 @@ docs_url:
     url: https://huggingface.co/docs/optimum/index
   - name: Kubeflow
     url: https://www.kubeflow.org/docs/
+  - name: NumPy 
+    url: https://numpy.org/doc/stable/
+  - name: Pandas 
+    url: https://pandas.pydata.org/docs/
   - name: PySpark
     url: https://spark.apache.org/docs/latest/api/python/index.html
   - name: Delta Lake (Python)
@@ -133,6 +137,96 @@ docs_url:
     url: https://plotly.com/python/
   - name: Seaborn
     url: https://seaborn.pydata.org
+  - name: PyTorch 
+    url: https://docs.pytorch.org/tutorials/
+  - name: PyTorch Lightning 
+    url: https://lightning.ai/docs/pytorch/stable/
+  - name: PyTorch/XLA 
+    url: https://docs.pytorch.org/xla/release/r2.8/index.html
+  - name: Ray 
+    url: https://docs.ray.io/en/latest/index.html
+  - name: XGBoost 
+    url: https://xgboost.readthedocs.io/
+  - name: CatBoost 
+    url: https://catboost.ai/docs/en/
+  - name: Optuna 
+    url: https://optuna.readthedocs.io/en/stable/
+  - name: Statsmodels 
+    url: https://www.statsmodels.org/stable/index.html
+  - name: Skforecast 
+    url: https://skforecast.org/latest/
+  - name: SHAP 
+    url: https://shap.readthedocs.io/en/latest/
+  - name: SHAP-IQ 
+    url: https://shapiq.readthedocs.io/en/latest/
+  - name: Numba 
+    url: https://numba.readthedocs.io/en/stable/index.html
+  - name: Scikit-Survival 
+    url: https://scikit-survival.readthedocs.io/en/stable/
+  - name: Scikit-Learn
+    url: https://scikit-learn.org/stable/
+  - name: Scikit-Learn Extra 
+    url: https://scikit-learn-extra.readthedocs.io/en/stable/
+  - name: River 
+    url: https://riverml.xyz/latest/
+  - name: Yellowbrick 
+    url: https://www.scikit-yb.org/en/latest/
+  - name: UMAP 
+    url: https://umap-learn.readthedocs.io/en/latest/
+  - name: NeuralProphet 
+    url: https://neuralprophet.com/contents.html
+  - name: ADTK 
+    url: https://adtk.readthedocs.io/en/stable/
+  - name: VectorBT 
+    url: https://vectorbt.dev
+  - name: Evidently 
+    url: https://docs.evidentlyai.com/introduction
+  - name: Alibi Explain 
+    url: https://docs.seldon.ai/alibi-explain
+  - name: Dagster 
+    url: https://docs.dagster.io
+  - name: NVIDIA Merlin 
+    url: https://nvidia-merlin.github.io/Merlin/main/README.html
+  - name: RecBole 
+    url: https://recbole.io/docs/
+  - name: NetworkX
+    url: https://networkx.org/documentation/stable/index.html
+  - name: PyTorch Geometric 
+    url: https://pytorch-geometric.readthedocs.io/en/latest/
+  - name: TerraTorch 
+    url: https://terrastackai.github.io/terratorch/stable/
+  - name: Roboflow 
+    url: https://docs.roboflow.com
+  - name: Inference (Roboflow)
+    url: https://inference.roboflow.com
+  - name: Supervision (Roboflow)
+    url: https://supervision.roboflow.com/latest/
+  - name: Ultralytics 
+    url: https://docs.ultralytics.com
+  - name: MediaPipe 
+    url: https://ai.google.dev/edge/mediapipe/solutions/guide
+  - name: OpenCV (Python)
+    url: https://docs.opencv.org/4.x/d6/d00/tutorial_py_root.html
+  - name: OpenVINO 
+    url: https://docs.openvino.ai/2026/index.html
+  - name: Qiskit 
+    url: https://quantum.cloud.ibm.com/docs/en/api/qiskit
+  - name: Pennylane 
+    url: https://docs.pennylane.ai/en/stable/
+  - name: Novu (Python)
+    url: https://novu-python.readthedocs.io/en/latest/
+  - name: Streamlit 
+    url: https://docs.streamlit.io
+  - name: Apache Airflow 
+    url: https://airflow.apache.org/docs/
+  - name: Luigi 
+    url: https://luigi.readthedocs.io/en/stable/
+  - name: Metasploit 
+    url: https://docs.metasploit.com
+  - name: NMAP 
+    url: https://nmap.org/docs.html
+  - name: Project Discovery 
+    url: https://docs.projectdiscovery.io/home
 
 
 llms_full_txt:
@@ -168,6 +262,24 @@ llms_full_txt:
     url: https://huggingface.co/docs/optimum/llms-full.txt
   - name: dbt 
     url: https://docs.getdbt.com/llms-full.txt
+  - name: Dask 
+    url: https://docs.dask.org/llms-full.txt
+  - name: Skforecast 
+    url: https://skforecast.org/latest/llms-full.txt
+  - name: Evidently 
+    url: https://docs.evidentlyai.com/llms-full.txt
+  - name: Alibi Explain 
+    url: https://docs.seldon.ai/alibi-explain/llms-full.txt
+  - name: Dagster 
+    url: https://docs.dagster.io/llms-full.txt
+  - name: Roboflow 
+    url: https://docs.roboflow.com/llms-full.txt
+  - name: Inference (Roboflow)
+    url: https://inference.roboflow.com/llms-full.txt
+  - name: Streamlit 
+    url: https://docs.streamlit.io/llms-full.txt
+  - name: Project Discovery 
+    url: https://docs.projectdiscovery.io/llms-full.txt
 
 
 llms_txt:
@@ -217,6 +329,28 @@ llms_txt:
     url: https://duckdb.org/llms.txt
   - name: dbt 
     url: https://docs.getdbt.com/llms.txt
+  - name: PyTorch 
+    url: https://docs.pytorch.org/tutorials/llms.txt
+  - name: Dask 
+    url: https://docs.dask.org/llms.txt
+  - name: Skforecast
+    url: https://skforecast.org/latest/llms.txt
+  - name: Evidently 
+    url: https://docs.evidentlyai.com/llms.txt
+  - name: Alibi Explain 
+    url: https://docs.seldon.ai/alibi-explain/llms.txt
+  - name: Dagster
+    url: https://docs.dagster.io/llms.txt
+  - name: Roboflow 
+    url: https://docs.roboflow.com/llms.txt
+  - name: Inference (Roboflow)
+    url: https://inference.roboflow.com/llms.txt
+  - name: Supervision (Roboflow)
+    url: https://supervision.roboflow.com/llms.txt
+  - name: Streamlit 
+    url: https://docs.streamlit.io/llms.txt
+  - name: Project Discovery 
+    url: https://docs.projectdiscovery.io/llms.txt
 
 
 sitemap_xml:
@@ -294,6 +428,36 @@ sitemap_xml:
     url: https://docs.getdbt.com/sitemap.xml
   - name: Plotly (Python)
     url: https://plotly.com/python/sitemap.xml
+  - name: PyTorch 
+    url: https://docs.pytorch.org/tutorials/sitemap.xml
+  - name: Ray 
+    url: https://docs.ray.io/sitemap.xml
+  - name: CatBoost 
+    url: https://catboost.ai/docs/sitemap.xml
+  - name: Skforecast 
+    url: https://skforecast.org/latest/sitemap.xml
+  - name: River 
+    url: https://riverml.xyz/latest/sitemap.xml
+  - name: VectorBT 
+    url: https://vectorbt.dev/sitemap.xml
+  - name: Evidently
+    url: https://docs.evidentlyai.com/sitemap.xml
+  - name: Alibi Explain 
+    url: https://docs.seldon.ai/alibi-explain/sitemap-pages.xml
+  - name: TerraTorch 
+    url: https://terrastackai.github.io/terratorch/sitemap.xml
+  - name: Roboflow
+    url: https://docs.roboflow.com/sitemap-pages.xml
+  - name: Inference (Roboflow)
+    url: https://inference.roboflow.com/sitemap.xml
+  - name: Supervision (Roboflow)
+    url: https://supervision.roboflow.com/sitemap.xml
+  - name: Ultralytics 
+    url: https://docs.ultralytics.com/sitemap.xml
+  - name: Metasploit 
+    url: https://docs.metasploit.com/sitemap.xml
+  - name: Project Discovery 
+    url: https://docs.projectdiscovery.io/sitemap.xml
 
 
 github_repo:
@@ -405,6 +569,10 @@ github_repo:
     url: https://github.com/huggingface/optimum
   - name: Kubeflow 
     url: https://github.com/kubeflow/kubeflow
+  - name: NumPy 
+    url: https://github.com/numpy/numpy
+  - name: Pandas 
+    url: https://github.com/pandas-dev/pandas
   - name: PyIceberg 
     url: https://github.com/apache/iceberg-python
   - name: Kafka (Python)
@@ -417,6 +585,98 @@ github_repo:
     url: https://github.com/plotly/plotly.py
   - name: Seaborn 
     url: https://github.com/mwaskom/seaborn
+  - name: PyTorch 
+    url: https://github.com/pytorch/pytorch
+  - name: PyTorch Lightning 
+    url: https://github.com/Lightning-AI/pytorch-lightning
+  - name: PyTorch/XLA 
+    url: https://github.com/pytorch/xla
+  - name: Dask
+    url: https://github.com/dask/dask
+  - name: Ray 
+    url: https://github.com/ray-project/ray
+  - name: XGBoost 
+    url: https://github.com/dmlc/xgboost
+  - name: CatBoost 
+    url: https://github.com/catboost/catboost
+  - name: Optuna 
+    url: https://github.com/optuna/optuna
+  - name: Statsmodels 
+    url: https://github.com/statsmodels/statsmodels
+  - name: Skforecast
+    url: https://github.com/skforecast/skforecast
+  - name: SHAP 
+    url: https://github.com/shap/shap
+  - name: SHAP-IQ 
+    url: https://github.com/mmschlk/shapiq
+  - name: Numba 
+    url: https://github.com/numba/numba
+  - name: Scikit-Survival 
+    url: https://github.com/sebp/scikit-survival
+  - name: Scikit-Learn 
+    url: https://github.com/scikit-learn/scikit-learn
+  - name: Scikit-Learn Extra 
+    url: https://github.com/scikit-learn-contrib/scikit-learn-extra
+  - name: NeuralProphet
+    url: https://github.com/ourownstory/neural_prophet
+  - name: ADTK 
+    url: https://github.com/arundo/adtk
+  - name: River
+    url: https://github.com/online-ml/river
+  - name: Yellowbrick
+    url: https://github.com/districtdatalabs/yellowbrick
+  - name: UMAP 
+    url: https://github.com/lmcinnes/umap
+  - name: VectorBT 
+    url: https://github.com/polakowo/vectorbt
+  - name: Evidently 
+    url: https://github.com/evidentlyai/evidently
+  - name: Alibi Explain 
+    url: https://github.com/seldonio/alibi
+  - name: Dagster 
+    url: https://docs.dagster.io/sitemap.xml
+  - name: NVIDIA Merlin 
+    url: https://github.com/NVIDIA-Merlin/Merlin
+  - name: RecBole 
+    url: https://github.com/rucaibox/recbole
+  - name: NetworkX 
+    url: https://github.com/networkx/networkx
+  - name: PyTorch Geometric
+    url: https://github.com/pyg-team/pytorch_geometric
+  - name: TerraTorch 
+    url: https://github.com/terrastackai/terratorch
+  - name: Roboflow
+    url: https://github.com/roboflow/roboflow-python
+  - name: Inference (Roboflow)
+    url: https://github.com/roboflow/inference
+  - name: Supervision (Roboflow)
+    url: https://github.com/roboflow/supervision
+  - name: Ultralytics
+    url: https://github.com/ultralytics/ultralytics
+  - name: MediaPipe 
+    url: https://github.com/google-ai-edge/mediapipe
+  - name: OpenCV 
+    url: https://github.com/opencv/opencv-python
+  - name: OpenVINO
+    url: https://github.com/openvinotoolkit/openvino
+  - name: Qiskit 
+    url: https://github.com/Qiskit/qiskit
+  - name: Pennylane 
+    url: https://github.com/PennyLaneAI/pennylane
+  - name: Novu (Python)
+    url: https://github.com/novuhq/novu-py
+  - name: Streamlit 
+    url: https://github.com/streamlit/streamlit
+  - name: Apache Airflow
+    url: https://github.com/apache/airflow
+  - name: Luigi
+    url: https://github.com/spotify/luigi
+  - name: Metasploit 
+    url: https://github.com/rapid7/metasploit-framework
+  - name: NMAP 
+    url: https://github.com/nmap/nmap
+  - name: Project Discovery 
+    url: https://github.com/projectdiscovery
 
 
 categories:
@@ -480,6 +740,10 @@ categories:
     category: Python
   - name: Optimum
     category: Python
+  - name: NumPy 
+    category: Python
+  - name: Pandas 
+    category: Python
   - name: PySpark
     category: Python
   - name: Delta Lake (Python)
@@ -494,3 +758,95 @@ categories:
     category: Python
   - name: Seaborn 
     category: Python
+  - name: PyTorch
+    category: Python
+  - name: PyTorch Lightning
+    category: Python
+  - name: PyTorch/XLA
+    category: Python
+  - name: Dask
+    category: Python
+  - name: Ray 
+    category: Python
+  - name: XGBoost
+    category: Python
+  - name: CatBoost 
+    category: Python
+  - name: Optuna 
+    category: Python
+  - name: Statsmodels 
+    category: Python
+  - name: Skforecast 
+    category: Python
+  - name: SHAP 
+    category: Python
+  - name: SHAP-IQ 
+    category: Python
+  - name: Numba 
+    category: Python
+  - name: Scikit-Survival 
+    category: Python
+  - name: Scikit-Learn 
+    category: Python
+  - name: Scikit-Learn Extra 
+    category: Python
+  - name: River
+    category: Python
+  - name: Yellowbrick
+    category: Python
+  - name: UMAP
+    category: Python
+  - name: NeuralProphet
+    category: Python
+  - name: VectorBT 
+    category: Python
+  - name: ADTK
+    category: Python
+  - name: Evidently 
+    category: Python
+  - name: Alibi Explain 
+    category: Python
+  - name: Dagster 
+    category: Python
+  - name: NVIDIA Merlin 
+    category: Python
+  - name: RecBole 
+    category: Python
+  - name: NetworkX
+    category: Python
+  - name: PyTorch Geometric
+    category: Python
+  - name: TerraTorch
+    category: Python
+  - name: Roboflow
+    category: Python
+  - name: Inference (Roboflow)
+    category: Python
+  - name: Supervision (Roboflow)
+    category: Python
+  - name: Ultralytics
+    category: Python
+  - name: MediaPipe 
+    category: Python
+  - name: OpenCV 
+    category: Python
+  - name: OpenVINO
+    category: Python
+  - name: Qiskit 
+    category: Python
+  - name: Pennylane 
+    category: Python
+  - name: Novu (Python)
+    category: Python
+  - name: Streamlit 
+    category: Python
+  - name: Apache Airflow 
+    category: Python
+  - name: Luigi 
+    category: Python
+  - name: Metasploit 
+    category: Pentest
+  - name: NMAP 
+    category: Pentest
+  - name: Project Discovery 
+    category: Pentest
