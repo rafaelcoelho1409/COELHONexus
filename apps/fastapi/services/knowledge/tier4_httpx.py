@@ -305,11 +305,19 @@ async def _httpx_fetch_and_extract_all(
 
     sem = asyncio.Semaphore(_MAX_CONCURRENT)
     failures: list[tuple[str, str]] = []
-    manifest: list[ManifestEntry] = []
+    # Pre-allocated by URL position so manifest order tracks the input
+    # discovery order (sitemap / Common Crawl / BFS sequence) instead of
+    # fetch-completion order under the parallel Semaphore. The
+    # zero-padded ordinal in each slug then makes alphabetical
+    # filesystem listing equal that same order — same rule applied in
+    # post_ingest (Tier 1), ingest_llms_txt (Tier 2), ingest_sitemap_httpx
+    # (Tier 3).
+    width = max(4, len(str(max(0, len(urls) - 1))))
+    entries: list[Optional[ManifestEntry]] = [None] * len(urls)
     total_bytes = 0
     completed = 0
 
-    async def _one(url: str) -> None:
+    async def _one(i: int, url: str) -> None:
         nonlocal total_bytes, completed
         async with sem:
             try:
@@ -330,7 +338,7 @@ async def _httpx_fetch_and_extract_all(
                 completed += 1
                 await progress.update(completed, f"(empty) {url}")
                 return
-            slug = _slugify(url)
+            slug = f"{i:0{width}d}-{_slugify(url)}"
             entry = await _write_raw(
                 storage = storage,
                 study_root = cfg.study_root,
@@ -341,12 +349,15 @@ async def _httpx_fetch_and_extract_all(
                 cfg = cfg,
             )
             if entry:
-                manifest.append(entry)
+                entries[i] = entry
                 total_bytes += entry.bytes
             completed += 1
             await progress.update(completed, url)
 
-    await asyncio.gather(*(_one(u) for u in urls))
+    await asyncio.gather(*(_one(i, u) for i, u in enumerate(urls)))
+
+    # Preserve submission order; drop slots that failed (None).
+    manifest: list[ManifestEntry] = [e for e in entries if e is not None]
 
     fail_rate = len(failures) / max(1, len(urls))
     if fail_rate > 0.5:

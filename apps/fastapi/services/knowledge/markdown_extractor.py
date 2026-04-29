@@ -106,6 +106,24 @@ _DOCS_TOC_XPATHS = (
     '//*[@id="on-this-page"]',
     '//*[@id="page-toc"]',
     '//*[contains(@class, "on-this-page")]',
+    # mdBook (Rust Book, Cargo Book, rustc Book, many Rust ecosystem books) —
+    # static-site renderer that injects sidebar nav, top menu bar, search
+    # UI, theme switcher, and a keyboard-shortcuts help popup on every page.
+    # All chrome elements are id-prefixed but we MUST NOT match the content
+    # wrappers (mdbook-content / mdbook-page-wrapper / mdbook-body-container)
+    # which hold the actual article body. trafilatura's news-tuned default
+    # doesn't strip these because they're plain `<div>`/`<aside>` not in
+    # nav/header/footer.
+    '//*[@id="mdbook-help-popup"]',
+    '//*[@id="mdbook-help-container"]',
+    '//*[@id="mdbook-menu-bar"]',
+    '//*[@id="mdbook-menu-bar-hover-placeholder"]',
+    '//*[@id="mdbook-sidebar"]',
+    '//*[@id="mdbook-sidebar-toggle"]',
+    '//*[@id="mdbook-sidebar-toggle-anchor"]',
+    '//*[@id="mdbook-sidebar-resize-handle"]',
+    '//*[starts-with(@id, "mdbook-search")]',     # searchbar, search-toggle, searchresults, etc.
+    '//*[starts-with(@id, "mdbook-theme-")]',     # theme-toggle, theme-list, theme-{ayu,coal,light,navy,rust,...}
 )
 
 
