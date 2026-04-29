@@ -38,7 +38,6 @@ from tenacity import (
 from schemas.knowledge.ingestion import (
     DocsIngestionConfig,
     IngestResult,
-    ManifestEntry,
 )
 from services.knowledge.ingest_progress import IngestProgress
 from services.knowledge.ingestion import _write_raw

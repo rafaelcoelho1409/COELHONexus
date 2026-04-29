@@ -56,7 +56,6 @@ from services.knowledge.ingest_progress import IngestProgress
 from services.knowledge.ingestion import (
     _build_language_filter,
     _is_polyglot_framework,
-    _matches_any,
     _should_keep,
     _slugify,
     _write_raw,
