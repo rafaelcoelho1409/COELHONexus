@@ -355,6 +355,90 @@ def _is_mostly_chrome(md: str) -> bool:
 
 
 # =============================================================================
+# Stage 2.5 — fence inline-code unwrap (html2text quirk fix)
+# =============================================================================
+# Crawl4AI's DefaultMarkdownGenerator (html2text-based) wraps the entire
+# content of a `<pre>` block with leading + trailing single-backtick markers
+# whenever the source HTML has internal backticks (e.g., cargo command
+# output containing literal `flag` quotes). Result: a fenced block whose
+# first content line begins with `` ` `` and whose second-to-last line is
+# a lone `` ` `` — pure noise that confuses downstream renderers and the
+# planner.
+#
+# No upstream html2text option disables this; `mark_code` produces
+# `[code]...[/code]` instead, which is wrong format. We post-process.
+#
+# Detection requires BOTH stray markers in the exact positions, plus a
+# parity check on the surviving backticks — only when both wrapping
+# markers are present AND removing them leaves an even count of backticks
+# in the surviving content (the signature of paired-backtick source like
+# `` `hello` ``) do we strip. Real-world false-positive risk is
+# essentially nil.
+
+_FENCE_RE = re.compile(r"^(\s*)(`{3,})")
+
+
+def _unwrap_fence_inline_code(md: str) -> str:
+    """
+    Strip html2text-generated stray inline-code markers wrapping fenced
+    code blocks. Conservative — only modifies blocks matching the exact
+    malformed pattern; clean blocks pass through untouched.
+    """
+    lines = md.splitlines(keepends = True)
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        m = _FENCE_RE.match(lines[i])
+        if not m:
+            out.append(lines[i])
+            i += 1
+            continue
+        # Found an opening fence. Find the matching close.
+        open_indent, open_ticks = m.group(1), m.group(2)
+        close_re = re.compile(rf"^{re.escape(open_indent)}{open_ticks[0]}{{{len(open_ticks)},}}\s*$")
+        j = i + 1
+        while j < len(lines) and not close_re.match(lines[j]):
+            j += 1
+        if j >= len(lines):
+            # No close fence (unbalanced) — leave block as-is.
+            out.append(lines[i])
+            i += 1
+            continue
+        # Block content is lines[i+1 : j], close fence is lines[j].
+        block = lines[i + 1:j]
+        # Pattern check: at least 2 content lines; first starts with `,
+        # second-to-last is a lone backtick (after stripping whitespace).
+        if (
+            len(block) >= 2
+            and block[0].lstrip().startswith("`")
+            and block[-1].strip() == "`"
+        ):
+            # Parity check: simulate removal and count remaining backticks.
+            stripped_first = block[0].lstrip()[1:]
+            survivors = [stripped_first] + [l for l in block[1:-1]]
+            backtick_count = sum(l.count("`") for l in survivors)
+            if backtick_count % 2 == 0:
+                # Safe to strip. Replace block with survivors (drop last
+                # lone-backtick line; replace first line minus its leading
+                # backtick, preserving the rest of its leading whitespace
+                # if any was eaten by lstrip).
+                first_lws_len = len(block[0]) - len(block[0].lstrip())
+                new_first = block[0][:first_lws_len] + stripped_first
+                out.append(lines[i])  # opening fence
+                out.append(new_first)
+                out.extend(block[1:-1])
+                out.append(lines[j])  # closing fence
+                i = j + 1
+                continue
+        # Pattern didn't match — emit block unchanged.
+        out.append(lines[i])
+        out.extend(block)
+        out.append(lines[j])
+        i = j + 1
+    return "".join(out)
+
+
+# =============================================================================
 # Public entry point
 # =============================================================================
 def html_to_markdown(html: str, url: str) -> Optional[str]:
@@ -384,6 +468,9 @@ def html_to_markdown(html: str, url: str) -> Optional[str]:
     md = getattr(result, "raw_markdown", None)
     if not md or not md.strip():
         return None
+
+    # Stage 2.5 — unwrap html2text's spurious fence-inline-code wrapping
+    md = _unwrap_fence_inline_code(md)
 
     # Stage 3 — regex cosmetic cleanup
     md = _clean_markdown_chrome(md)
