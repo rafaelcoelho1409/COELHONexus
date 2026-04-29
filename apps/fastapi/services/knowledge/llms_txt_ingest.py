@@ -75,6 +75,25 @@ _MIN_OK_RATIO = 0.5           # abort tier if <50% fetched successfully
 # File extensions that are already markdown (skip HTML extraction)
 _MD_EXTS = (".md", ".mdx", ".markdown")
 
+# Format-priority dedup for llms.txt URL lists. When a publisher exposes
+# the same logical page under multiple URL forms (Docker lists every page
+# as both `/foo` and `/foo.md`), we keep one URL per (host, path-stem)
+# group — the one with the lowest priority number below. Raw markdown
+# wins because it's byte-stable, structurally faithful, and chrome-free;
+# HTML/no-ext requires Crawl4AI extraction and may leak widget chrome
+# (Docker's "Gordon" assistant being the canonical case).
+# Extensions not listed are treated as opaque path segments — `.txt` and
+# `.json` and similar are NOT format siblings of `/foo`, they're their
+# own logical page.
+_FORMAT_PRIORITY: dict[str, int] = {
+    ".md": 0,
+    ".mdx": 0,
+    ".markdown": 0,
+    ".html": 2,
+    ".htm": 2,
+    "": 3,  # bare path — treat as rendered HTML
+}
+
 # Regex fallback when AnswerDotAI's `parse_llms_file` fails or returns 0
 # URLs. NVIDIA's llms.txt at docs.nvidia.com (as of April 2026) mixes bare
 # URLs with markdown-link syntax per-section, which breaks the official
@@ -171,6 +190,72 @@ def _parse_llms_txt(body: str, base_url: str) -> list[str]:
         f"[tier-2] regex fallback extracted {len(deduped)} URLs from llms.txt"
     )
     return deduped
+
+
+# =============================================================================
+# Format-priority dedup
+# =============================================================================
+def _path_stem_and_ext(url: str) -> tuple[str, str, str]:
+    """
+    Decompose a URL into (host, path-stem, extension).
+
+    `path-stem` strips the trailing slash and any extension recognized
+    in `_FORMAT_PRIORITY`. So `/foo`, `/foo/`, `/foo.html`, and
+    `/foo.md` all share the stem `/foo` on the same host. Unrecognized
+    extensions (e.g., `.txt`, `.json`, `.tar.gz`) are kept as part of
+    the stem so we don't accidentally collapse unrelated pages.
+    """
+    p = urlparse(url)
+    host = (p.netloc or "").lower()
+    path = (p.path or "").rstrip("/")
+    if "/" in path:
+        head, last = path.rsplit("/", 1)
+    else:
+        head, last = "", path
+    if "." in last:
+        stem_segment, _, ext = last.rpartition(".")
+        ext = "." + ext.lower()
+    else:
+        stem_segment, ext = last, ""
+    if ext not in _FORMAT_PRIORITY:
+        # Unknown extension — keep the whole `last` as the stem so
+        # `/foo.json` is its own page, not a `.json` sibling of `/foo`.
+        stem_segment, ext = last, ""
+    full_stem = f"{head}/{stem_segment}" if head else stem_segment
+    return host, full_stem, ext
+
+
+def _prefer_best_format(urls: list[str]) -> list[str]:
+    """
+    Group input URLs by (host, path-stem); within each group keep the
+    URL whose format has the lowest priority number (= highest quality
+    per `_FORMAT_PRIORITY`). Order-preserving: each group occupies its
+    first-seen position in the output, but the URL emitted is the best
+    one in that group.
+
+    Idempotent and a no-op for groups of size 1 — only fires when the
+    publisher actually lists multiple format URLs for the same logical
+    page (Docker case). NVIDIA, Mintlify, Terragrunt etc. pass through
+    unchanged.
+    """
+    best: dict[tuple[str, str], tuple[int, str]] = {}
+    for u in urls:
+        host, stem, ext = _path_stem_and_ext(u)
+        prio = _FORMAT_PRIORITY.get(ext, 4)  # safety net for unrecognized
+        gk = (host, stem)
+        if gk not in best or prio < best[gk][0]:
+            best[gk] = (prio, u)
+
+    seen: set[tuple[str, str]] = set()
+    out: list[str] = []
+    for u in urls:
+        host, stem, _ = _path_stem_and_ext(u)
+        gk = (host, stem)
+        if gk in seen:
+            continue
+        seen.add(gk)
+        out.append(best[gk][1])
+    return out
 
 
 # =============================================================================
@@ -316,6 +401,17 @@ async def ingest_llms_txt(
                 f"may link exclusively off-subtree — falling back to Tier 4."
             )
 
+        # Per-page format dedup — keep `.md` over HTML/no-ext when the
+        # publisher lists both for the same logical page. No-op for
+        # publishers without duplicates.
+        before = len(filtered)
+        filtered = _prefer_best_format(filtered)
+        if len(filtered) != before:
+            logger.info(
+                f"[tier-2] format-priority dedup kept {len(filtered)}/{before} "
+                f"URLs (dropped {before - len(filtered)} HTML twins of .md siblings)"
+            )
+
         # -----------------------------------------------------------------
         # Step 3 — Parallel fetch + extract + write
         # -----------------------------------------------------------------
@@ -324,11 +420,18 @@ async def ingest_llms_txt(
 
         sem = asyncio.Semaphore(_MAX_CONCURRENT)
         failures: list[tuple[str, str]] = []
-        manifest: list[ManifestEntry] = []
+        # Pre-allocated by URL position so manifest order tracks the parsed
+        # llms.txt order (the publisher's curated reading sequence) instead
+        # of fetch-completion order under the parallel Semaphore. The
+        # zero-padded ordinal in each slug then makes alphabetical
+        # filesystem listing equal that same order — same rule applied in
+        # post_ingest.split_monolith_if_needed for Tier 1.
+        width = max(4, len(str(max(0, len(filtered) - 1))))
+        entries: list[Optional[ManifestEntry]] = [None] * len(filtered)
         total_bytes = 0
         completed = 0
 
-        async def _one(url: str) -> None:
+        async def _one(i: int, url: str) -> None:
             nonlocal total_bytes, completed
             async with sem:
                 try:
@@ -353,7 +456,7 @@ async def ingest_llms_txt(
                     completed += 1
                     await progress.update(completed, f"(failed) {url}")
                     return
-                slug = _slugify(url)
+                slug = f"{i:0{width}d}-{_slugify(url)}"
                 entry = await _write_raw(
                     storage = storage,
                     study_root = cfg.study_root,
@@ -364,16 +467,19 @@ async def ingest_llms_txt(
                     cfg = cfg,
                 )
                 if entry is not None:
-                    manifest.append(entry)
+                    entries[i] = entry
                     total_bytes += entry.bytes
                 completed += 1
                 await progress.update(completed, url)
 
         try:
-            await asyncio.gather(*(_one(u) for u in filtered))
+            await asyncio.gather(*(_one(i, u) for i, u in enumerate(filtered)))
         finally:
-            await progress.finish(status = "done" if manifest else "failed")
+            await progress.finish(status = "done" if any(entries) else "failed")
             await progress.close()
+
+    # Preserve submission order; drop slots that failed (None).
+    manifest: list[ManifestEntry] = [e for e in entries if e is not None]
 
     # -----------------------------------------------------------------
     # Step 4 — Result + partial-failure check

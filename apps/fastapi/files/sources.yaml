@@ -308,7 +308,7 @@ llms_txt:
   - name: OpenTelemetry
     url: https://opentelemetry.io/llms.txt
   - name: LangFuse
-    url: https://langfuse.com/llms.txt
+    url: https://langfuse.com/llms-docs.txt
   - name: Pydantic
     url: https://pydantic.dev/docs/validation/llms.txt
   - name: MLflow

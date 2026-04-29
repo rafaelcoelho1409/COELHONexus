@@ -192,41 +192,42 @@ async def split_monolith_if_needed(
     prefix = f"{study_root}/research/raw/"
     await storage.delete(src_key)
 
-    # Phase 1 — slug + body for every section. Sequential pass: slug
-    # dedup depends on order-of-arrival when two H2 "Overview" appear
-    # under different H1s. CPU-only, no I/O.
+    # Phase 1 — slug + body for every section. The leading zero-padded
+    # ordinal (`0042-...`) makes alphabetical filesystem listing equal
+    # document order, which is what every downstream consumer expects:
+    # `_read_raw_prefix` (planner input), `_research_raw_slugs`, the
+    # /inspect UI, and any external S3 browser. Without it, those paths
+    # see the corpus in alphabetical-by-heading order and the planner
+    # plans chapters off `# Acceleration` before `# Contributing`.
+    # The ordinal also makes every slug unique by construction, so the
+    # heading-text dedup loop (`-2`, `-3` suffixes) is no longer needed.
+    width = max(4, len(str(max(0, len(sections) - 1))))
     writes: list[tuple[str, str]] = []
-    used_slugs: set[str] = set()
     for i, (h1, h2, body) in enumerate(sections):
-        heading_text = h2 or h1 or f"section-{i:04d}"
+        heading_text = h2 or h1 or f"section-{i:0{width}d}"
         sub = re.sub(r"[^a-z0-9]+", "-", heading_text.lower()).strip("-")[:60]
         if not sub:
-            sub = f"section-{i:04d}"
-        full_slug = sub if sub.startswith(slug) else f"{slug}-{sub}"
-        candidate = full_slug
-        dedup_n = 2
-        while candidate in used_slugs:
-            candidate = f"{full_slug}-{dedup_n}"
-            dedup_n += 1
-        used_slugs.add(candidate)
-        writes.append((candidate, body))
+            sub = f"section-{i:0{width}d}"
+        base = sub if sub.startswith(slug) else f"{slug}-{sub}"
+        full_slug = f"{i:0{width}d}-{base}"
+        writes.append((full_slug, body))
 
     # Phase 2 — parallel MinIO writes via shared aioboto3 client. Avoids
     # per-call TLS+SigV4 handshake; measured ~40× speedup for ~3700-section
     # llms-full.txt files.
     await storage.write_many(
-        [(f"{prefix}{candidate}.md", body, "text/markdown")
-         for candidate, body in writes]
+        [(f"{prefix}{full_slug}.md", body, "text/markdown")
+         for full_slug, body in writes]
     )
 
     new_manifest = [
         ManifestEntry(
             url = only.url,        # all sections originated from the same fetch
-            slug = candidate,
+            slug = full_slug,
             tier = only.tier,
             bytes = len(body.encode("utf-8")),
         )
-        for candidate, body in writes
+        for full_slug, body in writes
     ]
 
     logger.info(

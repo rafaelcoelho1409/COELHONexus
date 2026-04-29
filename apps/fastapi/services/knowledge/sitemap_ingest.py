@@ -316,11 +316,19 @@ async def ingest_sitemap_httpx(
 
         sem = asyncio.Semaphore(_MAX_CONCURRENT)
         failures: list[tuple[str, str]] = []
-        manifest: list[ManifestEntry] = []
+        # Pre-allocated by URL position so manifest order tracks the parsed
+        # sitemap order (publisher's exhaustive page index) instead of
+        # fetch-completion order under the parallel Semaphore. The
+        # zero-padded ordinal in each slug then makes alphabetical
+        # filesystem listing equal sitemap order — same rule applied in
+        # post_ingest.split_monolith_if_needed (Tier 1) and ingest_llms_txt
+        # (Tier 2).
+        width = max(4, len(str(max(0, len(filtered) - 1))))
+        entries: list[Optional[ManifestEntry]] = [None] * len(filtered)
         total_bytes = 0
         completed = 0
 
-        async def _one(url: str) -> None:
+        async def _one(i: int, url: str) -> None:
             nonlocal total_bytes, completed
             async with sem:
                 try:
@@ -341,7 +349,7 @@ async def ingest_sitemap_httpx(
                     completed += 1
                     await progress.update(completed, f"(failed) {url}")
                     return
-                slug = _slugify(url)
+                slug = f"{i:0{width}d}-{_slugify(url)}"
                 entry = await _write_raw(
                     storage = storage,
                     study_root = cfg.study_root,
@@ -352,16 +360,19 @@ async def ingest_sitemap_httpx(
                     cfg = cfg,
                 )
                 if entry is not None:
-                    manifest.append(entry)
+                    entries[i] = entry
                     total_bytes += entry.bytes
                 completed += 1
                 await progress.update(completed, url)
 
         try:
-            await asyncio.gather(*(_one(u) for u in filtered))
+            await asyncio.gather(*(_one(i, u) for i, u in enumerate(filtered)))
         finally:
-            await progress.finish(status = "done" if manifest else "failed")
+            await progress.finish(status = "done" if any(entries) else "failed")
             await progress.close()
+
+    # Preserve submission order; drop slots that failed (None).
+    manifest: list[ManifestEntry] = [e for e in entries if e is not None]
 
     # -----------------------------------------------------------------
     # Step 4 — Result + partial-failure check
