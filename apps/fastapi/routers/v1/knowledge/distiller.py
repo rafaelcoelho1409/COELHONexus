@@ -13,7 +13,6 @@ Endpoints:
   GET    /studies/{study_id}/stream           SSE node-by-node updates
   GET    /studies/{study_id}/tree             MinIO object manifest
   GET    /studies/{study_id}/chapters/{n}     One chapter's 3 artifacts
-  POST   /studies/{study_id}/export           PDF/HTML/EPUB/Anki derived export
   DELETE /studies/{study_id}                  Cancel
   GET    /downloads/{user_id}/{slug}          .tar.gz of study artifacts (by MinIO folder)
 
@@ -55,7 +54,6 @@ from celery_app import app as celery_app
 from schemas.knowledge.inputs import (
     CreateBatchRequest,
     CreateStudyRequest,
-    ExportRequest,
 )
 from schemas.knowledge.resolver import ResolveRequest, ResolvedStudy
 from services.knowledge.scope import classify_scope
@@ -956,8 +954,7 @@ async def _build_study_tarball(
     storage,
     study_root: str,
     framework_tag: str,
-    include_raw: bool,
-    include_exports: bool) -> tuple[io.BytesIO, str]:
+    include_raw: bool) -> tuple[io.BytesIO, str]:
     """
     Fetch all selected artifacts under `study_root` from MinIO and bundle into
     a gzipped tar in memory. Returns (buffer, suggested_filename).
@@ -977,8 +974,6 @@ async def _build_study_tarball(
     for key in all_keys:
         rel = key[len(prefix):]
         if rel.startswith("research/raw/") and not include_raw:
-            continue
-        if rel.startswith("exports/") and not include_exports:
             continue
         selected.append((key, rel))
     if not selected:
@@ -1034,8 +1029,7 @@ async def download_by_slug(
     user_id: str,
     slug: str,
     request: Request,
-    include_raw: bool = True,
-    include_exports: bool = False):
+    include_raw: bool = True):
     """
     Download a study's artifacts by MinIO folder name.
 
@@ -1045,12 +1039,10 @@ async def download_by_slug(
     `mc ls coelhonexus/{user_id}/knowledge/` or your MinIO console.
 
     Defaults: includes the full raw corpus under `research/raw/` so the
-    downloaded bundle is self-contained and verifiable. Exports (PDF/HTML/
-    EPUB/APKG) are excluded by default — fetch them separately when needed.
+    downloaded bundle is self-contained and verifiable.
 
     Filters (query params):
-      - `include_raw=false`   → skip `research/raw/*.md` (usually 500+ files, much smaller tarball)
-      - `include_exports=true` → also include `exports/*` (PDF/HTML/EPUB/APKG)
+      - `include_raw=false` → skip `research/raw/*.md` (usually 500+ files, much smaller tarball)
 
     Usage:
       curl -o study.tar.gz \\
@@ -1060,7 +1052,7 @@ async def download_by_slug(
     storage = request.app.state.study_storage
     study_root = f"{user_id}/knowledge/{slug}"
     buf, filename = await _build_study_tarball(
-        storage, study_root, slug, include_raw, include_exports,
+        storage, study_root, slug, include_raw,
     )
     return StreamingResponse(
         buf,
@@ -1070,61 +1062,6 @@ async def download_by_slug(
             "Content-Length": str(buf.getbuffer().nbytes),
         },
     )
-
-
-# =============================================================================
-# POST /studies/{study_id}/export — enqueue a derived-artifact render
-# =============================================================================
-@router.post("/studies/{study_id}/export")
-async def export_study(
-    study_id: str,
-    payload: ExportRequest,
-    request: Request):
-    """
-    Generate a derived artifact (PDF/HTML/EPUB/Anki) from the study's
-    canonical markdown. Runs as a Celery task — the pandoc+xelatex render
-    can take 30-60s for a full study, too long for a request round trip.
-
-    Output lands at:
-        <study_root>/exports/study.{pdf,html,epub,apkg}
-
-    Returns:
-        {
-            "task_id": <celery id>,
-            "status": "queued",
-            "endpoint": "/api/v1/tasks/{task_id}",
-            "study_id": ...,
-            "format": ...,
-            "expected_object_key": <minio key once rendered>,
-        }
-
-    Error codes:
-        404: study_id not found in the registry.
-    """
-    record = await _load_study_record(request.app.state.redis_aio, study_id)
-    if not record:
-        raise HTTPException(status_code = 404, detail = "Study not found")
-    from tasks.knowledge.export import export_study as export_task
-    task = export_task.delay(
-        study_id,
-        record["study_root"],
-        record["framework"],
-        payload.format,
-    )
-    ext = "apkg" if payload.format == "anki" else payload.format
-    expected_key = f"{record['study_root']}/exports/study.{ext}"
-    logger.info(
-        f"[knowledge] export queued: study={study_id} format={payload.format} "
-        f"task_id={task.id} expected={expected_key}"
-    )
-    return {
-        "task_id": task.id,
-        "status": "queued",
-        "endpoint": f"/api/v1/tasks/{task.id}",
-        "study_id": study_id,
-        "format": payload.format,
-        "expected_object_key": expected_key,
-    }
 
 
 # =============================================================================

@@ -1,0 +1,68 @@
+package templates
+
+// KDInspect — Knowledge Distiller markdown quality inspector.
+// Three-pane layout (frameworks · files · preview) wired entirely with HTMX
+// fragments served by the FastAPI inspect router. Server-side markdown
+// rendering keeps the page dependency-free; htmx swaps replace inner HTML
+// of each pane on click.
+templ KDInspect() {
+	@Base("Inspect Markdown · KD", "kd-inspect") {
+		<div class="flex h-screen -ml-64 pl-64">
+			<!-- Frameworks rail -->
+			<aside class="w-56 shrink-0 border-r border-base-300 overflow-y-auto bg-base-100">
+				<div class="px-4 py-3 border-b border-base-300 sticky top-0 bg-base-100 z-10">
+					<h2 class="text-[0.7rem] font-semibold uppercase tracking-wider text-base-content/60">Frameworks</h2>
+					<p class="text-[0.65rem] text-base-content/50 mt-0.5">Ingested into MinIO</p>
+				</div>
+				<nav
+					id="kd-framework-list"
+					hx-get="/api/kd/inspect/frameworks"
+					hx-trigger="load"
+					hx-swap="innerHTML"
+					class="p-2 flex flex-col gap-0.5"
+				>
+					<div class="text-xs text-base-content/50 px-3 py-2">Loading…</div>
+				</nav>
+			</aside>
+			<!-- File list rail -->
+			<aside class="w-80 shrink-0 border-r border-base-300 overflow-y-auto bg-base-100" id="kd-file-pane">
+				<div class="px-4 py-3 border-b border-base-300 sticky top-0 bg-base-100 z-10 flex items-center gap-2">
+					<h2
+						class="text-[0.7rem] font-semibold uppercase tracking-wider text-base-content/60 truncate flex-1"
+						id="kd-file-pane-title"
+					>
+						Files
+					</h2>
+					<input
+						type="search"
+						placeholder="filter…"
+						class="input input-xs input-bordered w-28 text-xs"
+						oninput="kdFilterFiles(this.value)"
+					/>
+				</div>
+				<div id="kd-file-list" class="p-2 flex flex-col gap-0.5">
+					<div class="text-xs text-base-content/50 px-3 py-4">Pick a framework on the left.</div>
+				</div>
+			</aside>
+			<!-- Preview pane -->
+			<main class="flex-1 overflow-y-auto bg-base-200 min-w-0" id="kd-preview-pane">
+				<div class="max-w-4xl mx-auto px-8 py-8" id="kd-preview">
+					<div class="text-base-content/50 text-center py-24">
+						<i data-lucide="file-search" class="w-12 h-12 mx-auto mb-3 opacity-40"></i>
+						<div class="text-sm">Select a file to preview its rendered markdown.</div>
+						<div class="text-xs mt-1 opacity-70">Quality stats appear above the rendered output.</div>
+					</div>
+				</div>
+			</main>
+		</div>
+		<script>
+			// Case-insensitive substring filter for the file list.
+			window.kdFilterFiles = (q) => {
+				const re = q ? new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") : null;
+				document.querySelectorAll("#kd-file-list [data-file-row]").forEach((row) => {
+					row.style.display = !re || re.test(row.dataset.fileRow) ? "" : "none";
+				});
+			};
+		</script>
+	}
+}

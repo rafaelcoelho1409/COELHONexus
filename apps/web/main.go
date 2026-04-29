@@ -6,7 +6,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -35,6 +38,10 @@ func main() {
 
 	// Home page - calls FastAPI /health
 	mux.HandleFunc("/", homeHandler)
+
+	// KD markdown inspector
+	mux.HandleFunc("/kd/inspect", kdInspectHandler)
+	mux.HandleFunc("/api/kd/inspect/", kdInspectProxyHandler)
 
 	// Test FastAPI connection
 	mux.HandleFunc("/api/test", testFastAPIHandler)
@@ -198,6 +205,176 @@ const homePage = `<!DOCTYPE html>
 func homeHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(homePage))
+}
+
+// kdInspectPage — full-screen 3-pane markdown inspector.
+// Frame is identical to homePage (sidebar + DaisyUI emerald) but the main
+// pane swaps in framework / file lists / rendered previews via HTMX from
+// the FastAPI inspect router (proxied through /api/kd/inspect/*).
+const kdInspectPage = `<!DOCTYPE html>
+<html lang="en" data-theme="emerald">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#16a34a">
+  <title>Inspect Markdown · COELHONexus</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.14/dist/full.min.css" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <script src="https://unpkg.com/lucide@latest" defer></script>
+  <script>
+    tailwind.config = { theme: { extend: { fontFamily: {
+      sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+      mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+    } } } };
+  </script>
+  <style>
+    body { font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased; line-height: 1.55; }
+    code, pre { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+    .nav-item { @apply flex items-center gap-3 px-3 py-2 text-sm font-medium
+      rounded-md text-base-content/70 hover:text-base-content hover:bg-base-200
+      transition-colors no-underline; }
+    .nav-item-active { @apply bg-base-200 text-primary; }
+    /* Codehilite outputs <pre> with inline styles; ensure prose doesn't
+       fight them by giving them their own wrapper appearance. */
+    .prose pre { background: #0d1117; color: #e6edf3; border-radius: 0.5rem;
+      padding: 1rem; overflow-x: auto; font-size: 0.85rem; line-height: 1.55; }
+    .prose pre code { background: transparent; padding: 0; color: inherit; }
+    .prose code { background: rgba(0,0,0,0.06); padding: 0.1rem 0.35rem;
+      border-radius: 0.25rem; font-size: 0.9em; }
+    [data-theme="forest"] .prose code { background: rgba(255,255,255,0.08); }
+  </style>
+</head>
+<body class="min-h-screen bg-base-200 text-base-content">
+  <div class="flex min-h-screen">
+    <!-- Sidebar -->
+    <aside class="fixed left-0 top-0 h-screen w-64 bg-base-100 border-r border-base-300 flex flex-col z-20">
+      <div class="px-4 py-5 border-b border-base-300">
+        <a href="/" class="flex items-center gap-2 no-underline">
+          <span class="w-8 h-8 rounded-md bg-primary/10 text-primary flex items-center justify-center">
+            <i data-lucide="layers" class="w-5 h-5"></i>
+          </span>
+          <div>
+            <div class="font-semibold text-sm">COELHONexus</div>
+            <div class="text-[0.65rem] text-base-content/60 uppercase tracking-wider">AI Engineering Hub</div>
+          </div>
+        </a>
+      </div>
+      <nav class="flex-1 px-3 py-4 flex flex-col gap-1 overflow-y-auto">
+        <div class="text-[0.7rem] uppercase tracking-wider text-base-content/50 px-3 py-2">Knowledge</div>
+        <a href="/" class="nav-item"><i data-lucide="home" class="w-4 h-4"></i><span>Home</span></a>
+        <a href="/kd/inspect" class="nav-item nav-item-active"><i data-lucide="file-search" class="w-4 h-4"></i><span>Inspect Markdown</span></a>
+      </nav>
+      <div class="px-3 py-3 border-t border-base-300 flex items-center justify-between">
+        <button onclick="toggleTheme()" class="btn btn-sm btn-ghost" title="Toggle theme">
+          <i data-lucide="moon" class="w-4 h-4"></i>
+        </button>
+        <span class="text-[0.7rem] text-base-content/50">v0.1 · GOTTH</span>
+      </div>
+    </aside>
+
+    <!-- Main: 3-pane inspector -->
+    <main class="flex-1 ml-64 flex h-screen">
+      <!-- Frameworks rail -->
+      <aside class="w-56 shrink-0 border-r border-base-300 overflow-y-auto bg-base-100">
+        <div class="px-4 py-3 border-b border-base-300 sticky top-0 bg-base-100 z-10">
+          <h2 class="text-[0.7rem] font-semibold uppercase tracking-wider text-base-content/60">Frameworks</h2>
+          <p class="text-[0.65rem] text-base-content/50 mt-0.5">Ingested into MinIO</p>
+        </div>
+        <nav id="kd-framework-list"
+             hx-get="/api/kd/inspect/frameworks"
+             hx-trigger="load"
+             hx-swap="innerHTML"
+             class="p-2 flex flex-col gap-0.5">
+          <div class="text-xs text-base-content/50 px-3 py-2">Loading…</div>
+        </nav>
+      </aside>
+      <!-- File list rail -->
+      <aside class="w-80 shrink-0 border-r border-base-300 overflow-y-auto bg-base-100">
+        <div class="px-4 py-3 border-b border-base-300 sticky top-0 bg-base-100 z-10 flex items-center gap-2">
+          <h2 class="text-[0.7rem] font-semibold uppercase tracking-wider text-base-content/60 truncate flex-1"
+              id="kd-file-pane-title">Files</h2>
+          <input type="search" placeholder="filter…"
+                 class="input input-xs input-bordered w-28 text-xs"
+                 oninput="kdFilterFiles(this.value)" />
+        </div>
+        <div id="kd-file-list" class="p-2 flex flex-col gap-0.5">
+          <div class="text-xs text-base-content/50 px-3 py-4">Pick a framework on the left.</div>
+        </div>
+      </aside>
+      <!-- Preview pane -->
+      <section class="flex-1 overflow-y-auto bg-base-200 min-w-0">
+        <div class="max-w-4xl mx-auto px-8 py-8" id="kd-preview">
+          <div class="text-base-content/50 text-center py-24">
+            <i data-lucide="file-search" class="w-12 h-12 mx-auto mb-3 opacity-40"></i>
+            <div class="text-sm">Select a file to preview its rendered markdown.</div>
+            <div class="text-xs mt-1 opacity-70">Quality stats appear above the rendered output.</div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    // Theme toggle (parity with homePage).
+    const themeKey = "coelhonexus:theme";
+    const LIGHT = "emerald", DARK = "forest";
+    const saved = localStorage.getItem(themeKey);
+    const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.setAttribute("data-theme", saved || (prefersDark ? DARK : LIGHT));
+    window.toggleTheme = () => {
+      const cur = document.documentElement.getAttribute("data-theme");
+      const next = cur === DARK ? LIGHT : DARK;
+      document.documentElement.setAttribute("data-theme", next);
+      localStorage.setItem(themeKey, next);
+    };
+    // Lucide re-init on every htmx swap so newly-rendered icons appear.
+    document.addEventListener("DOMContentLoaded", () => { if (window.lucide) window.lucide.createIcons(); });
+    document.body.addEventListener("htmx:afterSwap", () => { if (window.lucide) window.lucide.createIcons(); });
+    // Case-insensitive substring filter for the file list.
+    window.kdFilterFiles = (q) => {
+      const re = q ? new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") : null;
+      document.querySelectorAll("#kd-file-list [data-file-row]").forEach((row) => {
+        row.style.display = !re || re.test(row.dataset.fileRow) ? "" : "none";
+      });
+    };
+  </script>
+</body>
+</html>`
+
+// kdInspectHandler — KD markdown inspector page (3-pane HTMX layout).
+// HTML kept inline to match the homePage pattern; once the Templ pipeline
+// is wired up (apps/web/templates/kd_inspect.templ already exists), swap
+// this for `templates.KDInspect().Render(r.Context(), w)`.
+func kdInspectHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(kdInspectPage))
+}
+
+// kdInspectProxyHandler — reverse-proxies /api/kd/inspect/* to the FastAPI
+// inspect router at /api/v1/knowledge/inspect/*. Same-origin keeps HTMX
+// fragments simple (no CORS, no auth header juggling).
+func kdInspectProxyHandler(w http.ResponseWriter, r *http.Request) {
+	target, err := url.Parse(fastAPIURL)
+	if err != nil {
+		http.Error(w, "bad upstream URL", http.StatusInternalServerError)
+		return
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		// /api/kd/inspect/<rest>  →  /api/v1/knowledge/inspect/<rest>
+		req.URL.Path = "/api/v1/knowledge/inspect/" + strings.TrimPrefix(
+			req.URL.Path, "/api/kd/inspect/",
+		)
+		req.Host = target.Host
+	}
+	proxy.ServeHTTP(w, r)
 }
 
 func testFastAPIHandler(w http.ResponseWriter, r *http.Request) {

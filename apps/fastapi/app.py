@@ -14,6 +14,7 @@ from routers.v1.youtube import agents as youtube_agents
 from routers.v1.youtube import content as youtube_content
 from routers.v1.knowledge import distiller as knowledge_distiller
 from routers.v1.knowledge import ingestion as knowledge_ingestion
+from routers.v1.knowledge import inspect as knowledge_inspect
 from routers.v1.knowledge import resolve as knowledge_resolve
 from routers.v1 import tasks as tasks_router
 from routers.v1.youtube.helpers import (
@@ -256,6 +257,12 @@ app.include_router(
     knowledge_ingestion.router,
     prefix = "/api/v1/knowledge",
     tags = ["Knowledge — ingestion (corpus only)"],
+)
+
+app.include_router(
+    knowledge_inspect.router,
+    prefix = "/api/v1/knowledge",
+    tags = ["Knowledge — markdown inspector"],
 )
 
 app.include_router(

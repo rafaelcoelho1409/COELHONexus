@@ -167,12 +167,3 @@ class CreateBatchRequest(BaseModel):
     )
 
 
-# =============================================================================
-# Export — POST /api/v1/knowledge/studies/{id}/export
-# =============================================================================
-ExportFormat = Literal["pdf", "html", "epub", "anki"]
-
-
-class ExportRequest(BaseModel):
-    """Generate a derived artifact from the canonical markdown. Triggers a Celery task."""
-    format: ExportFormat

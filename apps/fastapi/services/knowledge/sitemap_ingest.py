@@ -192,18 +192,22 @@ def _filter_urls(
     urls: list[str],
     cfg: DocsIngestionConfig) -> list[str]:
     """
-    Apply the same filters Tier 4 uses: blocklist, language path-filter,
-    same-host-and-subtree, user-provided extra allow/deny patterns.
+    Apply per-URL filters: same-host, language-path regex, blocklist deny
+    patterns, user-provided allow/deny patterns.
+
+    NO subtree-path filter — the sitemap is publisher-asserted truth and
+    we should not reject URLs that don't match the SITEMAP URL's parent
+    directory. Real example: Kubernetes' sitemap is at `/en/sitemap.xml`
+    but content URLs are at `/docs/...` (no `/en/` prefix). A subtree
+    filter derived from `/en` would drop ALL content URLs and force a
+    pointless Tier 4 fallback.
+
+    Host check + language regex + deny patterns are sufficient guards;
+    polyglot frameworks add the per-language allow filter when cfg.language
+    is set.
     """
     parsed = urlparse(cfg.docs_url)
     target_host = (parsed.netloc or "").lower()
-    # cfg.docs_url is the curated sitemap.xml URL — the docs subtree is the
-    # directory containing it (strip filename). Host-root sitemaps collapse
-    # to "/" → no path constraint.
-    raw_path = parsed.path or "/"
-    docs_path = raw_path.rsplit("/", 1)[0] if "/" in raw_path else ""
-    if docs_path == "/" or not docs_path:
-        docs_path = ""  # no path constraint when sitemap lives at host root
 
     allow, deny = _build_language_filter(cfg.language)
     # Extra patterns from cfg
@@ -219,9 +223,6 @@ def _filter_urls(
         if host != target_host:
             continue
         path = p.path or "/"
-        # Must be under the docs subtree when docs_url has a meaningful path.
-        if docs_path and not path.startswith(docs_path):
-            continue
         # Polyglot + language-scoped filter
         if polyglot and cfg.language:
             if not _should_keep(u, allow, deny):

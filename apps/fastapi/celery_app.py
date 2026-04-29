@@ -77,8 +77,6 @@ app.config_from_object({
         # KD ingestion-only (no LLM, but I/O-heavy — shares the llm queue's prefetch=1
         # behavior so a Tier-4 Playwright crawl doesn't starve a synth task waiting for an LLM slot)
         "tasks.knowledge.ingestion.*": {"queue": Q_LLM},
-        # KD exports (Pandoc/xelatex/genanki) — CPU-bound but short; share the llm queue.
-        "tasks.knowledge.export.*": {"queue": Q_LLM},
     },
     # Default queue for unrouted tasks
     "task_default_queue": Q_DEFAULT,
@@ -86,13 +84,13 @@ app.config_from_object({
     "worker_prefetch_multiplier": 1,
     # Acknowledge task AFTER execution (not before) — prevents task loss on
     # crash. SAFE ONLY FOR IDEMPOTENT TASKS. Individual non-idempotent tasks
-    # (Knowledge Distiller + KD Export) override with `acks_late=False` at
-    # the @app.task decorator — those tasks are user-triggered and resumable
-    # via checkpointer/re-click, so auto-redelivery on worker crash creates
+    # (Knowledge Distiller) override with `acks_late=False` at the @app.task
+    # decorator — those tasks are user-triggered and resumable via
+    # checkpointer/re-click, so auto-redelivery on worker crash creates
     # unwanted zombie runs rather than recovering real work.
     "task_acks_late": True,
     # Reject and requeue tasks when worker is killed (OOM, SIGKILL). Only
-    # affects tasks that still have acks_late=True; no-op for KD tasks.
+    # affects tasks that still have acks_late=True; no-op for KD distiller task.
     "task_reject_on_worker_lost": True,
     # Broker-level safety: cap how long an unacked message may live before
     # Redis makes it visible again. Default is 1h (3600). 7200 = 2h covers
@@ -113,5 +111,4 @@ app.conf.include = [
     "tasks.youtube.pipeline",
     "tasks.knowledge.distiller",
     "tasks.knowledge.ingestion",
-    "tasks.knowledge.export",
 ]

@@ -230,6 +230,8 @@ docs_url:
 llms_full_txt:
   - name: Docker
     url: https://docs.docker.com/llms-full.txt
+  - name: Terraform
+    url: https://www.mintlify.com/hashicorp/terraform/llms-full.txt
   - name: Terragrunt
     url: https://docs.terragrunt.com/llms-full.txt
   - name: DeepAgents

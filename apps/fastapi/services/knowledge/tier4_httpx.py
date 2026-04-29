@@ -90,6 +90,24 @@ _SPA_ROOT_RE = re.compile(
     r'["\']?\s*[^>]*>\s*</div>',
     re.IGNORECASE,
 )
+# Hydrated-SPA markers — page is SSR'd (content visible) BUT navigation/links
+# are injected via client-side hydration. httpx BFS finds only top-of-page
+# links; Playwright rendering needed for full nav discovery. Real cases:
+#   - Next.js docs sites (HashiCorp, Vercel, OpenAI, many Mintlify-on-Next)
+#     → <script id="__NEXT_DATA__" type="application/json">
+#   - Nuxt.js (Vue ecosystem) → window.__NUXT__ = {...}
+#   - Gatsby → window.___gatsby = {...}
+#   - Remix → __remixContext
+#   - Generic SSR with SPA hydration → window.__INITIAL_STATE__ / __APOLLO_STATE__
+_HYDRATED_SPA_RE = re.compile(
+    r'<script[^>]+id\s*=\s*["\']?__NEXT_DATA__'   # Next.js
+    r'|window\.__NUXT__\s*='                       # Nuxt
+    r'|window\.___gatsby\s*='                      # Gatsby
+    r'|__remixContext\s*[:=]'                      # Remix
+    r'|window\.__INITIAL_STATE__\s*='              # generic SSR/SPA
+    r'|window\.__APOLLO_STATE__\s*=',              # Apollo SSR
+    re.IGNORECASE,
+)
 _SPA_SAMPLE_SIZE = 3
 
 
@@ -233,10 +251,20 @@ async def _httpx_bfs(
 # =============================================================================
 def _looks_like_spa_shell(body: str) -> bool:
     """
-    Conservative SPA-shell heuristic. Returns True when body is small,
-    visible text is sparse, OR contains a known SPA root marker.
-    Bias toward Playwright fallback: false-positive is harmless,
-    false-negative produces empty corpus.
+    Conservative SPA-shell heuristic. Returns True when body looks like a
+    JS-driven page that needs Playwright rendering for full link discovery.
+
+    Three signals (any one fires):
+      1. body too small / visible text too sparse → empty SPA shell
+      2. empty <div id="root|app|__next|__nuxt|...">  </div> → unhydrated shell
+      3. hydrated SPA bundle markers (__NEXT_DATA__, __NUXT__, ___gatsby,
+         __remixContext, __INITIAL_STATE__, __APOLLO_STATE__) → page IS
+         SSR'd but nav/links inject via client-side JS — httpx BFS will
+         miss most of the actual navigation
+
+    Bias toward Playwright fallback: false-positive (Playwright on a real
+    static site) just costs wall time; false-negative (httpx on real SPA)
+    produces empty/incomplete corpus.
     """
     if not body or len(body) < _SPA_BODY_MIN:
         return True
@@ -250,6 +278,11 @@ def _looks_like_spa_shell(body: str) -> bool:
     if len(visible.strip()) < _SPA_TEXT_MIN:
         return True
     if _SPA_ROOT_RE.search(body):
+        return True
+    # Hydrated-SPA detection: page renders SSR'd content but nav/links
+    # injected via client-side hydration. httpx BFS would find only top-of-
+    # page links; Playwright needed for full discovery.
+    if _HYDRATED_SPA_RE.search(body):
         return True
     return False
 

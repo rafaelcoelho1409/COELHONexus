@@ -21,8 +21,6 @@ LAYOUT (single bucket, prefix-namespaced):
             chapter02/ ...
             summary.md
             DEBT.md
-            exports/
-              study.pdf, study.html, study.apkg
 
 CLIENT: aioboto3 (async wrapper around aiobotocore + boto3). MinIO is
 S3-compatible, so we point boto3 at MinIO via endpoint_url and use

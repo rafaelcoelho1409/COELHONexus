@@ -22,7 +22,7 @@ dependencies = [
     "langchain-text-splitters", # Text chunking
     "tiktoken",                # Token counting for KD synth budget (Tier 1 #2 — replaces char-based cap)
     "langfuse",                # LLM observability (Tier 3 #14 + 0d-5): per-model preservation rate, prompt versioning, trace replay
-    "litellm==1.83.12",        # LLM Router w/ fail-fast (enable_pre_call_checks + cooldown + retry policy). PINNED EXACT — v1.82.7 and v1.82.8 were COMPROMISED via Trivy CI/CD supply-chain attack on 2026-03-24. Do NOT allow >=1.82.7,<1.83.0. v1.83.0+ ships from the rebuilt CI/CD v2 pipeline (isolated envs, signed). Bump manually after checking https://docs.litellm.ai/blog for security notices.
+    "litellm==1.83.14",        # LLM Router w/ fail-fast (enable_pre_call_checks + cooldown + retry policy). PINNED EXACT — v1.82.7 and v1.82.8 were COMPROMISED via Trivy CI/CD supply-chain attack on 2026-03-24. Do NOT allow >=1.82.7,<1.83.0. v1.83.0+ ships from the rebuilt CI/CD v2 pipeline (isolated envs, signed). 2026-04-28 bump to 1.83.14: 1.83.12 had ImportError in litellm/cost_calculator.py — `_video_output_cost_per_second` not present in openai/cost_calculation.py at that release. Bump manually after checking https://docs.litellm.ai/blog for security notices.
     "langchain-litellm==0.6.4", # LangChain wrapper around LiteLLM Router (ChatLiteLLMRouter). Pin matches the clean litellm 1.83.x line.
     "langchain-google-genai",  # Native Gemini integration — more reliable function calling than the OAI-compat endpoint
     "langgraph-checkpoint-redis",
@@ -47,13 +47,14 @@ dependencies = [
     "playwright",              # Browser automation (connects to remote server)
     "tenacity",                # Retry with exponential backoff
     "crawl4ai>=0.8.0,<0.9",    # LLM-friendly docs crawler (KD Tier 4 + HTML→md extractor for T2/T3)
+    "trafilatura>=2.0",        # ONLY for tree_cleaning() HTML chrome strip — strips nav/footer/aside/ads pre-conversion. The full extract() pipeline (article-shape extraction + format convert) is NOT used; that work stays with Crawl4AI's DefaultMarkdownGenerator (it preserves code blocks correctly, which trafilatura.extract() did not — see issue adbar/trafilatura#489).
     "llms-txt>=0.0.6",         # Official AnswerDotAI llms.txt parser (KD Tier 2)
     "aioboto3>=13.0",          # Async S3 client for MinIO (Knowledge Distiller storage)
-    "pypandoc>=1.13",          # Pandoc Python wrapper (KD exports: PDF/HTML/EPUB). Requires system `pandoc` + `texlive-xetex` for PDF (installed in Dockerfile.fastapi).
-    "genanki>=0.13",           # Anki .apkg generator (KD exports: flashcards per chapter)
     "py-spy>=0.4",             # Live Python process sampler (attach to Celery worker pid to dump a hung task's stack without restarting)
     "mdformat>=0.7",           # OP-60 (2026-04-25): pure-Python markdown formatter — post-curator syntax normalization (heading depth, fence languages, list markers)
     "mdformat-gfm>=0.3",       # OP-60: GitHub Flavored Markdown plugin (tables, strikethrough)
+    "markdown>=3.6",           # KD inspector — md → HTML rendering for the /inspect viewer (server-side, no JS deps)
+    "pygments>=2.18",          # codehilite extension dependency — inline syntax highlighting in inspector previews
     "tree-sitter>=0.23,<0.25",       # OP-59 (2026-04-25): universal parser library. <0.25 to avoid ABI breaks
     # OP-59 (2026-04-25): pre-compiled tree-sitter grammars (~305 languages) — replaces LLM code_syntax_valid critic.
     # Upper bound <1.6 because v1.6.2/1.6.3 only ship cp314 wheels; cp313 wheels start again at older releases. Pin below the broken band.
