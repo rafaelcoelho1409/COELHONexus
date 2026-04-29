@@ -21,28 +21,10 @@ build:
         dockerfile: Dockerfile.fastapi
         noCache: false  # Enable layer caching for faster rebuilds
       sync:
-        # Hot-reload: sync source files directly to container (no rebuild).
-        # Requires: skaffold dev (not skaffold run).
-        #
-        # The sync rule list MUST cover every file Claude (or you) routinely
-        # edit during dev — anything inside `apps/fastapi/` that ISN'T
-        # matched here triggers a full Docker rebuild instead. The Dockerfile
-        # itself, pyproject.toml, requirements.txt, and entrypoint.sh are
-        # intentionally NOT synced — those need a real rebuild.
+        # Hot-reload: sync Python files directly to container (no rebuild)
+        # Requires: skaffold dev (not skaffold run)
         manual:
-          # Python source — hot-reloaded by uvicorn --reload
           - src: "**/*.py"
-            dest: /app
-          # Curated catalog (sources.yaml) — read at FastAPI startup;
-          # changes here do not need a rebuild, just a uvicorn reload.
-          - src: "files/**"
-            dest: /app
-          # Helper / test / fixture data (e.g. *.json prompts, *.yaml configs)
-          - src: "**/*.yaml"
-            dest: /app
-          - src: "**/*.yml"
-            dest: /app
-          - src: "**/*.json"
             dest: /app
     # Web frontend (Go + Templ + HTMX + PWA)
     - image: coelhonexus-web
@@ -117,21 +99,8 @@ portForward:
 # NOTE: Ensure docker-buildx is installed when useBuildkit is true
 # Development (Skaffold): ports 23020-23039
 # sh mirror_localhost_tailscale.sh $(for i in {23020..23022}; do echo $i; done)
-#
-# Recommended dev command for fast Claude-Code-style iteration:
-#   skaffold dev --cache-artifacts=false --no-prune=false --auto-build=false
-#
-#   --auto-build=false : DO NOT auto-rebuild Docker images on file changes.
-#                        Only rebuild on manual `b` keypress. This prevents
-#                        rebuild storms when Claude (or you) edit several
-#                        files quickly. Hot-reload sync still fires on
-#                        every file change matching the sync rules above —
-#                        --auto-sync remains true (default).
-#   --auto-sync=true   : (default) sync matched files to running pod immediately.
-#
-# Press `b` to trigger a manual rebuild when you've changed Dockerfile /
-# pyproject.toml / requirements.txt / entrypoint.sh. Otherwise let sync
-# handle everything.
+# skaffold dev --cache-artifacts=false --no-prune=false --auto-sync=false --auto-build=false
+# # press b (build) or s (sync) 
 
 #
 # Production (ArgoCD): ports 23000-23019

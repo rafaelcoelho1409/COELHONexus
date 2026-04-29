@@ -744,14 +744,14 @@ async def fetch_transcriptions_batch(
 # =============================================================================
 # Playwright CDP Transcript Extraction
 # =============================================================================
-# CDP endpoints for Playwright server (Tailscale addresses)
+# CDP endpoints for Playwright server (in-cluster ClusterIP service)
 CDP_HEADLESS = os.environ.get(
     "PLAYWRIGHT_CDP_HEADLESS",
-    "https://playwright-cdp-headless.YOUR_TAILNET_DOMAIN.ts.net"
+    "http://playwright.playwright.svc.cluster.local:9224"
 )
 CDP_HEADED = os.environ.get(
     "PLAYWRIGHT_CDP_HEADED",
-    "https://playwright-cdp.YOUR_TAILNET_DOMAIN.ts.net"
+    "http://playwright.playwright.svc.cluster.local:9222"
 )
 
 # Resource blocking patterns - balanced for speed and reliability

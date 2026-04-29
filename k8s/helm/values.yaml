@@ -8,16 +8,16 @@ observability:
   enabled: false
   otlp_endpoint: "alloy.monitoring:4317"
 
-# External services (COELHOCloud infrastructure via Tailscale)
+# External services — all in-cluster ClusterIP services in the same K3s cluster.
 # Credentials are loaded from coelhonexus-secret (upload via upload_env_to_k3d.sh)
 minio:
-  host: minio-api.YOUR_TAILNET_DOMAIN.ts.net
-  port: 443
-  endpoint: "https://minio-api.YOUR_TAILNET_DOMAIN.ts.net"
+  host: minio.minio.svc.cluster.local
+  port: 9000
+  endpoint: "http://minio.minio.svc.cluster.local:9000"
 
 redis:
-  # External access via Tailscale (WireGuard encrypted)
-  host: redis-tcp.YOUR_TAILNET_DOMAIN.ts.net
+  # In-cluster ClusterIP service (redis-master.redis)
+  host: redis-master.redis.svc.cluster.local
   port: 6379
 
 postgresql:
@@ -28,38 +28,38 @@ postgresql:
   database: coelhonexus
 
 neo4j:
-  # External access via Tailscale (WireGuard encrypted)
-  uri: "bolt://neo4j.YOUR_TAILNET_DOMAIN.ts.net:7687"
+  # In-cluster ClusterIP service (neo4j.neo4j); Bolt on 7687
+  uri: "bolt://neo4j.neo4j.svc.cluster.local:7687"
   # Credentials loaded from secret (NEO4J_USERNAME, NEO4J_PASSWORD)
 
 qdrant:
-  # External access via Tailscale HTTPS (port 443 only, 6333/6334 not exposed)
-  url: "https://qdrant.YOUR_TAILNET_DOMAIN.ts.net"
-  port: 443
+  # In-cluster ClusterIP service (qdrant.qdrant); HTTP REST on 6333, gRPC on 6334
+  url: "http://qdrant.qdrant.svc.cluster.local:6333"
+  port: 6333
 
 elasticsearch:
-  # External access via Tailscale (WireGuard encrypted)
-  host: "https://elasticsearch.YOUR_TAILNET_DOMAIN.ts.net"
+  # In-cluster ClusterIP service (elasticsearch-master.elasticsearch); HTTP on 9200
+  host: "http://elasticsearch-master.elasticsearch.svc.cluster.local:9200"
   username: "elastic"
   # Password loaded from secret (ELASTICSEARCH_PASSWORD)
 
 # Proxy configuration for YouTube Transcript API (WARP + Tor fallback)
-# Uses external Tailscale addresses for remote access
+# In-cluster ClusterIP services
 proxy:
   warp:
-    # External access via Tailscale (auth credentials from secret)
-    host: "warp-proxy.YOUR_TAILNET_DOMAIN.ts.net"
+    # In-cluster ClusterIP service (warp.warp); auth credentials from secret
+    host: "warp.warp.svc.cluster.local"
     port: 1080
   tor:
-    # External access via Tailscale (no auth)
-    host: "tor-proxy.YOUR_TAILNET_DOMAIN.ts.net"
+    # In-cluster ClusterIP service (tor.tor); no auth
+    host: "tor.tor.svc.cluster.local"
     port: 9150
 
 # Playwright CDP for browser automation (bypasses IP blocking)
-# Uses external Tailscale addresses for remote access
+# In-cluster ClusterIP service (playwright.playwright); ports per templates/playwright service
 playwright:
-  cdp_headless: "https://playwright-cdp-headless.YOUR_TAILNET_DOMAIN.ts.net"
-  cdp_headed: "https://playwright-cdp.YOUR_TAILNET_DOMAIN.ts.net"
+  cdp_headless: "http://playwright.playwright.svc.cluster.local:9224"
+  cdp_headed: "http://playwright.playwright.svc.cluster.local:9222"
 
 # Embedding model (NVIDIA NIM API — see docs/NVIDIA-NIM-EMBEDDING-MODELS.md)
 # Change model here to switch. MUST re-ingest all data after changing (vectors are incompatible across models).
@@ -139,7 +139,7 @@ registry:
   imagePullSecret: ""
 
 # Image configurations
-# Uses GitLab Container Registry (registry.YOUR_TAILNET_DOMAIN.ts.net)
+# Uses k3d in-cluster registry (coelhocloud-registry:5000) — see registry.url below
 # with 'latest' tag and imagePullPolicy: Always
 
 

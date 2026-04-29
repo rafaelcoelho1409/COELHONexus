@@ -182,7 +182,7 @@ DEFAULT_SCORER_KEYWORDS: list[str] = [
 def _resolve_cdp_ws_url(cdp_endpoint: str) -> Optional[str]:
     """
     Given an HTTP(S) Playwright CDP server URL (e.g.
-    `https://playwright-cdp-headless.YOUR_TAILNET_DOMAIN.ts.net`), hit its
+    `http://playwright.playwright.svc.cluster.local:9224`), hit its
     `/json/version` endpoint to discover the WebSocket debugger URL and
     rewrite the scheme + host so we actually connect through the same
     ingress we reached HTTP on.

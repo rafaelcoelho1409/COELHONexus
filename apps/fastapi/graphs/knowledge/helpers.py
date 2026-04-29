@@ -1727,21 +1727,15 @@ def _fence_safe_split(content: str) -> list[str]:
     file alone exceeds the token budget — we pack as many sections as fit,
     never mid-fence.
 
-    Uses the same CommonMark-aware splitter as
-    `services.knowledge.post_ingest.split_monolith_if_needed` — the
-    line-anchored regex alternative cuts mid-fence on code comments like
-    `# ...` or `## TODO` inside python / bash blocks (13% corruption rate
-    measured on a real llms-full.txt during the prior implementation).
+    Delegates to `services.knowledge.post_ingest._split_markdown_by_headings`
+    so both monolith-split and chapter-pack share one token-aware splitter.
+    Code fences, tables, list blocks, and HTML blocks are atomic tokens in
+    markdown-it-py — they cannot be bisected by walking heading_open
+    boundaries.
     """
-    from langchain_text_splitters.markdown import (
-        ExperimentalMarkdownSyntaxTextSplitter,
-    )
-    splitter = ExperimentalMarkdownSyntaxTextSplitter(
-        headers_to_split_on = [("#", "H1"), ("##", "H2"), ("###", "H3")],
-        strip_headers = False,
-    )
-    docs = splitter.split_text(content)
-    return [d.page_content for d in docs if d.page_content.strip()]
+    from services.knowledge.post_ingest import _split_markdown_by_headings
+    sections = _split_markdown_by_headings(content, split_levels = (1, 2, 3))
+    return [body for _, _, body in sections if body.strip()]
 
 
 async def _load_chapter_files(
