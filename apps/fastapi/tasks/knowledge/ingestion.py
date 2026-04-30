@@ -112,6 +112,29 @@ def run_knowledge_ingestion(
         await _write_manifest_json(storage, study_root, result.manifest)
         slugs = [m.slug for m in result.manifest]
         manifest_hash = compute_manifest_hash(slugs)
+
+        # Populate the ingest cache so subsequent /studies runs see a HIT.
+        # `set_ingestion` does the full job: copies raw/*.md from study_root
+        # to `_cache/ingestion/{framework}/{version}/raw/`, writes
+        # manifest.json, and writes the _state.json freshness marker.
+        # It's a superset of `finalize_ingestion` (which only writes metadata
+        # and assumes pages were already streamed via save_ingested_page —
+        # true for Tier 4 only). The Tier 4 stream-in-place path remains
+        # idempotent because set_ingestion skips files that already exist
+        # in the cache prefix.
+        try:
+            await cache.set_ingestion(
+                framework = framework,
+                version = version,
+                study_root = study_root,
+                manifest = [m.model_dump() for m in result.manifest],
+                slugs = slugs,
+            )
+        except Exception as e:
+            logger.warning(
+                f"[KD-ingest:{study_id}] cache set failed (continuing): {e}"
+            )
+
         return result, manifest_hash
 
     try:

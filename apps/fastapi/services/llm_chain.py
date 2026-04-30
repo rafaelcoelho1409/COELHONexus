@@ -54,7 +54,6 @@ Factories (all serve from the same `kd-all` group, varying only temperature):
   - build_synth_fallback_chain         — T=0.0 (synthesize_chapter, curator)
   - build_refine_llm_chain             — T=0.7 (Self-Refine per Madaan 2023)
   - build_curator_llm                  — T=0.0
-  - build_scope_classifier_llm         — T=0.0
 """
 import logging
 import os
@@ -449,10 +448,3 @@ def build_curator_llm(timeout_s: int = 600):
     return ChatLiteLLMRouter(router=_get_router(), model=GROUP, temperature=0.0)
 
 
-def build_scope_classifier_llm(timeout_s: int = 30):
-    """
-    Scope classifier for POST /studies. Unified catalog at T=0.0 — previous
-    tiny-model tail (llama-3.1-8b, gpt-oss-20b) is relaxed per design
-    decision 2026-04-24: quality > speed, tokens are free.
-    """
-    return ChatLiteLLMRouter(router=_get_router(), model=GROUP, temperature=0.0)

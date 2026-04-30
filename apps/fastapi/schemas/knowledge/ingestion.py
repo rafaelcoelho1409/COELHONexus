@@ -34,7 +34,7 @@ class DocsIngestionConfig(BaseModel):
     framework: NonEmptyStr
     version: Optional[NonEmptyStr] = None    # from state; passed to cache for versioned storage. None/"latest" share the "latest" cache bucket
     docs_url: NonEmptyStr                    # must be provided; router resolves if user didn't supply
-    language: Optional[NonEmptyStr] = None   # from ScopeValidation.language — drives filtering
+    language: Optional[NonEmptyStr] = None   # from SourceEntry.language (catalog-derived from category) — drives filtering
     study_root: NonEmptyStr                  # MinIO object key prefix; raw files land at <study_root>/research/raw/<slug>.md
     study_id: Optional[str] = None           # UUID of this study; feeds IngestProgress → Redis so /stream can emit per-page events. None → progress reporting is a no-op (legacy callers unaffected).
     max_depth: int = Field(default = 5, ge = 1, le = 10)           # Tier 4 depth

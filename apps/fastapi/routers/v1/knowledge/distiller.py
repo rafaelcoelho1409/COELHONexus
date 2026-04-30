@@ -31,10 +31,12 @@ STREAMING:
   no pub/sub infra). It yields a new SSE event whenever the meta dict
   changes. Close the stream when state reaches SUCCESS or FAILURE.
 
-SCOPE-GATE FAILURE MODES:
-  - LLM succeeds + is_code_framework=False → 400 with rejection_reason
-  - LLM raises (network, timeout)          → 503 — we fail CLOSED (never
-    enqueue unverified scope)
+FRAMEWORK GATE:
+  The curated catalog (apps/fastapi/files/sources.yaml) is the single
+  source of truth. Names not in the catalog → HTTP 404. The previous
+  LLM-based scope classifier was removed — every catalog entry is
+  pre-vetted as a code framework, so the LLM round-trip was redundant.
+  Language is derived deterministically from `entry.category`.
 """
 import asyncio
 import io
@@ -56,7 +58,6 @@ from schemas.knowledge.inputs import (
     CreateStudyRequest,
 )
 from schemas.knowledge.resolver import ResolveRequest, ResolvedStudy
-from services.knowledge.scope import classify_scope
 from services.resolver import lookup as resolver_lookup
 
 
@@ -323,27 +324,34 @@ async def resolve_study(
 async def create_study(
     payload: CreateStudyRequest,
     request: Request,
-    max_concurrent_chapters: int = 2):  # OP-20: K=2 fits NIM free-tier 40 RPM/model without stampede.
+    max_concurrent_chapters: int = 2,  # OP-20: K=2 fits NIM free-tier 40 RPM/model without stampede.
+    stop_after: str | None = None):
     """
     Create a Knowledge Distiller study. Framework name must exist in the
     curated catalog (apps/fastapi/files/sources.yaml).
 
     Steps:
-      1. Resolver lookup: derive docs_url, tier, github metadata from sources.yaml.
-      2. Scope gate (LLM classifier): detect language for downstream metadata.
-      3. Generate study_id (uuid4), compute study_root prefix.
-      4. Stash registry entry in Redis.
-      5. Enqueue Celery task (task_id == study_id).
+      1. Resolver lookup: derive docs_url, tier, language, github metadata
+         from sources.yaml. Language comes from the catalog category — no
+         LLM scope gate (curated entries are pre-vetted as code frameworks).
+      2. Generate study_id (uuid4), compute study_root prefix.
+      3. Stash registry entry in Redis.
+      4. Enqueue Celery task (task_id == study_id).
 
     Query params:
         max_concurrent_chapters (int, default 2): cap on parallel
         synthesize_chapter workers. Lower = more consistent voice across
         chapters; values 1-3 recommended.
+        stop_after (str, default None): debug knob. When set to a node
+        name (planner / canary_synth / synthesize_chapter / curator /
+        critic / assembler), the graph runs up to and including that
+        node, then halts. State is checkpointed; downstream nodes can
+        be invoked one at a time via POST
+        /studies/{study_id}/debug/run_node. Useful for iterating on a
+        single node without re-running upstream work.
 
     Error codes:
-        400: scope gate rejected the framework as non-code.
         404: framework name not in sources.yaml catalog.
-        503: scope classifier itself failed.
     """
     app = request.app
 
@@ -366,29 +374,8 @@ async def create_study(
     repo_url = entry.github_repo
     github_org, github_repo = entry.github_org_repo
 
-    # 2) Scope gate — kept for language detection. Curated names should
-    #    always pass the is_code_framework check; if one rejects, treat it
-    #    as a sources.yaml curation issue and surface the reason.
-    scope_llm = getattr(app.state, "llm_scope", None) or app.state.llm
-    try:
-        scope = await classify_scope(entry.name, scope_llm)
-    except RuntimeError as e:
-        logger.warning(f"[knowledge] scope classifier failed for '{entry.name}': {e}")
-        raise HTTPException(
-            status_code = 503,
-            detail = f"Scope classifier unavailable: {e}",
-        )
-    if not scope.is_code_framework:
-        raise HTTPException(
-            status_code = 400,
-            detail = {
-                "message": scope.rejection_reason or "Not a code framework",
-                "detected_topic": scope.detected_topic,
-                "framework": entry.name,
-            },
-        )
-
-    # 3) Build study identity.
+    # 2) Build study identity. Language comes from the catalog (entry.language),
+    #    derived deterministically from the category field — no LLM round-trip.
     study_id = str(uuid.uuid4())
     study_root = _make_study_root(
         user_id = payload.user_id,
@@ -403,8 +390,7 @@ async def create_study(
         "framework": entry.name,
         "version": payload.version or "latest",
         "level": payload.user_profile.level,
-        "language": scope.language,
-        "detected_topic": scope.detected_topic,
+        "language": entry.language,
         "category": entry.category,
         "docs_url": docs_url,
         "docs_url_source": "catalog",
@@ -424,36 +410,76 @@ async def create_study(
     # 4) Persist study registry entry.
     await _save_study_record(app.state.redis_aio, study_id, record)
 
-    # 5) Enqueue Celery task.
+    # 5) Enqueue Celery task(s). Auto-chain ingestion → distiller when the
+    #    corpus cache is empty so the user keeps the one-click UX:
+    #      cache hit  → distiller alone
+    #      cache miss → chain(ingestion, distiller)
+    #    Both signatures are .si() (immutable) so the chain doesn't pass
+    #    intermediate results between tasks.
+    from celery import chain as celery_chain
+    from services.knowledge.cache import StudyCache
     from tasks.knowledge.distiller import run_knowledge_distiller
-    run_knowledge_distiller.apply_async(
-        kwargs = {
-            "study_id": study_id,
-            "framework": entry.name,
-            "version": payload.version,
-            "docs_url": docs_url,
-            "language": scope.language,
-            "user_id": payload.user_id,
-            "user_profile": payload.user_profile.model_dump(),
-            "study_root": study_root,
-            "max_concurrent_chapters": max_concurrent_chapters,
-            "tier": tier,
-            "github_discover": "homepage" if repo_url else None,
-            "github_org": github_org,
-            "github_repo": github_repo,
-            "github_default_branch": None,
-            "repo_url": repo_url,
-            "preview": payload.preview,
-            "skip_below_threshold": payload.skip_below_threshold,
-        },
-        task_id = study_id,
-        # Safety net: drop any message stuck in the broker > 2h.
-        expires = 7200,
-    )
-    logger.info(
-        f"[knowledge] study queued: id={study_id} root={study_root} "
-        f"framework={entry.name} docs_url={docs_url} tier={tier}"
-    )
+    from tasks.knowledge.ingestion import run_knowledge_ingestion
+
+    cache = StudyCache(storage = app.state.study_storage, latest_ttl_days = 14)
+    cache_hit = await cache.get_ingestion(entry.name, payload.version)
+
+    distiller_kwargs = {
+        "study_id": study_id,
+        "framework": entry.name,
+        "version": payload.version,
+        "docs_url": docs_url,
+        "language": entry.language,
+        "user_id": payload.user_id,
+        "user_profile": payload.user_profile.model_dump(),
+        "study_root": study_root,
+        "max_concurrent_chapters": max_concurrent_chapters,
+        "tier": tier,
+        "github_discover": "homepage" if repo_url else None,
+        "github_org": github_org,
+        "github_repo": github_repo,
+        "github_default_branch": None,
+        "repo_url": repo_url,
+        "preview": payload.preview,
+        "skip_below_threshold": payload.skip_below_threshold,
+        "stop_after": stop_after,
+    }
+
+    if cache_hit is None:
+        ingestion_task_id = str(uuid.uuid4())
+        ingestion_sig = run_knowledge_ingestion.si(
+            study_id = ingestion_task_id,
+            framework = entry.name,
+            version = payload.version,
+            docs_url = docs_url,
+            language = entry.language,
+            user_id = payload.user_id,
+            study_root = study_root,
+            tier = tier,
+            github_discover = "homepage" if repo_url else None,
+            github_org = github_org,
+            github_repo = github_repo,
+            github_default_branch = None,
+            repo_url = repo_url,
+        ).set(task_id = ingestion_task_id, expires = 3600)
+        distiller_sig = run_knowledge_distiller.si(**distiller_kwargs).set(
+            task_id = study_id, expires = 7200,
+        )
+        celery_chain(ingestion_sig, distiller_sig).apply_async()
+        logger.info(
+            f"[knowledge] cache miss — chained ingestion={ingestion_task_id} "
+            f"→ distiller={study_id} for framework={entry.name} tier={tier}"
+        )
+    else:
+        run_knowledge_distiller.apply_async(
+            kwargs = distiller_kwargs,
+            task_id = study_id,
+            expires = 7200,
+        )
+        logger.info(
+            f"[knowledge] cache hit — distiller queued direct: id={study_id} "
+            f"framework={entry.name} cached_at={cache_hit.cached_at}"
+        )
 
     return {
         "study_id": study_id,
@@ -464,8 +490,7 @@ async def create_study(
         "stream_endpoint": f"/api/v1/knowledge/studies/{study_id}/stream",
         "framework": entry.name,
         "category": entry.category,
-        "detected_topic": scope.detected_topic,
-        "language": scope.language,
+        "language": entry.language,
         "tier": tier,
         "tier_kind": entry.best.kind,
         "docs_url": docs_url,
@@ -525,10 +550,13 @@ async def create_batch(
     GET /studies/{study_id}; the whole batch via GET /studies/batch/{batch_id}.
     """
     from celery import chain
+    from services.knowledge.cache import StudyCache
     from tasks.knowledge.distiller import run_knowledge_distiller
+    from tasks.knowledge.ingestion import run_knowledge_ingestion
 
     app = request.app
     user_profile_dump = payload.user_profile.model_dump()
+    cache = StudyCache(storage = app.state.study_storage, latest_ttl_days = 14)
 
     # Order the studies: lower tier first (fast-path first). Coalesced groups
     # within the same tier go ahead of solo ones (more information per unit
@@ -586,7 +614,6 @@ async def create_batch(
             "version": study.version,
             "level": payload.user_profile.level,
             "language": None,
-            "detected_topic": None,
             "docs_url": study.primary_docs_url,
             "docs_urls": study.docs_urls,
             "docs_url_source": "batch",
@@ -602,6 +629,29 @@ async def create_batch(
             "created_at": now,
         }
         await _save_study_record(app.state.redis_aio, study_id, record)
+
+        # Cache check — if the corpus for this framework + version isn't
+        # in `_cache/ingestion/...`, prepend an ingestion task to the chain
+        # so the distiller has corpus to read. Mirrors the /studies path.
+        cache_hit = await cache.get_ingestion(joined_framework, study.version)
+        if cache_hit is None:
+            ingestion_task_id = str(uuid.uuid4())
+            ingestion_sig = run_knowledge_ingestion.si(
+                study_id = ingestion_task_id,
+                framework = joined_framework,
+                version = study.version,
+                docs_url = study.primary_docs_url,
+                language = None,
+                user_id = payload.user_id,
+                study_root = study_root,
+                tier = study.tier,
+                github_discover = None,
+                github_org = None,
+                github_repo = None,
+                github_default_branch = None,
+                repo_url = study.repo_urls[0] if study.repo_urls else None,
+            ).set(task_id = ingestion_task_id, expires = 3600)
+            signatures.append(ingestion_sig)
 
         # Immutable signature (.si) — the chain passes the previous task's
         # result as first arg by default; .si ignores it so our kwargs-only

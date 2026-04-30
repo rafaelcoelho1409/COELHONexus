@@ -48,6 +48,18 @@ class TierUrl:
     url: str
 
 
+_CATEGORY_TO_LANGUAGE: dict[str, str] = {
+    "python": "python",
+    "go": "go",
+    "rust": "rust",
+    "bash": "bash",
+}
+
+# Self-referential entries: framework name == language name. These set
+# `language` from `name` directly (e.g., entry "Python" → language "python").
+_NAME_IS_LANGUAGE: set[str] = {"python", "bash", "go", "rust"}
+
+
 @dataclass
 class SourceEntry:
     name: str
@@ -62,6 +74,31 @@ class SourceEntry:
     @property
     def available_tier_kinds(self) -> list[str]:
         return [t.kind for t in self.tiers]
+
+    @property
+    def language(self) -> Optional[str]:
+        """
+        Derived programming-language scope, used by downstream filters
+        (e.g., `_build_language_filter` in services/knowledge/ingestion.py
+        for polyglot frameworks). Replaces the old LLM-based scope gate.
+
+        Rules (deterministic):
+          1. Entry name itself is a language ("Python", "Go ", "Rust", "Bash")
+             → language = name lowercased.
+          2. category == "Python" → language = "python" (covers ~90% of
+             entries; the "(Python)" name suffixes in the catalog already
+             scope these to Python clients of polyglot tools).
+          3. category matches a known language name → language = that name.
+          4. Otherwise → None (polyglot or non-code-language entry like
+             Docker, Kubernetes, Helm, Terraform).
+        """
+        norm_name = (self.name or "").strip().lower()
+        if norm_name in _NAME_IS_LANGUAGE:
+            return norm_name
+        if not self.category:
+            return None
+        cat = self.category.strip().lower()
+        return _CATEGORY_TO_LANGUAGE.get(cat)
 
     @property
     def github_org_repo(self) -> tuple[Optional[str], Optional[str]]:

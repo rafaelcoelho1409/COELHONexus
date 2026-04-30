@@ -49,38 +49,6 @@ def build_tone_block(profile: UserProfile) -> str:
 
 
 # =============================================================================
-# Scope Gate — classifies the framework argument before any expensive work
-# =============================================================================
-SCOPE_PROMPT = ChatPromptTemplate.from_messages([
-    (
-        "system",
-        "You are a scope classifier for a code-framework learning tool. "
-        "Return structured output indicating whether the input refers to a "
-        "code/programming framework, library, SDK, API, CLI tool, or developer-"
-        "focused technical topic — in ANY programming language.\n\n"
-        "True examples: 'FastAPI', 'React', 'CUDA', 'Terraform', 'Rust tokio', "
-        "'OpenTelemetry Python', 'Kubernetes', 'Docker Compose', 'TensorFlow', "
-        "'Next.js', 'Django', 'pandas', 'PyTorch', 'Go gRPC'.\n\n"
-        "False examples: 'how to bake a cake', 'stock market tips', "
-        "'yoga for beginners', 'marketing strategy', 'cooking recipes', "
-        "'self-improvement', 'relationship advice', 'history of WWII'.\n\n"
-        "If True, ALSO populate docs_url with the canonical documentation "
-        "root URL you are most confident about. Examples: 'pydantic' → "
-        "'https://docs.pydantic.dev/latest', 'jinja2' → "
-        "'https://jinja.palletsprojects.com/en/stable', 'FastAPI' → "
-        "'https://fastapi.tiangolo.com', 'React' → 'https://react.dev', "
-        "'tokio' → 'https://docs.rs/tokio/latest', 'OpenTelemetry Python' → "
-        "'https://opentelemetry.io/docs/languages/python'. Return the DOCS "
-        "root, not the project homepage; never guess if unsure — leave null.\n\n"
-        "If False, populate rejection_reason with a one-line user-facing "
-        "explanation (e.g., 'This tool only covers code frameworks; baking "
-        "tutorials are out of scope'). If True, leave rejection_reason empty."
-    ),
-    ("human", "{framework}"),
-])
-
-
-# =============================================================================
 # Planner — decomposes the ingested corpus into 4-12 chapters
 # =============================================================================
 PLANNER_PROMPT = ChatPromptTemplate.from_messages([

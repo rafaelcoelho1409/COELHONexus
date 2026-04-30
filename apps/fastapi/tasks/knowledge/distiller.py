@@ -130,6 +130,12 @@ def run_knowledge_distiller(
     # to True so re-runs after partial success only re-attempt sentinel'd
     # chapters instead of re-synthesizing every DEBT-flagged one.
     skip_below_threshold: bool = True,
+    # Debug knob (2026-04-30): if set to a node name (planner / canary_synth /
+    # synthesize_chapter / curator / critic / assembler), the graph executes
+    # up to and including that node, then stops. State is checkpointed so
+    # the per-node debug route (/studies/{id}/debug/run_node) can pick up
+    # downstream nodes one at a time. None = run the whole graph (default).
+    stop_after: str | None = None,
 ) -> dict:
     """
     Run the full Knowledge Distiller pipeline for one framework.
@@ -172,12 +178,14 @@ def run_knowledge_distiller(
         f"language={language or '-'} user_id={user_id} study_root={study_root} "
         f"coalesced_from={coalesced_n} chained={is_chained}"
     )
+    # Ingestion runs in a separate Celery task (chained ahead of this one
+    # by the route on cache miss), so the distiller's first phase is "plan".
     self.update_state(
         state = "PROGRESS",
         meta = {
             "study_id": study_id,
             "study_root": study_root,
-            "phase": "ingest",
+            "phase": "plan",
             "last_node": None,
             "nodes_seen": 0,
         },
@@ -291,6 +299,37 @@ def run_knowledge_distiller(
         curator_llm = build_curator_llm(timeout_s = 600)
 
         # ---------------------------------------------------------------
+        # Pre-load corpus from cache (2026-04-30 refactor)
+        #
+        # Ingestion is no longer a graph node — the dedicated /ingestion
+        # endpoint is responsible for populating `_cache/ingestion/{framework}/
+        # {version}/`. We require a cache HIT here; the route auto-chains
+        # the ingestion task before this one when cache is empty, so by
+        # the time we run, the corpus exists. If cache is somehow still
+        # empty (race, manual delete), fail with a clear message instead
+        # of silently re-fetching.
+        # ---------------------------------------------------------------
+        cache_hit = await cache.get_ingestion(framework, version)
+        if cache_hit is None:
+            raise RuntimeError(
+                f"[KD:{study_id}] corpus not in cache for "
+                f"framework={framework!r} version={version or 'latest'!r}. "
+                f"POST /api/v1/knowledge/ingestion first (the route is "
+                f"supposed to auto-chain this — check why the chain didn't "
+                f"include the ingestion task)."
+            )
+        await cache.copy_ingestion_to_study(framework, version, study_root)
+        cached_raw_files = [
+            k.rsplit("/", 1)[-1].removesuffix(".md") for k in cache_hit.raw_keys
+        ]
+        cached_manifest = cache_hit.manifest
+        cached_tier_used = f"{cache_hit.tier_used}+cache"
+        logger.info(
+            f"[KD:{study_id}] corpus pre-loaded — files={len(cached_raw_files)} "
+            f"tier={cached_tier_used} cached_at={cache_hit.cached_at}"
+        )
+
+        # ---------------------------------------------------------------
         # Build graph with checkpointer and stream updates
         # ---------------------------------------------------------------
         async with AsyncPostgresSaver.from_conn_string(_pg_url()) as checkpointer:
@@ -308,35 +347,35 @@ def run_knowledge_distiller(
             )
 
             initial_state = {
-                # study_id threads into DocsIngestionConfig → IngestProgress
-                # so tier functions can emit SSE-friendly progress events to
-                # Redis (consumed by /studies/{id}/stream).
+                # study_id threads through the graph; surfaced in logs and
+                # was previously used for ingest progress reporting.
                 "study_id": study_id,
                 "framework": framework,
                 "version": version,
                 "docs_url": docs_url,
-                # Coalesced-group fields — length-1 for solo studies. Tier 2/3/4
-                # ingesters (when updated) will use docs_urls as a subtree-prefix
-                # union. For Tier 1 (shared llms-full.txt) the ingester still
-                # reads a single docs_url; docs_urls is informational.
+                # Coalesced-group fields — length-1 for solo studies.
+                # Retained on state for downstream nodes that may consume
+                # them (currently informational).
                 "docs_urls": docs_urls or ([docs_url] if docs_url else []),
                 "canonical_names": canonical_names or [framework],
                 "language": language,
                 "user_id": user_id,
                 "user_profile": UserProfile(**user_profile),
                 "study_root": study_root,
-                # Resolver hints — forwarded to the ingest node so the
-                # dispatcher can pick the right tier without re-probing.
+                # Resolver hints — retained on state for any downstream
+                # consumer that may need them.
                 "tier": tier,
                 "github_discover": github_discover,
                 "github_org": github_org,
                 "github_repo": github_repo,
                 "github_default_branch": github_default_branch,
                 "repo_url": repo_url,
-                "current_phase": "ingest",
-                "ingest_tier_used": "none",
-                "raw_files": [],
-                "manifest": [],
+                # Graph now starts at planner — pre-loaded corpus state
+                # replaces what the deleted ingest node used to return.
+                "current_phase": "plan",
+                "ingest_tier_used": cached_tier_used,
+                "raw_files": cached_raw_files,
+                "manifest": cached_manifest,
                 "plan": [],
                 # OP-14 canary (2026-04-24): populated by canary_synth node
                 # pre-fan-out; fan_out_chapters reads it to skip that chapter.
@@ -359,6 +398,7 @@ def run_knowledge_distiller(
             # stream_mode="updates" yields {"node_name": {"state_key": value}}
             # per completed node. Multiple nodes may complete in parallel
             # (synthesize_chapter during fan-out) — we report each separately.
+            should_stop = False
             async for chunk in graph.astream(
                 initial_state,
                 config = config,
@@ -383,8 +423,18 @@ def run_knowledge_distiller(
                             "phase": latest_phase,
                             "last_node": latest_node,
                             "nodes_seen": nodes_seen,
+                            "stop_after": stop_after,
                         },
                     )
+                    if stop_after and node_name == stop_after:
+                        logger.info(
+                            f"[KD:{study_id}] stop_after={stop_after!r} reached — "
+                            f"halting graph; downstream nodes can be invoked via "
+                            f"/api/v1/knowledge/studies/{study_id}/debug/run_node"
+                        )
+                        should_stop = True
+                if should_stop:
+                    break
 
             # Pull the final checkpointed state — astream doesn't yield it back
             # after completion. aget_state reads whatever the checkpointer wrote

@@ -77,7 +77,7 @@ class KnowledgeDistillerState(TypedDict):
     # llms-full.txt is source-of-truth regardless.
     docs_urls: list[str]            # [docs_url] for solo; [...N...] for coalesced groups
     canonical_names: list[str]      # [framework] for solo; [name, name, ...] for coalesced groups
-    language: Optional[str]         # Programming language scope (from ScopeValidation.language at Step 11)
+    language: Optional[str]         # Programming language scope (from SourceEntry.language — catalog-derived from category)
     user_id: str                    # MinIO multi-tenancy key (from CreateStudyRequest.user_id)
     user_profile: UserProfile       # Pydantic model stored inside TypedDict (JSON-serializable)
     study_root: str                 # MinIO object key prefix: "{user_id}/knowledge/{framework}-{version}-{ts}"

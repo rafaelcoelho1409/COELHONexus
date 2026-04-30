@@ -12,6 +12,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from routers.v1.youtube import agents as youtube_agents
 from routers.v1.youtube import content as youtube_content
+from routers.v1.knowledge import debug as knowledge_debug
 from routers.v1.knowledge import distiller as knowledge_distiller
 from routers.v1.knowledge import ingestion as knowledge_ingestion
 from routers.v1.knowledge import inspect as knowledge_inspect
@@ -154,11 +155,9 @@ async def lifespan(app: FastAPI):
     # Research doc: docs/STUDY-GENERATOR-ADAPTIVE-GRADER.md (April 2026 update).
     from services.llm_chain import (
         build_llm_fallback_chain,
-        build_scope_classifier_llm,
         build_resolver_llm_chain,
     )
     app.state.llm = build_llm_fallback_chain()
-    app.state.llm_scope = build_scope_classifier_llm()
     # Resolver-only chain — same 14 models, tight 30s/60s timeouts so a
     # stalled model cascades in 1 min on the request path (vs 5 min on the
     # general chain tuned for KD planner/synthesizer).
@@ -263,6 +262,12 @@ app.include_router(
     knowledge_inspect.router,
     prefix = "/api/v1/knowledge",
     tags = ["Knowledge — markdown inspector"],
+)
+
+app.include_router(
+    knowledge_debug.router,
+    prefix = "/api/v1/knowledge",
+    tags = ["Knowledge — debug (per-node test harness)"],
 )
 
 app.include_router(

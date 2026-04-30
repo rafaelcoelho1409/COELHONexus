@@ -31,10 +31,15 @@ MODEL CONSISTENCY:
   applies per-chapter so a legitimately-down primary escalates cleanly.
 
 Pipeline shape:
-    START → ingest → planner → (Send fan-out to N workers)
+    START → planner → canary_synth → (Send fan-out to N workers)
           → synthesize_chapter [×N parallel, capped by semaphore]
             (results merged via operator.add)
-          → critic → assembler → END
+          → curator → critic → assembler → END
+
+Note: ingestion is NOT a graph node. The dedicated ingestion endpoint
+(POST /api/v1/knowledge/ingestion) populates the corpus cache; the
+Celery distiller task pre-loads cache → study_root before invoking
+the graph. See tasks/knowledge/distiller.py.
 """
 import asyncio
 import logging
@@ -53,7 +58,6 @@ from schemas.knowledge.agents import (
     GraderEvaluation,
     ShardLabels,
 )
-from schemas.knowledge.ingestion import DocsIngestionConfig
 from schemas.knowledge.inputs import UserProfile
 from schemas.knowledge.prompts import (
     CRITIC_PROMPT,
@@ -68,7 +72,6 @@ from services.knowledge.cache import (
     canonical_profile_hash,
     compute_manifest_hash,
 )
-from services.knowledge.ingestion import ingest_framework_docs
 from services.knowledge.storage import MinIOStudyStorage
 from graphs.knowledge.helpers import (
     # Step 5
@@ -112,8 +115,6 @@ from graphs.knowledge.helpers import (
     _call_assembler_llm,
     _load_chapter_previews,
     _log_episodic_memory,
-    # Step 9
-    _write_manifest_json,
 )
 from .hierarchical_synth import (
     HIERARCHICAL_VAULT_THRESHOLD,
@@ -159,107 +160,13 @@ class KnowledgeDistillerGraph:
         pass
 
     # =========================================================================
-    # Node: Ingest (cache-aware)
+    # Note: ingestion is no longer a graph node (2026-04-30 refactor).
+    # Corpus is fetched by the dedicated ingestion endpoint
+    # (POST /api/v1/knowledge/ingestion → tasks/knowledge/ingestion.py) and
+    # cached at `_cache/ingestion/{framework}/{version}/`. The Celery
+    # distiller task pre-loads that cache into study_root + initial_state
+    # before invoking the graph; the graph entry point is `planner`.
     # =========================================================================
-    async def ingest(
-        self,
-        state: KnowledgeDistillerState,
-        storage: MinIOStudyStorage,
-        cache: StudyCache) -> dict:
-        """
-        Graph entry point. Checks the ingestion cache first:
-          - CACHE HIT: copies `_cache/ingestion/{framework}/{version}/` into
-            `<study_root>/research/raw/` — skips the 60-500s crawl entirely.
-          - CACHE MISS: runs the tiered crawl, writes both `study_root` AND
-            the cache so future runs with the same (framework, version) are fast.
-
-        Freshness:
-          - `version="latest"` entries expire after 14 days
-          - pinned versions are immutable (cache never expires)
-
-        Required state fields: framework, docs_url, study_root, version.
-        """
-        framework = state["framework"]
-        version = state.get("version") or "latest"
-        study_root = state["study_root"]
-        docs_url = state.get("docs_url")
-
-        # 1) Cache lookup
-        hit = await cache.get_ingestion(framework, version)
-        if hit is not None:
-            await cache.copy_ingestion_to_study(framework, version, study_root)
-            logger.info(
-                f"[ingest] CACHE HIT framework={framework} version={version} "
-                f"files={len(hit.raw_keys)} cached_at={hit.cached_at}"
-            )
-            return {
-                "raw_files": [k.rsplit("/", 1)[-1].removesuffix(".md") for k in hit.raw_keys],
-                "manifest": hit.manifest,
-                "ingest_tier_used": f"{hit.tier_used}+cache",
-                "current_phase": "plan",
-            }
-
-        # 2) Cache miss — run the full tiered ingest
-        if not docs_url:
-            raise ValueError(
-                "state['docs_url'] is required for ingestion. The FastAPI router "
-                "is responsible for resolving it from the framework name "
-                "when the user doesn't supply one."
-            )
-        cfg = DocsIngestionConfig(
-            framework = framework,
-            version = version,
-            docs_url = docs_url,
-            language = state.get("language"),
-            study_root = study_root,
-            # study_id enables per-page progress reporting to Redis via
-            # IngestProgress → /studies/{id}/stream SSE events. None on
-            # legacy graph invocations that didn't carry it.
-            study_id = state.get("study_id"),
-            # Forward resolver hints — dispatcher in ingestion.py uses
-            # these to pick the right tier; None values fall through to
-            # Tier 4 (Crawl4AI Playwright) for backward compat.
-            tier = state.get("tier"),
-            github_discover = state.get("github_discover"),
-            github_org = state.get("github_org"),
-            github_repo = state.get("github_repo"),
-            github_default_branch = state.get("github_default_branch"),
-        )
-        # Pass cache into ingest so it can (a) skip URLs that a previous
-        # attempt already cached (resume), and (b) tee every successful
-        # page to the cache as it arrives (stream). A worker crash or
-        # cancel mid-crawl leaves a partial cache; the next run picks up
-        # exactly where it stopped.
-        result = await ingest_framework_docs(cfg, storage, cache = cache)
-        # Persist manifest next to raw/ in study_root
-        await _write_manifest_json(storage, study_root, result.manifest)
-        logger.info(
-            f"[ingest] tier={result.tier_used} files={result.total_files} "
-            f"bytes={result.total_bytes}"
-        )
-
-        # 3) Finalize the cache entry. Raw files were already written
-        #    per-page via `save_ingested_page` during streaming; this step
-        #    just lays down the manifest.json + _state.json completeness
-        #    marker so future `get_ingestion` calls hit.
-        try:
-            slugs = [e.slug for e in result.manifest]
-            await cache.finalize_ingestion(
-                framework = framework,
-                version = version,
-                study_root = study_root,
-                manifest = [e.model_dump() for e in result.manifest],
-                slugs = slugs,
-            )
-        except Exception as e:
-            logger.warning(f"[ingest] cache finalize failed (continuing): {e}")
-
-        return {
-            "raw_files": [e.slug for e in result.manifest],
-            "manifest": [e.model_dump() for e in result.manifest],
-            "ingest_tier_used": result.tier_used,
-            "current_phase": "plan",
-        }
 
     # =========================================================================
     # Node: Planner
@@ -2616,12 +2523,6 @@ class KnowledgeDistillerGraph:
         # this gives three independent paths to UI visibility.
         from services.knowledge.langfuse_client import flush_langfuse
 
-        async def _ingest(state):
-            try:
-                return await self.ingest(state, storage, cache)
-            finally:
-                flush_langfuse(reason = "node:ingest")
-
         async def _planner(state):
             try:
                 return await self.planner(state, llm, storage, cache)
@@ -2680,7 +2581,6 @@ class KnowledgeDistillerGraph:
         # --------------------------------------------------------------------
         # Register nodes
         # --------------------------------------------------------------------
-        workflow.add_node("ingest", _ingest)
         workflow.add_node("planner", _planner)
         workflow.add_node("canary_synth", _canary_synth)
         workflow.add_node("synthesize_chapter", _synthesize_chapter)
@@ -2690,9 +2590,9 @@ class KnowledgeDistillerGraph:
 
         # --------------------------------------------------------------------
         # Entry point + linear edges
-        # Pipeline: ingest → planner → canary_synth (OP-14 safety net,
-        #           smallest chapter only) → [fan-out synthesize_chapter ×(N-1)]
-        #           → curator → critic → assembler → END
+        # Pipeline: planner → canary_synth (OP-14 safety net, smallest chapter
+        #           only) → [fan-out synthesize_chapter ×(N-1)] → curator →
+        #           critic → assembler → END
         # Curator runs BEFORE critic so the critic judges the final
         # (style-normalized) text, not the raw drafts — otherwise the
         # curator's post-critic rewrites could silently drift facts.
@@ -2700,8 +2600,7 @@ class KnowledgeDistillerGraph:
         # OP-14: if canary_synth raises, LangGraph fails the run fast with
         # a clear error and zero wasted fan-out compute.
         # --------------------------------------------------------------------
-        workflow.set_entry_point("ingest")
-        workflow.add_edge("ingest", "planner")
+        workflow.set_entry_point("planner")
         workflow.add_edge("planner", "canary_synth")
 
         # Dynamic fan-out: canary_synth → (N-1) synthesize_chapter workers

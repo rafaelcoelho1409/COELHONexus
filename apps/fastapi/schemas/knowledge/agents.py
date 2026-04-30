@@ -6,49 +6,10 @@ The LLM reads each field's `description=...` to understand what to produce —
 so descriptions are prompts, not documentation.
 
 Every call in the KD pipeline that extracts structured data from an LLM has
-a corresponding model here: scope gate, planner, grader, critic.
+a corresponding model here: planner, grader, critic.
 """
 from typing import Literal, Optional
 from pydantic import BaseModel, Field
-
-
-# =============================================================================
-# Scope Gate — rejects non-code-framework requests before any expensive work
-# =============================================================================
-class ScopeValidation(BaseModel):
-    """
-    Pre-flight classifier output. Runs on Groq llama-3.1-8b-instant (~500ms).
-    See services/knowledge/scope.py in step 3.
-    """
-    is_code_framework: bool = Field(
-        description = (
-            "True ONLY if the input refers to a code/programming framework, library, "
-            "SDK, API, CLI tool, or developer-focused technical topic — any programming "
-            "language counts. Examples True: 'OpenTelemetry Python', 'React', 'CUDA', "
-            "'Terraform', 'Rust tokio'. Examples False: 'how to bake a cake', 'stock "
-            "market tips', 'yoga for beginners', 'marketing strategy'."
-        )
-    )
-    detected_topic: str = Field(
-        description = "Short label summarizing the subject. Example: 'FastAPI Python', 'Next.js', 'cake baking'"
-    )
-    language: Optional[str] = Field(
-        default = None,
-        description = "Primary programming language in scope if specified. Example: 'Python', 'Rust', 'TypeScript'"
-    )
-    docs_url: Optional[str] = Field(
-        default = None,
-        description = (
-            "Official documentation root URL for the framework. Examples: "
-            "'https://docs.pydantic.dev/latest', 'https://jinja.palletsprojects.com/en/stable', "
-            "'https://fastapi.tiangolo.com', 'https://react.dev', 'https://docs.rs/tokio/latest'. "
-            "Return the canonical docs root (not the project homepage). Null when is_code_framework=False."
-        )
-    )
-    rejection_reason: Optional[str] = Field(
-        default = None,
-        description = "User-facing one-line explanation when is_code_framework=False. Empty string or null when True."
-    )
 
 
 # =============================================================================
