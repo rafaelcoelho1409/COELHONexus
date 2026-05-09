@@ -975,63 +975,98 @@ def _format_preservation_feedback(
 # Step 5 — planner helpers
 # =============================================================================
 # =============================================================================
-# Tier 4 #17 — noise pre-filter before MAP (2026-04-24)
+# Pre-MAP noise filter — semantic off-topic (2026-05-09)
 # =============================================================================
-# Cheap heuristics that drop obvious non-pedagogical files BEFORE the
-# planner/MAP-shard LLM calls ever see them. Typical outcome: 5-15%
-# fewer shards, zero quality loss. Runs in-memory on the loaded corpus.
-_NOISE_SLUG_PATTERNS = (
-    # changelog-ish — version-bump lists rarely teach concepts
-    re.compile(r"(?:^|[\-/])changelog(?:[\-/]|$)", re.IGNORECASE),
-    re.compile(r"(?:^|[\-/])release[\-_]?notes?(?:[\-/]|$)", re.IGNORECASE),
-    re.compile(r"(?:^|[\-/])history(?:[\-/]|$)", re.IGNORECASE),
-    re.compile(r"(?:^|[\-/])migration[\-_]?(?:guide|notes)?(?:[\-/]|$)", re.IGNORECASE),
-    re.compile(r"(?:^|[\-/])upgrade[\-_]?(?:guide|notes)?(?:[\-/]|$)", re.IGNORECASE),
-    # legal / community boilerplate
-    re.compile(r"(?:^|[\-/])(?:license|licence|copying|code[\-_]of[\-_]conduct|contributing|security[\-_]policy)(?:[\-/]|$)", re.IGNORECASE),
-    # marketing / redirects / stubs
-    re.compile(r"(?:^|[\-/])(?:cookies|privacy|terms|tos|subscribe|newsletter)(?:[\-/]|$)", re.IGNORECASE),
+# Replaces the legacy regex-based `_filter_noise_files` (Tier 4 #17, 2026-04-24).
+# The old approach maintained a hand-curated list of slug patterns
+# (changelog/license/contributing/...). It missed framework-specific noise
+# without matching slugs (Terragrunt's 160-file `/contribute*` + `/developing-*`
+# junk-drawer Chapter 3 was the canonical failure case).
+#
+# Replacement: embed each doc + a "teaching-content prototype" anchored on
+# the framework name, drop any doc whose cosine similarity to the prototype
+# is below `_OFF_TOPIC_THRESHOLD`. Single Xinference batch call (~1s for 400
+# docs); fully deterministic; zero per-framework calibration.
+#
+# Why this beats regex:
+#   - Catches every framework's contributing/release-process/community docs
+#     without a pre-curated pattern list.
+#   - Boilerplate (license, cookies) still gets dropped — those texts have
+#     low cosine to a "how to use" prototype regardless of slug shape.
+#   - Stub / pure-nav pages also score low (no teaching content → low cos).
+# =============================================================================
+_OFF_TOPIC_THRESHOLD = 0.30  # cosine; tunable per framework if a corpus repeatedly mis-classifies
+_OFF_TOPIC_PROTOTYPE_TEMPLATE = (
+    "Documentation explaining how to use {framework}: "
+    "features, configuration, usage examples, and tutorials."
 )
-_MIN_USEFUL_CONTENT_CHARS = 200
+_OFF_TOPIC_SNIPPET_CHARS = 200  # bytes of body fed into the embedder per doc
 
 
-def _filter_noise_files(
+async def _filter_off_topic_files(
     entries: list[tuple[str, str]],
+    framework: str,
+    threshold: float = _OFF_TOPIC_THRESHOLD,
 ) -> list[tuple[str, str]]:
     """
-    Tier 4 #17: drop obvious noise entries from the ingested corpus.
+    Drop docs that don't semantically resemble teaching content for
+    `framework`, using cosine similarity to a prototype anchor.
 
-    Criteria (any one → drop):
-      - slug matches a known boilerplate pattern (changelog / license /
-        release-notes / cookie notice / etc.)
-      - stripped content is below `_MIN_USEFUL_CONTENT_CHARS` (200 chars)
-      - zero fenced code blocks AND zero docs-shape headings — pure prose
-        without either teaching-intent signal is almost always a landing
-        page or redirect stub
+    Args:
+        entries:   list of (slug, body) tuples from research/raw/.
+        framework: framework slug (e.g., "terragrunt"). Used in the prototype
+                   text so the threshold separates teaching content from
+                   contributing/release-process/community/legal docs.
+        threshold: cosine similarity floor; docs below get dropped.
 
-    Returns entries in the same order, minus anything matched. Defensive:
-    on any exception, logs and returns the input unchanged.
+    Returns:
+        entries minus off-topic docs, preserving input order. On any
+        embedding failure, returns input unchanged (defensive: a broken
+        embedding service must not block the planner).
     """
+    if not entries:
+        return entries
     try:
+        import numpy as np
+        from services.knowledge.embeddings import embed_texts
+        prototype_text = _OFF_TOPIC_PROTOTYPE_TEMPLATE.format(framework=framework)
+        snippets = [
+            (body or "").strip()[:_OFF_TOPIC_SNIPPET_CHARS] or " "
+            for _, body in entries
+        ]
+        all_texts = [prototype_text] + snippets
+        vectors_list, provider = await embed_texts(all_texts)
+        vectors = np.asarray(vectors_list, dtype=np.float32)
+        proto = vectors[0]
+        docs = vectors[1:]
+        proto_norm = float(np.linalg.norm(proto))
+        doc_norms = np.linalg.norm(docs, axis=1)
+        cosines = (docs @ proto) / np.maximum(doc_norms * proto_norm, 1e-12)
         kept: list[tuple[str, str]] = []
-        for slug, body in entries:
-            # slug pattern
-            slug_lower = slug.lower()
-            if any(p.search(slug_lower) for p in _NOISE_SLUG_PATTERNS):
-                continue
-            # length
-            stripped = body.strip()
-            if len(stripped) < _MIN_USEFUL_CONTENT_CHARS:
-                continue
-            # pedagogy signal: heading OR fenced code block present
-            has_heading = bool(re.search(r"^#{1,6}\s+\S", stripped, re.MULTILINE))
-            has_fence = bool(re.search(r"^(```|~~~)", stripped, re.MULTILINE))
-            if not (has_heading or has_fence):
-                continue
-            kept.append((slug, body))
+        dropped_samples: list[str] = []
+        for (slug, body), cos in zip(entries, cosines):
+            if float(cos) >= threshold:
+                kept.append((slug, body))
+            elif len(dropped_samples) < 5:
+                dropped_samples.append(slug)
+        dropped = len(entries) - len(kept)
+        if dropped > 0:
+            logger.info(
+                f"[off-topic-filter] dropped {dropped}/{len(entries)} docs "
+                f"(cos<{threshold:.2f} to {framework!r} prototype, "
+                f"provider={provider}, sample={dropped_samples})"
+            )
+        else:
+            logger.info(
+                f"[off-topic-filter] kept all {len(entries)} docs "
+                f"(provider={provider})"
+            )
         return kept
-    except Exception as e:  # pragma: no cover — defensive fallback
-        logger.warning(f"[noise-filter] failed ({e}); keeping all entries")
+    except Exception as e:
+        logger.warning(
+            f"[off-topic-filter] failed ({type(e).__name__}: {e}); "
+            f"keeping all entries"
+        )
         return entries
 
 

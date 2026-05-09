@@ -99,6 +99,38 @@ app.config_from_object({
     # (acks_late=False) this is a defense-in-depth setting that rarely
     # fires — messages are acked on pickup, never reaching the unacked pool.
     "broker_transport_options": {"visibility_timeout": 7200},
+    # =========================================================================
+    # Production hardening (added 2026-05-08, deep-research validated)
+    # =========================================================================
+    # Worker recycling — guards against memory leaks in long-running Python
+    # workers (Playwright contexts, LLM client buffers, transformers caches).
+    # Recycle worker after 50 tasks OR 2 GB RSS, whichever fires first.
+    "worker_max_tasks_per_child": 50,
+    "worker_max_memory_per_child": 2_000_000,  # 2 GB RSS in KB (Celery unit)
+    # Task time limits — defensive cap for tasks that hang (Playwright frozen
+    # context, LLM provider stuck mid-stream). Hard kill at 2h matches
+    # broker_transport_options.visibility_timeout above, so an unacked
+    # message can never re-fire while the original is still SIGKILLed
+    # mid-flight. Soft limit gives 2 min for SoftTimeLimitExceeded cleanup.
+    # Individual KD synth tasks override per-@app.task if they need more.
+    "task_time_limit": 7200,
+    "task_soft_time_limit": 7080,
+    # Flower events — REQUIRED or Flower's task list stays empty. Equivalent
+    # to passing -E on the worker CLI. Source: Celery Monitoring guide.
+    "worker_send_task_events": True,
+    "task_send_sent_event": True,
+    "event_queue_expires": 60.0,
+    # Celery 6 readiness — silences 5.x DeprecationWarning at boot and makes
+    # broker-retry-on-startup behavior explicit (was implicit-true in 5.x).
+    "broker_connection_retry_on_startup": True,
+    # Redis broker hardening — in-cluster DNS can blip during k8s reschedules.
+    # Keepalive + tighter timeout + retry-forever give faster, deterministic
+    # recovery vs Celery's 120s default + finite-retry.
+    "broker_pool_limit": 10,
+    "redis_socket_keepalive": True,
+    "redis_socket_timeout": 30,
+    "redis_retry_on_timeout": True,
+    "broker_connection_max_retries": None,
     # Timezone
     "timezone": "UTC",
 })
@@ -112,3 +144,43 @@ app.conf.include = [
     "tasks.knowledge.distiller",
     "tasks.knowledge.ingestion",
 ]
+
+
+# =============================================================================
+# Worker startup hook — Xinference connectivity probe (lazy-load on first use)
+# =============================================================================
+# Each Celery worker process boots independently. We DO NOT pre-load any model
+# here — the first task that needs embeddings triggers the load via
+# XinfManager (in services.knowledge.embeddings). The cross-process Redis
+# transition lock guarantees that even if all 5 prefork workers land on the
+# same task simultaneously, only ONE launches the model; the others see
+# "already loaded" and proceed.
+#
+# Pre-loading wastes the cold-start budget on a model the next task may not
+# need (the manager's whole point is dynamic per-task swapping).
+# =============================================================================
+from celery.signals import worker_process_init
+
+
+@worker_process_init.connect
+def _probe_xinference(**_kwargs) -> None:
+    try:
+        from services.knowledge.embeddings import get_manager
+        ok = get_manager().ping()
+        if ok:
+            print(
+                "[celery] Xinference reachable; models will load on first task.",
+                flush=True,
+            )
+        else:
+            print(
+                "[celery] Xinference unreachable at worker startup; "
+                "embeddings will fall back to fastembed until available.",
+                flush=True,
+            )
+    except Exception as e:
+        print(
+            f"[celery] Xinference probe failed (non-fatal): "
+            f"{type(e).__name__}: {e}",
+            flush=True,
+        )

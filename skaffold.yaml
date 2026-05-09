@@ -14,8 +14,15 @@ build:
   tagPolicy:
     sha256: {}
   artifacts:
-    # FastAPI ML backend
-    - image: coelhonexus-fastapi
+    # FastAPI ML backend.
+    # Image name is fully qualified with `localhost:5001` (k3d host port
+    # mapping → coelho-cloud-registry container). The cluster also resolves
+    # this same address via a containerd mirror configured in COELHO Cloud's
+    # k3d module (see ~/COELHOCloud/infrastructure/modules/k3d/files/
+    # registries.yaml.tpl) — so the artifact image string is identical to
+    # the deployed pod's image string, which Skaffold's sync matcher
+    # requires for hot-reload to work. No setValueTemplates rewrite needed.
+    - image: localhost:5001/coelhonexus-fastapi
       context: apps/fastapi
       docker:
         dockerfile: Dockerfile.fastapi
@@ -28,8 +35,9 @@ build:
             dest: /app
           - src: "**/*.yaml"
             dest: /app
-    # Web frontend (Go + Templ + HTMX + PWA)
-    - image: coelhonexus-web
+    # Web frontend (Go + Templ + HTMX + PWA). Same fully-qualified-image
+    # pattern as fastapi above.
+    - image: localhost:5001/coelhonexus-web
       context: apps/web
       docker:
         dockerfile: Dockerfile.web
@@ -45,8 +53,29 @@ build:
           - src: "**/*.templ"
             dest: /app
             strip: ""
+    # FastHTML frontend (Python + python-fasthtml + HTMX + PWA).
+    # Coexists with `web` during migration; same fully-qualified-image
+    # pattern as fastapi/web above.
+    - image: localhost:5001/coelhonexus-fasthtml
+      context: apps/fasthtml
+      docker:
+        dockerfile: Dockerfile.fasthtml
+        noCache: false
+      sync:
+        manual:
+          - src: "**/*.py"
+            dest: /app
+          - src: "static/**"
+            dest: /app/static
+            strip: "static/"
   local:
-    push: true  # Push to COELHOCloud registry (localhost:5000)
+    # Push to COELHO Cloud k3d registry at localhost:5001 (k3d host port).
+    # The cluster resolves the SAME address via a containerd mirror
+    # (registries.yaml in ~/COELHOCloud/infrastructure/modules/k3d/), so
+    # `localhost:5001/foo:bar` works as a single image name end-to-end —
+    # host pushes there, kubelet pulls from there. Single source of truth,
+    # Skaffold's sync matcher matches, hot-reload works.
+    push: true
     # IMPORTANT: tryImportMissing=false forces Skaffold to always build from
     # source. With true, Skaffold would silently import an existing image with
     # the same name+tag from the registry — which masked code changes when
@@ -65,10 +94,21 @@ manifests:
         namespace: coelhonexus-dev
         createNamespace: true
         skipBuildDependencies: true
-        # Enable Skaffold image tracking for hot-reload sync
+        # Enable Skaffold image tracking for hot-reload sync.
+        #
+        # IMAGE_FULLY_QUALIFIED_<name> = "<artifact-image>:<sha256-tag>".
+        # Variable name uses the artifact image with non-alphanumerics
+        # replaced by underscores — so `localhost:5001/coelhonexus-fastapi`
+        # becomes `localhost_5001_coelhonexus_fastapi`.
+        #
+        # The pod's deployed image string equals what Skaffold pushed
+        # (no rewrite), so Skaffold's sync matcher finds the pod and
+        # hot-reload works. The cluster's containerd mirror handles
+        # `localhost:5001` → in-cluster registry transparently.
         setValueTemplates:
-          fastapi.image: "{{.IMAGE_FULLY_QUALIFIED_coelhonexus_fastapi}}"
-          web.image: "{{.IMAGE_FULLY_QUALIFIED_coelhonexus_web}}"
+          fastapi.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_fastapi}}"
+          web.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_web}}"
+          fasthtml.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_fasthtml}}"
           environment: local  # Enables --reload in uvicorn for hot-reload
 
 deploy:
@@ -96,11 +136,25 @@ portForward:
     port: 3000
     localPort: 23021
     address: 0.0.0.0
+  # Flower — Celery monitoring dashboard (per-project, was in COELHO Cloud)
+  - resourceType: service
+    resourceName: coelhonexus-flower
+    namespace: coelhonexus-dev
+    port: 5555
+    localPort: 23022
+    address: 0.0.0.0
+  # FastHTML frontend (coexists with web during migration)
+  - resourceType: service
+    resourceName: coelhonexus-fasthtml
+    namespace: coelhonexus-dev
+    port: 3000
+    localPort: 23023
+    address: 0.0.0.0
 
 
 # NOTE: Ensure docker-buildx is installed when useBuildkit is true
 # Development (Skaffold): ports 23020-23039
-# sh mirror_localhost_tailscale.sh $(for i in {23020..23022}; do echo $i; done)
+# sh mirror_localhost_tailscale.sh $(for i in {23020..23023}; do echo $i; done)
 # skaffold dev --cache-artifacts=false --no-prune=false --auto-sync=false --auto-build=false
 # # press b (build) or s (sync) 
 

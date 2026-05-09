@@ -100,17 +100,29 @@ async def lifespan(app: FastAPI):
     # Create YouTube indexes if not exists (metadata + transcriptions)
     es_index_result = await create_youtube_indexes(app.state.es)
     print(f"ElasticSearch YouTube indexes: {es_index_result}", flush = True)
-    # Initialize Playwright transcript service (browser pool)
-    # v5 optimizations (overnight-safe):
-    # - max_concurrent=5: Optimal with cleanup safeguards
-    # - browser_refresh_interval=10: Aggressive refresh to release memory
-    # - max_retries=3: Balance between recovery and avoiding wasted retries
-    app.state.transcript_service = await init_transcript_service(
-        max_concurrent = 5,
-        browser_refresh_interval = 10,
-        max_retries = 3,
-    )
-    print("Playwright transcript service initialized.", flush = True)
+    # Initialize Playwright transcript service (browser pool).
+    # Non-fatal: COELHO Cloud's playwright-headed module's socat sidecar
+    # forwards TCP but doesn't rewrite the HTTP Host header, and Chrome M113+
+    # rejects non-localhost Host headers on /json/version with 500. Until
+    # the COELHO Cloud module ships a Host-rewriting proxy (nginx/haproxy
+    # in front of CDP), Playwright init will fail in cluster deployments.
+    # YouTube routes that depend on transcript_service will 503 individually;
+    # the rest of the app (KD, etc.) keeps booting.
+    try:
+        app.state.transcript_service = await init_transcript_service(
+            max_concurrent = 5,
+            browser_refresh_interval = 10,
+            max_retries = 3,
+        )
+        print("Playwright transcript service initialized.", flush = True)
+    except Exception as e:
+        app.state.transcript_service = None
+        print(
+            f"Playwright transcript service unavailable "
+            f"({type(e).__name__}: {str(e)[:160]}); "
+            f"YouTube routes will return 503 until fixed.",
+            flush = True,
+        )
     # Qdrant async client
     app.state.qdrant = AsyncQdrantClient(
         url = QDRANT_URL,
@@ -180,6 +192,21 @@ async def lifespan(app: FastAPI):
     )
     await app.state.study_storage.ensure_bucket()
     print(f"MinIO study storage ready: bucket={MINIO_BUCKET} at {MINIO_ENDPOINT}", flush = True)
+    # Xinference embeddings — lazy-load via XinfManager.
+    # Lifespan only does a connectivity probe; the first embed call triggers
+    # the actual model load (managed by services.knowledge.embeddings.XinfManager).
+    # This keeps startup fast and avoids pre-loading a model the next request
+    # may not even need (multi-model swap is a runtime concern, not a startup one).
+    from services.knowledge.embeddings import get_manager as _get_xinf_manager
+    app.state.xinf = _get_xinf_manager()
+    if app.state.xinf.ping():
+        print("Xinference reachable. Models will load on first use.", flush = True)
+    else:
+        print(
+            "Xinference unreachable at startup; embeddings will fall back to "
+            "fastembed until Xinference is available.",
+            flush = True,
+        )
     # PostgreSQL: auto-create database + conversation history table + checkpointer
     await _ensure_postgres_database()
     from services.youtube.conversation import ensure_conversation_table

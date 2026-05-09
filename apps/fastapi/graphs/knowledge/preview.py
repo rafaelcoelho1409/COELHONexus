@@ -34,7 +34,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 from graphs.knowledge.helpers import (
     _dedup_chapter_files,
-    _filter_noise_files,
+    _filter_off_topic_files,
     _read_raw_prefix,
 )
 from services.knowledge.embeddings import embed_texts
@@ -149,6 +149,7 @@ def _ctfidf_labels(
 async def run_preview_pipeline(
     storage: MinIOStudyStorage,
     study_root: str,
+    framework: str,
 ) -> dict:
     """
     Execute the classical preview pipeline end-to-end. `study_root` must
@@ -170,7 +171,7 @@ async def run_preview_pipeline(
     entries = await _read_raw_prefix(storage, study_root)
     if not entries:
         raise FileNotFoundError(f"research/raw/ is empty at prefix {study_root!r}")
-    entries = _filter_noise_files(entries)
+    entries = await _filter_off_topic_files(entries, framework=framework)
     entries = _dedup_chapter_files(entries)
     if not entries:
         raise RuntimeError("preview: nothing survived noise filter + dedup")

@@ -1,0 +1,4 @@
+{{- if and .Values.flower.enabled .Values.flower.persistDb }}
+apiVersion: v1
+{{- include "coelhonexus.PVCSettings" (dict "appName" "flower" "root" .) | nindent 0 }}
+{{- end }}

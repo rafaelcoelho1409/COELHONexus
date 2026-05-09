@@ -1,0 +1,98 @@
+{{- if .Values.flower.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coelhonexus-flower
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion }}
+    app.kubernetes.io/component: flower
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  replicas: {{ .Values.flower.replicas }}
+  # Recreate (not RollingUpdate): shelve DB is single-writer + RWO PVC can't
+  # be mounted by 2 pods simultaneously. Two pods touching the same shelve
+  # file = corrupted task history.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: coelhonexus-flower
+  template:
+    metadata:
+      labels:
+        app: coelhonexus-flower
+    spec:
+      {{- if and (eq .Values.environment "production") (.Values.registry.imagePullSecret) }}
+      imagePullSecrets:
+        - name: {{ .Values.registry.imagePullSecret }}
+      {{- end }}
+      containers:
+        - name: flower
+          image: {{ .Values.flower.image }}
+          imagePullPolicy: {{ .Values.flower.imagePullPolicy }}
+          # mher/flower's ENTRYPOINT is ["celery"]; we pass --broker BEFORE
+          # the `flower` subcommand so it routes to the right backend.
+          command: ["celery"]
+          args:
+            - "--broker=$(CELERY_BROKER_URL)"
+            - "flower"
+            - "--port=5555"
+            - "--address=0.0.0.0"
+            {{- if .Values.flower.persistDb }}
+            - "--persistent=True"
+            - "--db=/data/flower"
+            - "--state_save_interval={{ .Values.flower.stateSaveInterval }}"
+            {{- end }}
+            - "--max_tasks={{ .Values.flower.maxTasks }}"
+            - "--purge_offline_workers={{ .Values.flower.purgeOfflineWorkersSeconds }}"
+            {{- if .Values.flower.basicAuth.enabled }}
+            - "--basic_auth=$(FLOWER_BASIC_AUTH)"
+            {{- end }}
+          # Reuse the FastAPI ConfigMap to get REDIS_HOST + REDIS_PORT.
+          # Extra env vars (NEO4J_URI, QDRANT_URL, etc.) are harmless to
+          # Flower and avoid needing a flower-specific configmap.
+          envFrom:
+            - configMapRef:
+                name: coelhonexus-fastapi-configmap
+          env:
+            # REDIS_PASSWORD comes from coelhonexus-secret via secretMappings.
+            {{- include "coelhonexus.secretEnvVars" . | nindent 12 }}
+            # Build the broker URL from the configmap + secret. K8s does
+            # variable substitution inside env values via $(VAR) syntax.
+            - name: CELERY_BROKER_URL
+              value: "redis://:$(REDIS_PASSWORD)@$(REDIS_HOST):$(REDIS_PORT)/0"
+            # API endpoints require auth by default. Don't open them up.
+            - name: FLOWER_UNAUTHENTICATED_API
+              value: "false"
+          ports:
+            - name: http
+              containerPort: 5555
+              protocol: TCP
+          {{- with .Values.flower.livenessProbeSettings }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+          {{- with .Values.flower.readinessProbeSettings }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+          resources:
+            requests:
+              memory: {{ .Values.flower.resources.requests.memory }}
+              cpu: {{ .Values.flower.resources.requests.cpu }}
+            limits:
+              memory: {{ .Values.flower.resources.limits.memory }}
+              cpu: {{ .Values.flower.resources.limits.cpu }}
+          {{- if .Values.flower.persistDb }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          {{- end }}
+      {{- if .Values.flower.persistDb }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: coelhonexus-flower-pvc
+      {{- end }}
+{{- end }}

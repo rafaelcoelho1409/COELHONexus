@@ -38,8 +38,12 @@ qdrant:
   port: 6333
 
 elasticsearch:
-  # In-cluster ClusterIP service (elasticsearch-master.elasticsearch); HTTP on 9200
-  host: "http://elasticsearch-master.elasticsearch.svc.cluster.local:9200"
+  # In-cluster ClusterIP service (elasticsearch-es-http.elasticsearch).
+  # COELHO Cloud's ECK-operator deployment exposes HTTPS by default (self-signed
+  # certs); the AsyncElasticsearch client in app.py uses verify_certs=False so
+  # the self-signed cert is accepted. Service was renamed during the v2 rewrite
+  # (was elasticsearch-master in v1).
+  host: "https://elasticsearch-es-http.elasticsearch.svc.cluster.local:9200"
   username: "elastic"
   # Password loaded from secret (ELASTICSEARCH_PASSWORD)
 
@@ -56,10 +60,13 @@ proxy:
     port: 9150
 
 # Playwright CDP for browser automation (bypasses IP blocking)
-# In-cluster ClusterIP service (playwright.playwright); ports per templates/playwright service
+# COELHO Cloud's playwright module deploys SEPARATE Services per mode (renamed
+# during v2 rewrite — was a single `playwright` service in v1):
+#   playwright-headed   :9222  (chromium with noVNC sidecar, displayable)
+#   playwright-headless :9224  (chromedp/headless-shell, no display)
 playwright:
-  cdp_headless: "http://playwright.playwright.svc.cluster.local:9224"
-  cdp_headed: "http://playwright.playwright.svc.cluster.local:9222"
+  cdp_headless: "http://playwright-headless.playwright.svc.cluster.local:9224"
+  cdp_headed: "http://playwright-headed.playwright.svc.cluster.local:9222"
 
 # Embedding model (NVIDIA NIM API — see docs/NVIDIA-NIM-EMBEDDING-MODELS.md)
 # Change model here to switch. MUST re-ingest all data after changing (vectors are incompatible across models).
@@ -131,22 +138,25 @@ secretMappings:
     key: jina-api-key
   - envName: LINKUP_API_KEY
     key: linkup-api-key
+  # Flower basic auth — only consumed when flower.basicAuth.enabled=true
+  - envName: FLOWER_BASIC_AUTH
+    key: flower-basic-auth
 
 # Registry configuration - uses k3d COELHOCloud Registry (same as Skaffold)
 registry:
-  url: coelhocloud-registry:5000
+  url: coelho-cloud-registry:5000
   # k3d registry doesn't need authentication
   imagePullSecret: ""
 
 # Image configurations
-# Uses k3d in-cluster registry (coelhocloud-registry:5000) — see registry.url below
+# Uses k3d in-cluster registry (coelho-cloud-registry:5000) — see registry.url below
 # with 'latest' tag and imagePullPolicy: Always
 
 
 # FastAPI unified ML backend (includes River incremental and Sklearn batch training)
 # Uses k3d COELHOCloud Registry (same as Skaffold)
 fastapi:
-  image: coelhocloud-registry:5000/coelhonexus-fastapi:latest
+  image: localhost:5001/coelhonexus-fastapi:latest
   imagePullPolicy: Always  # Always pull latest from Skaffold builds
   replicas: 1
   resources:
@@ -208,9 +218,76 @@ celery:
       memory: "4Gi"
       cpu: "500m"  # Low CPU cap — embedding runs slower but doesn't slow the machine
 
+# Flower — Celery monitoring dashboard (UI for the workers above)
+# Deployed per-project (was previously in COELHO Cloud shared infra).
+# Uses upstream mher/flower image (NOT the FastAPI image) — Flower doesn't
+# need app code, it watches broker events and stores task history in a
+# Python shelve file. Smaller image, separate CVE surface, no rebuild
+# coupling with FastAPI. Single replica enforced — shelve is single-writer.
+flower:
+  enabled: true
+  # PyPI 2.0.1 frozen since 2023-08-13; no newer release as of 2026.
+  # mher/flower master tag rebuilt monthly with patches but not released.
+  image: mher/flower:2.0.1
+  imagePullPolicy: IfNotPresent
+  replicas: 1                # DO NOT INCREASE — shelve DB is single-writer.
+  # Persistent task history — Flower writes /data/flower.dat (shelve format,
+  # NOT SQLite — common doc misread). 1 GiB is wildly oversized for a 10k
+  # task ring (~5-50 MB actual) but cheap insurance against ring expansion.
+  persistDb: true
+  storageSize: "1Gi"
+  # Named to match _helpers.tpl coelhonexus.PVCSettings macro (key lookup).
+  storageClassName: "local-path"
+  maxTasks: 10000                # in-memory task ring; older tasks evict
+  purgeOfflineWorkersSeconds: 300  # remove stale worker rows after 5 min
+  stateSaveInterval: 10000       # write shelve every 10s (ms)
+  # Basic auth — Tailnet IS the trust boundary by default (homelab pattern).
+  # Flip on by setting basicAuth.enabled=true AND adding FLOWER_BASIC_AUTH=
+  # "user:pass" to coelhonexus-secret via upload_env_to_k3d.sh.
+  # Flower's --basic_auth supports comma-separated multi-user.
+  basicAuth:
+    enabled: false
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+  # Service config — same pattern as fastapi/web (LoadBalancer + NodePort in
+  # production, ClusterIP in local; switched by _helpers.tpl). Production
+  # NodePorts are 23000-23019; we pick 30022 to align with the pattern
+  # (fastapi=30020, web=30021, flower=30022).
+  portsSettings:
+    ports:
+      - name: http
+        port: 5555
+        targetPort: 5555
+        nodePort: 30022
+        protocol: TCP
+    type: LoadBalancer
+  # Probes — Flower's /healthcheck is auth-exempt and returns "OK".
+  # Officially documented; no liveness flapping during startup.
+  livenessProbeSettings:
+    livenessProbe:
+      httpGet:
+        path: /healthcheck
+        port: 5555
+      initialDelaySeconds: 15
+      periodSeconds: 30
+      failureThreshold: 3
+  readinessProbeSettings:
+    readinessProbe:
+      httpGet:
+        path: /healthcheck
+        port: 5555
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      failureThreshold: 3
+
 # Web frontend (Go + Templ + HTMX + PWA)
 web:
-  image: coelhocloud-registry:5000/coelhonexus-web:latest
+  image: localhost:5001/coelhonexus-web:latest
   imagePullPolicy: Always
   replicas: 1
   resources:
@@ -250,5 +327,54 @@ web:
         path: /health
         port: 3000
       initialDelaySeconds: 0    # Starts immediately after startup probe passes
+      periodSeconds: 5
+      failureThreshold: 3
+
+# FastHTML frontend (Python + python-fasthtml + HTMX + PWA).
+# Coexists with `web` (Go) during the migration period — same /static, same
+# /kd/inspect, same /api/test contract. Both run side-by-side until parity is
+# confirmed end-to-end, then `web` gets removed.
+# Listens on port 3000 inside the pod (same as `web`); the Service exposes
+# port 3000 with NodePort 30023 to avoid clashing with `web`'s 30021.
+fasthtml:
+  image: localhost:5001/coelhonexus-fasthtml:latest
+  imagePullPolicy: Always
+  replicas: 1
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  portsSettings:
+    ports:
+      - name: http
+        port: 3000
+        targetPort: 3000
+        nodePort: 30023        # web=30021, flower=30022, fasthtml=30023
+        protocol: TCP
+    type: LoadBalancer
+  startupProbeSettings:
+    startupProbe:
+      httpGet:
+        path: /health
+        port: 3000
+      failureThreshold: 12     # 12 x 5s = 60s — uvicorn cold start + reload watcher
+      periodSeconds: 5
+  livenessProbeSettings:
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 3000
+      initialDelaySeconds: 0
+      periodSeconds: 10
+      failureThreshold: 3
+  readinessProbeSettings:
+    readinessProbe:
+      httpGet:
+        path: /health
+        port: 3000
+      initialDelaySeconds: 0
       periodSeconds: 5
       failureThreshold: 3

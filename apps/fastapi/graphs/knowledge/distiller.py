@@ -43,6 +43,7 @@ the graph. See tasks/knowledge/distiller.py.
 """
 import asyncio
 import logging
+import os  # KD_USE_CLASSICAL_MAP feature flag (Phase 2b, 2026-05-09)
 import re  # OP-46 (2026-04-25) — citation regex for prose-only path
 from typing import Optional
 from pydantic import ValidationError as PydanticValidationError
@@ -77,7 +78,7 @@ from graphs.knowledge.helpers import (
     # Step 5
     _build_corpus_summary,
     _dedup_chapter_files,
-    _filter_noise_files,
+    _filter_off_topic_files,
     _read_raw_prefix,
     _validate_plan,
     _write_plan_json,
@@ -200,17 +201,17 @@ class KnowledgeDistillerGraph:
         entries = await _read_raw_prefix(storage, study_root)
         if not entries:
             raise FileNotFoundError(f"research/raw/ is empty at prefix {study_root!r}")
-        # Tier 4 #17 (2026-04-24) — noise pre-filter before MAP.
-        # Drops obvious non-pedagogical slugs (changelog / release-notes /
-        # stubs with <200 chars of prose / files with ~0 code-to-prose ratio)
-        # BEFORE MAP shards burn LLM calls on them. Typical effect: 5-15%
-        # fewer shards, zero pedagogical loss.
+        # Pre-MAP semantic off-topic filter (2026-05-09 — supersedes Tier 4 #17).
+        # Embed each doc + a teaching-content prototype anchored on the
+        # framework name; drop docs with cosine < 0.30. Catches every
+        # framework's contributing/release-process/community/license/stub
+        # docs without per-framework regex curation.
         before_filter = len(entries)
-        entries = _filter_noise_files(entries)
+        entries = await _filter_off_topic_files(entries, framework=framework)
         filtered = before_filter - len(entries)
         if filtered > 0:
             logger.info(
-                f"[planner] noise pre-filter dropped {filtered}/{before_filter} "
+                f"[planner] off-topic filter dropped {filtered}/{before_filter} "
                 f"entries ({filtered * 100 // max(1, before_filter)}%)"
             )
         # Tier 2 #6 (2026-04-24) — code-aware near-dup filter.
@@ -473,6 +474,23 @@ class KnowledgeDistillerGraph:
         MAP_SHARD_SEMAPHORE = _asyncio.Semaphore(22)
         _MAP_SHARD_TIMEOUT_SECONDS = 180  # OP-5
 
+        # ------ Classical MAP feature flag (Phase 2b/4c, 2026-05-09) ---------
+        # KD_USE_CLASSICAL_MAP=1 routes MAP to the deterministic classical
+        # pipeline (Xinference embeddings → community_detection → KeyLLM via
+        # Llama-3.2-1B-Instruct, see graphs.knowledge.classical_map). Default
+        # false keeps the LLM rotator path. Env var is read per-call so
+        # /debug/map_compare can override per-request via os.environ patching.
+        #
+        # Classical path is two-phase (cluster all shards, then swap once to
+        # the instruct LM, then label all clusters) → single Xinference model
+        # transition per study. The branching is at the gather() level, NOT
+        # inside _label_shard_bounded, so the LLM path's per-shard timeout +
+        # semaphore pattern stays untouched.
+        def _use_classical_map() -> bool:
+            return os.environ.get("KD_USE_CLASSICAL_MAP", "0").strip().lower() in (
+                "1", "true", "yes",
+            )
+
         async def _label_shard_bounded(shard, shard_idx):
             async with MAP_SHARD_SEMAPHORE:
                 try:
@@ -511,9 +529,15 @@ class KnowledgeDistillerGraph:
                     )
 
         _shard_start = _asyncio.get_event_loop().time()
-        shard_results: list[ShardLabels] = await _asyncio.gather(
-            *(_label_shard_bounded(s, i + 1) for i, s in enumerate(shards)),
-        )
+        if _use_classical_map():
+            from graphs.knowledge.classical_map import label_shards_classical
+            # Two-phase: embed+cluster all shards (one model loaded), swap once,
+            # label all clusters (other model loaded). Single transition / study.
+            shard_results = await label_shards_classical(shards)
+        else:
+            shard_results: list[ShardLabels] = await _asyncio.gather(
+                *(_label_shard_bounded(s, i + 1) for i, s in enumerate(shards)),
+            )
         _shard_elapsed = _asyncio.get_event_loop().time() - _shard_start
         total_clusters = sum(len(r.clusters) for r in shard_results)
         total_shard_unused = sum(len(r.unused_shard_slugs) for r in shard_results)

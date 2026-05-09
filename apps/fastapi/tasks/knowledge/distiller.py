@@ -264,7 +264,7 @@ def run_knowledge_distiller(
                     "nodes_seen": 1,
                 },
             )
-            preview_result = await run_preview_pipeline(storage, study_root)
+            preview_result = await run_preview_pipeline(storage, study_root, framework=framework)
             return {
                 "study_id": study_id,
                 "study_root": study_root,

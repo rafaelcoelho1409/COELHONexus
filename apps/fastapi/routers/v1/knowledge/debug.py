@@ -26,6 +26,218 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# =============================================================================
+# Embeddings smoke test — verify Xinference round-trip + cosine geometry
+# =============================================================================
+@router.get("/debug/map_compare")
+async def debug_map_compare(
+    request: Request,
+    study_root: str,
+    framework: str,
+    shard_size: int = 40,
+    max_shards: Optional[int] = None,
+):
+    """
+    A/B compare LLM-based MAP vs classical (deterministic) MAP on the same
+    corpus, per shard. Reads cached corpus from MinIO, applies the same
+    pre-MAP filters the planner uses, builds shards of `shard_size` files,
+    then runs both paths over each shard and returns side-by-side output
+    for human inspection.
+
+    Query params:
+        study_root:  required. e.g. "default/knowledge/terragrunt-0.x.y-..."
+        framework:   required. Used by the off-topic filter prototype + LLM prompt.
+        shard_size:  optional, defaults to 40 (planner default).
+        max_shards:  optional cap. Useful to A/B against just the first
+                     N shards (e.g., max_shards=3) on a 400-file corpus.
+
+    Returns JSON with one entry per shard:
+      {
+        "shard_size": 40,
+        "n_files": 440,
+        "n_shards": 11,
+        "off_topic_dropped": 28,
+        "shards": [
+          {
+            "shard_idx": 1,
+            "n_files": 40,
+            "llm":       {"clusters": [...], "unused_shard_slugs": [...], "wall_s": 12.4},
+            "classical": {"clusters": [...], "unused_shard_slugs": [...], "wall_s":  3.1},
+          },
+          ...
+        ]
+      }
+
+    Acceptance gates from KD-PLANNER-MAP-OPTIMIZATION.md §6.2:
+      - per-shard cluster count within ±1 of LLM
+      - file coverage ≥99% (no dropped slugs)
+      - cluster-name semantic overlap ≥80% (manual review)
+      - wall time ≤30s per study
+      - identical output across reruns (deterministic)
+    """
+    import time as _t
+    from graphs.knowledge.helpers import (
+        _dedup_chapter_files,
+        _filter_off_topic_files,
+        _read_raw_prefix,
+    )
+    from graphs.knowledge.classical_map import label_shards_classical
+    from schemas.knowledge.agents import ShardLabels, ShardCluster
+    from schemas.knowledge.prompts import SHARD_LABEL_PROMPT
+
+    app = request.app
+    storage = getattr(app.state, "study_storage", None)
+    llm = getattr(app.state, "llm", None)
+    if storage is None or llm is None:
+        raise HTTPException(
+            status_code=503,
+            detail="FastAPI dependencies not initialized (storage/llm).",
+        )
+
+    # --- 1) Load + filter corpus (matches planner pre-MAP path) -----------
+    try:
+        entries = await _read_raw_prefix(storage, study_root)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if not entries:
+        raise HTTPException(status_code=404, detail=f"empty corpus at {study_root!r}")
+    n_initial = len(entries)
+    entries = await _filter_off_topic_files(entries, framework=framework)
+    n_after_filter = len(entries)
+    entries = _dedup_chapter_files(entries)
+    n_after_dedup = len(entries)
+
+    # --- 2) Build shards (matches planner: size 40) ----------------------
+    shards = [entries[i:i + shard_size] for i in range(0, len(entries), shard_size)]
+    if max_shards is not None:
+        shards = shards[:max_shards]
+
+    # --- 3) Per-shard LLM call (minimal — no semaphore/timeout/fallbacks) -
+    # Self-contained so we don't have to refactor distiller.py's nested
+    # _label_shard. This is for A/B inspection only; production keeps its
+    # full retry/timeout/strict-schema pipeline.
+    shard_chain = SHARD_LABEL_PROMPT | llm.with_structured_output(
+        ShardLabels, method="function_calling",
+    )
+
+    async def _llm_one(shard_entries: list[tuple[str, str]], shard_idx: int) -> dict:
+        from graphs.knowledge.helpers import _build_corpus_summary
+        shard_summary = _build_corpus_summary(shard_entries)
+        shard_slugs = [s for s, _ in shard_entries]
+        t0 = _t.monotonic()
+        try:
+            parsed: ShardLabels = await shard_chain.ainvoke({
+                "framework": framework,
+                "shard_summary": shard_summary,
+            })
+            wall = _t.monotonic() - t0
+            # Drop hallucinated slugs (LLM may invent slugs not in shard)
+            for c in parsed.clusters:
+                c.file_slugs = [s for s in c.file_slugs if s in shard_slugs]
+            return {
+                "wall_s": round(wall, 2),
+                "clusters": [c.model_dump() for c in parsed.clusters],
+                "unused_shard_slugs": list(parsed.unused_shard_slugs or []),
+            }
+        except Exception as e:
+            return {
+                "wall_s": round(_t.monotonic() - t0, 2),
+                "error": f"{type(e).__name__}: {str(e)[:160]}",
+                "clusters": [],
+                "unused_shard_slugs": [],
+            }
+
+    # Classical path runs as ONE two-phase batch (cluster all → swap once →
+    # label all). Single Xinference model transition for the whole batch.
+    async def _classical_all(all_shards: list[list[tuple[str, str]]]) -> list[dict]:
+        t0 = _t.monotonic()
+        try:
+            shard_labels_list: list[ShardLabels] = await label_shards_classical(all_shards)
+            wall = _t.monotonic() - t0
+            per_shard_wall = round(wall / max(len(all_shards), 1), 2)
+            return [
+                {
+                    "wall_s": per_shard_wall,
+                    "clusters": [c.model_dump() for c in sl.clusters],
+                    "unused_shard_slugs": list(sl.unused_shard_slugs or []),
+                }
+                for sl in shard_labels_list
+            ]
+        except Exception as e:
+            err = f"{type(e).__name__}: {str(e)[:160]}"
+            return [
+                {
+                    "wall_s": round(_t.monotonic() - t0, 2),
+                    "error": err,
+                    "clusters": [],
+                    "unused_shard_slugs": [],
+                }
+                for _ in all_shards
+            ]
+
+    # Run both paths in parallel. LLM path fans out per shard; classical is
+    # one batched call (its internal _cluster_shards / _label_all_clusters
+    # already parallelize across shards inside each phase).
+    import asyncio as _asyncio
+    llm_results, classical_results = await _asyncio.gather(
+        _asyncio.gather(*(_llm_one(s, i + 1) for i, s in enumerate(shards))),
+        _classical_all(shards),
+    )
+
+    return {
+        "study_root": study_root,
+        "framework": framework,
+        "n_files_initial": n_initial,
+        "n_files_after_off_topic_filter": n_after_filter,
+        "n_files_after_dedup": n_after_dedup,
+        "off_topic_dropped": n_initial - n_after_filter,
+        "dedup_dropped": n_after_filter - n_after_dedup,
+        "shard_size": shard_size,
+        "n_shards": len(shards),
+        "shards": [
+            {
+                "shard_idx": i + 1,
+                "n_files": len(shards[i]),
+                "slugs": [s for s, _ in shards[i]],
+                "llm": llm_results[i],
+                "classical": classical_results[i],
+            }
+            for i in range(len(shards))
+        ],
+    }
+
+
+@router.get("/debug/embeddings_smoke")
+async def debug_embeddings_smoke(mode: Optional[str] = None):
+    """
+    Verify the embeddings stack end-to-end without running the full graph.
+
+    Embeds 3 known phrases (2 similar, 1 different) and checks that the
+    similar pair has higher cosine similarity than the different pair.
+    Returns provider name, dimensionality, similarity scores.
+
+    Query params:
+      mode: override KD_EMBEDDING_MODE for this call only
+            ("xinference_with_fallback" | "xinference" | "local")
+
+    Usage:
+      curl http://<fastapi>/api/v1/knowledge/debug/embeddings_smoke
+      curl http://<fastapi>/api/v1/knowledge/debug/embeddings_smoke?mode=xinference
+      curl http://<fastapi>/api/v1/knowledge/debug/embeddings_smoke?mode=local
+    """
+    import asyncio as _asyncio
+    from services.knowledge.embeddings import smoke_test
+    try:
+        # smoke_test is sync; run in worker thread to keep loop responsive.
+        result = await _asyncio.to_thread(smoke_test, mode)
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code = 503,
+            detail = f"smoke test failed: {type(e).__name__}: {e}",
+        )
+
+
 class RunNodeRequest(BaseModel):
     node_name: Literal[
         "planner",

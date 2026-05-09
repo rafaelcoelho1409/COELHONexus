@@ -127,7 +127,7 @@ template:
     #  runAsUser: 1000
     #  fsGroup: 1000
     containers:
-      - name: coelhonexus-{{ .appName }}-container
+      - name: coelhonexus-{{ .appName }}
         image: {{ include "coelhonexus.imageName" (dict "appName" .appName "root" .root) }}
         imagePullPolicy: {{ index .root.Values .appName "imagePullPolicy" }}
         #securityContext:

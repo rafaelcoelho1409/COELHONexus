@@ -19,14 +19,14 @@ spec:
     - namePattern: coelhonexus
       images:
         - alias: fastapi
-          imageName: coelhocloud-registry:5000/coelhonexus-fastapi:latest
+          imageName: localhost:5001/coelhonexus-fastapi:latest
           commonUpdateSettings:
             updateStrategy: digest
           manifestTargets:
             helm:
               spec: fastapi.image  # Full image reference (repo:tag@digest)
         - alias: web
-          imageName: coelhocloud-registry:5000/coelhonexus-web:latest
+          imageName: localhost:5001/coelhonexus-web:latest
           commonUpdateSettings:
             updateStrategy: digest
           manifestTargets:

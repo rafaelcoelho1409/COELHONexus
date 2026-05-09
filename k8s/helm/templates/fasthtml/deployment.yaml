@@ -1,0 +1,10 @@
+{{- $appName := "fasthtml" -}}
+{{- $appConfig := index $.Values $appName }}
+
+apiVersion: apps/v1
+{{- include "coelhonexus.DeploymentSettings" (dict "appName" $appName "root" .) | nindent 0 }}
+spec:
+  replicas: {{ $appConfig.replicas }}
+{{- include "coelhonexus.DeploymentSpecSettings" (dict "appName" $appName "root" .) | nindent 2 }}
+{{- include "coelhonexus.DeploymentResources" (dict "appName" $appName "root" .) | nindent 10}}
+{{- include "coelhonexus.ProbeSettings" (dict "appName" $appName "root" .) | nindent 10 }}

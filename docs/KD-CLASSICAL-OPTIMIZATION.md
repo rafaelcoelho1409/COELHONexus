@@ -1,7 +1,13 @@
 # Knowledge Distiller — Classical-Algorithm Optimization Plan
 
-**Date:** 2026-04-25
+**Date:** 2026-04-25 (last updated 2026-04-30)
 **Scope:** Every step in the KD pipeline, classified by current implementation, with concrete 2026 SOTA classical replacements (or improvements where already classical).
+
+## Recent updates and supersedes
+
+- **2026-04-30 — OP-66 (BERTopic shard labeling) SUPERSEDED.** Deep research validated against the actual planner shard size (N=40 docs/shard) showed BERTopic is the wrong tool — its own FAQ requires N≥1000 minimum, and HDBSCAN's density-clustering core fails on small batches. The replacement is `sentence-transformers + sklearn AgglomerativeClustering + KeyBERT`, fully deterministic, ~50 LoC. **See [`KD-PLANNER-MAP-OPTIMIZATION.md`](./KD-PLANNER-MAP-OPTIMIZATION.md) for the full analysis, baseline run results on Terragrunt, and validation plan.**
+- **2026-04-30 — OP-64 (local Qwen3-Embedding-0.6B) operationalized.** The recommendation moves from "load Qwen3 in-process via sentence-transformers" to **"deploy as a standalone TEI microservice in COELHO Cloud."** This serves all current and planned embedding consumers (KD MAP, KD REDUCE, YouTube RAG, resolver fuzzy match, future RAG/search). **See [`COELHO-CLOUD-EMBEDDINGS-MICROSERVICE.md`](./COELHO-CLOUD-EMBEDDINGS-MICROSERVICE.md) for the architecture decision, Kubernetes manifest, and migration plan.**
+- **2026-04-30 — OP-1 (Resolver scope gate) DELIVERED via deletion.** The LLM scope classifier was removed entirely (not replaced with SetFit). The curated catalog (`apps/fastapi/files/sources.yaml`) is now the trust boundary; language is derived deterministically from `entry.category`. ~100 LoC removed from the codebase.
 
 ## Hard constraints (non-negotiable)
 
@@ -141,11 +147,15 @@ reduced = reducer.fit_transform(pca128)
 
 ---
 
-#### B-4. NIM embeddings API → local Qwen3-Embedding-0.6B
+#### B-4. NIM embeddings API → Qwen3-Embedding-0.6B via TEI microservice (UPDATED 2026-04-30)
+
+> **OPERATIONALIZED:** The original "load Qwen3 in-process via sentence-transformers" recommendation has been refined to "deploy as a standalone TEI microservice in COELHO Cloud." See [`COELHO-CLOUD-EMBEDDINGS-MICROSERVICE.md`](./COELHO-CLOUD-EMBEDDINGS-MICROSERVICE.md) for the full architecture, Kubernetes manifest, and consumer list.
 
 **Current:** NIM `nvidia/llama-nemotron-embed-1b-v2` API (cascaded with fastembed fallback).
 
-**Replacement:** **`Qwen/Qwen3-Embedding-0.6B`** (Apache-2.0, June 2025). MTEB Code score **74**. Matryoshka representation lets you output 256-d directly, eliminating the PCA(128) step in REDUCE.
+**Replacement:** **`Qwen/Qwen3-Embedding-0.6B`** (Apache-2.0, June 2025) served via HuggingFace TEI as a standalone microservice in COELHO Cloud (namespace `tei`). MTEB Code score **74**. Matryoshka representation lets you output 256-d directly, eliminating the PCA(128) step in REDUCE.
+
+**Why microservice not in-process:** The model serves multiple consumers (KD MAP, KD REDUCE, YouTube RAG, resolver fuzzy match, future RAG/search). One shared instance vs N×600MB in each Celery worker. Independent scaling, independent lifecycle, OpenAI-compat endpoint. See companion doc for the full rationale.
 
 **Quality assessment:** Roughly equivalent or better on technical docs (Qwen3 8B variant scores **80.68** on MTEB Code, the 0.6B is a strong distillation). Eliminates network round-trips and rate limits in REDUCE. **No quality loss.**
 
@@ -197,17 +207,17 @@ prediction = model.predict(["LangGraph"])  # -> "framework"
 
 ### Tier 2 — Replace with hybrid (classical pre-filter + LLM only on borderline)
 
-#### B-6. MAP shard labeling — HYBRID via BERTopic
+#### B-6. MAP shard labeling — ⚠ SUPERSEDED 2026-04-30
 
-**Current:** LLM per-shard call producing `ShardLabels(clusters=[...], unused_shard_slugs=[...])`.
+> **STATUS: Original BERTopic recommendation rejected after deeper research.** See [`KD-PLANNER-MAP-OPTIMIZATION.md`](./KD-PLANNER-MAP-OPTIMIZATION.md) for the new plan.
 
-**Replacement strategy:** **`BERTopic`** with `KeyBERTInspired` representation + c-TF-IDF + MMR for the shard *labels*; LLM only when topic-coherence (`c_v` score) < 0.4.
+**Why rejected:** BERTopic's author-published FAQ requires **N ≥ 1000 documents minimum** for stable topic extraction. Our shards have N=40. HDBSCAN's density-clustering core (BERTopic's foundation) fails on this scale, and the proposed `c_v < 0.4` LLM-fallback would fire on the majority of shards — defeating the purpose.
 
-**Why hybrid:** For shard labels (5-7 keywords describing 40 files), BERTopic matches or beats Groq-8B's output and is fully deterministic. For meta-cluster *narrative names* (`"FastAPI dependency injection patterns"`), LLM still wins on coherent phrasing.
+**New replacement:** `sentence-transformers + sklearn.AgglomerativeClustering + KeyBERT` — purpose-built for "small batch, unknown k". Fully deterministic by construction (no UMAP/HDBSCAN stochastic layer), no LLM fallback branch needed, ~50 LoC, produces 2-6 word phrase labels via KeyBERT MMR.
 
-**Quality tradeoff:** ~5-10% noise on micro-cluster boundaries (KMeans groups by semantic similarity, LLM blends pedagogy + semantics). **REDUCE re-clusters globally anyway → noise gets absorbed.** Acceptable, validated by Clio v2 already using this pattern at REDUCE scale.
+See `KD-PLANNER-MAP-OPTIMIZATION.md` Section 5 for the implementation sketch and Section 6 for the validation plan (`/debug/map_compare` A/B route before full migration).
 
-**Code:**
+**Original BERTopic recommendation (kept for context, not for implementation):**
 ```python
 # pip install bertopic>=0.16.4 keybert
 from bertopic import BERTopic
@@ -224,7 +234,7 @@ topics, _ = topic_model.fit_transform(shard_summaries)
 labels = topic_model.get_topic_info()["Name"].tolist()
 ```
 
-**Effort:** 8-12h, ~120 LoC. Integrate into `_label_shard` with LLM fallback when `c_v < 0.4`.
+**Effort (NEW estimate):** 6h, ~50 LoC for Agglomerative+KeyBERT, plus ~2h for the `/debug/map_compare` A/B route.
 
 ---
 

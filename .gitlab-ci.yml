@@ -6,7 +6,7 @@
 # Fully automated - just push to master!
 # Same workflow as Skaffold: build -> push -> done (ArgoCD handles deploy)
 #
-# Registry: k3d COELHOCloud Registry (coelhocloud-registry:5000)
+# Registry: k3d COELHOCloud Registry (coelho-cloud-registry:5000)
 # Deploy: ArgoCD Image Updater auto-detects new images and syncs
 #
 # No CI/CD variables needed!
@@ -18,7 +18,7 @@ stages:
 
 variables:
   # k3d COELHOCloud Registry (same as Skaffold uses)
-  REGISTRY: "coelhocloud-registry:5000"
+  REGISTRY: "coelho-cloud-registry:5000"
   FASTAPI_IMAGE: "${REGISTRY}/coelhonexus-fastapi"
   WEB_IMAGE: "${REGISTRY}/coelhonexus-web"
   # Docker-in-Docker configuration
@@ -36,7 +36,7 @@ build-fastapi:
   services:
     - name: docker:28-dind
       alias: docker
-      command: ["dockerd", "--host=tcp://0.0.0.0:2375", "--host=unix:///var/run/docker.sock", "--tls=false", "--insecure-registry=coelhocloud-registry:5000"]
+      command: ["dockerd", "--host=tcp://0.0.0.0:2375", "--host=unix:///var/run/docker.sock", "--tls=false", "--insecure-registry=coelho-cloud-registry:5000"]
   only:
     - master
     - main
@@ -59,7 +59,7 @@ build-web:
   services:
     - name: docker:28-dind
       alias: docker
-      command: ["dockerd", "--host=tcp://0.0.0.0:2375", "--host=unix:///var/run/docker.sock", "--tls=false", "--insecure-registry=coelhocloud-registry:5000"]
+      command: ["dockerd", "--host=tcp://0.0.0.0:2375", "--host=unix:///var/run/docker.sock", "--tls=false", "--insecure-registry=coelho-cloud-registry:5000"]
   only:
     - master
     - main
@@ -81,7 +81,7 @@ build-web:
 # =============================================================================
 # No deploy stage needed!
 # ArgoCD Image Updater watches k3d registry and auto-deploys when:
-#   1. CI pushes new images to coelhocloud-registry:5000
+#   1. CI pushes new images to coelho-cloud-registry:5000
 #   2. Image Updater detects new digest (update-strategy: digest)
 #   3. ArgoCD syncs and restarts pods
 #

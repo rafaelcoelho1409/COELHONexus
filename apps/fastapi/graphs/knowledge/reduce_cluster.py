@@ -61,6 +61,7 @@ References:
 """
 import asyncio
 import logging
+import math
 import time
 from collections import Counter
 from typing import Optional
@@ -110,6 +111,19 @@ _UMAP_N_COMPONENTS = 5
 _UMAP_N_NEIGHBORS = 15
 _UMAP_MIN_DIST = 0.0
 _UMAP_METRIC = "cosine"
+
+# T-2 (2026-05-09): cap a single meta-cluster at 25% of total micro-clusters.
+# Without this, KMeansConstrained's only constraint is `size_max = fair_share × 2`,
+# which on uneven corpora collapses one meta-cluster around the densest topic
+# and leaves the rest thin (Terragrunt 2026-04-30 baseline: Chapter 3 absorbed
+# 39% of micro-clusters → 160-file junk drawer).
+_META_CLUSTER_MAX_FRACTION = 0.25
+
+# T-3 (2026-05-09): post-clustering thin-chapter merge.
+# Any meta-cluster with fewer than this many assigned files folds into the
+# nearest larger meta-cluster by cosine on UMAP-reduced centroids. Eliminates
+# the "9-file standalone chapter next to a 60-file chapter" pattern.
+_THIN_CHAPTER_FILE_THRESHOLD = 15
 
 
 async def embed_and_cluster_reduce(
@@ -243,7 +257,11 @@ async def embed_and_cluster_reduce(
     for k in k_candidates:
         fair_share = n_clusters / k
         size_min = max(1, int(fair_share / 3))
-        size_max = max(size_min + 1, int(fair_share * 2))
+        # T-2: cap size_max at 25% of total micro-clusters so no single
+        # meta-cluster can absorb a junk-drawer's worth of content.
+        size_max_unconstrained = int(fair_share * 2)
+        size_max_global_cap = int(math.ceil(_META_CLUSTER_MAX_FRACTION * n_clusters))
+        size_max = max(size_min + 1, min(size_max_unconstrained, size_max_global_cap))
         try:
             from k_means_constrained import KMeansConstrained
             km = KMeansConstrained(
@@ -299,6 +317,51 @@ async def embed_and_cluster_reduce(
         mid: vectors_reduced[idxs].mean(axis=0)
         for mid, idxs in meta_groups.items()
     }
+
+    # T-3 (2026-05-09): merge thin meta-clusters into nearest fat meta-cluster.
+    # File counts come from the union of file_slugs across each meta-cluster's
+    # micro-clusters. Chapters below `_THIN_CHAPTER_FILE_THRESHOLD` files are
+    # too small to teach a coherent topic — fold them into the nearest larger
+    # cluster by cosine on UMAP-reduced centroids. Recompute centroid + size
+    # after each merge so subsequent thin merges see the updated geometry.
+    def _meta_file_count(mid: int) -> int:
+        return sum(len(micro_clusters[i].file_slugs) for i in meta_groups[mid])
+
+    thin_mids = [m for m in list(meta_groups) if _meta_file_count(m) < _THIN_CHAPTER_FILE_THRESHOLD]
+    fat_mids  = [m for m in list(meta_groups) if _meta_file_count(m) >= _THIN_CHAPTER_FILE_THRESHOLD]
+    merged_pairs: list[tuple[int, int, int]] = []  # (thin_mid, fat_mid, files_moved)
+    if thin_mids and fat_mids:
+        # Process thin clusters smallest-first so very thin ones get absorbed
+        # before they perturb other thin clusters' merge decisions.
+        thin_mids.sort(key=_meta_file_count)
+        for thin_mid in thin_mids:
+            thin_cent = centroids[thin_mid]
+            thin_norm = thin_cent / max(float(np.linalg.norm(thin_cent)), 1e-12)
+            best_fat: Optional[int] = None
+            best_sim: float = -1.0
+            for fat_mid in fat_mids:
+                fat_cent = centroids[fat_mid]
+                fat_norm = fat_cent / max(float(np.linalg.norm(fat_cent)), 1e-12)
+                sim = float(thin_norm @ fat_norm)
+                if sim > best_sim:
+                    best_sim, best_fat = sim, fat_mid
+            if best_fat is None:
+                continue
+            files_moved = _meta_file_count(thin_mid)
+            meta_groups[best_fat].extend(meta_groups[thin_mid])
+            del meta_groups[thin_mid]
+            del centroids[thin_mid]
+            # Recompute centroid for the absorbing meta-cluster
+            centroids[best_fat] = vectors_reduced[meta_groups[best_fat]].mean(axis=0)
+            merged_pairs.append((thin_mid, best_fat, files_moved))
+    if merged_pairs:
+        logger.info(
+            f"[reduce-cluster] T-3 thin-chapter merge: "
+            f"folded {len(merged_pairs)} thin meta-cluster(s) "
+            f"(<{_THIN_CHAPTER_FILE_THRESHOLD} files each) "
+            f"→ pairs: {merged_pairs}; "
+            f"meta-clusters now: {len(meta_groups)}"
+        )
 
     # 7. Label each meta-cluster in parallel (~3K tokens each)
     t0 = time.time()
