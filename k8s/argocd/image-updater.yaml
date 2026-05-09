@@ -25,12 +25,12 @@ spec:
           manifestTargets:
             helm:
               spec: fastapi.image  # Full image reference (repo:tag@digest)
-        - alias: web
-          imageName: localhost:5001/coelhonexus-web:latest
+        - alias: fasthtml
+          imageName: localhost:5001/coelhonexus-fasthtml:latest
           commonUpdateSettings:
             updateStrategy: digest
           manifestTargets:
             helm:
-              spec: web.image  # Full image reference (repo:tag@digest)
+              spec: fasthtml.image  # Full image reference (repo:tag@digest)
   writeBackConfig:
     method: argocd

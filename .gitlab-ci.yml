@@ -20,7 +20,7 @@ variables:
   # k3d COELHOCloud Registry (same as Skaffold uses)
   REGISTRY: "coelho-cloud-registry:5000"
   FASTAPI_IMAGE: "${REGISTRY}/coelhonexus-fastapi"
-  WEB_IMAGE: "${REGISTRY}/coelhonexus-web"
+  FASTHTML_IMAGE: "${REGISTRY}/coelhonexus-fasthtml"
   # Docker-in-Docker configuration
   DOCKER_HOST: tcp://docker:2375
   DOCKER_TLS_CERTDIR: ""
@@ -53,7 +53,7 @@ build-fastapi:
     - docker push ${FASTAPI_IMAGE}:latest
     - echo "FastAPI image pushed to ${FASTAPI_IMAGE}"
 
-build-web:
+build-fasthtml:
   stage: build
   image: docker:28-cli
   services:
@@ -66,15 +66,15 @@ build-web:
   before_script:
     - until docker info; do sleep 1; done
   script:
-    - echo "Building Web image with Docker (same as Skaffold)..."
+    - echo "Building FastHTML image with Docker (same as Skaffold)..."
     - docker build
-      -t ${WEB_IMAGE}:${CI_COMMIT_SHORT_SHA}
-      -t ${WEB_IMAGE}:latest
-      -f apps/web/Dockerfile.web
-      apps/web
-    - docker push ${WEB_IMAGE}:${CI_COMMIT_SHORT_SHA}
-    - docker push ${WEB_IMAGE}:latest
-    - echo "Web image pushed to ${WEB_IMAGE}"
+      -t ${FASTHTML_IMAGE}:${CI_COMMIT_SHORT_SHA}
+      -t ${FASTHTML_IMAGE}:latest
+      -f apps/fasthtml/Dockerfile.fasthtml
+      apps/fasthtml
+    - docker push ${FASTHTML_IMAGE}:${CI_COMMIT_SHORT_SHA}
+    - docker push ${FASTHTML_IMAGE}:latest
+    - echo "FastHTML image pushed to ${FASTHTML_IMAGE}"
 
 # =============================================================================
 # DEPLOY - Handled by ArgoCD Image Updater

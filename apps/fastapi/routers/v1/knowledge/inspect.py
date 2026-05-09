@@ -9,7 +9,7 @@ here directly inform extractor fixes (markdown_extractor.py chrome
 stripping, Crawl4AI generator config, sitemap filters, etc.).
 
 Output is HTML fragments — designed for HTMX `hx-swap` against panes in
-`apps/web/templates/kd_inspect.templ`. Server-side rendering keeps the
+`apps/fasthtml/components/kd_inspect.py`. Server-side rendering keeps the
 frontend dependency-free (no marked.js / Shiki) and gives consistent
 output across browsers.
 

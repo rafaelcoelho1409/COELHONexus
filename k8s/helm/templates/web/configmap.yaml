@@ -1,8 +1,0 @@
-apiVersion: v1
-{{- include "coelhonexus.ConfigMapSettings" (dict "appName" "web" "root" .) | nindent 0}}
-data:
-  {{- include "coelhonexus.commonEnvVars" . | nindent 2 }}
-  # Web server configuration
-  PORT: "3000"
-  # FastAPI backend URL (internal cluster DNS)
-  FASTAPI_URL: "http://coelhonexus-fastapi:8000"

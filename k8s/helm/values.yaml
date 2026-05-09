@@ -285,57 +285,10 @@ flower:
       periodSeconds: 10
       failureThreshold: 3
 
-# Web frontend (Go + Templ + HTMX + PWA)
-web:
-  image: localhost:5001/coelhonexus-web:latest
-  imagePullPolicy: Always
-  replicas: 1
-  resources:
-    requests:
-      memory: "256Mi"
-      cpu: "100m"
-    limits:
-      memory: "512Mi"
-      cpu: "500m"
-  portsSettings:
-    ports:
-      - name: http
-        port: 3000
-        targetPort: 3000
-        nodePort: 30021
-        protocol: TCP
-    type: LoadBalancer
-  # Probe execution order: startup -> liveness + readiness
-  startupProbeSettings:
-    startupProbe:
-      httpGet:
-        path: /health
-        port: 3000
-      failureThreshold: 6       # 6 x 5s = 30s max startup time
-      periodSeconds: 5
-  livenessProbeSettings:
-    livenessProbe:
-      httpGet:
-        path: /health
-        port: 3000
-      initialDelaySeconds: 0    # Starts immediately after startup probe passes
-      periodSeconds: 10
-      failureThreshold: 3
-  readinessProbeSettings:
-    readinessProbe:
-      httpGet:
-        path: /health
-        port: 3000
-      initialDelaySeconds: 0    # Starts immediately after startup probe passes
-      periodSeconds: 5
-      failureThreshold: 3
-
 # FastHTML frontend (Python + python-fasthtml + HTMX + PWA).
-# Coexists with `web` (Go) during the migration period — same /static, same
-# /kd/inspect, same /api/test contract. Both run side-by-side until parity is
-# confirmed end-to-end, then `web` gets removed.
-# Listens on port 3000 inside the pod (same as `web`); the Service exposes
-# port 3000 with NodePort 30023 to avoid clashing with `web`'s 30021.
+# Replaced the legacy Go web frontend on 2026-05-09 — same /static, same
+# /kd/inspect, same /api/test contract. NodePort 30023 retained to avoid
+# breaking any external callers that may still reference the old `web` URLs.
 fasthtml:
   image: localhost:5001/coelhonexus-fasthtml:latest
   imagePullPolicy: Always

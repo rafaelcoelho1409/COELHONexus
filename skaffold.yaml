@@ -35,27 +35,10 @@ build:
             dest: /app
           - src: "**/*.yaml"
             dest: /app
-    # Web frontend (Go + Templ + HTMX + PWA). Same fully-qualified-image
-    # pattern as fastapi above.
-    - image: localhost:5001/coelhonexus-web
-      context: apps/web
-      docker:
-        dockerfile: Dockerfile.web
-        noCache: false
-      sync:
-        manual:
-          - src: "static/**"
-            dest: /app/static
-            strip: "static/"
-          - src: "**/*.go"
-            dest: /app
-            strip: ""
-          - src: "**/*.templ"
-            dest: /app
-            strip: ""
     # FastHTML frontend (Python + python-fasthtml + HTMX + PWA).
-    # Coexists with `web` during migration; same fully-qualified-image
-    # pattern as fastapi/web above.
+    # Replaced the legacy Go web frontend on 2026-05-09 — see
+    # apps/fasthtml/ for the full-parity port. Same fully-qualified-image
+    # pattern as fastapi above.
     - image: localhost:5001/coelhonexus-fasthtml
       context: apps/fasthtml
       docker:
@@ -107,7 +90,6 @@ manifests:
         # `localhost:5001` → in-cluster registry transparently.
         setValueTemplates:
           fastapi.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_fastapi}}"
-          web.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_web}}"
           fasthtml.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_fasthtml}}"
           environment: local  # Enables --reload in uvicorn for hot-reload
 
@@ -128,13 +110,6 @@ portForward:
     namespace: coelhonexus-dev
     port: 8000
     localPort: 23020
-    address: 0.0.0.0
-  # Web frontend
-  - resourceType: service
-    resourceName: coelhonexus-web
-    namespace: coelhonexus-dev
-    port: 3000
-    localPort: 23021
     address: 0.0.0.0
   # Flower — Celery monitoring dashboard (per-project, was in COELHO Cloud)
   - resourceType: service
@@ -161,4 +136,4 @@ portForward:
 #
 # Production (ArgoCD): ports 23000-23019
 # kubectl port-forward -n coelhonexus svc/coelhonexus-fastapi 23000:8000 &
-# kubectl port-forward -n coelhonexus svc/coelhonexus-web 23001:3000 &
+# kubectl port-forward -n coelhonexus svc/coelhonexus-fasthtml 23001:3000 &
