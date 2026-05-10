@@ -12,13 +12,13 @@
 > | Stage | **Pick** |
 > |---|---|
 > | Pre-MAP noise filter | **Pure semantic off-topic filter** (cosine to framework prototype, threshold=0.30) |
-> | Embedding model | **Qwen3-Embedding-0.6B Q8 GGUF** (llama.cpp engine) via Xinference |
+> | Embedding model | **NIM `nvidia/llama-nemotron-embed-1b-v2` (2048-dim) via LiteLLM rotator** — single-entry `kd-embed` group; no provider fallover (different vector geometry would break clustering mid-study) |
 > | Clustering | **`sentence_transformers.util.community_detection`** algorithm (threshold=0.60, min_community_size=2; rolled inline as numpy to drop torch dep) |
-> | Cluster labeling | **KeyLLM with Llama-3.2-1B-Instruct via Xinference** (Q4_K_M GGUF, llama.cpp; IFEval 59.5 — highest among ≤1B candidates; temp=0 deterministic-safe) |
-> | Multi-model orchestration | **`XinfManager`** (single-slot mutex + ref-count + Redis transition lock; hot-swaps embedding ↔ instruct model per task) |
-> | Architecture rule | **Local Xinference for ≤2B models (embeddings + small task LMs); rotator (NIM + Groq) only for big LLMs you can't host locally.** Do not push small LMs onto the rotator just because they're "available there." |
+> | Cluster labeling | **KeyLLM via the LLM rotator** — `kd-keylm` group: NIM `meta/llama-3.2-1b-instruct` (GA) primary, Groq `llama-3.2-1b-preview` fallback. Temp=0, max_tokens=16. |
+> | Multi-model orchestration | **`XinfManager`** for **embeddings + rerankers only** (single-slot mutex + Redis transition lock). LLMs of any size go through `services/llm_chain.py` rotator. |
+> | Architecture rule | **Embeddings + rerankers → local Xinference; LLMs of any size → LLM rotator (NIM/Groq).** Do not host small LMs locally even when ≤2B — friction (custom registration, OOM thrash on launch failures) outweighs the determinism gain at homelab scale. |
 >
-> **Do NOT swap KeyLLM back to KeyBERT or PromptRank without re-reading §5.** Past divergences (KeyBERT-style "to avoid an extra Xinference model" + Qwen2.5-0.5B placeholder) wasted work — the XinfManager exists specifically to make multi-model swap cheap, and Llama-3.2-1B beats Qwen3-0.6B on IFEval + temp=0 stability.
+> **Do NOT swap KeyLLM back to KeyBERT, PromptRank, or local Xinference-hosted LM without re-reading §5.** Past regressions: (1) KeyBERT-style custom code "to avoid an extra Xinference model"; (2) Qwen2.5-0.5B placeholder; (3) Llama-3.2-1B-Instruct via Xinference custom registration (hit OOM during failed launches 2026-05-09 → reverted to rotator).
 
 ---
 
@@ -152,11 +152,11 @@ After deep web research validated against 2025-2026 papers + production writeups
 | Stage | **Pick** | One-line rationale |
 |---|---|---|
 | **Pre-MAP noise filter** | Pure semantic off-topic filter (cosine to framework prototype, threshold=0.30) | One Xinference batch catches every framework's contributing/community/release/license/stub docs. Zero per-framework regex curation. |
-| **Embedding model** | **Qwen3-Embedding-0.6B Q8 GGUF** (llama.cpp engine) via Xinference | On May 2026 MTEB sub-1B Pareto frontier. Apache-2.0. Fastest CPU path; 1024-dim output. |
+| **Embedding model** | **NIM `nvidia/llama-nemotron-embed-1b-v2` (2048-dim) via the LiteLLM rotator** — single-entry `kd-embed` group | Free tier 40 RPM, no monthly cap, commercial OK. Same NVIDIA_API_KEY already in coelhonexus-secret. **Single-entry by design**: embedding rotation across providers breaks cosine geometry within a study (different model = different vector space). If NIM is fully down, study fails — user retries (cheap). Local Xinference removed 2026-05-09 after CPU-spike cluster-stability issues; fastembed CPU fallback removed for the same reason. |
 | **Clustering** | `sentence_transformers.util.community_detection` algorithm — `threshold=0.60`, `min_community_size=2` | Purpose-built for embedding clustering, deterministic. **Rolled as 15-line numpy** in `services/knowledge/embeddings.py` (algorithm matches sbert reference exactly) to drop the torch transitive that `sentence-transformers` package would pull. |
-| **Cluster labeling** | **KeyLLM with Llama-3.2-1B-Instruct via Xinference** (Q4_K_M GGUF, llama.cpp engine, ~808 MB on disk, ~1.2 GB resident) | KeyBERT author Maarten Grootendorst's 2024 follow-up. Picked over Qwen3-0.6B / Qwen2.5-0.5B because: (a) IFEval 59.5 — highest among ≤1B candidates as of May 2026 (best at "follow the 2-4 word Title Case format" constraint); (b) temp=0 deterministic decoding works without caveat (Qwen3 team explicitly warns against greedy decoding for sub-1B models); (c) distilled from Llama-3.1-405B/70B → strong format adherence at small size. License: Llama 3.2 (commercial OK <700M MAU; non-blocking for COELHO scope). |
-| **Multi-model orchestration** | `XinfManager` — single-slot mutex + per-process asyncio lock + cross-process Redis transition lock | Hot-swaps embedding ↔ instruct model per task. Single source of truth for Xinference launch/terminate. Lock held only during transitions; embeds + chat completions proceed lock-free once a model is loaded. |
-| **MAP execution shape** | **Two-phase: (A) embed+cluster ALL shards in parallel with embedding model, (B) swap once to instruct LM and label ALL clusters in parallel** | Per-shard interleaved swaps would thrash 22+ times on an 11-shard study. Two-phase guarantees exactly ONE Xinference transition per study regardless of shard count. Implemented in `classical_map.py::label_shards_classical(shards)`. |
+| **Cluster labeling** | **KeyLLM via the LLM rotator** — `kd-keylm` group in `services/llm_chain.py`. Primary: NIM `meta/llama-3.2-1b-instruct` (GA on integrate.api.nvidia.com, free tier). Fallback: Groq `llama-3.2-1b-preview` (LPU, sub-100ms). | Same model the research validated (IFEval 59.5, temp=0 stable, Llama-3.1 lineage), but hosted by NIM + Groq instead of self-hosted on Xinference. Earlier draft (2026-05-09 morning) registered Llama-3.2-1B as a custom Xinference model; reverted same-day after OOM during failed launches. Rotator path is faster (LPU > Tiger Lake CPU), zero local RAM cost, zero custom-registration code. License: Llama 3.2 (commercial OK <700M MAU). |
+| **Multi-model orchestration** | `XinfManager` for **embeddings + rerankers only** — single-slot mutex + Redis transition lock. LLMs route through `services/llm_chain.py` rotator (LiteLLM Router with circuit-breaker cooldowns + multi-group support). | XinfManager remains the right tool for high-volume CPU-bound embedding work and any future model class not on hosted APIs. Forcing a tiny LM through it duplicates rotator capability without benefit. |
+| **MAP execution shape** | **Two-phase: (A) embed+cluster ALL shards in parallel via Xinference, (B) generate ALL cluster labels in parallel via the rotator (KEYLM_CONCURRENCY=4 cap)** | Phase A is single-model on Xinference (no swap). Phase B doesn't touch Xinference at all — pure rotator calls, sub-second each. No model thrash possible. Implemented in `classical_map.py::label_shards_classical(shards)`. |
 
 ### 5.2 What was rejected — and why this list will not regress
 
@@ -185,15 +185,22 @@ After deep web research validated against 2025-2026 papers + production writeups
 
 ### 5.4 Lessons learned — DO NOT REGRESS
 
-Three real divergences happened during the 2026-05-09 implementation cycle. Each was wrong; each is documented here so future-you doesn't redo them:
+Four real divergences happened during the 2026-05-09 implementation cycle. Each was wrong; each is documented here so future-you doesn't redo them:
 
-1. **"Avoid a second Xinference model — roll our own KeyBERT-style"** (caught + fixed 2026-05-09). The `XinfManager` was built specifically to hot-swap small LMs per task at near-zero cost. Adding a 1B Q4_K_M instruct LM (~808 MB on disk) is the right cost.
+1. **"Avoid a second Xinference model — roll our own KeyBERT-style"** (caught + fixed 2026-05-09). The `XinfManager` was built specifically to hot-swap small LMs per task at near-zero cost. Adding a 1B Q4_K_M instruct LM (~808 MB on disk) seemed like the right cost — but see lesson #4 below for why we ultimately moved off this anyway.
 
 2. **"Qwen2.5-0.5B-Instruct is small and Apache-2.0, ship it"** (caught + fixed 2026-05-09). Smaller is not better. Llama-3.2-1B has a confirmed IFEval 59.5 vs Qwen2.5-0.5B's lower-baseline score, and crucially, Qwen3-0.6B's official docs warn against greedy decoding — conflicts with our temp=0 determinism. **Always check IFEval + greedy-decoding stability before picking the smallest available model.**
 
-3. **"Llama-3.2-1B is on the rotator — use the rotator instead of Xinference"** (caught + fixed 2026-05-09). Both NIM (GA) and Groq (preview) host Llama-3.2-1B-Instruct. That doesn't mean we should use them: at homelab scale, *robustness > 20s wall-time saving*. The architectural rule is **local for ≤2B, rotator for >2B**. Putting a small task LM onto the rotator just because it's available there creates silent-failure modes (preview-model deprecations, rate-limit drift, provider failovers that break temp=0).
+3. **"Llama-3.2-1B is on the rotator — but stay local for robustness"** (initial decision 2026-05-09 morning, REVERSED same day — see lesson #4). The original rationale: at homelab scale, robustness > 20s wall-time saving; XinfManager was already built. **What broke this rationale:** real-world friction with Xinference custom-model registration (version=2 + model_family validation, 400s on missing fields) plus **OOMKilled** events during failed launch retries. The "robustness" promise didn't hold once we exercised the actual launch path.
 
-If a future change considers any of: replacing **KeyLLM** with KeyBERT/PromptRank, swapping **Llama-3.2-1B-Instruct** for a smaller Qwen variant, or routing the **label step** through the LLM rotator — re-read §5.1, §5.2, and this section first. Per `feedback_kd_quality_over_speed`, the committed pick stands.
+4. **"Stay local for ≤2B" rule reversed → "all LLMs go through rotator"** (committed 2026-05-09 evening). After hitting OOMKill during Llama-3.2-1B custom registration attempts, we pivoted to using the LLM rotator's `kd-keylm` group instead. The new rule is simpler and tested: **embeddings/rerankers → Xinference; LLMs of any size → rotator.** No more custom-registration code; no OOM thrash; faster (LPU/cloud > Tiger Lake CPU); same model (Llama-3.2-1B-Instruct) hosted on NIM as GA.
+
+If a future change considers any of:
+- Replacing **KeyLLM** with KeyBERT, PromptRank, or any custom in-process implementation
+- Swapping **Llama-3.2-1B-Instruct** for a smaller Qwen/Phi variant on the rotator
+- **Hosting the small LM locally on Xinference** (re-doing custom registration)
+
+— re-read §5.1, §5.2, and this section first. The committed picks stand. Per `feedback_kd_quality_over_speed`, the rotator is **also** the quality choice (sub-100ms LPU latency vs CPU; identical model weights).
 
 ### 5.5 Honest tradeoffs (kept from the 2026-04-30 draft, still apply)
 

@@ -168,7 +168,8 @@ async def embed_and_cluster_reduce(
         f"{len(shard_unused_all)} shard-unused"
     )
 
-    # 2. Embed — NIM primary, local fastembed fallback (selectable via env var)
+    # 2. Embed via LiteLLM rotator's `kd-embed` group (NIM nemotron-1b-v2,
+    #    single entry — no provider fallover, see embeddings.py module docstring)
     t0 = time.time()
     texts = [f"{c.cluster_name}: {c.description}" for c in micro_clusters]
     vectors_list, embed_provider = await embed_texts(texts)

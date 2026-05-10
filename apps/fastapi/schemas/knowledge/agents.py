@@ -90,11 +90,16 @@ class ShardCluster(BaseModel):
 
 
 class ShardLabels(BaseModel):
-    """Output of the shard-labeler (MAP pass). 1-3 clusters per shard typical."""
+    """Output of the shard-labeler (MAP pass).
+    LLM path: 1-3 clusters per shard typical, 5 was the prompt-budget cap.
+    Classical path with PREVIEW_CHARS=1500: 4-8 clusters per shard typical
+    (richer embeddings → finer-grained communities). max_length bumped to
+    10 on 2026-05-09 night to accommodate. REDUCE re-clusters globally,
+    so per-shard count granularity doesn't affect downstream chapter k."""
     clusters: list[ShardCluster] = Field(
         min_length = 1,
-        max_length = 5,
-        description = "Micro-clusters this shard's files group into. 1-3 typical; 5 hard cap.",
+        max_length = 10,
+        description = "Micro-clusters this shard's files group into. 1-8 typical; 10 hard cap.",
     )
     unused_shard_slugs: list[str] = Field(
         default_factory = list,

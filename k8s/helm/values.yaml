@@ -73,6 +73,18 @@ playwright:
 embedding:
   model: "nvidia/llama-nemotron-embed-1b-v2"  # 2048d, 8K context, best quality
 
+# Knowledge Distiller pipeline tunables.
+# `useClassicalMap` toggles the planner's MAP step between:
+#   "1" / "true" → classical pipeline (Xinference-replaced NIM rotator embed
+#                  + community_detection + KeyLLM via rotator). Deterministic,
+#                  ~30s per study, no LLM rate-limit risk on 11 shards.
+#   "0" / "false" → legacy LLM-based per-shard labeling via the kd-all rotator.
+#                   Slower (~3 min), better label quality on shard names but
+#                   prone to 429 cascades and timeouts on free-tier providers.
+# See docs/KD-PLANNER-MAP-OPTIMIZATION.md §5 for the full rationale.
+kd:
+  useClassicalMap: "1"
+
 # SearXNG — in-cluster metasearch used by Knowledge Distiller to resolve
 # official documentation URLs (and any future web-search need). Internal DNS
 # avoids Tailscale TLS overhead on every query. Service lives in the

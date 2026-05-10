@@ -192,21 +192,12 @@ async def lifespan(app: FastAPI):
     )
     await app.state.study_storage.ensure_bucket()
     print(f"MinIO study storage ready: bucket={MINIO_BUCKET} at {MINIO_ENDPOINT}", flush = True)
-    # Xinference embeddings — lazy-load via XinfManager.
-    # Lifespan only does a connectivity probe; the first embed call triggers
-    # the actual model load (managed by services.knowledge.embeddings.XinfManager).
-    # This keeps startup fast and avoids pre-loading a model the next request
-    # may not even need (multi-model swap is a runtime concern, not a startup one).
-    from services.knowledge.embeddings import get_manager as _get_xinf_manager
-    app.state.xinf = _get_xinf_manager()
-    if app.state.xinf.ping():
-        print("Xinference reachable. Models will load on first use.", flush = True)
-    else:
-        print(
-            "Xinference unreachable at startup; embeddings will fall back to "
-            "fastembed until Xinference is available.",
-            flush = True,
-        )
+    # Embeddings go through the LiteLLM rotator's `kd-embed` group (NIM
+    # nvidia/llama-nemotron-embed-1b-v2). Nothing to probe at startup —
+    # the rotator is constructed lazily on first embed call, and the
+    # NVIDIA_API_KEY is already validated as part of the LLM chain init.
+    # Xinference removed 2026-05-09 night (see memory:
+    # project_local_vs_rotator_architecture).
     # PostgreSQL: auto-create database + conversation history table + checkpointer
     await _ensure_postgres_database()
     from services.youtube.conversation import ensure_conversation_table

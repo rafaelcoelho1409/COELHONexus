@@ -1,36 +1,32 @@
 """
-Knowledge Distiller — Classical MAP step (deterministic, KeyLLM via Xinference)
+Knowledge Distiller — Classical MAP step (deterministic, two-phase)
 
 Drop-in replacement for the LLM-based `_label_shard` in
 graphs/knowledge/distiller.py. Same input shape (shards of (slug, content)
 tuples), same output type (list[ShardLabels]), but produced via:
 
-    Phase A (all shards in parallel, ONE model loaded):
-        Xinference embeddings (Qwen3-Embedding-0.6B, llama.cpp, Q8_0 GGUF)
+    Phase A (all shards in parallel, single embedding model loaded):
+        Xinference embeddings (Qwen3-Embedding-0.6B Q8 GGUF, llama.cpp)
             ↓
         community_detection — greedy O(N²) cosine, threshold=0.60
             ↓
         clusters of slug indices per shard (no labels yet)
 
-    [transition: XinfManager swaps Qwen3-Embedding-0.6B → Llama-3.2-1B-Instruct]
-
-    Phase B (all shards in parallel, ONE model loaded):
-        For each cluster: chat completion via Xinference's KeyLLM endpoint
+    Phase B (all shards in parallel, hosted small-LM rotator):
+        For each cluster: chat completion via the LLM rotator's `kd-keylm`
+        group (NIM meta/llama-3.2-1b-instruct primary, Groq llama-3.2-1b-
+        preview fallback). Bounded concurrency to keep free-tier RPM in check.
             ↓
         2-4 word Title-Case label
 
-Why two-phase, not per-shard interleaved:
-    With 11 parallel shards each running embed → swap-to-LM → label →
-    swap-back, we'd thrash the single-slot Xinference container 22+ times.
-    Two-phase serialization means exactly ONE swap per study, regardless of
-    shard count. The XinfManager's transition lock guarantees atomicity at
-    the swap boundary.
+Architecture rule (memory: project_local_vs_rotator_architecture.md):
+    Embeddings + rerankers → Xinference (local, high call volume).
+    LLMs of any size → LLM rotator (NIM/Groq/etc, hosted free tier).
 
-Why this beats the LLM rotator path on shards:
-    - Deterministic (same input → same output across reruns)
-    - <30s total per study vs ~90-180s for LLM rotator (rate limits + retries)
-    - Owned infra (no preview-model risk; offline-capable)
-    - Local 1B model with IFEval 59.5 follows "2-4 word Title Case" reliably
+    Earlier draft hosted a 1B instruct LM on Xinference too. Reverted on
+    2026-05-09 after hitting OOM during failed launch attempts + custom
+    model registration friction. The rotator already hosts Llama-3.2-1B-
+    Instruct as GA on NIM with a generous free tier — no reason to duplicate.
 
 Why Llama-3.2-1B-Instruct (not Qwen2.5-0.5B / not Qwen3-0.6B):
     - Highest IFEval (59.5) among ≤1B candidates as of May 2026
@@ -46,14 +42,14 @@ import time
 from typing import Optional
 
 import numpy as np
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from schemas.knowledge.agents import ShardCluster, ShardLabels
 from services.knowledge.embeddings import (
-    DEFAULT_MODEL,
     community_detection,
     embed_texts,
-    get_manager,
 )
+from services.llm_chain import build_keylm_chain
 
 
 logger = logging.getLogger(__name__)
@@ -62,11 +58,10 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Configuration — committed picks per docs/KD-PLANNER-MAP-OPTIMIZATION.md §5
 # =============================================================================
-# Embedding model for Phase A (cluster snippets).
-EMBEDDING_MODEL = DEFAULT_MODEL  # "Qwen3-Embedding-0.6B"
-
-# Instruct LM for Phase B (KeyLLM-style label generation).
-KEYLM_MODEL = "llama-3.2-instruct"
+# Phase A embedder is selected by services/llm_chain.py KD_EMBED_GROUP
+# (currently NIM nvidia/llama-nemotron-embed-1b-v2 via the rotator).
+# embed_texts() goes through that group automatically — no model_name
+# kwarg threading needed at the planner level.
 
 # Cosine threshold for community_detection. Lower → coarser clusters (fewer,
 # larger). Higher → tighter (more, smaller). 0.60 is the sbert recommendation
@@ -75,24 +70,59 @@ KEYLM_MODEL = "llama-3.2-instruct"
 COMMUNITY_THRESHOLD = 0.60
 MIN_COMMUNITY_SIZE = 2
 
-# Snippet length per file — matches CORPUS_PREVIEW_CHARS used by the LLM path
-# in helpers.py (so embedding-based clustering sees the same first-N chars
-# the LLM had access to).
-PREVIEW_CHARS = 80
+# Snippet length per file fed into the embedder.
+#
+# Bumped 80 → 1500 on 2026-05-09 night. The original 80 was chosen to keep
+# the LLM-path MAP prompt under Groq's 12K TPM free-tier limit (40 docs ×
+# 80 chars × 11 shards ≈ 9.6K tokens). That constraint doesn't apply to the
+# embedding path — NIM `llama-nemotron-embed-1b-v2` has no per-call token
+# cap, only 40 RPM (which we comfortably stay under at ~14 batches/study).
+#
+# 1500 chars ≈ 450 tokens, which sits in NV-Embed's training-distribution
+# sweet spot (256-512 tokens). At 80 chars, embeddings cluster mostly on
+# the slug; at 1500 they capture the doc's full intro + first code example
+# + first section header — exactly the topical anchors clustering needs.
+# Beyond ~1500 chars, technical docs shift to param tables / API enumerations
+# which dilute topical signal (plateau on benchmarks).
+#
+# Sources: NV-Embed-v2 paper §3.1 (training distribution); MTEB Clustering
+# benchmark suite (~10% accuracy drop at <100-token inputs); LangChain RAG
+# cookbook (512-token chunks recommended); LlamaIndex chunk-size eval.
+PREVIEW_CHARS = 1500
 
 # Cap on cluster text fed into the KeyLLM prompt. Keeps each call ~300-500
-# input tokens regardless of cluster size — well under Llama-3.2-1B's
-# 128K context but tight enough for fast inference (~1s/call).
+# input tokens regardless of cluster size — small enough for sub-second
+# rotator turn-around without truncating real cluster signal.
 LABEL_TEXT_CAP = 1500
 
 # KeyLLM generation tunables — deterministic by design.
-KEYLM_TEMPERATURE = 0.0
 KEYLM_MAX_TOKENS = 16  # 2-4 words ≈ 8-12 BPE tokens; +4 buffer for whitespace
 
-# Concurrency cap on KeyLLM calls. Xinference llama.cpp serializes generation
-# server-side anyway, but capping at 4 keeps the queue depth predictable
-# under bursts (11 shards × ~3 clusters each = ~33 parallel labels).
+# Concurrency cap on KeyLLM rotator calls. Free-tier RPM on the small-LM
+# providers (NIM ~40 RPM, Groq generous) is plenty for our ~33 calls/study
+# but we cap at 4 to keep the request rate predictable + avoid 429 storms
+# on simultaneous shard bursts. The Router's allowed_fails_policy will
+# cool down a deployment that 429s anyway, but capping is cheaper.
 KEYLM_CONCURRENCY = 4
+
+
+# Lazy module-level singleton — built on first call, reused thereafter.
+# `build_keylm_chain()` is cheap (just constructs a ChatLiteLLMRouter wrapper
+# around the shared Router), but caching it skips the LangChain instantiation
+# on every cluster-label call.
+_keylm_chain_singleton = None
+_keylm_chain_lock = asyncio.Lock()
+
+
+async def _get_keylm_chain():
+    """Lazy singleton for the build_keylm_chain() factory result."""
+    global _keylm_chain_singleton
+    if _keylm_chain_singleton is not None:
+        return _keylm_chain_singleton
+    async with _keylm_chain_lock:
+        if _keylm_chain_singleton is None:
+            _keylm_chain_singleton = build_keylm_chain()
+    return _keylm_chain_singleton
 
 
 # =============================================================================
@@ -120,7 +150,9 @@ _LEADING_LABEL_RE = re.compile(
     re.IGNORECASE,
 )
 _QUOTES_RE = re.compile(r"^[\"\'`]+|[\"\'`]+$")
-_NON_LABEL_CHARS_RE = re.compile(r"[^\w\s\-]")
+# Preserve apostrophes inside words ("Terragrunt's" → "Terragrunt's"); previously
+# stripped → "Terragrunt S" which read as a typo. Hyphens still allowed.
+_NON_LABEL_CHARS_RE = re.compile(r"[^\w\s\-']")
 
 
 def _sanitize_label(raw: str, fallback: str) -> str:
@@ -142,15 +174,21 @@ def _sanitize_label(raw: str, fallback: str) -> str:
     if not line:
         return fallback
     words = line.split()[:6]
-    return " ".join(w.capitalize() if not w.isupper() else w for w in words)
+    # Force Title Case across the board. Previously preserved `w.upper()` to
+    # respect intentional acronyms (HTTP, IAM, AWS), but KeyLLM also echoes
+    # whole-heading ALL CAPS like "TERRAGRUNT HOOKS AND EXECUTION" which we
+    # don't want. Trade: real acronyms now Title-cased ("AWS" → "Aws"). For
+    # KD's clustering use-case, this trade is fine (REDUCE re-labels chapters
+    # via the kd-all rotator anyway, and acronym precision isn't critical
+    # for shard-level intermediate signal).
+    return " ".join(w.lower().capitalize() for w in words)
 
 
 # =============================================================================
-# Phase A — embed + cluster all shards (uses EMBEDDING_MODEL)
+# Phase A — embed + cluster all shards (uses the rotator's kd-embed group)
 # =============================================================================
 async def _cluster_shards(
     shards: list[list[tuple[str, str]]],
-    embedding_model: str = EMBEDDING_MODEL,
 ) -> list[dict]:
     """
     Embed snippets + run community_detection for every shard in parallel.
@@ -173,7 +211,7 @@ async def _cluster_shards(
                 "communities": [], "embed_dt": 0.0,
             }
         t0 = time.monotonic()
-        vectors_list, _ = await embed_texts(snippets, model_name=embedding_model)
+        vectors_list, _ = await embed_texts(snippets)
         embed_dt = time.monotonic() - t0
         vectors = np.asarray(vectors_list, dtype=np.float32)
         communities = community_detection(
@@ -199,23 +237,26 @@ async def _label_one_cluster(
     fallback_label: str,
     semaphore: asyncio.Semaphore,
 ) -> str:
-    """One KeyLLM call: returns a sanitized 2-4 word Title-Case label."""
-    mgr = get_manager()
+    """One KeyLLM call via the rotator: returns a sanitized 2-4 word
+    Title-Case label. Failure falls through to `fallback_label` (typically
+    the first slug, normalized) so downstream REDUCE always sees something."""
+    chain = await _get_keylm_chain()
     user_msg = _KEYLM_USER_TEMPLATE.format(cluster_text=cluster_text[:LABEL_TEXT_CAP])
     async with semaphore:
         try:
-            raw = await mgr.chat(
-                model=KEYLM_MODEL,
-                messages=[
-                    {"role": "system", "content": _KEYLM_SYSTEM},
-                    {"role": "user",   "content": user_msg},
+            response = await chain.ainvoke(
+                [
+                    SystemMessage(content=_KEYLM_SYSTEM),
+                    HumanMessage(content=user_msg),
                 ],
-                temperature=KEYLM_TEMPERATURE,
+                # max_tokens applied per-call so the chain factory can stay
+                # generic (other future small-LM tasks may want longer outputs).
                 max_tokens=KEYLM_MAX_TOKENS,
             )
+            raw = getattr(response, "content", "") or ""
         except Exception as e:
             logger.warning(
-                f"[classical-map] KeyLLM call failed "
+                f"[classical-map] KeyLLM rotator call failed "
                 f"({type(e).__name__}: {str(e)[:120]}); using fallback {fallback_label!r}"
             )
             return fallback_label
@@ -265,9 +306,11 @@ async def label_shards_classical(
     shards: list[list[tuple[str, str]]],
 ) -> list[ShardLabels]:
     """
-    Two-phase classical MAP: embed + cluster ALL shards (Phase A), then swap
-    to Llama-3.2-1B-Instruct and label ALL clusters across ALL shards
-    (Phase B). Single XinfManager transition mid-flight; no thrash.
+    Two-phase classical MAP: embed + cluster ALL shards (Phase A) via the
+    LiteLLM rotator's `kd-embed` group, then label ALL clusters across ALL
+    shards (Phase B) via the rotator's `kd-keylm` group. Both phases are
+    parallel; KEYLM_CONCURRENCY caps Phase B fanout to keep free-tier RPM
+    safe. No local model hosting, no model swap.
 
     Args:
         shards: list of shards, each a list of (slug, content) tuples.

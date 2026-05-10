@@ -32,13 +32,21 @@ _client: Optional[httpx.AsyncClient] = None
 def _get_client() -> httpx.AsyncClient:
     """Lazy-instantiate the httpx async client. Pool size 50 is plenty for
     our homelab traffic; per-request timeout is 30s for proxy + 10s for
-    short health checks (callers can override via `timeout=` kwarg)."""
+    short health checks (callers can override via `timeout=` kwarg).
+
+    `AsyncHTTPTransport(retries=3)` is critical: when the FastAPI pod
+    restarts (Skaffold reload, OOM, image swap), its keepalive TCP
+    connections die. Without this, the singleton pool reuses dead sockets
+    and every request fails with `ConnectError: All connection attempts
+    failed` until the pod is itself restarted. With retries, httpx
+    re-resolves DNS + opens a fresh socket on transport errors."""
     global _client
     if _client is None:
         _client = httpx.AsyncClient(
             base_url=FASTAPI_URL,
             timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0),
             limits=httpx.Limits(max_connections=50, max_keepalive_connections=10),
+            transport=httpx.AsyncHTTPTransport(retries=3),
         )
     return _client
 

@@ -47,6 +47,7 @@ def Sidebar(active: str = ""):
             NavItem("home", "home", "Home", "/", active),
             NavItem("library", "book-open-text", "Study Library", "/library", active),
             NavItem("kd-inspect", "file-search", "Inspect Markdown", "/kd/inspect", active),
+            NavItem("kd-map-compare", "scale", "MAP A/B Compare", "/kd/map-compare", active),
             NavItem("catalog", "activity", "Catalog Health", "/catalog", active),
             Div("YouTube RAG", cls="text-[0.7rem] uppercase tracking-wider text-base-content/50 px-3 py-2 mt-2"),
             NavItem("youtube", "message-square-more", "Ask the Corpus", "/youtube/ask", active),

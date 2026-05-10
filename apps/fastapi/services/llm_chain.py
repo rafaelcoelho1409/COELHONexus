@@ -190,6 +190,167 @@ def _zhipu_entry(group: str, model: str, timeout_s: int = 120) -> dict:
 # Providers interleaved so no 3 in a row of same provider anywhere.
 GROUP = "kd-all"
 
+# =============================================================================
+# Small-LM group — `kd-keylm` (KeyLLM cluster labeling for the classical MAP)
+# =============================================================================
+# Tiny instruct LMs (≤1B) for short-output format-strict tasks like the
+# 2-4 word cluster titles emitted by graphs/knowledge/classical_map.py's
+# KeyLLM step. NOT for synthesis — those go to GROUP=kd-all.
+#
+# Why a separate group: the kd-all rotator's frontier 70B+ models would
+# burn unnecessary tokens on a 16-token title. Routing tiny tasks to a tiny
+# model keeps latency < 200ms and leaves the rotator's free-tier RPM
+# budget for the synthesis-heavy steps.
+#
+# Rationale for picks (research-validated 2026-05-09):
+# - meta/llama-3.2-1b-instruct on NIM (GA): IFEval 59.5 (highest among
+#   ≤1B candidates), temp=0 deterministic-stable, distilled from
+#   Llama-3.1-405B/70B → strong format adherence.
+# - llama-3.2-1b-preview on Groq (preview): same model on LPU silicon —
+#   sub-100ms latency. Preview status is a stability risk so secondary.
+KEYLM_GROUP = "kd-keylm"
+
+
+def _keylm_entries() -> list:
+    """
+    Two-deep small-LM rotator for cluster labeling.
+
+    Both deployments are NIM (Groq decommissioned llama-3.2-1b-preview, and
+    NIM-only matches the embeddings architecture rule). The 3B variant is
+    the fallback because:
+      - First Terragrunt MAP run (2026-05-09) hit NIM's 40 RPM limit during
+        the 28-cluster burst on the 1B endpoint → simple-shuffle had no
+        alternate, ~10 cluster labels fell back to slug names.
+      - Llama-3.2-3B-Instruct is the next size up Meta ships, also GA on
+        NIM, identical chat template — drop-in fallback when 1B cools down.
+      - 3B is slower (~2-3× wall time per call) but correctness > speed
+        for the few-percent cluster labels that route to fallback.
+    """
+    return [
+        # Primary: 1B for speed
+        _nim_entry(KEYLM_GROUP, "meta/llama-3.2-1b-instruct", timeout_s=30),
+        # Fallback: 3B when 1B is cooled down (rate-limit absorber)
+        _nim_entry(KEYLM_GROUP, "meta/llama-3.2-3b-instruct", timeout_s=45),
+    ]
+
+
+# =============================================================================
+# Embedding group — `kd-embed` (vector embeddings for KD MAP/REDUCE/preview)
+# =============================================================================
+# **SINGLE-ENTRY by design** — embedding rotation across providers breaks
+# cosine geometry within a study (different model = different vector space).
+# If NIM is down for an extended period, the LiteLLM Router's per-deployment
+# cooldown + retry policy handles transient failures (5xx/429/timeout) on
+# the same deployment; longer outages = study fails, user retries (cheap).
+# Don't add a second model to this group — see project_planner_map_replacement
+# memory for the regression that motivated this rule.
+#
+# Pick rationale (research-validated 2026-05-09 night):
+# - 40 RPM, NO monthly cap (Mistral's 2 RPM too tight for bulk filter)
+# - Commercial license OK (Jina v4 is non-commercial — license trap)
+# - Same NVIDIA_API_KEY already in use for the LLM rotator
+# - Higher MTEB rank than `bge-m3` / `e5-mistral` at sub-2B size class
+# - 2048-dim is plenty (KD's REDUCE PCA-reduces to 128 anyway)
+KD_EMBED_GROUP = "kd-embed"
+
+# Hard upper bound on inputs per /v1/embeddings call. NIM doesn't publish a
+# strict limit; 64 is empirically safe and matches the previous Xinference
+# batch tuning. Helper functions auto-batch above this.
+KD_EMBED_BATCH_SIZE = 64
+
+
+def _embed_entries() -> list:
+    """
+    Single-entry embedding group — see KD_EMBED_GROUP docstring above.
+
+    Two NIM-specific params are baked into litellm_params so they apply on
+    every call (LiteLLM Router strips unknown call-time kwargs):
+
+      - `encoding_format="float"` — required by NIM's OpenAI-compat /v1/embeddings.
+        Without it, NIM 400s with: "Input should be 'float' or 'base64'".
+
+      - `input_type="passage"` — required for ASYMMETRIC embedding models
+        (NV-Embed family has different heads for queries vs passages).
+        Use "passage" because KD's clustering compares document-vs-document
+        similarity, not query-vs-document. Without it, NIM 400s with:
+        "'input_type' parameter is required for asymmetric models".
+    """
+    return [
+        {
+            "model_name": KD_EMBED_GROUP,
+            "litellm_params": {
+                "model":           "nvidia_nim/nvidia/llama-nemotron-embed-1b-v2",
+                "api_key":         _env("NVIDIA_API_KEY"),
+                "timeout":         120,
+                "max_retries":     0,
+                "encoding_format": "float",
+                "input_type":      "passage",
+            },
+        },
+    ]
+
+
+def embed_via_router_sync(texts: list[str]) -> list[list[float]]:
+    """
+    Sync batch-embed via the rotator's `kd-embed` group. Auto-batches at
+    KD_EMBED_BATCH_SIZE; returns vectors in input order. Empty/whitespace
+    inputs are substituted with " " to keep the OpenAI-style /v1/embeddings
+    call happy (a real provider would 400 on empty inputs).
+
+    Returns flat list of vectors. Caller is responsible for tuple-wrapping
+    with a provider label (see services.knowledge.embeddings.embed_texts_sync).
+    """
+    if not texts:
+        return []
+    router = _get_router()
+    clean = [t if (t and t.strip()) else " " for t in texts]
+    out: list[list[float]] = []
+    for start in range(0, len(clean), KD_EMBED_BATCH_SIZE):
+        batch = clean[start:start + KD_EMBED_BATCH_SIZE]
+        # NIM's `nvidia/llama-nemotron-embed-1b-v2` is asymmetric (separate
+        # query/passage encoding heads). Both kwargs are required; verified
+        # 2026-05-09 with direct litellm.embedding(...) call. `extra_body=`
+        # does NOT work for LiteLLM embeddings (gets passed as a literal
+        # field, NIM rejects it).
+        response = router.embedding(
+            model=KD_EMBED_GROUP,
+            input=batch,
+            encoding_format="float",
+            input_type="passage",
+        )
+        # LiteLLM normalizes to OpenAI shape: response["data"] is a list of
+        # {"embedding": [...], "index": N, "object": "embedding"}.
+        out.extend(item["embedding"] for item in response["data"])
+    if len(out) != len(texts):
+        raise RuntimeError(
+            f"kd-embed: rotator returned {len(out)} vectors for {len(texts)} inputs"
+        )
+    return out
+
+
+async def embed_via_router_async(texts: list[str]) -> list[list[float]]:
+    """Async equivalent of embed_via_router_sync."""
+    if not texts:
+        return []
+    router = _get_router()
+    clean = [t if (t and t.strip()) else " " for t in texts]
+    out: list[list[float]] = []
+    for start in range(0, len(clean), KD_EMBED_BATCH_SIZE):
+        batch = clean[start:start + KD_EMBED_BATCH_SIZE]
+        # encoding_format + input_type both required — see embed_via_router_sync.
+        response = await router.aembedding(
+            model=KD_EMBED_GROUP,
+            input=batch,
+            encoding_format="float",
+            input_type="passage",
+        )
+        out.extend(item["embedding"] for item in response["data"])
+    if len(out) != len(texts):
+        raise RuntimeError(
+            f"kd-embed: rotator returned {len(out)} vectors for {len(texts)} inputs"
+        )
+    return out
+
 
 def _all_entries() -> list:
     """
@@ -361,7 +522,12 @@ def _get_router() -> Router:
             redis_kwargs["redis_password"] = redis_password
 
     _router_instance = Router(
-        model_list=_all_entries(),
+        # Combined model_list — `kd-all` (synthesis/planner/critic), `kd-keylm`
+        # (KeyLLM cluster labels), and `kd-embed` (embeddings) all live in one
+        # Router so they share the cooldown circuit-breaker + Redis state.
+        # The factory + helper functions select which group via the `model=`
+        # arg on ChatLiteLLMRouter / Router.embedding.
+        model_list=_all_entries() + _keylm_entries() + _embed_entries(),
         # simple-shuffle is recommended for production (LiteLLM docs): doesn't
         # add Redis round-trips per request the way usage-based-routing does.
         # Combined with allowed_fails_policy this effectively routes among
@@ -446,5 +612,20 @@ def build_curator_llm(timeout_s: int = 600):
     per design decision 2026-04-24: unified rotation for every step.
     """
     return ChatLiteLLMRouter(router=_get_router(), model=GROUP, temperature=0.0)
+
+
+def build_keylm_chain():
+    """
+    Tiny-LM chain for the classical MAP step's cluster-label generation
+    (KeyLLM-style). Routes to KEYLM_GROUP — currently NIM Llama-3.2-1B
+    primary, Groq Llama-3.2-1B-preview fallback. T=0.0 for deterministic
+    output; max_tokens applied per-call by the caller (typically 16 — a
+    2-4 word Title-Case title fits in 8-12 BPE tokens with margin).
+
+    See docs/KD-PLANNER-MAP-OPTIMIZATION.md §5 for the model selection
+    rationale. KeyLLM is intentionally NOT routed through the kd-all
+    frontier rotator — small task, small model.
+    """
+    return ChatLiteLLMRouter(router=_get_router(), model=KEYLM_GROUP, temperature=0.0)
 
 

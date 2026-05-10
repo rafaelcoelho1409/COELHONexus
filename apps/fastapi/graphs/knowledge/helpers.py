@@ -1000,7 +1000,11 @@ _OFF_TOPIC_PROTOTYPE_TEMPLATE = (
     "Documentation explaining how to use {framework}: "
     "features, configuration, usage examples, and tutorials."
 )
-_OFF_TOPIC_SNIPPET_CHARS = 200  # bytes of body fed into the embedder per doc
+_OFF_TOPIC_SNIPPET_CHARS = 1500  # bytes of body fed into the embedder per doc.
+# Bumped 200 → 1500 on 2026-05-09 night for parity with classical_map.py's
+# PREVIEW_CHARS. Matches NV-Embed's optimal input length (256-512 tokens);
+# sharper cosine separation between teaching content and contributing/release-
+# process docs vs the prior 200-char "intro paragraph only" cap.
 
 
 async def _filter_off_topic_files(

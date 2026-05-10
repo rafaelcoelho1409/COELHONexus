@@ -28,7 +28,6 @@ dependencies = [
     "langgraph-checkpoint-redis",
     "langgraph-checkpoint-postgres",  # PostgreSQL checkpointer for conversation persistence
     "psycopg[binary]",               # PostgreSQL async driver (binary — no libpq needed)
-    "fastembed",               # Dense + BM25 embeddings (ONNX, local, no torch)
     "scikit-learn",            # Calinski-Harabasz + KMeans fallback for KD REDUCE (Clio pattern)
     "umap-learn",              # Dim reduction before k-means (KD REDUCE): silhouette 0.06 → ~0.25 on same-domain text
     "k-means-constrained",     # Balanced k-means (KD REDUCE): enforces size_min/size_max per meta-cluster

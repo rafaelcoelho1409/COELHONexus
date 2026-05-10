@@ -77,6 +77,13 @@ HEAD_ASSETS = (
         .prose code { background: rgba(0,0,0,0.06); padding: 0.1rem 0.35rem;
           border-radius: 0.25rem; font-size: 0.9em; }
         [data-theme="forest"] .prose code { background: rgba(255,255,255,0.08); }
+        /* HTMX indicator — hidden by default, shown while a request is in flight.
+           HTMX sets `htmx-request` on the element with `hx-indicator` (or its
+           closest ancestor); we toggle display via that class. Using display
+           rather than opacity so the indicator doesn't take up space when idle. */
+        .htmx-indicator { display: none !important; }
+        .htmx-request .htmx-indicator,
+        .htmx-request.htmx-indicator { display: flex !important; }
     """),
 )
 

@@ -41,6 +41,10 @@ PLAYWRIGHT_CDP_HEADED: "{{ .Values.playwright.cdp_headed }}"
 NVIDIA_EMBEDDING_MODEL: "{{ .Values.embedding.model }}"
 # SearXNG metasearch (in-cluster) — used by Knowledge Distiller docs-URL resolver
 SEARXNG_URL: "{{ .Values.searxng.url }}"
+# KD planner MAP step routing — "1" enables the classical pipeline (rotator
+# embed + community_detection + KeyLLM); "0" keeps the legacy LLM path.
+# Read at runtime by graphs/knowledge/distiller.py.
+KD_USE_CLASSICAL_MAP: "{{ .Values.kd.useClassicalMap }}"
 {{- end -}}
 
 

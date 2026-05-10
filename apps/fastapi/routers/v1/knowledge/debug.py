@@ -36,6 +36,8 @@ async def debug_map_compare(
     framework: str,
     shard_size: int = 40,
     max_shards: Optional[int] = None,
+    skip_off_topic_filter: bool = False,
+    classical_only: bool = False,
 ):
     """
     A/B compare LLM-based MAP vs classical (deterministic) MAP on the same
@@ -102,8 +104,15 @@ async def debug_map_compare(
     if not entries:
         raise HTTPException(status_code=404, detail=f"empty corpus at {study_root!r}")
     n_initial = len(entries)
-    entries = await _filter_off_topic_files(entries, framework=framework)
-    n_after_filter = len(entries)
+    # The semantic off-topic filter embeds the entire corpus (~440 docs on
+    # Terragrunt) which can take 1-2 min on Tiger Lake CPU. For A/B debug
+    # runs with `max_shards` we usually don't need it — set
+    # `skip_off_topic_filter=true` to bypass and go straight to dedup+shard.
+    if skip_off_topic_filter:
+        n_after_filter = n_initial
+    else:
+        entries = await _filter_off_topic_files(entries, framework=framework)
+        n_after_filter = len(entries)
     entries = _dedup_chapter_files(entries)
     n_after_dedup = len(entries)
 
@@ -175,14 +184,23 @@ async def debug_map_compare(
                 for _ in all_shards
             ]
 
-    # Run both paths in parallel. LLM path fans out per shard; classical is
-    # one batched call (its internal _cluster_shards / _label_all_clusters
-    # already parallelize across shards inside each phase).
+    # Run both paths in parallel — UNLESS classical_only=true, in which
+    # case skip the LLM-rotator path entirely (it can stall for minutes
+    # on the kd-all 40-deep cascade through frontier models). The FastHTML
+    # /kd/map-compare UI defaults to classical_only=true so the page
+    # returns in <30s instead of 5+ minutes.
     import asyncio as _asyncio
-    llm_results, classical_results = await _asyncio.gather(
-        _asyncio.gather(*(_llm_one(s, i + 1) for i, s in enumerate(shards))),
-        _classical_all(shards),
-    )
+    if classical_only:
+        classical_results = await _classical_all(shards)
+        llm_results = [
+            {"wall_s": 0.0, "skipped": True, "clusters": [], "unused_shard_slugs": []}
+            for _ in shards
+        ]
+    else:
+        llm_results, classical_results = await _asyncio.gather(
+            _asyncio.gather(*(_llm_one(s, i + 1) for i, s in enumerate(shards))),
+            _classical_all(shards),
+        )
 
     return {
         "study_root": study_root,
@@ -208,28 +226,22 @@ async def debug_map_compare(
 
 
 @router.get("/debug/embeddings_smoke")
-async def debug_embeddings_smoke(mode: Optional[str] = None):
+async def debug_embeddings_smoke():
     """
     Verify the embeddings stack end-to-end without running the full graph.
-
-    Embeds 3 known phrases (2 similar, 1 different) and checks that the
-    similar pair has higher cosine similarity than the different pair.
-    Returns provider name, dimensionality, similarity scores.
-
-    Query params:
-      mode: override KD_EMBEDDING_MODE for this call only
-            ("xinference_with_fallback" | "xinference" | "local")
+    Embeds 3 known phrases (2 similar, 1 different) and asserts the similar
+    pair scores higher cosine than the different pair. Returns provider, dim,
+    similarity scores. Embeddings now go through the LiteLLM rotator
+    (`kd-embed` group → NIM nvidia/llama-nemotron-embed-1b-v2).
 
     Usage:
       curl http://<fastapi>/api/v1/knowledge/debug/embeddings_smoke
-      curl http://<fastapi>/api/v1/knowledge/debug/embeddings_smoke?mode=xinference
-      curl http://<fastapi>/api/v1/knowledge/debug/embeddings_smoke?mode=local
     """
     import asyncio as _asyncio
     from services.knowledge.embeddings import smoke_test
     try:
         # smoke_test is sync; run in worker thread to keep loop responsive.
-        result = await _asyncio.to_thread(smoke_test, mode)
+        result = await _asyncio.to_thread(smoke_test)
         return result
     except Exception as e:
         raise HTTPException(
