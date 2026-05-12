@@ -51,6 +51,9 @@ KD_USE_CLASSICAL_GRADER: "{{ .Values.kd.useClassicalGrader }}"
 # Phase 2.1 (2026-05-13): replaces critic's per-chapter LLM faithfulness call
 # with kd-embed similarity heuristic when "1". See kd.useClassicalCritic above.
 KD_USE_CLASSICAL_CRITIC: "{{ .Values.kd.useClassicalCritic }}"
+# Phase 3.1 (2026-05-13): routes Phase A outline through classical path when "1".
+# See kd.useClassicalOutline in values.yaml.
+KD_USE_CLASSICAL_OUTLINE: "{{ .Values.kd.useClassicalOutline }}"
 # R8 (2026-05-11): when "1", MAP runs ONE global pass (label_corpus_classical)
 # instead of per-shard. See `kd.globalMap` in values.yaml and `_use_global_map`
 # in graphs/knowledge/distiller.py.

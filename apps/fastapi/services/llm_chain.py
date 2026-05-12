@@ -297,7 +297,9 @@ def _reduce_label_entries() -> list:
         # deployment override approach we tried first didn't take effect.
         # json_schema mode keeps output valid at T=1.0 for non-Gemini
         # deployments too; only sampling among valid JSON paths differs.
-        _gemini_entry(REDUCE_LABEL_GROUP, "gemini-3.1-flash-lite-preview", timeout_s=60),
+        # Bumped 2026-05-13 from -preview (retires 2026-05-25) to stable
+        # (shipped 2026-05-07; ai.google.dev/gemini-api/docs/deprecations).
+        _gemini_entry(REDUCE_LABEL_GROUP, "gemini-3.1-flash-lite", timeout_s=60),
         # --- Tier 2: NIM-hosted, non-reasoning, high-context ---
         # Nemotron-3-super-120b-a12b: 1M ctx hybrid Mamba, AAII 36, leads
         # size class on AIME-2025 + Terminal-Bench. Non-reasoning by default
@@ -468,25 +470,28 @@ def _all_entries() -> list:
     """
     return [
         # --- 1–10: Frontier class (AAII 45+) ---
-        _nim_entry(GROUP, "moonshotai/kimi-k2-thinking", timeout_s=120),                           # AAII 67 — highest on list; HLE 44.9%, 200-300 tool-call coherence, 256K ctx
+        # _nim_entry(GROUP, "moonshotai/kimi-k2-thinking", timeout_s=120),                         # DISABLED 2026-05-13 — NIM returns 410 "Gone" since 2026-05-12 EOL (surfaced via Phase 3.1 outline_compare validation). The K2-thinking line is the reasoning variant of K2; no in-family replacement yet from Moonshot on NIM. K2.6 (#3 below) is the non-reasoning K2 successor and remains active. AAII 67 was highest on the list — when Moonshot ships K2.7-thinking or equivalent on NIM, restore here.
+
         # _deepseek_entry(GROUP, "deepseek-v4-pro", timeout_s=120),                                # DISABLED 2026-04-24 — "Insufficient Balance" on account. Re-enable after top-up (5M free grant used up or V4 not in free tier). AAII ~57, 1T+ MoE FP4, 1M ctx
         _nim_entry(GROUP, "z-ai/glm-5.1", timeout_s=120),                                          # AAII 51 (Reasoning); SWE-Bench Pro 58.4% (#1 OSS); may be skipped during NIM endpoint flakiness
         _nim_entry(GROUP, "minimaxai/minimax-m2.7", timeout_s=120),                                # AAII 50 — 204K ctx agentic, SWE-Pro 56.22%, SWE-Multilingual 76.5
         # _groq_entry(GROUP, "moonshotai/kimi-k2-instruct", timeout_s=120),                        # DISABLED 2026-04-24 — not in Groq's actual catalog (research agent hallucinated; Groq listing confirmed missing). AAII 49 (K2-0905), 256K ctx
         # _deepseek_entry(GROUP, "deepseek-v4-flash", timeout_s=120),                              # DISABLED 2026-04-24 — "Insufficient Balance" (same DeepSeek account as v4-pro). AAII 47 (Max), 284B MoE, 1M ctx
-        _nim_entry(GROUP, "moonshotai/kimi-k2.5", timeout_s=120),                                  # AAII 47 (R) / 37 (NR) — Arena Elo ~1447, 262K ctx, powers Cursor Composer 2
+        _nim_entry(GROUP, "moonshotai/kimi-k2.6", timeout_s=120),                                  # RE-ENABLED 2026-05-13 — K2.5 EOL'd on NIM 2026-04-30 (surfaced via Phase 3.1 outline_compare 410 cascade); K2.6 is the current Kimi K2.x on NIM (build.nvidia.com/moonshotai/kimi-k2.6) and the original disable reason no longer applies. Sits in the cascade alongside K2-Thinking (#1, reasoning variant).
+
         _gemini_entry(GROUP, "gemini-3-flash-preview", timeout_s=120),                             # AAII 46 (R) / 35 (NR) — LiveCodeBench 90.8%, SWE-bench 78%, 1M ctx
         _nim_entry(GROUP, "qwen/qwen3.5-397b-a17b", timeout_s=120),                                # AAII 45 (R) / 40 (NR) — MMLU-Pro 87.18%, 262K ctx
-        _nim_entry(GROUP, "deepseek-ai/deepseek-v3.2", timeout_s=120),                             # AAII 42 (R) / 32 (NR) — SWE-Bench 72-74%, IMO gold, 163K ctx
+        _nim_entry(GROUP, "deepseek-ai/deepseek-v4-flash", timeout_s=120),                          # BUMPED 2026-05-13 V3.2→V4-Flash — NIM EOL'd v3.2 on 2026-05-04 (surfaced via Phase 3.1 outline_compare 410 cascade, same week as v3.1-terminus). V4-Flash is the successor on the same free-tier NIM DeepSeek line per build.nvidia.com/deepseek-ai/deepseek-v4-flash (the `deepseek/` provider entries for V4-Flash stay commented because DeepSeek's own API is paywalled; NIM-hosted V4-Flash is the free-tier path).
         # --- 11–17: Strong second tier (AAII 34–42) ---
-        # _sambanova_entry(GROUP, "MiniMax-M2.5", timeout_s=120),                                  # DISABLED 2026-04-24 — SambaNova response: "A payment method is required". Re-enable after adding payment method. AAII 42, SWE-Bench 80.2% (highest SWE), 160K ctx
-        _nim_entry(GROUP, "minimaxai/minimax-m2.5", timeout_s=120),                                # AAII 42 — DUP of #11 (same model, NIM infra)
+        # _sambanova_entry(GROUP, "MiniMax-M2.7", timeout_s=120),                                  # COMMENTED 2026-05-13 — model string updated M2.5→M2.7 (M2.7 supersedes M2.5 on SambaNova). Still DISABLED via "A payment method is required" SambaNova paywall (since 2026-04-24); re-enable after adding payment method. AAII 50, 204K ctx (M2.7).
+        _nim_entry(GROUP, "minimaxai/minimax-m2.7", timeout_s=120),                                # RE-ENABLED 2026-05-13 — M2.5 EOL'd on NIM 2026-05-12; M2.7 is the successor (same as #3 active above — deliberate cascade duplicate so LiteLLM Router can rotate between the two instances if one hits a transient hiccup).
+
         # _cerebras_entry(GROUP, "zai-glm-4.7", timeout_s=120),                                    # DISABLED 2026-04-24 — 404 "you do not have access to it" (model exists in Cerebras catalog but API key lacks access). AAII 42 (R) / 34 (NR), SOTA τ²-Bench, 200K ctx, 355B params
         _nim_entry(GROUP, "nvidia/nemotron-3-super-120b-a12b", timeout_s=120),                     # AAII 36 — 1M ctx, hybrid Mamba, leads size class on AIME-2025 + Terminal-Bench
         # _sambanova_entry(GROUP, "DeepSeek-V3.1", timeout_s=120),                                 # DISABLED 2026-04-24 (Run-8 evidence) — full SambaNova account now paywalled; whole provider returns "A payment method is required" even for previously-free models. AAII 34 (R) when/if re-enabled.
-        # _nim_entry(GROUP, "deepseek-ai/deepseek-v3.1-terminus", timeout_s=120),                  # DISABLED 2026-05-13 — NIM returns 410 "Gone" since 2026-05-04 EOL. Surfaced via Phase 1.3 grader_compare validation (LLM grader cascade hit this model and 410 is non-retryable in LiteLLM, aborting the whole request). Re-enable if NIM republishes; otherwise leave commented.
+        _nim_entry(GROUP, "deepseek-ai/deepseek-v4-flash", timeout_s=120),                          # RE-ENABLED 2026-05-13 (cascade dup) — V3.1-Terminus → V3.2 → V4-Flash chain: V3.1-Terminus EOL 2026-05-04; V3.2 also EOL 2026-05-04 (NIM EOL'd them as a pair). V4-Flash is the successor (build.nvidia.com/deepseek-ai/deepseek-v4-flash). Deliberate cascade duplicate of the V4-Flash entry above for redundancy.
 
-        _gemini_entry(GROUP, "gemini-3.1-flash-lite-preview", timeout_s=90),                       # AAII 34 — GPQA Diamond 86.9%, 381 t/s, 1M ctx
+        _gemini_entry(GROUP, "gemini-3.1-flash-lite", timeout_s=90),                               # AAII 34 — GPQA Diamond 86.9%, 381 t/s, 1M ctx. Bumped 2026-05-13 from -preview (retires 2026-05-25) to stable (shipped 2026-05-07; ai.google.dev/gemini-api/docs/deprecations)
         # --- 18–21: gpt-oss-120b on four providers (AAII 33 each) ---
         # _cerebras_entry(GROUP, "gpt-oss-120b", timeout_s=120),                                   # DISABLED 2026-04-24 — 404 "you do not have access to it" (model listed in Cerebras catalog but key unauthorized). AAII 33, MMLU-Pro 90.0%, 3000 tok/s
         # _sambanova_entry(GROUP, "gpt-oss-120b", timeout_s=120),                                  # DISABLED 2026-04-24 — SambaNova response: "A payment method is required". Same model as #18 family

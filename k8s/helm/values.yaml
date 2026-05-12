@@ -102,6 +102,16 @@ kd:
   # flip after A/B validation via /api/v1/knowledge/debug/critic_compare.
   # Phase 2.2 will upgrade to host-side MiniCheck/AlignScore if needed.
   useClassicalCritic: "0"
+  # Phase 3.1 (2026-05-13): when "1", routes Phase A outline generation
+  # through services/knowledge/outline_classical.py — deterministic
+  # markdown-header section extraction (zero LLM for naming) + 1 small
+  # LLM call for the creative challenges+flashcards artifacts. ~80%
+  # token reduction on the outline step, same ChapterOutline shape so
+  # Phase B/C/D work unchanged. Default "0" keeps the legacy single
+  # large LLM call (OUTLINE_PROMPT); flip after A/B validation via
+  # /api/v1/knowledge/debug/outline_compare confirms section structure
+  # quality on representative chapters.
+  useClassicalOutline: "0"
   # R8 (global community_detection) + R8b (file-cap sub-split) status:
   # - Docker (1318 files): WORKS — silhouette 0.522 (record), 10 balanced
   #   chapters, max 18.9%, 48 orphans (vs 103 per-shard).

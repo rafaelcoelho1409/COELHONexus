@@ -531,6 +531,116 @@ async def debug_critic_compare(request: CriticCompareRequest):
     }
 
 
+class OutlineCompareRequest(BaseModel):
+    """
+    Body for POST /debug/outline_compare — side-by-side LLM vs classical
+    outline generation on the same chapter source. Phase 3.1 validation
+    harness for services/knowledge/outline_classical.py.
+
+    Both paths run; both ChapterOutline objects returned with per-field
+    deltas + wall-clock timings. Run on synthetic fixtures during dev OR
+    paste real chapter assigned-files-content from a prior committed study.
+    """
+    chapter: dict = Field(
+        description="ChapterPlan JSON: number, title, goal, assigned_files."
+    )
+    files_content: str = Field(
+        min_length=10,
+        description="Concatenated source files for this chapter (the same "
+                    "input `generate_outline` sees in production).",
+    )
+    framework: str = Field(default="generic")
+    tone_block: str = Field(
+        default="",
+        description="Optional tone-block (UserProfile-derived). Inherits "
+                    "neutral tone if empty.",
+    )
+
+
+@router.post("/debug/outline_compare")
+async def debug_outline_compare(request: OutlineCompareRequest):
+    """
+    Run the LLM outline (current OUTLINE_PROMPT path via
+    `generate_outline`) AND the classical outline
+    (services/knowledge/outline_classical.generate_outline_classically)
+    on the same chapter input. Return both ChapterOutline objects +
+    per-field diffs + wall-clock timings.
+
+    Useful for Phase 3.1 validation: paste a real chapter's
+    `files_content`, inspect whether the classical sections match the
+    structural quality of the LLM-emitted ones. Section heading agreement
+    matters more than goal text — Phase B routing uses heading + goal
+    for vault assignment.
+    """
+    import time as _time
+    import os as _os
+
+    from schemas.knowledge.agents import ChapterPlan
+    from services.knowledge.outline_classical import generate_outline_classically
+    from graphs.knowledge.hierarchical_synth import generate_outline
+    from services.llm_chain import build_synth_fallback_chain
+
+    try:
+        chapter = ChapterPlan(**request.chapter)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid chapter JSON: {type(e).__name__}: {e}",
+        )
+
+    llm = build_synth_fallback_chain()
+    code_vault: dict[str, str] = {}  # outline doesn't need actual code blocks
+
+    # Classical path (deterministic seg + 1 small LLM)
+    t0_classical = _time.monotonic()
+    classical_outline = await generate_outline_classically(
+        chapter=chapter,
+        files_content=request.files_content,
+        code_vault=code_vault,
+        framework=request.framework,
+        tone_block=request.tone_block,
+        llm=llm,
+    )
+    classical_dt = _time.monotonic() - t0_classical
+
+    # LLM path — temporarily disable KD_USE_CLASSICAL_OUTLINE so the
+    # route is a true A/B test regardless of production config.
+    prior_flag = _os.environ.get("KD_USE_CLASSICAL_OUTLINE")
+    _os.environ["KD_USE_CLASSICAL_OUTLINE"] = "0"
+    t0_llm = _time.monotonic()
+    try:
+        llm_outline = await generate_outline(
+            chapter=chapter,
+            files_content=request.files_content,
+            code_vault=code_vault,
+            framework=request.framework,
+            tone_block=request.tone_block,
+            llm=llm,
+        )
+    finally:
+        if prior_flag is None:
+            _os.environ.pop("KD_USE_CLASSICAL_OUTLINE", None)
+        else:
+            _os.environ["KD_USE_CLASSICAL_OUTLINE"] = prior_flag
+    llm_dt = _time.monotonic() - t0_llm
+
+    return {
+        "classical": classical_outline.model_dump(),
+        "llm": llm_outline.model_dump(),
+        "section_count_delta": (
+            len(classical_outline.sections) - len(llm_outline.sections)
+        ),
+        "flashcard_count_delta": (
+            len(classical_outline.flashcards) - len(llm_outline.flashcards)
+        ),
+        "classical_wall_clock_s": round(classical_dt, 4),
+        "llm_wall_clock_s": round(llm_dt, 4),
+        "speedup": round(llm_dt / max(classical_dt, 1e-6), 1),
+        "classical_section_headings": [s.heading for s in classical_outline.sections],
+        "llm_section_headings": [s.heading for s in llm_outline.sections],
+    }
+
+
 @router.get("/debug/embeddings_smoke")
 async def debug_embeddings_smoke():
     """

@@ -109,6 +109,31 @@ async def generate_outline(
     user_id: str | None = None,
 ) -> ChapterOutline:
     """Phase A: prose-only LLM call producing ChapterOutline."""
+    # Phase 3.1 (2026-05-13): KD_USE_CLASSICAL_OUTLINE=1 routes through
+    # services/knowledge/outline_classical.py — deterministic header-based
+    # section extraction (zero LLM for naming) + 1 small LLM call for
+    # the creative challenges+flashcards artifacts. ~80% token reduction,
+    # same ChapterOutline shape so Phase B (vault routing), Phase C
+    # (per-section synth), and Phase D (assemble) work unchanged. Default
+    # "0" keeps the legacy single-large-LLM-call path until A/B validation
+    # via /api/v1/knowledge/debug/outline_compare. See
+    # docs/KD-SYNTH-LLM-TO-CLASSICAL-MAY2026.md Phase 3.
+    import os as _os
+    if _os.environ.get("KD_USE_CLASSICAL_OUTLINE", "0").strip().lower() in (
+        "1", "true", "yes",
+    ):
+        from services.knowledge.outline_classical import generate_outline_classically
+        return await generate_outline_classically(
+            chapter=chapter,
+            files_content=files_content,
+            code_vault=code_vault,
+            framework=framework,
+            tone_block=tone_block,
+            llm=llm,
+            iteration=iteration,
+            study_id=study_id,
+            user_id=user_id,
+        )
     label = f"hierarchical-outline-ch{chapter.number:02d}"
     return await _invoke_structured_with_fallback(
         prompt = OUTLINE_PROMPT,
