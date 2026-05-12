@@ -93,7 +93,7 @@ kd:
   # A/B validation via /api/v1/knowledge/debug/grader_compare confirms
   # the classical scorer agrees on representative chapters. See
   # docs/KD-SYNTH-LLM-TO-CLASSICAL-MAY2026.md Phase 1.
-  useClassicalGrader: "0"
+  useClassicalGrader: "1"
   # Phase 2.1 (2026-05-13): when "1", replaces the post-synth critic's
   # per-chapter LLM faithfulness call (OP-45) with an embedding-similarity
   # heuristic via the kd-embed rotator (services/knowledge/critic_classical.py).
@@ -101,7 +101,7 @@ kd:
   # this flag (they always were). Default "0" keeps the legacy LLM critic;
   # flip after A/B validation via /api/v1/knowledge/debug/critic_compare.
   # Phase 2.2 will upgrade to host-side MiniCheck/AlignScore if needed.
-  useClassicalCritic: "0"
+  useClassicalCritic: "1"
   # Phase 3.1 (2026-05-13): when "1", routes Phase A outline generation
   # through services/knowledge/outline_classical.py — deterministic
   # markdown-header section extraction (zero LLM for naming) + 1 small
@@ -111,7 +111,7 @@ kd:
   # large LLM call (OUTLINE_PROMPT); flip after A/B validation via
   # /api/v1/knowledge/debug/outline_compare confirms section structure
   # quality on representative chapters.
-  useClassicalOutline: "0"
+  useClassicalOutline: "1"
   # Phase 4 (2026-05-13): when "1", Self-Refine loop attempts deterministic
   # patches on patchable Issue dims (signal_to_noise / citation_integrity /
   # assumption_match) BEFORE the LLM adjustment+re-synth cycle. If patches
@@ -123,7 +123,7 @@ kd:
   # KD_USE_CLASSICAL_GRADER for reliably labeled Issue dimensions. Default
   # "0" keeps the legacy LLM-only refine path; flip after A/B validation
   # via /api/v1/knowledge/debug/refiner_compare.
-  useClassicalRefiner: "0"
+  useClassicalRefiner: "1"
   # Phase 5 (2026-05-13): when "1", routes the per-chapter curator pass
   # through services/knowledge/curator_classical.py — deterministic glossary
   # substitution + heading-depth normalization (collapse H4+ to H3) +
@@ -133,7 +133,7 @@ kd:
   # the legacy CURATOR_PROMPT LLM call; flip after A/B validation via
   # /api/v1/knowledge/debug/curator_compare confirms style normalization
   # matches.
-  useClassicalCurator: "0"
+  useClassicalCurator: "1"
   # Phase 5 (2026-05-13): when "1", routes the final summary.md / assembler
   # step through services/knowledge/summary_classical.py — deterministic
   # Python-built header + reading plan + one small-LLM call via the
@@ -142,7 +142,7 @@ kd:
   # (~70% output-token reduction vs ASSEMBLER_PROMPT). Default "0" keeps the
   # legacy single-call assembler; flip after A/B validation via
   # /api/v1/knowledge/debug/summary_compare.
-  useClassicalSummary: "0"
+  useClassicalSummary: "1"
   # R8 (global community_detection) + R8b (file-cap sub-split) status:
   # - Docker (1318 files): WORKS — silhouette 0.522 (record), 10 balanced
   #   chapters, max 18.9%, 48 orphans (vs 103 per-shard).
