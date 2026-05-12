@@ -26,7 +26,10 @@ ENV PATH="/usr/local/bin:$PATH"
 # Copy dependency files first (for layer caching)
 COPY pyproject.toml ./
 
-# Install dependencies (no PyTorch — embeddings use ONNX via FastEmbed)
+# Install dependencies (no PyTorch — embeddings use ONNX via FastEmbed).
+# The unclecode-litellm vs litellm namespace collision is resolved at
+# resolution time via `[tool.uv] override-dependencies` in pyproject.toml —
+# no post-install patching needed here.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv lock && \
     uv sync --frozen --no-install-project --no-dev

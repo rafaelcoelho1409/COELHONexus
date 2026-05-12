@@ -32,6 +32,7 @@ dependencies = [
     "umap-learn",              # Dim reduction before k-means (KD REDUCE): silhouette 0.06 → ~0.25 on same-domain text
     "k-means-constrained",     # Balanced k-means (KD REDUCE): enforces size_min/size_max per meta-cluster
     "httpx",                   # HTTP client for NVIDIA NIM embedding API
+    "diskcache>=5.6",          # R7 (2026-05-11): on-disk cache for kd-embed vectors keyed on (model_id, sha256(text)) — skips NIM round-trips on same-corpus re-runs during tuning loops. Pure-Python, no system deps, fork-safe.
     "flashrank",               # Cross-encoder reranker (local, no API cost)
     "rapidfuzz",               # Fuzzy string matching for entity resolution
     "qdrant-client",           # Qdrant vector database client
@@ -79,3 +80,30 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = []
+
+[tool.uv]
+# Resolution overrides for transitive-dependency conflicts.
+#
+# unclecode-litellm vs litellm namespace collision (2026-05-11):
+# crawl4ai 0.8.6 declares `unclecode-litellm==1.81.13` (self-described in its
+# METADATA as a "pre-compromise fork of litellm") as a transitive dependency.
+# That package installs files into the SAME `litellm/` namespace as upstream
+# litellm 1.83.13 — both ship `litellm/cost_calculator.py` AND
+# `litellm/llms/openai/cost_calculation.py`. uv's install order isn't
+# deterministic across rebuilds, so the venv ends up with cost_calculator.py
+# from 1.83.13 (which imports `_video_output_cost_per_second`) but
+# cost_calculation.py from 1.81.13 (which lacks that symbol — it predates
+# litellm's video pricing support). Result: ImportError on first
+# `import litellm`, blocking app startup.
+#
+# Fix: override the transitive `unclecode-litellm` requirement with one
+# carrying a marker that always evaluates False (`python_version >= '99'`).
+# uv resolves the override against the real environment, the marker is
+# False, and the package is silently skipped. crawl4ai's runtime
+# `import litellm` resolves to upstream litellm 1.83.13 — the upstream
+# API is a strict superset of the fork's 1.81.13 API, so crawl4ai
+# behavior is unaffected. Verified by regenerating uv.lock after this
+# override lands: `unclecode-litellm` no longer appears in the lock.
+override-dependencies = [
+    "unclecode-litellm; python_version >= '99'",
+]

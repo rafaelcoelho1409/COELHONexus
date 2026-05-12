@@ -45,6 +45,10 @@ SEARXNG_URL: "{{ .Values.searxng.url }}"
 # embed + community_detection + KeyLLM); "0" keeps the legacy LLM path.
 # Read at runtime by graphs/knowledge/distiller.py.
 KD_USE_CLASSICAL_MAP: "{{ .Values.kd.useClassicalMap }}"
+# R8 (2026-05-11): when "1", MAP runs ONE global pass (label_corpus_classical)
+# instead of per-shard. See `kd.globalMap` in values.yaml and `_use_global_map`
+# in graphs/knowledge/distiller.py.
+KD_GLOBAL_MAP: "{{ .Values.kd.globalMap }}"
 {{- end -}}
 
 

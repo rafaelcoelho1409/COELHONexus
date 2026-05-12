@@ -84,6 +84,18 @@ embedding:
 # See docs/KD-PLANNER-MAP-OPTIMIZATION.md §5 for the full rationale.
 kd:
   useClassicalMap: "1"
+  # R8 (global community_detection) + R8b (file-cap sub-split) status:
+  # - Docker (1318 files): WORKS — silhouette 0.522 (record), 10 balanced
+  #   chapters, max 18.9%, 48 orphans (vs 103 per-shard).
+  # - Terragrunt (440 files): REGRESSED — R8b's plain-KMeans(k=2) sub-split
+  #   produced a degenerate 7+1 partition (253-file sub-meta still 63% of
+  #   corpus, no recursion → mega junk drawer). Validated 2026-05-12 on
+  #   study 8e88137d.
+  # Default REVERTED to "0" pending the adaptive-k KMeansConstrained
+  # sub-split fix in reduce_cluster.py. R8+R8b remain opt-in for advanced
+  # tuning; per-shard mode (label_shards_classical, the validated stable
+  # path) is the safe default for both Docker and Terragrunt.
+  globalMap: "0"
 
 # SearXNG — in-cluster metasearch used by Knowledge Distiller to resolve
 # official documentation URLs (and any future web-search need). Internal DNS

@@ -16,6 +16,17 @@ Why this shape:
     crashed our single-node K8s on bulk operations. Same problem as
     Xinference. Fail fast on rotator outage instead.
 
+R7 disk cache (2026-05-11):
+  - Each text input → cache key `f"{KD_EMBED_GROUP}:{sha256(text).hex()}"`.
+  - Cache value: the 2048-dim float vector returned by NIM.
+  - Cache hits skip the round-trip; misses go to NIM, then are stored.
+  - Cache dir `/app/.embed_cache`, size cap 1 GiB (≈65K cached texts at
+    2048×4 bytes each + diskcache index). Ephemeral within the pod —
+    great for tuning-loop re-runs of the same corpus, lost on pod
+    restart. Persistent storage would require a PVC mount.
+  - Cache key includes the rotator group name so a future kd-embed model
+    swap auto-invalidates (the keys carry the model identity).
+
 Used by:
   - graphs/knowledge/reduce_cluster.py     (REDUCE step, micro-cluster embeddings)
   - graphs/knowledge/hierarchical_synth.py (synth audit — section + hash vecs)
@@ -30,10 +41,13 @@ Public API:
   smoke_test()             -> dict                        # /debug
 """
 import asyncio
+import hashlib
 import logging
 import math
+import os
 import time
 
+import diskcache as _dc
 import numpy as np
 
 from services.llm_chain import (
@@ -53,6 +67,83 @@ _PROVIDER_LABEL = f"rotator:{KD_EMBED_GROUP}"
 
 
 # =============================================================================
+# R7 (2026-05-11) — on-disk cache for kd-embed vectors
+# =============================================================================
+# Keyed on `(rotator_group, sha256(text))`. Pinning the group name in the key
+# means a future kd-embed model swap auto-invalidates (vectors from a
+# different model live in a different geometry — see the project memory note
+# on regression #5). 1 GiB cap stores ~65K cached texts; LRU eviction when
+# full. Module-level singleton because diskcache is fork-safe (filelock-based
+# coordination across Celery prefork children).
+_EMBED_CACHE_DIR = os.environ.get("KD_EMBED_CACHE_DIR", "/app/.embed_cache")
+_EMBED_CACHE_SIZE_BYTES = 1 * 1024 * 1024 * 1024  # 1 GiB
+
+try:
+    os.makedirs(_EMBED_CACHE_DIR, exist_ok=True)
+    _EMBED_CACHE: _dc.Cache | None = _dc.Cache(
+        _EMBED_CACHE_DIR, size_limit=_EMBED_CACHE_SIZE_BYTES,
+    )
+except Exception as _cache_err:  # pragma: no cover — defensive
+    logger.warning(
+        f"[embeddings] disk cache init failed "
+        f"({type(_cache_err).__name__}: {_cache_err}); "
+        f"continuing without cache (every call hits NIM)"
+    )
+    _EMBED_CACHE = None
+
+
+def _embed_cache_key(text: str) -> str:
+    """Stable cache key. Includes rotator group so kd-embed model swaps
+    invalidate transparently."""
+    digest = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+    return f"{KD_EMBED_GROUP}:{digest}"
+
+
+def _cache_lookup_partition(
+    texts: list[str],
+) -> tuple[list[list[float] | None], list[int], list[str], int]:
+    """
+    Split `texts` into cache-hits and -misses preserving order.
+
+    Returns:
+        vectors_out: list with cached vectors at hit positions, None at miss
+        miss_indices: positions of `None`s in vectors_out
+        miss_texts:   texts at miss_indices (input to the rotator)
+        hits:         count of cache hits (for logging)
+    """
+    if _EMBED_CACHE is None:
+        return [None] * len(texts), list(range(len(texts))), list(texts), 0
+    vectors_out: list[list[float] | None] = [None] * len(texts)
+    miss_indices: list[int] = []
+    miss_texts: list[str] = []
+    hits = 0
+    for i, text in enumerate(texts):
+        try:
+            cached = _EMBED_CACHE.get(_embed_cache_key(text))
+        except Exception:
+            cached = None  # defensive: corrupt cache entry → treat as miss
+        if cached is not None:
+            vectors_out[i] = cached
+            hits += 1
+        else:
+            miss_indices.append(i)
+            miss_texts.append(text)
+    return vectors_out, miss_indices, miss_texts, hits
+
+
+def _cache_store(texts: list[str], vectors: list[list[float]]) -> None:
+    """Best-effort cache store. Failures are logged at debug level only —
+    we never block a successful embed call on cache writes."""
+    if _EMBED_CACHE is None:
+        return
+    for text, vec in zip(texts, vectors):
+        try:
+            _EMBED_CACHE.set(_embed_cache_key(text), vec)
+        except Exception as e:  # pragma: no cover — defensive
+            logger.debug(f"[embeddings] cache set failed: {type(e).__name__}: {e}")
+
+
+# =============================================================================
 # Public API — embed_texts (sync + async)
 # =============================================================================
 def embed_texts_sync(texts: list[str]) -> tuple[list[list[float]], str]:
@@ -60,6 +151,10 @@ def embed_texts_sync(texts: list[str]) -> tuple[list[list[float]], str]:
     Synchronous batch embed via the LiteLLM rotator's `kd-embed` group.
     Returns (vectors, provider_label). vectors are 2048-dim float lists,
     one per input, in input order.
+
+    R7 (2026-05-11): each input is looked up in the disk cache first
+    (key = `f"{KD_EMBED_GROUP}:{sha256(text).hex()}"`); only misses go
+    to NIM. Cache writes are best-effort.
 
     Raises on full provider outage — caller should let the request fail and
     rely on user-side retry. **Do NOT add a fallback to a different model**
@@ -69,11 +164,23 @@ def embed_texts_sync(texts: list[str]) -> tuple[list[list[float]], str]:
     if not texts:
         return [], "empty"
     t0 = time.time()
-    vectors = embed_via_router_sync(texts)
+    vectors_out, miss_indices, miss_texts, hits = _cache_lookup_partition(texts)
+    if miss_texts:
+        miss_vectors = embed_via_router_sync(miss_texts)
+        for idx, vec in zip(miss_indices, miss_vectors):
+            vectors_out[idx] = vec
+        _cache_store(miss_texts, miss_vectors)
+    vectors: list[list[float]] = [v for v in vectors_out if v is not None]
+    if len(vectors) != len(texts):
+        raise RuntimeError(
+            f"embed_texts_sync: cache partition invariant violated — "
+            f"got {len(vectors)} vectors for {len(texts)} inputs "
+            f"({hits} hits, {len(miss_texts)} misses)"
+        )
     logger.info(
         f"[embeddings] {KD_EMBED_GROUP} ok "
         f"({len(texts)} items, {len(vectors[0]) if vectors else 0}d, "
-        f"in {time.time() - t0:.2f}s)"
+        f"in {time.time() - t0:.2f}s, cache: {hits}/{len(texts)} hit)"
     )
     return vectors, _PROVIDER_LABEL
 
@@ -83,11 +190,23 @@ async def embed_texts(texts: list[str]) -> tuple[list[list[float]], str]:
     if not texts:
         return [], "empty"
     t0 = time.time()
-    vectors = await embed_via_router_async(texts)
+    vectors_out, miss_indices, miss_texts, hits = _cache_lookup_partition(texts)
+    if miss_texts:
+        miss_vectors = await embed_via_router_async(miss_texts)
+        for idx, vec in zip(miss_indices, miss_vectors):
+            vectors_out[idx] = vec
+        _cache_store(miss_texts, miss_vectors)
+    vectors: list[list[float]] = [v for v in vectors_out if v is not None]
+    if len(vectors) != len(texts):
+        raise RuntimeError(
+            f"embed_texts: cache partition invariant violated — "
+            f"got {len(vectors)} vectors for {len(texts)} inputs "
+            f"({hits} hits, {len(miss_texts)} misses)"
+        )
     logger.info(
         f"[embeddings] {KD_EMBED_GROUP} ok "
         f"({len(texts)} items, {len(vectors[0]) if vectors else 0}d, "
-        f"in {time.time() - t0:.2f}s)"
+        f"in {time.time() - t0:.2f}s, cache: {hits}/{len(texts)} hit)"
     )
     return vectors, _PROVIDER_LABEL
 

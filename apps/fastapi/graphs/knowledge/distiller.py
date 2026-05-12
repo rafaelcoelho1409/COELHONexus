@@ -491,6 +491,22 @@ class KnowledgeDistillerGraph:
                 "1", "true", "yes",
             )
 
+        # R8 (2026-05-11): KD_GLOBAL_MAP=1 routes MAP through the GLOBAL
+        # classical pipeline — one batched embed call across the entire
+        # corpus + one community_detection on the full N×N cosine matrix
+        # (graphs.knowledge.classical_map.label_corpus_classical). Bypasses
+        # per-shard sharding entirely. Sharding was a TPM/context-budget
+        # workaround from the LLM-MAP era; the classical algorithm has no
+        # such constraint, so global is cheaper (one rotator call vs S),
+        # more accurate (no cross-shard fragmentation), and yields fewer
+        # micro-clusters for REDUCE downstream. Defaults to "0" — flip to
+        # "1" after A/B validation via /debug/map_compare. Implies
+        # KD_USE_CLASSICAL_MAP semantics (classical algorithm).
+        def _use_global_map() -> bool:
+            return os.environ.get("KD_GLOBAL_MAP", "0").strip().lower() in (
+                "1", "true", "yes",
+            )
+
         async def _label_shard_bounded(shard, shard_idx):
             async with MAP_SHARD_SEMAPHORE:
                 try:
@@ -529,7 +545,14 @@ class KnowledgeDistillerGraph:
                     )
 
         _shard_start = _asyncio.get_event_loop().time()
-        if _use_classical_map():
+        if _use_global_map():
+            # R8 (2026-05-11): one global embed + one community_detection over
+            # the whole corpus. Returns a single-element list[ShardLabels];
+            # downstream REDUCE flattens shard_results anyway. Implies
+            # KD_USE_CLASSICAL_MAP semantics (classical algorithm).
+            from graphs.knowledge.classical_map import label_corpus_classical
+            shard_results = await label_corpus_classical(shards)
+        elif _use_classical_map():
             from graphs.knowledge.classical_map import label_shards_classical
             # Two-phase: embed+cluster all shards (one model loaded), swap once,
             # label all clusters (other model loaded). Single transition / study.

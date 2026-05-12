@@ -147,10 +147,57 @@ app.conf.include = [
 
 
 # =============================================================================
-# Worker startup — no pre-warm needed
+# Worker startup — UMAP numba JIT pre-warm
 # =============================================================================
 # Embeddings go through the LiteLLM rotator's `kd-embed` group (NIM hosted).
-# LLM calls go through `kd-all` / `kd-keylm`. No local models to warm; the
-# rotator is constructed lazily on first call. Xinference + its probe block
-# removed 2026-05-09 night (see memory: project_local_vs_rotator_architecture).
+# LLM calls go through `kd-all` / `kd-keylm` / `kd-reduce-label`. The rotator
+# is constructed lazily on first call. Xinference + its probe block removed
+# 2026-05-09 night (see memory: project_local_vs_rotator_architecture).
+#
+# UMAP pre-warm (added 2026-05-11):
+# UMAP is the only locally-imported library in the KD pipeline that runs
+# numba-JIT-compiled kernels. First fit_transform in a fresh Python process
+# triggers ahead-of-time JIT compilation that takes 5–8 minutes (observed
+# 2026-05-11 Phase-A validation run on Docker: 496s for a single 135×128
+# UMAP call, with the worker process otherwise idle). Subsequent calls in
+# the same process run in 1–3s on the same input shape.
+#
+# Hooking `worker_process_init` runs the pre-warm once per Celery prefork
+# child at boot, BEFORE tasks dequeue. The JIT cost stays at startup; first
+# real study sees a warm cache. Pre-warm uses production parameters
+# (n_components=5, n_neighbors=15, min_dist=0.0, metric='cosine', random_
+# state=42) so the JIT specializations match exactly what
+# `embed_and_cluster_reduce` triggers later. Failure is non-fatal: the
+# worker still boots and JIT just happens on first use (the original
+# behavior).
 # =============================================================================
+from celery.signals import worker_process_init
+
+
+@worker_process_init.connect
+def _prewarm_umap_jit(**_kwargs) -> None:
+    import logging
+    import time as _time
+    logger = logging.getLogger(__name__)
+    try:
+        import numpy as _np
+        from umap import UMAP as _UMAP
+        t0 = _time.time()
+        dummy = _np.random.RandomState(42).rand(20, 128).astype(_np.float32)
+        _UMAP(
+            n_components=5,
+            n_neighbors=15,
+            min_dist=0.0,
+            metric="cosine",
+            random_state=42,
+            verbose=False,
+        ).fit_transform(dummy)
+        logger.info(
+            f"[worker-init] UMAP numba JIT pre-warmed in {_time.time() - t0:.1f}s "
+            f"(production params, 20×128 dummy)"
+        )
+    except Exception as e:
+        logger.warning(
+            f"[worker-init] UMAP pre-warm failed "
+            f"({type(e).__name__}: {str(e)[:200]}); JIT will run on first use"
+        )

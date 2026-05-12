@@ -62,6 +62,7 @@ References:
 import asyncio
 import logging
 import math
+import re
 import time
 from collections import Counter
 from typing import Optional
@@ -82,6 +83,7 @@ from schemas.knowledge.agents import (
 )
 from schemas.knowledge.prompts import META_LABEL_PROMPT, ORDER_PROMPT
 from services.knowledge.embeddings import embed_texts
+from services.llm_chain import build_reduce_label_chain
 
 
 logger = logging.getLogger(__name__)
@@ -112,18 +114,134 @@ _UMAP_N_NEIGHBORS = 15
 _UMAP_MIN_DIST = 0.0
 _UMAP_METRIC = "cosine"
 
-# T-2 (2026-05-09): cap a single meta-cluster at 25% of total micro-clusters.
-# Without this, KMeansConstrained's only constraint is `size_max = fair_share × 2`,
-# which on uneven corpora collapses one meta-cluster around the densest topic
-# and leaves the rest thin (Terragrunt 2026-04-30 baseline: Chapter 3 absorbed
-# 39% of micro-clusters → 160-file junk drawer).
-_META_CLUSTER_MAX_FRACTION = 0.25
+# T-2 (2026-05-09, tightened 2026-05-11): cap a single meta-cluster at 20% of
+# total micro-clusters. Original 0.25 left a Docker 2026-05-09 Chapter 7 at
+# 225 files (22% of corpus, borderline junk drawer). Tightening to 0.20 forces
+# no chapter beyond ~20% of corpus, producing finer (and more pedagogically
+# useful) granularity at large N. Without this, KMeansConstrained's only
+# constraint is `size_max = fair_share × 2`, which on uneven corpora collapses
+# one meta-cluster around the densest topic and leaves the rest thin
+# (Terragrunt 2026-04-30 baseline: Chapter 3 absorbed 39% of micro-clusters
+# → 160-file junk drawer).
+_META_CLUSTER_MAX_FRACTION = 0.20
 
 # T-3 (2026-05-09): post-clustering thin-chapter merge.
 # Any meta-cluster with fewer than this many assigned files folds into the
 # nearest larger meta-cluster by cosine on UMAP-reduced centroids. Eliminates
 # the "9-file standalone chapter next to a 60-file chapter" pattern.
 _THIN_CHAPTER_FILE_THRESHOLD = 15
+
+# R8b (2026-05-12): file-count cap on meta-clusters — the per-chapter twin
+# of T-2's per-micro-cluster cap. T-2 ensures no meta absorbs >20% of
+# *micro-clusters*; R8b ensures no meta absorbs >20% of *files*. The two
+# diverge when communities are sized unevenly: R8 global MAP produced a
+# chapter with 22 micro-clusters (16% of n_clusters, T-2 pass) but 273
+# files (28.9% of corpus, junk drawer). Per-shard MAP's ≤40-file shard
+# size naturally bounded this; global needs an explicit cap.
+_META_MAX_FILE_FRACTION = 0.20
+
+# Polish #4 (2026-05-11): some kd-reduce-label deployments emit titles like
+# ": Docker Compose..." or ":** Managing Docker Hub..." despite the schema
+# description saying "2-6 words" — leftover Markdown/numbering punctuation
+# that survived the json_schema cut. Strip leading/trailing of these forms:
+# - Leading "**" or "*" emphasis markers
+# - Leading "Chapter N" or "Chapter N:" prefixes (case-insensitive)
+# - Leading runs of `:`, `*`, `-`, `.` punctuation (with surrounding whitespace)
+# - Trailing emphasis chars + punctuation tails
+# The regex anchors on a single PASS — input "Docker CLI Command Reference"
+# (clean) is left untouched; input ": Foo" → "Foo"; "**Chapter 3:** Foo"
+# → "Foo"; ":** Foo" → "Foo".
+_TITLE_PREFIX_RE = re.compile(
+    r"^\s*(?:\*+\s*)?(?:chapter\s+\d+\s*[:\-.]?)?\s*[:*\-.]+\s*",
+    re.IGNORECASE,
+)
+_TITLE_SUFFIX_RE = re.compile(r"\s*[\*\-:]+\s*$")
+
+
+def _sanitize_title(raw: str) -> str:
+    """
+    Strip Markdown / numbering prefixes that some LLMs emit despite the
+    `MetaLabelDraft.title` schema. Returns the cleaned title; empty string
+    if nothing meaningful survives sanitization (caller treats as failure).
+    """
+    if not raw:
+        return ""
+    cleaned = _TITLE_PREFIX_RE.sub("", raw).strip()
+    cleaned = _TITLE_SUFFIX_RE.sub("", cleaned).strip()
+    return cleaned
+
+
+# =============================================================================
+# R4 (2026-05-11) — hedged invoke for `kd-reduce-label` calls
+# =============================================================================
+# Empirical justification: Phase A validation runs show one deployment in
+# the kd-reduce-label pool occasionally taking 60–180s while siblings
+# return in 5–10s. The Router's per-call wait + cascade-on-failure means
+# the slow tail dominates wall-clock for the parallel-labeling step.
+#
+# Hedged invoke fires N parallel attempts against the SAME chain. Router
+# cooldown ensures they land on different deployments. First successful
+# result wins; losers are cancelled. p95 collapses to ~p50 of the next-
+# fastest deployment in the pool.
+#
+# Trade-off: free-tier consumption ~2× on hedged calls (we send to two
+# deployments per logical request). At M=8–12 metas × fanout=2 = 16–24
+# extra "wasted" requests per study. Well within every free-tier RPM cap
+# in `_reduce_label_entries`; no provider gets close to its quota.
+async def _hedged_invoke(
+    chain: Runnable,
+    payload: dict,
+    config=None,
+    *,
+    fanout: int = 2,
+):
+    """
+    Fire `fanout` parallel calls against `chain`; return the first
+    successful result and cancel the rest. Raises the last captured
+    exception if every parallel call failed.
+
+    fanout < 1: ValueError
+    fanout == 1: degenerates to a plain `chain.ainvoke` (no parallelism)
+    fanout >= 2: parallel race via `asyncio.wait(FIRST_COMPLETED)`
+    """
+    if fanout < 1:
+        raise ValueError(f"fanout must be ≥1, got {fanout}")
+    if fanout == 1:
+        return await chain.ainvoke(payload, config=config)
+
+    async def _one():
+        return await chain.ainvoke(payload, config=config)
+
+    tasks = [asyncio.create_task(_one()) for _ in range(fanout)]
+    pending: set[asyncio.Task] = set(tasks)
+    last_exc: BaseException | None = None
+    try:
+        while pending:
+            done, pending = await asyncio.wait(
+                pending, return_when=asyncio.FIRST_COMPLETED,
+            )
+            for t in done:
+                exc = t.exception()
+                if exc is None:
+                    # First success — cancel the rest and return
+                    for p in pending:
+                        p.cancel()
+                    return t.result()
+                last_exc = exc
+        # All `fanout` tasks failed — propagate the last exception so the
+        # caller's existing try/except logic (synthetic fallback) fires.
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError(
+            f"all {fanout} hedged calls failed without raising"
+        )
+    finally:
+        # Defensive: ensure pending tasks are cancelled and awaited even
+        # if a CancelledError propagates through the outer loop.
+        for p in pending:
+            p.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
 
 async def embed_and_cluster_reduce(
@@ -364,10 +482,155 @@ async def embed_and_cluster_reduce(
             f"meta-clusters now: {len(meta_groups)}"
         )
 
+    # R8b (2026-05-12): file-count cap — split oversized meta-clusters.
+    # After T-3 thin-merge, any meta over `_META_MAX_FILE_FRACTION` of
+    # total files gets split via sub-KMeans on its UMAP-reduced member
+    # vectors with k=2. The bigger half keeps the original meta_id; the
+    # smaller half gets a new meta_id. ONE pass (no recursion): if a
+    # sub-meta is still oversized, log a warning and accept it. Capped at
+    # `_MAX_CHAPTERS` total — once the meta count hits 12, no further
+    # splits even if oversized metas remain (the ChapterPlanList schema
+    # caps the final plan at 12 chapters; over-splitting fails Pydantic).
+    file_cap = max(1, int(math.ceil(_META_MAX_FILE_FRACTION * total_slugs_assigned)))
+    oversized = [
+        (mid, _meta_file_count(mid)) for mid in list(meta_groups)
+        if _meta_file_count(mid) > file_cap
+    ]
+    # Split biggest-first so the worst offender gets the most splitting budget.
+    oversized.sort(key=lambda t: -t[1])
+    # (orig_mid, files_before, [files_per_sub_meta])
+    split_log: list[tuple[int, int, list[int]]] = []
+    if oversized:
+        next_meta_id = max(meta_groups) + 1
+        for mid, file_count_before in oversized:
+            slots_remaining = _MAX_CHAPTERS - len(meta_groups)
+            if slots_remaining < 1:
+                logger.warning(
+                    f"[reduce-cluster] R8b: at _MAX_CHAPTERS={_MAX_CHAPTERS}; "
+                    f"cannot split meta {mid} ({file_count_before} files); "
+                    f"plan will exceed file cap on this chapter"
+                )
+                break
+            members = meta_groups[mid]
+            if len(members) < 2:
+                logger.warning(
+                    f"[reduce-cluster] R8b: meta {mid} has {file_count_before} "
+                    f"files but only 1 micro-cluster — cannot split"
+                )
+                continue
+            # R8b (improved 2026-05-12): adaptive sub_k based on how over-cap
+            # this meta is, with KMeansConstrained-forced balance.
+            #
+            # Plain KMeans(k=2) sub-split (the original R8b) produced
+            # degenerate (n-1, 1) partitions on small dense clusters
+            # (Terragrunt 2026-05-12: 8-member meta → 7+1 split → 253-file
+            # sub-meta still 63% of corpus). Two fixes:
+            #
+            # 1. sub_k = ceil(files / cap) — a 4×-oversized meta gets split
+            #    into 4 sub-metas in one pass. Avoids "split, still over cap,
+            #    accept" failure mode.
+            # 2. KMeansConstrained(size_min, size_max) — forces every sub-
+            #    bucket to have at least `fair_share // 2` micro-clusters,
+            #    preventing the degenerate (n-1, 1) partition outright.
+            #
+            # Bounded by (a) len(members) — can't have more clusters than
+            # input points — and (b) slots_remaining + 1 — the +1 because we
+            # replace the original meta with sub_k sub-metas (net +sub_k-1).
+            sub_k_needed = max(2, math.ceil(file_count_before / file_cap))
+            sub_k = min(sub_k_needed, len(members), slots_remaining + 1)
+            if sub_k < 2:
+                continue  # No splitting budget
+            fair_share = max(1, len(members) // sub_k)
+            sub_size_min = max(1, fair_share // 2)
+            sub_size_max = max(sub_size_min + 1, fair_share * 2)
+            try:
+                from k_means_constrained import KMeansConstrained
+                sub_km = KMeansConstrained(
+                    n_clusters=sub_k,
+                    size_min=sub_size_min,
+                    size_max=sub_size_max,
+                    random_state=_SEED,
+                )
+                sub_labels = sub_km.fit_predict(vectors_reduced[members])
+            except Exception as e:
+                # Fall back to plain KMeans if the size constraints are
+                # infeasible for this geometry (e.g., adversarial layouts
+                # where balanced clustering has no min-cost-flow solution).
+                logger.warning(
+                    f"[reduce-cluster] R8b: KMeansConstrained(k={sub_k}, "
+                    f"size_min={sub_size_min}, size_max={sub_size_max}) "
+                    f"failed for meta {mid} ({type(e).__name__}: {e}); "
+                    f"falling back to plain KMeans"
+                )
+                try:
+                    sub_km = KMeans(n_clusters=sub_k, random_state=_SEED, n_init=10)
+                    sub_labels = sub_km.fit_predict(vectors_reduced[members])
+                except Exception as e2:
+                    logger.warning(
+                        f"[reduce-cluster] R8b: plain KMeans fallback also "
+                        f"failed for meta {mid} ({type(e2).__name__}: {e2}); "
+                        f"leaving as is"
+                    )
+                    continue
+            # Partition members into sub_k buckets; drop empty buckets defensively
+            sub_buckets: dict[int, list[int]] = {}
+            for member_idx, sub_lbl in zip(members, sub_labels):
+                sub_buckets.setdefault(int(sub_lbl), []).append(member_idx)
+            sub_buckets = {k: v for k, v in sub_buckets.items() if v}
+            if len(sub_buckets) < 2:
+                logger.warning(
+                    f"[reduce-cluster] R8b: sub-cluster for meta {mid} "
+                    f"degenerated to {len(sub_buckets)} non-empty bucket(s); "
+                    f"leaving meta as is"
+                )
+                continue
+            # Sort sub-buckets by file count, biggest first.
+            # Biggest keeps the original meta_id; rest get fresh ids.
+            ranked = sorted(
+                sub_buckets.values(),
+                key=lambda b: -sum(len(micro_clusters[i].file_slugs) for i in b),
+            )
+            meta_groups[mid] = ranked[0]
+            centroids[mid] = vectors_reduced[ranked[0]].mean(axis=0)
+            new_file_counts = [
+                sum(len(micro_clusters[i].file_slugs) for i in ranked[0])
+            ]
+            for sub_bucket in ranked[1:]:
+                meta_groups[next_meta_id] = sub_bucket
+                centroids[next_meta_id] = vectors_reduced[sub_bucket].mean(axis=0)
+                new_file_counts.append(
+                    sum(len(micro_clusters[i].file_slugs) for i in sub_bucket)
+                )
+                next_meta_id += 1
+            split_log.append((mid, file_count_before, new_file_counts))
+            if max(new_file_counts) > file_cap:
+                logger.warning(
+                    f"[reduce-cluster] R8b: meta {mid} split into "
+                    f"{new_file_counts} files — biggest sub-meta still over "
+                    f"cap={file_cap}; accepting (single-pass split)"
+                )
+    if split_log:
+        logger.info(
+            f"[reduce-cluster] R8b file-cap split: cap={file_cap} files "
+            f"(_META_MAX_FILE_FRACTION={_META_MAX_FILE_FRACTION}, "
+            f"total_files={total_slugs_assigned}); splits: {split_log}; "
+            f"meta-clusters now: {len(meta_groups)}"
+        )
+
     # 7. Label each meta-cluster in parallel (~3K tokens each)
+    # R1+R2 (2026-05-11): route through the dedicated `kd-reduce-label` rotator
+    # (curated non-reasoning pool: Groq llama-3.3-70b, Gemini Flash-Lite,
+    # NIM Nemotron-Super-120b + gpt-oss-120b + Mistral-Large-3, Mistral direct,
+    # Llama-4 Maverick). The `llm` argument is the synth-grade kd-all chain —
+    # wrong tool for 3K-token classification labeling because its reasoning
+    # models burn the 300s NIM gateway budget on <think> blocks. Method swapped
+    # from function_calling → json_schema so structured output is enforced
+    # server-side, making the silent-None / empty-title path structurally
+    # impossible on providers that honor it.
     t0 = time.time()
-    label_chain = META_LABEL_PROMPT | llm.with_structured_output(
-        MetaLabelDraft, method="function_calling",
+    reduce_label_llm = build_reduce_label_chain()
+    label_chain = META_LABEL_PROMPT | reduce_label_llm.with_structured_output(
+        MetaLabelDraft, method="json_schema",
     )
 
     async def _label_one(
@@ -384,7 +647,12 @@ async def embed_and_cluster_reduce(
         draft: MetaLabelDraft | None = None
         try:
             from services.knowledge.langfuse_client import langfuse_config as _lf_cfg
-            draft = await label_chain.ainvoke(
+            # R4 (2026-05-11): hedge fanout=2 against the kd-reduce-label
+            # pool. First successful response wins; the loser is cancelled.
+            # Caps p95 at the second-fastest deployment's latency, killing
+            # the slow-tail cascade observed on heavier studies.
+            draft = await _hedged_invoke(
+                label_chain,
                 {
                     "framework": framework,
                     "meta_id": meta_id,
@@ -402,17 +670,39 @@ async def embed_and_cluster_reduce(
                     user_id = user_id,
                     run_name = f"kd-reduce-meta-label-{meta_id:02d}",
                 ) or None,
+                fanout=2,
             )
-            # OP-21c (2026-04-25, mid-Run-18) — `with_structured_output(method=
-            # "function_calling")` silently returns None when the LLM's tool_call
-            # doesn't parse (no exception raised). Same quirk that
-            # `_invoke_structured_with_fallback` guards against in the synth path.
-            # Without this None-check, downstream `d.title` blows up the planner.
-            if draft is None:
+            # OP-21c (2026-04-25) + Polish #1 (2026-05-11) — `with_structured_output`
+            # can return None (tool_call non-parseable) OR an instance with an
+            # empty/whitespace-only `title` field (observed on Docker 2026-05-09:
+            # one kd-all deployment returned `title=""` instead of None, slipping
+            # past the original None-only check). With R2's json_schema mode this
+            # is structurally impossible on providers that honor the schema, but
+            # we keep both guards as belt-and-suspenders for deployments that
+            # silently fall back to free-form output.
+            if draft is None or not (draft.title or "").strip():
                 raise RuntimeError(
-                    f"label_chain returned None for meta {meta_id} "
-                    f"(LLM tool_call non-parseable)"
+                    f"label_chain returned None or empty title for meta {meta_id} "
+                    f"(LLM tool_call non-parseable or schema-violating)"
                 )
+            # Polish #4 (2026-05-11) — strip leading/trailing Markdown +
+            # "Chapter N:" / "**:" punctuation artifacts that some kd-reduce-label
+            # deployments emit despite the json_schema cut. Observed on Docker
+            # 2026-05-11: titles like ": Docker Compose..." (Ch3) and
+            # ":** Managing Docker Hub..." (Ch4). Sanitize and re-validate;
+            # treat an empty result as label failure (caller's synthetic fallback).
+            sanitized = _sanitize_title(draft.title)
+            if not sanitized:
+                raise RuntimeError(
+                    f"label_chain produced unparseable title for meta {meta_id} "
+                    f"after sanitization (raw={draft.title!r})"
+                )
+            if sanitized != draft.title:
+                logger.info(
+                    f"[reduce-cluster] meta {meta_id} title sanitized: "
+                    f"{draft.title!r} → {sanitized!r}"
+                )
+                draft = draft.model_copy(update={"title": sanitized})
         except Exception as e:
             logger.warning(
                 f"[reduce-cluster] label call for meta {meta_id} failed "
@@ -498,13 +788,20 @@ async def embed_and_cluster_reduce(
     chapter_lines = "\n".join(
         f"{i}: {d.title} — {d.goal}" for i, d in enumerate(drafts)
     )
-    order_chain = ORDER_PROMPT | llm.with_structured_output(
-        OrderedIndices, method="function_calling",
+    # R1+R2 (2026-05-11): reuse the kd-reduce-label rotator + json_schema mode
+    # for the ordering call too — same constraints apply (small structured
+    # output, non-reasoning preferred, native schema enforcement).
+    order_chain = ORDER_PROMPT | reduce_label_llm.with_structured_output(
+        OrderedIndices, method="json_schema",
     )
     rationale: str
     try:
         from services.knowledge.langfuse_client import langfuse_config as _lf_cfg
-        ordering: OrderedIndices = await order_chain.ainvoke(
+        # R4 (2026-05-11): hedge the single serial ordering call too —
+        # this one isn't fanned out across metas, so a slow deployment here
+        # blocks the whole step. fanout=2 caps p95 at the second-fastest.
+        ordering: OrderedIndices = await _hedged_invoke(
+            order_chain,
             {
                 "framework": framework,
                 "chapter_lines": chapter_lines,
@@ -519,6 +816,7 @@ async def embed_and_cluster_reduce(
                 user_id = user_id,
                 run_name = "kd-reduce-order-chapters",
             ) or None,
+            fanout=2,
         )
         proposed = [int(i) for i in ordering.order]
         if len(proposed) == M and set(proposed) == set(range(M)):

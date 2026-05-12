@@ -235,6 +235,97 @@ def _keylm_entries() -> list:
 
 
 # =============================================================================
+# REDUCE labeling group — `kd-reduce-label` (Clio per-meta naming + ordering)
+# =============================================================================
+# Curated pool for the Clio REDUCE step's `_label_one` parallel calls and the
+# single `order_chain` call (apps/fastapi/graphs/knowledge/reduce_cluster.py).
+# Each call is ~3K tokens, structurally a classification task ("name this
+# group of 30 related topics"). Co-mingling these with kd-all's reasoning
+# models (Kimi K2-Thinking, GLM-5.1, MiniMax-M2.7, Qwen3.5-397B, DeepSeek-V3.2,
+# Magistral, Gemini-3-flash R-mode) is the root cause of the 504s/stragglers/
+# silent-None failures observed pre-2026-05-11: those models burn the 300s
+# NIM gateway budget on <think> blocks for what should be a sub-10s call.
+#
+# This group hard-excludes reasoning models. Pool curated against the
+# live state of `_all_entries()` below — every entry here is one that's
+# currently reachable AND non-reasoning AND has native function-calling or
+# response_format support on its hosting provider.
+#
+# Specifically EXCLUDED-by-design vs kd-all:
+#   - SambaNova (whole provider paywalled per 2026-04-24 Run-8)
+#   - Cerebras gpt-oss-120b (this account 404; user's key lacks model access)
+#   - DeepSeek V4 (Insufficient Balance per kd-all comments)
+#   - Zhipu glm-*-flash (auth/endpoint failures, 0/14 success in Run-16)
+#   - Groq gpt-oss-120b (8K TPM ceiling) and qwen3-32b (6K TPM) — also
+#     excluded from kd-all for the same reason
+#   - All reasoning-mode models even when reachable (the whole point)
+#
+# Pool sized for M=8-12 parallel labeling fanout. With 8 deployments and
+# per-deployment cooldown, a single bad provider takes out ≤1 entry.
+REDUCE_LABEL_GROUP = "kd-reduce-label"
+
+
+def _reduce_label_entries() -> list:
+    """
+    Non-reasoning rotator for the REDUCE step's labeling + ordering calls.
+
+    Order: fastest LPU/TPU silicon first (Groq, Gemini Flash-Lite), then
+    NIM hybrid-Mamba + gpt-oss + Mistral-Large-3, then Mistral direct,
+    then Llama-4 Maverick as deep tail. ~8 deployments — generous
+    cooldown-redundancy for parallel labeling.
+
+    Timeouts are tighter than kd-all (60-90s vs 120s) — these calls are
+    structurally short; a long delay almost always means a flaky model
+    head and we'd rather fall through faster than wait it out.
+    """
+    return [
+        # --- Tier 1: LPU/TPU silicon, sub-100ms TTFT, native tools ---
+        # Groq llama-3.3-70b-versatile is EXCLUDED from kd-all only because of
+        # the code-gen error benchmark; chapter naming doesn't generate code,
+        # so that exclusion doesn't apply here. 12K TPM ample for ~3K prompts.
+        _groq_entry(REDUCE_LABEL_GROUP, "llama-3.3-70b-versatile", timeout_s=60),
+        # Gemini 3.1 Flash-Lite preview: 381 t/s, AAII 34, 1M ctx, native tools.
+        # Distinct from `gemini-2.5-flash-lite` which is disabled in kd-all
+        # (returns empty choices on the complex ChapterOutput schema) — the
+        # REDUCE schemas (MetaLabelDraft / OrderedIndices) are much simpler.
+        # Gemini-3 requires T=1.0 (Google's API: "Setting temperature < 1.0
+        # for Gemini 3 models can cause infinite loops, degraded reasoning
+        # performance, and failure on complex tasks"). Polish #5b (2026-05-11):
+        # the factory `build_reduce_label_chain` now passes T=1.0 to ALL
+        # kd-reduce-label deployments — call-time temperature wins over
+        # deployment-level litellm_params in LiteLLM Router, so the per-
+        # deployment override approach we tried first didn't take effect.
+        # json_schema mode keeps output valid at T=1.0 for non-Gemini
+        # deployments too; only sampling among valid JSON paths differs.
+        _gemini_entry(REDUCE_LABEL_GROUP, "gemini-3.1-flash-lite-preview", timeout_s=60),
+        # --- Tier 2: NIM-hosted, non-reasoning, high-context ---
+        # Nemotron-3-super-120b-a12b: 1M ctx hybrid Mamba, AAII 36, leads
+        # size class on AIME-2025 + Terminal-Bench. Non-reasoning by default
+        # (no detailed_thinking parameter exposed by the NIM endpoint).
+        _nim_entry(REDUCE_LABEL_GROUP, "nvidia/nemotron-3-super-120b-a12b", timeout_s=90),
+        # gpt-oss-120b on NIM — Groq's 8K TPM ceiling makes Groq's host
+        # permanently incompatible; Cerebras 404s on this account; NIM is
+        # the only viable host for the gpt-oss family on this account.
+        _nim_entry(REDUCE_LABEL_GROUP, "openai/gpt-oss-120b", timeout_s=90),
+        # Mistral Large 3 via NIM (DUP of Mistral direct below, NIM infra
+        # adds an independent failure domain).
+        _nim_entry(REDUCE_LABEL_GROUP, "mistralai/mistral-large-3-675b-instruct-2512", timeout_s=90),
+        # --- Tier 3: Mistral direct API ---
+        # Mistral Large 3 v25.12 — LMArena #2 OSS, native function calling,
+        # 256K ctx. Same model as the NIM entry above; different infra.
+        _mistral_entry(REDUCE_LABEL_GROUP, "mistral-large-latest", timeout_s=90),
+        # Mistral Small 4 v26.03 — HumanEval 92, MMLU 88.5, AAII 28 — outperforms
+        # Mistral Medium 3.1 on most benchmarks; fastest viable fallback here.
+        _mistral_entry(REDUCE_LABEL_GROUP, "mistral-small-latest", timeout_s=60),
+        # --- Tier 4: deep tail ---
+        # Llama-4 Maverick 17B-128E MoE on NIM — 1M ctx, AAII 18; weak relative
+        # to the head of the pool but absorbs cooldown bursts when everything
+        # above is in cooldown. Same-token-budget cost as the tier-1 entries.
+        _nim_entry(REDUCE_LABEL_GROUP, "meta/llama-4-maverick-17b-128e-instruct", timeout_s=90),
+    ]
+
+
+# =============================================================================
 # Embedding group — `kd-embed` (vector embeddings for KD MAP/REDUCE/preview)
 # =============================================================================
 # **SINGLE-ENTRY by design** — embedding rotation across providers breaks
@@ -523,11 +614,17 @@ def _get_router() -> Router:
 
     _router_instance = Router(
         # Combined model_list — `kd-all` (synthesis/planner/critic), `kd-keylm`
-        # (KeyLLM cluster labels), and `kd-embed` (embeddings) all live in one
-        # Router so they share the cooldown circuit-breaker + Redis state.
-        # The factory + helper functions select which group via the `model=`
-        # arg on ChatLiteLLMRouter / Router.embedding.
-        model_list=_all_entries() + _keylm_entries() + _embed_entries(),
+        # (KeyLLM cluster labels), `kd-reduce-label` (Clio REDUCE per-meta
+        # labeling + chapter ordering), and `kd-embed` (embeddings) all live
+        # in one Router so they share the cooldown circuit-breaker + Redis
+        # state. The factory + helper functions select which group via the
+        # `model=` arg on ChatLiteLLMRouter / Router.embedding.
+        model_list=(
+            _all_entries()
+            + _keylm_entries()
+            + _reduce_label_entries()
+            + _embed_entries()
+        ),
         # simple-shuffle is recommended for production (LiteLLM docs): doesn't
         # add Redis round-trips per request the way usage-based-routing does.
         # Combined with allowed_fails_policy this effectively routes among
@@ -627,5 +724,31 @@ def build_keylm_chain():
     frontier rotator — small task, small model.
     """
     return ChatLiteLLMRouter(router=_get_router(), model=KEYLM_GROUP, temperature=0.0)
+
+
+def build_reduce_label_chain():
+    """
+    Dedicated non-reasoning rotator for the Clio REDUCE step's per-meta-cluster
+    labeling (`_label_one`) and chapter ordering (`order_chain`) calls. Routes
+    to REDUCE_LABEL_GROUP — a curated 8-deployment pool of fast small/medium
+    models with native function-calling or json-schema response_format support.
+
+    T=1.0 (Polish #5b, 2026-05-11). Gemini-3 explicitly requires T=1.0 (per
+    Google's API, T<1.0 "can cause infinite loops, degraded reasoning
+    performance, and failure on complex tasks"). The factory's call-time T
+    overrides any per-deployment litellm_params.temperature in LiteLLM Router,
+    so setting T per-deployment doesn't work — we move it here. With R2's
+    json_schema mode, output structure is enforced server-side regardless of
+    T, so non-Gemini deployments (Groq, NIM, Mistral) running at T=1.0
+    produce equally valid output, only sampling among valid JSON paths varies.
+
+    See R1/R2 in docs/KD-PLANNER-REDUCE-MAY2026-OPTIMIZATION.md for the
+    design rationale — this group exists to keep REDUCE labeling off the
+    kd-all reasoning models that burn the 300s NIM gateway budget on <think>
+    blocks for what is structurally a 3K-token classification task.
+    """
+    return ChatLiteLLMRouter(
+        router=_get_router(), model=REDUCE_LABEL_GROUP, temperature=1.0,
+    )
 
 

@@ -145,8 +145,18 @@ _KEYLM_USER_TEMPLATE = (
 )
 
 # Output sanitization: strip wrappers the LM may emit despite the prompt.
+# Polish #6 (2026-05-11): extended to also catch leading Markdown emphasis
+# (`**Foo**`), `Chapter N:` numbering, and stray leading punctuation runs
+# (`: Foo`, `:** Foo`) — defense-in-depth alongside Polish #4 at the REDUCE
+# layer. KeyLLM (Llama-3.2-1B) is unlikely to emit these, but the cost is
+# trivial and prevents naughty outputs from leaking into the REDUCE prompt
+# as `member_lines` text.
 _LEADING_LABEL_RE = re.compile(
-    r"^\s*(?:title|label|topic|name)\s*[:\-]\s*",
+    r"^\s*"                                                # leading whitespace
+    r"(?:\*+\s*)?"                                         # optional ** emphasis
+    r"(?:chapter\s+\d+\s*[:\-.]?\s*)?"                     # optional "Chapter N:" numbering
+    r"(?:(?:title|label|topic|name|cluster)\s*[:\-]\s*)?"  # optional prefix word
+    r"[:*\-.]*\s*",                                        # leftover punctuation runs
     re.IGNORECASE,
 )
 _QUOTES_RE = re.compile(r"^[\"\'`]+|[\"\'`]+$")
@@ -380,6 +390,163 @@ async def label_shards_classical(
     logger.info(
         f"[classical-map] {len(shards)} shards / {total} files → "
         f"{n_clusters} clusters in {time.monotonic() - t0:.2f}s "
+        f"(Phase A embed+cluster {cluster_dt:.2f}s; "
+        f"Phase B KeyLLM label {label_dt:.2f}s)"
+    )
+    return output
+
+
+# =============================================================================
+# R8 (2026-05-11) — GLOBAL classical MAP (drop per-shard, one cosine pass)
+# =============================================================================
+# Phase A (global) — flatten the shard input, embed the WHOLE corpus in one
+# batched call, run a single community_detection on the full N×N cosine
+# matrix. The per-shard structure was a TPM/context-budget workaround from
+# the LLM-based MAP era. With the classical algorithm (cosine + greedy
+# community detection), there's no per-call constraint — global is cheaper
+# (one rotator call instead of S parallel), more accurate (cross-shard
+# fragmentation eliminated — "networking" docs across 5 shards become ONE
+# community, not 5), and yields fewer micro-clusters downstream.
+#
+# Memory: O(N²) cosine matrix at the embedding dim (2048 from NIM). At
+# N≤5000, the similarity matrix is ~100MB float32 — fine. Beyond N≈10000
+# we'd want a sparse / HNSW similarity graph (future R8b).
+#
+# Hard expectation per the optimization doc: Docker run drops from ~135
+# micro-clusters (per-shard) to ≤40 globally; REDUCE downstream sees the
+# benefit immediately (smaller input set, no re-merging of near-duplicate
+# clusters across shards).
+async def _cluster_corpus(
+    entries: list[tuple[str, str]],
+) -> dict:
+    """
+    Global Phase A: embed entire corpus + run ONE community_detection.
+    Returns dict with the same keys as _cluster_shards's per-shard dicts
+    so Phase B can reuse `_label_all_clusters` by wrapping in [result].
+    """
+    slugs = [slug for slug, _ in entries]
+    snippets = [
+        f"{slug.replace('-', ' ')} — {(content or '').strip()[:PREVIEW_CHARS]}"
+        for slug, content in entries
+    ]
+    if not snippets:
+        return {"slugs": [], "snippets": [], "communities": [], "embed_dt": 0.0}
+    t0 = time.monotonic()
+    vectors_list, _ = await embed_texts(snippets)
+    embed_dt = time.monotonic() - t0
+    vectors = np.asarray(vectors_list, dtype=np.float32)
+    communities = community_detection(
+        vectors,
+        threshold=COMMUNITY_THRESHOLD,
+        min_community_size=MIN_COMMUNITY_SIZE,
+    )
+    return {
+        "slugs": slugs,
+        "snippets": snippets,
+        "communities": communities,
+        "embed_dt": embed_dt,
+    }
+
+
+async def label_corpus_classical(
+    shards: list[list[tuple[str, str]]],
+) -> list[ShardLabels]:
+    """
+    R8 — drop-in alternative to `label_shards_classical` that bypasses
+    sharding entirely. Accepts the same `shards` shape for API symmetry,
+    flattens internally to one corpus, runs ONE global Phase A + Phase B.
+
+    Returns a single-element `list[ShardLabels]`. The downstream REDUCE in
+    `embed_and_cluster_reduce` flattens shard_results anyway — the per-shard
+    grouping was a vestige of the LLM-MAP era's TPM ceiling and adds no
+    semantic value at the classical layer.
+
+    Gated by `KD_GLOBAL_MAP` env flag at the distiller layer for A/B.
+    """
+    if not shards:
+        return []
+
+    # Flatten — preserves the original (slug, content) order across shards
+    all_entries: list[tuple[str, str]] = [e for shard in shards for e in shard]
+    if not all_entries:
+        return []
+
+    # Phase A — one global embed + one community_detection pass
+    t0 = time.monotonic()
+    global_result = await _cluster_corpus(all_entries)
+    cluster_dt = time.monotonic() - t0
+
+    # Phase B — label every community in parallel. `_label_all_clusters`
+    # iterates per-shard internally; passing `[global_result]` yields a
+    # single "shard" containing every community, which respects the same
+    # KEYLM_CONCURRENCY cap and Router cooldown semantics as the per-shard
+    # path. No duplication of logic.
+    t1 = time.monotonic()
+    labels_per_shard = await _label_all_clusters([global_result])
+    label_dt = time.monotonic() - t1
+    shard_labels = labels_per_shard[0] if labels_per_shard else []
+
+    # Build a single ShardLabels covering the whole corpus
+    slugs = global_result["slugs"]
+    communities = global_result["communities"]
+
+    clusters: list[ShardCluster] = []
+    used_indices: set[int] = set()
+    for c_idx, members in enumerate(communities):
+        label = (shard_labels[c_idx] if c_idx < len(shard_labels) else None) or "Cluster"
+        rep_slugs = [slugs[i] for i in members[:3]]
+        description = (
+            f"{len(members)} files clustered by global cosine similarity. "
+            f"Representatives: {', '.join(rep_slugs)}"
+        )[:150]
+        clusters.append(ShardCluster(
+            cluster_name=label,
+            description=description,
+            file_slugs=[slugs[i] for i in members],
+        ))
+        used_indices.update(members)
+
+    unused_slugs = [slugs[i] for i in range(len(slugs)) if i not in used_indices]
+
+    # ShardLabels.clusters requires min_length=1 (Pydantic). If
+    # community_detection found nothing (very heterogeneous corpus or
+    # threshold too high), emit a single fallback bucket so REDUCE has
+    # something to work with.
+    if not clusters:
+        clusters = [ShardCluster(
+            cluster_name="Corpus (heterogeneous)",
+            description=(
+                f"No cosine community ≥{COMMUNITY_THRESHOLD} at "
+                f"min_size={MIN_COMMUNITY_SIZE} at global level; "
+                f"forwarding all slugs for REDUCE to handle."
+            ),
+            file_slugs=slugs,
+        )]
+        unused_slugs = []
+
+    # R8 bugfix (2026-05-12): ShardLabels.clusters has Pydantic max_length=10
+    # (the per-shard reasoning "1-8 typical, 10 hard cap" predates global
+    # MAP). Global community_detection on N=994 yields ~140 communities,
+    # which violates the cap if shoved into one ShardLabels. Chunk into
+    # synthetic shards of ≤_CLUSTERS_PER_SYNTHETIC_SHARD each — downstream
+    # REDUCE flattens shard_results anyway, so this is purely a schema-
+    # compliance maneuver with no semantic impact. unused_shard_slugs goes
+    # on the first synthetic shard only (REDUCE concatenates them).
+    _CLUSTERS_PER_SYNTHETIC_SHARD = 10
+    output: list[ShardLabels] = []
+    for chunk_start in range(0, len(clusters), _CLUSTERS_PER_SYNTHETIC_SHARD):
+        chunk = clusters[chunk_start:chunk_start + _CLUSTERS_PER_SYNTHETIC_SHARD]
+        chunk_unused = unused_slugs if chunk_start == 0 else []
+        output.append(ShardLabels(
+            clusters=chunk,
+            unused_shard_slugs=chunk_unused,
+        ))
+
+    total_files = len(all_entries)
+    logger.info(
+        f"[classical-map][global] 1 pass / {total_files} files → "
+        f"{len(clusters)} clusters in {len(output)} synthetic shards "
+        f"+ {len(unused_slugs)} unused in {time.monotonic() - t0:.2f}s "
         f"(Phase A embed+cluster {cluster_dt:.2f}s; "
         f"Phase B KeyLLM label {label_dt:.2f}s)"
     )
