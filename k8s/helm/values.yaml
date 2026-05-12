@@ -84,6 +84,24 @@ embedding:
 # See docs/KD-PLANNER-MAP-OPTIMIZATION.md §5 for the full rationale.
 kd:
   useClassicalMap: "1"
+  # Phase 1.3 (2026-05-13): when "1", routes the synth grader through
+  # services/knowledge/grader_classical.py — deterministic per-dim scorers
+  # for 6/9 grader dims, plus stubs for assumption_match, complexity_
+  # appropriate, market_analysis (Phase 1.2 will replace stubs). Drop-in
+  # GraderEvaluation shape so Self-Refine loop + best-of-N argmax work
+  # unchanged. Default "0" keeps the legacy LLM grader; flip to "1" after
+  # A/B validation via /api/v1/knowledge/debug/grader_compare confirms
+  # the classical scorer agrees on representative chapters. See
+  # docs/KD-SYNTH-LLM-TO-CLASSICAL-MAY2026.md Phase 1.
+  useClassicalGrader: "0"
+  # Phase 2.1 (2026-05-13): when "1", replaces the post-synth critic's
+  # per-chapter LLM faithfulness call (OP-45) with an embedding-similarity
+  # heuristic via the kd-embed rotator (services/knowledge/critic_classical.py).
+  # citation_coverage + code_syntax_valid stay deterministic regardless of
+  # this flag (they always were). Default "0" keeps the legacy LLM critic;
+  # flip after A/B validation via /api/v1/knowledge/debug/critic_compare.
+  # Phase 2.2 will upgrade to host-side MiniCheck/AlignScore if needed.
+  useClassicalCritic: "0"
   # R8 (global community_detection) + R8b (file-cap sub-split) status:
   # - Docker (1318 files): WORKS — silhouette 0.522 (record), 10 balanced
   #   chapters, max 18.9%, 48 orphans (vs 103 per-shard).

@@ -225,6 +225,312 @@ async def debug_map_compare(
     }
 
 
+class GraderCompareRequest(BaseModel):
+    """
+    Body for POST /debug/grader_compare — side-by-side LLM vs classical
+    grader on the same chapter input. Both grades run; both results are
+    returned with per-dimension deltas. Phase 1.3 validation harness for
+    services/knowledge/grader_classical.py (see
+    docs/KD-SYNTH-LLM-TO-CLASSICAL-MAY2026.md Phase 1).
+
+    Inputs match the existing `_grade_attempt` signature so any chapter
+    that has already been graded (or can be graded) by the LLM path can
+    be replayed against the classical path with zero corpus dependency —
+    no MinIO read, no Celery enqueue, just two scoring functions on the
+    same `synthesis_text`. Pass synthetic fixtures during dev OR paste
+    real assembled chapter markdown from a prior committed study.
+    """
+    synthesis_text: str = Field(
+        min_length=10,
+        description="Assembled chapter markdown to grade. Same shape "
+                    "the LLM grader sees in production.",
+    )
+    chapter: dict = Field(
+        description="ChapterPlan JSON: number, title, goal, assigned_files."
+    )
+    user_profile: dict = Field(
+        description="UserProfile JSON: user_id, level, target_markets, "
+                    "portfolio_refs, mastered_technologies, acceptance_threshold.",
+    )
+    framework: str = Field(
+        default="generic",
+        description="Framework name (used by LLM grader only).",
+    )
+    audit_summary: str = Field(
+        default="",
+        description="Optional deterministic audit signals string. The "
+                    "classical scorer parses 'preservation=X.XX' out of this "
+                    "for the code_preservation_ratio dim.",
+    )
+
+
+@router.post("/debug/grader_compare")
+async def debug_grader_compare(request: GraderCompareRequest):
+    """
+    Run the LLM grader (existing GRADER_PROMPT path via
+    `_invoke_structured_with_fallback`) AND the classical grader
+    (services/knowledge/grader_classical.score_chapter_classically) on
+    the same chapter input. Return both GraderEvaluation objects + per-
+    dimension deltas + wall-clock timings + agreement flags.
+
+    Useful for Phase 1 validation: paste an assembled chapter into the
+    body and inspect whether the classical scorer agrees with the LLM
+    grader within tolerance. If yes → flip `KD_USE_CLASSICAL_GRADER=1`.
+    If no → tune scorers or extend stubs (Phase 1.2 — assumption_match,
+    complexity_appropriate, market_analysis).
+
+    Does NOT mutate any pipeline state. Safe to call repeatedly.
+    """
+    import asyncio as _asyncio
+    import time as _time
+
+    from schemas.knowledge.agents import ChapterPlan
+    from schemas.knowledge.inputs import UserProfile
+    from services.knowledge.grader_classical import score_chapter_classically
+    from graphs.knowledge.helpers import _grade_attempt
+    from services.llm_chain import build_synth_fallback_chain
+
+    # Parse inputs to Pydantic
+    try:
+        chapter = ChapterPlan(**request.chapter)
+        user_profile = UserProfile(**request.user_profile)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid chapter or user_profile JSON: {type(e).__name__}: {e}",
+        )
+
+    # Classical path — 8 deterministic scorers (sub-ms) + 1 small-LLM call
+    # for market_analysis (Phase 1.2, ~2-5s via kd-reduce-label rotator).
+    t0_classical = _time.monotonic()
+    classical_eval = await score_chapter_classically(
+        synthesis_text=request.synthesis_text,
+        chapter=chapter,
+        user_profile=user_profile,
+        audit_summary=request.audit_summary,
+        framework=request.framework,
+    )
+    classical_dt = _time.monotonic() - t0_classical
+
+    # LLM path — temporarily DISABLE the KD_USE_CLASSICAL_GRADER env flag
+    # so _grade_attempt routes to the LLM grader regardless of current
+    # cluster config. This makes the endpoint a true A/B test rather than
+    # mirroring whatever the production flag is set to.
+    import os as _os
+    prior_flag = _os.environ.get("KD_USE_CLASSICAL_GRADER")
+    _os.environ["KD_USE_CLASSICAL_GRADER"] = "0"
+    t0_llm = _time.monotonic()
+    try:
+        llm = build_synth_fallback_chain()
+        llm_eval = await _grade_attempt(
+            synthesis_text=request.synthesis_text,
+            chapter=chapter,
+            user_profile=user_profile,
+            framework=request.framework,
+            llm=llm,
+            iteration=None,
+            study_id=None,
+            user_id=None,
+            audit_summary=request.audit_summary,
+        )
+    finally:
+        if prior_flag is None:
+            _os.environ.pop("KD_USE_CLASSICAL_GRADER", None)
+        else:
+            _os.environ["KD_USE_CLASSICAL_GRADER"] = prior_flag
+    llm_dt = _time.monotonic() - t0_llm
+
+    # Per-dim deltas: classical - llm
+    dims = [
+        "signal_to_noise", "assumption_match", "job_alignment",
+        "citation_integrity", "code_density", "portfolio_synergy",
+        "complexity_appropriate", "market_analysis", "code_preservation_ratio",
+    ]
+    deltas_per_dim = {
+        d: round(getattr(classical_eval, d) - getattr(llm_eval, d), 4)
+        for d in dims
+    }
+    weighted_delta = round(classical_eval.weighted_score - llm_eval.weighted_score, 4)
+    # Agreement: same action class + scores within 0.10 on every dim
+    agreement_action = classical_eval.action == llm_eval.action
+    agreement_within_tolerance = all(abs(deltas_per_dim[d]) <= 0.10 for d in dims)
+
+    return {
+        "classical": classical_eval.model_dump(),
+        "llm": llm_eval.model_dump(),
+        "deltas_per_dim": deltas_per_dim,
+        "weighted_score_delta": weighted_delta,
+        "classical_wall_clock_s": round(classical_dt, 4),
+        "llm_wall_clock_s": round(llm_dt, 4),
+        "speedup": round(llm_dt / max(classical_dt, 1e-6), 1),
+        "agreement_action": agreement_action,
+        "agreement_within_0.10_per_dim": agreement_within_tolerance,
+    }
+
+
+class CriticCompareRequest(BaseModel):
+    """
+    Body for POST /debug/critic_compare — side-by-side LLM vs classical
+    critic on one chapter. citation_coverage + code_syntax_valid are
+    computed deterministically (both paths share these); only the
+    faithfulness dim differs (LLM judgment vs embedding-similarity).
+    Phase 2.1 validation harness for services/knowledge/critic_classical.py.
+
+    Single-chapter input keeps the endpoint focused. The production critic
+    aggregates across N chapters; this debug version skips aggregation —
+    you can replay it per-chapter to see how faithfulness scoring varies.
+    """
+    chapter_number: int = Field(default=1, ge=1)
+    chapter_title: str = Field(default="Chapter")
+    chapter_text: str = Field(
+        min_length=10,
+        description="Assembled chapter markdown.",
+    )
+    framework: str = Field(default="generic")
+    source_contents: dict = Field(
+        description="{slug: content} for every cited slug. Loaded by the "
+                    "production critic via _read_raw_prefix; pass here for "
+                    "test isolation.",
+    )
+    available_slugs: list[str] = Field(
+        default_factory=list,
+        description="Slugs available under research/raw/. Used by "
+                    "_scan_citations to flag broken/hallucinated cites. "
+                    "Defaults to source_contents.keys() if empty.",
+    )
+
+
+@router.post("/debug/critic_compare")
+async def debug_critic_compare(request: CriticCompareRequest):
+    """
+    Run the LLM critic (existing CRITIC_PROMPT path) AND the classical
+    critic (services/knowledge/critic_classical.assess_chapter_classically)
+    on the same chapter. citation_coverage + code_syntax_valid are shared
+    (both paths use the same deterministic computation); only faithfulness
+    differs. Return both CriticAssessment objects + per-dim deltas +
+    wall-clock timings.
+
+    Useful for Phase 2.1 validation: paste an assembled chapter + its
+    source slugs, inspect whether the embedding-similarity faithfulness
+    score agrees with the LLM critic within tolerance. If yes → flip
+    `KD_USE_CLASSICAL_CRITIC=1`. If no → tune cosine thresholds or
+    upgrade to host-side MiniCheck/AlignScore in Phase 2.2.
+    """
+    import asyncio as _asyncio
+    import time as _time
+    import os as _os
+
+    from schemas.knowledge.agents import CriticAssessment
+    from schemas.knowledge.prompts import CRITIC_PROMPT
+    from services.knowledge.critic_classical import (
+        assess_chapter_classically,
+    )
+    from services.llm_chain import build_synth_fallback_chain
+    from graphs.knowledge.helpers import (
+        _scan_citations,
+        _compute_code_syntax_valid_score,
+        _invoke_structured_with_fallback,
+    )
+
+    # Default available_slugs to source_contents.keys() if not provided.
+    available_slugs = (
+        set(request.available_slugs)
+        if request.available_slugs
+        else set(request.source_contents.keys())
+    )
+
+    # Build the (chapter_number, title, body) tuple list the deterministic
+    # helpers expect.
+    chapters_list = [(request.chapter_number, request.chapter_title, request.chapter_text)]
+
+    # Shared deterministic scorers — both paths use these (no point
+    # double-computing in side-by-side comparison).
+    cited, citation_issues = _scan_citations(chapters_list, available_slugs)
+    citation_coverage = (
+        sum(1 for s in cited if s in available_slugs) / len(cited)
+        if cited else 0.0
+    )
+    code_syntax_score, ts_stats = _compute_code_syntax_valid_score(chapters_list)
+
+    # Classical path — embedding-similarity faithfulness
+    t0_classical = _time.monotonic()
+    classical_assessment = await assess_chapter_classically(
+        chapter_text=request.chapter_text,
+        citation_coverage=citation_coverage,
+        code_syntax_valid=code_syntax_score,
+        source_contents=request.source_contents,
+    )
+    classical_dt = _time.monotonic() - t0_classical
+
+    # LLM path — temporarily disable the KD_USE_CLASSICAL_CRITIC env flag
+    # so the route is a true A/B test regardless of production config.
+    prior_flag = _os.environ.get("KD_USE_CLASSICAL_CRITIC")
+    _os.environ["KD_USE_CLASSICAL_CRITIC"] = "0"
+    t0_llm = _time.monotonic()
+    try:
+        llm = build_synth_fallback_chain()
+        bundle = (
+            f"=== Chapter {request.chapter_number:02d} — "
+            f"{request.chapter_title} ===\n{request.chapter_text}\n"
+        )
+        try:
+            llm_assessment_raw = await _invoke_structured_with_fallback(
+                prompt=CRITIC_PROMPT,
+                llm=llm,
+                schema=CriticAssessment,
+                invoke_vars={
+                    "framework": request.framework,
+                    "file_slugs": ", ".join(sorted(available_slugs)),
+                    "chapter_bundles": bundle,
+                },
+                label="debug-critic-compare",
+            )
+            # Override the LLM's citation_coverage + code_syntax_valid
+            # with the deterministic values (same as the production
+            # critic does post-OP-59).
+            llm_assessment = CriticAssessment(
+                citation_coverage=citation_coverage,
+                faithfulness=llm_assessment_raw.faithfulness,
+                code_syntax_valid=code_syntax_score,
+                overall_score=(
+                    0.4 * citation_coverage
+                    + 0.4 * llm_assessment_raw.faithfulness
+                    + 0.2 * code_syntax_score
+                ),
+                issues=llm_assessment_raw.issues,
+            )
+        except Exception as e:
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=503,
+                detail=f"LLM critic call failed: {type(e).__name__}: {e}",
+            )
+    finally:
+        if prior_flag is None:
+            _os.environ.pop("KD_USE_CLASSICAL_CRITIC", None)
+        else:
+            _os.environ["KD_USE_CLASSICAL_CRITIC"] = prior_flag
+    llm_dt = _time.monotonic() - t0_llm
+
+    dims = ["citation_coverage", "faithfulness", "code_syntax_valid", "overall_score"]
+    deltas_per_dim = {
+        d: round(getattr(classical_assessment, d) - getattr(llm_assessment, d), 4)
+        for d in dims
+    }
+    agreement_within_tolerance = all(abs(deltas_per_dim[d]) <= 0.15 for d in dims)
+
+    return {
+        "classical": classical_assessment.model_dump(),
+        "llm": llm_assessment.model_dump(),
+        "deltas_per_dim": deltas_per_dim,
+        "classical_wall_clock_s": round(classical_dt, 4),
+        "llm_wall_clock_s": round(llm_dt, 4),
+        "speedup": round(llm_dt / max(classical_dt, 1e-6), 1),
+        "agreement_within_0.15_per_dim": agreement_within_tolerance,
+        "tree_sitter_stats": ts_stats,
+    }
+
+
 @router.get("/debug/embeddings_smoke")
 async def debug_embeddings_smoke():
     """

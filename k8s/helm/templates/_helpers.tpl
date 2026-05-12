@@ -45,6 +45,12 @@ SEARXNG_URL: "{{ .Values.searxng.url }}"
 # embed + community_detection + KeyLLM); "0" keeps the legacy LLM path.
 # Read at runtime by graphs/knowledge/distiller.py.
 KD_USE_CLASSICAL_MAP: "{{ .Values.kd.useClassicalMap }}"
+# Phase 1.3 (2026-05-13): routes synth grader through classical scorer when "1".
+# See kd.useClassicalGrader in values.yaml.
+KD_USE_CLASSICAL_GRADER: "{{ .Values.kd.useClassicalGrader }}"
+# Phase 2.1 (2026-05-13): replaces critic's per-chapter LLM faithfulness call
+# with kd-embed similarity heuristic when "1". See kd.useClassicalCritic above.
+KD_USE_CLASSICAL_CRITIC: "{{ .Values.kd.useClassicalCritic }}"
 # R8 (2026-05-11): when "1", MAP runs ONE global pass (label_corpus_classical)
 # instead of per-shard. See `kd.globalMap` in values.yaml and `_use_global_map`
 # in graphs/knowledge/distiller.py.

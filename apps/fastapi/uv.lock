@@ -656,6 +656,7 @@ dependencies = [
     { name = "scikit-learn" },
     { name = "starlette" },
     { name = "tenacity" },
+    { name = "textstat" },
     { name = "tiktoken" },
     { name = "trafilatura" },
     { name = "tree-sitter" },
@@ -716,6 +717,7 @@ requires-dist = [
     { name = "scikit-learn" },
     { name = "starlette" },
     { name = "tenacity" },
+    { name = "textstat", specifier = ">=0.7.13" },
     { name = "tiktoken" },
     { name = "trafilatura", specifier = ">=2.0" },
     { name = "tree-sitter", specifier = ">=0.23,<0.25" },
@@ -3332,6 +3334,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pyphen"
+version = "0.17.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/69/56/e4d7e1bd70d997713649c5ce530b2d15a5fc2245a74ca820fc2d51d89d4d/pyphen-0.17.2.tar.gz", hash = "sha256:f60647a9c9b30ec6c59910097af82bc5dd2d36576b918e44148d8b07ef3b4aa3", size = 2079470 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7b/1f/c2142d2edf833a90728e5cdeb10bdbdc094dde8dbac078cee0cf33f5e11b/pyphen-0.17.2-py3-none-any.whl", hash = "sha256:3a07fb017cb2341e1d9ff31b8634efb1ae4dc4b130468c7c39dd3d32e7c3affd", size = 2079358 },
+]
+
+[[package]]
 name = "python-dateutil"
 version = "2.9.0.post0"
 source = { registry = "https://pypi.org/simple" }
@@ -3838,6 +3849,15 @@ wheels = [
 ]
 
 [[package]]
+name = "setuptools"
+version = "82.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4f/db/cfac1baf10650ab4d1c111714410d2fbb77ac5a616db26775db562c8fab2/setuptools-82.0.1.tar.gz", hash = "sha256:7d872682c5d01cfde07da7bccc7b65469d3dca203318515ada1de5eda35efbf9", size = 1152316 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9d/76/f789f7a86709c6b087c5a2f52f911838cad707cc613162401badc665acfe/setuptools-82.0.1-py3-none-any.whl", hash = "sha256:a59e362652f08dcd477c78bb6e7bd9d80a7995bc73ce773050228a348ce2e5bb", size = 1006223 },
+]
+
+[[package]]
 name = "shapely"
 version = "2.1.2"
 source = { registry = "https://pypi.org/simple" }
@@ -3995,6 +4015,20 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/47/c6/ee486fd809e357697ee8a44d3d69222b344920433d3b6666ccd9b374630c/tenacity-9.1.4.tar.gz", hash = "sha256:adb31d4c263f2bd041081ab33b498309a57c77f9acf2db65aadf0898179cf93a", size = 49413 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d7/c1/eb8f9debc45d3b7918a32ab756658a0904732f75e555402972246b0b8e71/tenacity-9.1.4-py3-none-any.whl", hash = "sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55", size = 28926 },
+]
+
+[[package]]
+name = "textstat"
+version = "0.7.13"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "nltk" },
+    { name = "pyphen" },
+    { name = "setuptools" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8c/0f/b673fcec5ad6e976b2e8368ef3651fe0fea3348a1191bacfcd41a17ddec6/textstat-0.7.13.tar.gz", hash = "sha256:a88d1da76287cd27ca4ce7bcba1ebaf2890544a5f0bb6a5758fa84cef3bceccb", size = 138932 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ca/31/0eb4cc5bb021b4ceaaa602c59ba16ce99256b9dd30981bef3f3a53d8555f/textstat-0.7.13-py3-none-any.whl", hash = "sha256:04b1ec995d1e8b2e628759497e6b23204a9ec91dcd652447d8cbba9478f25471", size = 177050 },
 ]
 
 [[package]]

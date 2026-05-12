@@ -2119,10 +2119,59 @@ class KnowledgeDistillerGraph:
                 )
                 return False, None, f"{type(e_one).__name__}: {str(e_one)[:160]}"
 
-        per_ch_results = await asyncio.gather(
-            *(_critic_one_chapter(n, t, b) for (n, t, b) in chapters),
-            return_exceptions = False,
-        )
+        # Phase 2.1 (2026-05-13): KD_USE_CLASSICAL_CRITIC=1 swaps the per-
+        # chapter LLM faithfulness call for an embedding-similarity heuristic
+        # via the kd-embed rotator (no in-cluster inference, respects the
+        # architecture rule). citation_coverage + code_syntax_valid stay
+        # exactly as they were (both already deterministic upstream / by
+        # tree-sitter OP-59). Drop-in shape: same `per_ch_results` list[
+        # tuple[bool, CriticAssessment|None, str]] feeds the existing
+        # downstream aggregation. See docs/KD-SYNTH-LLM-TO-CLASSICAL-MAY2026.md
+        # Phase 2.
+        _use_classical_critic = os.environ.get(
+            "KD_USE_CLASSICAL_CRITIC", "0",
+        ).strip().lower() in ("1", "true", "yes")
+        if _use_classical_critic:
+            from services.knowledge.critic_classical import (
+                score_faithfulness_classical,
+            )
+            # Load source contents once (research/raw/<slug>) — needed for
+            # the claim-vs-source similarity scoring.
+            source_entries = await _read_raw_prefix(storage, study_root)
+            source_contents = dict(source_entries)
+            logger.info(
+                f"[critic] CLASSICAL CRITIC ENABLED — "
+                f"embedding-similarity faithfulness across "
+                f"{len(chapters)} chapter(s), source corpus size "
+                f"{len(source_contents)} slugs"
+            )
+            per_ch_results = []
+            for (ch_num, ch_title, ch_body) in chapters:
+                try:
+                    faith, issues = await score_faithfulness_classical(
+                        ch_body, source_contents,
+                    )
+                    synthetic = CriticAssessment(
+                        citation_coverage = citation_coverage,
+                        faithfulness = faith,
+                        code_syntax_valid = 1.0,  # placeholder; overridden by OP-59 tree-sitter below
+                        overall_score = 0.0,       # recomputed by merge below
+                        issues = [f"[ch{ch_num:02d}] {i}" for i in issues],
+                    )
+                    per_ch_results.append((True, synthetic, ""))
+                except Exception as e_one:
+                    logger.warning(
+                        f"[critic-ch{ch_num:02d}] classical faithfulness failed "
+                        f"({type(e_one).__name__}: {str(e_one)[:120]}); skipping"
+                    )
+                    per_ch_results.append(
+                        (False, None, f"{type(e_one).__name__}: {str(e_one)[:160]}")
+                    )
+        else:
+            per_ch_results = await asyncio.gather(
+                *(_critic_one_chapter(n, t, b) for (n, t, b) in chapters),
+                return_exceptions = False,
+            )
         per_ch_faith: list[float] = []
         per_ch_code: list[float] = []
         per_ch_issues: list[str] = []

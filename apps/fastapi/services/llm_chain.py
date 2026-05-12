@@ -484,7 +484,8 @@ def _all_entries() -> list:
         # _cerebras_entry(GROUP, "zai-glm-4.7", timeout_s=120),                                    # DISABLED 2026-04-24 — 404 "you do not have access to it" (model exists in Cerebras catalog but API key lacks access). AAII 42 (R) / 34 (NR), SOTA τ²-Bench, 200K ctx, 355B params
         _nim_entry(GROUP, "nvidia/nemotron-3-super-120b-a12b", timeout_s=120),                     # AAII 36 — 1M ctx, hybrid Mamba, leads size class on AIME-2025 + Terminal-Bench
         # _sambanova_entry(GROUP, "DeepSeek-V3.1", timeout_s=120),                                 # DISABLED 2026-04-24 (Run-8 evidence) — full SambaNova account now paywalled; whole provider returns "A payment method is required" even for previously-free models. AAII 34 (R) when/if re-enabled.
-        _nim_entry(GROUP, "deepseek-ai/deepseek-v3.1-terminus", timeout_s=120),                    # AAII 34 (R) / 29 (NR) — V3.1-Terminus, slightly newer than V3.1, 128K ctx
+        # _nim_entry(GROUP, "deepseek-ai/deepseek-v3.1-terminus", timeout_s=120),                  # DISABLED 2026-05-13 — NIM returns 410 "Gone" since 2026-05-04 EOL. Surfaced via Phase 1.3 grader_compare validation (LLM grader cascade hit this model and 410 is non-retryable in LiteLLM, aborting the whole request). Re-enable if NIM republishes; otherwise leave commented.
+
         _gemini_entry(GROUP, "gemini-3.1-flash-lite-preview", timeout_s=90),                       # AAII 34 — GPQA Diamond 86.9%, 381 t/s, 1M ctx
         # --- 18–21: gpt-oss-120b on four providers (AAII 33 each) ---
         # _cerebras_entry(GROUP, "gpt-oss-120b", timeout_s=120),                                   # DISABLED 2026-04-24 — 404 "you do not have access to it" (model listed in Cerebras catalog but key unauthorized). AAII 33, MMLU-Pro 90.0%, 3000 tok/s

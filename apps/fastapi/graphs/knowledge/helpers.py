@@ -19,6 +19,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 from typing import Optional
 
@@ -2178,6 +2179,30 @@ async def _grade_attempt(
             ],
             action = "refine",
         )
+    # Phase 1.3 (2026-05-13): KD_USE_CLASSICAL_GRADER=1 routes the grader
+    # through services/knowledge/grader_classical.py — deterministic per-dim
+    # scorers + (Phase 1.2) one small-LLM call for the market_analysis dim.
+    # Drop-in shape: returns the same GraderEvaluation Pydantic. Default "0"
+    # keeps the legacy LLM grader until A/B validation on /debug/grader_compare
+    # shows the classical scores agree on existing chapters. See
+    # docs/KD-SYNTH-LLM-TO-CLASSICAL-MAY2026.md Phase 1.
+    if os.environ.get("KD_USE_CLASSICAL_GRADER", "0").strip().lower() in (
+        "1", "true", "yes",
+    ):
+        from services.knowledge.grader_classical import score_chapter_classically
+        result = await score_chapter_classically(
+            synthesis_text = synthesis_text,
+            chapter = chapter,
+            user_profile = user_profile,
+            audit_summary = audit_summary or "",
+            framework = framework,
+        )
+        logger.info(
+            f"[grader][ch{chapter.number:02d}] classical scored: "
+            f"composite={result.weighted_score:.3f} action={result.action} "
+            f"issues={len(result.specific_issues)}"
+        )
+        return result
     return await _invoke_structured_with_fallback(
         prompt = GRADER_PROMPT,
         llm = llm,

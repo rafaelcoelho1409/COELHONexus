@@ -71,6 +71,38 @@
 
 The KD planner has plateaued — chapter quality is high, wall-clock is acceptable. The dominant remaining time sink is the **synthesizer step** (~20–40 min per study, not planner). The R1+R2 pattern applied to synthesis (separate `kd-synth` non-reasoning pool, json_schema where applicable) is the next big user-facing optimization. Out of scope for this doc; tracked elsewhere.
 
+## Final status (2026-05-12)
+
+**REDUCE step is stable and considered done for this optimization pass.** Default is per-shard MAP (`kd.globalMap: "0"`), validated on Docker (1318 files → 9 clean chapters, max 17.2%) and Terragrunt (440 files → 5 clean chapters historical baseline, max 36%). R8 (global MAP) remains opt-in via `KD_GLOBAL_MAP=1` for advanced tuning on large corpora.
+
+### Known limitations (R8 in opt-in mode)
+
+R8 is **corpus-dependent**. It produces strictly better plans on large corpora with diffuse topical structure (Docker: silhouette 0.522, 48 orphans vs 103, max chapter 18.9%) and regresses on small corpora with dense topical concentration (Terragrunt: max chapter 44.6%, mega junk drawer "Contributing to Terragrunt" with 178 files).
+
+Root cause: at `community_detection`'s `threshold=0.60`, dense topical regions like Terragrunt's contributing/development docs (~150 files clustering tightly) become single oversized communities. R8b's REDUCE-layer sub-split can partition the meta-cluster they end up in, but can't split the underlying micro-cluster — its file count is the inherent floor. Per-shard mode naturally bounds community size to ≤40 files via the shard boundary; global mode has no such bound.
+
+Empirical heuristic for opt-in: **R8 recommended for corpora ≥800 files**; per-shard remains safer for smaller corpora.
+
+### Future improvements (deferred — only revisit if a concrete need arises)
+
+| Option | Effort | What it solves | When to revisit |
+|---|---|---|---|
+| **R8b — re-run T-3 thin-merge after the file-cap split** | ~5 LoC, refactor T-3 into a callable function | Cosmetic — absorbs the 4-file orphan sub-metas R8b creates (e.g., Terragrunt 2026-05-12 study `00e83dfb` chapters 7+8) into their nearest neighbor. Doesn't fix the underlying mega-chapter. | Only if R8 becomes the default AND telemetry shows the orphan sub-metas degrading user experience. |
+| **R8c — MAP-layer community size cap** | ~30 LoC, recursive function in `community_detection`, threshold tuning | Principled root-cause fix. Caps individual community size at e.g. 50 files in `_cluster_corpus`; oversized communities get sub-split via recursive `community_detection` at higher threshold (or k-means subdivision). Would make R8 work uniformly across all corpora and let us flip `kd.globalMap` to `"1"` as default. | Only if there's a specific Terragrunt-class corpus a real user needs handled well, AND the orphan-recovery win matters enough to justify another redeploy + dual-corpus validation cycle. |
+| **R5 — file-centroid embedding for REDUCE input** | ~40 LoC, research-pilot | Use `CORPUS_PREVIEW_CHARS=80` cached file content as the embedding signal instead of `cluster_name + description`. Partly subsumed by R8+R8b. | Only if a future framework's chapters look topically incoherent. |
+| **R6 — pre-labeling reranker** (NIM `llama-nemotron-rerank-1b-v2`) | ~50 LoC + new `kd-rerank` rotator group | Cuts `_label_one` prompt tokens 30–60% by reranking members against a seed name. | Only if Groq 413s reappear or rotator TPM ceilings get hit. |
+| **Numba `@njit(cache=True)` monkey-patch for UMAP** | ~10 LoC + Helm PVC mount | Persists numba JIT artifacts across worker restarts. Eliminates the 3.5 min pre-warm cost on every fresh pod boot. | Only if skaffold cycle time becomes a daily friction point. |
+
+### Next scope (separate doc when started): Synthesizer optimization
+
+The same `R1 + R2 + R4` triad pattern that worked for REDUCE applies cleanly to the synthesizer step:
+
+- **R1-equivalent**: separate `kd-synth` rotator group of non-reasoning models suitable for prose generation (different list than `kd-reduce-label` — prose generation benefits from larger / more creative models like Mistral-Large-3, Llama-4-Maverick, Nemotron-Super; explicitly excludes reasoning models that burn `<think>` budget on long-form output)
+- **R2-equivalent**: `method="json_schema"` for `ChapterOutput` / `ProseChapterOutput` / `ChapterOutline` / `Section` schemas (already structured, just not using grammar-constrained JSON)
+- **R4-equivalent**: hedged invoke at fanout=2 for synthesis calls — the highest absolute wall-clock win available since each synthesis call is ~30–120s
+
+Synthesizer represents ~20–40 min per study (8–10× the planner's wall-clock). This is the next big user-facing optimization. Track in a new doc when scoped.
+
 ### Phase A deviations from the deep-research plan
 
 The research proposed a Cerebras-first pool with SambaNova + Gemini-2.5-flash-lite + Mistral mid-tier. The shipped pool diverges because the live `_all_entries()` catalog in `llm_chain.py` documents account-level model-access failures that the research couldn't see:
