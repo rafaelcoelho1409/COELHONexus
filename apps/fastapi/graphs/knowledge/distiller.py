@@ -1426,15 +1426,94 @@ class KnowledgeDistillerGraph:
                     continue
                 # Localized issues → generate specific adjustment, retry
                 if iteration < MAX_SELF_REFINE_ITERATIONS - 1:
-                    # Generate adjustment feedback with T=0.7 refiner chain for
-                    # exploration (Madaan 2023, Self-Refine §2 — T=0 collapses
-                    # exploration and commits to a single deterministic edit path,
-                    # a documented cause of regression per Huang 2024 §3.3).
-                    # Grader stays T=0; only this critique-generation call benefits
-                    # from higher temperature.
-                    from services.llm_chain import build_refine_llm_chain
-                    refine_llm = build_refine_llm_chain()
-                    adj = await _generate_adjustment(evaluation, synthesis.content, refine_llm)
+                    # Phase 4 (2026-05-13): KD_USE_CLASSICAL_REFINER=1 tries
+                    # deterministic patches on patchable Issue dims first
+                    # (signal_to_noise / citation_integrity / assumption_match).
+                    # If patches clear the acceptance threshold the next re-synth
+                    # iter is skipped entirely (saves 2 LLM calls); otherwise the
+                    # adjustment text is generated from per-dim templates
+                    # (replaces the LLM ADJUSTMENT_PROMPT call). Default "0"
+                    # preserves the legacy LLM-only path. See
+                    # docs/KD-SYNTH-LLM-TO-CLASSICAL-MAY2026.md Phase 4.
+                    use_classical_refiner = os.environ.get(
+                        "KD_USE_CLASSICAL_REFINER", "0",
+                    ).strip().lower() in ("1", "true", "yes")
+
+                    if use_classical_refiner:
+                        from services.knowledge.refiner_classical import (
+                            apply_classical_patches,
+                            generate_adjustment_classically,
+                        )
+                        patched_content, residual, patch_log = apply_classical_patches(
+                            synthesis_text = synthesis.content,
+                            issues = evaluation.specific_issues,
+                            chapter = chapter,
+                            user_profile = user_profile,
+                        )
+
+                        if patch_log and patched_content != synthesis.content:
+                            patched_synthesis = ChapterSynthesis(
+                                content = patched_content,
+                                challenges = synthesis.challenges,
+                                flashcards = synthesis.flashcards,
+                            )
+                            try:
+                                patched_eval = await _grade_attempt(
+                                    synthesis_text = patched_content,
+                                    chapter = chapter,
+                                    user_profile = user_profile,
+                                    framework = framework,
+                                    llm = llm,
+                                    iteration = iteration,
+                                    study_id = payload.get("study_id"),
+                                    user_id = payload.get("user_id"),
+                                    audit_summary = _audit_summary_str,
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    f"[synth][ch{chapter.number:02d}] classical-refiner "
+                                    f"re-grade failed ({type(e).__name__}: {e}); "
+                                    f"falling back to template adjustment"
+                                )
+                                patched_eval = None
+
+                            if patched_eval is not None:
+                                history.append((patched_synthesis, patched_eval))
+                                if patched_eval.weighted_score > best_eval.weighted_score:
+                                    best_synthesis = patched_synthesis
+                                    best_eval = patched_eval
+                                logger.info(
+                                    f"[synth][ch{chapter.number:02d}] iter {iteration} "
+                                    f"classical-refiner applied {len(patch_log)} patches: "
+                                    f"score {evaluation.weighted_score:.2f} → "
+                                    f"{patched_eval.weighted_score:.2f} "
+                                    f"action {evaluation.action} → {patched_eval.action}"
+                                )
+                                if (patched_eval.action == "accept"
+                                        or patched_eval.weighted_score >= accept_threshold):
+                                    logger.info(
+                                        f"[synth][ch{chapter.number:02d}] "
+                                        f"CLASSICAL-PATCH ACCEPTED — skipping re-synth "
+                                        f"(saved 2 LLM calls this iter)"
+                                    )
+                                    break
+                                evaluation = patched_eval
+
+                        adj = generate_adjustment_classically(
+                            evaluation = evaluation,
+                            residual_issues = residual,
+                            patch_log = patch_log,
+                        )
+                    else:
+                        # Generate adjustment feedback with T=0.7 refiner chain for
+                        # exploration (Madaan 2023, Self-Refine §2 — T=0 collapses
+                        # exploration and commits to a single deterministic edit path,
+                        # a documented cause of regression per Huang 2024 §3.3).
+                        # Grader stays T=0; only this critique-generation call benefits
+                        # from higher temperature.
+                        from services.llm_chain import build_refine_llm_chain
+                        refine_llm = build_refine_llm_chain()
+                        adj = await _generate_adjustment(evaluation, synthesis.content, refine_llm)
                     adjustments.append(adj)
                     logger.info(
                         f"[synth][ch{chapter.number:02d}] adjustment generated ({len(adj)} chars) "

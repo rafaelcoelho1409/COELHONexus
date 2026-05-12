@@ -641,6 +641,190 @@ async def debug_outline_compare(request: OutlineCompareRequest):
     }
 
 
+class RefinerCompareRequest(BaseModel):
+    """
+    Body for POST /debug/refiner_compare — side-by-side LLM vs classical
+    refiner on one chapter + Issue list. Phase 4 validation harness for
+    services/knowledge/refiner_classical.py (see
+    docs/KD-SYNTH-LLM-TO-CLASSICAL-MAY2026.md Phase 4).
+
+    The classical path runs in two layers: (1) apply_classical_patches
+    edits the chapter in place for patchable dims; (2)
+    generate_adjustment_classically emits the deterministic adjustment
+    string from per-dim templates. The LLM path is the legacy
+    `_generate_adjustment` call against ADJUSTMENT_PROMPT.
+
+    Pass `issues` directly (e.g. from a prior grader run) so the test is
+    deterministic and not dependent on re-running the grader. Issues
+    should be Pydantic `Issue` dicts: `{span_quote, dimension, suggestion}`.
+    """
+    synthesis_text: str = Field(
+        min_length=10,
+        description="Assembled chapter markdown the refiner sees.",
+    )
+    issues: list[dict] = Field(
+        default_factory=list,
+        description="Grader-emitted Issue list. Each item: "
+                    "{span_quote, dimension, suggestion}.",
+    )
+    chapter: dict = Field(
+        description="ChapterPlan JSON: number, title, goal, assigned_files.",
+    )
+    user_profile: dict = Field(
+        description="UserProfile JSON.",
+    )
+    framework: str = Field(default="generic")
+    weighted_score: float = Field(
+        default=0.70,
+        ge=0.0, le=1.0,
+        description="Current composite score from the grader. Used for the "
+                    "classical adjustment text's target line.",
+    )
+    regrade_after_patch: bool = Field(
+        default=True,
+        description="If true, re-grade the patched chapter via the classical "
+                    "scorer so the response includes the score delta and "
+                    "whether patches alone reach the acceptance threshold.",
+    )
+
+
+@router.post("/debug/refiner_compare")
+async def debug_refiner_compare(request: RefinerCompareRequest):
+    """
+    Run the LLM adjustment generator (existing ADJUSTMENT_PROMPT path via
+    `_generate_adjustment`) AND the classical refiner
+    (services/knowledge/refiner_classical.apply_classical_patches +
+    generate_adjustment_classically) on the same chapter + Issue list.
+    Return both adjustment strings + the classical patch log + per-dim
+    counts + wall-clock timings + (optionally) the post-patch re-grade.
+
+    Useful for Phase 4 validation: paste a chapter + grader's
+    specific_issues, inspect whether classical patches resolve the
+    patchable dims and how the deterministic adjustment text compares
+    to the LLM-generated one. If patches reach `accept` on re-grade, the
+    Self-Refine loop will skip the next re-synth iter (2 LLM calls saved).
+    """
+    import time as _time
+
+    from schemas.knowledge.agents import ChapterPlan, GraderEvaluation, Issue
+    from schemas.knowledge.inputs import UserProfile
+    from services.knowledge.refiner_classical import (
+        apply_classical_patches,
+        generate_adjustment_classically,
+    )
+    from services.knowledge.grader_classical import score_chapter_classically
+    from services.llm_chain import build_refine_llm_chain
+    from graphs.knowledge.helpers import _generate_adjustment
+
+    try:
+        chapter = ChapterPlan(**request.chapter)
+        user_profile = UserProfile(**request.user_profile)
+        issues = [Issue(**i) for i in request.issues]
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid request body: {type(e).__name__}: {e}",
+        )
+
+    # Synthetic evaluation reflects the input issues + score so both paths
+    # see equivalent context. Action="refine" is the only realistic case.
+    dim_defaults = {
+        "signal_to_noise": 0.7, "assumption_match": 0.7, "job_alignment": 0.7,
+        "citation_integrity": 0.7, "code_density": 0.7, "portfolio_synergy": 0.7,
+        "complexity_appropriate": 0.7, "market_analysis": 0.7,
+        "code_preservation_ratio": 1.0,
+    }
+    evaluation = GraderEvaluation(
+        **dim_defaults,
+        weighted_score=request.weighted_score,
+        specific_issues=issues,
+        action="refine",
+    )
+
+    # Classical path — patches + adjustment text
+    t0_classical = _time.monotonic()
+    patched_text, residual, patch_log = apply_classical_patches(
+        synthesis_text=request.synthesis_text,
+        issues=issues,
+        chapter=chapter,
+        user_profile=user_profile,
+    )
+    classical_adj = generate_adjustment_classically(
+        evaluation=evaluation,
+        residual_issues=residual,
+        patch_log=patch_log,
+    )
+    classical_dt = _time.monotonic() - t0_classical
+
+    # Optional re-grade on patched content via the classical grader
+    regrade_result: Optional[dict] = None
+    if request.regrade_after_patch and patch_log:
+        try:
+            t0_regrade = _time.monotonic()
+            patched_eval = await score_chapter_classically(
+                synthesis_text=patched_text,
+                chapter=chapter,
+                user_profile=user_profile,
+                audit_summary="",
+                framework=request.framework,
+            )
+            regrade_dt = _time.monotonic() - t0_regrade
+            regrade_result = {
+                "post_patch_score": round(patched_eval.weighted_score, 4),
+                "post_patch_action": patched_eval.action,
+                "score_delta": round(
+                    patched_eval.weighted_score - request.weighted_score, 4,
+                ),
+                "reach_acceptance": (
+                    patched_eval.weighted_score >= user_profile.acceptance_threshold
+                ),
+                "regrade_wall_clock_s": round(regrade_dt, 4),
+            }
+        except Exception as e:
+            regrade_result = {"error": f"{type(e).__name__}: {e}"}
+
+    # LLM path — _generate_adjustment against ADJUSTMENT_PROMPT
+    t0_llm = _time.monotonic()
+    try:
+        refine_llm = build_refine_llm_chain()
+        llm_adj = await _generate_adjustment(
+            evaluation, request.synthesis_text, refine_llm,
+        )
+    except Exception as e:
+        llm_adj = f"(LLM adjustment failed: {type(e).__name__}: {e})"
+    llm_dt = _time.monotonic() - t0_llm
+
+    issues_by_dim: dict[str, int] = {}
+    for iss in issues:
+        issues_by_dim[iss.dimension] = issues_by_dim.get(iss.dimension, 0) + 1
+    residual_by_dim: dict[str, int] = {}
+    for iss in residual:
+        residual_by_dim[iss.dimension] = residual_by_dim.get(iss.dimension, 0) + 1
+
+    return {
+        "classical": {
+            "patched_text_len": len(patched_text),
+            "original_text_len": len(request.synthesis_text),
+            "text_delta_chars": len(patched_text) - len(request.synthesis_text),
+            "patch_log": patch_log,
+            "patches_applied": len(patch_log),
+            "issues_by_dim": issues_by_dim,
+            "residual_by_dim": residual_by_dim,
+            "residual_total": len(residual),
+            "adjustment_text": classical_adj,
+            "adjustment_chars": len(classical_adj),
+        },
+        "llm": {
+            "adjustment_text": llm_adj,
+            "adjustment_chars": len(llm_adj),
+        },
+        "regrade": regrade_result,
+        "classical_wall_clock_s": round(classical_dt, 4),
+        "llm_wall_clock_s": round(llm_dt, 4),
+        "speedup": round(llm_dt / max(classical_dt, 1e-6), 1),
+    }
+
+
 @router.get("/debug/embeddings_smoke")
 async def debug_embeddings_smoke():
     """

@@ -54,6 +54,11 @@ KD_USE_CLASSICAL_CRITIC: "{{ .Values.kd.useClassicalCritic }}"
 # Phase 3.1 (2026-05-13): routes Phase A outline through classical path when "1".
 # See kd.useClassicalOutline in values.yaml.
 KD_USE_CLASSICAL_OUTLINE: "{{ .Values.kd.useClassicalOutline }}"
+# Phase 4 (2026-05-13): when "1", Self-Refine loop attempts deterministic patches
+# on patchable grader Issue dims before LLM re-synth, and uses template-based
+# adjustment text instead of the ADJUSTMENT_PROMPT LLM call. See
+# kd.useClassicalRefiner in values.yaml.
+KD_USE_CLASSICAL_REFINER: "{{ .Values.kd.useClassicalRefiner }}"
 # R8 (2026-05-11): when "1", MAP runs ONE global pass (label_corpus_classical)
 # instead of per-shard. See `kd.globalMap` in values.yaml and `_use_global_map`
 # in graphs/knowledge/distiller.py.

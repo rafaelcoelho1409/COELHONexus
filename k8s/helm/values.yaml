@@ -112,6 +112,18 @@ kd:
   # /api/v1/knowledge/debug/outline_compare confirms section structure
   # quality on representative chapters.
   useClassicalOutline: "0"
+  # Phase 4 (2026-05-13): when "1", Self-Refine loop attempts deterministic
+  # patches on patchable Issue dims (signal_to_noise / citation_integrity /
+  # assumption_match) BEFORE the LLM adjustment+re-synth cycle. If patches
+  # clear the acceptance threshold on re-grade, the next re-synth iter is
+  # skipped entirely (2 LLM calls saved); otherwise the adjustment text is
+  # generated from per-dim templates instead of the LLM ADJUSTMENT_PROMPT
+  # call (1 LLM call saved). See services/knowledge/refiner_classical.py
+  # and docs/KD-SYNTH-LLM-TO-CLASSICAL-MAY2026.md Phase 4. Depends on
+  # KD_USE_CLASSICAL_GRADER for reliably labeled Issue dimensions. Default
+  # "0" keeps the legacy LLM-only refine path; flip after A/B validation
+  # via /api/v1/knowledge/debug/refiner_compare.
+  useClassicalRefiner: "0"
   # R8 (global community_detection) + R8b (file-cap sub-split) status:
   # - Docker (1318 files): WORKS — silhouette 0.522 (record), 10 balanced
   #   chapters, max 18.9%, 48 orphans (vs 103 per-shard).
