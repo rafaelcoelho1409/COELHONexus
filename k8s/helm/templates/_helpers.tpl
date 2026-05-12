@@ -59,6 +59,14 @@ KD_USE_CLASSICAL_OUTLINE: "{{ .Values.kd.useClassicalOutline }}"
 # adjustment text instead of the ADJUSTMENT_PROMPT LLM call. See
 # kd.useClassicalRefiner in values.yaml.
 KD_USE_CLASSICAL_REFINER: "{{ .Values.kd.useClassicalRefiner }}"
+# Phase 5 (2026-05-13): when "1", per-chapter curator pass runs through
+# services/knowledge/curator_classical.py (deterministic regex passes, no LLM
+# call). See kd.useClassicalCurator in values.yaml.
+KD_USE_CLASSICAL_CURATOR: "{{ .Values.kd.useClassicalCurator }}"
+# Phase 5 (2026-05-13): when "1", summary.md / assembler step runs through
+# services/knowledge/summary_classical.py (deterministic reading plan +
+# small-LLM creative artifacts only). See kd.useClassicalSummary in values.yaml.
+KD_USE_CLASSICAL_SUMMARY: "{{ .Values.kd.useClassicalSummary }}"
 # R8 (2026-05-11): when "1", MAP runs ONE global pass (label_corpus_classical)
 # instead of per-shard. See `kd.globalMap` in values.yaml and `_use_global_map`
 # in graphs/knowledge/distiller.py.

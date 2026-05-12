@@ -1917,63 +1917,99 @@ class KnowledgeDistillerGraph:
                         f"keeping original"
                     )
                     return False
-                try:
-                    from services.knowledge.langfuse_client import langfuse_config as _lf_cfg
-                    resp = await chain.ainvoke(
-                        {
-                            "chapter_number": n,
-                            "framework": framework,
-                            "tone_block": tone_block,
-                            "glossary": glossary_str,
-                            "chapter_content": vaulted_content,
-                        },
-                        config = _lf_cfg(
-                            metadata = {
-                                "framework": framework,
-                                "chapter_number": str(n),
-                                "label": f"curator-ch{n:02d}",
-                            },
-                            tags = [f"ch{n:02d}", "curator"],
-                            session_id = state.get("study_id"),
-                            user_id = state.get("user_id"),
-                            run_name = f"kd-curator-ch{n:02d}",
-                        ) or None,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"[curator][ch{n:02d}] curation failed ({e}); keeping original"
-                    )
-                    return False
-                # OP-21 (2026-04-24, post-Run-10) — normalize LLM response
-                # content to a plain string. Some providers (notably Mistral
-                # with reasoning tokens, and Claude-style content-block
-                # responses) return `resp.content` as a list of blocks:
-                #   [{"type": "text", "text": "..."}, {"type": "thinking", ...}]
-                # The downstream regex `_audit_sentinel_roundtrip` needs a
-                # string. Without this flattener, Run-10 crashed on ch09's
-                # curator pass with `TypeError: expected string or bytes-like
-                # object, got 'list'`. Safe fallback: coerce anything that
-                # isn't already a string to text.
-                raw_content = resp.content if hasattr(resp, "content") else resp
-                if isinstance(raw_content, list):
-                    parts: list[str] = []
-                    for block in raw_content:
-                        if isinstance(block, str):
-                            parts.append(block)
-                        elif isinstance(block, dict):
-                            # Most SDKs emit {"type": "text", "text": "..."}
-                            # Keep only text-like blocks; drop "thinking" /
-                            # "tool_use" blocks that don't belong in prose.
-                            btype = block.get("type", "")
-                            if btype in ("text", "output_text") or btype == "":
-                                parts.append(str(block.get("text", "")))
-                        else:
-                            parts.append(str(block))
-                    curated_vaulted = "\n".join(p for p in parts if p)
-                elif isinstance(raw_content, str):
-                    curated_vaulted = raw_content
+                # Phase 5 (2026-05-13): KD_USE_CLASSICAL_CURATOR=1 routes
+                # this chapter through services/knowledge/curator_classical.py
+                # — deterministic glossary substitution + heading-depth
+                # normalization + transition-line deletion. No LLM call.
+                # Code-vault sentinels are never touched (text-only regexes).
+                # Default "0" keeps the legacy LLM curator. See
+                # docs/KD-SYNTH-LLM-TO-CLASSICAL-MAY2026.md Phase 5.
+                use_classical_curator = os.environ.get(
+                    "KD_USE_CLASSICAL_CURATOR", "0",
+                ).strip().lower() in ("1", "true", "yes")
+
+                if use_classical_curator:
+                    try:
+                        from services.knowledge.curator_classical import (
+                            curate_chapter_classically,
+                        )
+                        curated_vaulted, pass_log = curate_chapter_classically(
+                            content = vaulted_content,
+                            glossary_terms = glossary,
+                            chapter_number = n,
+                            framework = framework,
+                        )
+                        logger.info(
+                            f"[curator][ch{n:02d}] classical applied "
+                            f"{len(pass_log)} pass(es); skipped LLM"
+                        )
+                        resp = None  # not used in the classical path
+                    except Exception as e:
+                        logger.warning(
+                            f"[curator][ch{n:02d}] classical curation failed "
+                            f"({type(e).__name__}: {e}); keeping original"
+                        )
+                        return False
                 else:
-                    curated_vaulted = str(raw_content)
+                    try:
+                        from services.knowledge.langfuse_client import langfuse_config as _lf_cfg
+                        resp = await chain.ainvoke(
+                            {
+                                "chapter_number": n,
+                                "framework": framework,
+                                "tone_block": tone_block,
+                                "glossary": glossary_str,
+                                "chapter_content": vaulted_content,
+                            },
+                            config = _lf_cfg(
+                                metadata = {
+                                    "framework": framework,
+                                    "chapter_number": str(n),
+                                    "label": f"curator-ch{n:02d}",
+                                },
+                                tags = [f"ch{n:02d}", "curator"],
+                                session_id = state.get("study_id"),
+                                user_id = state.get("user_id"),
+                                run_name = f"kd-curator-ch{n:02d}",
+                            ) or None,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"[curator][ch{n:02d}] curation failed ({e}); keeping original"
+                        )
+                        return False
+                if not use_classical_curator:
+                    # OP-21 (2026-04-24, post-Run-10) — normalize LLM response
+                    # content to a plain string. Some providers (notably Mistral
+                    # with reasoning tokens, and Claude-style content-block
+                    # responses) return `resp.content` as a list of blocks:
+                    #   [{"type": "text", "text": "..."}, {"type": "thinking", ...}]
+                    # The downstream regex `_audit_sentinel_roundtrip` needs a
+                    # string. Without this flattener, Run-10 crashed on ch09's
+                    # curator pass with `TypeError: expected string or bytes-like
+                    # object, got 'list'`. Safe fallback: coerce anything that
+                    # isn't already a string to text.
+                    raw_content = resp.content if hasattr(resp, "content") else resp
+                    if isinstance(raw_content, list):
+                        parts: list[str] = []
+                        for block in raw_content:
+                            if isinstance(block, str):
+                                parts.append(block)
+                            elif isinstance(block, dict):
+                                # Most SDKs emit {"type": "text", "text": "..."}
+                                # Keep only text-like blocks; drop "thinking" /
+                                # "tool_use" blocks that don't belong in prose.
+                                btype = block.get("type", "")
+                                if btype in ("text", "output_text") or btype == "":
+                                    parts.append(str(block.get("text", "")))
+                            else:
+                                parts.append(str(block))
+                        curated_vaulted = "\n".join(p for p in parts if p)
+                    elif isinstance(raw_content, str):
+                        curated_vaulted = raw_content
+                    else:
+                        curated_vaulted = str(raw_content)
+                # else: classical path already set `curated_vaulted` above
                 missing, unexpected = _audit_sentinel_roundtrip(
                     curated_vaulted, code_vault
                 )
@@ -2457,16 +2493,41 @@ class KnowledgeDistillerGraph:
                 "chapters that succeed between runs).\n"
             )
         else:
-            # 2) Generate summary.md via ASSEMBLER_PROMPT (freeform markdown)
-            try:
-                summary_md = await _call_assembler_llm(
-                    framework = framework,
-                    user_profile_summary_str = _user_profile_summary(user_profile),
-                    chapter_summaries = chapter_summaries,
-                    llm = llm,
-                )
-            except Exception as e:
-                raise RuntimeError(f"Assembler LLM call failed: {e}") from e
+            # Phase 5 (2026-05-13): KD_USE_CLASSICAL_SUMMARY=1 routes summary
+            # generation through services/knowledge/summary_classical.py —
+            # deterministic Python-built header + reading plan + one small-LLM
+            # call via kd-reduce-label rotator for framing + market_roadmap +
+            # money_projects. ~70% output-token reduction; the reading-plan
+            # list never transits the LLM. Default "0" keeps the legacy
+            # ASSEMBLER_PROMPT call. See
+            # docs/KD-SYNTH-LLM-TO-CLASSICAL-MAY2026.md Phase 5.
+            use_classical_summary = os.environ.get(
+                "KD_USE_CLASSICAL_SUMMARY", "0",
+            ).strip().lower() in ("1", "true", "yes")
+
+            if use_classical_summary:
+                from services.knowledge.summary_classical import build_summary_classically
+                try:
+                    summary_md = await build_summary_classically(
+                        framework = framework,
+                        user_profile = user_profile,
+                        previews = previews,
+                    )
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Classical summary failed: {e}"
+                    ) from e
+            else:
+                # 2) Generate summary.md via ASSEMBLER_PROMPT (freeform markdown)
+                try:
+                    summary_md = await _call_assembler_llm(
+                        framework = framework,
+                        user_profile_summary_str = _user_profile_summary(user_profile),
+                        chapter_summaries = chapter_summaries,
+                        llm = llm,
+                    )
+                except Exception as e:
+                    raise RuntimeError(f"Assembler LLM call failed: {e}") from e
 
         summary_key = f"{study_root}/summary.md"
         await storage.write(summary_key, summary_md, content_type = "text/markdown")

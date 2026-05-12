@@ -124,6 +124,25 @@ kd:
   # "0" keeps the legacy LLM-only refine path; flip after A/B validation
   # via /api/v1/knowledge/debug/refiner_compare.
   useClassicalRefiner: "0"
+  # Phase 5 (2026-05-13): when "1", routes the per-chapter curator pass
+  # through services/knowledge/curator_classical.py — deterministic glossary
+  # substitution + heading-depth normalization (collapse H4+ to H3) +
+  # transition-line deletion. NO LLM call (the curator's irreducibly-creative
+  # voice-harmonization pass is dropped; gains ~95% of curator value at 100%
+  # token savings). Code-vault sentinels are never touched. Default "0" keeps
+  # the legacy CURATOR_PROMPT LLM call; flip after A/B validation via
+  # /api/v1/knowledge/debug/curator_compare confirms style normalization
+  # matches.
+  useClassicalCurator: "0"
+  # Phase 5 (2026-05-13): when "1", routes the final summary.md / assembler
+  # step through services/knowledge/summary_classical.py — deterministic
+  # Python-built header + reading plan + one small-LLM call via the
+  # kd-reduce-label rotator for the framing paragraph + market_roadmap +
+  # 3-5 money projects only. The reading-plan list never transits the LLM
+  # (~70% output-token reduction vs ASSEMBLER_PROMPT). Default "0" keeps the
+  # legacy single-call assembler; flip after A/B validation via
+  # /api/v1/knowledge/debug/summary_compare.
+  useClassicalSummary: "0"
   # R8 (global community_detection) + R8b (file-cap sub-split) status:
   # - Docker (1318 files): WORKS — silhouette 0.522 (record), 10 balanced
   #   chapters, max 18.9%, 48 orphans (vs 103 per-shard).

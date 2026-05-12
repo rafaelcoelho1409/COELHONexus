@@ -825,6 +825,242 @@ async def debug_refiner_compare(request: RefinerCompareRequest):
     }
 
 
+class CuratorCompareRequest(BaseModel):
+    """
+    Body for POST /debug/curator_compare — side-by-side LLM vs classical
+    curator on ONE chapter. Phase 5 validation harness for
+    services/knowledge/curator_classical.py (see
+    docs/KD-SYNTH-LLM-TO-CLASSICAL-MAY2026.md Phase 5).
+
+    The chapter must be vaulted-form markdown (`<code-ref hash="..."/>`
+    sentinels rather than raw fenced code blocks). Tests against vaulted
+    content is the realistic case because the production curator
+    vaults before invoking either path.
+    """
+    chapter_content: str = Field(
+        min_length=10,
+        description="Vaulted chapter markdown (code-ref sentinels in "
+                    "place of fences).",
+    )
+    glossary_terms: list[str] = Field(
+        default_factory=list,
+        description="Canonical glossary terms — typically the output of "
+                    "_extract_glossary_terms over all study chapters.",
+    )
+    chapter_number: int = Field(default=1, ge=1)
+    framework: str = Field(default="generic")
+    tone_block: str = Field(
+        default="",
+        description="Tone-block string for the LLM curator (ignored by "
+                    "classical path).",
+    )
+
+
+@router.post("/debug/curator_compare")
+async def debug_curator_compare(request: CuratorCompareRequest):
+    """
+    Run the LLM curator (CURATOR_PROMPT path with build_curator_llm) AND
+    the classical curator (services/knowledge/curator_classical) on the
+    same vaulted chapter. Return both curated outputs + char deltas +
+    classical pass_log + wall-clock timings.
+
+    Useful for Phase 5 validation: paste a real vaulted chapter, inspect
+    whether the deterministic regex passes preserve the same style
+    properties the LLM was applying. The classical path is sub-millisecond
+    so the wall-clock comparison is overwhelmingly classical-favored;
+    the interesting comparison is content quality (whether boilerplate
+    was correctly stripped, whether glossary terms were normalized).
+    """
+    import time as _time
+
+    from schemas.knowledge.prompts import CURATOR_PROMPT
+    from services.knowledge.curator_classical import curate_chapter_classically
+    from services.llm_chain import build_curator_llm
+
+    # Classical path
+    t0_classical = _time.monotonic()
+    try:
+        classical_content, pass_log = curate_chapter_classically(
+            content=request.chapter_content,
+            glossary_terms=request.glossary_terms,
+            chapter_number=request.chapter_number,
+            framework=request.framework,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Classical curator failed: {type(e).__name__}: {e}",
+        )
+    classical_dt = _time.monotonic() - t0_classical
+
+    # LLM path
+    glossary_str = (
+        "\n".join(f"  - {t}" for t in request.glossary_terms)
+        if request.glossary_terms else "  (none extracted)"
+    )
+    t0_llm = _time.monotonic()
+    llm_content = ""
+    llm_error: Optional[str] = None
+    try:
+        curator_llm = build_curator_llm()
+        chain = CURATOR_PROMPT | curator_llm
+        resp = await chain.ainvoke({
+            "chapter_number": request.chapter_number,
+            "framework": request.framework,
+            "tone_block": request.tone_block,
+            "glossary": glossary_str,
+            "chapter_content": request.chapter_content,
+        })
+        raw_content = resp.content if hasattr(resp, "content") else resp
+        if isinstance(raw_content, list):
+            parts: list[str] = []
+            for block in raw_content:
+                if isinstance(block, str):
+                    parts.append(block)
+                elif isinstance(block, dict):
+                    btype = block.get("type", "")
+                    if btype in ("text", "output_text") or btype == "":
+                        parts.append(str(block.get("text", "")))
+            llm_content = "\n".join(p for p in parts if p)
+        elif isinstance(raw_content, str):
+            llm_content = raw_content
+        else:
+            llm_content = str(raw_content)
+    except Exception as e:
+        llm_error = f"{type(e).__name__}: {str(e)[:200]}"
+    llm_dt = _time.monotonic() - t0_llm
+
+    return {
+        "classical": {
+            "content_len": len(classical_content),
+            "char_delta_from_input": len(classical_content) - len(request.chapter_content),
+            "pass_log": pass_log,
+            "passes_applied": len(pass_log),
+            "content_sample_head": classical_content[:500],
+            "content_sample_tail": classical_content[-300:] if len(classical_content) > 300 else "",
+        },
+        "llm": {
+            "content_len": len(llm_content),
+            "char_delta_from_input": len(llm_content) - len(request.chapter_content),
+            "content_sample_head": llm_content[:500],
+            "content_sample_tail": llm_content[-300:] if len(llm_content) > 300 else "",
+            "error": llm_error,
+        },
+        "classical_wall_clock_s": round(classical_dt, 4),
+        "llm_wall_clock_s": round(llm_dt, 4),
+        "speedup": round(llm_dt / max(classical_dt, 1e-6), 1),
+        "original_content_len": len(request.chapter_content),
+    }
+
+
+class SummaryCompareRequest(BaseModel):
+    """
+    Body for POST /debug/summary_compare — side-by-side LLM vs classical
+    summary/assembler on the same chapter previews. Phase 5 validation
+    harness for services/knowledge/summary_classical.py.
+
+    `previews` is a list of `[number, title, goal, preview_text]` 4-tuples
+    — the same shape `_load_chapter_previews` produces in production.
+    """
+    framework: str = Field(default="generic")
+    user_profile: dict = Field(description="UserProfile JSON.")
+    previews: list[list] = Field(
+        description="List of [number, title, goal, preview_text] entries.",
+        min_length=1,
+    )
+
+
+@router.post("/debug/summary_compare")
+async def debug_summary_compare(request: SummaryCompareRequest):
+    """
+    Run the LLM assembler (ASSEMBLER_PROMPT path via _call_assembler_llm)
+    AND the classical summary (build_summary_classically) on the same
+    chapter previews. Return both summary.md strings + char counts +
+    timings.
+
+    Useful for Phase 5 validation: paste the previews from a real study,
+    inspect whether the deterministic reading-plan section + small-LLM
+    creative artifacts produce a similarly useful summary.md. The
+    classical path saves ~70% of the LLM's output tokens because the
+    reading plan is built in Python; the LLM only emits framing +
+    roadmap + money_projects (compact JSON).
+    """
+    import time as _time
+
+    from schemas.knowledge.inputs import UserProfile
+    from services.knowledge.summary_classical import build_summary_classically
+    from graphs.knowledge.helpers import _call_assembler_llm, _build_chapter_summaries, _user_profile_summary
+    from services.llm_chain import build_synth_fallback_chain
+
+    try:
+        user_profile = UserProfile(**request.user_profile)
+        previews = [
+            (int(p[0]), str(p[1]), str(p[2]), str(p[3]))
+            for p in request.previews
+        ]
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid request body: {type(e).__name__}: {e}",
+        )
+
+    # Classical path
+    t0_classical = _time.monotonic()
+    try:
+        classical_summary = await build_summary_classically(
+            framework=request.framework,
+            user_profile=user_profile,
+            previews=previews,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Classical summary failed: {type(e).__name__}: {e}",
+        )
+    classical_dt = _time.monotonic() - t0_classical
+
+    # LLM path
+    chapter_summaries_str = _build_chapter_summaries(previews)
+    t0_llm = _time.monotonic()
+    llm_summary = ""
+    llm_error: Optional[str] = None
+    try:
+        llm = build_synth_fallback_chain()
+        llm_summary = await _call_assembler_llm(
+            framework=request.framework,
+            user_profile_summary_str=_user_profile_summary(user_profile),
+            chapter_summaries=chapter_summaries_str,
+            llm=llm,
+        )
+    except Exception as e:
+        llm_error = f"{type(e).__name__}: {str(e)[:200]}"
+    llm_dt = _time.monotonic() - t0_llm
+
+    def _count_sections(md: str) -> int:
+        import re as _re
+        return len(_re.findall(r"^## ", md, _re.MULTILINE))
+
+    return {
+        "classical": {
+            "summary_len": len(classical_summary),
+            "section_count": _count_sections(classical_summary),
+            "summary_sample_head": classical_summary[:800],
+            "summary_full": classical_summary,
+        },
+        "llm": {
+            "summary_len": len(llm_summary),
+            "section_count": _count_sections(llm_summary),
+            "summary_sample_head": llm_summary[:800],
+            "summary_full": llm_summary,
+            "error": llm_error,
+        },
+        "classical_wall_clock_s": round(classical_dt, 4),
+        "llm_wall_clock_s": round(llm_dt, 4),
+        "speedup": round(llm_dt / max(classical_dt, 1e-6), 1),
+        "chapter_count": len(previews),
+    }
+
+
 @router.get("/debug/embeddings_smoke")
 async def debug_embeddings_smoke():
     """
