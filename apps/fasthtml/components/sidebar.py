@@ -45,7 +45,7 @@ def Sidebar(active: str = ""):
         Nav(
             Div("Knowledge", cls="text-[0.7rem] uppercase tracking-wider text-base-content/50 px-3 py-2"),
             NavItem("home", "home", "Home", "/", active),
-            NavItem("library", "book-open-text", "Study Library", "/library", active),
+            NavItem("kd-studies", "book-open-text", "Studies", "/kd/studies", active),
             NavItem("kd-inspect", "file-search", "Inspect Markdown", "/kd/inspect", active),
             NavItem("kd-map-compare", "scale", "MAP A/B Compare", "/kd/map-compare", active),
             NavItem("catalog", "activity", "Catalog Health", "/catalog", active),

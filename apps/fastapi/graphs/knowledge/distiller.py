@@ -807,6 +807,41 @@ class KnowledgeDistillerGraph:
         )
 
         # =====================================================================
+        # Fix #2 (2026-05-12 night) — per-chapter model pinning
+        # =====================================================================
+        # When KD_PIN_CHAPTER_MODEL=1 AND KD_USE_SYNTH_POOL=1, override the
+        # incoming `llm` with a single-deployment chain pinned to ONE member
+        # of SYNTH_GROUP for the entire chapter (all Phase A/C calls + all
+        # refine iters). Gives the refiner continuity: same model sees its
+        # own previous output, can act on surgical missing-hash feedback,
+        # converges in 2-3 iters instead of random-walking with 5+.
+        # See Phase B/C audit-fail hardening § Fix #2 in
+        # docs/KD-SYNTH-LLM-TO-CLASSICAL-MAY2026.md.
+        _pin_chapter_model = (
+            os.environ.get("KD_PIN_CHAPTER_MODEL", "0").strip().lower()
+            in ("1", "true", "yes")
+        ) and (
+            os.environ.get("KD_USE_SYNTH_POOL", "0").strip().lower()
+            in ("1", "true", "yes")
+        )
+        if _pin_chapter_model:
+            try:
+                from services.llm_chain import (
+                    pick_synth_deployment, build_synth_pinned_chain,
+                )
+                _pinned_model_id = pick_synth_deployment(chapter.number)
+                llm = build_synth_pinned_chain(_pinned_model_id)
+                logger.info(
+                    f"[synth][ch{chapter.number:02d}] PIN-CHAPTER-MODEL: "
+                    f"using {_pinned_model_id!r} for all Phase A/C + refine iters"
+                )
+            except Exception as _pe:
+                logger.warning(
+                    f"[synth][ch{chapter.number:02d}] pinning failed "
+                    f"({type(_pe).__name__}: {_pe}); falling back to pool routing"
+                )
+
+        # =====================================================================
         # OP-46 (2026-04-25, post-Run-12) — empty-vault prose-only short-circuit
         # =====================================================================
         # Run-12 evidence: Docker chapters had code_vault={} (security policies,
@@ -1160,8 +1195,23 @@ class KnowledgeDistillerGraph:
                     _has_zero_citations
                     or _real_thin_count > _THIN_SECTIONS_ACCEPT_LIMIT
                 )
-                if (missing or invented or fence_sections or duplicated_refs
-                        or empty_sections or _thin_blocks_accept):
+                # Fix 1 (2026-05-12 night-late): relax missing-hash tolerance
+                # for the audit gate. Previously ANY missing hash → refine.
+                # Empirically (study 8f6af2b8) section synth LLMs drop a few
+                # hashes when Phase B routes 30+ to a single section; the
+                # refiner can't converge across model-rotation runs. Allowing
+                # up to MISSING_TOLERANCE_PCT of vault hashes missing lets
+                # chapters reach the grader (which then properly weights via
+                # code_preservation_ratio) instead of OP-12 rescuing them as
+                # score=0. Surgical feedback (_build_targeted_audit_adjustment)
+                # still flags the missing hashes if invented/empty/etc force
+                # refine anyway, so the LLM has a chance to fix them on retry.
+                _MISSING_TOLERANCE_PCT = 0.10
+                _vault_size = max(1, len(code_vault))
+                _missing_ratio = len(missing) / _vault_size
+                _missing_blocks_accept = _missing_ratio > _MISSING_TOLERANCE_PCT
+                if (_missing_blocks_accept or invented or fence_sections
+                        or duplicated_refs or empty_sections or _thin_blocks_accept):
                     logger.warning(
                         f"[synth][ch{chapter.number:02d}] iter {iteration} "
                         f"structured-output audit FAILED: "

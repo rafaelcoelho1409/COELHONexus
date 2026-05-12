@@ -57,6 +57,7 @@ Factories (all serve from the same `kd-all` group, varying only temperature):
 """
 import logging
 import os
+import litellm
 from langchain_litellm.chat_models import ChatLiteLLMRouter
 from litellm import Router
 
@@ -66,6 +67,38 @@ from litellm.types.router import (
     AllowedFailsPolicy,
     ModelGroupInfo,
 )
+
+
+# =============================================================================
+# OpenTelemetry callback (2026-05-12 night)
+# =============================================================================
+# When OTEL_EXPORTER_OTLP_ENDPOINT is set (handled by services.otel_setup at
+# process startup), enabling the `otel` callback makes LiteLLM emit a span
+# per LLM call containing:
+#   - model (e.g. "moonshotai/kimi-k2.6")
+#   - deployment_id (UUID assigned by Router to this entry)
+#   - provider, custom_llm_provider
+#   - request input/output token counts + computed cost
+#   - latency (start_time → end_time)
+#   - error type if call failed (RateLimitError, TimeoutError, etc.)
+# Spans are sent through the SAME TracerProvider configured in otel_setup
+# (dual-export: Alloy gRPC → LGTM + LangFuse HTTP OTLP), so per-deployment
+# performance data lands in Mimir for routing-decision queries AND in
+# LangFuse for prompt-replay UX. No per-call code change required.
+#
+# Adds `kd_process` metadata propagation: when a call site passes
+# `config={"metadata": {"kd_process": "..."}}` to chain.ainvoke(...), LiteLLM
+# attaches it as a span attribute. PromQL queries can then slice by
+# (kd_process, deployment_id) to see "which model is fastest for section_synth".
+if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+    try:
+        litellm.callbacks = ["otel"]
+        logger.info("[llm-chain] LiteLLM OTel callback enabled")
+    except Exception as _ote:
+        logger.warning(
+            f"[llm-chain] failed to enable LiteLLM OTel callback "
+            f"({type(_ote).__name__}: {_ote})"
+        )
 
 
 # =============================================================================
@@ -324,6 +357,109 @@ def _reduce_label_entries() -> list:
         # to the head of the pool but absorbs cooldown bursts when everything
         # above is in cooldown. Same-token-budget cost as the tier-1 entries.
         _nim_entry(REDUCE_LABEL_GROUP, "meta/llama-4-maverick-17b-128e-instruct", timeout_s=90),
+    ]
+
+
+# =============================================================================
+# Section-synth prose group — `kd-synth` (Scope B, 2026-05-12 night)
+# =============================================================================
+# Curated pool for the hierarchical_synth Phase C per-section synthesis calls
+# (8 sections/chapter × N self-refine iters × ~7 chapters parallel = 16-48
+# concurrent at peak). Section synth is structurally PROSE GENERATION with
+# embedded code blocks — NOT classification, NOT reasoning. Reasoning models
+# burn the 300s NIM gateway budget on <think> blocks for what should be
+# straight prose; that was the root cause of the 2026-05-12 cascade-
+# exhaustion observation (ch01 OP-12 rescue path, score=0.00 / 0 iters).
+#
+# Hybrid pool revised 2026-05-12 night-late: previous pure-non-reasoning curation
+# surfaced a NEW failure mode during Scope B E2E (study 8f6af2b8) — the
+# smaller non-reasoning models (Mistral Medium, Llama-4 Maverick) DROP HASHES
+# under heavy ChapterOutput schemas. Observed on ch01 iter 2: 29 of 52 vault
+# hashes MISSING in the structured output (56% drop rate), 7 duplicated, 5
+# thin sections. Each refine iter made it WORSE because different pool members
+# produced different incomplete subsets.
+#
+# Root cause: non-reasoning models have shorter effective output token
+# budgets and weren't trained as rigorously on multi-entity structured
+# outputs as the frontier reasoning models (Kimi K2.6, GLM-5.1, MiniMax M2.7).
+# Reasoning models, when given the Scope B concurrency cap (KD_LLM_GLOBAL_
+# CONCURRENCY=10) preventing peak-cascade exhaustion, complete structured
+# output correctly because their per-call timeout is buffered by the cap.
+#
+# Design tradeoff now:
+#   - Tier 1 (REASONING — strong structured output): the four frontier
+#     reasoning models from kd-all. Each call burns <think> tokens before
+#     emitting parseable output (300s NIM gateway), but the concurrency cap
+#     stops peak parallelism from exhausting the cascade. Output is
+#     structurally complete (52/52 hashes survive the audit).
+#   - Tier 2 (NON-REASONING FRONTIER): Mistral L3 + Nemotron-3-super +
+#     gpt-oss-120b. Fast, complete structured output on chapters where the
+#     reasoning models are cooling down.
+#   - Tier 3 (DEEP TAIL): Mistral Medium + Mistral Small + Llama-4 Maverick.
+#     Fast cooldown absorbers; OK for small chapters but drop hashes on
+#     large schemas — kept as last-resort cascade members only.
+#
+# Hard EXCLUSIONS (vs kd-all):
+#   - Gemini 3.x family entirely: Google's own warning per Gemini 3 docs —
+#     "Setting temperature < 1.0 can cause infinite loops, degraded reasoning
+#     performance, and failure on complex tasks." Section synth runs at
+#     T=0.0/0.7; either incompatible.
+#   - Magistral (Mistral's R-mode by default — kept its non-reasoning sibling
+#     Mistral Medium instead).
+#   - Cerebras whole provider (this account 404s on every model).
+#   - SambaNova whole provider (paywalled).
+#   - DeepSeek direct API (Insufficient Balance).
+#   - Groq gpt-oss-120b + Groq llama-3.3-70b-versatile (8-12K TPM ceiling —
+#     section synth prompts hit 21-37K tokens; same TPM-too-tight pattern).
+#
+# All models support native function_calling AND response_format=json_schema
+# on their hosting provider — required for ChapterOutput / ProseChapterOutput
+# / Section structured output reliability.
+SYNTH_GROUP = "kd-synth"
+
+
+def _synth_entries() -> list:
+    """
+    Hybrid reasoning + non-reasoning rotator for hierarchical_synth Phase C.
+
+    Revised 2026-05-12 night-late after E2E study 8f6af2b8 revealed that
+    pure-non-reasoning pool drops 56% of vault hashes on large chapters.
+    Reasoning models go FIRST because their structured-output completeness
+    is what the post-synth audit gate requires; non-reasoning models stay
+    as Tier 2/3 cascade fallback for cooldown absorption.
+
+    Concurrency cap (KD_LLM_GLOBAL_CONCURRENCY=10 in helpers.py) prevents
+    peak parallelism from cascade-exhausting via reasoning-model <think>
+    timeouts; that's what makes Tier 1 reasoning models viable here at all.
+    """
+    return [
+        # --- Tier 1: Frontier reasoning (strong structured output) ---
+        # Kimi K2.6 on NIM — AAII 49, 256K ctx. Non-thinking K2 variant; Moonshot's
+        # current K2.x on NIM (K2.5 EOL 2026-04-30, K2-Thinking EOL 2026-05-12).
+        _nim_entry(SYNTH_GROUP, "moonshotai/kimi-k2.6", timeout_s=180),
+        # GLM-5.1 on NIM — AAII 51 (Reasoning), SWE-Bench Pro 58.4% (#1 OSS).
+        _nim_entry(SYNTH_GROUP, "z-ai/glm-5.1", timeout_s=180),
+        # MiniMax M2.7 on NIM — AAII 50, 204K ctx agentic, SWE-Pro 56.22%.
+        _nim_entry(SYNTH_GROUP, "minimaxai/minimax-m2.7", timeout_s=180),
+        # DeepSeek V4-Flash on NIM — AAII 47, free-tier path (DeepSeek direct
+        # paywalled). Re-enabled 2026-05-13 as V3.2 EOL successor.
+        _nim_entry(SYNTH_GROUP, "deepseek-ai/deepseek-v4-flash", timeout_s=180),
+        # --- Tier 2: Frontier non-reasoning (complete structured output, fast) ---
+        # Mistral Large 3 v25.12 direct — LMArena #2 OSS non-reasoning, 256K ctx.
+        _mistral_entry(SYNTH_GROUP, "mistral-large-latest", timeout_s=120),
+        # Mistral Large 3 via NIM (independent failure domain from Mistral direct).
+        _nim_entry(SYNTH_GROUP, "mistralai/mistral-large-3-675b-instruct-2512", timeout_s=120),
+        # Nemotron-3-super-120b-a12b: 1M ctx hybrid Mamba, AAII 36.
+        _nim_entry(SYNTH_GROUP, "nvidia/nemotron-3-super-120b-a12b", timeout_s=120),
+        # gpt-oss-120b on NIM — AAII 33, native tools.
+        _nim_entry(SYNTH_GROUP, "openai/gpt-oss-120b", timeout_s=120),
+        # --- Tier 3: Deep-tail cooldown absorbers (may drop hashes on large schemas) ---
+        # Mistral Medium 3.1 — between Large and Small.
+        _mistral_entry(SYNTH_GROUP, "mistral-medium-latest", timeout_s=120),
+        # Mistral Small 4 v26.03 — HumanEval 92, AAII 28. Fast fallback; OK for small chapters.
+        _mistral_entry(SYNTH_GROUP, "mistral-small-latest", timeout_s=90),
+        # Llama-4 Maverick 17B-128E MoE on NIM — 1M ctx, deep tail.
+        _nim_entry(SYNTH_GROUP, "meta/llama-4-maverick-17b-128e-instruct", timeout_s=120),
     ]
 
 
@@ -629,6 +765,7 @@ def _get_router() -> Router:
             _all_entries()
             + _keylm_entries()
             + _reduce_label_entries()
+            + _synth_entries()
             + _embed_entries()
         ),
         # simple-shuffle is recommended for production (LiteLLM docs): doesn't
@@ -697,8 +834,132 @@ def build_resolver_llm_chain(
 def build_synth_fallback_chain(
     groq_timeout_s: int = 120,
     nim_timeout_s: int = 300):
-    """Synthesize_chapter + curator. Unified catalog at T=0.0."""
-    return ChatLiteLLMRouter(router=_get_router(), model=GROUP, temperature=0.0)
+    """
+    Synthesize_chapter + curator chain.
+
+    Scope B (2026-05-12): when KD_USE_SYNTH_POOL=1, routes to the curated
+    `kd-synth` non-reasoning pool instead of `kd-all`. Section synth is
+    structurally prose generation — reasoning models burn the timeout on
+    <think> blocks. The cascade exhaustion observed during the 2026-05-12
+    E2E (ch01 OP-12 rescue, score=0.00 / 0 iters) was caused by the
+    kd-all rotator routing parallel synth calls into reasoning-mode
+    models that never produced a parseable response inside the deadline.
+    See SYNTH_GROUP docstring above and Scope B research brief.
+    Default "0" preserves the legacy kd-all routing.
+    """
+    import os
+    use_synth_pool = os.environ.get(
+        "KD_USE_SYNTH_POOL", "0",
+    ).strip().lower() in ("1", "true", "yes")
+    target_group = SYNTH_GROUP if use_synth_pool else GROUP
+    return ChatLiteLLMRouter(
+        router=_get_router(), model=target_group, temperature=0.0,
+    )
+
+
+def build_synth_pool_chain():
+    """
+    Explicit factory for the kd-synth non-reasoning pool. Same as
+    build_synth_fallback_chain() with KD_USE_SYNTH_POOL=1 — provided
+    for direct use by callers that always want the synth pool
+    regardless of env config (e.g. validation harnesses).
+    """
+    return ChatLiteLLMRouter(
+        router=_get_router(), model=SYNTH_GROUP, temperature=0.0,
+    )
+
+
+# =============================================================================
+# Per-chapter model pinning (Fix #2 of Phase B/C audit-fail hardening, 2026-05-12 night)
+# =============================================================================
+# Problem: across refine iterations within a chapter, the rotator's simple-
+# shuffle picks DIFFERENT deployments per iter. Each iter the LLM starts
+# fresh with no memory of what the previous iter produced. The refiner's
+# surgical "you missed hash X, Y, Z" feedback can't act on output it
+# didn't generate. Empirically (FastAPI study bb7f3b50, 2026-05-12):
+# ch01 iter 0 dropped 31 hashes; iter 4 (different model) dropped 302
+# of 342 hashes — the refiner was a random walk, not a convergent loop.
+#
+# Fix: at chapter start, deterministically pick ONE deployment from
+# SYNTH_GROUP and use it for ALL section synth + refine iters within
+# that chapter. Same model sees its own previous output across iters →
+# refiner converges in 2-3 iters instead of diverging over 5+.
+#
+# Determinism: `seed=chapter.number` → same chapter always picks the same
+# deployment, even across study runs. Different chapters spread across
+# pool members to balance load.
+#
+# Failure mode: if the pinned model has a hard outage (404, 410, auth),
+# the per-call timeout cascades through num_retries=3 inside the pinned
+# router. Single-model failure → chapter falls to OP-12 rescue (graceful)
+# rather than cascading across the entire SYNTH_GROUP (which would
+# defeat the purpose of pinning).
+def pick_synth_deployment(seed: int) -> str:
+    """
+    Deterministically pick one litellm model string from SYNTH_GROUP.
+    Same seed → same model. Different seeds spread across pool members.
+    """
+    entries = _synth_entries()
+    if not entries:
+        raise RuntimeError("SYNTH_GROUP is empty — cannot pin a deployment")
+    idx = seed % len(entries)
+    return entries[idx]["litellm_params"]["model"]
+
+
+# Per-process cache so we don't build a new Router for every chapter call.
+# Keyed by the pinned litellm model string. ChatLiteLLMRouter wraps a Router
+# under the hood; one cache per process is the right scope (Celery prefork
+# workers each have their own).
+_pinned_chain_cache: dict[str, "ChatLiteLLMRouter"] = {}
+
+
+def build_synth_pinned_chain(pinned_model: str):
+    """
+    Single-deployment ChatLiteLLMRouter targeting `pinned_model`.
+
+    Built by copying the matching SYNTH_GROUP entry's litellm_params into
+    a fresh single-entry Router. The original SYNTH_GROUP rotator stays
+    untouched; pinned routers live in `_pinned_chain_cache` keyed by the
+    pinned model string. ChatLiteLLMRouter's downstream behavior is
+    unchanged (with_structured_output, ainvoke, etc.) — only the deployment
+    pool size differs (1 instead of 11).
+
+    Falls back to the full pool if `pinned_model` is not in SYNTH_GROUP
+    (e.g. someone disabled it mid-run after pinning).
+    """
+    if pinned_model in _pinned_chain_cache:
+        return _pinned_chain_cache[pinned_model]
+
+    matching = [
+        e for e in _synth_entries()
+        if e["litellm_params"]["model"] == pinned_model
+    ]
+    if not matching:
+        import logging
+        logging.getLogger(__name__).warning(
+            f"[synth-pin] {pinned_model!r} not in SYNTH_GROUP; "
+            f"falling back to full pool"
+        )
+        return build_synth_pool_chain()
+
+    pinned_group = f"kd-synth-pinned-{abs(hash(pinned_model)) & 0xFFFFFF:06x}"
+    fresh_entry = {
+        "model_name": pinned_group,
+        "litellm_params": dict(matching[0]["litellm_params"]),
+    }
+    pinned_router = Router(
+        model_list=[fresh_entry],
+        routing_strategy="simple-shuffle",
+        enable_pre_call_checks=True,
+        num_retries=3,            # tighter — only one deployment
+        cooldown_time=30,         # shorter; single-deployment can't waste
+        set_verbose=False,
+    )
+    chain = ChatLiteLLMRouter(
+        router=pinned_router, model=pinned_group, temperature=0.0,
+    )
+    _pinned_chain_cache[pinned_model] = chain
+    return chain
 
 
 def build_refine_llm_chain(

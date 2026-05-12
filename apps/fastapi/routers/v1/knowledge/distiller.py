@@ -803,6 +803,53 @@ async def get_batch_status(
 # =============================================================================
 # GET /studies/{study_id} — status + phase + Celery meta
 # =============================================================================
+@router.get("/studies")
+async def list_studies(
+    request: Request,
+    limit: int = 50):
+    """
+    List recent studies from the Redis registry, newest first.
+    Returns a slim payload per study (study_id + framework + status indicator +
+    created_at) so the UI can render a table without paging through full
+    plan/synth_results blobs.
+    """
+    redis_aio = request.app.state.redis_aio
+    keys = []
+    async for k in redis_aio.scan_iter(
+        match="coelhonexus:knowledge:study:*", count=200,
+    ):
+        keys.append(k.decode() if isinstance(k, bytes) else k)
+    out = []
+    for key in keys:
+        try:
+            raw = await redis_aio.get(key)
+        except Exception:
+            continue
+        if not raw:
+            continue
+        try:
+            rec = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+        except Exception:
+            continue
+        sid = rec.get("study_id")
+        if not sid:
+            continue
+        snapshot = _celery_snapshot(sid)
+        out.append({
+            "study_id": sid,
+            "framework": rec.get("framework"),
+            "version": rec.get("version"),
+            "level": rec.get("level"),
+            "user_id": rec.get("user_id"),
+            "study_root": rec.get("study_root"),
+            "created_at": rec.get("created_at"),
+            "task_state": snapshot.get("task_state"),
+            "current_phase": (snapshot.get("progress") or {}).get("phase"),
+        })
+    out.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    return {"studies": out[:limit], "total": len(out)}
+
+
 @router.get("/studies/{study_id}")
 async def get_study(
     study_id: str,

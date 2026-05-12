@@ -563,13 +563,19 @@ class ChapterOutline(BaseModel):
     """
     sections: list[OutlineSection] = Field(
         min_length = 4,
-        max_length = 15,
+        max_length = 40,
         description = (
-            "Ordered list of 4-15 sections. The outline gates fan-out on this "
-            "count: too few = under-decomposed (Phase C wastes parallelism); "
-            "too many = under-supported (each section has too few hashes to "
-            "be coherent). 4-15 is the empirical sweet spot — matches the "
-            "section counts that produced ACCEPTs in Run-13."
+            "Ordered list of 4-40 sections. Bumped 15→40 2026-05-12 night "
+            "(Fix #1 of Phase B/C audit-fail hardening) after FastAPI study "
+            "bb7f3b50 showed monster chapters (342 hashes) need 35+ sub-sections "
+            "after Phase A.5 bucket-split. Previously the 15-cap forced overflow "
+            "into a 224-hash 'Additional' section that always failed audit. "
+            "40 supports up to 400-hash chapters at 10 hashes per section. "
+            "The outline gates fan-out on this count: too few = under-"
+            "decomposed (Phase C wastes parallelism); too many = under-"
+            "supported (each section has too few hashes to be coherent). "
+            "4-15 is the empirical sweet spot for typical chapters; 16-40 "
+            "is reserved for hash-dense outlier chapters after bucket-split."
         ),
     )
     challenges: str = Field(

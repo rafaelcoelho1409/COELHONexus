@@ -8,6 +8,31 @@ observability:
   enabled: false
   otlp_endpoint: "alloy.monitoring:4317"
 
+# OpenTelemetry (2026-05-12 night) — dual-export pipeline.
+#
+# alloy_endpoint:
+#   gRPC OTLP endpoint of Alloy's `otelcol.receiver.otlp` block in the
+#   `monitoring` namespace. Empty string disables OTel entirely
+#   (FastAPI/Celery boot without instrumentation, no-op tracer + meter).
+#   When set, every LiteLLM call, every KD phase, every refine iter is
+#   exported as a trace span with attributes for routing-decision queries.
+#
+# langfuse_otlp_endpoint:
+#   HTTP OTLP endpoint of self-hosted LangFuse v3+. The Python SDK appends
+#   `/v1/traces` automatically if not present. Reads LANGFUSE_PUBLIC_KEY +
+#   LANGFUSE_SECRET_KEY from the env secrets for HTTP Basic auth. Empty
+#   string disables the LangFuse arm of the dual-export (LGTM-only mode).
+#
+# service_name / service_version:
+#   service.name + service.version resource attrs — surfaced in Grafana +
+#   LangFuse for distinguishing the FastAPI process from Celery workers
+#   (same service.name "coelhonexus-fastapi" but different process.pid).
+otel:
+  alloy_endpoint: "http://alloy.monitoring.svc.cluster.local:4317"
+  langfuse_otlp_endpoint: "http://langfuse-web.langfuse.svc.cluster.local:3000/api/public/otel"
+  service_name: "coelhonexus-fastapi"
+  service_version: "1.0.0"
+
 # External services — all in-cluster ClusterIP services in the same K3s cluster.
 # Credentials are loaded from coelhonexus-secret (upload via upload_env_to_k3d.sh)
 minio:
@@ -143,6 +168,37 @@ kd:
   # legacy single-call assembler; flip after A/B validation via
   # /api/v1/knowledge/debug/summary_compare.
   useClassicalSummary: "1"
+  # Scope B (2026-05-12 night, revised night-late): when "1", section synth
+  # routes through the curated `kd-synth` HYBRID pool — Tier 1 reasoning
+  # (Kimi K2.6 / GLM-5.1 / MiniMax M2.7 / DeepSeek V4-Flash) for structural-
+  # output completeness, Tier 2 non-reasoning frontier (Mistral L3 ×2 /
+  # Nemotron-3-super / gpt-oss-120b) for fast fallback, Tier 3 deep tail
+  # (Mistral Medium + Small + Llama-4 Maverick) for cooldown absorption.
+  # Excludes Gemini 3.x (T<1 infinite-loop bug), Magistral (R-mode default),
+  # Cerebras (account 404), SambaNova (paywall), DeepSeek direct (Insufficient
+  # Balance), Groq gpt-oss + llama-3.3 (TPM ceilings too tight). The
+  # concurrency cap (KD_LLM_GLOBAL_CONCURRENCY) prevents peak parallelism
+  # from cascade-exhausting via reasoning-model <think> timeouts.
+  # See services/llm_chain.py SYNTH_GROUP.
+  useSynthPool: "1"
+  # Fix #2 of Phase B/C audit-fail hardening (2026-05-12 night): when "1"
+  # AND useSynthPool="1", every chapter pins ONE deployment from SYNTH_GROUP
+  # at synth start (deterministic by chapter.number) and uses it for all
+  # Phase A/C calls + all refine iters. Gives the refiner continuity to act
+  # on surgical missing-hash feedback (same model sees its own previous
+  # attempts → converges in 2-3 iters instead of random-walking across
+  # rotator members for 5+). See pick_synth_deployment / build_synth_pinned_
+  # chain in services/llm_chain.py. Default "1" since Fix #2 is the
+  # convergence answer for the audit-fail loop empirically observed.
+  pinChapterModel: "1"
+  # Scope B (2026-05-12 night): global LLM concurrency cap PER PROCESS. Free-tier
+  # provider RPMs sum to ~170 across Groq/NIM/Mistral/Gemini; safety-factor 0.5
+  # = ~10 sustainable concurrent calls cluster-wide. Without this cap, peak
+  # parallel synth (~7 chapters × 8 sections × N iters = 16-48 concurrent calls)
+  # exceeds the budget and triggers the cascade-exhaustion mode. PER-PROCESS:
+  # Celery prefork concurrency=5 × this cap = effective cluster-wide ceiling.
+  # See _get_llm_semaphore() in graphs/knowledge/helpers.py.
+  llmGlobalConcurrency: "10"
   # R8 (global community_detection) + R8b (file-cap sub-split) status:
   # - Docker (1318 files): WORKS — silhouette 0.522 (record), 10 balanced
   #   chapters, max 18.9%, 48 orphans (vs 103 per-shard).
@@ -287,7 +343,17 @@ fastapi:
 celery:
   enabled: true
   replicas: 1
-  concurrency: 5  # Number of concurrent tasks per worker
+  # 2026-05-12 night: concurrency lowered 5→2 after Scope B E2E surfaced
+  # ForkPoolWorker SIGKILL storms. Parent celery process loads numba/transformers/
+  # langchain/litellm/sklearn at ~1.8GB RSS; every forked child inherits that
+  # baseline via COW and trips the worker_max_memory_per_child=2GB recycling
+  # guard (celery_app.py:109) the moment Python refcounting copies pages.
+  # With concurrency=5 the pod also exceeded the 4Gi memory limit (5 × 2GB +
+  # parent ≈ 11.8GB). concurrency=2 gives 2 in-flight tasks (each chapter's
+  # synthesize_chapter task spawns 8 parallel section-synth LLM calls anyway,
+  # so 2 celery workers × 8 parallel calls = 16 in-flight LLM calls — already
+  # at the KD_LLM_GLOBAL_CONCURRENCY=10 cap which queues the rest).
+  concurrency: 2
   # Queue names are environment-suffixed in the deployment template (see
   # k8s/helm/templates/celery/deployment.yaml). Both dev (skaffold) and prod
   # (argocd) share the same Redis broker, but workers only consume their own
@@ -295,10 +361,13 @@ celery:
   queues: "crawler,embedding,llm,default"
   resources:
     requests:
-      memory: "1Gi"
+      memory: "2Gi"
       cpu: "100m"
+    # Bumped 4Gi→6Gi 2026-05-12 night: with concurrency=2 + worker_max_memory_
+    # per_child=2GB + parent ~1.8GB, peak RSS ≈ 5.8GB. Headroom to 6Gi keeps
+    # the cgroup OOM killer out of the picture.
     limits:
-      memory: "4Gi"
+      memory: "6Gi"
       cpu: "500m"  # Low CPU cap — embedding runs slower but doesn't slow the machine
 
 # Flower — Celery monitoring dashboard (UI for the workers above)

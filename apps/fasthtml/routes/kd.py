@@ -1,12 +1,17 @@
 """
-Knowledge Distiller routes — markdown inspector + MAP A/B compare + proxies.
+Knowledge Distiller routes — markdown inspector + MAP A/B compare + studies.
 
 Route map:
   GET  /kd/inspect             → KDInspectPage() shell (HTMX-driven 3-pane)
   *    /api/kd/inspect/<rest>  → reverse-proxy → FastAPI /api/v1/knowledge/inspect/<rest>
   GET  /kd/map-compare         → MapComparePage() shell (form + result swap)
-  POST /kd/map-compare/run     → calls FastAPI /api/v1/knowledge/debug/map_compare,
-                                  renders side-by-side per-shard cluster output
+  POST /kd/map-compare/run     → calls FastAPI /api/v1/knowledge/debug/map_compare
+  GET  /kd/studies             → KDStudiesListPage() — table of studies (10s refresh)
+  GET  /kd/studies/{id}        → KDStudyDetailPage(id) — chapters viewer
+  GET  /api/kd/studies/list_fragment              → HTMX fragment for studies table
+  GET  /api/kd/studies/{id}/header                → HTMX fragment for study header
+  GET  /api/kd/studies/{id}/chapters_list         → HTMX fragment for chapter cards
+  GET  /api/kd/studies/{id}/chapters/{n}/render   → HTMX fragment for one chapter's content
 """
 import httpx
 from fasthtml.common import APIRouter, Div, I, Span
@@ -14,6 +19,15 @@ from starlette.requests import Request
 
 from components.kd_inspect import KDInspectPage
 from components.map_compare import MapComparePage, MapCompareResult
+from components.kd_studies import (
+    KDStudiesListPage,
+    KDStudiesTableFragment,
+    KDStudyDetailPage,
+    StudyHeaderFragment,
+    ChaptersListFragment,
+    ChapterContentFragment,
+    ChapterErrorFragment,
+)
 from services.fastapi_client import _get_client, reverse_proxy
 
 
@@ -100,3 +114,102 @@ async def kd_map_compare_run(request: Request):
             role="alert",
             cls="alert alert-error text-xs p-3 gap-2",
         )
+
+
+# -----------------------------------------------------------------------------
+# /kd/studies — live registry viewer + per-study chapter detail
+# -----------------------------------------------------------------------------
+@ar("/kd/studies")
+async def kd_studies_list_page():
+    """List page shell — HTMX hydrates #kd-studies-table every 10s."""
+    return KDStudiesListPage()
+
+
+@ar("/kd/studies/{study_id}")
+async def kd_study_detail_page(study_id: str):
+    """Detail page shell — header + chapter cards lazy-load via HTMX."""
+    return KDStudyDetailPage(study_id)
+
+
+@ar("/api/kd/studies/list_fragment")
+async def kd_studies_list_fragment():
+    """HTMX fragment: studies table body, refreshed every 10s."""
+    client = _get_client()
+    try:
+        r = await client.get("/api/v1/knowledge/studies", params={"limit": "50"})
+        if r.status_code != 200:
+            return Div(
+                f"FastAPI HTTP {r.status_code}: {r.text[:200]}",
+                cls="text-sm text-error p-4",
+            )
+        data = r.json()
+        return KDStudiesTableFragment(
+            studies=data.get("studies", []),
+            total=data.get("total", 0),
+        )
+    except Exception as e:
+        return Div(
+            f"Fetch failed: {type(e).__name__}: {str(e)[:200]}",
+            cls="text-sm text-error p-4",
+        )
+
+
+@ar("/api/kd/studies/{study_id}/header")
+async def kd_study_header_fragment(study_id: str):
+    """HTMX fragment: study header card."""
+    client = _get_client()
+    try:
+        r = await client.get(f"/api/v1/knowledge/studies/{study_id}")
+        if r.status_code != 200:
+            return Div(
+                f"Study not found or HTTP {r.status_code}",
+                cls="text-sm text-error p-4 bg-base-100 border border-base-300 rounded-lg",
+            )
+        return StudyHeaderFragment(r.json())
+    except Exception as e:
+        return Div(
+            f"Fetch failed: {type(e).__name__}: {str(e)[:200]}",
+            cls="text-sm text-error p-4",
+        )
+
+
+@ar("/api/kd/studies/{study_id}/chapters_list")
+async def kd_study_chapters_list_fragment(study_id: str):
+    """HTMX fragment: chapter cards. Combines study record + MinIO tree."""
+    client = _get_client()
+    try:
+        study_resp = await client.get(f"/api/v1/knowledge/studies/{study_id}")
+        if study_resp.status_code != 200:
+            return Div(
+                f"Study unavailable: HTTP {study_resp.status_code}",
+                cls="text-sm text-error p-4",
+            )
+        study_data = study_resp.json()
+
+        tree_resp = await client.get(f"/api/v1/knowledge/studies/{study_id}/tree")
+        tree = tree_resp.json() if tree_resp.status_code == 200 else {}
+
+        return ChaptersListFragment(study_id, study_data, tree)
+    except Exception as e:
+        return Div(
+            f"Fetch failed: {type(e).__name__}: {str(e)[:200]}",
+            cls="text-sm text-error p-4",
+        )
+
+
+@ar("/api/kd/studies/{study_id}/chapters/{n:int}/render")
+async def kd_study_chapter_render_fragment(study_id: str, n: int):
+    """HTMX fragment: one chapter's rendered content (README + challenges + flashcards)."""
+    client = _get_client()
+    try:
+        r = await client.get(
+            f"/api/v1/knowledge/studies/{study_id}/chapters/{n}",
+            timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0),
+        )
+        if r.status_code == 404:
+            return ChapterErrorFragment("Chapter not ready yet (synth in progress).")
+        if r.status_code != 200:
+            return ChapterErrorFragment(f"FastAPI HTTP {r.status_code}")
+        return ChapterContentFragment(r.json())
+    except Exception as e:
+        return ChapterErrorFragment(f"{type(e).__name__}: {str(e)[:200]}")

@@ -67,6 +67,26 @@ KD_USE_CLASSICAL_CURATOR: "{{ .Values.kd.useClassicalCurator }}"
 # services/knowledge/summary_classical.py (deterministic reading plan +
 # small-LLM creative artifacts only). See kd.useClassicalSummary in values.yaml.
 KD_USE_CLASSICAL_SUMMARY: "{{ .Values.kd.useClassicalSummary }}"
+# Scope B (2026-05-12 night): when "1", section synth uses the kd-synth
+# non-reasoning pool instead of kd-all. See kd.useSynthPool in values.yaml.
+KD_USE_SYNTH_POOL: "{{ .Values.kd.useSynthPool }}"
+# Fix #2 (2026-05-12 night): per-chapter model pinning. See kd.pinChapterModel
+# in values.yaml.
+KD_PIN_CHAPTER_MODEL: "{{ .Values.kd.pinChapterModel }}"
+# OpenTelemetry (2026-05-12 night) — dual-export to Alloy (LGTM) + LangFuse v3.
+# Set OTEL_EXPORTER_OTLP_ENDPOINT to Alloy's OTLP gRPC receiver (typically
+# alloy.monitoring.svc.cluster.local:4317). Set LANGFUSE_OTLP_ENDPOINT to the
+# LangFuse v3 OTLP endpoint pattern (`<host>/api/public/otel`).
+# Leave OTEL_EXPORTER_OTLP_ENDPOINT empty in dev to disable the pipeline entirely.
+OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.otel.alloy_endpoint }}"
+OTEL_SERVICE_NAME: "{{ .Values.otel.service_name }}"
+OTEL_SERVICE_VERSION: "{{ .Values.otel.service_version }}"
+OTEL_RESOURCE_ATTRIBUTES: "deployment.environment={{ .Values.environment }},service.namespace=knowledge-distiller"
+LANGFUSE_OTLP_ENDPOINT: "{{ .Values.otel.langfuse_otlp_endpoint }}"
+# Scope B (2026-05-12 night): per-process LLM concurrency cap. See
+# kd.llmGlobalConcurrency in values.yaml and _get_llm_semaphore() in
+# graphs/knowledge/helpers.py.
+KD_LLM_GLOBAL_CONCURRENCY: "{{ .Values.kd.llmGlobalConcurrency }}"
 # R8 (2026-05-11): when "1", MAP runs ONE global pass (label_corpus_classical)
 # instead of per-shard. See `kd.globalMap` in values.yaml and `_use_global_map`
 # in graphs/knowledge/distiller.py.

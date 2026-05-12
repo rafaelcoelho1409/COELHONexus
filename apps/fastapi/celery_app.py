@@ -201,3 +201,23 @@ def _prewarm_umap_jit(**_kwargs) -> None:
             f"[worker-init] UMAP pre-warm failed "
             f"({type(e).__name__}: {str(e)[:200]}); JIT will run on first use"
         )
+
+
+@worker_process_init.connect
+def _init_otel_per_worker(**_kwargs) -> None:
+    """
+    OTel SDK init per Celery prefork worker. Each forked worker has its own
+    event loop + process; OTel state must be initialized in each.
+    Idempotent — services.otel_setup.init_otel_for_celery_worker is safe to
+    call multiple times. No-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        from services.otel_setup import init_otel_for_celery_worker
+        init_otel_for_celery_worker()
+    except Exception as e:
+        logger.warning(
+            f"[worker-init] OTel init failed ({type(e).__name__}: {e}); "
+            f"continuing without observability"
+        )

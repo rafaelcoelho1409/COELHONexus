@@ -1487,6 +1487,40 @@ async def _write_manifest_json(
 # =============================================================================
 # Step 6 — synthesizer + grader + adjustment helpers
 # =============================================================================
+# Scope B (2026-05-12 night) — global LLM concurrency cap. The 2026-05-12 E2E
+# (FastAPI study fa83cc4f) revealed cascade-exhaustion under parallel section
+# synth: ~7 chapters × 8 sections/chapter × 1-3 self-refine iters = 16-48
+# concurrent LLM calls peak. Free-tier provider RPMs sum to ~170 (Groq 30 +
+# Cerebras 30 + NIM 40 + Mistral 60 + Gemini ~10), which at safety factor 0.5
+# = ~10 sustainable concurrent calls cluster-wide. Without a cap, the rotator
+# cascade walks every provider, hits 429 across the board, and chapters end
+# up in OP-12 rescue (score=0.00 / 0 iters).
+#
+# This is a PER-PROCESS cap; Celery prefork with concurrency=5 + uvicorn
+# workers compound the effective cluster-wide limit. Multi-worker quota
+# sharing via Redis-backed pyrate-limiter is Scope B item #4 — deferred
+# until per-process cap is empirically validated.
+_LLM_GLOBAL_SEMAPHORE: asyncio.Semaphore | None = None
+
+
+def _get_llm_semaphore() -> asyncio.Semaphore:
+    """
+    Module-level lazy singleton. Cap configurable via env (default 10).
+    Lazy because asyncio.Semaphore binds to the running event loop;
+    Celery prefork workers each have their own loop and need their own
+    Semaphore instance.
+    """
+    global _LLM_GLOBAL_SEMAPHORE
+    if _LLM_GLOBAL_SEMAPHORE is None:
+        cap = int(os.environ.get("KD_LLM_GLOBAL_CONCURRENCY", "10"))
+        _LLM_GLOBAL_SEMAPHORE = asyncio.Semaphore(cap)
+        logger.info(
+            f"[llm-concurrency] global semaphore initialized "
+            f"with cap={cap} (per process)"
+        )
+    return _LLM_GLOBAL_SEMAPHORE
+
+
 async def _invoke_structured_with_fallback(
     *,
     prompt,
@@ -1514,23 +1548,22 @@ async def _invoke_structured_with_fallback(
       `runnable` + `fallbacks` and walk the models manually so a None
       at any step escalates to the next model, matching the intent
       documented in _synthesize_attempt / _grade_attempt.
+
+    Scope B (2026-05-12 night):
+      1. method="json_schema" (was "function_calling") — Mistral L3, Groq
+         gpt-oss, NIM, Gemini all ship native json_schema in May 2026.
+         Reduces None returns from "model emitted plain text instead of
+         tool_call" failure mode. Falls back to function_calling on
+         schema-not-supported errors.
+      2. Global asyncio.Semaphore (`_get_llm_semaphore()`) wraps the
+         router call so peak parallelism doesn't exceed cluster RPM
+         budget. Eliminates the 2026-05-12 cascade-exhaustion mode.
     """
     # Tier 3 #14 + 0d-5 (2026-04-23): LangFuse telemetry. The LiteLLM
     # Router behind `llm` handles provider cascade + fail-fast + cooldown
     # internally — we don't iterate models here anymore. Caller gets ONE
     # ainvoke() that walks healthy deployments and auto-cools down the
     # broken ones via Redis TTL cache.
-    #
-    # What this wrapper still does:
-    #   1. Attaches LangFuse callback for per-request tracing
-    #   2. Outer timeout belt-and-suspenders (router's own timeouts +
-    #      our eager 120s cap per-deployment — router already enforces
-    #      per-entry timeouts defined in llm_chain.py)
-    #   3. None-guard for the LangChain `with_structured_output` quirk:
-    #      `method="function_calling"` can return None when a provider
-    #      emits a tool_call the parser rejects. Router's pre-call
-    #      checks can't know this; we still need to raise so the caller
-    #      (Self-Refine loop) treats it as a failure, not a success.
     from services.knowledge.langfuse_client import langfuse_config
     # 2026-04-24: raised 600 → 1200 after Run-8 evidence showed 6/9 chapters
     # hitting the outer timeout mid-cascade. With per-entry timeouts
@@ -1539,38 +1572,66 @@ async def _invoke_structured_with_fallback(
     # well under 300s.
     OUTER_TIMEOUT_SECONDS = 1200
 
+    # `kd_process` derived from `label` (which has shape "<process> ch<NN>" or
+    # similar — e.g. "synth ch01", "grade ch03", "outline ch02"). OTel +
+    # LangFuse pick this up as a span attribute; PromQL queries can then slice
+    # by (kd_process, deployment_id) to drive routing decisions.
+    _kd_process = (label or "unknown").split()[0]
     per_attempt_config = langfuse_config(
-        metadata = {**(langfuse_metadata or {}), "label": label},
-        tags = [label.split()[0], *(langfuse_tags or [])],
+        metadata = {
+            **(langfuse_metadata or {}),
+            "label": label,
+            "kd_process": _kd_process,
+        },
+        tags = [_kd_process, *(langfuse_tags or [])],
         session_id = langfuse_session_id,
         user_id = langfuse_user_id,
         run_name = langfuse_run_name or f"kd-{label.replace(' ', '-')}",
     )
 
-    try:
-        chain = prompt | llm.with_structured_output(
-            schema,
-            method = "function_calling",
-        )
-        result = await asyncio.wait_for(
+    async def _invoke_with_method(method: str):
+        chain = prompt | llm.with_structured_output(schema, method=method)
+        return await asyncio.wait_for(
             chain.ainvoke(
                 invoke_vars,
                 config = per_attempt_config or None,
             ),
             timeout = OUTER_TIMEOUT_SECONDS,
         )
-        if result is None:
+
+    async with _get_llm_semaphore():
+        try:
+            try:
+                result = await _invoke_with_method("json_schema")
+            except (NotImplementedError, ValueError) as schema_err:
+                # Provider doesn't advertise json_schema — fall back to
+                # function_calling. Most May-2026 providers support
+                # json_schema, but some older deployments fail at the
+                # LangChain wrapper level with NotImplementedError /
+                # ValueError ("Unsupported method").
+                err_msg = str(schema_err).lower()
+                if ("json_schema" in err_msg or "method" in err_msg
+                        or "schema" in err_msg or "supported" in err_msg):
+                    logger.warning(
+                        f"[{label}] json_schema unsupported "
+                        f"({type(schema_err).__name__}: {str(schema_err)[:120]}); "
+                        f"falling back to function_calling"
+                    )
+                    result = await _invoke_with_method("function_calling")
+                else:
+                    raise
+            if result is None:
+                raise RuntimeError(
+                    f"[{label}] LiteLLM Router returned None (all healthy models "
+                    f"emitted non-parseable output). Triggers Self-Refine retry."
+                )
+            return result
+        except asyncio.TimeoutError as e:
             raise RuntimeError(
-                f"[{label}] LiteLLM Router returned None (all healthy models "
-                f"emitted non-parseable output). Triggers Self-Refine retry."
-            )
-        return result
-    except asyncio.TimeoutError as e:
-        raise RuntimeError(
-            f"[{label}] exceeded outer {OUTER_TIMEOUT_SECONDS}s timeout — "
-            f"LiteLLM Router exhausted its cascade or got stuck. "
-            f"Last exception: {e}"
-        ) from e
+                f"[{label}] exceeded outer {OUTER_TIMEOUT_SECONDS}s timeout — "
+                f"LiteLLM Router exhausted its cascade or got stuck. "
+                f"Last exception: {e}"
+            ) from e
 
 
 # =============================================================================

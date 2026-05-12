@@ -192,7 +192,14 @@ def validate_outline(outline: ChapterOutline) -> tuple[bool, str]:
 # Phase B — deterministic hash routing
 # =============================================================================
 class HashRouting:
-    """Output of Phase B: per-section hash assignment + shared core + orphan rate."""
+    """Output of Phase B: per-section hash assignment + shared core + orphan rate.
+
+    `hash_keys` + `hash_vecs` carry the embeddings forward to Phase A.5
+    (split_overloaded_sections) so it can re-cluster within an overloaded
+    section without re-embedding. Optional for backwards compat — callers
+    that don't pass them just skip Phase A.5 (cluster fallback would re-
+    embed via embed_texts if needed).
+    """
 
     def __init__(
         self,
@@ -201,12 +208,16 @@ class HashRouting:
         orphan_rate: float,
         n_orphans: int,
         n_total: int,
+        hash_keys: list[str] | None = None,
+        hash_vecs: list[list[float]] | None = None,
     ):
         self.section_hashes = section_hashes
         self.shared_core = shared_core
         self.orphan_rate = orphan_rate
         self.n_orphans = n_orphans
         self.n_total = n_total
+        self.hash_keys = hash_keys or []
+        self.hash_vecs = hash_vecs or []
 
 
 def _extract_hash_contexts(
@@ -364,12 +375,27 @@ async def route_hashes_to_sections(
                 pass
             section_hashes[sec_idx].append(hash_keys[h_idx])
 
+    # Fix 3 v1 REVERTED 2026-05-12 night-late after research validation —
+    # cross-topic redistribution destroys natural topic coherence when source
+    # material has skewed distribution (e.g., 60% topic A → flat cap moves
+    # topic A's hashes into UNRELATED sections). See KD-SYNTH-LLM-TO-CLASSICAL-
+    # MAY2026.md "Phase B/C audit-fail hardening — Fix 3 v2".
+    #
+    # The proper fix is Phase A.5 bucket-split (in `split_overloaded_sections`
+    # below) which preserves topic coherence by splitting an overloaded section
+    # INTO ITS OWN SUB-SECTIONS (same parent heading, sibling sub-headings)
+    # rather than dispersing hashes to other topics. Pattern source:
+    # GraphRAG (Edge et al., arXiv 2404.16130) hierarchical community split;
+    # STORM (Shao et al., NAACL 2024) outline expansion under heavy topics.
+
     return HashRouting(
         section_hashes = section_hashes,
         shared_core = shared_core,
         orphan_rate = orphan_rate,
         n_orphans = n_orphans,
         n_total = n_total,
+        hash_keys = hash_keys,
+        hash_vecs = hash_vecs,
     )
 
 
@@ -377,6 +403,205 @@ def _bare_hash_from_sentinel(sentinel: str) -> str:
     """Extract the 12-hex bare hash from a `<code-ref hash="..."/>` sentinel."""
     m = re.search(r'hash="([a-f0-9]{12})"', sentinel)
     return m.group(1) if m else ""
+
+
+# =============================================================================
+# Phase A.5 — adaptive sub-section split for overloaded sections (2026-05-12 night-late)
+# =============================================================================
+# Pattern source: GraphRAG hierarchical community split (Edge et al., arXiv
+# 2404.16130) + STORM outline expansion (Shao et al., NAACL 2024) +
+# LLM×MapReduce tree-oriented map-reduce (THUNLP, ACL 2025 Long, arXiv
+# 2410.09342). All three handle skewed topic distribution by SPLITTING the
+# heavy topic into sub-sections under the same parent — never by
+# redistributing across unrelated topics.
+#
+# Empirical justification: study 64b1cf9a (FastAPI, 2026-05-12) showed
+# ch04's Phase B routing assigned 32 of 53 hashes to a single section.
+# Asking the LLM section-synth to faithfully list 32 specific 12-hex
+# hashes in one structured-output array exceeds reliable recall on every
+# May-2026 frontier model we tested (Kimi K2.6, GLM-5.1, MiniMax M2.7,
+# DeepSeek V4-Flash all dropped ≥10% of hashes). JSONSchemaBench (ICLR
+# 2025, arXiv 2501.10868) confirms: constrained-decoding holds shape but
+# degrades recall as enumeration cardinality grows.
+#
+# Pattern: when a section has >MAX_HASHES_PER_SECTION hashes, k-means
+# cluster its hash embeddings into k = ceil(n / MAX) sub-buckets, create
+# k sub-sections under the same parent heading ("<parent> — Part i of k"),
+# each sub-section inherits the parent's `goal` and `assumes_from_prior_
+# sections`, and the original hashes route to whichever sub-section their
+# cluster centroid is closest to. Result: topic coherence preserved,
+# every Phase C LLM call sees ≤MAX hashes, audit gate clears naturally.
+MAX_HASHES_PER_SECTION_BUCKET = 10
+
+
+def split_overloaded_sections(
+    outline: ChapterOutline,
+    routing: HashRouting,
+    max_per_section: int = MAX_HASHES_PER_SECTION_BUCKET,
+) -> tuple[ChapterOutline, HashRouting]:
+    """
+    Phase A.5: bucket-split overloaded sections under same parent heading.
+
+    For each section in `outline.sections` whose routed hash count exceeds
+    `max_per_section`, split into k = ceil(n / max_per_section) sub-sections.
+    Sub-sections share the parent's heading prefix + the parent's goal +
+    assumes_from_prior_sections; only the heading differs ("— Part i of k").
+    Hash assignment within the parent's set uses k-means on the hash
+    embeddings (carried forward from Phase B's HashRouting).
+
+    Hard caps:
+      - ChapterOutline allows 4-15 sections; if expansion exceeds 15 we cap
+        by merging the smallest siblings within the same parent (rare; only
+        triggers for chapters with 150+ hashes).
+      - Falls back to no-op split if hash_vecs are missing (backwards compat
+        for callers that don't pass embeddings forward).
+
+    Returns (new_outline, new_routing). Both downstream-compatible with
+    Phase C — no signature changes to synthesize_one_section.
+    """
+    import math
+    n_orig = len(outline.sections)
+
+    # No-op path: nothing to split if no section exceeds the cap.
+    overloaded = [
+        i for i in range(n_orig)
+        if len(routing.section_hashes.get(i, [])) > max_per_section
+    ]
+    if not overloaded:
+        return outline, routing
+
+    # Cluster fallback: if embeddings weren't carried forward, split
+    # chronologically (preserves narrative flow within the topic). This
+    # is the safe fallback shape — not as semantically tight as k-means
+    # but still under cap and topically coherent.
+    use_kmeans = bool(routing.hash_keys and routing.hash_vecs)
+    if use_kmeans:
+        try:
+            import numpy as np
+            from sklearn.cluster import KMeans
+        except Exception:
+            use_kmeans = False
+
+    hash_to_idx = (
+        {h: i for i, h in enumerate(routing.hash_keys)}
+        if use_kmeans else {}
+    )
+
+    new_sections: list[OutlineSection] = []
+    new_section_hashes: dict[int, list[str]] = {}
+    split_log: list[str] = []
+
+    for orig_idx, section in enumerate(outline.sections):
+        section_hash_list = routing.section_hashes.get(orig_idx, [])
+        n = len(section_hash_list)
+
+        if n <= max_per_section:
+            new_idx = len(new_sections)
+            new_sections.append(section)
+            new_section_hashes[new_idx] = section_hash_list
+            continue
+
+        # Need to split: k = ceil(n / max).
+        k = math.ceil(n / max_per_section)
+
+        if use_kmeans and len(section_hash_list) >= k:
+            # K-means cluster within the parent's hash set.
+            try:
+                section_vecs = np.array([
+                    routing.hash_vecs[hash_to_idx[h]] for h in section_hash_list
+                ])
+                km = KMeans(
+                    n_clusters=k, n_init=3, random_state=42,
+                ).fit(section_vecs)
+                labels = km.labels_.tolist()
+            except Exception:
+                # Cluster fallback: equal-size chronological chunks.
+                labels = [i % k for i in range(n)]
+        else:
+            # No embeddings: chronological chunks (preserves document order).
+            chunk_size = math.ceil(n / k)
+            labels = [i // chunk_size for i in range(n)]
+
+        clusters: dict[int, list[str]] = {i: [] for i in range(k)}
+        for h, lab in zip(section_hash_list, labels):
+            clusters[lab].append(h)
+
+        # Emit sub-sections in cluster order; skip empty clusters.
+        actual_subs = sum(1 for c in clusters.values() if c)
+        sub_count = 0
+        for cluster_idx in range(k):
+            cluster_hashes = clusters[cluster_idx]
+            if not cluster_hashes:
+                continue
+            sub_count += 1
+            sub_heading = (
+                f"{section.heading} — Part {sub_count} of {actual_subs}"
+            )
+            new_idx = len(new_sections)
+            new_sections.append(OutlineSection(
+                heading=sub_heading,
+                goal=section.goal,
+                assumes_from_prior_sections=section.assumes_from_prior_sections,
+            ))
+            new_section_hashes[new_idx] = cluster_hashes
+        split_log.append(
+            f"'{section.heading}' ({n} hashes → {actual_subs} sub-sections)"
+        )
+
+    # Hard cap at ChapterOutline.sections.max_length (40 since 2026-05-12
+    # night, Fix #1 of Phase B/C audit-fail hardening — was 15 before).
+    # 40 supports up to 400-hash chapters cleanly at 10 hashes/section.
+    # Triggers only for very dense outliers (rare).
+    _SCHEMA_MAX_SECTIONS = 40
+    if len(new_sections) > _SCHEMA_MAX_SECTIONS:
+        logger.warning(
+            f"[bucket-split] expanded to {len(new_sections)} sections, "
+            f"exceeds ChapterOutline max={_SCHEMA_MAX_SECTIONS}; capping by "
+            f"merging trailing sub-sections into the last in-budget section "
+            f"(consider raising max or splitting chapter at planner level)"
+        )
+        # Merge overflow into the last fittable section.
+        _keep_n = _SCHEMA_MAX_SECTIONS - 1  # leave 1 slot for merged tail
+        keep = new_sections[:_keep_n]
+        merged_hashes: list[str] = []
+        for i in range(_keep_n, len(new_sections)):
+            merged_hashes.extend(new_section_hashes[i])
+        tail_heading = "Additional"
+        keep.append(OutlineSection(
+            heading=tail_heading,
+            goal=(new_sections[_keep_n].goal
+                  if len(new_sections) > _keep_n
+                  else "Additional related content."),
+            assumes_from_prior_sections="",
+        ))
+        new_section_hashes = {
+            i: new_section_hashes[i] for i in range(_keep_n)
+        }
+        new_section_hashes[_keep_n] = merged_hashes
+        new_sections = keep
+
+    if split_log:
+        logger.info(
+            f"[bucket-split] split {len(split_log)} overloaded "
+            f"section(s): {'; '.join(split_log)} "
+            f"(orig {n_orig} → new {len(new_sections)})"
+        )
+
+    new_outline = ChapterOutline(
+        sections=new_sections,
+        challenges=outline.challenges,
+        flashcards=outline.flashcards,
+    )
+    new_routing = HashRouting(
+        section_hashes=new_section_hashes,
+        shared_core=routing.shared_core,
+        orphan_rate=routing.orphan_rate,
+        n_orphans=routing.n_orphans,
+        n_total=routing.n_total,
+        hash_keys=routing.hash_keys,
+        hash_vecs=routing.hash_vecs,
+    )
+    return new_outline, new_routing
 
 
 # =============================================================================
@@ -591,6 +816,29 @@ async def synthesize_hierarchical(
             f"Phase B orphan_rate {routing.orphan_rate:.1%} > cap "
             f"{ORPHAN_RATE_CAP:.1%} ({routing.n_orphans}/{routing.n_total} "
             f"hashes can't fit any section)"
+        )
+
+    # Phase A.5 — bucket-split overloaded sections (2026-05-12 night-late)
+    # See split_overloaded_sections docstring + KD-SYNTH-LLM-TO-CLASSICAL-
+    # MAY2026.md Phase B/C audit-fail hardening § Fix 3 v2.
+    try:
+        outline, routing = split_overloaded_sections(
+            outline=outline,
+            routing=routing,
+            max_per_section=MAX_HASHES_PER_SECTION_BUCKET,
+        )
+        if len(outline.sections) != n_sections:
+            n_sections = len(outline.sections)
+            logger.info(
+                f"[hierarchical][ch{chapter.number:02d}] Phase A.5: "
+                f"bucket-split expanded to {n_sections} sections "
+                f"(per-section sizes="
+                f"{[len(routing.section_hashes[i]) for i in range(n_sections)]})"
+            )
+    except Exception as e:
+        logger.warning(
+            f"[hierarchical][ch{chapter.number:02d}] Phase A.5 split failed "
+            f"({type(e).__name__}: {e}); continuing with original routing"
         )
 
     # Phase C — parallel per-section synth (capped concurrency)

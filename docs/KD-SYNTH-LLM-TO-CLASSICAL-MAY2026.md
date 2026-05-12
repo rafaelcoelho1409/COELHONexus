@@ -455,6 +455,212 @@ The wall-clock speedup is modest (1.3×) because the small-LLM creative call sti
 
 **Scope A (LLM→classical replacement) is now complete** — only Phase 2.2 remains and that requires host-side llama-server infrastructure the user hasn't provisioned (the Phase 2.1 embedding-similarity faithfulness is good enough until adversarial data forces the upgrade).
 
+### Scope B — Rotator + concurrency hardening (2026-05-12 night, started post-E2E)
+
+The 2026-05-12 E2E run with all Scope A flags ON revealed a **cascade-exhaustion failure mode** that Scope A's classical paths cannot fix because it lives in the irreducibly-LLM section synth (Phase C). Symptoms: 58 min wall-clock for 2 chapters (1 with DEBT, 1 with score=0.00 / 0 iters via OP-12 rescue path), retry storm across mistral / magistral / gemini / minimax / qwen / gemini-3, no hard errors logged. Root cause: ~7 chapters × 8 sections × 1-3 self-refine iters = 16-48 concurrent LLM calls at peak, against ~170 RPM total free-tier budget (sustainable ~10 concurrent at safety-factor 0.5).
+
+A deep-research brief identified 5 SoTA fixes (May 2026); ship-first list (highest ROI first):
+
+| # | Fix | ROI | Status |
+|---|---|---|---|
+| 1 | **`asyncio.Semaphore` per-process LLM concurrency cap** in `_invoke_structured_with_fallback` (default 10, env `KD_LLM_GLOBAL_CONCURRENCY`) | 10/10 | ✅ shipped |
+| 2 | **`method="json_schema"`** with `function_calling` fallback in `_invoke_structured_with_fallback` | 8/10 | ✅ shipped |
+| 3 | **`kd-synth` non-reasoning pool** (7 deployments curated for prose+code: mistral-large-3 ×2 / Nemotron-3-super / gpt-oss-120b / Mistral Small + Medium / Llama-4 Maverick); env flag `KD_USE_SYNTH_POOL` opts synth in | 7/10 | ✅ shipped (default OFF pending validation) |
+| 4 | Redis-backed `pyrate-limiter` per-provider RPM enforcement (multi-worker quota sharing across Celery + FastAPI) | 6/10 | pending |
+| 5 | Exponential cooldown + `Retry-After` honor (LiteLLM callback hook patch) | 4/10 | pending |
+
+#### Shipped this session
+
+**Item 1 — Global concurrency cap.** New `_get_llm_semaphore()` lazy singleton in `graphs/knowledge/helpers.py`; configurable via `KD_LLM_GLOBAL_CONCURRENCY` env (default `"10"`). All structured-output LLM calls (section synth, grader-when-classical-off, outline-when-classical-off, critic-when-classical-off) acquire from this semaphore before invoking the router. Per-process — Celery prefork concurrency=5 × cap=10 = effective 50 cluster-wide; tune cap=2 if multi-worker over-subscription becomes an issue (Redis-backed pyrate-limiter — Scope B item #4 — is the durable fix).
+
+**Item 2 — `method="json_schema"`.** `_invoke_structured_with_fallback` tries json_schema first (Mistral L3, Groq gpt-oss, NIM Nemotron, Gemini all GA in May 2026); falls back to function_calling on `NotImplementedError`/`ValueError` carrying "json_schema"/"method"/"schema"/"supported" in the message. Eliminates the None-return tool-call failure mode where a provider emits plain-text instead of a tool_call.
+
+**Item 3 — `kd-synth` rotator group.** New `SYNTH_GROUP` constant + `_synth_entries()` function in `services/llm_chain.py`. **Revised 2026-05-12 night-late to a HYBRID pool** after E2E study `8f6af2b8` revealed that a pure-non-reasoning curation dropped 56% of vault hashes on large chapters (ch01 iter 2: 29 of 52 missing, 7 duplicated, 5 thin sections). Root cause: non-reasoning models have shorter effective output token budgets and weren't trained as rigorously on multi-entity structured outputs as frontier reasoning models. Concurrency cap (item 1) prevents reasoning models from cascade-exhausting under parallel fan-out, making them viable here.
+
+| Tier | Deployment | Role |
+|---|---|---|
+| 1 | `nvidia_nim/moonshotai/kimi-k2.6` | Reasoning, AAII 49, complete structured output |
+| 1 | `nvidia_nim/z-ai/glm-5.1` | Reasoning, AAII 51, SWE-Pro #1 OSS |
+| 1 | `nvidia_nim/minimaxai/minimax-m2.7` | Reasoning, AAII 50, 204K ctx agentic |
+| 1 | `nvidia_nim/deepseek-ai/deepseek-v4-flash` | Reasoning, AAII 47, free-tier path |
+| 2 | `mistral/mistral-large-latest` | Non-reasoning frontier, LMArena #2 OSS, 256K ctx |
+| 2 | `nvidia_nim/mistralai/mistral-large-3-675b-instruct-2512` | Same as above via NIM (independent failure domain) |
+| 2 | `nvidia_nim/nvidia/nemotron-3-super-120b-a12b` | Non-reasoning, 1M ctx hybrid Mamba, AAII 36 |
+| 2 | `nvidia_nim/openai/gpt-oss-120b` | Non-reasoning, AAII 33, native tools |
+| 3 | `mistral/mistral-medium-latest` | Deep tail, between Large + Small |
+| 3 | `mistral/mistral-small-latest` | Deep tail, AAII 28, fast fallback |
+| 3 | `nvidia_nim/meta/llama-4-maverick-17b-128e-instruct` | Deep tail, 1M ctx, AAII 18 |
+
+Tier 1 reasoning models get 180s timeout (vs 120s for Tier 2/3) to absorb their `<think>` token burn. The concurrency cap (item 1) keeps peak parallelism within budget so reasoning models don't cascade-exhaust.
+
+**Failed pure-non-reasoning curation (2026-05-12 night, REVERTED):** Mistral L3 ×2 + Nemotron + gpt-oss + Mistral Medium/Small + Llama-4 Maverick (and ~~Groq llama-3.3-70b-versatile, removed mid-attempt for TPM ceiling~~). Surface failure: hash-drop pattern on large chapters because smaller models truncated their output. Logged as cautionary tale in commit history.
+
+Hard EXCLUSIONS (still apply to hybrid pool): entire Gemini 3.x family (`T<1.0` infinite-loop bug per Google's own warning), Magistral (R-mode default — Mistral Medium covers same niche without reasoning burn), Cerebras whole provider (account 404), SambaNova (paywall), DeepSeek direct (Insufficient Balance), Groq gpt-oss-120b + Groq llama-3.3-70b-versatile (8-12K TPM ceiling vs 21-37K section-synth prompts).
+
+Wiring: `build_synth_fallback_chain()` reads `KD_USE_SYNTH_POOL` env at call time — `"1"` routes to SYNTH_GROUP, default `"0"` keeps legacy kd-all. New explicit factory `build_synth_pool_chain()` for direct callers (validation harnesses, future hedged-invoke wrapper).
+
+#### Files touched (Scope B partial — items 1+2+3)
+
+**Modified:**
+- `apps/fastapi/services/llm_chain.py` — added `SYNTH_GROUP`/`_synth_entries()`; bumped `build_synth_fallback_chain` to env-flag routing; new `build_synth_pool_chain()`; added `_synth_entries()` to Router model_list
+- `apps/fastapi/graphs/knowledge/helpers.py` — added `_get_llm_semaphore()` + `_LLM_GLOBAL_SEMAPHORE`; wrapped `_invoke_structured_with_fallback` body with semaphore; switched `method="function_calling"` → `method="json_schema"` with function_calling fallback
+- `k8s/helm/values.yaml` — new `kd.useSynthPool` (default `"0"`) + `kd.llmGlobalConcurrency` (default `"10"`)
+- `k8s/helm/templates/_helpers.tpl` — `KD_USE_SYNTH_POOL` + `KD_LLM_GLOBAL_CONCURRENCY` env vars
+- `docs/KD-SYNTH-LLM-TO-CLASSICAL-MAY2026.md` — this Scope B section
+
+#### Validation pending
+
+Live E2E with all Scope A flags ON + `KD_USE_SYNTH_POOL=1` + cap=10: expect zero cascade-exhaustion, all chapters reaching graded state. Items 4+5 deferred until empirical validation shows whether per-process cap alone is sufficient or multi-worker Redis-backed throttling is required.
+
+### Phase B/C audit-fail hardening (2026-05-12 night-late, post-Scope B E2E)
+
+Scope B (concurrency cap + json_schema + kd-synth pool) successfully eliminated the cascade-exhaustion failure mode. The next E2E (study `64b1cf9a`) revealed a SECOND, pre-existing audit failure mode: **hash-drop in Phase B/C hierarchical synth**. Symptom: LLM section synth outputs fewer code_refs than vault assigned; audit rejects (0 missing required); refiner loops through different models per iter (no convergence); chapters land in OP-12 rescue (score=0.00).
+
+Evidence: ch01 (52 hashes) iter 2 had 29 missing / 7 duplicated; iter 4 had 31 missing / 5 duplicated; each iter using a different rotator member. ch04's Phase B routing assigned 32 of 53 hashes to a single section — an unreasonable structured-output ask for ANY model.
+
+Three fixes shipped (Fix 2 deferred as a multi-day architectural change):
+
+**Fix 1 — relax audit missing-hash tolerance** (`distiller.py` synth loop, 1-line change). Audit gate now accepts ≤10% missing as soft-DEBT (chapter proceeds to grader, code_preservation_ratio dim handles the weighting). Eliminates OP-12 rescue for chapters that are 90%+ structurally complete.
+
+**Fix 3 v1 — REVERTED 2026-05-12 night-late.** Flat per-section cap with cross-topic redistribution. Initial implementation: when Phase B routed >10 hashes to a section, move WEAKEST-fit hashes to other sections by argmax similarity. **User-flagged correctly:** if source material is naturally 60% topic A / 20% B / 10% C / 10% D, the natural distribution `[60, 20, 10, 10]` is *correct* — cross-topic redistribution moves topic A's hashes into sections that aren't about topic A, damaging coherence. Confirmed by SoTA research (May 2026): STORM, GraphRAG, LLM×MapReduce all preserve skewed distribution at leaf level via sub-section splitting under the same parent, NEVER redistribute across topics.
+
+**Fix 3 v2 — Phase A.5 bucket-split** (`hierarchical_synth.py::split_overloaded_sections`, runs between Phase B routing and Phase C synth). When a section has >`MAX_HASHES_PER_SECTION_BUCKET=10` hashes assigned, **split it into k = ceil(n/MAX) sibling sub-sections under the SAME parent heading**. Sub-sections inherit the parent's `goal` and `assumes_from_prior_sections` verbatim; only the heading differs (`"<parent> — Part i of k"`). Hash assignment within the parent's set uses k-means on the embedding vectors carried forward from Phase B (HashRouting now optionally returns `hash_keys` + `hash_vecs`); falls back to chronological-chunk split if embeddings unavailable. Result: **topic coherence preserved, every Phase C LLM call sees ≤10 hashes, audit gate clears naturally without forcing the LLM to recite 30+ hash strings.** Sources: GraphRAG hierarchical community split (Edge et al., arXiv 2404.16130), STORM outline expansion (Shao et al., NAACL 2024), JSONSchemaBench (ICLR 2025, arXiv 2501.10868) confirming structured-output recall degrades with list cardinality. If `len(new_sections) > 15` (ChapterOutline schema max), merge trailing sub-sections into a final "Additional" section.
+
+**Fix 4 — surgical missing-hash feedback** (already shipped via `_format_structured_output_feedback`). Refiner adjustment text already includes the first 8 missing hashes with code-block previews; the LLM gets explicit "add these specific hashes back to the right section" instructions. Made fully effective once Fix 2 (model pinning) ships.
+
+**Fix 2 — per-chapter model pinning** (DEFERRED). Would wrap LiteLLM Router with sticky deployment selection per chapter so all iterations use the same model (refiner gets continuity). Multi-day architectural change. Skipped this session because Fix 1 + Fix 3 should absorb most cases; revisit if audit-fail rate stays high after empirical validation.
+
+#### Files touched (Phase B/C audit hardening)
+
+**Modified:**
+- `apps/fastapi/graphs/knowledge/distiller.py` — synth-loop audit gate: `_MISSING_TOLERANCE_PCT = 0.10` + `_missing_blocks_accept` condition (was `missing or ...`)
+- `apps/fastapi/graphs/knowledge/hierarchical_synth.py::route_hashes_to_sections` — added MAX_HASHES_PER_SECTION=10 rebalancing pass after the empty-section nudge
+
+### Phase B/C audit-fail hardening v2 — Fix #1 + Fix #2 (2026-05-12 night, post-bb7f3b50 study)
+
+Study `bb7f3b50` (FastAPI, 2026-05-12 with Phase A.5 active) surfaced two distinct failure modes that Phase A.5 alone could not resolve:
+
+1. **Monster chapter overflow** — ch01 had 342 vault hashes from a single dense doc page. Phase A.5 wanted to expand to ~35 sub-sections but `ChapterOutline.sections.max_length` capped at 15. My overflow fallback dumped 224 hashes into one "Additional" section — exactly the cross-topic dumping ground the user warned about.
+2. **Multi-model refine non-convergence** — across refine iters within a chapter, the rotator's `simple-shuffle` picked different deployments per iter. Each iter the LLM started fresh with no memory of previous output. The refiner's surgical "you missed hash X, Y, Z" feedback couldn't act on output the current model didn't generate. Empirical: ch01 iter 0 dropped 31 hashes, iter 4 dropped 302 hashes — refiner was a random walk, not a convergent loop.
+
+#### Fix #1 — bump `ChapterOutline.sections.max_length` 15 → 40
+
+Schema change in `apps/fastapi/schemas/knowledge/agents.py`. 40 supports up to 400-hash chapters at 10 hashes/section. Phase A.5's overflow fallback in `hierarchical_synth.py` updated to use the new cap (was hardcoded 15 → now `_SCHEMA_MAX_SECTIONS = 40`, leaving 39 slots before merging into "Additional"). The "Additional" fallback now triggers only for >400-hash outlier chapters (rare).
+
+#### Fix #2 — per-chapter model pinning
+
+New `pick_synth_deployment(seed)` + `build_synth_pinned_chain(model)` in `services/llm_chain.py`. Approach:
+
+- `pick_synth_deployment(chapter.number)` deterministically picks one litellm model string from SYNTH_GROUP (same chapter always picks the same model across study runs; different chapters spread load across pool members)
+- `build_synth_pinned_chain(pinned_model)` builds a fresh single-deployment `Router` containing only that model + a unique group_name (`kd-synth-pinned-<hash>`), wraps in `ChatLiteLLMRouter`
+- Per-process `_pinned_chain_cache` keyed by pinned model string (Celery prefork workers each have their own)
+- Falls back to full SYNTH_GROUP if the pinned model isn't in the pool (e.g. EOL'd mid-run)
+
+Wiring in `distiller.py::synthesize_chapter` at chapter start (after vault build, before synth loop): when `KD_PIN_CHAPTER_MODEL=1` AND `KD_USE_SYNTH_POOL=1`, the incoming `llm` parameter is overridden with the pinned chain for the entire chapter's Phase A/B/C calls + refine iters. Logged as `PIN-CHAPTER-MODEL: using <model>` at chapter start.
+
+**Single-model failure mode**: pinned router has `num_retries=3` + `cooldown_time=30s`. If the pinned model has a hard outage (404/410/auth), the chapter falls to OP-12 rescue rather than cascading across the entire SYNTH_GROUP (cascading would defeat the purpose of pinning). This is intentional: better to lose ONE chapter to a model outage than to lose refine convergence across the WHOLE study.
+
+#### Helm
+
+- `kd.useSynthPool: "1"` (default; Scope B item 3)
+- `kd.pinChapterModel: "1"` (default; Fix #2 — flipped to default-on since it's the convergence answer empirically observed)
+
+#### Files touched (Fix #1 + Fix #2)
+
+**Modified:**
+- `apps/fastapi/schemas/knowledge/agents.py` — `ChapterOutline.sections.max_length` 15 → 40
+- `apps/fastapi/graphs/knowledge/hierarchical_synth.py` — Phase A.5 overflow fallback uses `_SCHEMA_MAX_SECTIONS = 40`
+- `apps/fastapi/services/llm_chain.py` — new `pick_synth_deployment` + `build_synth_pinned_chain` + `_pinned_chain_cache`
+- `apps/fastapi/graphs/knowledge/distiller.py` — synth chapter-start: `KD_PIN_CHAPTER_MODEL` env check, overrides `llm` with pinned chain
+- `k8s/helm/values.yaml` — `kd.pinChapterModel: "1"`
+- `k8s/helm/templates/_helpers.tpl` — `KD_PIN_CHAPTER_MODEL` env var
+
+**Deferred to follow-up (validated as needed):**
+- Recursive bucket-split (Phase A.5 v3) — only worth it if 40-section cap proves insufficient for chapters >400 hashes
+- Planner-side chapter size caps (REDUCE step) — would prevent monster chapters from existing in the first place; complementary to Fix #1
+- LLM-generated sub-section headings — UX polish, no convergence impact
+
+### Observability — OpenTelemetry dual-export (2026-05-12 night)
+
+Goal: per-deployment LLM performance data to drive data-driven rotator decisions instead of static benchmark ranking. The same pipeline doubles as study-level distributed tracing for debugging.
+
+**Architecture:**
+
+```
+LiteLLM Router + KD pipeline + LangChain
+       ↓ (OTel SDK with kd_process metadata)
+TracerProvider + MeterProvider (services/otel_setup.py)
+       ↓ (BatchSpanProcessor fan-out)
+       ├─ gRPC OTLP → Alloy → LGTM (Mimir/Tempo/Loki)
+       └─ HTTP OTLP → LangFuse v3 /api/public/otel
+```
+
+**One init, dual export:** the SAME `TracerProvider` carries two `BatchSpanProcessor` instances. Every LLM call, every KD phase, every refine iter produces ONE span that lands in BOTH backends. No double-instrumentation, no redundant SDK setup, single source of truth.
+
+**What lands in each backend (complementary, not duplicative):**
+
+| Signal | LGTM (via Alloy) | LangFuse v3 |
+|---|---|---|
+| Per-deployment latency histogram (p50/p95/p99) | ✅ Mimir | — |
+| Time-series success/failure counters | ✅ Mimir | — |
+| Per-LLM-call traces with prompt context | ✅ Tempo | ✅ rich UI |
+| Cost / token analysis by user/session/model | ⚠️ raw | ✅ built-in |
+| KD custom metrics (refiner iters, bucket-split overflow, etc.) | ✅ Mimir | — |
+| `kd_process` attribute for routing-decision queries | ✅ | ✅ |
+| Distributed trace (study → planner → synth × N → curator → assembler) | ✅ Tempo | ✅ |
+| Log correlation via trace_id injection | ✅ Loki | — |
+
+**Files added:**
+
+- `apps/fastapi/services/otel_setup.py` (~250 LoC) — `init_otel()` + `init_otel_for_celery_worker()` + dual-exporter setup. Auto-instruments FastAPI (routes), httpx (upstream LLM calls), redis (study registry, broker), Celery (task spans), logging (trace_id injection).
+- `apps/fastapi/services/otel_metrics.py` (~200 LoC) — KD-specific custom metrics (`kd.chapter_synth_duration_seconds`, `kd.refiner_iters_to_accept`, `kd.bucket_split_overflow_total`, `kd.classical_grader_dim_score`, `kd.audit_missing_hashes_ratio`, `kd.study_completion_seconds`, `kd.classical_patch_applied_total`). Each carries the labels needed for production-decision PromQL.
+
+**Files modified:**
+
+- `apps/fastapi/pyproject.toml` — added `opentelemetry-api/sdk/exporter-otlp-proto-grpc/-http`, `opentelemetry-instrumentation-{fastapi,httpx,redis,celery,logging}`.
+- `apps/fastapi/app.py` — `lifespan()` startup calls `init_otel(also_instrument_fastapi_app=app)`.
+- `apps/fastapi/celery_app.py` — `worker_process_init` signal calls `init_otel_for_celery_worker()` per fork (each prefork worker needs its own provider since OTel state doesn't survive fork() cleanly).
+- `apps/fastapi/services/llm_chain.py` — `litellm.callbacks = ["otel"]` when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. LiteLLM emits per-call deployment_id + model + latency + tokens + cost + error_type as span attributes.
+- `apps/fastapi/graphs/knowledge/helpers.py::_invoke_structured_with_fallback` — derives `kd_process` from the existing `label` field ("synth" / "grade" / "outline" / "curator" / "critic"...) and injects it into metadata. LiteLLM's OTel callback picks it up; PromQL queries can then slice by `(kd_process, deployment_id)`.
+- `k8s/helm/values.yaml` — new `otel:` block (alloy_endpoint, langfuse_otlp_endpoint, service_name, service_version).
+- `k8s/helm/templates/_helpers.tpl` — `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_SERVICE_VERSION`, `OTEL_RESOURCE_ATTRIBUTES`, `LANGFUSE_OTLP_ENDPOINT` env vars (LANGFUSE_PUBLIC_KEY/SECRET_KEY already plumbed from secret).
+
+**Operator config:**
+
+- `OTEL_EXPORTER_OTLP_ENDPOINT=""` → OTel disabled entirely (default in environments without Alloy).
+- `LANGFUSE_OTLP_ENDPOINT=""` → LGTM-only mode (no LangFuse arm of the dual export).
+- Both set + LANGFUSE_PUBLIC_KEY/SECRET_KEY → full dual export.
+
+**PromQL examples for adaptive routing:**
+
+```promql
+# Per-deployment p50 latency for section-synth process
+histogram_quantile(0.5,
+  sum by (le, deployment_id) (
+    rate(litellm_llm_call_duration_bucket{kd_process="synth"}[1h])
+  )
+)
+
+# Success rate per deployment per process
+sum by (deployment_id, kd_process) (rate(litellm_llm_call_total{status="success"}[1h]))
+  /
+sum by (deployment_id, kd_process) (rate(litellm_llm_call_total[1h]))
+
+# Bucket-split overflow rate by framework (signals chapter-cap pressure)
+sum by (framework) (rate(kd_bucket_split_overflow_total[5m]))
+
+# Refiner convergence — distribution of iters-to-accept by pinned_model
+histogram_quantile(0.95,
+  sum by (le, pinned_model) (
+    rate(kd_refiner_iters_to_accept_bucket{outcome="accept"}[1h])
+  )
+)
+```
+
+**Next phase (deferred until ~1 week of production data accumulates):**
+- Build Grafana dashboards from the metrics above (`docs/KD-OTEL-DASHBOARDS.md`)
+- Implement `services/llm_chain_optimizer.py::get_best_deployment_for(process_name)` — PromQL-driven adaptive routing helper that re-ranks `_synth_entries()` based on observed performance, called by `pick_synth_deployment()`
+
 **Cumulative LLM-call reduction so far** (with all six classical flags ON):
 - Grader: ~95% token reduction (8/9 dims deterministic + 1 small-LLM call vs full GRADER_PROMPT)
 - Critic: ~100% LLM reduction (zero LLM calls when classical critic on)

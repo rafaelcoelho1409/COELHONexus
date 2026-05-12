@@ -63,6 +63,18 @@ dependencies = [
     # Upper bound <1.6 because v1.6.2/1.6.3 only ship cp314 wheels; cp313 wheels start again at older releases. Pin below the broken band.
     "tree-sitter-language-pack>=0.4,<1.6",
     "pyyaml>=6.0",             # Resolver catalog loader (apps/fastapi/sources.yaml)
+    # OpenTelemetry (2026-05-12 night) — per-deployment LLM perf data + study-level traces.
+    # Dual-export: Alloy → LGTM stack (Mimir/Tempo/Loki) + LangFuse v3 OTLP endpoint.
+    # See services/otel_setup.py for the dual-pipeline configuration.
+    "opentelemetry-api>=1.30",
+    "opentelemetry-sdk>=1.30",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.30",   # gRPC OTLP for Alloy
+    "opentelemetry-exporter-otlp-proto-http>=1.30",   # HTTP OTLP for LangFuse v3
+    "opentelemetry-instrumentation-fastapi>=0.50b0",  # Auto-instrument FastAPI routes
+    "opentelemetry-instrumentation-httpx>=0.50b0",    # Auto-instrument outbound httpx (upstream NIM, OpenAI etc.)
+    "opentelemetry-instrumentation-redis>=0.50b0",    # Auto-instrument Redis (cache, study registry, Celery broker)
+    "opentelemetry-instrumentation-celery>=0.50b0",   # Auto-instrument Celery tasks (study_id correlation)
+    "opentelemetry-instrumentation-logging>=0.50b0",  # Inject trace_id into stdlib logging (Loki correlation)
     # NER filter (Phase 2.1) — fast-gliner deferred. The package is sdist-only
     # (Rust source) and requires `cc` + Rust toolchain at build time, which our
     # python:3.13-slim base doesn't ship. Options when re-enabling:

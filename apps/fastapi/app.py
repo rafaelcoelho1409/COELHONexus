@@ -89,6 +89,16 @@ async def _ensure_postgres_database():
 async def lifespan(app: FastAPI):
     """Application lifespan handler for startup/shutdown tasks."""
     print("Starting FastAPI Service...", flush = True)
+    # OpenTelemetry init (2026-05-12 night) — dual-export to Alloy (LGTM stack)
+    # + LangFuse v3 OTLP endpoint. No-op when OTEL_EXPORTER_OTLP_ENDPOINT unset.
+    # Auto-instruments httpx, redis, FastAPI routes. See services/otel_setup.py.
+    try:
+        from services.otel_setup import init_otel
+        init_otel(also_instrument_fastapi_app=app)
+        print("OpenTelemetry initialized (FastAPI auto-instrumented).", flush=True)
+    except Exception as _ote:
+        print(f"OpenTelemetry init failed: {type(_ote).__name__}: {_ote}",
+              flush=True)
     app.state.redis_aio = redis_aio.from_url(REDIS_URL)
     # ElasticSearch async client
     app.state.es = AsyncElasticsearch(
