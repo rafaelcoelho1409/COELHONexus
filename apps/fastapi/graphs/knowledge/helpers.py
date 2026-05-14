@@ -21,7 +21,8 @@ import json
 import logging
 import os
 import re
-from typing import Optional
+import time
+from typing import Any, Optional
 
 from langchain_openai import ChatOpenAI
 
@@ -1521,6 +1522,102 @@ def _get_llm_semaphore() -> asyncio.Semaphore:
     return _LLM_GLOBAL_SEMAPHORE
 
 
+# =============================================================================
+# ParetoBandit integration — always-on routing (Phase 2 FULL, 2026-05-14)
+# =============================================================================
+# Maps the first word of `label` (e.g. "synth ch01" → "synth") to a canonical
+# kd_process. Falls back to "kd-all" for unrecognized labels.
+_LABEL_TO_KD_PROCESS: dict[str, str] = {
+    "synth":         "kd-synth",
+    "synthesize":    "kd-synth",
+    "refine":        "kd-synth",
+    "refiner":       "kd-synth",
+    "section":       "kd-synth",
+    "grade":         "kd-grader",
+    "grader":        "kd-grader",
+    "critic":        "kd-critic",
+    "critique":      "kd-critic",
+    "outline":       "kd-plan",
+    "plan":          "kd-plan",
+    "planner":       "kd-plan",
+    "curator":       "kd-curator",
+    "curate":        "kd-curator",
+    "reduce_label":  "kd-reduce-label",
+    "label":         "kd-reduce-label",
+    "keylm":         "kd-keylm",
+}
+
+
+def _label_to_kd_process(label_word: str) -> str:
+    return _LABEL_TO_KD_PROCESS.get((label_word or "").lower(), "kd-all")
+
+
+def _classify_llm_error(e: BaseException) -> str:
+    """Map a raised exception to a ParetoBandit error_class for reward sizing.
+
+    Checks both class name AND message — LiteLLM and httpx raise concrete
+    typed exceptions (RateLimitError, TimeoutException, etc.), but bare
+    `Exception("Internal Server Error")` patterns also come up downstream.
+    """
+    name = type(e).__name__.lower()
+    msg = str(e).lower()
+    if "ratelimit" in name or "rate_limit" in name or "429" in msg or "rate limit" in msg:
+        return "rate_limit"
+    if "timeout" in name or "timed out" in msg:
+        return "timeout"
+    if ("auth" in name
+            or " 401" in msg or " 403" in msg
+            or "unauthorized" in msg or "forbidden" in msg):
+        return "auth_error"
+    if "validation" in name or "validation" in msg \
+            or "pydantic" in name or "pydantic" in msg \
+            or "validationerror" in name:
+        return "schema_invalid"
+    if "content" in name and "filter" in name:
+        return "content_filter"
+    if "content filter" in msg or "policy violation" in msg:
+        return "content_filter"
+    if any(t in name for t in (
+        "connectionerror", "apierror", "servererror", "internalerror",
+        "badgatewayerror", "serviceunavailable",
+    )):
+        return "server_error"
+    if any(t in msg for t in (
+        "internal server error", "bad gateway", "service unavailable",
+        " 500 ", " 502 ", " 503 ", " 504 ", "server error",
+    )):
+        return "server_error"
+    return "unknown"
+
+
+_async_redis_client_for_bandit = None
+
+
+async def _get_bandit_redis():
+    """Lazy single-process async Redis client for bandit cell I/O."""
+    global _async_redis_client_for_bandit
+    if _async_redis_client_for_bandit is not None:
+        return _async_redis_client_for_bandit
+    try:
+        import redis.asyncio as redis_aio_lib
+        host = os.environ.get("REDIS_HOST", "localhost")
+        port = os.environ.get("REDIS_PORT", "6379")
+        password = os.environ.get("REDIS_PASSWORD", "")
+        url = (f"redis://:{password}@{host}:{port}"
+               if password else f"redis://{host}:{port}")
+        _async_redis_client_for_bandit = redis_aio_lib.from_url(url)
+        return _async_redis_client_for_bandit
+    except Exception as e:
+        logger.debug(f"[bandit] redis client init failed: {type(e).__name__}: {e}")
+        return None
+
+
+def _bandit_disabled() -> bool:
+    return os.environ.get("KD_PARETO_BANDIT_DISABLE", "0").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 async def _invoke_structured_with_fallback(
     *,
     prompt,
@@ -1589,49 +1686,177 @@ async def _invoke_structured_with_fallback(
         run_name = langfuse_run_name or f"kd-{label.replace(' ', '-')}",
     )
 
-    async def _invoke_with_method(method: str):
-        chain = prompt | llm.with_structured_output(schema, method=method)
+    async def _invoke_one_chain(chain_in: Any, method: str):
+        sub_chain = prompt | chain_in.with_structured_output(schema, method=method)
         return await asyncio.wait_for(
-            chain.ainvoke(
+            sub_chain.ainvoke(
                 invoke_vars,
                 config = per_attempt_config or None,
             ),
             timeout = OUTER_TIMEOUT_SECONDS,
         )
 
-    async with _get_llm_semaphore():
-        try:
+    async def _try_chain(chain_to_try: Any):
+        """Existing 2-method (json_schema → function_calling) try, parameterized
+        on which Router chain to invoke. Raises on terminal failure."""
+        async with _get_llm_semaphore():
             try:
-                result = await _invoke_with_method("json_schema")
-            except (NotImplementedError, ValueError) as schema_err:
-                # Provider doesn't advertise json_schema — fall back to
-                # function_calling. Most May-2026 providers support
-                # json_schema, but some older deployments fail at the
-                # LangChain wrapper level with NotImplementedError /
-                # ValueError ("Unsupported method").
-                err_msg = str(schema_err).lower()
-                if ("json_schema" in err_msg or "method" in err_msg
-                        or "schema" in err_msg or "supported" in err_msg):
-                    logger.warning(
-                        f"[{label}] json_schema unsupported "
-                        f"({type(schema_err).__name__}: {str(schema_err)[:120]}); "
-                        f"falling back to function_calling"
+                try:
+                    result = await _invoke_one_chain(chain_to_try, "json_schema")
+                except (NotImplementedError, ValueError) as schema_err:
+                    err_msg = str(schema_err).lower()
+                    if ("json_schema" in err_msg or "method" in err_msg
+                            or "schema" in err_msg or "supported" in err_msg):
+                        logger.warning(
+                            f"[{label}] json_schema unsupported "
+                            f"({type(schema_err).__name__}: {str(schema_err)[:120]}); "
+                            f"falling back to function_calling"
+                        )
+                        result = await _invoke_one_chain(chain_to_try, "function_calling")
+                    else:
+                        raise
+                if result is None:
+                    raise RuntimeError(
+                        f"[{label}] LiteLLM Router returned None (all healthy models "
+                        f"emitted non-parseable output). Triggers Self-Refine retry."
                     )
-                    result = await _invoke_with_method("function_calling")
-                else:
-                    raise
-            if result is None:
+                return result
+            except asyncio.TimeoutError as e:
                 raise RuntimeError(
-                    f"[{label}] LiteLLM Router returned None (all healthy models "
-                    f"emitted non-parseable output). Triggers Self-Refine retry."
+                    f"[{label}] exceeded outer {OUTER_TIMEOUT_SECONDS}s timeout — "
+                    f"LiteLLM Router exhausted its cascade or got stuck. "
+                    f"Last exception: {e}"
+                ) from e
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Phase 2 always-on ParetoBandit cascade routing (2026-05-14).
+    # Wrap the call in a top-K bandit cascade:
+    #   1. Build context vector (kd_process + chapter + temporal + load).
+    #   2. Bandit predicts top-K=3 deployments ranked by UCB.
+    #   3. Try each pinned chain in order. Submit error-class-typed reward
+    #      after each attempt.
+    #   4. If all bandit picks fail (or bandit machinery errors), fall
+    #      through to the original `llm` (Phase 1 simple-shuffle + full
+    #      40-deep cascade).
+    # KD_PARETO_BANDIT_DISABLE=1 hard-disables the bandit path.
+    # ─────────────────────────────────────────────────────────────────────
+    bandit_kd_process = _label_to_kd_process(_kd_process)
+    if not _bandit_disabled():
+        try:
+            from services import pareto_bandit
+            from services.llm_chain import build_pinned_chain_any
+
+            # Discover candidate deployments from the current Router.
+            target_group = getattr(llm, "model", None) or "kd-all"
+            router_obj = getattr(llm, "router", None)
+            candidates: list[str] = []
+            if router_obj is not None and hasattr(router_obj, "model_list"):
+                seen: set[str] = set()
+                for e in router_obj.model_list:
+                    if e.get("model_name") != target_group:
+                        continue
+                    m = e.get("litellm_params", {}).get("model")
+                    if m and m not in seen:
+                        seen.add(m)
+                        candidates.append(m)
+
+            if candidates:
+                # Build context vector — pull request features from langfuse_metadata
+                # if caller supplied them, else use safe defaults.
+                meta = langfuse_metadata or {}
+                ctx_vec = pareto_bandit.make_context_vector(
+                    bandit_kd_process,
+                    chapter_number=int(meta.get("chapter_number", 0) or 0),
+                    expected_hash_count=int(meta.get("expected_hash_count", 0) or 0),
+                    has_thinking_budget=bool(meta.get("has_thinking_budget", False)),
+                    vault_size=int(meta.get("vault_size", 0) or 0),
+                    recent_error_rates=None,    # populated by background task later
                 )
-            return result
-        except asyncio.TimeoutError as e:
-            raise RuntimeError(
-                f"[{label}] exceeded outer {OUTER_TIMEOUT_SECONDS}s timeout — "
-                f"LiteLLM Router exhausted its cascade or got stuck. "
-                f"Last exception: {e}"
-            ) from e
+                redis_for_bandit = await _get_bandit_redis()
+                top_k = await pareto_bandit.predict_top_k(
+                    bandit_kd_process, ctx_vec, candidates,
+                    redis=redis_for_bandit, k=3,
+                )
+
+                last_error: BaseException | None = None
+                for deployment_id, ucb_score, n_obs in top_k:
+                    pinned = build_pinned_chain_any(deployment_id, group=target_group)
+                    if pinned is None:
+                        continue
+                    t0 = time.time()
+                    try:
+                        result = await _try_chain(pinned)
+                        # Success — submit positive reward + feed ADWIN drift detector.
+                        latency_s = time.time() - t0
+                        reward = pareto_bandit.compose_reward(
+                            success=True, schema_valid=True,
+                            latency_s=latency_s, expected_latency_s=60.0,
+                        )
+                        asyncio.create_task(pareto_bandit.update(
+                            deployment_id, bandit_kd_process, ctx_vec, reward,
+                            redis=redis_for_bandit,
+                        ))
+                        # ADWIN drift detection — feed success indicator.
+                        try:
+                            from services import pareto_drift
+                            drifted = pareto_drift.feed_observation(
+                                deployment_id, bandit_kd_process, success=True,
+                            )
+                            if drifted:
+                                asyncio.create_task(pareto_drift.maybe_reset_cell(
+                                    deployment_id, bandit_kd_process,
+                                    redis=redis_for_bandit,
+                                ))
+                        except Exception:
+                            pass
+                        return result
+                    except Exception as call_err:
+                        error_class = _classify_llm_error(call_err)
+                        latency_s = time.time() - t0
+                        reward = pareto_bandit.compose_reward(
+                            success=False, latency_s=latency_s, error_class=error_class,
+                        )
+                        asyncio.create_task(pareto_bandit.update(
+                            deployment_id, bandit_kd_process, ctx_vec, reward,
+                            redis=redis_for_bandit,
+                        ))
+                        # ADWIN — feed failure indicator.
+                        try:
+                            from services import pareto_drift
+                            drifted = pareto_drift.feed_observation(
+                                deployment_id, bandit_kd_process, success=False,
+                            )
+                            if drifted:
+                                asyncio.create_task(pareto_drift.maybe_reset_cell(
+                                    deployment_id, bandit_kd_process,
+                                    redis=redis_for_bandit,
+                                ))
+                        except Exception:
+                            pass
+                        last_error = call_err
+                        logger.info(
+                            f"[{label}] bandit-pick {deployment_id} failed "
+                            f"({error_class}: {type(call_err).__name__}); "
+                            f"trying next bandit candidate"
+                        )
+                        continue
+
+                if last_error is not None:
+                    logger.warning(
+                        f"[{label}] all {len(top_k)} bandit picks failed; "
+                        f"falling back to Phase 1 simple-shuffle Router. "
+                        f"Last error: {type(last_error).__name__}"
+                    )
+        except Exception as bandit_err:
+            # Bandit infrastructure itself failed (e.g. Redis unavailable,
+            # import error). Fail-soft to Phase 1.
+            logger.warning(
+                f"[{label}] bandit machinery failed: "
+                f"{type(bandit_err).__name__}: {bandit_err}; using Phase 1 chain"
+            )
+
+    # Phase 1 fallback path — bandit disabled, exhausted, or errored.
+    return await _try_chain(llm)
 
 
 # =============================================================================

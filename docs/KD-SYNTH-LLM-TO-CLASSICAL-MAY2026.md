@@ -580,6 +580,17 @@ Wiring in `distiller.py::synthesize_chapter` at chapter start (after vault build
 - Planner-side chapter size caps (REDUCE step) — would prevent monster chapters from existing in the first place; complementary to Fix #1
 - LLM-generated sub-section headings — UX polish, no convergence impact
 
+### Forward reference — v2 rotator architecture
+
+The Scope B items 4 (Redis pyrate-limiter) + 5 (exponential cooldown) deferred above, plus Fix #2 v2 (adaptive pinning instead of round-robin), are materialized as a coherent 4-layer architecture in **`docs/KD-ROTATOR-V2-ARCHITECTURE-MAY2026.md`**. That doc:
+
+- Names a single opinionated v2 design (PILOT contextual bandit + DDSketch hedging + L1 semantic cache + OTel-pull control plane)
+- ROI-ranks the 4 shipping items (12-14 engineer-days total to industry-leading)
+- Documents what was REJECTED as performative complexity (Portkey, Kong AI Gateway, RouteLLM, Vowpal Wabbit, GPTCache full layer, etc.)
+- Sources every recommendation to May 2026 research (PILOT EMNLP 2025, Tail at Scale CACM 2013, RouterBench, GAMBITTS, hedge-python, etc.)
+
+The Observability section below is the **load-bearing pre-condition** for that architecture — without OTel data flowing into Mimir, the v2 control plane is ~2 weeks of extra infra work. With it, 3 days.
+
 ### Observability — OpenTelemetry dual-export (2026-05-12 night)
 
 Goal: per-deployment LLM performance data to drive data-driven rotator decisions instead of static benchmark ranking. The same pipeline doubles as study-level distributed tracing for debugging.

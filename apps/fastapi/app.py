@@ -17,6 +17,7 @@ from routers.v1.knowledge import distiller as knowledge_distiller
 from routers.v1.knowledge import ingestion as knowledge_ingestion
 from routers.v1.knowledge import inspect as knowledge_inspect
 from routers.v1.knowledge import resolve as knowledge_resolve
+from routers.v1.admin import rotator as admin_rotator
 from routers.v1 import tasks as tasks_router
 from routers.v1.youtube.helpers import (
     create_youtube_indexes,
@@ -178,8 +179,55 @@ async def lifespan(app: FastAPI):
     from services.llm_chain import (
         build_llm_fallback_chain,
         build_resolver_llm_chain,
+        init_dynamic_catalog,
     )
+    # Phase 1 rotator rebuild — populate per-step pools from live discovery +
+    # benchmark ranking BEFORE the first build_*_chain() (which materializes
+    # the LiteLLM Router with the current catalog). Fails soft to static
+    # catalog on any error. Toggle via KD_DYNAMIC_CATALOG env var (default ON).
+    await init_dynamic_catalog()
     app.state.llm = build_llm_fallback_chain()
+    # Phase 2 ParetoBandit warm-start (2026-05-14, ALWAYS-ON architecture).
+    # Initialize one bandit cell per (deployment, kd_process) pair from the
+    # existing Phase 1 catalog + benchmark composite scores. Cells live in
+    # Redis (90d TTL). The bandit drives routing from day 1 via
+    # helpers._invoke_structured_with_fallback's top-K cascade — and because
+    # warm-started cells use the SAME benchmark composite Phase 1 uses,
+    # day-1 picks == Phase 1 picks. Learning kicks in over time.
+    #
+    # KD_PARETO_BANDIT_DISABLE=1 hard-disables (emergency only). Default unset
+    # = bandit runs. No 3-state flag needed — warm-start makes shadow/live
+    # equivalent at startup.
+    if os.environ.get("KD_PARETO_BANDIT_DISABLE", "0").strip().lower() not in (
+        "1", "true", "yes", "on",
+    ):
+        try:
+            from services import pareto_bandit, benchmarks, discovery, llm_chain
+            by_provider = await discovery.list_all_alive_models()
+            alive = [r for records in by_provider.values() for r in records]
+            steps_map: dict[str, list[tuple[str, float]]] = {}
+            for step in pareto_bandit.KD_PROCESSES:
+                ranked = await benchmarks.rank_for_step(
+                    step, alive, redis=app.state.redis_aio,
+                )
+                step_entries = []
+                for rec, score in ranked:
+                    entry = llm_chain._record_to_entry(step, rec, timeout_s=120)
+                    if entry is None:
+                        continue
+                    deployment_id = entry["litellm_params"]["model"]
+                    step_entries.append((deployment_id, score))
+                steps_map[step] = step_entries[:30]
+            count = await pareto_bandit.init_bandit_warm_start(
+                steps_map, redis=app.state.redis_aio, overwrite=False,
+            )
+            print(f"ParetoBandit warm-start: {count} cells initialized (always-on).", flush=True)
+        except Exception as _e:
+            print(
+                f"ParetoBandit warm-start failed: {type(_e).__name__}: {_e} "
+                f"— continuing without bandit (Phase 1 fallback in helpers.py)",
+                flush=True,
+            )
     # Resolver-only chain — same 14 models, tight 30s/60s timeouts so a
     # stalled model cascades in 1 min on the request path (vs 5 min on the
     # general chain tuned for KD planner/synthesizer).
@@ -302,6 +350,12 @@ app.include_router(
     tasks_router.router,
     prefix = "/api/v1/tasks",
     tags = ["Tasks"],
+)
+
+app.include_router(
+    admin_rotator.router,
+    prefix = "/api/v1/admin",
+    tags = ["Admin — rotator discovery"],
 )
 
 

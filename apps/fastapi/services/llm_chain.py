@@ -762,10 +762,10 @@ def _get_router() -> Router:
         # state. The factory + helper functions select which group via the
         # `model=` arg on ChatLiteLLMRouter / Router.embedding.
         model_list=(
-            _all_entries()
+            _all_entries_current()
             + _keylm_entries()
-            + _reduce_label_entries()
-            + _synth_entries()
+            + _reduce_label_entries_current()
+            + _synth_entries_current()
             + _embed_entries()
         ),
         # simple-shuffle is recommended for production (LiteLLM docs): doesn't
@@ -895,15 +895,94 @@ def build_synth_pool_chain():
 # rather than cascading across the entire SYNTH_GROUP (which would
 # defeat the purpose of pinning).
 def pick_synth_deployment(seed: int) -> str:
+    """Deterministic chapter-pin (Fix #2). seed=chapter.number.
+
+    Round-robin across SYNTH_GROUP. Same seed → same model. Used as the
+    fallback path when bandit-driven pinning is disabled or fails.
     """
-    Deterministically pick one litellm model string from SYNTH_GROUP.
-    Same seed → same model. Different seeds spread across pool members.
-    """
-    entries = _synth_entries()
+    entries = _synth_entries_current()
     if not entries:
         raise RuntimeError("SYNTH_GROUP is empty — cannot pin a deployment")
     idx = seed % len(entries)
     return entries[idx]["litellm_params"]["model"]
+
+
+async def pick_synth_deployment_bandit(
+    seed: int,
+    *,
+    chapter_number: int = 0,
+    expected_hash_count: int = 0,
+    vault_size: int = 0,
+    has_thinking_budget: bool = False,
+) -> str:
+    """Bandit-driven chapter-pin (Phase 2 fix, 2026-05-14).
+
+    Replaces the static `chapter.number % N` round-robin with a per-chapter
+    ParetoBandit query. The bandit's top-1 pick — informed by warm-start
+    benchmark priors, accumulated production observations, AND ADWIN drift
+    detection — becomes the pinned deployment for the chapter's full
+    Phase A / C / refine cycle.
+
+    This is the architectural fix for the failure mode observed in
+    study 22da0586 (2026-05-14): round-robin pinning chose a model that
+    was hanging on `<think>` tokens, and the bandit's per-call cascade
+    couldn't help because the pinned chain had only 1 candidate. With
+    bandit-driven pinning, the bandit picks the best deployment AT
+    CHAPTER START, then per-call cascade still has continuity.
+
+    On any failure (bandit cells missing, Redis unavailable, etc.), falls
+    back to the deterministic round-robin via pick_synth_deployment(seed).
+    """
+    if os.environ.get("KD_PARETO_BANDIT_DISABLE", "0").strip().lower() in (
+        "1", "true", "yes", "on",
+    ):
+        return pick_synth_deployment(seed)
+
+    entries = _synth_entries_current()
+    if not entries:
+        raise RuntimeError("SYNTH_GROUP is empty — cannot pin a deployment")
+
+    try:
+        from services import pareto_bandit
+        import redis.asyncio as redis_aio_lib
+        host = _env("REDIS_HOST", "localhost")
+        port = _env("REDIS_PORT", "6379")
+        password = _env("REDIS_PASSWORD")
+        url = (f"redis://:{password}@{host}:{port}"
+               if password else f"redis://{host}:{port}")
+        rds = redis_aio_lib.from_url(url)
+        try:
+            candidates = [e["litellm_params"]["model"] for e in entries]
+            ctx = pareto_bandit.make_context_vector(
+                "kd-synth",
+                chapter_number=chapter_number,
+                expected_hash_count=expected_hash_count,
+                vault_size=vault_size,
+                has_thinking_budget=has_thinking_budget,
+            )
+            ranked = await pareto_bandit.predict_top_k(
+                "kd-synth", ctx, candidates, redis=rds, k=1,
+            )
+            if ranked:
+                deployment_id, ucb_score, n_obs = ranked[0]
+                logger.info(
+                    f"[bandit-pin] ch{chapter_number:02d} → "
+                    f"{deployment_id} (ucb={ucb_score:.4f}, n_obs={n_obs})"
+                )
+                return deployment_id
+        finally:
+            try:
+                await rds.aclose()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(
+            f"[bandit-pin] ch{chapter_number:02d} bandit pick failed "
+            f"({type(e).__name__}: {e}); falling back to round-robin"
+        )
+
+    # Bandit unavailable / errored / empty result — deterministic fallback.
+    return pick_synth_deployment(seed)
 
 
 # Per-process cache so we don't build a new Router for every chapter call.
@@ -911,6 +990,64 @@ def pick_synth_deployment(seed: int) -> str:
 # under the hood; one cache per process is the right scope (Celery prefork
 # workers each have their own).
 _pinned_chain_cache: dict[str, "ChatLiteLLMRouter"] = {}
+
+
+def build_pinned_chain_any(pinned_model: str, group: str | None = None):
+    """Generalized per-call pinning (Phase 2 enhancement #3, 2026-05-14).
+
+    Build a single-deployment ChatLiteLLMRouter for any litellm_params.model
+    string, searching across the current Phase 1 catalogs. Used by
+    helpers._invoke_structured_with_fallback when ParetoBandit picks a
+    specific deployment for this call.
+
+    Searches in priority: kd-synth → kd-reduce-label → kd-all (the
+    dynamic-catalog steps). If `group` is given, only that group is
+    searched. Falls back to None if the pinned_model isn't in any catalog
+    (caller falls through to original Phase 1 chain).
+    """
+    if pinned_model in _pinned_chain_cache:
+        return _pinned_chain_cache[pinned_model]
+
+    search_groups: list[tuple[str, list[dict]]] = []
+    if group is None or group == SYNTH_GROUP:
+        search_groups.append((SYNTH_GROUP, _synth_entries_current()))
+    if group is None or group == REDUCE_LABEL_GROUP:
+        search_groups.append((REDUCE_LABEL_GROUP, _reduce_label_entries_current()))
+    if group is None or group == GROUP:
+        search_groups.append((GROUP, _all_entries_current()))
+
+    matching_entry: dict | None = None
+    matched_group: str | None = None
+    for grp_name, entries in search_groups:
+        for e in entries:
+            if e["litellm_params"]["model"] == pinned_model:
+                matching_entry = e
+                matched_group = grp_name
+                break
+        if matching_entry is not None:
+            break
+
+    if matching_entry is None:
+        return None    # caller decides fallback
+
+    pinned_group = f"kd-pinned-{abs(hash(pinned_model)) & 0xFFFFFF:06x}"
+    fresh_entry = {
+        "model_name": pinned_group,
+        "litellm_params": dict(matching_entry["litellm_params"]),
+    }
+    pinned_router = Router(
+        model_list=[fresh_entry],
+        routing_strategy="simple-shuffle",
+        enable_pre_call_checks=True,
+        num_retries=3,
+        cooldown_time=30,
+        set_verbose=False,
+    )
+    chain = ChatLiteLLMRouter(
+        router=pinned_router, model=pinned_group, temperature=0.0,
+    )
+    _pinned_chain_cache[pinned_model] = chain
+    return chain
 
 
 def build_synth_pinned_chain(pinned_model: str):
@@ -931,7 +1068,7 @@ def build_synth_pinned_chain(pinned_model: str):
         return _pinned_chain_cache[pinned_model]
 
     matching = [
-        e for e in _synth_entries()
+        e for e in _synth_entries_current()
         if e["litellm_params"]["model"] == pinned_model
     ]
     if not matching:
@@ -1019,3 +1156,247 @@ def build_reduce_label_chain():
     )
 
 
+# =============================================================================
+# DYNAMIC CATALOG — discovery + benchmarks → top-K per step (Phase 1, 2026-05-14)
+# =============================================================================
+# When KD_DYNAMIC_CATALOG=1 (default) and init_dynamic_catalog() succeeds at
+# startup, the kd-all / kd-synth / kd-reduce-label groups are populated from:
+#
+#    services.discovery.list_all_alive_models()       (live free-tier models)
+#                          ↓
+#    services.benchmarks.rank_for_step(step, alive)   (composite scoring)
+#                          ↓
+#    top-K cut per step  → _record_to_entry() → LiteLLM model_list dict
+#
+# Falls back to the static catalog (_all_entries / _synth_entries /
+# _reduce_label_entries) on any failure. kd-keylm and kd-embed stay static —
+# kd-keylm needs tiny instruct LMs (≤3B params, no benchmark coverage), and
+# kd-embed is single-entry by cosine-geometry design.
+#
+# pick_synth_deployment() and build_synth_pinned_chain() both read from
+# _synth_entries_current() so per-chapter pinning stays consistent with the
+# Router's model_list (no orphan deployments).
+#
+# Cold-start sequence:
+#   FastAPI lifespan       → await init_dynamic_catalog() BEFORE build_*chain()
+#   Celery worker_process_init → init_dynamic_catalog_sync() at fork
+#   On failure              → static catalog, log warning, continue
+#
+# Disable via env: KD_DYNAMIC_CATALOG=0
+# =============================================================================
+_dynamic_entries: dict[str, list[dict]] = {}
+_dynamic_catalog_initialized: bool = False
+
+# Per-step top-K — picks the highest-benchmark slice of the discovered pool.
+# Larger K = more cascade depth + more cooldown redundancy; smaller K = tighter
+# rotator decisions. Calibrated against the v1 static catalog sizes.
+_DYNAMIC_TOP_K: dict[str, int] = {
+    "kd-all":           30,
+    "kd-synth":         12,
+    "kd-reduce-label":  10,
+}
+
+# Per-step group name + default per-deployment timeout (s). Reasoning-heavy
+# pools need longer; classification pools shorter.
+_DYNAMIC_STEP_TO_GROUP: dict[str, str] = {
+    "kd-all":           "kd-all",
+    "kd-synth":         "kd-synth",
+    "kd-reduce-label":  "kd-reduce-label",
+}
+_DYNAMIC_STEP_TIMEOUT_S: dict[str, int] = {
+    "kd-all":           120,
+    "kd-synth":         180,    # reasoning models burn <think> tokens
+    "kd-reduce-label":   90,    # non-reasoning, fast
+}
+
+
+def _record_to_entry(group: str, record, timeout_s: int) -> dict | None:
+    """Convert a discovery.DiscoveryRecord → LiteLLM model_list entry.
+
+    Dispatches by provider to the existing `_xxx_entry()` helpers so the
+    resulting dict shape is byte-identical to the static catalog. Returns
+    None for unsupported providers (SambaNova/DeepSeek-direct held disabled
+    in services/discovery.py).
+    """
+    p, m = record.provider, record.model_id
+    if not m:
+        return None
+    if p == "groq":      return _groq_entry(group, m, timeout_s=timeout_s)
+    if p == "nim":       return _nim_entry(group, m, timeout_s=timeout_s)
+    if p == "cerebras":  return _cerebras_entry(group, m, timeout_s=timeout_s)
+    if p == "mistral":   return _mistral_entry(group, m, timeout_s=timeout_s)
+    if p == "gemini":    return _gemini_entry(group, m, timeout_s=timeout_s)
+    if p == "zhipu":     return _zhipu_entry(group, m, timeout_s=timeout_s)
+    return None
+
+
+def _all_entries_current() -> list:
+    """Active catalog for kd-all — dynamic if available, else static fallback."""
+    if _dynamic_catalog_initialized and _dynamic_entries.get("kd-all"):
+        return _dynamic_entries["kd-all"]
+    return _all_entries()
+
+
+def _synth_entries_current() -> list:
+    """Active catalog for kd-synth — dynamic if available, else static fallback."""
+    if _dynamic_catalog_initialized and _dynamic_entries.get("kd-synth"):
+        return _dynamic_entries["kd-synth"]
+    return _synth_entries()
+
+
+def _reduce_label_entries_current() -> list:
+    """Active catalog for kd-reduce-label — dynamic if available, else static."""
+    if _dynamic_catalog_initialized and _dynamic_entries.get("kd-reduce-label"):
+        return _dynamic_entries["kd-reduce-label"]
+    return _reduce_label_entries()
+
+
+def _build_redis_url_for_bench() -> str | None:
+    """Construct Redis URL from env vars for benchmark cache (90d TTL)."""
+    host = _env("REDIS_HOST")
+    if not host:
+        return None
+    port = _env("REDIS_PORT", "6379")
+    password = _env("REDIS_PASSWORD")
+    if password:
+        return f"redis://:{password}@{host}:{port}"
+    return f"redis://{host}:{port}"
+
+
+async def init_dynamic_catalog() -> bool:
+    """Populate _dynamic_entries from live discovery + benchmark ranking.
+
+    Idempotent — re-calling is a no-op once initialized successfully.
+    Call from FastAPI lifespan startup BEFORE the first build_*_chain().
+    Returns True on success (dynamic catalog active), False if it fell back
+    to the static catalog.
+
+    Behavior:
+      - KD_DYNAMIC_CATALOG=0 → skip entirely, use static.
+      - Discovery returns 0 models → fall back, log warning.
+      - Benchmark fetch raises → fall back, log warning.
+      - Per-step top-K is empty (all unscored AND no static fallback) → still
+        materialize Router with whatever the static catalog returns.
+    """
+    global _dynamic_catalog_initialized, _dynamic_entries
+
+    if _dynamic_catalog_initialized:
+        return True
+
+    flag = os.environ.get("KD_DYNAMIC_CATALOG", "1").strip().lower()
+    if flag not in ("1", "true", "yes", "on"):
+        logger.info("[llm-chain] KD_DYNAMIC_CATALOG=0 — using static catalog")
+        return False
+
+    try:
+        from services import discovery, benchmarks
+        import redis.asyncio as redis_aio
+
+        redis_url = _build_redis_url_for_bench()
+        rds = redis_aio.from_url(redis_url) if redis_url else None
+
+        try:
+            by_provider = await discovery.list_all_alive_models()
+            alive = [r for records in by_provider.values() for r in records]
+            if not alive:
+                raise RuntimeError("discovery returned 0 alive models")
+            logger.info(
+                f"[llm-chain] dynamic catalog: discovery returned "
+                f"{len(alive)} models across {len(by_provider)} providers"
+            )
+
+            for step, top_k in _DYNAMIC_TOP_K.items():
+                group_name = _DYNAMIC_STEP_TO_GROUP[step]
+                timeout_s = _DYNAMIC_STEP_TIMEOUT_S[step]
+                try:
+                    ranked = await benchmarks.rank_for_step(step, alive, redis=rds)
+                except Exception as e:
+                    logger.warning(
+                        f"[llm-chain] rank_for_step({step}) failed: "
+                        f"{type(e).__name__}: {e}; using static for this step"
+                    )
+                    continue
+
+                # Take top-K with composite_score > 0 first, then fill with
+                # unscored top-tier-fallback entries until we hit top_k or
+                # exhaust the ranked list.
+                scored_top: list = []
+                unscored_top: list = []
+                for record, score in ranked:
+                    if score > 0:
+                        scored_top.append(record)
+                    else:
+                        unscored_top.append(record)
+                pool_records = scored_top[:top_k]
+                # Backfill with unscored (provider-tier-sorted) if we have
+                # room — keeps the pool deep enough for cooldown redundancy.
+                if len(pool_records) < top_k:
+                    pool_records.extend(unscored_top[: top_k - len(pool_records)])
+
+                entries: list[dict] = []
+                seen_litellm_models: set[str] = set()
+                for r in pool_records:
+                    entry = _record_to_entry(group_name, r, timeout_s)
+                    if entry is None:
+                        continue
+                    # Dedupe by litellm_params.model so we don't include the
+                    # same (provider, model_id) twice in one pool.
+                    key = entry["litellm_params"]["model"]
+                    if key in seen_litellm_models:
+                        continue
+                    seen_litellm_models.add(key)
+                    entries.append(entry)
+
+                if entries:
+                    _dynamic_entries[step] = entries
+                    logger.info(
+                        f"[llm-chain] dynamic catalog: {step} → "
+                        f"{len(entries)} entries (top-K={top_k})"
+                    )
+                else:
+                    logger.warning(
+                        f"[llm-chain] dynamic catalog: {step} produced 0 "
+                        f"entries; static fallback for this step"
+                    )
+        finally:
+            if rds:
+                try:
+                    await rds.aclose()
+                except Exception:
+                    pass
+
+        # Mark initialized if at least one step got dynamic entries
+        if _dynamic_entries:
+            _dynamic_catalog_initialized = True
+            logger.info(
+                f"[llm-chain] dynamic catalog ACTIVE for: "
+                f"{sorted(_dynamic_entries.keys())}"
+            )
+            return True
+        logger.warning("[llm-chain] dynamic catalog: 0 steps populated; full static fallback")
+        return False
+
+    except Exception as e:
+        logger.warning(
+            f"[llm-chain] dynamic catalog init failed: "
+            f"{type(e).__name__}: {e}; using static catalog"
+        )
+        _dynamic_entries.clear()
+        _dynamic_catalog_initialized = False
+        return False
+
+
+def init_dynamic_catalog_sync() -> bool:
+    """Sync wrapper for non-async callers (Celery worker_process_init).
+
+    Spins up a private event loop. Do NOT call from inside an existing loop.
+    """
+    import asyncio
+    try:
+        return asyncio.run(init_dynamic_catalog())
+    except Exception as e:
+        logger.warning(
+            f"[llm-chain] init_dynamic_catalog_sync failed: "
+            f"{type(e).__name__}: {e}"
+        )
+        return False

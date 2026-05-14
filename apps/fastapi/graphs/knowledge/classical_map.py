@@ -98,12 +98,27 @@ LABEL_TEXT_CAP = 1500
 # KeyLLM generation tunables — deterministic by design.
 KEYLM_MAX_TOKENS = 16  # 2-4 words ≈ 8-12 BPE tokens; +4 buffer for whitespace
 
-# Concurrency cap on KeyLLM rotator calls. Free-tier RPM on the small-LM
-# providers (NIM ~40 RPM, Groq generous) is plenty for our ~33 calls/study
-# but we cap at 4 to keep the request rate predictable + avoid 429 storms
-# on simultaneous shard bursts. The Router's allowed_fails_policy will
-# cool down a deployment that 429s anyway, but capping is cheaper.
-KEYLM_CONCURRENCY = 4
+# Concurrency cap on KeyLLM rotator calls.
+#
+# 2026-05-12 night reduction: 4 → 2 after planner phase stalled for 21+ min
+# on study 7d1e9130. Root cause: the kd-keylm pool has only 2 NIM
+# deployments (llama-3.2-1b + 3b). With KEYLM_CONCURRENCY=4 and one
+# deployment in cooldown (after 3 timeouts → 60s cooldown per
+# allowed_fails_policy), all 4 concurrent calls hammered the surviving
+# deployment, exceeding its 40 RPM ceiling → cascade retries until
+# cooldown clears → deployment 2 also cools down → grind.
+#
+# With KEYLM_CONCURRENCY=2: at most 2 calls in flight, one per
+# deployment in the healthy case. If one deployment cools down, the
+# other handles 2 calls at a time — still under its 40 RPM (sustained
+# 2 in-flight × 30s avg = 4 calls/min). Linear throughput, no retry
+# storm. Expected planner phase: ~6 min for ~24 cluster labels.
+#
+# Bigger architectural fix (deferred to v2): hierarchical fallback —
+# when kd-keylm is saturated, fall through to kd-reduce-label (8
+# deployments, larger models but much wider RPM headroom). Documented
+# in `docs/KD-ROTATOR-V2-ARCHITECTURE-MAY2026.md` L5 control plane.
+KEYLM_CONCURRENCY = 2
 
 
 # Lazy module-level singleton — built on first call, reused thereafter.

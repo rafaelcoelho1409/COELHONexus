@@ -35,6 +35,7 @@ dependencies = [
     "diskcache>=5.6",          # R7 (2026-05-11): on-disk cache for kd-embed vectors keyed on (model_id, sha256(text)) — skips NIM round-trips on same-corpus re-runs during tuning loops. Pure-Python, no system deps, fork-safe.
     "flashrank",               # Cross-encoder reranker (local, no API cost)
     "rapidfuzz",               # Fuzzy string matching for entity resolution
+    "river>=0.21",             # Phase 2 (2026-05-14): river.drift.ADWIN for ParetoBandit cell drift detection — regime-shift alarm faster than geometric forgetting
     "textstat>=0.7.13",        # Phase 1.2 (2026-05-13): readability formulas (Flesch-Kincaid, Coleman-Liau, Dale-Chall, etc.) for grader_classical.score_complexity_appropriate. Pure Python, no inference, no GPU. Targets user_profile.level → expected grade band.
     "qdrant-client",           # Qdrant vector database client
     "neo4j",

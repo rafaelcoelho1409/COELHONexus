@@ -28,7 +28,11 @@ observability:
 #   LangFuse for distinguishing the FastAPI process from Celery workers
 #   (same service.name "coelhonexus-fastapi" but different process.pid).
 otel:
-  alloy_endpoint: "http://alloy.monitoring.svc.cluster.local:4317"
+  # NOTE 2026-05-12 night: corrected from `alloy.monitoring` after empirical
+  # validation. Cluster's Alloy service lives in the `alloy` namespace (the
+  # service name is `alloy`, ports 12345/4317/4318). The OTLP gRPC receiver
+  # is on 4317. Verified via `kubectl get svc -A | grep alloy`.
+  alloy_endpoint: "http://alloy.alloy.svc.cluster.local:4317"
   langfuse_otlp_endpoint: "http://langfuse-web.langfuse.svc.cluster.local:3000/api/public/otel"
   service_name: "coelhonexus-fastapi"
   service_version: "1.0.0"
@@ -211,6 +215,33 @@ kd:
   # tuning; per-shard mode (label_shards_classical, the validated stable
   # path) is the safe default for both Docker and Terragrunt.
   globalMap: "0"
+
+  # Phase 1 rotator rebuild (2026-05-14):
+  # When "1" (default), services/llm_chain.py builds the LiteLLM Router's
+  # model_list from live provider /v1/models discovery + 3-source benchmark
+  # composite ranking instead of the static hand-curated catalog. Falls back
+  # to the static catalog on ANY error (discovery network failure, benchmark
+  # source down, empty results) so studies never break on catalog issues.
+  #
+  # Set "0" to force-disable and use the static catalog (debugging fallback).
+  #
+  # Architecture: discovery.list_all_alive_models() → benchmarks.rank_for_step(step)
+  #            → top-K cut per step → _record_to_entry() → LiteLLM model_list dict
+  # Per-step top-K: kd-all=30, kd-synth=12, kd-reduce-label=10.
+  # kd-keylm + kd-embed stay STATIC by design (tiny LMs + single embedding model).
+  dynamicCatalog: "1"
+
+  # Phase 2 — ParetoBandit ALWAYS-ON adaptive routing (2026-05-14):
+  # The bandit runs from day 1 via top-K cascade in helpers._invoke_structured_with_fallback.
+  # Warm-start from the benchmark composite means Day-1 picks == Phase 1 picks; learning
+  # emerges over time from per-call reward signal (success / schema_valid / latency / hash_recall /
+  # error_class) combined with river.drift.ADWIN regime-shift detection.
+  #
+  # Single escape hatch only — set `paretoBanditDisable: "1"` to fully disable
+  # (emergency rollback to Phase 1 simple-shuffle). Default "0" = bandit runs.
+  #
+  # See docs/KD-ROTATOR-ALWAYS-ON-BANDIT-MAY2026.md for the full architecture.
+  paretoBanditDisable: "0"
 
 # SearXNG — in-cluster metasearch used by Knowledge Distiller to resolve
 # official documentation URLs (and any future web-search need). Internal DNS

@@ -91,6 +91,16 @@ KD_LLM_GLOBAL_CONCURRENCY: "{{ .Values.kd.llmGlobalConcurrency }}"
 # instead of per-shard. See `kd.globalMap` in values.yaml and `_use_global_map`
 # in graphs/knowledge/distiller.py.
 KD_GLOBAL_MAP: "{{ .Values.kd.globalMap }}"
+# Phase 1 rotator rebuild (2026-05-14): when "1", build the LiteLLM Router's
+# model_list from live discovery (services/discovery.py) + benchmark ranking
+# (services/benchmarks.py) instead of the hand-curated static catalog in
+# services/llm_chain.py. Falls back to static catalog on any error.
+# See kd.dynamicCatalog in values.yaml.
+KD_DYNAMIC_CATALOG: "{{ .Values.kd.dynamicCatalog }}"
+# Phase 2 — ParetoBandit ALWAYS-ON adaptive routing (2026-05-14): the bandit
+# runs by default; set "1" to disable (emergency rollback to Phase 1).
+# See kd.paretoBanditDisable in values.yaml + docs/KD-ROTATOR-ALWAYS-ON-BANDIT-MAY2026.md.
+KD_PARETO_BANDIT_DISABLE: "{{ .Values.kd.paretoBanditDisable }}"
 {{- end -}}
 
 

@@ -221,3 +221,27 @@ def _init_otel_per_worker(**_kwargs) -> None:
             f"[worker-init] OTel init failed ({type(e).__name__}: {e}); "
             f"continuing without observability"
         )
+
+
+@worker_process_init.connect
+def _init_dynamic_catalog_per_worker(**_kwargs) -> None:
+    """Phase 1 (2026-05-14): populate the rotator's dynamic catalog per worker.
+
+    Each Celery prefork worker has its own Python process — must run discovery
+    + benchmark ranking once at boot so build_*_chain() factories see the
+    same per-step pools the FastAPI lifespan populated. Falls back to the
+    static catalog on any error.
+
+    Toggle via env: KD_DYNAMIC_CATALOG=0 disables and uses static.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        from services.llm_chain import init_dynamic_catalog_sync
+        ok = init_dynamic_catalog_sync()
+        logger.info(f"[worker-init] dynamic catalog init: ok={ok}")
+    except Exception as e:
+        logger.warning(
+            f"[worker-init] dynamic catalog init failed "
+            f"({type(e).__name__}: {e}); using static catalog"
+        )

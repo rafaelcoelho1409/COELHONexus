@@ -827,9 +827,21 @@ class KnowledgeDistillerGraph:
         if _pin_chapter_model:
             try:
                 from services.llm_chain import (
-                    pick_synth_deployment, build_synth_pinned_chain,
+                    pick_synth_deployment_bandit,
+                    build_synth_pinned_chain,
                 )
-                _pinned_model_id = pick_synth_deployment(chapter.number)
+                # Bandit-driven chapter pin (Phase 2, 2026-05-14): replaces
+                # the round-robin `chapter.number % N` with a ParetoBandit
+                # query that incorporates warm-start benchmark priors + any
+                # accumulated observations + ADWIN drift state. Internally
+                # falls back to the deterministic round-robin on bandit error.
+                _pinned_model_id = await pick_synth_deployment_bandit(
+                    chapter.number,
+                    chapter_number=chapter.number,
+                    expected_hash_count=len(code_vault),
+                    vault_size=len(code_vault),
+                    has_thinking_budget=False,
+                )
                 llm = build_synth_pinned_chain(_pinned_model_id)
                 logger.info(
                     f"[synth][ch{chapter.number:02d}] PIN-CHAPTER-MODEL: "
