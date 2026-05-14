@@ -989,7 +989,13 @@ class KnowledgeDistillerGraph:
         # iter 2 (16 missing, an over-correction) → iter 3 (5 issues) →
         # iter 4 (44 issues) — budget wasted and best-seen lost.
         prev_n_issues: int | None = None
-        _AUDIT_REGRESSION_FACTOR = 3
+        # Tightened 2026-05-14 from 3 → 1.5 after Terragrunt canary ch01 went
+        # iter 1 (8 issues: 1 missing + 5 dup + 2 thin) → iter 2 (14 issues:
+        # 7 missing + 5 dup + 2 thin), ratio=1.75× — should have early-stopped
+        # at iter 2 but 1.75 < 3.0 so the regression flew through. Setting to
+        # 1.5 catches the common "refiner over-correction" pattern (Huang
+        # 2024 §3.3) where one bad iter doubles issue count.
+        _AUDIT_REGRESSION_FACTOR = 1.5
 
         # 0b) Tier 3 #13 extension (2026-04-24) — per-iteration partial cache.
         # Run-8 lost chapters that reached real grader scores (0.71 / 0.73)
@@ -1222,8 +1228,23 @@ class KnowledgeDistillerGraph:
                 _vault_size = max(1, len(code_vault))
                 _missing_ratio = len(missing) / _vault_size
                 _missing_blocks_accept = _missing_ratio > _MISSING_TOLERANCE_PCT
+                # Fix #5 (2026-05-14): relax duplicated-hash tolerance. After
+                # Phase A.5 bucket-split, the SAME code-hash legitimately
+                # appears in sibling sub-sections of one parent (the splitter
+                # copies code_refs across the new sub-sections to keep each
+                # bucket complete). Treating any duplication as a refine
+                # trigger forces unnecessary iters — Terragrunt canary ch01
+                # had 5 duplicated hashes that didn't move across iter 0/1/2,
+                # confirming they're structural, not refiner-fixable.
+                # Limit chosen to cover typical A.5 split (~3 sub-sections,
+                # each potentially duplicating 1-3 shared hashes).
+                _DUPLICATED_REFS_ACCEPT_LIMIT = 8
+                _duplicated_blocks_accept = (
+                    len(duplicated_refs) > _DUPLICATED_REFS_ACCEPT_LIMIT
+                )
                 if (_missing_blocks_accept or invented or fence_sections
-                        or duplicated_refs or empty_sections or _thin_blocks_accept):
+                        or _duplicated_blocks_accept or empty_sections
+                        or _thin_blocks_accept):
                     logger.warning(
                         f"[synth][ch{chapter.number:02d}] iter {iteration} "
                         f"structured-output audit FAILED: "
