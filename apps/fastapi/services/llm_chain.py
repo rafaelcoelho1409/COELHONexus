@@ -907,6 +907,23 @@ def pick_synth_deployment(seed: int) -> str:
     return entries[idx]["litellm_params"]["model"]
 
 
+# Per-provider chapter-pin caps (Batch 2 speed fix, 2026-05-14).
+# When N concurrent chapters all hit the same provider's pool, the per-process
+# asyncio semaphore in helpers.py serializes them and effective concurrency
+# drops. Distributing chapter-pins ACROSS providers via Redis-backed slot
+# reservations restores wall-clock parallelism. Caps match helpers._PROVIDER_
+# CONCURRENCY (the per-process limit); chapter-level slot is conservative —
+# fewer concurrent chapters per provider than concurrent calls.
+_PROVIDER_CHAPTER_CAPS: dict[str, int] = {
+    "nvidia_nim": 2,
+    "groq":       2,
+    "cerebras":   2,
+    "mistral":    3,
+    "gemini":     1,
+    "openai":     2,
+}
+
+
 async def pick_synth_deployment_bandit(
     seed: int,
     *,
@@ -960,16 +977,69 @@ async def pick_synth_deployment_bandit(
                 vault_size=vault_size,
                 has_thinking_budget=has_thinking_budget,
             )
+            # Phase 3 fix (2026-05-14): request top-K=5 (was 3) so the
+            # provider-aware reservation pass below has more alternatives
+            # to fall through to when the highest-scoring provider's slots
+            # are full. Canary v7 evidence: bandit top-3 were all NIM, so
+            # without provider-aware reservation, NIM saturated and the
+            # cascade fell through to round-robin instead of picking from
+            # a less-saturated provider.
             ranked = await pareto_bandit.predict_top_k(
-                "kd-synth", ctx, candidates, redis=rds, k=1,
+                "kd-synth", ctx, candidates, redis=rds, k=5,
             )
-            if ranked:
-                deployment_id, ucb_score, n_obs = ranked[0]
+            # Iterate top-K and atomically reserve the first available
+            # (provider_slot, deployment) pair. Provider slot is claimed
+            # FIRST; if successful, deployment slot is then claimed. If
+            # deployment slot fails, the provider slot is released so it
+            # doesn't leak. TTL=1800s for both — matches expected chapter
+            # duration; stale slots self-heal via TTL expiry.
+            for deployment_id, ucb_score, n_obs in ranked:
+                provider = (deployment_id.split("/", 1)[0]
+                            if "/" in deployment_id else deployment_id)
+                provider_cap = _PROVIDER_CHAPTER_CAPS.get(provider, 2)
+                # Step 1: try to claim a provider slot.
+                slot = await pareto_bandit.try_reserve_provider_slot(
+                    provider, redis=rds,
+                    max_slots=provider_cap, ttl_s=1800,
+                )
+                if slot is None:
+                    logger.info(
+                        f"[bandit-pin] ch{chapter_number:02d} skipping "
+                        f"{deployment_id} (provider {provider!r} full at "
+                        f"{provider_cap} chapters); trying next"
+                    )
+                    continue
+                # Step 2: try to claim the deployment slot.
+                reserved = await pareto_bandit.try_reserve(
+                    deployment_id, "kd-synth", redis=rds, ttl_s=1800,
+                )
+                if not reserved:
+                    # Release the provider slot we just acquired — another
+                    # chapter holds the deployment lock; we'd be double-
+                    # booking otherwise.
+                    await pareto_bandit.release_provider_slot(
+                        provider, slot, redis=rds,
+                    )
+                    logger.info(
+                        f"[bandit-pin] ch{chapter_number:02d} skipping "
+                        f"{deployment_id} (deployment already reserved); "
+                        f"trying next"
+                    )
+                    continue
                 logger.info(
                     f"[bandit-pin] ch{chapter_number:02d} → "
-                    f"{deployment_id} (ucb={ucb_score:.4f}, n_obs={n_obs})"
+                    f"{deployment_id} (ucb={ucb_score:.4f}, "
+                    f"n_obs={n_obs}, reserved, "
+                    f"provider_slot={provider}:{slot})"
                 )
                 return deployment_id
+            # All top-K provider/deployment combos saturated — let
+            # round-robin pick across the full pool (no slot accounting).
+            logger.warning(
+                f"[bandit-pin] ch{chapter_number:02d} all top-{len(ranked)} "
+                f"provider/deployment slots saturated; "
+                f"falling through to round-robin"
+            )
         finally:
             try:
                 await rds.aclose()
@@ -990,6 +1060,40 @@ async def pick_synth_deployment_bandit(
 # under the hood; one cache per process is the right scope (Celery prefork
 # workers each have their own).
 _pinned_chain_cache: dict[str, "ChatLiteLLMRouter"] = {}
+
+
+# Pinned-group → parent-group registry (Phase 3 fix, 2026-05-14).
+# When build_synth_pinned_chain / build_pinned_chain_any wraps a deployment
+# in a single-entry Router, the resulting chain's `.model` attribute is the
+# hashed pinned group (e.g. "kd-synth-pinned-abc123"). Downstream callers
+# (helpers.py per-call cascade) need the PARENT pool name to enumerate
+# alternative candidates — without this, the cascade collapses to k=1 and
+# can't escape a failing chapter pin. See canary v4 evidence in
+# docs/KD-NEXT-STEPS-2026-05-14.md.
+_pinned_to_parent: dict[str, str] = {}
+
+
+def get_parent_group(pinned_or_parent: str | None) -> str | None:
+    """Return the parent pool name (kd-synth / kd-all / kd-reduce-label) for
+    a pinned-group hash, or None if the input is already a parent group or
+    unknown. Caller should treat None as "input is already a parent group"
+    and fall through."""
+    if not pinned_or_parent:
+        return None
+    return _pinned_to_parent.get(pinned_or_parent)
+
+
+def get_entries_for_group(group: str) -> list:
+    """Return the current model entries for a parent pool name. Used by the
+    bandit cascade to enumerate candidate deployments when the caller's llm
+    is a pinned (single-entry) chain."""
+    if group == SYNTH_GROUP:
+        return _synth_entries_current()
+    if group == REDUCE_LABEL_GROUP:
+        return _reduce_label_entries_current()
+    if group == GROUP:
+        return _all_entries_current()
+    return []
 
 
 def build_pinned_chain_any(pinned_model: str, group: str | None = None):
@@ -1047,6 +1151,7 @@ def build_pinned_chain_any(pinned_model: str, group: str | None = None):
         router=pinned_router, model=pinned_group, temperature=0.0,
     )
     _pinned_chain_cache[pinned_model] = chain
+    _pinned_to_parent[pinned_group] = matched_group or GROUP
     return chain
 
 
@@ -1096,6 +1201,7 @@ def build_synth_pinned_chain(pinned_model: str):
         router=pinned_router, model=pinned_group, temperature=0.0,
     )
     _pinned_chain_cache[pinned_model] = chain
+    _pinned_to_parent[pinned_group] = SYNTH_GROUP
     return chain
 
 

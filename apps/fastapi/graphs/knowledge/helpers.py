@@ -1502,6 +1502,32 @@ async def _write_manifest_json(
 # sharing via Redis-backed pyrate-limiter is Scope B item #4 — deferred
 # until per-process cap is empirically validated.
 _LLM_GLOBAL_SEMAPHORE: asyncio.Semaphore | None = None
+_LLM_PROVIDER_SEMAPHORES: dict[str, asyncio.Semaphore] = {}
+
+# Per-provider concurrency caps (Phase 3 fix, 2026-05-14; tuned Batch 3 same
+# day). Canary v6 evidence: 3 concurrent chapters all picked NIM deployments
+# and collectively exhausted NIM's ~40 RPM budget, producing ~10 min of
+# `Retrying request` stalls. Canary v7 at NIM=2 capped retries to 41 over
+# 2h study — too conservative; throughput dropped to effective 2-chapter
+# parallelism.
+#
+# Batch 3 tuning (2026-05-14): bumped NIM 2→4, Mistral 3→4. NIM free-tier
+# is 40 RPM PER MODEL; 4 concurrent calls × 30s/call = ~8 RPM total per
+# model (well under cap). The bandit cascade naturally spreads NIM picks
+# across multiple models, so aggregate provider-level pressure stays
+# below RPM cap even at 4-6 concurrent.
+#
+# Per-provider semaphores convert deployment-diversity into provider-
+# diversity: when NIM slots are full, the cascade picks a Groq/Cerebras/
+# Mistral/Gemini deployment instead of queueing behind NIM.
+_PROVIDER_CONCURRENCY: dict[str, int] = {
+    "nvidia_nim": 4,    # 2→4 (canary v7 showed NIM was the throughput limiter)
+    "groq":       2,
+    "cerebras":   2,
+    "mistral":    4,    # 3→4
+    "gemini":     1,    # tightest free-tier RPM
+    "openai":     2,    # Zhipu-style endpoints; only present if re-enabled
+}
 
 
 def _get_llm_semaphore() -> asyncio.Semaphore:
@@ -1509,7 +1535,8 @@ def _get_llm_semaphore() -> asyncio.Semaphore:
     Module-level lazy singleton. Cap configurable via env (default 10).
     Lazy because asyncio.Semaphore binds to the running event loop;
     Celery prefork workers each have their own loop and need their own
-    Semaphore instance.
+    Semaphore instance. Used by the Phase 1 fallback path (full-pool chain)
+    where we don't know which provider will be picked.
     """
     global _LLM_GLOBAL_SEMAPHORE
     if _LLM_GLOBAL_SEMAPHORE is None:
@@ -1520,6 +1547,34 @@ def _get_llm_semaphore() -> asyncio.Semaphore:
             f"with cap={cap} (per process)"
         )
     return _LLM_GLOBAL_SEMAPHORE
+
+
+def _provider_of(deployment_id: str | None) -> str:
+    """Extract the provider prefix from a litellm deployment id like
+    `nvidia_nim/qwen/qwen3.5-397b-a17b` → `nvidia_nim`. Falls back to
+    `unknown` for malformed/empty inputs."""
+    if not deployment_id:
+        return "unknown"
+    return deployment_id.split("/", 1)[0] or "unknown"
+
+
+def _get_provider_semaphore(deployment_id: str | None) -> asyncio.Semaphore:
+    """Lazy per-provider semaphore. Used when the caller has already pinned
+    a specific deployment (bandit cascade picks, re-picks); the per-provider
+    cap gates concurrent calls to the same provider's free-tier RPM budget.
+
+    Unknown providers fall back to cap=2 so a misconfigured catalog can't
+    monopolize a process."""
+    global _LLM_PROVIDER_SEMAPHORES
+    p = _provider_of(deployment_id)
+    if p not in _LLM_PROVIDER_SEMAPHORES:
+        cap = _PROVIDER_CONCURRENCY.get(p, 2)
+        _LLM_PROVIDER_SEMAPHORES[p] = asyncio.Semaphore(cap)
+        logger.info(
+            f"[llm-concurrency] provider semaphore initialized: "
+            f"{p}={cap} (per process)"
+        )
+    return _LLM_PROVIDER_SEMAPHORES[p]
 
 
 # =============================================================================
@@ -1550,6 +1605,28 @@ _LABEL_TO_KD_PROCESS: dict[str, str] = {
 
 def _label_to_kd_process(label_word: str) -> str:
     return _LABEL_TO_KD_PROCESS.get((label_word or "").lower(), "kd-all")
+
+
+# Chapter-scoped failed-arm + in-flight blacklist key extraction.
+# Bandit timing fix (2026-05-14, canary v8 evidence): concurrent Phase C
+# section-cascade queries fire 8-14 picks before any reward lands, so the
+# bandit keeps re-picking the same dead arm. Per-chapter blacklist (Redis
+# set, 30-min TTL) lets us mark arms as "in-flight" or "failed this chapter"
+# so subsequent picks skip them locally — even while the global bandit
+# cell state is still propagating updates.
+_LABEL_CHAPTER_RE = re.compile(r"ch(\d{1,3})", re.IGNORECASE)
+
+
+def _extract_chapter_id(label: str | None) -> str | None:
+    """Return `ch04`-style chapter id from a label like `synth ch04` or
+    `hierarchical-section-ch04-sec07`. Returns None for non-chapter labels
+    (planner, curator, etc.) — those skip the chapter blacklist."""
+    if not label:
+        return None
+    m = _LABEL_CHAPTER_RE.search(label)
+    if not m:
+        return None
+    return f"ch{m.group(1).zfill(2)}"
 
 
 def _classify_llm_error(e: BaseException) -> str:
@@ -1662,12 +1739,15 @@ async def _invoke_structured_with_fallback(
     # ainvoke() that walks healthy deployments and auto-cools down the
     # broken ones via Redis TTL cache.
     from services.knowledge.langfuse_client import langfuse_config
-    # 2026-04-24: raised 600 → 1200 after Run-8 evidence showed 6/9 chapters
-    # hitting the outer timeout mid-cascade. With per-entry timeouts
-    # now uniformly capped at 120s in llm_chain.py, 10 cold entries = 1200s
-    # worst case (matching this budget). Realistically most cascades complete
-    # well under 300s.
-    OUTER_TIMEOUT_SECONDS = 1200
+    # 2026-05-14 (Batch 1 speed fix): lowered 1200 → 300 after canary v7
+    # evidence that the prior 1200s budget burned 20 full minutes on a
+    # single stuck deepseek-v4-flash call before the outer asyncio.wait_for
+    # fired. The inner LiteLLM Router's 40-retry × per-error-class budget
+    # is already bounded at <120s per healthy provider; legitimate cascades
+    # complete in <90s. 300s gives generous headroom while bounding the
+    # cost of a wedged provider call to 5 min instead of 20.
+    # History: 2026-04-24 raised 600 → 1200 (Run-8). Reverted past that.
+    OUTER_TIMEOUT_SECONDS = 300
 
     # `kd_process` derived from `label` (which has shape "<process> ch<NN>" or
     # similar — e.g. "synth ch01", "grade ch03", "outline ch02"). OTel +
@@ -1696,10 +1776,19 @@ async def _invoke_structured_with_fallback(
             timeout = OUTER_TIMEOUT_SECONDS,
         )
 
-    async def _try_chain(chain_to_try: Any):
+    async def _try_chain(chain_to_try: Any, *, pinned_deployment: str | None = None):
         """Existing 2-method (json_schema → function_calling) try, parameterized
-        on which Router chain to invoke. Raises on terminal failure."""
-        async with _get_llm_semaphore():
+        on which Router chain to invoke. Raises on terminal failure.
+
+        pinned_deployment: when the caller already knows which specific
+        deployment will be called (bandit cascade picks, re-picks), pass
+        the deployment_id so we can gate on the per-provider semaphore
+        instead of the cluster-wide global one. Phase 1 fallback (full
+        pool, unknown provider) leaves this None and uses the global
+        semaphore."""
+        sem = (_get_provider_semaphore(pinned_deployment)
+               if pinned_deployment else _get_llm_semaphore())
+        async with sem:
             try:
                 try:
                     result = await _invoke_one_chain(chain_to_try, "json_schema")
@@ -1744,21 +1833,32 @@ async def _invoke_structured_with_fallback(
     if not _bandit_disabled():
         try:
             from services import pareto_bandit
-            from services.llm_chain import build_pinned_chain_any
+            from services.llm_chain import (
+                build_pinned_chain_any,
+                get_parent_group,
+                get_entries_for_group,
+            )
 
             # Discover candidate deployments from the current Router.
-            target_group = getattr(llm, "model", None) or "kd-all"
-            router_obj = getattr(llm, "router", None)
+            # Phase 3 fix (2026-05-14): when `llm` is a chapter-pinned chain,
+            # its `.model` attribute is the hashed pinned group (e.g.
+            # "kd-synth-pinned-abc123"), NOT the parent pool name. Resolve
+            # via the pinned→parent registry so the cascade can enumerate
+            # the full pool of alternatives. Without this, candidates
+            # collapsed to len=1 (the pinned deployment) and the "top-K
+            # cascade" was effectively k=1 (canary v4 evidence).
+            model_attr = getattr(llm, "model", None) or "kd-all"
+            target_group = get_parent_group(model_attr) or model_attr
+            # Query the parent pool's entries directly (more authoritative
+            # than router_obj.model_list, which for a pinned router is also
+            # filtered to the single entry).
             candidates: list[str] = []
-            if router_obj is not None and hasattr(router_obj, "model_list"):
-                seen: set[str] = set()
-                for e in router_obj.model_list:
-                    if e.get("model_name") != target_group:
-                        continue
-                    m = e.get("litellm_params", {}).get("model")
-                    if m and m not in seen:
-                        seen.add(m)
-                        candidates.append(m)
+            seen: set[str] = set()
+            for e in get_entries_for_group(target_group):
+                m = e.get("litellm_params", {}).get("model")
+                if m and m not in seen:
+                    seen.add(m)
+                    candidates.append(m)
 
             if candidates:
                 # Build context vector — pull request features from langfuse_metadata
@@ -1773,6 +1873,38 @@ async def _invoke_structured_with_fallback(
                     recent_error_rates=None,    # populated by background task later
                 )
                 redis_for_bandit = await _get_bandit_redis()
+
+                # Bandit timing fix (2026-05-14): chapter-scoped failed-arm
+                # + in-flight blacklist. Concurrent section-cascade queries
+                # within the same chapter share this Redis set; queries skip
+                # arms that are either (a) failed-this-chapter or (b) in-flight
+                # right now. Solves the "8-14 parallel picks all converge on
+                # the same dead arm" problem we saw in canary v8 ch04.
+                chapter_id = _extract_chapter_id(label)
+                blacklist_key = (
+                    f"kd:chapter:{chapter_id}:bandit_skip:{bandit_kd_process}"
+                    if chapter_id else None
+                )
+                if blacklist_key:
+                    try:
+                        raw = await redis_for_bandit.smembers(blacklist_key)
+                        blacklisted = {
+                            (b.decode() if isinstance(b, bytes) else b)
+                            for b in (raw or set())
+                        }
+                        if blacklisted:
+                            filtered = [c for c in candidates if c not in blacklisted]
+                            if filtered:
+                                if len(filtered) != len(candidates):
+                                    logger.info(
+                                        f"[{label}] chapter blacklist skipped "
+                                        f"{len(candidates) - len(filtered)} arm(s): "
+                                        f"{sorted(blacklisted)[:3]}{'...' if len(blacklisted)>3 else ''}"
+                                    )
+                                candidates = filtered
+                    except Exception:
+                        pass
+
                 top_k = await pareto_bandit.predict_top_k(
                     bandit_kd_process, ctx_vec, candidates,
                     redis=redis_for_bandit, k=3,
@@ -1783,9 +1915,21 @@ async def _invoke_structured_with_fallback(
                     pinned = build_pinned_chain_any(deployment_id, group=target_group)
                     if pinned is None:
                         continue
+
+                    # Mark in-flight (chapter-scoped) BEFORE call so other
+                    # concurrent section queries skip this arm and diversify.
+                    if blacklist_key:
+                        try:
+                            await redis_for_bandit.sadd(blacklist_key, deployment_id)
+                            await redis_for_bandit.expire(blacklist_key, 1800)
+                        except Exception:
+                            pass
+
                     t0 = time.time()
                     try:
-                        result = await _try_chain(pinned)
+                        result = await _try_chain(
+                            pinned, pinned_deployment=deployment_id,
+                        )
                         # Success — submit positive reward + feed ADWIN drift detector.
                         latency_s = time.time() - t0
                         reward = pareto_bandit.compose_reward(
@@ -1796,6 +1940,13 @@ async def _invoke_structured_with_fallback(
                             deployment_id, bandit_kd_process, ctx_vec, reward,
                             redis=redis_for_bandit,
                         ))
+                        # Success → remove from blacklist so other section
+                        # queries in this chapter can use this arm again.
+                        if blacklist_key:
+                            try:
+                                await redis_for_bandit.srem(blacklist_key, deployment_id)
+                            except Exception:
+                                pass
                         # ADWIN drift detection — feed success indicator.
                         try:
                             from services import pareto_drift
@@ -1816,10 +1967,20 @@ async def _invoke_structured_with_fallback(
                         reward = pareto_bandit.compose_reward(
                             success=False, latency_s=latency_s, error_class=error_class,
                         )
-                        asyncio.create_task(pareto_bandit.update(
-                            deployment_id, bandit_kd_process, ctx_vec, reward,
-                            redis=redis_for_bandit,
-                        ))
+                        # SYNC update on failure — was asyncio.create_task,
+                        # which let concurrent picks see stale state and keep
+                        # selecting the same dead arm. Awaiting the Redis
+                        # write (typically <50ms) guarantees the next pick
+                        # from a parallel section call sees the penalty.
+                        # Failure → leave in chapter blacklist; 30-min TTL
+                        # cleans it up after the chapter completes.
+                        try:
+                            await pareto_bandit.update(
+                                deployment_id, bandit_kd_process, ctx_vec,
+                                reward, redis=redis_for_bandit,
+                            )
+                        except Exception:
+                            pass
                         # ADWIN — feed failure indicator.
                         try:
                             from services import pareto_drift
@@ -1844,8 +2005,71 @@ async def _invoke_structured_with_fallback(
                 if last_error is not None:
                     logger.warning(
                         f"[{label}] all {len(top_k)} bandit picks failed; "
-                        f"falling back to Phase 1 simple-shuffle Router. "
+                        f"attempting fresh re-pick from parent pool "
+                        f"{target_group!r}. "
                         f"Last error: {type(last_error).__name__}"
+                    )
+                    # ─────────────────────────────────────────────────────
+                    # Chapter-pin re-pick on cascade exhaustion
+                    # (Phase 3 fix, 2026-05-14).
+                    # Canary v5 ch02 evidence: original `llm` is a
+                    # single-deployment pinned chain whose deployment just
+                    # failed K times. Falling back to `_try_chain(llm)`
+                    # would retry the same dead pinned model = TERMINAL
+                    # FAILURE. Instead, walk the parent pool in entry-list
+                    # order, skipping cascade-tried deployments, and try up
+                    # to MAX_FRESH_PICKS fresh single-deployment chains.
+                    # If all fresh re-picks fail, falls through to the
+                    # original llm (final attempt; likely fails).
+                    # ─────────────────────────────────────────────────────
+                    MAX_FRESH_PICKS = 3
+                    cascade_tried: set[str] = {d for d, _, _ in top_k}
+                    # Exclude the chapter pin's own deployment (already
+                    # known dead — its single-entry router won't help).
+                    try:
+                        rml = getattr(
+                            getattr(llm, "router", None), "model_list", None,
+                        ) or []
+                        for e in rml:
+                            m = e.get("litellm_params", {}).get("model")
+                            if m:
+                                cascade_tried.add(m)
+                    except Exception:
+                        pass
+
+                    fresh_attempts = 0
+                    for entry in get_entries_for_group(target_group):
+                        if fresh_attempts >= MAX_FRESH_PICKS:
+                            break
+                        m = entry.get("litellm_params", {}).get("model")
+                        if not m or m in cascade_tried:
+                            continue
+                        fresh_pinned = build_pinned_chain_any(
+                            m, group=target_group,
+                        )
+                        if fresh_pinned is None:
+                            continue
+                        fresh_attempts += 1
+                        logger.warning(
+                            f"[{label}] re-pick {fresh_attempts}/"
+                            f"{MAX_FRESH_PICKS}: trying fresh {m}"
+                        )
+                        try:
+                            return await _try_chain(
+                                fresh_pinned, pinned_deployment=m,
+                            )
+                        except Exception as fresh_err:
+                            cascade_tried.add(m)
+                            logger.info(
+                                f"[{label}] fresh re-pick {m} also failed: "
+                                f"{type(fresh_err).__name__}: "
+                                f"{str(fresh_err)[:120]}"
+                            )
+                            continue
+                    logger.warning(
+                        f"[{label}] re-pick budget exhausted "
+                        f"({fresh_attempts} tried); "
+                        f"falling through to original Phase 1 chain"
                     )
         except Exception as bandit_err:
             # Bandit infrastructure itself failed (e.g. Redis unavailable,
@@ -1855,7 +2079,8 @@ async def _invoke_structured_with_fallback(
                 f"{type(bandit_err).__name__}: {bandit_err}; using Phase 1 chain"
             )
 
-    # Phase 1 fallback path — bandit disabled, exhausted, or errored.
+    # Phase 1 fallback path — bandit disabled, exhausted (incl. re-pick),
+    # or errored.
     return await _try_chain(llm)
 
 

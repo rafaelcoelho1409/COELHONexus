@@ -37,6 +37,13 @@ HEAD_ASSETS = (
     Script(src="https://cdn.tailwindcss.com?plugins=typography"),
     # HTMX 2.0.4 — pinned to match apps/web inline script.
     Script(src="https://unpkg.com/htmx.org@2.0.4"),
+    # Idiomorph extension — DOM-merge swap strategy. Required so polling
+    # containers (#kd-study-chapters, #kd-study-header) preserve native
+    # element state across re-renders: <details> open/closed, focus, scroll
+    # position, video playback, form input state. Carson Gross (HTMX
+    # creator) explicitly recommends idiomorph for polled <details> state
+    # preservation; HTMX 4.0 makes it the default swap strategy.
+    Script(src="https://unpkg.com/idiomorph@0.7.3/dist/idiomorph-ext.min.js"),
     # HTMX SSE extension 2.2.3 — used by future /youtube/ask streaming view.
     Script(src="https://unpkg.com/htmx-ext-sse@2.2.3/sse.js", defer=True),
     # Lucide icons — `defer` so the script tag is non-blocking; we

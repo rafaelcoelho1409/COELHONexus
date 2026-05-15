@@ -181,6 +181,13 @@ PROVIDERS: dict[str, ProviderConfig] = {
         auth_style="bearer",
         response_shape="openai",
         free_filter=_filter_all,    # tier is account-level; listing == callable
+        enabled=False,    # DISABLED 2026-05-14 — free-tier credits exhausted
+                          # mid-run (Chinese error `余额不足或无可用资源包,请充值`).
+                          # Account-level quota with no graceful warning, and the
+                          # cascade can re-pin to the same dead chain via Phase 1
+                          # fallback, producing TERMINAL FAILURE (canary v5 ch02).
+                          # Re-enable when (a) account is refilled OR (b) the
+                          # chapter-pin re-pick-on-exhaustion fix lands.
     ),
     "sambanova": ProviderConfig(
         name="sambanova",

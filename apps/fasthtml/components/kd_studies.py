@@ -53,7 +53,12 @@ document.addEventListener('DOMContentLoaded', function () {
   _renderMarkdownIn(document.body);
 });
 
-// Re-run after every HTMX swap (chapter lazy-load fires this)
+// Re-run after every HTMX swap (chapter lazy-load fires this).
+// <details> open-state preservation across the 15s chapter-list poll is
+// now handled by idiomorph (hx_ext="morph" on #kd-study-chapters in
+// kd_studies.py). Idiomorph morphs the DOM in-place instead of replacing
+// innerHTML, so native element state survives polled re-renders — no
+// localStorage shim needed.
 document.body.addEventListener('htmx:afterSwap', function (evt) {
   _renderMarkdownIn(evt.detail.target || document.body);
   if (window.lucide) window.lucide.createIcons();
@@ -240,7 +245,10 @@ def KDStudyDetailPage(study_id: str):
                     hx_swap="innerHTML",
                 ),
                 # Chapter list — initial load only; chapters lazy-load contents
-                # when clicked.
+                # when clicked. Uses idiomorph (morph swap) so <details>
+                # open state is preserved across the 15s poll; previously
+                # innerHTML-swapped which destroyed every <details> on each
+                # tick. See base.py for the extension script.
                 Div(
                     Div(
                         I(data_lucide="loader",
@@ -250,7 +258,8 @@ def KDStudyDetailPage(study_id: str):
                     id="kd-study-chapters",
                     hx_get=f"/api/kd/studies/{study_id}/chapters_list",
                     hx_trigger="load, every 15s",
-                    hx_swap="innerHTML",
+                    hx_ext="morph",
+                    hx_swap="morph",
                     cls="mt-6",
                 ),
                 cls="max-w-5xl mx-auto px-6 py-6",
@@ -331,8 +340,11 @@ def ChaptersListFragment(study_id: str, study_data: dict, tree: dict):
     )
     plan_chapters = plan.get("chapters") if isinstance(plan, dict) else None
 
-    # Tree gives MinIO keys — find chapter directories with README present
-    keys = tree.get("keys") or tree.get("files") or []
+    # Tree gives MinIO keys — find chapter directories with README present.
+    # FastAPI's /studies/{id}/tree returns keys under "objects" (per
+    # routers/v1/knowledge/distiller.py:get_study_tree). The "keys"/"files"
+    # fallbacks are kept for backward-compat with any older response shapes.
+    keys = tree.get("objects") or tree.get("keys") or tree.get("files") or []
     chapters_with_readme = set()
     chapter_titles_from_tree: dict[int, str] = {}
     for k in keys:

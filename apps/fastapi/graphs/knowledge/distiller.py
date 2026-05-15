@@ -989,13 +989,16 @@ class KnowledgeDistillerGraph:
         # iter 2 (16 missing, an over-correction) → iter 3 (5 issues) →
         # iter 4 (44 issues) — budget wasted and best-seen lost.
         prev_n_issues: int | None = None
-        # Tightened 2026-05-14 from 3 → 1.5 after Terragrunt canary ch01 went
-        # iter 1 (8 issues: 1 missing + 5 dup + 2 thin) → iter 2 (14 issues:
-        # 7 missing + 5 dup + 2 thin), ratio=1.75× — should have early-stopped
-        # at iter 2 but 1.75 < 3.0 so the regression flew through. Setting to
-        # 1.5 catches the common "refiner over-correction" pattern (Huang
-        # 2024 §3.3) where one bad iter doubles issue count.
-        _AUDIT_REGRESSION_FACTOR = 1.5
+        # Tightened 2026-05-14 in two passes:
+        #   Pass 1: 3 → 1.5 — after canary v2 ch01 missed an early-stop at 1.75×.
+        #   Pass 2: 1.5 → 1.2 — after canary v3 ch01 went iter 0 (13 issues:
+        #     2 missing + 5 dup + 6 thin) → iter 1 (15 issues: 7 missing + 5
+        #     dup + 3 thin), ratio=1.15× still flew through. 1.2× catches the
+        #     subtle drift that 1.5× misses; refiner regressions are
+        #     usually 1.1-1.5× not 2×+ (Huang 2024 §3.3 over-correction
+        #     pattern). Lower than 1.2 risks false-positive early-stops on
+        #     normal iter-to-iter noise.
+        _AUDIT_REGRESSION_FACTOR = 1.2
 
         # 0b) Tier 3 #13 extension (2026-04-24) — per-iteration partial cache.
         # Run-8 lost chapters that reached real grader scores (0.71 / 0.73)
@@ -1072,8 +1075,34 @@ class KnowledgeDistillerGraph:
                 f"engaged (vault={len(code_vault)} > "
                 f"threshold={HIERARCHICAL_VAULT_THRESHOLD})"
             )
+        # Batch 4 speed fix (2026-05-14): carry the prior iter's ChapterOutput
+        # forward so Phase C inside synthesize_hierarchical can reuse sections
+        # that already look fine (≥600 chars prose + ≥1 code_ref + matching
+        # heading). Reset to None when the hierarchical path is disabled or
+        # falls back to flat synth (no section concept).
+        _prior_chapter_output_for_reuse = None
+        # Batch 4 cap fix (2026-05-14, canary v9 evidence): the reuse path
+        # produced an infinite loop on ch04 — iter 1 reused 13/14, iter 2-5
+        # reused 14/14 while audit kept failing on chapter-level structural
+        # defects (missing/duplicated hashes that section-level "looks fine"
+        # heuristics can't see). Solution: once an iter USED the cache AND
+        # the audit still failed, permanently disable the cache for the rest
+        # of this chapter's refine loop. Forces fresh Phase C so the refiner
+        # has a real chance to fix structural issues.
+        _phase_c_cache_disabled_this_chapter = False
+        _cache_input_was_used_this_iter = False
         try:
             for iteration in range(resume_from_iter, _iter_budget):
+                # Decide whether to feed cache to synthesize_hierarchical
+                # THIS iter. Disable globally for the chapter once we've
+                # observed a cache-but-audit-fail event below.
+                _cache_input_this_iter = (
+                    None if _phase_c_cache_disabled_this_chapter
+                    else _prior_chapter_output_for_reuse
+                )
+                _cache_input_was_used_this_iter = (
+                    _cache_input_this_iter is not None
+                )
                 # 1. Synthesize — Tier 3 #21 structured output.
                 #    Returns a ChapterOutput (sections + challenges + flashcards),
                 #    NOT free-form markdown. The LLM can't emit fences in prose_md
@@ -1093,6 +1122,7 @@ class KnowledgeDistillerGraph:
                                 iteration = iteration,
                                 study_id = payload.get("study_id"),
                                 user_id = payload.get("user_id"),
+                                prior_chapter_output = _cache_input_this_iter,
                             )
                         except HierarchicalSynthFailed as he:
                             logger.warning(
@@ -1163,6 +1193,15 @@ class KnowledgeDistillerGraph:
                     raise RuntimeError(
                         f"Synthesizer failed on chapter {chapter.number} iter {iteration}: {e}"
                     ) from e
+
+                # Batch 4 speed fix: save the just-produced output so the
+                # NEXT iter's hierarchical Phase C can reuse healthy sections.
+                # Reset to None when we fell back to flat synth (no section
+                # concept) so the reuse path doesn't fire on a flat output.
+                if _use_hierarchical and not _hierarchical_disabled:
+                    _prior_chapter_output_for_reuse = chapter_output
+                else:
+                    _prior_chapter_output_for_reuse = None
                 # 1b. Integrity audit (Tier 0c, #21 variant + batch-3 2026-04-23).
                 #     Union + uniqueness + distribution against the vault:
                 #       - `missing` = vault hashes the LLM forgot to reference
@@ -1204,7 +1243,16 @@ class KnowledgeDistillerGraph:
                 # of ACCEPT. Raising to ≤5 converts both immediately to real
                 # ACCEPT-eligible (subject to grader). 5 is still tight enough
                 # that genuinely code-dump-shape chapters still force refine.
-                _THIN_SECTIONS_ACCEPT_LIMIT = 5
+                #
+                # Bumped 2026-05-14 from 5 → 7. Canary v3 evidence: ch01 iter 0
+                # had 6 thin (2 missing + 5 dup + 6 thin = otherwise close to
+                # ACCEPT) — just over the previous 5 limit, forcing another
+                # iter that then REGRESSED (7 missing). Like duplicated_refs,
+                # thin-section count is largely structural (Phase A.5 splits
+                # smaller buckets can't have dense citations) — refiner can't
+                # systematically improve it across iters. Raising to 7 lets
+                # near-clean chapters land instead of regressing.
+                _THIN_SECTIONS_ACCEPT_LIMIT = 7
                 _real_thin_count = sum(
                     1 for h in thin_sections if h != _ZERO_CITATIONS_MARKER
                 )
@@ -1397,6 +1445,20 @@ class KnowledgeDistillerGraph:
                         + _hallucination_guard
                         + _best_anchor
                     )
+                    # Batch 4 cap fix — if THIS iter used the Phase C cache
+                    # AND the audit still failed, the cache is trapping us in
+                    # a loop where structural defects can't be fixed by
+                    # carrying forward "good-looking" sections. Disable cache
+                    # for the rest of this chapter's refine loop so subsequent
+                    # iters do full fresh Phase C synthesis.
+                    if (_cache_input_was_used_this_iter
+                            and not _phase_c_cache_disabled_this_chapter):
+                        _phase_c_cache_disabled_this_chapter = True
+                        logger.info(
+                            f"[synth][ch{chapter.number:02d}] iter {iteration} "
+                            f"audit failed despite Phase C cache reuse — "
+                            f"disabling cache for remaining iters of this chapter"
+                        )
                     continue
                 # Audit passed — clear regression tracker so next iter
                 # doesn't compare against a stale value.

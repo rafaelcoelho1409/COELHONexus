@@ -86,7 +86,11 @@ _OUTLINE_MAX_SECTIONS = 15
 # Phase C cap. asyncio.gather is unbounded; cap concurrency to avoid
 # thundering-herd on the LiteLLM router (which has its own per-deployment
 # rate limits but we burn cooldown TTL faster if we slam it).
-_PHASE_C_CONCURRENCY = 6
+# Batch 3 tuning (2026-05-14): bumped 6→8 to leverage the new
+# per-provider semaphores in helpers.py (NIM=4) for within-chapter
+# throughput. The actual concurrency is min(_PHASE_C_CONCURRENCY,
+# provider_semaphore_cap × n_active_providers).
+_PHASE_C_CONCURRENCY = 8
 
 
 class HierarchicalSynthFailed(RuntimeError):
@@ -745,6 +749,7 @@ async def synthesize_hierarchical(
     iteration: int = 0,
     study_id: str | None = None,
     user_id: str | None = None,
+    prior_chapter_output: ChapterOutput | None = None,
 ) -> ChapterOutput:
     """
     4-phase hierarchical synthesis. Returns a ChapterOutput identical in
@@ -842,9 +847,48 @@ async def synthesize_hierarchical(
         )
 
     # Phase C — parallel per-section synth (capped concurrency)
+    # Batch 4 speed fix (2026-05-14): per-section cache across refine iters.
+    # Canary v7 ch02 evidence: iter 0 produced 41/47 missing hashes; iter 1
+    # produced 0 missing but Phase C re-ran ALL 12 sections from scratch
+    # including the ~6 sections that were already legitimate prose. With
+    # per-section reuse, only the sections that LOOK broken at the end of
+    # the prior iter get re-synthesized.
+    #
+    # Reuse heuristic (conservative — only carries forward sections that
+    # already look fine to avoid amplifying audit failures):
+    #   - same outline shape (n_sections matches prior)
+    #   - same heading text at this index (Phase A outline LLM might vary)
+    #   - prior prose_md ≥ 600 chars (filters thin sections)
+    #   - prior code_refs ≥ 1 (filters empty-citation sections)
+    # Audit defects (missing/invented/fence/duplicated) all violate one of
+    # these → those sections are NOT carried, get fresh synthesis.
     semaphore = asyncio.Semaphore(_PHASE_C_CONCURRENCY)
 
+    prior_sections_by_idx: dict[int, Section] = {}
+    if (
+        prior_chapter_output is not None
+        and iteration > 0
+        and len(prior_chapter_output.sections) == n_sections
+    ):
+        for _i, _prior in enumerate(prior_chapter_output.sections):
+            _prior_heading = (getattr(_prior, "heading", "") or "").strip()
+            _curr_heading = (outline.sections[_i].heading or "").strip()
+            if _prior_heading != _curr_heading:
+                continue
+            _prose_len = len(_prior.prose_md or "")
+            _ref_count = len(_prior.code_refs or [])
+            if _prose_len >= 600 and _ref_count >= 1:
+                prior_sections_by_idx[_i] = _prior
+        if prior_sections_by_idx:
+            logger.info(
+                f"[hierarchical][ch{chapter.number:02d}] iter {iteration}: "
+                f"reusing {len(prior_sections_by_idx)}/{n_sections} sections "
+                f"from prior iter (saved Phase C LLM calls)"
+            )
+
     async def _bounded(i: int) -> Section:
+        if i in prior_sections_by_idx:
+            return prior_sections_by_idx[i]
         async with semaphore:
             return await synthesize_one_section(
                 outline_section = outline.sections[i],

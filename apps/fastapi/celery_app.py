@@ -108,10 +108,13 @@ app.config_from_object({
     "worker_max_tasks_per_child": 50,
     "worker_max_memory_per_child": 2_000_000,  # 2 GB RSS in KB (Celery unit)
     # Task time limits — defensive cap for tasks that hang (Playwright frozen
-    # context, LLM provider stuck mid-stream). Hard kill at 2h matches
-    # broker_transport_options.visibility_timeout above, so an unacked
-    # message can never re-fire while the original is still SIGKILLed
-    # mid-flight. Soft limit gives 2 min for SoftTimeLimitExceeded cleanup.
+    # context, LLM provider stuck mid-stream). Hard 2h ceiling kept
+    # deliberately: if the speed batches don't bring a study below 2h, the
+    # system is broken; we want it to fail loud, not grind for 4h hiding the
+    # regression. Soft limit gives 2 min for SoftTimeLimitExceeded cleanup.
+    # Visibility timeout in broker_transport_options must be kept ≥
+    # task_time_limit so an unacked message can't re-fire while the original
+    # is still SIGKILLed mid-flight — update there too if you change this.
     # Individual KD synth tasks override per-@app.task if they need more.
     "task_time_limit": 7200,
     "task_soft_time_limit": 7080,

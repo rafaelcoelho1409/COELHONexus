@@ -142,9 +142,15 @@ _PROVIDER_IDX = {p: i for i, p in enumerate(CONTEXT_PROVIDERS)}
 
 # Error-class → reward penalty. Used by compose_reward() when the call fails.
 # 429 is "try later" (light penalty), 500 is "broken" (heavy), auth is fatal.
+# Tuned 2026-05-14 (canary v8 evidence): bumped timeout -0.30 → -0.60.
+# Concurrent section-cascade queries fire 8-14 picks before any reward lands,
+# so a single negative observation needs to be strong enough to flip ranking
+# AFTER landing — otherwise the same dead arm keeps getting selected for 5+
+# more queries while feedback catches up. -0.60 is enough that one timeout
+# moves a 0.85-prior arm below most competitors.
 ERROR_CLASS_PENALTIES: dict[str, float] = {
     "rate_limit":      -0.10,   # 429 — provider overloaded right now
-    "timeout":         -0.30,   # call exceeded deadline — deployment too slow
+    "timeout":         -0.60,   # call exceeded deadline — was -0.30; bumped for faster avoidance
     "server_error":    -0.50,   # 5xx — model crashed or deployment broken
     "auth_error":      -0.80,   # 401/403 — config wrong, avoid this deployment
     "schema_invalid":  -0.40,   # produced output but failed Pydantic validation
@@ -624,6 +630,125 @@ async def predict_top_k(
         _record_ucb_score(scored[0][1])
 
     return scored[: max(1, k)]
+
+
+# =============================================================================
+# Provisional reservations — thundering-herd protection (Phase 3, 2026-05-14)
+# =============================================================================
+# Canary v4 evidence (2026-05-14): two concurrent chapters (ch02 + ch04) both
+# queried the bandit within 1s, both saw `deepseek-v4-pro` at n_obs=0 with
+# the maximum UCB exploration bonus, neither saw the other's pending pick.
+# Both pinned to it; both hung simultaneously on a `<think>` token timeout.
+#
+# Pattern: each successful pick attempts an atomic claim of
+#   kd:rotator:pareto:reserved:{kd_process}:{deployment}
+# via SET NX EX. Concurrent pickers see the claim and skip to the next-best
+# arm. Callers can either release explicitly at end-of-use, or rely on TTL
+# expiry for self-healing (workers crashing mid-call leave dangling
+# reservations that expire within ttl_s).
+async def try_reserve(
+    deployment: str,
+    kd_process: str,
+    *,
+    redis: "redis_aio.Redis | None",
+    ttl_s: int = 60,
+) -> bool:
+    """Atomic claim of (deployment, kd_process) for ttl_s seconds.
+
+    Returns True when this caller now holds the reservation. Returns False
+    only when the key was already set by a concurrent caller and we should
+    pick a different arm.
+
+    Fail-soft: if redis is None or the SET call raises, returns True (i.e.
+    "you may proceed without protection"). This preserves old behavior on
+    Redis outage rather than blocking the chapter.
+    """
+    if redis is None:
+        return True
+    key = f"kd:rotator:pareto:reserved:{kd_process}:{deployment}"
+    try:
+        claimed = await redis.set(key, "1", ex=ttl_s, nx=True)
+        return bool(claimed)
+    except Exception:
+        return True
+
+
+async def release_reservation(
+    deployment: str,
+    kd_process: str,
+    *,
+    redis: "redis_aio.Redis | None",
+) -> None:
+    """Best-effort release. Safe to call multiple times; no-op when redis
+    is None or unavailable. If never called, the reservation expires via
+    TTL set by try_reserve()."""
+    if redis is None:
+        return
+    try:
+        await redis.delete(f"kd:rotator:pareto:reserved:{kd_process}:{deployment}")
+    except Exception:
+        pass
+
+
+# =============================================================================
+# Provider-level slot reservations — Batch 2 speed fix (2026-05-14)
+# =============================================================================
+# Canary v7 evidence: bandit top-3 picks were all NIM deployments (glm-5.1,
+# deepseek-v4-flash, kimi-k2.6) because NIM has the most high-benchmark-prior
+# models. Per-process asyncio semaphore (NIM=2) then serialized them, dropping
+# effective concurrency from 3 → 2.
+#
+# Provider-slot reservations gate chapter-level picks at the DISTRIBUTED level
+# (Redis-backed, cross-Celery-worker). When NIM has 2 active chapter pins,
+# the next chapter's bandit iteration sees provider-full and forces selection
+# from Groq/Cerebras/Mistral. Restores actual 3x concurrency without burning
+# rate-limit budget.
+#
+# Pattern: per-provider, numbered slot keys
+#   kd:rotator:provider_slot:nvidia_nim:0
+#   kd:rotator:provider_slot:nvidia_nim:1
+# Each slot atomically claimed via SET NX EX. Release by deleting the specific
+# slot key. TTL=1800s matches chapter-pin TTL so stale slots self-heal.
+async def try_reserve_provider_slot(
+    provider: str,
+    *,
+    redis: "redis_aio.Redis | None",
+    max_slots: int,
+    ttl_s: int = 1800,
+) -> int | None:
+    """Atomically claim one of `max_slots` numbered slots for the provider.
+    Returns the claimed slot index (0..max_slots-1) on success, or None if
+    every slot is taken.
+
+    Fail-soft: redis=None → returns 0 (i.e. "you may proceed without
+    protection") to match the existing try_reserve fail-soft semantics."""
+    if redis is None:
+        return 0
+    for slot_idx in range(max_slots):
+        key = f"kd:rotator:provider_slot:{provider}:{slot_idx}"
+        try:
+            claimed = await redis.set(key, "1", ex=ttl_s, nx=True)
+            if claimed:
+                return slot_idx
+        except Exception:
+            continue
+    return None
+
+
+async def release_provider_slot(
+    provider: str,
+    slot_idx: int | None,
+    *,
+    redis: "redis_aio.Redis | None",
+) -> None:
+    """Best-effort release. Safe to call multiple times. No-op when
+    redis is None, slot_idx is None, or the delete raises."""
+    if redis is None or slot_idx is None:
+        return
+    try:
+        await redis.delete(f"kd:rotator:provider_slot:{provider}:{slot_idx}")
+    except Exception:
+        pass
 
 
 # =============================================================================
