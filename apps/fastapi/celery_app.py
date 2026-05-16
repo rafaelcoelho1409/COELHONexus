@@ -30,6 +30,7 @@ else:
 # (values.yaml): "local" or "production".
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "local").lower()
 Q_DEFAULT = f"default-{ENVIRONMENT}"
+Q_CRAWLER = f"crawler-{ENVIRONMENT}"
 
 
 app = Celery("coelhonexus")
@@ -43,6 +44,10 @@ app.config_from_object({
     "result_expires": 86400,
     "task_track_started": True,
     "task_default_queue": Q_DEFAULT,
+    "task_routes": {
+        # Docs Distiller ingestion is HTTP-fetch heavy → crawler queue
+        "tasks.docs_distiller.ingestion.*": {"queue": Q_CRAWLER},
+    },
     "worker_prefetch_multiplier": 1,
     "broker_connection_retry_on_startup": True,
     # Flower events — required or Flower's task list stays empty.
@@ -52,5 +57,30 @@ app.config_from_object({
     "timezone": "UTC",
 })
 
-# No task modules yet. Add entries here as `tasks/<module>.py` files ship.
-app.conf.include = []
+# Task module discovery. Add one entry per `tasks/<feature>/<module>.py`.
+app.conf.include = [
+    "tasks.docs_distiller.ingestion",
+]
+
+
+# =============================================================================
+# Per-worker init — provision MinIO bucket so the first ingest task can
+# put_object without a 404 on the bucket. Idempotent.
+# =============================================================================
+from celery.signals import worker_process_init
+
+
+@worker_process_init.connect
+def _ensure_minio_bucket(**_kwargs) -> None:
+    import asyncio
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        from services.docs_distiller.ingestion.storage_minio import get_storage
+        asyncio.run(get_storage().ensure_bucket())
+    except Exception as e:
+        logger.warning(
+            f"[worker-init] MinIO ensure_bucket failed "
+            f"({type(e).__name__}: {e}); ingestion tasks will fail until "
+            f"MinIO is reachable + creds are correct"
+        )

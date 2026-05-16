@@ -2,8 +2,14 @@
 this package into a single APIRouter mounted by app.py."""
 from fastapi import APIRouter
 
-from .frameworks import router as _frameworks_router
+from .debug import router as _debug_router
+from .ingestion import router as _ingestion_router
+from .resolver import router as _resolver_router
+from .runs import router as _runs_router
 
 
 router = APIRouter()
-router.include_router(_frameworks_router)
+router.include_router(_resolver_router, prefix="/resolver")
+router.include_router(_runs_router, prefix="/runs")
+router.include_router(_ingestion_router, prefix="/ingestion")
+router.include_router(_debug_router, prefix="/debug")

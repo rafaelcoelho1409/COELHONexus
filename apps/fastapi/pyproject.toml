@@ -12,6 +12,15 @@ dependencies = [
     "celery[redis]",
     "redis",
     "pyyaml",
+    # Ingestion stack
+    "beautifulsoup4",                  # HTML parsing for sitemap + tier 4 fallback
+    "lxml",                            # fast XML parser for sitemap.xml
+    "markdownify",                     # HTML → markdown (tier 3, tier 4 httpx path)
+    "markdown-it-py>=3.0",             # token-aware monolith splitter (post-process)
+    "mdit-py-plugins>=0.4",            # frontmatter / deflist / footnote tokens
+    "tenacity",                        # exponential-backoff retry helper
+    "aioboto3>=13.0",                  # async S3 client for MinIO (page-body storage)
+    "crawl4ai>=0.8.0,<0.9",            # AsyncUrlSeeder + Playwright-CDP BFS fallback
 ]
 
 [build-system]
