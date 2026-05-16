@@ -5,6 +5,7 @@ router, then serve. Everything else lives in dedicated modules:
 
   shell.py                       — HEAD + topbar layout (_Shell)
   proxy.py                       — /api/{path:path} → FastAPI reverse proxy
+  features/home.py               — / landing page (hero + live stats + features)
   features/docs_distiller.py     — /docs-distiller wizard (_Picker)
   routes.py                      — /youtube-content-search, /coming-soon, /health
   static/css/app.css             — global stylesheet
@@ -16,7 +17,7 @@ from starlette.staticfiles import StaticFiles
 
 import proxy
 import routes
-from features import docs_distiller
+from features import docs_distiller, home
 from shell import HEAD
 
 
@@ -33,6 +34,7 @@ app, rt = fast_app(
 
 
 proxy.register(rt)
+home.register(rt)
 docs_distiller.register(rt)
 routes.register(rt)
 

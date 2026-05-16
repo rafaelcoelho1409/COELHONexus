@@ -14,6 +14,7 @@ from fasthtml.common import (
 
 
 FEATURES = [
+    ("home", "Home", "/"),
     ("docs-distiller", "Docs Distiller", "/docs-distiller"),
     ("youtube-content-search", "YouTube Content Search", "/youtube-content-search"),
     ("coming-soon", "Coming Soon", "/coming-soon"),
@@ -39,7 +40,9 @@ HEAD = (
 )
 
 
-def _Shell(active_key: str, title_text: str, body=None):
+def _Shell(active_key: str, title_text=None, body=None):
+    """Page chrome. Pass `title_text=None` to skip the burgundy-bordered
+    title row (used by the home page which provides its own hero)."""
     nav_links = [
         A(
             label,
@@ -48,23 +51,26 @@ def _Shell(active_key: str, title_text: str, body=None):
         )
         for key, label, href in FEATURES
     ]
+    title_row = (
+        Div(H1(title_text, cls="title"), cls="title-row")
+        if title_text else ""
+    )
     return (
         Title("COELHO Nexus"),
         Div(
             Div(
                 Div(
-                    Div(
+                    # Brand is a link to the home page. Same visual as before
+                    # — A inherits .brand's flex/colour styles.
+                    A(
                         Span(cls="brand-flag"),
                         Span("COELHO Nexus"),
-                        cls="brand",
+                        href="/", cls="brand",
                     ),
                     Div(*nav_links, cls="nav"),
                     cls="topbar",
                 ),
-                Div(
-                    H1(title_text, cls="title"),
-                    cls="title-row",
-                ),
+                title_row,
                 Div(body if body is not None else "", cls="panel"),
                 cls="card",
             ),

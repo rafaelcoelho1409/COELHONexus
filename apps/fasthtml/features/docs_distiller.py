@@ -312,11 +312,7 @@ def _Picker():
 
 
 def register(rt) -> None:
-    """Attach /docs-distiller (and / aliased to it) to `rt`."""
-    @rt("/")
-    def index():
-        return _Shell("docs-distiller", "Docs Distiller", body=_Picker())
-
+    """Attach /docs-distiller to `rt`. The / route lives in features/home.py."""
     @rt("/docs-distiller")
     def docs_distiller():
         return _Shell("docs-distiller", "Docs Distiller", body=_Picker())
