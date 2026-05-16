@@ -749,7 +749,7 @@ frameworks:
 
 - name: UMAP
   logo: https://umap-learn.readthedocs.io/en/latest/_static/logo.png
-  docs: https://umap-learn.readthedocs.io/en/
+  docs: https://umap-learn.readthedocs.io/en/latest/
   github: https://github.com/lmcinnes/umap
   category: Python
 

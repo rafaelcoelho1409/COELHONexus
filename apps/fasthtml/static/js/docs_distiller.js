@@ -53,6 +53,11 @@
   const drawerPrev = document.querySelector('#fw-drawer-prev');
   const drawerNext = document.querySelector('#fw-drawer-next');
   const drawerClose = document.querySelector('#fw-drawer-close');
+  // -------- planner (Step 3) --------
+  const plannerStartBtn   = document.querySelector('#fw-planner-start');
+  const plannerSubtitle   = document.querySelector('#fw-planner-subtitle');
+  const plannerCardsEl    = document.querySelector('#fw-planner-cards');
+  const plannerProgressLbl= document.querySelector('#fw-planner-progress-label');
 
   // State
   let activeChip = 'All';
@@ -63,6 +68,22 @@
   let pollAbort = false;
   let currentStep = 1;
   let farthestStep = 1;
+  // -------- planner --------
+  let plannerThreadId = null;
+  let plannerPollAbort = false;
+  // Substep order MUST match the order in features/docs_distiller.py
+  // (`planner_substeps` list) AND the field each node writes in
+  // services/docs_distiller/planner/nodes/*.py.
+  const PLANNER_SUBSTEP_FIELDS = [
+    'raw_files',        // corpus_load
+    'relevant_files',   // off_topic
+    'deduped_files',    // dedup
+    'cached_plan',      // cache_lookup  (special: null is a valid completion)
+    'shard_results',    // map
+    'chapter_plan',     // reduce
+    'validated_plan',   // validate
+    'plan_path',        // plan_write
+  ];
 
   // ============================================================
   // Utility
@@ -281,17 +302,22 @@
         if (activeSlug) loadManifestForSlug(activeSlug);
       }
     }
+    // Step 3 — Planner. Refresh start-button enablement based on active
+    // ingestion + currently selected sidebar slug.
+    if (n === 3) {
+      refreshPlannerStartState();
+    }
     renderStepper();
   }
 
   function syncStepLocks() {
-    // Step 2/3 unlock when EITHER an ingestion is running OR the library
+    // Steps 2/3/4 unlock when EITHER an ingestion is running OR the library
     // has at least one finalized framework. Otherwise lock back to Step 1.
     const hasLibrary =
       sidebarList.querySelectorAll('.fw-lib-item').length > 0;
     const ingestActive = activeRunId !== null;
     if (hasLibrary || ingestActive) {
-      farthestStep = Math.max(farthestStep, 3);
+      farthestStep = Math.max(farthestStep, 4);
     } else {
       farthestStep = 1;
       if (currentStep !== 1) {
@@ -322,7 +348,7 @@
     });
   }
   function advance() {
-    if (currentStep >= 3) return;
+    if (currentStep >= 4) return;
     farthestStep = Math.max(farthestStep, currentStep + 1);
     showStep(currentStep + 1);
   }
@@ -424,7 +450,8 @@
           refreshGenerateState();
           await loadManifestForSlug(activeSlug);
           await loadLibrary();
-          jumpTo(3);
+          jumpTo(3);   // ingestion → Planner (natural next action)
+          refreshPlannerStartState();
           return;
         }
         if (st === 'failed' || st === 'cancelled') {
@@ -454,6 +481,186 @@
   });
 
   // ============================================================
+  // Step 3: Planner — start button, history poll, substep cards
+  // ============================================================
+  function refreshPlannerStartState() {
+    // Enable Start Planner only when an ingested framework is selected
+    // and there's no planner run in flight + no active ingestion.
+    const ready = activeSlug && !plannerThreadId && activeRunId === null;
+    if (ready) plannerStartBtn.removeAttribute('disabled');
+    else plannerStartBtn.setAttribute('disabled', 'disabled');
+    plannerSubtitle.textContent = activeSlug
+      ? ('Framework: ' + activeSlug + (plannerThreadId ? ' · planner running' : ''))
+      : 'Pick a framework, then start to generate the chapter plan.';
+  }
+
+  function cardEl(idx) {
+    return plannerCardsEl.querySelector(
+      '.fw-planner-card[data-idx="' + idx + '"]');
+  }
+
+  function resetPlannerCards() {
+    PLANNER_SUBSTEP_FIELDS.forEach((_, i) => {
+      const c = cardEl(i);
+      if (!c) return;
+      c.classList.remove('running', 'done', 'failed', 'expanded');
+      const icon = c.querySelector('.fw-planner-card-icon');
+      icon.textContent = '○';
+      icon.dataset.status = 'pending';
+      c.querySelector('.fw-planner-card-latency').textContent = '';
+      c.querySelector('.fw-planner-card-body').innerHTML =
+        '<div class="fw-empty">Output will appear here once the substep runs.</div>';
+    });
+    plannerProgressLbl.textContent = '';
+  }
+
+  function _fieldPresent(values, field) {
+    // cached_plan is special: the cache_lookup node writes `null` as a
+    // valid completion (cache miss). Treat `field in values` (even when
+    // value is null) as "this node ran".
+    return values && Object.prototype.hasOwnProperty.call(values, field);
+  }
+
+  function renderPlannerCards(values) {
+    // values = the latest checkpoint's accumulated state
+    let doneCount = 0;
+    for (let i = 0; i < PLANNER_SUBSTEP_FIELDS.length; i++) {
+      const field = PLANNER_SUBSTEP_FIELDS[i];
+      const c = cardEl(i);
+      if (!c) continue;
+      const icon = c.querySelector('.fw-planner-card-icon');
+      const body = c.querySelector('.fw-planner-card-body');
+      const present = _fieldPresent(values, field);
+      if (present) {
+        c.classList.add('done'); c.classList.remove('running', 'failed');
+        icon.textContent = '●'; icon.dataset.status = 'done';
+        const v = values[field];
+        body.innerHTML = '<pre>' + escapeHtml(formatFieldValue(v)) + '</pre>';
+        doneCount++;
+      } else if (i === doneCount && plannerThreadId !== null) {
+        // First not-done card while polling = currently running
+        c.classList.add('running'); c.classList.remove('done', 'failed');
+        icon.textContent = '◐'; icon.dataset.status = 'running';
+      } else {
+        c.classList.remove('running', 'done', 'failed');
+        icon.textContent = '○'; icon.dataset.status = 'pending';
+      }
+    }
+    plannerProgressLbl.textContent =
+      'Step ' + doneCount + ' of ' + PLANNER_SUBSTEP_FIELDS.length;
+  }
+
+  function markPlannerFailed(message) {
+    // Find the first card still running (or first pending) and flag it.
+    for (let i = 0; i < PLANNER_SUBSTEP_FIELDS.length; i++) {
+      const c = cardEl(i);
+      if (!c) continue;
+      if (c.classList.contains('running') ||
+          (!c.classList.contains('done') && !c.classList.contains('failed'))) {
+        c.classList.remove('running');
+        c.classList.add('failed', 'expanded');
+        const icon = c.querySelector('.fw-planner-card-icon');
+        icon.textContent = '✕';
+        icon.dataset.status = 'failed';
+        c.querySelector('.fw-planner-card-body').innerHTML =
+          '<div class="fw-planner-error">' + escapeHtml(message) + '</div>';
+        break;
+      }
+    }
+  }
+
+  function formatFieldValue(v) {
+    if (v === null || v === undefined) return String(v);
+    if (Array.isArray(v)) {
+      if (v.length === 0) return '[]';
+      const head = v.slice(0, 20).map(x => '  ' + JSON.stringify(x)).join(',\n');
+      const tail = v.length > 20 ? '\n  … (' + (v.length - 20) + ' more)' : '';
+      return '[\n' + head + tail + '\n] (' + v.length + ' items)';
+    }
+    return JSON.stringify(v, null, 2);
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;',
+      '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  async function pollPlanner(threadId) {
+    plannerPollAbort = false;
+    while (!plannerPollAbort && plannerThreadId === threadId) {
+      try {
+        // thread_id has slashes (docs-distiller/{slug}/{uuid}). Don't
+        // encode — the FastAPI `:path` converter accepts slashes; the
+        // smoke test in /history confirmed unencoded paths round-trip.
+        const r = await fetch(
+          API + '/planner/debug/graph/' + threadId + '/state');
+        if (r.status === 404) { await sleep(700); continue; }
+        if (!r.ok) { await sleep(1500); continue; }
+        const data = await r.json();
+        const values = data.values || {};
+        renderPlannerCards(values);
+        if (values.status === 'done') {
+          plannerThreadId = null;
+          refreshPlannerStartState();
+          return;
+        }
+        if (values.status === 'failed') {
+          markPlannerFailed(values.error || 'Planner failed.');
+          plannerThreadId = null;
+          refreshPlannerStartState();
+          return;
+        }
+      } catch (e) { /* transient — retry */ }
+      await sleep(1000);
+    }
+  }
+
+  async function startPlanner() {
+    if (!activeSlug || plannerThreadId) return;
+    resetPlannerCards();
+    plannerStartBtn.setAttribute('disabled', 'disabled');
+    try {
+      const r = await fetch(
+        API + '/planner/' + activeSlug,
+        {method: 'POST'},
+      );
+      if (!r.ok) {
+        const txt = await r.text();
+        markPlannerFailed('HTTP ' + r.status + ': ' + txt.slice(0, 400));
+        refreshPlannerStartState();
+        return;
+      }
+      const data = await r.json();
+      plannerThreadId = data.thread_id;
+      // The POST blocks until the graph finishes (no-op stubs run fast),
+      // so data.state is already the final state. Render it once + skip
+      // the poll loop. Once nodes do real work this branch flips to
+      // start the loop instead.
+      if (data.state && data.state.status === 'done') {
+        renderPlannerCards(data.state);
+        plannerThreadId = null;
+        refreshPlannerStartState();
+      } else {
+        pollPlanner(plannerThreadId);
+      }
+    } catch (e) {
+      markPlannerFailed('Request failed: ' + String(e));
+      refreshPlannerStartState();
+    }
+  }
+
+  plannerStartBtn.addEventListener('click', startPlanner);
+
+  // Card-head click → toggle expanded body
+  plannerCardsEl.addEventListener('click', ev => {
+    const head = ev.target.closest('.fw-planner-card-head');
+    if (!head) return;
+    head.parentElement.classList.toggle('expanded');
+  });
+
+  // ============================================================
   // POST /runs — Generate / Refresh
   // ============================================================
   async function triggerIngest(slug, refresh) {
@@ -471,8 +678,8 @@
         showNotice('Loaded from cache · ingested ' +
           fmtAge(data.manifest?.ingested_at) +
           '. Click ↻ in the sidebar to refresh.');
-        farthestStep = 3;
-        showStep(3);
+        farthestStep = 4;
+        showStep(4);   // jump to Study (cached → user wants to view)
         return;
       }
       if (data.status === 'queued') {
@@ -537,8 +744,9 @@
           x => x.classList.remove('active'));
         el.classList.add('active');
         await loadManifestForSlug(slug);
-        farthestStep = Math.max(farthestStep, 3);
-        showStep(3);
+        farthestStep = Math.max(farthestStep, 4);
+        showStep(4);   // sidebar click → Study (view existing files)
+        refreshPlannerStartState();
       });
     });
     sidebarList.querySelectorAll('.fw-lib-refresh').forEach(b => {

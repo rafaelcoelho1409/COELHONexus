@@ -14,6 +14,7 @@ Celery is even dispatched; this module just releases it in the `finally`
 block. TTL on the lock (35 min) outlives the Celery task's soft_time_limit
 (30 min), so a crashed task still releases the lock automatically.
 """
+import asyncio
 import logging
 from dataclasses import asdict
 
@@ -33,6 +34,7 @@ from .progress import (
     IngestCancelled,
     Progress,
     _redis_url,
+    is_cancelled,
     release_lock,
 )
 from .storage_minio import framework_prefix, get_storage
@@ -56,6 +58,39 @@ def _pick_best(entry: dict) -> dict | None:
         if entry.get(kind):
             return {"kind": kind, "url": entry[kind]}
     return None
+
+
+async def _cancel_watcher(
+    redis_client: "redis_aio.Redis",
+    run_id: str,
+    main_task: asyncio.Task,
+    poll_interval_s: float = 1.0,
+) -> None:
+    """Background task: polls the cancel flag every `poll_interval_s` and
+    cancels `main_task` on the first True. Required because cooperative
+    `raise_if_cancelled()` calls inside tier code only fire between
+    operations — Crawl4AI's Playwright `arun_many` can block 30-60s
+    between yields, leaving the user's Cancel click ignored until the
+    run finishes naturally.
+
+    Bypasses Progress.check_cancelled's per-instance throttle by calling
+    `is_cancelled()` directly — the watcher's own sleep is the rate limit."""
+    try:
+        while not main_task.done():
+            try:
+                if await is_cancelled(redis_client, run_id):
+                    logger.info(
+                        f"[dispatch] {run_id}: cancel flag detected by "
+                        f"watcher → cancelling main task"
+                    )
+                    main_task.cancel()
+                    return
+            except Exception as e:
+                logger.warning(f"[dispatch] cancel watcher Redis error: {e}")
+            await asyncio.sleep(poll_interval_s)
+    except asyncio.CancelledError:
+        # Normal shutdown when main task completes.
+        return
 
 
 async def _cleanup_framework(minio, framework_slug: str) -> int:
@@ -122,6 +157,14 @@ async def run(run_id: str, slug: str) -> dict:
         "tier_kind": best["kind"],
         "tier_url": best["url"],
     }
+
+    # Spawn the cancel watcher BEFORE entering the main try/except so it's
+    # active from the very first await. It cancels this very coroutine on
+    # cancel-flag detection; the asyncio.CancelledError is caught alongside
+    # IngestCancelled below.
+    watcher_task = asyncio.create_task(
+        _cancel_watcher(r, run_id, asyncio.current_task()),
+    )
 
     try:
         await progress.raise_if_cancelled()
@@ -205,7 +248,10 @@ async def run(run_id: str, slug: str) -> dict:
             "manifest": [asdict(e) for e in store.manifest],
         }
 
-    except IngestCancelled:
+    except (IngestCancelled, asyncio.CancelledError):
+        # Watcher-driven cancel surfaces as asyncio.CancelledError; the
+        # cooperative `raise_if_cancelled()` path surfaces as IngestCancelled.
+        # Both mean the same thing — user wants out.
         logger.info(f"[dispatch] {slug}: cancelled by user (run_id={run_id})")
         await _cleanup_framework(minio, slug)
         await progress.finish(status="cancelled")
@@ -226,6 +272,13 @@ async def run(run_id: str, slug: str) -> dict:
         }
 
     finally:
+        # Stop the watcher before tearing down Redis — otherwise its next
+        # `is_cancelled` call would race the aclose().
+        watcher_task.cancel()
+        try:
+            await watcher_task
+        except (asyncio.CancelledError, Exception):
+            pass
         # Always release the lock so a subsequent click can proceed.
         try:
             await release_lock(r, slug, run_id)

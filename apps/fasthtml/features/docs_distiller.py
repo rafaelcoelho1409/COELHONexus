@@ -144,8 +144,70 @@ def _Picker():
         ),
     )
 
-    # Step 3 — page grid (rendered by JS from /ingestion/{slug}/manifest)
+    # Step 3 — Planner (8 substep cards, populated by JS polling /debug/graph)
+    # Each card mirrors one LangGraph node; status fills in as the run advances.
+    planner_substeps = [
+        ("corpus_load", "Corpus load", "Read ingestion's canonical manifest from MinIO."),
+        ("off_topic",   "Off-topic filter", "Embed every file, drop those below cosine threshold."),
+        ("dedup",       "Deduplicate",      "MinHash + Jaccard threshold to drop near-duplicates."),
+        ("cache_lookup","Cache lookup",     "Hash deduped corpus; reuse plan if seen before."),
+        ("map",         "MAP labeling",     "Per-shard LLM labeling of file clusters."),
+        ("reduce",      "REDUCE outline",   "Single LLM merge → final 4-12 chapter outline."),
+        ("validate",    "Validate",         "Coverage repair: orphan/hallucinated slug detection."),
+        ("plan_write",  "Plan write",       "Persist final chapter plan to MinIO."),
+    ]
+    substep_cards = [
+        Div(
+            Div(
+                Span("○", cls="fw-planner-card-icon", data_status="pending"),
+                Div(
+                    Div(label, cls="fw-planner-card-title"),
+                    Div(desc, cls="fw-planner-card-desc"),
+                    cls="fw-planner-card-text",
+                ),
+                Span("", cls="fw-planner-card-latency"),
+                Span("▾", cls="fw-planner-card-chevron"),
+                cls="fw-planner-card-head",
+            ),
+            Div(
+                Div(
+                    "Output will appear here once the substep runs.",
+                    cls="fw-empty",
+                ),
+                cls="fw-planner-card-body",
+            ),
+            cls="fw-planner-card",
+            data_substep=key,
+            data_idx=str(i),
+        )
+        for i, (key, label, desc) in enumerate(planner_substeps)
+    ]
     step3_body = Div(
+        # Header w/ Start button + progress meta
+        Div(
+            Div(
+                Div("Planner", cls="fw-planner-title"),
+                Div(
+                    "Pick a framework, then start to generate the chapter plan.",
+                    cls="fw-planner-subtitle", id="fw-planner-subtitle",
+                ),
+                cls="fw-planner-head-text",
+            ),
+            Div(
+                Span("", id="fw-planner-progress-label",
+                     cls="fw-planner-progress-label"),
+                Button("Start Planner", id="fw-planner-start",
+                       cls="btn-primary", disabled=True),
+                cls="fw-planner-head-actions",
+            ),
+            cls="fw-planner-head",
+        ),
+        # Substep timeline
+        Div(*substep_cards, id="fw-planner-cards", cls="fw-planner-cards"),
+    )
+
+    # Step 4 — page grid (rendered by JS from /ingestion/{slug}/manifest)
+    step4_body = Div(
         Div(id="fw-pages-summary", cls="fw-pages-summary"),
         Div(
             Div(
@@ -164,7 +226,9 @@ def _Picker():
                 Span(cls="fw-step-connector"),
                 _Step(2, "Ingestion"),
                 Span(cls="fw-step-connector"),
-                _Step(3, "Study"),
+                _Step(3, "Planner"),
+                Span(cls="fw-step-connector"),
+                _Step(4, "Study"),
                 cls="fw-stepper",
             ),
             cls="fw-stepper-row",
@@ -189,6 +253,7 @@ def _Picker():
                 ),
                 Div(step2_body, id="fw-step-2-panel", cls="fw-step-panel"),
                 Div(step3_body, id="fw-step-3-panel", cls="fw-step-panel"),
+                Div(step4_body, id="fw-step-4-panel", cls="fw-step-panel"),
                 cls="fw-main",
             ),
             cls="fw-layout",
