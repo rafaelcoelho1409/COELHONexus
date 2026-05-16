@@ -111,14 +111,14 @@ portForward:
     port: 8000
     localPort: 23020
     address: 0.0.0.0
-  # Flower — Celery monitoring dashboard (per-project, was in COELHO Cloud)
+  # Flower — Celery monitoring dashboard
   - resourceType: service
     resourceName: coelhonexus-flower
     namespace: coelhonexus-dev
     port: 5555
     localPort: 23022
     address: 0.0.0.0
-  # FastHTML frontend (coexists with web during migration)
+  # FastHTML frontend
   - resourceType: service
     resourceName: coelhonexus-fasthtml
     namespace: coelhonexus-dev

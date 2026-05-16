@@ -1,91 +1,16 @@
 [project]
 name = "coelhonexus-fastapi"
 version = "1.0.0"
-description = "COELHO Nexus - FastAPI"
+description = "COELHO Nexus - FastAPI base shell"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi",
-    "uvicorn",
+    "uvicorn[standard]",
     "pydantic",
-    "starlette",
     "python-dotenv",
-    "deepagents",
-    "langchain",
-    "langgraph",
-    "langchain-openai",        # OpenAI, NVIDIA NIM, SambaNova
-    "langchain-groq",          # Groq
-    "langchain-ollama",        # Ollama (local)
-    "langchain-community",     # FastEmbedEmbeddings (ONNX, no PyTorch)
-    "langchain-neo4j",         # Neo4j graph database
-    "langchain-qdrant",        # Qdrant vector store
-    "langchain-experimental",  # LLMGraphTransformer
-    "langchain-text-splitters", # Text chunking
-    "tiktoken",                # Token counting for KD synth budget (Tier 1 #2 — replaces char-based cap)
-    "langfuse",                # LLM observability (Tier 3 #14 + 0d-5): per-model preservation rate, prompt versioning, trace replay
-    "litellm==1.83.13",        # LLM Router w/ fail-fast (enable_pre_call_checks + cooldown + retry policy). PINNED EXACT — v1.82.7 and v1.82.8 were COMPROMISED via Trivy CI/CD supply-chain attack on 2026-03-24. Do NOT allow >=1.82.7,<1.83.0. v1.83.0+ ships from the rebuilt CI/CD v2 pipeline (isolated envs, signed). 2026-04-29: pinned at 1.83.13 — both 1.83.12 AND 1.83.14 ship cost_calculator.py importing `_video_output_cost_per_second` from openai/cost_calculation.py while the symbol is absent from that file (verified by tarball inspection). 1.83.11 and 1.83.13 are the clean intermediate patches; 1.83.13 is preferred (more recent). Re-verify on every bump: `tar -xzf litellm-X.Y.Z.tar.gz && grep -c '_video_output_cost_per_second' litellm-X.Y.Z/litellm/llms/openai/cost_calculation.py` must return ≥1. Bump only after checking https://docs.litellm.ai/blog for security notices.
-    "langchain-litellm==0.6.4", # LangChain wrapper around LiteLLM Router (ChatLiteLLMRouter). Pin matches the clean litellm 1.83.x line.
-    "langchain-google-genai",  # Native Gemini integration — more reliable function calling than the OAI-compat endpoint
-    "langgraph-checkpoint-redis",
-    "langgraph-checkpoint-postgres",  # PostgreSQL checkpointer for conversation persistence
-    "psycopg[binary]",               # PostgreSQL async driver (binary — no libpq needed)
-    "scikit-learn",            # Calinski-Harabasz + KMeans fallback for KD REDUCE (Clio pattern)
-    "umap-learn",              # Dim reduction before k-means (KD REDUCE): silhouette 0.06 → ~0.25 on same-domain text
-    "k-means-constrained",     # Balanced k-means (KD REDUCE): enforces size_min/size_max per meta-cluster
-    "httpx",                   # HTTP client for NVIDIA NIM embedding API
-    "diskcache>=5.6",          # R7 (2026-05-11): on-disk cache for kd-embed vectors keyed on (model_id, sha256(text)) — skips NIM round-trips on same-corpus re-runs during tuning loops. Pure-Python, no system deps, fork-safe.
-    "flashrank",               # Cross-encoder reranker (local, no API cost)
-    "rapidfuzz",               # Fuzzy string matching for entity resolution
-    "river>=0.21",             # Phase 2 (2026-05-14): river.drift.ADWIN for ParetoBandit cell drift detection — regime-shift alarm faster than geometric forgetting
-    "textstat>=0.7.13",        # Phase 1.2 (2026-05-13): readability formulas (Flesch-Kincaid, Coleman-Liau, Dale-Chall, etc.) for grader_classical.score_complexity_appropriate. Pure Python, no inference, no GPU. Targets user_profile.level → expected grade band.
-    "qdrant-client",           # Qdrant vector database client
-    "neo4j",
+    "httpx",
+    "celery[redis]",
     "redis",
-    "celery[redis]",               # Distributed task queue (background workers)
-    "yt-dlp",                  # YouTube metadata extraction (subprocess)
-    "bgutil-ytdlp-pot-provider>=1.3.0",  # PO Token plugin (latest, matches sidecar API)
-    "curl_cffi>=0.11,<0.15",       # Browser impersonation for yt-dlp (0.15 unsupported)
-    "orjson",                  # Fast JSON parsing
-    "elasticsearch[async]>=8.0.0,<9.0.0",  # ES server is v8
-    "playwright",              # Browser automation (connects to remote server)
-    "tenacity",                # Retry with exponential backoff
-    "crawl4ai>=0.8.0,<0.9",    # LLM-friendly docs crawler (KD Tier 4 + HTML→md extractor for T2/T3)
-    "trafilatura>=2.0",        # ONLY for tree_cleaning() HTML chrome strip — strips nav/footer/aside/ads pre-conversion. The full extract() pipeline (article-shape extraction + format convert) is NOT used; that work stays with Crawl4AI's DefaultMarkdownGenerator (it preserves code blocks correctly, which trafilatura.extract() did not — see issue adbar/trafilatura#489).
-    "llms-txt>=0.0.6",         # Official AnswerDotAI llms.txt parser (KD Tier 2)
-    "aioboto3>=13.0",          # Async S3 client for MinIO (Knowledge Distiller storage)
-    "py-spy>=0.4",             # Live Python process sampler (attach to Celery worker pid to dump a hung task's stack without restarting)
-    "mdformat>=0.7",           # OP-60 (2026-04-25): pure-Python markdown formatter — post-curator syntax normalization (heading depth, fence languages, list markers)
-    "mdformat-gfm>=0.3",       # OP-60: GitHub Flavored Markdown plugin (tables, strikethrough)
-    "markdown>=3.6",           # KD inspector — md → HTML rendering for the /inspect viewer (server-side, no JS deps)
-    "markdown-it-py>=3.0",     # 2026-04-29: token-aware llms-full.txt splitter (services/knowledge/post_ingest.py). Code fences and tables are atomic tokens — replaces LangChain's regex-heuristic ExperimentalMarkdownSyntaxTextSplitter that would bisect ~13% of sections mid-fence.
-    "mdit-py-plugins>=0.4",    # 2026-04-29: extra atomic-block recognizers used by the T1 splitter — front_matter (--- YAML ---), deflist (term/definition lists), footnote (cited definitions). Without these, MDX-derived llms-full.txt could split mid-frontmatter or mid-deflist.
-    "pygments>=2.18",          # codehilite extension dependency — inline syntax highlighting in inspector previews
-    "tree-sitter>=0.23,<0.25",       # OP-59 (2026-04-25): universal parser library. <0.25 to avoid ABI breaks
-    # OP-59 (2026-04-25): pre-compiled tree-sitter grammars (~305 languages) — replaces LLM code_syntax_valid critic.
-    # Upper bound <1.6 because v1.6.2/1.6.3 only ship cp314 wheels; cp313 wheels start again at older releases. Pin below the broken band.
-    "tree-sitter-language-pack>=0.4,<1.6",
-    "pyyaml>=6.0",             # Resolver catalog loader (apps/fastapi/sources.yaml)
-    # OpenTelemetry (2026-05-12 night) — per-deployment LLM perf data + study-level traces.
-    # Dual-export: Alloy → LGTM stack (Mimir/Tempo/Loki) + LangFuse v3 OTLP endpoint.
-    # See services/otel_setup.py for the dual-pipeline configuration.
-    "opentelemetry-api>=1.30",
-    "opentelemetry-sdk>=1.30",
-    "opentelemetry-exporter-otlp-proto-grpc>=1.30",   # gRPC OTLP for Alloy
-    "opentelemetry-exporter-otlp-proto-http>=1.30",   # HTTP OTLP for LangFuse v3
-    "opentelemetry-instrumentation-fastapi>=0.50b0",  # Auto-instrument FastAPI routes
-    "opentelemetry-instrumentation-httpx>=0.50b0",    # Auto-instrument outbound httpx (upstream NIM, OpenAI etc.)
-    "opentelemetry-instrumentation-redis>=0.50b0",    # Auto-instrument Redis (cache, study registry, Celery broker)
-    "opentelemetry-instrumentation-celery>=0.50b0",   # Auto-instrument Celery tasks (study_id correlation)
-    "opentelemetry-instrumentation-logging>=0.50b0",  # Inject trace_id into stdlib logging (Loki correlation)
-    # NER filter (Phase 2.1) — fast-gliner deferred. The package is sdist-only
-    # (Rust source) and requires `cc` + Rust toolchain at build time, which our
-    # python:3.13-slim base doesn't ship. Options when re-enabling:
-    #   (a) Add Rust + build-essential to Dockerfile.fastapi (heavy: ~300MB)
-    #   (b) Use a multi-stage Dockerfile with builder + runtime stages
-    #   (c) Switch to `gliner` package (pure Python but pulls PyTorch CPU ~250MB)
-    #   (d) Direct onnxruntime + manual tokenizer (lean ~80 LoC, no extra deps)
-    # Until then, services/resolver/ner_filter.py.TechEntityExtractor.get()
-    # returns None and the resolver falls back to query_splitter + per-token
-    # catalog fuzzy match (handles 90% of real query shapes).
 ]
 
 [build-system]
@@ -94,30 +19,3 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = []
-
-[tool.uv]
-# Resolution overrides for transitive-dependency conflicts.
-#
-# unclecode-litellm vs litellm namespace collision (2026-05-11):
-# crawl4ai 0.8.6 declares `unclecode-litellm==1.81.13` (self-described in its
-# METADATA as a "pre-compromise fork of litellm") as a transitive dependency.
-# That package installs files into the SAME `litellm/` namespace as upstream
-# litellm 1.83.13 — both ship `litellm/cost_calculator.py` AND
-# `litellm/llms/openai/cost_calculation.py`. uv's install order isn't
-# deterministic across rebuilds, so the venv ends up with cost_calculator.py
-# from 1.83.13 (which imports `_video_output_cost_per_second`) but
-# cost_calculation.py from 1.81.13 (which lacks that symbol — it predates
-# litellm's video pricing support). Result: ImportError on first
-# `import litellm`, blocking app startup.
-#
-# Fix: override the transitive `unclecode-litellm` requirement with one
-# carrying a marker that always evaluates False (`python_version >= '99'`).
-# uv resolves the override against the real environment, the marker is
-# False, and the package is silently skipped. crawl4ai's runtime
-# `import litellm` resolves to upstream litellm 1.83.13 — the upstream
-# API is a strict superset of the fork's 1.81.13 API, so crawl4ai
-# behavior is unaffected. Verified by regenerating uv.lock after this
-# override lands: `unclecode-litellm` no longer appears in the lock.
-override-dependencies = [
-    "unclecode-litellm; python_version >= '99'",
-]
