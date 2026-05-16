@@ -6,6 +6,8 @@ no LLMs). Add lifespan setup + routers as features land.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from routers.v1.docs_distiller import router as docs_distiller_router
+
 
 app = FastAPI(
     title="COELHO Nexus - FastAPI",
@@ -21,6 +23,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(
+    docs_distiller_router,
+    prefix="/api/v1/docs-distiller",
+    tags=["Docs Distiller"],
+)
+
 
 @app.get("/")
 async def root():
@@ -30,6 +38,7 @@ async def root():
         "endpoints": {
             "docs": "/docs",
             "health": "/health",
+            "frameworks": "/api/v1/docs-distiller/frameworks",
         },
     }
 

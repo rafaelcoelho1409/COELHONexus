@@ -11,6 +11,7 @@ dependencies = [
     "httpx",
     "celery[redis]",
     "redis",
+    "pyyaml",
 ]
 
 [build-system]
