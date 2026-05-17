@@ -156,3 +156,74 @@ def should_keep(
 
 def same_host(url: str, host: str) -> bool:
     return (urlparse(url).netloc or "").lower() == host.lower()
+
+
+# =============================================================================
+# Path-pattern filter — stage 1 of the noise removal pipeline.
+# Cheap deterministic regex match on URL paths. Catches obvious non-docs
+# pages (events / blog / changelog / jobs / sponsor) BEFORE we fetch
+# them, saving bandwidth + MinIO storage + planner embedding cost.
+# Catalog entries can extend or replace these defaults via the
+# `path_filter` field in sources.yaml.
+# =============================================================================
+
+# Conservative defaults — only patterns that are NEVER teaching content.
+# Things like `/contributing/`, `/community/`, `/code-of-conduct/` are
+# intentionally absent because some frameworks DO host real teaching
+# content under those paths; we let the semantic off_topic filter in the
+# planner handle those.
+DEFAULT_EXCLUDE_PATH_PATTERNS: tuple[str, ...] = (
+    r"/events?(/|$)",
+    r"/blog(/|$)",
+    r"/news(/|$)",
+    r"/changelog(/|$)",
+    r"/release[-_]?notes?(/|$)",
+    r"/releases(/|$)",
+    r"/jobs?(/|$)",
+    r"/careers?(/|$)",
+    r"/hiring(/|$)",
+    r"/sponsors?(/|$)",
+    r"/meetups?(/|$)",
+)
+
+_DEFAULT_EXCLUDE_RE = re.compile(
+    "|".join(f"(?:{p})" for p in DEFAULT_EXCLUDE_PATH_PATTERNS),
+    re.IGNORECASE,
+)
+
+
+def passes_path_filter(
+    url: str,
+    catalog_filter: dict | None = None,
+) -> bool:
+    """Return True if the URL passes the path-pattern filter.
+
+    catalog_filter shape (all keys optional, all values lists of regex strings):
+        {
+          "include":         [...],   # if non-empty, URL MUST match at least one
+          "exclude":         [...],   # URL must match NONE
+          "disable_defaults": bool,    # if true, skip DEFAULT_EXCLUDE_PATH_PATTERNS
+        }
+    """
+    path = urlparse(url).path or "/"
+    filt = catalog_filter or {}
+    # Defaults apply unless explicitly disabled.
+    if not filt.get("disable_defaults") and _DEFAULT_EXCLUDE_RE.search(path):
+        return False
+    extra_exclude = filt.get("exclude") or []
+    for pat in extra_exclude:
+        try:
+            if re.search(pat, path, re.IGNORECASE):
+                return False
+        except re.error:
+            continue
+    include = filt.get("include") or []
+    if include:
+        for pat in include:
+            try:
+                if re.search(pat, path, re.IGNORECASE):
+                    return True
+            except re.error:
+                continue
+        return False
+    return True

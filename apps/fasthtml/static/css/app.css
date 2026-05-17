@@ -195,6 +195,23 @@ html, body {
   height: 28px; width: auto; max-width: 100%;
   display: block; margin-bottom: 10px; object-fit: contain;
 }
+/* Multi-logo strip — for unified stack tiles (e.g. LangChain - LangGraph
+   - DeepAgents). Each component's logo shows side-by-side. */
+.fw-tile-logos {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+  min-height: 28px;
+}
+.fw-tile-logo-multi {
+  height: 24px;
+  width: auto;
+  max-width: 32px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
 .fw-tile-name {
   font-size: 0.92rem; font-weight: 500;
   color: var(--text); word-break: break-word;
@@ -595,6 +612,12 @@ html, body {
   min-width: 0;
   flex: 1;
 }
+.fw-progress-logos {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
 .fw-progress-logo {
   width: 22px;
   height: 22px;
@@ -857,6 +880,42 @@ html, body {
   letter-spacing: 0.02em;
   font-family: 'JetBrains Mono', ui-monospace, monospace;
 }
+.fw-planner-mode-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.fw-planner-mode-label {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.fw-planner-mode-select {
+  font-family: 'Raleway', sans-serif;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 6px 28px 6px 10px;
+  cursor: pointer;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  /* tiny inline chevron — same color as text-muted */
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='%238b8b8b' d='M0 0l5 6 5-6z'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  transition: border-color 0.15s;
+}
+.fw-planner-mode-select:hover { border-color: var(--text-muted); }
+.fw-planner-mode-select:focus { border-color: var(--primary); }
+.fw-planner-mode-select option:disabled {
+  color: var(--text-muted);
+}
 .fw-planner-cards {
   display: flex;
   flex-direction: column;
@@ -875,6 +934,122 @@ html, body {
 }
 .fw-planner-card.done { border-color: var(--border); }
 .fw-planner-card.failed { border-color: var(--error-border); }
+.fw-planner-card.future {
+  opacity: 0.55;
+  background: rgba(0, 0, 0, 0.015);
+}
+.fw-planner-card.future .fw-planner-card-icon {
+  color: var(--text-muted);
+  animation: none;
+}
+.fw-planner-card.future .fw-planner-card-title {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* ===== Substep stats — KPI grid + distribution + footer ===== */
+/* Used inside expanded substep cards. Designed per 2026 dashboard
+   best practices: 4 headline KPIs max, one visual element per card,
+   responsive (4-col → 2-col → 1-col), Raleway label + JetBrains-Mono
+   numbers. */
+.fw-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.fw-stat-card {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+  padding: 12px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.fw-stat-card-label {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-family: 'Raleway', sans-serif;
+}
+.fw-stat-card-value {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+.fw-stat-card-sub {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  margin-top: 2px;
+}
+
+.fw-stat-dist {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 12px 14px;
+  background: var(--card);
+  margin-bottom: 14px;
+}
+.fw-stat-dist-title {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-family: 'Raleway', sans-serif;
+  margin-bottom: 10px;
+}
+.fw-stat-dist-row {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+}
+.fw-stat-dist-cell {
+  text-align: left;
+}
+.fw-stat-dist-key {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  font-family: 'Raleway', sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 3px;
+}
+.fw-stat-dist-val {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.fw-stat-foot {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  padding-top: 4px;
+}
+.fw-stat-foot strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Responsive — 2 cols on tablet, 1 col on phone */
+@media (max-width: 900px) {
+  .fw-stat-grid { grid-template-columns: repeat(2, 1fr); }
+  .fw-stat-dist-row { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 560px) {
+  .fw-stat-grid { grid-template-columns: 1fr; }
+  .fw-stat-dist-row { grid-template-columns: repeat(2, 1fr); }
+}
 .fw-planner-card-head {
   display: flex;
   align-items: center;

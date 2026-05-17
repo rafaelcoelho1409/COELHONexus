@@ -12,9 +12,12 @@
 #   sitemap     sitemap.xml (Tier 3)
 #   github      upstream GitHub repository
 #
-# YAML anchors (&id / *id) dedupe URLs shared by related tools:
-#   &lc_full / &lc_txt / &lc_sitemap   — LangChain ecosystem bundles
-#   &g_sitemap                          — Grafana ecosystem sitemap
+# Ecosystem bundles: when multiple projects share the same docs URL
+# (LangChain/LangGraph/DeepAgents under docs.langchain.com; Grafana +
+# Alloy/Loki/Mimir/Tempo under grafana.com/en/sitemap.xml), they're
+# unified into ONE catalog entry whose display name lists every member
+# (e.g. "LangChain - LangGraph - DeepAgents"). Avoids ingesting the
+# identical corpus N times into N orphan MinIO slugs.
 
 frameworks:
 
@@ -32,12 +35,6 @@ frameworks:
   sitemap: https://docs.seldon.ai/alibi-explain/sitemap-pages.xml
   github: https://github.com/seldonio/alibi
   category: Python
-
-- name: Alloy (Grafana)
-  logo: https://grafana.com/media/docs/alloy/alloy_icon.png
-  docs: https://grafana.com/docs/alloy/
-  sitemap: &g_sitemap https://grafana.com/en/sitemap.xml
-  github: https://github.com/grafana/alloy
 
 - name: Ansible
   logo: https://cdn.simpleicons.org/ansible
@@ -127,15 +124,6 @@ frameworks:
   sitemap: https://docs.getdbt.com/sitemap.xml
   github: https://github.com/dbt-labs/dbt-core
 
-- name: DeepAgents
-  logo: https://raw.githubusercontent.com/langchain-ai/deepagents/main/.github/images/logo-dark.svg
-  docs: https://docs.langchain.com/oss/python/deepagents/
-  llms_full: &lc_full https://docs.langchain.com/llms-full.txt
-  llms_txt: &lc_txt https://docs.langchain.com/llms.txt
-  sitemap: &lc_sitemap https://docs.langchain.com/sitemap.xml
-  github: https://github.com/langchain-ai/deepagents
-  category: Python
-
 - name: Delta Lake (Python)
   logo: https://cdn.simpleicons.org/databricks
   docs: https://docs.delta.io/api/latest/python/spark/
@@ -219,10 +207,18 @@ frameworks:
   github: https://github.com/golang/go
   category: Programming Language
 
-- name: Grafana
+- name: Grafana - Alloy - Loki - Mimir - Tempo
+  # Multi-logo stack tile — the picker renders each in a strip; the
+  # sidebar + loading box use the single `logo` fallback below.
+  logos:
+    - https://cdn.simpleicons.org/grafana
+    - https://grafana.com/media/docs/alloy/alloy_icon.png
+    - https://grafana.com/media/docs/loki/logo-grafana-loki.png
+    - https://grafana.com/media/docs/mimir/GrafanaLogo_Mimir_icon.png
+    - https://grafana.com/static/assets/img/blog/tempo.png
   logo: https://cdn.simpleicons.org/grafana
   docs: https://grafana.com/docs/grafana/
-  sitemap: *g_sitemap
+  sitemap: https://grafana.com/en/sitemap.xml
   github: https://github.com/grafana/grafana
 
 - name: Helm
@@ -263,12 +259,18 @@ frameworks:
   sitemap: https://kubernetes.io/en/sitemap.xml
   github: https://github.com/kubernetes/kubernetes
 
-- name: LangChain
+- name: LangChain - LangGraph - DeepAgents
+  # Multi-logo stack tile — the picker renders each in a strip; the
+  # sidebar + loading box use the single `logo` fallback below.
+  logos:
+    - https://raw.githubusercontent.com/langchain-ai/langchain/master/.github/images/logo-dark.svg
+    - https://raw.githubusercontent.com/langchain-ai/langgraph/main/.github/images/logo-dark.svg
+    - https://raw.githubusercontent.com/langchain-ai/deepagents/main/.github/images/logo-dark.svg
   logo: https://raw.githubusercontent.com/langchain-ai/langchain/master/.github/images/logo-dark.svg
-  docs: https://docs.langchain.com/oss/python/langchain/
-  llms_full: *lc_full
-  llms_txt: *lc_txt
-  sitemap: *lc_sitemap
+  docs: https://docs.langchain.com/
+  llms_full: https://docs.langchain.com/llms-full.txt
+  llms_txt: https://docs.langchain.com/llms.txt
+  sitemap: https://docs.langchain.com/sitemap.xml
   github: https://github.com/langchain-ai/langchain
   category: Python
 
@@ -280,15 +282,6 @@ frameworks:
   github: https://github.com/langfuse/langfuse
   category: Python
 
-- name: LangGraph
-  logo: https://raw.githubusercontent.com/langchain-ai/langgraph/main/.github/images/logo-dark.svg
-  docs: https://docs.langchain.com/oss/python/langgraph/
-  llms_full: *lc_full
-  llms_txt: *lc_txt
-  sitemap: *lc_sitemap
-  github: https://github.com/langchain-ai/langgraph
-  category: Python
-
 - name: LiteLLM
   logo: https://docs.litellm.ai/img/favicon.ico
   docs: https://docs.litellm.ai/
@@ -297,12 +290,6 @@ frameworks:
   sitemap: https://docs.litellm.ai/sitemap.xml
   github: https://github.com/BerriAI/litellm
   category: Python
-
-- name: Loki (Grafana)
-  logo: https://grafana.com/media/docs/loki/logo-grafana-loki.png
-  docs: https://grafana.com/docs/loki/
-  sitemap: *g_sitemap
-  github: https://github.com/grafana/loki
 
 - name: Luigi
   logo: https://raw.githubusercontent.com/spotify/luigi/master/doc/luigi.png
@@ -322,12 +309,6 @@ frameworks:
   sitemap: https://docs.metasploit.com/sitemap.xml
   github: https://github.com/rapid7/metasploit-framework
   category: Pentest
-
-- name: Mimir (Grafana)
-  logo: https://grafana.com/media/docs/mimir/GrafanaLogo_Mimir_icon.png
-  docs: https://grafana.com/docs/mimir/
-  sitemap: *g_sitemap
-  github: https://github.com/grafana/mimir
 
 - name: MLflow
   logo: https://cdn.simpleicons.org/mlflow
@@ -692,12 +673,6 @@ frameworks:
   sitemap: https://supervision.roboflow.com/sitemap.xml 
   github: https://github.com/roboflow/supervision
   category: Python
-
-- name: Tempo (Grafana)
-  logo: https://grafana.com/static/assets/img/blog/tempo.png
-  docs: https://grafana.com/docs/tempo/
-  sitemap: *g_sitemap
-  github: https://github.com/grafana/tempo
 
 - name: TensorRT
   logo: https://developer-blogs.nvidia.com/wp-content/uploads/2020/04/tensorrt-logo.png

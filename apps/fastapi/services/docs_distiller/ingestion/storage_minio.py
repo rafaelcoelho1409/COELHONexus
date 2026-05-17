@@ -314,6 +314,78 @@ class MinIOStorage:
                 *(_put_one(k, c, ct) for k, c, ct in chunk)
             )
 
+    async def read_many(
+        self,
+        keys: list[str],
+        max_concurrent: int = 16,
+        chunk_size: int = 256,
+        chunk_timeout_s: float = 60.0,
+        max_chunk_retries: int = 3,
+        encoding: str = "utf-8",
+    ) -> list[str]:
+        """Read many objects in parallel, in chunks. Same shape as `write_many`:
+        one shared aioboto3 client per chunk (avoids per-key TLS+SigV4 cost),
+        bounded concurrency inside each chunk, fresh client on retry, chunk
+        timeout to escape stuck connections. Returns bodies in input order.
+
+        Ported from v1 services/knowledge/storage.py `read_many`. Used by
+        planner substeps (off_topic, dedup, map) that need to load page
+        bodies on demand — corpus_load only carries keys in state so the
+        Postgres checkpoint stays small."""
+        if not keys:
+            return []
+        results: list[str] = []
+        for start in range(0, len(keys), chunk_size):
+            chunk = keys[start:start + chunk_size]
+            end = start + len(chunk)
+            last_err: Exception | None = None
+            for attempt in range(max_chunk_retries):
+                try:
+                    chunk_results = await asyncio.wait_for(
+                        self._read_chunk(chunk, max_concurrent, encoding),
+                        timeout=chunk_timeout_s,
+                    )
+                    results.extend(chunk_results)
+                    break
+                except (asyncio.TimeoutError, ClientError) as e:
+                    last_err = e
+                    if isinstance(e, ClientError):
+                        code = (e.response or {}).get("Error", {}).get("Code", "")
+                        if code not in (
+                            "RequestTimeout", "InternalError",
+                            "ServiceUnavailable", "SlowDown",
+                        ):
+                            raise
+                    logger.warning(
+                        f"[minio] read_many chunk [{start}:{end}) attempt "
+                        f"{attempt+1}/{max_chunk_retries} transient — retrying"
+                    )
+                if attempt < max_chunk_retries - 1:
+                    await asyncio.sleep(1.0 * (2 ** attempt))
+            else:
+                raise RuntimeError(
+                    f"read_many chunk [{start}:{end}) failed after "
+                    f"{max_chunk_retries} attempts; last error: "
+                    f"{type(last_err).__name__}: {last_err}"
+                )
+        return results
+
+    async def _read_chunk(
+        self,
+        chunk: list[str],
+        max_concurrent: int,
+        encoding: str,
+    ) -> list[str]:
+        sem = asyncio.BoundedSemaphore(max_concurrent)
+        async with self._client() as s3:
+            async def _get_one(key: str) -> str:
+                async with sem:
+                    resp = await s3.get_object(Bucket=self.bucket, Key=key)
+                    async with resp["Body"] as stream:
+                        data = await stream.read()
+                return data.decode(encoding)
+            return await asyncio.gather(*(_get_one(k) for k in chunk))
+
 
 # =============================================================================
 # Singleton accessor — used by Store, tier modules, and the runs router

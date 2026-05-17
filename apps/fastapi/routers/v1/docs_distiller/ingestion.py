@@ -52,6 +52,7 @@ async def list_library() -> list[dict]:
             "slug": slug,
             "framework_name": m.get("framework_name") or cat.get("name") or slug,
             "logo": cat.get("logo"),
+            "logos": cat.get("logos") or [],
             "ingested_at": m.get("ingested_at"),
             "page_count": m.get("page_count") or 0,
             "total_bytes": m.get("total_bytes") or 0,

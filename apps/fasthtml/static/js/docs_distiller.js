@@ -24,7 +24,7 @@
   const progressFill = document.querySelector('#fw-progress-fill');
   const progressCounter = document.querySelector('#fw-progress-counter');
   const progressUrl = document.querySelector('#fw-progress-url');
-  const progressLogo = document.querySelector('#fw-progress-logo');
+  const progressLogos = document.querySelector('#fw-progress-logos');
   const progressFramework = document.querySelector('#fw-progress-framework');
   const cancelBtn = document.querySelector('#fw-cancel');
   const step2Summary = document.querySelector('#fw-step2-summary');
@@ -60,6 +60,7 @@
   const plannerSubtitle   = document.querySelector('#fw-planner-subtitle');
   const plannerCardsEl    = document.querySelector('#fw-planner-cards');
   const plannerProgressLbl= document.querySelector('#fw-planner-progress-label');
+  const plannerModeSel    = document.querySelector('#fw-planner-mode');
 
   // State
   let activeChip = 'All';
@@ -73,9 +74,9 @@
   // -------- planner --------
   let plannerThreadId = null;
   let plannerPollAbort = false;
-  // Substep order MUST match the order in features/docs_distiller.py
-  // (`planner_substeps` list) AND the field each node writes in
-  // services/docs_distiller/planner/nodes/*.py.
+  // Substep order MUST match `NODE_ORDER` in
+  // services/docs_distiller/planner/graph.py AND the field each node
+  // writes (`state.<field>`).
   const PLANNER_SUBSTEP_FIELDS = [
     'raw_files',        // corpus_load
     'relevant_files',   // off_topic
@@ -86,6 +87,10 @@
     'validated_plan',   // validate
     'plan_path',        // plan_write
   ];
+  // Populated from GET /planner/info — names of substeps actually wired
+  // into the runtime graph. Stubs aren't included; their cards render
+  // as "future" so the user doesn't expect them to advance.
+  let plannerImplemented = new Set();
 
   // ============================================================
   // Utility
@@ -232,26 +237,34 @@
   // and augmented from the library sidebar (which has logos too). Used
   // by the loading box to label the active ingestion + by recovery.
   // ============================================================
-  const frameworkInfo = {};   // slug → {name, logo}
+  const frameworkInfo = {};   // slug → {name, logos: [url, ...]}
   function indexTilesForFramework() {
     tiles.forEach(t => {
       const slug = t.dataset.slug;
       const name = t.dataset.name;
-      const img = t.querySelector('.fw-tile-logo');
-      const logo = img ? img.src : '';
-      frameworkInfo[slug] = {name, logo};
+      // Multi-logo tile carries a strip of `.fw-tile-logo-multi`;
+      // single-logo tile carries `.fw-tile-logo`. Collect whichever.
+      const multi = Array.from(t.querySelectorAll('.fw-tile-logo-multi'));
+      const single = t.querySelector('.fw-tile-logo');
+      const logos = multi.length
+        ? multi.map(i => i.src)
+        : (single ? [single.src] : []);
+      frameworkInfo[slug] = {name, logos};
     });
   }
   indexTilesForFramework();
 
   function setProgressFramework(slug) {
-    const info = frameworkInfo[slug] || {name: slug, logo: ''};
+    const info = frameworkInfo[slug] || {name: slug, logos: []};
     progressFramework.textContent = info.name || slug;
-    if (info.logo) {
-      progressLogo.src = info.logo;
-      progressLogo.style.display = '';
+    if (info.logos && info.logos.length) {
+      progressLogos.innerHTML = info.logos.map(u =>
+        '<img class="fw-progress-logo" src="' + u + '" alt="">'
+      ).join('');
+      progressLogos.style.display = '';
     } else {
-      progressLogo.style.display = 'none';
+      progressLogos.innerHTML = '';
+      progressLogos.style.display = 'none';
     }
   }
 
@@ -555,13 +568,28 @@
   // Step 3: Planner — start button, history poll, substep cards
   // ============================================================
   function refreshPlannerStartState() {
-    // Enable Start Planner only when an ingested framework is selected
-    // and there's no planner run in flight + no active ingestion.
-    const ready = activeSlug && !plannerThreadId && activeRunId === null;
-    if (ready) plannerStartBtn.removeAttribute('disabled');
-    else plannerStartBtn.setAttribute('disabled', 'disabled');
+    // Three states for the Start/Cancel button:
+    //  - idle, ready    → "Start Planner" enabled
+    //  - idle, blocked  → "Start Planner" disabled (no slug or ingest active)
+    //  - running        → button becomes "Cancel Planner" (always enabled
+    //                     during a run; same behavior pattern as Step 2's
+    //                     ingestion cancel)
+    const running = plannerThreadId !== null;
+    if (running) {
+      plannerStartBtn.removeAttribute('disabled');
+      plannerStartBtn.classList.add('btn-outline');
+      plannerStartBtn.classList.remove('btn-primary');
+      plannerStartBtn.innerHTML = 'Cancel Planner';
+    } else {
+      const ready = activeSlug && activeRunId === null;
+      if (ready) plannerStartBtn.removeAttribute('disabled');
+      else plannerStartBtn.setAttribute('disabled', 'disabled');
+      plannerStartBtn.classList.add('btn-primary');
+      plannerStartBtn.classList.remove('btn-outline');
+      plannerStartBtn.innerHTML = 'Start Planner';
+    }
     plannerSubtitle.textContent = activeSlug
-      ? ('Framework: ' + activeSlug + (plannerThreadId ? ' · planner running' : ''))
+      ? ('Framework: ' + activeSlug + (running ? ' · planner running' : ''))
       : 'Pick a framework, then start to generate the chapter plan.';
   }
 
@@ -592,6 +620,143 @@
     return values && Object.prototype.hasOwnProperty.call(values, field);
   }
 
+  // Per-substep custom body renderers. Each returns an HTML string for
+  // the card body. Keyed by substep idx (matches PLANNER_SUBSTEP_FIELDS).
+  // Substeps without an entry here fall back to formatFieldValue/JSON.
+  const SUBSTEP_RENDERERS = {
+    // corpus_load — KPI-card grid + percentile distribution + meta footer.
+    // Design follows 2026 dashboard best practices: 4 headline KPI cards
+    // (one visual element max per card), then a compact percentile row,
+    // then a metadata footer line. Avoids the "Christmas Tree" effect.
+    0: function renderCorpusLoad(values) {
+      const s = values.corpus_stats || {};
+      if (!s.total_files) {
+        return '<div class="fw-empty">no corpus stats reported</div>';
+      }
+      const rate = s.load_ms
+        ? Math.round(s.total_files / s.load_ms * 1000)
+        : 0;
+      const ts = s.ingested_at
+        ? new Date(s.ingested_at * 1000).toISOString().replace('T',' ').slice(0, 16) + ' UTC'
+        : '—';
+
+      // 4 KPI cards
+      const kpi = (label, value, sub) =>
+        '<div class="fw-stat-card">' +
+          '<div class="fw-stat-card-label">' + escapeHtml(label) + '</div>' +
+          '<div class="fw-stat-card-value">' + escapeHtml(value) + '</div>' +
+          (sub ? '<div class="fw-stat-card-sub">' + escapeHtml(sub) + '</div>' : '') +
+        '</div>';
+
+      const cards =
+        kpi('Files',        s.total_files.toLocaleString(), null) +
+        kpi('Total bytes',  fmtBytes(s.total_bytes),        null) +
+        kpi('Median page',  fmtBytes(s.median_bytes),       null) +
+        kpi('Load time',    s.load_ms + ' ms',
+                            rate ? rate.toLocaleString() + ' files/s' : null);
+
+      // Compact distribution row — percentiles inline (log-scale not needed
+      // when bytes span 3 orders of magnitude; raw numbers tell the story).
+      const dist =
+        '<div class="fw-stat-dist">' +
+          '<div class="fw-stat-dist-title">Page size distribution</div>' +
+          '<div class="fw-stat-dist-row">' +
+            ['min', 'p10', 'median', 'p90', 'max'].map((k, i) => {
+              const val = [s.min_bytes, s.p10_bytes, s.median_bytes,
+                           s.p90_bytes, s.max_bytes][i];
+              return '<div class="fw-stat-dist-cell">' +
+                       '<div class="fw-stat-dist-key">' + k + '</div>' +
+                       '<div class="fw-stat-dist-val">' + fmtBytes(val) + '</div>' +
+                     '</div>';
+            }).join('') +
+          '</div>' +
+        '</div>';
+
+      // Footer — tier + ingested timestamp
+      const foot =
+        '<div class="fw-stat-foot">' +
+          'Tier <strong>' + escapeHtml(s.tier_kind || '—') + '</strong>' +
+          ' · ingested <strong>' + escapeHtml(ts) + '</strong>' +
+        '</div>';
+
+      return '<div class="fw-stat-grid">' + cards + '</div>' + dist + foot;
+    },
+
+    // off_topic — semantic noise filter. KPI cards (kept/dropped/
+    // threshold/domain_coherence) + a "boundary cases" table showing
+    // pages within ±0.05 of the threshold (false-positive / false-
+    // negative candidates the operator might want to inspect).
+    1: function renderOffTopic(values) {
+      const s = values.off_topic_stats || {};
+      if (s.kept === undefined && s.dropped === undefined) {
+        return '<div class="fw-empty">no off_topic stats reported</div>';
+      }
+      const kept = s.kept || 0;
+      const dropped = s.dropped || 0;
+      const total = kept + dropped;
+      const dropPct = total ? Math.round(dropped / total * 100) : 0;
+      const elapsed = s.elapsed_ms || 0;
+
+      const kpi = (label, value, sub) =>
+        '<div class="fw-stat-card">' +
+          '<div class="fw-stat-card-label">' + escapeHtml(label) + '</div>' +
+          '<div class="fw-stat-card-value">' + escapeHtml(value) + '</div>' +
+          (sub ? '<div class="fw-stat-card-sub">' + escapeHtml(sub) + '</div>' : '') +
+        '</div>';
+
+      const cards =
+        kpi('Kept',    kept.toLocaleString(), 'of ' + total.toLocaleString()) +
+        kpi('Dropped', dropped.toLocaleString(), dropPct + '% off-topic') +
+        kpi('Threshold', String(s.threshold || 0), 'cosine cutoff') +
+        kpi('Domain coherence', (s.domain_coherence || 0).toFixed(3),
+            'mean cos of kept set');
+
+      // Boundary table: pages within ±0.05 of threshold.
+      const t = s.threshold || 0.30;
+      const perFile = s.per_file_cosines || [];
+      const boundary = perFile
+        .filter(([_n, c, _k]) => Math.abs(c - t) <= 0.05)
+        .sort((a, b) => Math.abs(a[1] - t) - Math.abs(b[1] - t))
+        .slice(0, 12);
+
+      let table = '';
+      if (boundary.length) {
+        const rows = boundary.map(([name, c, k]) =>
+          '<tr>' +
+            '<td>' + (k
+              ? '<span style="color:#2a8b46">●</span>'
+              : '<span style="color:var(--error-text)">●</span>') + '</td>' +
+            '<td style="font-family:JetBrains Mono,monospace;font-size:0.78rem">' +
+              c.toFixed(4) + '</td>' +
+            '<td style="font-size:0.78rem;color:var(--text-muted)">' +
+              escapeHtml(name) + '</td>' +
+          '</tr>'
+        ).join('');
+        table =
+          '<div class="fw-stat-dist" style="margin-top:14px">' +
+            '<div class="fw-stat-dist-title">Boundary cases ' +
+              '(±0.05 from threshold)</div>' +
+            '<table style="width:100%;border-collapse:collapse;font-family:Raleway">' +
+              '<thead><tr style="border-bottom:1px solid var(--border)">' +
+                '<th style="text-align:left;padding:4px 8px 8px 0;font-size:0.7rem;color:var(--text-muted);text-transform:uppercase">In</th>' +
+                '<th style="text-align:left;padding:4px 8px 8px 0;font-size:0.7rem;color:var(--text-muted);text-transform:uppercase">Cosine</th>' +
+                '<th style="text-align:left;padding:4px 0 8px 0;font-size:0.7rem;color:var(--text-muted);text-transform:uppercase">Page</th>' +
+              '</tr></thead>' +
+              '<tbody>' + rows + '</tbody>' +
+            '</table>' +
+          '</div>';
+      }
+
+      const foot =
+        '<div class="fw-stat-foot">' +
+          'NIM <strong>nvidia/llama-nemotron-embed-1b-v2</strong>' +
+          ' · ' + elapsed + ' ms total' +
+        '</div>';
+
+      return '<div class="fw-stat-grid">' + cards + '</div>' + table + foot;
+    },
+  };
+
   function renderPlannerCards(values) {
     // values = the latest checkpoint's accumulated state
     let doneCount = 0;
@@ -602,18 +767,38 @@
       const icon = c.querySelector('.fw-planner-card-icon');
       const body = c.querySelector('.fw-planner-card-body');
       const present = _fieldPresent(values, field);
+      // Substep name = the PLANNER_SUBSTEPS index → graph node name.
+      // Lookup the implementation flag for visual treatment.
+      const cardData = c.dataset.substep || '';
+      const isImplemented = plannerImplemented.has(cardData);
       if (present) {
-        c.classList.add('done'); c.classList.remove('running', 'failed');
+        c.classList.add('done');
+        c.classList.remove('running', 'failed', 'future');
         icon.textContent = '●'; icon.dataset.status = 'done';
-        const v = values[field];
-        body.innerHTML = '<pre>' + escapeHtml(formatFieldValue(v)) + '</pre>';
+        const renderer = SUBSTEP_RENDERERS[i];
+        if (renderer) {
+          body.innerHTML = renderer(values);
+        } else {
+          const v = values[field];
+          body.innerHTML = '<pre>' + escapeHtml(formatFieldValue(v)) + '</pre>';
+        }
         doneCount++;
+      } else if (!isImplemented) {
+        // Substep stub — not wired into the runtime graph. Render as
+        // "future" so the user sees it's a planned step, not a failure.
+        c.classList.add('future');
+        c.classList.remove('running', 'done', 'failed');
+        icon.textContent = '⏳'; icon.dataset.status = 'future';
+        body.innerHTML =
+          '<div class="fw-empty">Substep not yet implemented — will be ' +
+          'wired into the graph as its real logic lands.</div>';
       } else if (i === doneCount && plannerThreadId !== null) {
-        // First not-done card while polling = currently running
-        c.classList.add('running'); c.classList.remove('done', 'failed');
+        // First not-done IMPLEMENTED card while polling = currently running
+        c.classList.add('running');
+        c.classList.remove('done', 'failed', 'future');
         icon.textContent = '◐'; icon.dataset.status = 'running';
       } else {
-        c.classList.remove('running', 'done', 'failed');
+        c.classList.remove('running', 'done', 'failed', 'future');
         icon.textContent = '○'; icon.dataset.status = 'pending';
       }
     }
@@ -688,41 +873,115 @@
     }
   }
 
+  function _genPlannerThreadId(slug) {
+    // Client-side UUID v4 — uses crypto.randomUUID where available,
+    // falls back to a sufficient-quality polyfill for older browsers.
+    const uuid = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        });
+    return 'docs-distiller/' + slug + '/' + uuid;
+  }
+
+  async function pollPlannerState(threadId) {
+    // Polls /debug/graph/.../state every 1.5s while this thread is
+    // still the active one. Each tick re-renders the substep cards so
+    // the user sees corpus_load complete → off_topic start → off_topic
+    // complete as checkpoints land. Exits when startPlanner clears
+    // plannerThreadId (or it changes to a new run).
+    while (plannerThreadId === threadId) {
+      try {
+        const r = await fetch(
+          API + '/planner/debug/graph/' + threadId + '/state');
+        if (r.ok) {
+          const data = await r.json();
+          renderPlannerCards(data.values || {});
+        }
+        // 404 is normal in the brief window before the first checkpoint
+        // is written — just retry next tick.
+      } catch (e) { /* transient */ }
+      await sleep(1500);
+    }
+  }
+
   async function startPlanner() {
     if (!activeSlug || plannerThreadId) return;
     resetPlannerCards();
-    plannerStartBtn.setAttribute('disabled', 'disabled');
+    // Generate thread_id client-side so the Cancel button + polling
+    // loop both have a real ID from click 1 (no 'pending' dead-zone).
+    const tid = _genPlannerThreadId(activeSlug);
+    plannerThreadId = tid;
+    refreshPlannerStartState();   // button flips to "Cancel Planner"
+    // Kick off polling in parallel with the main POST so the user sees
+    // cards advance progressively.
+    pollPlannerState(tid);
     try {
+      const mode = (plannerModeSel && plannerModeSel.value) || 'llm';
       const r = await fetch(
-        API + '/planner/' + activeSlug,
+        API + '/planner/' + activeSlug +
+        '?mode=' + encodeURIComponent(mode) +
+        '&thread_id=' + encodeURIComponent(tid),
         {method: 'POST'},
       );
       if (!r.ok) {
         const txt = await r.text();
         markPlannerFailed('HTTP ' + r.status + ': ' + txt.slice(0, 400));
+        plannerThreadId = null;
         refreshPlannerStartState();
         return;
       }
       const data = await r.json();
-      plannerThreadId = data.thread_id;
-      // The POST blocks until the graph finishes (no-op stubs run fast),
-      // so data.state is already the final state. Render it once + skip
-      // the poll loop. Once nodes do real work this branch flips to
-      // start the loop instead.
-      if (data.state && data.state.status === 'done') {
-        renderPlannerCards(data.state);
-        plannerThreadId = null;
-        refreshPlannerStartState();
-      } else {
-        pollPlanner(plannerThreadId);
+      // POST returned — render terminal state, stop polling loop.
+      renderPlannerCards(data.state || {});
+      if (data.status === 'cancelled') {
+        showToast('Planner cancelled. ' +
+          'Checkpoints up to the cancel point are preserved.');
+      } else if (data.status === 'failed') {
+        markPlannerFailed(data.state?.error || 'Planner failed');
       }
+      plannerThreadId = null;
+      refreshPlannerStartState();
     } catch (e) {
       markPlannerFailed('Request failed: ' + String(e));
+      plannerThreadId = null;
       refreshPlannerStartState();
     }
   }
 
-  plannerStartBtn.addEventListener('click', startPlanner);
+  async function cancelPlanner() {
+    if (!plannerThreadId) return;
+    const tid = plannerThreadId;
+    // Spinner + "Cancelling…" — mirrors the Step 2 ingestion cancel UX.
+    plannerStartBtn.setAttribute('disabled', 'disabled');
+    plannerStartBtn.innerHTML =
+      '<div class="fw-spinner" style="display:inline-block;' +
+      'vertical-align:middle;margin-right:8px"></div>Cancelling…';
+    try {
+      // Fire-and-forget — the cancel watcher on the server detects the
+      // Redis flag within ~1s, raises CancelledError inside graph.ainvoke,
+      // and the in-flight POST /planner/{slug} returns with
+      // status='cancelled'. THAT response triggers the UI cleanup
+      // (refreshPlannerStartState in startPlanner's finally).
+      await fetch(API + '/planner/' + tid + '/cancel', {method: 'POST'});
+    } catch (e) {
+      // If the cancel POST itself fails, restore the button so the user
+      // can retry. The startPlanner POST is still in flight either way.
+      plannerStartBtn.removeAttribute('disabled');
+      plannerStartBtn.innerHTML = 'Cancel Planner';
+      showToast('Cancel request failed: ' + String(e));
+    }
+  }
+
+  plannerStartBtn.addEventListener('click', () => {
+    // Dual-purpose: Start when idle, Cancel when a thread_id is set.
+    if (plannerThreadId) {
+      cancelPlanner();
+    } else {
+      startPlanner();
+    }
+  });
 
   // Card-head click → toggle expanded body
   plannerCardsEl.addEventListener('click', ev => {
@@ -787,9 +1046,14 @@
     if (items) {
       items.forEach(it => {
         if (it.slug && !frameworkInfo[it.slug]) {
+          // Prefer `logos` array from the catalog (multi-logo stack);
+          // fall back to the single `logo` for everyday entries.
+          const logos = (it.logos && it.logos.length)
+            ? it.logos
+            : (it.logo ? [it.logo] : []);
           frameworkInfo[it.slug] = {
             name: it.framework_name || it.slug,
-            logo: it.logo || '',
+            logos,
           };
         }
       });
@@ -953,6 +1217,37 @@
     } catch (e) { /* silent — nothing to recover */ }
   }
 
+  async function loadPlannerInfo() {
+    try {
+      const r = await fetch(API + '/planner/info');
+      if (!r.ok) return;
+      const data = await r.json();
+      plannerImplemented = new Set(data.implemented || []);
+      // Hydrate the mode dropdown from the server's canonical mode list.
+      // Server-rendered defaults work even without this, but a future
+      // mode addition (e.g. "hybrid") shows up automatically.
+      if (Array.isArray(data.modes) && plannerModeSel) {
+        const currentVal = plannerModeSel.value;
+        plannerModeSel.innerHTML = data.modes.map(m => {
+          const label = m.enabled ? m.label : m.label + ' (soon)';
+          const sel = (m.key === currentVal && m.enabled) ? ' selected' : '';
+          const dis = m.enabled ? '' : ' disabled';
+          return '<option value="' + m.key + '"' + sel + dis + '>' +
+                 escapeHtml(label) + '</option>';
+        }).join('');
+        // If the previously-selected value got disabled, fall back to
+        // the first enabled mode.
+        const enabled = data.modes.filter(m => m.enabled);
+        if (enabled.length && !enabled.find(m => m.key === plannerModeSel.value)) {
+          plannerModeSel.value = enabled[0].key;
+        }
+      }
+      // Re-render the cards now that we know which are implemented vs
+      // future — turns unimplemented stubs into the "⏳ future" state.
+      renderPlannerCards({});
+    } catch (e) { /* silent — defaults to all "pending" */ }
+  }
+
   // ============================================================
   // Init
   // ============================================================
@@ -963,4 +1258,5 @@
   // mid-flight runs — recovery may flip currentStep to 2 which depends on
   // library state already being known.
   loadLibrary().then(recoverActiveRuns);
+  loadPlannerInfo();
 })();

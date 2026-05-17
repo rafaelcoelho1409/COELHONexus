@@ -291,6 +291,7 @@ async def run(
     store: Store,
     language: str | None = None,
     framework_name: str | None = None,
+    path_filter: dict | None = None,
 ) -> int:
     parsed = urlparse(url)
     host = (parsed.netloc or "").lower()
@@ -342,6 +343,10 @@ async def run(
             if not same_host(u, host):
                 return False
             if NON_TARGET_LANGUAGE_PATH_RE.search(p.path or ""):
+                return False
+            # Stage 1 noise filter — defaults + per-framework path_filter.
+            from .filters import passes_path_filter
+            if not passes_path_filter(u, path_filter):
                 return False
             if polyglot and language:
                 return should_keep(u, allow, deny)

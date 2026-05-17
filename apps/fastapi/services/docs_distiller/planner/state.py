@@ -18,10 +18,18 @@ class PlannerState(TypedDict, total=False):
     # --- inputs (set at graph kick-off) ---
     framework_slug: str
     thread_id: str               # also LangFuse session_id
+    # "llm"        — every substep that has an LLM path uses the rotator
+    # "classical"  — substeps with classical fallbacks (map → numpy
+    #                community_detection + KeyLLM; etc.) use them instead.
+    # Plumbed through state today; only the LLM path is implemented. When
+    # classical lands, nodes branch on this field. Default "llm".
+    planner_mode: str
 
     # --- node outputs (one per substep) ---
-    raw_files: Optional[list[str]]              # corpus_load
+    raw_files: Optional[list[str]]              # corpus_load — MinIO keys only
+    corpus_stats: Optional[dict]                # corpus_load — count/bytes/perc dist
     relevant_files: Optional[list[str]]         # off_topic (post-embedding filter)
+    off_topic_stats: Optional[dict]             # off_topic observability dict
     deduped_files: Optional[list[str]]          # dedup
     cached_plan: Optional[dict]                 # cache_lookup (None = cache miss)
     shard_results: Optional[list[dict]]         # map (per-shard labels + assignments)

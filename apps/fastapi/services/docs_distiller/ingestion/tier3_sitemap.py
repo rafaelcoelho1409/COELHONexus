@@ -160,6 +160,7 @@ async def run(
     store: Store,
     language: str | None = None,
     framework_name: str | None = None,
+    path_filter: dict | None = None,
 ) -> int:
     logger.info(f"[tier-3] framework={framework_slug} sitemap={url}")
     await progress.start(tier="sitemap", total=0)
@@ -170,6 +171,12 @@ async def run(
     def _keep(u: str) -> bool:
         p = urlparse(u)
         if NON_TARGET_LANGUAGE_PATH_RE.search(p.path or ""):
+            return False
+        # Stage 1 noise filter: drop obvious non-docs paths (events,
+        # blog, changelog, jobs, …) BEFORE we fetch them. Defaults plus
+        # per-framework `path_filter` from sources.yaml.
+        from .filters import passes_path_filter
+        if not passes_path_filter(u, path_filter):
             return False
         if polyglot and language:
             return should_keep(u, allow, deny)

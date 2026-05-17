@@ -180,6 +180,7 @@ async def run(run_id: str, slug: str) -> dict:
             }
             if mod in (tier3_sitemap, tier4_http):
                 kwargs["framework_name"] = entry["name"]
+                kwargs["path_filter"] = entry.get("path_filter")
             await mod.run(**kwargs)
         except tier1_llms_full.ManifestDetected:
             if entry.get("llms_txt"):
@@ -230,6 +231,7 @@ async def run(run_id: str, slug: str) -> dict:
             }
             if fb_mod in (tier3_sitemap, tier4_http):
                 fb_kwargs["framework_name"] = entry["name"]
+                fb_kwargs["path_filter"] = entry.get("path_filter")
             await fb_mod.run(**fb_kwargs)
 
         await progress.raise_if_cancelled()
@@ -284,6 +286,17 @@ async def run(run_id: str, slug: str) -> dict:
         # cooperative `raise_if_cancelled()` path surfaces as IngestCancelled.
         # Both mean the same thing — user wants out.
         logger.info(f"[dispatch] {slug}: cancelled by user (run_id={run_id})")
+        # CRITICAL: stop the watcher BEFORE running cleanup. Otherwise the
+        # watcher's poll loop (still seeing cancel-flag set in Redis) fires
+        # a SECOND `main_task.cancel()` mid-cleanup → CancelledError raised
+        # inside `delete_prefix` → cleanup aborts with leftover MinIO objects.
+        # Observed in production on Kubernetes ingest (2026-05-17): 428
+        # straggler objects left over after the watcher's second cancel.
+        watcher_task.cancel()
+        try:
+            await watcher_task
+        except (asyncio.CancelledError, Exception):
+            pass
         # Two-pass cleanup. The streaming pattern in tier 2/3/4a has
         # parallel coroutines that may complete MinIO writes AFTER the
         # cancel signal but BEFORE the gather actually unwinds — leaving

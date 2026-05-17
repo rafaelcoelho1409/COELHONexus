@@ -20,7 +20,7 @@ client-side wizard logic is in /static/js/docs_distiller.js.
 """
 import httpx
 from fasthtml.common import (
-    Button, Div, Img, Input, P, Script, Span,
+    Button, Div, Img, Input, Option, P, Script, Select, Span,
 )
 
 from proxy import FASTAPI_URL
@@ -49,7 +49,16 @@ def _Step(n: int, label: str, active: bool = False):
 
 def _tile(f: dict):
     children = []
-    if f.get("logo"):
+    # Multi-logo stack entries (e.g. LangChain - LangGraph - DeepAgents)
+    # render every component logo in a horizontal strip. Single-logo
+    # entries fall back to the legacy single-image render.
+    logos = f.get("logos") or []
+    if logos:
+        children.append(Div(
+            *[Img(src=u, alt="", cls="fw-tile-logo-multi") for u in logos],
+            cls="fw-tile-logos",
+        ))
+    elif f.get("logo"):
         children.append(Img(src=f["logo"], alt="", cls="fw-tile-logo"))
     children.append(Div(f["name"], cls="fw-tile-name"))
     children.append(Div(f.get("category") or "—", cls="fw-tile-cat"))
@@ -127,8 +136,11 @@ def _Picker():
             Div("", id="fw-progress-url", cls="fw-progress-url"),
             Div(
                 Div(
-                    Img(id="fw-progress-logo", cls="fw-progress-logo",
-                        src="", alt="", style="display:none"),
+                    # Logo strip — JS populates with one or more <img>
+                    # elements. Supports the unified stack tiles which
+                    # carry a `logos: [...]` array (LangChain stack,
+                    # Grafana stack) as well as the single-logo case.
+                    Div(id="fw-progress-logos", cls="fw-progress-logos"),
                     Span("", id="fw-progress-framework",
                          cls="fw-progress-framework"),
                     cls="fw-progress-framework-box",
@@ -201,6 +213,20 @@ def _Picker():
                 cls="fw-planner-head-text",
             ),
             Div(
+                # Mode dropdown — populated from /planner/info on load.
+                # Server-rendered fallback options so the UI is usable even
+                # before that fetch completes; JS replaces them with the
+                # canonical list (which may add modes in the future).
+                Div(
+                    Span("Mode", cls="fw-planner-mode-label"),
+                    Select(
+                        Option("LLM-only", value="llm", selected=True),
+                        Option("Classical + LLM (soon)",
+                               value="classical", disabled=True),
+                        id="fw-planner-mode", cls="fw-planner-mode-select",
+                    ),
+                    cls="fw-planner-mode-box",
+                ),
                 Span("", id="fw-planner-progress-label",
                      cls="fw-planner-progress-label"),
                 Button("Start Planner", id="fw-planner-start",
