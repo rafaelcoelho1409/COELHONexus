@@ -35,7 +35,10 @@ from services.docs_distiller.ingestion.progress import (
     read_url_records,
     request_cancel,
 )
-from services.docs_distiller.ingestion.storage_minio import get_storage
+from services.docs_distiller.ingestion.storage_minio import (
+    framework_prefix,
+    get_storage,
+)
 from services.docs_distiller.ingestion.store import (
     read_framework_manifest,
     read_framework_page,
@@ -100,10 +103,9 @@ async def start_run(body: StartRunBody) -> dict:
             }
 
         # 2. Cached: skip ingestion unless refresh requested.
+        minio = get_storage()
         if not body.refresh:
-            cached = await read_framework_manifest(
-                get_storage(), body.slug,
-            )
+            cached = await read_framework_manifest(minio, body.slug)
             if cached:
                 return {
                     "status": "cached",
@@ -111,6 +113,28 @@ async def start_run(body: StartRunBody) -> dict:
                     "run_id": None,
                     "manifest": cached,
                 }
+        else:
+            # Refresh: wipe the framework prefix before queuing so the
+            # new ingestion writes against a clean slate. Without this,
+            # old pages (especially when the new run produces fewer
+            # pages than the previous one — e.g. after a splitter
+            # change) stay as orphans under the same prefix and
+            # contaminate later reads + `delete_prefix` calls.
+            try:
+                n = await minio.delete_prefix(framework_prefix(body.slug))
+                if n:
+                    import logging
+                    logging.getLogger(__name__).info(
+                        f"[runs] refresh wipe: deleted {n} stale objects "
+                        f"for {body.slug!r} before re-ingestion"
+                    )
+            except Exception as e:
+                # Don't block re-ingestion on cleanup failure — the new
+                # writes will at least overwrite the colliding keys.
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"[runs] refresh wipe failed for {body.slug!r}: {e}"
+                )
 
         # 3. Acquire lock + queue task.
         run_id = uuid.uuid4().hex
@@ -137,6 +161,55 @@ async def start_run(body: StartRunBody) -> dict:
         }
     finally:
         await r.aclose()
+
+
+@router.get("/active")
+async def list_active_runs() -> dict:
+    """Return every in-flight ingestion (lock-held with a still-running
+    progress record). Page-reload recovery: the FastHTML UI calls this on
+    init so that closing/reopening a tab mid-ingestion restores the
+    progress display + resumes polling — and crucially prevents the user
+    from triggering a duplicate run for a slug that's already in flight.
+
+    Source of truth: `dd:lock:*` keys in Redis (set when POST /runs
+    acquires the single-flight lock, released in dispatch.py's finally
+    block). Cross-checked with the per-run progress record so we don't
+    show locks whose progress was never written (rare race window).
+    """
+    r = redis_aio.from_url(
+        _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+    )
+    active: list[dict] = []
+    try:
+        # SCAN > KEYS for safety on large keyspaces; same semantics here
+        # since the lock set is tiny (1 per active framework).
+        cursor = 0
+        while True:
+            cursor, keys = await r.scan(cursor=cursor, match="dd:lock:*", count=100)
+            for k in keys:
+                ks = k.decode() if isinstance(k, bytes) else k
+                slug = ks.split("dd:lock:", 1)[-1]
+                run_id_raw = await r.get(k)
+                if not run_id_raw:
+                    continue
+                run_id = (
+                    run_id_raw.decode()
+                    if isinstance(run_id_raw, bytes) else run_id_raw
+                )
+                progress = await read_progress(r, run_id)
+                # Only surface runs that have written progress AND aren't
+                # already terminal (in case the lock is being released).
+                if progress and progress.get("status") in ("running", "idle"):
+                    active.append({
+                        "slug": slug,
+                        "run_id": run_id,
+                        "progress": progress,
+                    })
+            if cursor == 0:
+                break
+    finally:
+        await r.aclose()
+    return {"active": active}
 
 
 @router.post("/{run_id}/cancel")

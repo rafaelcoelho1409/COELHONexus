@@ -31,27 +31,63 @@ from .store import Store
 
 logger = logging.getLogger(__name__)
 
+
+class EmptyLinksDetected(Exception):
+    """Raised when llms.txt was fetched successfully but parsed zero
+    usable per-page links. Some sites publish a long-form prose llms.txt
+    (per the llmstxt.org spec) with bare-URL bullets like
+    `- GitHub: https://github.com/…` instead of the `- [title](url)`
+    markdown-link format our parser expects. In that case the dispatcher
+    should fall through to the next available tier (sitemap/docs/github)
+    rather than fail the run — Tier 2 simply isn't usable here."""
+    pass
+
+
 _USER_AGENT = "COELHONexus-DocsDistiller-Tier2/1.0"
 _TIMEOUT_S = 30.0
 _CONCURRENCY = 8
 _MIN_OK_BYTES = 200
 
 
-_LINK_RE = re.compile(r"^\s*[-*]\s+\[([^\]]+)\]\(([^)]+)\)", re.MULTILINE)
+# Two link styles seen in llms.txt files:
+#   A) `- [Title](https://url)`           — canonical markdown link (most sites)
+#   B) `- Title (extra): https://url`    — bare-URL bullet (Supervision, others)
+#       also matches `- Title: https://url` (no parens)
+_LINK_MD_RE = re.compile(r"^\s*[-*]\s+\[([^\]]+)\]\(([^)]+)\)", re.MULTILINE)
+_LINK_BARE_RE = re.compile(
+    r"^\s*[-*]\s+(.+?):\s+(https?://\S+)\s*$", re.MULTILINE,
+)
 
 
 def _parse_index(body: str, base_url: str) -> list[tuple[str, str]]:
-    """Return [(title, absolute_url), ...] from a llms.txt body. Dedupes
+    """Return [(title, absolute_url), ...] from a llms.txt body. Tries the
+    canonical markdown-link format first; then the bare-URL bullet format
+    that Supervision (and likely others) use. Filters URLs to the same
+    host as `base_url` so we don't try to ingest GitHub/PyPI/external
+    meta-links that often appear in long-form llms.txt files. Dedupes
     while preserving first-occurrence order."""
+    from urllib.parse import urlparse
+    base_host = (urlparse(base_url).netloc or "").lower()
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for m in _LINK_RE.finditer(body):
-        title = m.group(1).strip()
-        url = urljoin(base_url, m.group(2).strip())
+
+    def _add(title: str, url: str) -> None:
+        url = urljoin(base_url, url.strip())
+        # Drop external links — long-form llms.txt usually peppers in
+        # meta-pointers like `- GitHub: https://github.com/...` that
+        # aren't docs pages and would route through the wrong tier.
+        host = (urlparse(url).netloc or "").lower()
+        if base_host and host and host != base_host:
+            return
         if url in seen:
-            continue
+            return
         seen.add(url)
-        out.append((title, url))
+        out.append((title.strip(), url))
+
+    for m in _LINK_MD_RE.finditer(body):
+        _add(m.group(1), m.group(2))
+    for m in _LINK_BARE_RE.finditer(body):
+        _add(m.group(1), m.group(2))
     return out
 
 
@@ -185,39 +221,43 @@ async def run(
         )
         links = _parse_index(resp.text or "", base_url=url)
         if not links:
-            await progress.finish(status="failed")
-            raise RuntimeError(f"Tier 2: {url} parsed zero links")
+            # Don't mark as failed — dispatcher will catch + fall through.
+            logger.info(
+                f"[tier-2] {url} parsed zero links — likely a long-form "
+                f"prose llms.txt; signalling fallback"
+            )
+            raise EmptyLinksDetected(url)
 
         logger.info(f"[tier-2] parsed {len(links)} URLs from {url}")
         await progress.update_total(len(links))
 
-        # Fan out
+        # Fan out — stream each successful fetch to MinIO inside the
+        # coroutine. Bounded RAM, partial-persistence on crash, smooth
+        # progress bar. See tier3_sitemap for the broader rationale.
         sem = asyncio.Semaphore(_CONCURRENCY)
+        written = 0
 
         async def _bound(title: str, link: str):
+            nonlocal written
             async with sem:
                 await progress.raise_if_cancelled()
-                return await _fetch_one(
+                r = await _fetch_one(
                     client, title, link, progress=progress, tier_name="llms_txt",
                 )
+            if r is not None:
+                slug, src_url, body, t = r
+                await store.add_page(
+                    slug=slug, url=src_url, body=body,
+                    tier="llms_txt", title=t,
+                )
+                written += 1
+            await progress.update(current=written, last_url=link)
+            return r
 
-        results = await asyncio.gather(
+        await asyncio.gather(
             *(_bound(t, u) for t, u in links),
             return_exceptions=False,
         )
-
-    # Write successes in order
-    written = 0
-    for r in results:
-        if r is None:
-            continue
-        slug, src_url, body, title = r
-        await store.add_page(
-            slug=slug, url=src_url, body=body,
-            tier="llms_txt", title=title,
-        )
-        written += 1
-        await progress.update(current=written, last_url=src_url)
 
     if written == 0:
         await progress.finish(status="failed")

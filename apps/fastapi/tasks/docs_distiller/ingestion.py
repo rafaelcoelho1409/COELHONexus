@@ -21,8 +21,11 @@ logger = logging.getLogger(__name__)
     bind=True,
     acks_late=False,             # idempotent re-trigger lives in the API layer
     track_started=True,
-    soft_time_limit=1800,        # 30 min soft cap
-    time_limit=1860,             # 31 min hard kill
+    # Docker-scale Tier 3 (1500+ pages) + Tier 4 BFS with Playwright fallback
+    # can legitimately push past 30 min. Raised from 1800/1860 (2026-05-17).
+    # The framework lock's TTL in progress.py (2100s) also got room.
+    soft_time_limit=3600,        # 60 min soft cap
+    time_limit=3660,             # 61 min hard kill
 )
 def run_ingestion(self, run_id: str, slug: str) -> dict:
     """Run docs ingestion for `slug` and persist the manifest under

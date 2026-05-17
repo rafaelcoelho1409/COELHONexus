@@ -90,13 +90,12 @@ async def restore(
     if cur:
         import asyncio
         sem = asyncio.BoundedSemaphore(32)
-
-        async def _one(k: str) -> None:
-            async with sem:
-                async with minio._client() as s3:
+        # Shared client across the loop — same fix as MinIOStorage.delete_prefix.
+        async with minio._client() as s3:
+            async def _one(k: str) -> None:
+                async with sem:
                     await s3.delete_object(Bucket=minio.bucket, Key=k)
-
-        await asyncio.gather(*(_one(k) for k in cur))
+            await asyncio.gather(*(_one(k) for k in cur))
         deleted = len(cur)
 
     t0 = time.monotonic()

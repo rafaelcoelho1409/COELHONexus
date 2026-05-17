@@ -583,7 +583,31 @@ html, body {
 }
 .fw-progress-actions {
   margin-top: 16px;
-  display: flex; justify-content: flex-end; gap: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;  /* framework-box left, cancel button right */
+  gap: 12px;
+}
+.fw-progress-framework-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.fw-progress-logo {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.fw-progress-framework {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ===== Step 3 page list ===== */

@@ -24,6 +24,8 @@
   const progressFill = document.querySelector('#fw-progress-fill');
   const progressCounter = document.querySelector('#fw-progress-counter');
   const progressUrl = document.querySelector('#fw-progress-url');
+  const progressLogo = document.querySelector('#fw-progress-logo');
+  const progressFramework = document.querySelector('#fw-progress-framework');
   const cancelBtn = document.querySelector('#fw-cancel');
   const step2Summary = document.querySelector('#fw-step2-summary');
   const step2Grid = document.querySelector('#fw-step2-grid');
@@ -224,6 +226,34 @@
     const idx = parseInt(card.dataset.idx, 10);
     if (Number.isFinite(idx)) openDrawer(idx);
   });
+
+  // ============================================================
+  // slug → {name, logo} lookup. Built from the rendered tiles (catalog)
+  // and augmented from the library sidebar (which has logos too). Used
+  // by the loading box to label the active ingestion + by recovery.
+  // ============================================================
+  const frameworkInfo = {};   // slug → {name, logo}
+  function indexTilesForFramework() {
+    tiles.forEach(t => {
+      const slug = t.dataset.slug;
+      const name = t.dataset.name;
+      const img = t.querySelector('.fw-tile-logo');
+      const logo = img ? img.src : '';
+      frameworkInfo[slug] = {name, logo};
+    });
+  }
+  indexTilesForFramework();
+
+  function setProgressFramework(slug) {
+    const info = frameworkInfo[slug] || {name: slug, logo: ''};
+    progressFramework.textContent = info.name || slug;
+    if (info.logo) {
+      progressLogo.src = info.logo;
+      progressLogo.style.display = '';
+    } else {
+      progressLogo.style.display = 'none';
+    }
+  }
 
   // ============================================================
   // Step 1: picker filtering + selection
@@ -438,6 +468,11 @@
     activeRunId = runId;
     refreshGenerateState();   // disable Generate while this run is in flight
     progressBox.style.display = '';   // reveal the live progress display
+    // Reset cancel button (a previous cancelled run may have left it
+    // in the "Cancelling…" + spinner state).
+    cancelBtn.disabled = false;
+    cancelBtn.innerHTML = 'Cancel ingestion';
+    if (activeSlug) setProgressFramework(activeSlug);
     while (!pollAbort && activeRunId === runId) {
       try {
         const r = await fetch(API + '/runs/' + runId);
@@ -455,9 +490,32 @@
           return;
         }
         if (st === 'failed' || st === 'cancelled') {
+          const cancelledSlug = activeSlug;
           activeRunId = null;
           refreshGenerateState();
+          // Hide the live progress box + restore Step 2 + Step 4 to their
+          // initial pick-a-framework state. The dispatcher has already
+          // wiped MinIO; we just need the UI to reflect that.
+          progressBox.style.display = 'none';
+          step2Summary.innerHTML = '';
+          step2Grid.innerHTML =
+            '<div class="fw-empty">Pick a framework in the catalog or ' +
+            'the sidebar to see its downloaded files.</div>';
+          // If the user was viewing the cancelled framework on Step 4
+          // (Study), clear that too — its files no longer exist.
+          if (activeSlug === cancelledSlug) {
+            activeSlug = null;
+            pagesSummary.innerHTML = '';
+            pageGrid.innerHTML =
+              '<div class="fw-empty">Pick an item from the sidebar or ' +
+              'generate a new study.</div>';
+            // Drop sidebar "active" highlight (the cancelled row is gone
+            // anyway after loadLibrary, but clear here too).
+            sidebarList.querySelectorAll('.fw-lib-item.active')
+              .forEach(x => x.classList.remove('active'));
+          }
           await loadLibrary();
+          refreshPlannerStartState();
           showToast('Ingestion ' + st + '. ' +
             (st === 'cancelled' ? 'Partial pages cleared from storage.' : ''));
           return;
@@ -471,12 +529,25 @@
 
   cancelBtn.addEventListener('click', async () => {
     if (!activeRunId) return;
+    // Visible "we heard you" state — spinner + "Cancelling…" replaces
+    // the button content, button stays disabled. The watcher in
+    // dispatch.py picks up the cancel flag within ~1s, the worker wipes
+    // MinIO partial state, pollRun's cancelled branch then hides the
+    // entire progressBox (which contains this button), so we don't
+    // need an explicit restore on success — pollRun's reset on the
+    // NEXT run handles it.
     cancelBtn.disabled = true;
+    cancelBtn.innerHTML =
+      '<div class="fw-spinner" style="display:inline-block;' +
+      'vertical-align:middle;margin-right:8px"></div>Cancelling…';
+    progressStatus.textContent = 'cancelling';
     try {
       await fetch(API + '/runs/' + activeRunId + '/cancel', {method: 'POST'});
-    } finally {
-      // Poll loop will pick up the cancelled status and surface a toast.
+    } catch (e) {
+      // If the POST itself fails, restore the button so the user can retry.
       cancelBtn.disabled = false;
+      cancelBtn.innerHTML = 'Cancel ingestion';
+      showToast('Cancel request failed: ' + String(e));
     }
   });
 
@@ -710,6 +781,19 @@
   // Sidebar — library list
   // ============================================================
   function renderSidebar(items) {
+    // Augment frameworkInfo from the library list so recovery + sidebar
+    // clicks can label the loading box even for frameworks that aren't
+    // in the catalog tile set (or were ingested via the audit endpoint).
+    if (items) {
+      items.forEach(it => {
+        if (it.slug && !frameworkInfo[it.slug]) {
+          frameworkInfo[it.slug] = {
+            name: it.framework_name || it.slug,
+            logo: it.logo || '',
+          };
+        }
+      });
+    }
     if (!items || items.length === 0) {
       sidebarList.innerHTML =
         '<div class="fw-sidebar-empty">' +
@@ -832,10 +916,51 @@
   }
 
   // ============================================================
+  // Page-reload recovery — restore active-ingestion state from Redis.
+  // ============================================================
+  // Without this, refreshing the page mid-ingestion wipes the in-memory
+  // activeRunId/activeSlug → the loading box vanishes and the user can
+  // re-click Start Ingestion (which the backend single-flight lock would
+  // deny with "locked", but the UX is jarring). With this, the UI
+  // re-attaches to any still-running run on page load: resumes polling,
+  // restores the progress display, blocks the Generate button.
+  async function recoverActiveRuns() {
+    try {
+      const r = await fetch(API + '/runs/active');
+      if (!r.ok) return;
+      const data = await r.json();
+      const runs = data.active || [];
+      if (runs.length === 0) return;
+      // Resume the first active run (single-flight lock is per-slug so
+      // multiple concurrent runs across different slugs are theoretically
+      // possible; we surface the first one — the others remain protected
+      // by their own locks, user will see them when they finish).
+      const run = runs[0];
+      activeSlug = run.slug;
+      activeRunId = run.run_id;
+      farthestStep = Math.max(farthestStep, 2);
+      refreshGenerateState();   // disables Start + sidebar refresh/delete
+      showStep(2);              // reveal the live progress box
+      setProgressFramework(run.slug);
+      // Paint the last-known progress immediately so the UI is populated
+      // before the first poll tick lands.
+      if (run.progress) renderProgress(run.progress);
+      pollRun(run.run_id);      // resume the poll loop
+      showNotice(
+        'Resumed in-flight ingestion of ' + run.slug + ' (started ' +
+        fmtAge(run.progress?.updated_at) + ').'
+      );
+    } catch (e) { /* silent — nothing to recover */ }
+  }
+
+  // ============================================================
   // Init
   // ============================================================
   countEl.textContent = total + ' of ' + total;
   renderStepper();
   refreshGenerateState();   // initial pass — disabled until a tile is picked
-  loadLibrary();
+  // Library first (populates sidebar + syncStepLocks), then recover any
+  // mid-flight runs — recovery may flip currentStep to 2 which depends on
+  // library state already being known.
+  loadLibrary().then(recoverActiveRuns);
 })();

@@ -50,7 +50,10 @@ _TIMEOUT_S = 30.0
 _CONCURRENCY = 10
 _MIN_OK_BYTES = 200
 _BFS_MAX_DEPTH = 3
-_BFS_URL_CAP = 600
+# URL cap removed (2026-05-17) — BFS is already bounded by 4 natural
+# guards: same-host filter, subtree path filter, max depth ≤ 3, and the
+# `discovered` visited-set (no cycles). The 10000 ceiling was redundant
+# and would only truncate genuinely huge docs sites.
 _DISCOVERY_MIN_URLS = 5
 _PHASE4A_FAIL_RATE_TRIGGER = 0.5     # >50% → escalate to Playwright
 
@@ -181,9 +184,6 @@ async def _bfs(
                 if link not in discovered:
                     discovered[link] = depth + 1
                     queue.append((link, depth + 1))
-            if len(discovered) >= _BFS_URL_CAP:
-                logger.info(f"[tier-4] BFS URL cap hit ({_BFS_URL_CAP})")
-                return sorted(discovered.keys())
     return sorted(discovered.keys())
 
 
@@ -375,34 +375,38 @@ async def run(
             )
 
         # ----------------------------------------------------------------
-        # Phase 4a — parallel httpx fetch + extract
+        # Phase 4a — parallel httpx fetch + extract, streamed to MinIO
         # ----------------------------------------------------------------
         await progress.update_total(len(filtered))
         sem = asyncio.Semaphore(_CONCURRENCY)
+        # Stream successful pages to MinIO inside each coroutine; collect
+        # failed URLs in a shared list for Phase 4b Playwright escalation.
+        # See tier3_sitemap for the broader rationale (bounded memory,
+        # partial-persistence on crash, smooth progress bar).
+        written = 0
+        failed: list[str] = []
 
         async def _bound(u: str):
+            nonlocal written
             async with sem:
                 await progress.raise_if_cancelled()
-                return await _fetch_one(client, u, progress=progress)
+                r = await _fetch_one(client, u, progress=progress)
+            if r is None:
+                failed.append(u)
+            else:
+                slug, src_url, body, title = r
+                await store.add_page(
+                    slug=slug, url=src_url, body=body,
+                    tier="http", title=title,
+                )
+                written += 1
+            await progress.update(current=written, last_url=u)
+            return r
 
-        results = await asyncio.gather(
+        await asyncio.gather(
             *(_bound(u) for u in filtered),
             return_exceptions=False,
         )
-
-    # Write successes + collect failed URLs (used for 4b escalation).
-    written = 0
-    failed: list[str] = []
-    for u, r in zip(filtered, results):
-        if r is None:
-            failed.append(u)
-            continue
-        slug, src_url, body, title = r
-        await store.add_page(
-            slug=slug, url=src_url, body=body, tier="http", title=title,
-        )
-        written += 1
-        await progress.update(current=written, last_url=src_url)
 
     fail_rate = len(failed) / max(1, len(filtered))
 

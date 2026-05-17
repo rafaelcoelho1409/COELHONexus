@@ -126,6 +126,13 @@ def _Picker():
             ),
             Div("", id="fw-progress-url", cls="fw-progress-url"),
             Div(
+                Div(
+                    Img(id="fw-progress-logo", cls="fw-progress-logo",
+                        src="", alt="", style="display:none"),
+                    Span("", id="fw-progress-framework",
+                         cls="fw-progress-framework"),
+                    cls="fw-progress-framework-box",
+                ),
                 Button("Cancel ingestion", id="fw-cancel", cls="btn-outline"),
                 cls="fw-progress-actions",
             ),

@@ -40,8 +40,11 @@ _USER_AGENT = "COELHONexus-DocsDistiller-Tier3/1.0"
 _TIMEOUT_S = 30.0
 _CONCURRENCY = 8
 _MIN_OK_BYTES = 200
-# Hard cap so a 50k-URL sitemap doesn't pin the worker for an hour.
-_URL_CAP = 600
+# Cap removed (2026-05-17) — was 600, silently truncating large docs sites
+# like Docker (1512 URLs after filter → only 600 kept). Sitemap is bounded
+# by construction (finite list); concurrency + per-URL timeout already
+# bound wall-time. If a 50k-URL sitemap shows up, raise concurrency or
+# add a per-framework override; don't truncate by default.
 # Nested sitemap depth limit (sitemap index → sitemap → …).
 _INDEX_MAX_DEPTH = 3
 
@@ -193,40 +196,42 @@ async def run(
             seen.add(u)
             deduped.append(u)
 
-        if len(deduped) > _URL_CAP:
-            logger.info(
-                f"[tier-3] capping {len(deduped)} URLs → {_URL_CAP}"
-            )
-            deduped = deduped[:_URL_CAP]
-
         logger.info(
             f"[tier-3] {len(all_urls)} total → {len(kept)} after filter → "
-            f"{len(deduped)} after dedup/cap"
+            f"{len(deduped)} after dedup"
         )
         await progress.update_total(len(deduped))
 
         sem = asyncio.Semaphore(_CONCURRENCY)
+        # Stream each page to MinIO as soon as its fetch returns. No
+        # post-gather serial write loop — that pattern held all bodies in
+        # RAM and serialized writes, doubling wall-time on big corpora
+        # like Docker (1500+ pages). Now: fetch + write + manifest-append
+        # all overlap; partial state is persisted on crash; progress bar
+        # reflects actual MinIO commits.
+        written = 0
 
         async def _bound(u: str):
+            nonlocal written
             async with sem:
                 await progress.raise_if_cancelled()
-                return await _fetch_page(client, u, progress=progress)
+                r = await _fetch_page(client, u, progress=progress)
+            if r is not None:
+                slug, src_url, body, title = r
+                await store.add_page(
+                    slug=slug, url=src_url, body=body,
+                    tier="sitemap", title=title,
+                )
+                written += 1
+            # Update fires per fetch (incl. failed fetches counted in
+            # progress.total but not in `written`) — keeps the bar moving.
+            await progress.update(current=written, last_url=u)
+            return r
 
-        results = await asyncio.gather(
+        await asyncio.gather(
             *(_bound(u) for u in deduped),
             return_exceptions=False,
         )
-
-    written = 0
-    for r in results:
-        if r is None:
-            continue
-        slug, src_url, body, title = r
-        await store.add_page(
-            slug=slug, url=src_url, body=body, tier="sitemap", title=title,
-        )
-        written += 1
-        await progress.update(current=written, last_url=src_url)
 
     if written == 0:
         await progress.finish(status="failed")

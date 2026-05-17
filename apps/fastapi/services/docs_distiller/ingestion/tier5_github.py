@@ -43,7 +43,10 @@ _RAW_BASE = "https://raw.githubusercontent.com"
 _USER_AGENT = "COELHONexus-DocsDistiller-Tier5/1.0"
 _TIMEOUT_S = 30.0
 _CONCURRENCY = 10
-_MAX_BLOB_BYTES = 2_000_000      # 2 MB — anything larger isn't real docs
+# _MAX_BLOB_BYTES removed (2026-05-17) — was 2 MB, silently dropping large
+# generated API references (e.g. Kubernetes auto-doc files commonly > 2 MB).
+# raw.githubusercontent.com has a hard 100 MB ceiling itself, which is more
+# than enough for any real markdown blob; relying on that.
 _MIN_OK_BYTES = 150
 
 _MD_EXTS = (".md", ".mdx", ".markdown")
@@ -270,14 +273,10 @@ async def run(
             fetch_ms=int((time.monotonic() - t0) * 1000),
         )
 
-        # Filter
-        keep: list[str] = []
-        for path, size in blobs:
-            if not _is_docs_blob(path):
-                continue
-            if size is not None and size > _MAX_BLOB_BYTES:
-                continue
-            keep.append(path)
+        # Filter — keep every markdown blob; size limit removed.
+        keep: list[str] = [
+            path for path, _size in blobs if _is_docs_blob(path)
+        ]
         if not keep:
             await progress.finish(status="failed")
             raise RuntimeError(
@@ -291,30 +290,33 @@ async def run(
         )
         await progress.update_total(len(keep))
 
+        # Stream-to-MinIO inside each coroutine. See tier3_sitemap for
+        # the broader rationale (bounded RAM, partial-persistence, smooth
+        # progress bar).
         sem = asyncio.Semaphore(_CONCURRENCY)
+        written = 0
 
         async def _bound(p: str):
+            nonlocal written
             async with sem:
                 await progress.raise_if_cancelled()
-                return await _fetch_one(
+                r = await _fetch_one(
                     client, org, repo, branch, p, progress=progress,
                 )
+            if r is not None:
+                slug, raw_url, body, title = r
+                await store.add_page(
+                    slug=slug, url=raw_url, body=body,
+                    tier="github", title=title,
+                )
+                written += 1
+            await progress.update(current=written, last_url=p)
+            return r
 
-        results = await asyncio.gather(
+        await asyncio.gather(
             *(_bound(p) for p in keep),
             return_exceptions=False,
         )
-
-    written = 0
-    for r in results:
-        if r is None:
-            continue
-        slug, raw_url, body, title = r
-        await store.add_page(
-            slug=slug, url=raw_url, body=body, tier="github", title=title,
-        )
-        written += 1
-        await progress.update(current=written, last_url=raw_url)
 
     if written == 0:
         await progress.finish(status="failed")

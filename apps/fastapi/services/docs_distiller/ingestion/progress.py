@@ -27,7 +27,7 @@ import redis.asyncio as redis_aio
 logger = logging.getLogger(__name__)
 
 _TTL_S = 7200
-_LOCK_TTL_S = 2100        # 35 min; Celery soft_time_limit is 1800 s
+_LOCK_TTL_S = 3900        # 65 min; Celery soft_time_limit is 3600 s
 _THROTTLE_S = 1.0
 _CANCEL_POLL_THROTTLE_S = 1.0
 

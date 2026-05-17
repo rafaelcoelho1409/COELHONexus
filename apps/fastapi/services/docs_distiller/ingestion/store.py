@@ -62,6 +62,20 @@ class Store:
         self.r = r
         self.minio = minio
         self._cached_manifest: list[ManifestEntry] = []
+        # Concurrency: tier 3/4a fetch many URLs in parallel and want to
+        # stream each result to MinIO as soon as it arrives. The idx-assign
+        # + manifest-append region needs to be atomic; the slow MinIO PUT
+        # can happen outside the lock so we preserve real concurrency.
+        import asyncio
+        self._add_lock = asyncio.Lock()
+        # Live-manifest write throttle. Without throttling, every add_page
+        # serialises the FULL growing manifest to Redis — at page 1500 each
+        # call writes a ~300KB blob; 1500 such writes compounded blew past
+        # Celery's 30-min soft_time_limit on Docker's Tier 3 run. With 1s
+        # throttling the live UI still polls smoothly (its own loop is 1.5s)
+        # but worker CPU + Redis bandwidth stay bounded.
+        self._live_last_flush = 0.0
+        self._live_throttle_s = 1.0
 
     async def add_page(
         self,
@@ -72,16 +86,21 @@ class Store:
         tier: str,
         title: str = "",
     ) -> ManifestEntry:
-        idx = len(self._cached_manifest)
-        key = page_key(self.framework_slug, idx, slug)
+        """Stream a fetched page to MinIO + append to the live manifest.
+        Safe to call from many coroutines concurrently — the idx-assign +
+        manifest-append region is locked; the MinIO PUT happens outside the
+        lock so writes overlap freely."""
         body_bytes = len(body.encode("utf-8"))
+        async with self._add_lock:
+            idx = len(self._cached_manifest)
+            key = page_key(self.framework_slug, idx, slug)
+            entry = ManifestEntry(
+                idx=idx, slug=slug, url=url, tier=tier,
+                bytes=body_bytes, title=title or slug, key=key,
+            )
+            self._cached_manifest.append(entry)
+        # MinIO PUT outside the lock — concurrent puts proceed in parallel.
         await self.minio.write(key, body, content_type="text/markdown")
-
-        entry = ManifestEntry(
-            idx=idx, slug=slug, url=url, tier=tier,
-            bytes=body_bytes, title=title or slug, key=key,
-        )
-        self._cached_manifest.append(entry)
         await self._write_live_manifest()
         return entry
 
@@ -102,9 +121,11 @@ class Store:
 
     async def replace_manifest(self, entries: list[ManifestEntry]) -> None:
         """Post-process rewrites the manifest. Caller must have already
-        written each new entry's body to MinIO via `write_body_by_key`."""
+        written each new entry's body to MinIO via `write_body_by_key`.
+        force=True ensures the live manifest is up-to-date for any UI
+        poll between post-process and finalize."""
         self._cached_manifest = list(entries)
-        await self._write_live_manifest()
+        await self._write_live_manifest(force=True)
 
     async def write_body_by_key(self, key: str, body: str) -> int:
         return await self.minio.write(key, body, content_type="text/markdown")
@@ -142,7 +163,12 @@ class Store:
         except Exception as e:
             logger.warning(f"[store] manifest write to MinIO failed: {e}")
 
-    async def _write_live_manifest(self) -> None:
+    async def _write_live_manifest(self, force: bool = False) -> None:
+        import time
+        now = time.monotonic()
+        if not force and (now - self._live_last_flush) < self._live_throttle_s:
+            return
+        self._live_last_flush = now
         try:
             await self.r.set(
                 live_manifest_key(self.run_id),

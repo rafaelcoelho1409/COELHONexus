@@ -3,14 +3,25 @@
 Two responsibilities:
 
   1. Monolith split — when a tier produced one large markdown blob (mainly
-     Tier 1's llms-full.txt), break it on H1/H2 boundaries into per-section
-     files. Uses markdown-it-py's token stream so code fences, tables, and
-     HTML blocks are atomic — never bisected.
+     Tier 1's llms-full.txt), break it into per-original-page files. Two
+     boundary strategies, tried in order:
 
-  2. Cleanup pass — drop heading-only stubs (<64 B body) and SHA256-dedupe
-     byte-identical sections. Both fixes carried forward from the verified
-     v3 baseline; together they remove the noise that was inflating embed
-     budget and creating tiny micro-clusters in the planner downstream.
+       a) `Source: <url>` markers (modern llms-full.txt convention,
+          e.g. Streamlit/Mintlify) — these are GROUND TRUTH original-page
+          boundaries published by the upstream docs site. When present
+          (≥3 markers), prefer them: each section starts at the H1 above
+          the Source line and runs through to the next.
+       b) H1 fallback — when no Source markers exist, split at H1
+          boundaries only. H2/H3 are subsection structure, NOT page
+          structure; splitting on them shatters originally-coherent
+          pages into context-less fragments (the bug that gave Streamlit
+          778 pages vs MLflow's 82 for similar-sized corpora).
+
+     Both strategies use markdown-it-py's token stream so code fences,
+     tables, HTML/MDX blocks are atomic — never bisected.
+
+  2. Cleanup pass — drop sub-300 B stubs (was 64, too lenient; let
+     micro-fragments through) and SHA256-dedupe byte-identical sections.
 """
 import hashlib
 import logging
@@ -22,12 +33,20 @@ from .store import ManifestEntry, Store
 logger = logging.getLogger(__name__)
 
 MONOLITH_SPLIT_THRESHOLD_BYTES = 50_000
-SPLIT_MIN_SECTION_BYTES = 64        # heading-only stub threshold
+SPLIT_MIN_SECTION_BYTES = 300       # raised from 64; MLflow p10 is ~2.5 KB
+
+# Matches: "Source: https://..." on its own line. The modern llms-full.txt
+# convention (Mintlify, Streamlit, etc.) emits these immediately under each
+# original page's H1 as the canonical original-page-boundary signal.
+_SOURCE_LINE_RE = re.compile(
+    r'^Source:\s+(https?://\S+)\s*$', re.MULTILINE,
+)
+_SOURCE_MIN_MARKERS = 3             # below this count, format isn't trustworthy
 
 
 def _split_markdown_by_headings(
     text: str,
-    split_levels: tuple[int, ...] = (1, 2),
+    split_levels: tuple[int, ...] = (1,),
 ) -> list[tuple[str, str, str]]:
     """Return [(h1, h2, body), ...] in document order.
 
@@ -92,6 +111,76 @@ def _slugify_heading(s: str, fallback: str) -> str:
     return s2 or fallback
 
 
+def _split_by_source_markers(text: str) -> list[tuple[str, str, str]] | None:
+    """Boundary strategy A: split at `Source: <url>` markers.
+
+    For each Source line, walk back to the nearest preceding H1 — that's
+    the section's true start (the page's title). Section body runs from
+    that H1 through to the start of the next section.
+
+    Returns [(h1_title, "", body), ...] in document order, OR None if
+    the format doesn't carry enough Source markers to trust this strategy.
+    """
+    matches = list(_SOURCE_LINE_RE.finditer(text))
+    if len(matches) < _SOURCE_MIN_MARKERS:
+        return None
+
+    lines = text.splitlines(keepends=True)
+    # Build cumulative char offset per line for fast char→line lookup.
+    line_offsets = [0]
+    for line in lines:
+        line_offsets.append(line_offsets[-1] + len(line))
+
+    def _char_to_line_idx(pos: int) -> int:
+        # Binary-search would be tidier; linear is plenty fast for our sizes.
+        for i in range(len(line_offsets) - 1):
+            if line_offsets[i] <= pos < line_offsets[i + 1]:
+                return i
+        return len(lines) - 1
+
+    section_starts: list[tuple[int, str]] = []
+    seen_starts: set[int] = set()
+    for m in matches:
+        src_line_idx = _char_to_line_idx(m.start())
+        # Walk back to find the nearest H1 above this Source line. An H1
+        # is a line that starts with "# " but NOT "## " or deeper.
+        h1_idx = None
+        h1_title = ""
+        for cursor in range(src_line_idx - 1, -1, -1):
+            ln = lines[cursor].rstrip("\n").rstrip("\r")
+            if ln.startswith("# ") and not ln.startswith("## "):
+                h1_idx = cursor
+                h1_title = ln[2:].strip()
+                break
+        if h1_idx is None:
+            # No H1 above → preamble; start at the Source line itself so
+            # the section at least carries the URL marker.
+            h1_idx = src_line_idx
+            h1_title = ""
+        if h1_idx in seen_starts:
+            continue
+        seen_starts.add(h1_idx)
+        section_starts.append((h1_idx, h1_title))
+
+    section_starts.sort(key=lambda s: s[0])
+
+    sections: list[tuple[str, str, str]] = []
+    # Capture any leading preamble before the first detected boundary.
+    if section_starts and section_starts[0][0] > 0:
+        preamble = "".join(lines[:section_starts[0][0]])
+        if preamble.strip():
+            sections.append(("", "", preamble))
+
+    for j, (h1_idx, h1_title) in enumerate(section_starts):
+        end = (
+            section_starts[j + 1][0]
+            if j + 1 < len(section_starts) else len(lines)
+        )
+        body = "".join(lines[h1_idx:end])
+        sections.append((h1_title, "", body))
+    return sections
+
+
 def split_monolith(
     body: str,
     parent_slug: str,
@@ -101,23 +190,43 @@ def split_monolith(
     Returns (writes, stubs_dropped, duplicates_dropped). Pure function —
     caller is responsible for persistence.
 
+    Boundary strategy precedence:
+      1. `Source: <url>` markers (true upstream page boundaries)
+      2. H1 fallback (splits on H1 only, NOT H2 — H2 is subsection)
+
     Below MONOLITH_SPLIT_THRESHOLD_BYTES → returns the body unchanged as
     a single-entry list (idempotent for already-small or pre-split corpora).
     """
     if len(body.encode("utf-8")) < MONOLITH_SPLIT_THRESHOLD_BYTES:
         return [(parent_slug, body)], 0, 0
 
-    sections = _split_markdown_by_headings(body, split_levels=(1, 2))
+    sections = _split_by_source_markers(body)
+    strategy = "source-markers"
+    if sections is None:
+        sections = _split_markdown_by_headings(body, split_levels=(1,))
+        strategy = "h1-fallback"
     if len(sections) < 3:
         return [(parent_slug, body)], 0, 0
+
+    logger.info(
+        f"[post] split_monolith: {strategy} → {len(sections)} sections "
+        f"(input {len(body)//1024} KB)"
+    )
 
     width = max(4, len(str(max(0, len(sections) - 1))))
     writes: list[tuple[str, str]] = []
     for i, (h1, h2, sec_body) in enumerate(sections):
-        heading = h2 or h1 or f"section-{i:0{width}d}"
+        # Prefer H1 (parent-page name) over H2 (subsection) — flipped from
+        # the legacy ordering that buried parent context behind subsections.
+        heading = h1 or h2 or f"section-{i:0{width}d}"
         sub = _slugify_heading(heading, f"section-{i:0{width}d}")
         base = sub if sub.startswith(parent_slug) else f"{parent_slug}-{sub}"
-        writes.append((f"{i:0{width}d}-{base}", sec_body))
+        # Slug is the heading-derived base only. The pre-cleanup section
+        # index used to be prefixed here, but after stub-drop + dedup that
+        # made the surviving slugs look "gappy" (0000, 0002, 0006…) — the
+        # MinIO `page_key` already prepends a fresh contiguous `new_idx`
+        # so the section-index here was both redundant and misleading.
+        writes.append((base, sec_body))
 
     # Drop heading-only stubs.
     pre = len(writes)
@@ -232,21 +341,36 @@ async def apply_to_store(store: Store) -> dict:
     if input_files == 0:
         return _summary("dedup", 0, 0, [])
 
-    raw_pages: list[tuple[str, str, str]] = []
-    for e in current:
-        try:
-            body = await store.read_body_by_key(e.key)
-        except Exception:
-            body = ""
-        raw_pages.append((e.slug, e.url, body))
+    # Parallel read every body — was serial @ ~50ms/key, so 1500 pages
+    # took ~75s; bounded sem keeps from saturating the MinIO connection
+    # pool while still amortizing the latency.
+    import asyncio
+    _read_sem = asyncio.BoundedSemaphore(32)
+
+    async def _read_one(e):
+        async with _read_sem:
+            try:
+                b = await store.read_body_by_key(e.key)
+            except Exception:
+                b = ""
+        return (e.slug, e.url, b)
+
+    raw_pages: list[tuple[str, str, str]] = list(
+        await asyncio.gather(*(_read_one(e) for e in current))
+    )
 
     deduped, stubs, dupes = dedup_pages(raw_pages)
     if stubs == 0 and dupes == 0:
         return _summary("dedup", input_files, input_bytes, current)
 
-    # Wipe old MinIO objects, rewrite under contiguous idx (parallel).
-    for e in current:
-        await store.delete_body_by_key(e.key)
+    # Parallel wipe of old MinIO objects (same rationale — was serial).
+    _del_sem = asyncio.BoundedSemaphore(32)
+
+    async def _del_one(e):
+        async with _del_sem:
+            await store.delete_body_by_key(e.key)
+
+    await asyncio.gather(*(_del_one(e) for e in current))
     new_entries = []
     write_batch: list = []
     for new_idx, (slug, url, body) in enumerate(deduped):

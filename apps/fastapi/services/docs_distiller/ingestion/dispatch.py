@@ -200,6 +200,37 @@ async def run(run_id: str, slug: str) -> dict:
                     f"Tier 1 manifest at {url} but no llms_txt URL "
                     f"available to fall back to"
                 )
+        except tier2_llms_txt.EmptyLinksDetected:
+            # llms.txt was fetched but had no usable per-page links
+            # (long-form prose format). Walk down the priority list for
+            # the next available tier.
+            fallback_chain = [
+                ("sitemap", entry.get("sitemap"), tier3_sitemap),
+                ("docs",    entry.get("docs"),    tier4_http),
+                ("github",  entry.get("github"),  tier5_github),
+            ]
+            picked = next(((k, u, m) for k, u, m in fallback_chain if u), None)
+            if picked is None:
+                raise RuntimeError(
+                    f"Tier 2 llms.txt at {url} yielded zero links and no "
+                    f"fallback tier (sitemap/docs/github) is configured"
+                )
+            fb_kind, fb_url, fb_mod = picked
+            logger.info(
+                f"[dispatch] {slug}: Tier 2 yielded zero links, "
+                f"falling through to Tier {fb_kind} ({fb_url})"
+            )
+            base_result["tier_kind"] = fb_kind
+            base_result["tier_url"] = fb_url
+            await progress.close()
+            progress = Progress(run_id)
+            fb_kwargs = {
+                "url": fb_url, "framework_slug": slug,
+                "progress": progress, "store": store,
+            }
+            if fb_mod in (tier3_sitemap, tier4_http):
+                fb_kwargs["framework_name"] = entry["name"]
+            await fb_mod.run(**fb_kwargs)
 
         await progress.raise_if_cancelled()
 
@@ -253,7 +284,20 @@ async def run(run_id: str, slug: str) -> dict:
         # cooperative `raise_if_cancelled()` path surfaces as IngestCancelled.
         # Both mean the same thing — user wants out.
         logger.info(f"[dispatch] {slug}: cancelled by user (run_id={run_id})")
-        await _cleanup_framework(minio, slug)
+        # Two-pass cleanup. The streaming pattern in tier 2/3/4a has
+        # parallel coroutines that may complete MinIO writes AFTER the
+        # cancel signal but BEFORE the gather actually unwinds — leaving
+        # straggler objects after the first sweep. Brief sleep gives any
+        # in-flight writes time to either finish or be cancelled, then
+        # the second sweep catches them.
+        n1 = await _cleanup_framework(minio, slug)
+        await asyncio.sleep(0.8)
+        n2 = await _cleanup_framework(minio, slug)
+        if n2 > 0:
+            logger.info(
+                f"[dispatch] {slug}: cleanup pass 2 caught {n2} straggler "
+                f"objects (pass 1 deleted {n1})"
+            )
         await progress.finish(status="cancelled")
         return {
             **base_result, "status": "cancelled", "pages_written": 0,

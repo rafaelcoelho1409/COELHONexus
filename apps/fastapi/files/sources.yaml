@@ -20,7 +20,7 @@ frameworks:
 
 - name: ADTK
   logo: https://adtk.readthedocs.io/en/stable/_static/arundo_logo_black.png
-  docs: https://adtk.readthedocs.io/en/
+  docs: https://adtk.readthedocs.io/en/stable/
   github: https://github.com/arundo/adtk
   category: Python
 
@@ -144,15 +144,12 @@ frameworks:
 - name: Docker
   logo: https://cdn.simpleicons.org/docker
   docs: https://docs.docker.com/
-  llms_full: https://docs.docker.com/llms-full.txt
-  llms_txt: https://docs.docker.com/llms.txt
   sitemap: https://docs.docker.com/sitemap.xml
   github: https://github.com/docker/cli
 
 - name: DuckDB
   logo: https://cdn.simpleicons.org/duckdb
   docs: https://duckdb.org/docs/
-  llms_txt: https://duckdb.org/llms.txt
   sitemap: https://duckdb.org/sitemap.xml
   github: https://github.com/duckdb/duckdb
   category: Python
@@ -160,7 +157,6 @@ frameworks:
 - name: ElasticSearch
   logo: https://cdn.simpleicons.org/elasticsearch
   docs: https://www.elastic.co/docs
-  llms_txt: https://www.elastic.co/docs/llms.txt
   sitemap: https://www.elastic.co/docs/sitemap.xml
   github: https://github.com/elastic/elasticsearch
 
@@ -375,6 +371,7 @@ frameworks:
 - name: Novu (Python)
   logo: https://cdn.simpleicons.org/novu
   docs: https://novu-python.readthedocs.io/en/
+  sitemap: https://docs.novu.co/sitemap.xml
   github: https://github.com/novuhq/novu-py
   category: Python
 
@@ -420,7 +417,6 @@ frameworks:
 - name: OpenTelemetry
   logo: https://cdn.simpleicons.org/opentelemetry
   docs: https://opentelemetry.io/docs/
-  llms_txt: https://opentelemetry.io/llms.txt
   sitemap: https://opentelemetry.io/en/sitemap.xml
   github: https://github.com/open-telemetry
 
@@ -577,7 +573,7 @@ frameworks:
   logo: https://cdn.simpleicons.org/redis
   docs: https://redis.io/docs/
   llms_txt: https://redis.io/llms.txt
-  sitemap: https://redis.io/sitemap.xml
+  sitemap: https://redis.io/docs/latest/sitemap.xml
   github: https://github.com/redis/redis
 
 - name: Redis (Python)
@@ -685,6 +681,7 @@ frameworks:
   docs: https://docs.streamlit.io/
   llms_full: https://docs.streamlit.io/llms-full.txt
   llms_txt: https://docs.streamlit.io/llms.txt
+  sitemap: https://docs.streamlit.io/sitemap-0.xml
   github: https://github.com/streamlit/streamlit
   category: Python
 
@@ -692,7 +689,7 @@ frameworks:
   logo: https://cdn.simpleicons.org/roboflow
   docs: https://supervision.roboflow.com/
   llms_txt: https://supervision.roboflow.com/llms.txt
-  sitemap: https://supervision.roboflow.com/sitemap.xml
+  sitemap: https://supervision.roboflow.com/sitemap.xml 
   github: https://github.com/roboflow/supervision
   category: Python
 
@@ -733,7 +730,7 @@ frameworks:
   category: Python
 
 - name: TRL
-  logo: https://cdn.simpleicons.org/huggingface
+  logo: https://camo.githubusercontent.com/43833709f83c9ff958d834a21af558036d5f6877ac32ec573649aed1f9ca9a81/68747470733a2f2f68756767696e67666163652e636f2f64617461736574732f74726c2d6c69622f646f63756d656e746174696f6e2d696d616765732f7265736f6c76652f6d61696e2f74726c5f62616e6e65725f6461726b2e706e67
   docs: https://huggingface.co/docs/trl/
   llms_full: https://huggingface.co/docs/trl/llms-full.txt
   llms_txt: https://huggingface.co/docs/trl/llms.txt
