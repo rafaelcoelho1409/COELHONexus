@@ -1,7 +1,7 @@
 """
 Unified LLM Router — LiteLLM-backed with fail-fast pre-call checks.
 
-DESIGN 2026-04-24: ONE ranked catalog (`kd-all`) reused by every KD step.
+DESIGN 2026-04-24: ONE ranked catalog (`dd-all`) reused by every KD step.
 Previously had 5 separate groups (synth/refine/scope/curator/general); this
 file was refactored to serve a SINGLE best→worst ordering so every node in
 the KD graph draws from the same top-quality pool. Temperature differs per
@@ -48,7 +48,7 @@ rebuilt CI/CD v2 pipeline (isolated envs, signed artifacts).
 Interleaving: NO 3 same-provider in a row at ANY position. A single-
 provider outage affects ≤ 2 top-10 entries.
 
-Factories (all serve from the same `kd-all` group, varying only temperature):
+Factories (all serve from the same `dd-all` group, varying only temperature):
   - build_llm_fallback_chain          — T=0.0
   - build_resolver_llm_chain           — T=0.0
   - build_synth_fallback_chain         — T=0.0 (synthesize_chapter, curator)
@@ -57,6 +57,7 @@ Factories (all serve from the same `kd-all` group, varying only temperature):
 """
 import logging
 import os
+import time
 import litellm
 from langchain_litellm.chat_models import ChatLiteLLMRouter
 from litellm import Router
@@ -86,10 +87,10 @@ from litellm.types.router import (
 # performance data lands in Mimir for routing-decision queries AND in
 # LangFuse for prompt-replay UX. No per-call code change required.
 #
-# Adds `kd_process` metadata propagation: when a call site passes
-# `config={"metadata": {"kd_process": "..."}}` to chain.ainvoke(...), LiteLLM
+# Adds `dd_process` metadata propagation: when a call site passes
+# `config={"metadata": {"dd_process": "..."}}` to chain.ainvoke(...), LiteLLM
 # attaches it as a span attribute. PromQL queries can then slice by
-# (kd_process, deployment_id) to see "which model is fastest for section_synth".
+# (dd_process, deployment_id) to see "which model is fastest for section_synth".
 if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
     try:
         litellm.callbacks = ["otel"]
@@ -215,22 +216,22 @@ def _zhipu_entry(group: str, model: str, timeout_s: int = 120) -> dict:
 
 
 # =============================================================================
-# Unified ranked catalog — `kd-all`
+# Unified ranked catalog — `dd-all`
 # =============================================================================
 # SAME list served to every KD step. Ordering is strictly best→worst by
 # 2026-04-24 benchmark data (SWE-Bench Verified, MMLU-Pro, AIME-2025,
 # LMArena Elo, AAII, LiveCodeBench, GPQA, HumanEval — composite).
 # Providers interleaved so no 3 in a row of same provider anywhere.
-GROUP = "kd-all"
+GROUP = "dd-all"
 
 # =============================================================================
-# Small-LM group — `kd-keylm` (KeyLLM cluster labeling for the classical MAP)
+# Small-LM group — `dd-keylm` (KeyLLM cluster labeling for the classical MAP)
 # =============================================================================
 # Tiny instruct LMs (≤1B) for short-output format-strict tasks like the
 # 2-4 word cluster titles emitted by graphs/knowledge/classical_map.py's
-# KeyLLM step. NOT for synthesis — those go to GROUP=kd-all.
+# KeyLLM step. NOT for synthesis — those go to GROUP=dd-all.
 #
-# Why a separate group: the kd-all rotator's frontier 70B+ models would
+# Why a separate group: the dd-all rotator's frontier 70B+ models would
 # burn unnecessary tokens on a 16-token title. Routing tiny tasks to a tiny
 # model keeps latency < 200ms and leaves the rotator's free-tier RPM
 # budget for the synthesis-heavy steps.
@@ -241,7 +242,7 @@ GROUP = "kd-all"
 #   Llama-3.1-405B/70B → strong format adherence.
 # - llama-3.2-1b-preview on Groq (preview): same model on LPU silicon —
 #   sub-100ms latency. Preview status is a stability risk so secondary.
-KEYLM_GROUP = "kd-keylm"
+KEYLM_GROUP = "dd-keylm"
 
 
 def _keylm_entries() -> list:
@@ -268,12 +269,12 @@ def _keylm_entries() -> list:
 
 
 # =============================================================================
-# REDUCE labeling group — `kd-reduce-label` (Clio per-meta naming + ordering)
+# REDUCE labeling group — `dd-reduce-label` (Clio per-meta naming + ordering)
 # =============================================================================
 # Curated pool for the Clio REDUCE step's `_label_one` parallel calls and the
 # single `order_chain` call (apps/fastapi/graphs/knowledge/reduce_cluster.py).
 # Each call is ~3K tokens, structurally a classification task ("name this
-# group of 30 related topics"). Co-mingling these with kd-all's reasoning
+# group of 30 related topics"). Co-mingling these with dd-all's reasoning
 # models (Kimi K2-Thinking, GLM-5.1, MiniMax-M2.7, Qwen3.5-397B, DeepSeek-V3.2,
 # Magistral, Gemini-3-flash R-mode) is the root cause of the 504s/stragglers/
 # silent-None failures observed pre-2026-05-11: those models burn the 300s
@@ -284,18 +285,18 @@ def _keylm_entries() -> list:
 # currently reachable AND non-reasoning AND has native function-calling or
 # response_format support on its hosting provider.
 #
-# Specifically EXCLUDED-by-design vs kd-all:
+# Specifically EXCLUDED-by-design vs dd-all:
 #   - SambaNova (whole provider paywalled per 2026-04-24 Run-8)
 #   - Cerebras gpt-oss-120b (this account 404; user's key lacks model access)
-#   - DeepSeek V4 (Insufficient Balance per kd-all comments)
+#   - DeepSeek V4 (Insufficient Balance per dd-all comments)
 #   - Zhipu glm-*-flash (auth/endpoint failures, 0/14 success in Run-16)
 #   - Groq gpt-oss-120b (8K TPM ceiling) and qwen3-32b (6K TPM) — also
-#     excluded from kd-all for the same reason
+#     excluded from dd-all for the same reason
 #   - All reasoning-mode models even when reachable (the whole point)
 #
 # Pool sized for M=8-12 parallel labeling fanout. With 8 deployments and
 # per-deployment cooldown, a single bad provider takes out ≤1 entry.
-REDUCE_LABEL_GROUP = "kd-reduce-label"
+REDUCE_LABEL_GROUP = "dd-reduce-label"
 
 
 def _reduce_label_entries() -> list:
@@ -307,25 +308,25 @@ def _reduce_label_entries() -> list:
     then Llama-4 Maverick as deep tail. ~8 deployments — generous
     cooldown-redundancy for parallel labeling.
 
-    Timeouts are tighter than kd-all (60-90s vs 120s) — these calls are
+    Timeouts are tighter than dd-all (60-90s vs 120s) — these calls are
     structurally short; a long delay almost always means a flaky model
     head and we'd rather fall through faster than wait it out.
     """
     return [
         # --- Tier 1: LPU/TPU silicon, sub-100ms TTFT, native tools ---
-        # Groq llama-3.3-70b-versatile is EXCLUDED from kd-all only because of
+        # Groq llama-3.3-70b-versatile is EXCLUDED from dd-all only because of
         # the code-gen error benchmark; chapter naming doesn't generate code,
         # so that exclusion doesn't apply here. 12K TPM ample for ~3K prompts.
         _groq_entry(REDUCE_LABEL_GROUP, "llama-3.3-70b-versatile", timeout_s=60),
         # Gemini 3.1 Flash-Lite preview: 381 t/s, AAII 34, 1M ctx, native tools.
-        # Distinct from `gemini-2.5-flash-lite` which is disabled in kd-all
+        # Distinct from `gemini-2.5-flash-lite` which is disabled in dd-all
         # (returns empty choices on the complex ChapterOutput schema) — the
         # REDUCE schemas (MetaLabelDraft / OrderedIndices) are much simpler.
         # Gemini-3 requires T=1.0 (Google's API: "Setting temperature < 1.0
         # for Gemini 3 models can cause infinite loops, degraded reasoning
         # performance, and failure on complex tasks"). Polish #5b (2026-05-11):
         # the factory `build_reduce_label_chain` now passes T=1.0 to ALL
-        # kd-reduce-label deployments — call-time temperature wins over
+        # dd-reduce-label deployments — call-time temperature wins over
         # deployment-level litellm_params in LiteLLM Router, so the per-
         # deployment override approach we tried first didn't take effect.
         # json_schema mode keeps output valid at T=1.0 for non-Gemini
@@ -361,7 +362,7 @@ def _reduce_label_entries() -> list:
 
 
 # =============================================================================
-# Section-synth prose group — `kd-synth` (Scope B, 2026-05-12 night)
+# Section-synth prose group — `dd-synth` (Scope B, 2026-05-12 night)
 # =============================================================================
 # Curated pool for the hierarchical_synth Phase C per-section synthesis calls
 # (8 sections/chapter × N self-refine iters × ~7 chapters parallel = 16-48
@@ -382,13 +383,13 @@ def _reduce_label_entries() -> list:
 # Root cause: non-reasoning models have shorter effective output token
 # budgets and weren't trained as rigorously on multi-entity structured
 # outputs as the frontier reasoning models (Kimi K2.6, GLM-5.1, MiniMax M2.7).
-# Reasoning models, when given the Scope B concurrency cap (KD_LLM_GLOBAL_
+# Reasoning models, when given the Scope B concurrency cap (DD_LLM_GLOBAL_
 # CONCURRENCY=10) preventing peak-cascade exhaustion, complete structured
 # output correctly because their per-call timeout is buffered by the cap.
 #
 # Design tradeoff now:
 #   - Tier 1 (REASONING — strong structured output): the four frontier
-#     reasoning models from kd-all. Each call burns <think> tokens before
+#     reasoning models from dd-all. Each call burns <think> tokens before
 #     emitting parseable output (300s NIM gateway), but the concurrency cap
 #     stops peak parallelism from exhausting the cascade. Output is
 #     structurally complete (52/52 hashes survive the audit).
@@ -399,7 +400,7 @@ def _reduce_label_entries() -> list:
 #     Fast cooldown absorbers; OK for small chapters but drop hashes on
 #     large schemas — kept as last-resort cascade members only.
 #
-# Hard EXCLUSIONS (vs kd-all):
+# Hard EXCLUSIONS (vs dd-all):
 #   - Gemini 3.x family entirely: Google's own warning per Gemini 3 docs —
 #     "Setting temperature < 1.0 can cause infinite loops, degraded reasoning
 #     performance, and failure on complex tasks." Section synth runs at
@@ -415,7 +416,7 @@ def _reduce_label_entries() -> list:
 # All models support native function_calling AND response_format=json_schema
 # on their hosting provider — required for ChapterOutput / ProseChapterOutput
 # / Section structured output reliability.
-SYNTH_GROUP = "kd-synth"
+SYNTH_GROUP = "dd-synth"
 
 
 def _synth_entries() -> list:
@@ -428,7 +429,7 @@ def _synth_entries() -> list:
     is what the post-synth audit gate requires; non-reasoning models stay
     as Tier 2/3 cascade fallback for cooldown absorption.
 
-    Concurrency cap (KD_LLM_GLOBAL_CONCURRENCY=10 in helpers.py) prevents
+    Concurrency cap (DD_LLM_GLOBAL_CONCURRENCY=10 in helpers.py) prevents
     peak parallelism from cascade-exhausting via reasoning-model <think>
     timeouts; that's what makes Tier 1 reasoning models viable here at all.
     """
@@ -464,7 +465,7 @@ def _synth_entries() -> list:
 
 
 # =============================================================================
-# Embedding group — `kd-embed` (vector embeddings for KD MAP/REDUCE/preview)
+# Embedding group — `dd-embed` (vector embeddings for KD MAP/REDUCE/preview)
 # =============================================================================
 # **SINGLE-ENTRY by design** — embedding rotation across providers breaks
 # cosine geometry within a study (different model = different vector space).
@@ -474,111 +475,451 @@ def _synth_entries() -> list:
 # Don't add a second model to this group — see project_planner_map_replacement
 # memory for the regression that motivated this rule.
 #
-# Pick rationale (research-validated 2026-05-09 night):
+# Pick rationale (rev 2026-05-17 night — reverted from 8b attempt):
+# - llama-embed-nemotron-8b was attempted 2026-05-17 (MTEB v2 leader on paper)
+#   but is NOT exposed via NIM's hosted free-tier API (`integrate.api.nvidia.com/v1/models`
+#   confirms it's absent — exists only on HuggingFace + as a self-deployable
+#   NIM container). Reverted to llama-nemotron-embed-1b-v2 which IS hosted.
 # - 40 RPM, NO monthly cap (Mistral's 2 RPM too tight for bulk filter)
 # - Commercial license OK (Jina v4 is non-commercial — license trap)
 # - Same NVIDIA_API_KEY already in use for the LLM rotator
-# - Higher MTEB rank than `bge-m3` / `e5-mistral` at sub-2B size class
-# - 2048-dim is plenty (KD's REDUCE PCA-reduces to 128 anyway)
-KD_EMBED_GROUP = "kd-embed"
+# - Higher MTEB rank than bge-m3 / e5-mistral at sub-2B size class
+# - 2048-dim is plenty (downstream cluster/refine consume the unit-norm vectors)
+# - Cache invalidation: DD_EMBED_MODEL_NAME below feeds the embed_corpus
+#   cache hash so any stored .npz blobs from a different model re-embed cleanly.
+DD_EMBED_GROUP = "dd-embed"
+DD_EMBED_MODEL_NAME = "nvidia/llama-nemotron-embed-1b-v2"
 
 # Hard upper bound on inputs per /v1/embeddings call. NIM doesn't publish a
 # strict limit; 64 is empirically safe and matches the previous Xinference
 # batch tuning. Helper functions auto-batch above this.
-KD_EMBED_BATCH_SIZE = 64
+DD_EMBED_BATCH_SIZE = 64
 
 
 def _embed_entries() -> list:
     """
-    Single-entry embedding group — see KD_EMBED_GROUP docstring above.
+    Single-entry embedding group — see DD_EMBED_GROUP docstring above.
 
-    Two NIM-specific params are baked into litellm_params so they apply on
-    every call (LiteLLM Router strips unknown call-time kwargs):
-
-      - `encoding_format="float"` — required by NIM's OpenAI-compat /v1/embeddings.
-        Without it, NIM 400s with: "Input should be 'float' or 'base64'".
-
-      - `input_type="passage"` — required for ASYMMETRIC embedding models
-        (NV-Embed family has different heads for queries vs passages).
-        Use "passage" because KD's clustering compares document-vs-document
-        similarity, not query-vs-document. Without it, NIM 400s with:
-        "'input_type' parameter is required for asymmetric models".
+    NIM-specific params: `encoding_format` is required (NIM 400s without it).
+    `input_type` is required for ASYMMETRIC models — but it differs per call
+    (passage for corpus indexing, query for anchor/retrieval), so we DON'T
+    bake it here; callers pass it through `embed_via_router_async(..., input_type=)`.
+    The default behavior remains "passage" to preserve existing callers.
     """
     return [
         {
-            "model_name": KD_EMBED_GROUP,
+            "model_name": DD_EMBED_GROUP,
             "litellm_params": {
-                "model":           "nvidia_nim/nvidia/llama-nemotron-embed-1b-v2",
+                "model":           f"nvidia_nim/{DD_EMBED_MODEL_NAME}",
                 "api_key":         _env("NVIDIA_API_KEY"),
                 "timeout":         120,
                 "max_retries":     0,
                 "encoding_format": "float",
-                "input_type":      "passage",
             },
         },
     ]
 
 
-def embed_via_router_sync(texts: list[str]) -> list[list[float]]:
+def embed_via_router_sync(
+    texts: list[str], input_type: str = "passage",
+) -> list[list[float]]:
     """
-    Sync batch-embed via the rotator's `kd-embed` group. Auto-batches at
-    KD_EMBED_BATCH_SIZE; returns vectors in input order. Empty/whitespace
-    inputs are substituted with " " to keep the OpenAI-style /v1/embeddings
-    call happy (a real provider would 400 on empty inputs).
+    Sync batch-embed via the rotator's `dd-embed` group. Auto-batches at
+    DD_EMBED_BATCH_SIZE; returns vectors in input order.
 
-    Returns flat list of vectors. Caller is responsible for tuple-wrapping
-    with a provider label (see services.knowledge.embeddings.embed_texts_sync).
+    `input_type`: "passage" for documents being indexed, "query" for short
+    anchor/search strings. Asymmetric models (llama-embed-nemotron-8b family)
+    have different encoding heads — using the wrong one silently costs 3-8
+    cosine points (E5 / Nemotron model cards).
+
+    Empty/whitespace inputs are substituted with " " to keep the OpenAI-style
+    /v1/embeddings call happy (a real provider would 400 on empty inputs).
     """
     if not texts:
         return []
     router = _get_router()
     clean = [t if (t and t.strip()) else " " for t in texts]
     out: list[list[float]] = []
-    for start in range(0, len(clean), KD_EMBED_BATCH_SIZE):
-        batch = clean[start:start + KD_EMBED_BATCH_SIZE]
-        # NIM's `nvidia/llama-nemotron-embed-1b-v2` is asymmetric (separate
-        # query/passage encoding heads). Both kwargs are required; verified
-        # 2026-05-09 with direct litellm.embedding(...) call. `extra_body=`
-        # does NOT work for LiteLLM embeddings (gets passed as a literal
-        # field, NIM rejects it).
+    for start in range(0, len(clean), DD_EMBED_BATCH_SIZE):
+        batch = clean[start:start + DD_EMBED_BATCH_SIZE]
+        # NIM's asymmetric embedding models REQUIRE input_type at every call
+        # (passage for docs, query for anchors). `extra_body=` does NOT work
+        # for LiteLLM embeddings (gets passed as a literal field, NIM rejects).
         response = router.embedding(
-            model=KD_EMBED_GROUP,
+            model=DD_EMBED_GROUP,
             input=batch,
             encoding_format="float",
-            input_type="passage",
+            input_type=input_type,
         )
         # LiteLLM normalizes to OpenAI shape: response["data"] is a list of
         # {"embedding": [...], "index": N, "object": "embedding"}.
         out.extend(item["embedding"] for item in response["data"])
     if len(out) != len(texts):
         raise RuntimeError(
-            f"kd-embed: rotator returned {len(out)} vectors for {len(texts)} inputs"
+            f"dd-embed: rotator returned {len(out)} vectors for {len(texts)} inputs"
         )
     return out
 
 
-async def embed_via_router_async(texts: list[str]) -> list[list[float]]:
-    """Async equivalent of embed_via_router_sync."""
+async def embed_via_router_async(
+    texts: list[str],
+    input_type: str = "passage",
+    on_batch=None,
+) -> list[list[float]]:
+    """Async equivalent of embed_via_router_sync. See its docstring for
+    `input_type` semantics.
+
+    `on_batch`, when provided, is an async callback invoked after each
+    batch completes with kwargs (n_done, n_total, batch_size). Used by
+    embed_corpus to emit live progress events to the SSE channel. Errors
+    in the callback are swallowed — the embedding work always takes
+    precedence over progress reporting."""
     if not texts:
         return []
     router = _get_router()
     clean = [t if (t and t.strip()) else " " for t in texts]
+    total = len(clean)
     out: list[list[float]] = []
-    for start in range(0, len(clean), KD_EMBED_BATCH_SIZE):
-        batch = clean[start:start + KD_EMBED_BATCH_SIZE]
-        # encoding_format + input_type both required — see embed_via_router_sync.
+    for start in range(0, total, DD_EMBED_BATCH_SIZE):
+        batch = clean[start:start + DD_EMBED_BATCH_SIZE]
         response = await router.aembedding(
-            model=KD_EMBED_GROUP,
+            model=DD_EMBED_GROUP,
             input=batch,
             encoding_format="float",
-            input_type="passage",
+            input_type=input_type,
         )
         out.extend(item["embedding"] for item in response["data"])
-    if len(out) != len(texts):
+        if on_batch is not None:
+            try:
+                await on_batch(
+                    n_done=len(out), n_total=total, batch_size=len(batch),
+                )
+            except Exception:
+                pass
+    if len(out) != texts.__len__():
         raise RuntimeError(
-            f"kd-embed: rotator returned {len(out)} vectors for {len(texts)} inputs"
+            f"dd-embed: rotator returned {len(out)} vectors for {len(texts)} inputs"
         )
     return out
+
+
+# =============================================================================
+# Rerank — NIM cross-encoder via direct httpx (NOT LiteLLM)
+# =============================================================================
+# NIM rerankers live on a different domain + URL shape than the OpenAI-compat
+# embedding endpoint, and the request/response payload is NIM-specific (not
+# OpenAI-compat). LiteLLM's `router.arerank()` posts to OpenAI's `/v1/rerank`
+# shape, which NIM returns 404 for — verified 2026-05-17 night via live probes.
+#
+# So `dd-rerank` is NOT a LiteLLM Router group. We call the NIM rerank API
+# directly via httpx using the same NVIDIA_API_KEY as the rest of the rotator.
+#
+# Pick: `nvidia/llama-nemotron-rerank-1b-v2` — canonical NVIDIA-validated pair
+# with the llama-nemotron-embed-1b-v2 family, 1B params, 40 RPM free-tier.
+# Successor to `nvidia/llama-3.2-nv-rerankqa-1b-v2` (which deprecates 2026-05-18).
+# Stronger alternative if 1B underperforms: `nvidia/nv-rerankqa-mistral-4b-v3`.
+DD_RERANK_MODEL_NAME = "nvidia/llama-nemotron-rerank-1b-v2"
+_NIM_RERANK_BASE = "https://ai.api.nvidia.com/v1/retrieval"
+
+
+async def chat_judge_async(
+    prompt: str,
+    max_tokens: int = 8,
+    temperature: float = 0.0,
+) -> str:
+    """Single-shot text-classification call via the dd-all big-LLM rotator.
+    Returns the assistant's stripped text content. Uses LiteLLM Router's
+    simple-shuffle routing — no per-call bandit learning.
+
+    Kept for callers that just want a quick completion. Prefer
+    `chat_judge_bandit_async` when the call is repeated (e.g. off_topic's
+    per-page judgments) so the bandit can learn which deployments are
+    reliable + steer traffic accordingly."""
+    router = _get_router()
+    response = await router.acompletion(
+        model=GROUP,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    return (response.choices[0].message.content or "").strip()
+
+
+# =============================================================================
+# ParetoBandit-driven LLM judge — adaptive deployment selection with reward
+# =============================================================================
+# 2026-05-17 wiring: the off_topic node fires hundreds of binary KEEP/DROP
+# calls per planner run. Routing every call through Router's simple-shuffle
+# means we keep hitting deployments that consistently 429 or timeout. The
+# bandit learns from each outcome and steers subsequent calls toward
+# deployments that ACTUALLY answer quickly with parseable verdicts.
+#
+# Per 2026 SOTA literature (LLM Bandit arxiv 2502.02743, BaRP 2510.07429,
+# IBM MAR AAAI 2026): contextual bandit feedback is the published best
+# practice for partial-feedback LLM routing under cost+accuracy trade-offs.
+#
+# We use dd_process="dd-grader" (not "dd-all") so the bandit cells for the
+# judge stay separate from synthesizer cells — different reward shapes
+# (binary vs continuous), different latency expectations, different
+# preferred models. Empty dd-grader cells warm-start from benchmark priors.
+_JUDGE_KD_PROCESS = "dd-grader"
+# Expected wall per judge call. Used by compose_reward's latency component:
+# faster than this → positive contribution, slower → negative.
+_JUDGE_EXPECTED_LATENCY_S = 4.0
+# How many ranked deployments to cascade through before giving up. Matches
+# the bandit-driven chapter-pin cascade pattern in pick_synth_deployment_bandit.
+_JUDGE_BANDIT_TOP_K = 5
+
+
+async def _redis_for_bandit():
+    """Lazily build a Redis client for ParetoBandit reads/writes. Returns
+    None on env-misconfig so callers can fall back gracefully."""
+    import redis.asyncio as redis_aio_lib
+    host = _env("REDIS_HOST")
+    port = _env("REDIS_PORT", "6379")
+    password = _env("REDIS_PASSWORD")
+    if not host:
+        return None
+    url = (
+        f"redis://:{password}@{host}:{port}"
+        if password else f"redis://{host}:{port}"
+    )
+    try:
+        return redis_aio_lib.from_url(
+            url, socket_connect_timeout=3.0, socket_timeout=5.0,
+        )
+    except Exception:
+        return None
+
+
+def _classify_error(exc: Exception) -> str:
+    """Map a litellm/httpx exception to ParetoBandit's error_class taxonomy
+    (see compose_reward in pareto_bandit.py for the reward magnitudes)."""
+    name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+    if "ratelimit" in name or "429" in msg or "rate limit" in msg:
+        return "rate_limit"
+    if "timeout" in name or "timed out" in msg:
+        return "timeout"
+    if "auth" in name or "401" in msg or "403" in msg or "invalid api key" in msg:
+        return "auth_error"
+    if "content" in name and "filter" in name:
+        return "content_filter"
+    if "5" in msg and ("server" in msg or "internal" in msg or "bad gateway" in msg):
+        return "server_error"
+    return "unknown"
+
+
+async def chat_judge_bandit_async(
+    prompt: str,
+    *,
+    max_tokens: int = 8,
+    temperature: float = 0.0,
+    timeout_s: float = 30.0,
+    expected_pattern: str | None = None,
+) -> tuple[str, dict]:
+    """Bandit-routed single-shot text classification.
+
+    Pipeline:
+      1. Build context vector (dd_process=dd-grader, temporal sin/cos +
+         provider error rates default to 0 — Phase 2 features).
+      2. predict_top_k against the dd-all candidate set.
+      3. Cascade through the ranked deployments: try top-1 via direct
+         `litellm.acompletion(model=deployment_id)` (bypasses Router so
+         we hit the SPECIFIC chosen deployment, not Router shuffle).
+      4. After each attempt — success or failure — submit a reward
+         signal so the bandit learns. `expected_pattern` (e.g. "^(KEEP|DROP)$")
+         drives the schema_valid component of the reward.
+      5. Return (response_text, meta) where meta has `deployment`,
+         `latency_s`, `attempts`, `reward`.
+
+    Falls back to Router-shuffle (`chat_judge_async`) on any infrastructure
+    failure (Redis down, no candidates ranked, etc.) so the planner
+    never wedges on a misconfigured bandit.
+    """
+    import litellm
+    from services.llm import pareto_bandit
+
+    redis = await _redis_for_bandit()
+    if redis is None:
+        # No Redis = no bandit. Fall back to Router-shuffle.
+        text = await chat_judge_async(prompt, max_tokens=max_tokens, temperature=temperature)
+        return text, {"deployment": "router-shuffle", "attempts": 0,
+                      "latency_s": None, "reward": None,
+                      "fallback": "no_redis"}
+
+    candidates = [e["litellm_params"]["model"] for e in _all_entries_current()]
+    ctx = pareto_bandit.make_context_vector(_JUDGE_KD_PROCESS)
+    pattern = None
+    if expected_pattern:
+        import re
+        pattern = re.compile(expected_pattern)
+
+    try:
+        ranked = await pareto_bandit.predict_top_k(
+            _JUDGE_KD_PROCESS, ctx, candidates,
+            redis=redis, k=_JUDGE_BANDIT_TOP_K,
+        )
+    except Exception as e:
+        logger.warning(f"[dd-judge-bandit] predict_top_k failed: {e}; "
+                       f"falling back to router-shuffle")
+        try:
+            await redis.aclose()
+        except Exception:
+            pass
+        text = await chat_judge_async(prompt, max_tokens=max_tokens, temperature=temperature)
+        return text, {"deployment": "router-shuffle", "attempts": 0,
+                      "latency_s": None, "reward": None,
+                      "fallback": "predict_failed"}
+
+    api_key = _env("NVIDIA_API_KEY") or _env("GROQ_API_KEY") or ""
+    last_error: str | None = None
+    attempts = 0
+    try:
+        for deployment_id, _ucb, _n_obs in ranked:
+            attempts += 1
+            # Resolve the right api_key for this deployment's provider.
+            # _env lookups are cheap; do per-deployment so a Groq pick gets
+            # GROQ_API_KEY etc. without leaking the wrong creds.
+            provider = deployment_id.split("/", 1)[0] if "/" in deployment_id else ""
+            provider_key_env = {
+                "nvidia_nim": "NVIDIA_API_KEY",
+                "groq":       "GROQ_API_KEY",
+                "cerebras":   "CEREBRAS_API_KEY",
+                "mistral":    "MISTRAL_API_KEY",
+                "gemini":     "GEMINI_API_KEY",
+                "openai":     "OPENAI_API_KEY",
+                "deepseek":   "DEEPSEEK_API_KEY",
+                "sambanova":  "SAMBANOVA_API_KEY",
+            }.get(provider, "NVIDIA_API_KEY")
+            api_key = _env(provider_key_env) or _env("NVIDIA_API_KEY") or ""
+
+            t0 = time.monotonic()
+            error_class: str | None = None
+            success = False
+            schema_valid = False
+            response_text = ""
+            try:
+                response = await litellm.acompletion(
+                    model=deployment_id,
+                    api_key=api_key,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    timeout=timeout_s,
+                )
+                response_text = (response.choices[0].message.content or "").strip()
+                success = True
+                if pattern is not None:
+                    head = response_text.upper().split()[0].strip(".,;:!\"'`)") \
+                        if response_text else ""
+                    schema_valid = bool(pattern.match(head))
+                else:
+                    schema_valid = bool(response_text)
+            except Exception as e:
+                error_class = _classify_error(e)
+                last_error = f"{type(e).__name__}: {str(e)[:120]}"
+
+            latency_s = float(time.monotonic() - t0)
+            reward = pareto_bandit.compose_reward(
+                success=success,
+                schema_valid=schema_valid,
+                latency_s=latency_s,
+                expected_latency_s=_JUDGE_EXPECTED_LATENCY_S,
+                error_class=error_class,
+            )
+            try:
+                await pareto_bandit.update(
+                    deployment_id, _JUDGE_KD_PROCESS, ctx, reward, redis=redis,
+                )
+            except Exception:
+                pass
+
+            if success and schema_valid:
+                return response_text, {
+                    "deployment": deployment_id,
+                    "attempts":   attempts,
+                    "latency_s":  latency_s,
+                    "reward":     reward,
+                }
+            # Success but bad schema: still return — caller will treat as
+            # unparseable. Continuing the cascade would waste budget on a
+            # quirk that more model swaps won't fix.
+            if success:
+                return response_text, {
+                    "deployment": deployment_id,
+                    "attempts":   attempts,
+                    "latency_s":  latency_s,
+                    "reward":     reward,
+                    "schema_invalid": True,
+                }
+            # On failure: cascade to the next ranked deployment.
+
+        # All ranked deployments failed.
+        raise RuntimeError(
+            f"dd-judge-bandit: all {attempts} ranked deployments failed; "
+            f"last error: {last_error}"
+        )
+    finally:
+        try:
+            await redis.aclose()
+        except Exception:
+            pass
+
+
+async def rerank_via_router_async(
+    query: str, documents: list[str], top_n: int | None = None,
+) -> list[tuple[int, float]]:
+    """Cross-encoder rerank `documents` against `query` via NIM's hosted
+    rerank API. Returns a list of (orig_index, relevance_score) pairs in
+    descending score order. NIM rerankers return raw logits (typically
+    [-12, +12]); caller is responsible for thresholding.
+
+    Used by the off_topic substep on the GMM boundary band — too-narrow
+    margin gets a second opinion from the cross-encoder instead of trusting
+    the bi-encoder cosine alone.
+
+    Direct httpx instead of the LiteLLM Router because NIM's rerank API
+    isn't OpenAI-compat — see header comment for the verification details.
+    """
+    import httpx
+
+    if not documents:
+        return []
+    api_key = _env("NVIDIA_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "dd-rerank: NVIDIA_API_KEY env var not set — required for NIM rerank"
+        )
+
+    # Model slug in URL strips the "nvidia/" prefix — that's the NIM
+    # path convention (`/v1/retrieval/nvidia/{slug}/reranking`).
+    model_slug = DD_RERANK_MODEL_NAME.split("/", 1)[-1]
+    url = f"{_NIM_RERANK_BASE}/nvidia/{model_slug}/reranking"
+
+    payload = {
+        "model":    DD_RERANK_MODEL_NAME,
+        "query":    {"text": query},
+        "passages": [{"text": d} for d in documents],
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept":        "application/json",
+        "Content-Type":  "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+
+    # NIM response shape: {"rankings": [{"index": N, "logit": float}, ...]}
+    # already sorted descending by logit. Map to our (idx, score) tuples.
+    rankings = data.get("rankings") or []
+    pairs = [(int(r["index"]), float(r["logit"])) for r in rankings]
+    if top_n is not None:
+        pairs = pairs[:top_n]
+    return pairs
 
 
 def _all_entries() -> list:
@@ -755,9 +1096,9 @@ def _get_router() -> Router:
             redis_kwargs["redis_password"] = redis_password
 
     _router_instance = Router(
-        # Combined model_list — `kd-all` (synthesis/planner/critic), `kd-keylm`
-        # (KeyLLM cluster labels), `kd-reduce-label` (Clio REDUCE per-meta
-        # labeling + chapter ordering), and `kd-embed` (embeddings) all live
+        # Combined model_list — `dd-all` (synthesis/planner/critic), `dd-keylm`
+        # (KeyLLM cluster labels), `dd-reduce-label` (Clio REDUCE per-meta
+        # labeling + chapter ordering), and `dd-embed` (embeddings) all live
         # in one Router so they share the cooldown circuit-breaker + Redis
         # state. The factory + helper functions select which group via the
         # `model=` arg on ChatLiteLLMRouter / Router.embedding.
@@ -810,7 +1151,7 @@ def _get_router() -> Router:
 
 
 # =============================================================================
-# Public factory API — all serve from the same `kd-all` group
+# Public factory API — all serve from the same `dd-all` group
 # =============================================================================
 # Temperature is the only per-step variation. T=0.7 for Self-Refine
 # exploration (Madaan 2023 §2); T=0.0 for deterministic calls elsewhere.
@@ -837,19 +1178,19 @@ def build_synth_fallback_chain(
     """
     Synthesize_chapter + curator chain.
 
-    Scope B (2026-05-12): when KD_USE_SYNTH_POOL=1, routes to the curated
-    `kd-synth` non-reasoning pool instead of `kd-all`. Section synth is
+    Scope B (2026-05-12): when DD_USE_SYNTH_POOL=1, routes to the curated
+    `dd-synth` non-reasoning pool instead of `dd-all`. Section synth is
     structurally prose generation — reasoning models burn the timeout on
     <think> blocks. The cascade exhaustion observed during the 2026-05-12
     E2E (ch01 OP-12 rescue, score=0.00 / 0 iters) was caused by the
-    kd-all rotator routing parallel synth calls into reasoning-mode
+    dd-all rotator routing parallel synth calls into reasoning-mode
     models that never produced a parseable response inside the deadline.
     See SYNTH_GROUP docstring above and Scope B research brief.
-    Default "0" preserves the legacy kd-all routing.
+    Default "0" preserves the legacy dd-all routing.
     """
     import os
     use_synth_pool = os.environ.get(
-        "KD_USE_SYNTH_POOL", "0",
+        "DD_USE_SYNTH_POOL", "0",
     ).strip().lower() in ("1", "true", "yes")
     target_group = SYNTH_GROUP if use_synth_pool else GROUP
     return ChatLiteLLMRouter(
@@ -859,8 +1200,8 @@ def build_synth_fallback_chain(
 
 def build_synth_pool_chain():
     """
-    Explicit factory for the kd-synth non-reasoning pool. Same as
-    build_synth_fallback_chain() with KD_USE_SYNTH_POOL=1 — provided
+    Explicit factory for the dd-synth non-reasoning pool. Same as
+    build_synth_fallback_chain() with DD_USE_SYNTH_POOL=1 — provided
     for direct use by callers that always want the synth pool
     regardless of env config (e.g. validation harnesses).
     """
@@ -966,7 +1307,7 @@ async def pick_synth_deployment_bandit(
         try:
             candidates = [e["litellm_params"]["model"] for e in entries]
             ctx = pareto_bandit.make_context_vector(
-                "kd-synth",
+                "dd-synth",
                 chapter_number=chapter_number,
                 expected_hash_count=expected_hash_count,
                 vault_size=vault_size,
@@ -980,7 +1321,7 @@ async def pick_synth_deployment_bandit(
             # cascade fell through to round-robin instead of picking from
             # a less-saturated provider.
             ranked = await pareto_bandit.predict_top_k(
-                "kd-synth", ctx, candidates, redis=rds, k=5,
+                "dd-synth", ctx, candidates, redis=rds, k=5,
             )
             # Iterate top-K and atomically reserve the first available
             # (provider_slot, deployment) pair. Provider slot is claimed
@@ -1006,7 +1347,7 @@ async def pick_synth_deployment_bandit(
                     continue
                 # Step 2: try to claim the deployment slot.
                 reserved = await pareto_bandit.try_reserve(
-                    deployment_id, "kd-synth", redis=rds, ttl_s=1800,
+                    deployment_id, "dd-synth", redis=rds, ttl_s=1800,
                 )
                 if not reserved:
                     # Release the provider slot we just acquired — another
@@ -1060,7 +1401,7 @@ _pinned_chain_cache: dict[str, "ChatLiteLLMRouter"] = {}
 # Pinned-group → parent-group registry (Phase 3 fix, 2026-05-14).
 # When build_synth_pinned_chain / build_pinned_chain_any wraps a deployment
 # in a single-entry Router, the resulting chain's `.model` attribute is the
-# hashed pinned group (e.g. "kd-synth-pinned-abc123"). Downstream callers
+# hashed pinned group (e.g. "dd-synth-pinned-abc123"). Downstream callers
 # (helpers.py per-call cascade) need the PARENT pool name to enumerate
 # alternative candidates — without this, the cascade collapses to k=1 and
 # can't escape a failing chapter pin. See canary v4 evidence in
@@ -1069,7 +1410,7 @@ _pinned_to_parent: dict[str, str] = {}
 
 
 def get_parent_group(pinned_or_parent: str | None) -> str | None:
-    """Return the parent pool name (kd-synth / kd-all / kd-reduce-label) for
+    """Return the parent pool name (dd-synth / dd-all / dd-reduce-label) for
     a pinned-group hash, or None if the input is already a parent group or
     unknown. Caller should treat None as "input is already a parent group"
     and fall through."""
@@ -1099,7 +1440,7 @@ def build_pinned_chain_any(pinned_model: str, group: str | None = None):
     helpers._invoke_structured_with_fallback when ParetoBandit picks a
     specific deployment for this call.
 
-    Searches in priority: kd-synth → kd-reduce-label → kd-all (the
+    Searches in priority: dd-synth → dd-reduce-label → dd-all (the
     dynamic-catalog steps). If `group` is given, only that group is
     searched. Falls back to None if the pinned_model isn't in any catalog
     (caller falls through to original Phase 1 chain).
@@ -1129,7 +1470,7 @@ def build_pinned_chain_any(pinned_model: str, group: str | None = None):
     if matching_entry is None:
         return None    # caller decides fallback
 
-    pinned_group = f"kd-pinned-{abs(hash(pinned_model)) & 0xFFFFFF:06x}"
+    pinned_group = f"dd-pinned-{abs(hash(pinned_model)) & 0xFFFFFF:06x}"
     fresh_entry = {
         "model_name": pinned_group,
         "litellm_params": dict(matching_entry["litellm_params"]),
@@ -1179,7 +1520,7 @@ def build_synth_pinned_chain(pinned_model: str):
         )
         return build_synth_pool_chain()
 
-    pinned_group = f"kd-synth-pinned-{abs(hash(pinned_model)) & 0xFFFFFF:06x}"
+    pinned_group = f"dd-synth-pinned-{abs(hash(pinned_model)) & 0xFFFFFF:06x}"
     fresh_entry = {
         "model_name": pinned_group,
         "litellm_params": dict(matching[0]["litellm_params"]),
@@ -1225,7 +1566,7 @@ def build_keylm_chain():
     2-4 word Title-Case title fits in 8-12 BPE tokens with margin).
 
     See docs/KD-PLANNER-MAP-OPTIMIZATION.md §5 for the model selection
-    rationale. KeyLLM is intentionally NOT routed through the kd-all
+    rationale. KeyLLM is intentionally NOT routed through the dd-all
     frontier rotator — small task, small model.
     """
     return ChatLiteLLMRouter(router=_get_router(), model=KEYLM_GROUP, temperature=0.0)
@@ -1249,7 +1590,7 @@ def build_reduce_label_chain():
 
     See R1/R2 in docs/KD-PLANNER-REDUCE-MAY2026-OPTIMIZATION.md for the
     design rationale — this group exists to keep REDUCE labeling off the
-    kd-all reasoning models that burn the 300s NIM gateway budget on <think>
+    dd-all reasoning models that burn the 300s NIM gateway budget on <think>
     blocks for what is structurally a 3K-token classification task.
     """
     return ChatLiteLLMRouter(
@@ -1260,8 +1601,8 @@ def build_reduce_label_chain():
 # =============================================================================
 # DYNAMIC CATALOG — discovery + benchmarks → top-K per step (Phase 1, 2026-05-14)
 # =============================================================================
-# When KD_DYNAMIC_CATALOG=1 (default) and init_dynamic_catalog() succeeds at
-# startup, the kd-all / kd-synth / kd-reduce-label groups are populated from:
+# When DD_DYNAMIC_CATALOG=1 (default) and init_dynamic_catalog() succeeds at
+# startup, the dd-all / dd-synth / dd-reduce-label groups are populated from:
 #
 #    services.discovery.list_all_alive_models()       (live free-tier models)
 #                          ↓
@@ -1270,9 +1611,9 @@ def build_reduce_label_chain():
 #    top-K cut per step  → _record_to_entry() → LiteLLM model_list dict
 #
 # Falls back to the static catalog (_all_entries / _synth_entries /
-# _reduce_label_entries) on any failure. kd-keylm and kd-embed stay static —
-# kd-keylm needs tiny instruct LMs (≤3B params, no benchmark coverage), and
-# kd-embed is single-entry by cosine-geometry design.
+# _reduce_label_entries) on any failure. dd-keylm and dd-embed stay static —
+# dd-keylm needs tiny instruct LMs (≤3B params, no benchmark coverage), and
+# dd-embed is single-entry by cosine-geometry design.
 #
 # pick_synth_deployment() and build_synth_pinned_chain() both read from
 # _synth_entries_current() so per-chapter pinning stays consistent with the
@@ -1283,7 +1624,7 @@ def build_reduce_label_chain():
 #   Celery worker_process_init → init_dynamic_catalog_sync() at fork
 #   On failure              → static catalog, log warning, continue
 #
-# Disable via env: KD_DYNAMIC_CATALOG=0
+# Disable via env: DD_DYNAMIC_CATALOG=0
 # =============================================================================
 _dynamic_entries: dict[str, list[dict]] = {}
 _dynamic_catalog_initialized: bool = False
@@ -1292,22 +1633,22 @@ _dynamic_catalog_initialized: bool = False
 # Larger K = more cascade depth + more cooldown redundancy; smaller K = tighter
 # rotator decisions. Calibrated against the v1 static catalog sizes.
 _DYNAMIC_TOP_K: dict[str, int] = {
-    "kd-all":           30,
-    "kd-synth":         12,
-    "kd-reduce-label":  10,
+    "dd-all":           30,
+    "dd-synth":         12,
+    "dd-reduce-label":  10,
 }
 
 # Per-step group name + default per-deployment timeout (s). Reasoning-heavy
 # pools need longer; classification pools shorter.
 _DYNAMIC_STEP_TO_GROUP: dict[str, str] = {
-    "kd-all":           "kd-all",
-    "kd-synth":         "kd-synth",
-    "kd-reduce-label":  "kd-reduce-label",
+    "dd-all":           "dd-all",
+    "dd-synth":         "dd-synth",
+    "dd-reduce-label":  "dd-reduce-label",
 }
 _DYNAMIC_STEP_TIMEOUT_S: dict[str, int] = {
-    "kd-all":           120,
-    "kd-synth":         180,    # reasoning models burn <think> tokens
-    "kd-reduce-label":   90,    # non-reasoning, fast
+    "dd-all":           120,
+    "dd-synth":         180,    # reasoning models burn <think> tokens
+    "dd-reduce-label":   90,    # non-reasoning, fast
 }
 
 
@@ -1332,23 +1673,23 @@ def _record_to_entry(group: str, record, timeout_s: int) -> dict | None:
 
 
 def _all_entries_current() -> list:
-    """Active catalog for kd-all — dynamic if available, else static fallback."""
-    if _dynamic_catalog_initialized and _dynamic_entries.get("kd-all"):
-        return _dynamic_entries["kd-all"]
+    """Active catalog for dd-all — dynamic if available, else static fallback."""
+    if _dynamic_catalog_initialized and _dynamic_entries.get("dd-all"):
+        return _dynamic_entries["dd-all"]
     return _all_entries()
 
 
 def _synth_entries_current() -> list:
-    """Active catalog for kd-synth — dynamic if available, else static fallback."""
-    if _dynamic_catalog_initialized and _dynamic_entries.get("kd-synth"):
-        return _dynamic_entries["kd-synth"]
+    """Active catalog for dd-synth — dynamic if available, else static fallback."""
+    if _dynamic_catalog_initialized and _dynamic_entries.get("dd-synth"):
+        return _dynamic_entries["dd-synth"]
     return _synth_entries()
 
 
 def _reduce_label_entries_current() -> list:
-    """Active catalog for kd-reduce-label — dynamic if available, else static."""
-    if _dynamic_catalog_initialized and _dynamic_entries.get("kd-reduce-label"):
-        return _dynamic_entries["kd-reduce-label"]
+    """Active catalog for dd-reduce-label — dynamic if available, else static."""
+    if _dynamic_catalog_initialized and _dynamic_entries.get("dd-reduce-label"):
+        return _dynamic_entries["dd-reduce-label"]
     return _reduce_label_entries()
 
 
@@ -1373,7 +1714,7 @@ async def init_dynamic_catalog() -> bool:
     to the static catalog.
 
     Behavior:
-      - KD_DYNAMIC_CATALOG=0 → skip entirely, use static.
+      - DD_DYNAMIC_CATALOG=0 → skip entirely, use static.
       - Discovery returns 0 models → fall back, log warning.
       - Benchmark fetch raises → fall back, log warning.
       - Per-step top-K is empty (all unscored AND no static fallback) → still
@@ -1384,9 +1725,9 @@ async def init_dynamic_catalog() -> bool:
     if _dynamic_catalog_initialized:
         return True
 
-    flag = os.environ.get("KD_DYNAMIC_CATALOG", "1").strip().lower()
+    flag = os.environ.get("DD_DYNAMIC_CATALOG", "1").strip().lower()
     if flag not in ("1", "true", "yes", "on"):
-        logger.info("[llm-chain] KD_DYNAMIC_CATALOG=0 — using static catalog")
+        logger.info("[llm-chain] DD_DYNAMIC_CATALOG=0 — using static catalog")
         return False
 
     try:

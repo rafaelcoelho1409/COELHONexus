@@ -33,6 +33,7 @@ _HOP_BY_HOP_RESP = frozenset({
 })
 
 _proxy_client: Optional[httpx.AsyncClient] = None
+_sse_client: Optional[httpx.AsyncClient] = None
 
 
 def _get_client() -> httpx.AsyncClient:
@@ -46,6 +47,32 @@ def _get_client() -> httpx.AsyncClient:
             transport=httpx.AsyncHTTPTransport(retries=3),
         )
     return _proxy_client
+
+
+def _get_sse_client() -> httpx.AsyncClient:
+    """Separate client for SSE / long-lived streaming requests. NO read
+    timeout — the planner SSE channel stays open for the full run
+    (5-30 min); a finite read timeout would close it mid-stream and
+    surface as a 500."""
+    global _sse_client
+    if _sse_client is None:
+        _sse_client = httpx.AsyncClient(
+            base_url=FASTAPI_URL,
+            timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=5),
+        )
+    return _sse_client
+
+
+def _is_sse_request(request: Request) -> bool:
+    """SSE detection — Accept header asks for text/event-stream, or the
+    URL path ends in `/events` (our convention for SSE endpoints)."""
+    accept = (request.headers.get("accept") or "").lower()
+    if "text/event-stream" in accept:
+        return True
+    if request.url.path.rstrip("/").endswith("/events"):
+        return True
+    return False
 
 
 async def _forward(request: Request) -> StreamingResponse:
@@ -62,7 +89,7 @@ async def _forward(request: Request) -> StreamingResponse:
     }
     body = await request.body()
 
-    client = _get_client()
+    client = _get_sse_client() if _is_sse_request(request) else _get_client()
     upstream_req = client.build_request(
         method=request.method,
         url=upstream_path,

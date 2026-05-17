@@ -208,8 +208,6 @@ frameworks:
   category: Programming Language
 
 - name: Grafana - Alloy - Loki - Mimir - Tempo
-  # Multi-logo stack tile — the picker renders each in a strip; the
-  # sidebar + loading box use the single `logo` fallback below.
   logos:
     - https://cdn.simpleicons.org/grafana
     - https://grafana.com/media/docs/alloy/alloy_icon.png
@@ -260,8 +258,6 @@ frameworks:
   github: https://github.com/kubernetes/kubernetes
 
 - name: LangChain - LangGraph - DeepAgents
-  # Multi-logo stack tile — the picker renders each in a strip; the
-  # sidebar + loading box use the single `logo` fallback below.
   logos:
     - https://raw.githubusercontent.com/langchain-ai/langchain/master/.github/images/logo-dark.svg
     - https://raw.githubusercontent.com/langchain-ai/langgraph/main/.github/images/logo-dark.svg

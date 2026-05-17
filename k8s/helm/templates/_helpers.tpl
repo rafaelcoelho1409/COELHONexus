@@ -44,35 +44,35 @@ SEARXNG_URL: "{{ .Values.searxng.url }}"
 # KD planner MAP step routing — "1" enables the classical pipeline (rotator
 # embed + community_detection + KeyLLM); "0" keeps the legacy LLM path.
 # Read at runtime by graphs/knowledge/distiller.py.
-KD_USE_CLASSICAL_MAP: "{{ .Values.kd.useClassicalMap }}"
+DD_USE_CLASSICAL_MAP: "{{ .Values.dd.useClassicalMap }}"
 # Phase 1.3 (2026-05-13): routes synth grader through classical scorer when "1".
 # See kd.useClassicalGrader in values.yaml.
-KD_USE_CLASSICAL_GRADER: "{{ .Values.kd.useClassicalGrader }}"
+DD_USE_CLASSICAL_GRADER: "{{ .Values.dd.useClassicalGrader }}"
 # Phase 2.1 (2026-05-13): replaces critic's per-chapter LLM faithfulness call
-# with kd-embed similarity heuristic when "1". See kd.useClassicalCritic above.
-KD_USE_CLASSICAL_CRITIC: "{{ .Values.kd.useClassicalCritic }}"
+# with dd-embed similarity heuristic when "1". See kd.useClassicalCritic above.
+DD_USE_CLASSICAL_CRITIC: "{{ .Values.dd.useClassicalCritic }}"
 # Phase 3.1 (2026-05-13): routes Phase A outline through classical path when "1".
 # See kd.useClassicalOutline in values.yaml.
-KD_USE_CLASSICAL_OUTLINE: "{{ .Values.kd.useClassicalOutline }}"
+DD_USE_CLASSICAL_OUTLINE: "{{ .Values.dd.useClassicalOutline }}"
 # Phase 4 (2026-05-13): when "1", Self-Refine loop attempts deterministic patches
 # on patchable grader Issue dims before LLM re-synth, and uses template-based
 # adjustment text instead of the ADJUSTMENT_PROMPT LLM call. See
 # kd.useClassicalRefiner in values.yaml.
-KD_USE_CLASSICAL_REFINER: "{{ .Values.kd.useClassicalRefiner }}"
+DD_USE_CLASSICAL_REFINER: "{{ .Values.dd.useClassicalRefiner }}"
 # Phase 5 (2026-05-13): when "1", per-chapter curator pass runs through
 # services/knowledge/curator_classical.py (deterministic regex passes, no LLM
 # call). See kd.useClassicalCurator in values.yaml.
-KD_USE_CLASSICAL_CURATOR: "{{ .Values.kd.useClassicalCurator }}"
+DD_USE_CLASSICAL_CURATOR: "{{ .Values.dd.useClassicalCurator }}"
 # Phase 5 (2026-05-13): when "1", summary.md / assembler step runs through
 # services/knowledge/summary_classical.py (deterministic reading plan +
 # small-LLM creative artifacts only). See kd.useClassicalSummary in values.yaml.
-KD_USE_CLASSICAL_SUMMARY: "{{ .Values.kd.useClassicalSummary }}"
-# Scope B (2026-05-12 night): when "1", section synth uses the kd-synth
-# non-reasoning pool instead of kd-all. See kd.useSynthPool in values.yaml.
-KD_USE_SYNTH_POOL: "{{ .Values.kd.useSynthPool }}"
+DD_USE_CLASSICAL_SUMMARY: "{{ .Values.dd.useClassicalSummary }}"
+# Scope B (2026-05-12 night): when "1", section synth uses the dd-synth
+# non-reasoning pool instead of dd-all. See kd.useSynthPool in values.yaml.
+DD_USE_SYNTH_POOL: "{{ .Values.dd.useSynthPool }}"
 # Fix #2 (2026-05-12 night): per-chapter model pinning. See kd.pinChapterModel
 # in values.yaml.
-KD_PIN_CHAPTER_MODEL: "{{ .Values.kd.pinChapterModel }}"
+DD_PIN_CHAPTER_MODEL: "{{ .Values.dd.pinChapterModel }}"
 # OpenTelemetry (2026-05-12 night) — dual-export to Alloy (LGTM) + LangFuse v3.
 # Set OTEL_EXPORTER_OTLP_ENDPOINT to Alloy's OTLP gRPC receiver (typically
 # alloy.monitoring.svc.cluster.local:4317). Set LANGFUSE_OTLP_ENDPOINT to the
@@ -86,21 +86,21 @@ LANGFUSE_OTLP_ENDPOINT: "{{ .Values.otel.langfuse_otlp_endpoint }}"
 # Scope B (2026-05-12 night): per-process LLM concurrency cap. See
 # kd.llmGlobalConcurrency in values.yaml and _get_llm_semaphore() in
 # graphs/knowledge/helpers.py.
-KD_LLM_GLOBAL_CONCURRENCY: "{{ .Values.kd.llmGlobalConcurrency }}"
+DD_LLM_GLOBAL_CONCURRENCY: "{{ .Values.dd.llmGlobalConcurrency }}"
 # R8 (2026-05-11): when "1", MAP runs ONE global pass (label_corpus_classical)
 # instead of per-shard. See `kd.globalMap` in values.yaml and `_use_global_map`
 # in graphs/knowledge/distiller.py.
-KD_GLOBAL_MAP: "{{ .Values.kd.globalMap }}"
+DD_GLOBAL_MAP: "{{ .Values.dd.globalMap }}"
 # Phase 1 rotator rebuild (2026-05-14): when "1", build the LiteLLM Router's
 # model_list from live discovery (services/discovery.py) + benchmark ranking
 # (services/benchmarks.py) instead of the hand-curated static catalog in
 # services/llm_chain.py. Falls back to static catalog on any error.
 # See kd.dynamicCatalog in values.yaml.
-KD_DYNAMIC_CATALOG: "{{ .Values.kd.dynamicCatalog }}"
+DD_DYNAMIC_CATALOG: "{{ .Values.dd.dynamicCatalog }}"
 # Phase 2 — ParetoBandit ALWAYS-ON adaptive routing (2026-05-14): the bandit
 # runs by default; set "1" to disable (emergency rollback to Phase 1).
-# See kd.paretoBanditDisable in values.yaml + docs/KD-ROTATOR-ALWAYS-ON-BANDIT-MAY2026.md.
-KD_PARETO_BANDIT_DISABLE: "{{ .Values.kd.paretoBanditDisable }}"
+# See dd.paretoBanditDisable in values.yaml + docs/KD-ROTATOR-ALWAYS-ON-BANDIT-MAY2026.md.
+DD_PARETO_BANDIT_DISABLE: "{{ .Values.dd.paretoBanditDisable }}"
 {{- end -}}
 
 

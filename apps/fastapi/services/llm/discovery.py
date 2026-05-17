@@ -31,9 +31,9 @@ Provider matrix (validated 2026-05-13):
 
 OTel metrics emitted per call (for the FastAPI `/admin/rotator/models` route
 and rotator-rebuild call sites):
-  kd.rotator_models_alive            Gauge       per-provider live model count
-  kd.rotator_discovery_duration_s    Histogram   per-call wall-clock
-  kd.rotator_discovery_error_total   Counter     per-(provider, error_type) fetch failures
+  dd.rotator_models_alive            Gauge       per-provider live model count
+  dd.rotator_discovery_duration_s    Histogram   per-call wall-clock
+  dd.rotator_discovery_error_total   Counter     per-(provider, error_type) fetch failures
 
 Fail-soft: a provider that errors during a fan-out returns [] for that
 provider only. The other 7 still produce results. Caller decides whether
@@ -391,16 +391,16 @@ def _ensure_metrics() -> dict[str, Any]:
         if meter is None:
             return _metric_instruments
         _metric_instruments["alive_gauge"] = meter.create_gauge(
-            name="kd.rotator_models_alive",
+            name="dd.rotator_models_alive",
             description="Free-tier models alive per provider after last discovery fan-out",
         )
         _metric_instruments["duration_hist"] = meter.create_histogram(
-            name="kd.rotator_discovery_duration_seconds",
+            name="dd.rotator_discovery_duration_seconds",
             description="Wall-clock for one full discovery fan-out",
             unit="s",
         )
         _metric_instruments["error_counter"] = meter.create_counter(
-            name="kd.rotator_discovery_error_total",
+            name="dd.rotator_discovery_error_total",
             description="Discovery fetch errors — labels: provider, error_type",
         )
         logger.info(

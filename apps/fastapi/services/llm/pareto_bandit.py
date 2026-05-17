@@ -3,7 +3,7 @@ ParetoBandit-style adaptive routing for the LLM rotator (Phase 2).
 
 DESIGN (2026-05-14): LinUCB with geometric forgetting on sufficient statistics,
 following arXiv:2604.00136 (Taberner-Miller, Mar 2026). Per-(deployment,
-kd_process) cell state lives in Redis. Reward signal blends success rate,
+dd_process) cell state lives in Redis. Reward signal blends success rate,
 latency relative to expected, and KD-specific hash-recall ratio.
 
 Composes with the rest of the stack:
@@ -20,7 +20,7 @@ Composes with the rest of the stack:
        ↓
     LiteLLM CustomRoutingStrategy (Phase 2 Day 4)    → actual routing decision
 
-Cell state (one per (deployment, kd_process)):
+Cell state (one per (deployment, dd_process)):
     A_a:   (CONTEXT_DIM × CONTEXT_DIM) regularized covariance matrix
     b_a:   (CONTEXT_DIM,)              accumulated reward × context
     n_obs:                              total observations
@@ -58,27 +58,27 @@ CONTEXT VECTOR (16 dims, intentionally small for fast convergence):
     [2]     expected_hash_count_normalized                log(n+1) / log(500)
     [3]     has_thinking_budget                           0 / 1
     [4-6]   vault_size_bucket (small/medium/large)        one-hot
-    [7-15]  kd_process one-hot                            one-hot over 9 kd_processes
+    [7-15]  dd_process one-hot                            one-hot over 9 dd_processes
 
 Cache layout:
-    kd:rotator:pareto:cell:{deployment_id}:{kd_process}   → JSON blob, 90d TTL
+    dd:rotator:pareto:cell:{deployment_id}:{dd_process}   → JSON blob, 90d TTL
 
 OTel metrics emitted:
-    kd.pareto_predict_total{kd_process}              Counter — calls to predict()
-    kd.pareto_update_total{kd_process, outcome}      Counter — updates by reward bucket
-    kd.pareto_ucb_score                              Histogram — score distribution per pick
-    kd.pareto_n_obs{deployment, kd_process}          Gauge — observations per cell
-    kd.pareto_cell_age_seconds                       Histogram — staleness per cell
-    kd.pareto_shadow_agreement{kd_process}           Counter — predicted == actual deployment
+    dd.pareto_predict_total{dd_process}              Counter — calls to predict()
+    dd.pareto_update_total{dd_process, outcome}      Counter — updates by reward bucket
+    dd.pareto_ucb_score                              Histogram — score distribution per pick
+    dd.pareto_n_obs{deployment, dd_process}          Gauge — observations per cell
+    dd.pareto_cell_age_seconds                       Histogram — staleness per cell
+    dd.pareto_shadow_agreement{dd_process}           Counter — predicted == actual deployment
 
 The 'shadow_agreement' metric drives the production go/no-go: flip
-KD_USE_PARETO_BANDIT to "1" only after agreement > 60% over 1-2 weeks.
+DD_USE_PARETO_BANDIT to "1" only after agreement > 60% over 1-2 weeks.
 
 Public API (async; sync wrappers provided where needed):
     await init_bandit_warm_start(deployments, redis)         # called at lifespan
-    await predict(kd_process, context, redis)                 # returns (deployment, debug)
-    await update(deployment, kd_process, context, reward, redis)
-    await get_cell_state(deployment, kd_process, redis)       # introspection
+    await predict(dd_process, context, redis)                 # returns (deployment, debug)
+    await update(deployment, dd_process, context, reward, redis)
+    await get_cell_state(deployment, dd_process, redis)       # introspection
     await get_all_cells(redis)                                # admin endpoint backing
     make_context_vector(...)                                  # feature extraction helper
 """
@@ -104,7 +104,7 @@ logger = logging.getLogger(__name__)
 # Constants
 # =============================================================================
 CONTEXT_DIM = 25
-CACHE_PREFIX = "kd:rotator:pareto:cell:"
+CACHE_PREFIX = "dd:rotator:pareto:cell:"
 CELL_TTL_S = 90 * 24 * 3600       # 90 days — long-lived; forgetting handles staleness
 
 # Geometric forgetting rate per update (γ). 0.01 means old observations decay
@@ -119,19 +119,19 @@ UCB_ALPHA = 0.5
 RIDGE_LAMBDA = 1.0
 
 
-# kd_processes we serve. Ordering matters for the one-hot encoding.
-KD_PROCESSES: tuple[str, ...] = (
-    "kd-all",
-    "kd-synth",
-    "kd-reduce-label",
-    "kd-keylm",
-    "kd-embed",
-    "kd-plan",
-    "kd-curator",
-    "kd-grader",
-    "kd-critic",
+# dd_processes we serve. Ordering matters for the one-hot encoding.
+DD_PROCESSES: tuple[str, ...] = (
+    "dd-all",
+    "dd-synth",
+    "dd-reduce-label",
+    "dd-keylm",
+    "dd-embed",
+    "dd-plan",
+    "dd-curator",
+    "dd-grader",
+    "dd-critic",
 )
-_KD_PROCESS_IDX = {p: i for i, p in enumerate(KD_PROCESSES)}
+_DD_PROCESS_IDX = {p: i for i, p in enumerate(DD_PROCESSES)}
 
 # Providers ordered for one-hot in the context vector. Must match
 # services.discovery.PROVIDERS keys (enabled subset). Slots [19-24].
@@ -160,18 +160,18 @@ ERROR_CLASS_PENALTIES: dict[str, float] = {
 
 
 # =============================================================================
-# CellState — per (deployment, kd_process) bandit cell
+# CellState — per (deployment, dd_process) bandit cell
 # =============================================================================
 @dataclass
 class CellState:
-    """LinUCB state for one (deployment, kd_process) pair.
+    """LinUCB state for one (deployment, dd_process) pair.
 
     Wire format: JSON-serializable via to_dict()/from_dict(). A_a and b_a
     are stored as nested float lists in Redis (small footprint: 16×16 + 16
     floats ≈ 2KB per cell × 12 deployments × 9 processes = ~216KB total).
     """
     deployment: str
-    kd_process: str
+    dd_process: str
     A_a: np.ndarray              # (CONTEXT_DIM, CONTEXT_DIM)
     b_a: np.ndarray              # (CONTEXT_DIM,)
     n_obs: int
@@ -179,7 +179,7 @@ class CellState:
     benchmark_prior: float       # composite score at warm-start time
 
     @classmethod
-    def fresh(cls, deployment: str, kd_process: str, benchmark_prior: float) -> "CellState":
+    def fresh(cls, deployment: str, dd_process: str, benchmark_prior: float) -> "CellState":
         """Build a fresh cell, warm-started from the benchmark composite.
 
         Higher benchmark_prior → tighter prior (smaller covariance, more
@@ -196,7 +196,7 @@ class CellState:
         b_a = A_a @ theta_init
         return cls(
             deployment=deployment,
-            kd_process=kd_process,
+            dd_process=dd_process,
             A_a=A_a,
             b_a=b_a,
             n_obs=0,
@@ -207,7 +207,7 @@ class CellState:
     def to_dict(self) -> dict[str, Any]:
         return {
             "deployment": self.deployment,
-            "kd_process": self.kd_process,
+            "dd_process": self.dd_process,
             "A_a": self.A_a.tolist(),
             "b_a": self.b_a.tolist(),
             "n_obs": self.n_obs,
@@ -219,7 +219,7 @@ class CellState:
     def from_dict(cls, d: dict[str, Any]) -> "CellState":
         return cls(
             deployment=d["deployment"],
-            kd_process=d["kd_process"],
+            dd_process=d["dd_process"],
             A_a=np.asarray(d["A_a"], dtype=np.float64),
             b_a=np.asarray(d["b_a"], dtype=np.float64),
             n_obs=int(d.get("n_obs", 0)),
@@ -264,7 +264,7 @@ class CellState:
 # Context vector construction
 # =============================================================================
 def make_context_vector(
-    kd_process: str,
+    dd_process: str,
     *,
     chapter_number: int = 0,
     expected_hash_count: int = 0,
@@ -281,7 +281,7 @@ def make_context_vector(
         [2]      expected_hash_count_normalized   log(n+1)/log(500)
         [3]      has_thinking_budget              0/1
         [4-6]    vault_size_bucket (small/med/large)   one-hot
-        [7-15]   kd_process one-hot               over 9 processes (CONTEXT_DIM=25)
+        [7-15]   dd_process one-hot               over 9 processes (CONTEXT_DIM=25)
         [16]     hour_of_day_sin                  sin(2π·hour/24)   diurnal cycle
         [17]     hour_of_day_cos                  cos(2π·hour/24)   orthogonal
         [18]     day_of_week_normalized           weekday/6
@@ -304,8 +304,8 @@ def make_context_vector(
         v[5] = 1.0
     else:
         v[6] = 1.0
-    # kd_process one-hot
-    idx = _KD_PROCESS_IDX.get(kd_process)
+    # dd_process one-hot
+    idx = _DD_PROCESS_IDX.get(dd_process)
     if idx is not None:
         v[7 + idx] = 1.0
     # Temporal — sin/cos hour + day-of-week
@@ -377,13 +377,13 @@ def compose_reward(
 # =============================================================================
 # Redis persistence
 # =============================================================================
-def _cell_key(deployment: str, kd_process: str) -> str:
-    return f"{CACHE_PREFIX}{deployment}:{kd_process}"
+def _cell_key(deployment: str, dd_process: str) -> str:
+    return f"{CACHE_PREFIX}{deployment}:{dd_process}"
 
 
 async def get_cell_state(
     deployment: str,
-    kd_process: str,
+    dd_process: str,
     *,
     redis: "redis_aio.Redis | None",
 ) -> CellState | None:
@@ -391,14 +391,14 @@ async def get_cell_state(
     if redis is None:
         return None
     try:
-        raw = await redis.get(_cell_key(deployment, kd_process))
+        raw = await redis.get(_cell_key(deployment, dd_process))
         if raw is None:
             return None
         if isinstance(raw, bytes):
             raw = raw.decode()
         return CellState.from_dict(json.loads(raw))
     except Exception as e:
-        logger.debug(f"[pareto] cell read failed for {deployment}:{kd_process}: {e}")
+        logger.debug(f"[pareto] cell read failed for {deployment}:{dd_process}: {e}")
         return None
 
 
@@ -412,13 +412,13 @@ async def save_cell_state(
         return False
     try:
         await redis.set(
-            _cell_key(state.deployment, state.kd_process),
+            _cell_key(state.deployment, state.dd_process),
             json.dumps(state.to_dict()),
             ex=CELL_TTL_S,
         )
         return True
     except Exception as e:
-        logger.debug(f"[pareto] cell write failed for {state.deployment}:{state.kd_process}: {e}")
+        logger.debug(f"[pareto] cell write failed for {state.deployment}:{state.dd_process}: {e}")
         return False
 
 
@@ -429,7 +429,7 @@ async def get_all_cells(
 ) -> list[CellState]:
     """Scan all cells in Redis. Optional pattern restricts the scan.
 
-    Pattern format: pass a Redis glob like "*kd-synth" to match only kd-synth
+    Pattern format: pass a Redis glob like "*dd-synth" to match only dd-synth
     cells, or None for everything.
     """
     if redis is None:
@@ -453,7 +453,7 @@ async def get_all_cells(
 
 
 # =============================================================================
-# Warm-start — populate all (deployment, kd_process) cells from benchmark prior
+# Warm-start — populate all (deployment, dd_process) cells from benchmark prior
 # =============================================================================
 async def init_bandit_warm_start(
     deployments_by_step: dict[str, list[tuple[str, float]]],
@@ -461,13 +461,13 @@ async def init_bandit_warm_start(
     redis: "redis_aio.Redis | None",
     overwrite: bool = False,
 ) -> int:
-    """Initialize cells for all (deployment, kd_process) pairs.
+    """Initialize cells for all (deployment, dd_process) pairs.
 
     Args:
-        deployments_by_step: {kd_process: [(deployment_id, benchmark_score), ...]}
+        deployments_by_step: {dd_process: [(deployment_id, benchmark_score), ...]}
             Caller produces this by calling
-                services.llm_chain._all_entries_current()  (for kd-all),
-                services.llm_chain._synth_entries_current() (for kd-synth), etc.
+                services.llm_chain._all_entries_current()  (for dd-all),
+                services.llm_chain._synth_entries_current() (for dd-synth), etc.
             and looking up benchmark scores via services.benchmarks.rank_for_step.
         redis: Redis client (None → no persistence, returns 0).
         overwrite: when True, replaces existing cells; when False, leaves them.
@@ -477,27 +477,27 @@ async def init_bandit_warm_start(
     if redis is None or not deployments_by_step:
         return 0
     count = 0
-    for kd_process, deployments in deployments_by_step.items():
+    for dd_process, deployments in deployments_by_step.items():
         for deployment_id, score in deployments:
             if not overwrite:
-                existing = await get_cell_state(deployment_id, kd_process, redis=redis)
+                existing = await get_cell_state(deployment_id, dd_process, redis=redis)
                 if existing is not None:
                     continue
-            cell = CellState.fresh(deployment_id, kd_process, score)
+            cell = CellState.fresh(deployment_id, dd_process, score)
             if await save_cell_state(cell, redis=redis):
                 count += 1
     logger.info(
         f"[pareto] warm-start: initialized {count} cells across "
-        f"{len(deployments_by_step)} kd_processes"
+        f"{len(deployments_by_step)} dd_processes"
     )
     return count
 
 
 # =============================================================================
-# Predict — pick the highest-UCB deployment for a given (kd_process, context)
+# Predict — pick the highest-UCB deployment for a given (dd_process, context)
 # =============================================================================
 async def predict(
-    kd_process: str,
+    dd_process: str,
     context: np.ndarray,
     candidate_deployments: list[str],
     *,
@@ -507,7 +507,7 @@ async def predict(
     """Pick deployment by UCB. Returns (deployment_id, debug_info).
 
     Args:
-        kd_process: the step being routed (must be in KD_PROCESSES).
+        dd_process: the step being routed (must be in DD_PROCESSES).
         context: 16-dim context vector from make_context_vector(...).
         candidate_deployments: list of deployment_id strings to consider.
             Typically the litellm_params.model strings from Phase 1's
@@ -524,14 +524,14 @@ async def predict(
 
     # Look up cell state for each candidate (batched gather)
     cells = await asyncio.gather(
-        *[get_cell_state(d, kd_process, redis=redis) for d in candidate_deployments]
+        *[get_cell_state(d, dd_process, redis=redis) for d in candidate_deployments]
     )
 
     scored: list[tuple[str, float, float, float, int]] = []
     for deployment, cell in zip(candidate_deployments, cells):
         if cell is None:
             # No state yet — synthesize a cold cell with low prior (encourages exploration)
-            cell = CellState.fresh(deployment, kd_process, benchmark_prior=0.0)
+            cell = CellState.fresh(deployment, dd_process, benchmark_prior=0.0)
         total, exploit, explore = cell.ucb_score(context, alpha=alpha)
         scored.append((deployment, total, exploit, explore, cell.n_obs))
 
@@ -539,7 +539,7 @@ async def predict(
     scored.sort(key=lambda x: (-x[1], x[4], x[0]))
     winner = scored[0]
 
-    _record_predict(kd_process)
+    _record_predict(dd_process)
     _record_ucb_score(winner[1])
 
     debug = {
@@ -561,28 +561,28 @@ async def predict(
 # =============================================================================
 async def update(
     deployment: str,
-    kd_process: str,
+    dd_process: str,
     context: np.ndarray,
     reward: float,
     *,
     redis: "redis_aio.Redis | None",
 ) -> bool:
-    """Apply one observation's reward to the (deployment, kd_process) cell.
+    """Apply one observation's reward to the (deployment, dd_process) cell.
 
     Read cell → apply geometric forgetting + add observation → write back.
     Returns True on success, False on Redis failure (observation lost).
     """
     if redis is None:
         return False
-    cell = await get_cell_state(deployment, kd_process, redis=redis)
+    cell = await get_cell_state(deployment, dd_process, redis=redis)
     if cell is None:
         # Cell missing — create fresh (no benchmark prior available here)
-        cell = CellState.fresh(deployment, kd_process, benchmark_prior=0.0)
+        cell = CellState.fresh(deployment, dd_process, benchmark_prior=0.0)
     cell.apply_update(context, reward)
     ok = await save_cell_state(cell, redis=redis)
     if ok:
         outcome = "positive" if reward > 0.5 else ("neutral" if reward > 0 else "negative")
-        _record_update(kd_process, outcome)
+        _record_update(dd_process, outcome)
     return ok
 
 
@@ -590,7 +590,7 @@ async def update(
 # Top-K prediction — for cascade-aware routing (Phase 2 enhancement #3)
 # =============================================================================
 async def predict_top_k(
-    kd_process: str,
+    dd_process: str,
     context: np.ndarray,
     candidate_deployments: list[str],
     *,
@@ -611,13 +611,13 @@ async def predict_top_k(
         return []
 
     cells = await asyncio.gather(
-        *[get_cell_state(d, kd_process, redis=redis) for d in candidate_deployments]
+        *[get_cell_state(d, dd_process, redis=redis) for d in candidate_deployments]
     )
 
     scored: list[tuple[str, float, int]] = []
     for deployment, cell in zip(candidate_deployments, cells):
         if cell is None:
-            cell = CellState.fresh(deployment, kd_process, benchmark_prior=0.0)
+            cell = CellState.fresh(deployment, dd_process, benchmark_prior=0.0)
         total, _exploit, _bonus = cell.ucb_score(context, alpha=alpha)
         scored.append((deployment, total, cell.n_obs))
 
@@ -625,7 +625,7 @@ async def predict_top_k(
     # of under-sampled arms), then by deployment string for determinism.
     scored.sort(key=lambda x: (-x[1], x[2], x[0]))
 
-    _record_predict(kd_process)
+    _record_predict(dd_process)
     if scored:
         _record_ucb_score(scored[0][1])
 
@@ -641,19 +641,19 @@ async def predict_top_k(
 # Both pinned to it; both hung simultaneously on a `<think>` token timeout.
 #
 # Pattern: each successful pick attempts an atomic claim of
-#   kd:rotator:pareto:reserved:{kd_process}:{deployment}
+#   dd:rotator:pareto:reserved:{dd_process}:{deployment}
 # via SET NX EX. Concurrent pickers see the claim and skip to the next-best
 # arm. Callers can either release explicitly at end-of-use, or rely on TTL
 # expiry for self-healing (workers crashing mid-call leave dangling
 # reservations that expire within ttl_s).
 async def try_reserve(
     deployment: str,
-    kd_process: str,
+    dd_process: str,
     *,
     redis: "redis_aio.Redis | None",
     ttl_s: int = 60,
 ) -> bool:
-    """Atomic claim of (deployment, kd_process) for ttl_s seconds.
+    """Atomic claim of (deployment, dd_process) for ttl_s seconds.
 
     Returns True when this caller now holds the reservation. Returns False
     only when the key was already set by a concurrent caller and we should
@@ -665,7 +665,7 @@ async def try_reserve(
     """
     if redis is None:
         return True
-    key = f"kd:rotator:pareto:reserved:{kd_process}:{deployment}"
+    key = f"dd:rotator:pareto:reserved:{dd_process}:{deployment}"
     try:
         claimed = await redis.set(key, "1", ex=ttl_s, nx=True)
         return bool(claimed)
@@ -675,7 +675,7 @@ async def try_reserve(
 
 async def release_reservation(
     deployment: str,
-    kd_process: str,
+    dd_process: str,
     *,
     redis: "redis_aio.Redis | None",
 ) -> None:
@@ -685,7 +685,7 @@ async def release_reservation(
     if redis is None:
         return
     try:
-        await redis.delete(f"kd:rotator:pareto:reserved:{kd_process}:{deployment}")
+        await redis.delete(f"dd:rotator:pareto:reserved:{dd_process}:{deployment}")
     except Exception:
         pass
 
@@ -705,8 +705,8 @@ async def release_reservation(
 # rate-limit budget.
 #
 # Pattern: per-provider, numbered slot keys
-#   kd:rotator:provider_slot:nvidia_nim:0
-#   kd:rotator:provider_slot:nvidia_nim:1
+#   dd:rotator:provider_slot:nvidia_nim:0
+#   dd:rotator:provider_slot:nvidia_nim:1
 # Each slot atomically claimed via SET NX EX. Release by deleting the specific
 # slot key. TTL=1800s matches chapter-pin TTL so stale slots self-heal.
 async def try_reserve_provider_slot(
@@ -725,7 +725,7 @@ async def try_reserve_provider_slot(
     if redis is None:
         return 0
     for slot_idx in range(max_slots):
-        key = f"kd:rotator:provider_slot:{provider}:{slot_idx}"
+        key = f"dd:rotator:provider_slot:{provider}:{slot_idx}"
         try:
             claimed = await redis.set(key, "1", ex=ttl_s, nx=True)
             if claimed:
@@ -746,7 +746,7 @@ async def release_provider_slot(
     if redis is None or slot_idx is None:
         return
     try:
-        await redis.delete(f"kd:rotator:provider_slot:{provider}:{slot_idx}")
+        await redis.delete(f"dd:rotator:provider_slot:{provider}:{slot_idx}")
     except Exception:
         pass
 
@@ -766,21 +766,21 @@ def _ensure_metrics() -> dict[str, Any]:
         if meter is None:
             return _metric_instruments
         _metric_instruments["predict_counter"] = meter.create_counter(
-            name="kd.pareto_predict_total",
-            description="ParetoBandit predict() calls — labels: kd_process",
+            name="dd.pareto_predict_total",
+            description="ParetoBandit predict() calls — labels: dd_process",
         )
         _metric_instruments["update_counter"] = meter.create_counter(
-            name="kd.pareto_update_total",
-            description="ParetoBandit update() calls — labels: kd_process, outcome ∈ {positive, neutral, negative}",
+            name="dd.pareto_update_total",
+            description="ParetoBandit update() calls — labels: dd_process, outcome ∈ {positive, neutral, negative}",
         )
         _metric_instruments["ucb_score_hist"] = meter.create_histogram(
-            name="kd.pareto_ucb_score",
+            name="dd.pareto_ucb_score",
             description="UCB score of the winning deployment per predict() call",
             unit="1",
         )
         _metric_instruments["shadow_agreement"] = meter.create_counter(
-            name="kd.pareto_shadow_agreement_total",
-            description="Shadow-mode: predicted == actual deployment — labels: kd_process, agreement ∈ {yes, no}",
+            name="dd.pareto_shadow_agreement_total",
+            description="Shadow-mode: predicted == actual deployment — labels: dd_process, agreement ∈ {yes, no}",
         )
         logger.info(f"[pareto] {len(_metric_instruments)} OTel instruments registered")
     except Exception as e:
@@ -788,24 +788,24 @@ def _ensure_metrics() -> dict[str, Any]:
     return _metric_instruments
 
 
-def _record_predict(kd_process: str) -> None:
+def _record_predict(dd_process: str) -> None:
     inst = _ensure_metrics()
     c = inst.get("predict_counter")
     if c is None:
         return
     try:
-        c.add(1, attributes={"kd_process": kd_process})
+        c.add(1, attributes={"dd_process": dd_process})
     except Exception:
         pass
 
 
-def _record_update(kd_process: str, outcome: str) -> None:
+def _record_update(dd_process: str, outcome: str) -> None:
     inst = _ensure_metrics()
     c = inst.get("update_counter")
     if c is None:
         return
     try:
-        c.add(1, attributes={"kd_process": kd_process, "outcome": outcome})
+        c.add(1, attributes={"dd_process": dd_process, "outcome": outcome})
     except Exception:
         pass
 
@@ -821,14 +821,14 @@ def _record_ucb_score(score: float) -> None:
         pass
 
 
-def _record_shadow_agreement(kd_process: str, agreement: bool) -> None:
+def _record_shadow_agreement(dd_process: str, agreement: bool) -> None:
     inst = _ensure_metrics()
     c = inst.get("shadow_agreement")
     if c is None:
         return
     try:
         c.add(1, attributes={
-            "kd_process": kd_process,
+            "dd_process": dd_process,
             "agreement": "yes" if agreement else "no",
         })
     except Exception:

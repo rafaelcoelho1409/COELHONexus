@@ -107,11 +107,11 @@ embedding:
 #   "1" / "true" → classical pipeline (Xinference-replaced NIM rotator embed
 #                  + community_detection + KeyLLM via rotator). Deterministic,
 #                  ~30s per study, no LLM rate-limit risk on 11 shards.
-#   "0" / "false" → legacy LLM-based per-shard labeling via the kd-all rotator.
+#   "0" / "false" → legacy LLM-based per-shard labeling via the dd-all rotator.
 #                   Slower (~3 min), better label quality on shard names but
 #                   prone to 429 cascades and timeouts on free-tier providers.
 # See docs/KD-PLANNER-MAP-OPTIMIZATION.md §5 for the full rationale.
-kd:
+dd:
   useClassicalMap: "1"
   # Phase 1.3 (2026-05-13): when "1", routes the synth grader through
   # services/knowledge/grader_classical.py — deterministic per-dim scorers
@@ -125,7 +125,7 @@ kd:
   useClassicalGrader: "1"
   # Phase 2.1 (2026-05-13): when "1", replaces the post-synth critic's
   # per-chapter LLM faithfulness call (OP-45) with an embedding-similarity
-  # heuristic via the kd-embed rotator (services/knowledge/critic_classical.py).
+  # heuristic via the dd-embed rotator (services/knowledge/critic_classical.py).
   # citation_coverage + code_syntax_valid stay deterministic regardless of
   # this flag (they always were). Default "0" keeps the legacy LLM critic;
   # flip after A/B validation via /api/v1/knowledge/debug/critic_compare.
@@ -149,7 +149,7 @@ kd:
   # generated from per-dim templates instead of the LLM ADJUSTMENT_PROMPT
   # call (1 LLM call saved). See services/knowledge/refiner_classical.py
   # and docs/KD-SYNTH-LLM-TO-CLASSICAL-MAY2026.md Phase 4. Depends on
-  # KD_USE_CLASSICAL_GRADER for reliably labeled Issue dimensions. Default
+  # DD_USE_CLASSICAL_GRADER for reliably labeled Issue dimensions. Default
   # "0" keeps the legacy LLM-only refine path; flip after A/B validation
   # via /api/v1/knowledge/debug/refiner_compare.
   useClassicalRefiner: "1"
@@ -166,14 +166,14 @@ kd:
   # Phase 5 (2026-05-13): when "1", routes the final summary.md / assembler
   # step through services/knowledge/summary_classical.py — deterministic
   # Python-built header + reading plan + one small-LLM call via the
-  # kd-reduce-label rotator for the framing paragraph + market_roadmap +
+  # dd-reduce-label rotator for the framing paragraph + market_roadmap +
   # 3-5 money projects only. The reading-plan list never transits the LLM
   # (~70% output-token reduction vs ASSEMBLER_PROMPT). Default "0" keeps the
   # legacy single-call assembler; flip after A/B validation via
   # /api/v1/knowledge/debug/summary_compare.
   useClassicalSummary: "1"
   # Scope B (2026-05-12 night, revised night-late): when "1", section synth
-  # routes through the curated `kd-synth` HYBRID pool — Tier 1 reasoning
+  # routes through the curated `dd-synth` HYBRID pool — Tier 1 reasoning
   # (Kimi K2.6 / GLM-5.1 / MiniMax M2.7 / DeepSeek V4-Flash) for structural-
   # output completeness, Tier 2 non-reasoning frontier (Mistral L3 ×2 /
   # Nemotron-3-super / gpt-oss-120b) for fast fallback, Tier 3 deep tail
@@ -181,7 +181,7 @@ kd:
   # Excludes Gemini 3.x (T<1 infinite-loop bug), Magistral (R-mode default),
   # Cerebras (account 404), SambaNova (paywall), DeepSeek direct (Insufficient
   # Balance), Groq gpt-oss + llama-3.3 (TPM ceilings too tight). The
-  # concurrency cap (KD_LLM_GLOBAL_CONCURRENCY) prevents peak parallelism
+  # concurrency cap (DD_LLM_GLOBAL_CONCURRENCY) prevents peak parallelism
   # from cascade-exhausting via reasoning-model <think> timeouts.
   # See services/llm_chain.py SYNTH_GROUP.
   useSynthPool: "1"
@@ -227,8 +227,8 @@ kd:
   #
   # Architecture: discovery.list_all_alive_models() → benchmarks.rank_for_step(step)
   #            → top-K cut per step → _record_to_entry() → LiteLLM model_list dict
-  # Per-step top-K: kd-all=30, kd-synth=12, kd-reduce-label=10.
-  # kd-keylm + kd-embed stay STATIC by design (tiny LMs + single embedding model).
+  # Per-step top-K: dd-all=30, dd-synth=12, dd-reduce-label=10.
+  # dd-keylm + dd-embed stay STATIC by design (tiny LMs + single embedding model).
   dynamicCatalog: "1"
 
   # Phase 2 — ParetoBandit ALWAYS-ON adaptive routing (2026-05-14):
@@ -383,7 +383,7 @@ celery:
   # parent ≈ 11.8GB). concurrency=2 gives 2 in-flight tasks (each chapter's
   # synthesize_chapter task spawns 8 parallel section-synth LLM calls anyway,
   # so 2 celery workers × 8 parallel calls = 16 in-flight LLM calls — already
-  # at the KD_LLM_GLOBAL_CONCURRENCY=10 cap which queues the rest).
+  # at the DD_LLM_GLOBAL_CONCURRENCY=10 cap which queues the rest).
   concurrency: 2
   # Queue names are environment-suffixed in the deployment template (see
   # k8s/helm/templates/celery/deployment.yaml). Both dev (skaffold) and prod

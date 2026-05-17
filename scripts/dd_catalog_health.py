@@ -21,12 +21,12 @@ Usage:
   export LANGFUSE_HOST="https://langfuse.YOUR_TAILNET_DOMAIN.ts.net"
   export LANGFUSE_PUBLIC_KEY="lf_pk_..."
   export LANGFUSE_SECRET_KEY="lf_sk_..."
-  python scripts/kd_catalog_health.py [--days 7] [--min-calls 10]
+  python scripts/dd_catalog_health.py [--days 7] [--min-calls 10]
 
 Thresholds (tune via env):
-  KD_CATALOG_MIN_SUCCESS_RATE   default 0.80
-  KD_CATALOG_MIN_PRESERVATION   default 0.90
-  KD_CATALOG_MAX_ERROR_RATE     default 0.30
+  DD_CATALOG_MIN_SUCCESS_RATE   default 0.80
+  DD_CATALOG_MIN_PRESERVATION   default 0.90
+  DD_CATALOG_MAX_ERROR_RATE     default 0.30
 
 Any model exceeding the min success/preservation thresholds OR the max
 error rate gets a DEMOTE recommendation (with rationale).
@@ -118,9 +118,9 @@ def main():
     ap.add_argument("--min-calls", type=int, default=10, help="min calls per model to consider (default 10)")
     args = ap.parse_args()
 
-    min_success_rate = float(os.environ.get("KD_CATALOG_MIN_SUCCESS_RATE", "0.80"))
-    min_preservation = float(os.environ.get("KD_CATALOG_MIN_PRESERVATION", "0.90"))
-    max_error_rate = float(os.environ.get("KD_CATALOG_MAX_ERROR_RATE", "0.30"))
+    min_success_rate = float(os.environ.get("DD_CATALOG_MIN_SUCCESS_RATE", "0.80"))
+    min_preservation = float(os.environ.get("DD_CATALOG_MIN_PRESERVATION", "0.90"))
+    max_error_rate = float(os.environ.get("DD_CATALOG_MAX_ERROR_RATE", "0.30"))
 
     client = _load_langfuse_client()
     since = datetime.now(timezone.utc) - timedelta(days=args.days)

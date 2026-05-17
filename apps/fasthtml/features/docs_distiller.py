@@ -163,17 +163,18 @@ def _Picker():
         ),
     )
 
-    # Step 3 — Planner (8 substep cards, populated by JS polling /debug/graph)
+    # Step 3 — Planner (9 substep cards, populated by JS polling /debug/graph)
     # Each card mirrors one LangGraph node; status fills in as the run advances.
     planner_substeps = [
-        ("corpus_load", "Corpus load", "Read ingestion's canonical manifest from MinIO."),
-        ("off_topic",   "Off-topic filter", "Embed every file, drop those below cosine threshold."),
-        ("dedup",       "Deduplicate",      "MinHash + Jaccard threshold to drop near-duplicates."),
-        ("cache_lookup","Cache lookup",     "Hash deduped corpus; reuse plan if seen before."),
-        ("map",         "MAP labeling",     "Per-shard LLM labeling of file clusters."),
-        ("reduce",      "REDUCE outline",   "Single LLM merge → final 4-12 chapter outline."),
-        ("validate",    "Validate",         "Coverage repair: orphan/hallucinated slug detection."),
-        ("plan_write",  "Plan write",       "Persist final chapter plan to MinIO."),
+        ("corpus_load",  "Corpus load",      "Read ingestion's canonical manifest from MinIO."),
+        ("embed_corpus", "Embed corpus",     "NIM 8B pass (chunk+mean-pool, L2-norm); vectors cached in MinIO."),
+        ("off_topic",    "Off-topic filter", "Pure LLM-as-Judge per page, routed by ParetoBandit (dd-grader cells)."),
+        ("dedup",        "Deduplicate",      "MinHash + Jaccard threshold to drop near-duplicates."),
+        ("cache_lookup", "Cache lookup",     "Hash deduped corpus; reuse plan if seen before."),
+        ("map",          "MAP labeling",     "Per-shard LLM labeling of file clusters."),
+        ("reduce",       "REDUCE outline",   "Single LLM merge → final 4-12 chapter outline."),
+        ("validate",     "Validate",         "Coverage repair: orphan/hallucinated slug detection."),
+        ("plan_write",   "Plan write",       "Persist final chapter plan to MinIO."),
     ]
     substep_cards = [
         Div(
@@ -229,6 +230,11 @@ def _Picker():
                 ),
                 Span("", id="fw-planner-progress-label",
                      cls="fw-planner-progress-label"),
+                Button("Wipe planner", id="fw-planner-wipe",
+                       cls="btn-outline", disabled=True,
+                       title=("Delete this framework's planner cache "
+                              "(MinIO embeddings + Postgres checkpoints "
+                              "+ browser state)")),
                 Button("Start Planner", id="fw-planner-start",
                        cls="btn-primary", disabled=True),
                 cls="fw-planner-head-actions",

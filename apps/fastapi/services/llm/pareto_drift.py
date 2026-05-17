@@ -18,25 +18,25 @@ window structure isn't trivially JSON-serializable, and losing the window on
 restart is acceptable: the bandit's Redis state survives, and ADWIN simply
 rebuilds its window from new observations).
 
-Observation feed: `feed_observation(deployment, kd_process, success)` is
+Observation feed: `feed_observation(deployment, dd_process, success)` is
 called immediately after every pareto_bandit.update() in helpers.py. ADWIN
 runs in O(log W) per observation — cheap.
 
 Reset path: when ADWIN.update() returns True (drift detected), we
 asynchronously reset the cell:
-  1. Compute current benchmark composite for (deployment, kd_process)
+  1. Compute current benchmark composite for (deployment, dd_process)
   2. Build a fresh CellState from that prior
   3. Write to Redis (replaces stale posterior)
-  4. Emit kd.pareto_drift_reset_total metric
+  4. Emit dd.pareto_drift_reset_total metric
 
 OTel metrics:
-  kd.pareto_drift_observations_total{kd_process}    Counter — observations fed
-  kd.pareto_drift_detected_total{deployment, kd_process}  Counter — drift events
-  kd.pareto_drift_reset_total{deployment, kd_process}     Counter — successful resets
+  dd.pareto_drift_observations_total{dd_process}    Counter — observations fed
+  dd.pareto_drift_detected_total{deployment, dd_process}  Counter — drift events
+  dd.pareto_drift_reset_total{deployment, dd_process}     Counter — successful resets
 
 Public API:
-  feed_observation(deployment, kd_process, success)             → bool (drift detected)
-  await maybe_reset_cell(deployment, kd_process, *, redis)      → bool (reset done)
+  feed_observation(deployment, dd_process, success)             → bool (drift detected)
+  await maybe_reset_cell(deployment, dd_process, *, redis)      → bool (reset done)
   await drift_sweep(*, redis)                                    → dict (admin scan)
 """
 from __future__ import annotations
@@ -76,7 +76,7 @@ def _get_river_drift():
     return _river_drift_module
 
 
-# Per-cell ADWIN state. Key = (deployment, kd_process) tuple. Lost on
+# Per-cell ADWIN state. Key = (deployment, dd_process) tuple. Lost on
 # restart; the bandit's Redis state survives. ADWIN rebuilds its window
 # from fresh observations after restart — typically converges in <100 obs.
 _adwin_state: dict[tuple[str, str], Any] = {}
@@ -89,7 +89,7 @@ _pending_resets: set[tuple[str, str]] = set()
 
 def feed_observation(
     deployment: str,
-    kd_process: str,
+    dd_process: str,
     success: bool,
 ) -> bool:
     """Feed one success/fail observation to the cell's ADWIN detector.
@@ -102,8 +102,8 @@ def feed_observation(
     drift_module = _get_river_drift()
     if drift_module is None:
         return False
-    _record_observation(kd_process)
-    key = (deployment, kd_process)
+    _record_observation(dd_process)
+    key = (deployment, dd_process)
     adwin = _adwin_state.get(key)
     if adwin is None:
         try:
@@ -124,9 +124,9 @@ def feed_observation(
 
     if drifted:
         _pending_resets.add(key)
-        _record_detected(deployment, kd_process)
+        _record_detected(deployment, dd_process)
         logger.warning(
-            f"[pareto-drift] drift DETECTED for {deployment}/{kd_process} "
+            f"[pareto-drift] drift DETECTED for {deployment}/{dd_process} "
             f"(pending reset)"
         )
     return drifted
@@ -134,7 +134,7 @@ def feed_observation(
 
 async def maybe_reset_cell(
     deployment: str,
-    kd_process: str,
+    dd_process: str,
     *,
     redis: "redis_aio.Redis | None",
 ) -> bool:
@@ -146,7 +146,7 @@ async def maybe_reset_cell(
 
     Returns True if a reset was performed, False otherwise.
     """
-    key = (deployment, kd_process)
+    key = (deployment, dd_process)
     if key not in _pending_resets:
         return False
     try:
@@ -154,17 +154,17 @@ async def maybe_reset_cell(
         canonical = benchmarks.normalize_model_name(deployment)
         scores = await benchmarks.get_benchmarks(canonical, redis=redis)
         weights = benchmarks.STEP_WEIGHTS.get(
-            kd_process, benchmarks.STEP_WEIGHTS["kd-all"],
+            dd_process, benchmarks.STEP_WEIGHTS["dd-all"],
         )
         new_prior = benchmarks.compute_composite_score(scores, weights)
-        fresh = pareto_bandit.CellState.fresh(deployment, kd_process, new_prior)
+        fresh = pareto_bandit.CellState.fresh(deployment, dd_process, new_prior)
         await pareto_bandit.save_cell_state(fresh, redis=redis)
         _pending_resets.discard(key)
         # Also reset the ADWIN window — it has stale memory of the pre-drift regime.
         _adwin_state.pop(key, None)
-        _record_reset(deployment, kd_process)
+        _record_reset(deployment, dd_process)
         logger.warning(
-            f"[pareto-drift] RESET {deployment}/{kd_process} → benchmark prior={new_prior:.4f}"
+            f"[pareto-drift] RESET {deployment}/{dd_process} → benchmark prior={new_prior:.4f}"
         )
         return True
     except Exception as e:
@@ -185,13 +185,13 @@ async def drift_sweep(
     pending_snapshot = list(_pending_resets)
     reset: list[str] = []
     errors: list[str] = []
-    for deployment, kd_process in pending_snapshot:
+    for deployment, dd_process in pending_snapshot:
         try:
-            ok = await maybe_reset_cell(deployment, kd_process, redis=redis)
+            ok = await maybe_reset_cell(deployment, dd_process, redis=redis)
             if ok:
-                reset.append(f"{deployment}/{kd_process}")
+                reset.append(f"{deployment}/{dd_process}")
         except Exception as e:
-            errors.append(f"{deployment}/{kd_process}: {type(e).__name__}")
+            errors.append(f"{deployment}/{dd_process}: {type(e).__name__}")
     return {
         "pending_before": [f"{d}/{p}" for d, p in pending_snapshot],
         "reset": reset,
@@ -227,16 +227,16 @@ def _ensure_metrics() -> dict[str, Any]:
         if meter is None:
             return _metric_instruments
         _metric_instruments["obs_counter"] = meter.create_counter(
-            name="kd.pareto_drift_observations_total",
-            description="Observations fed to ADWIN — labels: kd_process",
+            name="dd.pareto_drift_observations_total",
+            description="Observations fed to ADWIN — labels: dd_process",
         )
         _metric_instruments["detected_counter"] = meter.create_counter(
-            name="kd.pareto_drift_detected_total",
-            description="Drift events raised by ADWIN — labels: deployment, kd_process",
+            name="dd.pareto_drift_detected_total",
+            description="Drift events raised by ADWIN — labels: deployment, dd_process",
         )
         _metric_instruments["reset_counter"] = meter.create_counter(
-            name="kd.pareto_drift_reset_total",
-            description="Cells reset from benchmark prior after drift — labels: deployment, kd_process",
+            name="dd.pareto_drift_reset_total",
+            description="Cells reset from benchmark prior after drift — labels: deployment, dd_process",
         )
         logger.info(f"[pareto-drift] {len(_metric_instruments)} OTel instruments registered")
     except Exception as e:
@@ -244,34 +244,34 @@ def _ensure_metrics() -> dict[str, Any]:
     return _metric_instruments
 
 
-def _record_observation(kd_process: str) -> None:
+def _record_observation(dd_process: str) -> None:
     inst = _ensure_metrics()
     c = inst.get("obs_counter")
     if c is None:
         return
     try:
-        c.add(1, attributes={"kd_process": kd_process})
+        c.add(1, attributes={"dd_process": dd_process})
     except Exception:
         pass
 
 
-def _record_detected(deployment: str, kd_process: str) -> None:
+def _record_detected(deployment: str, dd_process: str) -> None:
     inst = _ensure_metrics()
     c = inst.get("detected_counter")
     if c is None:
         return
     try:
-        c.add(1, attributes={"deployment": deployment, "kd_process": kd_process})
+        c.add(1, attributes={"deployment": deployment, "dd_process": dd_process})
     except Exception:
         pass
 
 
-def _record_reset(deployment: str, kd_process: str) -> None:
+def _record_reset(deployment: str, dd_process: str) -> None:
     inst = _ensure_metrics()
     c = inst.get("reset_counter")
     if c is None:
         return
     try:
-        c.add(1, attributes={"deployment": deployment, "kd_process": kd_process})
+        c.add(1, attributes={"deployment": deployment, "dd_process": dd_process})
     except Exception:
         pass

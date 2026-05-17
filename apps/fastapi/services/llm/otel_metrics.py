@@ -17,7 +17,7 @@ adding KD-pipeline-specific signals that LiteLLM has no awareness of:
 
 Each metric carries labels (attributes) that make slicing useful:
   - framework (FastAPI / Docker / Terragrunt / …)
-  - kd_process (section_synth / grader / refiner / curator / critic / summary)
+  - dd_process (section_synth / grader / refiner / curator / critic / summary)
   - chapter_number (where applicable)
   - outcome (accept / debt / op12_rescue / regenerate)
   - deployment_id (for routing-decision queries)

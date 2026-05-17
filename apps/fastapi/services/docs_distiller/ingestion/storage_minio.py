@@ -146,6 +146,14 @@ class MinIOStorage:
                 data = await stream.read()
         return data.decode(encoding)
 
+    async def read_bytes(self, key: str) -> bytes:
+        """Raw binary read. Used for non-text artifacts (numpy .npz blobs
+        in particular — embeddings, cluster matrices)."""
+        async with self._client() as s3:
+            resp = await s3.get_object(Bucket=self.bucket, Key=key)
+            async with resp["Body"] as stream:
+                return await stream.read()
+
     async def delete(self, key: str) -> None:
         async with self._client() as s3:
             await s3.delete_object(Bucket=self.bucket, Key=key)

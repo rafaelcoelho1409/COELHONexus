@@ -47,15 +47,15 @@ Canonicalization (3 layers, descending speed / accuracy):
     L3 HuggingFace model hub search (cached forever in Redis)            (~300ms)
 
 Cache layout:
-    kd:rotator:bench:lb:{source}          full leaderboard, 7d TTL
-    kd:rotator:bench:scores:{canonical}   merged per-canonical scores, 90d TTL
-    kd:rotator:bench:canonical:{prov_id}  provider_id → canonical_name, 1y TTL
+    dd:rotator:bench:lb:{source}          full leaderboard, 7d TTL
+    dd:rotator:bench:scores:{canonical}   merged per-canonical scores, 90d TTL
+    dd:rotator:bench:canonical:{prov_id}  provider_id → canonical_name, 1y TTL
 
 OTel metrics emitted (per the rotator dashboard):
-    kd.rotator_benchmark_fetch_total{source, outcome}    Counter
-    kd.rotator_benchmark_fetch_duration_seconds{source}  Histogram
-    kd.rotator_benchmark_cache_hit_total{layer}          Counter
-    kd.rotator_canonical_resolution_total{layer}         Counter
+    dd.rotator_benchmark_fetch_total{source, outcome}    Counter
+    dd.rotator_benchmark_fetch_duration_seconds{source}  Histogram
+    dd.rotator_benchmark_cache_hit_total{layer}          Counter
+    dd.rotator_canonical_resolution_total{layer}         Counter
 """
 from __future__ import annotations
 
@@ -87,9 +87,9 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Constants
 # =============================================================================
-CACHE_PREFIX_SCORES      = "kd:rotator:bench:scores:"
-CACHE_PREFIX_LEADERBOARD = "kd:rotator:bench:lb:"
-CACHE_PREFIX_CANONICAL   = "kd:rotator:bench:canonical:"
+CACHE_PREFIX_SCORES      = "dd:rotator:bench:scores:"
+CACHE_PREFIX_LEADERBOARD = "dd:rotator:bench:lb:"
+CACHE_PREFIX_CANONICAL   = "dd:rotator:bench:canonical:"
 
 SCORES_TTL_S      = 90 * 24 * 3600
 LEADERBOARD_TTL_S =  7 * 24 * 3600
@@ -103,7 +103,7 @@ HTTP_TIMEOUT_S = 30
 # =============================================================================
 STEP_WEIGHTS: dict[str, dict[str, float]] = {
     # code-heavy prose synthesis
-    "kd-synth": {
+    "dd-synth": {
         "lmarena_coding": 0.30,
         "lmarena":        0.25,
         "aaii":           0.20,
@@ -111,23 +111,23 @@ STEP_WEIGHTS: dict[str, dict[str, float]] = {
         "mmlu_pro":       0.10,
     },
     # short structured-output classification
-    "kd-reduce-label": {
+    "dd-reduce-label": {
         "lmarena":  0.35,
         "aaii":     0.30,
         "mmlu_pro": 0.20,
         "gpqa":     0.15,
     },
     # tiny instruct LMs — format adherence + small-model knowledge proxy
-    "kd-keylm": {
+    "dd-keylm": {
         "mmlu_pro": 0.45,
         "aaii":     0.35,
         "gsm8k":    0.20,
     },
     # embeddings — no public MTEB-equivalent free source, fall back to general
     # quality. PILOT will diverge embedding ranking from chat ranking quickly.
-    "kd-embed": {"lmarena": 1.0},
+    "dd-embed": {"lmarena": 1.0},
     # general fallback pool
-    "kd-all": {
+    "dd-all": {
         "aaii":           0.30,
         "lmarena":        0.25,
         "lmarena_coding": 0.20,
@@ -135,28 +135,28 @@ STEP_WEIGHTS: dict[str, dict[str, float]] = {
         "gpqa":           0.10,
     },
     # planning — emphasize reasoning + instruction
-    "kd-plan": {
+    "dd-plan": {
         "lmarena":  0.30,
         "aaii":     0.30,
         "mmlu_pro": 0.20,
         "arc_agi":  0.20,
     },
     # curator — like synth, slightly lighter on code
-    "kd-curator": {
+    "dd-curator": {
         "lmarena":        0.35,
         "lmarena_coding": 0.25,
         "aaii":           0.20,
         "mmlu_pro":       0.20,
     },
     # grader / critic — knowledge + reasoning
-    "kd-grader": {
+    "dd-grader": {
         "aaii":     0.30,
         "lmarena":  0.25,
         "mmlu_pro": 0.20,
         "gpqa":     0.15,
         "hle":      0.10,
     },
-    "kd-critic": {
+    "dd-critic": {
         "aaii":     0.30,
         "lmarena":  0.25,
         "mmlu_pro": 0.20,
@@ -832,7 +832,7 @@ async def rank_for_step(
     naive O(N×3) per-canonical fan-out was OOM-pressuring the pod when called
     with limit=250+ on cold cache; this is O(N + 3).
     """
-    weights = STEP_WEIGHTS.get(step, STEP_WEIGHTS["kd-all"])
+    weights = STEP_WEIGHTS.get(step, STEP_WEIGHTS["dd-all"])
     if not alive_models:
         return []
 
@@ -905,20 +905,20 @@ def _ensure_metrics() -> dict[str, Any]:
         if meter is None:
             return _metric_instruments
         _metric_instruments["fetch_counter"] = meter.create_counter(
-            name="kd.rotator_benchmark_fetch_total",
+            name="dd.rotator_benchmark_fetch_total",
             description="Benchmark leaderboard fetches — labels: source, outcome",
         )
         _metric_instruments["fetch_duration"] = meter.create_histogram(
-            name="kd.rotator_benchmark_fetch_duration_seconds",
+            name="dd.rotator_benchmark_fetch_duration_seconds",
             description="Per-source leaderboard fetch wall-clock",
             unit="s",
         )
         _metric_instruments["cache_hit"] = meter.create_counter(
-            name="kd.rotator_benchmark_cache_hit_total",
+            name="dd.rotator_benchmark_cache_hit_total",
             description="Cache hits — labels: layer ∈ {inmem, redis_lb, scores, canonical}",
         )
         _metric_instruments["canonical_counter"] = meter.create_counter(
-            name="kd.rotator_canonical_resolution_total",
+            name="dd.rotator_canonical_resolution_total",
             description="Canonicalization resolutions — labels: layer ∈ {cache, heuristic, fuzzy, hf_api}",
         )
         logger.info(f"[bench] {len(_metric_instruments)} OTel instruments registered")

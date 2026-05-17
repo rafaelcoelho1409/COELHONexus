@@ -26,6 +26,7 @@ from .checkpoint import get_checkpointer
 from .nodes.cache_lookup import cache_lookup
 from .nodes.corpus_load import corpus_load
 from .nodes.dedup import dedup
+from .nodes.embed_corpus import embed_corpus
 from .nodes.map import map_node
 from .nodes.off_topic import off_topic
 from .nodes.plan_write import plan_write
@@ -41,6 +42,7 @@ logger = logging.getLogger(__name__)
 # `NODE_REGISTRY` and listed in `IMPLEMENTED` to be included in the graph.
 NODE_ORDER = (
     "corpus_load",
+    "embed_corpus",
     "off_topic",
     "dedup",
     "cache_lookup",
@@ -51,14 +53,15 @@ NODE_ORDER = (
 )
 
 NODE_REGISTRY = {
-    "corpus_load": corpus_load,
-    "off_topic":   off_topic,
-    "dedup":       dedup,
+    "corpus_load":  corpus_load,
+    "embed_corpus": embed_corpus,
+    "off_topic":    off_topic,
+    "dedup":        dedup,
     "cache_lookup": cache_lookup,
-    "map":         map_node,
-    "reduce":      reduce_node,
-    "validate":    validate,
-    "plan_write":  plan_write,
+    "map":          map_node,
+    "reduce":       reduce_node,
+    "validate":     validate,
+    "plan_write":   plan_write,
 }
 
 # ONLY these nodes are wired into the runtime graph. Order must match
@@ -66,6 +69,7 @@ NODE_REGISTRY = {
 # as that substep's real (non-stub) implementation lands.
 IMPLEMENTED = (
     "corpus_load",
+    "embed_corpus",
     "off_topic",
 )
 

@@ -34,6 +34,7 @@ from services.docs_distiller.ingestion.store import read_framework_manifest
 from services.llm.otel_setup import get_tracer
 
 from ..observability.spans import traced
+from ..progress import emit_progress
 from ..state import PlannerState
 
 
@@ -52,10 +53,12 @@ def _percentile(sorted_values: list[int], p: float) -> int:
 @traced("corpus_load")
 async def corpus_load(state: PlannerState) -> dict:
     slug = state.get("framework_slug")
+    thread_id = state.get("thread_id") or ""
     if not slug:
         raise ValueError("planner state missing framework_slug")
 
     t0 = time.monotonic()
+    await emit_progress(thread_id, "corpus_load", "start", slug=slug)
     minio = get_storage()
     manifest = await read_framework_manifest(minio, slug)
     if not manifest:
@@ -112,5 +115,10 @@ async def corpus_load(state: PlannerState) -> dict:
         f"{total_bytes // 1024} KB total, "
         f"p10/p50/p90 = {stats['p10_bytes']}/{stats['median_bytes']}/{stats['p90_bytes']} B, "
         f"load={stats['load_ms']}ms"
+    )
+    await emit_progress(
+        thread_id, "corpus_load", "done",
+        files=n, total_bytes=total_bytes, wall_ms=stats["load_ms"],
+        tier_kind=stats.get("tier_kind"),
     )
     return {"raw_files": keys, "corpus_stats": stats}
