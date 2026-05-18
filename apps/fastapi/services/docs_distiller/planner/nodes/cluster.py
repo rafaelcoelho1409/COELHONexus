@@ -64,12 +64,60 @@ logger = logging.getLogger(__name__)
 _UMAP_DIM            = 10
 _UMAP_N_NEIGHBORS    = 15
 _UMAP_MIN_DIST       = 0.0
-_HDBSCAN_MIN_CLUSTER = 8
 _HDBSCAN_MIN_SAMPLES = 5
 # A boundary doc has max-prob below this floor; LITA's `refine` node
 # will re-evaluate those via LLM-small reassignment to the best cluster.
 _BOUNDARY_PROB_FLOOR = 0.5
 _BLOB_PREFIX         = "planner"
+# Cache schema version — bump on hyperparameter formula change so old
+# blobs invalidate cleanly.
+#   v2 (2026-05-18 AM): linear adaptive min_cluster_size — backfired at
+#                       large scale (langchain 744 docs → mcs=49 → mega-
+#                       cluster collapse, 19→4 clusters).
+#   v3 (2026-05-18 PM): sqrt-capped formula per May-2026 SOTA research.
+import math
+
+_CACHE_VERSION       = "v3"
+
+
+def _adaptive_min_cluster_size(n_docs: int) -> int:
+    """HDBSCAN's `min_cluster_size` is the density-mode floor — a cluster
+    must contain at least this many points to be recognized at all. The
+    parameter is fundamentally about density geometry, NOT corpus size,
+    so naive linear scaling violates HDBSCAN's invariants on large
+    corpora (`N/15` at N=744 demands a density mode of 49 points, which
+    in 10-D UMAP space doesn't exist for narrow sub-topics → they get
+    absorbed into mega-clusters; the langchain stack 19→4 collapse).
+
+    The May-2026 SOTA pattern (BERTopic, LITA, TnT-LLM, Clio, HERCULES)
+    is: use a small bounded min_cluster_size (deliberately over-fragment)
+    + push granularity decisions to the downstream LLM-merge step. That
+    second knob is `_TARGET_K` in `reduce.py`, NOT this value.
+
+    Formula: `max(5, min(15, ceil(sqrt(N)/3)))` per the BERTopic "1-2%
+    of N ≈ sqrt(N)" rule of thumb, capped 5-15. Concrete sizing:
+      -   85 docs (pydantic)        → 5
+      -  250 docs (terragrunt-class) → 5
+      -  744 docs (langchain stack) → 9    (vs broken linear's 49)
+      - 1500 docs (docker-class)    → 13
+      - 3000 docs                   → 15   (cap binds)
+
+    Floor 5 = HDBSCAN-recommended minimum for meaningful density modes
+    on real-world text embeddings (below 5, every micro-cluster looks
+    like a density mode + outlier rate explodes).
+    Cap 15 = empirical safe ceiling — beyond this, narrow sub-topics
+    get absorbed into broader modes (the langchain failure mode).
+
+    Sources:
+      - LLM-Assisted Topic Reduction for BERTopic (arXiv 2509.19365)
+      - BERTopic 2026 parameter-tuning docs
+      - DBOpt / Nature Comm Biology 2025 (Bayesian-opt alternative,
+        deferred — overkill for 85-3000 corpus range)
+      - See docs/PLANNER-IMPROVEMENTS-BACKLOG-2026-05-18.md option #1
+        + the May-2026 SOTA-research transcript that drove the v2→v3
+        switch.
+    """
+    return max(5, min(15, math.ceil(math.sqrt(n_docs) / 3)))
 
 
 def _blob_key(slug: str, manifest_hash: str) -> str:
@@ -141,14 +189,20 @@ async def cluster(state: PlannerState) -> dict:
 
     minio = get_storage()
 
+    # Adaptive HDBSCAN floor — scales with corpus size so small frameworks
+    # produce meaningful cluster counts (see _adaptive_min_cluster_size).
+    min_cluster_size = _adaptive_min_cluster_size(len(relevant_files))
+
     # ── Cache fast-path ───────────────────────────────────────────────
     # Hash key parts (must include hyperparams that affect output so a
     # config change invalidates the blob). Same {slug}/clusters/{hash}.npz
-    # layout as the cold path below.
+    # layout as the cold path below. `_CACHE_VERSION` invalidates v1
+    # blobs (computed when min_cluster_size was hardcoded 8).
     from hashlib import sha256
     mh = sha256(
         ("|".join(sorted(relevant_files)) +
-         f"|umap{_UMAP_DIM}|hdbscan{_HDBSCAN_MIN_CLUSTER}").encode("utf-8"),
+         f"|umap{_UMAP_DIM}|hdbscan{min_cluster_size}"
+         f"|{_CACHE_VERSION}").encode("utf-8"),
     ).hexdigest()[:16]
     blob_key = _blob_key(slug, mh)
     if await minio.exists(blob_key):
@@ -176,7 +230,7 @@ async def cluster(state: PlannerState) -> dict:
                 "cluster_sizes":    cluster_sizes[:30],
                 "boundary_floor":   _BOUNDARY_PROB_FLOOR,
                 "umap_dim":         _UMAP_DIM,
-                "min_cluster_size": _HDBSCAN_MIN_CLUSTER,
+                "min_cluster_size": min_cluster_size,
                 "blob_bytes":       len(blob),
                 "cache_hit":        True,
             }
@@ -216,7 +270,7 @@ async def cluster(state: PlannerState) -> dict:
     # Guardrails: degenerate corpora can't be UMAP'd. If N is too small to
     # produce meaningful clusters, return a single-cluster assignment and
     # let the operator see the warning in the stats.
-    min_for_clustering = max(_HDBSCAN_MIN_CLUSTER * 2, _UMAP_N_NEIGHBORS + 1)
+    min_for_clustering = max(min_cluster_size * 2, _UMAP_N_NEIGHBORS + 1)
     if n_docs < min_for_clustering:
         elapsed = int((time.monotonic() - t0) * 1000)
         assignments = np.zeros(n_docs, dtype=np.int32)
@@ -284,7 +338,7 @@ async def cluster(state: PlannerState) -> dict:
         n_docs=n_docs, reduced_dim=int(X_reduced.shape[1]),
     )
     clusterer = hdbscan.HDBSCAN(
-        min_cluster_size=_HDBSCAN_MIN_CLUSTER,
+        min_cluster_size=min_cluster_size,
         min_samples=_HDBSCAN_MIN_SAMPLES,
         cluster_selection_method="eom",
         prediction_data=True,
@@ -345,7 +399,7 @@ async def cluster(state: PlannerState) -> dict:
         "cluster_sizes":      size_list[:30],   # cap for state payload size
         "boundary_floor":     _BOUNDARY_PROB_FLOOR,
         "umap_dim":           _UMAP_DIM,
-        "min_cluster_size":   _HDBSCAN_MIN_CLUSTER,
+        "min_cluster_size":   min_cluster_size,
         "blob_bytes":         len(blob),
         "cache_hit":          False,
     }

@@ -462,6 +462,11 @@
     // stream and paint whatever progress has happened so far. Mirrors
     // the loading-box recovery on the Ingestion step.
     _tryResumeActivePlanner(slug).catch(() => {});
+    // Same per-slug recovery for the synth step (Step 4). View-only:
+    // the actual /resume only fires for explicit Start Synth clicks or
+    // recoverActiveSynth on page-load — navigating between slugs paints
+    // cached state, never triggers compute.
+    _tryResumeActiveSynth(slug).catch(() => {});
     try {
       const r = await fetch(API + '/ingestion/' + slug + '/manifest');
       if (!r.ok) {
@@ -2440,5 +2445,649 @@
     catch (e) { console.warn('[init] planner-info failed:', e); }
     try { await recoverActivePlanner(); }
     catch (e) { console.warn('[init] planner-recover failed:', e); }
+    try { await loadSynthInfo(); }
+    catch (e) { console.warn('[init] synth-info failed:', e); }
+    try { await recoverActiveSynth(); }
+    catch (e) { console.warn('[init] synth-recover failed:', e); }
   })();
+
+  // ============================================================
+  // Step 4 — Synth (UI scaffolding; nodes ship incrementally per
+  // `docs/SYNTH-ARCHITECTURE-SOTA-2026-05-18.md`). Mirrors the planner
+  // structure 1:1 — when synth nodes ship, the per-substep renderers +
+  // live-progress text get filled in and IMPLEMENTED grows server-side.
+  // ============================================================
+  const synthStartBtn    = document.querySelector('#fw-synth-start');
+  const synthWipeBtn     = document.querySelector('#fw-synth-wipe');
+  const synthSubtitle    = document.querySelector('#fw-synth-subtitle');
+  const synthCardsEl     = document.querySelector('#fw-synth-cards');
+  const synthProgressLbl = document.querySelector('#fw-synth-progress-label');
+  const synthBudgetSel   = document.querySelector('#fw-synth-budget');
+
+  // Substep order MUST match `NODE_ORDER` in
+  // services/docs_distiller/synth/graph.py (when that ships) AND the
+  // field each node writes (`state.<field>`).
+  // Field names are TENTATIVE — they're placeholders that match the
+  // SOTA architecture doc. Update when the real graph.py lands.
+  const SYNTH_SUBSTEP_FIELDS = [
+    'synth_cache_hit',       // cache_lookup
+    'normalized_corpus_ref', // corpus_normalize
+    'outline_dag_ref',       // outline_sdp
+    'digest_ref',            // digest_construct
+    'vault_ref',             // vault_sentinelize
+    'sawc_drafts_ref',       // sawc_write
+    'checklist_results_ref', // checklist_eval
+    'mgsr_actions_ref',      // mgsr_replan
+    'chapters_path',         // render_audit_write
+  ];
+  const SYNTH_NODE_ORDER = [
+    'cache_lookup', 'corpus_normalize', 'outline_sdp', 'digest_construct',
+    'vault_sentinelize', 'sawc_write', 'checklist_eval',
+    'mgsr_replan', 'render_audit_write',
+  ];
+  // Per-step "primary checkpoint field" for SSE→state-refresh races.
+  const SYNTH_STEP_TO_FIELD = {
+    cache_lookup:       'synth_cache_hit',
+    corpus_normalize:   'normalized_corpus_ref',
+    outline_sdp:        'outline_dag_ref',
+    digest_construct:   'digest_ref',
+    vault_sentinelize:  'vault_ref',
+    sawc_write:         'sawc_drafts_ref',
+    checklist_eval:     'checklist_results_ref',
+    mgsr_replan:        'mgsr_actions_ref',
+    render_audit_write: 'chapters_path',
+  };
+
+  // Populated from GET /synth/info. Cards whose substep isn't in this
+  // set stay "⏳ future" — same pattern as plannerImplemented.
+  let synthImplemented = new Set();
+  let synthThreadId = null;
+  let _synthLiveEventReceived = false;
+  let synthPollAbort = false;
+
+  // Per-substep custom body renderers, keyed by idx (matches
+  // SYNTH_SUBSTEP_FIELDS). Empty until nodes ship — each renderer gets
+  // added as its corresponding node lands. Until then, cards with
+  // `present` field fall back to formatFieldValue/JSON dump.
+  const SYNTH_SUBSTEP_RENDERERS = {};
+
+  function synthCardEl(idx) {
+    if (!synthCardsEl) return null;
+    return synthCardsEl.querySelector(
+      '.fw-planner-card[data-idx="' + idx + '"]');
+  }
+
+  function _synthStepIdx(stepName) {
+    return SYNTH_SUBSTEP_FIELDS.findIndex((_, i) =>
+      synthCardEl(i)?.dataset.substep === stepName);
+  }
+
+  function _synthFieldPresent(values, field) {
+    return values && Object.prototype.hasOwnProperty.call(values, field);
+  }
+
+  function _synthAllImplementedComplete(values) {
+    if (!synthImplemented || !synthImplemented.size) return false;
+    for (let i = 0; i < SYNTH_NODE_ORDER.length; i++) {
+      const step = SYNTH_NODE_ORDER[i];
+      if (!synthImplemented.has(step)) continue;
+      const field = SYNTH_SUBSTEP_FIELDS[i];
+      if (!_synthFieldPresent(values, field)) return false;
+    }
+    return true;
+  }
+
+  function _synthLiveProgressEl(stepName, idx) {
+    const c = synthCardEl(idx);
+    if (!c) return null;
+    const body = c.querySelector('.fw-planner-card-body');
+    if (!body) return null;
+    let el = body.querySelector('.fw-planner-card-live');
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'fw-planner-card-live';
+      el.style.cssText =
+        'font-family:JetBrains Mono,monospace;font-size:0.78rem;' +
+        'color:var(--text-muted);padding:8px 12px;border-top:1px dashed var(--border);' +
+        'margin-top:8px';
+      body.appendChild(el);
+    }
+    return el;
+  }
+
+  function _markSynthCardRunning(stepName) {
+    const idx = _synthStepIdx(stepName);
+    if (idx < 0) return;
+    const c = synthCardEl(idx);
+    if (!c) return;
+    if (c.classList.contains('done')) return;
+    c.classList.add('running');
+    c.classList.remove('failed', 'future');
+    const icon = c.querySelector('.fw-planner-card-icon');
+    if (icon) { icon.textContent = '◐'; icon.dataset.status = 'running'; }
+    const body = c.querySelector('.fw-planner-card-body');
+    if (body && body.querySelector('.fw-empty')) {
+      body.innerHTML = '';
+    }
+  }
+
+  // Per-step live-progress text. Every step starts with a generic
+  // "running…" line; specific event kinds get richer messages as nodes
+  // ship + define their SSE event surface. Mirrors planner's
+  // _renderLiveProgress pattern.
+  function _renderSynthLiveProgress(stepName, ev) {
+    const idx = _synthStepIdx(stepName);
+    if (idx < 0) return;
+    const c = synthCardEl(idx);
+    if (c && c.classList.contains('done')) return;
+    const el = _synthLiveProgressEl(stepName, idx);
+    if (!el) return;
+    let text = '';
+    // Generic lifecycle fallbacks — every node SHOULD emit start/done at
+    // minimum. Per-step custom kinds get added below as nodes ship.
+    if (ev.kind === 'start')      text = '· starting ' + stepName + '…';
+    else if (ev.kind === 'done')  text = '✓ done (' + (ev.wall_ms || 0) + ' ms)';
+    else if (ev.kind === 'error') text = '✕ ' + (ev.error || 'failed');
+    // Per-step rich progress lines added here as nodes ship. Examples
+    // (placeholders to fill in when each node lands):
+    //   if (stepName === 'outline_sdp')        { ... DAG stage timeline ... }
+    //   if (stepName === 'digest_construct')   { ... per-source progress ... }
+    //   if (stepName === 'sawc_write')         { ... per-section / per-iter ... }
+    //   if (stepName === 'checklist_eval')     { ... criteria pass-rate ... }
+    //   if (stepName === 'mgsr_replan')        { ... live replan actions ... }
+    if (text) el.textContent = text;
+  }
+
+  function renderSynthCards(values) {
+    if (!synthCardsEl) return;
+    let doneCount = 0;
+    for (let i = 0; i < SYNTH_SUBSTEP_FIELDS.length; i++) {
+      const field = SYNTH_SUBSTEP_FIELDS[i];
+      const c = synthCardEl(i);
+      if (!c) continue;
+      const icon = c.querySelector('.fw-planner-card-icon');
+      const body = c.querySelector('.fw-planner-card-body');
+      const present = _synthFieldPresent(values, field);
+      const cardData = c.dataset.substep || '';
+      const isImplemented = synthImplemented.has(cardData);
+      if (present) {
+        c.classList.add('done');
+        c.classList.remove('running', 'failed', 'future');
+        icon.textContent = '●'; icon.dataset.status = 'done';
+        const renderer = SYNTH_SUBSTEP_RENDERERS[i];
+        if (renderer) {
+          body.innerHTML = renderer(values);
+        } else {
+          const v = values[field];
+          body.innerHTML = '<pre>' + escapeHtml(formatFieldValue(v)) + '</pre>';
+        }
+        doneCount++;
+      } else if (!isImplemented) {
+        // Stub — render as future (⏳).
+        c.classList.add('future');
+        c.classList.remove('running', 'done', 'failed');
+        icon.textContent = '⏳'; icon.dataset.status = 'future';
+        body.innerHTML =
+          '<div class="fw-empty">Substep not yet implemented — will be ' +
+          'wired into the graph as its real logic lands.</div>';
+      } else if (i === doneCount && synthThreadId !== null) {
+        // First not-done IMPLEMENTED card while polling = currently running.
+        c.classList.add('running');
+        c.classList.remove('done', 'failed', 'future');
+        icon.textContent = '◐'; icon.dataset.status = 'running';
+      } else {
+        c.classList.remove('running', 'done', 'failed', 'future');
+        icon.textContent = '○'; icon.dataset.status = 'pending';
+      }
+    }
+    if (synthProgressLbl) {
+      synthProgressLbl.textContent =
+        'Step ' + doneCount + ' of ' + SYNTH_SUBSTEP_FIELDS.length;
+    }
+  }
+
+  function markSynthFailed(message) {
+    for (let i = 0; i < SYNTH_SUBSTEP_FIELDS.length; i++) {
+      const c = synthCardEl(i);
+      if (!c) continue;
+      if (c.classList.contains('running') ||
+          (!c.classList.contains('done') && !c.classList.contains('failed') &&
+           !c.classList.contains('future'))) {
+        c.classList.remove('running');
+        c.classList.add('failed', 'expanded');
+        const icon = c.querySelector('.fw-planner-card-icon');
+        icon.textContent = '✕';
+        icon.dataset.status = 'failed';
+        c.querySelector('.fw-planner-card-body').innerHTML =
+          '<div class="fw-planner-error">' + escapeHtml(message) + '</div>';
+        break;
+      }
+    }
+  }
+
+  function resetSynthCards() {
+    SYNTH_SUBSTEP_FIELDS.forEach((_, i) => {
+      const c = synthCardEl(i);
+      if (!c) return;
+      c.classList.remove('running', 'done', 'failed', 'expanded');
+      const substep = c.dataset.substep || '';
+      // Stubs go back to future (⏳); implemented nodes go to pending (○).
+      const isImpl = synthImplemented.has(substep);
+      c.classList.toggle('future', !isImpl);
+      const icon = c.querySelector('.fw-planner-card-icon');
+      icon.textContent = isImpl ? '○' : '⏳';
+      icon.dataset.status = isImpl ? 'pending' : 'future';
+      c.querySelector('.fw-planner-card-latency').textContent = '';
+      c.querySelector('.fw-planner-card-body').innerHTML = isImpl
+        ? '<div class="fw-empty">Output will appear here once the substep runs.</div>'
+        : '<div class="fw-empty">Substep not yet implemented — will be ' +
+          'wired into the graph as its real logic lands.</div>';
+    });
+    if (synthProgressLbl) synthProgressLbl.textContent = '';
+  }
+
+  function refreshSynthStartState() {
+    if (!synthStartBtn) return;
+    // Three states for the Start/Cancel button (mirrors planner):
+    //  - running        → "Cancel Synth"
+    //  - idle, ready    → "Start Synth" enabled
+    //  - idle, blocked  → "Start Synth" disabled
+    // Until the first synth node ships, "ready" requires the server's
+    // /synth/info implemented list to be non-empty — otherwise clicking
+    // Start would just hit the 503 stub. Show the button but disabled
+    // with a clarifying tooltip so the user sees the path is wired but
+    // not yet active.
+    const running = synthThreadId !== null;
+    if (running) {
+      synthStartBtn.removeAttribute('disabled');
+      synthStartBtn.classList.add('btn-outline');
+      synthStartBtn.classList.remove('btn-primary');
+      synthStartBtn.innerHTML = 'Cancel Synth';
+    } else {
+      const hasNodes = synthImplemented && synthImplemented.size > 0;
+      const ready = activeSlug && activeRunId === null && hasNodes;
+      if (ready) {
+        synthStartBtn.removeAttribute('disabled');
+        synthStartBtn.removeAttribute('title');
+      } else {
+        synthStartBtn.setAttribute('disabled', 'disabled');
+        if (!hasNodes) {
+          synthStartBtn.setAttribute(
+            'title',
+            'Synth pipeline not yet implemented — substeps light up as nodes ship.',
+          );
+        } else if (!activeSlug) {
+          synthStartBtn.setAttribute('title', 'Pick a framework first.');
+        }
+      }
+      synthStartBtn.classList.add('btn-primary');
+      synthStartBtn.classList.remove('btn-outline');
+      synthStartBtn.innerHTML = 'Start Synth';
+    }
+    if (synthWipeBtn) {
+      if (activeSlug && !running && synthImplemented.size > 0) {
+        synthWipeBtn.removeAttribute('disabled');
+      } else {
+        synthWipeBtn.setAttribute('disabled', 'disabled');
+      }
+    }
+    if (synthSubtitle) {
+      synthSubtitle.textContent = activeSlug ? ('Framework: ' + activeSlug) : '';
+    }
+  }
+
+  // Race-tolerant state fetch (mirrors planner's _refreshCardsFromState).
+  async function _refreshSynthCardsFromState(threadId, expectedField) {
+    const maxAttempts = expectedField ? 6 : 1;
+    for (let i = 0; i < maxAttempts; i++) {
+      try {
+        const r = await fetch(API + '/synth/debug/graph/' + threadId + '/state');
+        if (r.ok) {
+          const data = await r.json();
+          const values = data.values || {};
+          if (!expectedField || _synthFieldPresent(values, expectedField)) {
+            renderSynthCards(values);
+            return;
+          }
+        }
+      } catch (e) { /* transient */ }
+      await sleep(250 + 150 * i);
+    }
+  }
+
+  // SSE consumer — symmetric with pollPlannerState. Connects to
+  // /synth/{thread_id}/events; per-step events drive live-progress text
+  // and trigger state refresh at node boundaries.
+  async function pollSynthState(threadId) {
+    const url = API + '/synth/' + threadId + '/events';
+    let es;
+    try {
+      es = new EventSource(url);
+    } catch (e) {
+      markSynthFailed('EventSource open failed: ' + String(e));
+      synthThreadId = null;
+      refreshSynthStartState();
+      return;
+    }
+    es.onmessage = async (msg) => {
+      if (synthThreadId !== threadId) {
+        try { es.close(); } catch (_) {}
+        return;
+      }
+      let ev;
+      try { ev = JSON.parse(msg.data); } catch (_) { return; }
+      // Only "fresh" events count for orphan-detection (same heuristic
+      // as planner — Redis snapshot replay of an old run wouldn't
+      // suppress a needed /resume).
+      if (ev.ts && (Date.now() / 1000 - ev.ts) < 20) {
+        _synthLiveEventReceived = true;
+      }
+      if (ev.step === 'synth' && ev.kind === 'terminal') {
+        // Stub-router's empty-stream emits this immediately. Real impl
+        // emits it after the graph reaches END.
+        await _refreshSynthCardsFromState(threadId, 'status');
+        const status = ev.status || 'done';
+        if (status === 'failed') {
+          markSynthFailed(ev.error || 'Synth failed.');
+        } else if (status === 'cancelled') {
+          showToast('Synth cancelled. Checkpoints up to the cancel point are preserved.');
+        } else if (status === 'not_implemented') {
+          // Router stub — no run happened. Don't toast; the cards stay
+          // in their "future" state which already communicates the gap.
+        }
+        try { es.close(); } catch (_) {}
+        synthThreadId = null;
+        refreshSynthStartState();
+        return;
+      }
+      if (ev.step) {
+        if (ev.kind === 'start') {
+          _markSynthCardRunning(ev.step);
+          const stepIdx = SYNTH_NODE_ORDER.indexOf(ev.step);
+          if (stepIdx > 0) {
+            const prevStep = SYNTH_NODE_ORDER[stepIdx - 1];
+            const prevField = SYNTH_STEP_TO_FIELD[prevStep];
+            await _refreshSynthCardsFromState(threadId, prevField);
+            _markSynthCardRunning(ev.step);
+          }
+        }
+        if (ev.kind === 'done') {
+          const field = SYNTH_STEP_TO_FIELD[ev.step];
+          await _refreshSynthCardsFromState(threadId, field);
+        }
+        _renderSynthLiveProgress(ev.step, ev);
+      }
+    };
+    es.onerror = () => {
+      // SSE auto-reconnects; only act if WE'VE already disconnected.
+      if (synthThreadId !== threadId) {
+        try { es.close(); } catch (_) {}
+      }
+    };
+  }
+
+  // Per-slug isolation — same key shape as planner, separate namespace.
+  function _synthStorageKey(slug) { return 'dd:synth:active:' + slug; }
+  const _LAST_SYNTH_SLUG_KEY = 'dd:synth:last_slug';
+  function _rememberActiveSynth(slug, tid) {
+    try {
+      localStorage.setItem(_synthStorageKey(slug), tid);
+      localStorage.setItem(_LAST_SYNTH_SLUG_KEY, slug);
+    } catch (e) {}
+  }
+  function _forgetActiveSynth(slug) {
+    try { localStorage.removeItem(_synthStorageKey(slug)); } catch (e) {}
+  }
+  function _genSynthThreadId(slug) {
+    const uuid = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        });
+    return 'docs-distiller-synth/' + slug + '/' + uuid;
+  }
+
+  // Page-refresh recovery for synth — symmetric with the planner
+  // counterpart. Critical: navigating between slugs only PAINTS cached
+  // state; it does NOT trigger compute. Only explicit Start Synth click
+  // and recoverActiveSynth (page-load, single slug) call /resume.
+  async function _tryResumeActiveSynth(slug) {
+    if (!synthCardsEl) return false;
+    synthThreadId = null;
+    resetSynthCards();
+    refreshSynthStartState();
+
+    let tid = null;
+    try { tid = localStorage.getItem(_synthStorageKey(slug)); }
+    catch (e) { return false; }
+    if (!tid) return false;
+    try {
+      const r = await fetch(API + '/synth/debug/graph/' + tid + '/state');
+      if (!r.ok) {
+        _forgetActiveSynth(slug);
+        return false;
+      }
+      const data = await r.json();
+      const values = data.values || {};
+      const status = values.status;
+      const allImplDone = _synthAllImplementedComplete(values);
+      const effectivelyDone = (
+        status === 'failed' || status === 'cancelled' ||
+        (status === 'done' && allImplDone) ||
+        allImplDone
+      );
+      if (effectivelyDone) {
+        renderSynthCards(values);
+        return false;
+      }
+      synthThreadId = tid;
+      refreshSynthStartState();
+      renderSynthCards(values);
+      _synthLiveEventReceived = false;
+      pollSynthState(tid);
+      // Orphan auto-/resume — only for 'running' threads with no fresh
+      // SSE events arriving within _ORPHAN_DETECT_MS (mirror planner).
+      if (status === 'running') {
+        setTimeout(async () => {
+          if (synthThreadId === tid && !_synthLiveEventReceived) {
+            try {
+              await fetch(API + '/synth/' + tid + '/resume',
+                {method: 'POST'});
+            } catch (e) {}
+          }
+        }, _ORPHAN_DETECT_MS);
+      }
+      return true;
+    } catch (e) {
+      _forgetActiveSynth(slug);
+      return false;
+    }
+  }
+
+  // Page-load auto-recovery — mirrors recoverActivePlanner.
+  async function recoverActiveSynth() {
+    // Don't override planner recovery if it already activated a slug;
+    // synth recovery layers on top of an already-active slug context.
+    if (!activeSlug) {
+      // Try server-side recent list if localStorage is empty.
+      let lastSlug = null;
+      try { lastSlug = localStorage.getItem(_LAST_SYNTH_SLUG_KEY); }
+      catch (e) {}
+      const keys = [];
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith('dd:synth:active:')) keys.push(k);
+        }
+      } catch (e) { return; }
+      if (!keys.length) {
+        try {
+          const r = await fetch(API + '/synth/recent');
+          if (r.ok) {
+            const data = await r.json();
+            const recent = (data && data.recent) || [];
+            for (const item of recent) {
+              try {
+                localStorage.setItem(
+                  _synthStorageKey(item.slug), item.thread_id,
+                );
+              } catch (e) {}
+            }
+            if (recent.length) {
+              try {
+                localStorage.setItem(_LAST_SYNTH_SLUG_KEY, recent[0].slug);
+              } catch (e) {}
+            }
+          }
+        } catch (e) {}
+        return;   // recovery handed off to next user action
+      }
+      // No-op for now — synth recovery activates a slug only if the
+      // user hasn't picked one. Planner recovery already covers this
+      // path; synth layers via _tryResumeActiveSynth at slug-activation.
+    } else {
+      // activeSlug already set by planner-recover or user click; just
+      // resume any synth thread for it.
+      await _tryResumeActiveSynth(activeSlug).catch(() => {});
+    }
+  }
+
+  async function startSynth() {
+    if (!activeSlug || synthThreadId) return;
+    // Until any node ships, the POST returns 503 — surface it cleanly
+    // as a toast rather than a failed card.
+    if (!synthImplemented || !synthImplemented.size) {
+      showToast('Synth pipeline not yet implemented. UI is ready; ' +
+                'substeps light up as nodes ship.');
+      return;
+    }
+    resetSynthCards();
+
+    // Smart resume — symmetric with planner. If a thread already exists
+    // for THIS slug (and only this slug — same per-slug isolation that
+    // fixed the planner cascading bug), reuse its thread_id.
+    let tid = null;
+    let isResume = false;
+    try {
+      const r = await fetch(API + '/synth/recent');
+      if (r.ok) {
+        const data = await r.json();
+        const found = ((data && data.recent) || [])
+          .find(item => item.slug === activeSlug);
+        if (found && found.thread_id) {
+          tid = found.thread_id;
+          isResume = true;
+        }
+      }
+    } catch (e) {}
+
+    if (!tid) tid = _genSynthThreadId(activeSlug);
+    synthThreadId = tid;
+    _rememberActiveSynth(activeSlug, tid);
+    refreshSynthStartState();
+    pollSynthState(tid);
+
+    try {
+      const budget = (synthBudgetSel && synthBudgetSel.value) || '5';
+      const url = isResume
+        ? API + '/synth/' + tid + '/resume'
+        : API + '/synth/' + activeSlug +
+          '?mode=quality' +
+          '&thread_id=' + encodeURIComponent(tid) +
+          '&budget=' + encodeURIComponent(budget);
+      const r = await fetch(url, {method: 'POST'});
+      if (!r.ok) {
+        const txt = await r.text();
+        markSynthFailed('HTTP ' + r.status + ': ' + txt.slice(0, 400));
+        synthThreadId = null;
+        refreshSynthStartState();
+        return;
+      }
+      await r.json();
+    } catch (e) {
+      markSynthFailed('Request failed: ' + String(e));
+      synthThreadId = null;
+      refreshSynthStartState();
+    }
+  }
+
+  async function cancelSynth() {
+    if (!synthThreadId) return;
+    const tid = synthThreadId;
+    synthStartBtn.setAttribute('disabled', 'disabled');
+    synthStartBtn.innerHTML =
+      '<div class="fw-spinner" style="display:inline-block;' +
+      'vertical-align:middle;margin-right:8px"></div>Cancelling…';
+    try {
+      await fetch(API + '/synth/' + tid + '/cancel', {method: 'POST'});
+    } catch (e) {
+      synthStartBtn.removeAttribute('disabled');
+      synthStartBtn.innerHTML = 'Cancel Synth';
+      showToast('Cancel request failed: ' + String(e));
+    }
+  }
+
+  async function wipeSynth(slug) {
+    if (!slug) return {error: 'no slug'};
+    let result = {};
+    try {
+      const r = await fetch(API + '/synth/' + slug + '/wipe',
+        {method: 'DELETE'});
+      result = r.ok ? (await r.json()) : {http_status: r.status};
+    } catch (e) { result = {error: String(e)}; }
+    _forgetActiveSynth(slug);
+    if (activeSlug === slug) {
+      synthThreadId = null;
+      resetSynthCards();
+      refreshSynthStartState();
+    }
+    console.log('[ddWipeSynth]', slug, result);
+    return result;
+  }
+  window.ddWipeSynth = wipeSynth;
+
+  if (synthStartBtn) {
+    synthStartBtn.addEventListener('click', () => {
+      if (synthThreadId) cancelSynth();
+      else startSynth();
+    });
+  }
+  if (synthWipeBtn) {
+    synthWipeBtn.addEventListener('click', async () => {
+      if (!activeSlug || synthThreadId) return;
+      const ok = await showConfirm(
+        'Wipe synth cache for ' + activeSlug + '?',
+        ('Deletes MinIO chapter artifacts + Postgres checkpoints + ' +
+         'browser state for ' + activeSlug +
+         '. Planner cache is untouched. This cannot be undone.'),
+        'Wipe',
+      );
+      if (!ok) return;
+      const result = await wipeSynth(activeSlug);
+      if (result && result.error) {
+        showToast('Wipe failed: ' + result.error);
+      } else if (result && result.http_status) {
+        showToast('Wipe failed: HTTP ' + result.http_status);
+      } else {
+        showToast('Synth cache wiped for ' + activeSlug + '.');
+      }
+    });
+  }
+
+  async function loadSynthInfo() {
+    try {
+      const r = await fetch(API + '/synth/info');
+      if (!r.ok) return;
+      const data = await r.json();
+      synthImplemented = new Set(data.implemented || []);
+      // Hydrate the budget dropdown from server modes if provided
+      // (currently a 3-option static list; left here for future
+      // server-driven extension symmetric with the planner mode pattern).
+      // Re-render to convert any IMPLEMENTED entries from "future" to
+      // "pending" (○) — same pattern as plannerImplemented.
+      renderSynthCards({});
+      refreshSynthStartState();
+    } catch (e) { /* silent — defaults to all "future" */ }
+  }
 })();

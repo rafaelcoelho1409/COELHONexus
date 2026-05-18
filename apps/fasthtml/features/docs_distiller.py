@@ -244,8 +244,104 @@ def _Picker():
         Div(*substep_cards, id="fw-planner-cards", cls="fw-planner-cards"),
     )
 
-    # Step 4 — page grid (rendered by JS from /ingestion/{slug}/manifest)
+    # Step 4 — Synth (9 substep cards, populated by JS via SSE).
+    # Architecture per `docs/SYNTH-ARCHITECTURE-SOTA-2026-05-18.md`.
+    # All cards start in `future` state (⏳); the IMPLEMENTED set comes
+    # from GET /synth/info — nodes light up as they ship, mirroring the
+    # planner's incremental-rollout pattern. NO node code exists yet;
+    # this is UI scaffolding only.
+    synth_substeps = [
+        ("cache_lookup",      "Cache lookup",
+         "Redis 30d keyed by (plan_hash, tone_hash, chapter_id); partial-cache 7d for cascade-timeout resume."),
+        ("corpus_normalize",  "Corpus normalize",
+         "Strip Mintlify fence-meta + raw-corpus boundaries + orphan tags at INGESTION (replaces deprecated scrubber passes 0-2)."),
+        ("outline_sdp",       "Outline (SDP DAG)",
+         "Structure-Driven Planner — outline = list of sections w/ dependency DAG; topological stage indexing enables stage-parallel writing (SurveyGen-I 2508.14317)."),
+        ("digest_construct",  "Digest construct",
+         "Per-source LLM digest → aggregate-merge-consolidate; LLM assigns content to sections w/ reasoning (replaces blind embedding cosine; LLMxMapReduce-V3 2510.10890)."),
+        ("vault_sentinelize", "Vault sentinelize",
+         "Code blocks → <code-ref hash=...>; LLM never sees/emits code content. VeriCite-style audit (missing/invented/duplicated/orphaned) → bandit signal."),
+        ("sawc_write",        "SAWC write",
+         "Stage-parallel best-of-N drafts (N=3) via Instructor + Pydantic schema; writer ≠ critic rotator picks for MAMM diversity (2503.15272)."),
+        ("checklist_eval",    "Checklist eval",
+         "~10 binary criteria (Prometheus-2-style rubric on free-tier model); pass-rate = guided-refinement feedback (RefineBench 2511.22173)."),
+        ("mgsr_replan",       "MGSR replan",
+         "Memory-Guided Structure Replanner — typed actions {merge|delete|rename|reorder|add} on outline DAG + CoRefine confidence-halting (2602.08948). Loops back to SAWC until ≥80% criteria pass OR plateau OR budget exhausted."),
+        ("render_audit_write","Render + audit",
+         "Jinja render → round-trip code audit → 3 MinIO artifacts (README.md + challenges.md + flashcards.json) + Langfuse OTel span close."),
+    ]
+    synth_cards = [
+        Div(
+            Div(
+                # Hourglass icon for `future` state; JS swaps to ○/◐/●/✕
+                # as the substep's implementation lands + executes.
+                Span("⏳", cls="fw-planner-card-icon", data_status="future"),
+                Div(
+                    Div(label, cls="fw-planner-card-title"),
+                    Div(desc, cls="fw-planner-card-desc"),
+                    cls="fw-planner-card-text",
+                ),
+                Span("", cls="fw-planner-card-latency"),
+                Span("▾", cls="fw-planner-card-chevron"),
+                cls="fw-planner-card-head",
+            ),
+            Div(
+                Div(
+                    "Substep not yet implemented — will be wired into the "
+                    "graph as its real logic lands.",
+                    cls="fw-empty",
+                ),
+                cls="fw-planner-card-body",
+            ),
+            # Reuse planner-card CSS classes for visual parity; add `future`
+            # so the styles dim the card until the IMPLEMENTED set lights it.
+            cls="fw-planner-card future",
+            data_substep=key,
+            data_idx=str(i),
+        )
+        for i, (key, label, desc) in enumerate(synth_substeps)
+    ]
     step4_body = Div(
+        # Header w/ Start Synth button + progress meta — mirrors Planner head.
+        Div(
+            Div(
+                Div("Synth", cls="fw-planner-title"),
+                Div("", cls="fw-planner-subtitle", id="fw-synth-subtitle"),
+                cls="fw-planner-head-text",
+            ),
+            Div(
+                # Budget knob — per the SOTA doc step 8 (CoRefine halting):
+                # max replan iterations per chapter before forcing best-seen
+                # commit. Server-rendered defaults; JS may extend later.
+                Div(
+                    Span("Budget", cls="fw-planner-mode-label"),
+                    Select(
+                        Option("3 iters (fast)",   value="3"),
+                        Option("5 iters (default)", value="5", selected=True),
+                        Option("8 iters (quality)", value="8"),
+                        id="fw-synth-budget", cls="fw-planner-mode-select",
+                    ),
+                    cls="fw-planner-mode-box",
+                ),
+                Span("", id="fw-synth-progress-label",
+                     cls="fw-planner-progress-label"),
+                Button("Wipe synth", id="fw-synth-wipe",
+                       cls="btn-outline", disabled=True,
+                       title=("Delete this framework's synth cache "
+                              "(MinIO chapter artifacts + Postgres "
+                              "checkpoints + browser state)")),
+                Button("Start Synth", id="fw-synth-start",
+                       cls="btn-primary", disabled=True),
+                cls="fw-planner-head-actions",
+            ),
+            cls="fw-planner-head",
+        ),
+        # Substep timeline (9 cards, all `future` until nodes ship).
+        Div(*synth_cards, id="fw-synth-cards", cls="fw-planner-cards"),
+    )
+
+    # Step 5 — page grid (rendered by JS from /ingestion/{slug}/manifest)
+    step5_body = Div(
         Div(id="fw-pages-summary", cls="fw-pages-summary"),
         Div(
             Div(
@@ -257,7 +353,7 @@ def _Picker():
     )
 
     return Div(
-        # Stepper row
+        # Stepper row — Catalog → Ingestion → Planner → Synth → Study
         Div(
             Div(
                 _Step(1, "Catalog", active=True),
@@ -266,7 +362,9 @@ def _Picker():
                 Span(cls="fw-step-connector"),
                 _Step(3, "Planner"),
                 Span(cls="fw-step-connector"),
-                _Step(4, "Study"),
+                _Step(4, "Synth"),
+                Span(cls="fw-step-connector"),
+                _Step(5, "Study"),
                 cls="fw-stepper",
             ),
             cls="fw-stepper-row",
@@ -283,7 +381,7 @@ def _Picker():
                 ),
                 id="fw-sidebar", cls="fw-sidebar",
             ),
-            # Main panel — holds the 3 step panels
+            # Main panel — holds the 5 step panels
             Div(
                 Div(
                     step1_edit,
@@ -292,6 +390,7 @@ def _Picker():
                 Div(step2_body, id="fw-step-2-panel", cls="fw-step-panel"),
                 Div(step3_body, id="fw-step-3-panel", cls="fw-step-panel"),
                 Div(step4_body, id="fw-step-4-panel", cls="fw-step-panel"),
+                Div(step5_body, id="fw-step-5-panel", cls="fw-step-panel"),
                 cls="fw-main",
             ),
             cls="fw-layout",
