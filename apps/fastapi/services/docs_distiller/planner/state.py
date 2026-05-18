@@ -46,7 +46,10 @@ class PlannerState(TypedDict, total=False):
     # State carries only the pointer + summary stats.
     refine_assignments_ref: Optional[str]       # refine — MinIO key of the .npz
     refine_stats: Optional[dict]                # refine — counts/changed/null/wall
-    shard_results: Optional[list[dict]]         # map (per-shard labels + assignments)
+    # label output — KeyLLM-style 2-4 word names per refined cluster.
+    # Stored as MinIO JSON with {labels, n_round2, round1_decisions}.
+    cluster_labels_ref: Optional[str]           # label — MinIO key of the JSON
+    label_stats: Optional[dict]                 # label — counts + label map for UI
     chapter_plan: Optional[list[dict]]          # reduce (final outline)
     validated_plan: Optional[list[dict]]        # validate (coverage-repaired plan)
     plan_path: Optional[str]                    # plan_write (MinIO key)

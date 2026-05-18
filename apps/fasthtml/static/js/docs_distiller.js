@@ -94,8 +94,8 @@
     'relevant_files',           // off_topic
     'cluster_assignments_ref',  // cluster
     'refine_assignments_ref',   // refine
+    'cluster_labels_ref',       // label
     'deduped_files',            // dedup
-    'shard_results',            // map
     'chapter_plan',             // reduce
     'validated_plan',           // validate
     'plan_path',                // plan_write
@@ -105,7 +105,7 @@
   // map step → previous step → expected checkpoint field.
   const PLANNER_NODE_ORDER = [
     'corpus_load', 'embed_corpus', 'off_topic',
-    'cluster', 'refine', 'dedup', 'map',
+    'cluster', 'refine', 'label', 'dedup',
     'reduce', 'validate', 'plan_write',
   ];
   // Populated from GET /planner/info — names of substeps actually wired
@@ -1066,6 +1066,112 @@
 
       return '<div class="fw-stat-grid">' + cards + '</div>' + depRow + foot;
     },
+
+    // label — KeyLLM-style cluster naming via bandit-routed big-LLM with
+    // Universal Self-Consistency + 2-round sibling-aware re-labeling.
+    // KPI cards: clusters / unanimous vs USC-voted / round 2 / wall.
+    // Below: full label list as a sortable table so the operator can
+    // verify names match cluster contents.
+    5: function renderLabel(values) {
+      const s = values.label_stats || {};
+      const n = s.n_clusters || 0;
+      const labelsMap = s.labels || {};
+      if (!n && Object.keys(labelsMap).length === 0) {
+        return '<div class="fw-empty">no label stats reported</div>';
+      }
+      const unanimous = s.n_unanimous || 0;
+      const usc = s.n_usc_voted || 0;
+      const round2 = s.n_round2 || 0;
+      const errs = s.n_errors || 0;
+      const wall = s.wall_ms || 0;
+
+      const kpi = (label, value, sub) =>
+        '<div class="fw-stat-card">' +
+          '<div class="fw-stat-card-label">' + escapeHtml(label) + '</div>' +
+          '<div class="fw-stat-card-value">' + escapeHtml(value) + '</div>' +
+          (sub ? '<div class="fw-stat-card-sub">' + escapeHtml(sub) + '</div>' : '') +
+        '</div>';
+
+      const unanimousPct = n ? Math.round(unanimous / n * 100) : 0;
+      const cards =
+        kpi('Clusters labeled', String(n),
+            'wall ' + wall + ' ms' + (s.cache_hit ? ' · cache HIT' : '')) +
+        kpi('Unanimous', String(unanimous),
+            unanimousPct + '% on first try') +
+        kpi('USC-voted', String(usc),
+            'samples disagreed → LLM picked best') +
+        kpi('Round 2 re-labels', String(round2),
+            'with sibling-aware context' +
+              (errs ? ' · ' + errs + ' errors' : ''));
+
+      // Label table — full list, sorted by cluster ID, scrollable.
+      const entries = Object.entries(labelsMap)
+        .map(([k, v]) => [parseInt(k, 10), v])
+        .sort((a, b) => a[0] - b[0]);
+      let table = '';
+      if (entries.length) {
+        const rows = entries.map(([cid, label]) => {
+          const cidLabel = cid < 0 ? 'noise' : '#' + cid;
+          const cidColor = cid < 0 ? 'var(--text-muted)' : 'var(--text)';
+          return '<tr>' +
+            '<td style="padding:4px 12px 4px 8px;font-family:JetBrains Mono,monospace;font-size:0.78rem;color:' +
+              cidColor + '">' + escapeHtml(cidLabel) + '</td>' +
+            '<td style="padding:4px 0;font-size:0.85rem;font-weight:600">' +
+              escapeHtml(label || '?') + '</td>' +
+          '</tr>';
+        }).join('');
+        const headStyle =
+          'position:sticky;top:0;background:var(--card);' +
+          'text-align:left;padding:8px 12px;font-size:0.7rem;' +
+          'color:var(--text-muted);text-transform:uppercase;' +
+          'border-bottom:1px solid var(--border);z-index:2';
+        table =
+          '<div class="fw-stat-dist" style="margin-top:14px">' +
+            '<div class="fw-stat-dist-title">Cluster labels (' +
+              entries.length + ' total)</div>' +
+            '<div style="max-height:340px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;background:var(--card)">' +
+              '<table style="width:100%;border-collapse:collapse;font-family:Raleway">' +
+                '<thead><tr>' +
+                  '<th style="' + headStyle + ';padding-left:8px">Cluster</th>' +
+                  '<th style="' + headStyle + '">Label</th>' +
+                '</tr></thead>' +
+                '<tbody>' + rows + '</tbody>' +
+              '</table>' +
+            '</div>' +
+          '</div>';
+      }
+
+      // Bandit deployment usage
+      const depUsage = s.deployment_usage || [];
+      let depRow = '';
+      if (depUsage.length) {
+        const drows = depUsage.slice(0, 10).map(d =>
+          '<tr>' +
+            '<td style="padding:3px 12px 3px 0;font-size:0.78rem">' +
+              escapeHtml((d.deployment || '?').split('/').pop()) + '</td>' +
+            '<td style="padding:3px 0;font-family:JetBrains Mono,monospace;font-size:0.78rem;color:var(--text-muted)">' +
+              d.calls + ' calls</td>' +
+          '</tr>'
+        ).join('');
+        depRow =
+          '<div class="fw-stat-dist" style="margin-top:14px">' +
+            '<div class="fw-stat-dist-title">Bandit deployment usage</div>' +
+            '<table style="width:100%;border-collapse:collapse;font-family:Raleway">' +
+              '<tbody>' + drows + '</tbody>' +
+            '</table>' +
+          '</div>';
+      }
+
+      const foot =
+        '<div class="fw-stat-foot">' +
+          'router <strong>pareto-bandit/dd-grader</strong>' +
+          ' · N=' + (s.n_samples || '?') + ' samples + USC vote' +
+          ' · prompt <code style="font-family:JetBrains Mono,monospace;font-size:0.72rem">' +
+            escapeHtml(s.prompt_version || '?') + '</code>' +
+        '</div>';
+
+      return '<div class="fw-stat-grid">' + cards + '</div>' + table + depRow + foot;
+    },
   };
 
   function renderPlannerCards(values) {
@@ -1277,6 +1383,12 @@
       else if (ev.kind === 'context_prepared') text = '· prepared c-TF-IDF context for ' + (ev.n_clusters||0) + ' clusters; LLM-judging ' + (ev.n_boundary||0) + ' boundary docs…';
       else if (ev.kind === 'llm_progress')  text = '· LLM judged ' + (ev.judged||0).toLocaleString() + ' / ' + (ev.total||0).toLocaleString() + ' (reassigned ' + (ev.changed||0) + ', null ' + (ev.null||0) + (ev.err ? ', err ' + ev.err : '') + ')';
       else if (ev.kind === 'done')          text = '✓ ' + (ev.n_changed||0) + ' reassigned · ' + (ev.n_null||0) + ' sent to noise (' + (ev.wall_ms||0) + ' ms)';
+    } else if (stepName === 'label') {
+      if (ev.kind === 'start')                 text = '· preparing label context…';
+      else if (ev.kind === 'context_prepared') text = '· c-TF-IDF + rep-doc context ready for ' + (ev.n_clusters||0) + ' clusters; round 1 USC labeling…';
+      else if (ev.kind === 'llm_progress')     text = '· ' + (ev.round || 'round1') + ': labeled ' + (ev.judged||0) + ' / ' + (ev.total||0) + ' (unanimous ' + (ev.unanimous||0) + ', USC ' + (ev.usc||0) + (ev.err ? ', err ' + ev.err : '') + ')';
+      else if (ev.kind === 'round2_start')     text = '· round 2: re-labeling ' + (ev.n_round2||0) + ' USC-split clusters with sibling context…';
+      else if (ev.kind === 'done')             text = '✓ ' + (ev.n_clusters||0) + ' clusters named' + (ev.n_round2 ? ' (' + ev.n_round2 + ' via round 2)' : '') + ' · ' + (ev.wall_ms||0) + ' ms';
     }
     if (text) el.textContent = text;
   }
@@ -1313,6 +1425,7 @@
     off_topic:    'relevant_files',
     cluster:      'cluster_assignments_ref',
     refine:       'refine_assignments_ref',
+    label:        'cluster_labels_ref',
   };
 
   async function pollPlannerState(threadId) {
@@ -1533,21 +1646,35 @@
         return false;
       }
       // Still "running" — paint what we have so far + reconnect to SSE.
-      // If no events arrive within _ORPHAN_DETECT_MS, the bg task was
-      // killed by a pod restart; POST /resume to make LangGraph pick
-      // up from the last checkpoint.
       plannerThreadId = tid;
       refreshPlannerStartState();
       renderPlannerCards(values);
       _liveEventReceived = false;
       pollPlannerState(tid);
-      setTimeout(async () => {
-        if (plannerThreadId === tid && !_liveEventReceived) {
-          try {
-            await fetch(API + '/planner/' + tid + '/resume', {method: 'POST'});
-          } catch (e) { /* leave the cards in their current state */ }
-        }
-      }, _ORPHAN_DETECT_MS);
+      // Resume policy depends on what the status field tells us:
+      //   - status=done but new IMPLEMENTED nodes are pending → fire /resume
+      //     IMMEDIATELY (we know the bg task is dead, since aupdate_state
+      //     only writes "done" after main_task completes). This is the
+      //     "new node was added to the codebase, extend the existing
+      //     thread" case — common after every deploy.
+      //   - status=running → could be a live bg task OR an orphan from a
+      //     killed pod. Wait _ORPHAN_DETECT_MS for events; if none, POST
+      //     /resume to recover.
+      const isExtendCase = (status === 'done' && !allImplDone);
+      if (isExtendCase) {
+        try {
+          await fetch(API + '/planner/' + tid + '/resume', {method: 'POST'});
+        } catch (e) { /* card stays in its current state */ }
+      } else {
+        setTimeout(async () => {
+          if (plannerThreadId === tid && !_liveEventReceived) {
+            try {
+              await fetch(API + '/planner/' + tid + '/resume',
+                {method: 'POST'});
+            } catch (e) {}
+          }
+        }, _ORPHAN_DETECT_MS);
+      }
       return true;
     } catch (e) {
       _forgetActivePlanner(slug);

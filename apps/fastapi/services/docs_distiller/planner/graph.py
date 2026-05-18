@@ -28,7 +28,7 @@ from .nodes.cluster import cluster
 from .nodes.corpus_load import corpus_load
 from .nodes.dedup import dedup
 from .nodes.embed_corpus import embed_corpus
-from .nodes.map import map_node
+from .nodes.label import label
 from .nodes.off_topic import off_topic
 from .nodes.plan_write import plan_write
 from .nodes.reduce import reduce_node
@@ -48,8 +48,8 @@ NODE_ORDER = (
     "off_topic",
     "cluster",
     "refine",
+    "label",
     "dedup",
-    "map",
     "reduce",
     "validate",
     "plan_write",
@@ -60,9 +60,9 @@ NODE_REGISTRY = {
     "embed_corpus": embed_corpus,
     "off_topic":    off_topic,
     "cluster":      cluster,
-    "dedup":        dedup,
     "refine":       refine,
-    "map":          map_node,
+    "label":        label,
+    "dedup":        dedup,
     "reduce":       reduce_node,
     "validate":     validate,
     "plan_write":   plan_write,
@@ -77,6 +77,7 @@ IMPLEMENTED = (
     "off_topic",
     "cluster",
     "refine",
+    "label",
 )
 
 
