@@ -35,7 +35,6 @@ class PlannerState(TypedDict, total=False):
     embed_stats: Optional[dict]                 # embed_corpus — files/dim/cache_hit/wall_ms
     relevant_files: Optional[list[str]]         # off_topic (post-embedding filter)
     off_topic_stats: Optional[dict]             # off_topic observability dict
-    deduped_files: Optional[list[str]]          # dedup
     # cluster output — soft-membership matrix (N×K) stored in MinIO; state
     # carries pointer + summary stats. refine + label + reduce nodes load
     # the .npz blob via load_clusters().
@@ -50,7 +49,12 @@ class PlannerState(TypedDict, total=False):
     # Stored as MinIO JSON with {labels, n_round2, round1_decisions}.
     cluster_labels_ref: Optional[str]           # label — MinIO key of the JSON
     label_stats: Optional[dict]                 # label — counts + label map for UI
-    chapter_plan: Optional[list[dict]]          # reduce (final outline)
+    # reduce output — 4-12 chapter outline merged from labeled clusters.
+    # Stored as MinIO JSON with {outline, n_clusters_in, n_repairs, ...}.
+    # State carries the pointer + summary stats (which include the full
+    # outline inline since it's small — ~1-3 KB).
+    chapter_plan_ref: Optional[str]             # reduce — MinIO key of the JSON
+    reduce_stats: Optional[dict]                # reduce — counts + outline for UI
     validated_plan: Optional[list[dict]]        # validate (coverage-repaired plan)
     plan_path: Optional[str]                    # plan_write (MinIO key)
 

@@ -172,8 +172,7 @@ def _Picker():
         ("cluster",      "Cluster",          "UMAP (10-D) + HDBSCAN (eom) on stored vectors; soft-membership matrix powers LITA refine."),
         ("refine",       "Refine (LITA)",    "Bandit LLM reassigns boundary docs to best-fit cluster via top-5 candidate prompt with c-TF-IDF context."),
         ("label",        "Label",            "KeyLLM-style 2-4 word topic per cluster. Bandit LLM + 3 samples + Universal Self-Consistency vote; round 2 re-labels split-vote clusters with sibling context."),
-        ("dedup",        "Deduplicate",      "MinHash + Jaccard threshold to drop near-duplicates within each refined cluster."),
-        ("reduce",       "REDUCE outline",   "Single LLM merge → final 4-12 chapter outline."),
+        ("reduce",       "Reduce (outline)", "Single bandit-LLM merge of labeled clusters → 4-12 chapter outline. N=3 samples + USC vote + self-refine + coverage repair (TnT-LLM pattern)."),
         ("validate",     "Validate",         "Coverage repair: orphan/hallucinated slug detection."),
         ("plan_write",   "Plan write",       "Persist final chapter plan to MinIO."),
     ]

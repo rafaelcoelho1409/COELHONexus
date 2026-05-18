@@ -26,7 +26,6 @@ from langgraph.graph import END, START, StateGraph
 from .checkpoint import get_checkpointer
 from .nodes.cluster import cluster
 from .nodes.corpus_load import corpus_load
-from .nodes.dedup import dedup
 from .nodes.embed_corpus import embed_corpus
 from .nodes.label import label
 from .nodes.off_topic import off_topic
@@ -49,7 +48,6 @@ NODE_ORDER = (
     "cluster",
     "refine",
     "label",
-    "dedup",
     "reduce",
     "validate",
     "plan_write",
@@ -62,7 +60,6 @@ NODE_REGISTRY = {
     "cluster":      cluster,
     "refine":       refine,
     "label":        label,
-    "dedup":        dedup,
     "reduce":       reduce_node,
     "validate":     validate,
     "plan_write":   plan_write,
@@ -78,6 +75,7 @@ IMPLEMENTED = (
     "cluster",
     "refine",
     "label",
+    "reduce",
 )
 
 

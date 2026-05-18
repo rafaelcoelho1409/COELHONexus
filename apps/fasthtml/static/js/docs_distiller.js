@@ -95,8 +95,7 @@
     'cluster_assignments_ref',  // cluster
     'refine_assignments_ref',   // refine
     'cluster_labels_ref',       // label
-    'deduped_files',            // dedup
-    'chapter_plan',             // reduce
+    'chapter_plan_ref',         // reduce
     'validated_plan',           // validate
     'plan_path',                // plan_write
   ];
@@ -105,7 +104,7 @@
   // map step → previous step → expected checkpoint field.
   const PLANNER_NODE_ORDER = [
     'corpus_load', 'embed_corpus', 'off_topic',
-    'cluster', 'refine', 'label', 'dedup',
+    'cluster', 'refine', 'label',
     'reduce', 'validate', 'plan_write',
   ];
   // Populated from GET /planner/info — names of substeps actually wired
@@ -1172,6 +1171,98 @@
 
       return '<div class="fw-stat-grid">' + cards + '</div>' + table + depRow + foot;
     },
+
+    // reduce — 4-12 chapter outline merged from labeled clusters.
+    // KPI cards: chapters / input clusters / repairs / wall_ms.
+    // Below: the full ordered outline with title + description + member
+    // cluster IDs. This is the FINAL human-facing artifact of the
+    // planner pipeline.
+    6: function renderReduce(values) {
+      const s = values.reduce_stats || {};
+      const outline = s.outline || {};
+      const chapters = outline.chapters || [];
+      if (!chapters.length) {
+        return '<div class="fw-empty">no reduce stats reported</div>';
+      }
+
+      const kpi = (label, value, sub) =>
+        '<div class="fw-stat-card">' +
+          '<div class="fw-stat-card-label">' + escapeHtml(label) + '</div>' +
+          '<div class="fw-stat-card-value">' + escapeHtml(value) + '</div>' +
+          (sub ? '<div class="fw-stat-card-sub">' + escapeHtml(sub) + '</div>' : '') +
+        '</div>';
+
+      const cards =
+        kpi('Chapters', String(chapters.length),
+            'from ' + (s.n_clusters_in || 0) + ' clusters') +
+        kpi('Samples', String(s.n_samples || '?'),
+            'N=3 + USC vote + self-refine') +
+        kpi('Coverage repairs', String(s.n_repairs || 0),
+            s.forced_repair ? 'forced fallback applied' : 'auto-fixed') +
+        kpi('Wall', (s.wall_ms || 0) + ' ms',
+            s.cache_hit ? 'cache HIT' : 'cold');
+
+      // Full ordered outline — chapter cards
+      const sortedChapters = chapters.slice().sort(
+        (a, b) => (a.order || 0) - (b.order || 0),
+      );
+      const chapterRows = sortedChapters.map(ch => {
+        const memberIds = (ch.member_cluster_ids || []).slice().sort((a,b) => a-b);
+        const memberCidStr = memberIds.length
+          ? memberIds.map(c => '#' + c).join(' ')
+          : '<em style="color:var(--text-muted)">no clusters</em>';
+        return '<tr style="border-bottom:1px solid var(--border)">' +
+          '<td style="padding:8px 12px 8px 0;font-family:JetBrains Mono,monospace;font-size:0.78rem;color:var(--text-muted);vertical-align:top">' +
+            (ch.order || '?') + '</td>' +
+          '<td style="padding:8px 12px 8px 0;vertical-align:top;width:30%">' +
+            '<div style="font-weight:700;font-size:0.95rem">' +
+              escapeHtml(ch.title || '?') + '</div>' +
+            '<div style="font-family:JetBrains Mono,monospace;font-size:0.7rem;color:var(--text-muted);margin-top:4px">' +
+              memberCidStr + '</div>' +
+          '</td>' +
+          '<td style="padding:8px 0;vertical-align:top;font-size:0.85rem;color:var(--text-muted)">' +
+            escapeHtml(ch.description || '') +
+          '</td>' +
+          '</tr>';
+      }).join('');
+      const headStyle =
+        'position:sticky;top:0;background:var(--card);' +
+        'text-align:left;padding:10px 12px;font-size:0.7rem;' +
+        'color:var(--text-muted);text-transform:uppercase;' +
+        'border-bottom:1px solid var(--border);z-index:2';
+      const table =
+        '<div class="fw-stat-dist" style="margin-top:14px">' +
+          '<div class="fw-stat-dist-title">Chapter outline (' +
+            sortedChapters.length + ' chapters, ordered)</div>' +
+          '<div style="max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;background:var(--card)">' +
+            '<table style="width:100%;border-collapse:collapse;font-family:Raleway">' +
+              '<thead><tr>' +
+                '<th style="' + headStyle + ';padding-left:8px;width:40px">#</th>' +
+                '<th style="' + headStyle + '">Title</th>' +
+                '<th style="' + headStyle + '">Description</th>' +
+              '</tr></thead>' +
+              '<tbody>' + chapterRows + '</tbody>' +
+            '</table>' +
+          '</div>' +
+        '</div>';
+
+      const fallback = s.skipped
+        ? ' · <strong style="color:var(--accent)">' + escapeHtml(s.skipped) + '</strong>'
+        : '';
+      const errorPart = s.error
+        ? ' · <strong style="color:var(--error-text)">' + escapeHtml(s.error) + '</strong>'
+        : '';
+      const foot =
+        '<div class="fw-stat-foot">' +
+          'router <strong>pareto-bandit/dd-grader</strong>' +
+          ' · single-call + USC + self-refine' +
+          ' · prompt <code style="font-family:JetBrains Mono,monospace;font-size:0.72rem">' +
+            escapeHtml(s.prompt_version || '?') + '</code>' +
+          fallback + errorPart +
+        '</div>';
+
+      return '<div class="fw-stat-grid">' + cards + '</div>' + table + foot;
+    },
   };
 
   function renderPlannerCards(values) {
@@ -1389,6 +1480,14 @@
       else if (ev.kind === 'llm_progress')     text = '· ' + (ev.round || 'round1') + ': labeled ' + (ev.judged||0) + ' / ' + (ev.total||0) + ' (unanimous ' + (ev.unanimous||0) + ', USC ' + (ev.usc||0) + (ev.err ? ', err ' + ev.err : '') + ')';
       else if (ev.kind === 'round2_start')     text = '· round 2: re-labeling ' + (ev.n_round2||0) + ' USC-split clusters with sibling context…';
       else if (ev.kind === 'done')             text = '✓ ' + (ev.n_clusters||0) + ' clusters named' + (ev.n_round2 ? ' (' + ev.n_round2 + ' via round 2)' : '') + ' · ' + (ev.wall_ms||0) + ' ms';
+    } else if (stepName === 'reduce') {
+      if (ev.kind === 'start')                 text = '· reading cluster + refine + label artifacts…';
+      else if (ev.kind === 'context_prepared') text = '· prepared context for ' + (ev.n_clusters_in||0) + ' input clusters; generating N=3 outline samples…';
+      else if (ev.kind === 'samples_generated') text = '· ' + (ev.n_samples||0) + ' samples generated; USC voting…';
+      else if (ev.kind === 'usc_voted')        text = '· USC vote done; running self-refine pass (feedback → refine)…';
+      else if (ev.kind === 'refined')          text = '· self-refine done; validating coverage…';
+      else if (ev.kind === 'repair_attempt')   text = '· repair attempt ' + (ev.attempt||0) + ': missing ' + (ev.missing||0) + ', dup ' + (ev.duplicate||0) + ', unknown ' + (ev.unknown||0);
+      else if (ev.kind === 'done')             text = '✓ ' + (ev.n_chapters||0) + ' chapters' + (ev.n_repairs ? ' (' + ev.n_repairs + ' repair' + (ev.n_repairs > 1 ? 's' : '') + ')' : '') + (ev.forced_repair ? ' [forced]' : '') + ' · ' + (ev.wall_ms||0) + ' ms';
     }
     if (text) el.textContent = text;
   }
@@ -1426,6 +1525,7 @@
     cluster:      'cluster_assignments_ref',
     refine:       'refine_assignments_ref',
     label:        'cluster_labels_ref',
+    reduce:       'chapter_plan_ref',
   };
 
   async function pollPlannerState(threadId) {
@@ -1646,26 +1746,23 @@
         return false;
       }
       // Still "running" — paint what we have so far + reconnect to SSE.
+      // Resume policy: ONLY auto-/resume for an orphaned in-flight task
+      // (status === 'running' with no live events arriving within
+      // _ORPHAN_DETECT_MS — pod restart killed the bg task). DO NOT
+      // auto-/resume on the "status=done but new nodes pending" case
+      // here; that would trigger compute every time the user clicks
+      // a framework tile, cascading into parallel runs across slugs.
+      // Extending an existing thread with new nodes is an EXPLICIT
+      // action — the user clicks Start Planner, which routes through
+      // smart Start Planner (POST /resume if thread exists). Or
+      // page-load recoverActivePlanner does it for the single restored
+      // slug. Navigation between slugs is view-only.
       plannerThreadId = tid;
       refreshPlannerStartState();
       renderPlannerCards(values);
       _liveEventReceived = false;
       pollPlannerState(tid);
-      // Resume policy depends on what the status field tells us:
-      //   - status=done but new IMPLEMENTED nodes are pending → fire /resume
-      //     IMMEDIATELY (we know the bg task is dead, since aupdate_state
-      //     only writes "done" after main_task completes). This is the
-      //     "new node was added to the codebase, extend the existing
-      //     thread" case — common after every deploy.
-      //   - status=running → could be a live bg task OR an orphan from a
-      //     killed pod. Wait _ORPHAN_DETECT_MS for events; if none, POST
-      //     /resume to recover.
-      const isExtendCase = (status === 'done' && !allImplDone);
-      if (isExtendCase) {
-        try {
-          await fetch(API + '/planner/' + tid + '/resume', {method: 'POST'});
-        } catch (e) { /* card stays in its current state */ }
-      } else {
+      if (status === 'running') {
         setTimeout(async () => {
           if (plannerThreadId === tid && !_liveEventReceived) {
             try {
