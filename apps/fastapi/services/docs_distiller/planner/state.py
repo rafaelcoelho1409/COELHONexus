@@ -41,6 +41,11 @@ class PlannerState(TypedDict, total=False):
     # the .npz blob via load_clusters().
     cluster_assignments_ref: Optional[str]      # cluster — MinIO key of the .npz
     cluster_stats: Optional[dict]               # cluster — counts/sizes/wall
+    # refine output — LITA boundary-doc reassignment. Stored as MinIO .npz
+    # with (keys, refined_assignments, original_assignments, decisions_json).
+    # State carries only the pointer + summary stats.
+    refine_assignments_ref: Optional[str]       # refine — MinIO key of the .npz
+    refine_stats: Optional[dict]                # refine — counts/changed/null/wall
     shard_results: Optional[list[dict]]         # map (per-shard labels + assignments)
     chapter_plan: Optional[list[dict]]          # reduce (final outline)
     validated_plan: Optional[list[dict]]        # validate (coverage-repaired plan)

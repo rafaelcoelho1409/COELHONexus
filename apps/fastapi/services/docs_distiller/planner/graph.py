@@ -32,6 +32,7 @@ from .nodes.map import map_node
 from .nodes.off_topic import off_topic
 from .nodes.plan_write import plan_write
 from .nodes.reduce import reduce_node
+from .nodes.refine import refine
 from .nodes.validate import validate
 from .state import PlannerState
 
@@ -46,6 +47,7 @@ NODE_ORDER = (
     "embed_corpus",
     "off_topic",
     "cluster",
+    "refine",
     "dedup",
     "map",
     "reduce",
@@ -59,6 +61,7 @@ NODE_REGISTRY = {
     "off_topic":    off_topic,
     "cluster":      cluster,
     "dedup":        dedup,
+    "refine":       refine,
     "map":          map_node,
     "reduce":       reduce_node,
     "validate":     validate,
@@ -73,6 +76,7 @@ IMPLEMENTED = (
     "embed_corpus",
     "off_topic",
     "cluster",
+    "refine",
 )
 
 

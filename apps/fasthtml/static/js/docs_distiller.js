@@ -93,6 +93,7 @@
     'embeddings_ref',           // embed_corpus
     'relevant_files',           // off_topic
     'cluster_assignments_ref',  // cluster
+    'refine_assignments_ref',   // refine
     'deduped_files',            // dedup
     'shard_results',            // map
     'chapter_plan',             // reduce
@@ -104,7 +105,7 @@
   // map step → previous step → expected checkpoint field.
   const PLANNER_NODE_ORDER = [
     'corpus_load', 'embed_corpus', 'off_topic',
-    'cluster', 'dedup', 'map',
+    'cluster', 'refine', 'dedup', 'map',
     'reduce', 'validate', 'plan_write',
   ];
   // Populated from GET /planner/info — names of substeps actually wired
@@ -991,6 +992,80 @@
 
       return '<div class="fw-stat-grid">' + cards + '</div>' + dist + foot;
     },
+
+    // refine — LITA boundary-doc reassignment via bandit-routed big-LLM.
+    // KPI cards: boundary count + reassigned + null + wall. Recent
+    // decisions table shows per-doc verdicts with deployment + latency.
+    4: function renderRefine(values) {
+      const s = values.refine_stats || {};
+      const total = s.n_boundary || 0;
+      if (!s.n_docs && !total) {
+        return '<div class="fw-empty">no refine stats reported</div>';
+      }
+      const changed = s.n_changed || 0;
+      const nulld   = s.n_null || 0;
+      const errs    = s.n_errors || 0;
+      const wall    = s.wall_ms || 0;
+      const depUsage = s.deployment_usage || [];
+
+      const kpi = (label, value, sub) =>
+        '<div class="fw-stat-card">' +
+          '<div class="fw-stat-card-label">' + escapeHtml(label) + '</div>' +
+          '<div class="fw-stat-card-value">' + escapeHtml(value) + '</div>' +
+          (sub ? '<div class="fw-stat-card-sub">' + escapeHtml(sub) + '</div>' : '') +
+        '</div>';
+
+      const changePct = total ? Math.round(changed / total * 100) : 0;
+      const nullPct = total ? Math.round(nulld / total * 100) : 0;
+      const topDep = depUsage[0]
+        ? (depUsage[0].deployment.split('/').pop() + ' · ' + depUsage[0].calls + ' calls')
+        : '—';
+      const cards =
+        kpi('Boundary docs', String(total),
+            'max_prob < ' + (s.boundary_floor || 0.60)) +
+        kpi('Reassigned', String(changed), changePct + '% of boundary') +
+        kpi('Sent to noise', String(nulld),
+            nullPct + '% null' + (errs ? ' · ' + errs + ' errors' : '')) +
+        kpi('Top deployment', topDep,
+            depUsage.length > 1 ? '+' + (depUsage.length - 1) + ' more' : null);
+
+      // Bandit deployment breakdown (same pattern as off_topic).
+      let depRow = '';
+      if (depUsage.length) {
+        const drows = depUsage.slice(0, 10).map(d =>
+          '<tr>' +
+            '<td style="padding:3px 12px 3px 0;font-size:0.78rem">' +
+              escapeHtml((d.deployment || '?').split('/').pop()) + '</td>' +
+            '<td style="padding:3px 0;font-family:JetBrains Mono,monospace;font-size:0.78rem;color:var(--text-muted)">' +
+              d.calls + ' calls</td>' +
+          '</tr>'
+        ).join('');
+        depRow =
+          '<div class="fw-stat-dist" style="margin-top:14px">' +
+            '<div class="fw-stat-dist-title">Bandit deployment usage (top ' +
+              Math.min(10, depUsage.length) + ')</div>' +
+            '<table style="width:100%;border-collapse:collapse;font-family:Raleway">' +
+              '<tbody>' + drows + '</tbody>' +
+            '</table>' +
+          '</div>';
+      }
+
+      const fallback = s.skipped
+        ? ' · <strong style="color:var(--accent)">' + escapeHtml(s.skipped) + '</strong>'
+        : '';
+      const cache = s.cache_hit ? ' · cache HIT' : '';
+      const foot =
+        '<div class="fw-stat-foot">' +
+          'router <strong>pareto-bandit/dd-grader</strong>' +
+          ' · top-K ' + (s.top_k || '?') +
+          ' · prompt <code style="font-family:JetBrains Mono,monospace;font-size:0.72rem">' +
+            escapeHtml(s.prompt_version || '?') + '</code>' +
+          ' · ' + wall + ' ms' +
+          cache + fallback +
+        '</div>';
+
+      return '<div class="fw-stat-grid">' + cards + '</div>' + depRow + foot;
+    },
   };
 
   function renderPlannerCards(values) {
@@ -1197,6 +1272,11 @@
       else if (ev.kind === 'umap_start')    text = '· UMAP ' + (ev.in_dim||'?') + '-D → ' + (ev.out_dim||'?') + '-D (cosine metric, ' + (ev.n_docs||0) + ' docs)';
       else if (ev.kind === 'hdbscan_start') text = '· HDBSCAN density clustering on ' + (ev.reduced_dim||'?') + '-D embeddings';
       else if (ev.kind === 'done')          text = '✓ ' + (ev.n_clusters||0) + ' clusters · ' + (ev.n_noise||0) + ' noise · ' + (ev.n_boundary||0) + ' boundary (' + (ev.wall_ms||0) + ' ms)';
+    } else if (stepName === 'refine') {
+      if (ev.kind === 'start')              text = '· reading cluster state…';
+      else if (ev.kind === 'context_prepared') text = '· prepared c-TF-IDF context for ' + (ev.n_clusters||0) + ' clusters; LLM-judging ' + (ev.n_boundary||0) + ' boundary docs…';
+      else if (ev.kind === 'llm_progress')  text = '· LLM judged ' + (ev.judged||0).toLocaleString() + ' / ' + (ev.total||0).toLocaleString() + ' (reassigned ' + (ev.changed||0) + ', null ' + (ev.null||0) + (ev.err ? ', err ' + ev.err : '') + ')';
+      else if (ev.kind === 'done')          text = '✓ ' + (ev.n_changed||0) + ' reassigned · ' + (ev.n_null||0) + ' sent to noise (' + (ev.wall_ms||0) + ' ms)';
     }
     if (text) el.textContent = text;
   }
@@ -1232,6 +1312,7 @@
     embed_corpus: 'embeddings_ref',
     off_topic:    'relevant_files',
     cluster:      'cluster_assignments_ref',
+    refine:       'refine_assignments_ref',
   };
 
   async function pollPlannerState(threadId) {
