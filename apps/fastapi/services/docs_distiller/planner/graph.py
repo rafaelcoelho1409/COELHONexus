@@ -12,8 +12,9 @@ prevent later-substep crashes when they depend on outputs the earlier
 ones don't yet produce. Add a node's name to `IMPLEMENTED` (in order)
 as soon as its real implementation lands.
 
-Conditional edge: cache_lookup → plan_write on cache hit, → map on miss.
-Only added when both cache_lookup and plan_write are in IMPLEMENTED.
+Strictly sequential — cache_lookup was removed 2026-05-18 (its role is
+now covered by smart Start Planner thread reuse + LangGraph's native
+ainvoke(None) skip-completed-nodes behavior).
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ from typing import Optional
 from langgraph.graph import END, START, StateGraph
 
 from .checkpoint import get_checkpointer
-from .nodes.cache_lookup import cache_lookup
+from .nodes.cluster import cluster
 from .nodes.corpus_load import corpus_load
 from .nodes.dedup import dedup
 from .nodes.embed_corpus import embed_corpus
@@ -44,8 +45,8 @@ NODE_ORDER = (
     "corpus_load",
     "embed_corpus",
     "off_topic",
+    "cluster",
     "dedup",
-    "cache_lookup",
     "map",
     "reduce",
     "validate",
@@ -56,8 +57,8 @@ NODE_REGISTRY = {
     "corpus_load":  corpus_load,
     "embed_corpus": embed_corpus,
     "off_topic":    off_topic,
+    "cluster":      cluster,
     "dedup":        dedup,
-    "cache_lookup": cache_lookup,
     "map":          map_node,
     "reduce":       reduce_node,
     "validate":     validate,
@@ -71,18 +72,20 @@ IMPLEMENTED = (
     "corpus_load",
     "embed_corpus",
     "off_topic",
+    "cluster",
 )
-
-
-def _route_after_cache_lookup(state: PlannerState) -> str:
-    """Cache hit short-circuits the heavy MAP+REDUCE+VALIDATE path."""
-    return "plan_write" if state.get("cached_plan") else "map"
 
 
 def build_graph():
     """Build + compile the planner graph with the shared AsyncPostgresSaver.
     Only nodes in `IMPLEMENTED` get wired; the others are tracked in the
-    catalog (NODE_ORDER) for the UI but skipped at runtime."""
+    catalog (NODE_ORDER) for the UI but skipped at runtime.
+
+    cache_lookup (the v1 early-exit node) was removed 2026-05-18 — its
+    role is now covered by the smart Start Planner flow: client checks
+    /planner/recent → reuses existing thread → graph.ainvoke(None, config)
+    → LangGraph compares channel versions and skips committed nodes
+    automatically. No special routing edge needed."""
     active = [n for n in NODE_ORDER if n in IMPLEMENTED]
     if not active:
         raise RuntimeError(
@@ -95,20 +98,8 @@ def build_graph():
         g.add_node(name, NODE_REGISTRY[name])
 
     g.add_edge(START, active[0])
-    # Sequential edges between consecutive active nodes, EXCEPT the
-    # special cache_lookup → conditional-route case which we only add
-    # when both cache_lookup AND its targets (map, plan_write) are in
-    # the active set.
     for i in range(len(active) - 1):
-        src, dst = active[i], active[i + 1]
-        if src == "cache_lookup" and "map" in active and "plan_write" in active:
-            g.add_conditional_edges(
-                "cache_lookup",
-                _route_after_cache_lookup,
-                {"map": "map", "plan_write": "plan_write"},
-            )
-        else:
-            g.add_edge(src, dst)
+        g.add_edge(active[i], active[i + 1])
     g.add_edge(active[-1], END)
 
     logger.info(

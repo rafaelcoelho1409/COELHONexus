@@ -36,7 +36,11 @@ class PlannerState(TypedDict, total=False):
     relevant_files: Optional[list[str]]         # off_topic (post-embedding filter)
     off_topic_stats: Optional[dict]             # off_topic observability dict
     deduped_files: Optional[list[str]]          # dedup
-    cached_plan: Optional[dict]                 # cache_lookup (None = cache miss)
+    # cluster output — soft-membership matrix (N×K) stored in MinIO; state
+    # carries pointer + summary stats. refine + label + reduce nodes load
+    # the .npz blob via load_clusters().
+    cluster_assignments_ref: Optional[str]      # cluster — MinIO key of the .npz
+    cluster_stats: Optional[dict]               # cluster — counts/sizes/wall
     shard_results: Optional[list[dict]]         # map (per-shard labels + assignments)
     chapter_plan: Optional[list[dict]]          # reduce (final outline)
     validated_plan: Optional[list[dict]]        # validate (coverage-repaired plan)

@@ -78,27 +78,33 @@
   // when an SSE event arrives so we can distinguish a stuck "running"
   // state (no live task) from an actively-running one.
   let _liveEventReceived = false;
+  // off_topic verdict-table sort state (column + direction). Survives
+  // re-renders so SSE refreshes preserve the operator's current sort.
+  let _offTopicSort = {col: null, dir: 'asc'};
+  // Latest off_topic state values cached at render time so a sort-header
+  // click can re-render the card without refetching /state.
+  let _lastOffTopicValues = null;
   let plannerPollAbort = false;
   // Substep order MUST match `NODE_ORDER` in
   // services/docs_distiller/planner/graph.py AND the field each node
   // writes (`state.<field>`).
   const PLANNER_SUBSTEP_FIELDS = [
-    'raw_files',        // corpus_load
-    'embeddings_ref',   // embed_corpus
-    'relevant_files',   // off_topic
-    'deduped_files',    // dedup
-    'cached_plan',      // cache_lookup  (special: null is a valid completion)
-    'shard_results',    // map
-    'chapter_plan',     // reduce
-    'validated_plan',   // validate
-    'plan_path',        // plan_write
+    'raw_files',                // corpus_load
+    'embeddings_ref',           // embed_corpus
+    'relevant_files',           // off_topic
+    'cluster_assignments_ref',  // cluster
+    'deduped_files',            // dedup
+    'shard_results',            // map
+    'chapter_plan',             // reduce
+    'validated_plan',           // validate
+    'plan_path',                // plan_write
   ];
   // Parallel to PLANNER_SUBSTEP_FIELDS — the node name (matches the
   // server-side step name in SSE events). Used by the SSE handler to
   // map step → previous step → expected checkpoint field.
   const PLANNER_NODE_ORDER = [
     'corpus_load', 'embed_corpus', 'off_topic',
-    'dedup', 'cache_lookup', 'map',
+    'cluster', 'dedup', 'map',
     'reduce', 'validate', 'plan_write',
   ];
   // Populated from GET /planner/info — names of substeps actually wired
@@ -642,9 +648,8 @@
   }
 
   function _fieldPresent(values, field) {
-    // cached_plan is special: the cache_lookup node writes `null` as a
-    // valid completion (cache miss). Treat `field in values` (even when
-    // value is null) as "this node ran".
+    // `field in values` (even when value is null) counts as "this node
+    // ran" — some nodes may legitimately write null as their output.
     return values && Object.prototype.hasOwnProperty.call(values, field);
   }
 
@@ -802,7 +807,28 @@
       // no longer a decision input. ALL decisions rendered into a
       // scrollable container (sticky header) so the operator can
       // inspect every per-page verdict without clicking through pages.
-      const decisions = s.judge_decisions || [];
+      // Sortable columns: click any header to sort asc; click again to
+      // toggle desc. Sort state survives re-renders via module scope.
+      _lastOffTopicValues = values;
+      const decisions = (s.judge_decisions || []).slice();
+      // Apply current sort state.
+      const sortCol = _offTopicSort.col;
+      const sortDir = _offTopicSort.dir === 'desc' ? -1 : 1;
+      const _key = d => {
+        if (sortCol === 'verdict')    return (d.verdict || '');
+        if (sortCol === 'deployment') return ((d.deployment || '').split('/').pop() || '');
+        if (sortCol === 'latency')    return (d.latency_s !== undefined && d.latency_s !== null) ? d.latency_s : -1;
+        if (sortCol === 'page')       return ((d.key || '').split('/').pop() || '');
+        return 0;   // 'index' / null: keep original order
+      };
+      if (sortCol) {
+        decisions.sort((a, b) => {
+          const ka = _key(a); const kb = _key(b);
+          if (ka < kb) return -1 * sortDir;
+          if (ka > kb) return 1 * sortDir;
+          return 0;
+        });
+      }
       let table = '';
       if (decisions.length) {
         const rows = decisions.map(d => {
@@ -830,22 +856,33 @@
           '</tr>';
         }).join('');
         const headStyle =
-          'position:sticky;top:0;background:var(--surface);' +
-          'text-align:left;padding:6px 8px 8px 0;font-size:0.7rem;' +
+          'position:sticky;top:0;background:var(--card);' +
+          'text-align:left;padding:8px 12px;font-size:0.7rem;' +
           'color:var(--text-muted);text-transform:uppercase;' +
-          'border-bottom:1px solid var(--border);z-index:1';
+          'border-bottom:1px solid var(--border);z-index:2;cursor:pointer;' +
+          'user-select:none';
+        const _arrow = (col) => {
+          if (_offTopicSort.col !== col) return ' <span style="opacity:0.3">↕</span>';
+          return _offTopicSort.dir === 'desc'
+            ? ' <span style="color:var(--text)">↓</span>'
+            : ' <span style="color:var(--text)">↑</span>';
+        };
+        const th = (col, label) =>
+          '<th data-sort-col="' + col + '" style="' + headStyle + '">' +
+            escapeHtml(label) + _arrow(col) +
+          '</th>';
         table =
           '<div class="fw-stat-dist" style="margin-top:14px">' +
             '<div class="fw-stat-dist-title">LLM verdict (' +
-              decisions.length + ' decisions, scroll to inspect all)</div>' +
-            '<div style="max-height:340px;overflow-y:auto;border:1px solid var(--border);border-radius:4px">' +
-              '<table style="width:100%;border-collapse:collapse;font-family:Raleway">' +
+              decisions.length + ' decisions, click column headers to sort)</div>' +
+            '<div style="max-height:340px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;background:var(--card)">' +
+              '<table data-table="off-topic-verdicts" style="width:100%;border-collapse:collapse;font-family:Raleway">' +
                 '<thead><tr>' +
-                  '<th style="' + headStyle + ';padding-left:8px">In</th>' +
-                  '<th style="' + headStyle + '">Verdict</th>' +
-                  '<th style="' + headStyle + '">Deployment</th>' +
-                  '<th style="' + headStyle + '">Latency</th>' +
-                  '<th style="' + headStyle + '">Page</th>' +
+                  th('index',      'In') +
+                  th('verdict',    'Verdict') +
+                  th('deployment', 'Deployment') +
+                  th('latency',    'Latency') +
+                  th('page',       'Page') +
                 '</tr></thead>' +
                 '<tbody>' + rows + '</tbody>' +
               '</table>' +
@@ -891,6 +928,68 @@
         '</div>';
 
       return '<div class="fw-stat-grid">' + cards + '</div>' + table + depRow + foot;
+    },
+
+    // cluster — UMAP+HDBSCAN density clustering with soft membership.
+    // KPI cards: #clusters / #noise / #boundary docs / wall_ms. Compact
+    // cluster-size distribution row underneath so the operator can spot
+    // pathologies (one giant cluster, all-noise, etc.).
+    3: function renderCluster(values) {
+      const s = values.cluster_stats || {};
+      if (!s.n_docs) {
+        return '<div class="fw-empty">no cluster stats reported</div>';
+      }
+      const kpi = (label, value, sub) =>
+        '<div class="fw-stat-card">' +
+          '<div class="fw-stat-card-label">' + escapeHtml(label) + '</div>' +
+          '<div class="fw-stat-card-value">' + escapeHtml(value) + '</div>' +
+          (sub ? '<div class="fw-stat-card-sub">' + escapeHtml(sub) + '</div>' : '') +
+        '</div>';
+
+      const noisePct = s.n_docs ? Math.round(s.n_noise / s.n_docs * 100) : 0;
+      const boundaryPct = s.n_docs ? Math.round(s.n_boundary / s.n_docs * 100) : 0;
+      const cards =
+        kpi('Clusters', String(s.n_clusters || 0),
+            'on ' + (s.n_docs || 0).toLocaleString() + ' docs') +
+        kpi('Noise',    String(s.n_noise || 0),
+            noisePct + '% unassigned') +
+        kpi('Boundary', String(s.n_boundary || 0),
+            boundaryPct + '% (max-prob < ' + (s.boundary_floor || 0.5) + ')') +
+        kpi('Wall',     (s.wall_ms || 0) + ' ms',
+            'UMAP→HDBSCAN');
+
+      // Cluster size distribution — sparkline-style row.
+      let dist = '';
+      const sizes = s.cluster_sizes || [];
+      if (sizes.length) {
+        const maxSize = Math.max(...sizes);
+        const bars = sizes.map(n => {
+          const pct = Math.max(4, Math.round(n / maxSize * 100));
+          return '<div title="' + n + ' docs" style="display:inline-block;' +
+                 'width:' + pct + '%;max-width:48px;height:14px;' +
+                 'background:var(--accent,#4a7);margin-right:2px;border-radius:2px;' +
+                 'vertical-align:bottom"></div>';
+        }).join('');
+        dist =
+          '<div class="fw-stat-dist" style="margin-top:14px">' +
+            '<div class="fw-stat-dist-title">Cluster sizes (top ' +
+              sizes.length + ', descending) — max ' + maxSize + ' docs</div>' +
+            '<div style="padding:6px 0">' + bars + '</div>' +
+          '</div>';
+      }
+
+      const fallback = s.fallback
+        ? ' · <strong style="color:var(--accent)">' + escapeHtml(s.fallback) + '</strong>'
+        : '';
+      const foot =
+        '<div class="fw-stat-foot">' +
+          'UMAP <strong>n_components=' + (s.umap_dim || '?') + '</strong>' +
+          ' · HDBSCAN <strong>min_cluster=' + (s.min_cluster_size || '?') + '</strong>' +
+          ' · blob ' + Math.round((s.blob_bytes || 0) / 1024) + ' KB' +
+          fallback +
+        '</div>';
+
+      return '<div class="fw-stat-grid">' + cards + '</div>' + dist + foot;
     },
   };
 
@@ -1093,6 +1192,11 @@
       else if (ev.kind === 'anchors_embedded') text = '· anchors embedded (pos + neg) · LLM-as-Judge routing via ParetoBandit/dd-grader';
       else if (ev.kind === 'llm_progress')  text = '· LLM judged ' + (ev.judged||0).toLocaleString() + ' / ' + (ev.total||0).toLocaleString() + ' (keep ' + (ev.llm_keep||0) + ', drop ' + (ev.llm_drop||0) + (ev.llm_err ? ', err ' + ev.llm_err : '') + ')';
       else if (ev.kind === 'done')          text = '✓ kept ' + (ev.kept||0).toLocaleString() + '/' + (ev.total||0).toLocaleString() + ' (' + (ev.wall_ms||0) + ' ms)';
+    } else if (stepName === 'cluster') {
+      if (ev.kind === 'start')              text = '· clustering ' + (ev.n_docs||0).toLocaleString() + ' docs…';
+      else if (ev.kind === 'umap_start')    text = '· UMAP ' + (ev.in_dim||'?') + '-D → ' + (ev.out_dim||'?') + '-D (cosine metric, ' + (ev.n_docs||0) + ' docs)';
+      else if (ev.kind === 'hdbscan_start') text = '· HDBSCAN density clustering on ' + (ev.reduced_dim||'?') + '-D embeddings';
+      else if (ev.kind === 'done')          text = '✓ ' + (ev.n_clusters||0) + ' clusters · ' + (ev.n_noise||0) + ' noise · ' + (ev.n_boundary||0) + ' boundary (' + (ev.wall_ms||0) + ' ms)';
     }
     if (text) el.textContent = text;
   }
@@ -1127,6 +1231,7 @@
     corpus_load:  'raw_files',
     embed_corpus: 'embeddings_ref',
     off_topic:    'relevant_files',
+    cluster:      'cluster_assignments_ref',
   };
 
   async function pollPlannerState(threadId) {
@@ -1156,7 +1261,14 @@
       }
       let ev;
       try { ev = JSON.parse(msg.data); } catch (_) { return; }
-      _liveEventReceived = true;   // orphan-detect timer relies on this
+      // Only "fresh" events (within the last ~20 seconds) count for
+      // orphan-detect. Without this, the Redis snapshot replay of an
+      // old run's events (e.g. a previous cluster start that errored)
+      // would suppress the auto-/resume needed to actually run the
+      // step now.
+      if (ev.ts && (Date.now() / 1000 - ev.ts) < 20) {
+        _liveEventReceived = true;
+      }
 
       // Planner-level terminal event: end the stream + reset UI.
       if (ev.step === 'planner' && ev.kind === 'terminal') {
@@ -1315,9 +1427,21 @@
       const data = await r.json();
       const values = data.values || {};
       const status = values.status;
+      // Terminal means "no more work to do":
+      //   - failed/cancelled: explicit user/system halt, regardless of
+      //     how many nodes ran
+      //   - done AND all currently-wired nodes have committed: full
+      //     completion under the current IMPLEMENTED set
+      // CRITICAL: status="done" ALONE isn't enough. If new nodes were
+      // added to IMPLEMENTED after the run finished, the thread shows
+      // status="done" but missing the new node's field. Treating that as
+      // terminal would skip the auto-/resume that needs to run the new
+      // node — exactly the cluster-not-syncing bug.
+      const allImplDone = _allImplementedComplete(values);
       const effectivelyDone = (
-        status === 'done' || status === 'failed' || status === 'cancelled' ||
-        _allImplementedComplete(values)
+        status === 'failed' || status === 'cancelled' ||
+        (status === 'done' && allImplDone) ||
+        allImplDone
       );
       if (effectivelyDone) {
         // Terminal (or all-impl-done) — paint final state, don't subscribe.
@@ -1353,9 +1477,29 @@
   async function startPlanner() {
     if (!activeSlug || plannerThreadId) return;
     resetPlannerCards();
-    // Generate thread_id client-side so the Cancel button + polling
-    // loop both have a real ID from click 1 (no 'pending' dead-zone).
-    const tid = _genPlannerThreadId(activeSlug);
+
+    // Smart resume: if a thread already exists for this slug, reuse its
+    // thread_id and POST /resume instead of /planner/{slug}. LangGraph's
+    // ainvoke(None, config) on the expanded graph automatically skips
+    // already-checkpointed nodes and runs only the new downstream ones.
+    // Net: adding a 4th planner node + clicking Start Planner on a slug
+    // that has steps 1-3 cached → only step 4 actually executes.
+    let tid = null;
+    let isResume = false;
+    try {
+      const r = await fetch(API + '/planner/recent');
+      if (r.ok) {
+        const data = await r.json();
+        const found = ((data && data.recent) || [])
+          .find(item => item.slug === activeSlug);
+        if (found && found.thread_id) {
+          tid = found.thread_id;
+          isResume = true;
+        }
+      }
+    } catch (e) { /* fall through to fresh thread */ }
+
+    if (!tid) tid = _genPlannerThreadId(activeSlug);
     plannerThreadId = tid;
     _rememberActivePlanner(activeSlug, tid);   // page-refresh recovery
     refreshPlannerStartState();   // button flips to "Cancel Planner"
@@ -1364,12 +1508,12 @@
     pollPlannerState(tid);
     try {
       const mode = (plannerModeSel && plannerModeSel.value) || 'llm';
-      const r = await fetch(
-        API + '/planner/' + activeSlug +
-        '?mode=' + encodeURIComponent(mode) +
-        '&thread_id=' + encodeURIComponent(tid),
-        {method: 'POST'},
-      );
+      const url = isResume
+        ? API + '/planner/' + tid + '/resume'
+        : API + '/planner/' + activeSlug +
+          '?mode=' + encodeURIComponent(mode) +
+          '&thread_id=' + encodeURIComponent(tid);
+      const r = await fetch(url, {method: 'POST'});
       if (!r.ok) {
         const txt = await r.text();
         markPlannerFailed('HTTP ' + r.status + ': ' + txt.slice(0, 400));
@@ -1458,8 +1602,33 @@
     });
   }
 
-  // Card-head click → toggle expanded body
+  // Card-head click → toggle expanded body.
+  // Header-cell click in the off_topic verdict table → sort by that column.
   plannerCardsEl.addEventListener('click', ev => {
+    // Sort header click — take precedence over card-head expansion.
+    const sortTh = ev.target.closest('th[data-sort-col]');
+    if (sortTh) {
+      ev.stopPropagation();
+      const col = sortTh.dataset.sortCol;
+      if (_offTopicSort.col === col) {
+        // Toggle direction; third click clears the sort.
+        if (_offTopicSort.dir === 'asc') _offTopicSort.dir = 'desc';
+        else { _offTopicSort.col = null; _offTopicSort.dir = 'asc'; }
+      } else {
+        _offTopicSort.col = col;
+        _offTopicSort.dir = 'asc';
+      }
+      // Re-render the off_topic card body from cached values (no refetch).
+      const c = cardEl(2);   // off_topic substep idx
+      if (c && _lastOffTopicValues) {
+        const body = c.querySelector('.fw-planner-card-body');
+        const renderer = SUBSTEP_RENDERERS[2];
+        if (body && renderer) {
+          body.innerHTML = renderer(_lastOffTopicValues);
+        }
+      }
+      return;
+    }
     const head = ev.target.closest('.fw-planner-card-head');
     if (!head) return;
     head.parentElement.classList.toggle('expanded');

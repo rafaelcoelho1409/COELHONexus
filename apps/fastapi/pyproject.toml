@@ -32,6 +32,13 @@ dependencies = [
     # langchain-litellm PINNED EXACT — 0.6.4 matches the clean litellm 1.83.x line.
     "langchain-litellm==0.6.4",
     "numpy>=1.26,<2.2",                # LinUCB sufficient-statistics matrix algebra
+    # Planner cluster node — UMAP dim-reduction + HDBSCAN density clustering.
+    # IMPORTANT: hdbscan == scikit-learn-contrib/hdbscan, NOT sklearn.cluster.HDBSCAN
+    # (the latter is ~12× slower and missing all_points_membership_vectors(),
+    # which the LITA refine step REQUIRES to identify boundary docs by
+    # soft-membership probability).
+    "umap-learn>=0.5.8",
+    "hdbscan>=0.8.43",
     # OpenTelemetry — emits LLM call spans to Alloy (gRPC) and LangFuse (HTTP/OTLP).
     "opentelemetry-api>=1.30",
     "opentelemetry-sdk>=1.30",
