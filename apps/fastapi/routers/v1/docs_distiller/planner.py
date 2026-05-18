@@ -43,6 +43,8 @@ from services.docs_distiller.planner.cancel import (
 from services.docs_distiller.planner.graph import (
     IMPLEMENTED,
     NODE_ORDER,
+    NODE_REGISTRY,
+    NODE_TO_FIELD,
     build_graph,
 )
 from services.docs_distiller.planner.progress import (
@@ -212,6 +214,76 @@ async def start_planner(
     }
 
 
+def _missing_implemented_nodes(state: dict) -> list[str]:
+    """Return IMPLEMENTED node names whose primary output field is
+    missing/empty in state. Used by /resume to detect "this thread
+    completed BEFORE node N was added to IMPLEMENTED" — LangGraph's
+    `ainvoke(None)` short-circuits on those threads because the old
+    checkpoint already reached END, so the new node would never run."""
+    missing: list[str] = []
+    for name in IMPLEMENTED:
+        field = NODE_TO_FIELD.get(name)
+        if not field:
+            continue
+        val = state.get(field)
+        if val is None or val == "" or val == []:
+            missing.append(name)
+    return missing
+
+
+async def _run_missing_nodes_directly(
+    graph, config: dict, thread_id: str, missing: list[str],
+) -> None:
+    """Background wrapper: invoke each missing IMPLEMENTED node via
+    NODE_REGISTRY directly, patching state with the result through
+    `aupdate_state` between calls. Each node's own `emit_progress`
+    calls naturally surface live SSE events to the UI.
+
+    Used when a thread completed BEFORE a new IMPLEMENTED node was
+    added: LangGraph's `ainvoke(None)` would no-op because the old
+    checkpoint reached END. Running the new node(s) directly + patching
+    state restores the full pipeline output for the existing thread
+    without forcing a fresh re-run from corpus_load."""
+    terminal_patch: dict = {"status": "done"}
+    try:
+        for name in missing:
+            node_fn = NODE_REGISTRY.get(name)
+            if node_fn is None:
+                continue
+            snap = await graph.aget_state(config)
+            state = dict(snap.values or {})
+            state["thread_id"] = thread_id  # node functions read this
+            result = await node_fn(state)
+            if not isinstance(result, dict):
+                continue
+            await graph.aupdate_state(config, result)
+            logger.info(
+                f"[planner] {thread_id}: catch-up ran missing node "
+                f"{name!r} → fields {sorted(result.keys())}"
+            )
+    except Exception as e:
+        terminal_patch = {"status": "failed",
+                          "error": f"{type(e).__name__}: {e}"}
+        logger.exception(
+            f"[planner] {thread_id}: catch-up failed mid-run "
+            f"({type(e).__name__}: {e})"
+        )
+
+    try:
+        await graph.aupdate_state(config, terminal_patch)
+    except Exception as e:
+        logger.warning(
+            f"[planner] {thread_id}: aupdate_state failed for catch-up "
+            f"terminal patch {terminal_patch!r}: {type(e).__name__}: {e}"
+        )
+
+    await emit_progress(
+        thread_id, "planner", "terminal",
+        status=terminal_patch.get("status", "unknown"),
+        error=terminal_patch.get("error"),
+    )
+
+
 @router.post("/{thread_id:path}/resume")
 async def resume_planner(thread_id: str) -> dict:
     """Resume a planner run from its last LangGraph checkpoint.
@@ -221,13 +293,19 @@ async def resume_planner(thread_id: str) -> dict:
     no live events arrive. The UI detects the orphan (no SSE events in
     ~5s) and POSTs here to continue from where it left off.
 
-    LangGraph treats `ainvoke(None, config)` as "advance from the last
-    committed checkpoint" — completed nodes are NOT re-run; only the
-    next-pending node onward executes. This means: corpus_load +
-    embed_corpus (already checkpointed) are skipped automatically, and
-    off_topic restarts from the start of THAT node (LangGraph doesn't
-    do mid-node resume — that requires interrupt+resume tooling we
-    haven't wired)."""
+    Three execution paths:
+      1. `status` ∈ {"running", "failed"} → standard `ainvoke(None)`
+         resume from the last committed checkpoint.
+      2. `status == "done"` BUT some IMPLEMENTED nodes have no output
+         field in state → catch-up path. This happens when a new node
+         (e.g. plan_write) was added to IMPLEMENTED AFTER the thread
+         completed. LangGraph's `ainvoke(None)` would no-op (the END
+         marker is already consumed in the old checkpoint), so we run
+         each missing node directly via NODE_REGISTRY + aupdate_state,
+         preserving SSE events naturally.
+      3. `status == "done"` AND no missing nodes → return immediately
+         with no work to do (a true "already complete" thread).
+    """
     try:
         graph = build_graph()
     except RuntimeError as e:
@@ -235,8 +313,6 @@ async def resume_planner(thread_id: str) -> dict:
 
     config = {"configurable": {"thread_id": thread_id}}
 
-    # Sanity-check that the thread has any checkpoint at all (so we
-    # don't spawn a no-op run on a typo'd thread_id).
     snap = await graph.aget_state(config)
     if snap.values == {}:
         raise HTTPException(
@@ -245,7 +321,6 @@ async def resume_planner(thread_id: str) -> dict:
                    f"call POST /planner/{{slug}} to start a fresh run",
         )
 
-    # Clear any stale cancel flag from the prior incarnation.
     r = redis_aio.from_url(
         _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
@@ -254,14 +329,50 @@ async def resume_planner(thread_id: str) -> dict:
     finally:
         await r.aclose()
 
+    # Path 2 — status=done but newly-added IMPLEMENTED nodes haven't
+    # run. LangGraph would short-circuit `ainvoke(None)` because the
+    # old checkpoint reached END, so we drive the missing node(s)
+    # directly. Each node's own emit_progress() calls give the UI
+    # the same live-status experience as a fresh run.
+    state = dict(snap.values or {})
+    if state.get("status") == "done":
+        missing = _missing_implemented_nodes(state)
+        if missing:
+            await emit_progress(
+                thread_id, "planner", "catch_up",
+                missing=missing,
+            )
+            # Reset terminal status so the wrapper isn't confused by
+            # an already-done state mid-catch-up.
+            try:
+                await graph.aupdate_state(config, {"status": "running"})
+            except Exception as e:
+                logger.warning(
+                    f"[planner] {thread_id}: pre-catch-up status reset "
+                    f"failed: {type(e).__name__}: {e}"
+                )
+            bg_task = asyncio.create_task(
+                _run_missing_nodes_directly(graph, config, thread_id, missing)
+            )
+            _active_runs.add(bg_task)
+            bg_task.add_done_callback(_active_runs.discard)
+            return {
+                "thread_id":      thread_id,
+                "status":         "catching_up",
+                "missing_nodes":  missing,
+            }
+        # Path 3 — truly nothing to do.
+        return {
+            "thread_id": thread_id,
+            "status":    "done",
+            "note":      "all IMPLEMENTED nodes already have output",
+        }
+
+    # Path 1 — standard LangGraph resume.
     await emit_progress(
         thread_id, "planner", "resumed",
         next_nodes=list(snap.next or []),
     )
-
-    # Re-spawn the graph + watcher + background wrapper. Pass `None` as
-    # state so LangGraph picks up from the last checkpoint instead of
-    # restarting from scratch.
     main_task = asyncio.create_task(graph.ainvoke(None, config))
     watcher_task = asyncio.create_task(cancel_watcher(thread_id, main_task))
     bg_task = asyncio.create_task(

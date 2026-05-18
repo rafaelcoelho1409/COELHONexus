@@ -55,8 +55,13 @@ class PlannerState(TypedDict, total=False):
     # outline inline since it's small — ~1-3 KB).
     chapter_plan_ref: Optional[str]             # reduce — MinIO key of the JSON
     reduce_stats: Optional[dict]                # reduce — counts + outline for UI
-    validated_plan: Optional[list[dict]]        # validate (coverage-repaired plan)
-    plan_path: Optional[str]                    # plan_write (MinIO key)
+    # plan_write output — consumer-facing final plan with hydrated
+    # `sources` per chapter, written as `planner/{slug}/plan-latest.json`
+    # (mutable pointer) AND `planner/{slug}/plan/{hash}.json` (versioned).
+    # State carries the latest-pointer key + summary stats (with the
+    # inline plan for UI rendering).
+    plan_path: Optional[str]                    # plan_write — MinIO key of latest pointer
+    plan_write_stats: Optional[dict]            # plan_write — counts + inline plan for UI
 
     # --- bookkeeping ---
     status: Optional[str]                       # "running" | "done" | "failed" | "cancelled"

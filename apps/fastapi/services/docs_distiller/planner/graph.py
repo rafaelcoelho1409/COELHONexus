@@ -32,7 +32,6 @@ from .nodes.off_topic import off_topic
 from .nodes.plan_write import plan_write
 from .nodes.reduce import reduce_node
 from .nodes.refine import refine
-from .nodes.validate import validate
 from .state import PlannerState
 
 
@@ -49,7 +48,6 @@ NODE_ORDER = (
     "refine",
     "label",
     "reduce",
-    "validate",
     "plan_write",
 )
 
@@ -61,8 +59,25 @@ NODE_REGISTRY = {
     "refine":       refine,
     "label":        label,
     "reduce":       reduce_node,
-    "validate":     validate,
     "plan_write":   plan_write,
+}
+
+# Primary state field each node writes. Used by /resume's catch-up
+# path to detect IMPLEMENTED nodes that haven't run yet for a thread
+# (e.g. when a node lands AFTER a thread already completed — LangGraph
+# would otherwise short-circuit `ainvoke(None)` because the old
+# checkpoint's END marker is already consumed). The catch-up code
+# invokes the missing node directly through NODE_REGISTRY and patches
+# state via `aupdate_state`, preserving SSE events end-to-end.
+NODE_TO_FIELD = {
+    "corpus_load":  "raw_files",
+    "embed_corpus": "embeddings_ref",
+    "off_topic":    "relevant_files",
+    "cluster":      "cluster_assignments_ref",
+    "refine":       "refine_assignments_ref",
+    "label":        "cluster_labels_ref",
+    "reduce":       "chapter_plan_ref",
+    "plan_write":   "plan_path",
 }
 
 # ONLY these nodes are wired into the runtime graph. Order must match
@@ -76,6 +91,7 @@ IMPLEMENTED = (
     "refine",
     "label",
     "reduce",
+    "plan_write",
 )
 
 

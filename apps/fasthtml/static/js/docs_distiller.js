@@ -96,7 +96,6 @@
     'refine_assignments_ref',   // refine
     'cluster_labels_ref',       // label
     'chapter_plan_ref',         // reduce
-    'validated_plan',           // validate
     'plan_path',                // plan_write
   ];
   // Parallel to PLANNER_SUBSTEP_FIELDS — the node name (matches the
@@ -105,7 +104,7 @@
   const PLANNER_NODE_ORDER = [
     'corpus_load', 'embed_corpus', 'off_topic',
     'cluster', 'refine', 'label',
-    'reduce', 'validate', 'plan_write',
+    'reduce', 'plan_write',
   ];
   // Populated from GET /planner/info — names of substeps actually wired
   // into the runtime graph. Stubs aren't included; their cards render
@@ -1263,6 +1262,119 @@
 
       return '<div class="fw-stat-grid">' + cards + '</div>' + table + foot;
     },
+
+    // plan_write — consumer-facing final plan with hydrated `sources`.
+    // KPI cards: chapters / sources / unassigned / wall_ms.
+    // Below: the final outline with title, description, per-chapter
+    // source count + first-N source paths (so a developer can sanity-
+    // check which docs ended up where). Last card of the pipeline.
+    7: function renderPlanWrite(values) {
+      const s = values.plan_write_stats || {};
+      const plan = s.plan || {};
+      const chapters = (plan.chapters || []).slice();
+      if (!chapters.length) {
+        // Two cases: (a) plan_path missing entirely — node hasn't run
+        // yet; (b) plan_path set but stats not yet refreshed from the
+        // checkpoint commit (race window between SSE `done` and the
+        // /state poll catching the latest checkpoint). Show a neutral
+        // running-style message instead of the error-looking
+        // placeholders previously rendered.
+        if (values.plan_path) {
+          return '<div class="fw-empty">plan persisted at <code style="font-family:JetBrains Mono,monospace">' +
+            escapeHtml(values.plan_path) +
+            '</code> — refreshing chapter details…</div>';
+        }
+        return '<div class="fw-empty">waiting for plan_write to commit…</div>';
+      }
+
+      const kpi = (label, value, sub) =>
+        '<div class="fw-stat-card">' +
+          '<div class="fw-stat-card-label">' + escapeHtml(label) + '</div>' +
+          '<div class="fw-stat-card-value">' + escapeHtml(value) + '</div>' +
+          (sub ? '<div class="fw-stat-card-sub">' + escapeHtml(sub) + '</div>' : '') +
+        '</div>';
+
+      const nSources = s.n_sources || (plan.stats || {}).n_sources || 0;
+      const nUnassigned = s.n_unassigned || (plan.stats || {}).n_unassigned || 0;
+      const nDropped = s.n_dropped || (plan.stats || {}).n_dropped || 0;
+      const corpusN = (plan.provenance || {}).corpus_doc_count || 0;
+      const cards =
+        kpi('Chapters', String(chapters.length),
+            'final ordered outline') +
+        kpi('Sources',  String(nSources),
+            corpusN ? 'of ' + corpusN + ' corpus docs' : 'hydrated from refine') +
+        kpi('Unassigned', String(nUnassigned),
+            nDropped ? nDropped + ' empty chapters dropped' : 'none dropped') +
+        kpi('Wall', (s.wall_ms || 0) + ' ms',
+            s.cache_hit ? 'cache HIT' : 'cold');
+
+      const sortedChapters = chapters.slice().sort(
+        (a, b) => (a.order || 0) - (b.order || 0),
+      );
+      const headStyle =
+        'position:sticky;top:0;background:var(--card);' +
+        'text-align:left;padding:10px 12px;font-size:0.7rem;' +
+        'color:var(--text-muted);text-transform:uppercase;' +
+        'border-bottom:1px solid var(--border);z-index:2';
+      const chapterRows = sortedChapters.map(ch => {
+        const srcs = (ch.sources || []).slice();
+        const previewSrcs = srcs.slice(0, 4).map(p => {
+          const tail = p.split('/').slice(-2).join('/');
+          return '<div style="font-family:JetBrains Mono,monospace;font-size:0.7rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">' +
+            escapeHtml(tail) + '</div>';
+        }).join('');
+        const moreSrcs = srcs.length > 4
+          ? '<div style="font-family:JetBrains Mono,monospace;font-size:0.7rem;color:var(--text-muted);font-style:italic">… ' +
+              (srcs.length - 4) + ' more</div>'
+          : '';
+        return '<tr style="border-bottom:1px solid var(--border)">' +
+          '<td style="padding:8px 12px 8px 0;font-family:JetBrains Mono,monospace;font-size:0.78rem;color:var(--text-muted);vertical-align:top">' +
+            (ch.order || '?') + '</td>' +
+          '<td style="padding:8px 12px 8px 0;vertical-align:top;width:32%">' +
+            '<div style="font-weight:700;font-size:0.95rem">' +
+              escapeHtml(ch.title || '?') + '</div>' +
+            '<div style="font-family:JetBrains Mono,monospace;font-size:0.7rem;color:var(--text-muted);margin-top:4px">' +
+              escapeHtml(ch.id || '') + ' · ' + (ch.n_sources || srcs.length) + ' sources' +
+            '</div>' +
+          '</td>' +
+          '<td style="padding:8px 12px 8px 0;vertical-align:top;font-size:0.85rem;color:var(--text-muted)">' +
+            escapeHtml(ch.description || '') +
+          '</td>' +
+          '<td style="padding:8px 0;vertical-align:top">' +
+            previewSrcs + moreSrcs +
+          '</td>' +
+          '</tr>';
+      }).join('');
+      const table =
+        '<div class="fw-stat-dist" style="margin-top:14px">' +
+          '<div class="fw-stat-dist-title">Final plan (' +
+            sortedChapters.length + ' chapters, hydrated sources)</div>' +
+          '<div style="max-height:460px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;background:var(--card)">' +
+            '<table style="width:100%;border-collapse:collapse;font-family:Raleway">' +
+              '<thead><tr>' +
+                '<th style="' + headStyle + ';padding-left:8px;width:40px">#</th>' +
+                '<th style="' + headStyle + '">Chapter</th>' +
+                '<th style="' + headStyle + '">Description</th>' +
+                '<th style="' + headStyle + ';width:34%">Sources (sample)</th>' +
+              '</tr></thead>' +
+              '<tbody>' + chapterRows + '</tbody>' +
+            '</table>' +
+          '</div>' +
+        '</div>';
+
+      const prov = plan.provenance || {};
+      const provLine =
+        '<div class="fw-stat-foot">' +
+          'wrote <code style="font-family:JetBrains Mono,monospace;font-size:0.72rem">' +
+            escapeHtml(s.store_path || values.plan_path || '') + '</code>' +
+          ' · hash <code style="font-family:JetBrains Mono,monospace;font-size:0.72rem">' +
+            escapeHtml((s.manifest_hash || plan.manifest_hash || '').slice(0, 12)) + '</code>' +
+          ' · upstream prompts ' +
+          escapeHtml(JSON.stringify(prov.prompt_versions || {})) +
+        '</div>';
+
+      return '<div class="fw-stat-grid">' + cards + '</div>' + table + provLine;
+    },
   };
 
   function renderPlannerCards(values) {
@@ -1488,6 +1600,11 @@
       else if (ev.kind === 'refined')          text = '· self-refine done; validating coverage…';
       else if (ev.kind === 'repair_attempt')   text = '· repair attempt ' + (ev.attempt||0) + ': missing ' + (ev.missing||0) + ', dup ' + (ev.duplicate||0) + ', unknown ' + (ev.unknown||0);
       else if (ev.kind === 'done')             text = '✓ ' + (ev.n_chapters||0) + ' chapters' + (ev.n_repairs ? ' (' + ev.n_repairs + ' repair' + (ev.n_repairs > 1 ? 's' : '') + ')' : '') + (ev.forced_repair ? ' [forced]' : '') + ' · ' + (ev.wall_ms||0) + ' ms';
+    } else if (stepName === 'plan_write') {
+      if (ev.kind === 'start')           text = '· hashing inputs… (manifest ' + ((ev.manifest_hash||'').slice(0,8)) + ')';
+      else if (ev.kind === 'loaded')     text = '· loaded ' + (ev.n_chapters_in||0) + ' chapters · ' + (ev.n_clusters||0) + ' clusters · ' + (ev.n_docs||0) + ' docs';
+      else if (ev.kind === 'sanitized')  text = '· sanitized · ' + (ev.n_chapters||0) + ' chapters · ' + (ev.n_sources||0) + ' sources' + (ev.n_dropped ? ' · ' + ev.n_dropped + ' empty dropped' : '') + (ev.n_unassigned ? ' · ' + ev.n_unassigned + ' unassigned' : '');
+      else if (ev.kind === 'done')       text = '✓ ' + (ev.n_chapters||0) + ' chapters · ' + (ev.n_sources||0) + ' sources persisted (' + ((ev.cache_hit) ? 'cache hit' : ((ev.wall_ms||0) + ' ms')) + ')';
     }
     if (text) el.textContent = text;
   }
@@ -1526,6 +1643,7 @@
     refine:       'refine_assignments_ref',
     label:        'cluster_labels_ref',
     reduce:       'chapter_plan_ref',
+    plan_write:   'plan_path',
   };
 
   async function pollPlannerState(threadId) {

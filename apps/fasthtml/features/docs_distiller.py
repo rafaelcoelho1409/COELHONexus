@@ -173,8 +173,7 @@ def _Picker():
         ("refine",       "Refine (LITA)",    "Bandit LLM reassigns boundary docs to best-fit cluster via top-5 candidate prompt with c-TF-IDF context."),
         ("label",        "Label",            "KeyLLM-style 2-4 word topic per cluster. Bandit LLM + 3 samples + Universal Self-Consistency vote; round 2 re-labels split-vote clusters with sibling context."),
         ("reduce",       "Reduce (outline)", "Single bandit-LLM merge of labeled clusters → 4-12 chapter outline. N=3 samples + USC vote + self-refine + coverage repair (TnT-LLM pattern)."),
-        ("validate",     "Validate",         "Coverage repair: orphan/hallucinated slug detection."),
-        ("plan_write",   "Plan write",       "Persist final chapter plan to MinIO."),
+        ("plan_write",   "Plan write",       "Hydrate sources from refine assignments + light sanitization (smart title-case, drop empty chapters) + inline provenance refs. Persists hash-keyed blob + mutable `plan-latest.json` pointer (SLSA/Atlas idiom)."),
     ]
     substep_cards = [
         Div(
