@@ -3636,8 +3636,21 @@
         }
         return parts.join(' · ');
       }
-      case 'checklist_eval':     { const s = stats('checklist_stats');
-        return s && s.pass !== undefined ? `pass=${s.pass}` : ''; }
+      case 'checklist_eval':     {
+        const s = stats('checklist_stats');
+        if (!s) return '';
+        const parts = [];
+        if (s.n_total !== undefined && s.n_passed !== undefined) {
+          parts.push(`pass=${s.n_passed}/${s.n_total}`);
+        }
+        if (s.pass_rate !== undefined) {
+          parts.push(`rate=${(s.pass_rate * 100).toFixed(0)}%`);
+        }
+        if (s.chapter_passed === true)  parts.push('✓');
+        if (s.chapter_passed === false) parts.push('✗');
+        if (s.n_failed_feedback) parts.push(`fb=${s.n_failed_feedback}`);
+        return parts.join(' · ');
+      }
       case 'mgsr_replan':        { const s = stats('mgsr_stats');
         return s && s.actions !== undefined ? `act=${s.actions}` : ''; }
       case 'render_audit_write': { const s = stats('chapter_stats');
@@ -4115,9 +4128,47 @@
                ' (' + (ev.wall_ms || 0) + ' ms)';
       }
     }
+    // checklist_eval — 12 binary criteria (7 deterministic pre-gates +
+    // 5 LLM-judge). Fast node (1 LLM call total). Emits 4 event kinds.
+    if (stepName === 'checklist_eval') {
+      if (ev.kind === 'start') {
+        text = '· starting checklist for ' + (ev.chapter_title || ev.chapter_id || 'chapter') +
+               ' (' + (ev.n_total_criteria || 0) + ' criteria, threshold ' +
+               ((ev.pass_threshold || 0.8) * 100).toFixed(0) + '%)';
+      } else if (ev.kind === 'pregates_done') {
+        const failed = ev.names_failed || [];
+        text = '· pre-gates: ' + (ev.n_passed || 0) + '/' +
+               (ev.n_pregate || 0) + ' passed' +
+               (failed.length
+                  ? ' · failed: ' + failed.slice(0, 3).join(', ') +
+                    (failed.length > 3 ? ` (+${failed.length - 3})` : '')
+                  : '');
+      } else if (ev.kind === 'judge_request') {
+        text = '· LLM judge: dispatching (' +
+               ((ev.chapter_chars || 0) / 1000).toFixed(1) + 'k chars chapter' +
+               (ev.truncated ? ', truncated' : '') + ')…';
+      } else if (ev.kind === 'judge_done') {
+        const failed = ev.names_failed || [];
+        const dep = ev.deployment ? ' [' + ev.deployment + ']' : '';
+        const rep = ev.repaired ? ' (repaired)' : '';
+        text = '· LLM judge done: ' + (ev.n_passed || 0) + '/' +
+               (ev.n_llm || 0) + ' passed' + rep +
+               (failed.length
+                  ? ' · failed: ' + failed.slice(0, 3).join(', ') +
+                    (failed.length > 3 ? ` (+${failed.length - 3})` : '')
+                  : '') +
+               ' (' + (ev.wall_ms || 0) + ' ms)' + dep;
+      } else if (ev.kind === 'done') {
+        const passMark = ev.chapter_passed ? '✓ PASSED' : '✗ FAILED';
+        text = '✓ done — ' + passMark + ' — ' +
+               (ev.n_passed || 0) + '/' + (ev.n_total || 0) +
+               ' criteria (' + ((ev.pass_rate || 0) * 100).toFixed(0) + '%), ' +
+               (ev.n_failed_feedback || 0) + ' feedback notes' +
+               ' (' + (ev.wall_ms || 0) + ' ms)';
+      }
+    }
     // Per-step rich progress lines added here as nodes ship. Placeholders
     // for nodes not yet implemented:
-    //   if (stepName === 'checklist_eval')     { ... criteria pass-rate ... }
     //   if (stepName === 'mgsr_replan')        { ... live replan actions ... }
     if (text) el.textContent = text;
   }
