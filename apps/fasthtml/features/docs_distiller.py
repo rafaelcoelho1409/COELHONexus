@@ -163,44 +163,7 @@ def _Picker():
         ),
     )
 
-    # Step 3 — Planner (9 substep cards, populated by JS polling /debug/graph)
-    # Each card mirrors one LangGraph node; status fills in as the run advances.
-    planner_substeps = [
-        ("corpus_load",  "Corpus load",      "Read ingestion's canonical manifest from MinIO."),
-        ("embed_corpus", "Embed corpus",     "NIM 8B pass (chunk+mean-pool, L2-norm); vectors cached in MinIO."),
-        ("off_topic",    "Off-topic filter", "Pure LLM-as-Judge per page, routed by ParetoBandit (dd-grader cells)."),
-        ("cluster",      "Cluster",          "UMAP (10-D) + HDBSCAN (eom) on stored vectors; soft-membership matrix powers LITA refine."),
-        ("refine",       "Refine (LITA)",    "Bandit LLM reassigns boundary docs to best-fit cluster via top-5 candidate prompt with c-TF-IDF context."),
-        ("label",        "Label",            "KeyLLM-style 2-4 word topic per cluster. Bandit LLM + 3 samples + Universal Self-Consistency vote; round 2 re-labels split-vote clusters with sibling context."),
-        ("reduce",       "Reduce (outline)", "Single bandit-LLM merge of labeled clusters → 4-12 chapter outline. N=3 samples + USC vote + self-refine + coverage repair (TnT-LLM pattern)."),
-        ("plan_write",   "Plan write",       "Hydrate sources from refine assignments + light sanitization (smart title-case, drop empty chapters) + inline provenance refs. Persists hash-keyed blob + mutable `plan-latest.json` pointer (SLSA/Atlas idiom)."),
-    ]
-    substep_cards = [
-        Div(
-            Div(
-                Span("○", cls="fw-planner-card-icon", data_status="pending"),
-                Div(
-                    Div(label, cls="fw-planner-card-title"),
-                    Div(desc, cls="fw-planner-card-desc"),
-                    cls="fw-planner-card-text",
-                ),
-                Span("", cls="fw-planner-card-latency"),
-                Span("▾", cls="fw-planner-card-chevron"),
-                cls="fw-planner-card-head",
-            ),
-            Div(
-                Div(
-                    "Output will appear here once the substep runs.",
-                    cls="fw-empty",
-                ),
-                cls="fw-planner-card-body",
-            ),
-            cls="fw-planner-card",
-            data_substep=key,
-            data_idx=str(i),
-        )
-        for i, (key, label, desc) in enumerate(planner_substeps)
-    ]
+    # Step 3 — Planner (Cytoscape DAG canvas only; cards removed 2026-05-19)
     step3_body = Div(
         # Header w/ Start button + progress meta
         Div(
@@ -253,89 +216,30 @@ def _Picker():
             ),
             cls="fw-planner-head",
         ),
-        # Substep timeline — TWO render paths live behind a ?ui flag
-        # (see `docs/UI-ARCHITECTURE-SOTA-2026-05-18.md` Day 1).
-        #   ?ui=cards (default) → legacy vertical card list (this DOM)
-        #   ?ui=graph           → Cytoscape DAG canvas (sibling DOM)
-        # JS toggles which is visible at init; both stay rendered so a
-        # flag flip is a single class swap with no re-fetch.
-        # Empty-state placeholder — visible when no slug is active, so
-        # the panel doesn't show an inert pipeline UI dangling from
-        # the previously-viewed framework. JS hides it the moment
-        # activeSlug becomes non-null.
+        # Substep timeline — Cytoscape DAG canvas is the only render
+        # path. The legacy vertical-cards layout was removed 2026-05-19
+        # because the DAG canvas is strictly better for this domain
+        # (one-click node inspection via NodeDrawer, visual stage
+        # ordering, KPI badges per node, live SSE-driven coloring).
+        # Empty-state placeholder shows when no slug is active.
         Div(
             "Pick a framework from the library to view the planner pipeline.",
             id="fw-planner-empty", cls="fw-stage-empty",
         ),
-        Div(*substep_cards, id="fw-planner-cards", cls="fw-planner-cards"),
         Div(
             # Cytoscape mount point. Sized via CSS; Cytoscape draws to
-            # a <canvas> child element it creates on init. The status
-            # pill lives in the header above (next to the title) so
-            # it's visible in both ?ui=cards and ?ui=graph modes.
+            # a <canvas> child element it creates on init.
             Div(id="fw-planner-canvas", cls="fw-stage-canvas"),
             id="fw-planner-graph", cls="fw-planner-graph",
         ),
     )
 
-    # Step 4 — Synth (9 substep cards, populated by JS via SSE).
-    # Architecture per `docs/SYNTH-ARCHITECTURE-SOTA-2026-05-18.md`.
-    # All cards start in `future` state (⏳); the IMPLEMENTED set comes
-    # from GET /synth/info — nodes light up as they ship, mirroring the
-    # planner's incremental-rollout pattern. NO node code exists yet;
-    # this is UI scaffolding only.
-    # Cards represent ONLY the LLM-driven graph nodes that execute at
-    # Start-Synth time. Ingestion-time prep (corpus_normalize +
-    # vault_sentinelize) is shipped but does NOT show as a node here —
-    # those run during ingestion (see store.py:add_page) and persist
-    # to MinIO; the synth pipeline reads their artifacts as inputs.
-    # `cache_lookup` also removed 2026-05-19 — per-stage MinIO caches
-    # + LangGraph native skip-completed-nodes subsume it.
-    synth_substeps = [
-        ("outline_sdp",       "Outline (SDP DAG)",
-         "Structure-Driven Planner — outline = list of sections w/ dependency DAG; topological stage indexing enables stage-parallel writing (SurveyGen-I 2508.14317)."),
-        ("digest_construct",  "Digest construct",
-         "Per-source LLM digest → aggregate-merge-consolidate; LLM assigns content to sections w/ reasoning (replaces blind embedding cosine; LLMxMapReduce-V3 2510.10890)."),
-        ("sawc_write",        "SAWC write",
-         "Stage-parallel best-of-N drafts (N=3) via Instructor + Pydantic schema; writer ≠ critic rotator picks for MAMM diversity (2503.15272)."),
-        ("checklist_eval",    "Checklist eval",
-         "~10 binary criteria (Prometheus-2-style rubric on free-tier model); pass-rate = guided-refinement feedback (RefineBench 2511.22173)."),
-        ("mgsr_replan",       "MGSR replan",
-         "Memory-Guided Structure Replanner — typed actions {merge|delete|rename|reorder|add} on outline DAG + CoRefine confidence-halting (2602.08948). Loops back to SAWC until ≥80% criteria pass OR plateau OR budget exhausted."),
-        ("render_audit_write","Render + audit",
-         "Jinja render → round-trip code audit (vault hash check) → 3 MinIO artifacts (README.md + challenges.md + flashcards.json) + Langfuse OTel span close."),
-    ]
-    synth_cards = [
-        Div(
-            Div(
-                # Hourglass icon for `future` state; JS swaps to ○/◐/●/✕
-                # as the substep's implementation lands + executes.
-                Span("⏳", cls="fw-planner-card-icon", data_status="future"),
-                Div(
-                    Div(label, cls="fw-planner-card-title"),
-                    Div(desc, cls="fw-planner-card-desc"),
-                    cls="fw-planner-card-text",
-                ),
-                Span("", cls="fw-planner-card-latency"),
-                Span("▾", cls="fw-planner-card-chevron"),
-                cls="fw-planner-card-head",
-            ),
-            Div(
-                Div(
-                    "Substep not yet implemented — will be wired into the "
-                    "graph as its real logic lands.",
-                    cls="fw-empty",
-                ),
-                cls="fw-planner-card-body",
-            ),
-            # Reuse planner-card CSS classes for visual parity; add `future`
-            # so the styles dim the card until the IMPLEMENTED set lights it.
-            cls="fw-planner-card future",
-            data_substep=key,
-            data_idx=str(i),
-        )
-        for i, (key, label, desc) in enumerate(synth_substeps)
-    ]
+    # Step 4 — Synth (Cytoscape DAG canvas only; cards removed 2026-05-19).
+    # Per `docs/SYNTH-ARCHITECTURE-SOTA-2026-05-18.md`. The IMPLEMENTED set
+    # comes from GET /synth/info — nodes light up as they ship, mirroring
+    # the planner's incremental-rollout pattern. Node labels + descriptions
+    # for the canvas now live in apps/fasthtml/static/js/docs_distiller.js
+    # (SYNTH_NODE_LABELS) since the DAG is rendered client-side.
     step4_body = Div(
         # Header — mirrors Planner's pattern (title row with pill +
         # framework chip below + actions on the right). See Day 5 of
@@ -390,10 +294,8 @@ def _Picker():
             "Pick a framework from the library to view the synth pipeline.",
             id="fw-synth-empty", cls="fw-stage-empty",
         ),
-        # Substep timeline — TWO render paths behind ?ui flag (same as
-        # Planner). ?ui=cards (default) → vertical list; ?ui=graph →
-        # Cytoscape DAG canvas.
-        Div(*synth_cards, id="fw-synth-cards", cls="fw-planner-cards"),
+        # Substep timeline — Cytoscape DAG canvas only (cards removed
+        # 2026-05-19; see planner-side comment for rationale).
         Div(
             Div(id="fw-synth-canvas", cls="fw-stage-canvas"),
             id="fw-synth-graph", cls="fw-planner-graph",

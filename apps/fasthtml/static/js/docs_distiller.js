@@ -123,10 +123,10 @@
   // StageGraph — Cytoscape DAG canvas per LangGraph stage
   // (Planner / Synth / Curator / Critic / Assembler).
   //
-  // Activates only when `?ui=graph` is on the URL (Day 1 of the
-  // canvas-redesign sprint — `docs/UI-ARCHITECTURE-SOTA-2026-05-18.md`).
-  // The legacy vertical-cards layout stays the default until Day 5
-  // when the flag flips and the cards code is deleted.
+  // Canvas is now the ONLY render path (cards removed 2026-05-19).
+  // The DAG canvas is strictly better for this domain — one-click
+  // node inspection via NodeDrawer, visual stage ordering, KPI
+  // badges per node, live SSE-driven coloring.
   //
   // Public API (kept tiny so reuse across stages is mechanical):
   //   const g = StageGraph.create(containerEl, {
@@ -138,14 +138,10 @@
   //   g.reset()                       // back to initial nodes' statuses
   //   g.cy                            // the underlying Cytoscape instance
   // ============================================================
-  const UI_MODE = (function() {
-    try {
-      const p = new URLSearchParams(window.location.search);
-      const v = (p.get('ui') || '').toLowerCase();
-      if (v === 'graph') return 'graph';
-      return 'cards';
-    } catch (e) { return 'cards'; }
-  })();
+  // Always 'graph' since cards DOM no longer exists. Kept as a named
+  // constant so the legacy `if (UI_MODE === 'graph')` guards stay
+  // readable as "the canvas path" without renaming N call sites.
+  const UI_MODE = 'graph';
 
   const StageGraph = (function() {
     // Visual spec lives in the Cytoscape `style` array (Cytoscape uses
@@ -1054,14 +1050,18 @@
       if (Date.now() - startedAt > 5000) {
         console.warn(
           '[plannerGraph] Cytoscape failed to load within 5s — ' +
-          'canvas disabled, falling back to cards layout',
+          'canvas unavailable. Reload the page to retry.',
         );
-        // Revert visibility via the canonical toggle (cards visible,
-        // graph wrapper hidden) — but only if a slug is active;
-        // otherwise the empty-state placeholder stays correct.
-        const cardsFallback = document.getElementById('fw-planner-cards');
-        if (cardsFallback) cardsFallback.style.display = '';
-        root.style.display = 'none';
+        // No cards fallback anymore (cards DOM was removed 2026-05-19).
+        // Surface an in-place error so the user knows what happened
+        // instead of staring at an empty pane.
+        const canvasEl = document.getElementById('fw-planner-canvas');
+        if (canvasEl) {
+          canvasEl.innerHTML =
+            '<div class="fw-empty">Cytoscape failed to load. ' +
+            'Reload the page; if it persists, check the network panel ' +
+            'for blocked /static/vendor/cytoscape.min.js.</div>';
+        }
         return;
       }
       setTimeout(tryInit, 80);
@@ -1606,34 +1606,24 @@
   }
 
   // Toggles the "Pick a framework from the library to view the
-  // {stage} pipeline" placeholder for a stage panel. SINGLE SOURCE OF
-  // TRUTH for graph-wrapper + cards visibility — canvas init MUST NOT
-  // touch these directly or it races this toggle. When switching to
-  // the graph view, also kicks a resize so Cytoscape picks up the
-  // freshly-visible container dimensions (otherwise the graph latches
-  // 0×0 from when the wrapper was hidden).
+  // {stage} pipeline" placeholder for a stage panel. Single source of
+  // truth for graph-wrapper visibility — canvas init MUST NOT touch
+  // it directly or it races this toggle. On reveal, kicks a Cytoscape
+  // resize so the canvas picks up freshly-visible container dimensions
+  // (otherwise the graph latches 0×0 from when it was hidden).
   function _toggleStageEmpty(stage, showEmpty) {
     const emptyEl  = document.getElementById('fw-' + stage + '-empty');
-    const cardsEl  = document.getElementById('fw-' + stage + '-cards');
     const graphEl  = document.getElementById('fw-' + stage + '-graph');
     if (!emptyEl) return;
     if (showEmpty) {
       emptyEl.style.display = '';
-      if (cardsEl) cardsEl.style.display = 'none';
       if (graphEl) graphEl.style.display = 'none';
     } else {
       emptyEl.style.display = 'none';
-      // Restore the active render path based on UI flag.
-      if (UI_MODE === 'graph') {
-        if (cardsEl) cardsEl.style.display = 'none';
-        if (graphEl) graphEl.style.display = 'flex';
-        // Re-fit Cytoscape now that the wrapper has real dimensions.
-        if (stage === 'planner' && plannerGraph) _resizePlannerCanvas();
-        if (stage === 'synth'   && synthGraph)   _resizeSynthCanvas();
-      } else {
-        if (cardsEl) cardsEl.style.display = '';
-        if (graphEl) graphEl.style.display = 'none';
-      }
+      if (graphEl) graphEl.style.display = 'flex';
+      // Re-fit Cytoscape now that the wrapper has real dimensions.
+      if (stage === 'planner' && plannerGraph) _resizePlannerCanvas();
+      if (stage === 'synth'   && synthGraph)   _resizeSynthCanvas();
     }
   }
 
@@ -1661,6 +1651,11 @@
   }
 
   function cardEl(idx) {
+    // Cards DOM removed 2026-05-19. Always null in the new graph-only
+    // UI; the cards-rendering loops short-circuit cleanly via
+    // `if (!c) continue;` while still calling `_renderPlannerGraph`
+    // + `_refreshOpenPlannerDrawer` at the tail.
+    if (!plannerCardsEl) return null;
     return plannerCardsEl.querySelector(
       '.fw-planner-card[data-idx="' + idx + '"]');
   }
@@ -2420,10 +2415,15 @@
     for (let i = 0; i < PLANNER_SUBSTEP_FIELDS.length; i++) {
       const field = PLANNER_SUBSTEP_FIELDS[i];
       const c = cardEl(i);
-      if (!c) continue;
+      const present = _fieldPresent(values, field);
+      if (!c) {
+        // Cards DOM removed 2026-05-19. Still count done so the
+        // tail-end `_renderPlannerGraph` has accurate progress.
+        if (present) doneCount++;
+        continue;
+      }
       const icon = c.querySelector('.fw-planner-card-icon');
       const body = c.querySelector('.fw-planner-card-body');
-      const present = _fieldPresent(values, field);
       // Substep name = the PLANNER_SUBSTEPS index → graph node name.
       // Lookup the implementation flag for visual treatment.
       const cardData = c.dataset.substep || '';
@@ -3108,9 +3108,14 @@
     });
   }
 
-  // Card-head click → toggle expanded body.
-  // Header-cell click in the off_topic verdict table → sort by that column.
-  plannerCardsEl.addEventListener('click', ev => {
+  // Card-head click → toggle expanded body (legacy cards-mode handler).
+  // Cards DOM was removed 2026-05-19 — `plannerCardsEl` is null in the
+  // graph-only UI, so the handler is registered conditionally. The
+  // off_topic verdict-table sort branch lived inside this handler too;
+  // it now activates only when the planner drawer renders that table
+  // (handled by SUBSTEP_RENDERERS[2] inside the drawer details panel,
+  // which has its own delegate).
+  if (plannerCardsEl) plannerCardsEl.addEventListener('click', ev => {
     // Sort header click — take precedence over card-head expansion.
     const sortTh = ev.target.closest('th[data-sort-col]');
     if (sortTh) {
@@ -3832,10 +3837,19 @@
         return;
       }
       if (Date.now() - startedAt > 5000) {
-        console.warn('[synthGraph] Cytoscape failed to load within 5s; falling back to cards');
-        const cardsFallback = document.getElementById('fw-synth-cards');
-        if (cardsFallback) cardsFallback.style.display = '';
-        root.style.display = 'none';
+        console.warn(
+          '[synthGraph] Cytoscape failed to load within 5s — ' +
+          'canvas unavailable. Reload the page to retry.',
+        );
+        // No cards fallback anymore (removed 2026-05-19). Same in-place
+        // error shape as the planner-side handler above.
+        const synthCanvasEl = document.getElementById('fw-synth-canvas');
+        if (synthCanvasEl) {
+          synthCanvasEl.innerHTML =
+            '<div class="fw-empty">Cytoscape failed to load. ' +
+            'Reload the page; if it persists, check the network panel ' +
+            'for blocked /static/vendor/cytoscape.min.js.</div>';
+        }
         return;
       }
       setTimeout(tryInit, 80);
@@ -4034,12 +4048,22 @@
   }
 
   function renderSynthCards(values) {
-    if (!synthCardsEl) return;
+    // Cards DOM was removed 2026-05-19 — synthCardsEl is null. The
+    // per-card loop below now early-skips at `if (!c) continue;` but
+    // `_renderSynthGraph` + `_refreshOpenSynthDrawer` at the tail MUST
+    // still fire (they own the graph-canvas + drawer state). Previous
+    // `if (!synthCardsEl) return;` short-circuit silently broke them.
     let doneCount = 0;
     for (let i = 0; i < SYNTH_SUBSTEP_FIELDS.length; i++) {
       const field = SYNTH_SUBSTEP_FIELDS[i];
       const c = synthCardEl(i);
-      if (!c) continue;
+      if (!c) {
+        // Without cards we can't count done state from the DOM, so
+        // derive it from values directly to keep the "first not-done
+        // → running" canvas logic intact.
+        if (_synthFieldPresent(values, field)) doneCount++;
+        continue;
+      }
       const icon = c.querySelector('.fw-planner-card-icon');
       const body = c.querySelector('.fw-planner-card-body');
       const present = _synthFieldPresent(values, field);
