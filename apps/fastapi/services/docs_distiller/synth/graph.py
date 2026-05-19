@@ -27,6 +27,7 @@ import logging
 
 from langgraph.graph import END, START, StateGraph
 
+from .nodes.digest_construct import digest_construct
 from .nodes.outline_sdp import outline_sdp
 # Planner owns checkpointer init in lifespan; reuse the same saver.
 from ..planner.checkpoint import get_checkpointer
@@ -51,8 +52,8 @@ NODE_ORDER = (
 
 NODE_REGISTRY = {
     "outline_sdp":        outline_sdp,
+    "digest_construct":   digest_construct,
     # placeholders — add as each node ships:
-    # "digest_construct":    digest_construct,
     # "sawc_write":          sawc_write,
     # "checklist_eval":      checklist_eval,
     # "mgsr_replan":         mgsr_replan,
@@ -73,6 +74,7 @@ NODE_TO_FIELD = {
 # ONLY these nodes are wired into the runtime. Append as each ships.
 IMPLEMENTED = (
     "outline_sdp",
+    "digest_construct",
 )
 
 

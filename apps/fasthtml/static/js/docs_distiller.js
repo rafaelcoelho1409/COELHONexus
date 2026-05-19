@@ -3602,8 +3602,21 @@
         if (s.n_violations !== undefined) parts.push(`viol=${s.n_violations}`);
         return parts.join(' · ');
       }
-      case 'digest_construct':   { const s = stats('digest_stats');
-        return s && s.sources !== undefined ? `src=${s.sources}` : ''; }
+      case 'digest_construct':   {
+        const s = stats('digest_stats');
+        if (!s) return '';
+        const parts = [];
+        if (s.n_sources !== undefined) parts.push(`src=${s.n_sources}`);
+        if (s.n_sections !== undefined &&
+            s.n_sections_covered !== undefined) {
+          parts.push(`cov=${s.n_sections_covered}/${s.n_sections}`);
+        }
+        if (s.n_orphan_code_refs !== undefined) {
+          parts.push(`orph=${s.n_orphan_code_refs}`);
+        }
+        if (s.n_empty_sections) parts.push(`empty=${s.n_empty_sections}`);
+        return parts.join(' · ');
+      }
       case 'sawc_write':         { const s = stats('sawc_stats');
         return s && s.drafts !== undefined ? `drafts=${s.drafts}` : ''; }
       case 'checklist_eval':     { const s = stats('checklist_stats');
@@ -3972,9 +3985,48 @@
                ' (' + (ev.wall_ms || 0) + ' ms)';
       }
     }
+    // digest_construct — per-source LLM-assigned routing (LLMxMapReduce-V3
+    // pattern). N parallel source digests with one `source_done` event per
+    // completion, plus lifecycle events.
+    if (stepName === 'digest_construct') {
+      if (ev.kind === 'start') {
+        text = '· starting digests for ' + (ev.chapter_title || ev.chapter_id || 'chapter') +
+               ' (' + (ev.n_sources || 0) + ' sources × ' +
+               (ev.n_sections || 0) + ' sections)';
+      } else if (ev.kind === 'outline_loaded') {
+        text = '· outline loaded: ' + (ev.n_sources || 0) + ' source(s), ' +
+               (ev.n_total_vault_hashes || 0) + ' code refs, ' +
+               (((ev.total_bytes || 0) / 1000).toFixed(1)) + 'k chars';
+      } else if (ev.kind === 'source_done') {
+        const idx = (ev.sample_idx ?? 0) + 1;
+        const tot = ev.n_total || 0;
+        const dep = ev.deployment ? ' [' + ev.deployment + ']' : '';
+        const src = (ev.source_key || '').split('/').pop();
+        if (ev.ok) {
+          text = '· source ' + idx + '/' + tot + ' done · ' + src + ' · ' +
+                 (ev.n_contributions || 0) + ' contribs, ' +
+                 (ev.wall_ms || 0) + ' ms' + dep;
+        } else {
+          text = '· source ' + idx + '/' + tot + ' FAILED · ' + src +
+                 ': ' + (ev.error || 'unknown');
+        }
+      } else if (ev.kind === 'digests_aggregated') {
+        text = '· aggregated ' + (ev.n_digests_ok || 0) + '/' +
+               (ev.n_total || 0) + ' digests' +
+               (ev.n_pydantic_fail
+                  ? ', ' + ev.n_pydantic_fail + ' pydantic-rejected'
+                  : '');
+      } else if (ev.kind === 'done') {
+        text = '✓ done — ' + (ev.n_sources || 0) + ' sources, ' +
+               'cov=' + (ev.n_sections_covered || 0) + '/' +
+               (ev.n_sections || 0) + ', ' +
+               'empty=' + (ev.n_empty_sections || 0) + ', ' +
+               'orph=' + (ev.n_orphan_code_refs || 0) +
+               ' (' + (ev.wall_ms || 0) + ' ms)';
+      }
+    }
     // Per-step rich progress lines added here as nodes ship. Placeholders
     // for nodes not yet implemented:
-    //   if (stepName === 'digest_construct')   { ... per-source progress ... }
     //   if (stepName === 'sawc_write')         { ... per-section / per-iter ... }
     //   if (stepName === 'checklist_eval')     { ... criteria pass-rate ... }
     //   if (stepName === 'mgsr_replan')        { ... live replan actions ... }

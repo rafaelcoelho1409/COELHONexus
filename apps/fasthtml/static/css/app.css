@@ -1754,6 +1754,296 @@ html, body {
 }
 .ycs-step-connector.complete { background: var(--primary); }
 
+/* ----- Step 1 · Source · 4-mode tabs (Search / Videos / Playlist / Channel) ----- */
+.ycs-source-tabs { display: flex; flex-direction: column; gap: 0; }
+.ycs-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+.ycs-tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 10px 20px;
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  letter-spacing: 0.02em;
+  margin-bottom: -1px; /* overlap the strip's bottom border */
+  transition: color 0.15s, border-color 0.15s;
+}
+.ycs-tab:hover { color: var(--text); }
+.ycs-tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  font-weight: 600;
+}
+.ycs-tab-body { display: none; }
+.ycs-tab-body.active { display: block; }
+
+/* ----- Direct-mode form bodies (Videos / Playlist / Channel) ----- */
+.ycs-direct-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ycs-tab-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+/* ----- Search-mode body (kept for back-compat with .ycs-search-panel) ----- */
+.ycs-search-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ycs-search-row {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+.ycs-search-input {
+  flex: 1;
+  padding: 12px 16px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+}
+.ycs-search-input:focus { border-color: var(--primary); }
+.ycs-search-max {
+  width: 80px;
+  padding: 12px 12px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+  text-align: center;
+}
+.ycs-search-max:focus { border-color: var(--primary); }
+
+.ycs-filters { display: flex; flex-direction: column; gap: 12px; }
+.ycs-filters-toggle {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.ycs-filters-toggle:hover { color: var(--text); }
+.ycs-filters-toggle-chevron {
+  display: inline-block;
+  transition: transform 0.15s;
+}
+.ycs-filters-toggle.open .ycs-filters-toggle-chevron {
+  transform: rotate(180deg);
+}
+.ycs-filters-body {
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px 18px;
+  padding: 16px 18px;
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.ycs-filter-field { display: flex; flex-direction: column; gap: 4px; }
+.ycs-filter-label {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.ycs-filter-input,
+.ycs-filter-select {
+  padding: 8px 10px;
+  font-size: 0.85rem;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+}
+.ycs-filter-input:focus,
+.ycs-filter-select:focus { border-color: var(--primary); }
+.ycs-filter-check-wrap {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 0;
+}
+.ycs-filter-check-label {
+  font-size: 0.85rem; color: var(--text);
+}
+
+/* ----- Search status + results list ----- */
+.ycs-search-results-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ycs-search-status {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-style: italic;
+  min-height: 1.2em;
+}
+.ycs-search-status.running { color: var(--running-text); font-style: normal; }
+.ycs-search-status.error {
+  color: var(--error-text);
+  font-style: normal;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ycs-search-empty {
+  padding: 20px;
+  color: var(--text-muted);
+  font-style: italic;
+  border: 1px dashed var(--border);
+  border-radius: 3px;
+  text-align: center;
+}
+.ycs-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ycs-result {
+  display: grid;
+  grid-template-columns: 160px 1fr auto;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  transition: border-color 0.15s;
+}
+.ycs-result:hover { border-color: var(--text-muted); }
+.ycs-result-thumb {
+  position: relative;
+  width: 160px; height: 90px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #000;
+  display: block;
+  flex-shrink: 0;
+}
+.ycs-result-thumb img {
+  width: 100%; height: 100%; object-fit: cover;
+}
+.ycs-result-dur {
+  position: absolute;
+  right: 4px; bottom: 4px;
+  padding: 1px 6px;
+  background: rgba(0, 0, 0, 0.78);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 500;
+  border-radius: 2px;
+}
+.ycs-result-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.ycs-result-title {
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-decoration: none;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ycs-result-title:hover { color: var(--primary); }
+.ycs-result-meta {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.01em;
+}
+.ycs-result-desc {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ycs-result-add {
+  align-self: flex-start;
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.ycs-result-add:hover { border-color: var(--primary); color: var(--primary); }
+.ycs-result-add.added {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.ycs-result-add.added:hover { background: var(--primary-dark); }
+
+/* ----- Cart footer ----- */
+.ycs-cart {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.02);
+  position: sticky;
+  bottom: 16px;
+}
+.ycs-cart-count {
+  color: var(--text);
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+/* ----- Legacy single-shot Q&A divider (temporary; removed when wizard completes) ----- */
+.ycs-legacy-divider {
+  margin-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
 .ycs-intro {
   color: var(--text-muted);
   font-size: 0.9rem;
