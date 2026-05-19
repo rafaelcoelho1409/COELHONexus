@@ -21,6 +21,13 @@ dependencies = [
     "tenacity",                        # exponential-backoff retry helper
     "aioboto3>=13.0",                  # async S3 client for MinIO (page-body storage)
     "crawl4ai>=0.8.0,<0.9",            # AsyncUrlSeeder + Playwright-CDP BFS fallback
+    # YouTube ingestion stack (services/youtube/) — yt-dlp + PO Token plugin (the
+    # legacy stack as of 2026-05; per docs/YCS-MIGRATION-SOTA-2026-05-19.md this
+    # also covers transcript extraction via --write-auto-subs, so Playwright CDP
+    # is only the fallback tier and is not a hard dependency at v0).
+    "yt-dlp",                          # YouTube metadata + auto-subtitle extraction
+    "bgutil-ytdlp-pot-provider>=1.3.0",# PO Token plugin (auto-discovered by yt-dlp)
+    "curl_cffi>=0.11,<0.15",           # Browser impersonation for yt-dlp (0.15 unsupported)
     # LLM rotator stack (services/llm/) — LiteLLM Router + ParetoBandit adaptive routing.
     # litellm PINNED EXACT — v1.82.7/v1.82.8 supply-chain compromised (2026-03-24
     # Trivy CI/CD breach); v1.83.12 AND v1.83.14 ship cost_calculator.py importing

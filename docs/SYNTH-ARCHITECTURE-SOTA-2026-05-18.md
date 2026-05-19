@@ -24,19 +24,36 @@ Every documented quality defect (`# docs:` leakage, `<code-ref/>` unresolved, or
 
 ---
 
-## The 9 substeps (replacing the deprecated 42)
+## The 6 substeps (replacing the deprecated 42)
+
+**Update 2026-05-19 (afternoon):** Both `corpus_normalize` and
+`vault_sentinelize` are reclassified as **ingestion-time preprocessors**,
+not synth graph nodes. They're shipped and live, but execute inside
+`services/docs_distiller/ingestion/store.py:add_page` as per-page side
+effects when each doc is ingested. The synth canvas's mental model is
+"what runs when the user clicks Start Synth" — ingestion-prep doesn't
+belong there. Synth reads the persisted MinIO artifacts (normalized
+body at `ingestion/{slug}/pages/`, vault + sentinelized body at
+`synth-vault/{slug}/pages/`) as inputs at runtime.
+
+**Update 2026-05-19 (morning):** `cache_lookup` removed. Per-stage MinIO
+content-addressed caches plus LangGraph's native skip-completed-nodes
+subsume it.
 
 ```
-1. cache_lookup        — Redis 30d, keyed by (plan_hash, tone_profile_hash, chapter_id)
-2. corpus_normalize    — strip Mintlify/boundaries/meta at INGESTION (move from output-scrub)
-3. outline_sdp         — dependency DAG with topological stage indexing (parallel within stage)
-4. digest_construct    — per-source LLM digest → aggregate-merge; LLM picks WHAT goes WHERE
-5. vault_sentinelize   — code blocks → <code-ref hash=...>; LLM never sees/emits code content
-6. sawc_write          — stage-parallel best-of-N drafts via Instructor + Pydantic; writer ≠ critic (MAMM diversity)
-7. checklist_eval      — ~10 binary criteria (Prometheus-2 rubric on free-tier model); failed items = guided feedback
-8. mgsr_replan         — structured outline actions {merge|delete|rename|reorder|add} + CoRefine confidence-halting
-   ↑──────── loop 6→7→8 until ≥80% criteria pass OR confidence plateau OR budget exhausted
-9. render_audit_write  — Jinja render + round-trip code audit + 3 MinIO artifacts + Langfuse OTel span close
+INGESTION-TIME PREP (runs per page in store.py:add_page; NOT a synth graph node):
+  - corpus_normalize    — strip Mintlify/boundaries/meta/admonitions
+                          (replaces deprecated output-side scrubber passes 0-2)
+  - vault_sentinelize   — code blocks → <code-ref hash=...>; LLM never sees/emits code
+
+SYNTH GRAPH (6 nodes; the canvas shows these):
+  1. outline_sdp         — dependency DAG with topological stage indexing (parallel within stage)
+  2. digest_construct    — per-source LLM digest → aggregate-merge; LLM picks WHAT goes WHERE
+  3. sawc_write          — stage-parallel best-of-N drafts via Instructor + Pydantic; writer ≠ critic (MAMM diversity)
+  4. checklist_eval      — ~10 binary criteria (Prometheus-2 rubric on free-tier model); failed items = guided feedback
+  5. mgsr_replan         — structured outline actions {merge|delete|rename|reorder|add} + CoRefine confidence-halting
+     ↑──────── loop 3→4→5 until ≥80% criteria pass OR confidence plateau OR budget exhausted
+  6. render_audit_write  — Jinja render + round-trip code audit + 3 MinIO artifacts + Langfuse OTel span close
 ```
 
 ### Step-by-step detail
@@ -219,8 +236,15 @@ Per `feedback_kd_quality_over_speed.md`: tokens are free, runtime isn't a concer
 5. **`sawc_write`** (step 6) — heaviest, builds on SDP DAG; Instructor schema is the key dependency
 6. **`checklist_eval`** (step 7) — independent of writer, can be developed parallel to 6
 7. **`mgsr_replan`** (step 8) — orchestrates the loop; depends on 6 + 7
-8. **`render_audit_write`** (step 9) — final node, mostly deterministic
-9. **`cache_lookup`** (step 1) — wire last (defense-in-depth on top of a working pipeline)
+8. **`render_audit_write`** (synth node 6) — final node, mostly deterministic
+
+(Step `cache_lookup` removed 2026-05-19 — per-stage MinIO content-
+addressed caches subsume the use case.)
+
+(Steps `corpus_normalize` (originally step 2) and `vault_sentinelize`
+(originally step 5) reclassified as ingestion-time prep 2026-05-19
+afternoon — see top-of-doc note. Both are shipped and live; they just
+don't run during synth.)
 
 Per node added: append to `IMPLEMENTED` tuple in `synth/graph.py`, add `SUBSTEP_RENDERERS[idx]` in `apps/fasthtml/static/js/docs_distiller.js`.
 

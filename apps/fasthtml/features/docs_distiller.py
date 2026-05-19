@@ -284,17 +284,18 @@ def _Picker():
     # from GET /synth/info — nodes light up as they ship, mirroring the
     # planner's incremental-rollout pattern. NO node code exists yet;
     # this is UI scaffolding only.
+    # Cards represent ONLY the LLM-driven graph nodes that execute at
+    # Start-Synth time. Ingestion-time prep (corpus_normalize +
+    # vault_sentinelize) is shipped but does NOT show as a node here —
+    # those run during ingestion (see store.py:add_page) and persist
+    # to MinIO; the synth pipeline reads their artifacts as inputs.
+    # `cache_lookup` also removed 2026-05-19 — per-stage MinIO caches
+    # + LangGraph native skip-completed-nodes subsume it.
     synth_substeps = [
-        ("cache_lookup",      "Cache lookup",
-         "Redis 30d keyed by (plan_hash, tone_hash, chapter_id); partial-cache 7d for cascade-timeout resume."),
-        ("corpus_normalize",  "Corpus normalize",
-         "Strip Mintlify fence-meta + raw-corpus boundaries + orphan tags at INGESTION (replaces deprecated scrubber passes 0-2)."),
         ("outline_sdp",       "Outline (SDP DAG)",
          "Structure-Driven Planner — outline = list of sections w/ dependency DAG; topological stage indexing enables stage-parallel writing (SurveyGen-I 2508.14317)."),
         ("digest_construct",  "Digest construct",
          "Per-source LLM digest → aggregate-merge-consolidate; LLM assigns content to sections w/ reasoning (replaces blind embedding cosine; LLMxMapReduce-V3 2510.10890)."),
-        ("vault_sentinelize", "Vault sentinelize",
-         "Code blocks → <code-ref hash=...>; LLM never sees/emits code content. VeriCite-style audit (missing/invented/duplicated/orphaned) → bandit signal."),
         ("sawc_write",        "SAWC write",
          "Stage-parallel best-of-N drafts (N=3) via Instructor + Pydantic schema; writer ≠ critic rotator picks for MAMM diversity (2503.15272)."),
         ("checklist_eval",    "Checklist eval",
@@ -302,7 +303,7 @@ def _Picker():
         ("mgsr_replan",       "MGSR replan",
          "Memory-Guided Structure Replanner — typed actions {merge|delete|rename|reorder|add} on outline DAG + CoRefine confidence-halting (2602.08948). Loops back to SAWC until ≥80% criteria pass OR plateau OR budget exhausted."),
         ("render_audit_write","Render + audit",
-         "Jinja render → round-trip code audit → 3 MinIO artifacts (README.md + challenges.md + flashcards.json) + Langfuse OTel span close."),
+         "Jinja render → round-trip code audit (vault hash check) → 3 MinIO artifacts (README.md + challenges.md + flashcards.json) + Langfuse OTel span close."),
     ]
     synth_cards = [
         Div(

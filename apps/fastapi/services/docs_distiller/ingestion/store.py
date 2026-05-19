@@ -19,7 +19,14 @@ from typing import Optional
 
 import redis.asyncio as redis_aio
 
-from .storage_minio import MinIOStorage, manifest_key, page_key
+from .storage_minio import (
+    MinIOStorage,
+    manifest_key,
+    page_key,
+    raw_page_key,
+    vault_manifest_key,
+    vault_sentinelized_key,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -89,20 +96,103 @@ class Store:
         """Stream a fetched page to MinIO + append to the live manifest.
         Safe to call from many coroutines concurrently — the idx-assign +
         manifest-append region is locked; the MinIO PUT happens outside the
-        lock so writes overlap freely."""
-        body_bytes = len(body.encode("utf-8"))
+        lock so writes overlap freely.
+
+        Normalization (added 2026-05-19, see SYNTH-ARCHITECTURE-SOTA doc):
+        the body goes through `corpus_normalize.normalize_doc` BEFORE the
+        canonical write so file viewer + embed_corpus + cluster + synth
+        all see clean content. The raw body is preserved at
+        `ingestion-raw/{slug}/pages/...` so backfills + normalizer
+        version bumps stay reversible.
+        """
+        # Normalize before MinIO write. Best-effort: ingestion failures
+        # MUST NOT cascade from a normalizer bug, so on exception we
+        # fall through to the raw body.
+        normalized_body = body
+        try:
+            from services.docs_distiller.synth.corpus_normalize import (
+                normalize_doc,
+            )
+            normalized_body = normalize_doc(body).body
+        except Exception as e:
+            logger.warning(
+                f"[store] normalize_doc failed for slug={slug!r}: "
+                f"{type(e).__name__}: {e}; falling back to raw body"
+            )
+        normalized_bytes = len(normalized_body.encode("utf-8"))
         async with self._add_lock:
             idx = len(self._cached_manifest)
             key = page_key(self.framework_slug, idx, slug)
             entry = ManifestEntry(
                 idx=idx, slug=slug, url=url, tier=tier,
-                bytes=body_bytes, title=title or slug, key=key,
+                bytes=normalized_bytes, title=title or slug, key=key,
             )
             self._cached_manifest.append(entry)
         # MinIO PUT outside the lock — concurrent puts proceed in parallel.
-        await self.minio.write(key, body, content_type="text/markdown")
+        # Write normalized to the canonical path + raw to the parallel
+        # `ingestion-raw/` prefix concurrently.
+        import asyncio as _asyncio
+        await _asyncio.gather(
+            self.minio.write(key, normalized_body, content_type="text/markdown"),
+            self.minio.write(
+                raw_page_key(self.framework_slug, idx, slug),
+                body, content_type="text/markdown",
+            ),
+        )
+        # Replace `body` with normalized for downstream vault build —
+        # vault must see the same bytes the LLM will see at synth time.
+        body = normalized_body
+        # Vault build — sentinelize code blocks for the synth pipeline.
+        # Writes TWO sibling blobs under `synth-vault/{slug}/pages/...`
+        # without touching the original `ingestion/{slug}/pages/...`
+        # markdown the file viewer reads. Best-effort: ingestion is the
+        # source of truth, so vault failures are logged but never crash
+        # the run. See docs/SYNTH-ARCHITECTURE-SOTA-2026-05-18.md step 5.
+        try:
+            await self._build_and_persist_vault(idx, slug, body)
+        except Exception as e:
+            logger.warning(
+                f"[store] vault build failed for idx={idx} slug={slug!r}: "
+                f"{type(e).__name__}: {e}"
+            )
         await self._write_live_manifest()
         return entry
+
+    async def _build_and_persist_vault(
+        self, idx: int, slug: str, body: str,
+    ) -> None:
+        """Sentinelize a page's body + persist the vault manifest +
+        sentinelized text to MinIO. Lazy-imports the vault module so
+        the ingestion path doesn't pay a startup cost when not needed."""
+        from services.docs_distiller.synth.vault import build_manifest
+        source_key = page_key(self.framework_slug, idx, slug)
+        sentinelized, manifest = build_manifest(
+            framework=self.framework_slug,
+            source_key=source_key,
+            md_text=body,
+        )
+        # Persist BOTH blobs concurrently — they're independent. Empty
+        # vaults (docs with no fenced code) still get written so synth
+        # has a uniform read path (no fallback-to-original logic).
+        import asyncio as _asyncio
+        vk = vault_manifest_key(self.framework_slug, idx, slug)
+        sk = vault_sentinelized_key(self.framework_slug, idx, slug)
+        await _asyncio.gather(
+            self.minio.write(
+                vk,
+                manifest.model_dump_json(),
+                content_type="application/json",
+            ),
+            self.minio.write(
+                sk, sentinelized, content_type="text/markdown",
+            ),
+        )
+        n = len(manifest.entries)
+        if n:
+            logger.info(
+                f"[store] vault built idx={idx} slug={slug!r}: "
+                f"{n} fence(s) → {vk}"
+            )
 
     async def read_body(self, idx: int) -> str:
         if idx < 0 or idx >= len(self._cached_manifest):

@@ -48,13 +48,23 @@ router = APIRouter()
 
 # Canonical node order per `docs/SYNTH-ARCHITECTURE-SOTA-2026-05-18.md`.
 # Mirrors the planner's NODE_ORDER / IMPLEMENTED split — `implemented` is
-# the subset of `node_order` that has real code wired. Currently empty.
+# the subset of `node_order` that has real code wired.
+#
+# `cache_lookup` removed 2026-05-19 — see git history. Per-stage MinIO
+# content-addressed caches + LangGraph's native skip-completed-nodes
+# subsume it.
+#
+# `corpus_normalize` + `vault_sentinelize` removed 2026-05-19 — they
+# ARE shipped, but execute at INGESTION-time (in store.py:add_page),
+# NOT during synth. The synth canvas mental model is "what runs when
+# the user clicks Start Synth"; ingestion-time preprocessors don't
+# belong here. They live in `services/docs_distiller/synth/` as a
+# library + ingestion-side hook; the synth graph reads their MinIO
+# artifacts as inputs. See SYNTH-ARCHITECTURE-SOTA doc for the
+# reclassification rationale.
 NODE_ORDER = (
-    "cache_lookup",
-    "corpus_normalize",
     "outline_sdp",
     "digest_construct",
-    "vault_sentinelize",
     "sawc_write",
     "checklist_eval",
     "mgsr_replan",

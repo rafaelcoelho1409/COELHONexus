@@ -3496,37 +3496,34 @@
   // field each node writes (`state.<field>`).
   // Field names are TENTATIVE — they're placeholders that match the
   // SOTA architecture doc. Update when the real graph.py lands.
+  // `corpus_normalize` + `vault_sentinelize` removed from this canvas
+  // 2026-05-19 — both ARE shipped but execute at INGESTION time, NOT
+  // synth-time. The canvas's mental model is "what runs when Start
+  // Synth is clicked"; ingestion-prep doesn't belong here.
+  // `cache_lookup` also removed — per-stage MinIO caches + LangGraph
+  // native skip-completed-nodes subsume it. See SYNTH-ARCHITECTURE-SOTA
+  // doc for the full rationale.
   const SYNTH_SUBSTEP_FIELDS = [
-    'synth_cache_hit',       // cache_lookup
-    'normalized_corpus_ref', // corpus_normalize
     'outline_dag_ref',       // outline_sdp
     'digest_ref',            // digest_construct
-    'vault_ref',             // vault_sentinelize
     'sawc_drafts_ref',       // sawc_write
     'checklist_results_ref', // checklist_eval
     'mgsr_actions_ref',      // mgsr_replan
     'chapters_path',         // render_audit_write
   ];
   const SYNTH_NODE_ORDER = [
-    'cache_lookup', 'corpus_normalize', 'outline_sdp', 'digest_construct',
-    'vault_sentinelize', 'sawc_write', 'checklist_eval',
+    'outline_sdp', 'digest_construct',
+    'sawc_write', 'checklist_eval',
     'mgsr_replan', 'render_audit_write',
   ];
-  // Short labels for the graph canvas (parallel to SYNTH_NODE_ORDER).
-  // Same shape as PLANNER_NODE_LABELS — kept hardcoded here so the
-  // StageGraph module stays independent of DOM-card scraping.
   const SYNTH_NODE_LABELS = [
-    'Cache lookup', 'Corpus normalize', 'Outline (SDP)', 'Digest',
-    'Vault sentinelize', 'SAWC write', 'Checklist eval',
+    'Outline (SDP)', 'Digest',
+    'SAWC write', 'Checklist eval',
     'MGSR replan', 'Render + audit',
   ];
-  // Per-step "primary checkpoint field" for SSE→state-refresh races.
   const SYNTH_STEP_TO_FIELD = {
-    cache_lookup:       'synth_cache_hit',
-    corpus_normalize:   'normalized_corpus_ref',
     outline_sdp:        'outline_dag_ref',
     digest_construct:   'digest_ref',
-    vault_sentinelize:  'vault_ref',
     sawc_write:         'sawc_drafts_ref',
     checklist_eval:     'checklist_results_ref',
     mgsr_replan:        'mgsr_actions_ref',
@@ -3573,16 +3570,10 @@
     if (!values) return '';
     const stats = (key) => values[key] || null;
     switch (nodeId) {
-      case 'cache_lookup':       { const s = stats('synth_cache_stats');
-        return s && s.hit !== undefined ? `hit=${s.hit}` : ''; }
-      case 'corpus_normalize':   { const s = stats('normalize_stats');
-        return s && s.files !== undefined ? `n=${s.files}` : ''; }
       case 'outline_sdp':        { const s = stats('outline_stats');
         return s && s.sections !== undefined ? `sec=${s.sections}` : ''; }
       case 'digest_construct':   { const s = stats('digest_stats');
         return s && s.sources !== undefined ? `src=${s.sources}` : ''; }
-      case 'vault_sentinelize':  { const s = stats('vault_stats');
-        return s && s.refs !== undefined ? `refs=${s.refs}` : ''; }
       case 'sawc_write':         { const s = stats('sawc_stats');
         return s && s.drafts !== undefined ? `drafts=${s.drafts}` : ''; }
       case 'checklist_eval':     { const s = stats('checklist_stats');
