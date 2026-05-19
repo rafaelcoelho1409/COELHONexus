@@ -205,30 +205,43 @@ def _Picker():
         # Header w/ Start button + progress meta
         Div(
             Div(
-                Div("Planner", cls="fw-planner-title"),
+                # Title row — stage name + status pill share a flex line
+                # so the pill reads as "this is what Planner is doing
+                # right now" instead of floating above the canvas. Same
+                # pattern as Linear issue header + LangSmith run header.
                 Div(
-                    "Pick a framework, then start to generate the chapter plan.",
-                    cls="fw-planner-subtitle", id="fw-planner-subtitle",
+                    Div("Planner", cls="fw-planner-title"),
+                    Div(
+                        Span("Idle", cls="fw-stage-pill-text",
+                             id="fw-planner-pill-text"),
+                        cls="fw-stage-pill", id="fw-planner-pill",
+                        data_status="idle",
+                    ),
+                    cls="fw-planner-title-row",
+                ),
+                # Framework identity strip — logo(s) + catalog name. JS
+                # populates from the `frameworkInfo` map (built off the
+                # rendered catalog tiles) whenever activeSlug changes.
+                # Falls back to a hint when no framework is selected.
+                Div(
+                    Div(id="fw-planner-fw-logos",
+                        cls="fw-planner-fw-logos"),
+                    Span("Pick a framework to start.",
+                         id="fw-planner-fw-name",
+                         cls="fw-planner-fw-name"),
+                    id="fw-planner-fw", cls="fw-planner-fw",
                 ),
                 cls="fw-planner-head-text",
             ),
             Div(
-                # Mode dropdown — populated from /planner/info on load.
-                # Server-rendered fallback options so the UI is usable even
-                # before that fetch completes; JS replaces them with the
-                # canonical list (which may add modes in the future).
-                Div(
-                    Span("Mode", cls="fw-planner-mode-label"),
-                    Select(
-                        Option("LLM-only", value="llm", selected=True),
-                        Option("Classical + LLM (soon)",
-                               value="classical", disabled=True),
-                        id="fw-planner-mode", cls="fw-planner-mode-select",
-                    ),
-                    cls="fw-planner-mode-box",
-                ),
-                Span("", id="fw-planner-progress-label",
-                     cls="fw-planner-progress-label"),
+                # Mode dropdown removed 2026-05-18 — the v1 LLM-vs-classical
+                # split was superseded by the unified LITA-pattern
+                # architecture (see docs/PLANNER-ARCHITECTURE-2026-05-17.md).
+                # Server still accepts ?mode= with default "llm"; client
+                # always sends "llm" implicitly.
+                # Progress label ("Step N of 8") removed 2026-05-18 — its
+                # info is now folded into the status pill (e.g. "WORKING
+                # · 4/8") which lives next to the title.
                 Button("Wipe planner", id="fw-planner-wipe",
                        cls="btn-outline", disabled=True,
                        title=("Delete this framework's planner cache "
@@ -240,8 +253,29 @@ def _Picker():
             ),
             cls="fw-planner-head",
         ),
-        # Substep timeline
+        # Substep timeline — TWO render paths live behind a ?ui flag
+        # (see `docs/UI-ARCHITECTURE-SOTA-2026-05-18.md` Day 1).
+        #   ?ui=cards (default) → legacy vertical card list (this DOM)
+        #   ?ui=graph           → Cytoscape DAG canvas (sibling DOM)
+        # JS toggles which is visible at init; both stay rendered so a
+        # flag flip is a single class swap with no re-fetch.
+        # Empty-state placeholder — visible when no slug is active, so
+        # the panel doesn't show an inert pipeline UI dangling from
+        # the previously-viewed framework. JS hides it the moment
+        # activeSlug becomes non-null.
+        Div(
+            "Pick a framework from the library to view the planner pipeline.",
+            id="fw-planner-empty", cls="fw-stage-empty",
+        ),
         Div(*substep_cards, id="fw-planner-cards", cls="fw-planner-cards"),
+        Div(
+            # Cytoscape mount point. Sized via CSS; Cytoscape draws to
+            # a <canvas> child element it creates on init. The status
+            # pill lives in the header above (next to the title) so
+            # it's visible in both ?ui=cards and ?ui=graph modes.
+            Div(id="fw-planner-canvas", cls="fw-stage-canvas"),
+            id="fw-planner-graph", cls="fw-planner-graph",
+        ),
     )
 
     # Step 4 — Synth (9 substep cards, populated by JS via SSE).
@@ -302,11 +336,28 @@ def _Picker():
         for i, (key, label, desc) in enumerate(synth_substeps)
     ]
     step4_body = Div(
-        # Header w/ Start Synth button + progress meta — mirrors Planner head.
+        # Header — mirrors Planner's pattern (title row with pill +
+        # framework chip below + actions on the right). See Day 5 of
+        # `docs/UI-ARCHITECTURE-SOTA-2026-05-18.md`.
         Div(
             Div(
-                Div("Synth", cls="fw-planner-title"),
-                Div("", cls="fw-planner-subtitle", id="fw-synth-subtitle"),
+                Div(
+                    Div("Synth", cls="fw-planner-title"),
+                    Div(
+                        Span("Idle", cls="fw-stage-pill-text",
+                             id="fw-synth-pill-text"),
+                        cls="fw-stage-pill", id="fw-synth-pill",
+                        data_status="idle",
+                    ),
+                    cls="fw-planner-title-row",
+                ),
+                Div(
+                    Div(id="fw-synth-fw-logos", cls="fw-planner-fw-logos"),
+                    Span("Pick a framework to start.",
+                         id="fw-synth-fw-name",
+                         cls="fw-planner-fw-name fw-planner-fw-name-empty"),
+                    id="fw-synth-fw", cls="fw-planner-fw",
+                ),
                 cls="fw-planner-head-text",
             ),
             Div(
@@ -323,21 +374,29 @@ def _Picker():
                     ),
                     cls="fw-planner-mode-box",
                 ),
-                Span("", id="fw-synth-progress-label",
-                     cls="fw-planner-progress-label"),
                 Button("Wipe synth", id="fw-synth-wipe",
-                       cls="btn-outline", disabled=True,
-                       title=("Delete this framework's synth cache "
-                              "(MinIO chapter artifacts + Postgres "
-                              "checkpoints + browser state)")),
+                       cls="btn-outline", disabled=True),
                 Button("Start Synth", id="fw-synth-start",
                        cls="btn-primary", disabled=True),
                 cls="fw-planner-head-actions",
             ),
             cls="fw-planner-head",
         ),
-        # Substep timeline (9 cards, all `future` until nodes ship).
+        # Empty-state placeholder — mirrors planner's. Visible when
+        # activeSlug is null; JS hides it the moment a framework is
+        # picked from the library.
+        Div(
+            "Pick a framework from the library to view the synth pipeline.",
+            id="fw-synth-empty", cls="fw-stage-empty",
+        ),
+        # Substep timeline — TWO render paths behind ?ui flag (same as
+        # Planner). ?ui=cards (default) → vertical list; ?ui=graph →
+        # Cytoscape DAG canvas.
         Div(*synth_cards, id="fw-synth-cards", cls="fw-planner-cards"),
+        Div(
+            Div(id="fw-synth-canvas", cls="fw-stage-canvas"),
+            id="fw-synth-graph", cls="fw-planner-graph",
+        ),
     )
 
     # Step 5 — page grid (rendered by JS from /ingestion/{slug}/manifest)
@@ -442,6 +501,60 @@ def _Picker():
             ),
             Div("", id="fw-drawer-body", cls="fw-drawer-body"),
             id="fw-drawer", cls="fw-drawer",
+        ),
+        # Node-detail drawer — opens when the user clicks a node on the
+        # planner/synth canvas. Reuses `.fw-drawer` for slide-in chrome;
+        # body holds a 3-zone layout: (A) sticky header with status +
+        # KPIs, (B) live SSE event log (rAF-batched, sticky-bottom,
+        # 200-line cap), (C) collapsible <details> for Inputs/Outputs
+        # /Prompt. See `docs/UI-ARCHITECTURE-SOTA-2026-05-18.md` Day 3.
+        Div(
+            # Zone A — sticky header. Repurposes drawer-header chrome
+            # but swaps the file-paging controls for a single ✕ close.
+            Div(
+                Div(
+                    Span("○", id="fw-node-drawer-icon",
+                         cls="fw-node-drawer-icon"),
+                    Div(
+                        Div("", id="fw-node-drawer-title",
+                            cls="fw-drawer-name"),
+                        Div("", id="fw-node-drawer-meta",
+                            cls="fw-drawer-meta"),
+                        cls="fw-drawer-title",
+                    ),
+                    cls="fw-node-drawer-head-left",
+                ),
+                Div(
+                    Button("✕", id="fw-node-drawer-close",
+                           cls="fw-drawer-btn", title="Close (Esc)"),
+                    cls="fw-drawer-controls",
+                ),
+                cls="fw-drawer-header",
+            ),
+            # Zone A continued — KPI strip (inline, comma-separated).
+            Div("", id="fw-node-drawer-kpis", cls="fw-node-drawer-kpis"),
+            # Body wraps Zone B + Zone C so they share the scroll area.
+            Div(
+                # Zone B — live SSE event log.
+                Div(
+                    Div("Activity", cls="fw-node-drawer-section-title"),
+                    Div(
+                        Div("Open a node to stream its events here.",
+                            cls="fw-empty",
+                            id="fw-node-drawer-log-empty"),
+                        Div("", id="fw-node-drawer-log",
+                            cls="fw-node-drawer-log"),
+                        cls="fw-node-drawer-log-wrap",
+                    ),
+                    cls="fw-node-drawer-section",
+                ),
+                # Zone C — collapsible <details> for Inputs/Outputs/
+                # Prompt. Native HTML — zero JS for the toggle animation.
+                Div("", id="fw-node-drawer-details",
+                    cls="fw-node-drawer-details"),
+                id="fw-node-drawer-body", cls="fw-drawer-body",
+            ),
+            id="fw-node-drawer", cls="fw-drawer",
         ),
         Script(src="/static/js/docs_distiller.js"),
         cls="fw-picker",

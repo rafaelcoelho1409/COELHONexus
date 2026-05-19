@@ -36,6 +36,29 @@ HEAD = (
     # Client-side markdown renderer for the file-content drawer. Pinned
     # major version — zero deps, ~50 KB gzip over the jsDelivr CDN.
     Script(src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"),
+    # Cytoscape.js — DAG canvas for per-stage LangGraph visualization
+    # (Planner / Synth / Curator / Critic / Assembler). Pinned to a 3.x
+    # patch via cdnjs. ~320 KB minified, browser-cached aggressively.
+    # See `docs/UI-ARCHITECTURE-SOTA-2026-05-18.md`. The graph view
+    # activates only when `?ui=graph` is on the URL; without Cytoscape
+    # loaded, the JS falls back cleanly to the legacy cards layout.
+    Script(
+        src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.4/cytoscape.min.js",
+        defer=True,
+    ),
+    # Dagre — hierarchical DAG layout algorithm. Cytoscape's own docs
+    # ("Using layouts", 2024) recommend dagre as the first-choice
+    # layout for DAGs and trees; `breadthfirst` produces less
+    # traditional results for sequential pipelines. ~140 KB total
+    # across both scripts, served from unpkg.
+    Script(
+        src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js",
+        defer=True,
+    ),
+    Script(
+        src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js",
+        defer=True,
+    ),
     Link(rel="stylesheet", href="/static/css/app.css"),
 )
 

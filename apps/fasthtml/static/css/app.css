@@ -12,6 +12,12 @@
   --error-bg: #fde7e9;
   --error-border: #e8a3aa;
   --error-text: #7a2228;
+  /* Running / in-progress status — sky blue, distinct from burgundy
+     primary AND from the red/error palette. SOTA convention across
+     Linear, GitHub Actions, Dagster, LangSmith. */
+  --running-bg: #e0f2fe;
+  --running-border: #0369a1;
+  --running-text: #0c4a6e;
 }
 * { box-sizing: border-box; }
 html, body {
@@ -764,6 +770,204 @@ html, body {
   overflow-y: auto;
   padding: 24px 32px 60px 32px;
 }
+
+/* ===== Node-detail drawer (Day 3 of UI-redesign sprint) =====
+   Reuses .fw-drawer chrome; adds 3 zones: header status icon, KPI
+   strip, live log, collapsible details. See
+   docs/UI-ARCHITECTURE-SOTA-2026-05-18.md. */
+.fw-node-drawer-head-left {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.fw-node-drawer-icon {
+  font-size: 1.15rem;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text-muted);
+}
+.fw-node-drawer-icon[data-status="running"] {
+  color: var(--running-border);
+  border-color: var(--running-border);
+  background: var(--running-bg);
+}
+.fw-node-drawer-icon[data-status="done"] {
+  color: #2a8b46;
+  border-color: #2a8b46;
+}
+.fw-node-drawer-icon[data-status="failed"] {
+  color: var(--error-text);
+  border-color: var(--error-border);
+}
+.fw-node-drawer-kpis {
+  flex-shrink: 0;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  background: rgba(0, 0, 0, 0.015);
+}
+.fw-node-drawer-kpi {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.fw-node-drawer-kpi-label {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.fw-node-drawer-kpi-value {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.85rem;
+  color: var(--text);
+  font-weight: 500;
+}
+.fw-node-drawer-section {
+  margin-bottom: 22px;
+}
+.fw-node-drawer-section-title {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.fw-node-drawer-log-wrap {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fafafa;
+  overflow: hidden;
+}
+.fw-node-drawer-log {
+  max-height: 360px;
+  overflow-y: auto;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--text);
+  /* contain: strict so the log scroll doesn't reflow the parent */
+  contain: content;
+}
+.fw-node-drawer-log-line {
+  padding: 3px 12px;
+  border-left: 3px solid transparent;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.fw-node-drawer-log-line.severity-error {
+  background: var(--error-bg);
+  border-left-color: var(--error-border);
+  color: var(--error-text);
+}
+.fw-node-drawer-log-line.severity-warn {
+  background: var(--notice-bg);
+  border-left-color: var(--notice-border);
+  color: var(--notice-text);
+}
+/* "Since last viewed" highlight (Day 4.1) — burgundy left-border on
+   events whose timestamp is newer than the previous drawer-open for
+   the same node. Falls back to standard severity styles otherwise. */
+.fw-node-drawer-log-line.is-new {
+  border-left-color: var(--primary);
+  background: rgba(196, 18, 48, 0.025);
+}
+/* Cross-fade (Day 4.4) — body opacity dips while content swaps when
+   switching nodes without closing the drawer first. Transition is on
+   the body element; class is added/removed by NodeDrawer.open(). */
+#fw-node-drawer-body {
+  transition: opacity 0.14s ease;
+}
+#fw-node-drawer-body.fw-node-drawer-fading {
+  opacity: 0.25;
+}
+.fw-node-drawer-log .fw-empty {
+  padding: 24px 16px;
+  font-style: italic;
+}
+.fw-node-drawer-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fw-node-drawer-detail {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+}
+.fw-node-drawer-detail > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 12px 16px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+.fw-node-drawer-detail > summary::before {
+  content: '▸';
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+  display: inline-block;
+}
+.fw-node-drawer-detail[open] > summary::before {
+  transform: rotate(90deg);
+}
+.fw-node-drawer-detail > summary::-webkit-details-marker { display: none; }
+.fw-node-drawer-detail-body {
+  padding: 0 16px 16px 36px;
+  font-size: 0.82rem;
+  color: var(--text);
+}
+.fw-node-drawer-detail-body pre {
+  margin: 0;
+  padding: 12px;
+  background: #f5f5f5;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.fw-empty-inline {
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 0.85rem;
+}
+/* Rich results panel — hosts the SUBSTEP_RENDERERS[idx](values) HTML
+   that the legacy card body used to show. The renderers emit their
+   own KPI grids, tables, outline blocks etc.; this container just
+   gives them clean spacing inside the drawer. */
+.fw-node-drawer-results {
+  margin-bottom: 22px;
+}
+.fw-node-drawer-waiting {
+  padding: 32px 16px;
+  text-align: center;
+  font-style: italic;
+  margin-bottom: 22px;
+}
 /* Markdown prose inside the drawer */
 .fw-markdown {
   font-size: 0.92rem;
@@ -868,6 +1072,38 @@ html, body {
   color: var(--text-muted);
   line-height: 1.4;
 }
+/* Framework identity strip — logo(s) + catalog name, sits right below
+   the Planner title row. Mirrors Step 2's progress-framework strip but
+   sized for a header rather than a loading box. */
+.fw-planner-fw {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+.fw-planner-fw-logos {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.fw-planner-fw-logo {
+  height: 22px;
+  width: auto;
+  max-width: 28px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.fw-planner-fw-name {
+  font-size: 0.92rem;
+  font-weight: 500;
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+.fw-planner-fw-name.fw-planner-fw-name-empty {
+  font-size: 0.82rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
 .fw-planner-head-actions {
   display: flex;
   align-items: center;
@@ -921,6 +1157,101 @@ html, body {
   flex-direction: column;
   gap: 8px;
 }
+/* Empty-state placeholder — shown by JS when activeSlug is null on a
+   stage panel (Planner / Synth). Matches the visual weight of an
+   empty file grid so the user reads it as a clear prompt, not as a
+   missing UI element. */
+.fw-stage-empty {
+  display: none;                   /* JS toggles to '' when shown */
+  padding: 80px 32px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  line-height: 1.5;
+  background: var(--card);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  margin-top: 18px;
+}
+
+/* ===== Stage graph canvas (Day 1 of UI-redesign sprint, ?ui=graph) =====
+   Render path 2 for the per-stage substep timeline. Coexists with
+   `.fw-planner-cards` in the DOM; JS toggles `display:none` based on
+   the `?ui=` URL flag. Cytoscape draws into `.fw-stage-canvas` as a
+   <canvas> child element.
+   See docs/UI-ARCHITECTURE-SOTA-2026-05-18.md. */
+.fw-planner-graph {
+  display: none;                 /* JS shows when UI_MODE === 'graph' */
+  flex-direction: column;
+  gap: 14px;
+}
+/* Title row — stage name + status pill share a flex line so the pill
+   sits visually attached to the stage identity. Used by the planner
+   header (and synth when it gets the same treatment). */
+.fw-planner-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.fw-stage-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.4;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.fw-stage-pill[data-status="working"] {
+  border-color: var(--running-border);
+  color: var(--running-border);
+  background: var(--running-bg);
+}
+.fw-stage-pill[data-status="working"]::before {
+  content: '✻ ';
+  animation: fw-stage-pill-spin 2.4s linear infinite;
+  display: inline-block;
+}
+.fw-stage-pill[data-status="done"] {
+  border-color: #2a8b46;
+  color: #2a8b46;
+}
+.fw-stage-pill[data-status="done"]::before { content: '✔ '; }
+.fw-stage-pill[data-status="failed"] {
+  border-color: var(--error-border);
+  color: var(--error-text);
+}
+.fw-stage-pill[data-status="failed"]::before { content: '✕ '; }
+@keyframes fw-stage-pill-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.fw-stage-canvas {
+  width: 100%;
+  /* Tall enough for 8-9 nodes at native size (200x60 + dagre rankSep
+     56 → ~840px tall for 8 nodes) — canvas scrolls within the panel
+     if a stage outgrows it. Increased from 520→720 after the dagre
+     switch + node size bump (200x60 was 150x48). */
+  height: 720px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+  /* Cytoscape needs a positioned ancestor + non-zero size to layout
+     its internal <canvas>. The size above + relative below satisfy it. */
+  position: relative;
+  overflow: hidden;
+  /* Subtle inner shadow so the canvas reads as a panel, not a card edge. */
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.015);
+}
 .fw-planner-card {
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -929,8 +1260,8 @@ html, body {
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .fw-planner-card.running {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 2px rgba(196, 18, 48, 0.08);
+  border-color: var(--running-border);
+  box-shadow: 0 0 0 2px rgba(3, 105, 161, 0.10);
 }
 .fw-planner-card.done { border-color: var(--border); }
 .fw-planner-card.failed { border-color: var(--error-border); }
@@ -1071,7 +1402,7 @@ html, body {
   flex-shrink: 0;
 }
 .fw-planner-card.running .fw-planner-card-icon {
-  color: var(--primary);
+  color: var(--running-border);
   animation: fw-spin 1.2s linear infinite;
 }
 .fw-planner-card.done .fw-planner-card-icon { color: #2a8b46; }

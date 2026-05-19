@@ -58,10 +58,11 @@
   // -------- planner (Step 3) --------
   const plannerStartBtn   = document.querySelector('#fw-planner-start');
   const plannerWipeBtn    = document.querySelector('#fw-planner-wipe');
-  const plannerSubtitle   = document.querySelector('#fw-planner-subtitle');
   const plannerCardsEl    = document.querySelector('#fw-planner-cards');
-  const plannerProgressLbl= document.querySelector('#fw-planner-progress-label');
-  const plannerModeSel    = document.querySelector('#fw-planner-mode');
+  // plannerProgressLbl removed 2026-05-18 — the "Step N of 8" counter
+  // moved into the status pill (`WORKING · N/8`) for less header noise.
+  const plannerFwLogosEl  = document.querySelector('#fw-planner-fw-logos');
+  const plannerFwNameEl   = document.querySelector('#fw-planner-fw-name');
 
   // State
   let activeChip = 'All';
@@ -106,10 +107,967 @@
     'cluster', 'refine', 'label',
     'reduce', 'plan_write',
   ];
+  // Short labels for the graph canvas (same text as the card titles —
+  // hardcoded here to keep StageGraph independent of DOM-card scraping).
+  const PLANNER_NODE_LABELS = [
+    'Corpus load', 'Embed corpus', 'Off-topic filter',
+    'Cluster', 'Refine (LITA)', 'Label',
+    'Reduce (outline)', 'Plan write',
+  ];
   // Populated from GET /planner/info — names of substeps actually wired
   // into the runtime graph. Stubs aren't included; their cards render
   // as "future" so the user doesn't expect them to advance.
   let plannerImplemented = new Set();
+
+  // ============================================================
+  // StageGraph — Cytoscape DAG canvas per LangGraph stage
+  // (Planner / Synth / Curator / Critic / Assembler).
+  //
+  // Activates only when `?ui=graph` is on the URL (Day 1 of the
+  // canvas-redesign sprint — `docs/UI-ARCHITECTURE-SOTA-2026-05-18.md`).
+  // The legacy vertical-cards layout stays the default until Day 5
+  // when the flag flips and the cards code is deleted.
+  //
+  // Public API (kept tiny so reuse across stages is mechanical):
+  //   const g = StageGraph.create(containerEl, {
+  //     nodes:       [{id, label, status, kpi?}, ...],   // status: pending|running|done|failed|future
+  //     edges:       [{source, target}, ...],
+  //     onNodeClick: (nodeId) => { ... },
+  //   });
+  //   g.setStatus(nodeId, status, kpiText?)
+  //   g.reset()                       // back to initial nodes' statuses
+  //   g.cy                            // the underlying Cytoscape instance
+  // ============================================================
+  const UI_MODE = (function() {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      const v = (p.get('ui') || '').toLowerCase();
+      if (v === 'graph') return 'graph';
+      return 'cards';
+    } catch (e) { return 'cards'; }
+  })();
+
+  const StageGraph = (function() {
+    // Visual spec lives in the Cytoscape `style` array (Cytoscape uses
+    // its own selector engine, not CSS, for node/edge appearance).
+    // App-level CSS handles the container + status pill + drawer.
+    function _cyStyles() {
+      return [
+        {
+          selector: 'node',
+          style: {
+            'shape':            'round-rectangle',
+            'width':            200,
+            'height':           60,
+            'background-color': '#ffffff',
+            'border-width':     1,
+            'border-color':     '#e5e5e5',
+            // Function-mapped label so KPI shows as a second line
+            // when `data(kpi)` is set. Single line otherwise.
+            'label': function(ele) {
+              const base = ele.data('label') || '';
+              const kpi = ele.data('kpi') || '';
+              return kpi ? (base + '\n' + kpi) : base;
+            },
+            'color':            '#2a2a2a',
+            'text-valign':      'center',
+            'text-halign':      'center',
+            'font-family':      'Raleway, Helvetica Neue, Arial, sans-serif',
+            'font-size':        14,
+            'font-weight':      500,
+            'text-wrap':        'wrap',
+            'text-max-width':   '180px',
+            'line-height':      1.18,
+            'min-zoomed-font-size': 8,
+            'transition-property':       'border-color border-width opacity background-color',
+            'transition-duration':       '180ms',
+          },
+        },
+        {
+          selector: "node[status = 'future']",
+          style: {
+            'opacity':           0.55,
+            'background-color': '#f5f5f5',
+            'border-color':     '#cccccc',
+            'color':            '#999999',
+          },
+        },
+        {
+          selector: "node[status = 'pending']",
+          style: {
+            'opacity':           1,
+            'background-color': '#ffffff',
+            'border-color':     '#e5e5e5',
+            'color':            '#2a2a2a',
+          },
+        },
+        {
+          selector: "node[status = 'running']",
+          style: {
+            // Sky-blue fill — visually distinct from burgundy (primary)
+            // AND from red (failed). SOTA convention for "actively
+            // processing" across Linear/GitHub Actions/Dagster/LangSmith.
+            // Matches CSS var --running-bg.
+            'background-color': '#e0f2fe',
+            'border-color':     '#0369a1',
+            'border-width':     2,
+            'color':            '#0c4a6e',
+          },
+        },
+        {
+          selector: "node[status = 'done']",
+          style: {
+            // Pastel green fill — same shade family as the done icon
+            // color (#2a8b46). Dark text + green border keep the
+            // "completed" read clean.
+            'background-color': '#e5f4e9',
+            'border-color':     '#2a8b46',
+            'border-width':     2,
+            'color':            '#1a3a23',
+          },
+        },
+        {
+          selector: "node[status = 'failed']",
+          style: {
+            // Matches --error-bg / --error-border / --error-text from
+            // the app's CSS vars — single source of truth for "this
+            // failed" across cards and canvas.
+            'background-color': '#fde7e9',
+            'border-color':     '#e8a3aa',
+            'border-width':     3,
+            'color':            '#7a2228',
+          },
+        },
+        {
+          selector: 'edge',
+          style: {
+            'width':              1,
+            'line-color':         '#cccccc',
+            'curve-style':        'bezier',
+            'target-arrow-shape': 'triangle',
+            'target-arrow-color': '#cccccc',
+            'arrow-scale':        0.7,
+          },
+        },
+        {
+          selector: "edge[active = 'true']",
+          style: {
+            // Active edge matches the running node color (sky blue) so
+            // the "flow" reads as continuous from upstream to running.
+            'line-color':         '#0369a1',
+            'target-arrow-color': '#0369a1',
+            'width':              2,
+            'line-style':         'dashed',
+            'line-dash-pattern':  [6, 4],
+            // line-dash-offset is animated by the marching-ants timer
+            // attached at create() time (Cytoscape's canvas renderer
+            // doesn't honor CSS @keyframes, so JS drives the offset).
+            'line-dash-offset':   0,
+          },
+        },
+      ];
+    }
+
+    function create(containerEl, options) {
+      if (!containerEl) {
+        console.warn('[StageGraph] no container element');
+        return null;
+      }
+      if (typeof cytoscape === 'undefined') {
+        console.warn('[StageGraph] Cytoscape not loaded — canvas disabled');
+        return null;
+      }
+      const { nodes = [], edges = [], onNodeClick } = options || {};
+      const elements = [
+        ...nodes.map(n => ({
+          data: {
+            id:     n.id,
+            label:  n.label || n.id,
+            status: n.status || 'future',
+            kpi:    n.kpi || '',
+          },
+        })),
+        ...edges.map(e => ({
+          data: {
+            id:     `${e.source}__${e.target}`,
+            source: e.source,
+            target: e.target,
+            active: 'false',
+          },
+        })),
+      ];
+      // Dagre is registered as a Cytoscape extension when its bundle
+      // loads; we fall back to breadthfirst if it didn't load (e.g.,
+      // CDN blocked) so the graph always renders SOMETHING.
+      const hasDagre = (
+        typeof cytoscape.use === 'function' &&
+        typeof window.cytoscapeDagre !== 'undefined'
+      );
+      if (hasDagre && !cytoscape._dagreRegistered) {
+        cytoscape.use(window.cytoscapeDagre);
+        cytoscape._dagreRegistered = true;
+      }
+      const layoutConfig = hasDagre
+        ? { name: 'dagre', rankDir: 'TB', nodeSep: 36, rankSep: 56,
+            padding: 32, animate: false, fit: false }
+        : { name: 'breadthfirst', directed: true, padding: 32,
+            spacingFactor: 1.4, animate: false, grid: false, fit: false };
+      const cy = cytoscape({
+        container:              containerEl,
+        elements,
+        style:                  _cyStyles(),
+        layout:                 layoutConfig,
+        minZoom:                0.6,
+        maxZoom:                1.8,
+        userZoomingEnabled:     true,    // user can zoom; default still 1.0
+        userPanningEnabled:     true,    // and pan if the graph overflows
+        boxSelectionEnabled:    false,
+        autounselectify:        true,
+        wheelSensitivity:       0.15,
+      });
+      if (typeof onNodeClick === 'function') {
+        cy.on('tap', 'node', evt => onNodeClick(evt.target.data('id')));
+      }
+      // Initial nodes' status as remembered for reset().
+      const _initial = {};
+      cy.nodes().forEach(n => { _initial[n.id()] = n.data('status'); });
+      // Marching-ants animation on active edges — drives the
+      // line-dash-offset since Cytoscape's canvas renderer doesn't
+      // honor CSS @keyframes. Timer runs continuously at low cost
+      // (~16fps); style updates are no-ops when no edge is active.
+      const _antsInterval = setInterval(() => {
+        const active = cy.edges('[active = "true"]');
+        if (active.length === 0) return;
+        const next = ((_antsInterval._offset || 0) + 1) % 10;
+        _antsInterval._offset = next;
+        active.style('line-dash-offset', next);
+      }, 60);
+      return {
+        cy,
+        setStatus(nodeId, status, kpiText) {
+          const node = cy.getElementById(nodeId);
+          if (node.length === 0) return;
+          node.data('status', status);
+          if (kpiText !== undefined) node.data('kpi', kpiText);
+          // Mark the incoming edge `active` while this node is running;
+          // clear all edges when transitioning out of running.
+          if (status === 'running') {
+            cy.edges().forEach(e => {
+              e.data('active', e.target().id() === nodeId ? 'true' : 'false');
+            });
+          } else if (status === 'done' || status === 'failed' ||
+                     status === 'pending' || status === 'future') {
+            cy.edges('[active = "true"]').forEach(e => {
+              if (e.target().id() === nodeId) e.data('active', 'false');
+            });
+          }
+        },
+        reset() {
+          cy.nodes().forEach(n => {
+            n.data('status', _initial[n.id()] || 'pending');
+            n.data('kpi', '');
+          });
+          cy.edges().forEach(e => e.data('active', 'false'));
+        },
+        destroy() {
+          // Stop the marching-ants timer and tear down Cytoscape.
+          // Currently only called by tests; kept for API completeness.
+          clearInterval(_antsInterval);
+          try { cy.destroy(); } catch (e) {}
+        },
+      };
+    }
+    return { create };
+  })();
+
+  // Module-scoped planner graph instance — populated by initPlannerCanvas
+  // once Cytoscape has loaded. null when ?ui=cards (the default).
+  let plannerGraph = null;
+
+  // Tell Cytoscape to recompute its drawing area + re-fit nodes after
+  // the Planner panel transitions from display:none to display:block.
+  // Cytoscape latches container dimensions at init time; without
+  // `resize()` the graph stays invisible (0x0 viewport) even after
+  // the panel becomes active. Called from showStep(3) below, from
+  // initPlannerCanvas (if Step 3 is already active at page load),
+  // and from a window resize listener.
+  function _resizePlannerCanvas() {
+    if (!plannerGraph || !plannerGraph.cy) return;
+    // requestAnimationFrame defers to the next paint — the CSS panel
+    // transition (display:block) needs one frame to apply non-zero
+    // dimensions before Cytoscape measures them. Without the rAF,
+    // resize() reads stale 0x0 bounds and the graph stays hidden.
+    requestAnimationFrame(() => {
+      _runPlannerLayoutAndCenter('first');
+      // Second-pass after a longer delay — handles the case where the
+      // container's final size is only known after CSS transitions /
+      // flex reflows complete. Without this the graph latches the
+      // canvas's transient pre-reflow width.
+      setTimeout(() => _runPlannerLayoutAndCenter('second'), 250);
+    });
+  }
+
+  function _runPlannerLayoutAndCenter(passLabel) {
+    if (!plannerGraph || !plannerGraph.cy) return;
+    try {
+      const cy = plannerGraph.cy;
+      cy.resize();
+      const hasDagre = !!cytoscape._dagreRegistered;
+      const layout = cy.layout(hasDagre
+        ? { name: 'dagre', rankDir: 'TB', nodeSep: 36, rankSep: 56,
+            padding: 32, animate: false, fit: false }
+        : { name: 'breadthfirst', directed: true, padding: 32,
+            spacingFactor: 1.4, animate: false, fit: false }
+      );
+      layout.one('layoutstop', () => {
+        try {
+          cy.fit(cy.elements(), 32);
+          cy.center(cy.elements());
+          _forceCenterHorizontal(cy, '[plannerGraph ' + passLabel + ']');
+        } catch (e) {
+          console.warn('[plannerGraph] center pipeline failed:', e);
+        }
+      });
+      layout.run();
+    } catch (e) {
+      console.warn('[plannerGraph] resize ' + passLabel + ' failed:', e);
+    }
+  }
+
+  // Brute-force horizontal recentering with detailed logging so we can
+  // SEE what Cytoscape thinks the dimensions are. The empty catch
+  // blocks in earlier versions silently swallowed the actual problem.
+  function _forceCenterHorizontal(cy, tag) {
+    tag = tag || '[graph]';
+    const containerW = cy.width();
+    const containerH = cy.height();
+    const bb = cy.elements().renderedBoundingBox();
+    const pan = cy.pan();
+    const zoom = cy.zoom();
+    console.log(
+      tag + ' centering: containerW=' + containerW +
+      ' containerH=' + containerH +
+      ' zoom=' + zoom.toFixed(3) +
+      ' pan=(' + pan.x.toFixed(1) + ',' + pan.y.toFixed(1) + ')' +
+      ' bb={x1=' + (bb ? bb.x1.toFixed(1) : '?') +
+      ' x2=' + (bb ? bb.x2.toFixed(1) : '?') +
+      ' w=' + (bb ? bb.w.toFixed(1) : '?') + '}'
+    );
+    if (!containerW || !bb || !bb.w) {
+      console.warn(tag + ' centering ABORTED — bad dims');
+      return;
+    }
+    const graphMidX = bb.x1 + bb.w / 2;
+    const containerMidX = containerW / 2;
+    const dx = containerMidX - graphMidX;
+    const graphMidY = bb.y1 + bb.h / 2;
+    const containerMidY = containerH / 2;
+    const dy = containerMidY - graphMidY;
+    console.log(
+      tag + ' delta: dx=' + dx.toFixed(1) + ' dy=' + dy.toFixed(1)
+    );
+    if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+      cy.panBy({ x: dx, y: dy });
+      const newPan = cy.pan();
+      console.log(
+        tag + ' panned to (' + newPan.x.toFixed(1) + ',' +
+        newPan.y.toFixed(1) + ')'
+      );
+    }
+  }
+  // Defensive: re-fit on window resize so the canvas stays responsive.
+  // Throttle to one rAF per resize burst.
+  let _resizeRafPending = false;
+  window.addEventListener('resize', () => {
+    if (_resizeRafPending) return;
+    _resizeRafPending = true;
+    requestAnimationFrame(() => {
+      _resizeRafPending = false;
+      if (plannerGraph) _resizePlannerCanvas();
+    });
+  });
+  // ResizeObserver — catches container size changes from sources other
+  // than window resize (CSS transitions, flex reflows, sidebar
+  // collapses). Critical for the left-clipping bug: the canvas's
+  // post-display:flex final width can land 100+ ms after the initial
+  // mount, and Cytoscape latches the transient pre-reflow value.
+  function _attachCanvasResizeObserver(containerId, resizeFn) {
+    if (typeof ResizeObserver === 'undefined') return;
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    let lastW = 0;
+    let debounce = null;
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) {
+        const w = Math.round(e.contentRect.width);
+        if (w === lastW || w === 0) continue;
+        lastW = w;
+        console.log('[' + containerId + '] container resized to', w);
+        if (debounce) clearTimeout(debounce);
+        debounce = setTimeout(() => { debounce = null; resizeFn(); }, 80);
+      }
+    });
+    ro.observe(el);
+  }
+
+  // ============================================================
+  // Day 2 — Stage pill + graph state mirror (SSE → canvas wiring)
+  //
+  // Top-of-stage pill summarizes the WHOLE pipeline at a glance
+  // (idle / working / done / failed). Driven by the same SSE events
+  // that flip per-node statuses. CSS handles the visual via
+  // `[data-status]` attribute selectors on `.fw-stage-pill`.
+  // ============================================================
+  function _setPlannerStagePill(status, labelOverride) {
+    const pill = document.getElementById('fw-planner-pill');
+    const text = document.getElementById('fw-planner-pill-text');
+    if (!pill || !text) return;
+    const labels = {
+      idle:     'Idle',
+      working:  'Working',
+      done:     'Completed',
+      failed:   'Failed',
+      cancelled:'Cancelled',
+    };
+    pill.dataset.status = status;
+    text.textContent = labelOverride || labels[status] || status;
+  }
+
+  // Per-node KPI badge — ONE number shown as a small second-line under
+  // the label. Source is the per-node `*_stats` dict in state values
+  // (same dicts the cards use for their KPI grids). Returns '' when
+  // the node hasn't run yet.
+  function _kpiForNode(nodeId, values) {
+    if (!values) return '';
+    const stats = (key) => values[key] || null;
+    switch (nodeId) {
+      case 'corpus_load': {
+        const s = stats('corpus_stats');
+        return s && s.files ? `n=${s.files}` : '';
+      }
+      case 'embed_corpus': {
+        const s = stats('embed_stats');
+        if (!s) return '';
+        if (s.dim) return `dim=${s.dim}`;
+        if (s.files) return `n=${s.files}`;
+        return '';
+      }
+      case 'off_topic': {
+        const s = stats('off_topic_stats');
+        return s && (s.kept !== undefined)
+          ? `kept=${s.kept}/${(s.kept + (s.dropped || 0))}` : '';
+      }
+      case 'cluster': {
+        const s = stats('cluster_stats');
+        return s && (s.n_clusters !== undefined)
+          ? `k=${s.n_clusters}` : '';
+      }
+      case 'refine': {
+        const s = stats('refine_stats');
+        return s && (s.n_changed !== undefined)
+          ? `reassigned=${s.n_changed}` : '';
+      }
+      case 'label': {
+        const s = stats('label_stats');
+        return s && (s.n_clusters !== undefined)
+          ? `k=${s.n_clusters}` : '';
+      }
+      case 'reduce': {
+        const s = stats('reduce_stats');
+        return s && (s.n_chapters !== undefined)
+          ? `ch=${s.n_chapters}` : '';
+      }
+      case 'plan_write': {
+        const s = stats('plan_write_stats');
+        return s && (s.n_chapters !== undefined)
+          ? `ch=${s.n_chapters}` : '';
+      }
+    }
+    return '';
+  }
+
+  // Mirror of renderPlannerCards for the Cytoscape canvas. Loops the
+  // canonical node order, derives status per node from state field
+  // presence (same logic as the cards path), and pushes to
+  // plannerGraph.setStatus. No-op when the canvas isn't mounted
+  // (?ui=cards) — keeps the call sites uniform.
+  function _renderPlannerGraph(values) {
+    if (!plannerGraph) return;
+    let doneCount = 0;
+    let anyRunning = false;
+    let anyFailed = false;
+    for (let i = 0; i < PLANNER_NODE_ORDER.length; i++) {
+      const nodeId = PLANNER_NODE_ORDER[i];
+      const field = PLANNER_SUBSTEP_FIELDS[i];
+      const present = _fieldPresent(values, field);
+      const isImpl = plannerImplemented.has(nodeId);
+      let status;
+      if (present) {
+        status = 'done';
+        doneCount++;
+      } else if (!isImpl) {
+        status = 'future';
+      } else if (i === doneCount && plannerThreadId !== null) {
+        status = 'running';
+        anyRunning = true;
+      } else {
+        status = 'pending';
+      }
+      const kpi = present ? _kpiForNode(nodeId, values) : '';
+      plannerGraph.setStatus(nodeId, status, kpi);
+    }
+    // Derive stage pill from aggregate state. Failed has priority,
+    // then running, then all-done, else idle. The terminal SSE
+    // handler overrides this with explicit done/failed/cancelled.
+    // Progress count (N/8) is folded INTO the pill while working —
+    // replaces the separate "Step N of 8" label that used to live in
+    // the header actions cluster.
+    const explicitStatus = (values && values.status) || null;
+    const implCount = PLANNER_NODE_ORDER.filter(n => plannerImplemented.has(n)).length;
+    const progress = implCount ? doneCount + '/' + implCount : null;
+    if (explicitStatus === 'failed') {
+      _setPlannerStagePill('failed');
+      anyFailed = true;
+    } else if (explicitStatus === 'cancelled') {
+      _setPlannerStagePill('cancelled');
+    } else if (anyRunning || plannerThreadId !== null) {
+      _setPlannerStagePill('working',
+        progress ? 'Working · ' + progress : null);
+    } else if (
+      doneCount > 0 && doneCount === implCount
+    ) {
+      _setPlannerStagePill('done');
+    } else if (doneCount === 0) {
+      _setPlannerStagePill('idle');
+    }
+    return { doneCount, anyRunning, anyFailed };
+  }
+
+  // Build the drawer context object for a planner node from the
+  // current checkpoint state. Separate from `open()` so live state
+  // refreshes can reuse the same logic via `_refreshOpenPlannerDrawer`.
+  function _buildPlannerNodeCtx(nodeId, values) {
+    const idx = PLANNER_NODE_ORDER.indexOf(nodeId);
+    if (idx < 0) return null;
+    const label = PLANNER_NODE_LABELS[idx] || nodeId;
+    const thisField = PLANNER_SUBSTEP_FIELDS[idx];
+    let status = 'pending';
+    if (_fieldPresent(values, thisField)) status = 'done';
+    else if (!plannerImplemented.has(nodeId)) status = 'future';
+    else if (plannerThreadId) status = 'running';
+    // KPI strip for the sticky header — same compact format as the
+    // node-label KPI badge but split into key/value chips.
+    const kpiText = _kpiForNode(nodeId, values);
+    const kpis = {};
+    if (kpiText) {
+      const eqIdx = kpiText.indexOf('=');
+      if (eqIdx > 0) kpis[kpiText.slice(0, eqIdx)] = kpiText.slice(eqIdx + 1);
+    }
+    // PRIMARY content — the SAME rich HTML the legacy card body
+    // showed. Custom per-substep renderer if this node has produced
+    // output; otherwise the drawer renders a status-aware placeholder.
+    const renderer = SUBSTEP_RENDERERS[idx];
+    const resultsHtml = (renderer && _fieldPresent(values, thisField))
+      ? renderer(values)
+      : null;
+    // Raw JSON kept as collapsed debug aids (only when present).
+    const inputs = idx > 0 && _fieldPresent(values, PLANNER_SUBSTEP_FIELDS[idx - 1])
+      ? JSON.stringify({ [PLANNER_SUBSTEP_FIELDS[idx - 1]]: values[PLANNER_SUBSTEP_FIELDS[idx - 1]] }, null, 2)
+      : null;
+    const outputs = _fieldPresent(values, thisField)
+      ? JSON.stringify({ [thisField]: values[thisField] }, null, 2)
+      : null;
+    return { label, status, kpis, resultsHtml, inputs, outputs };
+  }
+
+  // Opens the NodeDrawer for a planner node. Fetches fresh state for
+  // an accurate initial render; subsequent updates flow in via the
+  // SSE handler + _refreshOpenPlannerDrawer.
+  async function _openPlannerNodeDrawer(nodeId) {
+    let values = {};
+    // plannerThreadId is set ONLY while a run is in flight — terminal
+    // SSE handler nulls it on done/failed/cancelled. For a completed
+    // thread we need the localStorage entry (same fallback the page-
+    // refresh recovery uses) so the drawer can fetch /state and the
+    // renderer can show the rich card body content.
+    let tid = plannerThreadId;
+    if (!tid && activeSlug) {
+      try { tid = localStorage.getItem(_plannerStorageKey(activeSlug)); }
+      catch (e) {}
+    }
+    if (tid) {
+      try {
+        const r = await fetch(API + '/planner/debug/graph/' + tid + '/state');
+        if (r.ok) values = (await r.json()).values || {};
+      } catch (e) { /* drawer opens with empty results */ }
+    }
+    const ctx = _buildPlannerNodeCtx(nodeId, values);
+    if (ctx) NodeDrawer.open('planner', nodeId, ctx);
+  }
+
+  // Called from renderPlannerCards on every state refresh so the
+  // open drawer's results panel updates as the pipeline progresses
+  // (e.g. cluster card's KPI grid materializes the moment `cluster`
+  // commits its checkpoint, without the user having to re-click).
+  function _refreshOpenPlannerDrawer(values) {
+    if (NodeDrawer.openStage !== 'planner') return;
+    const nodeId = NodeDrawer.openNodeId;
+    if (!nodeId) return;
+    const ctx = _buildPlannerNodeCtx(nodeId, values);
+    if (ctx) NodeDrawer.updateContext(ctx);
+  }
+
+  // ============================================================
+  // NodeDrawer — right-side drawer showing a single graph node's
+  // live activity (Day 3 of UI-redesign sprint). Opens when a user
+  // clicks a node on the planner/synth canvas; subscribes to the SSE
+  // event stream for that node and streams events into a sticky-
+  // bottom log with rAF batching + 200-line cap.
+  //
+  // Public API:
+  //   NodeDrawer.open(stage, nodeId, ctx)  // ctx = {label, kpis, status, prompt?, inputs?, outputs?}
+  //   NodeDrawer.close()
+  //   NodeDrawer.isOpenFor(stage, nodeId)
+  //   NodeDrawer.appendEvent(ev)           // route an SSE event to the log + status
+  //   NodeDrawer.updateContext(ctx)        // refresh static sections (inputs/outputs)
+  // ============================================================
+  const NodeDrawer = (function() {
+    const elDrawer    = document.getElementById('fw-node-drawer');
+    const elIcon      = document.getElementById('fw-node-drawer-icon');
+    const elTitle     = document.getElementById('fw-node-drawer-title');
+    const elMeta      = document.getElementById('fw-node-drawer-meta');
+    const elKpis      = document.getElementById('fw-node-drawer-kpis');
+    const elLog       = document.getElementById('fw-node-drawer-log');
+    const elLogEmpty  = document.getElementById('fw-node-drawer-log-empty');
+    const elDetails   = document.getElementById('fw-node-drawer-details');
+    const elClose     = document.getElementById('fw-node-drawer-close');
+
+    const MAX_LOG_LINES = 200;
+    const STATUS_ICON = {
+      future: '⏳', pending: '○', running: '◐',
+      done: '●', failed: '✕', cancelled: '∅',
+    };
+
+    let _openStage = null;        // 'planner' | 'synth' | null
+    let _openNodeId = null;
+    let _pendingEvents = [];
+    let _flushScheduled = false;
+    let _userPinnedScroll = true; // true = auto-scroll to bottom; false = user scrolled up
+    // "Since last viewed" tracking: maps `${stage}/${nodeId}` → epoch ms
+    // of last drawer-open for that node. Events whose timestamp is
+    // newer than the previous lastSeen get an `.is-new` highlight.
+    // Per-session (not persisted) — chat-style affordance.
+    const _lastSeenAt = new Map();
+    let _prevSeenForOpen = 0;     // captured at open(); 0 = first open ever
+
+    function _fmtTs(ts) {
+      const d = typeof ts === 'number' ? new Date(ts * 1000) : new Date();
+      const h = String(d.getHours()).padStart(2, '0');
+      const m = String(d.getMinutes()).padStart(2, '0');
+      const s = String(d.getSeconds()).padStart(2, '0');
+      return `${h}:${m}:${s}`;
+    }
+
+    function _makeLogLine(ev) {
+      const div = document.createElement('div');
+      div.className = 'fw-node-drawer-log-line';
+      const kind = (ev && ev.kind) || 'info';
+      div.dataset.kind = kind;
+      // Severity coloring: errors burgundy, warnings amber, info gray.
+      if (kind === 'error' || ev.error) div.classList.add('severity-error');
+      else if (kind === 'warning')      div.classList.add('severity-warn');
+      // "Since last viewed" highlight — events newer than the previous
+      // drawer-open get a subtle left-border accent. Only after first
+      // open (_prevSeenForOpen > 0); on a node's first-ever open every
+      // event would be "new" which carries no signal.
+      const evTsMs = (typeof ev.ts === 'number') ? ev.ts * 1000 : Date.now();
+      if (_prevSeenForOpen > 0 && evTsMs > _prevSeenForOpen) {
+        div.classList.add('is-new');
+      }
+      // Extract a tidy event payload (drop noisy fields).
+      const tidy = {};
+      Object.keys(ev || {}).forEach(k => {
+        if (k === 'ts' || k === 'step' || k === 'kind') return;
+        tidy[k] = ev[k];
+      });
+      const tidyStr = Object.keys(tidy).length
+        ? ' ' + Object.entries(tidy)
+            .map(([k, v]) => `${k}=${typeof v === 'object'
+              ? JSON.stringify(v).slice(0, 60) : String(v).slice(0, 60)}`)
+            .join(' ')
+        : '';
+      div.textContent = `▸ ${_fmtTs(ev.ts)} ${kind}${tidyStr}`;
+      return div;
+    }
+
+    function _scheduleFlush() {
+      if (_flushScheduled) return;
+      _flushScheduled = true;
+      requestAnimationFrame(() => {
+        _flushScheduled = false;
+        if (_pendingEvents.length === 0 || !elLog) return;
+        // Hide the empty-state placeholder on first line.
+        if (elLogEmpty) elLogEmpty.style.display = 'none';
+        const frag = document.createDocumentFragment();
+        _pendingEvents.forEach(ev => frag.appendChild(_makeLogLine(ev)));
+        elLog.appendChild(frag);
+        _pendingEvents = [];
+        // Cap at MAX_LOG_LINES — evict oldest from top.
+        while (elLog.childElementCount > MAX_LOG_LINES) {
+          elLog.removeChild(elLog.firstChild);
+        }
+        // Sticky-bottom: only auto-scroll if the user hasn't scrolled
+        // up to inspect earlier events.
+        if (_userPinnedScroll) {
+          elLog.scrollTop = elLog.scrollHeight;
+        }
+      });
+    }
+
+    function _updateStatusIcon(status) {
+      if (!elIcon) return;
+      elIcon.textContent = STATUS_ICON[status] || '○';
+      elIcon.dataset.status = status || 'pending';
+    }
+
+    function _renderKpis(kpis) {
+      if (!elKpis) return;
+      if (!kpis || typeof kpis !== 'object') {
+        elKpis.innerHTML = '';
+        elKpis.style.display = 'none';
+        return;
+      }
+      const entries = Object.entries(kpis).filter(([, v]) =>
+        v !== undefined && v !== null && v !== '');
+      if (!entries.length) {
+        elKpis.innerHTML = '';
+        elKpis.style.display = 'none';
+        return;
+      }
+      elKpis.innerHTML = entries.map(([k, v]) =>
+        '<span class="fw-node-drawer-kpi">' +
+          '<span class="fw-node-drawer-kpi-label">' + escapeHtml(k) + '</span>' +
+          '<span class="fw-node-drawer-kpi-value">' +
+            escapeHtml(typeof v === 'object' ? JSON.stringify(v) : String(v)) +
+          '</span>' +
+        '</span>'
+      ).join('');
+      elKpis.style.display = '';
+    }
+
+    function _renderDetails(ctx) {
+      if (!elDetails) return;
+      // Primary content = the SAME rich HTML the legacy card body
+      // showed (KPI grids, tables, outline cards, bandit charts).
+      // Caller passes `resultsHtml` precomputed via the stage's
+      // SUBSTEP_RENDERERS[idx](values). Falls back to a waiting
+      // placeholder when the node hasn't produced output yet.
+      const resultsBlock = ctx.resultsHtml
+        ? '<div class="fw-node-drawer-results">' + ctx.resultsHtml + '</div>'
+        : '<div class="fw-empty fw-node-drawer-waiting">' +
+          (ctx.status === 'running'
+            ? 'Running — results will appear once this node commits its checkpoint.'
+            : ctx.status === 'failed'
+            ? 'This node failed before producing output. See the activity log for details.'
+            : ctx.status === 'future'
+            ? 'Not yet implemented — substep will activate when its node code ships.'
+            : 'Waiting for this node to run.') +
+          '</div>';
+      // Raw inputs/outputs JSON kept as a collapsed debugging aid
+      // (only when present — hides when there's nothing to show).
+      const debug = [];
+      if (ctx.inputs) debug.push({
+        id: 'inputs',  title: 'Inputs (upstream state, raw)',
+        content: '<pre>' + escapeHtml(ctx.inputs) + '</pre>',
+      });
+      if (ctx.outputs) debug.push({
+        id: 'outputs', title: 'Outputs (this node, raw)',
+        content: '<pre>' + escapeHtml(ctx.outputs) + '</pre>',
+      });
+      const debugBlock = debug.length
+        ? debug.map(s =>
+            '<details class="fw-node-drawer-detail" data-section="' + s.id + '">' +
+              '<summary>' + escapeHtml(s.title) + '</summary>' +
+              '<div class="fw-node-drawer-detail-body">' + s.content + '</div>' +
+            '</details>'
+          ).join('')
+        : '';
+      elDetails.innerHTML = resultsBlock + debugBlock;
+    }
+
+    function _populate(stage, nodeId, ctx) {
+      // Capture lastSeenAt BEFORE bumping it — so events arriving in
+      // this open() session compare against the previous timestamp,
+      // not the current one. First-ever open of a node has 0.
+      const key = stage + '/' + nodeId;
+      _prevSeenForOpen = _lastSeenAt.get(key) || 0;
+      _lastSeenAt.set(key, Date.now());
+      _openStage  = stage;
+      _openNodeId = nodeId;
+      _pendingEvents = [];
+      _userPinnedScroll = true;
+      if (elTitle) elTitle.textContent = ctx.label || nodeId;
+      if (elMeta)  elMeta.textContent  = stage + ' · ' + nodeId;
+      _updateStatusIcon(ctx.status || 'pending');
+      _renderKpis(ctx.kpis);
+      _renderDetails(ctx);
+      // Reset log (each drawer-open starts fresh; events stream live).
+      if (elLog) elLog.innerHTML = '';
+      if (elLogEmpty) elLogEmpty.style.display = '';
+    }
+
+    function open(stage, nodeId, ctx) {
+      if (!elDrawer) return;
+      ctx = ctx || {};
+      const wasVisible = elDrawer.classList.contains('visible');
+      const isSameNode = (_openStage === stage && _openNodeId === nodeId);
+      const elBody = document.getElementById('fw-node-drawer-body');
+      // Cross-fade when switching to a different node while the drawer
+      // is already open — avoids the hard content-swap flicker.
+      // Same-node re-opens skip the fade (no perceptible change anyway).
+      if (wasVisible && !isSameNode && elBody) {
+        elBody.classList.add('fw-node-drawer-fading');
+        setTimeout(() => {
+          _populate(stage, nodeId, ctx);
+          elBody.classList.remove('fw-node-drawer-fading');
+        }, 140);
+      } else {
+        _populate(stage, nodeId, ctx);
+      }
+      elDrawer.classList.add('visible');
+      // Focus close for keyboard a11y.
+      if (elClose) setTimeout(() => elClose.focus(), 100);
+    }
+
+    function close() {
+      if (!elDrawer) return;
+      elDrawer.classList.remove('visible');
+      _openStage = null;
+      _openNodeId = null;
+    }
+
+    function isOpenFor(stage, nodeId) {
+      return _openStage === stage && _openNodeId === nodeId;
+    }
+
+    function appendEvent(ev) {
+      if (!ev || !_openNodeId) return;
+      _pendingEvents.push(ev);
+      _scheduleFlush();
+      // Side effects on status: `done`/`failed`/`start` swap the
+      // drawer's status icon to match the canvas node.
+      if (ev.kind === 'start')   _updateStatusIcon('running');
+      else if (ev.kind === 'done') _updateStatusIcon('done');
+      else if (ev.kind === 'error') _updateStatusIcon('failed');
+    }
+
+    function updateContext(ctx) {
+      if (!_openNodeId) return;
+      ctx = ctx || {};
+      if (ctx.status !== undefined) _updateStatusIcon(ctx.status);
+      if (ctx.kpis   !== undefined) _renderKpis(ctx.kpis);
+      // Re-render details only if any of the section sources changed —
+      // cheap enough to do unconditionally for now.
+      _renderDetails(ctx);
+    }
+
+    // Detect user scroll-away — lock auto-scroll until they return to
+    // bottom. Threshold of 24px so a small wheel nudge doesn't flip it.
+    if (elLog) {
+      elLog.addEventListener('scroll', () => {
+        const atBottom = (elLog.scrollHeight - elLog.scrollTop - elLog.clientHeight) < 24;
+        _userPinnedScroll = atBottom;
+      });
+    }
+    if (elClose) elClose.addEventListener('click', close);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && elDrawer && elDrawer.classList.contains('visible')) {
+        close();
+      }
+    });
+
+    return { open, close, isOpenFor, appendEvent, updateContext,
+             get openNodeId() { return _openNodeId; },
+             get openStage()  { return _openStage; } };
+  })();
+
+  function _initPlannerCanvas() {
+    if (UI_MODE !== 'graph') {
+      console.log('[plannerGraph] UI_MODE=cards (default) — canvas not mounted');
+      return;
+    }
+    console.log('[plannerGraph] UI_MODE=graph — mounting Cytoscape canvas');
+    const root = document.getElementById('fw-planner-graph');
+    const canvasEl = document.getElementById('fw-planner-canvas');
+    if (!root || !canvasEl) {
+      console.warn('[plannerGraph] missing #fw-planner-graph or #fw-planner-canvas in DOM');
+      return;
+    }
+    // Visibility is managed exclusively by _toggleStageEmpty (single
+    // source of truth). Canvas init no longer touches display so it
+    // can't race the toggle. Cytoscape may mount against a 0×0
+    // container if the wrapper is hidden — that's fine; the toggle
+    // calls _resizePlannerCanvas() the moment the wrapper becomes
+    // visible.
+    // Wait for Cytoscape (loaded with `defer` from CDN). Poll briefly.
+    const startedAt = Date.now();
+    function tryInit() {
+      if (typeof cytoscape !== 'undefined') {
+        const nodes = PLANNER_NODE_ORDER.map((id, i) => ({
+          id,
+          label:  PLANNER_NODE_LABELS[i] || id,
+          status: plannerImplemented.has(id) ? 'pending' : 'future',
+        }));
+        const edges = [];
+        for (let i = 0; i < PLANNER_NODE_ORDER.length - 1; i++) {
+          edges.push({
+            source: PLANNER_NODE_ORDER[i],
+            target: PLANNER_NODE_ORDER[i + 1],
+          });
+        }
+        const w = canvasEl.offsetWidth;
+        const h = canvasEl.offsetHeight;
+        console.log(
+          `[plannerGraph] canvas container ready, dims=${w}x${h}` +
+          (w === 0 || h === 0
+            ? ' (WARNING: zero dim — graph will be invisible until ' +
+              '_resizePlannerCanvas runs after panel becomes active)'
+            : ''),
+        );
+        plannerGraph = StageGraph.create(canvasEl, {
+          nodes, edges,
+          onNodeClick: (nodeId) => _openPlannerNodeDrawer(nodeId),
+        });
+        console.log(
+          `[plannerGraph] Cytoscape initialized with ${nodes.length} ` +
+          `nodes, ${edges.length} edges`,
+        );
+        // If Step 3 is already the active panel at init time, kick a
+        // resize+fit immediately. Otherwise the first resize fires from
+        // showStep(3) below — Cytoscape inits inside a display:none
+        // ancestor with 0x0 bounds, and without resize() it stays
+        // invisible even after the panel becomes active.
+        if (plannerGraph) _resizePlannerCanvas();
+        _attachCanvasResizeObserver('fw-planner-canvas', _resizePlannerCanvas);
+        return;
+      }
+      if (Date.now() - startedAt > 5000) {
+        console.warn(
+          '[plannerGraph] Cytoscape failed to load within 5s — ' +
+          'canvas disabled, falling back to cards layout',
+        );
+        // Revert visibility via the canonical toggle (cards visible,
+        // graph wrapper hidden) — but only if a slug is active;
+        // otherwise the empty-state placeholder stays correct.
+        const cardsFallback = document.getElementById('fw-planner-cards');
+        if (cardsFallback) cardsFallback.style.display = '';
+        root.style.display = 'none';
+        return;
+      }
+      setTimeout(tryInit, 80);
+    }
+    tryInit();
+  }
 
   // ============================================================
   // Utility
@@ -347,6 +1305,12 @@
     // Sticky bar appears on Step 1 whenever a tile is selected; Generate
     // enablement is controlled by `refreshGenerateState()`.
     stickyBar.classList.toggle('visible', n === 1 && selected !== null);
+    // Step 3 — Cytoscape latches container dimensions at init time;
+    // the canvas was initialized while the panel was display:none so
+    // its viewport is 0x0 until we explicitly tell it to resize after
+    // the panel becomes visible. Idempotent — no-op when ?ui=cards.
+    if (n === 3 && plannerGraph) _resizePlannerCanvas();
+    if (n === 4 && synthGraph)   _resizeSynthCanvas();
     // Step 2 — only show the live progress box during an active run;
     // pull the canonical manifest into the file list otherwise. While a
     // run is in flight the manifest doesn't exist yet (finalize happens
@@ -622,13 +1586,78 @@
     if (plannerWipeBtn) {
       if (activeSlug && !running) {
         plannerWipeBtn.removeAttribute('disabled');
+        plannerWipeBtn.setAttribute('title',
+          "Delete this framework's planner cache " +
+          '(MinIO embeddings + Postgres checkpoints + browser state)');
       } else {
         plannerWipeBtn.setAttribute('disabled', 'disabled');
+        plannerWipeBtn.setAttribute('title', running
+          ? 'Cannot wipe while a planner run is in flight.'
+          : 'Pick a framework first.');
       }
     }
-    plannerSubtitle.textContent = activeSlug
-      ? ('Framework: ' + activeSlug + (running ? ' · planner running' : ''))
-      : 'Pick a framework, then start to generate the chapter plan.';
+    // Framework chip — logo(s) + catalog name. Mirrors the Step 2
+    // progress framework strip; same `frameworkInfo` source.
+    setPlannerFramework(activeSlug);
+    // Empty-state placeholder — show "pick a framework" when no slug
+    // is active, hide the cards/canvas in that case so the user isn't
+    // confused by an inert pipeline UI dangling from prior context.
+    _toggleStageEmpty('planner', !activeSlug);
+  }
+
+  // Toggles the "Pick a framework from the library to view the
+  // {stage} pipeline" placeholder for a stage panel. SINGLE SOURCE OF
+  // TRUTH for graph-wrapper + cards visibility — canvas init MUST NOT
+  // touch these directly or it races this toggle. When switching to
+  // the graph view, also kicks a resize so Cytoscape picks up the
+  // freshly-visible container dimensions (otherwise the graph latches
+  // 0×0 from when the wrapper was hidden).
+  function _toggleStageEmpty(stage, showEmpty) {
+    const emptyEl  = document.getElementById('fw-' + stage + '-empty');
+    const cardsEl  = document.getElementById('fw-' + stage + '-cards');
+    const graphEl  = document.getElementById('fw-' + stage + '-graph');
+    if (!emptyEl) return;
+    if (showEmpty) {
+      emptyEl.style.display = '';
+      if (cardsEl) cardsEl.style.display = 'none';
+      if (graphEl) graphEl.style.display = 'none';
+    } else {
+      emptyEl.style.display = 'none';
+      // Restore the active render path based on UI flag.
+      if (UI_MODE === 'graph') {
+        if (cardsEl) cardsEl.style.display = 'none';
+        if (graphEl) graphEl.style.display = 'flex';
+        // Re-fit Cytoscape now that the wrapper has real dimensions.
+        if (stage === 'planner' && plannerGraph) _resizePlannerCanvas();
+        if (stage === 'synth'   && synthGraph)   _resizeSynthCanvas();
+      } else {
+        if (cardsEl) cardsEl.style.display = '';
+        if (graphEl) graphEl.style.display = 'none';
+      }
+    }
+  }
+
+  function setPlannerFramework(slug) {
+    if (!plannerFwNameEl || !plannerFwLogosEl) return;
+    if (!slug) {
+      plannerFwNameEl.textContent = 'Pick a framework to start.';
+      plannerFwNameEl.classList.add('fw-planner-fw-name-empty');
+      plannerFwLogosEl.innerHTML = '';
+      plannerFwLogosEl.style.display = 'none';
+      return;
+    }
+    const info = frameworkInfo[slug] || {name: slug, logos: []};
+    plannerFwNameEl.textContent = info.name || slug;
+    plannerFwNameEl.classList.remove('fw-planner-fw-name-empty');
+    if (info.logos && info.logos.length) {
+      plannerFwLogosEl.innerHTML = info.logos.map(u =>
+        '<img class="fw-planner-fw-logo" src="' + u + '" alt="">'
+      ).join('');
+      plannerFwLogosEl.style.display = '';
+    } else {
+      plannerFwLogosEl.innerHTML = '';
+      plannerFwLogosEl.style.display = 'none';
+    }
   }
 
   function cardEl(idx) {
@@ -648,7 +1677,10 @@
       c.querySelector('.fw-planner-card-body').innerHTML =
         '<div class="fw-empty">Output will appear here once the substep runs.</div>';
     });
-    plannerProgressLbl.textContent = '';
+    // Day 2: also reset the Cytoscape canvas + stage pill so a fresh
+    // Start Planner click presents a clean visual baseline.
+    if (plannerGraph) plannerGraph.reset();
+    _setPlannerStagePill('idle');
   }
 
   function _fieldPresent(values, field) {
@@ -1427,12 +2459,21 @@
         icon.textContent = '○'; icon.dataset.status = 'pending';
       }
     }
-    plannerProgressLbl.textContent =
-      'Step ' + doneCount + ' of ' + PLANNER_SUBSTEP_FIELDS.length;
+    // Day 2: mirror the same state into the Cytoscape canvas. No-op
+    // when ?ui=cards (plannerGraph is null). Drives node colors,
+    // KPI badges, and the top-of-stage status pill (which now also
+    // carries the N/8 progress count while working).
+    _renderPlannerGraph(values);
+    // Drawer live-refresh: if the user has the drawer open for a
+    // planner node, re-hydrate its Results panel with the latest
+    // SUBSTEP_RENDERERS output. Lets the drawer evolve in lockstep
+    // with the card body without forcing the user to re-click.
+    _refreshOpenPlannerDrawer(values);
   }
 
   function markPlannerFailed(message) {
     // Find the first card still running (or first pending) and flag it.
+    let failedNodeId = null;
     for (let i = 0; i < PLANNER_SUBSTEP_FIELDS.length; i++) {
       const c = cardEl(i);
       if (!c) continue;
@@ -1445,9 +2486,15 @@
         icon.dataset.status = 'failed';
         c.querySelector('.fw-planner-card-body').innerHTML =
           '<div class="fw-planner-error">' + escapeHtml(message) + '</div>';
+        failedNodeId = PLANNER_NODE_ORDER[i];
         break;
       }
     }
+    // Day 2: mirror to canvas + flip stage pill to failed.
+    if (plannerGraph && failedNodeId) {
+      plannerGraph.setStatus(failedNodeId, 'failed');
+    }
+    _setPlannerStagePill('failed');
   }
 
   function formatFieldValue(v) {
@@ -1555,6 +2602,22 @@
     const body = c.querySelector('.fw-planner-card-body');
     if (body && body.querySelector('.fw-empty')) {
       body.innerHTML = '';
+    }
+    // Day 2: mirror to the Cytoscape canvas — flip the corresponding
+    // graph node to 'running' so the burgundy border + active-edge
+    // animation kick in immediately on the SSE `start` event (without
+    // waiting for the next /state refresh). Also flip the top-of-stage
+    // pill to 'working' on the very first per-step start of a run.
+    if (plannerGraph) {
+      plannerGraph.setStatus(stepName, 'running');
+      // Pill carries the in-flight step's ordinal so the user sees a
+      // crisp "Working · 3/8" without waiting for the next state poll.
+      const stepIdx = PLANNER_NODE_ORDER.indexOf(stepName);
+      const implCount = PLANNER_NODE_ORDER.filter(n => plannerImplemented.has(n)).length;
+      const progress = (stepIdx >= 0 && implCount)
+        ? (stepIdx + '/' + implCount) : null;
+      _setPlannerStagePill('working',
+        progress ? 'Working · ' + progress : null);
     }
   }
 
@@ -1699,6 +2762,14 @@
           markPlannerFailed(ev.error || 'Planner failed.');
         } else if (status === 'cancelled') {
           showToast('Planner cancelled. Checkpoints up to the cancel point are preserved.');
+          _setPlannerStagePill('cancelled');
+        } else {
+          // Day 2: explicit done → flip pill so the at-a-glance
+          // indicator transitions out of 'working' even before the
+          // user navigates away. _renderPlannerGraph's aggregate
+          // logic also sets this, but the explicit signal is
+          // race-safer (covers the all-impl-done detection edge).
+          _setPlannerStagePill('done');
         }
         try { es.close(); } catch (_) {}
         plannerThreadId = null;
@@ -1732,6 +2803,12 @@
           }
         }
         _renderLiveProgress(ev.step, ev);
+        // Day 3: route the same event into NodeDrawer if it's open for
+        // this node. The drawer's rAF batching + sticky-bottom log
+        // turns the SSE stream into a live activity tail.
+        if (NodeDrawer.isOpenFor('planner', ev.step)) {
+          NodeDrawer.appendEvent(ev);
+        }
       }
     };
     es.onerror = (_e) => {
@@ -1935,12 +3012,13 @@
     // cards advance progressively.
     pollPlannerState(tid);
     try {
-      const mode = (plannerModeSel && plannerModeSel.value) || 'llm';
+      // Mode is fixed to "llm" (the unified LITA-pattern planner) —
+      // the dropdown was removed; the server still defaults `mode=llm`
+      // if omitted, so we don't even need to pass it.
       const url = isResume
         ? API + '/planner/' + tid + '/resume'
         : API + '/planner/' + activeSlug +
-          '?mode=' + encodeURIComponent(mode) +
-          '&thread_id=' + encodeURIComponent(tid);
+          '?mode=llm&thread_id=' + encodeURIComponent(tid);
       const r = await fetch(url, {method: 'POST'});
       if (!r.ok) {
         const txt = await r.text();
@@ -2164,9 +3242,17 @@
           x => x.classList.remove('active'));
         el.classList.add('active');
         await loadManifestForSlug(slug);
-        farthestStep = Math.max(farthestStep, 4);
-        showStep(4);   // sidebar click → Study (view existing files)
+        // Library click swaps the ACTIVE FRAMEWORK without changing the
+        // user's current step — they stay wherever they were navigating
+        // (Catalog on first interaction, otherwise whatever step they
+        // last opened). farthestStep bumped to the max so all 5 steps
+        // stay reachable via the stepper for the newly-selected slug.
+        farthestStep = Math.max(farthestStep, 5);
+        renderStepper();
         refreshPlannerStartState();
+        if (typeof refreshSynthStartState === 'function') {
+          refreshSynthStartState();
+        }
       });
     });
     sidebarList.querySelectorAll('.fw-lib-refresh').forEach(b => {
@@ -2296,17 +3382,19 @@
   // surviving /state so a plain page reload (no framework click)
   // restores the cached substep cards.
   async function recoverActivePlanner() {
-    if (activeSlug) return;  // ingestion recovery already took over
-
-    // Collect all planner localStorage entries, then SORT by preference:
-    // (1) the last-active slug first, (2) the rest alphabetically. This
-    // makes the auto-activation predictable on browsers with multiple
-    // cached slugs (otherwise the JS Object key order would pick at
-    // random and could land on the wrong framework).
-    let lastSlug = null;
-    try { lastSlug = localStorage.getItem(_LAST_PLANNER_SLUG_KEY); }
-    catch (e) {}
-
+    // Page-load behaviour (per user UX rule): NEVER auto-activate a
+    // framework on reload — the user lands on Catalog (Step 1) and
+    // must click a library item to pick a framework. The previous
+    // behaviour (auto-pick the first cached slug + jump to Step 3)
+    // was confusing because the sidebar wouldn't show any item as
+    // active even though the Planner panel had data.
+    //
+    // This function now ONLY hydrates the planner localStorage from
+    // the server-side /planner/recent endpoint (useful for browsers
+    // that wipe localStorage like Brave / Safari private mode). The
+    // hydrated entries make _tryResumeActivePlanner(slug) work later
+    // when the user explicitly clicks a library item.
+    if (activeSlug) return;     // some other path already activated
     const keys = [];
     try {
       for (let i = 0; i < localStorage.length; i++) {
@@ -2314,86 +3402,25 @@
         if (k && k.startsWith('dd:planner:active:')) keys.push(k);
       }
     } catch (e) { return; }
-    if (!keys.length) {
-      // Brave / Safari / private mode sometimes wipe localStorage. Fall
-      // back to the server-side discovery endpoint that lists the most
-      // recent thread per slug (queried straight from Postgres). This
-      // path doesn't depend on any client-side state at all.
-      // Brave / Safari / private mode sometimes wipe localStorage. Fall
-      // back to the server-side discovery endpoint that lists the most
-      // recent thread per slug (queried straight from Postgres).
-      try {
-        const r = await fetch(API + '/planner/recent');
-        if (r.ok) {
-          const data = await r.json();
-          const recent = (data && data.recent) || [];
-          if (recent.length) {
-            for (const item of recent) {
-              try {
-                localStorage.setItem(
-                  _plannerStorageKey(item.slug), item.thread_id,
-                );
-              } catch (e) {}
-            }
-            try {
-              localStorage.setItem(_LAST_PLANNER_SLUG_KEY, recent[0].slug);
-            } catch (e) {}
-            return await recoverActivePlanner();
-          }
-        }
-      } catch (e) {
-        console.warn('[planner-recover] /planner/recent failed:', e);
+    if (keys.length) return;   // localStorage already populated; nothing to do
+    // localStorage empty — try to seed it from the server's recent list.
+    try {
+      const r = await fetch(API + '/planner/recent');
+      if (!r.ok) return;
+      const data = await r.json();
+      const recent = (data && data.recent) || [];
+      for (const item of recent) {
+        try {
+          localStorage.setItem(_plannerStorageKey(item.slug), item.thread_id);
+        } catch (e) {}
       }
-      return;
-    }
-    keys.sort((a, b) => {
-      const slugA = a.slice('dd:planner:active:'.length);
-      const slugB = b.slice('dd:planner:active:'.length);
-      if (slugA === lastSlug) return -1;
-      if (slugB === lastSlug) return 1;
-      return slugA.localeCompare(slugB);
-    });
-    console.log('[planner-recover] candidates (priority order):',
-      keys.map(k => k.slice('dd:planner:active:'.length)));
-
-    const probeResults = [];
-    for (const k of keys) {
-      const slug = k.slice('dd:planner:active:'.length);
-      let tid;
-      try { tid = localStorage.getItem(k); } catch (e) { continue; }
-      if (!tid) continue;
-      try {
-        const r = await fetch(API + '/planner/debug/graph/' + tid + '/state');
-        if (!r.ok) {
-          console.log('[planner-recover]', slug, 'HTTP', r.status);
-          probeResults.push(slug + '=' + r.status);
-          try { localStorage.removeItem(k); } catch (e) {}
-          continue;
-        }
-        // Sanity check: state must have at least one known node field
-        // before we activate. An empty state means the thread row exists
-        // but no node ran (or the thread is from a different schema).
-        const data = await r.json();
-        const values = data.values || {};
-        const haveAnyField = PLANNER_SUBSTEP_FIELDS.some(f =>
-          _fieldPresent(values, f));
-        if (!haveAnyField) {
-          console.log('[planner-recover]', slug, 'state empty, skipping');
-          probeResults.push(slug + '=empty');
-          continue;
-        }
-        console.log('[planner-recover] activating', slug, 'thread=' + tid);
-        await loadManifestForSlug(slug);
-        farthestStep = Math.max(farthestStep, 3);
-        showStep(3);
-        return;
-      } catch (e) {
-        console.log('[planner-recover]', slug, 'fetch failed:', e);
-        probeResults.push(slug + '=err');
+      if (recent.length) {
+        try { localStorage.setItem(_LAST_PLANNER_SLUG_KEY, recent[0].slug); }
+        catch (e) {}
       }
+    } catch (e) {
+      console.warn('[planner-recover] /planner/recent failed:', e);
     }
-    console.log('[planner-recover] no candidate had valid /state:',
-      probeResults);
   }
 
   async function loadPlannerInfo() {
@@ -2402,25 +3429,10 @@
       if (!r.ok) return;
       const data = await r.json();
       plannerImplemented = new Set(data.implemented || []);
-      // Hydrate the mode dropdown from the server's canonical mode list.
-      // Server-rendered defaults work even without this, but a future
-      // mode addition (e.g. "hybrid") shows up automatically.
-      if (Array.isArray(data.modes) && plannerModeSel) {
-        const currentVal = plannerModeSel.value;
-        plannerModeSel.innerHTML = data.modes.map(m => {
-          const label = m.enabled ? m.label : m.label + ' (soon)';
-          const sel = (m.key === currentVal && m.enabled) ? ' selected' : '';
-          const dis = m.enabled ? '' : ' disabled';
-          return '<option value="' + m.key + '"' + sel + dis + '>' +
-                 escapeHtml(label) + '</option>';
-        }).join('');
-        // If the previously-selected value got disabled, fall back to
-        // the first enabled mode.
-        const enabled = data.modes.filter(m => m.enabled);
-        if (enabled.length && !enabled.find(m => m.key === plannerModeSel.value)) {
-          plannerModeSel.value = enabled[0].key;
-        }
-      }
+      // Mode dropdown removed 2026-05-18 — the unified LITA-pattern
+      // planner is the only mode now (see PLANNER-ARCHITECTURE-2026-05-17
+      // .md). Server still returns `modes` for backwards compatibility
+      // but the client no longer renders the picker.
       // Re-render the cards now that we know which are implemented vs
       // future — turns unimplemented stubs into the "⏳ future" state.
       renderPlannerCards({});
@@ -2433,6 +3445,12 @@
   countEl.textContent = total + ' of ' + total;
   renderStepper();
   refreshGenerateState();   // initial pass — disabled until a tile is picked
+  // Initial empty-state — show the "pick a framework" placeholder on
+  // both Planner + Synth panels until a slug becomes active. The
+  // refresh*StartState functions will hide them the moment a library
+  // item or tile is clicked.
+  _toggleStageEmpty('planner', true);
+  _toggleStageEmpty('synth',   true);
   // Sequence init steps WITHOUT chaining — if one fails the next still
   // runs. Each step's exception (if any) is logged to console only;
   // the user-visible recovery outcome lives on the planner cards.
@@ -2443,10 +3461,19 @@
     catch (e) { console.warn('[init] ingestion-recover failed:', e); }
     try { await loadPlannerInfo(); }
     catch (e) { console.warn('[init] planner-info failed:', e); }
+    // Day 1: mount Cytoscape canvas if `?ui=graph` is on the URL. Runs
+    // AFTER loadPlannerInfo so the initial node statuses (future vs
+    // pending) reflect the server's IMPLEMENTED set.
+    try { _initPlannerCanvas(); }
+    catch (e) { console.warn('[init] planner-canvas failed:', e); }
     try { await recoverActivePlanner(); }
     catch (e) { console.warn('[init] planner-recover failed:', e); }
     try { await loadSynthInfo(); }
     catch (e) { console.warn('[init] synth-info failed:', e); }
+    // Day 5: mount the synth Cytoscape canvas if ?ui=graph. Runs after
+    // loadSynthInfo so the initial node statuses respect IMPLEMENTED.
+    try { _initSynthCanvas(); }
+    catch (e) { console.warn('[init] synth-canvas failed:', e); }
     try { await recoverActiveSynth(); }
     catch (e) { console.warn('[init] synth-recover failed:', e); }
   })();
@@ -2459,10 +3486,10 @@
   // ============================================================
   const synthStartBtn    = document.querySelector('#fw-synth-start');
   const synthWipeBtn     = document.querySelector('#fw-synth-wipe');
-  const synthSubtitle    = document.querySelector('#fw-synth-subtitle');
   const synthCardsEl     = document.querySelector('#fw-synth-cards');
-  const synthProgressLbl = document.querySelector('#fw-synth-progress-label');
   const synthBudgetSel   = document.querySelector('#fw-synth-budget');
+  const synthFwLogosEl   = document.querySelector('#fw-synth-fw-logos');
+  const synthFwNameEl    = document.querySelector('#fw-synth-fw-name');
 
   // Substep order MUST match `NODE_ORDER` in
   // services/docs_distiller/synth/graph.py (when that ships) AND the
@@ -2484,6 +3511,14 @@
     'cache_lookup', 'corpus_normalize', 'outline_sdp', 'digest_construct',
     'vault_sentinelize', 'sawc_write', 'checklist_eval',
     'mgsr_replan', 'render_audit_write',
+  ];
+  // Short labels for the graph canvas (parallel to SYNTH_NODE_ORDER).
+  // Same shape as PLANNER_NODE_LABELS — kept hardcoded here so the
+  // StageGraph module stays independent of DOM-card scraping.
+  const SYNTH_NODE_LABELS = [
+    'Cache lookup', 'Corpus normalize', 'Outline (SDP)', 'Digest',
+    'Vault sentinelize', 'SAWC write', 'Checklist eval',
+    'MGSR replan', 'Render + audit',
   ];
   // Per-step "primary checkpoint field" for SSE→state-refresh races.
   const SYNTH_STEP_TO_FIELD = {
@@ -2510,6 +3545,239 @@
   // added as its corresponding node lands. Until then, cards with
   // `present` field fall back to formatFieldValue/JSON dump.
   const SYNTH_SUBSTEP_RENDERERS = {};
+
+  // ============================================================
+  // Day 5 — Synth canvas parity. Mirrors planner's helpers so each
+  // shipped synth node lights up the same way Planner does today.
+  // The canvas appears under ?ui=graph; cards remain the default view.
+  // ============================================================
+  let synthGraph = null;     // Cytoscape instance once mounted
+
+  function _setSynthStagePill(status, labelOverride) {
+    const pill = document.getElementById('fw-synth-pill');
+    const text = document.getElementById('fw-synth-pill-text');
+    if (!pill || !text) return;
+    const labels = {
+      idle: 'Idle', working: 'Working', done: 'Completed',
+      failed: 'Failed', cancelled: 'Cancelled',
+    };
+    pill.dataset.status = status;
+    text.textContent = labelOverride || labels[status] || status;
+  }
+
+  // KPI extraction per synth node. Currently every field is empty
+  // because no synth nodes ship state yet — populated as each lands.
+  // Format mirrors _kpiForNode (planner side): returns 'k=v' string or
+  // empty. When synth nodes start emitting real `*_stats`, fill these.
+  function _kpiForSynthNode(nodeId, values) {
+    if (!values) return '';
+    const stats = (key) => values[key] || null;
+    switch (nodeId) {
+      case 'cache_lookup':       { const s = stats('synth_cache_stats');
+        return s && s.hit !== undefined ? `hit=${s.hit}` : ''; }
+      case 'corpus_normalize':   { const s = stats('normalize_stats');
+        return s && s.files !== undefined ? `n=${s.files}` : ''; }
+      case 'outline_sdp':        { const s = stats('outline_stats');
+        return s && s.sections !== undefined ? `sec=${s.sections}` : ''; }
+      case 'digest_construct':   { const s = stats('digest_stats');
+        return s && s.sources !== undefined ? `src=${s.sources}` : ''; }
+      case 'vault_sentinelize':  { const s = stats('vault_stats');
+        return s && s.refs !== undefined ? `refs=${s.refs}` : ''; }
+      case 'sawc_write':         { const s = stats('sawc_stats');
+        return s && s.drafts !== undefined ? `drafts=${s.drafts}` : ''; }
+      case 'checklist_eval':     { const s = stats('checklist_stats');
+        return s && s.pass !== undefined ? `pass=${s.pass}` : ''; }
+      case 'mgsr_replan':        { const s = stats('mgsr_stats');
+        return s && s.actions !== undefined ? `act=${s.actions}` : ''; }
+      case 'render_audit_write': { const s = stats('render_stats');
+        return s && s.chapters !== undefined ? `ch=${s.chapters}` : ''; }
+    }
+    return '';
+  }
+
+  function _renderSynthGraph(values) {
+    if (!synthGraph) return;
+    let doneCount = 0;
+    let anyRunning = false;
+    for (let i = 0; i < SYNTH_NODE_ORDER.length; i++) {
+      const nodeId = SYNTH_NODE_ORDER[i];
+      const field = SYNTH_SUBSTEP_FIELDS[i];
+      const present = _synthFieldPresent(values, field);
+      const isImpl = synthImplemented.has(nodeId);
+      let status;
+      if (present)      { status = 'done'; doneCount++; }
+      else if (!isImpl) { status = 'future'; }
+      else if (i === doneCount && synthThreadId !== null) {
+        status = 'running'; anyRunning = true;
+      } else            { status = 'pending'; }
+      synthGraph.setStatus(nodeId, status,
+        present ? _kpiForSynthNode(nodeId, values) : '');
+    }
+    const explicitStatus = (values && values.status) || null;
+    const implCount = SYNTH_NODE_ORDER.filter(n => synthImplemented.has(n)).length;
+    const progress = implCount ? doneCount + '/' + implCount : null;
+    if (explicitStatus === 'failed')        _setSynthStagePill('failed');
+    else if (explicitStatus === 'cancelled') _setSynthStagePill('cancelled');
+    else if (anyRunning || synthThreadId !== null) {
+      _setSynthStagePill('working',
+        progress ? 'Working · ' + progress : null);
+    } else if (doneCount > 0 && doneCount === implCount) {
+      _setSynthStagePill('done');
+    } else if (doneCount === 0) {
+      _setSynthStagePill('idle');
+    }
+  }
+
+  function _buildSynthNodeCtx(nodeId, values) {
+    const idx = SYNTH_NODE_ORDER.indexOf(nodeId);
+    if (idx < 0) return null;
+    const label = SYNTH_NODE_LABELS[idx] || nodeId;
+    const thisField = SYNTH_SUBSTEP_FIELDS[idx];
+    let status = 'pending';
+    if (_synthFieldPresent(values, thisField)) status = 'done';
+    else if (!synthImplemented.has(nodeId)) status = 'future';
+    else if (synthThreadId) status = 'running';
+    const kpiText = _kpiForSynthNode(nodeId, values);
+    const kpis = {};
+    if (kpiText) {
+      const eqIdx = kpiText.indexOf('=');
+      if (eqIdx > 0) kpis[kpiText.slice(0, eqIdx)] = kpiText.slice(eqIdx + 1);
+    }
+    // Synth's SUBSTEP_RENDERERS is empty until nodes ship; same
+    // pattern as planner — when a renderer lands, drawer gets the
+    // rich KPI/table/outline view automatically.
+    const renderer = SYNTH_SUBSTEP_RENDERERS[idx];
+    const resultsHtml = (renderer && _synthFieldPresent(values, thisField))
+      ? renderer(values)
+      : null;
+    const inputs = idx > 0 && _synthFieldPresent(values, SYNTH_SUBSTEP_FIELDS[idx - 1])
+      ? JSON.stringify({ [SYNTH_SUBSTEP_FIELDS[idx - 1]]: values[SYNTH_SUBSTEP_FIELDS[idx - 1]] }, null, 2)
+      : null;
+    const outputs = _synthFieldPresent(values, thisField)
+      ? JSON.stringify({ [thisField]: values[thisField] }, null, 2)
+      : null;
+    return { label, status, kpis, resultsHtml, inputs, outputs };
+  }
+
+  async function _openSynthNodeDrawer(nodeId) {
+    let values = {};
+    // Same fallback as planner: localStorage thread id covers the
+    // post-terminal case when synthThreadId has been nulled.
+    let tid = synthThreadId;
+    if (!tid && activeSlug) {
+      try { tid = localStorage.getItem(_synthStorageKey(activeSlug)); }
+      catch (e) {}
+    }
+    if (tid) {
+      try {
+        const r = await fetch(API + '/synth/debug/graph/' + tid + '/state');
+        if (r.ok) values = (await r.json()).values || {};
+      } catch (e) { /* drawer opens with empty results */ }
+    }
+    const ctx = _buildSynthNodeCtx(nodeId, values);
+    if (ctx) NodeDrawer.open('synth', nodeId, ctx);
+  }
+
+  function _refreshOpenSynthDrawer(values) {
+    if (NodeDrawer.openStage !== 'synth') return;
+    const nodeId = NodeDrawer.openNodeId;
+    if (!nodeId) return;
+    const ctx = _buildSynthNodeCtx(nodeId, values);
+    if (ctx) NodeDrawer.updateContext(ctx);
+  }
+
+  function _resizeSynthCanvas() {
+    if (!synthGraph || !synthGraph.cy) return;
+    requestAnimationFrame(() => {
+      _runSynthLayoutAndCenter('first');
+      setTimeout(() => _runSynthLayoutAndCenter('second'), 250);
+    });
+  }
+
+  function _runSynthLayoutAndCenter(passLabel) {
+    if (!synthGraph || !synthGraph.cy) return;
+    try {
+      const cy = synthGraph.cy;
+      cy.resize();
+      const hasDagre = !!cytoscape._dagreRegistered;
+      const layout = cy.layout(hasDagre
+        ? { name: 'dagre', rankDir: 'TB', nodeSep: 36, rankSep: 56,
+            padding: 32, animate: false, fit: false }
+        : { name: 'breadthfirst', directed: true, padding: 32,
+            spacingFactor: 1.4, animate: false, fit: false }
+      );
+      layout.one('layoutstop', () => {
+        try {
+          cy.fit(cy.elements(), 32);
+          cy.center(cy.elements());
+          _forceCenterHorizontal(cy, '[synthGraph ' + passLabel + ']');
+        } catch (e) {
+          console.warn('[synthGraph] center pipeline failed:', e);
+        }
+      });
+      layout.run();
+    } catch (e) {
+      console.warn('[synthGraph] resize ' + passLabel + ' failed:', e);
+    }
+  }
+
+  function _initSynthCanvas() {
+    if (UI_MODE !== 'graph') return;
+    const root = document.getElementById('fw-synth-graph');
+    const canvasEl = document.getElementById('fw-synth-canvas');
+    if (!root || !canvasEl) return;
+    // Visibility managed by _toggleStageEmpty (single source of truth)
+    // — mirror of the planner-side fix. Canvas init no longer races
+    // the toggle by setting display directly.
+    const startedAt = Date.now();
+    function tryInit() {
+      if (typeof cytoscape !== 'undefined') {
+        const nodes = SYNTH_NODE_ORDER.map((id, i) => ({
+          id,
+          label:  SYNTH_NODE_LABELS[i] || id,
+          status: synthImplemented.has(id) ? 'pending' : 'future',
+        }));
+        const edges = [];
+        for (let i = 0; i < SYNTH_NODE_ORDER.length - 1; i++) {
+          edges.push({ source: SYNTH_NODE_ORDER[i],
+                       target: SYNTH_NODE_ORDER[i + 1] });
+        }
+        console.log(
+          `[synthGraph] canvas container ready, dims=${canvasEl.offsetWidth}x${canvasEl.offsetHeight}`
+        );
+        synthGraph = StageGraph.create(canvasEl, {
+          nodes, edges,
+          onNodeClick: (nodeId) => _openSynthNodeDrawer(nodeId),
+        });
+        console.log(
+          `[synthGraph] Cytoscape initialized with ${nodes.length} nodes, ${edges.length} edges`
+        );
+        if (synthGraph) _resizeSynthCanvas();
+        _attachCanvasResizeObserver('fw-synth-canvas', _resizeSynthCanvas);
+        return;
+      }
+      if (Date.now() - startedAt > 5000) {
+        console.warn('[synthGraph] Cytoscape failed to load within 5s; falling back to cards');
+        const cardsFallback = document.getElementById('fw-synth-cards');
+        if (cardsFallback) cardsFallback.style.display = '';
+        root.style.display = 'none';
+        return;
+      }
+      setTimeout(tryInit, 80);
+    }
+    tryInit();
+  }
+
+  // Window resize handler — rAF-throttled (mirrors planner equivalent).
+  let _synthResizeRafPending = false;
+  window.addEventListener('resize', () => {
+    if (_synthResizeRafPending) return;
+    _synthResizeRafPending = true;
+    requestAnimationFrame(() => {
+      _synthResizeRafPending = false;
+      if (synthGraph) _resizeSynthCanvas();
+    });
+  });
 
   function synthCardEl(idx) {
     if (!synthCardsEl) return null;
@@ -2568,6 +3836,16 @@
     const body = c.querySelector('.fw-planner-card-body');
     if (body && body.querySelector('.fw-empty')) {
       body.innerHTML = '';
+    }
+    // Day 5: mirror to canvas + flip stage pill, same pattern as planner.
+    if (synthGraph) {
+      synthGraph.setStatus(stepName, 'running');
+      const stepIdx = SYNTH_NODE_ORDER.indexOf(stepName);
+      const implCount = SYNTH_NODE_ORDER.filter(n => synthImplemented.has(n)).length;
+      const progress = (stepIdx >= 0 && implCount)
+        ? (stepIdx + '/' + implCount) : null;
+      _setSynthStagePill('working',
+        progress ? 'Working · ' + progress : null);
     }
   }
 
@@ -2640,13 +3918,16 @@
         icon.textContent = '○'; icon.dataset.status = 'pending';
       }
     }
-    if (synthProgressLbl) {
-      synthProgressLbl.textContent =
-        'Step ' + doneCount + ' of ' + SYNTH_SUBSTEP_FIELDS.length;
-    }
+    // Mirror state into the Cytoscape canvas (no-op when ?ui=cards).
+    // Drives node colors + KPI badges + the top-of-stage status pill.
+    _renderSynthGraph(values);
+    // Live-refresh drawer if open for a synth node (same pattern as
+    // planner — _refreshOpenSynthDrawer is a no-op when not open).
+    _refreshOpenSynthDrawer(values);
   }
 
   function markSynthFailed(message) {
+    let failedNodeId = null;
     for (let i = 0; i < SYNTH_SUBSTEP_FIELDS.length; i++) {
       const c = synthCardEl(i);
       if (!c) continue;
@@ -2660,9 +3941,12 @@
         icon.dataset.status = 'failed';
         c.querySelector('.fw-planner-card-body').innerHTML =
           '<div class="fw-planner-error">' + escapeHtml(message) + '</div>';
+        failedNodeId = SYNTH_NODE_ORDER[i];
         break;
       }
     }
+    if (synthGraph && failedNodeId) synthGraph.setStatus(failedNodeId, 'failed');
+    _setSynthStagePill('failed');
   }
 
   function resetSynthCards() {
@@ -2683,7 +3967,9 @@
         : '<div class="fw-empty">Substep not yet implemented — will be ' +
           'wired into the graph as its real logic lands.</div>';
     });
-    if (synthProgressLbl) synthProgressLbl.textContent = '';
+    // Day 5: also reset the Cytoscape canvas + stage pill on Start.
+    if (synthGraph) synthGraph.reset();
+    _setSynthStagePill('idle');
   }
 
   function refreshSynthStartState() {
@@ -2727,12 +4013,51 @@
     if (synthWipeBtn) {
       if (activeSlug && !running && synthImplemented.size > 0) {
         synthWipeBtn.removeAttribute('disabled');
+        synthWipeBtn.setAttribute('title',
+          "Delete this framework's synth cache " +
+          '(MinIO chapter artifacts + Postgres checkpoints + browser state)');
       } else {
         synthWipeBtn.setAttribute('disabled', 'disabled');
+        synthWipeBtn.setAttribute('title', running
+          ? 'Cannot wipe while a synth run is in flight.'
+          : (synthImplemented.size === 0
+              ? 'Synth pipeline not yet implemented.'
+              : 'Pick a framework first.'));
       }
     }
-    if (synthSubtitle) {
-      synthSubtitle.textContent = activeSlug ? ('Framework: ' + activeSlug) : '';
+    // Framework chip + stage-pill aggregate state.
+    setSynthFramework(activeSlug);
+    if (!running) {
+      // When idle, pill reflects "have any synth output for this slug?"
+      // — but since no nodes are implemented yet, default to 'idle'.
+      // _renderSynthGraph overrides this on the next state refresh.
+      _setSynthStagePill('idle');
+    }
+    // Empty-state placeholder — hide the cards/canvas when no slug
+    // is active so the panel doesn't show an inert pipeline UI.
+    _toggleStageEmpty('synth', !activeSlug);
+  }
+
+  function setSynthFramework(slug) {
+    if (!synthFwNameEl || !synthFwLogosEl) return;
+    if (!slug) {
+      synthFwNameEl.textContent = 'Pick a framework to start.';
+      synthFwNameEl.classList.add('fw-planner-fw-name-empty');
+      synthFwLogosEl.innerHTML = '';
+      synthFwLogosEl.style.display = 'none';
+      return;
+    }
+    const info = frameworkInfo[slug] || {name: slug, logos: []};
+    synthFwNameEl.textContent = info.name || slug;
+    synthFwNameEl.classList.remove('fw-planner-fw-name-empty');
+    if (info.logos && info.logos.length) {
+      synthFwLogosEl.innerHTML = info.logos.map(u =>
+        '<img class="fw-planner-fw-logo" src="' + u + '" alt="">'
+      ).join('');
+      synthFwLogosEl.style.display = '';
+    } else {
+      synthFwLogosEl.innerHTML = '';
+      synthFwLogosEl.style.display = 'none';
     }
   }
 
@@ -2791,9 +4116,12 @@
           markSynthFailed(ev.error || 'Synth failed.');
         } else if (status === 'cancelled') {
           showToast('Synth cancelled. Checkpoints up to the cancel point are preserved.');
+          _setSynthStagePill('cancelled');
         } else if (status === 'not_implemented') {
           // Router stub — no run happened. Don't toast; the cards stay
           // in their "future" state which already communicates the gap.
+        } else {
+          _setSynthStagePill('done');
         }
         try { es.close(); } catch (_) {}
         synthThreadId = null;
@@ -2816,6 +4144,10 @@
           await _refreshSynthCardsFromState(threadId, field);
         }
         _renderSynthLiveProgress(ev.step, ev);
+        // Day 5: route to NodeDrawer if open for this synth node.
+        if (NodeDrawer.isOpenFor('synth', ev.step)) {
+          NodeDrawer.appendEvent(ev);
+        }
       }
     };
     es.onerror = () => {
