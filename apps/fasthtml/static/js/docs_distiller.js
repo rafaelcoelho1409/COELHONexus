@@ -3622,8 +3622,20 @@
         if (s.n_empty_sections) parts.push(`empty=${s.n_empty_sections}`);
         return parts.join(' · ');
       }
-      case 'sawc_write':         { const s = stats('sawc_stats');
-        return s && s.drafts !== undefined ? `drafts=${s.drafts}` : ''; }
+      case 'sawc_write':         {
+        const s = stats('sawc_stats');
+        if (!s) return '';
+        const parts = [];
+        if (s.n_sections !== undefined && s.n_completed !== undefined) {
+          parts.push(`sec=${s.n_completed}/${s.n_sections}`);
+        }
+        if (s.n_fallback) parts.push(`fb=${s.n_fallback}`);
+        if (s.n_repairs) parts.push(`rep=${s.n_repairs}`);
+        if (s.n_picker_fallbacks) {
+          parts.push(`pfb=${s.n_picker_fallbacks}`);
+        }
+        return parts.join(' · ');
+      }
       case 'checklist_eval':     { const s = stats('checklist_stats');
         return s && s.pass !== undefined ? `pass=${s.pass}` : ''; }
       case 'mgsr_replan':        { const s = stats('mgsr_stats');
@@ -4039,9 +4051,72 @@
                ' (' + (ev.wall_ms || 0) + ' ms)';
       }
     }
+    // sawc_write — Structure-Aware Writing Controller (SurveyGen-I §3.2
+    // + MAMM-Refine). Stage-parallel; N=3 best-of-N per section; per-
+    // section critic-pick. Emits 6 event kinds so the live progress
+    // stream has steady cadence across the stage loop.
+    if (stepName === 'sawc_write') {
+      if (ev.kind === 'start') {
+        text = '· starting writes for ' + (ev.chapter_title || ev.chapter_id || 'chapter') +
+               ' (' + (ev.n_sections || 0) + ' sections × 3 drafts = ' +
+               (ev.n_total_drafts || 0) + ' draft calls + critic picks across ' +
+               (ev.n_stages || 0) + ' stages)';
+      } else if (ev.kind === 'stage_start') {
+        const sids = (ev.section_ids || []).join(', ');
+        text = '· stage ' + (ev.stage_idx ?? '?') + ' starting (' +
+               (ev.n_sections_in_stage || 0) + ' sections in parallel: ' +
+               sids + ')';
+      } else if (ev.kind === 'section_draft_done') {
+        const di = (ev.draft_idx ?? 0) + 1;
+        const tot = ev.n_total || 3;
+        const sid = ev.section_id || '?';
+        const dep = ev.deployment ? ' [' + ev.deployment + ']' : '';
+        if (ev.ok) {
+          text = '· ' + sid + ' draft ' + di + '/' + tot + ' done · ' +
+                 (ev.n_paragraphs || 0) + ' paras, ' +
+                 (ev.n_citations || 0) + ' cites, ' +
+                 (ev.wall_ms || 0) + ' ms' +
+                 (ev.n_violations ? ', ' + ev.n_violations + ' viol' : '') + dep;
+        } else {
+          text = '· ' + sid + ' draft ' + di + '/' + tot + ' FAILED: ' +
+                 (ev.error || 'unknown');
+        }
+      } else if (ev.kind === 'section_picked') {
+        const sid = ev.section_id || '?';
+        const fb = ev.fallback ? ' [fallback=' + ev.fallback + ']' : '';
+        const dep = ev.deployment_critic ? ' [' + ev.deployment_critic + ']' : '';
+        if (ev.chosen_idx === -1) {
+          text = '· ' + sid + ' all 3 drafts failed → placeholder';
+        } else {
+          text = '· ' + sid + ' picked draft ' + ev.chosen_idx +
+                 ' (score=' + (ev.structural_score || 0).toFixed(2) +
+                 (ev.n_violations ? ', ' + ev.n_violations + ' viol' : '') +
+                 ')' + fb + dep;
+        }
+      } else if (ev.kind === 'section_done') {
+        const sid = ev.section_id || '?';
+        const fb = ev.fallback ? ' [' + ev.fallback + ']' : '';
+        text = '· ' + sid + ' written — ' + (ev.n_paragraphs || 0) + ' paras, ' +
+               (ev.n_code_refs || 0) + ' refs, ' +
+               (ev.n_citations || 0) + ' cites, ' +
+               ((ev.total_chars || 0) / 1000).toFixed(1) + 'k chars, ' +
+               (ev.wall_ms || 0) + ' ms' + fb;
+      } else if (ev.kind === 'stage_done') {
+        text = '✓ stage ' + (ev.stage_idx ?? '?') + ' complete: ' +
+               (ev.n_completed || 0) + ' sections written, ' +
+               (ev.n_failed || 0) + ' failed (' +
+               (ev.wall_ms || 0) + ' ms)';
+      } else if (ev.kind === 'done') {
+        text = '✓ done — ' + (ev.n_completed || 0) + '/' +
+               (ev.n_sections || 0) + ' sections, ' +
+               (ev.n_fallback || 0) + ' fallbacks, ' +
+               (ev.n_repairs || 0) + ' repairs, ' +
+               (ev.total_drafts_fired || 0) + ' drafts fired' +
+               ' (' + (ev.wall_ms || 0) + ' ms)';
+      }
+    }
     // Per-step rich progress lines added here as nodes ship. Placeholders
     // for nodes not yet implemented:
-    //   if (stepName === 'sawc_write')         { ... per-section / per-iter ... }
     //   if (stepName === 'checklist_eval')     { ... criteria pass-rate ... }
     //   if (stepName === 'mgsr_replan')        { ... live replan actions ... }
     if (text) el.textContent = text;
@@ -4375,7 +4450,11 @@
   // state; it does NOT trigger compute. Only explicit Start Synth click
   // and recoverActiveSynth (page-load, single slug) call /resume.
   async function _tryResumeActiveSynth(slug) {
-    if (!synthCardsEl) return false;
+    // Previously had `if (!synthCardsEl) return false;` which became
+    // an unconditional short-circuit when the cards DOM was removed
+    // (2026-05-19). The function still drives the GRAPH canvas via
+    // renderSynthCards's tail-end `_renderSynthGraph(values)`, so we
+    // must always run regardless of cards-DOM presence.
     synthThreadId = null;
     resetSynthCards();
     refreshSynthStartState();

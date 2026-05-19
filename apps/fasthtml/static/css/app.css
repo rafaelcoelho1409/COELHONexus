@@ -2038,27 +2038,12 @@ html, body {
   font-weight: 500;
 }
 
-/* ----- Legacy single-shot Q&A divider (temporary; removed when wizard completes) ----- */
-.ycs-legacy-divider {
-  margin-top: 8px;
-  border-top: 1px dashed var(--border);
-}
-
 .ycs-intro {
   color: var(--text-muted);
   font-size: 0.9rem;
   line-height: 1.55;
   margin: 0 0 8px 0;
   max-width: 720px;
-}
-.ycs-form { display: flex; flex-direction: column; gap: 16px; }
-.ycs-field { display: flex; flex-direction: column; gap: 6px; }
-.ycs-label {
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  font-weight: 600;
 }
 .ycs-input {
   padding: 12px 16px;
@@ -2075,86 +2060,3 @@ html, body {
 .ycs-input:focus { border-color: var(--primary); }
 .ycs-textarea { resize: vertical; min-height: 72px; line-height: 1.5; }
 .ycs-actions { display: flex; justify-content: flex-end; }
-
-.ycs-status {
-  padding: 12px 18px;
-  border-radius: 3px;
-  font-size: 0.88rem;
-  line-height: 1.5;
-}
-.ycs-status-running {
-  background: var(--running-bg);
-  border: 1px solid var(--running-border);
-  color: var(--running-text);
-}
-.ycs-status-error {
-  background: var(--error-bg);
-  border: 1px solid var(--error-border);
-  color: var(--error-text);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.ycs-indexed {
-  color: var(--text-muted);
-  font-size: 0.82rem;
-  font-style: italic;
-}
-
-.ycs-eyebrow {
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  font-weight: 600;
-  margin-bottom: 10px;
-}
-
-.ycs-answer {
-  padding: 24px 28px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-left: 4px solid var(--primary);
-  border-radius: 3px;
-}
-.ycs-answer-text {
-  font-size: 1.05rem;
-  line-height: 1.6;
-  color: var(--text);
-  margin-bottom: 16px;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-}
-.ycs-answer-meta-row { display: flex; }
-.ycs-answer-meta {
-  color: var(--text-muted);
-  font-size: 0.78rem;
-  letter-spacing: 0.02em;
-}
-
-.ycs-citations-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.ycs-citation {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  padding: 12px 16px;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: var(--card);
-  text-decoration: none;
-  color: var(--text);
-  transition: border-color 0.15s, color 0.15s;
-}
-.ycs-citation:hover { border-color: var(--primary); color: var(--primary); }
-.ycs-citation-title { font-weight: 500; font-size: 0.92rem; }
-.ycs-citation-meta {
-  color: var(--text-muted);
-  font-size: 0.78rem;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-}
