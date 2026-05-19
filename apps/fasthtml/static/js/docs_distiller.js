@@ -3651,8 +3651,20 @@
         if (s.n_failed_feedback) parts.push(`fb=${s.n_failed_feedback}`);
         return parts.join(' · ');
       }
-      case 'mgsr_replan':        { const s = stats('mgsr_stats');
-        return s && s.actions !== undefined ? `act=${s.actions}` : ''; }
+      case 'mgsr_replan':        {
+        const s = stats('mgsr_stats');
+        if (!s) return '';
+        const parts = [];
+        if (s.halt !== undefined) {
+          parts.push(s.halt ? '✓halt' : '↻loop');
+        }
+        if (s.halt_reason) parts.push(s.halt_reason);
+        if (s.n_actions !== undefined) parts.push(`act=${s.n_actions}`);
+        if (s.confidence !== undefined) {
+          parts.push(`conf=${(s.confidence * 100).toFixed(0)}%`);
+        }
+        return parts.join(' · ');
+      }
       case 'render_audit_write': { const s = stats('chapter_stats');
         return s && s.chapters !== undefined ? `ch=${s.chapters}` : ''; }
     }
@@ -4167,9 +4179,44 @@
                ' (' + (ev.wall_ms || 0) + ' ms)';
       }
     }
-    // Per-step rich progress lines added here as nodes ship. Placeholders
-    // for nodes not yet implemented:
-    //   if (stepName === 'mgsr_replan')        { ... live replan actions ... }
+    // mgsr_replan — Memory-Guided Structure Replanner (SurveyGen-I +
+    // CoRefine). Fast path = trivial_pass (no LLM call) when chapter
+    // already passed checklist. Slow path = 1 LLM call emitting typed
+    // replan actions on the outline DAG. 5 event kinds.
+    if (stepName === 'mgsr_replan') {
+      if (ev.kind === 'start') {
+        const fmtRate = ((ev.pass_rate || 0) * 100).toFixed(0);
+        text = '· starting replan for ' + (ev.chapter_title || ev.chapter_id || 'chapter') +
+               ' (pass=' + fmtRate + '%, ' +
+               (ev.n_failed_criteria || 0) + ' failed criteria)';
+      } else if (ev.kind === 'trivial_pass') {
+        text = '· chapter already passed (' +
+               ((ev.pass_rate || 0) * 100).toFixed(0) +
+               '%) — halting trivially, no LLM call';
+      } else if (ev.kind === 'llm_request') {
+        text = '· LLM replan: dispatching (' +
+               (ev.n_failed_criteria || 0) + ' failed criteria)…';
+      } else if (ev.kind === 'llm_done') {
+        const dep = ev.deployment ? ' [' + ev.deployment + ']' : '';
+        const rep = ev.repaired ? ' (repaired)' : '';
+        const halt = ev.halt ? 'halt' : 'continue';
+        if (ev.error) {
+          text = '· LLM replan FAILED — fallback halt (' +
+                 (ev.wall_ms || 0) + ' ms)';
+        } else {
+          text = '· LLM replan done: ' + halt + ', ' +
+                 (ev.n_actions || 0) + ' actions, conf=' +
+                 ((ev.confidence || 0) * 100).toFixed(0) + '%' +
+                 rep + ' (' + (ev.wall_ms || 0) + ' ms)' + dep;
+        }
+      } else if (ev.kind === 'done') {
+        const mark = ev.halt ? '✓ HALT' : '↻ LOOP';
+        text = '✓ done — ' + mark + ' (' + (ev.halt_reason || '?') + '), ' +
+               (ev.n_actions || 0) + ' actions, conf=' +
+               ((ev.confidence || 0) * 100).toFixed(0) + '%' +
+               ' (' + (ev.wall_ms || 0) + ' ms)';
+      }
+    }
     if (text) el.textContent = text;
   }
 

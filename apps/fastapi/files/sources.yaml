@@ -176,6 +176,13 @@ frameworks:
   github: https://github.com/qdrant/fastembed
   category: Python
 
+- name: FastHTML
+  logo: https://www.fastht.ml/docs/logo.svg
+  docs: https://www.fastht.ml/docs/index.html
+  llms_txt: https://fastht.ml/docs/llms.txt
+  github: https://github.com/answerdotai/fasthtml
+  category: Python
+
 - name: FastMCP
   logo: https://mintcdn.com/fastmcp/Lu2sdJVHDyHdvswk/assets/brand/wordmark.png?fit=max&auto=format&n=Lu2sdJVHDyHdvswk&q=85&s=67680e9b1c641023511881a24f296077
   docs: https://gofastmcp.com/
