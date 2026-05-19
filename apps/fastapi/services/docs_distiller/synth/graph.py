@@ -31,6 +31,7 @@ from .nodes.checklist_eval import checklist_eval
 from .nodes.digest_construct import digest_construct
 from .nodes.mgsr_replan import mgsr_replan
 from .nodes.outline_sdp import outline_sdp
+from .nodes.render_audit_write import render_audit_write
 from .nodes.sawc_write import sawc_write
 # Planner owns checkpointer init in lifespan; reuse the same saver.
 from ..planner.checkpoint import get_checkpointer
@@ -59,8 +60,7 @@ NODE_REGISTRY = {
     "sawc_write":         sawc_write,
     "checklist_eval":     checklist_eval,
     "mgsr_replan":        mgsr_replan,
-    # placeholders — add as each node ships:
-    # "render_audit_write":  render_audit_write,
+    "render_audit_write": render_audit_write,
 }
 
 # Primary state field each node writes — used by /resume's catch-up
@@ -81,6 +81,7 @@ IMPLEMENTED = (
     "sawc_write",
     "checklist_eval",
     "mgsr_replan",
+    "render_audit_write",
 )
 
 

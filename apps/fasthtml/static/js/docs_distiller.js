@@ -3665,8 +3665,24 @@
         }
         return parts.join(' · ');
       }
-      case 'render_audit_write': { const s = stats('chapter_stats');
-        return s && s.chapters !== undefined ? `ch=${s.chapters}` : ''; }
+      case 'render_audit_write': {
+        const s = stats('chapter_stats');
+        if (!s) return '';
+        const parts = [];
+        if (s.audit_passed === true)  parts.push('audit=✓');
+        if (s.audit_passed === false) parts.push('audit=✗');
+        if (s.n_artifacts !== undefined) parts.push(`arts=${s.n_artifacts}`);
+        if (s.n_code_refs !== undefined && s.n_resolved !== undefined &&
+            s.n_code_refs > 0) {
+          parts.push(`refs=${s.n_resolved}/${s.n_code_refs}`);
+        }
+        if (s.n_missing) parts.push(`miss=${s.n_missing}`);
+        if (s.n_byte_drift) parts.push(`drift=${s.n_byte_drift}`);
+        if (s.rendered_chars) {
+          parts.push(`${(s.rendered_chars / 1000).toFixed(1)}k`);
+        }
+        return parts.join(' · ');
+      }
     }
     return '';
   }
@@ -4176,6 +4192,56 @@
                (ev.n_passed || 0) + '/' + (ev.n_total || 0) +
                ' criteria (' + ((ev.pass_rate || 0) * 100).toFixed(0) + '%), ' +
                (ev.n_failed_feedback || 0) + ' feedback notes' +
+               ' (' + (ev.wall_ms || 0) + ' ms)';
+      }
+    }
+    // render_audit_write — Final node. Zero LLM calls. Renders 3
+    // artifacts (README.md, challenges.md, flashcards.json) via Jinja2
+    // + runs SHA-256 round-trip audit on code refs. 5 event kinds.
+    if (stepName === 'render_audit_write') {
+      if (ev.kind === 'start') {
+        text = '· starting render for ' + (ev.chapter_title || ev.chapter_id || 'chapter') +
+               ' (' + (ev.n_sections || 0) + ' sections, ' +
+               (ev.n_challenges || 0) + ' challenges, ' +
+               (ev.n_flashcards || 0) + ' flashcards · mgsr ' +
+               (ev.mgsr_halt_reason || '?') + ')';
+      } else if (ev.kind === 'inputs_loaded') {
+        text = '· vaults loaded: ' + (ev.n_vault_files_loaded || 0) + '/' +
+               (ev.n_sources || 0) + ' source vaults' +
+               (ev.n_vault_files_skipped
+                 ? ', ' + ev.n_vault_files_skipped + ' skipped'
+                 : '') +
+               ' · ' + (ev.n_vault_entries || 0) + ' total vault entries';
+      } else if (ev.kind === 'rendered') {
+        const auditMark = ev.audit_passed ? '✓' : '✗';
+        text = '· rendered chapter (' +
+               ((ev.chapter_chars || 0) / 1000).toFixed(1) + 'k chars, ' +
+               (ev.n_sections_rendered || 0) + ' sections) · ' +
+               'audit=' + auditMark + ' refs=' +
+               (ev.n_code_refs_resolved || 0) + '/' +
+               ((ev.n_code_refs_resolved || 0) +
+                (ev.n_code_refs_missing || 0)) +
+               (ev.n_code_refs_missing
+                 ? ' · miss=' + ev.n_code_refs_missing : '') +
+               (ev.n_code_refs_drift
+                 ? ' · drift=' + ev.n_code_refs_drift : '') +
+               (ev.sentinels_in_output
+                 ? ' · sent=' + ev.sentinels_in_output : '');
+      } else if (ev.kind === 'artifacts_written') {
+        const names = (ev.artifact_names || []).join(', ');
+        text = '· wrote ' + (ev.n_artifacts || 0) + ' artifacts (' +
+               ((ev.total_bytes || 0) / 1000).toFixed(1) + 'k bytes total) — ' +
+               names;
+      } else if (ev.kind === 'done') {
+        const mark = ev.audit_passed ? '✓ AUDIT PASSED' : '✗ AUDIT FAILED';
+        text = '✓ done — ' + mark + ' · ' +
+               (ev.n_artifacts || 0) + ' artifacts, ' +
+               ((ev.rendered_chars || 0) / 1000).toFixed(1) + 'k chars rendered' +
+               (ev.n_missing ? ' · ' + ev.n_missing + ' missing refs' : '') +
+               (ev.n_byte_drift ? ' · ' + ev.n_byte_drift + ' drift' : '') +
+               (ev.sentinels_in_output
+                 ? ' · ' + ev.sentinels_in_output + ' unresolved sentinels'
+                 : '') +
                ' (' + (ev.wall_ms || 0) + ' ms)';
       }
     }
