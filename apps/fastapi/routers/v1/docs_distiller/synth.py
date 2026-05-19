@@ -93,6 +93,145 @@ async def synth_info() -> dict:
     }
 
 
+# =============================================================================
+# Step 5 Study viewer — artifact serving
+# =============================================================================
+# Per `docs/UI-ARCHITECTURE-SOTA-2026-05-18.md` 5-step pipeline:
+#   Catalog → Ingestion → Planner → Synth → Study
+# Step 5 (Study) needs to read the 3 artifacts that render_audit_write
+# produces per chapter:
+#   - synth/{slug}/{chapter_id}/README.md       (full chapter markdown)
+#   - synth/{slug}/{chapter_id}/challenges.md   (active-recall questions)
+#   - synth/{slug}/{chapter_id}/flashcards.json (Q/A pairs)
+# Plus a "list chapters with their render-status" endpoint so the
+# sidebar can show which chapters are ready vs not-yet-synthesized.
+
+_VALID_ARTIFACTS = {
+    "README.md":       "text/markdown; charset=utf-8",
+    "challenges.md":   "text/markdown; charset=utf-8",
+    "flashcards.json": "application/json",
+}
+
+
+@router.get("/{slug}/study/chapters")
+async def list_study_chapters(slug: str) -> dict:
+    """Chapter list for the Step 5 study viewer. For each chapter in
+    `planner/{slug}/plan-latest.json`, returns whether render_audit_write
+    has produced its artifacts yet — drives the sidebar status badges.
+
+    Shape:
+      {
+        "framework_slug": str,
+        "chapters": [
+          {
+            "id":           "ch-01-introduction-to-pydantic-basics",
+            "title":        "Introduction to Pydantic Basics",
+            "order":        1,
+            "n_sources":    9,
+            "rendered":     true,
+            "audit_passed": true,
+            "render_path":  "synth/.../render-latest.json"  (when rendered)
+          },
+          ...
+        ]
+      }
+    """
+    plan = await _load_plan(slug)
+    chapters_in: list[dict] = plan.get("chapters") or []
+    if not chapters_in:
+        return {"framework_slug": slug, "chapters": []}
+
+    minio = get_storage()
+    out: list[dict] = []
+    for ch in chapters_in:
+        cid = (ch or {}).get("id")
+        if not cid:
+            continue
+        render_key = (
+            f"synth/{slug}/{cid}/render-latest.json"
+        )
+        rendered = await minio.exists(render_key)
+        entry: dict = {
+            "id":         cid,
+            "title":      ch.get("title") or cid,
+            "order":      ch.get("order") or 0,
+            "n_sources":  len(ch.get("sources") or []),
+            "rendered":   rendered,
+            "audit_passed": False,
+            "render_path": render_key if rendered else None,
+        }
+        if rendered:
+            try:
+                text = await minio.read_text(render_key)
+                rp = json.loads(text)
+                entry["audit_passed"] = bool(
+                    (rp.get("audit") or {}).get("audit_passed", False)
+                )
+                entry["rendered_chars"] = rp.get("rendered_chars", 0)
+                entry["n_sections"] = rp.get("n_sections", 0)
+                # Synth thread that produced this render — lets the UI
+                # re-open the chapter's LangGraph canvas after a refresh.
+                # May be absent on blobs written before this field shipped.
+                entry["thread_id"] = rp.get("thread_id") or None
+            except Exception:
+                # render-latest exists but unparseable — flag as rendered
+                # but audit unknown
+                pass
+        out.append(entry)
+    return {"framework_slug": slug, "chapters": out}
+
+
+@router.get("/{slug}/study/{chapter_id}/artifact/{artifact_name}")
+async def get_study_artifact(
+    slug: str, chapter_id: str, artifact_name: str,
+) -> StreamingResponse:
+    """Stream one of the 3 chapter artifacts back to the browser. Used
+    by the Step 5 viewer to render README.md (via marked.js), display
+    challenges.md (also via marked.js), and parse flashcards.json
+    client-side.
+
+    Names enforced via `_VALID_ARTIFACTS` allow-list so this endpoint
+    can't be used to read arbitrary MinIO keys.
+    """
+    if artifact_name not in _VALID_ARTIFACTS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"invalid artifact name {artifact_name!r}; valid: "
+                f"{sorted(_VALID_ARTIFACTS)}"
+            ),
+        )
+    key = f"synth/{slug}/{chapter_id}/{artifact_name}"
+    minio = get_storage()
+    if not await minio.exists(key):
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"artifact {artifact_name!r} for chapter {chapter_id!r} "
+                f"not in MinIO at {key!r}; run synth + render first"
+            ),
+        )
+
+    async def _gen():
+        try:
+            text = await minio.read_text(key)
+            yield text.encode("utf-8")
+        except Exception as e:
+            logger.warning(
+                f"[synth-study-artifact] read failed for {key!r}: "
+                f"{type(e).__name__}: {e}"
+            )
+            yield b""
+
+    return StreamingResponse(
+        _gen(),
+        media_type=_VALID_ARTIFACTS[artifact_name],
+        headers={
+            "Cache-Control": "public, max-age=60",
+        },
+    )
+
+
 @router.get("/recent")
 async def list_recent_synth() -> dict:
     """Most-recent thread per slug. thread_id format:
@@ -231,7 +370,7 @@ _VALID_MODES = {"quality", "fast"}
 
 
 def _make_thread_id(slug: str, chapter_id: str | None = None) -> str:
-    """Canonical synth thread_id format. MUST match
+    """Canonical per-chapter synth thread_id. MUST match
     apps/fasthtml/static/js/docs_distiller.js:_genSynthThreadId so the
     Redis channel + /synth/recent SQL + /synth/{slug}/wipe SQL pattern-
     match correctly across client/server.
@@ -244,8 +383,252 @@ def _make_thread_id(slug: str, chapter_id: str | None = None) -> str:
     return f"docs-distiller/synth/{slug}/{uuid.uuid4()}"
 
 
+def _make_study_thread_id(slug: str) -> str:
+    """Study orchestrator thread_id — distinct prefix so /synth/recent
+    + /synth/{slug}/wipe SQL pattern-matchers can tell apart per-chapter
+    runs from study-level orchestrator runs. Used as the SSE channel
+    the UI subscribes to for orchestrator-level events (study_start,
+    chapter_running, chapter_done, study_done)."""
+    return f"docs-distiller/study/{slug}/{uuid.uuid4()}"
+
+
 # =============================================================================
-# Start synth (per chapter)
+# Study orchestrator
+# =============================================================================
+# Sequential per-chapter runner. POST /synth/{slug} (no chapter_id) spawns
+# this as a detached background task. For each chapter in the planner plan,
+# it kicks off a normal per-chapter graph.ainvoke and waits for completion
+# before moving to the next. The orchestrator emits study-level SSE events
+# on its own thread_id so the UI can show a chapter-progress strip that
+# updates in real time as chapters move pending → running → done.
+#
+# Concurrency: _STUDY_SEM = 1 (sequential). Bump to 2+ later if needed —
+# free-tier rotator + bandit handle ~30 concurrent calls cleanly, but
+# starting sequential makes the UX easier to follow.
+
+_STUDY_SEM = 1
+
+
+async def _run_study_orchestrator(
+    *,
+    slug: str,
+    study_thread_id: str,
+    chapter_ids: list[str],
+    mode: str,
+) -> None:
+    """Semaphore-gated orchestrator: run chapters through the synth graph.
+
+    Concurrency = `_STUDY_SEM` (default 1 — functionally sequential).
+    Bumping `_STUDY_SEM` enables true parallelism via `asyncio.gather`
+    over per-chapter coroutines, each gated by a shared Semaphore.
+
+    For each chapter:
+      1. Mint a per-chapter thread_id
+      2. Emit `chapter_running` on the study channel
+      3. Run graph.ainvoke for the chapter (all 6 nodes fire as usual)
+      4. On completion, emit `chapter_done` with status
+
+    Cancellation (POST /synth/{study_thread_id}/cancel sets the cancel
+    flag on the study thread):
+      - Queued chapters waiting on the semaphore short-circuit on the
+        cancel check before running
+      - In-flight chapters complete naturally (their per-chapter cancel
+        is independent — cancel each one to interrupt mid-pipeline)
+    """
+    n_total = len(chapter_ids)
+    await emit_progress(
+        study_thread_id, "study", "study_start",
+        slug=slug,
+        n_chapters=n_total,
+        chapter_ids=chapter_ids,
+        mode=mode,
+        concurrency=_STUDY_SEM,
+    )
+
+    # asyncio is single-threaded — naked dict mutation is race-free.
+    counters = {"completed": 0, "failed": 0, "cancelled": False}
+    sem = asyncio.Semaphore(_STUDY_SEM)
+
+    async def _study_cancelled() -> bool:
+        r = redis_aio.from_url(
+            _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        )
+        try:
+            from services.docs_distiller.synth.cancel import is_cancelled
+            return await is_cancelled(r, study_thread_id)
+        except Exception:
+            return False
+        finally:
+            try: await r.aclose()
+            except Exception: pass
+
+    async def _run_one(position: int, chapter_id: str) -> None:
+        # Fast pre-acquire cancel check — short-circuit deeply-queued
+        # chapters when a cancel arrives before their turn.
+        if await _study_cancelled():
+            counters["cancelled"] = True
+            return
+
+        async with sem:
+            # Re-check after acquiring the slot — a cancel may have
+            # fired while we waited behind the semaphore.
+            if await _study_cancelled():
+                counters["cancelled"] = True
+                return
+
+            chapter_thread_id = _make_thread_id(slug)
+            await emit_progress(
+                study_thread_id, "study", "chapter_running",
+                chapter_id=chapter_id,
+                chapter_thread_id=chapter_thread_id,
+                position=position,
+                n_total=n_total,
+            )
+
+            try:
+                graph = build_graph()
+            except RuntimeError as e:
+                counters["failed"] += 1
+                await emit_progress(
+                    study_thread_id, "study", "chapter_done",
+                    chapter_id=chapter_id,
+                    position=position, n_total=n_total,
+                    status="failed", error=str(e),
+                )
+                return
+
+            # Clear any stale cancel flag on the per-chapter thread.
+            r = redis_aio.from_url(
+                _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+            )
+            try:
+                await clear_cancel(r, chapter_thread_id)
+            finally:
+                await r.aclose()
+
+            initial_state = {
+                "framework_slug": slug,
+                "chapter_id":     chapter_id,
+                "thread_id":      chapter_thread_id,
+                "synth_mode":     mode,
+                "status":         "running",
+            }
+            config = {"configurable": {"thread_id": chapter_thread_id}}
+
+            main_task = asyncio.create_task(
+                graph.ainvoke(initial_state, config),
+            )
+            watcher_task = asyncio.create_task(
+                cancel_watcher(chapter_thread_id, main_task),
+            )
+
+            chapter_status = "done"
+            chapter_error: str | None = None
+            try:
+                await main_task
+            except asyncio.CancelledError:
+                chapter_status = "cancelled"
+            except Exception as e:
+                chapter_status = "failed"
+                chapter_error = f"{type(e).__name__}: {e}"
+                logger.exception(
+                    f"[study-orchestrator] {slug}/{chapter_id}: chapter "
+                    f"run failed ({type(e).__name__}: {e})"
+                )
+            finally:
+                watcher_task.cancel()
+                try:
+                    await watcher_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            # Patch terminal status into the per-chapter checkpointer.
+            try:
+                await graph.aupdate_state(
+                    config,
+                    {"status": chapter_status, "error": chapter_error},
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[study-orchestrator] {slug}/{chapter_id}: "
+                    f"aupdate_state failed: {type(e).__name__}: {e}"
+                )
+
+            await emit_progress(
+                chapter_thread_id, "synth", "terminal",
+                status=chapter_status, error=chapter_error,
+            )
+
+            if chapter_status == "done":
+                counters["completed"] += 1
+            else:
+                counters["failed"] += 1
+            await emit_progress(
+                study_thread_id, "study", "chapter_done",
+                chapter_id=chapter_id,
+                chapter_thread_id=chapter_thread_id,
+                position=position,
+                n_total=n_total,
+                status=chapter_status,
+                error=chapter_error,
+            )
+            logger.info(
+                f"[study-orchestrator] {slug}/{chapter_id}: "
+                f"{chapter_status} ({position}/{n_total})"
+            )
+
+    # Schedule all chapters at once — the Semaphore caps the actual
+    # in-flight count. With _STUDY_SEM=1 this is functionally sequential.
+    # return_exceptions=True so one chapter's unexpected error can't
+    # cancel its still-queued siblings (each _run_one is already
+    # defensively wrapped, so this is belt-and-suspenders).
+    results = await asyncio.gather(
+        *[_run_one(i + 1, cid) for i, cid in enumerate(chapter_ids)],
+        return_exceptions=True,
+    )
+    for res in results:
+        if isinstance(res, Exception):
+            logger.error(
+                f"[study-orchestrator] {slug}: a chapter task raised "
+                f"unexpectedly: {type(res).__name__}: {res}"
+            )
+
+    n_completed = counters["completed"]
+    n_failed = counters["failed"]
+    cancelled = counters["cancelled"]
+    final_status = (
+        "cancelled" if cancelled
+        else ("failed" if n_failed and not n_completed else "done")
+    )
+    await emit_progress(
+        study_thread_id, "study", "study_done",
+        n_completed=n_completed,
+        n_failed=n_failed,
+        n_total=n_total,
+        final_status=final_status,
+    )
+    # Mirror to a "synth"-step terminal event too so EventSource handlers
+    # that key off `step === 'synth' && kind === 'terminal'` close cleanly.
+    await emit_progress(
+        study_thread_id, "synth", "terminal",
+        status=final_status,
+        error=None,
+        n_completed=n_completed,
+        n_failed=n_failed,
+        n_total=n_total,
+    )
+    logger.info(
+        f"[study-orchestrator] {slug}: done — "
+        f"{n_completed}/{n_total} completed, {n_failed} failed, "
+        f"final_status={final_status}"
+    )
+
+
+# =============================================================================
+# Start synth — two modes:
+#   - POST /synth/{slug}                    → STUDY mode: orchestrator runs
+#                                              ALL chapters sequentially
+#   - POST /synth/{slug}?chapter_id=X       → SINGLE mode: just chapter X
 # =============================================================================
 @router.post("/{slug}")
 async def start_synth(
@@ -254,8 +637,22 @@ async def start_synth(
     mode: str = Query(default="quality"),
     thread_id: str | None = Query(default=None),
 ) -> dict:
-    """Kick off a synth run for ONE chapter of `slug`. Detached background
-    task; returns immediately with thread_id + chapter_id."""
+    """Kick off a synth run.
+
+    Behavior depends on whether `chapter_id` is provided:
+
+      - With `chapter_id`: single-chapter run (escape hatch for re-running
+        one specific chapter; preserved for the existing UI single-chapter
+        flow). Returns `{thread_id, chapter_id, status: "running"}`.
+
+      - Without `chapter_id`: STUDY mode — spawns the orchestrator
+        background task that runs ALL chapters in `plan-latest.json`
+        sequentially (sem=1 for v1; raise to 2 if free-tier rotator
+        can handle the burst). Returns `{study_thread_id, n_chapters,
+        chapter_ids, status: "running"}`. The UI subscribes to the
+        study thread for orchestrator events and opens per-chapter
+        SSE connections on `chapter_running` events.
+    """
     if mode not in _VALID_MODES:
         raise HTTPException(
             status_code=400,
@@ -263,22 +660,56 @@ async def start_synth(
         )
 
     plan = await _load_plan(slug)
-    if chapter_id is None:
-        chapter_id = _pick_first_chapter_id(plan)
-        if not chapter_id:
-            raise HTTPException(
-                status_code=404,
-                detail=f"plan for {slug!r} has no chapters",
-            )
+    plan_chapter_ids: list[str] = sorted(
+        c["id"] for c in (plan.get("chapters") or [])
+        if (c or {}).get("id")
+    )
+    if not plan_chapter_ids:
+        raise HTTPException(
+            status_code=404,
+            detail=f"plan for {slug!r} has no chapters",
+        )
 
-    # Validate chapter exists in plan
-    chapter_ids = {(c or {}).get("id") for c in (plan.get("chapters") or [])}
-    if chapter_id not in chapter_ids:
+    # ── STUDY MODE — orchestrator over all chapters ────────────────────
+    if chapter_id is None:
+        study_thread_id = thread_id or _make_study_thread_id(slug)
+
+        # Clear stale cancel flag on the study thread
+        r = redis_aio.from_url(
+            _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        )
+        try:
+            await clear_cancel(r, study_thread_id)
+        finally:
+            await r.aclose()
+
+        bg_task = asyncio.create_task(_run_study_orchestrator(
+            slug=slug,
+            study_thread_id=study_thread_id,
+            chapter_ids=plan_chapter_ids,
+            mode=mode,
+        ))
+        _active_runs.add(bg_task)
+        bg_task.add_done_callback(_active_runs.discard)
+
+        return {
+            "study_thread_id": study_thread_id,
+            "slug":            slug,
+            "n_chapters":      len(plan_chapter_ids),
+            "chapter_ids":     plan_chapter_ids,
+            "mode":            mode,
+            "concurrency":     _STUDY_SEM,
+            "status":          "running",
+            "latency_ms":      0,
+        }
+
+    # ── SINGLE-CHAPTER MODE — preserved escape hatch ───────────────────
+    if chapter_id not in set(plan_chapter_ids):
         raise HTTPException(
             status_code=404,
             detail=(
                 f"chapter {chapter_id!r} not in plan; known ids: "
-                f"{sorted(c for c in chapter_ids if c)}"
+                f"{plan_chapter_ids}"
             ),
         )
 

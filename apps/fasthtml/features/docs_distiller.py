@@ -266,16 +266,20 @@ def _Picker():
                 cls="fw-planner-head-text",
             ),
             Div(
-                # Budget knob — per the SOTA doc step 8 (CoRefine halting):
+                # Refine budget — per the SOTA doc step 8 (CoRefine halting):
                 # max replan iterations per chapter before forcing best-seen
-                # commit. Server-rendered defaults; JS may extend later.
+                # commit. DISABLED until v2: the synth graph is single-pass
+                # today (no StateGraph cycle back to sawc_write), so this
+                # value is inert. start_synth doesn't consume it yet either.
+                # Re-enable when the v2 refine loop + budget wiring lands.
                 Div(
-                    Span("Budget", cls="fw-planner-mode-label"),
+                    Span("Refine budget", cls="fw-planner-mode-label"),
                     Select(
-                        Option("3 iters (fast)",   value="3"),
-                        Option("5 iters (default)", value="5", selected=True),
-                        Option("8 iters (quality)", value="8"),
+                        Option("v2 — coming soon", value="5", selected=True),
                         id="fw-synth-budget", cls="fw-planner-mode-select",
+                        disabled=True,
+                        title=("Self-refine loop is deferred to v2 — every "
+                               "chapter runs a single pass today."),
                     ),
                     cls="fw-planner-mode-box",
                 ),
@@ -294,6 +298,21 @@ def _Picker():
             "Pick a framework from the library to view the synth pipeline.",
             id="fw-synth-empty", cls="fw-stage-empty",
         ),
+        # Chapter progress strip — visible only during STUDY mode runs
+        # (when `Start Synth` is clicked with no specific chapter, the
+        # orchestrator runs all chapters sequentially). JS populates one
+        # `.fw-chstrip-cell` per chapter and flips its data-status as
+        # `chapter_running`/`chapter_done` events arrive on the study
+        # SSE channel. Hidden by default; .visible class added by JS.
+        Div(
+            Div(
+                Span("Chapters", cls="fw-chstrip-title"),
+                Span(id="fw-chstrip-counter", cls="fw-chstrip-counter"),
+                cls="fw-chstrip-head",
+            ),
+            Div(id="fw-chstrip-cells", cls="fw-chstrip-cells"),
+            id="fw-chstrip", cls="fw-chstrip",
+        ),
         # Substep timeline — Cytoscape DAG canvas only (cards removed
         # 2026-05-19; see planner-side comment for rationale).
         Div(
@@ -302,15 +321,129 @@ def _Picker():
         ),
     )
 
-    # Step 5 — page grid (rendered by JS from /ingestion/{slug}/manifest)
+    # Step 5 — Study (chapter viewer for synthesized output)
+    # Three-column layout per Mintlify/Docusaurus/Fumadocs 2026 convention:
+    #   left:   chapter sidebar (rendered/not-rendered status per chapter)
+    #   center: tabs (README / Challenges / Cards) + content
+    #   right:  (optional) section TOC for the README tab
+    # JS populates everything from the artifact endpoints when activeSlug
+    # changes or the user lands on Step 5. Empty-state when no synth output
+    # exists yet for the framework.
     step5_body = Div(
-        Div(id="fw-pages-summary", cls="fw-pages-summary"),
+        # Header: framework name + global "regenerate synth" hint
         Div(
             Div(
-                "Pick an item from the sidebar or generate a new study.",
-                cls="fw-empty",
+                Div("Study", cls="fw-planner-title"),
+                Div(
+                    Span("Idle", cls="fw-stage-pill-text",
+                         id="fw-study-pill-text"),
+                    cls="fw-stage-pill", id="fw-study-pill",
+                    data_status="idle",
+                ),
+                cls="fw-planner-title-row",
             ),
-            id="fw-page-grid", cls="fw-page-grid",
+            Div(
+                Div(id="fw-study-fw-logos", cls="fw-planner-fw-logos"),
+                Span("Pick a framework with synthesized chapters.",
+                     id="fw-study-fw-name",
+                     cls="fw-planner-fw-name fw-planner-fw-name-empty"),
+                id="fw-study-fw", cls="fw-planner-fw",
+            ),
+            cls="fw-planner-head-text",
+        ),
+        # Empty-state placeholder — visible when no slug active OR no
+        # chapters rendered yet. JS hides this when there's content.
+        Div(
+            "Pick a framework from the library, then run Synth on its "
+            "chapters to populate this study viewer.",
+            id="fw-study-empty", cls="fw-stage-empty",
+        ),
+        # Reader — chapter list is now a slide-out SIDE WINDOW (toggled by
+        # the `≡ Chapters` button in the tab strip); the materials reader
+        # takes the full main width. Backdrop dims the page while the
+        # window is open and closes it on click.
+        Div(
+            # Backdrop — only interactive while the side window is open.
+            Div(id="fw-study-side-backdrop", cls="fw-study-side-backdrop"),
+            # Slide-out chapter window (off-canvas left). JS toggles `.open`
+            # on both this and the backdrop. Same #fw-study-chapter-list id
+            # so the existing render/click logic is untouched.
+            Div(
+                Div(
+                    Span("Chapters", cls="fw-study-side-title"),
+                    Button("×", id="fw-study-side-close",
+                           cls="fw-study-side-close", type="button",
+                           title="Close"),
+                    cls="fw-study-side-header",
+                ),
+                Div(id="fw-study-chapter-list",
+                    cls="fw-study-chapter-list"),
+                cls="fw-study-side",
+                id="fw-study-side",
+            ),
+            # MAIN: tabs + content (full width)
+            Div(
+                # Tab strip — `≡ Chapters` toggle on the left, then the
+                # 3 artifact tabs.
+                Div(
+                    Button("☰ Chapters", id="fw-study-toc-toggle",
+                           cls="fw-study-toc-toggle", type="button",
+                           title="Show chapters"),
+                    Button("README", cls="fw-study-tab active",
+                           data_tab="readme",
+                           type="button"),
+                    Button("Challenges", cls="fw-study-tab",
+                           data_tab="challenges",
+                           type="button"),
+                    Button("Flashcards", cls="fw-study-tab",
+                           data_tab="flashcards",
+                           type="button"),
+                    cls="fw-study-tabs",
+                ),
+                # Per-chapter heading strip (rendered when chapter
+                # selected — shows chapter title + audit status)
+                Div(id="fw-study-chapter-head",
+                    cls="fw-study-chapter-head"),
+                # Tab panes — only the active one is shown via CSS
+                Div(
+                    # README pane — marked.js renders into here
+                    Div(
+                        Div(
+                            "Open the ☰ Chapters window and pick a chapter.",
+                            cls="fw-empty",
+                        ),
+                        id="fw-study-readme",
+                        cls="fw-study-pane fw-study-prose active",
+                        data_tab="readme",
+                    ),
+                    # Challenges pane — collapsible Q/A
+                    Div(
+                        Div(
+                            "Pick a chapter to view its active-recall "
+                            "questions.",
+                            cls="fw-empty",
+                        ),
+                        id="fw-study-challenges",
+                        cls="fw-study-pane fw-study-prose",
+                        data_tab="challenges",
+                    ),
+                    # Flashcards pane — flip-card study mode
+                    Div(
+                        Div(
+                            "Pick a chapter to study its flashcards.",
+                            cls="fw-empty",
+                        ),
+                        id="fw-study-flashcards",
+                        cls="fw-study-pane fw-study-cards",
+                        data_tab="flashcards",
+                    ),
+                    cls="fw-study-content",
+                ),
+                cls="fw-study-main",
+                id="fw-study-main",
+            ),
+            cls="fw-study-grid",
+            id="fw-study-grid",
         ),
     )
 

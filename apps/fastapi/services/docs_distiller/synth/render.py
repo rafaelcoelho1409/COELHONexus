@@ -169,6 +169,11 @@ class RenderResult(BaseModel):
     mgsr_manifest_hash:    str
     render_manifest_hash:  str
     wall_ms:               int
+    # The synth thread that produced this render. Persisted so the Study
+    # chapter strip can re-open the chapter's LangGraph canvas (node
+    # statuses) after a page refresh — the per-run thread_id is otherwise
+    # ephemeral. Optional/defaulted so pre-existing blobs still parse.
+    thread_id:             str = ""
 
 
 # =============================================================================

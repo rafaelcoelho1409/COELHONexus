@@ -497,6 +497,7 @@ async def render_audit_write(state: SynthState) -> dict:
         mgsr_manifest_hash=mgsr_manifest_hash,
         render_manifest_hash=manifest_hash,
         wall_ms=elapsed,
+        thread_id=thread_id,
     )
     payload = result.model_dump()
     blob_bytes = json.dumps(payload, indent=2, ensure_ascii=False)

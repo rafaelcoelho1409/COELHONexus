@@ -982,7 +982,21 @@
       }
     });
 
-    return { open, close, isOpenFor, appendEvent, updateContext,
+    // reset() — clear in-flight events + DOM log without closing the
+    // drawer. Used when the study orchestrator advances to the next
+    // chapter so an already-open drawer doesn't keep stale events from
+    // the previous chapter's run of the same node.
+    function reset() {
+      _pendingEvents = [];
+      if (elLog) {
+        while (elLog.firstChild) elLog.removeChild(elLog.firstChild);
+      }
+      if (elLogEmpty) elLogEmpty.style.display = '';
+      _lastSeenAt.clear();
+      _prevSeenForOpen = 0;
+    }
+
+    return { open, close, reset, isOpenFor, appendEvent, updateContext,
              get openNodeId() { return _openNodeId; },
              get openStage()  { return _openStage; } };
   })();
@@ -1337,13 +1351,17 @@
   }
 
   function syncStepLocks() {
-    // Steps 2/3/4 unlock when EITHER an ingestion is running OR the library
+    // Steps 2-5 unlock when EITHER an ingestion is running OR the library
     // has at least one finalized framework. Otherwise lock back to Step 1.
+    // Study (5) is included so it's clickable while Synth runs — it shows
+    // its own empty-state until chapters render, then populates live. (It
+    // used to cap at 4, which left Study "completely blocked" during a run
+    // even though the user wants to peek at it.)
     const hasLibrary =
       sidebarList.querySelectorAll('.fw-lib-item').length > 0;
     const ingestActive = activeRunId !== null;
     if (hasLibrary || ingestActive) {
-      farthestStep = Math.max(farthestStep, 4);
+      farthestStep = Math.max(farthestStep, 5);
     } else {
       farthestStep = 1;
       if (currentStep !== 1) {
@@ -1386,6 +1404,7 @@
     const target = i + 1;
     if (target <= farthestStep) showStep(target);
   }));
+
 
   // ============================================================
   // Step 3: render manifest entries into the page grid
@@ -1431,6 +1450,15 @@
     // recoverActiveSynth on page-load — navigating between slugs paints
     // cached state, never triggers compute.
     _tryResumeActiveSynth(slug).catch(() => {});
+    // If the user switches frameworks while ALREADY on the Study stage,
+    // the showStep(5) navigation hook won't fire — so refresh the Study
+    // view in place. Without this, picking a framework on Step 5 left the
+    // stale "Pick a framework with synthesized chapters" placeholder.
+    if (currentStep === 5) {
+      setStudyFramework(slug);
+      refreshStudyVisibility();
+      if (slug !== studyLoadedSlug) loadStudyChapters(slug);
+    }
     try {
       const r = await fetch(API + '/ingestion/' + slug + '/manifest');
       if (!r.ok) {
@@ -3169,8 +3197,15 @@
         showNotice('Loaded from cache · ingested ' +
           fmtAge(data.manifest?.ingested_at) +
           '. Click ↻ in the sidebar to refresh.');
-        farthestStep = 4;
-        showStep(4);   // jump to Study (cached → user wants to view)
+        // Don't clobber a higher farthestStep (was a hard `= 4`, which
+        // re-locked Study when re-selecting a framework). Unlock through
+        // Study (5) so it's reachable; it shows empty until chapters render.
+        farthestStep = Math.max(farthestStep, 5);
+        // Restore the synth view for this slug — recovers an in-flight
+        // study's strip OR rebuilds it from durable render status so the
+        // chapter box survives a refresh on this path too.
+        _tryResumeActiveSynth(slug).catch(() => {});
+        showStep(4);   // jump to Synth stage
         return;
       }
       if (data.status === 'queued') {
@@ -3254,10 +3289,9 @@
         el.classList.add('active');
         await loadManifestForSlug(slug);
         // Library click swaps the ACTIVE FRAMEWORK without changing the
-        // user's current step — they stay wherever they were navigating
-        // (Catalog on first interaction, otherwise whatever step they
-        // last opened). farthestStep bumped to the max so all 5 steps
-        // stay reachable via the stepper for the newly-selected slug.
+        // user's current step. All 5 steps stay reachable for the
+        // newly-selected slug; Study (5) shows its own empty-state until
+        // that framework has rendered chapters.
         farthestStep = Math.max(farthestStep, 5);
         renderStepper();
         refreshPlannerStartState();
@@ -3564,6 +3598,27 @@
   let synthThreadId = null;
   let _synthLiveEventReceived = false;
   let synthPollAbort = false;
+
+  // Study-mode state — when Start Synth is clicked without picking a
+  // specific chapter, the backend spawns the orchestrator and returns a
+  // study_thread_id. We subscribe to that channel for orchestrator events
+  // (study_start → chapter_running → chapter_done × N → study_done) and
+  // ALSO open per-chapter SSE for substep-level progress on the Cytoscape
+  // canvas. The chapter progress strip above the canvas mirrors the
+  // orchestrator's view of where the run is.
+  let studyThreadId = null;
+  let studyChapterIds = [];        // ordered chapter ids for current study
+  let studyChapterStatus = new Map();  // id → pending|running|done|failed|cancelled
+  let studyCurrentChapterId = null;
+  let studyCurrentChapterThreadId = null;  // chapter_thread_id of last chapter_running
+  // chapter_id → chapter_thread_id (populated lazily as chapter_running events
+  // arrive, both live and via snapshot replay). Used by the strip-click handler
+  // to swap the canvas to a user-selected chapter.
+  let studyChapterThreads = new Map();
+  // When non-null, the user has clicked a specific chapter cell — the canvas
+  // is "pinned" to that chapter and should NOT auto-swap when the orchestrator
+  // advances to the next one. Click the currently-running cell to unpin.
+  let studyPinnedChapterId = null;
 
   // Per-substep custom body renderers, keyed by idx (matches
   // SYNTH_SUBSTEP_FIELDS). Empty until nodes ship — each renderer gets
@@ -4403,7 +4458,7 @@
     // Start would just hit the 503 stub. Show the button but disabled
     // with a clarifying tooltip so the user sees the path is wired but
     // not yet active.
-    const running = synthThreadId !== null;
+    const running = synthThreadId !== null || studyThreadId !== null;
     if (running) {
       synthStartBtn.removeAttribute('disabled');
       synthStartBtn.classList.add('btn-outline');
@@ -4500,6 +4555,372 @@
     }
   }
 
+  // ──────────────────────────────────────────────────────────────────
+  // Chapter progress strip — visible only during STUDY-mode runs.
+  // ──────────────────────────────────────────────────────────────────
+  const chstripEl       = document.querySelector('#fw-chstrip');
+  const chstripCellsEl  = document.querySelector('#fw-chstrip-cells');
+  const chstripCounterEl = document.querySelector('#fw-chstrip-counter');
+
+  function _showChStrip(visible) {
+    if (!chstripEl) return;
+    chstripEl.classList.toggle('visible', !!visible);
+  }
+  function _renderChStrip(chapterIds) {
+    if (!chstripCellsEl) return;
+    studyChapterIds = chapterIds.slice();
+    studyChapterStatus = new Map(chapterIds.map(id => [id, 'pending']));
+    studyCurrentChapterId = null;
+    chstripCellsEl.innerHTML = chapterIds.map(id => (
+      '<div class="fw-chstrip-cell" data-status="pending" ' +
+      'data-chapter-id="' + id.replace(/"/g, '&quot;') + '">' +
+      '  <span class="icon"></span>' +
+      '  <span class="label">' + id + '</span>' +
+      '</div>'
+    )).join('');
+    _updateChStripCounter();
+  }
+  function _markChStripCell(chapterId, status) {
+    if (!chstripCellsEl) return;
+    studyChapterStatus.set(chapterId, status);
+    const cell = chstripCellsEl.querySelector(
+      '.fw-chstrip-cell[data-chapter-id="' + chapterId.replace(/"/g, '\\"') + '"]'
+    );
+    if (cell) cell.dataset.status = status;
+    _updateChStripCounter();
+  }
+  function _updateChStripCounter() {
+    if (!chstripCounterEl) return;
+    let done = 0, failed = 0, total = studyChapterIds.length;
+    for (const s of studyChapterStatus.values()) {
+      if (s === 'done') done++;
+      else if (s === 'failed' || s === 'cancelled') failed++;
+    }
+    const txt = failed
+      ? (done + ' done, ' + failed + ' failed / ' + total)
+      : (done + ' / ' + total);
+    chstripCounterEl.textContent = txt;
+  }
+  function _resetStudyState() {
+    studyThreadId = null;
+    studyChapterIds = [];
+    studyChapterStatus = new Map();
+    studyCurrentChapterId = null;
+    studyCurrentChapterThreadId = null;
+    studyChapterThreads = new Map();
+    studyPinnedChapterId = null;
+    if (chstripCellsEl) chstripCellsEl.innerHTML = '';
+    if (chstripCounterEl) chstripCounterEl.textContent = '';
+    _showChStrip(false);
+  }
+
+  // Durable strip reconstruction — rebuilds the chapter progress strip from
+  // MinIO-backed render status (GET /synth/{slug}/study/chapters) instead of
+  // the ephemeral SSE snapshot. THIS is what makes the strip survive a page
+  // refresh after a study run finishes: the SSE-replay recovery only works
+  // while a run is in flight (and only within the 24h snapshot TTL), whereas
+  // this reads the actual rendered artifacts and works indefinitely. Each
+  // already-rendered chapter is marked 'done'; the rest stay 'pending'.
+  // Only shown for multi-chapter plans (a single chapter is already fully
+  // represented by the canvas).
+  async function _hydrateChStripFromChapters(slug) {
+    if (!slug || !chstripCellsEl) return false;
+    try {
+      const r = await fetch(API + '/synth/' + slug + '/study/chapters');
+      if (!r.ok) return false;
+      const data = await r.json();
+      const chapters = (data.chapters || []).slice()
+        .sort((a, b) => (a.order || 0) - (b.order || 0));
+      if (chapters.length < 2) { _showChStrip(false); return false; }
+      _renderChStrip(chapters.map(c => c.id));
+      chapters.forEach(c => {
+        if (!c) return;
+        if (c.rendered) _markChStripCell(c.id, 'done');
+        // Persist the durable thread_id (from render-latest.json) so a
+        // post-refresh click can re-open the chapter's graph canvas.
+        if (c.thread_id) {
+          studyChapterThreads.set(c.id, c.thread_id);
+          const cell = chstripCellsEl.querySelector(
+            '.fw-chstrip-cell[data-chapter-id="' + c.id.replace(/"/g, '\\"') + '"]'
+          );
+          if (cell) cell.dataset.chapterThreadId = c.thread_id;
+        }
+      });
+      _showChStrip(true);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Visual: highlight the strip cell whose chapter the canvas is currently
+  // showing. Mutually exclusive — clears any prior selection. Used both
+  // when the orchestrator advances (auto-highlight current chapter) and
+  // when the user clicks a cell.
+  function _highlightStripCell(chapterId) {
+    if (!chstripCellsEl) return;
+    chstripCellsEl.querySelectorAll('.fw-chstrip-cell.selected')
+      .forEach(c => c.classList.remove('selected'));
+    if (!chapterId) return;
+    const cell = chstripCellsEl.querySelector(
+      '.fw-chstrip-cell[data-chapter-id="' + chapterId.replace(/"/g, '\\"') + '"]'
+    );
+    if (cell) cell.classList.add('selected');
+  }
+
+  // Strip-cell click handler — wires the "switch canvas to this chapter"
+  // behavior. Behavior depends on the cell's status:
+  //   - pending  → no chapter_thread_id known yet, clear canvas to "no
+  //                state" view; the user is told nothing has run for
+  //                this chapter (visual: pinned, empty graph).
+  //   - running  → switch canvas to that chapter's live SSE; if the
+  //                user clicked the orchestrator's CURRENT chapter,
+  //                this also unpins (return to follow mode).
+  //   - done / failed / cancelled → fetch terminal Postgres checkpoint
+  //                state, render canvas with all node statuses + KPIs.
+  //                SSE opens momentarily, snapshot replays the chapter's
+  //                full history, then closes on terminal.
+  function _onStripCellClick(cellEl) {
+    if (!cellEl) return;
+    const cid = cellEl.dataset.chapterId;
+    if (!cid) return;
+    const status = cellEl.dataset.status || 'pending';
+    const chTid = cellEl.dataset.chapterThreadId
+                || studyChapterThreads.get(cid)
+                || null;
+
+    // Unpin if user clicks the currently-running cell while pinned to it.
+    if (cid === studyCurrentChapterId && studyPinnedChapterId === cid) {
+      studyPinnedChapterId = null;
+      _highlightStripCell(cid);   // stays highlighted as the running one
+      return;
+    }
+    // Already showing this chapter's canvas — just pin/highlight, don't
+    // reopen SSE (which would duplicate live event streams).
+    if (chTid && synthThreadId === chTid) {
+      studyPinnedChapterId = cid;
+      _highlightStripCell(cid);
+      return;
+    }
+    studyPinnedChapterId = cid;
+    _highlightStripCell(cid);
+
+    // No thread for this chapter. After a refresh the durable thread_id
+    // comes from render-latest.json (see _hydrateChStripFromChapters), so
+    // a rendered chapter normally HAS one. We only land here when the
+    // chapter never ran (pending) OR it's a legacy render written before
+    // the thread_id field shipped. Either way, clear the canvas to its
+    // empty/pending state — and for a rendered-but-thread-less chapter,
+    // hint that re-running synth will restore its inspectable graph.
+    if (!chTid) {
+      synthThreadId = null;
+      resetSynthCards();
+      _resetSynthEventBuffer();
+      if (typeof NodeDrawer !== 'undefined' && NodeDrawer.reset) {
+        NodeDrawer.reset();
+      }
+      try { renderSynthCards({}); } catch (_) {}
+      if (status === 'done') {
+        showToast('This chapter was rendered before graph-history tracking ' +
+                  'was added. Re-run Synth to inspect its node graph.');
+      }
+      return;
+    }
+
+    // Switch the canvas to the clicked chapter's thread. Reset any prior
+    // chapter state, fetch the latest checkpoint, then open SSE so live
+    // updates flow if this chapter is still running.
+    synthThreadId = chTid;
+    resetSynthCards();
+    _resetSynthEventBuffer();
+    if (typeof NodeDrawer !== 'undefined' && NodeDrawer.reset) {
+      NodeDrawer.reset();
+    }
+    // Initial paint from checkpoint state (handles done/failed/cancelled
+    // and gives running chapters their accumulated state before live SSE
+    // events resume).
+    (async () => {
+      try {
+        const r = await fetch(API + '/synth/debug/graph/' + chTid + '/state');
+        if (r.ok) {
+          const data = await r.json();
+          renderSynthCards(data.values || {});
+        }
+      } catch (_) {}
+      _synthLiveEventReceived = false;
+      pollSynthState(chTid);
+    })();
+  }
+
+  if (chstripCellsEl) {
+    chstripCellsEl.addEventListener('click', ev => {
+      const cell = ev.target.closest('.fw-chstrip-cell');
+      if (cell) _onStripCellClick(cell);
+    });
+  }
+
+  // SSE consumer for the STUDY-LEVEL channel — receives orchestrator
+  // events (study_start, chapter_running, chapter_done, study_done).
+  // For each chapter, opens the per-chapter SSE channel on chapter_running
+  // so the Cytoscape canvas lights up substeps in real time.
+  async function pollStudyState(sid) {
+    const url = API + '/synth/' + sid + '/events';
+    let es;
+    try {
+      es = new EventSource(url);
+    } catch (e) {
+      markSynthFailed('Study EventSource open failed: ' + String(e));
+      _resetStudyState();
+      refreshSynthStartState();
+      return;
+    }
+    // Helper: open per-chapter SSE for the currently-active chapter if
+    // we haven't already. Debounced (120 ms) so during page-refresh
+    // replay — which fires chapter_running N times back-to-back — we
+    // only open ONE SSE for the latest chapter rather than spawning
+    // N zombie connections.
+    let _studyAttachTimer = null;
+    const _maybeAttachCurrentChapterSSE = () => {
+      // If the user pinned to a specific chapter (clicked its strip cell),
+      // do NOT yank the canvas back to the orchestrator's current chapter.
+      // The user can unpin by clicking the running chapter's cell.
+      if (studyPinnedChapterId &&
+          studyPinnedChapterId !== studyCurrentChapterId) return;
+      const chTid = studyCurrentChapterThreadId;
+      if (!chTid) return;
+      if (synthThreadId === chTid) return;
+      resetSynthCards();
+      _resetSynthEventBuffer();
+      if (typeof NodeDrawer !== 'undefined' && NodeDrawer.reset) {
+        NodeDrawer.reset();
+      }
+      synthThreadId = chTid;
+      _synthLiveEventReceived = false;
+      pollSynthState(chTid);
+      _highlightStripCell(studyCurrentChapterId);
+    };
+    const _scheduleAttachCurrent = () => {
+      if (_studyAttachTimer) clearTimeout(_studyAttachTimer);
+      _studyAttachTimer = setTimeout(() => {
+        _studyAttachTimer = null;
+        _maybeAttachCurrentChapterSSE();
+      }, 120);
+    };
+
+    es.onmessage = (msg) => {
+      if (studyThreadId !== sid) {
+        try { es.close(); } catch (_) {}
+        return;
+      }
+      let ev;
+      try { ev = JSON.parse(msg.data); } catch (_) { return; }
+
+      if (ev.step === 'study' && ev.kind === 'study_start') {
+        const ids = ev.chapter_ids || [];
+        _renderChStrip(ids);
+        _showChStrip(true);
+        _setSynthStagePill('working', 'Study running (0 / ' + ids.length + ')');
+        return;
+      }
+      if (ev.step === 'study' && ev.kind === 'chapter_running') {
+        const cid = ev.chapter_id;
+        const chTid = ev.chapter_thread_id;
+        studyCurrentChapterId = cid;
+        studyCurrentChapterThreadId = chTid || null;
+        if (cid && chTid) {
+          studyChapterThreads.set(cid, chTid);
+          // Stash on the cell dataset too — survives across re-render
+          // and lets the click handler resolve thread_id without the Map.
+          const cell = chstripCellsEl && chstripCellsEl.querySelector(
+            '.fw-chstrip-cell[data-chapter-id="' + cid.replace(/"/g, '\\"') + '"]'
+          );
+          if (cell) cell.dataset.chapterThreadId = chTid;
+        }
+        _markChStripCell(cid, 'running');
+        _setSynthStagePill('working',
+          'Chapter ' + (ev.position || '?') + ' / ' +
+          (ev.n_total || studyChapterIds.length) + ' — ' + cid);
+        // Schedule the per-chapter SSE attach. The 120 ms debounce
+        // collapses replay bursts so only the LATEST chapter's SSE
+        // ever actually opens. Drawer reset moves into the attach
+        // helper so it fires exactly once per chapter swap.
+        _scheduleAttachCurrent();
+        return;
+      }
+      if (ev.step === 'study' && ev.kind === 'chapter_done') {
+        const cid = ev.chapter_id;
+        const status = ev.status || 'done';
+        _markChStripCell(cid, status);
+        if (status === 'failed') {
+          showToast('Chapter ' + cid + ' failed: ' +
+            (ev.error || 'unknown error') + ' — continuing.');
+        }
+        if (cid === studyCurrentChapterId) {
+          studyCurrentChapterId = null;
+          studyCurrentChapterThreadId = null;
+        }
+        // The per-chapter SSE handler will receive its own terminal
+        // and close itself; we just clear our reference.
+        synthThreadId = null;
+        if (status === 'done') {
+          // Step 5 auto-refresh — if the Study panel is currently visible,
+          // refetch the chapter list so the new artifact appears in the
+          // sidebar without manual navigation. (Study is already unlocked
+          // via syncStepLocks once the library exists.)
+          try {
+            const studyPanel = document.querySelector('#fw-step-5-panel');
+            if (studyPanel && studyPanel.classList.contains('active') &&
+                typeof loadStudyChapters === 'function' && activeSlug) {
+              loadStudyChapters(activeSlug).catch(() => {});
+            }
+          } catch (_) {}
+        }
+        return;
+      }
+      if (ev.step === 'study' && ev.kind === 'study_done') {
+        if (_studyAttachTimer) {
+          clearTimeout(_studyAttachTimer);
+          _studyAttachTimer = null;
+        }
+        studyCurrentChapterId = null;
+        studyCurrentChapterThreadId = null;
+        const ok = ev.n_completed || 0;
+        const tot = ev.n_total || studyChapterIds.length;
+        const fail = ev.n_failed || 0;
+        const final = ev.final_status || 'done';
+        if (final === 'cancelled') {
+          showToast('Study cancelled: ' + ok + '/' + tot + ' chapters done.');
+          _setSynthStagePill('cancelled');
+        } else if (fail > 0) {
+          showToast('Study finished with ' + fail + ' failed chapter(s); ' +
+            ok + '/' + tot + ' succeeded.');
+          _setSynthStagePill('done', 'Done (' + ok + '/' + tot + ')');
+        } else {
+          showToast('All ' + tot + ' chapters synthesized. ' +
+            'Open Step 5 to study.');
+          _setSynthStagePill('done', 'Done (' + ok + '/' + tot + ')');
+        }
+        // Keep the strip visible briefly so the user sees final state;
+        // tear down on next Start Synth (or step navigation).
+        return;
+      }
+      if (ev.step === 'synth' && ev.kind === 'terminal') {
+        // Orchestrator emits a final terminal on the study channel
+        // after study_done so any generic listener closes cleanly.
+        try { es.close(); } catch (_) {}
+        if (activeSlug) _forgetActiveStudy(activeSlug);
+        studyThreadId = null;
+        refreshSynthStartState();
+        return;
+      }
+    };
+    es.onerror = () => {
+      if (studyThreadId !== sid) {
+        try { es.close(); } catch (_) {}
+      }
+    };
+  }
+
   // SSE consumer — symmetric with pollPlannerState. Connects to
   // /synth/{thread_id}/events; per-step events drive live-progress text
   // and trigger state refresh at node boundaries.
@@ -4533,19 +4954,28 @@
         await _refreshSynthCardsFromState(threadId, 'status');
         const status = ev.status || 'done';
         if (status === 'failed') {
-          markSynthFailed(ev.error || 'Synth failed.');
+          // In study mode, per-chapter failure is reported via the
+          // strip; don't tear down the whole stage pill — orchestrator
+          // continues with the next chapter.
+          if (!studyThreadId) markSynthFailed(ev.error || 'Synth failed.');
         } else if (status === 'cancelled') {
-          showToast('Synth cancelled. Checkpoints up to the cancel point are preserved.');
-          _setSynthStagePill('cancelled');
+          if (!studyThreadId) {
+            showToast('Synth cancelled. Checkpoints up to the cancel point are preserved.');
+            _setSynthStagePill('cancelled');
+          }
         } else if (status === 'not_implemented') {
           // Router stub — no run happened. Don't toast; the cards stay
           // in their "future" state which already communicates the gap.
         } else {
-          _setSynthStagePill('done');
+          if (!studyThreadId) _setSynthStagePill('done');
         }
         try { es.close(); } catch (_) {}
-        synthThreadId = null;
-        refreshSynthStartState();
+        // In STUDY mode the orchestrator drives the button + pill — only
+        // reset state if this was a standalone single-chapter run.
+        if (!studyThreadId) {
+          synthThreadId = null;
+          refreshSynthStartState();
+        }
         return;
       }
       if (ev.step) {
@@ -4592,6 +5022,26 @@
   function _forgetActiveSynth(slug) {
     try { localStorage.removeItem(_synthStorageKey(slug)); } catch (e) {}
   }
+
+  // STUDY-mode persistence — separate namespace so it doesn't collide
+  // with per-chapter resume. Reused on page-load to resubscribe to the
+  // study SSE channel; the server-side snapshot (last 200 events,
+  // dd:synth:{tid}:events:snapshot, TTL 1h) replays study_start +
+  // chapter_running/done events so the strip rebuilds itself.
+  function _studyStorageKey(slug) { return 'dd:study:active:' + slug; }
+  function _rememberActiveStudy(slug, sid) {
+    try {
+      localStorage.setItem(_studyStorageKey(slug), sid);
+      localStorage.setItem(_LAST_SYNTH_SLUG_KEY, slug);
+    } catch (e) {}
+  }
+  function _forgetActiveStudy(slug) {
+    try { localStorage.removeItem(_studyStorageKey(slug)); } catch (e) {}
+  }
+  function _getActiveStudy(slug) {
+    try { return localStorage.getItem(_studyStorageKey(slug)); }
+    catch (e) { return null; }
+  }
   function _genSynthThreadId(slug) {
     // Canonical synth thread_id format — MUST match server-side
     // _make_thread_id in routers/v1/docs_distiller/synth.py. The
@@ -4622,6 +5072,47 @@
     synthThreadId = null;
     resetSynthCards();
     refreshSynthStartState();
+
+    // STUDY mode recovery — prefer this over per-chapter resume because
+    // a study orchestrator owns the run lifecycle. Subscribing to the
+    // study channel triggers a server-side snapshot replay that rebuilds
+    // the chapter strip + reattaches per-chapter SSE for whichever
+    // chapter is currently running.
+    const sid = _getActiveStudy(slug);
+    if (sid) {
+      _resetStudyState();
+      studyThreadId = sid;
+      // Strip starts empty — study_start in the snapshot replay will
+      // populate chapter_ids. _showChStrip(true) so the user immediately
+      // sees the panel structure while events stream in.
+      _showChStrip(true);
+      _setSynthStagePill('working', 'Resuming study…');
+      refreshSynthStartState();
+      pollStudyState(sid);
+      // Snapshot TTL is 24 hours (services/docs_distiller/synth/progress.py).
+      // If the user reloads after the snapshot has expired, pollStudyState
+      // would wait silently forever. 5 s grace: if we haven't received a
+      // single study event by then, forget the session and reset.
+      setTimeout(() => {
+        if (studyThreadId === sid && studyChapterIds.length === 0) {
+          console.log('[study-recover] no replay events in 5s; forgetting',
+                      sid);
+          _forgetActiveStudy(slug);
+          studyThreadId = null;
+          _resetStudyState();
+          refreshSynthStartState();
+        }
+      }, 5000);
+      return true;
+    }
+
+    // No in-flight study for this slug → rebuild the chapter strip from
+    // durable MinIO render status so it SURVIVES a refresh after the run
+    // completed (the SSE-replay path above only fires while a study is
+    // live). Fire-and-forget; independent of the per-chapter canvas resume
+    // below (canvas = one chapter, strip = all chapters).
+    _resetStudyState();
+    _hydrateChStripFromChapters(slug).catch(() => {});
 
     let tid = null;
     try { tid = localStorage.getItem(_synthStorageKey(slug)); }
@@ -4719,7 +5210,7 @@
   }
 
   async function startSynth() {
-    if (!activeSlug || synthThreadId) return;
+    if (!activeSlug || synthThreadId || studyThreadId) return;
     // Until any node ships, the POST returns 503 — surface it cleanly
     // as a toast rather than a failed card.
     if (!synthImplemented || !synthImplemented.size) {
@@ -4729,58 +5220,53 @@
     }
     resetSynthCards();
     _resetSynthEventBuffer();   // fresh run = fresh event history
+    _resetStudyState();          // clear any prior strip state
 
-    // Smart resume — symmetric with planner. If a thread already exists
-    // for THIS slug (and only this slug — same per-slug isolation that
-    // fixed the planner cascading bug), reuse its thread_id.
-    let tid = null;
-    let isResume = false;
-    try {
-      const r = await fetch(API + '/synth/recent');
-      if (r.ok) {
-        const data = await r.json();
-        const found = ((data && data.recent) || [])
-          .find(item => item.slug === activeSlug);
-        if (found && found.thread_id) {
-          tid = found.thread_id;
-          isResume = true;
-        }
-      }
-    } catch (e) {}
-
-    if (!tid) tid = _genSynthThreadId(activeSlug);
-    synthThreadId = tid;
-    _rememberActiveSynth(activeSlug, tid);
-    refreshSynthStartState();
-    pollSynthState(tid);
-
+    // STUDY MODE — Start Synth always fans out across ALL chapters via
+    // the orchestrator. The backend mints the study_thread_id and
+    // returns it along with chapter_ids; we subscribe to the study
+    // channel for orchestrator events and let each chapter_running open
+    // its own per-chapter SSE for substep-level updates.
     try {
       const budget = (synthBudgetSel && synthBudgetSel.value) || '5';
-      const url = isResume
-        ? API + '/synth/' + tid + '/resume'
-        : API + '/synth/' + activeSlug +
-          '?mode=quality' +
-          '&thread_id=' + encodeURIComponent(tid) +
-          '&budget=' + encodeURIComponent(budget);
+      const url = API + '/synth/' + activeSlug +
+        '?mode=quality' +
+        '&budget=' + encodeURIComponent(budget);
       const r = await fetch(url, {method: 'POST'});
       if (!r.ok) {
         const txt = await r.text();
         markSynthFailed('HTTP ' + r.status + ': ' + txt.slice(0, 400));
-        synthThreadId = null;
-        refreshSynthStartState();
         return;
       }
-      await r.json();
+      const data = await r.json();
+      const sid = data.study_thread_id;
+      const chapterIds = data.chapter_ids || [];
+      if (!sid) {
+        markSynthFailed('Server did not return a study_thread_id.');
+        return;
+      }
+      studyThreadId = sid;
+      _rememberActiveStudy(activeSlug, sid);
+      // Pre-render the strip immediately from the response so the user
+      // sees structure before the first SSE event lands.
+      _renderChStrip(chapterIds);
+      _showChStrip(true);
+      _setSynthStagePill('working',
+        'Study running (0 / ' + chapterIds.length + ')');
+      refreshSynthStartState();
+      pollStudyState(sid);
     } catch (e) {
       markSynthFailed('Request failed: ' + String(e));
-      synthThreadId = null;
-      refreshSynthStartState();
     }
   }
 
   async function cancelSynth() {
-    if (!synthThreadId) return;
-    const tid = synthThreadId;
+    // In study mode, cancel the study thread — the orchestrator checks
+    // its own cancel flag between chapters AND lets the current chapter
+    // complete naturally (its per-chapter thread isn't cancelled). For
+    // single-chapter runs, cancel that chapter's thread directly.
+    const tid = studyThreadId || synthThreadId;
+    if (!tid) return;
     synthStartBtn.setAttribute('disabled', 'disabled');
     synthStartBtn.innerHTML =
       '<div class="fw-spinner" style="display:inline-block;' +
@@ -4805,6 +5291,7 @@
     _forgetActiveSynth(slug);
     if (activeSlug === slug) {
       synthThreadId = null;
+      _resetStudyState();
       resetSynthCards();
       refreshSynthStartState();
     }
@@ -4856,4 +5343,453 @@
       refreshSynthStartState();
     } catch (e) { /* silent — defaults to all "future" */ }
   }
+
+  // ============================================================
+  // Step 5 — Study chapter viewer
+  //
+  // 3-column reader (sidebar / tabs+content) for the synthesized
+  // chapters that render_audit_write produces. Per chapter, 3
+  // artifact tabs match the render output:
+  //   README.md       → marked.js + highlight.js
+  //   challenges.md   → marked.js, rendered as collapsible Q's
+  //   flashcards.json → flip-card interactive study mode
+  //
+  // Endpoints consumed:
+  //   GET /synth/{slug}/study/chapters             (per-slug chapter list)
+  //   GET /synth/{slug}/study/{cid}/artifact/{n}   (READMEs etc bytes)
+  //
+  // ============================================================
+  const studyPillText      = document.querySelector('#fw-study-pill-text');
+  const studyPill          = document.querySelector('#fw-study-pill');
+  const studyFwName        = document.querySelector('#fw-study-fw-name');
+  const studyFwLogos       = document.querySelector('#fw-study-fw-logos');
+  const studyEmptyEl       = document.querySelector('#fw-study-empty');
+  const studyGridEl        = document.querySelector('#fw-study-grid');
+  const studyChapterListEl = document.querySelector('#fw-study-chapter-list');
+  const studyChapterHeadEl = document.querySelector('#fw-study-chapter-head');
+  const studyReadmeEl      = document.querySelector('#fw-study-readme');
+  const studyChallengesEl  = document.querySelector('#fw-study-challenges');
+  const studyFlashcardsEl  = document.querySelector('#fw-study-flashcards');
+  const studyTabBtns       = document.querySelectorAll('.fw-study-tab');
+  // Slide-out chapter side window
+  const studySideEl        = document.querySelector('#fw-study-side');
+  const studySideBackdrop  = document.querySelector('#fw-study-side-backdrop');
+  const studySideClose     = document.querySelector('#fw-study-side-close');
+  const studyTocToggle     = document.querySelector('#fw-study-toc-toggle');
+
+  function _setStudySideOpen(open) {
+    if (studySideEl) studySideEl.classList.toggle('open', open);
+    if (studySideBackdrop) studySideBackdrop.classList.toggle('open', open);
+    if (studyTocToggle) studyTocToggle.setAttribute('aria-expanded', String(!!open));
+  }
+  function openStudySide()  { _setStudySideOpen(true); }
+  function closeStudySide() { _setStudySideOpen(false); }
+  function toggleStudySide() {
+    _setStudySideOpen(!(studySideEl && studySideEl.classList.contains('open')));
+  }
+  if (studyTocToggle) studyTocToggle.addEventListener('click', toggleStudySide);
+  if (studySideClose) studySideClose.addEventListener('click', closeStudySide);
+  if (studySideBackdrop) studySideBackdrop.addEventListener('click', closeStudySide);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && studySideEl &&
+        studySideEl.classList.contains('open')) {
+      closeStudySide();
+    }
+  });
+
+  // Per-framework state
+  let studyChapters    = [];     // [{id, title, rendered, audit_passed, ...}]
+  let studyActiveChapter = null; // current selected chapter id
+  let studyActiveTab   = 'readme';
+  let studyCards       = [];     // [{q, a}, ...]
+  let studyCardIdx     = 0;
+  let studyLoadedSlug  = null;   // last slug we loaded chapters for
+  let studyLoadedCid   = null;   // last chapter we loaded artifacts for
+
+  function _setStudyStagePill(status, label) {
+    if (!studyPill || !studyPillText) return;
+    const map = {
+      idle:    'Idle',
+      working: 'Loading',
+      done:    'Ready',
+      failed:  'Failed',
+      cancelled: 'Cancelled',
+    };
+    studyPill.dataset.status = status;
+    studyPillText.textContent = label || map[status] || status;
+  }
+
+  function setStudyFramework(slug) {
+    if (!studyFwName || !studyFwLogos) return;
+    if (!slug) {
+      studyFwName.textContent = 'Pick a framework with synthesized chapters.';
+      studyFwName.classList.add('fw-planner-fw-name-empty');
+      studyFwLogos.innerHTML = '';
+      studyFwLogos.style.display = 'none';
+      return;
+    }
+    const info = frameworkInfo[slug] || {name: slug, logos: []};
+    studyFwName.textContent = info.name || slug;
+    studyFwName.classList.remove('fw-planner-fw-name-empty');
+    if (info.logos && info.logos.length) {
+      studyFwLogos.innerHTML = info.logos.map(u =>
+        '<img class="fw-planner-fw-logo" src="' + u + '" alt="">'
+      ).join('');
+      studyFwLogos.style.display = '';
+    } else {
+      studyFwLogos.innerHTML = '';
+      studyFwLogos.style.display = 'none';
+    }
+  }
+
+  function _renderStudySidebar() {
+    if (!studyChapterListEl) return;
+    if (!studyChapters.length) {
+      studyChapterListEl.innerHTML =
+        '<div class="fw-empty" style="font-size:0.8rem;padding:8px 4px">' +
+        'No chapters in this framework\'s plan. Run Planner first.' +
+        '</div>';
+      return;
+    }
+    studyChapterListEl.innerHTML = studyChapters.map(ch => {
+      const status = !ch.rendered
+        ? 'not-rendered'
+        : (ch.audit_passed ? 'rendered' : 'audit-failed');
+      const icon = !ch.rendered
+        ? '○'
+        : (ch.audit_passed ? '●' : '✕');
+      const cls = [
+        'fw-study-chapter',
+        ch.id === studyActiveChapter ? 'active' : '',
+      ].filter(Boolean).join(' ');
+      const title = ch.title || ch.id;
+      return (
+        '<button type="button" class="' + cls + '" ' +
+        'data-chapter-id="' + escapeHtml(ch.id) + '" ' +
+        'data-rendered="' + ch.rendered + '">' +
+          '<span class="fw-study-chapter-icon" data-status="' + status + '">' +
+            icon + '</span>' +
+          '<span class="fw-study-chapter-title">' +
+            escapeHtml(title) + '</span>' +
+        '</button>'
+      );
+    }).join('');
+  }
+
+  function _renderStudyChapterHead(ch) {
+    if (!studyChapterHeadEl) return;
+    if (!ch) {
+      studyChapterHeadEl.classList.remove('visible');
+      studyChapterHeadEl.innerHTML = '';
+      return;
+    }
+    const auditBadge = ch.rendered
+      ? (ch.audit_passed
+          ? '<span class="badge pass">Audit ✓</span>'
+          : '<span class="badge fail">Audit ✗</span>')
+      : '<span class="badge">Not rendered</span>';
+    studyChapterHeadEl.innerHTML =
+      '<div class="fw-study-chapter-head-title">' +
+        escapeHtml(ch.title || ch.id) + '</div>' +
+      '<div class="fw-study-chapter-head-meta">' +
+        auditBadge +
+        '<span>' + (ch.n_sections || 0) + ' sections</span>' +
+        '<span>' + (ch.n_sources || 0) + ' sources</span>' +
+        ((ch.rendered_chars || 0)
+          ? '<span>' + ((ch.rendered_chars / 1000).toFixed(1)) + 'k chars</span>'
+          : '') +
+      '</div>';
+    studyChapterHeadEl.classList.add('visible');
+  }
+
+  function _switchStudyTab(tab) {
+    studyActiveTab = tab;
+    studyTabBtns.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tab === tab);
+    });
+    document.querySelectorAll('.fw-study-pane').forEach(pane => {
+      pane.classList.toggle('active', pane.dataset.tab === tab);
+    });
+  }
+
+  async function _loadStudyArtifact(slug, cid, name) {
+    const url = API + '/synth/' + slug + '/study/' + cid + '/artifact/' + name;
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.text();
+  }
+
+  async function _loadStudyReadme(slug, cid) {
+    if (!studyReadmeEl) return;
+    studyReadmeEl.innerHTML =
+      '<div class="fw-empty">Loading chapter…</div>';
+    try {
+      const raw = await _loadStudyArtifact(slug, cid, 'README.md');
+      const md = (typeof marked !== 'undefined')
+        ? marked.parse(raw)
+        : ('<pre>' + escapeHtml(raw) + '</pre>');
+      studyReadmeEl.innerHTML = md;
+      // Apply syntax highlighting if highlight.js is loaded.
+      if (typeof hljs !== 'undefined') {
+        studyReadmeEl.querySelectorAll('pre code').forEach(block => {
+          try { hljs.highlightElement(block); } catch (_) {}
+        });
+      }
+    } catch (e) {
+      studyReadmeEl.innerHTML =
+        '<div class="fw-empty">Failed to load README.md: ' +
+        escapeHtml(String(e)) + '</div>';
+    }
+  }
+
+  async function _loadStudyChallenges(slug, cid) {
+    if (!studyChallengesEl) return;
+    studyChallengesEl.innerHTML =
+      '<div class="fw-empty">Loading challenges…</div>';
+    try {
+      const raw = await _loadStudyArtifact(slug, cid, 'challenges.md');
+      // Parse the numbered list manually so we can render each item
+      // as a collapsible <details> for active-recall UX.
+      const lines = raw.split('\n');
+      let title = '';
+      const items = [];
+      for (const line of lines) {
+        const headerMatch = line.match(/^#\s+(.+)$/);
+        if (headerMatch) { title = headerMatch[1].trim(); continue; }
+        const numMatch = line.match(/^\s*(\d+)\.\s+(.+)$/);
+        if (numMatch) {
+          items.push({ num: numMatch[1], text: numMatch[2].trim() });
+        }
+      }
+      const headerHtml = title
+        ? '<h1>' + escapeHtml(title) + '</h1>'
+        : '';
+      const itemsHtml = items.map(it => (
+        '<details class="fw-study-challenge">' +
+          '<summary>' +
+            '<span class="fw-study-challenge-num">' + it.num + '.</span>' +
+            '<span class="fw-study-challenge-text">' + escapeHtml(it.text) + '</span>' +
+          '</summary>' +
+          '<div class="fw-study-challenge-hint">' +
+            'Pause and think before checking your answer against the chapter. ' +
+            'The README explains each concept with the same vocabulary used here.' +
+          '</div>' +
+        '</details>'
+      )).join('');
+      studyChallengesEl.innerHTML = headerHtml + itemsHtml;
+    } catch (e) {
+      studyChallengesEl.innerHTML =
+        '<div class="fw-empty">Failed to load challenges.md: ' +
+        escapeHtml(String(e)) + '</div>';
+    }
+  }
+
+  function _renderFlashcard() {
+    if (!studyFlashcardsEl) return;
+    if (!studyCards.length) {
+      studyFlashcardsEl.innerHTML =
+        '<div class="fw-empty">No flashcards for this chapter.</div>';
+      return;
+    }
+    const card = studyCards[studyCardIdx];
+    const total = studyCards.length;
+    studyFlashcardsEl.innerHTML =
+      '<div class="fw-study-cards-progress">' +
+        'Card ' + (studyCardIdx + 1) + ' of ' + total +
+      '</div>' +
+      '<div class="fw-study-card-wrap">' +
+        '<div class="fw-study-card" id="fw-study-card">' +
+          '<div class="fw-study-card-face front">' +
+            '<span class="label">Question</span>' +
+            '<div class="body">' + _mdInline(card.q) + '</div>' +
+          '</div>' +
+          '<div class="fw-study-card-face back">' +
+            '<span class="label">Answer</span>' +
+            '<div class="body">' + _mdInline(card.a) + '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="fw-study-cards-actions">' +
+        '<button type="button" id="fw-study-card-prev"' +
+          (studyCardIdx === 0 ? ' disabled' : '') + '>← Prev</button>' +
+        '<button type="button" id="fw-study-card-flip">Flip</button>' +
+        '<button type="button" id="fw-study-card-next"' +
+          (studyCardIdx === total - 1 ? ' disabled' : '') + '>Next →</button>' +
+      '</div>' +
+      '<div class="fw-study-cards-hint">' +
+        'Click the card or hit Flip to reveal the answer.' +
+      '</div>';
+    // Bind handlers
+    const cardEl = document.querySelector('#fw-study-card');
+    const prevBtn = document.querySelector('#fw-study-card-prev');
+    const flipBtn = document.querySelector('#fw-study-card-flip');
+    const nextBtn = document.querySelector('#fw-study-card-next');
+    if (cardEl) cardEl.addEventListener('click', () => {
+      cardEl.classList.toggle('flipped');
+    });
+    if (flipBtn) flipBtn.addEventListener('click', () => {
+      if (cardEl) cardEl.classList.toggle('flipped');
+    });
+    if (prevBtn) prevBtn.addEventListener('click', () => {
+      if (studyCardIdx > 0) { studyCardIdx--; _renderFlashcard(); }
+    });
+    if (nextBtn) nextBtn.addEventListener('click', () => {
+      if (studyCardIdx < studyCards.length - 1) {
+        studyCardIdx++; _renderFlashcard();
+      }
+    });
+  }
+
+  // Tiny inline-markdown helper for flashcard faces — just handles
+  // `code` spans + **bold** + line breaks. marked.parse() would wrap
+  // everything in <p> which fights the flex-center layout.
+  function _mdInline(text) {
+    let s = escapeHtml(text || '');
+    s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/\n/g, '<br>');
+    return s;
+  }
+
+  async function _loadStudyFlashcards(slug, cid) {
+    if (!studyFlashcardsEl) return;
+    studyFlashcardsEl.innerHTML =
+      '<div class="fw-empty">Loading flashcards…</div>';
+    try {
+      const raw = await _loadStudyArtifact(slug, cid, 'flashcards.json');
+      studyCards = JSON.parse(raw) || [];
+      studyCardIdx = 0;
+      _renderFlashcard();
+    } catch (e) {
+      studyFlashcardsEl.innerHTML =
+        '<div class="fw-empty">Failed to load flashcards.json: ' +
+        escapeHtml(String(e)) + '</div>';
+    }
+  }
+
+  async function openStudyChapter(cid) {
+    if (!activeSlug || !cid) return;
+    const ch = studyChapters.find(c => c.id === cid);
+    if (!ch) return;
+    if (!ch.rendered) {
+      _renderStudyChapterHead(ch);
+      studyReadmeEl.innerHTML =
+        '<div class="fw-empty">This chapter has not been synthesized yet. ' +
+        'Run Synth (Step 4) on this chapter first.</div>';
+      studyChallengesEl.innerHTML =
+        '<div class="fw-empty">No challenges available — chapter not synthesized.</div>';
+      studyFlashcardsEl.innerHTML =
+        '<div class="fw-empty">No flashcards available — chapter not synthesized.</div>';
+      return;
+    }
+    studyActiveChapter = cid;
+    studyLoadedCid = cid;
+    _renderStudySidebar();   // re-render to update active highlight
+    _renderStudyChapterHead(ch);
+    _setStudyStagePill('working', 'Loading…');
+    // Fire all three loads in parallel
+    await Promise.all([
+      _loadStudyReadme(activeSlug, cid),
+      _loadStudyChallenges(activeSlug, cid),
+      _loadStudyFlashcards(activeSlug, cid),
+    ]);
+    _setStudyStagePill('done', 'Reading · ' + (ch.title || cid));
+  }
+
+  async function loadStudyChapters(slug) {
+    if (!studyChapterListEl) return;
+    studyChapters = [];
+    studyActiveChapter = null;
+    studyLoadedCid = null;
+    _setStudyStagePill('working', 'Loading chapters…');
+    studyChapterListEl.innerHTML =
+      '<div class="fw-empty" style="font-size:0.8rem;padding:8px 4px">' +
+      'Loading chapters…</div>';
+    try {
+      const r = await fetch(API + '/synth/' + slug + '/study/chapters');
+      if (!r.ok) {
+        studyChapterListEl.innerHTML =
+          '<div class="fw-empty" style="font-size:0.8rem;padding:8px 4px">' +
+          'Failed to load chapters (HTTP ' + r.status + ').</div>';
+        _setStudyStagePill('failed', 'Failed');
+        return;
+      }
+      const data = await r.json();
+      studyChapters = (data.chapters || []).sort(
+        (a, b) => (a.order || 0) - (b.order || 0)
+      );
+      studyLoadedSlug = slug;
+      _renderStudySidebar();
+      // Auto-open the first rendered chapter (if any) so the user
+      // immediately sees content instead of an empty pane.
+      const firstReady = studyChapters.find(c => c.rendered);
+      if (firstReady) {
+        await openStudyChapter(firstReady.id);
+      } else {
+        _setStudyStagePill('idle',
+          'No rendered chapters yet — run Synth first.');
+        studyReadmeEl.innerHTML =
+          '<div class="fw-empty">No chapters have been synthesized for ' +
+          'this framework yet. Run Synth (Step 4) to generate content.</div>';
+      }
+    } catch (e) {
+      studyChapterListEl.innerHTML =
+        '<div class="fw-empty" style="font-size:0.8rem;padding:8px 4px">' +
+        'Network error loading chapters.</div>';
+      _setStudyStagePill('failed', 'Failed');
+    }
+  }
+
+  // Tab buttons: simple click delegation
+  studyTabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      _switchStudyTab(btn.dataset.tab || 'readme');
+    });
+  });
+
+  // Chapter sidebar: event delegation for chapter clicks. Picking a
+  // chapter closes the side window so the materials get the full width.
+  if (studyChapterListEl) {
+    studyChapterListEl.addEventListener('click', ev => {
+      const btn = ev.target.closest('.fw-study-chapter');
+      if (!btn) return;
+      const cid = btn.dataset.chapterId;
+      if (!cid) return;
+      openStudyChapter(cid);
+      closeStudySide();
+    });
+  }
+
+  // Visibility toggle — show empty-state when no slug active. Also
+  // exposed as a function so other code paths (slug click, step nav)
+  // can re-trigger after activeSlug changes.
+  function refreshStudyVisibility() {
+    if (!studyEmptyEl || !studyGridEl) return;
+    if (!activeSlug) {
+      studyEmptyEl.style.display = '';
+      studyGridEl.style.display = 'none';
+      return;
+    }
+    studyEmptyEl.style.display = 'none';
+    studyGridEl.style.display = '';
+  }
+
+  // Hook into showStep so navigating to Step 5 triggers the load. If
+  // the framework changed since last load, refresh. If the same, no-op.
+  const _origShowStep = showStep;
+  // eslint-disable-next-line no-func-assign
+  showStep = function(n) {
+    _origShowStep(n);
+    // The chapter side window is position:fixed, so it would bleed over
+    // other steps if left open — always close it when not on Step 5,
+    // and start Step 5 content-first (closed) too.
+    closeStudySide();
+    if (n === 5) {
+      refreshStudyVisibility();
+      setStudyFramework(activeSlug);
+      if (activeSlug && activeSlug !== studyLoadedSlug) {
+        loadStudyChapters(activeSlug);
+      }
+    }
+  };
 })();

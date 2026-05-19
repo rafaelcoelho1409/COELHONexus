@@ -33,9 +33,22 @@ HEAD = (
             "family=Raleway:wght@300;400;500;600;700&display=swap"
         ),
     ),
-    # Client-side markdown renderer for the file-content drawer. Pinned
-    # major version — zero deps, ~50 KB gzip over the jsDelivr CDN.
+    # Client-side markdown renderer for the file-content drawer +
+    # Step 5 Study chapter viewer. Pinned major version — zero deps,
+    # ~50 KB gzip over the jsDelivr CDN.
     Script(src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"),
+    # Syntax highlighting for code blocks in the Study viewer (Step 5).
+    # highlight.js — most-adopted SOTA highlighter as of 2026 (10M wk
+    # downloads, zero-config auto-detect, 190+ langs, no dependencies).
+    # Theme: GitHub Dark (matches the burgundy + sharp-radius aesthetic).
+    Link(
+        rel="stylesheet",
+        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/styles/github-dark.min.css",
+    ),
+    Script(
+        src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/highlight.min.js",
+        defer=True,
+    ),
     # Cytoscape.js — DAG canvas for per-stage LangGraph visualization
     # (Planner / Synth / Curator / Critic / Assembler). Pinned to a 3.x
     # patch via cdnjs. ~320 KB minified, browser-cached aggressively.
