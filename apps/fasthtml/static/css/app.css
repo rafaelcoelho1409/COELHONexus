@@ -1698,3 +1698,173 @@ html, body {
   .home-features  { grid-template-columns: 1fr; }
   .home-steps     { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ===== YouTube Content Search (3-step wizard: Source → Ingest → Ask) ===== */
+.ycs-root { display: flex; flex-direction: column; gap: 24px; }
+
+/* Stepper — exact mirror of .fw-stepper, prefix swapped only. */
+.ycs-stepper-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 32px;
+}
+.ycs-stepper { flex: 1; display: flex; align-items: center; }
+.ycs-step {
+  display: flex; align-items: center; gap: 10px;
+  flex-shrink: 0; cursor: not-allowed; user-select: none;
+  opacity: 0.5; transition: opacity 0.2s;
+}
+.ycs-step.completed,
+.ycs-step.active { cursor: pointer; opacity: 1; }
+.ycs-step-circle {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 2px solid var(--border); background: var(--card);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.78rem; font-weight: 600;
+  color: var(--text-muted); transition: all 0.2s;
+}
+.ycs-step.active .ycs-step-circle {
+  border-color: var(--primary); color: var(--primary);
+}
+.ycs-step.completed .ycs-step-circle {
+  background: var(--primary); border-color: var(--primary);
+  color: #fff;
+}
+.ycs-step-label {
+  font-size: 0.85rem; font-weight: 500;
+  color: var(--text-muted); letter-spacing: 0.02em; white-space: nowrap;
+}
+.ycs-step.active .ycs-step-label {
+  color: var(--primary); font-weight: 600;
+}
+.ycs-step.completed .ycs-step-label { color: var(--text); }
+.ycs-step.active:hover .ycs-step-label,
+.ycs-step.completed:hover .ycs-step-label {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.ycs-step.active:hover .ycs-step-circle,
+.ycs-step.completed:hover .ycs-step-circle {
+  box-shadow: 0 0 0 3px rgba(196, 18, 48, 0.12);
+}
+.ycs-step-connector {
+  flex: 1; height: 2px; background: var(--border);
+  margin: 0 14px; min-width: 24px; transition: background 0.2s;
+}
+.ycs-step-connector.complete { background: var(--primary); }
+
+.ycs-intro {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.55;
+  margin: 0 0 8px 0;
+  max-width: 720px;
+}
+.ycs-form { display: flex; flex-direction: column; gap: 16px; }
+.ycs-field { display: flex; flex-direction: column; gap: 6px; }
+.ycs-label {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.ycs-input {
+  padding: 12px 16px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+.ycs-input:focus { border-color: var(--primary); }
+.ycs-textarea { resize: vertical; min-height: 72px; line-height: 1.5; }
+.ycs-actions { display: flex; justify-content: flex-end; }
+
+.ycs-status {
+  padding: 12px 18px;
+  border-radius: 3px;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+.ycs-status-running {
+  background: var(--running-bg);
+  border: 1px solid var(--running-border);
+  color: var(--running-text);
+}
+.ycs-status-error {
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  color: var(--error-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ycs-indexed {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-style: italic;
+}
+
+.ycs-eyebrow {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.ycs-answer {
+  padding: 24px 28px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--primary);
+  border-radius: 3px;
+}
+.ycs-answer-text {
+  font-size: 1.05rem;
+  line-height: 1.6;
+  color: var(--text);
+  margin-bottom: 16px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.ycs-answer-meta-row { display: flex; }
+.ycs-answer-meta {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+
+.ycs-citations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ycs-citation {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  text-decoration: none;
+  color: var(--text);
+  transition: border-color 0.15s, color 0.15s;
+}
+.ycs-citation:hover { border-color: var(--primary); color: var(--primary); }
+.ycs-citation-title { font-weight: 500; font-size: 0.92rem; }
+.ycs-citation-meta {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}

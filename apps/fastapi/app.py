@@ -27,6 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from routers.v1.docs_distiller import router as docs_distiller_router
 from routers.v1.llm import router as llm_router
+from routers.v1.youtube import router as youtube_router
 from services.docs_distiller.ingestion.storage_minio import get_storage
 from services.docs_distiller.planner.checkpoint import (
     close_checkpointer,
@@ -111,6 +112,12 @@ app.include_router(
     llm_router,
     prefix="/api/v1/llm",
     tags=["LLM Rotator"],
+)
+
+app.include_router(
+    youtube_router,
+    prefix="/api/v1/youtube",
+    tags=["YouTube Content Search"],
 )
 
 

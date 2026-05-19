@@ -3140,6 +3140,12 @@
     head.parentElement.classList.toggle('expanded');
   });
 
+  // NOTE: synth-cards click-to-expand handler is registered LATER in
+  // the IIFE (after `synthCardsEl` is declared at ~line 3504). Placing
+  // it here previously hit a Temporal Dead Zone error (const is not
+  // hoisted) which crashed the IIFE on load — silently breaking
+  // loadLibrary() and every other init step.
+
   // ============================================================
   // POST /runs — Generate / Refresh
   // ============================================================
@@ -3491,6 +3497,23 @@
   const synthFwLogosEl   = document.querySelector('#fw-synth-fw-logos');
   const synthFwNameEl    = document.querySelector('#fw-synth-fw-name');
 
+  // Synth-cards click-to-expand — mirrors the planner handler at line
+  // 3113. Without this, .fw-planner-card-body stays display:none and
+  // the live progress text (written by _renderSynthLiveProgress into
+  // .fw-planner-card-live inside the card body) is invisible during a
+  // run. Registered here (right after synthCardsEl is declared) so the
+  // reference doesn't hit a Temporal Dead Zone — an earlier draft put
+  // it next to the planner handler at line 3113, which crashed the
+  // whole IIFE on load and silently broke loadLibrary() + every other
+  // init step.
+  if (synthCardsEl) {
+    synthCardsEl.addEventListener('click', ev => {
+      const head = ev.target.closest('.fw-planner-card-head');
+      if (!head) return;
+      head.parentElement.classList.toggle('expanded');
+    });
+  }
+
   // Substep order MUST match `NODE_ORDER` in
   // services/docs_distiller/synth/graph.py (when that ships) AND the
   // field each node writes (`state.<field>`).
@@ -3504,12 +3527,12 @@
   // native skip-completed-nodes subsume it. See SYNTH-ARCHITECTURE-SOTA
   // doc for the full rationale.
   const SYNTH_SUBSTEP_FIELDS = [
-    'outline_dag_ref',       // outline_sdp
-    'digest_ref',            // digest_construct
-    'sawc_drafts_ref',       // sawc_write
-    'checklist_results_ref', // checklist_eval
-    'mgsr_actions_ref',      // mgsr_replan
-    'chapters_path',         // render_audit_write
+    'outline_path',          // outline_sdp
+    'digest_path',           // digest_construct
+    'sawc_path',             // sawc_write
+    'checklist_path',        // checklist_eval
+    'mgsr_path',             // mgsr_replan
+    'chapter_path',          // render_audit_write
   ];
   const SYNTH_NODE_ORDER = [
     'outline_sdp', 'digest_construct',
@@ -3522,12 +3545,12 @@
     'MGSR replan', 'Render + audit',
   ];
   const SYNTH_STEP_TO_FIELD = {
-    outline_sdp:        'outline_dag_ref',
-    digest_construct:   'digest_ref',
-    sawc_write:         'sawc_drafts_ref',
-    checklist_eval:     'checklist_results_ref',
-    mgsr_replan:        'mgsr_actions_ref',
-    render_audit_write: 'chapters_path',
+    outline_sdp:        'outline_path',
+    digest_construct:   'digest_path',
+    sawc_write:         'sawc_path',
+    checklist_eval:     'checklist_path',
+    mgsr_replan:        'mgsr_path',
+    render_audit_write: 'chapter_path',
   };
 
   // Populated from GET /synth/info. Cards whose substep isn't in this
@@ -3570,8 +3593,15 @@
     if (!values) return '';
     const stats = (key) => values[key] || null;
     switch (nodeId) {
-      case 'outline_sdp':        { const s = stats('outline_stats');
-        return s && s.sections !== undefined ? `sec=${s.sections}` : ''; }
+      case 'outline_sdp':        {
+        const s = stats('outline_stats');
+        if (!s) return '';
+        const parts = [];
+        if (s.n_sections   !== undefined) parts.push(`sec=${s.n_sections}`);
+        if (s.max_stage    !== undefined) parts.push(`depth=${s.max_stage}`);
+        if (s.n_violations !== undefined) parts.push(`viol=${s.n_violations}`);
+        return parts.join(' · ');
+      }
       case 'digest_construct':   { const s = stats('digest_stats');
         return s && s.sources !== undefined ? `src=${s.sources}` : ''; }
       case 'sawc_write':         { const s = stats('sawc_stats');
@@ -3580,7 +3610,7 @@
         return s && s.pass !== undefined ? `pass=${s.pass}` : ''; }
       case 'mgsr_replan':        { const s = stats('mgsr_stats');
         return s && s.actions !== undefined ? `act=${s.actions}` : ''; }
-      case 'render_audit_write': { const s = stats('render_stats');
+      case 'render_audit_write': { const s = stats('chapter_stats');
         return s && s.chapters !== undefined ? `ch=${s.chapters}` : ''; }
     }
     return '';
@@ -3631,8 +3661,16 @@
     const kpiText = _kpiForSynthNode(nodeId, values);
     const kpis = {};
     if (kpiText) {
-      const eqIdx = kpiText.indexOf('=');
-      if (eqIdx > 0) kpis[kpiText.slice(0, eqIdx)] = kpiText.slice(eqIdx + 1);
+      // KPI text format is `k1=v1 · k2=v2 · k3=v3` (space-dot-space
+      // separator). Older code only grabbed the first `k=v` because it
+      // split on the FIRST `=` for the whole string, dropping multi-key
+      // KPIs. Split on the separator first, then on `=` per pair.
+      kpiText.split(' · ').forEach(pair => {
+        const eqIdx = pair.indexOf('=');
+        if (eqIdx > 0) {
+          kpis[pair.slice(0, eqIdx).trim()] = pair.slice(eqIdx + 1).trim();
+        }
+      });
     }
     // Synth's SUBSTEP_RENDERERS is empty until nodes ship; same
     // pattern as planner — when a renderer lands, drawer gets the
@@ -3648,6 +3686,33 @@
       ? JSON.stringify({ [thisField]: values[thisField] }, null, 2)
       : null;
     return { label, status, kpis, resultsHtml, inputs, outputs };
+  }
+
+  // In-memory event buffer keyed by step name. The SSE handler in
+  // pollSynthState pushes every event here AS IT ARRIVES, regardless of
+  // whether the drawer is currently open. When the user opens the
+  // drawer for `outline_sdp` mid-run (or after the run finishes), we
+  // replay the buffered events into the drawer log so they see the
+  // full activity history — not just events that fire AFTER the drawer
+  // open. Without this, the long silent windows between SDP events
+  // (~28s while 3 LLM samples generate concurrently) made the drawer
+  // look empty even though the run was making progress.
+  // Capped per-step to avoid unbounded growth on very long runs.
+  const _synthEventBuffer = new Map();   // step → Array<event>
+  const _SYNTH_EVENT_BUFFER_PER_STEP = 200;
+
+  function _bufferSynthEvent(ev) {
+    if (!ev || !ev.step) return;
+    let list = _synthEventBuffer.get(ev.step);
+    if (!list) { list = []; _synthEventBuffer.set(ev.step, list); }
+    list.push(ev);
+    if (list.length > _SYNTH_EVENT_BUFFER_PER_STEP) {
+      list.splice(0, list.length - _SYNTH_EVENT_BUFFER_PER_STEP);
+    }
+  }
+
+  function _resetSynthEventBuffer() {
+    _synthEventBuffer.clear();
   }
 
   async function _openSynthNodeDrawer(nodeId) {
@@ -3667,6 +3732,12 @@
     }
     const ctx = _buildSynthNodeCtx(nodeId, values);
     if (ctx) NodeDrawer.open('synth', nodeId, ctx);
+    // Replay buffered events for this node so a late-open drawer sees
+    // the full event history, not just future events.
+    const buffered = _synthEventBuffer.get(nodeId) || [];
+    if (buffered.length) {
+      for (const ev of buffered) NodeDrawer.appendEvent(ev);
+    }
   }
 
   function _refreshOpenSynthDrawer(values) {
@@ -3853,13 +3924,56 @@
     if (!el) return;
     let text = '';
     // Generic lifecycle fallbacks — every node SHOULD emit start/done at
-    // minimum. Per-step custom kinds get added below as nodes ship.
+    // minimum.
     if (ev.kind === 'start')      text = '· starting ' + stepName + '…';
     else if (ev.kind === 'done')  text = '✓ done (' + (ev.wall_ms || 0) + ' ms)';
     else if (ev.kind === 'error') text = '✕ ' + (ev.error || 'failed');
-    // Per-step rich progress lines added here as nodes ship. Examples
-    // (placeholders to fill in when each node lands):
-    //   if (stepName === 'outline_sdp')        { ... DAG stage timeline ... }
+    // outline_sdp — SurveyGen-I SDP per-event progress
+    if (stepName === 'outline_sdp') {
+      if (ev.kind === 'start') {
+        text = '· loading sources for ' + (ev.chapter_title || ev.chapter_id || 'chapter') +
+               ' (' + (ev.n_sources || 0) + ' sources)';
+      } else if (ev.kind === 'sources_loaded') {
+        text = '· sources loaded: ' + (ev.n_bodies || 0) + '/' + (ev.n_sources || 0) +
+               ' bodies, ' + ((ev.bytes || 0) / 1000).toFixed(1) + 'k chars, ' +
+               (ev.n_vault_hashes || 0) + ' code refs' +
+               (ev.truncated ? ' (truncated)' : '');
+      } else if (ev.kind === 'sample_done') {
+        // Per-sample event (one per concurrent LLM draft). `sample_idx`
+        // is 0-based; show 1-based for the user.
+        const idx = (ev.sample_idx ?? 0) + 1;
+        const tot = ev.n_total || 0;
+        const dep = ev.deployment ? ' [' + ev.deployment + ']' : '';
+        if (ev.ok) {
+          text = '· sample ' + idx + '/' + tot + ' done (' +
+                 (ev.n_sections || '?') + ' sections, ' +
+                 (ev.wall_ms || 0) + ' ms)' + dep;
+        } else {
+          text = '· sample ' + idx + '/' + tot + ' FAILED: ' +
+                 (ev.error || 'unknown');
+        }
+      } else if (ev.kind === 'samples_drafted') {
+        text = '· drafted ' + (ev.n_samples || 0) + '/' +
+               (ev.n_requested || 0) + ' candidate outlines';
+      } else if (ev.kind === 'samples_validated') {
+        text = '· validated ' + (ev.n_candidates || 0) + ' candidate(s)' +
+               (ev.n_pydantic_fail ? ', ' + ev.n_pydantic_fail + ' pydantic-rejected' : '');
+      } else if (ev.kind === 'usc_voted') {
+        text = '· USC picked candidate #' + (ev.chosen_index || 0) +
+               ' (' + (ev.n_initial_violations || 0) + ' initial violations)';
+      } else if (ev.kind === 'repair_attempt') {
+        text = '· repair attempt ' + (ev.attempt || 0) +
+               ' (' + (ev.n_violations || 0) + ' violations)';
+      } else if (ev.kind === 'done') {
+        text = '✓ done — ' + (ev.n_sections || 0) + ' sections, ' +
+               'depth=' + (ev.max_stage || 0) + ', ' +
+               'repairs=' + (ev.n_repairs || 0) + ', ' +
+               'violations=' + (ev.n_violations || 0) +
+               ' (' + (ev.wall_ms || 0) + ' ms)';
+      }
+    }
+    // Per-step rich progress lines added here as nodes ship. Placeholders
+    // for nodes not yet implemented:
     //   if (stepName === 'digest_construct')   { ... per-source progress ... }
     //   if (stepName === 'sawc_write')         { ... per-section / per-iter ... }
     //   if (stepName === 'checklist_eval')     { ... criteria pass-rate ... }
@@ -4120,6 +4234,8 @@
         return;
       }
       if (ev.step) {
+        // Buffer every step event so a late-open drawer can replay them.
+        _bufferSynthEvent(ev);
         if (ev.kind === 'start') {
           _markSynthCardRunning(ev.step);
           const stepIdx = SYNTH_NODE_ORDER.indexOf(ev.step);
@@ -4162,13 +4278,20 @@
     try { localStorage.removeItem(_synthStorageKey(slug)); } catch (e) {}
   }
   function _genSynthThreadId(slug) {
+    // Canonical synth thread_id format — MUST match server-side
+    // _make_thread_id in routers/v1/docs_distiller/synth.py. The
+    // `docs-distiller/synth/` prefix is also what /synth/recent SQL +
+    // /synth/{slug}/wipe SQL pattern-match against; an earlier draft
+    // used `docs-distiller-synth/` (hyphen) which silently broke both
+    // recovery + wipe (the SSE channel still worked because both ends
+    // used the same string, masking the bug).
     const uuid = (typeof crypto !== 'undefined' && crypto.randomUUID)
       ? crypto.randomUUID()
       : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
           const r = Math.random() * 16 | 0;
           return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
         });
-    return 'docs-distiller-synth/' + slug + '/' + uuid;
+    return 'docs-distiller/synth/' + slug + '/' + uuid;
   }
 
   // Page-refresh recovery for synth — symmetric with the planner
@@ -4286,6 +4409,7 @@
       return;
     }
     resetSynthCards();
+    _resetSynthEventBuffer();   // fresh run = fresh event history
 
     // Smart resume — symmetric with planner. If a thread already exists
     // for THIS slug (and only this slug — same per-slug isolation that

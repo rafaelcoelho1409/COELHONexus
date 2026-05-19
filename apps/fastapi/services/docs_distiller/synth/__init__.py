@@ -7,17 +7,34 @@ MGSR replan loop. Each node ships independently behind the synth
 router's `IMPLEMENTED` tuple, lighting up its card/canvas node in
 the FastHTML UI when wired.
 
-Currently shipped:
-  - vault.py  (step 5 — byte-exact code-block preservation; the
-                first synth node, pure functions, no graph yet)
+Currently shipped (post-2026-05-19 architecture cleanup that moved
+`corpus_normalize` + `vault_sentinelize` to ingestion-time and removed
+`cache_lookup` in favor of per-stage MinIO content-addressed caching):
+
+  Ingestion-time prep (called from store.py:add_page, NOT a graph node):
+    - vault.py            — byte-exact code-block sentinelization
+    - corpus_normalize.py — Mintlify/boundary/wrapper-tag stripping
+
+  Synth graph nodes (in nodes/, wired by graph.py):
+    - outline_sdp         (step 1) — SurveyGen-I PlanEvo single-call
+                                      Structure-Driven Planner — SHIPPED
+
+  Pure libraries:
+    - outline.py — Pydantic schemas + DAG primitives + prompt templates
+                    + structural validators (consumed by outline_sdp)
+
+  Infrastructure:
+    - state.py        — SynthState TypedDict
+    - graph.py        — StateGraph builder (IMPLEMENTED-gated)
+    - cancel.py       — Redis cancel flag + watcher (mirrors planner)
+    - progress.py     — SSE event pub/sub (mirrors planner)
+    - observability/  — @traced decorator for OTel spans
 
 Shipping next (in dependency order):
-  - corpus_normalize (step 2) — ingestion-side hooks
-  - outline_sdp      (step 3) — SurveyGen-I PlanEvo single-call outline
-  - digest_construct (step 4) — LLMxMapReduce-V3 per-source digest
-  - sawc_write       (step 6) — stage-parallel writer + best-of-N
-  - checklist_eval   (step 7) — RefineBench binary criteria
-  - mgsr_replan      (step 8) — typed replan actions + CoRefine halt
-  - render_audit_write (step 9) — Jinja render + round-trip audit
-  - cache_lookup     (step 1) — wired last (Redis 30d, partial 7d)
+  - digest_construct (step 2) — LLMxMapReduce-V3 per-source digest +
+                                 LLM-assigned section routing
+  - sawc_write       (step 3) — stage-parallel writer + best-of-N
+  - checklist_eval   (step 4) — RefineBench binary criteria
+  - mgsr_replan      (step 5) — typed replan actions + CoRefine halt
+  - render_audit_write (step 6) — Jinja render + round-trip audit
 """
