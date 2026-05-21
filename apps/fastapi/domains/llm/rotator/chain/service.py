@@ -25,7 +25,7 @@ models + fresh benchmark data — LMArena, AAII, SWE-Bench Verified, AIME,
 MMLU-Pro, LiveCodeBench, HumanEval, GPQA):
 
   NIM=12 | Mistral=6 | SambaNova=5 | Groq=4 | Gemini=4 | Cerebras=2 |
-  DeepSeek=2 | Zhipu=2    →   37 entries total, 8 providers
+  DeepSeek=2    →   35 entries total, 7 providers
 
   Major 2026-04-24 changes:
   - DeepSeek V4 launched TODAY — swapped `deepseek-reasoner`/`deepseek-chat`
@@ -56,24 +56,56 @@ Factories (all serve from the same `dd-all` group, varying only temperature):
   - build_curator_llm                  — T=0.0
 """
 import logging
-import os
+import redis
+import redis.asyncio as redis_aio
 import time
-import litellm
-from langchain_litellm.chat_models import ChatLiteLLMRouter
-from litellm import Router
+import httpx
+import os
+import re
+import asyncio
 
-logger = logging.getLogger(__name__)
+# Hoisted from former in-function lazy imports (no cycle — none of these import chain).
+from domains.llm.rotator import benchmarks, discovery, pareto_bandit
+
+import litellm
+from litellm import Router
 from litellm.types.router import (
     RetryPolicy,
     AllowedFailsPolicy,
     ModelGroupInfo,
 )
+from langchain_litellm.chat_models import ChatLiteLLMRouter
+
+
+from .constants import (
+    KEYLM_GROUP,
+    REDUCE_LABEL_GROUP, 
+    SYNTH_GROUP,
+    DD_EMBED_GROUP,
+    DD_EMBED_MODEL_NAME,
+    DD_EMBED_BATCH_SIZE,
+    GROUP,
+    _JUDGE_KD_PROCESS,
+    _JUDGE_BANDIT_TOP_K,
+    _JUDGE_EXPECTED_LATENCY_S,
+    DD_RERANK_MODEL_NAME,
+    _NIM_RERANK_BASE,
+    _PROVIDER_CHAPTER_CAPS,
+    _router_instance,
+    _pinned_chain_cache,
+    _pinned_to_parent,
+    _dynamic_entries,
+    _dynamic_catalog_initialized
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
 # OpenTelemetry callback (2026-05-12 night)
 # =============================================================================
-# When OTEL_EXPORTER_OTLP_ENDPOINT is set (handled by services.otel_setup at
+# When OTEL_EXPORTER_OTLP_ENDPOINT is set (handled by core.otel_setup at
 # process startup), enabling the `otel` callback makes LiteLLM emit a span
 # per LLM call containing:
 #   - model (e.g. "moonshotai/kimi-k2.6")
@@ -115,6 +147,13 @@ def _env(key: str, default: str = "") -> str:
 # `model_name` is the GROUP name the Router serves from.
 # `litellm_params.model` uses LiteLLM's provider-prefixed naming.
 
+# =============================================================================
+# Unified ranked catalog — `dd-all`
+# =============================================================================
+# SAME list served to every KD step. Ordering is strictly best→worst by
+# 2026-04-24 benchmark data (SWE-Bench Verified, MMLU-Pro, AIME-2025,
+# LMArena Elo, AAII, LiveCodeBench, GPQA, HumanEval — composite).
+# Providers interleaved so no 3 in a row of same provider anywhere.
 def _groq_entry(group: str, model: str, timeout_s: int = 120) -> dict:
     return {
         "model_name": group,
@@ -200,30 +239,6 @@ def _sambanova_entry(group: str, model: str, timeout_s: int = 120) -> dict:
     }
 
 
-def _zhipu_entry(group: str, model: str, timeout_s: int = 120) -> dict:
-    # Zhipu is OpenAI-compatible; we set api_base explicitly since LiteLLM
-    # doesn't have a dedicated `zhipu/` prefix (uses OpenAI-compat path).
-    return {
-        "model_name": group,
-        "litellm_params": {
-            "model": f"openai/{model}",
-            "api_key": _env("ZHIPU_API_KEY"),
-            "api_base": "https://open.bigmodel.cn/api/paas/v4",
-            "timeout": timeout_s,
-            "max_retries": 0,
-        },
-    }
-
-
-# =============================================================================
-# Unified ranked catalog — `dd-all`
-# =============================================================================
-# SAME list served to every KD step. Ordering is strictly best→worst by
-# 2026-04-24 benchmark data (SWE-Bench Verified, MMLU-Pro, AIME-2025,
-# LMArena Elo, AAII, LiveCodeBench, GPQA, HumanEval — composite).
-# Providers interleaved so no 3 in a row of same provider anywhere.
-GROUP = "dd-all"
-
 # =============================================================================
 # Small-LM group — `dd-keylm` (KeyLLM cluster labeling for the classical MAP)
 # =============================================================================
@@ -242,9 +257,6 @@ GROUP = "dd-all"
 #   Llama-3.1-405B/70B → strong format adherence.
 # - llama-3.2-1b-preview on Groq (preview): same model on LPU silicon —
 #   sub-100ms latency. Preview status is a stability risk so secondary.
-KEYLM_GROUP = "dd-keylm"
-
-
 def _keylm_entries() -> list:
     """
     Two-deep small-LM rotator for cluster labeling.
@@ -262,9 +274,15 @@ def _keylm_entries() -> list:
     """
     return [
         # Primary: 1B for speed
-        _nim_entry(KEYLM_GROUP, "meta/llama-3.2-1b-instruct", timeout_s=30),
+        _nim_entry(
+            KEYLM_GROUP, 
+            "meta/llama-3.2-1b-instruct", 
+            timeout_s = 30),
         # Fallback: 3B when 1B is cooled down (rate-limit absorber)
-        _nim_entry(KEYLM_GROUP, "meta/llama-3.2-3b-instruct", timeout_s=45),
+        _nim_entry(
+            KEYLM_GROUP, 
+            "meta/llama-3.2-3b-instruct", 
+            timeout_s = 45),
     ]
 
 
@@ -289,16 +307,12 @@ def _keylm_entries() -> list:
 #   - SambaNova (whole provider paywalled per 2026-04-24 Run-8)
 #   - Cerebras gpt-oss-120b (this account 404; user's key lacks model access)
 #   - DeepSeek V4 (Insufficient Balance per dd-all comments)
-#   - Zhipu glm-*-flash (auth/endpoint failures, 0/14 success in Run-16)
 #   - Groq gpt-oss-120b (8K TPM ceiling) and qwen3-32b (6K TPM) — also
 #     excluded from dd-all for the same reason
 #   - All reasoning-mode models even when reachable (the whole point)
 #
 # Pool sized for M=8-12 parallel labeling fanout. With 8 deployments and
 # per-deployment cooldown, a single bad provider takes out ≤1 entry.
-REDUCE_LABEL_GROUP = "dd-reduce-label"
-
-
 def _reduce_label_entries() -> list:
     """
     Non-reasoning rotator for the REDUCE step's labeling + ordering calls.
@@ -317,7 +331,10 @@ def _reduce_label_entries() -> list:
         # Groq llama-3.3-70b-versatile is EXCLUDED from dd-all only because of
         # the code-gen error benchmark; chapter naming doesn't generate code,
         # so that exclusion doesn't apply here. 12K TPM ample for ~3K prompts.
-        _groq_entry(REDUCE_LABEL_GROUP, "llama-3.3-70b-versatile", timeout_s=60),
+        _groq_entry(
+            REDUCE_LABEL_GROUP, 
+            "llama-3.3-70b-versatile", 
+            timeout_s = 60),
         # Gemini 3.1 Flash-Lite preview: 381 t/s, AAII 34, 1M ctx, native tools.
         # Distinct from `gemini-2.5-flash-lite` which is disabled in dd-all
         # (returns empty choices on the complex ChapterOutput schema) — the
@@ -333,31 +350,52 @@ def _reduce_label_entries() -> list:
         # deployments too; only sampling among valid JSON paths differs.
         # Bumped 2026-05-13 from -preview (retires 2026-05-25) to stable
         # (shipped 2026-05-07; ai.google.dev/gemini-api/docs/deprecations).
-        _gemini_entry(REDUCE_LABEL_GROUP, "gemini-3.1-flash-lite", timeout_s=60),
+        _gemini_entry(
+            REDUCE_LABEL_GROUP, 
+            "gemini-3.1-flash-lite", 
+            timeout_s = 60),
         # --- Tier 2: NIM-hosted, non-reasoning, high-context ---
         # Nemotron-3-super-120b-a12b: 1M ctx hybrid Mamba, AAII 36, leads
         # size class on AIME-2025 + Terminal-Bench. Non-reasoning by default
         # (no detailed_thinking parameter exposed by the NIM endpoint).
-        _nim_entry(REDUCE_LABEL_GROUP, "nvidia/nemotron-3-super-120b-a12b", timeout_s=90),
+        _nim_entry(
+            REDUCE_LABEL_GROUP, 
+            "nvidia/nemotron-3-super-120b-a12b", 
+            timeout_s = 90),
         # gpt-oss-120b on NIM — Groq's 8K TPM ceiling makes Groq's host
         # permanently incompatible; Cerebras 404s on this account; NIM is
         # the only viable host for the gpt-oss family on this account.
-        _nim_entry(REDUCE_LABEL_GROUP, "openai/gpt-oss-120b", timeout_s=90),
+        _nim_entry(
+            REDUCE_LABEL_GROUP, 
+            "openai/gpt-oss-120b", 
+            timeout_s = 90),
         # Mistral Large 3 via NIM (DUP of Mistral direct below, NIM infra
         # adds an independent failure domain).
-        _nim_entry(REDUCE_LABEL_GROUP, "mistralai/mistral-large-3-675b-instruct-2512", timeout_s=90),
+        _nim_entry(
+            REDUCE_LABEL_GROUP, 
+            "mistralai/mistral-large-3-675b-instruct-2512", 
+            timeout_s = 90),
         # --- Tier 3: Mistral direct API ---
         # Mistral Large 3 v25.12 — LMArena #2 OSS, native function calling,
         # 256K ctx. Same model as the NIM entry above; different infra.
-        _mistral_entry(REDUCE_LABEL_GROUP, "mistral-large-latest", timeout_s=90),
+        _mistral_entry(
+            REDUCE_LABEL_GROUP, 
+            "mistral-large-latest", 
+            timeout_s = 90),
         # Mistral Small 4 v26.03 — HumanEval 92, MMLU 88.5, AAII 28 — outperforms
         # Mistral Medium 3.1 on most benchmarks; fastest viable fallback here.
-        _mistral_entry(REDUCE_LABEL_GROUP, "mistral-small-latest", timeout_s=60),
+        _mistral_entry(
+            REDUCE_LABEL_GROUP, 
+            "mistral-small-latest", 
+            timeout_s = 60),
         # --- Tier 4: deep tail ---
         # Llama-4 Maverick 17B-128E MoE on NIM — 1M ctx, AAII 18; weak relative
         # to the head of the pool but absorbs cooldown bursts when everything
         # above is in cooldown. Same-token-budget cost as the tier-1 entries.
-        _nim_entry(REDUCE_LABEL_GROUP, "meta/llama-4-maverick-17b-128e-instruct", timeout_s=90),
+        _nim_entry(
+            REDUCE_LABEL_GROUP, 
+            "meta/llama-4-maverick-17b-128e-instruct", 
+            timeout_s = 90),
     ]
 
 
@@ -416,9 +454,6 @@ def _reduce_label_entries() -> list:
 # All models support native function_calling AND response_format=json_schema
 # on their hosting provider — required for ChapterOutput / ProseChapterOutput
 # / Section structured output reliability.
-SYNTH_GROUP = "dd-synth"
-
-
 def _synth_entries() -> list:
     """
     Hybrid reasoning + non-reasoning rotator for hierarchical_synth Phase C.
@@ -437,30 +472,63 @@ def _synth_entries() -> list:
         # --- Tier 1: Frontier reasoning (strong structured output) ---
         # Kimi K2.6 on NIM — AAII 49, 256K ctx. Non-thinking K2 variant; Moonshot's
         # current K2.x on NIM (K2.5 EOL 2026-04-30, K2-Thinking EOL 2026-05-12).
-        _nim_entry(SYNTH_GROUP, "moonshotai/kimi-k2.6", timeout_s=180),
+        _nim_entry(
+            SYNTH_GROUP, 
+            "moonshotai/kimi-k2.6", 
+            timeout_s = 180),
         # GLM-5.1 on NIM — AAII 51 (Reasoning), SWE-Bench Pro 58.4% (#1 OSS).
-        _nim_entry(SYNTH_GROUP, "z-ai/glm-5.1", timeout_s=180),
+        _nim_entry(
+            SYNTH_GROUP, 
+            "z-ai/glm-5.1", 
+            timeout_s = 180),
         # MiniMax M2.7 on NIM — AAII 50, 204K ctx agentic, SWE-Pro 56.22%.
-        _nim_entry(SYNTH_GROUP, "minimaxai/minimax-m2.7", timeout_s=180),
+        _nim_entry(
+            SYNTH_GROUP, 
+            "minimaxai/minimax-m2.7", 
+            timeout_s = 180),
         # DeepSeek V4-Flash on NIM — AAII 47, free-tier path (DeepSeek direct
         # paywalled). Re-enabled 2026-05-13 as V3.2 EOL successor.
-        _nim_entry(SYNTH_GROUP, "deepseek-ai/deepseek-v4-flash", timeout_s=180),
+        _nim_entry(
+            SYNTH_GROUP, 
+            "deepseek-ai/deepseek-v4-flash", 
+            timeout_s = 180),
         # --- Tier 2: Frontier non-reasoning (complete structured output, fast) ---
         # Mistral Large 3 v25.12 direct — LMArena #2 OSS non-reasoning, 256K ctx.
-        _mistral_entry(SYNTH_GROUP, "mistral-large-latest", timeout_s=120),
+        _mistral_entry(
+            SYNTH_GROUP, 
+            "mistral-large-latest", 
+            timeout_s = 120),
         # Mistral Large 3 via NIM (independent failure domain from Mistral direct).
-        _nim_entry(SYNTH_GROUP, "mistralai/mistral-large-3-675b-instruct-2512", timeout_s=120),
+        _nim_entry(
+            SYNTH_GROUP, 
+            "mistralai/mistral-large-3-675b-instruct-2512", 
+            timeout_s = 120),
         # Nemotron-3-super-120b-a12b: 1M ctx hybrid Mamba, AAII 36.
-        _nim_entry(SYNTH_GROUP, "nvidia/nemotron-3-super-120b-a12b", timeout_s=120),
+        _nim_entry(
+            SYNTH_GROUP, 
+            "nvidia/nemotron-3-super-120b-a12b", 
+            timeout_s = 120),
         # gpt-oss-120b on NIM — AAII 33, native tools.
-        _nim_entry(SYNTH_GROUP, "openai/gpt-oss-120b", timeout_s=120),
+        _nim_entry(
+            SYNTH_GROUP, 
+            "openai/gpt-oss-120b", 
+            timeout_s = 120),
         # --- Tier 3: Deep-tail cooldown absorbers (may drop hashes on large schemas) ---
         # Mistral Medium 3.1 — between Large and Small.
-        _mistral_entry(SYNTH_GROUP, "mistral-medium-latest", timeout_s=120),
+        _mistral_entry(
+            SYNTH_GROUP, 
+            "mistral-medium-latest", 
+            timeout_s = 120),
         # Mistral Small 4 v26.03 — HumanEval 92, AAII 28. Fast fallback; OK for small chapters.
-        _mistral_entry(SYNTH_GROUP, "mistral-small-latest", timeout_s=90),
+        _mistral_entry(
+            SYNTH_GROUP, 
+            "mistral-small-latest", 
+            timeout_s = 90),
         # Llama-4 Maverick 17B-128E MoE on NIM — 1M ctx, deep tail.
-        _nim_entry(SYNTH_GROUP, "meta/llama-4-maverick-17b-128e-instruct", timeout_s=120),
+        _nim_entry(
+            SYNTH_GROUP, 
+            "meta/llama-4-maverick-17b-128e-instruct", 
+            timeout_s = 120),
     ]
 
 
@@ -487,15 +555,6 @@ def _synth_entries() -> list:
 # - 2048-dim is plenty (downstream cluster/refine consume the unit-norm vectors)
 # - Cache invalidation: DD_EMBED_MODEL_NAME below feeds the embed_corpus
 #   cache hash so any stored .npz blobs from a different model re-embed cleanly.
-DD_EMBED_GROUP = "dd-embed"
-DD_EMBED_MODEL_NAME = "nvidia/llama-nemotron-embed-1b-v2"
-
-# Hard upper bound on inputs per /v1/embeddings call. NIM doesn't publish a
-# strict limit; 64 is empirically safe and matches the previous Xinference
-# batch tuning. Helper functions auto-batch above this.
-DD_EMBED_BATCH_SIZE = 64
-
-
 def _embed_entries() -> list:
     """
     Single-entry embedding group — see DD_EMBED_GROUP docstring above.
@@ -521,7 +580,8 @@ def _embed_entries() -> list:
 
 
 def embed_via_router_sync(
-    texts: list[str], input_type: str = "passage",
+    texts: list[str], 
+    input_type: str = "passage",
 ) -> list[list[float]]:
     """
     Sync batch-embed via the rotator's `dd-embed` group. Auto-batches at
@@ -546,10 +606,10 @@ def embed_via_router_sync(
         # (passage for docs, query for anchors). `extra_body=` does NOT work
         # for LiteLLM embeddings (gets passed as a literal field, NIM rejects).
         response = router.embedding(
-            model=DD_EMBED_GROUP,
-            input=batch,
-            encoding_format="float",
-            input_type=input_type,
+            model = DD_EMBED_GROUP,
+            input = batch,
+            encoding_format = "float",
+            input_type = input_type,
         )
         # LiteLLM normalizes to OpenAI shape: response["data"] is a list of
         # {"embedding": [...], "index": N, "object": "embedding"}.
@@ -583,16 +643,18 @@ async def embed_via_router_async(
     for start in range(0, total, DD_EMBED_BATCH_SIZE):
         batch = clean[start:start + DD_EMBED_BATCH_SIZE]
         response = await router.aembedding(
-            model=DD_EMBED_GROUP,
-            input=batch,
-            encoding_format="float",
-            input_type=input_type,
+            model = DD_EMBED_GROUP,
+            input = batch,
+            encoding_format = "float",
+            input_type = input_type,
         )
         out.extend(item["embedding"] for item in response["data"])
         if on_batch is not None:
             try:
                 await on_batch(
-                    n_done=len(out), n_total=total, batch_size=len(batch),
+                    n_done = len(out), 
+                    n_total = total, 
+                    batch_size = len(batch),
                 )
             except Exception:
                 pass
@@ -618,10 +680,6 @@ async def embed_via_router_async(
 # with the llama-nemotron-embed-1b-v2 family, 1B params, 40 RPM free-tier.
 # Successor to `nvidia/llama-3.2-nv-rerankqa-1b-v2` (which deprecates 2026-05-18).
 # Stronger alternative if 1B underperforms: `nvidia/nv-rerankqa-mistral-4b-v3`.
-DD_RERANK_MODEL_NAME = "nvidia/llama-nemotron-rerank-1b-v2"
-_NIM_RERANK_BASE = "https://ai.api.nvidia.com/v1/retrieval"
-
-
 async def chat_judge_async(
     prompt: str,
     max_tokens: int = 8,
@@ -637,10 +695,10 @@ async def chat_judge_async(
     reliable + steer traffic accordingly."""
     router = _get_router()
     response = await router.acompletion(
-        model=GROUP,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=temperature,
-        max_tokens=max_tokens,
+        model = GROUP,
+        messages = [{"role": "user", "content": prompt}],
+        temperature = temperature,
+        max_tokens = max_tokens,
     )
     return (response.choices[0].message.content or "").strip()
 
@@ -657,24 +715,9 @@ async def chat_judge_async(
 # Per 2026 SOTA literature (LLM Bandit arxiv 2502.02743, BaRP 2510.07429,
 # IBM MAR AAAI 2026): contextual bandit feedback is the published best
 # practice for partial-feedback LLM routing under cost+accuracy trade-offs.
-#
-# We use dd_process="dd-grader" (not "dd-all") so the bandit cells for the
-# judge stay separate from synthesizer cells — different reward shapes
-# (binary vs continuous), different latency expectations, different
-# preferred models. Empty dd-grader cells warm-start from benchmark priors.
-_JUDGE_KD_PROCESS = "dd-grader"
-# Expected wall per judge call. Used by compose_reward's latency component:
-# faster than this → positive contribution, slower → negative.
-_JUDGE_EXPECTED_LATENCY_S = 4.0
-# How many ranked deployments to cascade through before giving up. Matches
-# the bandit-driven chapter-pin cascade pattern in pick_synth_deployment_bandit.
-_JUDGE_BANDIT_TOP_K = 5
-
-
 async def _redis_for_bandit():
     """Lazily build a Redis client for ParetoBandit reads/writes. Returns
     None on env-misconfig so callers can fall back gracefully."""
-    import redis.asyncio as redis_aio_lib
     host = _env("REDIS_HOST")
     port = _env("REDIS_PORT", "6379")
     password = _env("REDIS_PASSWORD")
@@ -685,8 +728,10 @@ async def _redis_for_bandit():
         if password else f"redis://{host}:{port}"
     )
     try:
-        return redis_aio_lib.from_url(
-            url, socket_connect_timeout=3.0, socket_timeout=5.0,
+        return redis_aio.from_url(
+            url, 
+            socket_connect_timeout = 3.0, 
+            socket_timeout = 5.0,
         )
     except Exception:
         return None
@@ -737,28 +782,30 @@ async def chat_judge_bandit_async(
     failure (Redis down, no candidates ranked, etc.) so the planner
     never wedges on a misconfigured bandit.
     """
-    import litellm
-    from services.llm import pareto_bandit
-
-    redis = await _redis_for_bandit()
-    if redis is None:
+    rds = await _redis_for_bandit()
+    if rds is None:
         # No Redis = no bandit. Fall back to Router-shuffle.
-        text = await chat_judge_async(prompt, max_tokens=max_tokens, temperature=temperature)
-        return text, {"deployment": "router-shuffle", "attempts": 0,
-                      "latency_s": None, "reward": None,
-                      "fallback": "no_redis"}
-
+        text = await chat_judge_async(
+            prompt, 
+            max_tokens = max_tokens, 
+            temperature = temperature)
+        return text, {
+            "deployment": "router-shuffle", 
+            "attempts": 0,
+            "latency_s": None, "reward": None,
+            "fallback": "no_redis"}
     candidates = [e["litellm_params"]["model"] for e in _all_entries_current()]
     ctx = pareto_bandit.make_context_vector(_JUDGE_KD_PROCESS)
     pattern = None
     if expected_pattern:
-        import re
         pattern = re.compile(expected_pattern)
-
     try:
         ranked = await pareto_bandit.predict_top_k(
-            _JUDGE_KD_PROCESS, ctx, candidates,
-            redis=redis, k=_JUDGE_BANDIT_TOP_K,
+            _JUDGE_KD_PROCESS, 
+            ctx, 
+            candidates,
+            redis = rds, 
+            k = _JUDGE_BANDIT_TOP_K,
         )
     except Exception as e:
         logger.warning(f"[dd-judge-bandit] predict_top_k failed: {e}; "
@@ -767,11 +814,16 @@ async def chat_judge_bandit_async(
             await redis.aclose()
         except Exception:
             pass
-        text = await chat_judge_async(prompt, max_tokens=max_tokens, temperature=temperature)
-        return text, {"deployment": "router-shuffle", "attempts": 0,
-                      "latency_s": None, "reward": None,
-                      "fallback": "predict_failed"}
-
+        text = await chat_judge_async(
+            prompt, 
+            max_tokens = max_tokens, 
+            temperature = temperature)
+        return text, {
+            "deployment": "router-shuffle", 
+            "attempts": 0,
+            "latency_s": None, 
+            "reward": None,
+            "fallback": "predict_failed"}
     api_key = _env("NVIDIA_API_KEY") or _env("GROQ_API_KEY") or ""
     last_error: str | None = None
     attempts = 0
@@ -793,7 +845,6 @@ async def chat_judge_bandit_async(
                 "sambanova":  "SAMBANOVA_API_KEY",
             }.get(provider, "NVIDIA_API_KEY")
             api_key = _env(provider_key_env) or _env("NVIDIA_API_KEY") or ""
-
             t0 = time.monotonic()
             error_class: str | None = None
             success = False
@@ -801,12 +852,12 @@ async def chat_judge_bandit_async(
             response_text = ""
             try:
                 response = await litellm.acompletion(
-                    model=deployment_id,
-                    api_key=api_key,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    timeout=timeout_s,
+                    model = deployment_id,
+                    api_key = api_key,
+                    messages = [{"role": "user", "content": prompt}],
+                    temperature = temperature,
+                    max_tokens = max_tokens,
+                    timeout = timeout_s,
                 )
                 response_text = (response.choices[0].message.content or "").strip()
                 success = True
@@ -819,22 +870,24 @@ async def chat_judge_bandit_async(
             except Exception as e:
                 error_class = _classify_error(e)
                 last_error = f"{type(e).__name__}: {str(e)[:120]}"
-
             latency_s = float(time.monotonic() - t0)
             reward = pareto_bandit.compose_reward(
-                success=success,
-                schema_valid=schema_valid,
-                latency_s=latency_s,
-                expected_latency_s=_JUDGE_EXPECTED_LATENCY_S,
-                error_class=error_class,
+                success = success,
+                schema_valid = schema_valid,
+                latency_s = latency_s,
+                expected_latency_s = _JUDGE_EXPECTED_LATENCY_S,
+                error_class = error_class,
             )
             try:
                 await pareto_bandit.update(
-                    deployment_id, _JUDGE_KD_PROCESS, ctx, reward, redis=redis,
+                    deployment_id, 
+                    _JUDGE_KD_PROCESS, 
+                    ctx, 
+                    reward, 
+                    redis = rds,
                 )
             except Exception:
                 pass
-
             if success and schema_valid:
                 return response_text, {
                     "deployment": deployment_id,
@@ -854,7 +907,6 @@ async def chat_judge_bandit_async(
                     "schema_invalid": True,
                 }
             # On failure: cascade to the next ranked deployment.
-
         # All ranked deployments failed.
         raise RuntimeError(
             f"dd-judge-bandit: all {attempts} ranked deployments failed; "
@@ -882,8 +934,6 @@ async def rerank_via_router_async(
     Direct httpx instead of the LiteLLM Router because NIM's rerank API
     isn't OpenAI-compat — see header comment for the verification details.
     """
-    import httpx
-
     if not documents:
         return []
     api_key = _env("NVIDIA_API_KEY")
@@ -891,12 +941,10 @@ async def rerank_via_router_async(
         raise RuntimeError(
             "dd-rerank: NVIDIA_API_KEY env var not set — required for NIM rerank"
         )
-
     # Model slug in URL strips the "nvidia/" prefix — that's the NIM
     # path convention (`/v1/retrieval/nvidia/{slug}/reranking`).
     model_slug = DD_RERANK_MODEL_NAME.split("/", 1)[-1]
     url = f"{_NIM_RERANK_BASE}/nvidia/{model_slug}/reranking"
-
     payload = {
         "model":    DD_RERANK_MODEL_NAME,
         "query":    {"text": query},
@@ -907,12 +955,13 @@ async def rerank_via_router_async(
         "Accept":        "application/json",
         "Content-Type":  "application/json",
     }
-
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(url, json=payload, headers=headers)
+    async with httpx.AsyncClient(timeout = 60.0) as client:
+        resp = await client.post(
+            url, 
+            json = payload, 
+            headers = headers)
         resp.raise_for_status()
         data = resp.json()
-
     # NIM response shape: {"rankings": [{"index": N, "logit": float}, ...]}
     # already sorted descending by logit. Map to our (idx, score) tuples.
     rankings = data.get("rankings") or []
@@ -948,26 +997,22 @@ def _all_entries() -> list:
     return [
         # --- 1–10: Frontier class (AAII 45+) ---
         # _nim_entry(GROUP, "moonshotai/kimi-k2-thinking", timeout_s=120),                         # DISABLED 2026-05-13 — NIM returns 410 "Gone" since 2026-05-12 EOL (surfaced via Phase 3.1 outline_compare validation). The K2-thinking line is the reasoning variant of K2; no in-family replacement yet from Moonshot on NIM. K2.6 (#3 below) is the non-reasoning K2 successor and remains active. AAII 67 was highest on the list — when Moonshot ships K2.7-thinking or equivalent on NIM, restore here.
-
         # _deepseek_entry(GROUP, "deepseek-v4-pro", timeout_s=120),                                # DISABLED 2026-04-24 — "Insufficient Balance" on account. Re-enable after top-up (5M free grant used up or V4 not in free tier). AAII ~57, 1T+ MoE FP4, 1M ctx
         _nim_entry(GROUP, "z-ai/glm-5.1", timeout_s=120),                                          # AAII 51 (Reasoning); SWE-Bench Pro 58.4% (#1 OSS); may be skipped during NIM endpoint flakiness
         _nim_entry(GROUP, "minimaxai/minimax-m2.7", timeout_s=120),                                # AAII 50 — 204K ctx agentic, SWE-Pro 56.22%, SWE-Multilingual 76.5
         # _groq_entry(GROUP, "moonshotai/kimi-k2-instruct", timeout_s=120),                        # DISABLED 2026-04-24 — not in Groq's actual catalog (research agent hallucinated; Groq listing confirmed missing). AAII 49 (K2-0905), 256K ctx
         # _deepseek_entry(GROUP, "deepseek-v4-flash", timeout_s=120),                              # DISABLED 2026-04-24 — "Insufficient Balance" (same DeepSeek account as v4-pro). AAII 47 (Max), 284B MoE, 1M ctx
         _nim_entry(GROUP, "moonshotai/kimi-k2.6", timeout_s=120),                                  # RE-ENABLED 2026-05-13 — K2.5 EOL'd on NIM 2026-04-30 (surfaced via Phase 3.1 outline_compare 410 cascade); K2.6 is the current Kimi K2.x on NIM (build.nvidia.com/moonshotai/kimi-k2.6) and the original disable reason no longer applies. Sits in the cascade alongside K2-Thinking (#1, reasoning variant).
-
         _gemini_entry(GROUP, "gemini-3-flash-preview", timeout_s=120),                             # AAII 46 (R) / 35 (NR) — LiveCodeBench 90.8%, SWE-bench 78%, 1M ctx
         _nim_entry(GROUP, "qwen/qwen3.5-397b-a17b", timeout_s=120),                                # AAII 45 (R) / 40 (NR) — MMLU-Pro 87.18%, 262K ctx
         _nim_entry(GROUP, "deepseek-ai/deepseek-v4-flash", timeout_s=120),                          # BUMPED 2026-05-13 V3.2→V4-Flash — NIM EOL'd v3.2 on 2026-05-04 (surfaced via Phase 3.1 outline_compare 410 cascade, same week as v3.1-terminus). V4-Flash is the successor on the same free-tier NIM DeepSeek line per build.nvidia.com/deepseek-ai/deepseek-v4-flash (the `deepseek/` provider entries for V4-Flash stay commented because DeepSeek's own API is paywalled; NIM-hosted V4-Flash is the free-tier path).
         # --- 11–17: Strong second tier (AAII 34–42) ---
         # _sambanova_entry(GROUP, "MiniMax-M2.7", timeout_s=120),                                  # COMMENTED 2026-05-13 — model string updated M2.5→M2.7 (M2.7 supersedes M2.5 on SambaNova). Still DISABLED via "A payment method is required" SambaNova paywall (since 2026-04-24); re-enable after adding payment method. AAII 50, 204K ctx (M2.7).
         _nim_entry(GROUP, "minimaxai/minimax-m2.7", timeout_s=120),                                # RE-ENABLED 2026-05-13 — M2.5 EOL'd on NIM 2026-05-12; M2.7 is the successor (same as #3 active above — deliberate cascade duplicate so LiteLLM Router can rotate between the two instances if one hits a transient hiccup).
-
         # _cerebras_entry(GROUP, "zai-glm-4.7", timeout_s=120),                                    # DISABLED 2026-04-24 — 404 "you do not have access to it" (model exists in Cerebras catalog but API key lacks access). AAII 42 (R) / 34 (NR), SOTA τ²-Bench, 200K ctx, 355B params
         _nim_entry(GROUP, "nvidia/nemotron-3-super-120b-a12b", timeout_s=120),                     # AAII 36 — 1M ctx, hybrid Mamba, leads size class on AIME-2025 + Terminal-Bench
         # _sambanova_entry(GROUP, "DeepSeek-V3.1", timeout_s=120),                                 # DISABLED 2026-04-24 (Run-8 evidence) — full SambaNova account now paywalled; whole provider returns "A payment method is required" even for previously-free models. AAII 34 (R) when/if re-enabled.
         _nim_entry(GROUP, "deepseek-ai/deepseek-v4-flash", timeout_s=120),                          # RE-ENABLED 2026-05-13 (cascade dup) — V3.1-Terminus → V3.2 → V4-Flash chain: V3.1-Terminus EOL 2026-05-04; V3.2 also EOL 2026-05-04 (NIM EOL'd them as a pair). V4-Flash is the successor (build.nvidia.com/deepseek-ai/deepseek-v4-flash). Deliberate cascade duplicate of the V4-Flash entry above for redundancy.
-
         _gemini_entry(GROUP, "gemini-3.1-flash-lite", timeout_s=90),                               # AAII 34 — GPQA Diamond 86.9%, 381 t/s, 1M ctx. Bumped 2026-05-13 from -preview (retires 2026-05-25) to stable (shipped 2026-05-07; ai.google.dev/gemini-api/docs/deprecations)
         # --- 18–21: gpt-oss-120b on four providers (AAII 33 each) ---
         # _cerebras_entry(GROUP, "gpt-oss-120b", timeout_s=120),                                   # DISABLED 2026-04-24 — 404 "you do not have access to it" (model listed in Cerebras catalog but key unauthorized). AAII 33, MMLU-Pro 90.0%, 3000 tok/s
@@ -975,14 +1020,12 @@ def _all_entries() -> list:
         # _groq_entry(GROUP, "openai/gpt-oss-120b", timeout_s=120),                                # DISABLED 2026-04-24 (OP-3) — 8K TPM ceiling permanently incompatible with 30K-token chapter prompts. Run-8 logged every call returning BadRequest("Request too large: Limit 8000, Requested 34127"). AAII 33 still served via NIM's `openai/gpt-oss-120b` entry.
         _nim_entry(GROUP, "openai/gpt-oss-120b", timeout_s=120),                                   # AAII 33 — DUP family; confirmed working on NIM
         # --- 22–23: AAII 30 ---
-        # _zhipu_entry(GROUP, "glm-4.7-flash", timeout_s=120),                                     # DISABLED 2026-04-25 (OP-PROVIDER-PRUNE) — Run-16 logged 0/14 success (100% fail), every call returned BadRequestError or NotFoundError. Likely auth or model-name mismatch on the Zhipu OpenAI-compat endpoint; burning a cascade slot for guaranteed failure. AAII 30 (R) was 30B-A3B MoE if it ever worked.
         _gemini_entry(GROUP, "gemini-2.5-flash", timeout_s=60),                                    # OP-25 (2026-04-25): timeout 120→60 — Gemini free tier is 20 req/DAY/model; once exhausted, stays exhausted ~24h. LiteLLM's 60s cooldown can't recover; shorter timeout at least makes the cascade walk past it faster instead of burning the outer 1200s budget. AAII ~30 — GPQA 82.8, MMLU-Lite 88.4, AIME 88, 1M ctx
-        # --- 24–28: AAII 22–28 (Mistral cluster + glm-4.5-flash) ---
+        # --- 24–28: AAII 22–28 (Mistral cluster) ---
         _mistral_entry(GROUP, "mistral-small-latest", timeout_s=120),                              # AAII 28 — Mistral Small 4 v26.03, HumanEval 92, MMLU 88.5 (surprisingly > Medium 3.1)
         _mistral_entry(GROUP, "magistral-medium-latest", timeout_s=120),                           # AAII 27 — Magistral 1.2, AIME24 91.82%, GPQA-Diamond 76.3% (reasoning specialist)
         _mistral_entry(GROUP, "mistral-large-latest", timeout_s=120),                              # AAII 23 — Mistral Large 3 v25.12, LMArena #2 OSS, MATH-500 93.6, 256K ctx
         _nim_entry(GROUP, "mistralai/mistral-large-3-675b-instruct-2512", timeout_s=120),          # AAII 23 — DUP of #26 (same Large 3 model, NIM infra)
-        # _zhipu_entry(GROUP, "glm-4.5-flash", timeout_s=120),                                     # DISABLED 2026-04-25 (OP-PROVIDER-PRUNE) — Run-16 logged 1/4 success (25%); same Zhipu endpoint failure pattern as glm-4.7-flash. AAII ~23.
         # --- 29–31: AAII 21–22 ---
         _mistral_entry(GROUP, "devstral-medium-latest", timeout_s=120),                            # AAII 22 — Devstral 2 code-agents, SWE-Bench Verified 46.8%, 256K ctx
         # _gemini_entry(GROUP, "gemini-2.5-flash-lite", timeout_s=90),                             # DISABLED 2026-04-24 (OP-4) — returns empty `choices=[]` (0 completion tokens) when given our ChapterOutput tool schema; model can't produce structured output for the nested Section + Flashcard shape at the lite tier. Run-8 logged 14/14 BadRequest from LangChain's downstream parse of the empty response. Plain completion works fine, so NOT a credential / safety issue — structural tool-schema incompatibility. AAII 22/19.
@@ -994,7 +1037,6 @@ def _all_entries() -> list:
         _nim_entry(GROUP, "meta/llama-4-maverick-17b-128e-instruct", timeout_s=120),               # AAII 18 — DUP of #34 (same Maverick, NIM infra, 1M ctx)
         # _groq_entry(GROUP, "meta-llama/llama-4-scout-17b-16e-instruct", timeout_s=120),          # DISABLED 2026-04-24 (OP-3) — 30K TPM barely covers our chapter-sized prompts; Run-8 logged 33615 / 30507 / 33950-token requests all rejected with "Request too large". Sometimes works when prompt is under 30K but unreliable. AAII ~15 (tail-tier). Same Llama-4 family served via SambaNova/NIM entries when those are enabled.
         # _sambanova_entry(GROUP, "Meta-Llama-3.3-70B-Instruct", timeout_s=120),                   # DISABLED 2026-04-24 — SambaNova response: "A payment method is required". AAII 14, 128K ctx on SambaNova
-
         # === DELIBERATELY EXCLUDED (verified 2026-04-24) ==================
         # Weak / context-tight / deprecated — skip to preserve quality
         #   - groq/openai/gpt-oss-20b (Run-7: 8K TPM < 30K prompts, permanent incompat)
@@ -1026,21 +1068,12 @@ def _all_entries() -> list:
         # SambaNova context-tight
         #   - sambanova/Qwen3-32B (~40K ctx — borderline for 40K prompts)
         #   - sambanova/DeepSeek-V3.2 (8K ctx preview — DISQUALIFIED)
-        # Zhipu paid / non-text
-        #   - zhipu/glm-4-32b-0414-128k ($0.10/M, not truly free)
-        #   - zhipu/glm-4.7-flashx (paid)
-        #   - zhipu/glm-5 / 5.1 / 5-Turbo / 4.7 / 4.6 / AirX (all paid)
-        #   - zhipu/glm-z1-flash (not a Z.AI API SKU — open-weights only on HF/Ollama)
-        #   - zhipu/glm-4.6v-flash (vision-only)
     ]
 
 
 # =============================================================================
 # Unified Router — single instance shared across all factories
 # =============================================================================
-_router_instance: Router | None = None
-
-
 def _get_router() -> Router:
     """
     Build the unified LiteLLM Router once per process. Shared state lives in
@@ -1050,7 +1083,6 @@ def _get_router() -> Router:
     global _router_instance
     if _router_instance is not None:
         return _router_instance
-
     # Cascade + circuit-breaker policy
     # -------------------------------------------------------------------
     # In LiteLLM Router, `num_retries` is the CASCADE length: on failure,
@@ -1069,23 +1101,21 @@ def _get_router() -> Router:
     # -------------------------------------------------------------------
     CASCADE_DEPTH = 40  # > total entries — ensures full catalog coverage
     retry_policy = RetryPolicy(
-        AuthenticationErrorRetries=CASCADE_DEPTH,
-        ContentPolicyViolationErrorRetries=CASCADE_DEPTH,
-        RateLimitErrorRetries=CASCADE_DEPTH,
-        BadRequestErrorRetries=CASCADE_DEPTH,
-        TimeoutErrorRetries=CASCADE_DEPTH,
-        InternalServerErrorRetries=CASCADE_DEPTH,
+        AuthenticationErrorRetries = CASCADE_DEPTH,
+        ContentPolicyViolationErrorRetries = CASCADE_DEPTH,
+        RateLimitErrorRetries = CASCADE_DEPTH,
+        BadRequestErrorRetries = CASCADE_DEPTH,
+        TimeoutErrorRetries = CASCADE_DEPTH,
+        InternalServerErrorRetries = CASCADE_DEPTH,
     )
-
     allowed_fails_policy = AllowedFailsPolicy(
-        AuthenticationErrorAllowedFails=0,    # invalid key = cooldown immediately
-        BadRequestErrorAllowedFails=1,        # 400/404/413 on first call = stop trying this model
-        ContentPolicyViolationErrorAllowedFails=2,
-        RateLimitErrorAllowedFails=1,         # 429 = cooldown immediately
-        TimeoutErrorAllowedFails=2,           # 2 timeouts → cooldown
-        InternalServerErrorAllowedFails=2,    # 5xx same
+        AuthenticationErrorAllowedFails = 0,    # invalid key = cooldown immediately
+        BadRequestErrorAllowedFails = 1,        # 400/404/413 on first call = stop trying this model
+        ContentPolicyViolationErrorAllowedFails = 2,
+        RateLimitErrorAllowedFails = 1,         # 429 = cooldown immediately
+        TimeoutErrorAllowedFails = 2,           # 2 timeouts → cooldown
+        InternalServerErrorAllowedFails = 2,    # 5xx same
     )
-
     redis_kwargs = {}
     redis_host = _env("REDIS_HOST")
     if redis_host:
@@ -1094,7 +1124,6 @@ def _get_router() -> Router:
         redis_password = _env("REDIS_PASSWORD")
         if redis_password:
             redis_kwargs["redis_password"] = redis_password
-
     _router_instance = Router(
         # Combined model_list — `dd-all` (synthesis/planner/critic), `dd-keylm`
         # (KeyLLM cluster labels), `dd-reduce-label` (Clio REDUCE per-meta
@@ -1102,7 +1131,7 @@ def _get_router() -> Router:
         # in one Router so they share the cooldown circuit-breaker + Redis
         # state. The factory + helper functions select which group via the
         # `model=` arg on ChatLiteLLMRouter / Router.embedding.
-        model_list=(
+        model_list = (
             _all_entries_current()
             + _keylm_entries()
             + _reduce_label_entries_current()
@@ -1113,17 +1142,16 @@ def _get_router() -> Router:
         # add Redis round-trips per request the way usage-based-routing does.
         # Combined with allowed_fails_policy this effectively routes among
         # HEALTHY entries in priority order.
-        routing_strategy="simple-shuffle",
-        enable_pre_call_checks=True,         # fail-fast core — skip cooled-down at 0ms
-        allowed_fails=3,                      # generic threshold (per-error policy overrides)
-        allowed_fails_policy=allowed_fails_policy,
-        cooldown_time=60,                     # TTL for auto-recovery
-        retry_policy=retry_policy,
-        num_retries=CASCADE_DEPTH,            # cascade length — on failure, try another deployment up to 40 times
-        set_verbose=False,
+        routing_strategy = "simple-shuffle",
+        enable_pre_call_checks = True,         # fail-fast core — skip cooled-down at 0ms
+        allowed_fails = 3,                      # generic threshold (per-error policy overrides)
+        allowed_fails_policy = allowed_fails_policy,
+        cooldown_time = 60,                     # TTL for auto-recovery
+        retry_policy = retry_policy,
+        num_retries = CASCADE_DEPTH,            # cascade length — on failure, try another deployment up to 40 times
+        set_verbose = False,
         **redis_kwargs,
     )
-
     # OP-LF-LITELLM-CALLBACK (2026-04-25 post-Run-16) — DISABLED 2026-04-25
     # mid-Run-17. The LiteLLM bundled langfuse integration
     # (`litellm/integrations/langfuse/langfuse.py:144`) reads
@@ -1157,19 +1185,24 @@ def _get_router() -> Router:
 # exploration (Madaan 2023 §2); T=0.0 for deterministic calls elsewhere.
 # Per-entry timeouts in the catalog reflect provider characteristics;
 # the factory-level timeout args are kept for API compatibility only.
-
 def build_llm_fallback_chain(
     groq_timeout_s: int = 120,
     nim_timeout_s: int = 300):
     """General-purpose LLM chain. Unified catalog at T=0.0."""
-    return ChatLiteLLMRouter(router=_get_router(), model=GROUP, temperature=0.0)
+    return ChatLiteLLMRouter(
+        router = _get_router(), 
+        model = GROUP, 
+        temperature = 0.0)
 
 
 def build_resolver_llm_chain(
     groq_timeout_s: int = 30,
     nim_timeout_s: int = 60):
     """Resolver chain. Unified catalog at T=0.0."""
-    return ChatLiteLLMRouter(router=_get_router(), model=GROUP, temperature=0.0)
+    return ChatLiteLLMRouter(
+        router = _get_router(), 
+        model = GROUP, 
+        temperature = 0.0)
 
 
 def build_synth_fallback_chain(
@@ -1188,13 +1221,14 @@ def build_synth_fallback_chain(
     See SYNTH_GROUP docstring above and Scope B research brief.
     Default "0" preserves the legacy dd-all routing.
     """
-    import os
     use_synth_pool = os.environ.get(
         "DD_USE_SYNTH_POOL", "0",
     ).strip().lower() in ("1", "true", "yes")
     target_group = SYNTH_GROUP if use_synth_pool else GROUP
     return ChatLiteLLMRouter(
-        router=_get_router(), model=target_group, temperature=0.0,
+        router = _get_router(), 
+        model = target_group, 
+        temperature = 0.0,
     )
 
 
@@ -1206,7 +1240,9 @@ def build_synth_pool_chain():
     regardless of env config (e.g. validation harnesses).
     """
     return ChatLiteLLMRouter(
-        router=_get_router(), model=SYNTH_GROUP, temperature=0.0,
+        router = _get_router(), 
+        model = SYNTH_GROUP, 
+        temperature = 0.0,
     )
 
 
@@ -1255,16 +1291,6 @@ def pick_synth_deployment(seed: int) -> str:
 # reservations restores wall-clock parallelism. Caps match helpers._PROVIDER_
 # CONCURRENCY (the per-process limit); chapter-level slot is conservative —
 # fewer concurrent chapters per provider than concurrent calls.
-_PROVIDER_CHAPTER_CAPS: dict[str, int] = {
-    "nvidia_nim": 2,
-    "groq":       2,
-    "cerebras":   2,
-    "mistral":    3,
-    "gemini":     1,
-    "openai":     2,
-}
-
-
 async def pick_synth_deployment_bandit(
     seed: int,
     *,
@@ -1294,24 +1320,21 @@ async def pick_synth_deployment_bandit(
     entries = _synth_entries_current()
     if not entries:
         raise RuntimeError("SYNTH_GROUP is empty — cannot pin a deployment")
-
     try:
-        from services.llm import pareto_bandit
-        import redis.asyncio as redis_aio_lib
         host = _env("REDIS_HOST", "localhost")
         port = _env("REDIS_PORT", "6379")
         password = _env("REDIS_PASSWORD")
         url = (f"redis://:{password}@{host}:{port}"
                if password else f"redis://{host}:{port}")
-        rds = redis_aio_lib.from_url(url)
+        rds = redis_aio.from_url(url)
         try:
             candidates = [e["litellm_params"]["model"] for e in entries]
             ctx = pareto_bandit.make_context_vector(
                 "dd-synth",
-                chapter_number=chapter_number,
-                expected_hash_count=expected_hash_count,
-                vault_size=vault_size,
-                has_thinking_budget=has_thinking_budget,
+                chapter_number = chapter_number,
+                expected_hash_count = expected_hash_count,
+                vault_size = vault_size,
+                has_thinking_budget = has_thinking_budget,
             )
             # Phase 3 fix (2026-05-14): request top-K=5 (was 3) so the
             # provider-aware reservation pass below has more alternatives
@@ -1321,7 +1344,11 @@ async def pick_synth_deployment_bandit(
             # cascade fell through to round-robin instead of picking from
             # a less-saturated provider.
             ranked = await pareto_bandit.predict_top_k(
-                "dd-synth", ctx, candidates, redis=rds, k=5,
+                "dd-synth", 
+                ctx, 
+                candidates, 
+                redis = rds, 
+                k = 5,
             )
             # Iterate top-K and atomically reserve the first available
             # (provider_slot, deployment) pair. Provider slot is claimed
@@ -1335,8 +1362,10 @@ async def pick_synth_deployment_bandit(
                 provider_cap = _PROVIDER_CHAPTER_CAPS.get(provider, 2)
                 # Step 1: try to claim a provider slot.
                 slot = await pareto_bandit.try_reserve_provider_slot(
-                    provider, redis=rds,
-                    max_slots=provider_cap, ttl_s=1800,
+                    provider, 
+                    redis = rds,
+                    max_slots = provider_cap, 
+                    ttl_s = 1800,
                 )
                 if slot is None:
                     logger.info(
@@ -1347,14 +1376,19 @@ async def pick_synth_deployment_bandit(
                     continue
                 # Step 2: try to claim the deployment slot.
                 reserved = await pareto_bandit.try_reserve(
-                    deployment_id, "dd-synth", redis=rds, ttl_s=1800,
+                    deployment_id, 
+                    "dd-synth", 
+                    redis = rds, 
+                    ttl_s = 1800,
                 )
                 if not reserved:
                     # Release the provider slot we just acquired — another
                     # chapter holds the deployment lock; we'd be double-
                     # booking otherwise.
                     await pareto_bandit.release_provider_slot(
-                        provider, slot, redis=rds,
+                        provider, 
+                        slot, 
+                        redis = rds,
                     )
                     logger.info(
                         f"[bandit-pin] ch{chapter_number:02d} skipping "
@@ -1386,27 +1420,8 @@ async def pick_synth_deployment_bandit(
             f"[bandit-pin] ch{chapter_number:02d} bandit pick failed "
             f"({type(e).__name__}: {e}); falling back to round-robin"
         )
-
     # Bandit unavailable / errored / empty result — deterministic fallback.
     return pick_synth_deployment(seed)
-
-
-# Per-process cache so we don't build a new Router for every chapter call.
-# Keyed by the pinned litellm model string. ChatLiteLLMRouter wraps a Router
-# under the hood; one cache per process is the right scope (Celery prefork
-# workers each have their own).
-_pinned_chain_cache: dict[str, "ChatLiteLLMRouter"] = {}
-
-
-# Pinned-group → parent-group registry (Phase 3 fix, 2026-05-14).
-# When build_synth_pinned_chain / build_pinned_chain_any wraps a deployment
-# in a single-entry Router, the resulting chain's `.model` attribute is the
-# hashed pinned group (e.g. "dd-synth-pinned-abc123"). Downstream callers
-# (helpers.py per-call cascade) need the PARENT pool name to enumerate
-# alternative candidates — without this, the cascade collapses to k=1 and
-# can't escape a failing chapter pin. See canary v4 evidence in
-# docs/KD-NEXT-STEPS-2026-05-14.md.
-_pinned_to_parent: dict[str, str] = {}
 
 
 def get_parent_group(pinned_or_parent: str | None) -> str | None:
@@ -1447,7 +1462,6 @@ def build_pinned_chain_any(pinned_model: str, group: str | None = None):
     """
     if pinned_model in _pinned_chain_cache:
         return _pinned_chain_cache[pinned_model]
-
     search_groups: list[tuple[str, list[dict]]] = []
     if group is None or group == SYNTH_GROUP:
         search_groups.append((SYNTH_GROUP, _synth_entries_current()))
@@ -1455,7 +1469,6 @@ def build_pinned_chain_any(pinned_model: str, group: str | None = None):
         search_groups.append((REDUCE_LABEL_GROUP, _reduce_label_entries_current()))
     if group is None or group == GROUP:
         search_groups.append((GROUP, _all_entries_current()))
-
     matching_entry: dict | None = None
     matched_group: str | None = None
     for grp_name, entries in search_groups:
@@ -1466,25 +1479,25 @@ def build_pinned_chain_any(pinned_model: str, group: str | None = None):
                 break
         if matching_entry is not None:
             break
-
     if matching_entry is None:
         return None    # caller decides fallback
-
     pinned_group = f"dd-pinned-{abs(hash(pinned_model)) & 0xFFFFFF:06x}"
     fresh_entry = {
         "model_name": pinned_group,
         "litellm_params": dict(matching_entry["litellm_params"]),
     }
     pinned_router = Router(
-        model_list=[fresh_entry],
-        routing_strategy="simple-shuffle",
-        enable_pre_call_checks=True,
-        num_retries=3,
-        cooldown_time=30,
-        set_verbose=False,
+        model_list = [fresh_entry],
+        routing_strategy = "simple-shuffle",
+        enable_pre_call_checks = True,
+        num_retries = 3,
+        cooldown_time = 30,
+        set_verbose = False,
     )
     chain = ChatLiteLLMRouter(
-        router=pinned_router, model=pinned_group, temperature=0.0,
+        router = pinned_router, 
+        model = pinned_group, 
+        temperature = 0.0,
     )
     _pinned_chain_cache[pinned_model] = chain
     _pinned_to_parent[pinned_group] = matched_group or GROUP
@@ -1507,34 +1520,33 @@ def build_synth_pinned_chain(pinned_model: str):
     """
     if pinned_model in _pinned_chain_cache:
         return _pinned_chain_cache[pinned_model]
-
     matching = [
         e for e in _synth_entries_current()
         if e["litellm_params"]["model"] == pinned_model
     ]
     if not matching:
-        import logging
         logging.getLogger(__name__).warning(
             f"[synth-pin] {pinned_model!r} not in SYNTH_GROUP; "
             f"falling back to full pool"
         )
         return build_synth_pool_chain()
-
     pinned_group = f"dd-synth-pinned-{abs(hash(pinned_model)) & 0xFFFFFF:06x}"
     fresh_entry = {
         "model_name": pinned_group,
         "litellm_params": dict(matching[0]["litellm_params"]),
     }
     pinned_router = Router(
-        model_list=[fresh_entry],
-        routing_strategy="simple-shuffle",
-        enable_pre_call_checks=True,
-        num_retries=3,            # tighter — only one deployment
-        cooldown_time=30,         # shorter; single-deployment can't waste
-        set_verbose=False,
+        model_list = [fresh_entry],
+        routing_strategy = "simple-shuffle",
+        enable_pre_call_checks = True,
+        num_retries = 3,            # tighter — only one deployment
+        cooldown_time = 30,         # shorter; single-deployment can't waste
+        set_verbose = False,
     )
     chain = ChatLiteLLMRouter(
-        router=pinned_router, model=pinned_group, temperature=0.0,
+        router = pinned_router, 
+        model = pinned_group, 
+        temperature = 0.0,
     )
     _pinned_chain_cache[pinned_model] = chain
     _pinned_to_parent[pinned_group] = SYNTH_GROUP
@@ -1545,7 +1557,10 @@ def build_refine_llm_chain(
     groq_timeout_s: int = 120,
     nim_timeout_s: int = 300):
     """Self-Refine refiner at T=0.7 (Madaan 2023 §2). Unified catalog."""
-    return ChatLiteLLMRouter(router=_get_router(), model=GROUP, temperature=0.7)
+    return ChatLiteLLMRouter(
+        router = _get_router(), 
+        model = GROUP, 
+        temperature = 0.7)
 
 
 def build_curator_llm(timeout_s: int = 600):
@@ -1554,7 +1569,10 @@ def build_curator_llm(timeout_s: int = 600):
     single-model pin per Mixture-of-Agents (arXiv 2406.04692) is relaxed
     per design decision 2026-04-24: unified rotation for every step.
     """
-    return ChatLiteLLMRouter(router=_get_router(), model=GROUP, temperature=0.0)
+    return ChatLiteLLMRouter(
+        router = _get_router(), 
+        model = GROUP, 
+        temperature = 0.0)
 
 
 def build_keylm_chain():
@@ -1569,7 +1587,10 @@ def build_keylm_chain():
     rationale. KeyLLM is intentionally NOT routed through the dd-all
     frontier rotator — small task, small model.
     """
-    return ChatLiteLLMRouter(router=_get_router(), model=KEYLM_GROUP, temperature=0.0)
+    return ChatLiteLLMRouter(
+        router = _get_router(), 
+        model = KEYLM_GROUP, 
+        temperature = 0.0)
 
 
 def build_reduce_label_chain():
@@ -1594,7 +1615,9 @@ def build_reduce_label_chain():
     blocks for what is structurally a 3K-token classification task.
     """
     return ChatLiteLLMRouter(
-        router=_get_router(), model=REDUCE_LABEL_GROUP, temperature=1.0,
+        router = _get_router(), 
+        model = REDUCE_LABEL_GROUP, 
+        temperature = 1.0,
     )
 
 
@@ -1604,9 +1627,9 @@ def build_reduce_label_chain():
 # When DD_DYNAMIC_CATALOG=1 (default) and init_dynamic_catalog() succeeds at
 # startup, the dd-all / dd-synth / dd-reduce-label groups are populated from:
 #
-#    services.discovery.list_all_alive_models()       (live free-tier models)
+#    domains.llm.discovery.list_all_alive_models()       (live free-tier models)
 #                          ↓
-#    services.benchmarks.rank_for_step(step, alive)   (composite scoring)
+#    domains.llm.benchmarks.rank_for_step(step, alive)   (composite scoring)
 #                          ↓
 #    top-K cut per step  → _record_to_entry() → LiteLLM model_list dict
 #
@@ -1626,32 +1649,6 @@ def build_reduce_label_chain():
 #
 # Disable via env: DD_DYNAMIC_CATALOG=0
 # =============================================================================
-_dynamic_entries: dict[str, list[dict]] = {}
-_dynamic_catalog_initialized: bool = False
-
-# Per-step top-K — picks the highest-benchmark slice of the discovered pool.
-# Larger K = more cascade depth + more cooldown redundancy; smaller K = tighter
-# rotator decisions. Calibrated against the v1 static catalog sizes.
-_DYNAMIC_TOP_K: dict[str, int] = {
-    "dd-all":           30,
-    "dd-synth":         12,
-    "dd-reduce-label":  10,
-}
-
-# Per-step group name + default per-deployment timeout (s). Reasoning-heavy
-# pools need longer; classification pools shorter.
-_DYNAMIC_STEP_TO_GROUP: dict[str, str] = {
-    "dd-all":           "dd-all",
-    "dd-synth":         "dd-synth",
-    "dd-reduce-label":  "dd-reduce-label",
-}
-_DYNAMIC_STEP_TIMEOUT_S: dict[str, int] = {
-    "dd-all":           120,
-    "dd-synth":         180,    # reasoning models burn <think> tokens
-    "dd-reduce-label":   90,    # non-reasoning, fast
-}
-
-
 def _record_to_entry(group: str, record, timeout_s: int) -> dict | None:
     """Convert a discovery.DiscoveryRecord → LiteLLM model_list entry.
 
@@ -1663,12 +1660,11 @@ def _record_to_entry(group: str, record, timeout_s: int) -> dict | None:
     p, m = record.provider, record.model_id
     if not m:
         return None
-    if p == "groq":      return _groq_entry(group, m, timeout_s=timeout_s)
-    if p == "nim":       return _nim_entry(group, m, timeout_s=timeout_s)
-    if p == "cerebras":  return _cerebras_entry(group, m, timeout_s=timeout_s)
-    if p == "mistral":   return _mistral_entry(group, m, timeout_s=timeout_s)
-    if p == "gemini":    return _gemini_entry(group, m, timeout_s=timeout_s)
-    if p == "zhipu":     return _zhipu_entry(group, m, timeout_s=timeout_s)
+    if p == "groq":      return _groq_entry(group, m, timeout_s = timeout_s)
+    if p == "nim":       return _nim_entry(group, m, timeout_s = timeout_s)
+    if p == "cerebras":  return _cerebras_entry(group, m, timeout_s = timeout_s)
+    if p == "mistral":   return _mistral_entry(group, m, timeout_s = timeout_s)
+    if p == "gemini":    return _gemini_entry(group, m, timeout_s = timeout_s)
     return None
 
 
@@ -1721,22 +1717,15 @@ async def init_dynamic_catalog() -> bool:
         materialize Router with whatever the static catalog returns.
     """
     global _dynamic_catalog_initialized, _dynamic_entries
-
     if _dynamic_catalog_initialized:
         return True
-
     flag = os.environ.get("DD_DYNAMIC_CATALOG", "1").strip().lower()
     if flag not in ("1", "true", "yes", "on"):
         logger.info("[llm-chain] DD_DYNAMIC_CATALOG=0 — using static catalog")
         return False
-
     try:
-        from services.llm import discovery, benchmarks
-        import redis.asyncio as redis_aio
-
         redis_url = _build_redis_url_for_bench()
         rds = redis_aio.from_url(redis_url) if redis_url else None
-
         try:
             by_provider = await discovery.list_all_alive_models()
             alive = [r for records in by_provider.values() for r in records]
@@ -1746,19 +1735,20 @@ async def init_dynamic_catalog() -> bool:
                 f"[llm-chain] dynamic catalog: discovery returned "
                 f"{len(alive)} models across {len(by_provider)} providers"
             )
-
             for step, top_k in _DYNAMIC_TOP_K.items():
                 group_name = _DYNAMIC_STEP_TO_GROUP[step]
                 timeout_s = _DYNAMIC_STEP_TIMEOUT_S[step]
                 try:
-                    ranked = await benchmarks.rank_for_step(step, alive, redis=rds)
+                    ranked = await benchmarks.rank_for_step(
+                        step, 
+                        alive, 
+                        redis = rds)
                 except Exception as e:
                     logger.warning(
                         f"[llm-chain] rank_for_step({step}) failed: "
                         f"{type(e).__name__}: {e}; using static for this step"
                     )
                     continue
-
                 # Take top-K with composite_score > 0 first, then fill with
                 # unscored top-tier-fallback entries until we hit top_k or
                 # exhaust the ranked list.
@@ -1774,7 +1764,6 @@ async def init_dynamic_catalog() -> bool:
                 # room — keeps the pool deep enough for cooldown redundancy.
                 if len(pool_records) < top_k:
                     pool_records.extend(unscored_top[: top_k - len(pool_records)])
-
                 entries: list[dict] = []
                 seen_litellm_models: set[str] = set()
                 for r in pool_records:
@@ -1788,7 +1777,6 @@ async def init_dynamic_catalog() -> bool:
                         continue
                     seen_litellm_models.add(key)
                     entries.append(entry)
-
                 if entries:
                     _dynamic_entries[step] = entries
                     logger.info(
@@ -1806,7 +1794,6 @@ async def init_dynamic_catalog() -> bool:
                     await rds.aclose()
                 except Exception:
                     pass
-
         # Mark initialized if at least one step got dynamic entries
         if _dynamic_entries:
             _dynamic_catalog_initialized = True
@@ -1833,7 +1820,6 @@ def init_dynamic_catalog_sync() -> bool:
 
     Spins up a private event loop. Do NOT call from inside an existing loop.
     """
-    import asyncio
     try:
         return asyncio.run(init_dynamic_catalog())
     except Exception as e:

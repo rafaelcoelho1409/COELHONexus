@@ -48,9 +48,6 @@ dependencies = [
     # soft-membership probability).
     "umap-learn>=0.5.8",
     "hdbscan>=0.8.43",
-    # Rotator deps — now hard deps (were optional/try-except-guarded):
-    "rapidfuzz>=3.0",                  # benchmarks L2 model-name canonicalization (token_set_ratio)
-    "river>=0.21",                     # ParetoBandit drift detection (ADWIN) in pareto_drift
     # OpenTelemetry — emits LLM call spans to Alloy (gRPC) and LangFuse (HTTP/OTLP).
     "opentelemetry-api>=1.30",
     "opentelemetry-sdk>=1.30",

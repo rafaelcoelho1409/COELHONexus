@@ -59,7 +59,7 @@ app.config_from_object({
 
 # Task module discovery. Add one entry per `tasks/<feature>/<module>.py`.
 app.conf.include = [
-#    "tasks.docs_distiller.ingestion",
+    "tasks.docs_distiller.ingestion",
 ]
 
 

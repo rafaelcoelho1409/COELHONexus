@@ -29,13 +29,13 @@ Metrics surfaced after merge:
 
 Composition with the rest of the rotator stack:
 
-    services.discovery.list_all_alive_models()      → {provider: [DiscoveryRecord,...]}
+    domains.llm.discovery.list_all_alive_models()      → {provider: [DiscoveryRecord,...]}
                           ↓
-    services.benchmarks.canonicalize(provider_id)   → canonical_name
+    domains.llm.benchmarks.canonicalize(provider_id)   → canonical_name
                           ↓
-    services.benchmarks.get_benchmarks(canonical)   → {lmarena, aaii, ...}
+    domains.llm.benchmarks.get_benchmarks(canonical)   → {lmarena, aaii, ...}
                           ↓
-    services.benchmarks.rank_for_step(step, alive)  → [(record, composite_score), ...]
+    domains.llm.benchmarks.rank_for_step(step, alive)  → [(record, composite_score), ...]
                           ↓
     rotator builder materializes LiteLLM Router from the ranked list
                           ↓
@@ -57,188 +57,46 @@ OTel metrics emitted (per the rotator dashboard):
     dd.rotator_benchmark_cache_hit_total{layer}          Counter
     dd.rotator_canonical_resolution_total{layer}         Counter
 """
-from __future__ import annotations
-
-import asyncio
-import json
 import logging
 import re
+import redis
+import redis.asyncio as redis_aio
+import httpx
 import time
+import json
+import asyncio
 from typing import Any, Awaitable, Callable
 
-import httpx
-import redis.asyncio as redis_aio
+from core.otel_setup import get_meter
 
-try:
-    from rapidfuzz import fuzz as _rf_fuzz, process as _rf_process
-    _RAPIDFUZZ_AVAILABLE = True
-except ImportError:
-    _RAPIDFUZZ_AVAILABLE = False
+
+from .constants import (
+    _PROVIDER_SUFFIXES,
+    _OPENEVALS_BENCHMARK_MAP,
+    HTTP_TIMEOUT_S,
+    CACHE_PREFIX_SCORES,
+    SCORES_TTL_S,
+    SCORE_NORMS,
+    STEP_WEIGHTS,
+)
+
+
+logger = logging.getLogger(__name__)
+
+
+# Module-level runtime state (mutable -> lives in service.py, not constants.py).
+_known_canonicals: set[str] = set()
+_inmem_leaderboards: dict[str, tuple[float, dict[str, dict[str, float]]]] = {}
+_metric_instruments: dict[str, Any] = {}
+
+
+from rapidfuzz import fuzz as _rf_fuzz, process as _rf_process
 
 try:
     from bs4 import BeautifulSoup
     _BS4_AVAILABLE = True
 except ImportError:
     _BS4_AVAILABLE = False
-
-logger = logging.getLogger(__name__)
-
-
-# =============================================================================
-# Constants
-# =============================================================================
-CACHE_PREFIX_SCORES      = "dd:rotator:bench:scores:"
-CACHE_PREFIX_LEADERBOARD = "dd:rotator:bench:lb:"
-CACHE_PREFIX_CANONICAL   = "dd:rotator:bench:canonical:"
-
-SCORES_TTL_S      = 90 * 24 * 3600
-LEADERBOARD_TTL_S =  7 * 24 * 3600
-CANONICAL_TTL_S   = 365 * 24 * 3600
-
-HTTP_TIMEOUT_S = 30
-
-
-# =============================================================================
-# Per-step composite-score weights — uses metrics actually retrievable
-# =============================================================================
-STEP_WEIGHTS: dict[str, dict[str, float]] = {
-    # code-heavy prose synthesis
-    "dd-synth": {
-        "lmarena_coding": 0.30,
-        "lmarena":        0.25,
-        "aaii":           0.20,
-        "gpqa":           0.15,
-        "mmlu_pro":       0.10,
-    },
-    # short structured-output classification
-    "dd-reduce-label": {
-        "lmarena":  0.35,
-        "aaii":     0.30,
-        "mmlu_pro": 0.20,
-        "gpqa":     0.15,
-    },
-    # tiny instruct LMs — format adherence + small-model knowledge proxy
-    "dd-keylm": {
-        "mmlu_pro": 0.45,
-        "aaii":     0.35,
-        "gsm8k":    0.20,
-    },
-    # embeddings — no public MTEB-equivalent free source, fall back to general
-    # quality. PILOT will diverge embedding ranking from chat ranking quickly.
-    "dd-embed": {"lmarena": 1.0},
-    # general fallback pool
-    "dd-all": {
-        "aaii":           0.30,
-        "lmarena":        0.25,
-        "lmarena_coding": 0.20,
-        "mmlu_pro":       0.15,
-        "gpqa":           0.10,
-    },
-    # planning — emphasize reasoning + instruction
-    "dd-plan": {
-        "lmarena":  0.30,
-        "aaii":     0.30,
-        "mmlu_pro": 0.20,
-        "arc_agi":  0.20,
-    },
-    # curator — like synth, slightly lighter on code
-    "dd-curator": {
-        "lmarena":        0.35,
-        "lmarena_coding": 0.25,
-        "aaii":           0.20,
-        "mmlu_pro":       0.20,
-    },
-    # grader / critic — knowledge + reasoning
-    "dd-grader": {
-        "aaii":     0.30,
-        "lmarena":  0.25,
-        "mmlu_pro": 0.20,
-        "gpqa":     0.15,
-        "hle":      0.10,
-    },
-    "dd-critic": {
-        "aaii":     0.30,
-        "lmarena":  0.25,
-        "mmlu_pro": 0.20,
-        "gpqa":     0.15,
-        "hle":      0.10,
-    },
-}
-
-
-# Provider-tier ordering — secondary sort key for tied (or unscored) models.
-# When composite_score is identical (typically score==0 for models that no
-# benchmark source covered), ties break by this order. Reflects empirical
-# speed + reliability observations from the v1 catalog and 2026-04 production
-# runs. PILOT will eventually override this with learned per-deployment data.
-PROVIDER_TIER: dict[str, int] = {
-    "groq":      1,    # LPU, sub-100ms TTFT, narrow but fast pool
-    "cerebras":  2,    # WSE, fast, narrow pool
-    "nim":       3,    # NVIDIA DGX Cloud — reliable, broadest catalog
-    "mistral":   4,    # direct API, mid latency
-    "gemini":    5,    # Google free tier — strict quotas
-    "zhipu":     6,    # Chinese provider, geo-latency
-    "sambanova": 7,
-    "deepseek":  8,
-}
-
-
-# Normalization ranges — raw → [0, 1] (clipped)
-SCORE_NORMS: dict[str, tuple[float, float]] = {
-    "lmarena":        (700.0, 1500.0),
-    "lmarena_coding": (700.0, 1600.0),
-    "aaii":           (0.0, 100.0),
-    "mmlu_pro":       (0.0, 100.0),
-    "gpqa":           (0.0, 100.0),
-    "arc_agi":        (0.0, 100.0),
-    "gsm8k":          (0.0, 100.0),
-    "hle":            (0.0, 100.0),
-    "ifeval":         (0.0, 100.0),
-    "math":           (0.0, 100.0),
-    "bbh":            (0.0, 100.0),
-    "humaneval":      (0.0, 100.0),
-    "mteb":           (0.0, 100.0),
-}
-
-
-# =============================================================================
-# Name normalization — heuristic layer 1
-# =============================================================================
-# Suffixes stripped to canonicalize variant names.
-#
-# RULE OF THUMB: strip TUNING/FORMAT/TIMESTAMP suffixes (these are different
-# packagings of the same model), but PRESERVE SIZE/CAPABILITY suffixes (these
-# are genuinely different models with different benchmark scores).
-#
-# DO STRIP — tuning, format, deployment-stage, version-stamp:
-#   -instruct, -chat, -chat-it, -it       (instruction-tuned variants)
-#   -versatile, -latest                   (Groq/Mistral marketing tags)
-#   -preview, -preview-thinking           (release-stage flags)
-#   -experimental, -instant               (release-stage flags)
-#   -thinking, -reasoning                 (mode-switch flags; same weights underneath)
-#   -2511, -2512, -2410, ...              (Mistral date stamps)
-#
-# DO NOT STRIP — size/capability identifiers (kept here for the negative-test
-# documentation; removed from the active list):
-#   -flash, -flash-lite                   (Gemini SIZE — flash ≠ pro)
-#   -air                                  (Zhipu SIZE — glm-4.5-air ≠ glm-4.5)
-#   -lite, -turbo                         (size/speed variants)
-#   -nano, -mini, -small, -medium, -large (size identifiers; benchmark scores differ)
-_PROVIDER_SUFFIXES = (
-    "-2511", "-2512", "-2510", "-2509", "-2507", "-2410", "-2409", "-2408",
-    "-versatile",
-    "-latest",
-    "-experimental",
-    "-preview-thinking",
-    "-preview",
-    "-thinking",
-    "-reasoning",
-    "-instant",
-    "-instruct",
-    "-chat-it",
-    "-chat",
-    "-it",
-)
 
 
 def normalize_model_name(name: str) -> str:
@@ -273,37 +131,6 @@ def normalize_model_name(name: str) -> str:
 # =============================================================================
 # Canonicalization — layer 2 (RapidFuzz) + layer 3 (constrained HF API)
 # =============================================================================
-_known_canonicals: set[str] = set()
-
-# Layer 3 (HF API search) ONLY fires when the provider_id begins with a
-# recognizable HuggingFace organization prefix. This prevents proprietary
-# closed-source models (Gemini, GLM, Kimi, MiniMax, DeepSeek-Pro) from being
-# resolved to random HF community fine-tunes that happen to share a name
-# token — the poisoning failure mode observed 2026-05-14 where Gemini got
-# 0/12 coverage because HF search returned `google/gemma-2-9b-it` etc.
-# Open-weights models hosted on HF DO have these prefixes in provider_id
-# (e.g. `meta/llama-3.3-70b-instruct` on NIM), so they still benefit from L3.
-_HF_FRIENDLY_PREFIXES = (
-    "meta/", "meta-llama/",
-    "mistralai/", "mistral/",
-    "microsoft/",
-    "google/",                      # gemma open weights, NOT gemini proprietary
-    "openai/",                      # gpt-oss family on HF
-    "deepseek-ai/",
-    "qwen/", "alibaba/",
-    "ibm-granite/", "ibm/",
-    "snowflake/",
-    "stabilityai/",
-    "huggingfaceh4/", "huggingface/",
-    "togethercomputer/",
-    "writer/",
-    "01-ai/",                       # yi family
-    "bigcode/",
-    "tiiuae/",
-    "baai/",
-)
-
-
 async def canonicalize(
     provider_id: str,
     *,
@@ -322,7 +149,6 @@ async def canonicalize(
     pid = (provider_id or "").strip()
     if not pid:
         return ""
-
     if redis is not None:
         try:
             cached = await redis.get(f"{CACHE_PREFIX_CANONICAL}{pid}")
@@ -334,21 +160,18 @@ async def canonicalize(
                 return cached
         except Exception as e:
             logger.debug(f"[bench] canonical cache read failed for {pid}: {e}")
-
     candidate = normalize_model_name(pid)
     resolved = candidate
     layer = "heuristic"
-
-    if _RAPIDFUZZ_AVAILABLE and _known_canonicals:
+    if _known_canonicals:
         match = _rf_process.extractOne(
             candidate,
             list(_known_canonicals),
-            scorer=_rf_fuzz.token_set_ratio,
+            scorer = _rf_fuzz.token_set_ratio,
         )
         if match and match[1] >= fuzzy_threshold:
             resolved = match[0]
             layer = "fuzzy"
-
     # Layer 3 — HF API fallback: DISABLED 2026-05-14.
     #
     # Rationale: HF model hub search ranks by `downloads`, which surfaces
@@ -364,10 +187,8 @@ async def canonicalize(
     # If we need to re-enable later, the right shape is: validate the HF
     # result's similarity to `candidate` AND prefer results whose `id` starts
     # with the same org as the original provider_id (filter quantizations).
-
     _known_canonicals.add(resolved)
     _record_canonical(layer)
-
     if redis is not None:
         try:
             await redis.set(
@@ -375,7 +196,6 @@ async def canonicalize(
             )
         except Exception as e:
             logger.debug(f"[bench] canonical cache write failed for {pid}: {e}")
-
     return resolved
 
 
@@ -384,8 +204,11 @@ async def _resolve_via_hf(query: str) -> str | None:
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 "https://huggingface.co/api/models",
-                params={"search": query, "limit": 1, "sort": "downloads"},
-                timeout=10,
+                params = {
+                    "search": query, 
+                    "limit": 1, 
+                    "sort": "downloads"},
+                timeout = 10,
             )
             resp.raise_for_status()
             results = resp.json()
@@ -399,9 +222,8 @@ async def _resolve_via_hf(query: str) -> str | None:
 # =============================================================================
 # Leaderboard fetchers
 # =============================================================================
-_inmem_leaderboards: dict[str, tuple[float, dict[str, dict[str, float]]]] = {}
-
-
+# ----- Source 1: OpenLM.ai Chatbot Arena+ (HTML scrape) ----------------------
+# Column header → our metric key. Lowercased substring match.
 async def _get_cached_leaderboard(
     source: str,
     fetcher: Callable[[httpx.AsyncClient], Awaitable[dict[str, dict[str, float]]]],
@@ -410,12 +232,10 @@ async def _get_cached_leaderboard(
 ) -> dict[str, dict[str, float]]:
     """L1 in-mem → L2 Redis → fetch. Returns full leaderboard for one source."""
     now = time.time()
-
     cached = _inmem_leaderboards.get(source)
     if cached and (now - cached[0]) < LEADERBOARD_TTL_S:
         _record_cache_hit("inmem")
         return cached[1]
-
     if redis is not None:
         try:
             raw = await redis.get(f"{CACHE_PREFIX_LEADERBOARD}{source}")
@@ -426,7 +246,6 @@ async def _get_cached_leaderboard(
                 return data
         except Exception as e:
             logger.debug(f"[bench] L2 read failed for {source}: {e}")
-
     t0 = time.time()
     try:
         data = await fetcher(client)
@@ -439,7 +258,6 @@ async def _get_cached_leaderboard(
         )
         data = {}
     _record_fetch(source, outcome, time.time() - t0)
-
     _inmem_leaderboards[source] = (now, data)
     if redis is not None:
         try:
@@ -450,23 +268,6 @@ async def _get_cached_leaderboard(
         except Exception as e:
             logger.debug(f"[bench] L2 write failed for {source}: {e}")
     return data
-
-
-# ----- Source 1: OpenLM.ai Chatbot Arena+ (HTML scrape) ----------------------
-# Column header → our metric key. Lowercased substring match.
-_OPENLM_COLUMN_MAP: dict[str, str] = {
-    "arena elo":     "lmarena",
-    "arena score":   "lmarena",
-    "coding":        "lmarena_coding",
-    "vision":        "lmarena_vision",
-    "aaii":          "aaii",
-    "intelligence":  "aaii",
-    "mmlu-pro":      "mmlu_pro",
-    "mmlu pro":      "mmlu_pro",
-    "arc-agi":       "arc_agi",
-    "arc agi":       "arc_agi",
-    "gpqa":          "gpqa",
-}
 
 
 def _parse_openlm_table(html: str) -> dict[str, dict[str, float]]:
@@ -482,7 +283,6 @@ def _parse_openlm_table(html: str) -> dict[str, dict[str, float]]:
     candidate_tables = soup.find_all("table")
     best_table = None
     best_headers: list[str] = []
-
     for tbl in candidate_tables:
         head = tbl.find("tr")
         if not head:
@@ -496,24 +296,20 @@ def _parse_openlm_table(html: str) -> dict[str, dict[str, float]]:
         if has_model and has_arena and len(headers) > len(best_headers):
             best_table = tbl
             best_headers = headers
-
     if best_table is None:
         return {}
-
     # Identify the model-name column + metric columns
     model_col_idx = next(
         (i for i, h in enumerate(best_headers) if "model" in h), None
     )
     if model_col_idx is None:
         return {}
-
     metric_cols: list[tuple[int, str]] = []
     for idx, header in enumerate(best_headers):
         for substr, our_key in _OPENLM_COLUMN_MAP.items():
             if substr in header:
                 metric_cols.append((idx, our_key))
                 break
-
     out: dict[str, dict[str, float]] = {}
     for tr in best_table.find_all("tr")[1:]:        # skip header row
         cells = tr.find_all(["td", "th"])
@@ -553,12 +349,12 @@ async def _fetch_openlm_arena(client: httpx.AsyncClient) -> dict[str, dict[str, 
     url = "https://openlm.ai/chatbot-arena/"
     resp = await client.get(
         url,
-        headers={
+        headers = {
             "User-Agent": "coelhonexus/1.0 (free-tier-rotator)",
             "Accept": "text/html,application/xhtml+xml",
         },
-        timeout=HTTP_TIMEOUT_S,
-        follow_redirects=True,
+        timeout = HTTP_TIMEOUT_S,
+        follow_redirects = True,
     )
     resp.raise_for_status()
     return _parse_openlm_table(resp.text)
@@ -571,10 +367,11 @@ async def _fetch_oolong_code(client: httpx.AsyncClient) -> dict[str, dict[str, f
     """
     headers = {"Accept": "application/json", "User-Agent": "coelhonexus/1.0"}
     base = "https://raw.githubusercontent.com/oolong-tea-2026/arena-ai-leaderboards/main/data"
-
     try:
         ptr = await client.get(
-            f"{base}/latest.json", headers=headers, timeout=HTTP_TIMEOUT_S,
+            f"{base}/latest.json", 
+            headers = headers, 
+            timeout = HTTP_TIMEOUT_S,
         )
         ptr.raise_for_status()
         pointer = ptr.json()
@@ -584,18 +381,17 @@ async def _fetch_oolong_code(client: httpx.AsyncClient) -> dict[str, dict[str, f
         return {}
     if not snapshot_path:
         return {}
-
     try:
         resp = await client.get(
             f"{base}/{snapshot_path}/code.json",
-            headers=headers, timeout=HTTP_TIMEOUT_S,
+            headers = headers, 
+            timeout = HTTP_TIMEOUT_S,
         )
         resp.raise_for_status()
         body = resp.json()
     except Exception as e:
         logger.warning(f"[bench] oolong code.json fetch failed: {e}")
         return {}
-
     out: dict[str, dict[str, float]] = {}
     for item in body.get("models") or []:
         if not isinstance(item, dict):
@@ -617,22 +413,6 @@ async def _fetch_oolong_code(client: httpx.AsyncClient) -> dict[str, dict[str, f
 # Schema is {benchmarks: {...}, models: [{...}, ...]} per agent research.
 # Each model entry typically: {model_id, scores: {benchmark_key: value}}
 # Map benchmark names → our metric keys.
-_OPENEVALS_BENCHMARK_MAP: dict[str, str] = {
-    "mmlu_pro":  "mmlu_pro",
-    "mmlu-pro":  "mmlu_pro",
-    "gpqa":      "gpqa",
-    "gpqa_diamond": "gpqa",
-    "gsm8k":     "gsm8k",
-    "hle":       "hle",
-    "humanity_last_exam": "hle",
-    "humanity's_last_exam": "hle",
-    "ifeval":    "ifeval",
-    "math":      "math",
-    "bbh":       "bbh",
-    "humaneval": "humaneval",
-}
-
-
 def _normalize_openevals_key(key: str) -> str | None:
     """Map an OpenEvals benchmark column name → our metric key (or None)."""
     k = (key or "").strip().lower().replace("-", "_").replace(" ", "_")
@@ -647,13 +427,12 @@ async def _fetch_openevals(client: httpx.AsyncClient) -> dict[str, dict[str, flo
     )
     resp = await client.get(
         url,
-        headers={"Accept": "application/json", "User-Agent": "coelhonexus/1.0"},
-        timeout=HTTP_TIMEOUT_S,
-        follow_redirects=True,
+        headers = {"Accept": "application/json", "User-Agent": "coelhonexus/1.0"},
+        timeout = HTTP_TIMEOUT_S,
+        follow_redirects = True,
     )
     resp.raise_for_status()
     body = resp.json()
-
     out: dict[str, dict[str, float]] = {}
     models = body.get("models") or body.get("results") or []
     for item in models:
@@ -670,7 +449,6 @@ async def _fetch_openevals(client: httpx.AsyncClient) -> dict[str, dict[str, flo
         scores_source = item.get("scores") or item.get("metrics") or item
         if not isinstance(scores_source, dict):
             continue
-
         scores: dict[str, float] = {}
         for raw_key, raw_val in scores_source.items():
             our_key = _normalize_openevals_key(raw_key)
@@ -691,7 +469,7 @@ async def _fetch_openevals(client: httpx.AsyncClient) -> dict[str, dict[str, flo
 
 
 # =============================================================================
-# Sources table
+# Sources table — name -> fetcher (dispatch table; lives with the fetchers)
 # =============================================================================
 _SOURCES: dict[str, Callable[[httpx.AsyncClient], Awaitable[dict[str, dict[str, float]]]]] = {
     "openlm_arena":  _fetch_openlm_arena,
@@ -717,7 +495,6 @@ async def get_benchmarks(
     canonical = (canonical_name or "").strip().lower()
     if not canonical:
         return {}
-
     if redis is not None:
         try:
             cached = await redis.get(f"{CACHE_PREFIX_SCORES}{canonical}")
@@ -728,23 +505,20 @@ async def get_benchmarks(
                 )
         except Exception as e:
             logger.debug(f"[bench] L3 read failed for {canonical}: {e}")
-
     async with httpx.AsyncClient() as client:
         boards = await asyncio.gather(
             *[
                 _get_cached_leaderboard(name, fetcher, redis, client)
                 for name, fetcher in _SOURCES.items()
             ],
-            return_exceptions=True,
+            return_exceptions = True,
         )
-
     merged: dict[str, float] = {}
     for result in boards:
         if isinstance(result, Exception) or not isinstance(result, dict):
             continue
         per_model = result.get(canonical, {})
         merged.update(per_model)
-
     if redis is not None:
         try:
             ttl = SCORES_TTL_S if merged else 3600
@@ -835,14 +609,12 @@ async def rank_for_step(
     weights = STEP_WEIGHTS.get(step, STEP_WEIGHTS["dd-all"])
     if not alive_models:
         return []
-
     # Canonicalize all model IDs in parallel (no network calls after L3 disable;
     # this is essentially N regex strips + N redis canonical-cache reads).
     canonicals = await asyncio.gather(
-        *[canonicalize(getattr(m, "model_id", ""), redis=redis)
+        *[canonicalize(getattr(m, "model_id", ""), redis = redis)
           for m in alive_models]
     )
-
     # Fetch all benchmark leaderboards ONCE — single httpx client, parallel
     # across sources. Each fetcher uses its own L1 in-mem + L2 Redis cache.
     async with httpx.AsyncClient() as client:
@@ -851,13 +623,12 @@ async def rank_for_step(
                 _get_cached_leaderboard(name, fetcher, redis, client)
                 for name, fetcher in _SOURCES.items()
             ],
-            return_exceptions=True,
+            return_exceptions = True,
         )
     valid_boards: list[dict[str, dict[str, float]]] = [
         b for b in board_results
         if isinstance(b, dict)
     ]
-
     # In-memory merge per canonical (no further network/Redis traffic).
     def _merge_for(canonical: str) -> dict[str, float]:
         merged: dict[str, float] = {}
@@ -866,22 +637,20 @@ async def rank_for_step(
             if per_model:
                 merged.update(per_model)
         return merged
-
     ranked: list[tuple[Any, float]] = []
     for record, canonical in zip(alive_models, canonicals):
         scores = _merge_for(canonical)
         composite = compute_composite_score(scores, weights)
         ranked.append((record, composite))
-
     # Multi-key sort:
     #   primary  — composite_score (descending, so a scored model always
     #              outranks an unscored one regardless of provider tier)
-    #   secondary — provider tier (ascending: groq=1 first, zhipu=6 last)
+    #   secondary — provider tier (ascending: groq=1 first, deepseek=7 last)
     #   tertiary — model_id (alphabetical, for determinism across runs)
     # The secondary key is what gives unscored tied-at-zero models a sensible
     # initial ordering until PILOT learns the real per-deployment posterior.
     ranked.sort(
-        key=lambda x: (
+        key = lambda x: (
             -x[1],
             PROVIDER_TIER.get(getattr(x[0], "provider", ""), 99),
             getattr(x[0], "model_id", ""),
@@ -893,33 +662,29 @@ async def rank_for_step(
 # =============================================================================
 # OTel metrics
 # =============================================================================
-_metric_instruments: dict[str, Any] = {}
-
-
 def _ensure_metrics() -> dict[str, Any]:
     if _metric_instruments:
         return _metric_instruments
     try:
-        from services.llm.otel_setup import get_meter
         meter = get_meter()
         if meter is None:
             return _metric_instruments
         _metric_instruments["fetch_counter"] = meter.create_counter(
-            name="dd.rotator_benchmark_fetch_total",
-            description="Benchmark leaderboard fetches — labels: source, outcome",
+            name = "dd.rotator_benchmark_fetch_total",
+            description = "Benchmark leaderboard fetches — labels: source, outcome",
         )
         _metric_instruments["fetch_duration"] = meter.create_histogram(
-            name="dd.rotator_benchmark_fetch_duration_seconds",
-            description="Per-source leaderboard fetch wall-clock",
-            unit="s",
+            name = "dd.rotator_benchmark_fetch_duration_seconds",
+            description = "Per-source leaderboard fetch wall-clock",
+            unit = "s",
         )
         _metric_instruments["cache_hit"] = meter.create_counter(
-            name="dd.rotator_benchmark_cache_hit_total",
-            description="Cache hits — labels: layer ∈ {inmem, redis_lb, scores, canonical}",
+            name = "dd.rotator_benchmark_cache_hit_total",
+            description = "Cache hits — labels: layer ∈ {inmem, redis_lb, scores, canonical}",
         )
         _metric_instruments["canonical_counter"] = meter.create_counter(
-            name="dd.rotator_canonical_resolution_total",
-            description="Canonicalization resolutions — labels: layer ∈ {cache, heuristic, fuzzy, hf_api}",
+            name = "dd.rotator_canonical_resolution_total",
+            description = "Canonicalization resolutions — labels: layer ∈ {cache, heuristic, fuzzy, hf_api}",
         )
         logger.info(f"[bench] {len(_metric_instruments)} OTel instruments registered")
     except Exception as e:
@@ -931,9 +696,15 @@ def _record_fetch(source: str, outcome: str, duration_s: float) -> None:
     inst = _ensure_metrics()
     try:
         if "fetch_counter" in inst:
-            inst["fetch_counter"].add(1, attributes={"source": source, "outcome": outcome})
+            inst["fetch_counter"].add(
+                1, 
+                attributes = {
+                    "source": source, 
+                    "outcome": outcome})
         if "fetch_duration" in inst:
-            inst["fetch_duration"].record(duration_s, attributes={"source": source})
+            inst["fetch_duration"].record(
+                duration_s, 
+                attributes = {"source": source})
     except Exception:
         pass
 

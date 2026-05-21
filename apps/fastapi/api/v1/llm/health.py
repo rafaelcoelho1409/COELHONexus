@@ -14,12 +14,11 @@ trace_id returned in the response body when OTel is up).
 """
 import logging
 import time
-
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from langchain_core.messages import HumanMessage
 
-from services.llm.chain import build_llm_fallback_chain
+from domains.llm.rotator.chain import build_llm_fallback_chain
 
 
 logger = logging.getLogger(__name__)
@@ -39,21 +38,21 @@ async def llm_health() -> JSONResponse:
         dt_ms = int((time.monotonic() - t0) * 1000)
         logger.exception("[llm-health] rotator call failed")
         return JSONResponse(
-            status_code=503,
-            content={
+            status_code = 503,
+            content = {
                 "ok": False,
                 "latency_ms": dt_ms,
                 "error_type": type(e).__name__,
                 "error_message": str(e),
             },
         )
-
     dt_ms = int((time.monotonic() - t0) * 1000)
     md = getattr(resp, "response_metadata", {}) or {}
     content = getattr(resp, "content", "") or ""
-    return JSONResponse(content={
-        "ok": True,
-        "latency_ms": dt_ms,
-        "model_used": md.get("model_name") or md.get("model"),
-        "content_preview": content[:120],
+    return JSONResponse(
+        content = {
+            "ok": True,
+            "latency_ms": dt_ms,
+            "model_used": md.get("model_name") or md.get("model"),
+            "content_preview": content[:120],
     })

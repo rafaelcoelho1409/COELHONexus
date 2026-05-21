@@ -28,7 +28,7 @@ spec:
       {{- end }}
       containers:
         # Celery worker — same image as FastAPI, different entrypoint
-        - name: celery-worker
+        - name: coelhonexus-celery-worker
           image: {{ $fastapi.image }}
           imagePullPolicy: {{ $fastapi.imagePullPolicy }}
           # SYS_PTRACE lets py-spy attach to the worker's Python processes to

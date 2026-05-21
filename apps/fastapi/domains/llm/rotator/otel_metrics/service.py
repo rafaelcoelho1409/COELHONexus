@@ -1,6 +1,6 @@
 """
 KD-specific custom OpenTelemetry metrics — emitted into the same meter
-configured by services.otel_setup, so they land in Mimir (via Alloy) alongside
+configured by core.otel_setup, so they land in Mimir (via Alloy) alongside
 LiteLLM's auto-emitted per-deployment metrics.
 
 These complement what LiteLLM emits (latency, tokens, cost per deployment) by
@@ -40,15 +40,17 @@ Production query examples (PromQL):
   # Bucket-split overflow rate per framework
   sum by (framework) (rate(kd_bucket_split_overflow_total[1h]))
 """
-from __future__ import annotations
-
 import logging
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from core.otel_setup import get_meter
 
-# Lazy singleton — instruments created on first access after init_otel ran.
-_instruments: dict = {}
+from .constants import (
+    _instruments
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_instruments():
@@ -56,48 +58,46 @@ def _ensure_instruments():
     if _instruments:
         return _instruments
     try:
-        from services.llm.otel_setup import get_meter
         meter = get_meter()
-
         _instruments["chapter_synth_duration"] = meter.create_histogram(
-            name="kd.chapter_synth_duration_seconds",
-            description="Per-chapter synth wall-clock from start to accept/debt",
-            unit="s",
+            name = "kd.chapter_synth_duration_seconds",
+            description = "Per-chapter synth wall-clock from start to accept/debt",
+            unit = "s",
         )
         _instruments["chapter_outcome"] = meter.create_counter(
-            name="kd.chapter_outcome_total",
-            description="Chapter outcomes — labels: outcome ∈ {accept, debt_below, "
+            name = "kd.chapter_outcome_total",
+            description = "Chapter outcomes — labels: outcome ∈ {accept, debt_below, "
                         "op12_rescue}; pinned_model; framework",
         )
         _instruments["refiner_iters"] = meter.create_histogram(
-            name="kd.refiner_iters_to_accept",
-            description="Number of Self-Refine iters before accept (or budget exhaustion)",
-            unit="1",
+            name = "kd.refiner_iters_to_accept",
+            description = "Number of Self-Refine iters before accept (or budget exhaustion)",
+            unit = "1",
         )
         _instruments["bucket_split_overflow"] = meter.create_counter(
-            name="kd.bucket_split_overflow_total",
-            description="Times Phase A.5 hit the section-count cap and merged "
+            name = "kd.bucket_split_overflow_total",
+            description = "Times Phase A.5 hit the section-count cap and merged "
                         "overflow into 'Additional'",
         )
         _instruments["grader_dim_score"] = meter.create_histogram(
-            name="kd.classical_grader_dim_score",
-            description="Per-dim classical grader score (0-1) — labels: dim ∈ "
+            name = "kd.classical_grader_dim_score",
+            description = "Per-dim classical grader score (0-1) — labels: dim ∈ "
                         "{signal_to_noise, code_density, ...}",
-            unit="1",
+            unit = "1",
         )
         _instruments["audit_missing_ratio"] = meter.create_histogram(
-            name="kd.audit_missing_hashes_ratio",
-            description="Per-iter ratio of missing vault hashes (0-1)",
-            unit="1",
+            name = "kd.audit_missing_hashes_ratio",
+            description = "Per-iter ratio of missing vault hashes (0-1)",
+            unit = "1",
         )
         _instruments["study_completion_duration"] = meter.create_histogram(
-            name="kd.study_completion_seconds",
-            description="End-to-end study wall-clock (ingest → assembler)",
-            unit="s",
+            name = "kd.study_completion_seconds",
+            description = "End-to-end study wall-clock (ingest → assembler)",
+            unit = "s",
         )
         _instruments["classical_patch_applied"] = meter.create_counter(
-            name="kd.classical_patch_applied_total",
-            description="Phase 4 classical refiner patch applications — labels: dim",
+            name = "kd.classical_patch_applied_total",
+            description = "Phase 4 classical refiner patch applications — labels: dim",
         )
         logger.info(f"[otel-metrics] {len(_instruments)} KD metric instruments registered")
     except Exception as e:
@@ -137,7 +137,7 @@ def record_bucket_split_overflow(*, framework: str, sections_dropped: int):
         if "bucket_split_overflow" in inst:
             inst["bucket_split_overflow"].add(
                 1,
-                attributes={
+                attributes = {
                     "framework": framework,
                     "sections_dropped": str(sections_dropped),
                 },
@@ -153,21 +153,27 @@ def record_grader_dim_score(*, framework: str, dim: str, score: float):
         if "grader_dim_score" in inst:
             inst["grader_dim_score"].record(
                 score,
-                attributes={"framework": framework, "dim": dim},
+                attributes = {
+                    "framework": framework, 
+                    "dim": dim},
             )
     except Exception:
         pass
 
 
-def record_audit_missing(*, framework: str, chapter_number: int,
-                         iteration: int, missing_ratio: float):
+def record_audit_missing(
+    *, 
+    framework: str, 
+    chapter_number: int,
+    iteration: int, 
+    missing_ratio: float):
     """Record the audit's missing-hash ratio for an iter."""
     inst = _ensure_instruments()
     try:
         if "audit_missing_ratio" in inst:
             inst["audit_missing_ratio"].record(
                 missing_ratio,
-                attributes={
+                attributes = {
                     "framework": framework,
                     "chapter_number": str(chapter_number),
                     "iteration": str(iteration),
@@ -177,15 +183,20 @@ def record_audit_missing(*, framework: str, chapter_number: int,
         pass
 
 
-def record_study_completion(*, framework: str, duration_s: float,
-                            n_accepted: int, n_total: int, outcome: str):
+def record_study_completion(
+    *, 
+    framework: str, 
+    duration_s: float,
+    n_accepted: int, 
+    n_total: int, 
+    outcome: str):
     """Record end-to-end study completion (called from assembler node)."""
     inst = _ensure_instruments()
     try:
         if "study_completion_duration" in inst:
             inst["study_completion_duration"].record(
                 duration_s,
-                attributes={
+                attributes = {
                     "framework": framework,
                     "outcome": outcome,
                     "accepted_count": str(n_accepted),
@@ -203,7 +214,10 @@ def record_classical_patch(*, dim: str, framework: str):
         if "classical_patch_applied" in inst:
             inst["classical_patch_applied"].add(
                 1,
-                attributes={"dim": dim, "framework": framework},
+                attributes = {
+                    "dim": dim, 
+                    "framework": framework},
             )
     except Exception:
         pass
+

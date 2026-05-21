@@ -25,7 +25,6 @@ Provider matrix (validated 2026-05-13):
   cerebras     api.cerebras.ai/v1/models                             all (account-tier gate)
   mistral      api.mistral.ai/v1/models                              not deprecated (date < now)
   gemini       generativelanguage.googleapis.com/v1beta/models       free-tier name prefixes
-  zhipu        open.bigmodel.cn/api/paas/v4/models                   all (account-tier gate)
   sambanova    api.sambanova.ai/v1/models                            pricing.prompt == 0  (DISABLED)
   deepseek     api.deepseek.com/v1/models                            paid-only            (DISABLED)
 
@@ -39,49 +38,31 @@ Fail-soft: a provider that errors during a fan-out returns [] for that
 provider only. The other 7 still produce results. Caller decides whether
 empty == failure or empty == "provider has no free models today."
 """
-from __future__ import annotations
-
+import datetime as dt
+import time
+import httpx
+import os
 import asyncio
 import logging
-import os
-import time
-from dataclasses import dataclass, field
-from typing import Any, Callable
 
-import httpx
+from core.otel_setup import get_meter
+
+from .constants import (
+    _GEMINI_FREE_NAME_PREFIXES,
+    DISCOVERY_HTTP_TIMEOUT_S,
+    PROVIDERS,
+    _metric_instruments
+)
+from .types import (
+    ProviderConfig,
+    DiscoveryRecord,
+    FreeFilter,
+)
+
 
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# Constants
-# =============================================================================
-DISCOVERY_HTTP_TIMEOUT_S = 15      # per-provider request budget
-
-# Free-tier filter helpers (provider-specific)
-_GEMINI_FREE_NAME_PREFIXES = (
-    "models/gemini-2.5-pro",
-    "models/gemini-2.5-flash",
-    "models/gemini-2.5-flash-lite",
-    "models/gemini-embedding",
-)
-
-
-# =============================================================================
-# Data class
-# =============================================================================
-@dataclass(frozen=True)
-class DiscoveryRecord:
-    """One model entry as observed at fetch time."""
-    provider: str
-    model_id: str          # canonical id used by LiteLLM's `<provider>/<model_id>`
-    fetched_at: float      # unix seconds
-    raw: dict = field(default_factory=dict)  # full provider response item
-
-
-# =============================================================================
-# Free-tier filter callables (one per provider)
-# =============================================================================
 def _filter_all(_m: dict) -> bool:
     return True
 
@@ -92,8 +73,7 @@ def _filter_mistral(m: dict) -> bool:
     if not dep:
         return True
     try:
-        import datetime as _dt
-        deadline = _dt.datetime.fromisoformat(str(dep).replace("Z", "+00:00"))
+        deadline = dt.datetime.fromisoformat(str(dep).replace("Z", "+00:00"))
         return deadline.timestamp() > time.time()
     except Exception:
         return True
@@ -119,94 +99,15 @@ def _filter_always_false(_m: dict) -> bool:
     return False
 
 
-# =============================================================================
-# Provider config
-# =============================================================================
-@dataclass(frozen=True)
-class ProviderConfig:
-    name: str
-    url: str
-    key_env: str
-    auth_style: str                            # "bearer" | "query-key"
-    response_shape: str                        # "openai" | "gemini"
-    free_filter: Callable[[dict], bool]
-    enabled: bool = True
-
-
-PROVIDERS: dict[str, ProviderConfig] = {
-    "groq": ProviderConfig(
-        name="groq",
-        url="https://api.groq.com/openai/v1/models",
-        key_env="GROQ_API_KEY",
-        auth_style="bearer",
-        response_shape="openai",
-        free_filter=_filter_all,
-    ),
-    "nim": ProviderConfig(
-        name="nim",
-        url="https://integrate.api.nvidia.com/v1/models",
-        key_env="NVIDIA_API_KEY",
-        auth_style="bearer",
-        response_shape="openai",
-        free_filter=_filter_all,
-    ),
-    "cerebras": ProviderConfig(
-        name="cerebras",
-        url="https://api.cerebras.ai/v1/models",
-        key_env="CEREBRAS_API_KEY",
-        auth_style="bearer",
-        response_shape="openai",
-        free_filter=_filter_all,
-    ),
-    "mistral": ProviderConfig(
-        name="mistral",
-        url="https://api.mistral.ai/v1/models",
-        key_env="MISTRAL_API_KEY",
-        auth_style="bearer",
-        response_shape="openai",
-        free_filter=_filter_mistral,
-    ),
-    "gemini": ProviderConfig(
-        name="gemini",
-        url="https://generativelanguage.googleapis.com/v1beta/models",
-        key_env="GOOGLE_API_KEY",
-        auth_style="query-key",
-        response_shape="gemini",
-        free_filter=_filter_gemini,
-    ),
-    "zhipu": ProviderConfig(
-        name="zhipu",
-        url="https://open.bigmodel.cn/api/paas/v4/models",
-        key_env="ZHIPU_API_KEY",
-        auth_style="bearer",
-        response_shape="openai",
-        free_filter=_filter_all,    # tier is account-level; listing == callable
-        enabled=False,    # DISABLED 2026-05-14 — free-tier credits exhausted
-                          # mid-run (Chinese error `余额不足或无可用资源包,请充值`).
-                          # Account-level quota with no graceful warning, and the
-                          # cascade can re-pin to the same dead chain via Phase 1
-                          # fallback, producing TERMINAL FAILURE (canary v5 ch02).
-                          # Re-enable when (a) account is refilled OR (b) the
-                          # chapter-pin re-pick-on-exhaustion fix lands.
-    ),
-    "sambanova": ProviderConfig(
-        name="sambanova",
-        url="https://api.sambanova.ai/v1/models",
-        key_env="SAMBANOVA_API_KEY",
-        auth_style="bearer",
-        response_shape="openai",
-        free_filter=_filter_sambanova_pricing,
-        enabled=False,    # whole provider paywalled as of 2026-04-24 Run-8
-    ),
-    "deepseek": ProviderConfig(
-        name="deepseek",
-        url="https://api.deepseek.com/v1/models",
-        key_env="DEEPSEEK_API_KEY",
-        auth_style="bearer",
-        response_shape="openai",
-        free_filter=_filter_always_false,
-        enabled=False,    # direct API paid-only; NIM-hosted DeepSeek is the free path
-    ),
+# FreeFilter enum value -> predicate. PROVIDERS (constants.py) stores the enum
+# member; this dispatch keeps the predicate functions in service.py, so there
+# is no constants -> service circular import.
+_FILTER_DISPATCH = {
+    FreeFilter.ALL: _filter_all,
+    FreeFilter.MISTRAL: _filter_mistral,
+    FreeFilter.GEMINI: _filter_gemini,
+    FreeFilter.SAMBANOVA_PRICING: _filter_sambanova_pricing,
+    FreeFilter.ALWAYS_FALSE: _filter_always_false,
 }
 
 
@@ -248,20 +149,18 @@ async def _fetch_provider(
             f"[discovery] {cfg.name}: {cfg.key_env} unset — skipping"
         )
         return []
-
     headers: dict[str, str] = {"Accept": "application/json"}
     params: dict[str, str] = {}
     if cfg.auth_style == "bearer":
         headers["Authorization"] = f"Bearer {api_key}"
     elif cfg.auth_style == "query-key":
         params["key"] = api_key
-
     try:
         resp = await client.get(
             cfg.url,
-            headers=headers,
-            params=params,
-            timeout=DISCOVERY_HTTP_TIMEOUT_S,
+            headers = headers,
+            params = params,
+            timeout = DISCOVERY_HTTP_TIMEOUT_S,
         )
         resp.raise_for_status()
         body = resp.json()
@@ -280,16 +179,15 @@ async def _fetch_provider(
         )
         _record_discovery_error(cfg.name, err_type)
         return []
-
     items = _normalize_response(cfg.response_shape, body)
-    filtered = [m for m in items if cfg.free_filter(m)]
+    filtered = [m for m in items if _FILTER_DISPATCH[cfg.free_filter](m)]
     now = time.time()
     records = [
         DiscoveryRecord(
-            provider=cfg.name,
-            model_id=_model_id(cfg.name, m),
-            fetched_at=now,
-            raw=m,
+            provider = cfg.name,
+            model_id = _model_id(cfg.name, m),
+            fetched_at = now,
+            raw = m,
         )
         for m in filtered
         if _model_id(cfg.name, m)
@@ -323,13 +221,11 @@ async def list_all_alive_models(
     ]
     if not selected:
         return {}
-
     async with httpx.AsyncClient() as client:
         results = await asyncio.gather(
             *[_fetch_provider(client, cfg) for cfg in selected],
-            return_exceptions=True,
+            return_exceptions = True,
         )
-
     out: dict[str, list[DiscoveryRecord]] = {}
     for cfg, result in zip(selected, results):
         if isinstance(result, Exception):
@@ -342,7 +238,6 @@ async def list_all_alive_models(
             continue
         out[cfg.name] = result
         _record_models_alive(cfg.name, len(result))
-
     duration = time.time() - start
     _record_discovery_duration(duration)
     logger.info(
@@ -362,7 +257,8 @@ def list_all_alive_models_sync(
     Don't call from within an event loop (FastAPI request handler). Use
     `await list_all_alive_models(...)` there.
     """
-    return asyncio.run(list_all_alive_models(only_providers=only_providers))
+    return asyncio.run(
+        list_all_alive_models(only_providers = only_providers))
 
 
 def flat_alive_list(
@@ -378,30 +274,26 @@ def flat_alive_list(
 # =============================================================================
 # OTel metric helpers
 # =============================================================================
-_metric_instruments: dict[str, Any] = {}
-
-
 def _ensure_metrics() -> dict[str, Any]:
     """Lazy-create OTel instruments. No-op if otel_setup didn't initialize."""
     if _metric_instruments:
         return _metric_instruments
     try:
-        from services.llm.otel_setup import get_meter
         meter = get_meter()
         if meter is None:
             return _metric_instruments
         _metric_instruments["alive_gauge"] = meter.create_gauge(
-            name="dd.rotator_models_alive",
-            description="Free-tier models alive per provider after last discovery fan-out",
+            name = "dd.rotator_models_alive",
+            description = "Free-tier models alive per provider after last discovery fan-out",
         )
         _metric_instruments["duration_hist"] = meter.create_histogram(
-            name="dd.rotator_discovery_duration_seconds",
-            description="Wall-clock for one full discovery fan-out",
-            unit="s",
+            name = "dd.rotator_discovery_duration_seconds",
+            description = "Wall-clock for one full discovery fan-out",
+            unit = "s",
         )
         _metric_instruments["error_counter"] = meter.create_counter(
-            name="dd.rotator_discovery_error_total",
-            description="Discovery fetch errors — labels: provider, error_type",
+            name = "dd.rotator_discovery_error_total",
+            description = "Discovery fetch errors — labels: provider, error_type",
         )
         logger.info(
             f"[discovery] {len(_metric_instruments)} OTel instruments registered"
@@ -420,7 +312,10 @@ def _record_models_alive(provider: str, count: int) -> None:
     if g is None:
         return
     try:
-        g.set(count, attributes={"provider": provider})
+        g.set(
+            count, 
+            attributes = {
+                "provider": provider})
     except Exception:
         pass
 
@@ -442,6 +337,10 @@ def _record_discovery_error(provider: str, error_type: str) -> None:
     if c is None:
         return
     try:
-        c.add(1, attributes={"provider": provider, "error_type": error_type})
+        c.add(
+            1, 
+            attributes = {
+                "provider": provider, 
+                "error_type": error_type})
     except Exception:
         pass
