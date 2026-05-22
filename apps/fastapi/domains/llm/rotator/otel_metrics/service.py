@@ -40,6 +40,7 @@ Production query examples (PromQL):
   # Bucket-split overflow rate per framework
   sum by (framework) (rate(kd_bucket_split_overflow_total[1h]))
 """
+from __future__ import annotations
 import logging
 from typing import Optional
 
@@ -209,6 +210,7 @@ def record_study_completion(
 
 def record_classical_patch(*, dim: str, framework: str):
     """Increment when Phase 4 classical refiner applies a patch."""
+
     inst = _ensure_instruments()
     try:
         if "classical_patch_applied" in inst:

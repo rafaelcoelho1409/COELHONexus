@@ -1,0 +1,126 @@
+/* ===== Framework picker (Step 1) ===== */
+.fw-picker { display: flex; flex-direction: column; gap: 18px; }
+.fw-search-row { display: flex; align-items: center; gap: 16px; }
+.fw-search {
+  flex: 1;
+  padding: 12px 16px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+}
+.fw-search:focus { border-color: var(--primary); }
+.fw-count {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+.fw-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.fw-chip {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  background: var(--card);
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.fw-chip:hover { color: var(--text); border-color: var(--text-muted); }
+.fw-chip.active {
+  background: var(--primary); color: #fff; border-color: var(--primary);
+}
+.fw-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+}
+.fw-grid.fw-grid-empty {
+  display: block;
+  padding: 24px 0;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+.fw-grid.fw-grid-empty::after {
+  content: 'No frameworks match this filter.';
+}
+.fw-tile {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  background: var(--card);
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.fw-tile:hover { border-color: var(--text-muted); }
+.fw-tile.selected {
+  border-color: var(--primary);
+  background: rgba(196, 18, 48, 0.04);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+.fw-tile-logo {
+  height: 28px; width: auto; max-width: 100%;
+  display: block; margin-bottom: 10px; object-fit: contain;
+}
+/* Multi-logo strip — for unified stack tiles (e.g. LangChain - LangGraph
+   - DeepAgents). Each component's logo shows side-by-side. */
+.fw-tile-logos {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+  min-height: 28px;
+}
+.fw-tile-logo-multi {
+  height: 24px;
+  width: auto;
+  max-width: 32px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.fw-tile-name {
+  font-size: 0.92rem; font-weight: 500;
+  color: var(--text); word-break: break-word;
+}
+.fw-tile-cat {
+  font-size: 0.68rem; color: var(--text-muted);
+  margin-top: 6px; text-transform: uppercase; letter-spacing: 0.05em;
+}
+.fw-sticky-bar {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.05);
+  padding: 14px 40px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  z-index: 50;
+  transform: translateY(100%);
+  transition: transform 0.25s ease;
+}
+.fw-sticky-bar.visible { transform: translateY(0); }
+.fw-selected-label {
+  flex: 1;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+.fw-selected-name {
+  color: var(--primary); font-weight: 600;
+}
+.fw-empty {
+  color: var(--text-muted);
+  padding: 32px;
+  text-align: center;
+  font-size: 0.9rem;
+}
+

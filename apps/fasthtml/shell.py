@@ -72,7 +72,14 @@ HEAD = (
         src = "https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js",
         defer = True,
     ),
-    Link(rel = "stylesheet", href = "/static/css/app.css"),
+    Link(rel="stylesheet", href="/static/css/base.css"),
+    Link(rel="stylesheet", href="/static/css/components.css"),
+    Link(rel="stylesheet", href="/static/css/home.css"),
+    Link(rel="stylesheet", href="/static/css/dd/picker.css"),
+    Link(rel="stylesheet", href="/static/css/dd/ingestion.css"),
+    Link(rel="stylesheet", href="/static/css/dd/planner.css"),
+    Link(rel="stylesheet", href="/static/css/dd/study.css"),
+    Link(rel="stylesheet", href="/static/css/youtube.css"),
 )
 
 

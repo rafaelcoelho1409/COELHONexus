@@ -57,6 +57,7 @@ OTel metrics emitted (per the rotator dashboard):
     dd.rotator_benchmark_cache_hit_total{layer}          Counter
     dd.rotator_canonical_resolution_total{layer}         Counter
 """
+from __future__ import annotations
 import logging
 import re
 import redis
@@ -606,6 +607,7 @@ async def rank_for_step(
     naive O(N×3) per-canonical fan-out was OOM-pressuring the pod when called
     with limit=250+ on cold cache; this is O(N + 3).
     """
+
     weights = STEP_WEIGHTS.get(step, STEP_WEIGHTS["dd-all"])
     if not alive_models:
         return []

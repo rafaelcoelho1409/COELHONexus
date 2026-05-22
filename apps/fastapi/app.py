@@ -1,18 +1,34 @@
+"""COELHO Nexus — FastAPI shell.
+
+Lifespan provisions external services that Docs Distiller ingestion needs
+to be functional end-to-end:
+
+  - OTel bootstrap — Alloy gRPC + LangFuse OTLP/HTTP exporters
+  - MinIO bucket — page-body storage for ingest runs
+  - AsyncPostgresSaver — planner-graph checkpoint store
+
+Add lifespan deps + routers as more features land.
+"""
 import logging
 from contextlib import asynccontextmanager
 
 
-# uvicorn 0.32+ doesn't attach a handler to the root logger, so any
-# `logging.getLogger(__name__).warning(...)` from app code goes nowhere
-# unless we configure one. Set INFO so lifespan/init breadcrumbs are
-# visible alongside uvicorn's own access log lines.
 logging.basicConfig(
-    level = logging.INFO,
-    format = "%(asctime)s %(levelname)s %(name)s: %(message)s",
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from domains.dd.api import router as dd_router
+from domains.dd.ingestion.storage import get_storage
+from domains.dd.planner.checkpoint import (
+    close_checkpointer,
+    init_checkpointer,
+)
+from api.v1.llm import router as llm_router
+from core.otel_setup import init_otel
 
 
 logger = logging.getLogger(__name__)
@@ -20,22 +36,65 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    try:
+        init_otel(also_instrument_fastapi_app=app)
+    except Exception as e:
+        logger.warning(
+            f"[lifespan] OTel setup failed: {type(e).__name__}: {e}. "
+            f"LLM traces will not be exported."
+        )
+
+    try:
+        await get_storage().ensure_bucket()
+    except Exception as e:
+        logger.warning(
+            f"[lifespan] MinIO ensure_bucket failed: "
+            f"{type(e).__name__}: {e}. Ingestion runs will fail until "
+            f"MinIO is reachable + creds are correct."
+        )
+
+    try:
+        await init_checkpointer()
+    except Exception as e:
+        logger.warning(
+            f"[lifespan] AsyncPostgresSaver init failed: "
+            f"{type(e).__name__}: {e}. Planner endpoints will 503 until "
+            f"Postgres is reachable + POSTGRES_* env vars are correct."
+        )
+
     yield
+
+    try:
+        await close_checkpointer()
+    except Exception as e:
+        logger.warning(f"[lifespan] checkpointer close failed: {e}")
 
 
 app = FastAPI(
-    title = "COELHO Nexus - FastAPI",
-    description = "COELHO Nexus - FastAPI",
-    version = "1.0.0",
-    lifespan = lifespan,
+    title="COELHO Nexus - FastAPI",
+    description="COELHO Nexus - FastAPI",
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins = ["*"],
-    allow_credentials = True,
-    allow_methods = ["*"],
-    allow_headers = ["*"],
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(
+    dd_router,
+    prefix="/api/v1/docs-distiller",
+    tags=["Docs Distiller"],
+)
+
+app.include_router(
+    llm_router,
+    prefix="/api/v1/llm",
+    tags=["LLM Rotator"],
 )
 
 
@@ -46,7 +105,9 @@ async def root():
         "version": "1.0.0",
         "endpoints": {
             "docs": "/docs",
-            "health": "/health"
+            "health": "/health",
+            "resolver": "/api/v1/docs-distiller/resolver",
+            "runs": "/api/v1/docs-distiller/runs",
         },
     }
 

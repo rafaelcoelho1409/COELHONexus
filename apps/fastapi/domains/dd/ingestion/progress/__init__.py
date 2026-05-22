@@ -9,6 +9,7 @@ from .constants import (
 )
 from .service import (
     Progress,
+    _redis_url,
     acquire_lock,
     clear_cancel,
     is_cancelled,
@@ -31,6 +32,7 @@ __all__ = [
     # types
     "IngestCancelled",
     # service
+    "_redis_url",
     "Progress",
     "acquire_lock",
     "read_lock",

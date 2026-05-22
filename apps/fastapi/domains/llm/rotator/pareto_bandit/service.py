@@ -82,6 +82,7 @@ Public API (async; sync wrappers provided where needed):
     await get_all_cells(redis)                                # admin endpoint backing
     make_context_vector(...)                                  # feature extraction helper
 """
+from __future__ import annotations
 import logging
 import numpy as np
 import time
@@ -584,6 +585,7 @@ async def release_provider_slot(
 ) -> None:
     """Best-effort release. Safe to call multiple times. No-op when
     redis is None, slot_idx is None, or the delete raises."""
+
     if redis is None or slot_idx is None:
         return
     try:

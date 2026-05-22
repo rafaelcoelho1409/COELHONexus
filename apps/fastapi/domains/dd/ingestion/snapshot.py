@@ -17,7 +17,7 @@ import logging
 import time
 from datetime import datetime, timezone
 
-from .storage_minio import MinIOStorage, framework_prefix
+from .storage import MinIOStorage, framework_prefix
 
 
 logger = logging.getLogger(__name__)

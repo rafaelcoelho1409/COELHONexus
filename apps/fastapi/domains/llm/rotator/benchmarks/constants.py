@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 CACHE_PREFIX_SCORES      = "dd:rotator:bench:scores:"
 CACHE_PREFIX_LEADERBOARD = "dd:rotator:bench:lb:"
 CACHE_PREFIX_CANONICAL   = "dd:rotator:bench:canonical:"

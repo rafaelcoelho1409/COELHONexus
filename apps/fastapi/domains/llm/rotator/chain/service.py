@@ -55,6 +55,7 @@ Factories (all serve from the same `dd-all` group, varying only temperature):
   - build_refine_llm_chain             — T=0.7 (Self-Refine per Madaan 2023)
   - build_curator_llm                  — T=0.0
 """
+from __future__ import annotations
 import logging
 import redis
 import redis.asyncio as redis_aio
@@ -1820,6 +1821,7 @@ def init_dynamic_catalog_sync() -> bool:
 
     Spins up a private event loop. Do NOT call from inside an existing loop.
     """
+
     try:
         return asyncio.run(init_dynamic_catalog())
     except Exception as e:

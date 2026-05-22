@@ -38,6 +38,7 @@ Fail-soft: a provider that errors during a fan-out returns [] for that
 provider only. The other 7 still produce results. Caller decides whether
 empty == failure or empty == "provider has no free models today."
 """
+from __future__ import annotations
 import datetime as dt
 import time
 import httpx
@@ -276,6 +277,7 @@ def flat_alive_list(
 # =============================================================================
 def _ensure_metrics() -> dict[str, Any]:
     """Lazy-create OTel instruments. No-op if otel_setup didn't initialize."""
+
     if _metric_instruments:
         return _metric_instruments
     try:

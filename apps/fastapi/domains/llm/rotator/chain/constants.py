@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 GROUP = "dd-all"
 KEYLM_GROUP = "dd-keylm"
 REDUCE_LABEL_GROUP = "dd-reduce-label"

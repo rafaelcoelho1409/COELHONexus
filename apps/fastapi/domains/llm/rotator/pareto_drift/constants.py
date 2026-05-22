@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 # Per-cell ADWIN state. Key = (deployment, dd_process) tuple. Lost on
 # restart; the bandit's Redis state survives. ADWIN rebuilds its window
 # from fresh observations after restart — typically converges in <100 obs.

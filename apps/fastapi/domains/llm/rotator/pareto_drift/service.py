@@ -39,6 +39,7 @@ Public API:
   await maybe_reset_cell(deployment, dd_process, *, redis)      → bool (reset done)
   await drift_sweep(*, redis)                                    → dict (admin scan)
 """
+from __future__ import annotations
 import asyncio
 import logging
 import time
@@ -171,6 +172,7 @@ async def drift_sweep(
 
 def get_state_summary() -> dict[str, Any]:
     """Snapshot of in-memory ADWIN state for admin / debugging."""
+
     return {
         "river_available": True,
         "adwin_cells_tracked": len(_adwin_state),

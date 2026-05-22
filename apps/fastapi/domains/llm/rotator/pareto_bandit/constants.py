@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 CONTEXT_DIM = 24
 CACHE_PREFIX = "dd:rotator:pareto:cell:"
 CELL_TTL_S = 90 * 24 * 3600       # 90 days — long-lived; forgetting handles staleness

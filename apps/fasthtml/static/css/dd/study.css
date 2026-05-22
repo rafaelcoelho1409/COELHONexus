@@ -1,0 +1,576 @@
+/* ===========================================================
+   Step 5 — Study chapter viewer (added 2026-05-19)
+   3-column reader: left chapter sidebar | center content | (right TOC reserved for v2)
+   Aesthetic continues the Linear-style sharp-radii + burgundy accent.
+   =========================================================== */
+
+.fw-study-grid {
+  display: block;          /* single column — chapter list is now an overlay */
+  margin-top: 18px;
+  min-height: 600px;
+  position: relative;
+}
+
+/* Chapter list — slide-out SIDE WINDOW (off-canvas left). Toggled by the
+   `☰ Chapters` button; `.open` slides it in. Fixed so it overlays the page
+   and the materials reader keeps the full width underneath. */
+.fw-study-side {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 100vh;
+  width: 300px;
+  max-width: 85vw;
+  z-index: 60;
+  background: var(--card);
+  border-right: 1px solid var(--border);
+  box-shadow: 2px 0 18px rgba(0, 0, 0, 0.28);
+  padding: 16px 14px 18px 14px;
+  overflow-y: auto;
+  transform: translateX(-100%);
+  transition: transform 0.22s ease;
+}
+.fw-study-side.open { transform: translateX(0); }
+
+/* Dimmer behind the open window; click anywhere on it to close. */
+.fw-study-side-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: rgba(0, 0, 0, 0.42);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+}
+.fw-study-side-backdrop.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.fw-study-side-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2px 10px 6px;
+  border-bottom: 1px dashed var(--border);
+  margin-bottom: 8px;
+}
+.fw-study-side-close {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.fw-study-side-close:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text);
+}
+.fw-study-side-title {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* `☰ Chapters` toggle — sits at the start of the tab strip. */
+.fw-study-toc-toggle {
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  margin-right: 6px;
+  white-space: nowrap;
+  transition: background-color 0.12s, border-color 0.12s;
+}
+.fw-study-toc-toggle:hover {
+  background: rgba(196, 18, 48, 0.06);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.fw-study-chapter-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fw-study-chapter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text);
+  text-align: left;
+  background: transparent;
+  font-family: inherit;
+  transition: background-color 0.12s, border-color 0.12s;
+  width: 100%;
+}
+.fw-study-chapter:hover {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: var(--border);
+}
+.fw-study-chapter.active {
+  background: rgba(196, 18, 48, 0.06);
+  border-color: var(--primary);
+  color: var(--primary);
+  font-weight: 600;
+}
+.fw-study-chapter[data-rendered="false"] {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+.fw-study-chapter-icon {
+  font-size: 0.85rem;
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.fw-study-chapter-icon[data-status="rendered"]      { color: #2a8b46; }
+.fw-study-chapter-icon[data-status="audit-failed"]  { color: var(--error-text); }
+.fw-study-chapter-icon[data-status="not-rendered"]  { color: var(--text-muted); }
+.fw-study-chapter-title {
+  flex: 1;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* CENTER — main reader area */
+.fw-study-main {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+  min-height: 600px;
+}
+
+/* Tab strip */
+.fw-study-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.02);
+  padding: 0;
+}
+.fw-study-tab {
+  padding: 12px 20px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  font-family: inherit;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background-color 0.12s;
+}
+.fw-study-tab:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.03);
+}
+.fw-study-tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  background: var(--card);
+}
+.fw-study-tab[disabled] {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Per-chapter heading strip */
+.fw-study-chapter-head {
+  padding: 16px 28px;
+  border-bottom: 1px dashed var(--border);
+  display: none;
+}
+.fw-study-chapter-head.visible { display: block; }
+.fw-study-chapter-head-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.fw-study-chapter-head-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.fw-study-chapter-head-meta .badge {
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+}
+.fw-study-chapter-head-meta .badge.pass { border-color: #2a8b46; color: #2a8b46; }
+.fw-study-chapter-head-meta .badge.fail { border-color: var(--error-border); color: var(--error-text); }
+
+/* Tab content panes */
+.fw-study-content {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 78vh;
+}
+.fw-study-pane {
+  display: none;
+  padding: 28px 36px;
+}
+.fw-study-pane.active { display: block; }
+
+/* Prose styling (README + Challenges) */
+.fw-study-prose {
+  font-family: 'Raleway', sans-serif;
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: var(--text);
+}
+.fw-study-prose h1 {
+  font-size: 1.65rem;
+  font-weight: 700;
+  margin: 0 0 18px 0;
+  padding-bottom: 12px;
+  border-bottom: 2px solid var(--primary);
+}
+.fw-study-prose h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 32px 0 12px 0;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.fw-study-prose h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 22px 0 8px 0;
+}
+.fw-study-prose p { margin: 0 0 14px 0; }
+.fw-study-prose code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.85em;
+  background: rgba(196, 18, 48, 0.06);
+  color: var(--primary);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.fw-study-prose pre {
+  background: #0d1117;
+  color: #c9d1d9;
+  padding: 14px 18px;
+  border-radius: 4px;
+  overflow-x: auto;
+  margin: 0 0 14px 0;
+  font-size: 0.83rem;
+  line-height: 1.55;
+}
+.fw-study-prose pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+}
+.fw-study-prose ul, .fw-study-prose ol {
+  margin: 0 0 14px 0;
+  padding-left: 24px;
+}
+.fw-study-prose ol { list-style: decimal; }
+.fw-study-prose ul { list-style: disc; }
+.fw-study-prose li { margin-bottom: 6px; line-height: 1.6; }
+.fw-study-prose strong { font-weight: 600; color: var(--text); }
+.fw-study-prose blockquote {
+  border-left: 3px solid var(--primary);
+  margin: 0 0 14px 0;
+  padding: 8px 16px;
+  background: rgba(196, 18, 48, 0.03);
+  color: var(--text);
+  font-style: italic;
+}
+.fw-study-prose a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+/* Challenges pane — collapsible details for active recall */
+.fw-study-challenge {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.015);
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+.fw-study-challenge summary {
+  list-style: none;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  outline: none;
+}
+.fw-study-challenge summary::-webkit-details-marker { display: none; }
+.fw-study-challenge summary::before {
+  content: '▸';
+  color: var(--primary);
+  font-size: 0.85rem;
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+.fw-study-challenge[open] summary::before { transform: rotate(90deg); }
+.fw-study-challenge-num {
+  color: var(--primary);
+  font-weight: 700;
+  flex-shrink: 0;
+  min-width: 1.5em;
+}
+.fw-study-challenge-text { flex: 1; }
+.fw-study-challenge-hint {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+/* Flashcards pane — flip-card study mode */
+.fw-study-cards {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;       /* vertically centre the card block */
+  gap: 22px;
+  min-height: 66vh;              /* fill the reader so centring is visible */
+  padding: 24px;
+  box-sizing: border-box;
+}
+.fw-study-cards-progress {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.fw-study-card-wrap {
+  perspective: 1200px;
+  width: 100%;
+  max-width: 560px;
+  height: 320px;
+}
+.fw-study-card {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: pointer;
+}
+.fw-study-card.flipped { transform: rotateY(180deg); }
+.fw-study-card-face {
+  position: absolute;
+  inset: 0;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+  padding: 38px 30px 26px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 1.05rem;
+  line-height: 1.55;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  overflow: hidden;             /* clip; the body scrolls if needed */
+}
+.fw-study-card-face.back {
+  transform: rotateY(180deg);
+  background: rgba(196, 18, 48, 0.025);
+  border-color: var(--primary);
+}
+.fw-study-card-face .label {
+  position: absolute;
+  top: 12px;
+  left: 16px;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.fw-study-card-face .body {
+  font-family: 'Raleway', sans-serif;
+  color: var(--text);
+  width: 100%;
+  max-height: 100%;
+  overflow-y: auto;             /* long Q/A scrolls inside the card */
+}
+.fw-study-card-face .body code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.88em;
+  background: rgba(196, 18, 48, 0.08);
+  color: var(--primary);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.fw-study-cards-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+.fw-study-cards-actions button {
+  padding: 8px 18px;
+  font-size: 0.88rem;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+.fw-study-cards-actions button:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.fw-study-cards-actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.fw-study-cards-hint {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ============================================================
+   Chapter progress strip — shown only during STUDY-mode synth
+   runs (Start Synth without picking a chapter). Sits above the
+   Cytoscape canvas and below the synth header. Hidden by
+   default; .visible flips display flex on. Each cell is one
+   chapter with data-status in {pending, running, done, failed,
+   cancelled}.
+   ============================================================ */
+.fw-chstrip {
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border, #2a1a1a);
+  border-radius: 2px;
+  background: var(--surface-2, #1a0e0e);
+}
+.fw-chstrip.visible { display: flex; }
+.fw-chstrip-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.fw-chstrip-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.fw-chstrip-counter {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.fw-chstrip-cells {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.fw-chstrip-cell {
+  flex: 1 1 0;
+  min-width: 120px;
+  max-width: 200px;
+  padding: 6px 8px;
+  border: 1px solid var(--border, #2a1a1a);
+  border-left: 3px solid var(--text-muted);
+  border-radius: 2px;
+  background: var(--surface, #0e0808);
+  font-size: 0.78rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.fw-chstrip-cell:hover {
+  background: rgba(168, 50, 50, 0.07);
+}
+.fw-chstrip-cell.selected {
+  outline: 1px solid var(--accent, #a83232);
+  outline-offset: -1px;
+  background: rgba(168, 50, 50, 0.12);
+}
+.fw-chstrip-cell .icon {
+  flex: 0 0 auto;
+  width: 14px;
+  text-align: center;
+  opacity: 0.9;
+}
+.fw-chstrip-cell .label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.fw-chstrip-cell[data-status="pending"] .icon::before  { content: '○'; }
+.fw-chstrip-cell[data-status="running"] .icon::before  { content: '◐'; }
+.fw-chstrip-cell[data-status="done"]    .icon::before  { content: '✔'; }
+.fw-chstrip-cell[data-status="failed"]  .icon::before  { content: '✕'; }
+.fw-chstrip-cell[data-status="cancelled"] .icon::before { content: '⊘'; }
+
+.fw-chstrip-cell[data-status="running"] {
+  border-left-color: var(--accent, #a83232);
+  background: rgba(168, 50, 50, 0.10);
+}
+.fw-chstrip-cell[data-status="running"] .icon {
+  animation: fw-chstrip-spin 1.6s linear infinite;
+  display: inline-block;
+}
+.fw-chstrip-cell[data-status="done"] {
+  border-left-color: #3a8a3a;
+}
+.fw-chstrip-cell[data-status="done"] .icon { color: #3a8a3a; }
+.fw-chstrip-cell[data-status="failed"] {
+  border-left-color: #c04848;
+  background: rgba(192, 72, 72, 0.10);
+}
+.fw-chstrip-cell[data-status="failed"] .icon { color: #c04848; }
+.fw-chstrip-cell[data-status="cancelled"] {
+  border-left-color: #888;
+  opacity: 0.75;
+}
+@keyframes fw-chstrip-spin {
+  to { transform: rotate(360deg); }
+}
