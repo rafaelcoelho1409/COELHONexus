@@ -346,7 +346,7 @@ export function _refreshOpenPlannerDrawer(values) {
 //   NodeDrawer.appendEvent(ev)           // route an SSE event to the log + status
 //   NodeDrawer.updateContext(ctx)        // refresh static sections (inputs/outputs)
 // ============================================================
-const NodeDrawer = (function() {
+export const NodeDrawer = (function() {
   const elDrawer    = document.getElementById('fw-node-drawer');
   const elIcon      = document.getElementById('fw-node-drawer-icon');
   const elTitle     = document.getElementById('fw-node-drawer-title');

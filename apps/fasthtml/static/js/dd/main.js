@@ -11,12 +11,19 @@ import { renderStepper, refreshGenerateState } from './ui.js';
 // at top level when imported.
 import './picker.js';
 import './ingestion.js';
-import { _initPlannerCanvas, _toggleStageEmpty } from './planner.js';
+import { _initPlannerCanvas, _toggleStageEmpty, NodeDrawer } from './planner.js';
 import {
   loadLibrary, recoverActiveRuns, recoverActivePlanner, loadPlannerInfo,
 } from './library.js';
-import { _initSynthCanvas, loadSynthInfo, recoverActiveSynth } from './synth.js';
+import {
+  _initSynthCanvas, loadSynthInfo, recoverActiveSynth, _setNodeDrawerRef,
+} from './synth.js';
 import './study.js';
+
+// Inject the shared NodeDrawer (defined in planner.js) into synth.js so
+// its live-update hot path (_refreshOpenSynthDrawer + SSE appendEvent)
+// can reach the drawer synchronously without a per-event dynamic import.
+_setNodeDrawerRef(NodeDrawer);
 
 // ============================================================
 // Init — mirrors the original IIFE bottom-of-file sequence.

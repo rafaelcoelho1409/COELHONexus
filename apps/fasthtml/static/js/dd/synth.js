@@ -423,6 +423,28 @@ export function _synthLiveProgressEl(stepName, idx) {
 export function _markSynthCardRunning(stepName) {
   const idx = _synthStepIdx(stepName);
   if (idx < 0) return;
+  // Graph-only UI (cards DOM removed): flip the Cytoscape node to
+  // 'running' FIRST, unconditionally — it's the sole live "Working"
+  // indicator now. Must run BEFORE the legacy card guard below, which
+  // early-returns when no card element exists (always) and previously
+  // suppressed this update. Mirrors planner._markCardRunning.
+  if (S.synthGraph) {
+    // Don't downgrade an already-finished node (SSE snapshot replay on
+    // refresh re-delivers old `start` events for done steps).
+    let cur = null;
+    try { cur = S.synthGraph.cy.getElementById(stepName).data('status'); }
+    catch (_) {}
+    if (cur !== 'done' && cur !== 'failed') {
+      S.synthGraph.setStatus(stepName, 'running');
+      const stepIdx = S.SYNTH_NODE_ORDER.indexOf(stepName);
+      const implCount = S.SYNTH_NODE_ORDER.filter(n => S.synthImplemented.has(n)).length;
+      const progress = (stepIdx >= 0 && implCount)
+        ? (stepIdx + '/' + implCount) : null;
+      _setSynthStagePill('working',
+        progress ? 'Working · ' + progress : null);
+    }
+  }
+  // Legacy card path — no-op in the graph-only UI (synthCardEl is null).
   const c = synthCardEl(idx);
   if (!c) return;
   if (c.classList.contains('done')) return;
@@ -433,16 +455,6 @@ export function _markSynthCardRunning(stepName) {
   const body = c.querySelector('.fw-planner-card-body');
   if (body && body.querySelector('.fw-empty')) {
     body.innerHTML = '';
-  }
-  // Day 5: mirror to canvas + flip stage pill, same pattern as planner.
-  if (S.synthGraph) {
-    S.synthGraph.setStatus(stepName, 'running');
-    const stepIdx = S.SYNTH_NODE_ORDER.indexOf(stepName);
-    const implCount = S.SYNTH_NODE_ORDER.filter(n => S.synthImplemented.has(n)).length;
-    const progress = (stepIdx >= 0 && implCount)
-      ? (stepIdx + '/' + implCount) : null;
-    _setSynthStagePill('working',
-      progress ? 'Working · ' + progress : null);
   }
 }
 
