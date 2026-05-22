@@ -46,7 +46,7 @@ app.config_from_object({
     "task_default_queue": Q_DEFAULT,
     "task_routes": {
         # Docs Distiller ingestion is HTTP-fetch heavy → crawler queue
-        "tasks.docs_distiller.ingestion.*": {"queue": Q_CRAWLER},
+        "domains.dd.ingestion.task.*": {"queue": Q_CRAWLER},
     },
     "worker_prefetch_multiplier": 1,
     "broker_connection_retry_on_startup": True,
@@ -59,7 +59,7 @@ app.config_from_object({
 
 # Task module discovery. Add one entry per `tasks/<feature>/<module>.py`.
 app.conf.include = [
-#    "tasks.docs_distiller.ingestion",
+    "domains.dd.ingestion.task",
 ]
 
 
@@ -76,7 +76,7 @@ def _ensure_minio_bucket(**_kwargs) -> None:
     import logging
     logger = logging.getLogger(__name__)
     try:
-        from services.docs_distiller.ingestion.storage_minio import get_storage
+        from domains.dd.ingestion.storage import get_storage
         asyncio.run(get_storage().ensure_bucket())
     except Exception as e:
         logger.warning(
