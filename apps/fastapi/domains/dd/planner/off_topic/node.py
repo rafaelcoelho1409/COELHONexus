@@ -251,8 +251,6 @@ async def off_topic(state: PlannerState) -> dict:
         span = _otel_trace.get_current_span()
         span.set_attribute("off_topic.kept", stats["kept"])
         span.set_attribute("off_topic.dropped", stats["dropped"])
-        span.set_attribute("off_topic.cleave_keep", cleave_keep)
-        span.set_attribute("off_topic.cleave_drop", cleave_drop)
         span.set_attribute("off_topic.llm_judged", len(judge_decisions))
         span.set_attribute("off_topic.llm_errors", len(judge_errors))
         span.set_attribute("off_topic.domain_coherence", stats["domain_coherence"])

@@ -129,10 +129,10 @@ export function renderSidebar(items) {
         // Clear Step 3 if the deleted framework was the one being viewed.
         if (S.activeSlug === slug) {
           S.setActiveSlug(null);
-          S.pageGrid.innerHTML =
+          if (S.pageGrid) S.pageGrid.innerHTML =
             '<div class="fw-empty">Pick an item from the sidebar or ' +
             'generate a new study.</div>';
-          S.pagesSummary.innerHTML = '';
+          if (S.pagesSummary) S.pagesSummary.innerHTML = '';
         }
         // Remove the row in place — snappier than a full library reload.
         row.remove();

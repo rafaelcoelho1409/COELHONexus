@@ -13,7 +13,7 @@ from pathlib import Path
 import yaml
 
 
-SOURCES_PATH = Path(__file__).resolve().parents[2] / "files" / "sources.yaml"
+SOURCES_PATH = Path(__file__).resolve().parents[2] / "shared" / "sources.yaml"
 
 TIER_ORDER = ("llms_full", "llms_txt", "sitemap", "docs", "github")
 

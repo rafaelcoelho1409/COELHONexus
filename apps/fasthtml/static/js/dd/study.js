@@ -1,39 +1,32 @@
-// Study viewer — chapter sidebar, tabs, flashcards, artifact loading.
-import { API, activeSlug } from './state.js';
+// Study viewer — chapter S.sidebar, tabs, flashcards, artifact loading.
+import * as S from './state.js';
 import { escapeHtml } from './utils.js';
-import { showStep } from './ui.js';
+import { stepFn } from './ui.js';
 
-function _setStudySideOpen(open) {
-  if (studySideEl) studySideEl.classList.toggle('open', open);
-  if (studySideBackdrop) studySideBackdrop.classList.toggle('open', open);
-  if (studyTocToggle) studyTocToggle.setAttribute('aria-expanded', String(!!open));
+export function _setStudySideOpen(open) {
+  if (S.studySideEl) S.studySideEl.classList.toggle('open', open);
+  if (S.studySideBackdrop) S.studySideBackdrop.classList.toggle('open', open);
+  if (S.studyTocToggle) S.studyTocToggle.setAttribute('aria-expanded', String(!!open));
 }
-function openStudySide()  { _setStudySideOpen(true); }
-function closeStudySide() { _setStudySideOpen(false); }
-function toggleStudySide() {
-  _setStudySideOpen(!(studySideEl && studySideEl.classList.contains('open')));
+export function openStudySide()  { _setStudySideOpen(true); }
+export function closeStudySide() { _setStudySideOpen(false); }
+export function toggleStudySide() {
+  _setStudySideOpen(!(S.studySideEl && S.studySideEl.classList.contains('open')));
 }
-if (studyTocToggle) studyTocToggle.addEventListener('click', toggleStudySide);
-if (studySideClose) studySideClose.addEventListener('click', closeStudySide);
-if (studySideBackdrop) studySideBackdrop.addEventListener('click', closeStudySide);
+if (S.studyTocToggle) S.studyTocToggle.addEventListener('click', toggleStudySide);
+if (S.studySideClose) S.studySideClose.addEventListener('click', closeStudySide);
+if (S.studySideBackdrop) S.studySideBackdrop.addEventListener('click', closeStudySide);
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && studySideEl &&
-      studySideEl.classList.contains('open')) {
+  if (e.key === 'Escape' && S.studySideEl &&
+      S.studySideEl.classList.contains('open')) {
     closeStudySide();
   }
 });
 
-// Per-framework state
-let studyChapters    = [];     // [{id, title, rendered, audit_passed, ...}]
-let studyActiveChapter = null; // current selected chapter id
-let studyActiveTab   = 'readme';
-let studyCards       = [];     // [{q, a}, ...]
-let studyCardIdx     = 0;
-let studyLoadedSlug  = null;   // last slug we loaded chapters for
-let studyLoadedCid   = null;   // last chapter we loaded artifacts for
+// Per-framework state — lives in state.js, accessed via S.xxx / S.setXxx()
 
-function _setStudyStagePill(status, label) {
-  if (!studyPill || !studyPillText) return;
+export function _setStudyStagePill(status, label) {
+  if (!S.studyPill || !S.studyPillText) return;
   const map = {
     idle:    'Idle',
     working: 'Loading',
@@ -41,43 +34,43 @@ function _setStudyStagePill(status, label) {
     failed:  'Failed',
     cancelled: 'Cancelled',
   };
-  studyPill.dataset.status = status;
-  studyPillText.textContent = label || map[status] || status;
+  S.studyPill.dataset.status = status;
+  S.studyPillText.textContent = label || map[status] || status;
 }
 
-function setStudyFramework(slug) {
-  if (!studyFwName || !studyFwLogos) return;
+export function setStudyFramework(slug) {
+  if (!S.studyFwName || !S.studyFwLogos) return;
   if (!slug) {
-    studyFwName.textContent = 'Pick a framework with synthesized chapters.';
-    studyFwName.classList.add('fw-planner-fw-name-empty');
-    studyFwLogos.innerHTML = '';
-    studyFwLogos.style.display = 'none';
+    S.studyFwName.textContent = 'Pick a framework with synthesized chapters.';
+    S.studyFwName.classList.add('fw-planner-fw-name-empty');
+    S.studyFwLogos.innerHTML = '';
+    S.studyFwLogos.style.display = 'none';
     return;
   }
-  const info = frameworkInfo[slug] || {name: slug, logos: []};
-  studyFwName.textContent = info.name || slug;
-  studyFwName.classList.remove('fw-planner-fw-name-empty');
+  const info = S.frameworkInfo[slug] || {name: slug, logos: []};
+  S.studyFwName.textContent = info.name || slug;
+  S.studyFwName.classList.remove('fw-planner-fw-name-empty');
   if (info.logos && info.logos.length) {
-    studyFwLogos.innerHTML = info.logos.map(u =>
+    S.studyFwLogos.innerHTML = info.logos.map(u =>
       '<img class="fw-planner-fw-logo" src="' + u + '" alt="">'
     ).join('');
-    studyFwLogos.style.display = '';
+    S.studyFwLogos.style.display = '';
   } else {
-    studyFwLogos.innerHTML = '';
-    studyFwLogos.style.display = 'none';
+    S.studyFwLogos.innerHTML = '';
+    S.studyFwLogos.style.display = 'none';
   }
 }
 
-function _renderStudySidebar() {
-  if (!studyChapterListEl) return;
-  if (!studyChapters.length) {
-    studyChapterListEl.innerHTML =
+export function _renderStudySidebar() {
+  if (!S.studyChapterListEl) return;
+  if (!S.studyChapters.length) {
+    S.studyChapterListEl.innerHTML =
       '<div class="fw-empty" style="font-size:0.8rem;padding:8px 4px">' +
       'No chapters in this framework\'s plan. Run Planner first.' +
       '</div>';
     return;
   }
-  studyChapterListEl.innerHTML = studyChapters.map(ch => {
+  S.studyChapterListEl.innerHTML = S.studyChapters.map(ch => {
     const status = !ch.rendered
       ? 'not-rendered'
       : (ch.audit_passed ? 'rendered' : 'audit-failed');
@@ -86,7 +79,7 @@ function _renderStudySidebar() {
       : (ch.audit_passed ? '●' : '✕');
     const cls = [
       'fw-study-chapter',
-      ch.id === studyActiveChapter ? 'active' : '',
+      ch.id === S.studyActiveChapter ? 'active' : '',
     ].filter(Boolean).join(' ');
     const title = ch.title || ch.id;
     return (
@@ -102,11 +95,11 @@ function _renderStudySidebar() {
   }).join('');
 }
 
-function _renderStudyChapterHead(ch) {
-  if (!studyChapterHeadEl) return;
+export function _renderStudyChapterHead(ch) {
+  if (!S.studyChapterHeadEl) return;
   if (!ch) {
-    studyChapterHeadEl.classList.remove('visible');
-    studyChapterHeadEl.innerHTML = '';
+    S.studyChapterHeadEl.classList.remove('visible');
+    S.studyChapterHeadEl.innerHTML = '';
     return;
   }
   const auditBadge = ch.rendered
@@ -114,7 +107,7 @@ function _renderStudyChapterHead(ch) {
         ? '<span class="badge pass">Audit ✓</span>'
         : '<span class="badge fail">Audit ✗</span>')
     : '<span class="badge">Not rendered</span>';
-  studyChapterHeadEl.innerHTML =
+  S.studyChapterHeadEl.innerHTML =
     '<div class="fw-study-chapter-head-title">' +
       escapeHtml(ch.title || ch.id) + '</div>' +
     '<div class="fw-study-chapter-head-meta">' +
@@ -125,12 +118,12 @@ function _renderStudyChapterHead(ch) {
         ? '<span>' + ((ch.rendered_chars / 1000).toFixed(1)) + 'k chars</span>'
         : '') +
     '</div>';
-  studyChapterHeadEl.classList.add('visible');
+  S.studyChapterHeadEl.classList.add('visible');
 }
 
-function _switchStudyTab(tab) {
-  studyActiveTab = tab;
-  studyTabBtns.forEach(btn => {
+export function _switchStudyTab(tab) {
+  S.setStudyActiveTab(tab);
+  S.studyTabBtns.forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tab === tab);
   });
   document.querySelectorAll('.fw-study-pane').forEach(pane => {
@@ -138,39 +131,39 @@ function _switchStudyTab(tab) {
   });
 }
 
-async function _loadStudyArtifact(slug, cid, name) {
-  const url = API + '/synth/' + slug + '/study/' + cid + '/artifact/' + name;
+export async function _loadStudyArtifact(slug, cid, name) {
+  const url = S.API + '/synth/' + slug + '/study/' + cid + '/artifact/' + name;
   const r = await fetch(url);
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return await r.text();
 }
 
-async function _loadStudyReadme(slug, cid) {
-  if (!studyReadmeEl) return;
-  studyReadmeEl.innerHTML =
+export async function _loadStudyReadme(slug, cid) {
+  if (!S.studyReadmeEl) return;
+  S.studyReadmeEl.innerHTML =
     '<div class="fw-empty">Loading chapter…</div>';
   try {
     const raw = await _loadStudyArtifact(slug, cid, 'README.md');
     const md = (typeof marked !== 'undefined')
       ? marked.parse(raw)
       : ('<pre>' + escapeHtml(raw) + '</pre>');
-    studyReadmeEl.innerHTML = md;
+    S.studyReadmeEl.innerHTML = md;
     // Apply syntax highlighting if highlight.js is loaded.
     if (typeof hljs !== 'undefined') {
-      studyReadmeEl.querySelectorAll('pre code').forEach(block => {
+      S.studyReadmeEl.querySelectorAll('pre code').forEach(block => {
         try { hljs.highlightElement(block); } catch (_) {}
       });
     }
   } catch (e) {
-    studyReadmeEl.innerHTML =
+    S.studyReadmeEl.innerHTML =
       '<div class="fw-empty">Failed to load README.md: ' +
       escapeHtml(String(e)) + '</div>';
   }
 }
 
-async function _loadStudyChallenges(slug, cid) {
-  if (!studyChallengesEl) return;
-  studyChallengesEl.innerHTML =
+export async function _loadStudyChallenges(slug, cid) {
+  if (!S.studyChallengesEl) return;
+  S.studyChallengesEl.innerHTML =
     '<div class="fw-empty">Loading challenges…</div>';
   try {
     const raw = await _loadStudyArtifact(slug, cid, 'challenges.md');
@@ -202,26 +195,26 @@ async function _loadStudyChallenges(slug, cid) {
         '</div>' +
       '</details>'
     )).join('');
-    studyChallengesEl.innerHTML = headerHtml + itemsHtml;
+    S.studyChallengesEl.innerHTML = headerHtml + itemsHtml;
   } catch (e) {
-    studyChallengesEl.innerHTML =
+    S.studyChallengesEl.innerHTML =
       '<div class="fw-empty">Failed to load challenges.md: ' +
       escapeHtml(String(e)) + '</div>';
   }
 }
 
-function _renderFlashcard() {
-  if (!studyFlashcardsEl) return;
-  if (!studyCards.length) {
-    studyFlashcardsEl.innerHTML =
+export function _renderFlashcard() {
+  if (!S.studyFlashcardsEl) return;
+  if (!S.studyCards.length) {
+    S.studyFlashcardsEl.innerHTML =
       '<div class="fw-empty">No flashcards for this chapter.</div>';
     return;
   }
-  const card = studyCards[studyCardIdx];
-  const total = studyCards.length;
-  studyFlashcardsEl.innerHTML =
+  const card = S.studyCards[S.studyCardIdx];
+  const total = S.studyCards.length;
+  S.studyFlashcardsEl.innerHTML =
     '<div class="fw-study-cards-progress">' +
-      'Card ' + (studyCardIdx + 1) + ' of ' + total +
+      'Card ' + (S.studyCardIdx + 1) + ' of ' + total +
     '</div>' +
     '<div class="fw-study-card-wrap">' +
       '<div class="fw-study-card" id="fw-study-card">' +
@@ -237,10 +230,10 @@ function _renderFlashcard() {
     '</div>' +
     '<div class="fw-study-cards-actions">' +
       '<button type="button" id="fw-study-card-prev"' +
-        (studyCardIdx === 0 ? ' disabled' : '') + '>← Prev</button>' +
+        (S.studyCardIdx === 0 ? ' disabled' : '') + '>← Prev</button>' +
       '<button type="button" id="fw-study-card-flip">Flip</button>' +
       '<button type="button" id="fw-study-card-next"' +
-        (studyCardIdx === total - 1 ? ' disabled' : '') + '>Next →</button>' +
+        (S.studyCardIdx === total - 1 ? ' disabled' : '') + '>Next →</button>' +
     '</div>' +
     '<div class="fw-study-cards-hint">' +
       'Click the card or hit Flip to reveal the answer.' +
@@ -257,11 +250,11 @@ function _renderFlashcard() {
     if (cardEl) cardEl.classList.toggle('flipped');
   });
   if (prevBtn) prevBtn.addEventListener('click', () => {
-    if (studyCardIdx > 0) { studyCardIdx--; _renderFlashcard(); }
+    if (S.studyCardIdx > 0) { S.studyCardIdx--; _renderFlashcard(); }
   });
   if (nextBtn) nextBtn.addEventListener('click', () => {
-    if (studyCardIdx < studyCards.length - 1) {
-      studyCardIdx++; _renderFlashcard();
+    if (S.studyCardIdx < S.studyCards.length - 1) {
+      S.studyCardIdx++; _renderFlashcard();
     }
   });
 }
@@ -269,7 +262,7 @@ function _renderFlashcard() {
 // Tiny inline-markdown helper for flashcard faces — just handles
 // `code` spans + **bold** + line breaks. marked.parse() would wrap
 // everything in <p> which fights the flex-center layout.
-function _mdInline(text) {
+export function _mdInline(text) {
   let s = escapeHtml(text || '');
   s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
   s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
@@ -277,89 +270,89 @@ function _mdInline(text) {
   return s;
 }
 
-async function _loadStudyFlashcards(slug, cid) {
-  if (!studyFlashcardsEl) return;
-  studyFlashcardsEl.innerHTML =
+export async function _loadStudyFlashcards(slug, cid) {
+  if (!S.studyFlashcardsEl) return;
+  S.studyFlashcardsEl.innerHTML =
     '<div class="fw-empty">Loading flashcards…</div>';
   try {
     const raw = await _loadStudyArtifact(slug, cid, 'flashcards.json');
-    studyCards = JSON.parse(raw) || [];
-    studyCardIdx = 0;
+    S.setStudyCards(JSON.parse(raw) || []);
+    S.setStudyCardIdx(0);
     _renderFlashcard();
   } catch (e) {
-    studyFlashcardsEl.innerHTML =
+    S.studyFlashcardsEl.innerHTML =
       '<div class="fw-empty">Failed to load flashcards.json: ' +
       escapeHtml(String(e)) + '</div>';
   }
 }
 
-async function openStudyChapter(cid) {
-  if (!activeSlug || !cid) return;
-  const ch = studyChapters.find(c => c.id === cid);
+export async function openStudyChapter(cid) {
+  if (!S.activeSlug || !cid) return;
+  const ch = S.studyChapters.find(c => c.id === cid);
   if (!ch) return;
   if (!ch.rendered) {
     _renderStudyChapterHead(ch);
-    studyReadmeEl.innerHTML =
+    S.studyReadmeEl.innerHTML =
       '<div class="fw-empty">This chapter has not been synthesized yet. ' +
       'Run Synth (Step 4) on this chapter first.</div>';
-    studyChallengesEl.innerHTML =
+    S.studyChallengesEl.innerHTML =
       '<div class="fw-empty">No challenges available — chapter not synthesized.</div>';
-    studyFlashcardsEl.innerHTML =
+    S.studyFlashcardsEl.innerHTML =
       '<div class="fw-empty">No flashcards available — chapter not synthesized.</div>';
     return;
   }
-  studyActiveChapter = cid;
-  studyLoadedCid = cid;
+  S.setStudyActiveChapter(cid);
+  S.setStudyLoadedCid(cid);
   _renderStudySidebar();   // re-render to update active highlight
   _renderStudyChapterHead(ch);
   _setStudyStagePill('working', 'Loading…');
   // Fire all three loads in parallel
   await Promise.all([
-    _loadStudyReadme(activeSlug, cid),
-    _loadStudyChallenges(activeSlug, cid),
-    _loadStudyFlashcards(activeSlug, cid),
+    _loadStudyReadme(S.activeSlug, cid),
+    _loadStudyChallenges(S.activeSlug, cid),
+    _loadStudyFlashcards(S.activeSlug, cid),
   ]);
   _setStudyStagePill('done', 'Reading · ' + (ch.title || cid));
 }
 
-async function loadStudyChapters(slug) {
-  if (!studyChapterListEl) return;
-  studyChapters = [];
-  studyActiveChapter = null;
-  studyLoadedCid = null;
+export async function loadStudyChapters(slug) {
+  if (!S.studyChapterListEl) return;
+  S.setStudyChapters([]);
+  S.setStudyActiveChapter(null);
+  S.setStudyLoadedCid(null);
   _setStudyStagePill('working', 'Loading chapters…');
-  studyChapterListEl.innerHTML =
+  S.studyChapterListEl.innerHTML =
     '<div class="fw-empty" style="font-size:0.8rem;padding:8px 4px">' +
     'Loading chapters…</div>';
   try {
-    const r = await fetch(API + '/synth/' + slug + '/study/chapters');
+    const r = await fetch(S.API + '/synth/' + slug + '/study/chapters');
     if (!r.ok) {
-      studyChapterListEl.innerHTML =
+      S.studyChapterListEl.innerHTML =
         '<div class="fw-empty" style="font-size:0.8rem;padding:8px 4px">' +
         'Failed to load chapters (HTTP ' + r.status + ').</div>';
       _setStudyStagePill('failed', 'Failed');
       return;
     }
     const data = await r.json();
-    studyChapters = (data.chapters || []).sort(
+    S.setStudyChapters((data.chapters || []).sort(
       (a, b) => (a.order || 0) - (b.order || 0)
-    );
-    studyLoadedSlug = slug;
+    ));
+    S.setStudyLoadedSlug(slug);
     _renderStudySidebar();
     // Auto-open the first rendered chapter (if any) so the user
     // immediately sees content instead of an empty pane.
-    const firstReady = studyChapters.find(c => c.rendered);
+    const firstReady = S.studyChapters.find(c => c.rendered);
     if (firstReady) {
       await openStudyChapter(firstReady.id);
     } else {
       _setStudyStagePill('idle',
         'No rendered chapters yet — run Synth first.');
-      studyReadmeEl.innerHTML =
+      S.studyReadmeEl.innerHTML =
         '<div class="fw-empty">No chapters have been synthesized for ' +
         'this framework yet. Run Synth (Step 4) to generate content.</div>';
     }
   } catch (e) {
-    studyChapterListEl.innerHTML =
+    S.studyChapterListEl.innerHTML =
       '<div class="fw-empty" style="font-size:0.8rem;padding:8px 4px">' +
       'Network error loading chapters.</div>';
     _setStudyStagePill('failed', 'Failed');
@@ -367,16 +360,16 @@ async function loadStudyChapters(slug) {
 }
 
 // Tab buttons: simple click delegation
-studyTabBtns.forEach(btn => {
+S.studyTabBtns.forEach(btn => {
   btn.addEventListener('click', () => {
     _switchStudyTab(btn.dataset.tab || 'readme');
   });
 });
 
-// Chapter sidebar: event delegation for chapter clicks. Picking a
+// Chapter S.sidebar: event delegation for chapter clicks. Picking a
 // chapter closes the side window so the materials get the full width.
-if (studyChapterListEl) {
-  studyChapterListEl.addEventListener('click', ev => {
+if (S.studyChapterListEl) {
+  S.studyChapterListEl.addEventListener('click', ev => {
     const btn = ev.target.closest('.fw-study-chapter');
     if (!btn) return;
     const cid = btn.dataset.chapterId;
@@ -388,33 +381,33 @@ if (studyChapterListEl) {
 
 // Visibility toggle — show empty-state when no slug active. Also
 // exposed as a function so other code paths (slug click, step nav)
-// can re-trigger after activeSlug changes.
-function refreshStudyVisibility() {
-  if (!studyEmptyEl || !studyGridEl) return;
-  if (!activeSlug) {
-    studyEmptyEl.style.display = '';
-    studyGridEl.style.display = 'none';
+// can re-trigger after S.activeSlug changes.
+export function refreshStudyVisibility() {
+  if (!S.studyEmptyEl || !S.studyGridEl) return;
+  if (!S.activeSlug) {
+    S.studyEmptyEl.style.display = '';
+    S.studyGridEl.style.display = 'none';
     return;
   }
-  studyEmptyEl.style.display = 'none';
-  studyGridEl.style.display = '';
+  S.studyEmptyEl.style.display = 'none';
+  S.studyGridEl.style.display = '';
 }
 
-// Hook into showStep so navigating to Step 5 triggers the load. If
-// the framework changed since last load, refresh. If the same, no-op.
-const _origShowStep = showStep;
-// eslint-disable-next-line no-func-assign
-showStep = function(n) {
+// Hook into showStep so navigating to Step 5 triggers the load. We wrap
+// the mutable `stepFn.showStep` indirection (ui.js) rather than the
+// imported binding — ES modules forbid reassigning imports.
+const _origShowStep = stepFn.showStep;
+stepFn.showStep = function(n) {
   _origShowStep(n);
   // The chapter side window is position:fixed, so it would bleed over
-  // other steps if left open — always close it when not on Step 5,
+  // other S.steps if left open — always close it when not on Step 5,
   // and start Step 5 content-first (closed) too.
   closeStudySide();
   if (n === 5) {
     refreshStudyVisibility();
-    setStudyFramework(activeSlug);
-    if (activeSlug && activeSlug !== studyLoadedSlug) {
-      loadStudyChapters(activeSlug);
+    setStudyFramework(S.activeSlug);
+    if (S.activeSlug && S.activeSlug !== S.studyLoadedSlug) {
+      loadStudyChapters(S.activeSlug);
     }
   }
 };

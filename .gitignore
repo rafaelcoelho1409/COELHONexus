@@ -69,3 +69,4 @@ k8s/helm/charts
 .openclaude-profile.json
 .claude/
 .openclaude/
+.antigravitycli/

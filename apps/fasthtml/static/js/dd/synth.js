@@ -4,6 +4,7 @@
 // ============================================================
 
 import * as S from './state.js';
+import { StageGraph } from './stagegraph.js';
 import { sleep, escapeHtml, formatFieldValue } from './utils.js';
 import {
   showToast, showConfirm, refreshGenerateState,
@@ -203,7 +204,7 @@ export function _buildSynthNodeCtx(nodeId, values) {
 // replay the buffered events into the drawer log so they see the
 // full activity history — not just events that fire AFTER the drawer
 // open. Without this, the long silent windows between SDP events
-// (~28s while 3 LLM samples generate concurrently) made the drawer
+// (~28s while 3 LLM samples S.generate concurrently) made the drawer
 // look empty even though the run was making progress.
 // Capped per-step to avoid unbounded growth on very long runs.
 
@@ -224,7 +225,7 @@ export function _resetSynthEventBuffer() {
 export async function _openSynthNodeDrawer(nodeId) {
   let values = {};
   // Same fallback as planner: localStorage thread id covers the
-  // post-terminal case when synthThreadId has been nulled.
+  // post-terminal case when S.synthThreadId has been nulled.
   let tid = S.synthThreadId;
   if (!tid && S.activeSlug) {
     try { tid = localStorage.getItem(_synthStorageKey(S.activeSlug)); }
@@ -328,9 +329,11 @@ export function _initSynthCanvas() {
       console.log(
         `[synthGraph] canvas container ready, dims=${canvasEl.offsetWidth}x${canvasEl.offsetHeight}`
       );
-      // StageGraph lives in planner.js — dynamic import
+      // StageGraph is shared (stagegraph.js); _attachCanvasResizeObserver
+      // is a planner helper pulled in via dynamic import to avoid a static
+      // synth→planner cycle.
       import('./planner.js').then(m => {
-        S.setSynthGraph(m.StageGraph.create(canvasEl, {
+        S.setSynthGraph(StageGraph.create(canvasEl, {
           nodes, edges,
           onNodeClick: (nodeId) => _openSynthNodeDrawer(nodeId),
         }));
@@ -609,7 +612,7 @@ export function _renderSynthLiveProgress(stepName, ev) {
     }
   }
   // checklist_eval — 12 binary criteria (7 deterministic pre-gates +
-  // 5 LLM-judge). Fast node (1 LLM call total). Emits 4 event kinds.
+  // 5 LLM-judge). Fast node (1 LLM call S.total). Emits 4 event kinds.
   if (stepName === 'checklist_eval') {
     if (ev.kind === 'start') {
       text = '· starting checklist for ' + (ev.chapter_title || ev.chapter_id || 'chapter') +
@@ -739,7 +742,7 @@ export function _renderSynthLiveProgress(stepName, ev) {
 }
 
 export function renderSynthCards(values) {
-  // Cards DOM was removed 2026-05-19 — synthCardsEl is null. The
+  // Cards DOM was removed 2026-05-19 — S.synthCardsEl is null. The
   // per-card loop below now early-skips at `if (!c) continue;` but
   // `_renderSynthGraph` + `_refreshOpenSynthDrawer` at the tail MUST
   // still fire (they own the graph-canvas + drawer state). Previous

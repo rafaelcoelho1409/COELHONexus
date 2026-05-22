@@ -8,7 +8,7 @@ import numpy as np
 
 from domains.llm.rotator.chain import DD_EMBED_MODEL_NAME
 
-from .constants import _CACHE_VERSION, _CHUNK_CHARS
+from .constants import _CACHE_VERSION, _CHUNK_CHARS, _EMBED_PREFIX
 
 
 def _manifest_hash(keys: list[str], total_bytes: int) -> str:

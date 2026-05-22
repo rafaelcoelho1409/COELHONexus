@@ -16,8 +16,13 @@ import { setProgressFramework } from './picker.js';
 // Step 3: render manifest entries into the page grid
 // ============================================================
 export function renderManifestTo(summaryEl, gridEl, m) {
+  // gridEl may be null — Step 3 became the Planner (page grid removed
+  // 2026-05-19), so `#fw-page-grid` no longer exists. Guard both targets
+  // so a missing element silently no-ops instead of throwing (which would
+  // abort the Step 2 render that follows in renderManifest).
   if (!m || !m.entries) {
-    gridEl.innerHTML = '<div class="fw-empty">Manifest unavailable.</div>';
+    if (gridEl) gridEl.innerHTML =
+      '<div class="fw-empty">Manifest unavailable.</div>';
     if (summaryEl) summaryEl.innerHTML = '';
     return;
   }
@@ -30,7 +35,7 @@ export function renderManifestTo(summaryEl, gridEl, m) {
       (m.entries.length) + ' pages · ' + fmtBytes(m.total_bytes || 0) + '</span>' +
       '<span>' + (m.tier_kind || '') + ' · ' + fmtAge(m.ingested_at) + '</span>';
   }
-  gridEl.innerHTML = m.entries.map(e =>
+  if (gridEl) gridEl.innerHTML = m.entries.map(e =>
     '<div class="fw-page-card" data-idx="' + e.idx + '">' +
     '<div class="fw-page-title">' + (e.title || e.slug) + '</div>' +
     '<div class="fw-page-meta">' + (e.tier || '') + ' · ' + fmtBytes(e.bytes) + '</div>' +
@@ -66,15 +71,15 @@ export async function loadManifestForSlug(slug) {
     if (!r.ok) {
       const msg = '<div class="fw-empty">Manifest fetch failed (HTTP ' +
         r.status + ').</div>';
-      S.pageGrid.innerHTML = msg;
-      S.step2Grid.innerHTML = msg;
+      if (S.pageGrid) S.pageGrid.innerHTML = msg;
+      if (S.step2Grid) S.step2Grid.innerHTML = msg;
       return;
     }
     renderManifest(await r.json());
   } catch (e) {
     const msg = '<div class="fw-empty">' + String(e) + '</div>';
-    S.pageGrid.innerHTML = msg;
-    S.step2Grid.innerHTML = msg;
+    if (S.pageGrid) S.pageGrid.innerHTML = msg;
+    if (S.step2Grid) S.step2Grid.innerHTML = msg;
   }
 }
 
@@ -140,8 +145,8 @@ export async function pollRun(runId) {
           'the sidebar to see its downloaded files.</div>';
         if (S.activeSlug === cancelledSlug) {
           S.setActiveSlug(null);
-          S.pagesSummary.innerHTML = '';
-          S.pageGrid.innerHTML =
+          if (S.pagesSummary) S.pagesSummary.innerHTML = '';
+          if (S.pageGrid) S.pageGrid.innerHTML =
             '<div class="fw-empty">Pick an item from the sidebar or ' +
             'generate a new study.</div>';
           S.sidebarList.querySelectorAll('.fw-lib-item.active')

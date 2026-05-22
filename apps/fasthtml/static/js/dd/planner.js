@@ -1,11 +1,13 @@
 // Planner module — Cytoscape graph, cards, SSE polling, start/cancel/wipe.
-import { API, plannerStartBtn, plannerWipeBtn, plannerCardsEl, plannerFwLogosEl, plannerFwNameEl, plannerThreadId, setPlannerThreadId, activeSlug, setActiveSlug, selected, currentStep, farthestStep, setFarthestStep, steps, connectors, panels, pagesSummary, pageGrid, progressBox, stickyBar } from './state.js';
+import * as S from './state.js';
+import { StageGraph } from './stagegraph.js';
 import { sleep, fmtBytes, fmtAge, escapeHtml, formatFieldValue } from './utils.js';
 import { showStep, showConfirm, showNotice, showToast, syncStepLocks, renderStepper, refreshGenerateState } from './ui.js';
 import { loadManifestForSlug, renderManifest } from './ingestion.js';
 
-function _resizePlannerCanvas() {
-  if (!plannerGraph || !plannerGraph.cy) return;
+
+export function _resizePlannerCanvas() {
+  if (!S.plannerGraph || !S.plannerGraph.cy) return;
   // requestAnimationFrame defers to the next paint — the CSS panel
   // transition (display:block) needs one frame to apply non-zero
   // dimensions before Cytoscape measures them. Without the rAF,
@@ -20,10 +22,10 @@ function _resizePlannerCanvas() {
   });
 }
 
-function _runPlannerLayoutAndCenter(passLabel) {
-  if (!plannerGraph || !plannerGraph.cy) return;
+export function _runPlannerLayoutAndCenter(passLabel) {
+  if (!S.plannerGraph || !S.plannerGraph.cy) return;
   try {
-    const cy = plannerGraph.cy;
+    const cy = S.plannerGraph.cy;
     cy.resize();
     const hasDagre = !!cytoscape._dagreRegistered;
     const layout = cy.layout(hasDagre
@@ -50,7 +52,7 @@ function _runPlannerLayoutAndCenter(passLabel) {
 // Brute-force horizontal recentering with detailed logging so we can
 // SEE what Cytoscape thinks the dimensions are. The empty catch
 // blocks in earlier versions silently swallowed the actual problem.
-function _forceCenterHorizontal(cy, tag) {
+export function _forceCenterHorizontal(cy, tag) {
   tag = tag || '[graph]';
   const containerW = cy.width();
   const containerH = cy.height();
@@ -96,15 +98,15 @@ window.addEventListener('resize', () => {
   _resizeRafPending = true;
   requestAnimationFrame(() => {
     _resizeRafPending = false;
-    if (plannerGraph) _resizePlannerCanvas();
+    if (S.plannerGraph) _resizePlannerCanvas();
   });
 });
 // ResizeObserver — catches container size changes from sources other
-// than window resize (CSS transitions, flex reflows, sidebar
+// than window resize (CSS transitions, flex reflows, S.sidebar
 // collapses). Critical for the left-clipping bug: the canvas's
 // post-display:flex final width can land 100+ ms after the initial
 // mount, and Cytoscape latches the transient pre-reflow value.
-function _attachCanvasResizeObserver(containerId, resizeFn) {
+export function _attachCanvasResizeObserver(containerId, resizeFn) {
   if (typeof ResizeObserver === 'undefined') return;
   const el = document.getElementById(containerId);
   if (!el) return;
@@ -131,7 +133,7 @@ function _attachCanvasResizeObserver(containerId, resizeFn) {
 // that flip per-node statuses. CSS handles the visual via
 // `[data-status]` attribute selectors on `.fw-stage-pill`.
 // ============================================================
-function _setPlannerStagePill(status, labelOverride) {
+export function _setPlannerStagePill(status, labelOverride) {
   const pill = document.getElementById('fw-planner-pill');
   const text = document.getElementById('fw-planner-pill-text');
   if (!pill || !text) return;
@@ -150,7 +152,7 @@ function _setPlannerStagePill(status, labelOverride) {
 // the label. Source is the per-node `*_stats` dict in state values
 // (same dicts the cards use for their KPI grids). Returns '' when
 // the node hasn't run yet.
-function _kpiForNode(nodeId, values) {
+export function _kpiForNode(nodeId, values) {
   if (!values) return '';
   const stats = (key) => values[key] || null;
   switch (nodeId) {
@@ -202,32 +204,32 @@ function _kpiForNode(nodeId, values) {
 // Mirror of renderPlannerCards for the Cytoscape canvas. Loops the
 // canonical node order, derives status per node from state field
 // presence (same logic as the cards path), and pushes to
-// plannerGraph.setStatus. No-op when the canvas isn't mounted
+// S.plannerGraph.setStatus. No-op when the canvas isn't mounted
 // (?ui=cards) — keeps the call sites uniform.
-function _renderPlannerGraph(values) {
-  if (!plannerGraph) return;
+export function _renderPlannerGraph(values) {
+  if (!S.plannerGraph) return;
   let doneCount = 0;
   let anyRunning = false;
   let anyFailed = false;
-  for (let i = 0; i < PLANNER_NODE_ORDER.length; i++) {
-    const nodeId = PLANNER_NODE_ORDER[i];
-    const field = PLANNER_SUBSTEP_FIELDS[i];
+  for (let i = 0; i < S.PLANNER_NODE_ORDER.length; i++) {
+    const nodeId = S.PLANNER_NODE_ORDER[i];
+    const field = S.PLANNER_SUBSTEP_FIELDS[i];
     const present = _fieldPresent(values, field);
-    const isImpl = plannerImplemented.has(nodeId);
+    const isImpl = S.plannerImplemented.has(nodeId);
     let status;
     if (present) {
       status = 'done';
       doneCount++;
     } else if (!isImpl) {
       status = 'future';
-    } else if (i === doneCount && plannerThreadId !== null) {
+    } else if (i === doneCount && S.plannerThreadId !== null) {
       status = 'running';
       anyRunning = true;
     } else {
       status = 'pending';
     }
     const kpi = present ? _kpiForNode(nodeId, values) : '';
-    plannerGraph.setStatus(nodeId, status, kpi);
+    S.plannerGraph.setStatus(nodeId, status, kpi);
   }
   // Derive stage pill from aggregate state. Failed has priority,
   // then running, then all-done, else idle. The terminal SSE
@@ -236,14 +238,14 @@ function _renderPlannerGraph(values) {
   // replaces the separate "Step N of 8" label that used to live in
   // the header actions cluster.
   const explicitStatus = (values && values.status) || null;
-  const implCount = PLANNER_NODE_ORDER.filter(n => plannerImplemented.has(n)).length;
+  const implCount = S.PLANNER_NODE_ORDER.filter(n => S.plannerImplemented.has(n)).length;
   const progress = implCount ? doneCount + '/' + implCount : null;
   if (explicitStatus === 'failed') {
     _setPlannerStagePill('failed');
     anyFailed = true;
   } else if (explicitStatus === 'cancelled') {
     _setPlannerStagePill('cancelled');
-  } else if (anyRunning || plannerThreadId !== null) {
+  } else if (anyRunning || S.plannerThreadId !== null) {
     _setPlannerStagePill('working',
       progress ? 'Working · ' + progress : null);
   } else if (
@@ -259,17 +261,17 @@ function _renderPlannerGraph(values) {
 // Build the drawer context object for a planner node from the
 // current checkpoint state. Separate from `open()` so live state
 // refreshes can reuse the same logic via `_refreshOpenPlannerDrawer`.
-function _buildPlannerNodeCtx(nodeId, values) {
-  const idx = PLANNER_NODE_ORDER.indexOf(nodeId);
+export function _buildPlannerNodeCtx(nodeId, values) {
+  const idx = S.PLANNER_NODE_ORDER.indexOf(nodeId);
   if (idx < 0) return null;
-  const label = PLANNER_NODE_LABELS[idx] || nodeId;
-  const thisField = PLANNER_SUBSTEP_FIELDS[idx];
+  const label = S.PLANNER_NODE_LABELS[idx] || nodeId;
+  const thisField = S.PLANNER_SUBSTEP_FIELDS[idx];
   let status = 'pending';
   if (_fieldPresent(values, thisField)) status = 'done';
-  else if (!plannerImplemented.has(nodeId)) status = 'future';
-  else if (plannerThreadId) status = 'running';
+  else if (!S.plannerImplemented.has(nodeId)) status = 'future';
+  else if (S.plannerThreadId) status = 'running';
   // KPI strip for the sticky header — same compact format as the
-  // node-label KPI badge but split into key/value chips.
+  // node-label KPI badge but split into key/value S.chips.
   const kpiText = _kpiForNode(nodeId, values);
   const kpis = {};
   if (kpiText) {
@@ -284,8 +286,8 @@ function _buildPlannerNodeCtx(nodeId, values) {
     ? renderer(values)
     : null;
   // Raw JSON kept as collapsed debug aids (only when present).
-  const inputs = idx > 0 && _fieldPresent(values, PLANNER_SUBSTEP_FIELDS[idx - 1])
-    ? JSON.stringify({ [PLANNER_SUBSTEP_FIELDS[idx - 1]]: values[PLANNER_SUBSTEP_FIELDS[idx - 1]] }, null, 2)
+  const inputs = idx > 0 && _fieldPresent(values, S.PLANNER_SUBSTEP_FIELDS[idx - 1])
+    ? JSON.stringify({ [S.PLANNER_SUBSTEP_FIELDS[idx - 1]]: values[S.PLANNER_SUBSTEP_FIELDS[idx - 1]] }, null, 2)
     : null;
   const outputs = _fieldPresent(values, thisField)
     ? JSON.stringify({ [thisField]: values[thisField] }, null, 2)
@@ -296,21 +298,21 @@ function _buildPlannerNodeCtx(nodeId, values) {
 // Opens the NodeDrawer for a planner node. Fetches fresh state for
 // an accurate initial render; subsequent updates flow in via the
 // SSE handler + _refreshOpenPlannerDrawer.
-async function _openPlannerNodeDrawer(nodeId) {
+export async function _openPlannerNodeDrawer(nodeId) {
   let values = {};
-  // plannerThreadId is set ONLY while a run is in flight — terminal
+  // S.plannerThreadId is set ONLY while a run is in flight — terminal
   // SSE handler nulls it on done/failed/cancelled. For a completed
   // thread we need the localStorage entry (same fallback the page-
   // refresh recovery uses) so the drawer can fetch /state and the
   // renderer can show the rich card body content.
-  let tid = plannerThreadId;
-  if (!tid && activeSlug) {
-    try { tid = localStorage.getItem(_plannerStorageKey(activeSlug)); }
+  let tid = S.plannerThreadId;
+  if (!tid && S.activeSlug) {
+    try { tid = localStorage.getItem(_plannerStorageKey(S.activeSlug)); }
     catch (e) {}
   }
   if (tid) {
     try {
-      const r = await fetch(API + '/planner/debug/graph/' + tid + '/state');
+      const r = await fetch(S.API + '/planner/debug/graph/' + tid + '/state');
       if (r.ok) values = (await r.json()).values || {};
     } catch (e) { /* drawer opens with empty results */ }
   }
@@ -322,7 +324,7 @@ async function _openPlannerNodeDrawer(nodeId) {
 // open drawer's results panel updates as the pipeline progresses
 // (e.g. cluster card's KPI grid materializes the moment `cluster`
 // commits its checkpoint, without the user having to re-click).
-function _refreshOpenPlannerDrawer(values) {
+export function _refreshOpenPlannerDrawer(values) {
   if (NodeDrawer.openStage !== 'planner') return;
   const nodeId = NodeDrawer.openNodeId;
   if (!nodeId) return;
@@ -337,7 +339,7 @@ function _refreshOpenPlannerDrawer(values) {
 // event stream for that node and streams events into a sticky-
 // bottom log with rAF batching + 200-line cap.
 //
-// Public API:
+// Public S.API:
 //   NodeDrawer.open(stage, nodeId, ctx)  // ctx = {label, kpis, status, prompt?, inputs?, outputs?}
 //   NodeDrawer.close()
 //   NodeDrawer.isOpenFor(stage, nodeId)
@@ -618,8 +620,8 @@ const NodeDrawer = (function() {
            get openStage()  { return _openStage; } };
 })();
 
-function _initPlannerCanvas() {
-  if (UI_MODE !== 'graph') {
+export function _initPlannerCanvas() {
+  if (S.UI_MODE !== 'graph') {
     console.log('[plannerGraph] UI_MODE=cards (default) — canvas not mounted');
     return;
   }
@@ -640,16 +642,16 @@ function _initPlannerCanvas() {
   const startedAt = Date.now();
   function tryInit() {
     if (typeof cytoscape !== 'undefined') {
-      const nodes = PLANNER_NODE_ORDER.map((id, i) => ({
+      const nodes = S.PLANNER_NODE_ORDER.map((id, i) => ({
         id,
-        label:  PLANNER_NODE_LABELS[i] || id,
-        status: plannerImplemented.has(id) ? 'pending' : 'future',
+        label:  S.PLANNER_NODE_LABELS[i] || id,
+        status: S.plannerImplemented.has(id) ? 'pending' : 'future',
       }));
       const edges = [];
-      for (let i = 0; i < PLANNER_NODE_ORDER.length - 1; i++) {
+      for (let i = 0; i < S.PLANNER_NODE_ORDER.length - 1; i++) {
         edges.push({
-          source: PLANNER_NODE_ORDER[i],
-          target: PLANNER_NODE_ORDER[i + 1],
+          source: S.PLANNER_NODE_ORDER[i],
+          target: S.PLANNER_NODE_ORDER[i + 1],
         });
       }
       const w = canvasEl.offsetWidth;
@@ -661,10 +663,10 @@ function _initPlannerCanvas() {
             '_resizePlannerCanvas runs after panel becomes active)'
           : ''),
       );
-      plannerGraph = StageGraph.create(canvasEl, {
+      S.setPlannerGraph(StageGraph.create(canvasEl, {
         nodes, edges,
         onNodeClick: (nodeId) => _openPlannerNodeDrawer(nodeId),
-      });
+      }));
       console.log(
         `[plannerGraph] Cytoscape initialized with ${nodes.length} ` +
         `nodes, ${edges.length} edges`,
@@ -674,7 +676,7 @@ function _initPlannerCanvas() {
       // showStep(3) below — Cytoscape inits inside a display:none
       // ancestor with 0x0 bounds, and without resize() it stays
       // invisible even after the panel becomes active.
-      if (plannerGraph) _resizePlannerCanvas();
+      if (S.plannerGraph) _resizePlannerCanvas();
       _attachCanvasResizeObserver('fw-planner-canvas', _resizePlannerCanvas);
       return;
     }
@@ -704,49 +706,49 @@ function _initPlannerCanvas() {
 // Utility
 // ============================================================
 
-function refreshPlannerStartState() {
+export function refreshPlannerStartState() {
   // Three states for the Start/Cancel button:
   //  - idle, ready    → "Start Planner" enabled
   //  - idle, blocked  → "Start Planner" disabled (no slug or ingest active)
   //  - running        → button becomes "Cancel Planner" (always enabled
   //                     during a run; same behavior pattern as Step 2's
   //                     ingestion cancel)
-  const running = plannerThreadId !== null;
+  const running = S.plannerThreadId !== null;
   if (running) {
-    plannerStartBtn.removeAttribute('disabled');
-    plannerStartBtn.classList.add('btn-outline');
-    plannerStartBtn.classList.remove('btn-primary');
-    plannerStartBtn.innerHTML = 'Cancel Planner';
+    S.plannerStartBtn.removeAttribute('disabled');
+    S.plannerStartBtn.classList.add('btn-outline');
+    S.plannerStartBtn.classList.remove('btn-primary');
+    S.plannerStartBtn.innerHTML = 'Cancel Planner';
   } else {
-    const ready = activeSlug && activeRunId === null;
-    if (ready) plannerStartBtn.removeAttribute('disabled');
-    else plannerStartBtn.setAttribute('disabled', 'disabled');
-    plannerStartBtn.classList.add('btn-primary');
-    plannerStartBtn.classList.remove('btn-outline');
-    plannerStartBtn.innerHTML = 'Start Planner';
+    const ready = S.activeSlug && S.activeRunId == null;
+    if (ready) S.plannerStartBtn.removeAttribute('disabled');
+    else S.plannerStartBtn.setAttribute('disabled', 'disabled');
+    S.plannerStartBtn.classList.add('btn-primary');
+    S.plannerStartBtn.classList.remove('btn-outline');
+    S.plannerStartBtn.innerHTML = 'Start Planner';
   }
   // Wipe button — enabled whenever a slug is active and no run is
   // currently in flight (wiping mid-run would corrupt LangGraph state).
-  if (plannerWipeBtn) {
-    if (activeSlug && !running) {
-      plannerWipeBtn.removeAttribute('disabled');
-      plannerWipeBtn.setAttribute('title',
+  if (S.plannerWipeBtn) {
+    if (S.activeSlug && !running) {
+      S.plannerWipeBtn.removeAttribute('disabled');
+      S.plannerWipeBtn.setAttribute('title',
         "Delete this framework's planner cache " +
         '(MinIO embeddings + Postgres checkpoints + browser state)');
     } else {
-      plannerWipeBtn.setAttribute('disabled', 'disabled');
-      plannerWipeBtn.setAttribute('title', running
+      S.plannerWipeBtn.setAttribute('disabled', 'disabled');
+      S.plannerWipeBtn.setAttribute('title', running
         ? 'Cannot wipe while a planner run is in flight.'
         : 'Pick a framework first.');
     }
   }
   // Framework chip — logo(s) + catalog name. Mirrors the Step 2
   // progress framework strip; same `frameworkInfo` source.
-  setPlannerFramework(activeSlug);
+  setPlannerFramework(S.activeSlug);
   // Empty-state placeholder — show "pick a framework" when no slug
   // is active, hide the cards/canvas in that case so the user isn't
   // confused by an inert pipeline UI dangling from prior context.
-  _toggleStageEmpty('planner', !activeSlug);
+  _toggleStageEmpty('planner', !S.activeSlug);
 }
 
 // Toggles the "Pick a framework from the library to view the
@@ -755,7 +757,7 @@ function refreshPlannerStartState() {
 // it directly or it races this toggle. On reveal, kicks a Cytoscape
 // resize so the canvas picks up freshly-visible container dimensions
 // (otherwise the graph latches 0×0 from when it was hidden).
-function _toggleStageEmpty(stage, showEmpty) {
+export function _toggleStageEmpty(stage, showEmpty) {
   const emptyEl  = document.getElementById('fw-' + stage + '-empty');
   const graphEl  = document.getElementById('fw-' + stage + '-graph');
   if (!emptyEl) return;
@@ -766,46 +768,46 @@ function _toggleStageEmpty(stage, showEmpty) {
     emptyEl.style.display = 'none';
     if (graphEl) graphEl.style.display = 'flex';
     // Re-fit Cytoscape now that the wrapper has real dimensions.
-    if (stage === 'planner' && plannerGraph) _resizePlannerCanvas();
-    if (stage === 'synth'   && synthGraph)   _resizeSynthCanvas();
+    if (stage === 'planner' && S.plannerGraph) _resizePlannerCanvas();
+    if (stage === 'synth'   && S.synthGraph)   _resizeSynthCanvas();
   }
 }
 
-function setPlannerFramework(slug) {
-  if (!plannerFwNameEl || !plannerFwLogosEl) return;
+export function setPlannerFramework(slug) {
+  if (!S.plannerFwNameEl || !S.plannerFwLogosEl) return;
   if (!slug) {
-    plannerFwNameEl.textContent = 'Pick a framework to start.';
-    plannerFwNameEl.classList.add('fw-planner-fw-name-empty');
-    plannerFwLogosEl.innerHTML = '';
-    plannerFwLogosEl.style.display = 'none';
+    S.plannerFwNameEl.textContent = 'Pick a framework to start.';
+    S.plannerFwNameEl.classList.add('fw-planner-fw-name-empty');
+    S.plannerFwLogosEl.innerHTML = '';
+    S.plannerFwLogosEl.style.display = 'none';
     return;
   }
-  const info = frameworkInfo[slug] || {name: slug, logos: []};
-  plannerFwNameEl.textContent = info.name || slug;
-  plannerFwNameEl.classList.remove('fw-planner-fw-name-empty');
+  const info = S.frameworkInfo[slug] || {name: slug, logos: []};
+  S.plannerFwNameEl.textContent = info.name || slug;
+  S.plannerFwNameEl.classList.remove('fw-planner-fw-name-empty');
   if (info.logos && info.logos.length) {
-    plannerFwLogosEl.innerHTML = info.logos.map(u =>
+    S.plannerFwLogosEl.innerHTML = info.logos.map(u =>
       '<img class="fw-planner-fw-logo" src="' + u + '" alt="">'
     ).join('');
-    plannerFwLogosEl.style.display = '';
+    S.plannerFwLogosEl.style.display = '';
   } else {
-    plannerFwLogosEl.innerHTML = '';
-    plannerFwLogosEl.style.display = 'none';
+    S.plannerFwLogosEl.innerHTML = '';
+    S.plannerFwLogosEl.style.display = 'none';
   }
 }
 
-function cardEl(idx) {
+export function cardEl(idx) {
   // Cards DOM removed 2026-05-19. Always null in the new graph-only
   // UI; the cards-rendering loops short-circuit cleanly via
   // `if (!c) continue;` while still calling `_renderPlannerGraph`
   // + `_refreshOpenPlannerDrawer` at the tail.
-  if (!plannerCardsEl) return null;
-  return plannerCardsEl.querySelector(
+  if (!S.plannerCardsEl) return null;
+  return S.plannerCardsEl.querySelector(
     '.fw-planner-card[data-idx="' + idx + '"]');
 }
 
-function resetPlannerCards() {
-  PLANNER_SUBSTEP_FIELDS.forEach((_, i) => {
+export function resetPlannerCards() {
+  S.PLANNER_SUBSTEP_FIELDS.forEach((_, i) => {
     const c = cardEl(i);
     if (!c) return;
     c.classList.remove('running', 'done', 'failed', 'expanded');
@@ -818,21 +820,21 @@ function resetPlannerCards() {
   });
   // Day 2: also reset the Cytoscape canvas + stage pill so a fresh
   // Start Planner click presents a clean visual baseline.
-  if (plannerGraph) plannerGraph.reset();
+  if (S.plannerGraph) S.plannerGraph.reset();
   _setPlannerStagePill('idle');
 }
 
-function _fieldPresent(values, field) {
+export function _fieldPresent(values, field) {
   // `field in values` (even when value is null) counts as "this node
   // ran" — some nodes may legitimately write null as their output.
   return values && Object.prototype.hasOwnProperty.call(values, field);
 }
 
 // Per-substep custom body renderers. Each returns an HTML string for
-// the card body. Keyed by substep idx (matches PLANNER_SUBSTEP_FIELDS).
+// the card body. Keyed by substep idx (matches S.PLANNER_SUBSTEP_FIELDS).
 // Substeps without an entry here fall back to formatFieldValue/JSON.
 const SUBSTEP_RENDERERS = {
-  // corpus_load — KPI-card grid + percentile distribution + meta footer.
+  // corpus_load — KPI-card S.grid + percentile distribution + meta footer.
   // Design follows 2026 dashboard best practices: 4 headline KPI cards
   // (one visual element max per card), then a compact percentile row,
   // then a metadata footer line. Avoids the "Christmas Tree" effect.
@@ -984,11 +986,11 @@ const SUBSTEP_RENDERERS = {
     // inspect every per-page verdict without clicking through pages.
     // Sortable columns: click any header to sort asc; click again to
     // toggle desc. Sort state survives re-renders via module scope.
-    _lastOffTopicValues = values;
+    S.set_lastOffTopicValues(values);
     const decisions = (s.judge_decisions || []).slice();
     // Apply current sort state.
-    const sortCol = _offTopicSort.col;
-    const sortDir = _offTopicSort.dir === 'desc' ? -1 : 1;
+    const sortCol = S._offTopicSort.col;
+    const sortDir = S._offTopicSort.dir === 'desc' ? -1 : 1;
     const _key = d => {
       if (sortCol === 'verdict')    return (d.verdict || '');
       if (sortCol === 'deployment') return ((d.deployment || '').split('/').pop() || '');
@@ -1037,8 +1039,8 @@ const SUBSTEP_RENDERERS = {
         'border-bottom:1px solid var(--border);z-index:2;cursor:pointer;' +
         'user-select:none';
       const _arrow = (col) => {
-        if (_offTopicSort.col !== col) return ' <span style="opacity:0.3">↕</span>';
-        return _offTopicSort.dir === 'desc'
+        if (S._offTopicSort.col !== col) return ' <span style="opacity:0.3">↕</span>';
+        return S._offTopicSort.dir === 'desc'
           ? ' <span style="color:var(--text)">↓</span>'
           : ' <span style="color:var(--text)">↑</span>';
       };
@@ -1553,11 +1555,11 @@ const SUBSTEP_RENDERERS = {
   },
 };
 
-function renderPlannerCards(values) {
+export function renderPlannerCards(values) {
   // values = the latest checkpoint's accumulated state
   let doneCount = 0;
-  for (let i = 0; i < PLANNER_SUBSTEP_FIELDS.length; i++) {
-    const field = PLANNER_SUBSTEP_FIELDS[i];
+  for (let i = 0; i < S.PLANNER_SUBSTEP_FIELDS.length; i++) {
+    const field = S.PLANNER_SUBSTEP_FIELDS[i];
     const c = cardEl(i);
     const present = _fieldPresent(values, field);
     if (!c) {
@@ -1571,7 +1573,7 @@ function renderPlannerCards(values) {
     // Substep name = the PLANNER_SUBSTEPS index → graph node name.
     // Lookup the implementation flag for visual treatment.
     const cardData = c.dataset.substep || '';
-    const isImplemented = plannerImplemented.has(cardData);
+    const isImplemented = S.plannerImplemented.has(cardData);
     if (present) {
       c.classList.add('done');
       c.classList.remove('running', 'failed', 'future');
@@ -1593,7 +1595,7 @@ function renderPlannerCards(values) {
       body.innerHTML =
         '<div class="fw-empty">Substep not yet implemented — will be ' +
         'wired into the graph as its real logic lands.</div>';
-    } else if (i === doneCount && plannerThreadId !== null) {
+    } else if (i === doneCount && S.plannerThreadId !== null) {
       // First not-done IMPLEMENTED card while polling = currently running
       c.classList.add('running');
       c.classList.remove('done', 'failed', 'future');
@@ -1604,7 +1606,7 @@ function renderPlannerCards(values) {
     }
   }
   // Day 2: mirror the same state into the Cytoscape canvas. No-op
-  // when ?ui=cards (plannerGraph is null). Drives node colors,
+  // when ?ui=cards (S.plannerGraph is null). Drives node colors,
   // KPI badges, and the top-of-stage status pill (which now also
   // carries the N/8 progress count while working).
   _renderPlannerGraph(values);
@@ -1615,10 +1617,10 @@ function renderPlannerCards(values) {
   _refreshOpenPlannerDrawer(values);
 }
 
-function markPlannerFailed(message) {
+export function markPlannerFailed(message) {
   // Find the first card still running (or first pending) and flag it.
   let failedNodeId = null;
-  for (let i = 0; i < PLANNER_SUBSTEP_FIELDS.length; i++) {
+  for (let i = 0; i < S.PLANNER_SUBSTEP_FIELDS.length; i++) {
     const c = cardEl(i);
     if (!c) continue;
     if (c.classList.contains('running') ||
@@ -1630,57 +1632,41 @@ function markPlannerFailed(message) {
       icon.dataset.status = 'failed';
       c.querySelector('.fw-planner-card-body').innerHTML =
         '<div class="fw-planner-error">' + escapeHtml(message) + '</div>';
-      failedNodeId = PLANNER_NODE_ORDER[i];
+      failedNodeId = S.PLANNER_NODE_ORDER[i];
       break;
     }
   }
   // Day 2: mirror to canvas + flip stage pill to failed.
-  if (plannerGraph && failedNodeId) {
-    plannerGraph.setStatus(failedNodeId, 'failed');
+  if (S.plannerGraph && failedNodeId) {
+    S.plannerGraph.setStatus(failedNodeId, 'failed');
   }
   _setPlannerStagePill('failed');
 }
 
-function formatFieldValue(v) {
-  if (v === null || v === undefined) return String(v);
-  if (Array.isArray(v)) {
-    if (v.length === 0) return '[]';
-    const head = v.slice(0, 20).map(x => '  ' + JSON.stringify(x)).join(',\n');
-    const tail = v.length > 20 ? '\n  … (' + (v.length - 20) + ' more)' : '';
-    return '[\n' + head + tail + '\n] (' + v.length + ' items)';
-  }
-  return JSON.stringify(v, null, 2);
-}
+// formatFieldValue + escapeHtml are imported from utils.js (shared).
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;',
-    '"': '&quot;', "'": '&#39;',
-  }[c]));
-}
-
-async function pollPlanner(threadId) {
-  plannerPollAbort = false;
-  while (!plannerPollAbort && plannerThreadId === threadId) {
+export async function pollPlanner(threadId) {
+  S.setPlannerPollAbort(false);
+  while (!S.plannerPollAbort && S.plannerThreadId === threadId) {
     try {
       // thread_id has slashes (docs-distiller/{slug}/{uuid}). Don't
       // encode — the FastAPI `:path` converter accepts slashes; the
       // smoke test in /history confirmed unencoded paths round-trip.
       const r = await fetch(
-        API + '/planner/debug/graph/' + threadId + '/state');
+        S.API + '/planner/debug/graph/' + threadId + '/state');
       if (r.status === 404) { await sleep(700); continue; }
       if (!r.ok) { await sleep(1500); continue; }
       const data = await r.json();
       const values = data.values || {};
       renderPlannerCards(values);
       if (values.status === 'done') {
-        plannerThreadId = null;
+        S.setPlannerThreadId(null);
         refreshPlannerStartState();
         return;
       }
       if (values.status === 'failed') {
         markPlannerFailed(values.error || 'Planner failed.');
-        plannerThreadId = null;
+        S.setPlannerThreadId(null);
         refreshPlannerStartState();
         return;
       }
@@ -1689,7 +1675,7 @@ async function pollPlanner(threadId) {
   }
 }
 
-function _genPlannerThreadId(slug) {
+export function _genPlannerThreadId(slug) {
   // Client-side UUID v4 — uses crypto.randomUUID where available,
   // falls back to a sufficient-quality polyfill for older browsers.
   const uuid = (typeof crypto !== 'undefined' && crypto.randomUUID)
@@ -1703,7 +1689,7 @@ function _genPlannerThreadId(slug) {
 
 // Live progress text per substep card (populated by SSE events).
 // Keyed by step name (matches the node names emitted server-side).
-function _liveProgressEl(stepName, idx) {
+export function _liveProgressEl(stepName, idx) {
   const c = cardEl(idx);
   if (!c) return null;
   const body = c.querySelector('.fw-planner-card-body');
@@ -1721,14 +1707,43 @@ function _liveProgressEl(stepName, idx) {
   return el;
 }
 
-function _stepIdx(stepName) {
-  return PLANNER_SUBSTEP_FIELDS.findIndex((_, i) =>
+export function _stepIdx(stepName) {
+  return S.PLANNER_SUBSTEP_FIELDS.findIndex((_, i) =>
     cardEl(i)?.dataset.substep === stepName);
 }
 
-function _markCardRunning(stepName) {
+export function _markCardRunning(stepName) {
   const idx = _stepIdx(stepName);
   if (idx < 0) return;
+  // Graph-only UI (cards DOM removed 2026-05-19): flip the Cytoscape
+  // node to 'running' FIRST, unconditionally. This is the sole live
+  // "Working" indicator now — the burgundy border + active-edge
+  // animation kick in immediately on the SSE `start` event (without
+  // waiting for the next /state refresh). Must run BEFORE the legacy
+  // card guard below, which early-returns when no card element exists
+  // (always, post-2026-05-19) and previously suppressed this update.
+  if (S.plannerGraph) {
+    // Don't downgrade an already-finished node. SSE snapshot replay on
+    // page refresh re-delivers old `start` events for done steps; without
+    // this guard they'd flip a completed node back to 'running' (the
+    // graph-only equivalent of the old card `.done` guard).
+    let cur = null;
+    try { cur = S.plannerGraph.cy.getElementById(stepName).data('status'); }
+    catch (_) {}
+    if (cur !== 'done' && cur !== 'failed') {
+      S.plannerGraph.setStatus(stepName, 'running');
+      // Pill carries the in-flight step's ordinal so the user sees a
+      // crisp "Working · 3/8" without waiting for the next state poll.
+      const stepIdx = S.PLANNER_NODE_ORDER.indexOf(stepName);
+      const implCount = S.PLANNER_NODE_ORDER.filter(n => S.plannerImplemented.has(n)).length;
+      const progress = (stepIdx >= 0 && implCount)
+        ? (stepIdx + '/' + implCount) : null;
+      _setPlannerStagePill('working',
+        progress ? 'Working · ' + progress : null);
+    }
+  }
+  // Legacy card path — no-op in the graph-only UI (cardEl is null), but
+  // kept so a future cards-mode reintroduction still works.
   const c = cardEl(idx);
   if (!c) return;
   // Don't downgrade an already-completed card. Without this guard, SSE
@@ -1741,31 +1756,13 @@ function _markCardRunning(stepName) {
   c.classList.remove('failed', 'future');
   const icon = c.querySelector('.fw-planner-card-icon');
   if (icon) { icon.textContent = '◐'; icon.dataset.status = 'running'; }
-  // Clear the "Output will appear here..." placeholder so the live
-  // progress sub-element has room.
   const body = c.querySelector('.fw-planner-card-body');
   if (body && body.querySelector('.fw-empty')) {
     body.innerHTML = '';
   }
-  // Day 2: mirror to the Cytoscape canvas — flip the corresponding
-  // graph node to 'running' so the burgundy border + active-edge
-  // animation kick in immediately on the SSE `start` event (without
-  // waiting for the next /state refresh). Also flip the top-of-stage
-  // pill to 'working' on the very first per-step start of a run.
-  if (plannerGraph) {
-    plannerGraph.setStatus(stepName, 'running');
-    // Pill carries the in-flight step's ordinal so the user sees a
-    // crisp "Working · 3/8" without waiting for the next state poll.
-    const stepIdx = PLANNER_NODE_ORDER.indexOf(stepName);
-    const implCount = PLANNER_NODE_ORDER.filter(n => plannerImplemented.has(n)).length;
-    const progress = (stepIdx >= 0 && implCount)
-      ? (stepIdx + '/' + implCount) : null;
-    _setPlannerStagePill('working',
-      progress ? 'Working · ' + progress : null);
-  }
 }
 
-function _renderLiveProgress(stepName, ev) {
+export function _renderLiveProgress(stepName, ev) {
   const idx = _stepIdx(stepName);
   if (idx < 0) return;
   const c = cardEl(idx);
@@ -1826,11 +1823,11 @@ function _renderLiveProgress(stepName, ev) {
 // naive fetch right after `done` may see stale state. When the caller
 // knows which field is expected to have just appeared, we retry with
 // backoff until it's present (or we exhaust attempts).
-async function _refreshCardsFromState(threadId, expectedField) {
+export async function _refreshCardsFromState(threadId, expectedField) {
   const maxAttempts = expectedField ? 6 : 1;
   for (let i = 0; i < maxAttempts; i++) {
     try {
-      const r = await fetch(API + '/planner/debug/graph/' + threadId + '/state');
+      const r = await fetch(S.API + '/planner/debug/graph/' + threadId + '/state');
       if (r.ok) {
         const data = await r.json();
         const values = data.values || {};
@@ -1847,18 +1844,8 @@ async function _refreshCardsFromState(threadId, expectedField) {
 // Mapping: SSE step name → the state field that becomes present once
 // that node's checkpoint is committed. Used by the retry-fetch above
 // so we wait for the previous node's commit before re-rendering.
-const STEP_TO_FIELD = {
-  corpus_load:  'raw_files',
-  embed_corpus: 'embeddings_ref',
-  off_topic:    'relevant_files',
-  cluster:      'cluster_assignments_ref',
-  refine:       'refine_assignments_ref',
-  label:        'cluster_labels_ref',
-  reduce:       'chapter_plan_ref',
-  plan_write:   'plan_path',
-};
 
-async function pollPlannerState(threadId) {
+export async function pollPlannerState(threadId) {
   // 2026-canonical pattern: Server-Sent Events instead of HTTP polling.
   // Backend pub/sub channel (Redis) is bridged by the FastAPI
   // /planner/{thread_id}/events endpoint which streams text/event-stream.
@@ -1868,18 +1855,18 @@ async function pollPlannerState(threadId) {
   // redraw the card with KPI grids.
   //
   // Name kept for back-compat with existing callers (startPlanner).
-  const url = API + '/planner/' + threadId + '/events';
+  const url = S.API + '/planner/' + threadId + '/events';
   let es;
   try {
     es = new EventSource(url);
   } catch (e) {
     markPlannerFailed('EventSource open failed: ' + String(e));
-    plannerThreadId = null;
+    S.setPlannerThreadId(null);
     refreshPlannerStartState();
     return;
   }
   es.onmessage = async (msg) => {
-    if (plannerThreadId !== threadId) {
+    if (S.plannerThreadId !== threadId) {
       try { es.close(); } catch (_) {}
       return;
     }
@@ -1891,7 +1878,7 @@ async function pollPlannerState(threadId) {
     // would suppress the auto-/resume needed to actually run the
     // step now.
     if (ev.ts && (Date.now() / 1000 - ev.ts) < 20) {
-      _liveEventReceived = true;
+      S.set_liveEventReceived(true);
     }
 
     // Planner-level terminal event: end the stream + reset UI.
@@ -1916,7 +1903,7 @@ async function pollPlannerState(threadId) {
         _setPlannerStagePill('done');
       }
       try { es.close(); } catch (_) {}
-      plannerThreadId = null;
+      S.setPlannerThreadId(null);
       // Intentionally NOT calling _forgetActivePlanner here — the
       // localStorage entry stays so a page refresh can still recover
       // the completed cards via the same thread_id. The entry only
@@ -1934,10 +1921,10 @@ async function pollPlannerState(threadId) {
         // time the NEXT step starts (graph is sequential), so refresh
         // state to paint the previous card's full KPI grid. Skip for
         // the first step (no previous).
-        const stepIdx = PLANNER_NODE_ORDER.indexOf(ev.step);
+        const stepIdx = S.PLANNER_NODE_ORDER.indexOf(ev.step);
         if (stepIdx > 0) {
-          const prevStep = PLANNER_NODE_ORDER[stepIdx - 1];
-          const prevField = STEP_TO_FIELD[prevStep];
+          const prevStep = S.PLANNER_NODE_ORDER[stepIdx - 1];
+          const prevField = S.STEP_TO_FIELD[prevStep];
           await _refreshCardsFromState(threadId, prevField);
           // _markCardRunning was called BEFORE the state refresh; if
           // renderPlannerCards happens to have flipped this card back
@@ -1958,13 +1945,13 @@ async function pollPlannerState(threadId) {
   es.onerror = (_e) => {
     // Browser auto-reconnects EventSource on transient errors; we
     // only intervene if the run was already torn down server-side.
-    if (plannerThreadId !== threadId) {
+    if (S.plannerThreadId !== threadId) {
       try { es.close(); } catch (_) {}
     }
   };
 }
 
-function _plannerStorageKey(slug) {
+export function _plannerStorageKey(slug) {
   return 'dd:planner:active:' + slug;
 }
 
@@ -1973,19 +1960,19 @@ function _plannerStorageKey(slug) {
 // if currently viewing that slug. Exposed on `window.ddWipePlanner`
 // so an operator can run `ddWipePlanner('pydantic')` from the
 // browser console without leaving the page.
-async function wipePlanner(slug) {
+export async function wipePlanner(slug) {
   if (!slug) return {error: 'no slug'};
   let result = {};
   try {
-    const r = await fetch(API + '/planner/' + slug + '/wipe',
+    const r = await fetch(S.API + '/planner/' + slug + '/wipe',
       {method: 'DELETE'});
     result = r.ok ? (await r.json()) : {http_status: r.status};
   } catch (e) {
     result = {error: String(e)};
   }
   _forgetActivePlanner(slug);
-  if (activeSlug === slug) {
-    plannerThreadId = null;
+  if (S.activeSlug === slug) {
+    S.setPlannerThreadId(null);
     resetPlannerCards();
     refreshPlannerStartState();
   }
@@ -1998,16 +1985,15 @@ window.ddWipePlanner = wipePlanner;
 // run for. recoverActivePlanner uses this to disambiguate when multiple
 // slugs have localStorage entries — without it, the JS scan order is
 // undefined and we might auto-activate the wrong framework on reload.
-const _LAST_PLANNER_SLUG_KEY = 'dd:planner:last_slug';
 
-function _rememberActivePlanner(slug, tid) {
+export function _rememberActivePlanner(slug, tid) {
   try {
     localStorage.setItem(_plannerStorageKey(slug), tid);
-    localStorage.setItem(_LAST_PLANNER_SLUG_KEY, slug);
+    localStorage.setItem(S._LAST_PLANNER_SLUG_KEY, slug);
   } catch (e) { /* private mode etc — silently ignore */ }
 }
 
-function _forgetActivePlanner(slug) {
+export function _forgetActivePlanner(slug) {
   try { localStorage.removeItem(_plannerStorageKey(slug)); }
   catch (e) { /* ignore */ }
 }
@@ -2017,10 +2003,9 @@ function _forgetActivePlanner(slug) {
 // UI catches up to the live state, mirroring the loading-box recovery
 // on the Ingestion step. After a pod restart the in-flight bg task is
 // dead but the LangGraph checkpoints persist — if no SSE events arrive
-// within _ORPHAN_DETECT_MS, we POST /resume which makes LangGraph
+// within S._ORPHAN_DETECT_MS, we POST /resume which makes LangGraph
 // continue from the last committed checkpoint (completed nodes skipped).
 // Returns true if a run was resumed.
-const _ORPHAN_DETECT_MS = 6000;
 
 // Returns true if every CURRENTLY-IMPLEMENTED planner node has its
 // output field present in `values`. Lets us treat a stuck `status:
@@ -2028,27 +2013,27 @@ const _ORPHAN_DETECT_MS = 6000;
 // aupdate_state(status='done') ran) as effectively-terminal so we
 // don't burn orphan-detect timers + /resume calls on a run that
 // actually finished.
-function _allImplementedComplete(values) {
+export function _allImplementedComplete(values) {
   if (!values) return false;
-  if (!plannerImplemented || !plannerImplemented.size) return false;
-  for (let i = 0; i < PLANNER_NODE_ORDER.length; i++) {
-    const step = PLANNER_NODE_ORDER[i];
-    if (!plannerImplemented.has(step)) continue;
-    const field = PLANNER_SUBSTEP_FIELDS[i];
+  if (!S.plannerImplemented || !S.plannerImplemented.size) return false;
+  for (let i = 0; i < S.PLANNER_NODE_ORDER.length; i++) {
+    const step = S.PLANNER_NODE_ORDER[i];
+    if (!S.plannerImplemented.has(step)) continue;
+    const field = S.PLANNER_SUBSTEP_FIELDS[i];
     if (!_fieldPresent(values, field)) return false;
   }
   return true;
 }
 
-async function _tryResumeActivePlanner(slug) {
+export async function _tryResumeActivePlanner(slug) {
   // Tear down any prior session FIRST so a switch from framework A
   // (which had cached planner state) to framework B doesn't leave
-  // A's KPI grids on B's cards. plannerThreadId !== new tid implies
+  // A's KPI grids on B's cards. S.plannerThreadId !== new tid implies
   // the previous SSE loop should self-exit on its next message
   // (see the guard inside pollPlannerState). We also reset the
   // visual state so a slug with no localStorage entry shows pending
   // cards instead of inheriting the previous slug's render.
-  plannerThreadId = null;
+  S.setPlannerThreadId(null);
   resetPlannerCards();
   refreshPlannerStartState();
 
@@ -2057,7 +2042,7 @@ async function _tryResumeActivePlanner(slug) {
   catch (e) { return false; }
   if (!tid) return false;
   try {
-    const r = await fetch(API + '/planner/debug/graph/' + tid + '/state');
+    const r = await fetch(S.API + '/planner/debug/graph/' + tid + '/state');
     if (!r.ok) {
       _forgetActivePlanner(slug);
       return false;
@@ -2092,7 +2077,7 @@ async function _tryResumeActivePlanner(slug) {
     // Still "running" — paint what we have so far + reconnect to SSE.
     // Resume policy: ONLY auto-/resume for an orphaned in-flight task
     // (status === 'running' with no live events arriving within
-    // _ORPHAN_DETECT_MS — pod restart killed the bg task). DO NOT
+    // S._ORPHAN_DETECT_MS — pod restart killed the bg task). DO NOT
     // auto-/resume on the "status=done but new nodes pending" case
     // here; that would trigger compute every time the user clicks
     // a framework tile, cascading into parallel runs across slugs.
@@ -2101,20 +2086,20 @@ async function _tryResumeActivePlanner(slug) {
     // smart Start Planner (POST /resume if thread exists). Or
     // page-load recoverActivePlanner does it for the single restored
     // slug. Navigation between slugs is view-only.
-    plannerThreadId = tid;
+    S.setPlannerThreadId(tid);
     refreshPlannerStartState();
     renderPlannerCards(values);
-    _liveEventReceived = false;
+    S.set_liveEventReceived(false);
     pollPlannerState(tid);
     if (status === 'running') {
       setTimeout(async () => {
-        if (plannerThreadId === tid && !_liveEventReceived) {
+        if (S.plannerThreadId === tid && !S._liveEventReceived) {
           try {
-            await fetch(API + '/planner/' + tid + '/resume',
+            await fetch(S.API + '/planner/' + tid + '/resume',
               {method: 'POST'});
           } catch (e) {}
         }
-      }, _ORPHAN_DETECT_MS);
+      }, S._ORPHAN_DETECT_MS);
     }
     return true;
   } catch (e) {
@@ -2123,8 +2108,8 @@ async function _tryResumeActivePlanner(slug) {
   }
 }
 
-async function startPlanner() {
-  if (!activeSlug || plannerThreadId) return;
+export async function startPlanner() {
+  if (!S.activeSlug || S.plannerThreadId) return;
   resetPlannerCards();
 
   // Smart resume: if a thread already exists for this slug, reuse its
@@ -2132,15 +2117,15 @@ async function startPlanner() {
   // ainvoke(None, config) on the expanded graph automatically skips
   // already-checkpointed nodes and runs only the new downstream ones.
   // Net: adding a 4th planner node + clicking Start Planner on a slug
-  // that has steps 1-3 cached → only step 4 actually executes.
+  // that has S.steps 1-3 cached → only step 4 actually executes.
   let tid = null;
   let isResume = false;
   try {
-    const r = await fetch(API + '/planner/recent');
+    const r = await fetch(S.API + '/planner/recent');
     if (r.ok) {
       const data = await r.json();
       const found = ((data && data.recent) || [])
-        .find(item => item.slug === activeSlug);
+        .find(item => item.slug === S.activeSlug);
       if (found && found.thread_id) {
         tid = found.thread_id;
         isResume = true;
@@ -2148,9 +2133,9 @@ async function startPlanner() {
     }
   } catch (e) { /* fall through to fresh thread */ }
 
-  if (!tid) tid = _genPlannerThreadId(activeSlug);
-  plannerThreadId = tid;
-  _rememberActivePlanner(activeSlug, tid);   // page-refresh recovery
+  if (!tid) tid = _genPlannerThreadId(S.activeSlug);
+  S.setPlannerThreadId(tid);
+  _rememberActivePlanner(S.activeSlug, tid);   // page-refresh recovery
   refreshPlannerStartState();   // button flips to "Cancel Planner"
   // Kick off polling in parallel with the main POST so the user sees
   // cards advance progressively.
@@ -2160,35 +2145,35 @@ async function startPlanner() {
     // the dropdown was removed; the server still defaults `mode=llm`
     // if omitted, so we don't even need to pass it.
     const url = isResume
-      ? API + '/planner/' + tid + '/resume'
-      : API + '/planner/' + activeSlug +
+      ? S.API + '/planner/' + tid + '/resume'
+      : S.API + '/planner/' + S.activeSlug +
         '?mode=llm&thread_id=' + encodeURIComponent(tid);
     const r = await fetch(url, {method: 'POST'});
     if (!r.ok) {
       const txt = await r.text();
       markPlannerFailed('HTTP ' + r.status + ': ' + txt.slice(0, 400));
-      plannerThreadId = null;
+      S.setPlannerThreadId(null);
       refreshPlannerStartState();
       return;
     }
     // POST now returns immediately with status="running" — the
     // background graph task runs server-side and the polling loop
     // (pollPlannerState above) owns terminal-state detection +
-    // resetting plannerThreadId / the button. Nothing to do here.
+    // resetting S.plannerThreadId / the button. Nothing to do here.
     await r.json();   // drain the body
   } catch (e) {
     markPlannerFailed('Request failed: ' + String(e));
-    plannerThreadId = null;
+    S.setPlannerThreadId(null);
     refreshPlannerStartState();
   }
 }
 
-async function cancelPlanner() {
-  if (!plannerThreadId) return;
-  const tid = plannerThreadId;
+export async function cancelPlanner() {
+  if (!S.plannerThreadId) return;
+  const tid = S.plannerThreadId;
   // Spinner + "Cancelling…" — mirrors the Step 2 ingestion cancel UX.
-  plannerStartBtn.setAttribute('disabled', 'disabled');
-  plannerStartBtn.innerHTML =
+  S.plannerStartBtn.setAttribute('disabled', 'disabled');
+  S.plannerStartBtn.innerHTML =
     '<div class="fw-spinner" style="display:inline-block;' +
     'vertical-align:middle;margin-right:8px"></div>Cancelling…';
   try {
@@ -2197,19 +2182,19 @@ async function cancelPlanner() {
     // and the in-flight POST /planner/{slug} returns with
     // status='cancelled'. THAT response triggers the UI cleanup
     // (refreshPlannerStartState in startPlanner's finally).
-    await fetch(API + '/planner/' + tid + '/cancel', {method: 'POST'});
+    await fetch(S.API + '/planner/' + tid + '/cancel', {method: 'POST'});
   } catch (e) {
     // If the cancel POST itself fails, restore the button so the user
     // can retry. The startPlanner POST is still in flight either way.
-    plannerStartBtn.removeAttribute('disabled');
-    plannerStartBtn.innerHTML = 'Cancel Planner';
+    S.plannerStartBtn.removeAttribute('disabled');
+    S.plannerStartBtn.innerHTML = 'Cancel Planner';
     showToast('Cancel request failed: ' + String(e));
   }
 }
 
-plannerStartBtn.addEventListener('click', () => {
+S.plannerStartBtn.addEventListener('click', () => {
   // Dual-purpose: Start when idle, Cancel when a thread_id is set.
-  if (plannerThreadId) {
+  if (S.plannerThreadId) {
     cancelPlanner();
   } else {
     startPlanner();
@@ -2219,67 +2204,67 @@ plannerStartBtn.addEventListener('click', () => {
 // Wipe-planner button — destructive, gated by a confirm dialog. Hits
 // the backend DELETE /planner/{slug}/wipe (MinIO embeddings + Postgres
 // checkpoints) then clears localStorage + resets cards.
-if (plannerWipeBtn) {
-  plannerWipeBtn.addEventListener('click', async () => {
-    if (!activeSlug || plannerThreadId) return;
+if (S.plannerWipeBtn) {
+  S.plannerWipeBtn.addEventListener('click', async () => {
+    if (!S.activeSlug || S.plannerThreadId) return;
     const ok = await showConfirm(
-      'Wipe planner cache for ' + activeSlug + '?',
+      'Wipe planner cache for ' + S.activeSlug + '?',
       'Deletes MinIO embedding blobs (forces a cold re-embed next ' +
       'run), Postgres LangGraph checkpoints (all threads for this ' +
       'slug), and the browser-cached thread_id. Cannot be undone.',
       'Wipe',
     );
     if (!ok) return;
-    plannerWipeBtn.setAttribute('disabled', 'disabled');
-    const orig = plannerWipeBtn.textContent;
-    plannerWipeBtn.textContent = 'Wiping…';
+    S.plannerWipeBtn.setAttribute('disabled', 'disabled');
+    const orig = S.plannerWipeBtn.textContent;
+    S.plannerWipeBtn.textContent = 'Wiping…';
     try {
-      const result = await wipePlanner(activeSlug);
+      const result = await wipePlanner(S.activeSlug);
       const minio = (result && result.minio_blobs_deleted) || 0;
       const pg = result && result.postgres_rows_deleted;
       const pgTotal = pg
         ? Object.values(pg).reduce(
             (a, b) => a + (typeof b === 'number' ? b : 0), 0)
         : 0;
-      showToast('Planner cache wiped for ' + activeSlug +
+      showToast('Planner cache wiped for ' + S.activeSlug +
         ' (' + minio + ' MinIO blobs, ' + pgTotal + ' Postgres rows).');
     } catch (e) {
       showToast('Wipe failed: ' + String(e));
     } finally {
-      plannerWipeBtn.textContent = orig;
+      S.plannerWipeBtn.textContent = orig;
       refreshPlannerStartState();
     }
   });
 }
 
 // Card-head click → toggle expanded body (legacy cards-mode handler).
-// Cards DOM was removed 2026-05-19 — `plannerCardsEl` is null in the
+// Cards DOM was removed 2026-05-19 — `S.plannerCardsEl` is null in the
 // graph-only UI, so the handler is registered conditionally. The
 // off_topic verdict-table sort branch lived inside this handler too;
 // it now activates only when the planner drawer renders that table
 // (handled by SUBSTEP_RENDERERS[2] inside the drawer details panel,
 // which has its own delegate).
-if (plannerCardsEl) plannerCardsEl.addEventListener('click', ev => {
+if (S.plannerCardsEl) S.plannerCardsEl.addEventListener('click', ev => {
   // Sort header click — take precedence over card-head expansion.
   const sortTh = ev.target.closest('th[data-sort-col]');
   if (sortTh) {
     ev.stopPropagation();
     const col = sortTh.dataset.sortCol;
-    if (_offTopicSort.col === col) {
+    if (S._offTopicSort.col === col) {
       // Toggle direction; third click clears the sort.
-      if (_offTopicSort.dir === 'asc') _offTopicSort.dir = 'desc';
-      else { _offTopicSort.col = null; _offTopicSort.dir = 'asc'; }
+      if (S._offTopicSort.dir === 'asc') S._offTopicSort.dir = 'desc';
+      else { S._offTopicSort.col = null; S._offTopicSort.dir = 'asc'; }
     } else {
-      _offTopicSort.col = col;
-      _offTopicSort.dir = 'asc';
+      S._offTopicSort.col = col;
+      S._offTopicSort.dir = 'asc';
     }
     // Re-render the off_topic card body from cached values (no refetch).
     const c = cardEl(2);   // off_topic substep idx
-    if (c && _lastOffTopicValues) {
+    if (c && S._lastOffTopicValues) {
       const body = c.querySelector('.fw-planner-card-body');
       const renderer = SUBSTEP_RENDERERS[2];
       if (body && renderer) {
-        body.innerHTML = renderer(_lastOffTopicValues);
+        body.innerHTML = renderer(S._lastOffTopicValues);
       }
     }
     return;
