@@ -13,7 +13,7 @@ Tier priority (highest -> lowest): llms_full > llms_txt > sitemap > docs > githu
 """
 from fastapi import APIRouter, HTTPException
 
-from ..resolver import _index_by_slug, _load_catalog, _pick_best_source
+from domains.dd.resolver import _index_by_slug, _load_catalog, _pick_best_source
 
 router = APIRouter()
 

@@ -26,7 +26,7 @@ import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..ingestion.progress import (
+from domains.dd.ingestion.progress import (
     acquire_lock,
     clear_cancel,
     read_lock,
@@ -35,17 +35,17 @@ from ..ingestion.progress import (
     read_url_records,
     request_cancel,
 )
-from ..ingestion.storage import (
+from domains.dd.ingestion.storage import (
     framework_prefix,
     get_storage,
 )
-from ..ingestion.storage import (
+from domains.dd.ingestion.storage import (
     read_framework_manifest,
     read_framework_page,
     read_live_manifest,
 )
 
-from ..resolver import _index_by_slug
+from domains.dd.resolver import _index_by_slug
 
 
 router = APIRouter()

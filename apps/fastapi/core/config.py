@@ -12,7 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class RedisSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="REDIS_", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix = "REDIS_", extra = "ignore")
 
     host: str = "localhost"
     port: int = 6379

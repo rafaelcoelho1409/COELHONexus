@@ -17,16 +17,16 @@ re-downloading.
 """
 from fastapi import APIRouter, HTTPException
 
-from ..ingestion.storage import (
+from domains.dd.ingestion.storage import (
     framework_prefix,
     get_storage,
 )
-from ..ingestion.storage import (
+from domains.dd.ingestion.storage import (
     read_framework_manifest,
     read_framework_page,
 )
 
-from ..resolver import _index_by_slug
+from domains.dd.resolver import _index_by_slug
 
 
 router = APIRouter()

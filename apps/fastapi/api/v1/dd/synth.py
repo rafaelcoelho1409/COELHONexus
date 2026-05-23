@@ -44,21 +44,21 @@ import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException, Query
 from starlette.responses import StreamingResponse
 
-from ..ingestion.storage import get_storage
-from ..synth.cancel import (
+from domains.dd.ingestion.storage import get_storage
+from domains.dd.synth.cancel import (
     _redis_url,
     clear_cancel,
     request_cancel,
     watcher as cancel_watcher,
 )
-from ..synth.graph import (
+from domains.dd.synth.graph import (
     IMPLEMENTED,
     NODE_ORDER,
     NODE_REGISTRY,
     NODE_TO_FIELD,
     build_graph,
 )
-from ..synth.progress import (
+from domains.dd.synth.progress import (
     emit_progress,
     subscribe_progress,
 )

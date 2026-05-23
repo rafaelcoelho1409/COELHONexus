@@ -32,11 +32,11 @@ from typing import Optional
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
 
-from ..ingestion import (
+from domains.dd.ingestion import (
     post,
     snapshot,
 )
-from ..ingestion.tiers import (
+from domains.dd.ingestion.tiers import (
     tier1,
     tier2,
     tier3,
@@ -44,11 +44,11 @@ from ..ingestion.tiers import (
     tier5,
     ManifestDetected,
 )
-from ..ingestion.progress import Progress
-from ..ingestion.storage import get_storage
-from ..ingestion.storage import Store
+from domains.dd.ingestion.progress import Progress
+from domains.dd.ingestion.storage import get_storage
+from domains.dd.ingestion.storage import Store
 
-from ..resolver import _index_by_slug
+from domains.dd.resolver import _index_by_slug
 
 
 router = APIRouter()

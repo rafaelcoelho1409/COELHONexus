@@ -32,7 +32,7 @@ async def llm_health() -> JSONResponse:
     t0 = time.monotonic()
     try:
         resp = await chain.ainvoke([
-            HumanMessage(content="Answer in exactly one word: ping"),
+            HumanMessage(content = "Answer in exactly one word: ping"),
         ])
     except Exception as e:
         dt_ms = int((time.monotonic() - t0) * 1000)

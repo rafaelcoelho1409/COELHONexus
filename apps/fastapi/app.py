@@ -21,7 +21,7 @@ logging.basicConfig(
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from domains.dd.api import router as dd_router
+from api.v1.dd import router as dd_router
 from domains.dd.ingestion.storage import get_storage
 from domains.dd.planner.checkpoint import (
     close_checkpointer,
