@@ -90,11 +90,39 @@ class CellState:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "CellState":
+        """Load a cell from JSON. Tolerates dim drift:
+
+        If a previously-saved cell has `A_a` / `b_a` of a different
+        dimension than the current `CONTEXT_DIM` (e.g. the context vector
+        layout changed between deploys), the matrix would later fail
+        matmul during predict(). To avoid 100% predict failures on the
+        new shape, re-initialize the cell from the saved `benchmark_prior`
+        (preserving the historical confidence/quality signal but
+        discarding accumulated observations that are no longer compatible
+        with the new context layout). Logs a one-line warning so the
+        operator notices the dim drift in deploy logs.
+        """
+        A_a = np.asarray(d["A_a"], dtype = np.float64)
+        b_a = np.asarray(d["b_a"], dtype = np.float64)
+        expected = (CONTEXT_DIM, CONTEXT_DIM)
+        if A_a.shape != expected or b_a.shape != (CONTEXT_DIM,):
+            import logging
+            logging.getLogger(__name__).warning(
+                f"[pareto] cell dim drift for {d.get('deployment')!r}/"
+                f"{d.get('dd_process')!r}: stored A_a {A_a.shape} vs "
+                f"current {expected}; re-initializing from benchmark_prior "
+                f"(observations dropped)"
+            )
+            return cls.fresh(
+                d["deployment"],
+                d["dd_process"],
+                float(d.get("benchmark_prior", 0.0)),
+            )
         return cls(
             deployment      = d["deployment"],
             dd_process      = d["dd_process"],
-            A_a             = np.asarray(d["A_a"], dtype = np.float64),
-            b_a             = np.asarray(d["b_a"], dtype = np.float64),
+            A_a             = A_a,
+            b_a             = b_a,
             n_obs           = int(d.get("n_obs", 0)),
             last_updated    = float(d.get("last_updated", time.time())),
             benchmark_prior = float(d.get("benchmark_prior", 0.0)),
