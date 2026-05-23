@@ -454,7 +454,7 @@ async def _run_study_orchestrator(
             _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
         )
         try:
-            from ..synth.cancel import is_cancelled
+            from domains.dd.synth.cancel import is_cancelled
             return await is_cancelled(r, study_thread_id)
         except Exception:
             return False

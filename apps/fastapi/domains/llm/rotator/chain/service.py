@@ -66,7 +66,7 @@ import re
 import asyncio
 
 # Hoisted from former in-function lazy imports (no cycle — none of these import chain).
-from domains.llm.rotator import benchmarks, discovery, pareto_bandit
+from domains.llm.rotator import benchmarks, discovery, bandit
 
 import litellm
 from litellm import Router
@@ -740,7 +740,7 @@ async def _redis_for_bandit():
 
 def _classify_error(exc: Exception) -> str:
     """Map a litellm/httpx exception to ParetoBandit's error_class taxonomy
-    (see compose_reward in pareto_bandit.py for the reward magnitudes)."""
+    (see compose_reward in bandit.py for the reward magnitudes)."""
     name = type(exc).__name__.lower()
     msg = str(exc).lower()
     if "ratelimit" in name or "429" in msg or "rate limit" in msg:
@@ -796,12 +796,12 @@ async def chat_judge_bandit_async(
             "latency_s": None, "reward": None,
             "fallback": "no_redis"}
     candidates = [e["litellm_params"]["model"] for e in _all_entries_current()]
-    ctx = pareto_bandit.make_context_vector(_JUDGE_KD_PROCESS)
+    ctx = bandit.make_context_vector(_JUDGE_KD_PROCESS)
     pattern = None
     if expected_pattern:
         pattern = re.compile(expected_pattern)
     try:
-        ranked = await pareto_bandit.predict_top_k(
+        ranked = await bandit.predict_top_k(
             _JUDGE_KD_PROCESS, 
             ctx, 
             candidates,
@@ -872,7 +872,7 @@ async def chat_judge_bandit_async(
                 error_class = _classify_error(e)
                 last_error = f"{type(e).__name__}: {str(e)[:120]}"
             latency_s = float(time.monotonic() - t0)
-            reward = pareto_bandit.compose_reward(
+            reward = bandit.compose_reward(
                 success = success,
                 schema_valid = schema_valid,
                 latency_s = latency_s,
@@ -880,7 +880,7 @@ async def chat_judge_bandit_async(
                 error_class = error_class,
             )
             try:
-                await pareto_bandit.update(
+                await bandit.update(
                     deployment_id, 
                     _JUDGE_KD_PROCESS, 
                     ctx, 
@@ -1330,7 +1330,7 @@ async def pick_synth_deployment_bandit(
         rds = redis_aio.from_url(url)
         try:
             candidates = [e["litellm_params"]["model"] for e in entries]
-            ctx = pareto_bandit.make_context_vector(
+            ctx = bandit.make_context_vector(
                 "dd-synth",
                 chapter_number = chapter_number,
                 expected_hash_count = expected_hash_count,
@@ -1344,7 +1344,7 @@ async def pick_synth_deployment_bandit(
             # without provider-aware reservation, NIM saturated and the
             # cascade fell through to round-robin instead of picking from
             # a less-saturated provider.
-            ranked = await pareto_bandit.predict_top_k(
+            ranked = await bandit.predict_top_k(
                 "dd-synth", 
                 ctx, 
                 candidates, 
@@ -1362,7 +1362,7 @@ async def pick_synth_deployment_bandit(
                             if "/" in deployment_id else deployment_id)
                 provider_cap = _PROVIDER_CHAPTER_CAPS.get(provider, 2)
                 # Step 1: try to claim a provider slot.
-                slot = await pareto_bandit.try_reserve_provider_slot(
+                slot = await bandit.try_reserve_provider_slot(
                     provider, 
                     redis = rds,
                     max_slots = provider_cap, 
@@ -1376,7 +1376,7 @@ async def pick_synth_deployment_bandit(
                     )
                     continue
                 # Step 2: try to claim the deployment slot.
-                reserved = await pareto_bandit.try_reserve(
+                reserved = await bandit.try_reserve(
                     deployment_id, 
                     "dd-synth", 
                     redis = rds, 
@@ -1386,7 +1386,7 @@ async def pick_synth_deployment_bandit(
                     # Release the provider slot we just acquired — another
                     # chapter holds the deployment lock; we'd be double-
                     # booking otherwise.
-                    await pareto_bandit.release_provider_slot(
+                    await bandit.release_provider_slot(
                         provider, 
                         slot, 
                         redis = rds,

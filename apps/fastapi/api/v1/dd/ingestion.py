@@ -5,18 +5,28 @@ survives Redis TTL — it's the canonical, deduplicable corpus that future
 per-experience-level synth (senior / mid / junior) will reuse without
 re-downloading.
 
-  GET /api/v1/docs-distiller/ingestion
+  GET    /api/v1/docs-distiller/ingestion
       -> summary list of every framework whose ingestion has been
-        finalized (sidebar data source in FastHTML).
+         finalized (sidebar data source in FastHTML).
 
-  GET /api/v1/docs-distiller/ingestion/{slug}/manifest
+  GET    /api/v1/docs-distiller/ingestion/{slug}/manifest
       -> full manifest dict (entries + ingest metadata).
 
-  GET /api/v1/docs-distiller/ingestion/{slug}/pages/{idx}
+  GET    /api/v1/docs-distiller/ingestion/{slug}/pages/{idx}
       -> raw markdown body for one page.
+
+  DELETE /api/v1/docs-distiller/ingestion/{slug}
+      -> full-wipe: ingestion + ingestion-raw + synth-vault + planner +
+         synth prefixes in MinIO, plus the dd:lock:{slug} Redis key if
+         held. Next POST /runs {slug} starts from scratch.
 """
+import logging
+import os
+
+import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
 
+from domains.dd.ingestion.progress import release_lock, read_lock
 from domains.dd.ingestion.storage import (
     framework_prefix,
     get_storage,
@@ -29,7 +39,15 @@ from domains.dd.ingestion.storage import (
 from domains.dd.resolver import _index_by_slug
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _redis_url() -> str:
+    host = os.environ.get("REDIS_HOST", "redis-master.redis.svc.cluster.local")
+    port = os.environ.get("REDIS_PORT", "6379")
+    pwd = os.environ.get("REDIS_PASSWORD", "")
+    return f"redis://:{pwd}@{host}:{port}" if pwd else f"redis://{host}:{port}"
 
 
 @router.get("")
@@ -91,10 +109,68 @@ async def get_page(slug: str, idx: int) -> dict:
 
 @router.delete("/{slug}")
 async def delete_framework(slug: str) -> dict:
-    """Wipe every MinIO object under `ingestion/{slug}/` — manifest,
-    page bodies, snapshots. After this the slug looks brand-new to the
-    cached-check, so the next `POST /runs {slug}` will re-ingest from
-    scratch. `slug` is taken literally — passing a run_id wipes orphan
-    content from the pre-fix-keyed runs."""
-    deleted = await get_storage().delete_prefix(framework_prefix(slug))
-    return {"slug": slug, "deleted": deleted}
+    """Full-wipe a framework: every MinIO prefix that holds data keyed by
+    this slug, plus the Redis single-flight lock if held.
+
+    Wiped prefixes:
+      ingestion/{slug}/         canonical pages + manifest (the sidebar source)
+      ingestion-raw/{slug}/     pre-normalization monolith (reversibility data)
+      synth-vault/{slug}/       sentinelized bodies + vault.json (synth inputs)
+      planner/{slug}/           planner artifacts (corpus_load → plan-latest.json)
+      synth/{slug}/             synth artifacts (outline → render output)
+
+    Plus dd:lock:{slug} in Redis if a previous ingestion crashed and leaked it.
+
+    After this call the slug is brand-new across the entire pipeline — next
+    POST /runs {slug} re-ingests from scratch + downstream planner/synth
+    start with clean state. `slug` is taken literally; passing a run_id
+    instead wipes orphan content from any pre-fix-keyed runs.
+
+    Returns the count of MinIO objects removed across all prefixes.
+    Per-prefix failures are logged but don't abort the wipe — best-effort
+    cleanup so a partial delete still removes most stale state.
+    """
+    minio = get_storage()
+    prefixes = (
+        framework_prefix(slug),       # ingestion/{slug}/
+        f"ingestion-raw/{slug}/",
+        f"synth-vault/{slug}/",
+        f"planner/{slug}/",
+        f"synth/{slug}/",
+    )
+    deleted = 0
+    failed: list[str] = []
+    for prefix in prefixes:
+        try:
+            deleted += await minio.delete_prefix(prefix)
+        except Exception as e:
+            logger.warning(
+                f"[delete] MinIO prefix wipe failed for {prefix!r}: "
+                f"{type(e).__name__}: {e}"
+            )
+            failed.append(prefix)
+
+    # Clear the single-flight lock if held — a previous crashed ingestion may
+    # have leaked it (the 35-min TTL would otherwise block re-ingestion).
+    r = redis_aio.from_url(
+        _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+    )
+    lock_released = False
+    try:
+        held_run_id = await read_lock(r, slug)
+        if held_run_id:
+            lock_released = await release_lock(r, slug, held_run_id)
+    except Exception as e:
+        logger.warning(
+            f"[delete] Redis lock cleanup failed for {slug!r}: "
+            f"{type(e).__name__}: {e}"
+        )
+    finally:
+        await r.aclose()
+
+    return {
+        "slug":           slug,
+        "deleted":        deleted,
+        "lock_released":  lock_released,
+        "failed_prefixes": failed,
+    }

@@ -17,6 +17,25 @@ import {
 } from './ingestion.js';
 
 // ============================================================
+// Sidebar action lock — disable every refresh + delete button while ANY
+// action (refresh OR delete on any row) is in flight. Without this guard
+// a user can fire a second delete mid-DELETE, leak Redis locks, or kick
+// off concurrent ingestions for two different slugs. Unlock defers to
+// refreshGenerateState so the activeRunId-based lock takes over once a
+// queued ingestion is running.
+// ============================================================
+function _setSidebarActionsLocked(locked) {
+  if (locked) {
+    S.sidebarList.querySelectorAll('.fw-lib-refresh, .fw-lib-delete')
+      .forEach(b => b.setAttribute('disabled', 'disabled'));
+  } else {
+    // Hand the final state to refreshGenerateState, which keeps buttons
+    // disabled while activeRunId is set and re-enables them otherwise.
+    refreshGenerateState();
+  }
+}
+
+// ============================================================
 // Sidebar — library list
 // ============================================================
 export function renderSidebar(items) {
@@ -87,9 +106,26 @@ export function renderSidebar(items) {
     });
   });
   S.sidebarList.querySelectorAll('.fw-lib-refresh').forEach(b => {
-    b.addEventListener('click', ev => {
+    b.addEventListener('click', async ev => {
       ev.stopPropagation();
-      triggerIngest(b.dataset.slug, true);
+      // Lock all sidebar actions + swap the ↻ icon with a spinner so the
+      // user has unambiguous "we're working on it" feedback. The lock
+      // covers the window between this click and POST /runs returning;
+      // after that, refreshGenerateState (called inside triggerIngest)
+      // keeps the lock based on activeRunId for the rest of the run.
+      const originalLabel = b.innerHTML;
+      b.innerHTML = '<div class="fw-spinner"></div>';
+      _setSidebarActionsLocked(true);
+      try {
+        await triggerIngest(b.dataset.slug, true);
+      } finally {
+        // Restore the icon either way. The disabled state is now
+        // governed by activeRunId via refreshGenerateState — keeps the
+        // lock during a queued ingestion, releases it on cached/locked/
+        // error (no active run).
+        b.innerHTML = originalLabel;
+        _setSidebarActionsLocked(false);
+      }
     });
   });
   // Newly-rendered refresh buttons must pick up the current ingest state
@@ -104,21 +140,21 @@ export function renderSidebar(items) {
       const displayName = row.querySelector('.fw-lib-name')?.textContent || slug;
 
       const ok = await showConfirm(
-        'Delete ingestion',
-        'Permanently delete "' + displayName + '"? ' +
-        'Wipes the manifest + every page body from MinIO. ' +
+        'Delete framework',
+        'Permanently delete "' + displayName + '"? Full wipe — removes ' +
+        'the ingested corpus, raw monolith, synth vault sentinels, and ' +
+        'any planner/synth artifacts for this framework. ' +
         'This cannot be undone.',
         'Delete'
       );
       if (!ok) return;
 
-      // Replace 🗑 with spinner + lock the row so a stray click can't
-      // re-fire delete or jump to another framework mid-DELETE.
-      const refresh = row.querySelector('.fw-lib-refresh');
+      // Replace 🗑 with spinner + lock EVERY sidebar action button across
+      // every row (not just this one) so a stray click can't fire a
+      // second DELETE / refresh while this one is in flight.
       const originalLabel = b.innerHTML;
       b.innerHTML = '<div class="fw-spinner"></div>';
-      b.setAttribute('disabled', 'disabled');
-      if (refresh) refresh.setAttribute('disabled', 'disabled');
+      _setSidebarActionsLocked(true);
       row.style.pointerEvents = 'none';
       row.style.opacity = '0.7';
 
@@ -126,13 +162,41 @@ export function renderSidebar(items) {
         const r = await fetch(S.API + '/ingestion/' + slug, {method: 'DELETE'});
         if (!r.ok) throw new Error('HTTP ' + r.status);
 
-        // Clear Step 3 if the deleted framework was the one being viewed.
+        // Reset every step's per-slug view to its initial empty state when
+        // the deleted framework was the one being viewed. The user lands
+        // on the "pick a framework" message exactly as if nothing was
+        // ever selected — same effect as a fresh page load with the
+        // sidebar item gone.
         if (S.activeSlug === slug) {
           S.setActiveSlug(null);
+          // Step 2 (Ingestion) — the file grid the user is most likely
+          // looking at when they delete.
+          if (S.step2Summary) S.step2Summary.innerHTML = '';
+          if (S.step2Grid) S.step2Grid.innerHTML =
+            '<div class="fw-empty">Pick a framework in the catalog or ' +
+            'the sidebar to see its downloaded files.</div>';
+          // Hide the live progress box if a previous run left it open.
+          if (S.progressBox) S.progressBox.style.display = 'none';
+          // Legacy Step 3 page-grid (element may be absent post 2026-05-19
+          // Planner canvas swap — guards no-op when missing).
           if (S.pageGrid) S.pageGrid.innerHTML =
             '<div class="fw-empty">Pick an item from the sidebar or ' +
             'generate a new study.</div>';
           if (S.pagesSummary) S.pagesSummary.innerHTML = '';
+          // Drop any sidebar "active" highlight — the deleted row is
+          // about to disappear, but other rows shouldn't linger as
+          // selected for a slug that no longer exists.
+          S.sidebarList.querySelectorAll('.fw-lib-item.active')
+            .forEach(x => x.classList.remove('active'));
+          // Reset Planner + Synth canvases to their "pick a framework"
+          // empty state. Dynamic import keeps this off the library.js
+          // module-load critical path AND avoids a circular dep with
+          // planner.js (which imports from library.js).
+          try {
+            const { _toggleStageEmpty } = await import('./planner.js');
+            _toggleStageEmpty('planner', true);
+            _toggleStageEmpty('synth', true);
+          } catch (_) { /* canvases may not be initialized — safe to skip */ }
         }
         // Remove the row in place — snappier than a full library reload.
         row.remove();
@@ -145,13 +209,18 @@ export function renderSidebar(items) {
         }
         syncStepLocks();   // library may now be empty → lock Steps 2+3
       } catch (e) {
-        // Restore on failure so the user can try again.
+        // Restore on failure so the user can try again. The row stays —
+        // only the icon + lock + visual fade get reverted.
         b.innerHTML = originalLabel;
-        b.removeAttribute('disabled');
-        if (refresh) refresh.removeAttribute('disabled');
         row.style.pointerEvents = '';
         row.style.opacity = '';
         showToast('Delete failed: ' + String(e));
+      } finally {
+        // Release the global sidebar lock. On success the row is gone
+        // (so nothing to restore on it); on failure the previous catch
+        // already restored this row's icon + opacity. Either way, OTHER
+        // rows' buttons need their lock dropped.
+        _setSidebarActionsLocked(false);
       }
     });
   });

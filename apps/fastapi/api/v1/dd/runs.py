@@ -33,6 +33,7 @@ from domains.dd.ingestion.progress import (
     read_post,
     read_progress,
     read_url_records,
+    release_lock,
     request_cancel,
 )
 from domains.dd.ingestion.storage import (
@@ -114,27 +115,40 @@ async def start_run(body: StartRunBody) -> dict:
                     "manifest": cached,
                 }
         else:
-            # Refresh: wipe the framework prefix before queuing so the
-            # new ingestion writes against a clean slate. Without this,
-            # old pages (especially when the new run produces fewer
-            # pages than the previous one — e.g. after a splitter
-            # change) stay as orphans under the same prefix and
-            # contaminate later reads + `delete_prefix` calls.
-            try:
-                n = await minio.delete_prefix(framework_prefix(body.slug))
-                if n:
-                    import logging
-                    logging.getLogger(__name__).info(
-                        f"[runs] refresh wipe: deleted {n} stale objects "
-                        f"for {body.slug!r} before re-ingestion"
+            # Refresh: wipe every ingestion-side prefix before queuing so
+            # the new run writes against a clean slate. Without this, old
+            # pages (especially when the new run produces fewer pages than
+            # the previous one — e.g. after a splitter change) stay as
+            # orphans and contaminate later reads + `delete_prefix` calls.
+            # Covers ALL prefixes the ingestion task touches:
+            #   ingestion/{slug}/         canonical pages + manifest
+            #   ingestion-raw/{slug}/     pre-normalization monolith
+            #   synth-vault/{slug}/       sentinelized bodies for synth
+            # Planner/synth artifacts are deliberately preserved — refresh
+            # is "re-ingest this framework", not "wipe everything". Users
+            # have separate /planner/{slug}/wipe and /synth/{slug}/wipe
+            # endpoints when they want to nuke downstream state too.
+            import logging
+            _log = logging.getLogger(__name__)
+            for prefix in (
+                framework_prefix(body.slug),       # ingestion/{slug}/
+                f"ingestion-raw/{body.slug}/",
+                f"synth-vault/{body.slug}/",
+            ):
+                try:
+                    n = await minio.delete_prefix(prefix)
+                    if n:
+                        _log.info(
+                            f"[runs] refresh wipe: deleted {n} stale objects "
+                            f"from {prefix!r} before re-ingestion"
+                        )
+                except Exception as e:
+                    # Per-prefix best-effort — don't block re-ingestion on
+                    # cleanup failure. New writes will overwrite colliding
+                    # keys; only stale leftovers might survive.
+                    _log.warning(
+                        f"[runs] refresh wipe failed for {prefix!r}: {e}"
                     )
-            except Exception as e:
-                # Don't block re-ingestion on cleanup failure — the new
-                # writes will at least overwrite the colliding keys.
-                import logging
-                logging.getLogger(__name__).warning(
-                    f"[runs] refresh wipe failed for {body.slug!r}: {e}"
-                )
 
         # 3. Acquire lock + queue task.
         run_id = uuid.uuid4().hex
@@ -151,8 +165,23 @@ async def start_run(body: StartRunBody) -> dict:
         await clear_cancel(r, run_id)
 
         # Late import — defer the Celery app import past FastAPI startup.
-        from ..ingestion.task import run_ingestion
-        run_ingestion.delay(run_id, body.slug)
+        # Wrap the dispatch in try/except so any post-acquire failure releases
+        # the lock instead of leaking it for 35 minutes. Without this guard,
+        # an ImportError / Celery-broker outage / network blip between
+        # acquire_lock() and run_ingestion.delay() leaves dd:lock:{slug} in
+        # Redis and the user sees "Another ingestion is already running" on
+        # every subsequent click until the TTL expires. Verified failure mode
+        # from the 2026-05-23 relative-import bug; defensive against future
+        # regressions in this exact path.
+        try:
+            from domains.dd.ingestion.task import run_ingestion
+            run_ingestion.delay(run_id, body.slug)
+        except Exception:
+            try:
+                await release_lock(r, body.slug, run_id)
+            except Exception:
+                pass
+            raise
 
         return {
             "status": "queued",

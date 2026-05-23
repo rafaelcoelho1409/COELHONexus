@@ -1,10 +1,40 @@
 """
-ParetoBandit-style adaptive routing for the LLM rotator (Phase 2).
+Adaptive contextual bandit routing for the LLM rotator.
 
-DESIGN (2026-05-14): LinUCB with geometric forgetting on sufficient statistics,
-following arXiv:2604.00136 (Taberner-Miller, Mar 2026). Per-(deployment,
-dd_process) cell state lives in Redis. Reward signal blends success rate,
-latency relative to expected, and KD-specific hash-recall ratio.
+DESIGN (Phase 2, 2026-05-14): LinUCB with geometric forgetting on sufficient
+statistics, following arXiv:2604.00136 (Taberner-Miller, Mar 2026). Per-
+(deployment, dd_process) cell state lives in Redis. Reward signal blends
+success rate, latency relative to expected, and KD-specific hash-recall ratio.
+
+DESIGN (Phase 3, 2026-05-23): three scoring modes share the same `(A_a, b_a)`
+state — switchable per-call or via env without invalidating the Redis posterior.
+
+ACTIVATED 2026-05-23 — FGTS-VA is the DEFAULT mode. User explicitly skipped
+the shadow-validation window (same pattern as the 2026-05-16 LinUCB rollout).
+To revert without code changes, use the env kill-switches below.
+
+Modes:
+  • ucb     LinUCB (Li et al. ICML 2010) — Phase 2 baseline. Deterministic UCB.
+  • ts      LinTS (Agrawal & Goyal ICML 2013) — Phase 3a. Posterior sampling
+            from N(A_a^-1 b_a, TS_SCALE²·A_a^-1). Faster convergence on
+            sample-poor problems (Chapelle & Li NIPS 2011).
+  • fgts_va FGTS-VA (NeurIPS 2025, arXiv:2511.02123) — Phase 3c, DEFAULT.
+            LinTS with per-arm noise variance σ̂²_a (EWMA on squared predictive
+            residuals) replacing fixed TS_SCALE², plus additive feel-good
+            optimism bonus β·√(ψᵀA^-1ψ). Tighter regret on heterogeneous-noise
+            arms — true for free-tier rotation.
+
+Env vars (priority order):
+  KD_BANDIT_MODE = ucb | ts | fgts_va   explicit selection
+  KD_DISABLE_BANDIT_TS = 1               kill-switch → ucb (full revert)
+  KD_DISABLE_FGTS_VA   = 1               kill-switch → ts  (revert one step)
+  (none set)                              DEFAULT = fgts_va
+
+The mode is per-call (predict()/predict_top_k() accept a `mode` override) so
+shadow-A/B harness can route real traffic with one mode while computing the
+hypothetical pick under another for the `dd.pareto_shadow_agreement` metric.
+
+Source-of-truth doc: docs/KD-ROTATOR-BANDIT-SOTA-2026-05-23.md
 
 Composes with the rest of the stack:
 
@@ -14,7 +44,7 @@ Composes with the rest of the stack:
                           ↓
     domains.llm_chain (Phase 1 dynamic catalog)     → Router model_list per step
                           ↓
-    domains.llm.pareto_bandit  (Phase 2 — THIS module)  → UCB ranking refines per-call selection
+    domains.llm.rotator.bandit (Phase 2-3 — THIS module) → scoring refines per-call selection
        ↓                                        ↑
        ↓                              reward update from OTel span events
        ↓
@@ -40,7 +70,7 @@ Posterior update on reward r given context ψ:
 The (1 - γ) factor implements **geometric forgetting** — old observations
 decay exponentially. γ ≈ 0.01 means each update decays history by 1%; after
 ~100 updates per cell, ancient observations contribute ~37% (e^-1) of their
-original weight. This is what makes ParetoBandit robust to non-stationary
+original weight. This is what makes the bandit robust to non-stationary
 behavior (provider quality regression, rate-limit drift, model EOL).
 
 WARM-START via benchmark prior:
@@ -63,16 +93,16 @@ CONTEXT VECTOR (16 dims, intentionally small for fast convergence):
 Cache layout:
     dd:rotator:pareto:cell:{deployment_id}:{dd_process}   → JSON blob, 90d TTL
 
-OTel metrics emitted:
-    dd.pareto_predict_total{dd_process}              Counter — calls to predict()
+OTel metrics emitted (current — see service.py _ensure_metrics for source of truth):
+    dd.pareto_predict_total{dd_process, mode}        Counter — calls to predict()
     dd.pareto_update_total{dd_process, outcome}      Counter — updates by reward bucket
-    dd.pareto_ucb_score                              Histogram — score distribution per pick
-    dd.pareto_n_obs{deployment, dd_process}          Gauge — observations per cell
-    dd.pareto_cell_age_seconds                       Histogram — staleness per cell
-    dd.pareto_shadow_agreement{dd_process}           Counter — predicted == actual deployment
+    dd.pareto_score{mode}                            Histogram — winning score per pick
+    dd.pareto_sigma_sq                               Histogram — per-arm noise variance EWMA
+    dd.pareto_shadow_agreement_total{dd_process}     Counter — counterfactual mode agreement
 
-The 'shadow_agreement' metric drives the production go/no-go: flip
-DD_USE_PARETO_BANDIT to "1" only after agreement > 60% over 1-2 weeks.
+The shadow_agreement counter is wired but currently unused — reserved for the
+future shadow-A/B harness that compares the live mode's pick against a
+counterfactual pick under a different mode (via predict(..., mode=other_mode)).
 
 Public API (async; sync wrappers provided where needed):
     await init_bandit_warm_start(deployments, redis)         # called at lifespan
@@ -85,11 +115,12 @@ Public API (async; sync wrappers provided where needed):
 from __future__ import annotations
 import logging
 import numpy as np
+import os
 import time
 import redis
 import asyncio
 import json
-from typing import Any, TYPE_CHECKING
+from typing import Any, Literal, TYPE_CHECKING
 if TYPE_CHECKING:
     import redis.asyncio as redis_aio
 
@@ -102,8 +133,11 @@ from .constants import (
     ERROR_CLASS_PENALTIES,
     CACHE_PREFIX,
     CELL_TTL_S,
+    FGTS_FEEL_GOOD_BETA,
+    FGTS_VA_SIGMA_MIN_SQ,
+    TS_SCALE,
     UCB_ALPHA,
-    _metric_instruments
+    _metric_instruments,
 )
 from .types import (
     CellState
@@ -111,6 +145,85 @@ from .types import (
 
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Mode resolution — env-driven default, per-call override
+# =============================================================================
+# Three scoring modes share the same (A_a, b_a) state; the mode parameter
+# governs only how a score is computed at predict() time. See module docstring.
+#
+# DEFAULT (2026-05-23 onward): FGTS-VA is the active mode. User explicitly
+# skipped the shadow-validation window — same pattern as the 2026-05-16 LinUCB
+# rollout when KD_USE_PARETO_BANDIT was retired. Rationale: FGTS-VA subsumes
+# LinTS (which subsumes LinUCB at the limit of zero posterior variance), so
+# the "ladder" of phases ships as one default. Per the SOTA doc, the operational
+# phases (3b, 4a, 4b, etc.) remain deferred until LangFuse + OTel give us
+# signal.
+#
+# Mode is selected in this priority order:
+#   1. Per-call `mode` kwarg                                  (shadow-A/B harness)
+#   2. KD_BANDIT_MODE env var (values: ucb / ts / fgts_va)    (explicit override)
+#   3. KD_DISABLE_FGTS_VA=1                                   (kill-switch → ts)
+#   4. KD_DISABLE_BANDIT_TS=1                                 (kill-switch → ucb)
+#   5. DEFAULT: fgts_va
+Mode = Literal["ucb", "ts", "fgts_va"]
+
+
+def _resolve_mode(override: Mode | None = None) -> Mode:
+    """Pick the scoring mode per the priority order in this module's header."""
+    if override is not None:
+        return override
+    # 2. Explicit env-driven mode selection
+    explicit = os.environ.get("KD_BANDIT_MODE", "").strip().lower()
+    if explicit in ("ucb", "ts", "fgts_va"):
+        return explicit  # type: ignore[return-value]
+    # 3-4. Kill-switches for staged emergency revert
+    if os.environ.get("KD_DISABLE_BANDIT_TS", "0") == "1":
+        return "ucb"
+    if os.environ.get("KD_DISABLE_FGTS_VA", "0") == "1":
+        return "ts"
+    # 5. Default
+    return "fgts_va"
+
+
+# Shared module-level RNG for posterior sampling. numpy's Generator is safe to
+# call concurrently from asyncio coroutines because it doesn't share Python
+# state across calls — each .multivariate_normal() draw is self-contained.
+_RNG = np.random.default_rng()
+
+
+# Announce the active mode at import time so the FastAPI / Celery worker logs
+# always show which bandit family is running. The bandit module is
+# imported by chain/service.py, which is imported by app.py — so this fires
+# exactly once per worker process at startup.
+try:
+    _startup_mode = _resolve_mode()
+    logger.info(f"[pareto] bandit scoring mode at startup: {_startup_mode}")
+except Exception:
+    pass
+
+
+def _score_cell(
+    cell: CellState,
+    context: np.ndarray,
+    mode: Mode,
+    *,
+    alpha: float = UCB_ALPHA,
+) -> tuple[float, float, float]:
+    """Dispatch to the right scoring method. Returns (total, exploit, explore)
+    triple shared across all three modes so predict()'s debug payload is
+    mode-independent."""
+    if mode == "fgts_va":
+        return cell.ts_score_va(
+            context,
+            rng = _RNG,
+            sigma_min_sq = FGTS_VA_SIGMA_MIN_SQ,
+            feel_good_beta = FGTS_FEEL_GOOD_BETA,
+        )
+    if mode == "ts":
+        return cell.ts_score(context, rng = _RNG, scale = TS_SCALE)
+    return cell.ucb_score(context, alpha = alpha)
 
 
 # =============================================================================
@@ -355,24 +468,29 @@ async def predict(
     *,
     redis: "redis_aio.Redis | None",
     alpha: float = UCB_ALPHA,
+    mode: Mode | None = None,
 ) -> tuple[str | None, dict[str, Any]]:
-    """Pick deployment by UCB. Returns (deployment_id, debug_info).
+    """Pick deployment via the configured scoring mode. Returns (deployment_id, debug).
 
     Args:
         dd_process: the step being routed (must be in DD_PROCESSES).
-        context: 16-dim context vector from make_context_vector(...).
+        context: CONTEXT_DIM context vector from make_context_vector(...).
         candidate_deployments: list of deployment_id strings to consider.
             Typically the litellm_params.model strings from Phase 1's
             _xxx_entries_current() for the matching step.
         redis: Redis client. Required for cell lookup; if None, returns the
             first candidate as a degenerate fallback.
-        alpha: UCB exploration coefficient.
+        alpha: UCB exploration coefficient (used when mode == "ucb").
+        mode: scoring mode override. None → resolved from env (see
+            _resolve_mode). Pass an explicit value to compute the
+            counterfactual for shadow A/B without touching env state.
 
-    Returns: (deployment_id, {"scores": [...], "winner_n_obs": int, ...})
+    Returns: (deployment_id, {"scores": [...], "winner_n_obs": int, "mode": ..., ...})
         On no candidates or all-cells-missing, deployment_id is None.
     """
     if not candidate_deployments:
         return None, {"reason": "no_candidates"}
+    resolved_mode = _resolve_mode(mode)
     # Look up cell state for each candidate (batched gather)
     cells = await asyncio.gather(
         *[get_cell_state(d, dd_process, redis = redis) for d in candidate_deployments]
@@ -382,21 +500,29 @@ async def predict(
         if cell is None:
             # No state yet — synthesize a cold cell with low prior (encourages exploration)
             cell = CellState.fresh(deployment, dd_process, benchmark_prior = 0.0)
-        total, exploit, explore = cell.ucb_score(context, alpha = alpha)
+        total, exploit, explore = _score_cell(cell, context, resolved_mode, alpha = alpha)
         scored.append((deployment, total, exploit, explore, cell.n_obs))
-    # argmax with tie-break by lowest n_obs (exploration of under-sampled arms)
-    scored.sort(key=lambda x: (-x[1], x[4], x[0]))
+    # argmax with tie-break by lowest n_obs (exploration of under-sampled arms).
+    # For TS/FGTS-VA modes the random sample already provides natural tie-breaking,
+    # but we keep the n_obs tiebreak as a deterministic fallback for the
+    # benchmark-prior cold start path where multiple arms can produce identical
+    # scores (zero perturbation under degenerate covariance).
+    scored.sort(key = lambda x: (-x[1], x[4], x[0]))
     winner = scored[0]
-    _record_predict(dd_process)
-    _record_ucb_score(winner[1])
+    _record_predict(dd_process, resolved_mode)
+    _record_score(winner[1], resolved_mode)
     debug = {
-        "winner": winner[0],
-        "winner_ucb": winner[1],
-        "winner_exploit": winner[2],
+        "winner":               winner[0],
+        "winner_score":         winner[1],
+        "winner_exploit":       winner[2],
         "winner_explore_bonus": winner[3],
-        "winner_n_obs": winner[4],
+        "winner_n_obs":         winner[4],
+        "mode":                 resolved_mode,
+        # `winner_ucb` retained for backward-compat with existing dashboards;
+        # for ts / fgts_va modes this is the sampled posterior score, not a UCB bound.
+        "winner_ucb":           winner[1],
         "all_scores": [
-            {"deployment": d, "ucb": t, "exploit": e, "explore": x, "n_obs": n}
+            {"deployment": d, "score": t, "exploit": e, "explore": x, "n_obs": n}
             for d, t, e, x, n in scored
         ],
     }
@@ -418,6 +544,11 @@ async def update(
 
     Read cell → apply geometric forgetting + add observation → write back.
     Returns True on success, False on Redis failure (observation lost).
+
+    Update is mode-agnostic: A_a, b_a, and sigma_sq_ewma are always advanced
+    by every observation regardless of which scoring mode is currently active
+    at predict-time. This means flipping KD_USE_LINTS or KD_USE_FGTS_VA at
+    runtime works seamlessly — the new mode reads the same accumulated state.
     """
     if redis is None:
         return False
@@ -430,6 +561,9 @@ async def update(
     if ok:
         outcome = "positive" if reward > 0.5 else ("neutral" if reward > 0 else "negative")
         _record_update(dd_process, outcome)
+        # Track per-arm noise variance — useful for FGTS-VA observability
+        # regardless of currently-active mode (we always update sigma_sq_ewma).
+        _record_sigma_sq(cell.sigma_sq_ewma)
     return ok
 
 
@@ -444,18 +578,25 @@ async def predict_top_k(
     redis: "redis_aio.Redis | None",
     k: int = 3,
     alpha: float = UCB_ALPHA,
+    mode: Mode | None = None,
 ) -> list[tuple[str, float, int]]:
-    """Return the top-K deployments ranked by UCB score.
+    """Return the top-K deployments ranked by score under the configured mode.
 
     Used by helpers.py for cascade-aware routing: try #1 → on fail try #2 →
     on fail try #3 → fall back to Phase 1 simple-shuffle Router. Each
     attempt gets its own error-class-typed reward submission.
 
-    Returns: [(deployment_id, ucb_score, n_obs), ...] sorted desc by score.
-    Length <= min(k, len(candidates)). Empty when no candidates.
+    Args:
+        mode: scoring mode override (see predict() docstring); None → env-
+            resolved default.
+
+    Returns: [(deployment_id, score, n_obs), ...] sorted desc by score.
+    Length <= min(k, len(candidates)). Empty when no candidates. The `score`
+    semantics depend on the active mode (UCB upper bound vs sampled posterior).
     """
     if not candidate_deployments:
         return []
+    resolved_mode = _resolve_mode(mode)
     cells = await asyncio.gather(
         *[get_cell_state(d, dd_process, redis = redis) for d in candidate_deployments]
     )
@@ -463,14 +604,14 @@ async def predict_top_k(
     for deployment, cell in zip(candidate_deployments, cells):
         if cell is None:
             cell = CellState.fresh(deployment, dd_process, benchmark_prior = 0.0)
-        total, _exploit, _bonus = cell.ucb_score(context, alpha=alpha)
+        total, _exploit, _bonus = _score_cell(cell, context, resolved_mode, alpha = alpha)
         scored.append((deployment, total, cell.n_obs))
-    # Sort: highest UCB first, ties broken by lowest n_obs (favor exploration
+    # Sort: highest score first, ties broken by lowest n_obs (favor exploration
     # of under-sampled arms), then by deployment string for determinism.
     scored.sort(key = lambda x: (-x[1], x[2], x[0]))
-    _record_predict(dd_process)
+    _record_predict(dd_process, resolved_mode)
     if scored:
-        _record_ucb_score(scored[0][1])
+        _record_score(scored[0][1], resolved_mode)
     return scored[: max(1, k)]
 
 
@@ -606,15 +747,32 @@ def _ensure_metrics() -> dict[str, Any]:
             return _metric_instruments
         _metric_instruments["predict_counter"] = meter.create_counter(
             name = "dd.pareto_predict_total",
-            description = "ParetoBandit predict() calls — labels: dd_process",
+            description = "Bandit predict() calls — labels: dd_process, mode ∈ {ucb, ts, fgts_va}",
         )
         _metric_instruments["update_counter"] = meter.create_counter(
             name = "dd.pareto_update_total",
-            description = "ParetoBandit update() calls — labels: dd_process, outcome ∈ {positive, neutral, negative}",
+            description = "Bandit update() calls — labels: dd_process, outcome ∈ {positive, neutral, negative}",
         )
-        _metric_instruments["ucb_score_hist"] = meter.create_histogram(
-            name = "dd.pareto_ucb_score",
-            description = "UCB score of the winning deployment per predict() call",
+        # 2026-05-23 — renamed from `dd.pareto_ucb_score` (semantics now cover all
+        # three modes via `mode` label, not just UCB). Old dashboards querying
+        # `dd.pareto_ucb_score` need to be updated to filter on `mode="ucb"`.
+        _metric_instruments["score_hist"] = meter.create_histogram(
+            name = "dd.pareto_score",
+            description = (
+                "Score of the winning deployment per predict() call. Semantics "
+                "depend on mode label: 'ucb' = upper confidence bound, "
+                "'ts'/'fgts_va' = sampled posterior score."
+            ),
+            unit = "1",
+        )
+        _metric_instruments["sigma_sq_hist"] = meter.create_histogram(
+            name = "dd.pareto_sigma_sq",
+            description = (
+                "Per-arm EWMA noise variance estimate after each update() — "
+                "used by FGTS-VA to scale posterior sampling. Histogram width "
+                "tells you whether arms have heterogeneous noise (justifying "
+                "FGTS-VA over plain LinTS)."
+            ),
             unit = "1",
         )
         _metric_instruments["shadow_agreement"] = meter.create_counter(
@@ -627,13 +785,13 @@ def _ensure_metrics() -> dict[str, Any]:
     return _metric_instruments
 
 
-def _record_predict(dd_process: str) -> None:
+def _record_predict(dd_process: str, mode: Mode = "ucb") -> None:
     inst = _ensure_metrics()
     c = inst.get("predict_counter")
     if c is None:
         return
     try:
-        c.add(1, attributes = {"dd_process": dd_process})
+        c.add(1, attributes = {"dd_process": dd_process, "mode": mode})
     except Exception:
         pass
 
@@ -649,13 +807,24 @@ def _record_update(dd_process: str, outcome: str) -> None:
         pass
 
 
-def _record_ucb_score(score: float) -> None:
+def _record_score(score: float, mode: Mode = "ucb") -> None:
     inst = _ensure_metrics()
-    h = inst.get("ucb_score_hist")
+    h = inst.get("score_hist")
     if h is None:
         return
     try:
-        h.record(score)
+        h.record(score, attributes = {"mode": mode})
+    except Exception:
+        pass
+
+
+def _record_sigma_sq(sigma_sq: float) -> None:
+    inst = _ensure_metrics()
+    h = inst.get("sigma_sq_hist")
+    if h is None:
+        return
+    try:
+        h.record(float(sigma_sq))
     except Exception:
         pass
 

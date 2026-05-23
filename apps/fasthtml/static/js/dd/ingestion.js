@@ -127,9 +127,13 @@ export async function pollRun(runId) {
         await loadManifestForSlug(S.activeSlug);
         const { loadLibrary } = await import('./library.js');
         await loadLibrary();
-        jumpTo(3);   // ingestion → Planner (natural next action)
+        // Stay on Step 2 (Ingestion) so the user sees the just-populated
+        // file grid instead of auto-advancing to Planner. The stepper
+        // unlocks Step 3+ via loadLibrary → syncStepLocks; the user
+        // clicks through manually when they're ready.
+        S.progressBox.style.display = 'none';   // hide the 100% progress bar
         const { refreshPlannerStartState } = await import('./planner.js');
-        refreshPlannerStartState();
+        refreshPlannerStartState();             // enable Step 3 Start button
         return;
       }
       if (st === 'failed' || st === 'cancelled') {

@@ -462,7 +462,7 @@ async def wipe_planner(slug: str) -> dict:
     from urllib.parse import quote
     import psycopg
 
-    from ..ingestion.storage import get_storage
+    from domains.dd.ingestion.storage import get_storage
 
     if not slug or "/" in slug:
         raise HTTPException(
