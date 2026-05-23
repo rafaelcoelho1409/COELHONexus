@@ -5,6 +5,19 @@ KEYLM_GROUP = "dd-keylm"
 REDUCE_LABEL_GROUP = "dd-reduce-label"
 SYNTH_GROUP = "dd-synth"
 DD_EMBED_GROUP = "dd-embed"
+# 2026-05-23 night — REVERTED Phase B embedder swap. `llama-embed-nemotron-8b`
+# (which the research agent recommended) is NOT exposed at
+# integrate.api.nvidia.com/v1/embeddings as of this date — NIM returned 404
+# during the FastMCP Planner run, breaking embed_corpus. The model exists on
+# build.nvidia.com (the catalog UI) and HuggingFace, but not on the production
+# embedding endpoint we route through.
+#
+# Verified-available NIM embedders with 32K context (via /v1/models probe):
+#   - nvidia/nv-embed-v1                  4096-D, Mistral-7B base
+#   - nvidia/nv-embedqa-mistral-7b-v2     4096-D, QA-tuned Mistral
+# Both untested; switching requires a separate verification pass (probe with
+# a real /v1/embeddings call before committing in code). Until then, sticking
+# with the proven baseline.
 DD_EMBED_MODEL_NAME = "nvidia/llama-nemotron-embed-1b-v2"
 # Hard upper bound on inputs per /v1/embeddings call. NIM doesn't publish a
 # strict limit; 64 is empirically safe and matches the previous Xinference

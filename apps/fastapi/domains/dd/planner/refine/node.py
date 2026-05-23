@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from hashlib import sha256
 
@@ -45,6 +46,7 @@ from ..cluster import load_clusters
 from .constants import (
     _BOUNDARY_FLOOR,
     _CTFIDF_DOC_CHARS,
+    _GMM_POSTERIOR_THRESHOLD,
     _PROMPT_VERSION,
     _REFINE_CONCURRENCY,
     _TOP_K,
@@ -57,10 +59,19 @@ from .service import (
     _pick_representative_doc,
     _refine_one,
     load_refine,
+    softmax_resolve_boundary,
 )
 
 
 logger = logging.getLogger(__name__)
+
+
+def _gmm_mode_active() -> bool:
+    """Phase D (2026-05-23): KD_REFINE_USE_GMM=1 enables the deterministic
+    soft-membership boundary resolver fast-path. Default off — set the env
+    per pod to enable. Cuts LLM-judge cost ~85% on LangChain-scale corpora
+    with ~3-5pp accuracy regression."""
+    return os.environ.get("KD_REFINE_USE_GMM", "0") == "1"
 
 
 @traced("refine")
@@ -186,6 +197,42 @@ async def refine(state: PlannerState) -> dict:
         for cid in cluster_docs_text.keys()
     }
 
+    # ── Phase D fast-path: deterministic soft-membership resolver ──────
+    # When KD_REFINE_USE_GMM=1, sharpen the soft membership distribution and
+    # take the deterministic argmax for boundary docs whose sharpened max
+    # posterior crosses _GMM_POSTERIOR_THRESHOLD. Fall back to LLM-judge ONLY
+    # for the genuinely-uncertain residual. ~85% LLM-cost reduction at
+    # LangChain scale with ~3-5pp boundary-assignment accuracy regression.
+    gmm_used = _gmm_mode_active()
+    gmm_assignments_for_boundary: np.ndarray | None = None
+    gmm_posteriors_for_boundary: np.ndarray | None = None
+    gmm_confident_mask: np.ndarray | None = None
+    if gmm_used:
+        valid_cluster_ids = set(cluster_keywords.keys())
+        (
+            gmm_assignments_for_boundary,
+            gmm_posteriors_for_boundary,
+            gmm_confident_mask,
+        ) = softmax_resolve_boundary(
+            soft=soft,
+            boundary_indices=boundary_indices,
+            valid_cluster_ids=valid_cluster_ids,
+        )
+        n_confident = int(gmm_confident_mask.sum())
+        await emit_progress(
+            thread_id, "refine", "gmm_resolved",
+            total_boundary=n_boundary,
+            n_confident=n_confident,
+            n_residual=n_boundary - n_confident,
+            threshold=_GMM_POSTERIOR_THRESHOLD,
+        )
+        logger.info(
+            f"[refine] {slug}: GMM fast-path resolved {n_confident}/{n_boundary} "
+            f"({n_confident * 100 // max(n_boundary, 1)}%) boundary docs "
+            f"deterministically (posterior ≥ {_GMM_POSTERIOR_THRESHOLD}); "
+            f"LLM-judge will only run on the {n_boundary - n_confident} residual"
+        )
+
     # ── Refine loop ────────────────────────────────────────────────────
     sem = asyncio.Semaphore(_REFINE_CONCURRENCY)
     judged_done = {"n": 0, "changed": 0, "null": 0, "err": 0}
@@ -217,8 +264,12 @@ async def refine(state: PlannerState) -> dict:
             )
         return result
 
-    tasks = []
-    for i in boundary_indices.tolist():
+    # Per-boundary-doc decision: either via GMM fast-path (cheap, deterministic)
+    # or via LLM-judge (slow, contextual). Build both lists then merge.
+    boundary_idx_list = boundary_indices.tolist()
+    deterministic_decisions: list[dict] = []
+    llm_task_specs: list[tuple[int, str, list[int]]] = []
+    for pos, i in enumerate(boundary_idx_list):
         # Top-K candidate cluster_ids for this doc, sorted by soft membership.
         # Exclude clusters with no docs (cluster_keywords doesn't have them).
         sorted_cids = np.argsort(-soft[int(i)])
@@ -226,8 +277,36 @@ async def refine(state: PlannerState) -> dict:
             int(cid) for cid in sorted_cids
             if int(cid) in cluster_keywords
         ][:_TOP_K]
-        tasks.append(_track(int(i), bodies[int(i)], candidates))
-    decisions = await asyncio.gather(*tasks)
+        # GMM fast-path: take the deterministic assignment when confident.
+        if (
+            gmm_used
+            and gmm_confident_mask is not None
+            and bool(gmm_confident_mask[pos])
+        ):
+            deterministic_decisions.append({
+                "doc_idx":        int(i),
+                "new_cluster_id": int(gmm_assignments_for_boundary[pos]),
+                "confidence":     float(gmm_posteriors_for_boundary[pos]),
+                "rationale":      (
+                    f"GMM softmax-sharpened posterior "
+                    f"{float(gmm_posteriors_for_boundary[pos]):.3f} ≥ "
+                    f"{_GMM_POSTERIOR_THRESHOLD} threshold"
+                ),
+                "meta":           {
+                    "deployment": "gmm/softmax-sharpened",
+                    "latency_s":  0.0,
+                },
+                "error":          None,
+            })
+        else:
+            llm_task_specs.append((int(i), bodies[int(i)], candidates))
+    # Fire LLM-judge ONLY for the residual (or all of them when GMM mode is off).
+    tasks = [
+        _track(spec_i, spec_body, spec_cands)
+        for spec_i, spec_body, spec_cands in llm_task_specs
+    ]
+    llm_decisions = await asyncio.gather(*tasks) if tasks else []
+    decisions = deterministic_decisions + list(llm_decisions)
 
     # ── Build refined assignments ──────────────────────────────────────
     refined = assignments.copy()
@@ -272,6 +351,8 @@ async def refine(state: PlannerState) -> dict:
     ]
 
     elapsed = int((time.monotonic() - t0) * 1000)
+    n_via_gmm = len(deterministic_decisions)
+    n_via_llm = n_boundary - n_via_gmm
     stats = {
         "n_docs":           n_docs,
         "n_boundary":       n_boundary,
@@ -286,6 +367,11 @@ async def refine(state: PlannerState) -> dict:
         "blob_bytes":       len(blob),
         "deployment_usage": deployment_summary,
         "prompt_version":   _PROMPT_VERSION,
+        # Phase D telemetry
+        "mode":             "gmm+llm" if gmm_used else "llm_judge",
+        "n_via_gmm":        n_via_gmm,
+        "n_via_llm":        n_via_llm,
+        "gmm_threshold":    _GMM_POSTERIOR_THRESHOLD if gmm_used else None,
     }
 
     await emit_progress(

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import unicodedata
 
 import numpy as np
 
@@ -11,15 +12,40 @@ from domains.llm.rotator.chain import DD_EMBED_MODEL_NAME
 from .constants import _CACHE_VERSION, _CHUNK_CHARS, _EMBED_PREFIX
 
 
+def normalize_content(text: str) -> str:
+    """Phase B (2026-05-23) — canonical text normalization applied before any
+    content-hashing. Fixes the "COLD twice on identical manifest" pattern
+    observed across FastMCP+LangChain runs (research-confirmed: content-
+    normalization drift is a known cache-miss cause; CRLF vs LF was the
+    likely culprit). Stable normalization rules:
+
+      1. NFC Unicode normalization (canonical composed form)
+      2. Line endings: CRLF → LF
+      3. Strip leading/trailing whitespace
+    """
+    return (
+        unicodedata.normalize("NFC", text or "")
+        .replace("\r\n", "\n")
+        .strip()
+    )
+
+
 def _manifest_hash(keys: list[str], total_bytes: int) -> str:
     """Stable cache key — same corpus (same keys + same byte count + same
     model + same cache version) → same hash → same MinIO blob. Re-runs
     after a re-ingestion that changes the corpus produce a different
     hash and re-embed. Model swaps also invalidate cleanly because the
-    DD_EMBED_MODEL_NAME is part of the digest."""
+    DD_EMBED_MODEL_NAME is part of the digest.
+
+    Phase B (2026-05-23): added explicit dim + input_type fields. The dim
+    matters because the new 8B embedder is 4096-D vs the legacy 1B's 2048-D
+    — if both versions ever co-exist via env override, their blobs must not
+    collide. The cache-version bump in constants is also a safety belt.
+    """
     h = hashlib.sha256()
     h.update(f"model={DD_EMBED_MODEL_NAME}|".encode("utf-8"))
     h.update(f"version={_CACHE_VERSION}|".encode("utf-8"))
+    h.update(f"input_type=passage|".encode("utf-8"))
     h.update(f"bytes={total_bytes}|".encode("utf-8"))
     for k in sorted(keys):
         h.update(k.encode("utf-8"))

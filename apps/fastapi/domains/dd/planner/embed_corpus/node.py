@@ -50,6 +50,7 @@ from .service import (
     _manifest_hash,
     _pack_npz,
     load_embeddings,
+    normalize_content,
 )
 
 
@@ -119,11 +120,15 @@ async def embed_corpus(state: PlannerState) -> dict:
 
     # Build the flat embedding input + a per-doc chunk-count map so we
     # can pool chunks back into one vector per doc.
+    # Phase B (2026-05-23): apply normalize_content() before chunking so
+    # whitespace / line-ending drift can't cause the same content to embed
+    # to different vectors on different runs (root cause of the "COLD twice"
+    # cache-miss pattern observed in the LangChain validation).
     flat_inputs: list[str] = []
     per_doc_chunk_counts: list[int] = []
     chunked_count = 0
     for body in bodies:
-        chunks = _chunk_doc(body or "")
+        chunks = _chunk_doc(normalize_content(body or ""))
         if len(chunks) > 1:
             chunked_count += 1
         flat_inputs.extend(chunks)

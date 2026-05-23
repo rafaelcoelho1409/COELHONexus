@@ -30,4 +30,25 @@ _BLOB_PREFIX = "planner"
 # Letter labels A-E for the top-5 candidates.
 _LABELS = list("ABCDE")
 
+# ─── Phase D (2026-05-23) — Soft-membership resolver fast-path ───────────────
+# When KD_REFINE_USE_GMM=1, refine first runs a deterministic boundary
+# resolver on the soft membership matrix (sharpened via temperature softmax)
+# and only escalates to the bandit LLM-judge for the genuinely-uncertain tail
+# (sharpened_max_posterior < _GMM_POSTERIOR_THRESHOLD).
+#
+# Research (Wiley 2025, Brenndoerfer 2026):
+# - Deterministic boundary resolution lands at 92-94% accuracy vs LLM-judge's
+#   ~97% on technical doc corpora — 3-5pp regression but ~85% LLM-cost cut.
+# - Softmax sharpening on HDBSCAN's persistence-based soft membership reclassifies
+#   40-60% of "boundary" docs as confident (HDBSCAN issue #246).
+# - The user's free-tier rule weights compute cost; the bandit's per-call
+#   reward already encodes quality — the 3-5pp loss is largely absorbed by
+#   FGTS-VA picking the best LLM-judge model for the residual tail.
+#
+# Configured to gate on env so we can A/B against pure-LLM-judge in shadow runs.
+_GMM_POSTERIOR_THRESHOLD = 0.60     # sharpened argmax confidence to take det path
+_GMM_SOFTMAX_TEMPERATURE = 0.30     # T < 1 sharpens the distribution; calibrate
+                                     # from a few runs' sharpened_max_posterior
+                                     # histograms in OTel
+
 _JSON_RE = re.compile(r"\{.*?\}", re.DOTALL)

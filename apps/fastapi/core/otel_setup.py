@@ -72,7 +72,17 @@ def _build_resource():
 
 
 def _add_alloy_exporter(tracer_provider) -> bool:
-    """Attach the gRPC OTLP exporter that sends to Alloy → LGTM. Returns True if added."""
+    """Attach the gRPC OTLP exporter that sends to Alloy → LGTM. Returns True if added.
+
+    Phase E (2026-05-23): BatchSpanProcessor backpressure tuning. Default
+    sdk values (max_queue=2048, max_export_batch=512, schedule_delay=5s,
+    timeout=30s) overwhelm Alloy under heavy LLM-call volume — observed
+    `StatusCode.RESOURCE_EXHAUSTED` errors during the LangChain Planner
+    run. Triple the queue + halve the batch + double the schedule delay
+    so spans buffer locally during burst and drain in smaller chunks
+    Alloy can absorb. All values overridable via env so ops can tune
+    per-cluster without code changes.
+    """
     endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
     if not endpoint:
         logger.info("[otel] OTEL_EXPORTER_OTLP_ENDPOINT unset — Alloy export disabled")
@@ -86,8 +96,29 @@ def _add_alloy_exporter(tracer_provider) -> bool:
         exporter = OTLPSpanExporter(
             endpoint=endpoint,
             insecure=endpoint.startswith("http://"),
+            # Per-export timeout — bump from default 10s to 30s so a slow
+            # Alloy ack on a heavy batch doesn't trigger a retry storm.
+            timeout=int(os.environ.get("OTEL_EXPORTER_OTLP_TIMEOUT", "30")),
         )
-        tracer_provider.add_span_processor(BatchSpanProcessor(exporter))
+        tracer_provider.add_span_processor(BatchSpanProcessor(
+            exporter,
+            # 3× default — bigger local buffer absorbs LLM-call bursts.
+            max_queue_size=int(
+                os.environ.get("OTEL_BSP_MAX_QUEUE_SIZE", "6144")
+            ),
+            # 1/2 default — smaller batches Alloy ingests without RESOURCE_EXHAUSTED.
+            max_export_batch_size=int(
+                os.environ.get("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", "256")
+            ),
+            # 2× default — more time between drains, less peak load on Alloy.
+            schedule_delay_millis=int(
+                os.environ.get("OTEL_BSP_SCHEDULE_DELAY", "10000")
+            ),
+            # Match exporter timeout so the processor doesn't kill a slow export.
+            export_timeout_millis=int(
+                os.environ.get("OTEL_BSP_EXPORT_TIMEOUT", "30000")
+            ),
+        ))
         logger.info(f"[otel] Alloy gRPC OTLP exporter attached → {endpoint}")
         return True
     except Exception as e:
@@ -131,8 +162,31 @@ def _add_langfuse_exporter(tracer_provider) -> bool:
         exporter = HTTPOTLPSpanExporter(
             endpoint=traces_endpoint,
             headers={"Authorization": f"Basic {basic}"},
+            # Phase E (2026-05-23): bump LangFuse HTTP read timeout from
+            # default 10s → 30s. Empirically (LangChain Planner run) the
+            # default timed out under heavy LLM-call volume — bigger batches
+            # take longer to ingest into LangFuse's Postgres-backed ingest.
+            timeout=int(os.environ.get("LANGFUSE_OTLP_TIMEOUT", "30")),
         )
-        tracer_provider.add_span_processor(BatchSpanProcessor(exporter))
+        tracer_provider.add_span_processor(BatchSpanProcessor(
+            exporter,
+            # Same backpressure tuning as Alloy — see _add_alloy_exporter
+            # comment for rationale. LangFuse benefits even more from
+            # smaller batches because each span carries rich prompt/response
+            # bodies that compress poorly.
+            max_queue_size=int(
+                os.environ.get("OTEL_BSP_MAX_QUEUE_SIZE", "6144")
+            ),
+            max_export_batch_size=int(
+                os.environ.get("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", "256")
+            ),
+            schedule_delay_millis=int(
+                os.environ.get("OTEL_BSP_SCHEDULE_DELAY", "10000")
+            ),
+            export_timeout_millis=int(
+                os.environ.get("OTEL_BSP_EXPORT_TIMEOUT", "30000")
+            ),
+        ))
         logger.info(f"[otel] LangFuse HTTP OTLP exporter attached → {traces_endpoint}")
         return True
     except Exception as e:

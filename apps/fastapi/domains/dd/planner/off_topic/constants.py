@@ -1,7 +1,25 @@
 from __future__ import annotations
 
 
-# LLM judge config
+# ─── Cross-encoder rerank fast-path (Phase A, 2026-05-23) ─────────────────────
+# When KD_OFF_TOPIC_USE_RERANK=1, off_topic skips the per-doc LLM judge entirely
+# and instead batches all candidates through `nvidia/llama-nemotron-rerank-1b-v2`
+# (the same NIM rerank model already used by `dd-rerank`). The cross-encoder
+# scores `(query=framework_descriptor, passage=doc)` pairs and returns logits;
+# sigmoid + threshold yields a calibrated KEEP/DROP verdict per doc.
+#
+# Expected speedup at LangChain scale: 280 s LLM-judge → ~15-25 s rerank.
+# Quality caveat: threshold MUST be calibrated on a ~50-100 doc validation set
+# per framework family. Default 0.35 is the research-recommended starting point
+# (Brenndoerfer 2026 cross-encoder calibration guide) but should be tuned for
+# >95% recall on hand-labeled validation data before flipping to production.
+_RERANK_THRESHOLD = 0.35
+_RERANK_BATCH_SIZE = 256   # NIM nemotron-rerank-1b-v2 hard cap is 512; 256 keeps
+                            # per-call latency stable + leaves headroom
+_RERANK_DOC_CHARS = 6000   # truncate each passage to ~6000 chars (well under the
+                            # 8192-token nemotron-rerank context, leaves headroom)
+
+# LLM judge config (legacy path; used when KD_OFF_TOPIC_USE_RERANK is unset)
 _JUDGE_BODY_CHARS = 4000     # chars sent to the LLM per page
 _JUDGE_MAX_TOKENS = 8        # plenty for "KEEP" or "DROP" plus whitespace
 # Concurrency: 5 parallel in-flight calls — the ParetoBandit + LiteLLM

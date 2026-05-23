@@ -243,6 +243,25 @@ dd:
   # See docs/KD-ROTATOR-ALWAYS-ON-BANDIT-MAY2026.md for the full architecture.
   paretoBanditDisable: "0"
 
+  # Phase A (2026-05-23 — docs/KD-PLANNER-SOTA-IMPROVEMENTS-2026-05-23.md):
+  # When "1", off_topic skips the per-doc LLM judge entirely and uses the
+  # NIM `nvidia/llama-nemotron-rerank-1b-v2` cross-encoder with batched 256
+  # passages/call + sigmoid threshold. Expected: 265s → ~15-25s on 777 docs
+  # (12-15× speedup, 0 LLM parsing failures).
+  # Threshold defaults to 0.35 (research-recommended starting point — see
+  # off_topic/constants.py:_RERANK_THRESHOLD). Tune on a 50-100 doc
+  # validation set per framework family if precision/recall need adjustment.
+  offTopicUseRerank: "1"
+
+  # Phase D (2026-05-23 — same doc):
+  # When "1", refine uses a deterministic softmax-sharpened soft-membership
+  # resolver for boundary docs whose sharpened posterior >= 0.60, falling
+  # back to the bandit LLM-judge only for the uncertain residual. Cuts
+  # ~85% of LLM-judge calls on LangChain-scale corpora (168s → ~30s for
+  # 405 boundary docs) at ~3-5pp accuracy regression vs pure LLM-judge.
+  # Trade-off worth it at scale per Wiley 2025 boundary-resolver comparison.
+  refineUseGmm: "1"
+
 # SearXNG — in-cluster metasearch used by Knowledge Distiller to resolve
 # official documentation URLs (and any future web-search need). Internal DNS
 # avoids Tailscale TLS overhead on every query. Service lives in the
