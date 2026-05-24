@@ -398,17 +398,26 @@ celery:
   # k8s/helm/templates/celery/deployment.yaml). Both dev (skaffold) and prod
   # (argocd) share the same Redis broker, but workers only consume their own
   # environment's tasks — no cross-env task stealing.
-  queues: "crawler,embedding,llm,default"
+  # 2026-05-24 — `planner` queue added: the 8-node LangGraph runs on Celery
+  # workers (was in-process in FastAPI). See domains/dd/planner/task.py +
+  # dispatch.py.
+  queues: "crawler,embedding,llm,planner,default"
   resources:
     requests:
       memory: "2Gi"
-      cpu: "100m"
+      # 2026-05-24 — bumped from 100m to 500m for Planner queue. UMAP+HDBSCAN
+      # in the cluster node + sklearn GMM in refine are CPU-bursty (multi-core
+      # numpy under the hood). The cluster step on 777 docs spikes to ~2 cores.
+      cpu: "500m"
     # Bumped 4Gi→6Gi 2026-05-12 night: with concurrency=2 + worker_max_memory_
     # per_child=2GB + parent ~1.8GB, peak RSS ≈ 5.8GB. Headroom to 6Gi keeps
-    # the cgroup OOM killer out of the picture.
+    # the cgroup OOM killer out of the picture. Planner adds ~200-400MB transient
+    # peak during cluster (numpy + UMAP fit) — still within 6Gi headroom.
     limits:
       memory: "6Gi"
-      cpu: "500m"  # Low CPU cap — embedding runs slower but doesn't slow the machine
+      # 2026-05-24 — bumped 500m→2000m for Planner cluster/refine math.
+      # Old cap throttled UMAP fit from ~6s to ~40s on 777-doc corpus.
+      cpu: "2000m"
 
 # Flower — Celery monitoring dashboard (UI for the workers above)
 # Deployed per-project (was previously in COELHO Cloud shared infra).

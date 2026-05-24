@@ -31,6 +31,9 @@ else:
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "local").lower()
 Q_DEFAULT = f"default-{ENVIRONMENT}"
 Q_CRAWLER = f"crawler-{ENVIRONMENT}"
+# Planner queue — isolated from crawler so CPU-heavy UMAP+HDBSCAN+GMM
+# work doesn't contend with HTTP-fetch tasks. See domains/dd/planner/task.py.
+Q_PLANNER = f"planner-{ENVIRONMENT}"
 
 
 app = Celery("coelhonexus")
@@ -47,6 +50,9 @@ app.config_from_object({
     "task_routes": {
         # Docs Distiller ingestion is HTTP-fetch heavy → crawler queue
         "domains.dd.ingestion.task.*": {"queue": Q_CRAWLER},
+        # Planner runs the 8-node LangGraph (CPU-heavy cluster/refine +
+        # LLM-bound off_topic/label/reduce) → planner queue
+        "domains.dd.planner.task.*": {"queue": Q_PLANNER},
     },
     "worker_prefetch_multiplier": 1,
     "broker_connection_retry_on_startup": True,
@@ -60,6 +66,7 @@ app.config_from_object({
 # Task module discovery. Add one entry per `tasks/<feature>/<module>.py`.
 app.conf.include = [
     "domains.dd.ingestion.task",
+    "domains.dd.planner.task",
 ]
 
 

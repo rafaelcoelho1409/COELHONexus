@@ -1,18 +1,30 @@
 """Planner endpoints — kick off + cancel + per-thread debug.
 
+The graph itself runs in a Celery worker (queue `planner-{env}`); FastAPI
+is purely the HTTP/SSE layer. Both POST routes dispatch to Celery via
+`.delay()` and return immediately. SSE/cancel/checkpoint all work cross-
+process: Redis pub/sub for events, Redis flag for cancel, Postgres for
+LangGraph checkpoints. The shared async runners live in
+`domains/dd/planner/dispatch.py`; the Celery task wrappers in
+`domains/dd/planner/task.py`.
+
+Migrated 2026-05-24 — see commit history for the prior in-process path.
+
   POST /planner/{slug}?mode=llm
-      → starts a planner run for `slug`. `mode` ∈ {llm, classical} —
-        only "llm" is wired today; "classical" is reserved for the
-        future classical+LLM mode (numpy community_detection + KeyLLM).
-        Returns the `thread_id` used as the LangGraph checkpoint group
-        key + the LangFuse session id. Each substep writes one
-        checkpoint row + one OTel span.
+      → dispatches `run_planner` Celery task. Returns immediately with
+        `thread_id` + `status="queued"` + `celery_task_id`. The UI polls
+        /debug/graph/{thread_id}/state + subscribes to /events for live
+        progress.
+
+  POST /planner/{thread_id}/resume
+      → dispatches `resume_planner` Celery task. Handles all three resume
+        paths (standard / catch-up missing nodes / no-op) inside the
+        worker via `dispatch.resume_planner_async`.
 
   POST /planner/{thread_id}/cancel
-      → sets the cancel flag in Redis. The cancel watcher running
-        alongside the planner task picks it up within ~1s and cancels
-        the main task, which propagates LangGraph's CancelledError.
-        The POST /planner/{slug} call returns with status="cancelled".
+      → sets the cancel flag in Redis. The watcher running inside the
+        Celery worker's async runner picks it up within ~1s and cancels
+        the graph (propagates LangGraph's CancelledError).
 
   GET /planner/debug/graph/{thread_id}/state
       → current state for the thread (latest checkpoint).
@@ -38,18 +50,16 @@ from domains.dd.planner.cancel import (
     _redis_url,
     clear_cancel,
     request_cancel,
-    watcher as cancel_watcher,
 )
 from domains.dd.planner.graph import (
     IMPLEMENTED,
     NODE_ORDER,
-    NODE_REGISTRY,
-    NODE_TO_FIELD,
     build_graph,
 )
-from domains.dd.planner.progress import (
-    emit_progress,
-    subscribe_progress,
+from domains.dd.planner.progress import subscribe_progress
+from domains.dd.planner.task import (
+    resume_planner as resume_planner_task,
+    run_planner as run_planner_task,
 )
 
 
@@ -57,67 +67,6 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
-
-
-# Strong refs to detached planner tasks so the event loop doesn't garbage-
-# collect them mid-run. Each task removes itself on completion via a
-# done_callback (see _spawn_planner_task below).
-_active_runs: set[asyncio.Task] = set()
-
-
-async def _run_planner_background(
-    graph,
-    config: dict,
-    main_task: asyncio.Task,
-    watcher_task: asyncio.Task,
-    thread_id: str,
-) -> None:
-    """Await the already-spawned planner graph task in the background,
-    handling cancel / error / success identically to the old in-route
-    logic. Writes terminal `status` ("done" / "cancelled" / "failed") +
-    optional `error` back into the LangGraph checkpointer via
-    aupdate_state so the polling UI can detect run completion via the
-    /debug/graph/{thread_id}/state response."""
-    terminal_patch: dict = {}
-    try:
-        await main_task
-        terminal_patch["status"] = "done"
-        logger.info(f"[planner] {thread_id}: done")
-    except asyncio.CancelledError:
-        terminal_patch["status"] = "cancelled"
-        logger.info(f"[planner] {thread_id}: cancelled by user")
-    except Exception as e:
-        terminal_patch["status"] = "failed"
-        terminal_patch["error"] = f"{type(e).__name__}: {e}"
-        logger.exception(
-            f"[planner] {thread_id}: run failed ({type(e).__name__}: {e})"
-        )
-    finally:
-        watcher_task.cancel()
-        try:
-            await watcher_task
-        except (asyncio.CancelledError, Exception):
-            pass
-
-    # Patch the terminal status into the checkpointer so callers of
-    # /debug/graph/{thread_id}/state see the run is over (used as the
-    # state-snapshot endpoint by the UI on reload).
-    try:
-        await graph.aupdate_state(config, terminal_patch)
-    except Exception as e:
-        logger.warning(
-            f"[planner] {thread_id}: aupdate_state failed for terminal "
-            f"patch {terminal_patch!r}: {type(e).__name__}: {e}"
-        )
-
-    # Emit a terminal event on the SSE channel so the live-UI listener
-    # can detect run completion without polling. Best-effort; the
-    # state-patch above is the authoritative record.
-    await emit_progress(
-        thread_id, "planner", "terminal",
-        status=terminal_patch.get("status", "unknown"),
-        error=terminal_patch.get("error"),
-    )
 
 
 @router.get("/info")
@@ -145,19 +94,19 @@ _VALID_MODES = {"llm", "classical"}
 async def start_planner(
     slug: str, mode: str = "llm", thread_id: str | None = None,
 ) -> dict:
-    """Kick off a planner run for `slug`. Spawns the graph in a detached
-    background task and returns IMMEDIATELY with `thread_id` + status
-    "running" — the UI polls /debug/graph/{thread_id}/state for progress.
+    """Kick off a planner run for `slug` by dispatching the `run_planner`
+    Celery task. Returns IMMEDIATELY with `thread_id` + `status="queued"` —
+    the UI polls /debug/graph/{thread_id}/state for progress and subscribes
+    to /events for live SSE updates.
 
-    The previous synchronous-await design held the HTTP connection open
-    for the full graph wall (160s+ for cold embed_corpus on a 777-doc
-    corpus), which blew past the FastHTML proxy's httpx timeout and
-    surfaced as a 500 to the user even though the backend succeeded.
+    If the caller supplies `thread_id`, it's used as-is — the UI generates
+    a UUID client-side BEFORE the POST returns, so the Cancel button +
+    the polling loop both have a real thread_id from click 1 (no 'pending'
+    dead-zone).
 
-    If the caller supplies `thread_id`, it's used as-is — the UI
-    generates a UUID client-side BEFORE the POST returns, so the
-    Cancel button + the polling loop both have a real thread_id from
-    click 1 (no 'pending' dead-zone)."""
+    The graph itself executes inside a Celery worker (queue `planner-{env}`)
+    via `dispatch.run_planner_async`. SSE/cancel/checkpoint all work cross-
+    process via Redis pub/sub + Redis flag + Postgres respectively."""
     if mode not in _VALID_MODES:
         raise HTTPException(
             status_code=400,
@@ -166,16 +115,9 @@ async def start_planner(
 
     if not thread_id:
         thread_id = f"docs-distiller/{slug}/{uuid.uuid4()}"
-    config = {"configurable": {"thread_id": thread_id}}
 
-    try:
-        graph = build_graph()
-    except RuntimeError as e:
-        # AsyncPostgresSaver not initialized — lifespan startup failure.
-        raise HTTPException(status_code=503, detail=str(e))
-
-    # Clear any stale cancel flag (defense-in-depth — thread_id is fresh
-    # uuid so collision impossible, but cheap to be explicit).
+    # Clear stale cancel flag pre-dispatch (cheap defense-in-depth —
+    # thread_id is fresh uuid so collision impossible, but explicit).
     r = redis_aio.from_url(
         _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
@@ -184,143 +126,49 @@ async def start_planner(
     finally:
         await r.aclose()
 
-    initial_state = {
-        "framework_slug": slug,
-        "thread_id": thread_id,
-        "planner_mode": mode,
-        "status": "running",
-    }
-
-    # Spawn the graph as a DETACHED background task. The watcher (cancel
-    # flag poller) runs beside it. The wrapper coroutine owns lifecycle
-    # cleanup (catch + watcher cancel) so this route can return
-    # immediately without holding the HTTP connection open for the full
-    # graph wall. Strong-ref via _active_runs so the event loop doesn't
-    # GC the task mid-run.
-    main_task = asyncio.create_task(graph.ainvoke(initial_state, config))
-    watcher_task = asyncio.create_task(cancel_watcher(thread_id, main_task))
-    bg_task = asyncio.create_task(
-        _run_planner_background(graph, config, main_task, watcher_task, thread_id)
-    )
-    _active_runs.add(bg_task)
-    bg_task.add_done_callback(_active_runs.discard)
+    try:
+        async_result = run_planner_task.delay(thread_id, slug, mode)
+    except Exception as e:
+        logger.exception(
+            f"[planner] {thread_id}: celery dispatch failed: "
+            f"{type(e).__name__}: {e}"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"celery dispatch failed: {type(e).__name__}: {e}",
+        )
 
     return {
-        "thread_id":  thread_id,
-        "slug":       slug,
-        "mode":       mode,
-        "status":     "running",
-        "latency_ms": 0,
+        "thread_id":      thread_id,
+        "slug":           slug,
+        "mode":           mode,
+        "status":         "queued",
+        "celery_task_id": async_result.id,
+        "latency_ms":     0,
     }
-
-
-def _missing_implemented_nodes(state: dict) -> list[str]:
-    """Return IMPLEMENTED node names whose primary output field is
-    missing/empty in state. Used by /resume to detect "this thread
-    completed BEFORE node N was added to IMPLEMENTED" — LangGraph's
-    `ainvoke(None)` short-circuits on those threads because the old
-    checkpoint already reached END, so the new node would never run."""
-    missing: list[str] = []
-    for name in IMPLEMENTED:
-        field = NODE_TO_FIELD.get(name)
-        if not field:
-            continue
-        val = state.get(field)
-        if val is None or val == "" or val == []:
-            missing.append(name)
-    return missing
-
-
-async def _run_missing_nodes_directly(
-    graph, config: dict, thread_id: str, missing: list[str],
-) -> None:
-    """Background wrapper: invoke each missing IMPLEMENTED node via
-    NODE_REGISTRY directly, patching state with the result through
-    `aupdate_state` between calls. Each node's own `emit_progress`
-    calls naturally surface live SSE events to the UI.
-
-    Used when a thread completed BEFORE a new IMPLEMENTED node was
-    added: LangGraph's `ainvoke(None)` would no-op because the old
-    checkpoint reached END. Running the new node(s) directly + patching
-    state restores the full pipeline output for the existing thread
-    without forcing a fresh re-run from corpus_load."""
-    terminal_patch: dict = {"status": "done"}
-    try:
-        for name in missing:
-            node_fn = NODE_REGISTRY.get(name)
-            if node_fn is None:
-                continue
-            snap = await graph.aget_state(config)
-            state = dict(snap.values or {})
-            state["thread_id"] = thread_id  # node functions read this
-            result = await node_fn(state)
-            if not isinstance(result, dict):
-                continue
-            await graph.aupdate_state(config, result)
-            logger.info(
-                f"[planner] {thread_id}: catch-up ran missing node "
-                f"{name!r} → fields {sorted(result.keys())}"
-            )
-    except Exception as e:
-        terminal_patch = {"status": "failed",
-                          "error": f"{type(e).__name__}: {e}"}
-        logger.exception(
-            f"[planner] {thread_id}: catch-up failed mid-run "
-            f"({type(e).__name__}: {e})"
-        )
-
-    try:
-        await graph.aupdate_state(config, terminal_patch)
-    except Exception as e:
-        logger.warning(
-            f"[planner] {thread_id}: aupdate_state failed for catch-up "
-            f"terminal patch {terminal_patch!r}: {type(e).__name__}: {e}"
-        )
-
-    await emit_progress(
-        thread_id, "planner", "terminal",
-        status=terminal_patch.get("status", "unknown"),
-        error=terminal_patch.get("error"),
-    )
 
 
 @router.post("/{thread_id:path}/resume")
 async def resume_planner(thread_id: str) -> dict:
-    """Resume a planner run from its last LangGraph checkpoint.
+    """Resume a planner run from its last LangGraph checkpoint by
+    dispatching the `resume_planner` Celery task.
 
-    Used by the FastHTML page-refresh recovery: when a pod restart kills
-    the in-flight asyncio bg task, the state.status stays "running" but
-    no live events arrive. The UI detects the orphan (no SSE events in
-    ~5s) and POSTs here to continue from where it left off.
+    Used by the FastHTML page-refresh recovery: when a worker pod restart
+    kills the in-flight task, the state.status stays "running" but no live
+    events arrive. The UI detects the orphan (no SSE events in ~5s) and
+    POSTs here to continue from where it left off.
 
-    Three execution paths:
+    Three execution paths handled inside `dispatch.resume_planner_async`:
       1. `status` ∈ {"running", "failed"} → standard `ainvoke(None)`
          resume from the last committed checkpoint.
       2. `status == "done"` BUT some IMPLEMENTED nodes have no output
          field in state → catch-up path. This happens when a new node
-         (e.g. plan_write) was added to IMPLEMENTED AFTER the thread
-         completed. LangGraph's `ainvoke(None)` would no-op (the END
-         marker is already consumed in the old checkpoint), so we run
-         each missing node directly via NODE_REGISTRY + aupdate_state,
+         was added to IMPLEMENTED AFTER the thread completed; the worker
+         runs each missing node directly via NODE_REGISTRY + aupdate_state,
          preserving SSE events naturally.
-      3. `status == "done"` AND no missing nodes → return immediately
-         with no work to do (a true "already complete" thread).
+      3. `status == "done"` AND no missing nodes → terminal "done" event
+         with no work performed.
     """
-    try:
-        graph = build_graph()
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-
-    config = {"configurable": {"thread_id": thread_id}}
-
-    snap = await graph.aget_state(config)
-    if snap.values == {}:
-        raise HTTPException(
-            status_code=404,
-            detail=f"no checkpoints found for thread_id={thread_id!r}; "
-                   f"call POST /planner/{{slug}} to start a fresh run",
-        )
-
     r = redis_aio.from_url(
         _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
@@ -329,62 +177,22 @@ async def resume_planner(thread_id: str) -> dict:
     finally:
         await r.aclose()
 
-    # Path 2 — status=done but newly-added IMPLEMENTED nodes haven't
-    # run. LangGraph would short-circuit `ainvoke(None)` because the
-    # old checkpoint reached END, so we drive the missing node(s)
-    # directly. Each node's own emit_progress() calls give the UI
-    # the same live-status experience as a fresh run.
-    state = dict(snap.values or {})
-    if state.get("status") == "done":
-        missing = _missing_implemented_nodes(state)
-        if missing:
-            await emit_progress(
-                thread_id, "planner", "catch_up",
-                missing=missing,
-            )
-            # Reset terminal status so the wrapper isn't confused by
-            # an already-done state mid-catch-up.
-            try:
-                await graph.aupdate_state(config, {"status": "running"})
-            except Exception as e:
-                logger.warning(
-                    f"[planner] {thread_id}: pre-catch-up status reset "
-                    f"failed: {type(e).__name__}: {e}"
-                )
-            bg_task = asyncio.create_task(
-                _run_missing_nodes_directly(graph, config, thread_id, missing)
-            )
-            _active_runs.add(bg_task)
-            bg_task.add_done_callback(_active_runs.discard)
-            return {
-                "thread_id":      thread_id,
-                "status":         "catching_up",
-                "missing_nodes":  missing,
-            }
-        # Path 3 — truly nothing to do.
-        return {
-            "thread_id": thread_id,
-            "status":    "done",
-            "note":      "all IMPLEMENTED nodes already have output",
-        }
-
-    # Path 1 — standard LangGraph resume.
-    await emit_progress(
-        thread_id, "planner", "resumed",
-        next_nodes=list(snap.next or []),
-    )
-    main_task = asyncio.create_task(graph.ainvoke(None, config))
-    watcher_task = asyncio.create_task(cancel_watcher(thread_id, main_task))
-    bg_task = asyncio.create_task(
-        _run_planner_background(graph, config, main_task, watcher_task, thread_id)
-    )
-    _active_runs.add(bg_task)
-    bg_task.add_done_callback(_active_runs.discard)
+    try:
+        async_result = resume_planner_task.delay(thread_id)
+    except Exception as e:
+        logger.exception(
+            f"[planner] {thread_id}: celery resume dispatch failed: "
+            f"{type(e).__name__}: {e}"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"celery dispatch failed: {type(e).__name__}: {e}",
+        )
 
     return {
-        "thread_id":  thread_id,
-        "status":     "resuming",
-        "next_nodes": list(snap.next or []),
+        "thread_id":      thread_id,
+        "status":         "queued",
+        "celery_task_id": async_result.id,
     }
 
 
