@@ -101,9 +101,6 @@ DD_DYNAMIC_CATALOG: "{{ .Values.dd.dynamicCatalog }}"
 # runs by default; set "1" to disable (emergency rollback to Phase 1).
 # See dd.paretoBanditDisable in values.yaml + docs/KD-ROTATOR-ALWAYS-ON-BANDIT-MAY2026.md.
 DD_PARETO_BANDIT_DISABLE: "{{ .Values.dd.paretoBanditDisable }}"
-# Phase A (2026-05-23): cross-encoder rerank fast-path for off_topic.
-# See dd.offTopicUseRerank in values.yaml + docs/KD-PLANNER-SOTA-IMPROVEMENTS-2026-05-23.md.
-KD_OFF_TOPIC_USE_RERANK: "{{ .Values.dd.offTopicUseRerank }}"
 # Phase D (2026-05-23): deterministic soft-membership boundary resolver for refine.
 # See dd.refineUseGmm in values.yaml + docs/KD-PLANNER-SOTA-IMPROVEMENTS-2026-05-23.md.
 KD_REFINE_USE_GMM: "{{ .Values.dd.refineUseGmm }}"

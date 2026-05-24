@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 
 import numpy as np
@@ -45,22 +44,11 @@ from ..observability.spans import traced
 from ..progress import emit_progress
 from ..state import PlannerState
 from ..embed_corpus import load_embeddings
-from .constants import (
-    _JUDGE_CONCURRENCY,
-    _NEGATIVE_DESCRIPTOR,
-    _RERANK_THRESHOLD,
-)
+from .constants import _JUDGE_CONCURRENCY, _NEGATIVE_DESCRIPTOR
 from .service import (
     _build_positive_descriptor,
     _judge_one,
-    off_topic_via_rerank,
 )
-
-
-def _rerank_mode_active() -> bool:
-    """Phase A (2026-05-23): KD_OFF_TOPIC_USE_RERANK=1 → cross-encoder rerank
-    replaces LLM-judge-per-doc. Default off — set the env to enable per pod."""
-    return os.environ.get("KD_OFF_TOPIC_USE_RERANK", "0") == "1"
 
 
 logger = logging.getLogger(__name__)
@@ -136,105 +124,66 @@ async def off_topic(state: PlannerState) -> dict:
     # gets the bandit-routed big-LLM verdict. Margins stay in the stats
     # payload as TELEMETRY only (operator can correlate margin to LLM
     # verdict to spot calibration drift between cheap + expensive signals).
-    #
-    # 2026-05-23 Phase A: KD_OFF_TOPIC_USE_RERANK=1 swaps to cross-encoder
-    # rerank fast-path (NIM `nvidia/llama-nemotron-rerank-1b-v2` batched at
-    # 256 passages/call + sigmoid threshold). 280 s → ~15-25 s on 777 docs.
-    # See domains/dd/planner/off_topic/service.py:off_topic_via_rerank.
     n = len(raw_files)
     keep_mask = np.zeros(n, dtype=bool)
+
+    # ── LLM-as-judge on EVERY doc, bandit-routed. ──────────────────────
     judge_decisions: list[dict] = []
     judge_errors: list[str] = []
     bodies = await minio.read_many(raw_files)
-    rerank_used = _rerank_mode_active()
-    rerank_scores: list[float] | None = None
+    sem = asyncio.Semaphore(_JUDGE_CONCURRENCY)
 
-    if rerank_used:
-        # ── Cross-encoder rerank fast-path (Phase A) ────────────────────
-        await emit_progress(
-            thread_id, "off_topic", "rerank_start",
-            files=n, threshold=_RERANK_THRESHOLD,
-        )
-        keep_list, rerank_scores = await off_topic_via_rerank(
-            framework_descriptor=positive_descriptor,
-            doc_bodies=list(bodies),
-            threshold=_RERANK_THRESHOLD,
-        )
-        for doc_idx, (key, body, keep, prob) in enumerate(
-            zip(raw_files, bodies, keep_list, rerank_scores)
-        ):
-            keep_mask[doc_idx] = keep
-            judge_decisions.append({
-                "key":           key,
-                "margin":        float(margins[doc_idx]),
-                "verdict":       "KEEP" if keep else "DROP",
-                "raw":           f"sigmoid={prob:.3f}",
-                "error":         None,
-                "deployment":    "nim/nemotron-rerank-1b-v2",
-                "latency_s":     None,
-                "reward":        None,
-                "attempts":      1,
-                "rerank_score":  float(prob),
-            })
-        await emit_progress(
-            thread_id, "off_topic", "rerank_done",
-            files=n,
-            kept=int(keep_mask.sum()),
-            dropped=int(n - keep_mask.sum()),
-        )
-    else:
-        # ── Legacy: LLM-as-judge on EVERY doc, bandit-routed. ──────────
-        sem = asyncio.Semaphore(_JUDGE_CONCURRENCY)
+    # Shared counter so we can emit live "judged N/M" progress as
+    # each future resolves (futures complete in arbitrary order with
+    # asyncio.gather, so accumulate across the gathered set).
+    judged_done = {"n": 0, "keep": 0, "drop": 0, "err": 0}
+    _EMIT_EVERY = max(1, n // 40)   # ~40 progress events / run
 
-        # Shared counter so we can emit live "judged N/M" progress as
-        # each future resolves (futures complete in arbitrary order with
-        # asyncio.gather, so accumulate across the gathered set).
-        judged_done = {"n": 0, "keep": 0, "drop": 0, "err": 0}
-        _EMIT_EVERY = max(1, n // 40)   # ~40 progress events / run
-
-        async def _on_judge_complete(keep: bool, error: str | None) -> None:
-            judged_done["n"] += 1
-            if error:
-                judged_done["err"] += 1
-            elif keep:
-                judged_done["keep"] += 1
-            else:
-                judged_done["drop"] += 1
-            if judged_done["n"] % _EMIT_EVERY == 0 or judged_done["n"] == n:
-                await emit_progress(
-                    thread_id, "off_topic", "llm_progress",
-                    judged=judged_done["n"], total=n,
-                    llm_keep=judged_done["keep"],
-                    llm_drop=judged_done["drop"],
-                    llm_err=judged_done["err"],
-                )
-
-        tasks = [
-            _judge_one(
-                sem, framework_name, framework_category, body,
-                on_complete=_on_judge_complete,
+    async def _on_judge_complete(keep: bool, error: str | None) -> None:
+        judged_done["n"] += 1
+        if error:
+            judged_done["err"] += 1
+        elif keep:
+            judged_done["keep"] += 1
+        else:
+            judged_done["drop"] += 1
+        if judged_done["n"] % _EMIT_EVERY == 0 or judged_done["n"] == n:
+            await emit_progress(
+                thread_id, "off_topic", "llm_progress",
+                judged=judged_done["n"], total=n,
+                llm_keep=judged_done["keep"],
+                llm_drop=judged_done["drop"],
+                llm_err=judged_done["err"],
             )
-            for body in bodies
-        ]
-        verdicts = await asyncio.gather(*tasks)
 
-        # Bandit deployment usage tally — which models actually answered.
-        for doc_idx, (keep, raw_resp, err, meta) in enumerate(verdicts):
-            keep_mask[doc_idx] = keep
-            dep = (meta or {}).get("deployment") or "?"
-            judge_decisions.append({
-                "key":        raw_files[doc_idx],
-                "margin":     float(margins[doc_idx]),
-                "verdict":    "KEEP" if keep else "DROP",
-                "raw":        raw_resp[:60],   # cap for state payload size
-                "error":      err,
-                "deployment": dep,
-                "latency_s":  (meta or {}).get("latency_s"),
-                "reward":     (meta or {}).get("reward"),
-                "attempts":   (meta or {}).get("attempts"),
-            })
-            if err:
-                judge_errors.append(err)
+    tasks = [
+        _judge_one(
+            sem, framework_name, framework_category, body,
+            on_complete=_on_judge_complete,
+        )
+        for body in bodies
+    ]
+    verdicts = await asyncio.gather(*tasks)
+
+    # Bandit deployment usage tally — which models actually answered.
+    deployment_usage: dict[str, int] = {}
+    for doc_idx, (keep, raw_resp, err, meta) in enumerate(verdicts):
+        keep_mask[doc_idx] = keep
+        dep = (meta or {}).get("deployment") or "?"
+        deployment_usage[dep] = deployment_usage.get(dep, 0) + 1
+        judge_decisions.append({
+            "key":        raw_files[doc_idx],
+            "margin":     float(margins[doc_idx]),
+            "verdict":    "KEEP" if keep else "DROP",
+            "raw":        raw_resp[:60],   # cap for state payload size
+            "error":      err,
+            "deployment": dep,
+            "latency_s":  (meta or {}).get("latency_s"),
+            "reward":     (meta or {}).get("reward"),
+            "attempts":   (meta or {}).get("attempts"),
+        })
+        if err:
+            judge_errors.append(err)
 
     # ── Compute outputs + observability ────────────────────────────────
     relevant: list[str] = []
@@ -257,13 +206,7 @@ async def off_topic(state: PlannerState) -> dict:
     llm_kept = sum(1 for d in judge_decisions if d["verdict"] == "KEEP")
     llm_dropped = sum(1 for d in judge_decisions if d["verdict"] == "DROP")
 
-    # Bandit telemetry — top deployments by usage + reward avg per deployment.
-    # Derived from judge_decisions so both LLM-judge and rerank paths populate
-    # consistent telemetry (rerank path = single nim/nemotron-rerank-1b-v2 entry).
-    deployment_usage: dict[str, int] = {}
-    for d in judge_decisions:
-        dep = d.get("deployment") or "?"
-        deployment_usage[dep] = deployment_usage.get(dep, 0) + 1
+    # Bandit telemetry — top deployments by usage + reward avg per deployment
     rewards_by_dep: dict[str, list[float]] = {}
     for d in judge_decisions:
         r = d.get("reward")
@@ -281,15 +224,6 @@ async def off_topic(state: PlannerState) -> dict:
             key=lambda kv: -deployment_usage.get(kv[0], 0),
         )
     ]
-    # Ensure all picked deployments show in the summary, even those without
-    # reward signal (rerank path is the main case — no per-call reward).
-    for dep, calls in sorted(
-        deployment_usage.items(), key=lambda kv: -kv[1],
-    ):
-        if not any(s["deployment"] == dep for s in deployment_summary):
-            deployment_summary.append({
-                "deployment": dep, "calls": calls, "reward_avg": 0.0,
-            })
 
     stats = {
         "kept":              len(relevant),
@@ -310,10 +244,6 @@ async def off_topic(state: PlannerState) -> dict:
         "embed_model":       DD_EMBED_MODEL_NAME,
         "judge_concurrency": _JUDGE_CONCURRENCY,
         "judge_router":      "pareto-bandit/dd-grader",
-        # Phase A: which classification path actually ran on this invocation.
-        "mode":              "rerank" if rerank_used else "llm_judge",
-        "rerank_threshold":  _RERANK_THRESHOLD if rerank_used else None,
-        "rerank_scores":     rerank_scores if rerank_used else None,
     }
 
     try:
