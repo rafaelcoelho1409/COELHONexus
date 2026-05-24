@@ -485,7 +485,10 @@ async def render_audit_write(state: SynthState) -> dict:
         )
         for s in sections
     ]
-    n_paragraphs_total = sum(len(s.get("paragraphs") or []) for s in sections)
+    # v2 cookbook schema (2026-05-24): each section has subtopics rather
+    # than flat paragraphs. The stat is renamed but kept under the same
+    # key in RenderResult for compatibility with the persisted blob shape.
+    n_subtopics_total = sum(len(s.get("subtopics") or []) for s in sections)
     n_citations_total = sum(len(s.get("citations") or []) for s in sections)
 
     chapter_md     = render_chapter_md(chapter_title, sections_ctx)
@@ -560,7 +563,7 @@ async def render_audit_write(state: SynthState) -> dict:
         audit=audit,
         rendered_chars=len(chapter_md),
         n_sections=len(sections),
-        n_paragraphs_total=n_paragraphs_total,
+        n_subtopics_total=n_subtopics_total,
         n_citations_total=n_citations_total,
         sawc_manifest_hash=sawc_manifest_hash,
         mgsr_manifest_hash=mgsr_manifest_hash,
@@ -588,7 +591,7 @@ async def render_audit_write(state: SynthState) -> dict:
         "sentinels_in_output":  audit.sentinels_in_output,
         "rendered_chars":       len(chapter_md),
         "n_sections":           len(sections),
-        "n_paragraphs_total":   n_paragraphs_total,
+        "n_subtopics_total":    n_subtopics_total,
         "n_citations_total":    n_citations_total,
         "n_vault_files_loaded": n_loaded,
         "n_vault_files_skipped": n_skipped,

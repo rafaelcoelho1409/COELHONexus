@@ -25,10 +25,11 @@ THE ROUND-TRIP AUDIT (the integrity guarantee)
    byte-identical to vault → on any drift, structured retry."
 
   Concretely:
-    1. For each `section.code_refs[*].hash` in the ChapterDraft:
+    1. For each `section.subtopics[*].code_ref_hash` in the ChapterDraft
+       (v2 cookbook schema, 2026-05-24):
        a. Look up the merged vault → get VaultEntry.fence_text
        b. Re-hash fence_text with SHA-256[:16] (same algorithm vault.py used)
-       c. Assert rehashed_prefix == ref.hash  → byte_drift list otherwise
+       c. Assert rehashed_prefix == code_ref_hash → byte_drift list otherwise
        d. If not found in any source vault → add to `missing` list
     2. After rendering, scan the chapter markdown for ANY
        `<code-ref hash=".../>"` remnants → if > 0, sentinel substitution
@@ -52,10 +53,10 @@ WHY BYTE-EXACT IS POSSIBLE HERE (vs the literature's harder problem)
   Our pipeline sidesteps this entirely by NEVER ASKING THE LLM TO COPY
   CODE. The vault sentinel architecture (vault.py, ingestion-time) hides
   fenced code blocks behind `<code-ref hash="..."/>` opaque tags before
-  any LLM ever sees the document. The LLM picks WHICH refs go in each
-  section (sawc Section.code_refs); render_audit_write does the actual
-  text materialization deterministically. Stronger guarantee than
-  RTC (arXiv 2402.08699 semantic equivalence) — we get byte-exact.
+  any LLM ever sees the document. The LLM picks WHICH hash goes in each
+  subtopic (sawc Section.subtopics[*].code_ref_hash); render_audit_write
+  does the actual text materialization deterministically. Stronger
+  guarantee than RTC (arXiv 2402.08699 semantic equivalence) — byte-exact.
 
 TEMPLATE DESIGN — Jinja2 inline strings, no external .j2 files
 
@@ -103,55 +104,73 @@ def _basename(key: str) -> str:
     return key.rstrip("/").rsplit("/", 1)[-1]
 
 
+def _slugify(s: str) -> str:
+    """Markdown-anchor-friendly slug for TOC links."""
+    import re as _re
+    out = _re.sub(r"[^a-zA-Z0-9\s-]", "", (s or "")).strip().lower()
+    return _re.sub(r"\s+", "-", out)
+
+
 def build_section_context(
     section: dict,
     *,
     vault: dict[str, str],
     resolution_log: list[CodeRefResolution],
 ) -> dict:
-    """Pre-process one sawc Section into the Jinja template context.
+    """Pre-process one sawc Section (v2 cookbook schema) into the Jinja
+    template context.
 
-    Side effect: APPENDS one `CodeRefResolution` entry per code_ref
-    to `resolution_log` (the caller's accumulator). This lets the
-    caller compute audit stats in a single pass.
+    Side effect: APPENDS one `CodeRefResolution` entry per subtopic
+    code_ref_hash to `resolution_log`. This lets the caller compute
+    audit stats in a single pass.
 
     Returns a dict with:
-      - section_id
-      - heading
-      - paragraphs        (list[str])
-      - materialized_code_blocks (list[str] — `fence_text` from vault)
-      - citations         (list[{source_basename, claim}])
+      - section_id, heading, intro, anchor
+      - subtopics: list[{subheading, explanation, code_block, anchor}]
+      - citations: list[{source_basename, claim}]
     """
     section_id = section.get("section_id", "?")
     heading = section.get("heading", "?")
-    paragraphs = list(section.get("paragraphs") or [])
+    intro = (section.get("intro") or "").strip()
 
-    materialized: list[str] = []
-    for ref in (section.get("code_refs") or []):
-        h = ref.get("hash") if isinstance(ref, dict) else None
-        if not h:
+    sub_ctx: list[dict] = []
+    for sub in (section.get("subtopics") or []):
+        if not isinstance(sub, dict):
             continue
-        if h in vault:
-            fence_text = vault[h]
-            materialized.append(fence_text)
-            # Re-hash + compare for the audit
-            rehashed = _hash_block(fence_text)
-            byte_drift = (rehashed != h)
-            resolution_log.append(CodeRefResolution(
-                hash=h,
-                found_in_vault=True,
-                byte_drift=byte_drift,
-                materialized_chars=len(fence_text),
-                section_id=section_id,
-            ))
-        else:
-            resolution_log.append(CodeRefResolution(
-                hash=h,
-                found_in_vault=False,
-                byte_drift=False,
-                materialized_chars=0,
-                section_id=section_id,
-            ))
+        subheading = (sub.get("subheading") or "").strip()
+        explanation = (sub.get("explanation") or "").strip()
+        h = sub.get("code_ref_hash")
+        # Render code block from the vault. Missing/drifted hashes get
+        # logged for the audit but render as an empty fence so the
+        # chapter is still readable.
+        code_block = ""
+        if h:
+            if h in vault:
+                fence_text = vault[h]
+                code_block = fence_text
+                rehashed = _hash_block(fence_text)
+                byte_drift = (rehashed != h)
+                resolution_log.append(CodeRefResolution(
+                    hash=h,
+                    found_in_vault=True,
+                    byte_drift=byte_drift,
+                    materialized_chars=len(fence_text),
+                    section_id=section_id,
+                ))
+            else:
+                resolution_log.append(CodeRefResolution(
+                    hash=h,
+                    found_in_vault=False,
+                    byte_drift=False,
+                    materialized_chars=0,
+                    section_id=section_id,
+                ))
+        sub_ctx.append({
+            "subheading":  subheading,
+            "explanation": explanation,
+            "code_block":  code_block,
+            "anchor":      _slugify(subheading),
+        })
 
     citations = []
     for c in (section.get("citations") or []):
@@ -164,27 +183,52 @@ def build_section_context(
             })
 
     return {
-        "section_id":               section_id,
-        "heading":                  heading,
-        "paragraphs":               paragraphs,
-        "materialized_code_blocks": materialized,
-        "citations":                citations,
+        "section_id":  section_id,
+        "heading":     heading,
+        "anchor":      _slugify(heading),
+        "intro":       intro,
+        "subtopics":   sub_ctx,
+        "citations":   citations,
     }
 
 
 # =============================================================================
 # Rendering — three pure transforms
 # =============================================================================
+def _build_toc(sections_ctx: list[dict]) -> list[dict]:
+    """Build a nested TOC from sections_ctx for the cookbook chapter
+    template. Only emitted when there are ≥2 sections with subtopics."""
+    toc = []
+    for s in sections_ctx:
+        subs = s.get("subtopics") or []
+        toc.append({
+            "heading": s.get("heading") or "?",
+            "anchor":  s.get("anchor") or "",
+            "subtopics": [
+                {"subheading": x.get("subheading") or "?",
+                 "anchor":     x.get("anchor") or ""}
+                for x in subs if (x.get("subheading") or "").strip()
+            ],
+        })
+    return toc
+
+
 def render_chapter_md(
     chapter_title: str,
     sections_ctx: list[dict],
 ) -> str:
-    """Render the README.md (full chapter markdown). Deterministic
-    given identical inputs."""
+    """Render the README.md (full cookbook chapter markdown). Deterministic
+    given identical inputs.
+
+    v2 cookbook structure: H1 chapter title → optional TOC → for each
+    section: H2 heading + intro paragraph + for each subtopic: H3 +
+    explanation + code block + (citations footer per section)."""
+    toc = _build_toc(sections_ctx) if len(sections_ctx) >= 2 else []
     tpl = _JINJA_ENV.from_string(CHAPTER_MD_TEMPLATE)
     md = tpl.render(
         chapter_title=chapter_title,
         sections=sections_ctx,
+        toc=toc,
     )
     # Collapse 3+ consecutive blank lines (Jinja's whitespace control
     # is good but not perfect with optional blocks). Two blank lines max.

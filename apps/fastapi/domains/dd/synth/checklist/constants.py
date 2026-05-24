@@ -9,8 +9,16 @@ CHECKLIST_SCHEMA_VERSION = "1.0"
 CHECKLIST_PROMPT_VERSION = "v1-2026-05-19"
 
 _PASS_THRESHOLD = 0.80
+# v1 schema (paragraph-mode) — kept for backwards-compat with any legacy
+# blobs still emitting avg_chars_per_paragraph in coverage_stats.
 _DENSITY_MIN_CHARS_PER_PARA = 150
 _DENSITY_MAX_CHARS_PER_PARA = 1200
+# v2 cookbook schema (2026-05-24 PM): density is measured in
+# explanation-words-per-subtopic, NOT chars-per-paragraph. The writer
+# is constrained to 8-80 words per explanation (per _LLMSectionDraft);
+# the chapter-wide average should land in the productive middle.
+_DENSITY_MIN_AVG_EXPLANATION_WORDS = 12.0
+_DENSITY_MAX_AVG_EXPLANATION_WORDS = 70.0
 _REPAIR_RATE_MAX = 0.50
 _PICKER_FALLBACK_RATE_MAX = 0.50
 _MIN_CITATIONS_PER_SECTION = 1

@@ -1,4 +1,11 @@
-"""sawc service — all function definitions."""
+"""sawc service — all function definitions.
+
+v2 cookbook schema (2026-05-24 evening): output is structured as
+{heading, intro, subtopics: [{subheading, explanation, code_ref_hash}],
+citations}. Each subtopic renders as one H3 + 1-2 sentence prose +
+ONE code block. See `sawc/types.py` and
+`docs/KD-CODE-FIRST-IMPLEMENTATION-2026-05-24.md`.
+"""
 from __future__ import annotations
 
 import re
@@ -8,14 +15,18 @@ from .constants import (
     _MEMORY_SUMMARY_CHARS_MAX,
     _MEMORY_TERM_CHARS_MAX,
     _MEMORY_TERMS_MAX,
+    _SUBTOPICS_MIN,
+    _SUBTOPICS_MAX,
+    _EXPLANATION_WORDS_MIN,
+    _EXPLANATION_WORDS_MAX,
 )
 from .types import (
     _LLMSectionDraft,
     Citation,
-    CodeRef,
     MemoryEntry,
     SAWCStats,
     Section,
+    Subtopic,
 )
 
 
@@ -43,8 +54,13 @@ def extract_memory_entry(
     in favor of a digest-driven heuristic. Future: mgsr_replan can
     upgrade to LLM-extract if needed.
     """
-    # --- summary: first paragraph, trimmed ---
-    summary = (section.paragraphs[0] if section.paragraphs else "").strip()
+    # --- summary: combine section intro + first subtopic explanation ---
+    parts: list[str] = []
+    if section.intro:
+        parts.append(section.intro.strip())
+    if section.subtopics:
+        parts.append(section.subtopics[0].explanation.strip())
+    summary = " ".join(parts).strip()
     if len(summary) > _MEMORY_SUMMARY_CHARS_MAX:
         summary = summary[: _MEMORY_SUMMARY_CHARS_MAX - 1].rsplit(" ", 1)[0] + "…"
     if len(summary) < _MEMORY_SUMMARY_CHARS_MIN:
@@ -121,24 +137,21 @@ def validate_section_against_inputs(
             f"{expected_heading!r}. Echo the outline heading verbatim."
         )
 
-    bad_hashes = [c.hash for c in draft.code_refs if c.hash not in allowed_hashes]
+    # v2 cookbook schema: validate subtopics' code_ref_hash field
+    bad_hashes = [
+        s.code_ref_hash for s in draft.subtopics
+        if s.code_ref_hash not in allowed_hashes
+    ]
     if bad_hashes:
         issues.append(
-            f"code_refs use hashes not in allowed_hashes: {bad_hashes}. "
+            f"subtopics use code_ref_hash not in allowed_hashes: {bad_hashes}. "
             f"Pick ONLY from the allowed_hashes list shown in the prompt."
         )
 
-    # 2026-05-24 evening (Ship B): tighter code-first density floor.
-    # Floor scales with bank size to push the LLM toward code-heavy output:
-    #   bank ≥20  → floor 6
-    #   bank ≥10  → floor 4
-    #   bank ≥6   → floor 3
-    #   bank ≥3   → floor 2
-    #   bank ≥1   → floor 1
-    # When the LLM emits below the floor, the repair feedback (Ship C)
-    # includes the FULL bank listing so the LLM can re-pick informed.
+    # Code-density floor scaled to bank size. Each subtopic = 1 code block,
+    # so the floor IS the subtopic count.
     n_allowed = len(allowed_hashes)
-    n_used = len(draft.code_refs)
+    n_used = len(draft.subtopics)
     if n_allowed >= 20:
         floor = 6
     elif n_allowed >= 10:
@@ -146,29 +159,21 @@ def validate_section_against_inputs(
     elif n_allowed >= 6:
         floor = 3
     elif n_allowed >= 3:
-        floor = 2
-    elif n_allowed >= 1:
-        floor = 1
+        floor = max(_SUBTOPICS_MIN, 3)
     else:
-        floor = 0
-    if floor > 0 and n_used < floor:
-        # Ship C: sharper repair feedback — explicitly list the bank's
-        # hashes so the LLM sees exactly what it can pick from on retry.
-        # Cap the listing at 30 hashes to keep the repair prompt within
-        # context budget.
+        floor = _SUBTOPICS_MIN
+    if n_used < floor:
         sorted_bank = sorted(allowed_hashes)[:30]
         bank_listing = ", ".join(sorted_bank)
         if len(allowed_hashes) > 30:
             bank_listing += f", ... ({len(allowed_hashes) - 30} more)"
         issues.append(
-            f"code_refs has only {n_used} entries but the section's code "
+            f"subtopics has only {n_used} entries but the section's code "
             f"bank offers {n_allowed} hashes — that's a CODE-FIRST violation. "
-            f"This chapter is a learning resource where the reader expects "
-            f"~50% of the output to be code. You MUST cite at least {floor} "
-            f"hashes from the bank. Pick the {floor}+ most pedagogically "
-            f"valuable ones (canonical example first, then primitives, then "
-            f"recipes). Available hashes you can cite: [{bank_listing}]. "
-            f"Each code_refs entry needs hash + placement_hint."
+            f"Emit at least {floor} subtopics, each with a distinct hash "
+            f"from the bank. Available hashes you can cite: [{bank_listing}]. "
+            f"Each Subtopic needs subheading (2-10 words) + explanation "
+            f"(8-80 words, the prose BEFORE the code) + code_ref_hash."
         )
 
     bad_sources = [
@@ -219,8 +224,10 @@ def score_draft_structural(
         allowed_hashes=allowed_hashes,
         valid_source_keys=valid_source_keys,
     )
+    # v2 cookbook scoring: subtopic count + explanation density + heading
+    # match + citation count drive the structural score.
     n_vault_violations = sum(
-        1 for c in draft.code_refs if c.hash not in allowed_hashes
+        1 for s in draft.subtopics if s.code_ref_hash not in allowed_hashes
     )
     n_citation_violations = sum(
         1 for c in draft.citations if c.source_key not in valid_source_keys
@@ -229,19 +236,29 @@ def score_draft_structural(
         draft.heading.strip().casefold() != expected_heading.strip().casefold()
     )
 
-    total_chars = sum(len(p) for p in draft.paragraphs)
-    n_paragraphs = len(draft.paragraphs)
+    n_subtopics = len(draft.subtopics)
     n_citations = len(draft.citations)
+    total_expl_chars = sum(len(s.explanation) for s in draft.subtopics)
+    intro_chars = len(draft.intro or "")
 
     score = 5.0
     score -= 10.0 * n_vault_violations
     score -= 10.0 * n_citation_violations
     score -= 5.0 if heading_mismatch else 0.0
+    # Reward 4-6 subtopics; penalize <3 (impossible — Pydantic blocks) or >10
+    score += 5.0 * min(n_subtopics / 5.0, 1.0)
+    score -= 1.0 * max(0, n_subtopics - 10)
+    # Reward citation density
     if n_primary_contribs > 0:
-        score += 5.0 * min(n_citations / n_primary_contribs, 1.0)
-    score += 3.0 * min(n_paragraphs / 5.0, 1.0)
-    score -= 2.0 * max(0, n_paragraphs - 12)
-    score += 2.0 * min(total_chars / 1500.0, 2.0)
+        score += 4.0 * min(n_citations / n_primary_contribs, 1.0)
+    # Reward intro + explanations in sweet spot
+    if intro_chars >= 60:
+        score += 1.0
+    avg_expl = total_expl_chars / max(1, n_subtopics)
+    if 60 <= avg_expl <= 400:
+        score += 2.0
+    elif avg_expl > 800:
+        score -= 1.0
     return round(score, 3)
 
 
@@ -259,11 +276,11 @@ def compute_sawc_stats(
     n_sections_completed = sum(1 for s in sections if not s.issues)
     n_sections_fallback = sum(1 for s in sections if "placeholder" in s.issues)
     n_repairs = sum(s.n_repairs for s in sections)
-    total_paragraphs = sum(len(s.paragraphs) for s in sections)
-    total_code_refs = sum(len(s.code_refs) for s in sections)
+    total_subtopics = sum(len(s.subtopics) for s in sections)
     total_citations = sum(len(s.citations) for s in sections)
-    n_para_total_chars = sum(
-        len(p) for s in sections for p in s.paragraphs
+    total_expl_words = sum(
+        len((st.explanation or "").split())
+        for s in sections for st in s.subtopics
     )
     return SAWCStats(
         n_sections=n_sections,
@@ -274,14 +291,13 @@ def compute_sawc_stats(
         n_critic_picks=n_critic_picks,
         n_picker_fallbacks=n_picker_fallbacks,
         n_repairs=n_repairs,
-        total_paragraphs=total_paragraphs,
-        total_code_refs=total_code_refs,
+        total_subtopics=total_subtopics,
         total_citations=total_citations,
-        avg_paragraphs_per_section=(
-            total_paragraphs / n_sections if n_sections else 0.0
+        avg_subtopics_per_section=(
+            total_subtopics / n_sections if n_sections else 0.0
         ),
-        avg_chars_per_paragraph=(
-            n_para_total_chars / total_paragraphs if total_paragraphs else 0.0
+        avg_explanation_words=(
+            total_expl_words / total_subtopics if total_subtopics else 0.0
         ),
     )
 
@@ -412,39 +428,34 @@ def build_writer_prompt(
     )
     return (
         f"You are the Section Writer — step 6 of the Docs Distiller "
-        f"synth pipeline. Write ONE section of one chapter, grounded in "
-        f"the per-source digest the previous step (digest_construct) "
-        f"already produced. This is one of N=3 best-of-N drafts; a "
-        f"critic LLM will pick the best one afterwards (MAMM-Refine "
-        f"arXiv 2503.15272 pattern).\n\n"
+        f"synth pipeline. Write ONE section of one chapter as a "
+        f"COOKBOOK — a sequence of (subheading, explanation, code block) "
+        f"triples. This is one of N=3 best-of-N drafts; a critic LLM "
+        f"will pick the best afterwards (MAMM-Refine arXiv 2503.15272).\n\n"
 
         f"⚡ CRITICAL PURPOSE — this is a CODE-FIRST learning resource. "
         f"The reader is here to learn {framework} FAST by reading "
-        f"production-quality code, not 400-page summaries. Lead with "
-        f"CODE. Each paragraph of prose should support a specific code "
-        f"reference, not summarize generically. Aim for sections where "
-        f"40-60% of the rendered output is code blocks. Sections that "
-        f"are pure prose without code references will be REJECTED by "
-        f"the checklist gate and re-rolled.\n\n"
+        f"production-quality code with focused explanations. Structure "
+        f"is: TOPIC (H2) → SUBTOPIC (H3) → 1-2 sentence explanation → "
+        f"code block. Repeat the subtopic pattern 4-6 times per "
+        f"section. Each code block teaches ONE pedagogically valuable "
+        f"thing.\n\n"
 
         f"FRAMEWORK: {framework}\n"
         f"CHAPTER: {chapter_id} — {chapter_title}\n"
-        f"SECTION: {section_id} — {section_heading}\n"
+        f"SECTION (H2): {section_id} — {section_heading}\n"
         f"SECTION GOAL: {section_description}\n"
         f"PREREQUISITES (already covered): {prereqs_str}\n\n"
 
-        f"== GROUNDED CONTRIBUTIONS (your prose MUST cover these) ==\n"
+        f"== GROUNDED CONTRIBUTIONS (your subtopics MUST cover these) ==\n"
         f"{_format_contributions_block(contributions)}\n\n"
 
         f"== ALLOWED CODE BANK ({len(allowed_hashes)} entries) — these "
         f"are the actual code blocks available for THIS section. "
-        f"Each `<code id=...>` envelope shows you the FULL real code "
-        f"body so you can pick the pedagogically valuable examples. The "
-        f"renderer will materialize them VERBATIM at the placement_hint "
-        f"location you specify. PICK A SUBSTANTIAL SUBSET — at minimum "
-        f"1 canonical example, ideally 3-6 (primitives + a recipe + "
-        f"a counter-example). Reason about each block fully and write "
-        f"commentary tied to specific lines / decorators / arguments. ==\n"
+        f"Each `<code id=...>` envelope shows the FULL code body. PICK "
+        f"3-8 BEST ONES — each becomes one subtopic. Reason about each "
+        f"block fully; the explanation must reference specific lines / "
+        f"decorators / arguments. ==\n"
         f"{hash_list}\n\n"
 
         f"== VALID CITATION SOURCE_KEYS ({len(valid_source_keys)}) — "
@@ -455,24 +466,25 @@ def build_writer_prompt(
         f"don't re-introduce) ==\n"
         f"{_format_memory_block(memory)}\n\n"
 
-        f"== OUTPUT — strict JSON ==\n"
+        f"== OUTPUT — strict JSON (cookbook v2 schema) ==\n"
         f"{{\n"
-        f'  "heading":    "{section_heading}",  /* ECHO verbatim */\n'
-        f'  "paragraphs": [\n'
-        f'    "First paragraph: 1-2 sentence intro of what this section '
-        f'covers and when to reach for it. NO embedded \\\\n\\\\n.",\n'
-        f'    "Each subsequent paragraph: 1-3 sentences (≤120 words) '
-        f'tying a SPECIFIC code reference to its purpose. The pattern is: '
-        f'short prose → code → 1 sentence callout on what to notice.",\n'
-        f'    ... 2-12 entries ...\n'
-        f'  ],\n'
-        f'  "code_refs": [\n'
-        f'    {{"hash": "16-hex from the code bank above", '
-        f'"placement_hint": "after paragraph 2"}},\n'
-        f'    ... AIM FOR 3-6 code_refs per section ...\n'
+        f'  "heading":  "{section_heading}",  /* ECHO verbatim, no "# " */\n'
+        f'  "intro":    "1-2 sentences (20-400 chars) framing what this '
+        f'section covers and why the reader should care. NO code fences.",\n'
+        f'  "subtopics": [\n'
+        f'    {{\n'
+        f'      "subheading":    "2-10 word descriptive H3 phrase, e.g. '
+        f'\'Minimal Tool Definition\' or \'Async Tool with Context\'",\n'
+        f'      "explanation":   "8-80 words. The prose BEFORE the code. '
+        f'Tell the reader what they\'re about to see and which specific '
+        f'lines/decorators/parameters matter. NO code fences in this '
+        f'field — pure prose only.",\n'
+        f'      "code_ref_hash": "16-hex hash from the code bank above"\n'
+        f'    }},\n'
+        f'    ... 3-12 subtopics, aim for 4-6 ...\n'
         f'  ],\n'
         f'  "citations": [\n'
-        f'    {{"source_key": "ingestion/.../0024-isbn.md", '
+        f'    {{"source_key": "ingestion/.../0024-foo.md", '
         f'"claim": "restate the specific fact this source backs"}},\n'
         f'    ...\n'
         f'  ]\n'
@@ -480,35 +492,36 @@ def build_writer_prompt(
 
         f"== HARD RULES ==\n"
         f"1. `heading` MUST be EXACTLY {section_heading!r} (case-sensitive "
-        f"   echo of the outline).\n"
-        f"2. Every `code_refs[*].hash` MUST be in the code bank above. "
-        f"   Inventing or 'paraphrasing' a hash is a violation.\n"
-        f"3. **CODE DENSITY TARGET: AT LEAST 3 code_refs per section** "
-        f"   (unless the section is a pure-concept overview with no code "
-        f"   in the bank). Sections shipping <3 code_refs when the bank "
-        f"   offers ≥5 will be re-rolled by the checklist gate.\n"
-        f"4. PROSE IS TIGHT: each `paragraphs[*]` entry = 1-3 sentences "
-        f"   (≤120 words). NO multi-paragraph summaries; the reader is "
-        f"   here for code, not a tour.\n"
-        f"5. Every `citations[*].source_key` MUST be one of the valid "
+        f"   echo). No leading '#' chars.\n"
+        f"2. **Each subtopic MUST have a unique code_ref_hash from the "
+        f"   bank above**. Inventing or paraphrasing a hash is a hard "
+        f"   violation.\n"
+        f"3. **CODE DENSITY: at least 3 subtopics per section. Aim for "
+        f"   4-6** when the bank has ≥6 entries; up to 8 when bank ≥20. "
+        f"   The whole point is code-rich learning material.\n"
+        f"4. EXPLANATIONS ARE TIGHT: 8-80 words per explanation (1-3 "
+        f"   sentences). Reference specific lines/decorators/types from "
+        f"   the code. NO multi-paragraph summaries — the reader is here "
+        f"   for code, not a tour.\n"
+        f"5. SUBHEADINGS ARE SPECIFIC: 'Minimal Tool with Type Hints' not "
+        f"   'Example 1'. Reader scans subheadings as a TOC.\n"
+        f"6. DISTINCT subheadings within the section — no two subtopics "
+        f"   can share a subheading or share a code_ref_hash.\n"
+        f"7. Every `citations[*].source_key` MUST be one of the valid "
         f"   source_keys above. Aim for {n_primary_contribs}+ citations "
         f"   (one per primary contribution).\n"
-        f"6. `paragraphs` is a LIST. Each entry is ONE paragraph — do NOT "
-        f"   embed `\\n\\n` inside a single entry. The renderer joins "
-        f"   with `\\n\\n` later.\n"
-        f"7. NO inline `<code-ref hash=\"...\"/>` tags in prose. Use the "
-        f"   typed `code_refs` field; the renderer places the block at "
-        f"   the right paragraph boundary.\n"
-        f"8. NO `# docs:` / `# src:` source-id leaks in prose. Use the "
+        f"8. NO inline `<code-ref hash=\"...\"/>` tags anywhere. NO "
+        f"   ```code fences``` in `intro` or `explanation`. The renderer "
+        f"   materializes code per-subtopic from `code_ref_hash`.\n"
+        f"9. NO `# docs:` / `# src:` source-id leaks in prose. Use the "
         f"   typed `citations` field; the renderer emits proper footnotes.\n"
-        f"9. Don't re-introduce terminology already in `memory[*]"
+        f"10. Don't re-introduce terminology already in `memory[*]"
         f".key_terminology` above — assume the reader saw it. Reference "
-        f"   by name; don't redefine.\n"
-        f"10. PEDAGOGICAL PATTERN within the section: open with 1 sentence "
-        f"    framing → first canonical code_ref → 1 sentence explaining "
-        f"    what to notice → next primitive code_ref → 1 sentence "
-        f"    callout → ... → optional counter-example/gotcha at end. "
-        f"    Think Anthropic Cookbook density, not Wikipedia article.\n\n"
+        f"    by name; don't redefine.\n"
+        f"11. PEDAGOGICAL ORDER: subtopics ordered easiest → most "
+        f"    advanced. First subtopic = canonical/minimal example. "
+        f"    Subsequent subtopics = primitives / recipes / edge cases. "
+        f"    Optional last subtopic = counter-example / gotcha.\n\n"
 
         f"Respond ONLY with valid JSON matching the schema above. NO "
         f"prose commentary, NO markdown wrapping, NO explanation."
@@ -536,10 +549,9 @@ def build_critic_picker_prompt(
             else " violations=(none)"
         )
         lines.append(
-            f"  [{i}] paragraphs={c.get('n_paragraphs')}, "
-            f"total_chars={c.get('total_chars')}, "
-            f"avg_chars/para={c.get('avg_chars_per_para', 0):.0f}, "
-            f"code_refs={c.get('n_code_refs')}, "
+            f"  [{i}] subtopics={c.get('n_subtopics')}, "
+            f"intro_chars={c.get('intro_chars')}, "
+            f"avg_expl_words={c.get('avg_expl_words', 0):.0f}, "
             f"citations={c.get('n_citations')}, "
             f"heading_match={'✓' if c.get('heading_match') else '✗'}, "
             f"structural_score={c.get('structural_score', 0):.2f}"
@@ -555,14 +567,15 @@ def build_critic_picker_prompt(
 
         f"Rubric (apply top-down — a higher-priority criterion decides "
         f"ties on lower ones):\n"
-        f"1. ZERO violations (vault hashes outside allowed, citations "
+        f"1. ZERO violations (subtopic hashes outside allowed, citations "
         f"   outside valid source_keys, heading mismatch). A candidate "
         f"   with any violations LOSES to any clean candidate.\n"
-        f"2. Citation count near or above n_primary_contribs="
+        f"2. Subtopic count in sweet spot: 4-6 subtopics is ideal; "
+        f"   3 is acceptable; 7-8 is OK for content-heavy sections.\n"
+        f"3. Citation count near or above n_primary_contribs="
         f"{n_primary_contribs} (one citation per primary contribution).\n"
-        f"3. Paragraph density in sweet spot: 3-8 paragraphs, "
-        f"   200-1500 chars each (avg_chars/para 250-700 is healthy).\n"
-        f"4. Highest structural_score (a deterministic proxy combining "
+        f"4. Average explanation words 15-60 (concise per subtopic).\n"
+        f"5. Highest structural_score (a deterministic proxy combining "
         f"   the above — useful as a tiebreaker).\n\n"
 
         f"Candidates:\n{candidates_block}\n\n"
@@ -605,8 +618,9 @@ def build_repair_prompt(
     )
     issues_block = "\n".join(f"- {x}" for x in issues)
     return (
-        f"Fix structural issues in this section draft. Keep the same JSON "
-        f"schema. Preserve good paragraphs and citations; ONLY change what's "
+        f"Fix structural issues in this cookbook-schema section draft. "
+        f"Keep the same v2 schema (heading + intro + subtopics + citations). "
+        f"Preserve good subtopics and citations; ONLY change what's "
         f"needed to clear the issues below.\n\n"
 
         f"FRAMEWORK: {framework}\n"
@@ -615,7 +629,7 @@ def build_repair_prompt(
         f"GOAL: {section_description}\n"
         f"PREREQUISITES: {prereqs_str}\n\n"
 
-        f"ALLOWED VAULT HASHES (use ONLY these for code_refs):\n"
+        f"ALLOWED VAULT HASHES (use ONLY these for subtopics[*].code_ref_hash):\n"
         f"{hash_list}\n\n"
 
         f"VALID CITATION SOURCE_KEYS (use ONLY these for citations):\n"
@@ -630,7 +644,18 @@ def build_repair_prompt(
 
         f"ISSUES TO FIX:\n{issues_block}\n\n"
 
-        f"Respond ONLY with valid JSON matching the original schema. "
+        f"Schema reminder: {{\n"
+        f'  "heading": "...",\n'
+        f'  "intro": "1-2 sentence section framing",\n'
+        f'  "subtopics": [\n'
+        f'    {{"subheading": "2-10 words", "explanation": "8-80 words", '
+        f'"code_ref_hash": "16-hex"}},\n'
+        f'    ... 3-12 entries ...\n'
+        f'  ],\n'
+        f'  "citations": [{{"source_key": "...", "claim": "..."}}, ...]\n'
+        f"}}\n\n"
+
+        f"Respond ONLY with valid JSON matching the v2 schema. "
         f"NO commentary, NO markdown wrapping."
     )
 
@@ -656,9 +681,12 @@ def summarize_candidate(
         allowed_hashes=allowed_hashes,
         valid_source_keys=valid_source_keys,
     )
-    total_chars = sum(len(p) for p in draft.paragraphs)
-    n_paragraphs = len(draft.paragraphs)
-    avg_chars = (total_chars / n_paragraphs) if n_paragraphs else 0.0
+    n_subtopics = len(draft.subtopics)
+    total_expl_words = sum(
+        len((s.explanation or "").split()) for s in draft.subtopics
+    )
+    avg_expl_words = (total_expl_words / n_subtopics) if n_subtopics else 0.0
+    intro_chars = len(draft.intro or "")
     structural_score = score_draft_structural(
         draft,
         expected_heading=expected_heading,
@@ -667,15 +695,14 @@ def summarize_candidate(
         n_primary_contribs=n_primary_contribs,
     )
     return {
-        "n_paragraphs":         n_paragraphs,
-        "total_chars":          total_chars,
-        "avg_chars_per_para":   avg_chars,
-        "n_code_refs":          len(draft.code_refs),
-        "n_citations":          len(draft.citations),
-        "heading_match":        (
+        "n_subtopics":      n_subtopics,
+        "intro_chars":      intro_chars,
+        "avg_expl_words":   avg_expl_words,
+        "n_citations":      len(draft.citations),
+        "heading_match":    (
             draft.heading.strip().casefold()
             == expected_heading.strip().casefold()
         ),
-        "structural_score":     structural_score,
-        "violations":           issues,
+        "structural_score": structural_score,
+        "violations":       issues,
     }

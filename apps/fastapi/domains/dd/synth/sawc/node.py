@@ -109,10 +109,10 @@ from .service import (
 from .types import (
     ChapterDraft,
     Citation,
-    CodeRef,
     MemoryEntry,
     SAWCStats,
     Section,
+    Subtopic,
     _LLMSectionDraft,
 )
 from ..state import SynthState
@@ -501,8 +501,7 @@ async def _draft_one_section(
         thread_id, "sawc_write", "section_draft_done",
         section_id=section_id, draft_idx=draft_idx, n_total=n_total,
         ok=True, wall_ms=wall_ms, deployment=deployment,
-        n_paragraphs=len(draft.paragraphs),
-        n_code_refs=len(draft.code_refs),
+        n_subtopics=len(draft.subtopics),
         n_citations=len(draft.citations),
         n_violations=len(issues),
     )
@@ -697,20 +696,21 @@ def _placeholder_section(
 ) -> Section:
     """Returned when every writer draft + every repair attempt fails.
     Keeps the chapter assemblable and surfaces the failure to
-    mgsr_replan via `issues`."""
+    mgsr_replan via `issues`.
+
+    v2 cookbook schema: empty subtopics list signals "no code emitted";
+    the checklist density gate flags this for the mgsr→sawc loop.
+    """
     return Section(
         section_id=section_id,
         heading=heading,
-        paragraphs=[
+        intro=(
             f"This section ({heading}) is awaiting content. The synth "
             f"writer was unable to produce a valid draft on its initial "
             f"pass; mgsr_replan should retarget this section or merge "
-            f"it into an adjacent section in the next iteration.",
-            f"Placeholder added by sawc_write to preserve chapter "
-            f"structure for downstream nodes (checklist_eval, "
-            f"render_audit_write).",
-        ],
-        code_refs=[],
+            f"it into an adjacent section in the next iteration."
+        ),
+        subtopics=[],
         citations=[],
         n_drafts_tried=_N_DRAFTS,
         n_repairs=n_repairs,
@@ -784,8 +784,8 @@ async def _write_section_best_of_n(
             )
             await emit_progress(
                 thread_id, "sawc_write", "section_done",
-                section_id=section_id, n_paragraphs=2,
-                n_code_refs=0, n_citations=0, total_chars=0,
+                section_id=section_id, n_subtopics=0,
+                n_citations=0, total_explanation_chars=0,
                 n_repairs=sum(r[3] for r in results),
                 wall_ms=int((time.monotonic() - t0) * 1000),
                 fallback="placeholder",
@@ -843,8 +843,8 @@ async def _write_section_best_of_n(
         section = Section(
             section_id=section_id,
             heading=chosen_draft.heading,
-            paragraphs=chosen_draft.paragraphs,
-            code_refs=chosen_draft.code_refs,
+            intro=chosen_draft.intro,
+            subtopics=chosen_draft.subtopics,
             citations=chosen_draft.citations,
             wall_ms=int((time.monotonic() - t0) * 1000),
             deployment_writer=dep_writer,
@@ -857,14 +857,15 @@ async def _write_section_best_of_n(
             issues=chosen_issues,
         )
 
-        total_chars = sum(len(p) for p in section.paragraphs)
+        total_expl_chars = sum(
+            len(st.explanation) for st in section.subtopics
+        )
         await emit_progress(
             thread_id, "sawc_write", "section_done",
             section_id=section_id,
-            n_paragraphs=len(section.paragraphs),
-            n_code_refs=len(section.code_refs),
+            n_subtopics=len(section.subtopics),
             n_citations=len(section.citations),
-            total_chars=total_chars,
+            total_explanation_chars=total_expl_chars,
             n_repairs=chosen_repairs,
             wall_ms=section.wall_ms,
         )
@@ -1325,11 +1326,10 @@ async def sawc_write(state: SynthState) -> dict:
         "n_critic_picks":        coverage.n_critic_picks,
         "n_picker_fallbacks":    coverage.n_picker_fallbacks,
         "n_repairs":             coverage.n_repairs,
-        "total_paragraphs":      coverage.total_paragraphs,
-        "total_code_refs":       coverage.total_code_refs,
+        "total_subtopics":       coverage.total_subtopics,
         "total_citations":       coverage.total_citations,
-        "avg_paragraphs_per_section": coverage.avg_paragraphs_per_section,
-        "avg_chars_per_paragraph":    coverage.avg_chars_per_paragraph,
+        "avg_subtopics_per_section": coverage.avg_subtopics_per_section,
+        "avg_explanation_words":     coverage.avg_explanation_words,
         "wall_ms":               elapsed,
         "store_path":            latest_key,
         "versioned_path":        versioned_key,

@@ -7,8 +7,21 @@ import re
 # =============================================================================
 # Versioning + tunables
 # =============================================================================
-SAWC_SCHEMA_VERSION = "1.0"
-SAWC_PROMPT_VERSION = "v1-2026-05-19"
+SAWC_SCHEMA_VERSION = "2.0-cookbook"
+SAWC_PROMPT_VERSION = "v2-cookbook-2026-05-24"
+
+# v2 schema (2026-05-24 evening): replaces flat paragraphs + code_refs with
+# a cookbook-style {intro, subtopics: [{subheading, explanation, code_ref_hash}]}
+# structure. Forces 1:1 pairing of explanation→code via Pydantic. See
+# docs/KD-CODE-FIRST-IMPLEMENTATION-2026-05-24.md.
+_SUBTOPICS_MIN = 3
+_SUBTOPICS_MAX = 12
+_SUBHEADING_MIN_WORDS = 2
+_SUBHEADING_MAX_WORDS = 10
+_EXPLANATION_WORDS_MIN = 8
+_EXPLANATION_WORDS_MAX = 80
+_INTRO_CHARS_MIN = 20
+_INTRO_CHARS_MAX = 400
 
 _N_DRAFTS = 3
 _MAX_REPAIR_ATTEMPTS = 2

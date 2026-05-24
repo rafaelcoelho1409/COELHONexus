@@ -1,4 +1,24 @@
-"""sawc types — Pydantic models only."""
+"""sawc types — Pydantic models (v2 cookbook schema).
+
+2026-05-24 evening (KD-CODE-FIRST-IMPLEMENTATION): replaced the v1 flat
+schema (paragraphs + code_refs as separate lists) with a cookbook-style
+nested structure where each subtopic IS a 1:1 pair of (explanation, code
+block). The renderer emits one H3 per subtopic with the explanation
+appearing BEFORE the materialized code block.
+
+Why this schema change:
+  - Empirical run 1 (pre-Phase 1): 0 code fences total. LLM emitted all-
+    prose paragraphs and zero code_refs.
+  - Empirical run 2 (post-Phase 1 bank-augmentation): 216 code fences
+    across 3 chapters, 65-83% code density. BUT structure was flat —
+    H2 sections with multiple code blocks interleaved freely with prose,
+    no H3 subsections.
+  - v2 schema enforces the user-requested pattern: H2 topic → for each
+    subtopic in 3-12 picks: (H3 subheading, 1-2 sentence explanation,
+    one code block).
+  - Pydantic min_length=3 + required `code_ref_hash` per Subtopic makes
+    code-emission STRUCTURALLY MANDATORY — no fallback to all-prose.
+"""
 from __future__ import annotations
 
 import re
@@ -10,19 +30,12 @@ from .constants import (
     SAWC_SCHEMA_VERSION,
     SAWC_PROMPT_VERSION,
     _N_DRAFTS,
-    _PARAGRAPHS_MIN,
-    _PARAGRAPHS_MAX,
-    _PARAGRAPH_CHARS_MIN,
-    _PARAGRAPH_CHARS_MAX,
     _HEADING_MIN_WORDS,
     _HEADING_MAX_WORDS,
-    _CODE_REFS_MAX,
     _CITATIONS_MIN,
     _CITATIONS_MAX,
     _CITATION_CLAIM_CHARS_MIN,
     _CITATION_CLAIM_CHARS_MAX,
-    _PLACEMENT_HINT_CHARS_MIN,
-    _PLACEMENT_HINT_CHARS_MAX,
     _MEMORY_TERMS_MIN,
     _MEMORY_TERMS_MAX,
     _MEMORY_TERM_CHARS_MIN,
@@ -30,6 +43,14 @@ from .constants import (
     _MEMORY_SUMMARY_CHARS_MIN,
     _MEMORY_SUMMARY_CHARS_MAX,
     _HASH_RE,
+    _SUBTOPICS_MIN,
+    _SUBTOPICS_MAX,
+    _SUBHEADING_MIN_WORDS,
+    _SUBHEADING_MAX_WORDS,
+    _EXPLANATION_WORDS_MIN,
+    _EXPLANATION_WORDS_MAX,
+    _INTRO_CHARS_MIN,
+    _INTRO_CHARS_MAX,
 )
 
 
@@ -66,76 +87,120 @@ class Citation(BaseModel):
         return s
 
 
-class CodeRef(BaseModel):
-    """A vault sentinel placed in the section. Typed so render_audit_write
-    can inject the code block at the right paragraph boundary without
-    parsing inline markers in the prose."""
-    hash: str = Field(
+class Subtopic(BaseModel):
+    """One (subheading, explanation, code block) triple. Each Subtopic
+    renders as a single H3 subsection in the final chapter — the
+    explanation appears immediately BEFORE the materialized code.
+
+    The schema is REQUIRED for code_ref_hash, NOT optional — making
+    code-emission structurally mandatory per Subtopic. Combined with
+    _SUBTOPICS_MIN=3 in the parent draft, every section must produce
+    at least 3 (H3, explanation, code) units.
+    """
+    subheading: str = Field(
         description=(
-            "16-hex vault hash. MUST be one of `allowed_hashes` for this "
-            "section (subset of digest's per_section[section_id] code_refs)."
+            f"{_SUBHEADING_MIN_WORDS}-{_SUBHEADING_MAX_WORDS} words. The H3 "
+            f"subheading for this specific code-block topic. Should be a "
+            f"specific, descriptive phrase (e.g. 'Minimal Tool Definition' "
+            f"or 'Async Tool with Context Injection'), NOT a generic "
+            f"label like 'Example'."
         ),
     )
-    placement_hint: str = Field(
+    explanation: str = Field(
         description=(
-            "4-200 chars. WHERE in the paragraph sequence this code block "
-            "should be injected, e.g. 'after paragraph 2', 'before "
-            "paragraph 4', 'at end'. render_audit_write reads this as a "
-            "soft signal — if ambiguous, the renderer falls back to "
-            "appending all code refs at the section end."
+            f"{_EXPLANATION_WORDS_MIN}-{_EXPLANATION_WORDS_MAX} words. The "
+            f"concise explanation that appears BEFORE the code block. Tell "
+            f"the reader what they're about to see and why it matters — "
+            f"reference specific lines, decorators, or parameters when "
+            f"possible. NO code fences inside; this is prose only."
+        ),
+    )
+    code_ref_hash: str = Field(
+        description=(
+            "16-hex vault hash REQUIRED — one code block per Subtopic. "
+            "MUST be in the section's allowed_hashes shown in the prompt. "
+            "Cannot be null/empty. The renderer materializes verbatim "
+            "from vault[code_ref_hash] immediately AFTER the explanation."
         ),
     )
 
-    @field_validator("hash")
+    @field_validator("subheading")
+    @classmethod
+    def _validate_subheading(cls, v: str) -> str:
+        s = v.strip()
+        if s.lstrip().startswith("#"):
+            raise ValueError("subheading must NOT start with '#'")
+        words = s.split()
+        if not (_SUBHEADING_MIN_WORDS <= len(words) <= _SUBHEADING_MAX_WORDS):
+            raise ValueError(
+                f"subheading must be {_SUBHEADING_MIN_WORDS}-"
+                f"{_SUBHEADING_MAX_WORDS} words; got {len(words)} ({s!r})"
+            )
+        return s
+
+    @field_validator("explanation")
+    @classmethod
+    def _validate_explanation(cls, v: str) -> str:
+        s = " ".join(v.strip().split())
+        words = s.split()
+        if not (_EXPLANATION_WORDS_MIN <= len(words) <= _EXPLANATION_WORDS_MAX):
+            raise ValueError(
+                f"explanation must be {_EXPLANATION_WORDS_MIN}-"
+                f"{_EXPLANATION_WORDS_MAX} words; got {len(words)}"
+            )
+        if "```" in s or "<code-ref" in s or "<code id" in s:
+            raise ValueError(
+                "explanation must NOT contain code fences or inline code "
+                "envelope tags — it's prose-only and renders BEFORE the code"
+            )
+        if re.search(r"(?m)^\s*#\s*docs?\s*:", s):
+            raise ValueError(
+                "explanation contains a `# docs:` source-id leak; "
+                "use the `citations` field for source references."
+            )
+        return s
+
+    @field_validator("code_ref_hash")
     @classmethod
     def _validate_hash(cls, v: str) -> str:
         if not _HASH_RE.match(v):
             raise ValueError(
-                f"code_ref.hash {v!r} must be 16 lowercase hex chars"
+                f"code_ref_hash {v!r} must be 16 lowercase hex chars"
             )
         return v
 
-    @field_validator("placement_hint")
-    @classmethod
-    def _validate_hint(cls, v: str) -> str:
-        s = " ".join(v.strip().split())
-        if not (_PLACEMENT_HINT_CHARS_MIN <= len(s) <= _PLACEMENT_HINT_CHARS_MAX):
-            raise ValueError(
-                f"placement_hint must be {_PLACEMENT_HINT_CHARS_MIN}-"
-                f"{_PLACEMENT_HINT_CHARS_MAX} chars; got {len(s)}"
-            )
-        return s
-
 
 class _LLMSectionDraft(BaseModel):
-    """What the LLM emits per writer-call. Plus node-injected metadata
-    becomes a `Section` for persistence."""
+    """Cookbook-style section schema (v2). The LLM emits a sequence of
+    Subtopic triples — each becoming one (H3 subheading, explanation, code
+    block) unit in the rendered chapter. Pydantic floors enforce the
+    code-first contract: at least 3 subtopics, each REQUIRED to cite a
+    vault hash. Plus node-injected metadata becomes a `Section` for
+    persistence."""
     heading: str = Field(
         description=(
-            "2-8 words. ECHO the outline heading verbatim — do not reword. "
-            "render_audit_write asserts heading matches outline; mismatch "
-            "fails the round-trip audit."
+            f"{_HEADING_MIN_WORDS}-{_HEADING_MAX_WORDS} words. ECHO the "
+            f"outline H2 heading verbatim — do not reword. "
+            f"render_audit_write asserts heading matches outline; mismatch "
+            f"fails the round-trip audit."
         ),
     )
-    paragraphs: list[str] = Field(
+    intro: str = Field(
         description=(
-            f"{_PARAGRAPHS_MIN}-{_PARAGRAPHS_MAX} paragraphs. Each entry is "
-            f"ONE paragraph (no embedded `\\n\\n`). Each "
-            f"{_PARAGRAPH_CHARS_MIN}-{_PARAGRAPH_CHARS_MAX} chars. Dense, "
-            f"production-focused prose grounded in the contributions + "
-            f"memory shown in the prompt. NO source-id leakage like "
-            f"`# docs: foo`; cite via `citations` instead. NO inline "
-            f"`<code-ref hash=...>` tags; use `code_refs` instead."
+            f"{_INTRO_CHARS_MIN}-{_INTRO_CHARS_MAX} chars. 1-2 sentences "
+            f"framing what this H2 section covers and why the reader "
+            f"should care. Sets up the subtopics that follow. NO code "
+            f"fences, NO inline backticks for full APIs (mention concepts, "
+            f"not specific code — that's what the subtopics do)."
         ),
     )
-    code_refs: list[CodeRef] = Field(
-        default_factory=list,
+    subtopics: list[Subtopic] = Field(
         description=(
-            f"0-{_CODE_REFS_MAX} typed vault references. Each `hash` MUST "
-            f"be in the section's allowed_hashes (passed in the prompt). "
-            f"Unknown hashes are a hard violation — the LLM must NOT "
-            f"invent hashes. Listing every allowed hash isn't required; "
-            f"list the ones the section's prose actually discusses."
+            f"{_SUBTOPICS_MIN}-{_SUBTOPICS_MAX} Subtopic triples. Each is "
+            f"(subheading, explanation, code_ref_hash) — rendered as one H3 "
+            f"+ 1-2 prose sentences + ONE code block. The reader should be "
+            f"able to scan the H3 headings as a mini-TOC for this H2 "
+            f"section. Aim for 4-6 subtopics in most sections."
         ),
     )
     citations: list[Citation] = Field(
@@ -160,59 +225,40 @@ class _LLMSectionDraft(BaseModel):
             raise ValueError("heading must NOT start with '#'")
         return v.strip()
 
-    @field_validator("paragraphs")
+    @field_validator("intro")
     @classmethod
-    def _validate_paragraphs(cls, v: list[str]) -> list[str]:
-        if not (_PARAGRAPHS_MIN <= len(v) <= _PARAGRAPHS_MAX):
+    def _validate_intro(cls, v: str) -> str:
+        s = " ".join(v.strip().split())
+        if not (_INTRO_CHARS_MIN <= len(s) <= _INTRO_CHARS_MAX):
             raise ValueError(
-                f"paragraphs count must be {_PARAGRAPHS_MIN}-"
-                f"{_PARAGRAPHS_MAX}; got {len(v)}"
+                f"intro must be {_INTRO_CHARS_MIN}-{_INTRO_CHARS_MAX} "
+                f"chars; got {len(s)}"
             )
-        cleaned: list[str] = []
-        for i, p in enumerate(v):
-            # Collapse leading/trailing whitespace but PRESERVE internal
-            # single \n (Markdown line breaks within a paragraph). Reject
-            # embedded \n\n which is the bug we're trying to prevent.
-            s = p.strip()
-            if "\n\n" in s:
-                raise ValueError(
-                    f"paragraph[{i}] contains embedded blank line "
-                    f"(`\\n\\n`) — use SEPARATE paragraphs list entries "
-                    f"instead. Found in {s[:60]!r}"
-                )
-            if not (_PARAGRAPH_CHARS_MIN <= len(s) <= _PARAGRAPH_CHARS_MAX):
-                raise ValueError(
-                    f"paragraph[{i}] length must be {_PARAGRAPH_CHARS_MIN}"
-                    f"-{_PARAGRAPH_CHARS_MAX} chars; got {len(s)}"
-                )
-            # No `# docs:` leakage (caught in render audit too, but
-            # rejecting at validation lets the repair loop see it)
-            if re.search(r"(?m)^\s*#\s*docs?\s*:", s):
-                raise ValueError(
-                    f"paragraph[{i}] contains a `# docs:` source-id "
-                    f"leak. Use `citations` instead — that field is "
-                    f"rendered as proper footnotes downstream."
-                )
-            # No inline vault sentinels — they should be in code_refs
-            if "<code-ref" in s:
-                raise ValueError(
-                    f"paragraph[{i}] contains an inline `<code-ref ...>` "
-                    f"sentinel. Use `code_refs` instead so the renderer "
-                    f"can inject the code block cleanly."
-                )
-            cleaned.append(s)
-        return cleaned
+        if "```" in s or "<code-ref" in s or "<code id" in s:
+            raise ValueError(
+                "intro must NOT contain code blocks/envelopes — pure prose"
+            )
+        return s
 
-    @field_validator("code_refs")
+    @field_validator("subtopics")
     @classmethod
-    def _validate_refs(cls, v: list[CodeRef]) -> list[CodeRef]:
-        if len(v) > _CODE_REFS_MAX:
+    def _validate_subtopics(cls, v: list[Subtopic]) -> list[Subtopic]:
+        if not (_SUBTOPICS_MIN <= len(v) <= _SUBTOPICS_MAX):
             raise ValueError(
-                f"code_refs count {len(v)} exceeds max {_CODE_REFS_MAX}"
+                f"subtopics count must be {_SUBTOPICS_MIN}-"
+                f"{_SUBTOPICS_MAX}; got {len(v)}"
             )
-        hashes = [c.hash for c in v]
+        hashes = [s.code_ref_hash for s in v]
         if len(set(hashes)) != len(hashes):
-            raise ValueError(f"duplicate code_ref hashes: {hashes}")
+            raise ValueError(
+                f"duplicate code_ref_hash across subtopics: {hashes}"
+            )
+        # Subheadings should be distinct within a section.
+        subheads = [s.subheading.casefold() for s in v]
+        if len(set(subheads)) != len(subheads):
+            raise ValueError(
+                f"duplicate subheading across subtopics: {[s.subheading for s in v]}"
+            )
         return v
 
     @field_validator("citations")
@@ -230,12 +276,12 @@ class _LLMSectionDraft(BaseModel):
 # Pydantic — persisted side (LLM + node-injected fields)
 # =============================================================================
 class Section(BaseModel):
-    """Persisted section. LLM fields from _LLMSectionDraft + node-injected
-    observability/meta."""
+    """Persisted section (v2 cookbook). LLM fields from _LLMSectionDraft +
+    node-injected observability/meta."""
     section_id:        str
     heading:           str
-    paragraphs:        list[str]
-    code_refs:         list[CodeRef]
+    intro:             str
+    subtopics:         list[Subtopic]
     citations:         list[Citation]
     # node-injected (post-LLM):
     wall_ms:           Optional[int] = None
@@ -314,11 +360,10 @@ class SAWCStats(BaseModel):
     n_critic_picks:       int   # sum of critic-picker calls
     n_picker_fallbacks:   int   # times we fell back to structural scoring
     n_repairs:            int
-    total_paragraphs:     int
-    total_code_refs:      int
+    total_subtopics:      int
     total_citations:      int
-    avg_paragraphs_per_section: float
-    avg_chars_per_paragraph:    float
+    avg_subtopics_per_section: float
+    avg_explanation_words: float
 
 
 class ChapterDraft(BaseModel):

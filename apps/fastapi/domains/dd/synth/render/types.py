@@ -63,7 +63,7 @@ class RenderResult(BaseModel):
     audit:                 AuditResult
     rendered_chars:        int                       # README.md size
     n_sections:            int
-    n_paragraphs_total:    int
+    n_subtopics_total:     int        # v2 cookbook: replaces n_paragraphs_total
     n_citations_total:     int
     sawc_manifest_hash:    str
     mgsr_manifest_hash:    str

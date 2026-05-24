@@ -3,8 +3,8 @@ prompt builders, and LLM verdict coercion."""
 from __future__ import annotations
 
 from .constants import (
-    _DENSITY_MAX_CHARS_PER_PARA,
-    _DENSITY_MIN_CHARS_PER_PARA,
+    _DENSITY_MAX_AVG_EXPLANATION_WORDS,
+    _DENSITY_MIN_AVG_EXPLANATION_WORDS,
     _LLM_CRITERIA,
     _MAX_RENDERED_CHAPTER_CHARS,
     _MIN_CITATIONS_PER_SECTION,
@@ -115,21 +115,28 @@ def check_all_sections_cite_at_least_1(sawc: dict) -> CriterionResult:
 
 
 def check_density_within_bounds(sawc: dict) -> CriterionResult:
+    """v2 cookbook schema (2026-05-24 PM): the writer emits 1-2 sentence
+    explanations (8-80 words) BEFORE each code block. The chapter-wide
+    average should land in the productive middle — too thin = under-
+    contextualized code; too verbose = wall-of-text before the code."""
     cs = sawc.get("coverage_stats") or {}
-    avg = float(cs.get("avg_chars_per_paragraph", 0))
-    passed = _DENSITY_MIN_CHARS_PER_PARA <= avg <= _DENSITY_MAX_CHARS_PER_PARA
+    avg = float(cs.get("avg_explanation_words", 0))
+    floor = _DENSITY_MIN_AVG_EXPLANATION_WORDS
+    ceil = _DENSITY_MAX_AVG_EXPLANATION_WORDS
+    passed = floor <= avg <= ceil
     if passed:
         feedback = ""
-    elif avg < _DENSITY_MIN_CHARS_PER_PARA:
+    elif avg < floor:
         feedback = (
-            f"paragraphs are too thin ({avg:.0f} avg chars; floor "
-            f"{_DENSITY_MIN_CHARS_PER_PARA}). expand prose with concrete "
-            f"examples and API details."
+            f"explanations are too thin ({avg:.0f} avg words; floor "
+            f"{floor:.0f}). expand the 1-2 sentence lead-in BEFORE each "
+            f"code block with concrete API/parameter detail."
         )
     else:
         feedback = (
-            f"paragraphs are too long ({avg:.0f} avg chars; ceiling "
-            f"{_DENSITY_MAX_CHARS_PER_PARA}). split run-on paragraphs."
+            f"explanations are too verbose ({avg:.0f} avg words; ceiling "
+            f"{ceil:.0f}). compress to 1-2 sentences — the code is the "
+            f"point, the prose just sets it up."
         )
     return CriterionResult(
         name="density_within_bounds",
@@ -183,21 +190,24 @@ def check_picker_fallback_rate_low(sawc: dict) -> CriterionResult:
 
 
 def check_code_density_appropriate(sawc: dict) -> CriterionResult:
-    """Ship #3 (2026-05-24) — code-first gate.
+    """Ship #3 (2026-05-24) — code-first gate. Updated 2026-05-24 PM
+    for v2 cookbook schema: each section now has `subtopics`, with each
+    subtopic carrying ONE `code_ref_hash`. So the count is `len(subtopics)`.
 
-    The chapter passes when the average code_refs per section is ≥
-    _MIN_AVG_CODE_REFS_PER_SECTION (default 2.0) AND when the writer
-    actually used the code bank (at least _MIN_CODE_REF_COVERAGE_FRACTION
-    of the allowed_hashes available to each section ended up cited).
+    The chapter passes when:
+      (a) the average subtopics-per-section is ≥
+          _MIN_AVG_CODE_REFS_PER_SECTION (default 2.0); AND
+      (b) the writer used the code bank — at least
+          _MIN_CODE_REF_COVERAGE_FRACTION of `allowed_hashes` per
+          section ended up in a subtopic.
 
-    Sections with zero allowed_hashes are exempt from the coverage check
-    (concept-only sections don't have code to cite). The average check
-    still applies — if MOST sections have no code, the chapter is too
-    prose-heavy regardless.
+    Sections with zero allowed_hashes are exempt from the coverage
+    check (concept-only sections have no code to cite). The average
+    check still applies — most sections must emit code or the chapter
+    is too prose-heavy regardless.
 
     Failure feedback names the offending sections so mgsr_replan can
-    decide whether to instruct sawc to re-roll those sections specifically
-    or accept the chapter as-is.
+    decide whether to re-roll those specifically or accept as-is.
     """
     from .constants import (
         _MIN_AVG_CODE_REFS_PER_SECTION,
@@ -217,7 +227,10 @@ def check_code_density_appropriate(sawc: dict) -> CriterionResult:
     n_total_refs = 0
     for s in sections:
         sid = s.get("section_id", "?")
-        n_refs = len(s.get("code_refs") or [])
+        # v2 cookbook: each subtopic carries exactly one code_ref_hash,
+        # so subtopic count == code-block count for the section.
+        subtopics = s.get("subtopics") or []
+        n_refs = sum(1 for st in subtopics if (st or {}).get("code_ref_hash"))
         n_total_refs += n_refs
         n_refs_per_section.append((sid, n_refs))
         # Coverage check uses the allowed_hashes_count if recorded.
@@ -225,9 +238,7 @@ def check_code_density_appropriate(sawc: dict) -> CriterionResult:
         if n_allowed >= 3:
             coverage = n_refs / max(1, n_allowed)
             if coverage < _MIN_CODE_REF_COVERAGE_FRACTION:
-                thin_coverage.append(
-                    f"{sid}({n_refs}/{n_allowed})"
-                )
+                thin_coverage.append(f"{sid}({n_refs}/{n_allowed})")
     avg = n_total_refs / len(sections)
     passed = (
         avg >= _MIN_AVG_CODE_REFS_PER_SECTION
@@ -238,9 +249,9 @@ def check_code_density_appropriate(sawc: dict) -> CriterionResult:
     else:
         zeros = [sid for sid, n in n_refs_per_section if n == 0]
         feedback = (
-            f"code density too low: avg {avg:.2f} code_refs/section "
+            f"code density too low: avg {avg:.2f} subtopics/section "
             f"(floor {_MIN_AVG_CODE_REFS_PER_SECTION}); "
-            f"{len(zeros)} sections with 0 code_refs"
+            f"{len(zeros)} sections with 0 code subtopics"
         )
         if zeros[:5]:
             feedback += f": {zeros[:5]}"
@@ -250,8 +261,8 @@ def check_code_density_appropriate(sawc: dict) -> CriterionResult:
                 f"{thin_coverage[:5]}"
             )
         feedback += (
-            ". This is a CODE-FIRST learning resource — sections must "
-            "lead with code, not summarize concepts in prose."
+            ". This is a CODE-FIRST learning resource — every section "
+            "must emit ≥3 (subheading, explanation, code block) subtopics."
         )
     return CriterionResult(
         name="code_density_appropriate",
@@ -309,24 +320,29 @@ def render_chapter_for_judge(
     *,
     char_cap: int = _MAX_RENDERED_CHAPTER_CHARS,
 ) -> tuple[str, bool]:
-    """Render the persisted ChapterDraft sections into a markdown-ish
-    block the LLM-judge can read.
+    """Render the persisted v2 cookbook sections into a markdown-ish
+    block the LLM-judge can read. Mirrors the final-render structure
+    (H2 + intro + H3 subtopics) so the judge sees what the reader sees.
 
     Format (per section):
 
         ## s{N}: {heading}
-        {paragraph 1}
+        {intro}
 
-        {paragraph 2}
+        ### {subheading_1}
+        {explanation_1}
+
+        [code-block: {hash_prefix}…]
+
+        ### {subheading_2}
         ...
 
-        [code-refs (N): hashes hint=hint, ...]
-        [citations (M): source-a.md ('claim text'), source-b.md ('claim')]
+        [citations (M): source-a.md ('claim'), source-b.md ('claim')]
 
-    Returns (text, truncated_flag). `truncated_flag` is True when we
-    hit `char_cap` and stopped concatenating remaining sections — the
-    LLM-judge prompt will note this so the judge doesn't penalize
-    "incomplete chapter" criteria when the truncation was our doing.
+    Returns (text, truncated_flag). `truncated_flag` is True when we hit
+    `char_cap` and stopped concatenating remaining sections — the LLM-
+    judge prompt notes this so the judge doesn't penalize "incomplete
+    chapter" criteria when truncation was our doing.
     """
     parts: list[str] = []
     total = 0
@@ -336,18 +352,24 @@ def render_chapter_for_judge(
         sid = s.get("section_id", "?")
         heading = s.get("heading", "?")
         block_lines: list[str] = [f"## {sid}: {heading}"]
-        for para in (s.get("paragraphs") or []):
+        intro = (s.get("intro") or "").strip()
+        if intro:
             block_lines.append("")
-            block_lines.append(para.strip())
+            block_lines.append(intro)
+        subtopics = s.get("subtopics") or []
+        for st in subtopics:
+            st = st or {}
+            block_lines.append("")
+            block_lines.append(f"### {st.get('subheading', '?')}")
+            expl = (st.get("explanation") or "").strip()
+            if expl:
+                block_lines.append("")
+                block_lines.append(expl)
+            h = (st.get("code_ref_hash") or "")
+            if h:
+                block_lines.append("")
+                block_lines.append(f"[code-block: {h[:12]}…]")
         # Compact metadata at section end
-        code_refs = s.get("code_refs") or []
-        if code_refs:
-            hash_summary = ", ".join(
-                f"{c.get('hash', '?')[:8]}…(hint={c.get('placement_hint', '')[:30]})"
-                for c in code_refs[:8]
-            )
-            block_lines.append("")
-            block_lines.append(f"[code-refs ({len(code_refs)}): {hash_summary}]")
         citations = s.get("citations") or []
         if citations:
             cite_summary = "; ".join(
@@ -468,22 +490,25 @@ def build_judge_prompt(
         f"using different names for the same thing.\n\n"
 
         f"[c11] prose_code_first_not_meta_framing\n"
-        f"  Is the prose dense + production-focused (concrete APIs, "
-        f"types, parameters, error modes), OR padded with meta-framing "
-        f"('In this chapter we will...', 'In summary...', 'It is "
-        f"important to note that...')? PASS if prose is dense; FAIL if "
-        f"meta-framing eats >20% of any section.\n\n"
+        f"  Is each section's prose dense + production-focused (concrete "
+        f"APIs, types, parameters, error modes), OR padded with meta-"
+        f"framing ('In this chapter we will...', 'In summary...', 'It "
+        f"is important to note that...')? PASS if prose is dense; FAIL "
+        f"if meta-framing eats >20% of any section's `intro` or any "
+        f"H3 subtopic's `explanation`.\n\n"
 
         f"[c12] code_refs_introduced_in_prose\n"
-        f"  Where code references (`[code-refs (...)]` markers) appear, "
-        f"is the surrounding prose introducing them (explaining what "
-        f"the code does, why it's relevant, parameters that matter), "
-        f"OR are they dumped at section end with no contextualization? "
-        f"PASS if code is introduced; FAIL if code-refs appear without "
-        f"prose lead-in.\n"
-        f"  NOTE: If a section has 0 code-refs (the source has no code), "
-        f"this criterion PASSES trivially for that section. Only fail "
-        f"if at least one section has code-refs AND no prose lead-in.\n\n"
+        f"  In the v2 cookbook structure, each H3 subtopic emits "
+        f"`{{subheading}} → {{explanation}} → [code-block]`. Does each "
+        f"subtopic's explanation (1-2 sentences BEFORE the code) "
+        f"actually introduce that specific code block — naming the "
+        f"decorator/type/parameter the reader is about to see — OR is "
+        f"it generic prose that could precede ANY code block? PASS if "
+        f"explanations are tied to their specific code; FAIL if any "
+        f"explanation reads as filler.\n"
+        f"  NOTE: If a section has 0 subtopics (rare — usually a "
+        f"placeholder), this criterion FAILS for that section. The "
+        f"cookbook contract requires ≥3 subtopics per section.\n\n"
 
         f"OUTPUT — strict JSON, exactly these 5 keys (each value: "
         f'{{"passed": bool, "feedback": "1-sentence specific reason if '

@@ -59,7 +59,7 @@ from .constants import (
 )
 from .types import (
     Citation,
-    CodeRef,
+    Subtopic,
     _LLMSectionDraft,
     Section,
     MemoryEntry,
@@ -106,7 +106,7 @@ __all__ = [
     "_HASH_RE",
     "_SECTION_ID_RE",
     "Citation",
-    "CodeRef",
+    "Subtopic",
     "_LLMSectionDraft",
     "Section",
     "MemoryEntry",

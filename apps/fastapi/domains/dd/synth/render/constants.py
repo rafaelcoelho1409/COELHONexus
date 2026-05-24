@@ -9,8 +9,8 @@ from jinja2 import Environment, StrictUndefined
 # =============================================================================
 # Versioning
 # =============================================================================
-RENDER_SCHEMA_VERSION = "1.0"
-RENDER_TEMPLATE_VERSION = "v1-2026-05-19"
+RENDER_SCHEMA_VERSION = "2.0-cookbook"
+RENDER_TEMPLATE_VERSION = "v2-cookbook-2026-05-24"
 
 # Same algorithm as `synth/vault.py:_hash_block` — 16-hex SHA-256
 # prefix. MUST match or the audit will false-fail. If vault.py ever
@@ -45,19 +45,34 @@ _JINJA_ENV = Environment(
 CHAPTER_MD_TEMPLATE = """\
 # {{ chapter_title }}
 
+{% if toc -%}
+## Contents
+
+{% for entry in toc -%}
+- [{{ entry.heading }}](#{{ entry.anchor }})
+{% for sub in entry.subtopics -%}
+  - [{{ sub.subheading }}](#{{ sub.anchor }})
+{% endfor -%}
+{% endfor %}
+
+---
+
+{% endif -%}
 {% for section in sections %}
 ## {{ section.heading }}
 
-{% for paragraph in section.paragraphs %}
-{{ paragraph }}
+{% if section.intro -%}
+{{ section.intro }}
 
-{% endfor -%}
-{% if section.materialized_code_blocks -%}
-{% for code_block in section.materialized_code_blocks %}
-{{ code_block }}
-
-{% endfor -%}
 {% endif -%}
+{% for sub in section.subtopics %}
+### {{ sub.subheading }}
+
+{{ sub.explanation }}
+
+{{ sub.code_block }}
+
+{% endfor -%}
 {% if section.citations -%}
 **Sources for this section:**
 
