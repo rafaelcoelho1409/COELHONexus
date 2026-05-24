@@ -77,6 +77,7 @@ from .constants import (
     CHECKLIST_PROMPT_VERSION,
     CHECKLIST_SCHEMA_VERSION,
 )
+from .faithfulness import atomic_claim_grounding
 from .types import (
     ChecklistEvaluation,
     CriterionResult,
@@ -512,6 +513,56 @@ async def checklist_eval(state: SynthState) -> dict:
         wall_ms=judge_wall_ms,
         deployment=deployment,
         repaired=repaired,
+    )
+
+    # -- Augment: atomic-claim grounding check (2026-05-24) -----------------
+    # The bundled judge above gives a coarse PASS/FAIL on
+    # `claims_grounded_in_sources` based on a 3-5 citation spot-check. This
+    # separate pass extracts atomic claims + verifies each against the digest
+    # grounding via bandit-routed LLM calls (per-claim, parallel concurrency=8).
+    # If atomic check finds any unsupported claim, we OVERRIDE the bundled
+    # judge's verdict to FAIL with specific feedback. Conservative bias:
+    # never upgrades the bundled judge — only downgrades it.
+    # See docs/KD-SYNTH-SOTA-2026-05-24.md §3 #2.
+    faithfulness_t0 = time.monotonic()
+    try:
+        atomic_result = await atomic_claim_grounding(
+            chapter_prose=rendered_chapter,
+            grounding_blob=rendered_digest,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[checklist_eval] atomic-claim grounding crashed: "
+            f"{type(e).__name__}: {e} — skipping augmentation"
+        )
+        atomic_result = None
+    faithfulness_wall_ms = int((time.monotonic() - faithfulness_t0) * 1000)
+
+    if atomic_result is not None and not atomic_result["passed"]:
+        # Override the bundled judge's `claims_grounded_in_sources` verdict.
+        # Find the entry by name and rebuild it as a failure with the
+        # atomic-claim feedback. CriterionResult shape is preserved.
+        for i, r in enumerate(llm_results):
+            if r.name == "claims_grounded_in_sources":
+                llm_results[i] = CriterionResult(
+                    name=r.name,
+                    passed=False,
+                    kind=r.kind,
+                    feedback=atomic_result["feedback"],
+                )
+                break
+        # Recompute the pass counts for telemetry consistency.
+        llm_failed = [r.name for r in llm_results if not r.passed]
+        n_llm_passed = sum(1 for r in llm_results if r.passed)
+
+    await emit_progress(
+        thread_id, "checklist_eval", "faithfulness_done",
+        method=(atomic_result or {}).get("method", "skipped"),
+        n_claims=(atomic_result or {}).get("n_claims", 0),
+        n_unsupported=(atomic_result or {}).get("n_unsupported", 0),
+        overrode_bundled=(atomic_result is not None
+                          and not atomic_result["passed"]),
+        wall_ms=faithfulness_wall_ms,
     )
 
     # -- Aggregate ----------------------------------------------------------

@@ -551,7 +551,11 @@ async def mgsr_replan(state: SynthState) -> dict:
                 f"actions={stats['n_actions']} conf={stats['confidence']:.2f} "
                 f"{elapsed} ms"
             )
-            return {"mgsr_path": latest_key, "mgsr_stats": stats}
+            return {
+                "mgsr_path":            latest_key,
+                "mgsr_stats":           stats,
+                "prev_checklist_score": pass_rate,
+            }
         except Exception as e:
             logger.warning(
                 f"[mgsr_replan] {slug}/{chapter_id}: cached blob "
@@ -622,7 +626,11 @@ async def mgsr_replan(state: SynthState) -> dict:
             f"(pass_rate={pass_rate:.2%} ≥ 0.80), no LLM call, "
             f"{elapsed} ms"
         )
-        return {"mgsr_path": latest_key, "mgsr_stats": stats}
+        return {
+            "mgsr_path":            latest_key,
+            "mgsr_stats":           stats,
+            "prev_checklist_score": pass_rate,
+        }
 
     # ── Slow path: chapter failed checklist; fire LLM replan ───────────
     await emit_progress(
@@ -740,7 +748,11 @@ async def mgsr_replan(state: SynthState) -> dict:
         f"(pass_rate={pass_rate:.2%}, {n_failed} failed criteria); "
         f"{elapsed} ms"
     )
-    return {"mgsr_path": latest_key, "mgsr_stats": stats}
+    return {
+        "mgsr_path":            latest_key,
+        "mgsr_stats":           stats,
+        "prev_checklist_score": pass_rate,
+    }
 
 
 # =============================================================================

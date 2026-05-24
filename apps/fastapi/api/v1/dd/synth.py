@@ -409,6 +409,114 @@ def _make_study_thread_id(slug: str) -> str:
 _STUDY_SEM = 1
 
 
+async def _run_book_harmonize(
+    *,
+    slug: str,
+    study_thread_id: str,
+    chapter_ids: list[str],
+) -> dict:
+    """Post-study cross-chapter coherence pass. Loads each chapter's rendered
+    README.md from MinIO, runs harmonize_book(), overwrites any chapter whose
+    patch passed validation.
+
+    Returns telemetry dict suitable for the study_done SSE payload."""
+    from domains.dd.ingestion.storage import get_storage
+    from domains.dd.resolver import _index_by_slug
+    from domains.dd.synth.book_harmonize import harmonize_book
+
+    minio = get_storage()
+
+    # Resolve framework display name (best-effort)
+    entry = _index_by_slug().get(slug, {})
+    framework_name = entry.get("name") or entry.get("slug") or slug
+
+    # Load each chapter's rendered prose from MinIO. Skip any that
+    # didn't render (failed chapters won't have README.md).
+    chapters: list[dict] = []
+    skipped_missing: list[str] = []
+    for cid in chapter_ids:
+        key = f"synth/{slug}/{cid}/README.md"
+        try:
+            blob = await minio.read_bytes(key)
+        except Exception:
+            skipped_missing.append(cid)
+            continue
+        chapters.append({
+            "chapter_id": cid,
+            "title":      cid,   # title can be enriched later from render-latest.json
+            "prose":      blob.decode("utf-8", errors="replace"),
+        })
+
+    if len(chapters) < 2:
+        await emit_progress(
+            study_thread_id, "study", "book_harmonize_skipped",
+            reason="fewer_than_2_rendered_chapters",
+            n_rendered=len(chapters),
+        )
+        return {
+            "skipped": "fewer_than_2_rendered_chapters",
+            "n_rendered_chapters": len(chapters),
+            "missing_chapters": skipped_missing,
+        }
+
+    await emit_progress(
+        study_thread_id, "study", "book_harmonize_start",
+        n_chapters=len(chapters),
+    )
+
+    result = await harmonize_book(
+        framework_slug=slug,
+        framework_name=framework_name,
+        chapters=chapters,
+    )
+
+    # Overwrite README.md for chapters that produced a valid patch.
+    n_overwritten = 0
+    for patch in result.get("patches", []):
+        if not patch.get("patched"):
+            continue
+        new_prose = patch.get("new_prose")
+        if not new_prose:
+            continue
+        cid = patch["chapter_id"]
+        key = f"synth/{slug}/{cid}/README.md"
+        try:
+            await minio.write(
+                key, new_prose.encode("utf-8"),
+                content_type="text/markdown",
+            )
+            n_overwritten += 1
+        except Exception as e:
+            logger.warning(
+                f"[book_harmonize] {slug}/{cid}: overwrite failed "
+                f"({type(e).__name__}: {e})"
+            )
+
+    await emit_progress(
+        study_thread_id, "study", "book_harmonize_done",
+        n_chapters=result.get("n_chapters", 0),
+        n_atomic_claims=result.get("n_atomic_claims", 0),
+        n_canonical_terms=result.get("n_canonical_terms", 0),
+        n_chapters_with_issues=result.get("n_chapters_with_issues", 0),
+        n_chapters_patched=result.get("n_chapters_patched", 0),
+        n_chapters_overwritten=n_overwritten,
+        elapsed_ms=result.get("elapsed_ms", 0),
+    )
+    logger.info(
+        f"[book_harmonize] {slug}: "
+        f"{n_overwritten}/{result.get('n_chapters_with_issues', 0)} chapters "
+        f"overwritten with harmonized prose "
+        f"({result.get('n_chapters', 0)} total, "
+        f"{result.get('n_canonical_terms', 0)} canonical terms, "
+        f"{result.get('elapsed_ms', 0)}ms)"
+    )
+    return {
+        **result,
+        "n_chapters_overwritten": n_overwritten,
+        "missing_chapters": skipped_missing,
+    }
+
+
 async def _run_study_orchestrator(
     *,
     slug: str,
@@ -600,12 +708,42 @@ async def _run_study_orchestrator(
         "cancelled" if cancelled
         else ("failed" if n_failed and not n_completed else "done")
     )
+
+    # === book_harmonize (cross-chapter coherence pass, 2026-05-24) =========
+    # After all chapters complete (or attempted), run a single book-level
+    # harmonization pass that detects + patches definition drift, terminology
+    # divergence, and cross-chapter contradictions. Skipped if <2 chapters
+    # completed (no cross-chapter coherence to validate).
+    # See docs/KD-SYNTH-SOTA-2026-05-24.md §3 #3.
+    harmonize_stats: dict | None = None
+    if (
+        not cancelled
+        and n_completed >= 2
+        and final_status != "failed"
+    ):
+        try:
+            harmonize_stats = await _run_book_harmonize(
+                slug=slug,
+                study_thread_id=study_thread_id,
+                chapter_ids=[
+                    cid for cid in chapter_ids
+                    # only chapters that produced render-latest.json
+                ],
+            )
+        except Exception as e:
+            logger.warning(
+                f"[study-orchestrator] {slug}: book_harmonize crashed "
+                f"({type(e).__name__}: {e}) — proceeding without it"
+            )
+            harmonize_stats = {"skipped": f"crash: {type(e).__name__}"}
+
     await emit_progress(
         study_thread_id, "study", "study_done",
         n_completed=n_completed,
         n_failed=n_failed,
         n_total=n_total,
         final_status=final_status,
+        book_harmonize=harmonize_stats,
     )
     # Mirror to a "synth"-step terminal event too so EventSource handlers
     # that key off `step === 'synth' && kind === 'terminal'` close cleanly.

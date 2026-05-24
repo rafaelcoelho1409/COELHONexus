@@ -395,8 +395,105 @@ async def _draft_one_section(
 
 
 # =============================================================================
-# Critic picker — MAMM-Refine rerank step
+# Critic picker — PAIRWISE TOURNAMENT (2026-05-24, supersedes pointwise N-pick)
 # =============================================================================
+# Why pairwise: Landesberg et al. Mar 2026 (arXiv:2603.12520) — pointwise LLM
+# scoring on similar-quality long-form drafts captures only 21% of selection
+# signal; 67% of pairwise comparisons tie. Knockout tournament with cross-
+# family critics (PoLL-style diversity via bandit-routed arms across separate
+# calls) recovers ~61% of selection signal. For N=3 we do 2 matches.
+# Falls back to deterministic structural-score on every parse failure inside
+# each match, so the tournament can never abort.
+#
+# Trade: 2 critic LLM calls instead of 1 for N=3. Cost is trivial under
+# `feedback_kd_quality_over_speed` (tokens are free).
+# See docs/KD-SYNTH-SOTA-2026-05-24.md §3 #1.
+
+_PAIRWISE_PICKER_PROMPT = """You are picking the BETTER of two technical-documentation
+drafts for the same section. The section is part of a larger distilled book.
+
+Choose by these criteria in order:
+1. Checklist coverage (does the draft address every outline point named?)
+2. Citation density (does it cite/reference the source documentation it claims?)
+3. Structural completeness (no truncations, no orphan code-refs, no placeholder text)
+4. Clarity and concision (well-organized, no rambling)
+
+You MUST choose A or B. Ties are NOT allowed.
+
+=== SECTION ===
+heading: {section_heading}
+expected primary source contributions: {n_primary_contribs}
+
+=== DRAFT A — structural summary ===
+{summary_a}
+
+=== DRAFT B — structural summary ===
+{summary_b}
+
+Answer in JSON: {{"winner": "A" | "B", "reason": "one short sentence"}}"""
+
+
+async def _pairwise_judge_match(
+    *,
+    section_id: str,
+    section_heading: str,
+    n_primary_contribs: int,
+    summary_a: dict,
+    summary_b: dict,
+) -> tuple[str, Optional[str]]:
+    """Run ONE pairwise match. Returns (winner_letter, deployment_critic).
+
+    winner_letter ∈ {"A", "B"}. On any parse / call failure, returns the
+    structural-score winner via deterministic tiebreak — the tournament
+    never aborts.
+    """
+    # Compact JSON-stringified summary keeps the prompt token-light.
+    def _fmt_summary(s: dict) -> str:
+        return json.dumps(
+            {
+                "structural_score": s.get("structural_score"),
+                "n_paragraphs":     s.get("n_paragraphs"),
+                "total_chars":      s.get("total_chars"),
+                "n_code_refs":      s.get("n_code_refs"),
+                "n_citations":      s.get("n_citations"),
+                "heading_matches":  s.get("heading_matches"),
+                "n_unknown_hashes": s.get("n_unknown_hashes"),
+                "n_unknown_keys":   s.get("n_unknown_keys"),
+            },
+            indent=2,
+        )
+
+    prompt = _PAIRWISE_PICKER_PROMPT.format(
+        section_heading=section_heading,
+        n_primary_contribs=n_primary_contribs,
+        summary_a=_fmt_summary(summary_a),
+        summary_b=_fmt_summary(summary_b),
+    )
+
+    try:
+        response, meta = await chat_judge_bandit_async(
+            prompt,
+            max_tokens=_MAX_TOKENS_CRITIC,
+            temperature=_TEMPERATURE_CRITIC,
+        )
+        deployment_critic = (meta or {}).get("deployment")
+        parsed = _parse_json_response(response)
+        if parsed and "winner" in parsed:
+            w = str(parsed["winner"]).strip().upper()[:1]
+            if w in ("A", "B"):
+                return w, deployment_critic
+    except Exception as e:
+        logger.warning(
+            f"[sawc_write] {section_id}: pairwise match failed: "
+            f"{type(e).__name__}: {e} — structural tiebreak"
+        )
+
+    # Structural tiebreak — never abort the tournament.
+    s_a = summary_a.get("structural_score", 0.0)
+    s_b = summary_b.get("structural_score", 0.0)
+    return ("A" if s_a >= s_b else "B"), None
+
+
 async def _critic_pick_best(
     *,
     section_id: str,
@@ -408,11 +505,14 @@ async def _critic_pick_best(
     valid_source_keys: set[str],
     thread_id: str,
 ) -> tuple[int, Optional[str], Optional[str], float]:
-    """Return (chosen_idx, deployment_critic, fallback_used, structural_score).
+    """Pairwise tournament picker. Returns
+    (chosen_idx, deployment_critic, fallback_used, structural_score).
 
-    fallback_used ∈ {None, "structural_score"} — None means the critic
-    LLM picked; "structural_score" means we fell back to deterministic
-    scoring.
+    fallback_used ∈ {None, "structural_score"} — None means at least one
+    pairwise match got a clean LLM verdict; "structural_score" means every
+    match fell back to deterministic tiebreak.
+
+    For N=3: 2 matches (knockout). For N=2: 1 match. For N=1: trivial.
     """
     summaries = [
         summarize_candidate(
@@ -429,40 +529,45 @@ async def _critic_pick_best(
         score = summaries[0]["structural_score"] if summaries else 0.0
         return 0, None, None, score
 
-    prompt = build_critic_picker_prompt(
-        section_id=section_id,
-        section_heading=section_heading,
-        n_primary_contribs=n_primary_contribs,
-        candidates_summary=summaries,
-    )
-    try:
-        response, meta = await chat_judge_bandit_async(
-            prompt,
-            max_tokens=_MAX_TOKENS_CRITIC,
-            temperature=_TEMPERATURE_CRITIC,
-        )
-        deployment_critic = (meta or {}).get("deployment")
-        parsed = _parse_json_response(response)
-        if parsed and "chosen_index" in parsed:
-            idx = int(parsed["chosen_index"])
-            if 0 <= idx < len(candidates):
-                return (
-                    idx,
-                    deployment_critic,
-                    None,
-                    summaries[idx]["structural_score"],
-                )
-    except Exception as e:
-        logger.warning(
-            f"[sawc_write] {section_id}: critic LLM failed: "
-            f"{type(e).__name__}: {e} — falling back to structural score"
-        )
+    # Knockout: indices represent positions in `candidates`. Each match
+    # picks between two positions; the winner advances.
+    n = len(candidates)
+    advancing = list(range(n))
+    deployment_critic: Optional[str] = None
+    n_llm_picks = 0
 
-    # Fallback: deterministic argmax by structural score (Self-Certainty
-    # proxy; arXiv 2502.18581)
-    scores = [s["structural_score"] for s in summaries]
-    best_idx = max(range(len(scores)), key=lambda i: scores[i])
-    return best_idx, None, "structural_score", scores[best_idx]
+    # Pairwise knockout — log_2(N) rounds, but for N=3 it's just 2 matches:
+    # round 1: cand[0] vs cand[1]; round 2: winner vs cand[2].
+    while len(advancing) > 1:
+        next_round: list[int] = []
+        # Pair the front: idx_a vs idx_b → winner. Carry odd survivor forward.
+        i = 0
+        while i + 1 < len(advancing):
+            idx_a, idx_b = advancing[i], advancing[i + 1]
+            winner_letter, dep = await _pairwise_judge_match(
+                section_id=section_id,
+                section_heading=section_heading,
+                n_primary_contribs=n_primary_contribs,
+                summary_a=summaries[idx_a],
+                summary_b=summaries[idx_b],
+            )
+            if dep is not None:
+                deployment_critic = dep
+                n_llm_picks += 1
+            next_round.append(idx_a if winner_letter == "A" else idx_b)
+            i += 2
+        if i < len(advancing):
+            next_round.append(advancing[i])  # bye for odd survivor
+        advancing = next_round
+
+    winner_idx = advancing[0]
+    fallback_used = None if n_llm_picks > 0 else "structural_score"
+    return (
+        winner_idx,
+        deployment_critic,
+        fallback_used,
+        summaries[winner_idx]["structural_score"],
+    )
 
 
 # =============================================================================
@@ -656,12 +761,18 @@ def _compute_manifest_hash(
     *,
     outline_manifest_hash: str,
     digest_manifest_hash: str,
+    refine_iter: int = 0,
 ) -> str:
+    """Content-addressed manifest hash for sawc cache key. Includes
+    refine_iter (2026-05-24, CoRefine loop closure) so each mgsr→sawc loop
+    iteration produces fresh drafts via bandit-routed exploration — without
+    this, the cache would short-circuit the loop with stale results."""
     payload = (
         f"outline={outline_manifest_hash}|"
         f"digest={digest_manifest_hash}|"
         f"prompt={SAWC_PROMPT_VERSION}|"
-        f"schema={SAWC_SCHEMA_VERSION}"
+        f"schema={SAWC_SCHEMA_VERSION}|"
+        f"iter={refine_iter}"
     )
     return sha256(payload.encode("utf-8")).hexdigest()[:16]
 
@@ -785,9 +896,16 @@ async def sawc_write(state: SynthState) -> dict:
     )
 
     # ── Cache fast-path ────────────────────────────────────────────────
+    # Track the iteration counter for the CoRefine loop (2026-05-24).
+    # Each sawc_write invocation bumps it by 1; refine_iter is part of the
+    # manifest hash so loop iterations don't cache-hit each other.
+    incoming_refine_iter = int(state.get("refine_iter") or 0)
+    refine_iter = incoming_refine_iter + 1
+
     manifest_hash = _compute_manifest_hash(
         outline_manifest_hash=outline_manifest_hash,
         digest_manifest_hash=digest_manifest_hash,
+        refine_iter=refine_iter,
     )
     versioned_key = _versioned_blob_key(slug, chapter_id, manifest_hash)
     latest_key    = _latest_blob_key(slug, chapter_id)
@@ -827,7 +945,11 @@ async def sawc_write(state: SynthState) -> dict:
                 f"{stats['n_completed']}/{stats['n_sections']} sections, "
                 f"{stats['n_repairs']} repairs, {elapsed} ms"
             )
-            return {"sawc_path": latest_key, "sawc_stats": stats}
+            return {
+                "sawc_path":   latest_key,
+                "sawc_stats":  stats,
+                "refine_iter": refine_iter,
+            }
         except Exception as e:
             logger.warning(
                 f"[sawc_write] {slug}/{chapter_id}: cached blob "
@@ -1034,9 +1156,14 @@ async def sawc_write(state: SynthState) -> dict:
         f"{stats['n_completed']}/{stats['n_sections']} sections written, "
         f"{stats['n_fallback']} fallbacks, {stats['n_repairs']} repairs, "
         f"{stats['n_total_drafts_fired']} drafts fired, "
-        f"{stats['n_picker_fallbacks']} picker fallbacks, {elapsed} ms"
+        f"{stats['n_picker_fallbacks']} picker fallbacks, "
+        f"refine_iter={refine_iter}, {elapsed} ms"
     )
-    return {"sawc_path": latest_key, "sawc_stats": stats}
+    return {
+        "sawc_path":   latest_key,
+        "sawc_stats":  stats,
+        "refine_iter": refine_iter,
+    }
 
 
 # =============================================================================

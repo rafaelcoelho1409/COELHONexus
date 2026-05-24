@@ -51,6 +51,19 @@ class SynthState(TypedDict, total=False):
     chapter_path:   Optional[str]
     chapter_stats:  Optional[dict]
 
+    # ── mgsr→sawc loop closure (2026-05-24, CoRefine-style halting) ────
+    # Iteration counter incremented each time sawc_write fires. Used by
+    # the conditional edge after mgsr_replan to enforce the 5-iter budget.
+    refine_iter:           Optional[int]
+    # Previous iteration's checklist pass_rate, used for plateau detection
+    # (halt when |this_score - prev_score| < 0.03 AND iter >= 2).
+    prev_checklist_score:  Optional[float]
+    # OP-12 best-seen rescue: track the sawc artifact (manifest hash + score)
+    # with the highest checklist_pass_rate so far. On budget/plateau halt,
+    # we route the best-seen — not necessarily the latest — to render.
+    best_seen_sawc_path:   Optional[str]
+    best_seen_score:       Optional[float]
+
     # ── bookkeeping ────────────────────────────────────────────────────
     status:         Optional[str]  # "running" | "done" | "failed" | "cancelled"
     error:          Optional[str]
