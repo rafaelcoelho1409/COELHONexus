@@ -626,10 +626,27 @@ async def mgsr_replan(state: SynthState) -> dict:
             f"(pass_rate={pass_rate:.2%} ≥ 0.80), no LLM call, "
             f"{elapsed} ms"
         )
+        # Ship #6 (2026-05-24) — OP-12 best-seen rescue: if THIS iter's
+        # pass_rate beats the carried-forward best_seen_score, advance the
+        # best-seen pointer to this iter's sawc versioned path (the
+        # immutable per-iteration blob that survives later overwrites of
+        # sawc-latest.json).
+        sawc_stats = state.get("sawc_stats") or {}
+        cur_sawc_versioned = (
+            sawc_stats.get("versioned_path")
+            or state.get("sawc_path")  # fallback to latest if versioned absent
+        )
+        cur_best_score = state.get("best_seen_score")
+        cur_best_path = state.get("best_seen_sawc_path")
+        if cur_best_score is None or pass_rate > float(cur_best_score):
+            cur_best_score = pass_rate
+            cur_best_path = cur_sawc_versioned or cur_best_path
         return {
             "mgsr_path":            latest_key,
             "mgsr_stats":           stats,
             "prev_checklist_score": pass_rate,
+            "best_seen_score":      cur_best_score,
+            "best_seen_sawc_path":  cur_best_path,
         }
 
     # ── Slow path: chapter failed checklist; fire LLM replan ───────────
@@ -748,10 +765,22 @@ async def mgsr_replan(state: SynthState) -> dict:
         f"(pass_rate={pass_rate:.2%}, {n_failed} failed criteria); "
         f"{elapsed} ms"
     )
+    sawc_stats = state.get("sawc_stats") or {}
+    cur_sawc_versioned = (
+        sawc_stats.get("versioned_path")
+        or state.get("sawc_path")
+    )
+    cur_best_score = state.get("best_seen_score")
+    cur_best_path = state.get("best_seen_sawc_path")
+    if cur_best_score is None or pass_rate > float(cur_best_score):
+        cur_best_score = pass_rate
+        cur_best_path = cur_sawc_versioned or cur_best_path
     return {
         "mgsr_path":            latest_key,
         "mgsr_stats":           stats,
         "prev_checklist_score": pass_rate,
+        "best_seen_score":      cur_best_score,
+        "best_seen_sawc_path":  cur_best_path,
     }
 
 

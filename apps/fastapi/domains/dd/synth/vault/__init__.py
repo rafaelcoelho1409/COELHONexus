@@ -19,6 +19,11 @@ from .service import (
     materialize,
     audit_roundtrip,
     build_manifest,
+    format_entry_for_prompt,
+    format_entries_for_prompt,
+    score_entry_pedagogy,
+    rank_hashes_by_pedagogy,
+    get_or_build_source_vault,
 )
 
 __all__ = [
@@ -37,4 +42,9 @@ __all__ = [
     "materialize",
     "audit_roundtrip",
     "build_manifest",
+    "format_entry_for_prompt",
+    "format_entries_for_prompt",
+    "score_entry_pedagogy",
+    "rank_hashes_by_pedagogy",
+    "get_or_build_source_vault",
 ]

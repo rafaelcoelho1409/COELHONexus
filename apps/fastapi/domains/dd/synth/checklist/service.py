@@ -182,6 +182,85 @@ def check_picker_fallback_rate_low(sawc: dict) -> CriterionResult:
     )
 
 
+def check_code_density_appropriate(sawc: dict) -> CriterionResult:
+    """Ship #3 (2026-05-24) — code-first gate.
+
+    The chapter passes when the average code_refs per section is ≥
+    _MIN_AVG_CODE_REFS_PER_SECTION (default 2.0) AND when the writer
+    actually used the code bank (at least _MIN_CODE_REF_COVERAGE_FRACTION
+    of the allowed_hashes available to each section ended up cited).
+
+    Sections with zero allowed_hashes are exempt from the coverage check
+    (concept-only sections don't have code to cite). The average check
+    still applies — if MOST sections have no code, the chapter is too
+    prose-heavy regardless.
+
+    Failure feedback names the offending sections so mgsr_replan can
+    decide whether to instruct sawc to re-roll those sections specifically
+    or accept the chapter as-is.
+    """
+    from .constants import (
+        _MIN_AVG_CODE_REFS_PER_SECTION,
+        _MIN_CODE_REF_COVERAGE_FRACTION,
+    )
+    sections = sawc.get("sections") or []
+    if not sections:
+        return CriterionResult(
+            name="code_density_appropriate",
+            passed=False,
+            kind="deterministic",
+            feedback="no sections — chapter is empty",
+        )
+
+    n_refs_per_section: list[tuple[str, int]] = []
+    thin_coverage: list[str] = []
+    n_total_refs = 0
+    for s in sections:
+        sid = s.get("section_id", "?")
+        n_refs = len(s.get("code_refs") or [])
+        n_total_refs += n_refs
+        n_refs_per_section.append((sid, n_refs))
+        # Coverage check uses the allowed_hashes_count if recorded.
+        n_allowed = int(s.get("n_allowed_hashes") or 0)
+        if n_allowed >= 3:
+            coverage = n_refs / max(1, n_allowed)
+            if coverage < _MIN_CODE_REF_COVERAGE_FRACTION:
+                thin_coverage.append(
+                    f"{sid}({n_refs}/{n_allowed})"
+                )
+    avg = n_total_refs / len(sections)
+    passed = (
+        avg >= _MIN_AVG_CODE_REFS_PER_SECTION
+        and len(thin_coverage) <= len(sections) // 2  # tolerate 50% thin
+    )
+    if passed:
+        feedback = ""
+    else:
+        zeros = [sid for sid, n in n_refs_per_section if n == 0]
+        feedback = (
+            f"code density too low: avg {avg:.2f} code_refs/section "
+            f"(floor {_MIN_AVG_CODE_REFS_PER_SECTION}); "
+            f"{len(zeros)} sections with 0 code_refs"
+        )
+        if zeros[:5]:
+            feedback += f": {zeros[:5]}"
+        if thin_coverage[:5]:
+            feedback += (
+                f"; {len(thin_coverage)} sections under-using code bank: "
+                f"{thin_coverage[:5]}"
+            )
+        feedback += (
+            ". This is a CODE-FIRST learning resource — sections must "
+            "lead with code, not summarize concepts in prose."
+        )
+    return CriterionResult(
+        name="code_density_appropriate",
+        passed=passed,
+        kind="deterministic",
+        feedback=feedback,
+    )
+
+
 # Ordered list used by the node — stable iteration order = stable
 # pass-rate denominators across runs.
 DETERMINISTIC_CHECKS = (
@@ -192,6 +271,7 @@ DETERMINISTIC_CHECKS = (
     check_density_within_bounds,
     check_repair_rate_low,
     check_picker_fallback_rate_low,
+    check_code_density_appropriate,
 )
 
 

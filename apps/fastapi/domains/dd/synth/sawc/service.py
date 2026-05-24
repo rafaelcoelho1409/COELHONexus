@@ -128,6 +128,49 @@ def validate_section_against_inputs(
             f"Pick ONLY from the allowed_hashes list shown in the prompt."
         )
 
+    # 2026-05-24 evening (Ship B): tighter code-first density floor.
+    # Floor scales with bank size to push the LLM toward code-heavy output:
+    #   bank ≥20  → floor 6
+    #   bank ≥10  → floor 4
+    #   bank ≥6   → floor 3
+    #   bank ≥3   → floor 2
+    #   bank ≥1   → floor 1
+    # When the LLM emits below the floor, the repair feedback (Ship C)
+    # includes the FULL bank listing so the LLM can re-pick informed.
+    n_allowed = len(allowed_hashes)
+    n_used = len(draft.code_refs)
+    if n_allowed >= 20:
+        floor = 6
+    elif n_allowed >= 10:
+        floor = 4
+    elif n_allowed >= 6:
+        floor = 3
+    elif n_allowed >= 3:
+        floor = 2
+    elif n_allowed >= 1:
+        floor = 1
+    else:
+        floor = 0
+    if floor > 0 and n_used < floor:
+        # Ship C: sharper repair feedback — explicitly list the bank's
+        # hashes so the LLM sees exactly what it can pick from on retry.
+        # Cap the listing at 30 hashes to keep the repair prompt within
+        # context budget.
+        sorted_bank = sorted(allowed_hashes)[:30]
+        bank_listing = ", ".join(sorted_bank)
+        if len(allowed_hashes) > 30:
+            bank_listing += f", ... ({len(allowed_hashes) - 30} more)"
+        issues.append(
+            f"code_refs has only {n_used} entries but the section's code "
+            f"bank offers {n_allowed} hashes — that's a CODE-FIRST violation. "
+            f"This chapter is a learning resource where the reader expects "
+            f"~50% of the output to be code. You MUST cite at least {floor} "
+            f"hashes from the bank. Pick the {floor}+ most pedagogically "
+            f"valuable ones (canonical example first, then primitives, then "
+            f"recipes). Available hashes you can cite: [{bank_listing}]. "
+            f"Each code_refs entry needs hash + placement_hint."
+        )
+
     bad_sources = [
         c.source_key for c in draft.citations
         if c.source_key not in valid_source_keys
@@ -308,18 +351,60 @@ def build_writer_prompt(
     valid_source_keys: list[str],
     memory: list[dict],
     n_primary_contribs: int,
+    vault_rich: dict | None = None,
 ) -> str:
-    """Build the per-section per-draft writer prompt."""
+    """Build the per-section per-draft writer prompt.
+
+    Args:
+        vault_rich: optional dict[hash → VaultEntry-like dict] giving the
+            LLM full visibility into each allowed code block (Visible Vault,
+            2026-05-24 Ship #1). When provided, renders `<code id=...>{body}
+            </code>` envelopes so the LLM can pick pedagogically valuable
+            hashes from informed context. When None, falls back to plain
+            hash listing (legacy behavior).
+    """
     prereqs_str = (
         ", ".join(section_prerequisites)
         if section_prerequisites
         else "(none — this is a stage-0 section)"
     )
-    hash_list = (
-        "\n".join(f"  - {h}" for h in allowed_hashes)
-        if allowed_hashes
-        else "  (none — prose-only section, leave code_refs empty)"
-    )
+
+    # Visible Vault rendering — see Ship #1 in
+    # docs/KD-CODE-FIRST-SOTA-2026-05-24.md. The LLM sees the FULL code
+    # body (no truncation, per feedback_kd_quality_over_speed) so it can
+    # pick canonical examples and write tight commentary. The renderer
+    # substitutes the vault entry verbatim at render time, so prompt-side
+    # variance doesn't affect output fidelity.
+    if allowed_hashes and vault_rich:
+        from ..vault.service import format_entry_for_prompt
+        from ..vault.types import VaultEntry as _VaultEntry
+
+        envelopes: list[str] = []
+        for h in allowed_hashes:
+            entry = vault_rich.get(h)
+            if entry is None:
+                envelopes.append(f'<code id="{h}" missing="true"/>')
+                continue
+            # Coerce dict → VaultEntry if needed for type compatibility.
+            if isinstance(entry, dict):
+                try:
+                    entry = _VaultEntry(**entry)
+                except Exception:
+                    envelopes.append(
+                        f'<code id="{h}" lang="{entry.get("lang","text")}">\n'
+                        f'{entry.get("fence_text") or ""}\n'
+                        f'</code>'
+                    )
+                    continue
+            envelopes.append(format_entry_for_prompt(entry))
+        hash_list = "\n\n".join(envelopes)
+    else:
+        hash_list = (
+            "\n".join(f"  - {h}" for h in allowed_hashes)
+            if allowed_hashes
+            else "  (none — prose-only section, leave code_refs empty)"
+        )
+
     source_list = (
         "\n".join(f"  - {k}" for k in valid_source_keys)
         if valid_source_keys
@@ -333,6 +418,15 @@ def build_writer_prompt(
         f"critic LLM will pick the best one afterwards (MAMM-Refine "
         f"arXiv 2503.15272 pattern).\n\n"
 
+        f"⚡ CRITICAL PURPOSE — this is a CODE-FIRST learning resource. "
+        f"The reader is here to learn {framework} FAST by reading "
+        f"production-quality code, not 400-page summaries. Lead with "
+        f"CODE. Each paragraph of prose should support a specific code "
+        f"reference, not summarize generically. Aim for sections where "
+        f"40-60% of the rendered output is code blocks. Sections that "
+        f"are pure prose without code references will be REJECTED by "
+        f"the checklist gate and re-rolled.\n\n"
+
         f"FRAMEWORK: {framework}\n"
         f"CHAPTER: {chapter_id} — {chapter_title}\n"
         f"SECTION: {section_id} — {section_heading}\n"
@@ -342,8 +436,15 @@ def build_writer_prompt(
         f"== GROUNDED CONTRIBUTIONS (your prose MUST cover these) ==\n"
         f"{_format_contributions_block(contributions)}\n\n"
 
-        f"== ALLOWED VAULT HASHES ({len(allowed_hashes)}) — pick a subset "
-        f"to place in this section ==\n"
+        f"== ALLOWED CODE BANK ({len(allowed_hashes)} entries) — these "
+        f"are the actual code blocks available for THIS section. "
+        f"Each `<code id=...>` envelope shows you the FULL real code "
+        f"body so you can pick the pedagogically valuable examples. The "
+        f"renderer will materialize them VERBATIM at the placement_hint "
+        f"location you specify. PICK A SUBSTANTIAL SUBSET — at minimum "
+        f"1 canonical example, ideally 3-6 (primitives + a recipe + "
+        f"a counter-example). Reason about each block fully and write "
+        f"commentary tied to specific lines / decorators / arguments. ==\n"
         f"{hash_list}\n\n"
 
         f"== VALID CITATION SOURCE_KEYS ({len(valid_source_keys)}) — "
@@ -358,15 +459,17 @@ def build_writer_prompt(
         f"{{\n"
         f'  "heading":    "{section_heading}",  /* ECHO verbatim */\n'
         f'  "paragraphs": [\n'
-        f'    "First paragraph: open with the section\'s framing (no '
-        f'redundant chapter intro). 80-1800 chars. NO embedded \\\\n\\\\n.",\n'
-        f'    "Subsequent paragraphs: dense technical prose grounded in '
-        f'the contributions above.",\n'
+        f'    "First paragraph: 1-2 sentence intro of what this section '
+        f'covers and when to reach for it. NO embedded \\\\n\\\\n.",\n'
+        f'    "Each subsequent paragraph: 1-3 sentences (≤120 words) '
+        f'tying a SPECIFIC code reference to its purpose. The pattern is: '
+        f'short prose → code → 1 sentence callout on what to notice.",\n'
         f'    ... 2-12 entries ...\n'
         f'  ],\n'
         f'  "code_refs": [\n'
-        f'    {{"hash": "16-hex", "placement_hint": "after paragraph 2"}},\n'
-        f'    ...\n'
+        f'    {{"hash": "16-hex from the code bank above", '
+        f'"placement_hint": "after paragraph 2"}},\n'
+        f'    ... AIM FOR 3-6 code_refs per section ...\n'
         f'  ],\n'
         f'  "citations": [\n'
         f'    {{"source_key": "ingestion/.../0024-isbn.md", '
@@ -378,24 +481,34 @@ def build_writer_prompt(
         f"== HARD RULES ==\n"
         f"1. `heading` MUST be EXACTLY {section_heading!r} (case-sensitive "
         f"   echo of the outline).\n"
-        f"2. Every `code_refs[*].hash` MUST be in the allowed_hashes list "
-        f"   above. Inventing or 'paraphrasing' a hash is a violation.\n"
-        f"3. Every `citations[*].source_key` MUST be one of the valid "
+        f"2. Every `code_refs[*].hash` MUST be in the code bank above. "
+        f"   Inventing or 'paraphrasing' a hash is a violation.\n"
+        f"3. **CODE DENSITY TARGET: AT LEAST 3 code_refs per section** "
+        f"   (unless the section is a pure-concept overview with no code "
+        f"   in the bank). Sections shipping <3 code_refs when the bank "
+        f"   offers ≥5 will be re-rolled by the checklist gate.\n"
+        f"4. PROSE IS TIGHT: each `paragraphs[*]` entry = 1-3 sentences "
+        f"   (≤120 words). NO multi-paragraph summaries; the reader is "
+        f"   here for code, not a tour.\n"
+        f"5. Every `citations[*].source_key` MUST be one of the valid "
         f"   source_keys above. Aim for {n_primary_contribs}+ citations "
         f"   (one per primary contribution).\n"
-        f"4. `paragraphs` is a LIST. Each entry is ONE paragraph — do NOT "
+        f"6. `paragraphs` is a LIST. Each entry is ONE paragraph — do NOT "
         f"   embed `\\n\\n` inside a single entry. The renderer joins "
         f"   with `\\n\\n` later.\n"
-        f"5. NO inline `<code-ref hash=\"...\"/>` tags in prose. Use the "
+        f"7. NO inline `<code-ref hash=\"...\"/>` tags in prose. Use the "
         f"   typed `code_refs` field; the renderer places the block at "
         f"   the right paragraph boundary.\n"
-        f"6. NO `# docs:` / `# src:` source-id leaks in prose. Use the "
+        f"8. NO `# docs:` / `# src:` source-id leaks in prose. Use the "
         f"   typed `citations` field; the renderer emits proper footnotes.\n"
-        f"7. Don't re-introduce terminology already in `memory[*]"
+        f"9. Don't re-introduce terminology already in `memory[*]"
         f".key_terminology` above — assume the reader saw it. Reference "
         f"   by name; don't redefine.\n"
-        f"8. Dense, production-focused. Concrete > abstract. Name actual "
-        f"   APIs / methods / types — match the granularity of `key_facts`.\n\n"
+        f"10. PEDAGOGICAL PATTERN within the section: open with 1 sentence "
+        f"    framing → first canonical code_ref → 1 sentence explaining "
+        f"    what to notice → next primitive code_ref → 1 sentence "
+        f"    callout → ... → optional counter-example/gotcha at end. "
+        f"    Think Anthropic Cookbook density, not Wikipedia article.\n\n"
 
         f"Respond ONLY with valid JSON matching the schema above. NO "
         f"prose commentary, NO markdown wrapping, NO explanation."

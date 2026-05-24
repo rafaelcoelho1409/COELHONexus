@@ -756,6 +756,50 @@ def _classify_error(exc: Exception) -> str:
     return "unknown"
 
 
+# =============================================================================
+# Option B (2026-05-24 evening) — per-dd_process bandit arms
+# =============================================================================
+# Empirical observation: heavyweight reasoning models (Kimi K2.6, GLM 5.1,
+# qwen3.5-397b, nemotron-3-super, minimax-m2.7, mistral-large variants) have
+# σ²_ewma 0.20-0.29 vs workhorses (llama-4-maverick, gpt-oss-120b, magistral-
+# small) at 0.06-0.18. The variance comes from <think> token traces and
+# higher per-call latency. FGTS-VA correctly penalizes that variance for
+# binary classification tasks (dd-grader / off_topic / refine) where
+# consistency wins.
+#
+# But SAWC writer drafts are NOT binary classification — they're long-form
+# generative writing where a single deep reasoning pass can beat many
+# shallow ones. By giving the writer drafts their own dd_process
+# ("dd-synth-write") + a filter that keeps only heavyweight arms, we get:
+#   1. Separate σ²_ewma evolution (writer cells learn writer-specific noise)
+#   2. Workhorses excluded from drafts, reasoning models foregrounded
+#   3. The bandit still picks the best heavyweight by its writer-specific
+#      reward signal (no more averaging across grader+writer tasks)
+
+
+# Substrings that identify "heavyweight" candidates for the SAWC writer
+# pool. Any deployment whose model id contains one of these substrings is
+# kept; everything else (small/medium workhorses) is filtered out.
+DD_SYNTH_WRITE_HEAVYWEIGHTS = (
+    "llama-4-maverick",          # 1M ctx, top-tier reasoning
+    "qwen3.5-397b",              # 397B param reasoning
+    "z-ai/glm-5.1",              # GLM reasoning
+    "moonshotai/kimi",           # Kimi reasoning
+    "nemotron-3-super",          # NVIDIA top reasoning
+    "minimaxai/minimax",         # MiniMax M-series reasoning
+    "mistral-large",             # Mistral Large (including 3-675b)
+    "deepseek-v4",               # DeepSeek V4
+    "gpt-oss-120b",              # GPT-OSS 120B (consistent quality)
+    "magistral-medium",          # Mistral premium reasoning
+    "devstral-medium",           # Devstral premium
+)
+
+
+def _is_heavyweight(deployment_id: str) -> bool:
+    """Returns True if `deployment_id` matches the SAWC-writer whitelist."""
+    return any(s in deployment_id for s in DD_SYNTH_WRITE_HEAVYWEIGHTS)
+
+
 async def chat_judge_bandit_async(
     prompt: str,
     *,
@@ -763,13 +807,25 @@ async def chat_judge_bandit_async(
     temperature: float = 0.0,
     timeout_s: float = 30.0,
     expected_pattern: str | None = None,
+    dd_process: str | None = None,
+    candidate_filter=None,
 ) -> tuple[str, dict]:
     """Bandit-routed single-shot text classification.
 
+    Args:
+        dd_process: process namespace for the bandit cells. Default
+            "dd-grader" (binary classification). Pass "dd-synth-write" for
+            SAWC writer drafts (long-form generation; uses separate cells +
+            optional heavyweight filter).
+        candidate_filter: optional callable(deployment_id: str) -> bool.
+            When provided, candidates that return False are excluded BEFORE
+            predict_top_k. Used by SAWC writer to keep only heavyweight
+            reasoning models in the pool.
+
     Pipeline:
-      1. Build context vector (dd_process=dd-grader, temporal sin/cos +
-         provider error rates default to 0 — Phase 2 features).
-      2. predict_top_k against the dd-all candidate set.
+      1. Build context vector (dd_process default "dd-grader", temporal
+         sin/cos + provider error rates default to 0 — Phase 2 features).
+      2. predict_top_k against the optionally-filtered candidate set.
       3. Cascade through the ranked deployments: try top-1 via direct
          `litellm.acompletion(model=deployment_id)` (bypasses Router so
          we hit the SPECIFIC chosen deployment, not Router shuffle).
@@ -777,35 +833,42 @@ async def chat_judge_bandit_async(
          signal so the bandit learns. `expected_pattern` (e.g. "^(KEEP|DROP)$")
          drives the schema_valid component of the reward.
       5. Return (response_text, meta) where meta has `deployment`,
-         `latency_s`, `attempts`, `reward`.
+         `latency_s`, `attempts`, `reward`, `dd_process`.
 
     Falls back to Router-shuffle (`chat_judge_async`) on any infrastructure
     failure (Redis down, no candidates ranked, etc.) so the planner
     never wedges on a misconfigured bandit.
     """
+    effective_process = dd_process or _JUDGE_KD_PROCESS
     rds = await _redis_for_bandit()
     if rds is None:
         # No Redis = no bandit. Fall back to Router-shuffle.
         text = await chat_judge_async(
-            prompt, 
-            max_tokens = max_tokens, 
+            prompt,
+            max_tokens = max_tokens,
             temperature = temperature)
         return text, {
-            "deployment": "router-shuffle", 
+            "deployment": "router-shuffle",
             "attempts": 0,
             "latency_s": None, "reward": None,
+            "dd_process": effective_process,
             "fallback": "no_redis"}
     candidates = [e["litellm_params"]["model"] for e in _all_entries_current()]
-    ctx = bandit.make_context_vector(_JUDGE_KD_PROCESS)
+    if candidate_filter is not None:
+        filtered = [c for c in candidates if candidate_filter(c)]
+        if filtered:
+            candidates = filtered
+        # If filter zeros the pool, fall back to full set rather than 503ing
+    ctx = bandit.make_context_vector(effective_process)
     pattern = None
     if expected_pattern:
         pattern = re.compile(expected_pattern)
     try:
         ranked = await bandit.predict_top_k(
-            _JUDGE_KD_PROCESS, 
-            ctx, 
+            effective_process,
+            ctx,
             candidates,
-            redis = rds, 
+            redis = rds,
             k = _JUDGE_BANDIT_TOP_K,
         )
     except Exception as e:
@@ -881,10 +944,10 @@ async def chat_judge_bandit_async(
             )
             try:
                 await bandit.update(
-                    deployment_id, 
-                    _JUDGE_KD_PROCESS, 
-                    ctx, 
-                    reward, 
+                    deployment_id,
+                    effective_process,
+                    ctx,
+                    reward,
                     redis = rds,
                 )
             except Exception:
@@ -895,6 +958,7 @@ async def chat_judge_bandit_async(
                     "attempts":   attempts,
                     "latency_s":  latency_s,
                     "reward":     reward,
+                    "dd_process": effective_process,
                 }
             # Success but bad schema: still return — caller will treat as
             # unparseable. Continuing the cascade would waste budget on a
@@ -906,6 +970,7 @@ async def chat_judge_bandit_async(
                     "latency_s":  latency_s,
                     "reward":     reward,
                     "schema_invalid": True,
+                    "dd_process": effective_process,
                 }
             # On failure: cascade to the next ranked deployment.
         # All ranked deployments failed.

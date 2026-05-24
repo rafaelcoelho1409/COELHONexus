@@ -538,6 +538,57 @@ async def digest_construct(state: SynthState) -> dict:
 
     # ── Read all source bodies in parallel ─────────────────────────────
     bodies = await minio.read_many(source_keys)
+
+    # ── Runtime sentinelization fallback (2026-05-24 evening fix) ──────
+    # When ingestion produced per-page markdown files at
+    # `ingestion/{slug}/pages/...` but didn't build matching per-page
+    # vaults (e.g., the consolidated llms-full crawl built only one mega-
+    # vault), the per-source markdown has no sentinels and the digest
+    # LLM finds zero vault hashes → emits empty code_refs → sawc ends up
+    # with allowed_hashes=[] → final chapter has zero code blocks.
+    # Fix: sentinelize each source on-the-fly here. The resulting
+    # vault entries are accumulated below and the sentinelized bodies
+    # replace the raw ones for downstream LLM input.
+    from ..vault.service import sentinelize_doc as _sentinelize_doc
+    runtime_vault_entries: dict = {}
+    sentinelized_bodies: list[bytes | str | None] = []
+    for sk, raw_body in zip(source_keys, bodies):
+        if not raw_body:
+            sentinelized_bodies.append(raw_body)
+            continue
+        body_text = (
+            raw_body.decode("utf-8", errors="replace")
+            if isinstance(raw_body, (bytes, bytearray))
+            else raw_body
+        )
+        if "<code-ref hash=" in body_text:
+            # Already sentinelized at the source (the pre-built path
+            # would have produced this).
+            sentinelized_bodies.append(body_text)
+            continue
+        try:
+            sentinelized, entries = _sentinelize_doc(body_text)
+            sentinelized_bodies.append(sentinelized)
+            # Convert VaultEntry → dict for downstream JSON serialization
+            for h, e in entries.items():
+                if h not in runtime_vault_entries:
+                    runtime_vault_entries[h] = (
+                        e.model_dump() if hasattr(e, "model_dump") else dict(e)
+                    )
+        except Exception as exc:
+            logger.warning(
+                f"[digest_construct] runtime-sentinelize failed for "
+                f"{sk!r}: {type(exc).__name__}: {exc}; using raw body"
+            )
+            sentinelized_bodies.append(body_text)
+    bodies = sentinelized_bodies
+    if runtime_vault_entries:
+        logger.info(
+            f"[digest_construct] {slug}/{chapter_id}: runtime-sentinelized "
+            f"{sum(1 for b in bodies if b and '<code-ref hash=' in str(b))} "
+            f"sources, accumulated {len(runtime_vault_entries)} vault entries"
+        )
+
     # Pair (source_key, body); drop empties + log
     pairs: list[tuple[str, str]] = []
     for k, b in zip(source_keys, bodies):

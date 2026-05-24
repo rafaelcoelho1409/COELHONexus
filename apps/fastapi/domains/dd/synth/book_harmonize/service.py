@@ -38,6 +38,7 @@ CONSTRAINT: free-tier-only. All LLM calls flow through chat_judge_bandit_async
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -51,6 +52,37 @@ logger = logging.getLogger(__name__)
 
 BOOK_HARMONIZE_SCHEMA_VERSION = "1.0"
 BOOK_HARMONIZE_PROMPT_VERSION = "v1-2026-05-24"
+
+
+# =============================================================================
+# Cache key (Ship #5, 2026-05-24)
+# =============================================================================
+def compute_harmonize_manifest_hash(chapters: list[dict]) -> str:
+    """Content-addressed cache key for the cross-chapter harmonization pass.
+
+    Includes:
+      - sha256 of each chapter's full prose (sorted by chapter_id)
+      - prompt_version + schema_version
+
+    On a re-run with identical chapter prose + identical prompts, the
+    manifest hash matches → caller can skip the harmonize call entirely
+    and replay the cached telemetry. After a successful patch the chapter
+    READMEs change → manifest hash changes → next run is a miss → harmonize
+    re-runs but finds no violations (idempotent) → writes a new cache
+    blob → THIRD run is a clean hit.
+    """
+    parts: list[str] = []
+    for ch in sorted(chapters, key=lambda c: c.get("chapter_id", "")):
+        cid = ch.get("chapter_id", "")
+        prose = ch.get("prose") or ""
+        prose_hash = hashlib.sha256(prose.encode("utf-8")).hexdigest()[:16]
+        parts.append(f"{cid}={prose_hash}")
+    payload = (
+        f"chapters={'|'.join(parts)}|"
+        f"prompt={BOOK_HARMONIZE_PROMPT_VERSION}|"
+        f"schema={BOOK_HARMONIZE_SCHEMA_VERSION}"
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 # =============================================================================

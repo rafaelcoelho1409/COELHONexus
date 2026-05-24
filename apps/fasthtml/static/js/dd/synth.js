@@ -72,6 +72,12 @@ export function _kpiForSynthNode(nodeId, values) {
       if (s.n_picker_fallbacks) {
         parts.push(`pfb=${s.n_picker_fallbacks}`);
       }
+      // Ship #7 (2026-05-24): show refine_iter when sawc has looped
+      // back from mgsr_replan (>1 means the CoRefine loop fired).
+      const iter = values.refine_iter;
+      if (iter !== undefined && iter > 1) {
+        parts.push(`iter=${iter}`);
+      }
       return parts.join(' · ');
     }
     case 'checklist_eval':     {
@@ -1244,6 +1250,30 @@ export async function pollStudyState(sid) {
       }
       return;
     }
+    // Ship #7 (2026-05-24): book_harmonize study-level events
+    if (ev.step === 'study' && ev.kind === 'book_harmonize_start') {
+      _setSynthStagePill('working', 'Harmonizing chapters…');
+      showToast(`Cross-chapter harmonization started (${ev.n_chapters || '?'} chapters)`);
+      return;
+    }
+    if (ev.step === 'study' && ev.kind === 'book_harmonize_skipped') {
+      console.log('[book-harmonize] skipped:', ev.reason);
+      return;
+    }
+    if (ev.step === 'study' && ev.kind === 'book_harmonize_done') {
+      const patched = ev.n_chapters_patched || 0;
+      const overwritten = ev.n_chapters_overwritten || 0;
+      const issues = ev.n_chapters_with_issues || 0;
+      const cache = ev.cache_hit ? ' (cache)' : '';
+      if (overwritten > 0) {
+        showToast(
+          `Harmonized ${overwritten}/${issues} chapter(s) for cross-chapter consistency${cache}`
+        );
+      } else if (issues === 0) {
+        showToast(`Cross-chapter coherence verified, no patches needed${cache}`);
+      }
+      return;
+    }
     if (ev.step === 'study' && ev.kind === 'study_done') {
       if (_studyAttachTimer) {
         clearTimeout(_studyAttachTimer);
@@ -1557,6 +1587,21 @@ export async function startSynth() {
   }
 }
 
+// Safety-net timeout (ms) — if no SSE `terminal` arrives within this
+// window the button auto-resets so the user is never stuck waiting.
+// Cancel watchers poll every ~1s; a 15s ceiling gives the slowest LLM
+// call enough time to land + the watcher to detect + emit terminal.
+const CANCEL_TIMEOUT_MS = 15000;
+
+// Cancel semantics (2026-05-24):
+//   • The in-flight Synth node aborts; nodes that already wrote a final
+//     `*-latest.json` to MinIO stay intact. LangGraph commits checkpoints
+//     only AFTER a node completes, so a cancelled mid-flight node never
+//     pollutes prior state.
+//   • Wipe Synth is the explicit "delete EVERYTHING" path — it's a
+//     separate button gated on the run being stopped first.
+//   • Use Resume after cancel to re-attempt from the last completed
+//     checkpoint (the in-flight node restarts cleanly).
 export async function cancelSynth() {
   const tid = S.studyThreadId || S.synthThreadId;
   if (!tid) return;
@@ -1564,9 +1609,62 @@ export async function cancelSynth() {
   S.synthStartBtn.innerHTML =
     '<div class="fw-spinner" style="display:inline-block;' +
     'vertical-align:middle;margin-right:8px"></div>Cancelling…';
+
+  // Safety-net timer. If the SSE terminal event doesn't fire within
+  // CANCEL_TIMEOUT_MS (e.g., the chapter watcher missed the flag, the
+  // pod restarted mid-cancel, or the SSE connection closed before the
+  // terminal event arrived), we forcibly reset the UI so the user isn't
+  // stuck. CRITICAL: this MUST clear synthThreadId AND studyThreadId
+  // — otherwise refreshSynthStartState keeps `running=true` and the
+  // Wipe button stays disabled even after the button looks like
+  // "Start Synth". This was the cause of the "Wipe button does
+  // nothing" bug. Backend cancel flag stays set (TTL=1h) so the
+  // worker still drains on its own watcher tick — the state we're
+  // clearing is purely browser-side.
+  const safetyTimer = setTimeout(() => {
+    if (S.synthStartBtn && S.synthStartBtn.innerHTML.includes('Cancelling')) {
+      // Clear all thread refs so `running` flips to false everywhere.
+      S.setSynthThreadId(null);
+      S.setStudyThreadId(null);
+      // Forget per-slug persistence too, so a page reload doesn't try
+      // to re-attach to the cancelled study.
+      if (S.activeSlug) {
+        try { _forgetActiveStudy(S.activeSlug); } catch (_) {}
+        try { _forgetActiveSynth(S.activeSlug); } catch (_) {}
+      }
+      // Now flip the visuals — refreshSynthStartState will see no
+      // running threads → enable Wipe + reset the Start button cleanly.
+      refreshSynthStartState();
+      showToast(
+        'Cancel sent. Cleanup is still finishing in the background. '
+        + 'Previously-completed nodes are preserved — click Wipe Synth '
+        + 'to delete the whole cache, or Resume to continue from the '
+        + 'last checkpoint.'
+      );
+    }
+  }, CANCEL_TIMEOUT_MS);
+
   try {
-    await fetch(S.API + '/synth/' + tid + '/cancel', {method: 'POST'});
+    const r = await fetch(S.API + '/synth/' + tid + '/cancel', {method: 'POST'});
+    if (r.ok) {
+      const data = await r.json().catch(() => ({}));
+      const n = (data.propagated_to || []).length;
+      if (n > 0) {
+        console.log('[cancelSynth] cancel propagated to '
+          + n + ' chapter thread(s); the in-flight node will abort. '
+          + 'Previously-completed node outputs are preserved.');
+      }
+      // Don't reset the button here — wait for the SSE `terminal` event
+      // which signals the watcher actually fired and the task cancelled.
+      // The safetyTimer above is the fallback if that never happens.
+    } else {
+      clearTimeout(safetyTimer);
+      S.synthStartBtn.removeAttribute('disabled');
+      S.synthStartBtn.innerHTML = 'Cancel Synth';
+      showToast('Cancel request failed: HTTP ' + r.status);
+    }
   } catch (e) {
+    clearTimeout(safetyTimer);
     S.synthStartBtn.removeAttribute('disabled');
     S.synthStartBtn.innerHTML = 'Cancel Synth';
     showToast('Cancel request failed: ' + String(e));
@@ -1584,9 +1682,20 @@ export async function wipeSynth(slug) {
   _forgetActiveSynth(slug);
   if (S.activeSlug === slug) {
     S.setSynthThreadId(null);
-    _resetStudyState();
+    _resetStudyState();      // clears study-level state + HIDES the chapter strip
     resetSynthCards();
     refreshSynthStartState();
+    // Re-populate the chapter strip from the planner's plan-latest.json.
+    // Wipe Synth deletes the SYNTH cache (rendered chapter outputs +
+    // LangGraph checkpoints) — it does NOT touch the planner. The chapter
+    // list shown in the "red box" comes from the planner via
+    // GET /synth/{slug}/study/chapters; after wiping synth, those
+    // chapters are still listed (none rendered yet). Without this re-
+    // hydrate the strip stays hidden and the user can't pick chapters to
+    // re-synthesize without a page reload.
+    _hydrateChStripFromChapters(slug).catch((e) => {
+      console.warn('[ddWipeSynth] chapter strip rehydrate failed:', e);
+    });
   }
   console.log('[ddWipeSynth]', slug, result);
   return result;
@@ -1620,10 +1729,71 @@ if (S.synthStartBtn) {
     else startSynth();
   });
 }
+// ────────────────────────────────────────────────────────────────────
+// Force-reset escape hatch (2026-05-24)
+//
+// If a Synth run gets into a stuck state (terminal SSE event never
+// arrived, browser was offline during cancel, pod restart raced with
+// cancel propagation, etc.), the Wipe button stays disabled because
+// `refreshSynthStartState()` sees `running=true`. This helper gives
+// the user (or me, debugging) a one-line way out: clear all in-memory
+// + localStorage refs to the supposedly-running threads, refresh the
+// UI, and the Wipe button becomes available again.
+//
+// Available globally as `window.ddForceResetSynthUI()` for console use.
+window.ddForceResetSynthUI = function () {
+  const beforeSynth = S.synthThreadId;
+  const beforeStudy = S.studyThreadId;
+  S.setSynthThreadId(null);
+  S.setStudyThreadId(null);
+  if (S.activeSlug) {
+    try { _forgetActiveStudy(S.activeSlug); } catch (_) {}
+    try { _forgetActiveSynth(S.activeSlug); } catch (_) {}
+  }
+  refreshSynthStartState();
+  console.log(
+    '[ddForceResetSynthUI] cleared synthThreadId=' + beforeSynth
+    + ', studyThreadId=' + beforeStudy
+    + ', activeSlug=' + S.activeSlug + ' — Wipe button is now enabled.'
+  );
+  showToast('Synth UI state cleared. Wipe is now available.');
+  return {synthThreadId: beforeSynth, studyThreadId: beforeStudy};
+};
+
 // Synth wipe button.
+//
+// UX contract (2026-05-24):
+//   • Wipe is BLOCKED whenever a Synth run is in flight (study-level or
+//     single-chapter). The button is also marked disabled via
+//     `refreshSynthStartState()`, but we re-check here as defense-in-depth
+//     so the wipe can never accidentally fire during a run (e.g., if the
+//     disabled attribute gets toggled by DevTools or a race between state
+//     updates).
+//   • If the user attempts to wipe while the UI THINKS a run is in flight,
+//     we show an explicit toast directing them to Cancel Synth first OR
+//     run `ddForceResetSynthUI()` in console if the state is stuck.
 if (S.synthWipeBtn) {
   S.synthWipeBtn.addEventListener('click', async () => {
-    if (!S.activeSlug || S.synthThreadId) return;
+    console.log('[wipeSynth-click] activeSlug=' + S.activeSlug
+      + ' synthThreadId=' + S.synthThreadId
+      + ' studyThreadId=' + S.studyThreadId
+      + ' disabled=' + (S.synthWipeBtn.getAttribute('disabled') === 'disabled'));
+
+    if (!S.activeSlug) {
+      showToast('Pick a framework first before wiping.');
+      return;
+    }
+    // Defense-in-depth: check BOTH thread IDs. Previously this only
+    // checked synthThreadId so a study-level run could slip through.
+    const running = S.synthThreadId !== null || S.studyThreadId !== null;
+    if (running) {
+      showToast(
+        'A Synth run is in progress (synth=' + S.synthThreadId
+        + ', study=' + S.studyThreadId + '). Click Cancel Synth first. '
+        + 'If the state is stuck, run `ddForceResetSynthUI()` in console.'
+      );
+      return;
+    }
     const ok = await showConfirm(
       'Wipe synth cache for ' + S.activeSlug + '?',
       ('Deletes MinIO chapter artifacts + Postgres checkpoints + ' +

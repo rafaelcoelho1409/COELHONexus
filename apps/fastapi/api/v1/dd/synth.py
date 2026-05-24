@@ -417,12 +417,16 @@ async def _run_book_harmonize(
 ) -> dict:
     """Post-study cross-chapter coherence pass. Loads each chapter's rendered
     README.md from MinIO, runs harmonize_book(), overwrites any chapter whose
-    patch passed validation.
+    patch passed validation. Content-addressed cache (Ship #5) skips work on
+    identical README contents.
 
     Returns telemetry dict suitable for the study_done SSE payload."""
     from domains.dd.ingestion.storage import get_storage
     from domains.dd.resolver import _index_by_slug
-    from domains.dd.synth.book_harmonize import harmonize_book
+    from domains.dd.synth.book_harmonize import (
+        compute_harmonize_manifest_hash,
+        harmonize_book,
+    )
 
     minio = get_storage()
 
@@ -459,9 +463,48 @@ async def _run_book_harmonize(
             "missing_chapters": skipped_missing,
         }
 
+    # ── Ship #5: content-addressed cache ───────────────────────────────
+    # Manifest hash is sha256 of (sorted chapter prose hashes + prompt
+    # version + schema version). On re-run with identical chapter content,
+    # this matches → skip the LLM work entirely. After a successful patch
+    # the README hashes change → next run is a cache miss → harmonize re-
+    # runs but finds no violations → writes new cache blob → third run is
+    # a clean hit (idempotent convergence).
+    manifest_hash = compute_harmonize_manifest_hash(chapters)
+    cache_key = f"synth/{slug}/book_harmonize/{manifest_hash}.json"
+    latest_key = f"synth/{slug}/book_harmonize-latest.json"
+    if await minio.exists(cache_key):
+        try:
+            cached_blob = await minio.read_bytes(cache_key)
+            cached = json.loads(cached_blob.decode("utf-8"))
+            cached["cache_hit"] = True
+            cached["manifest_hash"] = manifest_hash
+            await emit_progress(
+                study_thread_id, "study", "book_harmonize_done",
+                n_chapters=cached.get("n_chapters", 0),
+                n_atomic_claims=cached.get("n_atomic_claims", 0),
+                n_canonical_terms=cached.get("n_canonical_terms", 0),
+                n_chapters_with_issues=cached.get("n_chapters_with_issues", 0),
+                n_chapters_patched=cached.get("n_chapters_patched", 0),
+                n_chapters_overwritten=cached.get("n_chapters_overwritten", 0),
+                elapsed_ms=cached.get("elapsed_ms", 0),
+                cache_hit=True,
+            )
+            logger.info(
+                f"[book_harmonize] {slug}: CACHE HIT — manifest_hash="
+                f"{manifest_hash}, skipping LLM work"
+            )
+            return cached
+        except Exception as e:
+            logger.warning(
+                f"[book_harmonize] cache read failed at {cache_key!r}: "
+                f"{type(e).__name__}: {e} — recomputing"
+            )
+
     await emit_progress(
         study_thread_id, "study", "book_harmonize_start",
         n_chapters=len(chapters),
+        manifest_hash=manifest_hash,
     )
 
     result = await harmonize_book(
@@ -510,11 +553,24 @@ async def _run_book_harmonize(
         f"{result.get('n_canonical_terms', 0)} canonical terms, "
         f"{result.get('elapsed_ms', 0)}ms)"
     )
-    return {
+    final = {
         **result,
         "n_chapters_overwritten": n_overwritten,
         "missing_chapters": skipped_missing,
+        "manifest_hash": manifest_hash,
+        "cache_hit": False,
     }
+    # ── Persist cache for next restart ──────────────────────────────────
+    try:
+        blob = json.dumps(final, indent=2, ensure_ascii=False).encode("utf-8")
+        await minio.write(cache_key, blob, content_type="application/json")
+        await minio.write(latest_key, blob, content_type="application/json")
+    except Exception as e:
+        logger.warning(
+            f"[book_harmonize] cache write failed at {cache_key!r}: "
+            f"{type(e).__name__}: {e} (non-fatal)"
+        )
+    return final
 
 
 async def _run_study_orchestrator(
@@ -1042,16 +1098,75 @@ async def resume_synth(thread_id: str) -> dict:
 @router.post("/{thread_id:path}/cancel")
 async def cancel_synth(thread_id: str) -> dict:
     """Set the cancel flag — the watcher polling alongside the synth task
-    picks it up within ~1s and cancels the main task."""
+    picks it up within ~1s and cancels the main task.
+
+    BUG FIX 2026-05-24: when `thread_id` is a STUDY thread
+    (`docs-distiller/study/{slug}/{uuid}`), the study-level flag alone
+    is not enough — in-flight per-chapter tasks have their own watchers
+    polling their own per-chapter flags. Without propagation, cancelling
+    a study only blocks the NEXT chapter from starting; the in-flight
+    chapter continues to completion (LLM calls keep firing, the user
+    sees the button stuck on "Cancelling…").
+
+    Fix: when path indicates a study thread, scan Redis for active synth
+    chapter threads with the matching slug and propagate the cancel flag
+    to each. The chapter watchers pick up within ~1s and cancel cleanly.
+    """
     r = redis_aio.from_url(
         _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
+    propagated_to: list[str] = []
     try:
         await request_cancel(r, thread_id)
+        # Detect study thread + propagate to all active chapter threads
+        # for the same slug. Pattern is `docs-distiller/study/{slug}/{uuid}`.
+        parts = thread_id.split("/")
+        if len(parts) >= 4 and parts[1] == "study":
+            slug = parts[2]
+            chapter_prefix = f"docs-distiller/synth/{slug}/"
+            # Active chapter threads are those with a recent events
+            # snapshot key (only created when emit_progress fires) AND
+            # without a terminal event yet. The scan is bounded by the
+            # ~hundreds-of-keys typical fastmcp/langchain study, so it's
+            # cheap; for larger corpora replace with an explicit per-
+            # study active-chapter set written by the orchestrator.
+            scan_pattern = (
+                f"dd:synth:{chapter_prefix}*:events:snapshot"
+            )
+            try:
+                async for key in r.scan_iter(match=scan_pattern, count=200):
+                    if isinstance(key, bytes):
+                        key = key.decode()
+                    # Extract per-chapter thread_id from the key shape:
+                    # `dd:synth:{thread_id}:events:snapshot`
+                    ch_tid = key[len("dd:synth:"):-len(":events:snapshot")]
+                    await request_cancel(r, ch_tid)
+                    propagated_to.append(ch_tid)
+            except Exception as e:
+                logger.warning(
+                    f"[cancel_synth] scan/propagate failed for {thread_id!r}: "
+                    f"{type(e).__name__}: {e}"
+                )
     finally:
         await r.aclose()
+
     await emit_progress(thread_id, "synth", "cancel_requested")
-    return {"thread_id": thread_id, "status": "cancel_requested"}
+    # Also emit on every propagated chapter channel so the UI SSE
+    # listener can react immediately.
+    for ch_tid in propagated_to:
+        try:
+            await emit_progress(ch_tid, "synth", "cancel_requested")
+        except Exception:
+            pass
+    logger.info(
+        f"[cancel_synth] {thread_id}: flag set; "
+        f"propagated to {len(propagated_to)} chapter thread(s)"
+    )
+    return {
+        "thread_id":     thread_id,
+        "status":        "cancel_requested",
+        "propagated_to": propagated_to,
+    }
 
 
 # =============================================================================

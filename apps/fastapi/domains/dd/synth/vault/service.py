@@ -275,6 +275,267 @@ def audit_roundtrip(
     )
 
 
+# ── Visible-Vault helpers (2026-05-24, Ship #1) ───────────────────────
+#
+# Original vault design hid code from the LLM by replacing fences with
+# opaque hash sentinels. Empirical failure mode (FastMCP chapter 1): the
+# LLM cannot pick the canonical example among opaque hash IDs, so it cites
+# zero → final chapter = pure prose. See
+# docs/KD-CODE-FIRST-SOTA-2026-05-24.md.
+#
+# Fix per arXiv 2601.03640 / Yeung 2025 ("Deterministic Quoting"): give
+# the LLM full visibility into the code WHILE preserving byte-perfect
+# render-time substitution via the same hash-keyed vault. The LLM plans
+# (which hashes to cite) with informed picks; render emits verbatim from
+# vault[hash] regardless of what the LLM would have reproduced.
+
+
+def format_entry_for_prompt(
+    entry: "VaultEntry", *, max_chars: int | None = None,
+) -> str:
+    """Render a vault entry for inclusion in an LLM prompt as a visible
+    code envelope showing the FULL code body. Hash + lang + LOC travel
+    with the envelope so the LLM can correlate this entry with
+    `code_refs[*].hash` in its output.
+
+    Per `feedback_kd_quality_over_speed` (tokens are free, quality > speed)
+    and the visible-vault SOTA (the whole point is the LLM sees the actual
+    code), this defaults to NO TRUNCATION. The optional `max_chars` is
+    kept as a safety valve for pathological cases (e.g., a single
+    auto-generated 50K-line dump that would otherwise blow past every
+    free-tier context window). Set it only when you need it.
+
+    The LLM's output schema does NOT change — it still emits hash refs
+    in the typed `code_refs` field. The renderer materializes verbatim
+    from vault[hash] at render time, so even if the LLM mangles the body
+    in its prompt-side view, the final markdown is byte-perfect.
+    """
+    body = entry.fence_text or ""
+    if max_chars is not None and len(body) > max_chars:
+        body = body[:max_chars] + (
+            f"\n... [{len(body) - max_chars} more chars — render-time "
+            f"substitution will use the FULL body]"
+        )
+    lang = entry.lang or "text"
+    return (
+        f'<code id="{entry.hash}" lang="{lang}" loc="{entry.line_count}">\n'
+        f"{body}\n"
+        f"</code>"
+    )
+
+
+def format_entries_for_prompt(
+    entries: dict[str, "VaultEntry"], *, hashes: list[str] | None = None,
+    max_chars_per_entry: int | None = None,
+    max_total_chars: int | None = None,
+) -> str:
+    """Format a set of vault entries as a sequence of visible envelopes
+    for the LLM. If `hashes` is provided, render only those (in order);
+    otherwise render every entry in `entries`.
+
+    Defaults to NO TRUNCATION on either per-entry or total size — the
+    LLM sees the FULL code, per `feedback_kd_quality_over_speed`. The
+    bandit handles context-window variance across arms: a prompt that
+    overflows Mistral-Large-2 (128K) cascades to Llama-4-maverick (1M)
+    or Gemini-2.5-flash (1M).
+
+    `max_chars_per_entry` / `max_total_chars` remain as opt-in safety
+    valves for pathological corpora; leave them as None for normal use.
+    """
+    keys = hashes if hashes is not None else list(entries.keys())
+    out: list[str] = []
+    running = 0
+    for h in keys:
+        entry = entries.get(h)
+        if entry is None:
+            out.append(f'<code id="{h}" missing="true"/>')
+            continue
+        rendered = format_entry_for_prompt(entry, max_chars=max_chars_per_entry)
+        if (
+            max_total_chars is not None
+            and running + len(rendered) > max_total_chars
+            and out
+        ):
+            out.append(
+                f'<!-- code bank truncated at {running} chars; '
+                f'{len(keys) - len(out)} more entries omitted -->'
+            )
+            break
+        out.append(rendered)
+        running += len(rendered)
+    return "\n\n".join(out)
+
+
+# ── Ship #2 (2026-05-24) — Code inventory pedagogical scoring ─────────
+#
+# Lightweight scorer applied to vault entries to surface the most
+# pedagogically valuable code blocks per section. Used by the SAWC writer
+# prompt to order allowed_hashes by priority so the LLM picks the canonical
+# example first when it has to cap citations. No new LangGraph node —
+# pure-Python heuristics layered on the existing vault.
+#
+# Score components (weighted, max ≈ 3.0):
+#   - LOC sweet spot (5-30 lines): +1.0   (short = pedagogical)
+#   - has_imports (self-contained): +0.3
+#   - has_function_or_class (named API): +0.5
+#   - lang is python/js/ts/typescript (mainstream): +0.2
+#   - is_canonical_size (10-25 lines): +0.5 (best teaching size)
+#   - is_oneliner (≤2 lines): -0.5 (usually trivial — penalty)
+#
+# This is NOT a learned ranker. It's a heuristic baseline that beats
+# random hash order. SOTA learned ranking (e.g., AdaRubric exemplar-
+# based scoring) is deferred to a future ship.
+
+_PEDAGOGY_LANGS = frozenset({
+    "python", "py", "javascript", "js", "typescript", "ts", "go",
+    "rust", "java", "c", "cpp", "c++", "ruby", "php", "shell", "bash",
+})
+
+
+def score_entry_pedagogy(entry: "VaultEntry") -> float:
+    """Pedagogical priority for a single vault entry. Higher = more
+    likely to be a canonical teaching example. Score is unbounded but
+    typically falls in [0.0, 3.0]."""
+    if entry is None:
+        return 0.0
+    body = entry.fence_text or ""
+    loc = max(1, entry.line_count or len(body.splitlines()) or 1)
+    lang = (entry.lang or "").lower().strip()
+
+    score = 0.0
+    # LOC sweet spot
+    if 5 <= loc <= 30:
+        score += 1.0
+    elif 30 < loc <= 80:
+        score += 0.4
+    # Best teaching size
+    if 10 <= loc <= 25:
+        score += 0.5
+    # Oneliner penalty
+    if loc <= 2:
+        score -= 0.5
+    # Self-contained imports
+    if any(
+        body.lstrip().startswith(prefix)
+        for prefix in ("import ", "from ", "use ", "require(", "package ")
+    ):
+        score += 0.3
+    # Named API
+    if any(kw in body for kw in (
+        "def ", "class ", "function ", "fn ", "func ", "export ", "interface ",
+    )):
+        score += 0.5
+    # Mainstream language
+    if lang in _PEDAGOGY_LANGS:
+        score += 0.2
+    return round(score, 3)
+
+
+def rank_hashes_by_pedagogy(
+    hashes: list[str], vault: dict[str, "VaultEntry"],
+) -> list[str]:
+    """Reorder `hashes` by descending pedagogical score. Stable secondary
+    sort by hash so re-ranks across identical inputs are deterministic."""
+    scored = [
+        (score_entry_pedagogy(vault.get(h)), h)
+        for h in hashes
+    ]
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [h for _, h in scored]
+
+
+# ─────────────────────────────────────────────────────────────────────
+# CRITICAL FIX (2026-05-24 evening) — read-time vault provisioning
+# ─────────────────────────────────────────────────────────────────────
+# Root-cause discovery: ingestion produces per-page markdown files at
+# `ingestion/{slug}/pages/{idx}-{slug}.md` but the vault builder only ran
+# on the consolidated `llms-full.txt` crawl, producing exactly ONE
+# `synth-vault/{slug}/pages/0000-gofastmcp-com-llms-full.vault.json` for
+# all 335 fastmcp pages. When digest_construct calls extract_vault_hashes
+# on individual ingestion pages they have NO sentinels → digest LLM emits
+# empty code_refs → sawc has zero allowed_hashes per section → final
+# chapter has zero code blocks.
+#
+# Surgical fix: lazy per-source sentinelization. When a per-source vault
+# file doesn't exist on MinIO, run sentinelize_doc on the raw ingestion
+# page at read time. This populates the runtime vault for downstream
+# nodes WITHOUT requiring an ingestion-pipeline rebuild.
+
+
+async def get_or_build_source_vault(
+    minio, slug: str, source_key: str,
+) -> tuple[str, dict[str, "VaultEntry"]]:
+    """Return (sentinelized_text, vault_entries) for one source page.
+
+    Resolution order:
+      1. Pre-built per-source artifacts (`synth-vault/{slug}/pages/...
+         {basename}.sentinelized.md` + `.vault.json`) — preferred path,
+         used when the ingestion-time builder ran per-page.
+      2. Runtime sentinelization of `ingestion/{slug}/pages/...` raw
+         markdown — fallback when the per-page artifacts are missing
+         (e.g., the consolidated `llms-full` crawl populated a single
+         mega-vault instead of per-page vaults).
+
+    Always returns sentinelized text so downstream nodes see
+    `<code-ref hash="..."/>` placeholders in source bodies; the vault
+    dict maps each hash to its VaultEntry (with the original fence_text
+    body that render_audit_write materializes at the end of synth).
+    """
+    import json as _json
+    # Compute the expected per-page vault path. Mirror render's transform
+    # (we can't import render here without creating a circular dep).
+    basename = source_key.rstrip("/").rsplit("/", 1)[-1]
+    if basename.endswith(".md"):
+        basename = basename[:-3]
+    vault_key = f"synth-vault/{slug}/pages/{basename}.vault.json"
+    sentinel_key = f"synth-vault/{slug}/pages/{basename}.sentinelized.md"
+
+    # 1. Try pre-built artifacts.
+    if await minio.exists(vault_key) and await minio.exists(sentinel_key):
+        try:
+            manifest = _json.loads(await minio.read_text(vault_key))
+            sentinelized = await minio.read_text(sentinel_key)
+            entries: dict[str, VaultEntry] = {}
+            for h, d in (manifest.get("entries") or {}).items():
+                if isinstance(d, dict):
+                    try:
+                        entries[h] = VaultEntry(**d)
+                    except Exception:
+                        # Tolerate schema drift — fall back to a minimal
+                        # entry so downstream gets the body at least.
+                        if d.get("fence_text"):
+                            entries[h] = VaultEntry(
+                                hash=h,
+                                fence_text=d.get("fence_text", ""),
+                                info_string=d.get("info_string", ""),
+                                lang=d.get("lang", ""),
+                                line_count=int(d.get("line_count") or 0),
+                                char_count=int(d.get("char_count") or 0),
+                                sentinel_kind=d.get(
+                                    "sentinel_kind", "fence_backtick",
+                                ),
+                            )
+            return sentinelized, entries
+        except Exception:
+            # Fall through to runtime path if pre-built artifacts are
+            # corrupted.
+            pass
+
+    # 2. Runtime sentinelization of the raw ingestion page.
+    try:
+        raw = await minio.read_text(source_key)
+    except Exception:
+        return "", {}
+    if "<code-ref hash=" in raw:
+        # Already sentinelized at source (shouldn't normally happen for
+        # ingestion pages, but defensive).
+        return raw, {}
+    try:
+        return sentinelize_doc(raw)
+    except Exception:
+        return raw, {}
+
+
 # ── Convenience builder for the ingestion-time pipeline ────────────────
 
 def build_manifest(

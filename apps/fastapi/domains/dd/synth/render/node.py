@@ -173,27 +173,67 @@ async def _load_per_source_vaults(
     """Load and parse per-source vault manifests. Returns
     (merged_vault, n_loaded, n_skipped_missing).
 
-    `merged_vault` maps `hash → fence_text` across all sources. Empty
-    sources contribute nothing; missing vault files contribute nothing
-    (but increment n_skipped_missing).
+    `merged_vault` maps `hash → fence_text` across all sources.
+
+    CRITICAL FIX 2026-05-24 (matches digest + sawc): when a per-source
+    vault file doesn't exist on MinIO (common when ingestion built only
+    one consolidated `llms-full` vault for the whole corpus), fall back
+    to runtime sentinelization of the raw ingestion page. Without this
+    fallback, render's audit reports `n_resolved=0, n_missing=N` for
+    every code_ref the LLM cited and the final chapter has zero code
+    blocks despite the SAWC output containing valid hashes.
     """
+    from ..vault.service import sentinelize_doc as _sentinelize_doc
+
     manifests: list[dict] = []
     n_skipped = 0
+    n_runtime = 0
     for source_key in source_keys:
         vault_key = source_key_to_vault_key(source_key, slug)
-        if not await minio.exists(vault_key):
-            n_skipped += 1
-            continue
+        if await minio.exists(vault_key):
+            try:
+                text = await minio.read_text(vault_key)
+                manifests.append(json.loads(text))
+                continue
+            except Exception as e:
+                logger.warning(
+                    f"[render_audit_write] vault {vault_key!r} unreadable: "
+                    f"{type(e).__name__}: {e} — falling back to runtime"
+                )
+
+        # Runtime fallback: read raw ingestion page + sentinelize on-the-fly.
         try:
-            text = await minio.read_text(vault_key)
-            manifests.append(json.loads(text))
+            raw = await minio.read_text(source_key)
+            if not raw or "<code-ref hash=" in raw:
+                n_skipped += 1
+                continue
+            _, entries = _sentinelize_doc(raw)
+            if entries:
+                # Convert VaultEntry objects → manifest dict shape that
+                # merge_vault_entries expects (entries dict keyed by hash).
+                manifests.append({
+                    "entries": {
+                        h: (e.model_dump() if hasattr(e, "model_dump") else dict(e))
+                        for h, e in entries.items()
+                    },
+                })
+                n_runtime += 1
+            else:
+                n_skipped += 1
         except Exception as e:
             n_skipped += 1
             logger.warning(
-                f"[render_audit_write] vault {vault_key!r} unreadable: "
-                f"{type(e).__name__}: {e} — skipping"
+                f"[render_audit_write] runtime-sentinelize failed for "
+                f"{source_key!r}: {type(e).__name__}: {e}"
             )
+
     merged = merge_vault_entries(manifests)
+    if n_runtime:
+        logger.info(
+            f"[render_audit_write] {slug}: runtime-sentinelized {n_runtime} "
+            f"sources at vault-load time (no pre-built vaults found); "
+            f"merged vault has {len(merged)} entries total"
+        )
     return merged, len(manifests), n_skipped
 
 
@@ -239,20 +279,45 @@ async def render_audit_write(state: SynthState) -> dict:
     minio = get_storage()
 
     # ── Load sawc + mgsr ───────────────────────────────────────────────
-    sawc_key = _sawc_latest_key(slug, chapter_id)
+    # Ship #6 (2026-05-24) — OP-12 best-seen rescue. When the CoRefine
+    # mgsr→sawc loop halts on budget/plateau (not success), render the
+    # iteration with the highest checklist_pass_rate, not the last iter.
+    # `best_seen_sawc_path` is the versioned (immutable) key written by
+    # the winning iteration's sawc_write; falls back to the latest pointer
+    # when no best-seen tracking has happened (first invocation).
+    best_seen_path = state.get("best_seen_sawc_path") or ""
+    sawc_key = best_seen_path or _sawc_latest_key(slug, chapter_id)
     mgsr_key = _mgsr_latest_key(slug, chapter_id)
+    rescued = bool(best_seen_path and best_seen_path != _sawc_latest_key(slug, chapter_id))
+    if rescued:
+        logger.info(
+            f"[render_audit_write] {slug}/{chapter_id}: OP-12 best-seen "
+            f"rescue active — rendering best_seen_score="
+            f"{state.get('best_seen_score')} from {best_seen_path!r} "
+            f"instead of latest sawc"
+        )
 
     if not await minio.exists(sawc_key):
-        return {
-            "chapter_path":  "",
-            "chapter_stats": {
-                "skipped":  "sawc_not_found",
-                "sawc_key": sawc_key,
-                "wall_ms":  int((time.monotonic() - t0) * 1000),
-            },
-            "status": "failed",
-            "error":  f"sawc {sawc_key!r} not in MinIO — run sawc_write first",
-        }
+        # Fallback: best-seen pointer is stale → try latest.
+        fallback_key = _sawc_latest_key(slug, chapter_id)
+        if rescued and await minio.exists(fallback_key):
+            logger.warning(
+                f"[render_audit_write] best_seen path {sawc_key!r} missing "
+                f"→ falling back to latest"
+            )
+            sawc_key = fallback_key
+            rescued = False
+        else:
+            return {
+                "chapter_path":  "",
+                "chapter_stats": {
+                    "skipped":  "sawc_not_found",
+                    "sawc_key": sawc_key,
+                    "wall_ms":  int((time.monotonic() - t0) * 1000),
+                },
+                "status": "failed",
+                "error":  f"sawc {sawc_key!r} not in MinIO — run sawc_write first",
+            }
     if not await minio.exists(mgsr_key):
         return {
             "chapter_path":  "",

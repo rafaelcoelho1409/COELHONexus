@@ -80,9 +80,18 @@ from pydantic import ValidationError
 
 from ...ingestion.storage import get_storage
 from domains.llm.rotator.chain import chat_judge_bandit_async
+from domains.llm.rotator.chain.service import _is_heavyweight as _sawc_writer_filter
 
 from ..observability.spans import traced
 from ..progress import emit_progress
+from ..render.service import (
+    source_key_to_vault_key as _source_key_to_vault_key,
+)
+from ..vault.service import (
+    format_entries_for_prompt as _format_entries_for_prompt,
+    rank_hashes_by_pedagogy as _rank_hashes_by_pedagogy,
+)
+from ..vault.types import VaultEntry
 from .constants import (
     SAWC_PROMPT_VERSION,
     SAWC_SCHEMA_VERSION,
@@ -146,6 +155,104 @@ def _outline_latest_key(slug: str, chapter_id: str) -> str:
 
 def _digest_latest_key(slug: str, chapter_id: str) -> str:
     return f"{_BLOB_PREFIX}/{slug}/{chapter_id}/digest-latest.json"
+
+
+# =============================================================================
+# Visible Vault loader (2026-05-24, Ship #1)
+# =============================================================================
+# Loads per-source vault manifests and returns RICH VaultEntry objects
+# (hash + body + lang + line_count) — unlike render's loader which flattens
+# to hash → fence_text only. SAWC needs the rich entries to render visible
+# code envelopes in the writer prompt so the LLM can pick the pedagogically
+# valuable hashes from informed context.
+#
+# This loader is intentionally separate from render's so that:
+# (a) render keeps its lean hash → fence_text contract for substitution
+# (b) sawc gets full metadata for prompt rendering
+# (c) neither pollutes vault/service.py (which is pure functions, no I/O)
+async def _load_chapter_vault_rich(
+    minio,
+    slug: str,
+    source_keys: list[str],
+) -> tuple[dict[str, VaultEntry], int, int]:
+    """Returns (vault, n_loaded, n_skipped). Each value in `vault` is a
+    VaultEntry — not just the fence text — so writer prompts can render
+    full visible envelopes with lang + line_count metadata.
+
+    Resolution per source (mirrors digest's read-time fallback so both
+    nodes have identical vault visibility):
+      1. Pre-built per-source vault file at `synth-vault/{slug}/pages/...`
+      2. Runtime sentinelization of the raw ingestion page (preferred
+         fallback when the consolidated llms-full crawl built only one
+         mega-vault and individual per-page vaults are missing)
+    """
+    from ..vault.service import sentinelize_doc as _sentinelize_doc
+
+    rich_vault: dict[str, VaultEntry] = {}
+    n_loaded = 0
+    n_skipped = 0
+    for source_key in source_keys:
+        # Try the pre-built per-source vault first.
+        vault_key = _source_key_to_vault_key(source_key, slug)
+        used_runtime = False
+        if await minio.exists(vault_key):
+            try:
+                text = await minio.read_text(vault_key)
+                manifest = json.loads(text)
+                entries = (manifest or {}).get("entries") or {}
+                for h, entry_dict in entries.items():
+                    if not isinstance(entry_dict, dict):
+                        continue
+                    try:
+                        rich_vault[h] = VaultEntry(**entry_dict)
+                    except Exception:
+                        if entry_dict.get("fence_text"):
+                            rich_vault[h] = VaultEntry(
+                                hash=h,
+                                fence_text=entry_dict.get("fence_text", ""),
+                                info_string=entry_dict.get("info_string", ""),
+                                lang=entry_dict.get("lang", ""),
+                                line_count=int(entry_dict.get("line_count") or 0),
+                                char_count=int(entry_dict.get("char_count") or 0),
+                                sentinel_kind=entry_dict.get(
+                                    "sentinel_kind", "fence_backtick",
+                                ),
+                            )
+                n_loaded += 1
+                continue
+            except Exception as e:
+                logger.warning(
+                    f"[sawc_write] vault {vault_key!r} unreadable: "
+                    f"{type(e).__name__}: {e} — falling back to runtime"
+                )
+                used_runtime = True
+        else:
+            used_runtime = True
+
+        # Runtime fallback: read raw ingestion page + sentinelize on-the-fly.
+        # This is the path the fastmcp/etc corpora use today because
+        # ingestion only built one consolidated vault for llms-full.
+        if used_runtime:
+            try:
+                raw = await minio.read_text(source_key)
+                if not raw or "<code-ref hash=" in raw:
+                    n_skipped += 1
+                    continue
+                _, entries = _sentinelize_doc(raw)
+                if entries:
+                    for h, e in entries.items():
+                        if h not in rich_vault:
+                            rich_vault[h] = e
+                    n_loaded += 1
+                else:
+                    n_skipped += 1
+            except Exception as e:
+                n_skipped += 1
+                logger.warning(
+                    f"[sawc_write] runtime-sentinelize failed for "
+                    f"{source_key!r}: {type(e).__name__}: {e}"
+                )
+    return rich_vault, n_loaded, n_skipped
 
 
 # =============================================================================
@@ -215,6 +322,7 @@ async def _draft_one_section(
     valid_source_keys: list[str],
     memory: list[dict],
     n_primary_contribs: int,
+    vault_rich: dict | None = None,
 ) -> tuple[Optional[_LLMSectionDraft], Optional[str], int, int]:
     """One writer call → parse → Pydantic → cross-ref → repair.
 
@@ -241,14 +349,21 @@ async def _draft_one_section(
         valid_source_keys=valid_source_keys,
         memory=memory,
         n_primary_contribs=n_primary_contribs,
+        vault_rich=vault_rich,
     )
 
     deployment: Optional[str] = None
     try:
+        # Option B (2026-05-24): writer drafts use the dd-synth-write
+        # bandit pool restricted to heavyweight reasoning models.
+        # Workhorse arms (mistral-small, magistral-small, devstral-medium
+        # under medium budget) stay reserved for dd-grader filter tasks.
         response, meta = await chat_judge_bandit_async(
             prompt,
             max_tokens=_MAX_TOKENS_DRAFT,
             temperature=_TEMPERATURE_DRAFT,
+            dd_process="dd-synth-write",
+            candidate_filter=_sawc_writer_filter,
         )
         deployment = (meta or {}).get("deployment")
     except Exception as e:
@@ -616,6 +731,7 @@ async def _write_section_best_of_n(
     section_prerequisites: list[str],
     contributions: list[dict],
     allowed_hashes: list[str],
+    vault_rich: dict | None = None,
     valid_source_keys: list[str],
     memory: list[dict],
     n_primary_contribs: int,
@@ -646,6 +762,7 @@ async def _write_section_best_of_n(
                 valid_source_keys=valid_source_keys,
                 memory=memory,
                 n_primary_contribs=n_primary_contribs,
+                vault_rich=vault_rich,
             )
             for i in range(_N_DRAFTS)
         ]
@@ -902,6 +1019,12 @@ async def sawc_write(state: SynthState) -> dict:
     incoming_refine_iter = int(state.get("refine_iter") or 0)
     refine_iter = incoming_refine_iter + 1
 
+    # Ship #6 (2026-05-24) — OP-12 best-seen rescue. Carry the
+    # iteration with the highest checklist score across loop turns.
+    incoming_best_score = state.get("best_seen_score")
+    incoming_best_path = state.get("best_seen_sawc_path")
+    incoming_prev_score = state.get("prev_checklist_score")
+
     manifest_hash = _compute_manifest_hash(
         outline_manifest_hash=outline_manifest_hash,
         digest_manifest_hash=digest_manifest_hash,
@@ -945,17 +1068,40 @@ async def sawc_write(state: SynthState) -> dict:
                 f"{stats['n_completed']}/{stats['n_sections']} sections, "
                 f"{stats['n_repairs']} repairs, {elapsed} ms"
             )
-            return {
+            # Ship #6: cache-hit preserves best-seen tracking — we
+            # rerun the same draft, so best-seen is unchanged.
+            patch = {
                 "sawc_path":   latest_key,
                 "sawc_stats":  stats,
                 "refine_iter": refine_iter,
             }
+            if incoming_best_path:
+                patch["best_seen_sawc_path"] = incoming_best_path
+            if incoming_best_score is not None:
+                patch["best_seen_score"] = incoming_best_score
+            return patch
         except Exception as e:
             logger.warning(
                 f"[sawc_write] {slug}/{chapter_id}: cached blob "
                 f"{versioned_key!r} unreadable ({type(e).__name__}: {e}); "
                 f"recomputing"
             )
+
+    # ── Visible Vault load (2026-05-24, Ship #1) ──────────────────────
+    # Load the full vault entries for every source contributing to this
+    # chapter so the writer prompt can render <code id="..." lang="...">
+    # {body}</code> envelopes — the LLM sees actual code instead of opaque
+    # hashes. Render-time substitution still uses the same hash → vault[id]
+    # path so byte-perfect fidelity is preserved (Deterministic Quoting,
+    # Yeung 2025; arXiv 2601.03640).
+    vault_rich, n_vaults_loaded, n_vaults_skipped = await _load_chapter_vault_rich(
+        minio, slug, valid_source_keys,
+    )
+    logger.info(
+        f"[sawc_write] {slug}/{chapter_id}: visible vault loaded — "
+        f"{len(vault_rich)} entries across {n_vaults_loaded} sources "
+        f"(skipped {n_vaults_skipped})"
+    )
 
     # ── Stage loop (sequential across stages, parallel within) ─────────
     sem = asyncio.Semaphore(_CONCURRENCY)
@@ -996,11 +1142,59 @@ async def sawc_write(state: SynthState) -> dict:
             contributions = per_section_index.get(sid) or []
             # Allowed hashes = union of code_refs across all this section's
             # contributions (digest already gave us LLM-grounded routing)
+            # Ship #2 (2026-05-24) — code inventory: pedagogical ranking
+            # of allowed hashes so the writer prompt presents canonical
+            # examples first. The LLM's bandit-routed picks land on the
+            # highest-priority hashes when it caps its citations.
+            #
+            # Ship A (2026-05-24 evening, code-first implementation roadmap):
+            # CRITICAL — augment per-section bank from chapter-wide vault
+            # when digest under-routes. Empirical observation: digest's LLM
+            # often emits empty `code_refs` per contribution → 12+ sections
+            # end up with allowed_hashes=[] even though the chapter vault
+            # has 1499 entries. Pad with top-20 pedagogically-ranked hashes
+            # from the chapter-wide vault when the digest-routed bank is
+            # thin. The LLM picks 3-6 from the augmented bank using the
+            # existing visible-vault renderer. See
+            # docs/KD-CODE-FIRST-IMPLEMENTATION-2026-05-24.md §3 #2.
             allowed_hashes_set: set[str] = set()
             for c in contributions:
                 for h in (c.get("code_refs") or []):
                     allowed_hashes_set.add(h)
-            allowed_hashes = sorted(allowed_hashes_set)
+            # Ship A: augment thin digest-routed banks with chapter-wide
+            # vault. Threshold = 6 (below which most sections empirically
+            # emit too few code_refs). Pad with up to 20 highest-pedagogy
+            # hashes from the chapter vault not already in the routed set.
+            _MIN_BANK_SIZE = 6
+            _BANK_PAD_TO = 20
+            if vault_rich and len(allowed_hashes_set) < _MIN_BANK_SIZE:
+                chapter_wide = list(vault_rich.keys())
+                ranked_chapter = _rank_hashes_by_pedagogy(
+                    chapter_wide, vault_rich,
+                )
+                needed = _BANK_PAD_TO - len(allowed_hashes_set)
+                pads = [
+                    h for h in ranked_chapter
+                    if h not in allowed_hashes_set
+                ][:needed]
+                if pads:
+                    allowed_hashes_set.update(pads)
+                    logger.info(
+                        f"[sawc_write] {sid}: digest-routed bank had "
+                        f"{len(allowed_hashes_set) - len(pads)} hashes < "
+                        f"{_MIN_BANK_SIZE}; padded with {len(pads)} pedagogically-"
+                        f"ranked chapter-wide hashes → bank size now "
+                        f"{len(allowed_hashes_set)}"
+                    )
+
+            # Re-order by pedagogical score (canonical small examples
+            # first); fall back to sorted-hash if vault is empty.
+            if vault_rich:
+                allowed_hashes = _rank_hashes_by_pedagogy(
+                    sorted(allowed_hashes_set), vault_rich,
+                )
+            else:
+                allowed_hashes = sorted(allowed_hashes_set)
             n_primary_contribs = sum(
                 1 for c in contributions if c.get("relevance") == "primary"
             )
@@ -1014,6 +1208,7 @@ async def sawc_write(state: SynthState) -> dict:
                 ),
                 contributions=contributions,
                 allowed_hashes=allowed_hashes,
+                vault_rich=vault_rich,
                 valid_source_keys=valid_source_keys,
                 memory=memory_snapshot,
                 n_primary_contribs=n_primary_contribs,
@@ -1159,11 +1354,28 @@ async def sawc_write(state: SynthState) -> dict:
         f"{stats['n_picker_fallbacks']} picker fallbacks, "
         f"refine_iter={refine_iter}, {elapsed} ms"
     )
-    return {
+    # Ship #6 (2026-05-24) — best-seen tracker. We don't yet know THIS
+    # iteration's checklist score (sawc runs before checklist), so the
+    # tracker is updated in mgsr_replan once the score is known. Here
+    # we just propagate the incoming best-seen forward; if no prior
+    # best exists yet, default to the current sawc_path so render has
+    # something to fall back on at budget halt.
+    patch = {
         "sawc_path":   latest_key,
         "sawc_stats":  stats,
         "refine_iter": refine_iter,
     }
+    if incoming_best_path:
+        patch["best_seen_sawc_path"] = incoming_best_path
+    else:
+        # First iteration — current sawc IS the best-seen. We track the
+        # VERSIONED key (immutable) not the latest pointer, so render can
+        # load this specific iteration even after subsequent iterations
+        # overwrite latest_key.
+        patch["best_seen_sawc_path"] = versioned_key
+    if incoming_best_score is not None:
+        patch["best_seen_score"] = incoming_best_score
+    return patch
 
 
 # =============================================================================
