@@ -1093,7 +1093,7 @@ const SUBSTEP_RENDERERS = {
     }
 
     const embedModel = s.embed_model || 'nvidia/llama-nemotron-embed-1b-v2';
-    const router = s.judge_router || 'pareto-bandit/dd-grader';
+    const router = s.judge_router || 'bandit/dd-grader';
     const foot =
       '<div class="fw-stat-foot">' +
         'embed <strong>' + escapeHtml(embedModel) + '</strong>' +
@@ -1232,7 +1232,7 @@ const SUBSTEP_RENDERERS = {
     const cache = s.cache_hit ? ' · cache HIT' : '';
     const foot =
       '<div class="fw-stat-foot">' +
-        'router <strong>pareto-bandit/dd-grader</strong>' +
+        'router <strong>bandit/dd-grader</strong>' +
         ' · top-K ' + (s.top_k || '?') +
         ' · prompt <code style="font-family:JetBrains Mono,monospace;font-size:0.72rem">' +
           escapeHtml(s.prompt_version || '?') + '</code>' +
@@ -1340,7 +1340,7 @@ const SUBSTEP_RENDERERS = {
 
     const foot =
       '<div class="fw-stat-foot">' +
-        'router <strong>pareto-bandit/dd-grader</strong>' +
+        'router <strong>bandit/dd-grader</strong>' +
         ' · N=' + (s.n_samples || '?') + ' samples + USC vote' +
         ' · prompt <code style="font-family:JetBrains Mono,monospace;font-size:0.72rem">' +
           escapeHtml(s.prompt_version || '?') + '</code>' +
@@ -1431,7 +1431,7 @@ const SUBSTEP_RENDERERS = {
       : '';
     const foot =
       '<div class="fw-stat-foot">' +
-        'router <strong>pareto-bandit/dd-grader</strong>' +
+        'router <strong>bandit/dd-grader</strong>' +
         ' · single-call + USC + self-refine' +
         ' · prompt <code style="font-family:JetBrains Mono,monospace;font-size:0.72rem">' +
           escapeHtml(s.prompt_version || '?') + '</code>' +

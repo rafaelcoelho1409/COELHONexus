@@ -243,7 +243,7 @@ async def off_topic(state: PlannerState) -> dict:
         "embeddings_ref":    embeddings_ref,
         "embed_model":       DD_EMBED_MODEL_NAME,
         "judge_concurrency": _JUDGE_CONCURRENCY,
-        "judge_router":      "pareto-bandit/dd-grader",
+        "judge_router":      "bandit/dd-grader",
     }
 
     try:
