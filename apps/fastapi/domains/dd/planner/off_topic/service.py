@@ -8,8 +8,12 @@ from domains.llm.rotator.chain import chat_judge_bandit_async
 from .constants import (
     _JUDGE_BACKOFF_BASE,
     _JUDGE_BODY_CHARS,
+    _JUDGE_BODY_MIN_FOR_SPLIT,
+    _JUDGE_HEAD_CHARS,
+    _JUDGE_HEAD_TAIL_SEP,
     _JUDGE_MAX_ATTEMPTS,
     _JUDGE_MAX_TOKENS,
+    _JUDGE_TAIL_CHARS,
 )
 
 
@@ -32,11 +36,44 @@ def _build_positive_descriptor(entry: dict) -> str:
     )
 
 
+def _head_tail_truncate(body: str) -> str:
+    """Head + tail truncation (Ship 2026-05-25). For pages that fit in
+    HEAD+TAIL combined, return the full body. For longer pages, return
+    `body[:HEAD] + SEP + body[-TAIL:]` so the judge sees BOTH:
+
+      - leading content (TOC, opening paragraph, role badges) → catches
+        meta-content DROP signals like "Code of Conduct", "Sponsors",
+        "Contributing Guidelines"
+      - trailing content (license blocks, "Edit on GitHub" links,
+        changelog footers) → catches the OTHER half of DROP signals
+        currently missed by head-only truncation
+
+    Per ICLR 2025 "Lost in the Middle" work, autoregressive LLMs attend
+    most to the start AND end of the input — middle content is wasted
+    attention for binary classification. Head+tail is the structurally
+    correct shape (BERT truncation ablation arXiv 2403.12799 — head+tail
+    beats head-only by 1-3 F1 on long-doc classification).
+    """
+    s = (body or "").strip()
+    if not s:
+        return "(empty page)"
+    if len(s) <= _JUDGE_BODY_MIN_FOR_SPLIT:
+        # Fits in combined window — send the WHOLE page, no fake gap.
+        return s
+    return (
+        s[:_JUDGE_HEAD_CHARS]
+        + _JUDGE_HEAD_TAIL_SEP
+        + s[-_JUDGE_TAIL_CHARS:]
+    )
+
+
 def _build_judge_prompt(framework_name: str, framework_category: str, body: str) -> str:
     """Single-shot KEEP/DROP rubric, designed to be unambiguous so the
     model returns a clean one-word verdict at temperature=0."""
     cat_clause = f", a {framework_category} library/framework" if framework_category else ""
-    truncated = (body or "")[:_JUDGE_BODY_CHARS].strip() or "(empty page)"
+    truncated = _head_tail_truncate(body)
+    # Hint the judge about the truncation shape so it doesn't get confused
+    # by the "[…]" gap separator on long pages.
     return (
         f"You are filtering pages from the official documentation site of "
         f"{framework_name}{cat_clause}.\n\n"
@@ -48,7 +85,9 @@ def _build_judge_prompt(framework_name: str, framework_category: str, body: str)
         f"blog posts, changelog dumps, release notes, governance policies, "
         f"license text, generated index pages with no real content)\n\n"
         f"Respond with EXACTLY ONE WORD: KEEP or DROP.\n\n"
-        f"--- Page content (truncated) ---\n"
+        f"--- Page content (long pages truncated as `head[…]tail`; "
+        f"the `[…]` marker means content was elided between the head "
+        f"and tail samples) ---\n"
         f"{truncated}\n"
         f"--- End page content ---\n\n"
         f"Answer (KEEP or DROP):"
