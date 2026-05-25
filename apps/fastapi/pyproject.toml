@@ -66,6 +66,12 @@ dependencies = [
     "langgraph-checkpoint-postgres",   # Postgres-backed checkpointer; every super-step writes one row
     "psycopg[binary]",                 # async driver for AsyncPostgresSaver — binary wheel, no libpq needed
     "langchain-core",                  # BaseChatModel + HumanMessage — already pulled transitively but pin for clarity
+    # Tokenizer — Rust-backed BPE for byte-exact NIM parity in embed_corpus
+    # chunk-boundary math. 3.3 MB wheel vs ~50-60 MB for `transformers`; pure
+    # CPU, no torch, no inference, just tokenizer encode/decode.
+    # `Tokenizer.from_pretrained(model_id)` loads NIM's own tokenizer.json
+    # → exact-count parity with the server. See embed_corpus/service.py.
+    "tokenizers>=0.20,<1.0",
 ]
 
 [tool.uv]

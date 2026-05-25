@@ -581,7 +581,7 @@ def _embed_entries() -> list:
 
 
 def embed_via_router_sync(
-    texts: list[str], 
+    texts: list[str],
     input_type: str = "passage",
 ) -> list[list[float]]:
     """
@@ -595,6 +595,12 @@ def embed_via_router_sync(
 
     Empty/whitespace inputs are substituted with " " to keep the OpenAI-style
     /v1/embeddings call happy (a real provider would 400 on empty inputs).
+
+    `truncate="END"` (2026-05-25 — NIM-specific extension): server-side
+    safety net. Callers token-count upstream; this is belt-and-suspenders
+    for tokenizer-drift edge cases. NIM silently truncates from the END
+    of the input instead of returning HTTP 400. If LiteLLM doesn't forward
+    the kwarg to the NIM provider, the upstream token cap is still safe.
     """
     if not texts:
         return []
@@ -611,6 +617,7 @@ def embed_via_router_sync(
             input = batch,
             encoding_format = "float",
             input_type = input_type,
+            truncate = "END",
         )
         # LiteLLM normalizes to OpenAI shape: response["data"] is a list of
         # {"embedding": [...], "index": N, "object": "embedding"}.
@@ -643,11 +650,17 @@ async def embed_via_router_async(
     out: list[list[float]] = []
     for start in range(0, total, DD_EMBED_BATCH_SIZE):
         batch = clean[start:start + DD_EMBED_BATCH_SIZE]
+        # `truncate="END"` (2026-05-25) — see sync-variant docstring.
+        # Belt-and-suspenders against rare tokenizer-drift overflows;
+        # upstream token cap (embed_corpus/service.py:_chunk_doc) is the
+        # primary safety. NIM silently truncates from input tail; if
+        # LiteLLM doesn't forward the kwarg, token cap still protects.
         response = await router.aembedding(
             model = DD_EMBED_GROUP,
             input = batch,
             encoding_format = "float",
             input_type = input_type,
+            truncate = "END",
         )
         out.extend(item["embedding"] for item in response["data"])
         if on_batch is not None:

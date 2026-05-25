@@ -121,7 +121,18 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Tunables (quality > speed)
 # =============================================================================
-_CONCURRENCY        = 6     # max concurrent per-source LLM calls
+_CONCURRENCY        = 16    # max concurrent per-source LLM calls
+# Bumped 2026-05-25 from 6 → 16. Digest is the single heaviest synth
+# step (~17 min for FastMCP's 252 sources at N=6) because it fans out
+# one LLM call per ingested page. At ~4s per page, wall time ≈
+# n_sources × per_call_s / N. The FGTS-VA bandit distributes across
+# ~30 free-tier providers (NIM, Mistral, Gemini, Cerebras, Groq, etc.)
+# so per-provider 429s under N=16 are absorbed by the bandit's
+# existing cooldown + arm rotation — no per-call code change needed.
+# Expected: 252 × 4s / 16 ≈ 65s ideal; realistic ≈ 7-9 min after
+# accounting for repair attempts, larger-page outliers, and bandit
+# cooldown headroom. Quality is byte-identical (same prompts, same
+# model pool); this is pure throughput.
 _TEMPERATURE_DRAFT  = 0.1   # routing decisions should be ~deterministic
 _TEMPERATURE_REPAIR = 0.0
 _MAX_TOKENS_DRAFT   = 6000

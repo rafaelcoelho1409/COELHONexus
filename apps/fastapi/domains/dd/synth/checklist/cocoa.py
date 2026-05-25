@@ -42,6 +42,8 @@ import re
 
 from domains.llm.rotator.chain import chat_judge_bandit_async
 
+from ...ingestion.storage import get_storage
+
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,13 @@ logger = logging.getLogger(__name__)
 # Tunables
 # =============================================================================
 COCOA_PROMPT_VERSION = "v1-cocoa-2026-05-25"
+
+# Per-hash abstraction cache (Bundle 5, 2026-05-25). Stage 1 abstractions
+# depend ONLY on the code body — and the body is content-addressed by
+# its vault hash. So the same hash always produces the same spec under
+# a fixed prompt_version. Cache MinIO blob path includes prompt_version
+# so a prompt revision automatically invalidates without manual flush.
+_COCOA_CACHE_PREFIX = f"synth-cache/cocoa-abstractions/{COCOA_PROMPT_VERSION}"
 
 _DD_PROCESS_EXPLAINER = "dd-cocoa-explainer"
 _DD_PROCESS_JUDGE     = "dd-cocoa-judge"
@@ -129,16 +138,91 @@ def _render_blocks_for_explainer(blocks: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
+async def _read_cached_abstraction(minio, h: str) -> str | None:
+    """Return the cached spec for hash `h`, or None on miss / error.
+    Per-hash blobs are tiny JSON ({spec: "..."}); read latency is
+    dominated by MinIO RTT (~5-15 ms). Even an "all miss" pass over a
+    chapter of ~50 blocks costs <1s total — much cheaper than a single
+    LLM call."""
+    key = f"{_COCOA_CACHE_PREFIX}/{h}.json"
+    try:
+        if not await minio.exists(key):
+            return None
+        raw = await minio.read_text(key)
+        obj = json.loads(raw)
+        spec = (obj.get("spec") or "").strip()
+        return spec or None
+    except Exception:
+        return None
+
+
+async def _write_cached_abstraction(minio, h: str, spec: str) -> None:
+    """Best-effort cache write. Failures are silent — the abstraction
+    still works for this run, we just miss the cache for future ones."""
+    if not h or not spec:
+        return
+    key = f"{_COCOA_CACHE_PREFIX}/{h}.json"
+    try:
+        await minio.write(
+            key,
+            json.dumps({"spec": spec}),
+            content_type="application/json",
+        )
+    except Exception as e:
+        logger.debug(
+            f"[cocoa] cache write failed for {h[:8]}…: "
+            f"{type(e).__name__}: {e}"
+        )
+
+
 async def _explain_blocks(blocks: list[dict]) -> dict[str, str]:
     """Run the explainer on a batch of code blocks. Returns {id_str: spec}.
 
-    Fail-soft: empty dict on any error — caller treats unspecced blocks as
-    "alignment unknown" (passes through without overriding the bundled
-    judge)."""
+    Bundle 5 (2026-05-25) — per-hash MinIO cache:
+      - Verbatim blocks (default `code_source`) get cache lookup by
+        their vault hash. Same hash + same prompt_version = guaranteed
+        same spec.
+      - Derived blocks (sawc_derive promoted) have AI-generated bodies
+        that vary across runs even for the same originating hash, so
+        they always go to the LLM (no caching).
+      - Misses get one batched LLM call covering ALL miss ids; new specs
+        get written back to cache for future runs.
+
+    Fail-soft: empty dict on any error — caller treats unspecced blocks
+    as "alignment unknown" (passes through without overriding the bundled
+    judge).
+    """
     if not blocks:
         return {}
+
+    minio = get_storage()
+
+    # Partition into cache hits vs misses. Blocks without `hash` or
+    # flagged `code_source='derived'` go straight to the LLM (no cache).
+    cached: dict[str, str] = {}
+    misses: list[dict] = []
+    for b in blocks:
+        h = (b.get("hash") or "").strip()
+        is_derived = (b.get("code_source") or "verbatim") == "derived"
+        if h and not is_derived:
+            spec = await _read_cached_abstraction(minio, h)
+            if spec:
+                cached[b["id"]] = spec
+                continue
+        misses.append(b)
+
+    if cached:
+        logger.info(
+            f"[cocoa] explainer cache: {len(cached)}/{len(blocks)} "
+            f"hits ({len(misses)} miss); LLM call will cover misses"
+        )
+
+    # If everything was cached, skip the LLM call entirely.
+    if not misses:
+        return cached
+
     prompt = _EXPLAINER_PROMPT.format(
-        blocks_block=_render_blocks_for_explainer(blocks),
+        blocks_block=_render_blocks_for_explainer(misses),
     )
     try:
         response, _ = await chat_judge_bandit_async(
@@ -151,19 +235,34 @@ async def _explain_blocks(blocks: list[dict]) -> dict[str, str]:
         logger.warning(
             f"[cocoa] explainer call failed: {type(e).__name__}: {e}"
         )
-        return {}
+        return cached    # ship whatever we had cached; bundled judge stands
     parsed = _parse_json(response or "")
     if not parsed:
-        return {}
-    out: dict[str, str] = {}
+        return cached
+    fresh: dict[str, str] = {}
     for row in (parsed.get("abstractions") or []):
         if not isinstance(row, dict):
             continue
         rid = str(row.get("id") or "").strip()
         spec = str(row.get("spec") or "").strip()
         if rid and spec:
-            out[rid] = spec
-    return out
+            fresh[rid] = spec
+
+    # Write back the fresh ones to cache (only for verbatim blocks with
+    # a hash — derived blocks are unsafe to cache by hash since their
+    # bodies vary).
+    miss_by_id = {b["id"]: b for b in misses}
+    for rid, spec in fresh.items():
+        b = miss_by_id.get(rid)
+        if not b:
+            continue
+        h = (b.get("hash") or "").strip()
+        is_derived = (b.get("code_source") or "verbatim") == "derived"
+        if h and not is_derived:
+            await _write_cached_abstraction(minio, h, spec)
+
+    # Merge cache hits + fresh; caller doesn't need to know which is which.
+    return {**cached, **fresh}
 
 
 # =============================================================================
@@ -319,6 +418,8 @@ async def cocoa_alignment_check(
                 continue
             pairs.append({
                 "id":          str(len(pairs)),
+                "hash":        h,            # for stage-1 per-hash cache
+                "code_source": code_source,  # derived blocks skip cache
                 "subheading":  subheading,
                 "explanation": explanation,
                 "lang":        lang,
@@ -345,11 +446,18 @@ async def cocoa_alignment_check(
         for i in range(0, n_pairs, _MAX_SUBTOPICS_PER_BATCH)
     ]
 
-    # Stage 1: explainer over all blocks.
+    # Stage 1: explainer over all blocks (per-hash MinIO cache absorbs
+    # repeat work across iters/chapters/frameworks).
     specs: dict[str, str] = {}
     for batch in batches:
         blocks = [
-            {"id": p["id"], "lang": p["lang"], "body": p["body"]}
+            {
+                "id":          p["id"],
+                "hash":        p.get("hash") or "",
+                "code_source": p.get("code_source") or "verbatim",
+                "lang":        p["lang"],
+                "body":        p["body"],
+            }
             for p in batch
         ]
         partial = await _explain_blocks(blocks)

@@ -23,7 +23,15 @@ _EXPLANATION_WORDS_MAX = 80
 _INTRO_CHARS_MIN = 20
 _INTRO_CHARS_MAX = 400
 
-_N_DRAFTS = 3
+# Bumped 2026-05-25 from 3 → 2. MAMM-Refine (arXiv 2503.15272) recommends
+# N=3 best-of-N, but empirically on the FastMCP corpus the pairwise critic-
+# picker tiebreaks on structural_score 80%+ of the time once Ship B/E
+# validators are active — the third draft rarely wins. Cutting to N=2
+# saves 33% of sawc's LLM-call budget (~5 min/iter on a 15-min sawc pass)
+# without measurable quality loss. The pairwise picker handles N=2 with a
+# single match (already has `if len(candidates) <= 1: return 0,…` short-
+# circuit, so N=2 hits the standard knockout path with one round).
+_N_DRAFTS = 2
 _MAX_REPAIR_ATTEMPTS = 2
 _PARAGRAPHS_MIN = 2
 _PARAGRAPHS_MAX = 12

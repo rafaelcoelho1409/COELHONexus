@@ -1,20 +1,36 @@
 """embed_corpus constants — chunk threshold, prefix, cache version."""
 
-# Threshold for the chunk-and-pool path. Below this, embed the whole doc
-# in one shot; above this, chunk to bound NIM batch payload. 8 KB is the
-# v1-validated truncation cap; using it as a chunk-size keeps per-chunk
-# behavior identical to the previous truncate-then-embed path while
-# preserving signal from the rest of the document.
-# 2026-05-23 night — REVERTED to 8000 alongside the embedder rollback
-# (llama-nemotron-embed-1b-v2's hard cap is 8192 tokens, ~8K chars at the
-# default char-per-token ratio). When a verified 32K-context NIM embedder
-# is in place, bump this back to 28000.
-_CHUNK_CHARS = 8000
+# Token-counted chunking (2026-05-25 — replaces the legacy _CHUNK_CHARS=8000
+# heuristic which used only ~25% of the model's 8192-token capacity because
+# it conflated chars and tokens).
+#
+# Llama-3-family BPE tokenizers (which `llama-nemotron-embed-1b-v2` uses)
+# vary 2.5-4 chars/token depending on content density. The old char-based
+# cap was either over-strict on English (~25% waste) or risked overflow on
+# heavy-code chunks. Token-based caps are byte-for-byte correct.
+#
+# _TOKEN_TARGET = 7800 leaves ~5% headroom (392 tokens) for:
+#   - special tokens added by AutoTokenizer (`add_special_tokens=False`
+#     prevents most, but NIM may inject input_type prefix server-side)
+#   - tokenizer drift across model card revisions
+# 8192 is the hard server cap (NIM 400s above it without truncate=END).
+_TOKEN_TARGET   = 7800
+_TOKEN_HARD_CAP = 8192
+
+# Char-cap kept as a sanity belt for the extreme outlier case where
+# tokenizer init fails: per-char-1.0 ratio = absolute worst case → 8192
+# chars guarantees ≤ 8192 tokens even for pathological inputs.
+_CHUNK_CHARS_FALLBACK = 8000
+
+# Legacy alias kept to avoid breaking imports inside the same package.
+# All real chunk-size logic now flows through _TOKEN_TARGET via _chunk_doc.
+_CHUNK_CHARS = _CHUNK_CHARS_FALLBACK
+
 _EMBED_PREFIX = "planner"
+
 # Bumped every time the embedding semantics change (model swap, chunk
 # strategy, normalization) so stored .npz blobs invalidate cleanly.
-# v3 = adds content-NFC normalization (still applied; helps with cache
-# hits across runs where source content has whitespace drift). The Phase B
-# embedder swap was reverted but the normalize_content() call stays as it
-# yields cleaner embedding inputs regardless of which model is in use.
-_CACHE_VERSION = "v3-2026-05-23"
+# v4 (2026-05-25): token-counted chunking — same model, different chunk
+# boundaries → different per-doc mean-pool results vs v3, so cache must
+# invalidate.
+_CACHE_VERSION = "v4-2026-05-25"
