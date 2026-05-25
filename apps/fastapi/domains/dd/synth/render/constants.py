@@ -70,6 +70,9 @@ CHAPTER_MD_TEMPLATE = """\
 
 {{ sub.explanation }}
 
+{% if sub.derived_caption -%}
+{{ sub.derived_caption }}
+{% endif -%}
 {{ sub.code_block }}
 
 {% endfor -%}

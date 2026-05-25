@@ -33,6 +33,7 @@ from .mgsr.node import mgsr_replan
 from .outline.node import outline_sdp
 from .render.node import render_audit_write
 from .sawc.node import sawc_write
+from .sawc_derive.node import sawc_derive
 # Planner owns checkpointer init in lifespan; reuse the same saver.
 from ..planner.checkpoint import get_checkpointer
 from .state import SynthState
@@ -49,6 +50,7 @@ NODE_ORDER = (
     "outline_sdp",
     "digest_construct",
     "sawc_write",
+    "sawc_derive",
     "checklist_eval",
     "mgsr_replan",
     "render_audit_write",
@@ -58,6 +60,7 @@ NODE_REGISTRY = {
     "outline_sdp":        outline_sdp,
     "digest_construct":   digest_construct,
     "sawc_write":         sawc_write,
+    "sawc_derive":        sawc_derive,
     "checklist_eval":     checklist_eval,
     "mgsr_replan":        mgsr_replan,
     "render_audit_write": render_audit_write,
@@ -69,6 +72,7 @@ NODE_TO_FIELD = {
     "outline_sdp":        "outline_path",
     "digest_construct":   "digest_path",
     "sawc_write":         "sawc_path",
+    "sawc_derive":        "derive_stats",
     "checklist_eval":     "checklist_path",
     "mgsr_replan":        "mgsr_path",
     "render_audit_write": "chapter_path",
@@ -79,6 +83,7 @@ IMPLEMENTED = (
     "outline_sdp",
     "digest_construct",
     "sawc_write",
+    "sawc_derive",
     "checklist_eval",
     "mgsr_replan",
     "render_audit_write",

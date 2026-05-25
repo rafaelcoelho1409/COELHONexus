@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .constants import (
     SAWC_SCHEMA_VERSION,
@@ -92,35 +92,80 @@ class Subtopic(BaseModel):
     renders as a single H3 subsection in the final chapter — the
     explanation appears immediately BEFORE the materialized code.
 
-    The schema is REQUIRED for code_ref_hash, NOT optional — making
-    code-emission structurally mandatory per Subtopic. Combined with
-    _SUBTOPICS_MIN=3 in the parent draft, every section must produce
-    at least 3 (H3, explanation, code) units.
+    code_source semantics (2026-05-24, Ship #95 sawc_derive):
+      - "verbatim": code body is materialized from vault[code_ref_hash]
+        byte-exact at render time (Yeung 2025 Deterministic Quoting).
+        This is the default — the LLM picked a vault hash; render audit
+        re-hashes the substitution to guarantee byte fidelity.
+      - "derived": code body is AI-generated via sawc_derive
+        (Analogical Prompting + MPSC). code_ref_hash still points to the
+        ORIGINATING vault entry (typically a thin signature) for trace-
+        ability; derived_code carries the expanded runnable example.
+        Render audit AST-parses derived_code to filter hallucinations.
+
+    code_ref_hash REMAINS REQUIRED in both cases — every subtopic must
+    anchor to a vault entry from the source docs (the derived case
+    expands the original; never floats free of provenance).
     """
+    # FIELD ORDER MATTERS for LLM generation. The Pydantic order matches
+    # the JSON output order the LLM emits, and 2026 SOTA (Citation-
+    # Grounded Code Comprehension, arXiv 2512.12117; NL Outlines, arXiv
+    # 2408.04820) shows that committing to the cited entity BEFORE writing
+    # prose dramatically reduces drift — the prose then conditions on a
+    # KNOWN code body instead of an imagined topic.
+    code_ref_hash: str = Field(
+        description=(
+            "16-hex vault hash REQUIRED — one code block per Subtopic. "
+            "PICK THIS FIRST. MUST be in the section's allowed_hashes "
+            "shown in the prompt. For 'verbatim' subtopics, the renderer "
+            "materializes the code from vault[code_ref_hash]. For 'derived' "
+            "subtopics, the hash anchors provenance back to the originating "
+            "docs entry."
+        ),
+    )
     subheading: str = Field(
         description=(
             f"{_SUBHEADING_MIN_WORDS}-{_SUBHEADING_MAX_WORDS} words. The H3 "
-            f"subheading for this specific code-block topic. Should be a "
-            f"specific, descriptive phrase (e.g. 'Minimal Tool Definition' "
-            f"or 'Async Tool with Context Injection'), NOT a generic "
-            f"label like 'Example'."
+            f"subheading naming WHAT THE CHOSEN code_ref_hash BLOCK actually "
+            f"demonstrates — derive it from identifiers / decorators / "
+            f"function names in the picked code, NOT from the broader topic "
+            f"you might want to cover. Example: a code block defining "
+            f"`@mcp.tool def list_skills(...)` becomes 'List Skills via "
+            f"@mcp.tool'; a `roots=[Path(...)]` constructor call becomes "
+            f"'Multi-Root Provider Construction'. NOT 'Example' or generic "
+            f"labels."
         ),
     )
     explanation: str = Field(
         description=(
             f"{_EXPLANATION_WORDS_MIN}-{_EXPLANATION_WORDS_MAX} words. The "
-            f"concise explanation that appears BEFORE the code block. Tell "
-            f"the reader what they're about to see and why it matters — "
-            f"reference specific lines, decorators, or parameters when "
-            f"possible. NO code fences inside; this is prose only."
+            f"concise explanation that appears BEFORE the code block. MUST "
+            f"reference at least one specific identifier visible in the "
+            f"chosen code_ref_hash body (function name, decorator, type, or "
+            f"parameter), so the prose grounds to the code below it. NO "
+            f"code fences inside; this is prose only. Do NOT describe APIs "
+            f"that aren't visible in the code — the validator rejects "
+            f"prose that mentions zero code identifiers."
         ),
     )
-    code_ref_hash: str = Field(
+    code_source: Literal["verbatim", "derived"] = Field(
+        default="verbatim",
         description=(
-            "16-hex vault hash REQUIRED — one code block per Subtopic. "
-            "MUST be in the section's allowed_hashes shown in the prompt. "
-            "Cannot be null/empty. The renderer materializes verbatim "
-            "from vault[code_ref_hash] immediately AFTER the explanation."
+            "Provenance tag. 'verbatim' = vault[hash] substituted byte-"
+            "exact at render time (default). 'derived' = AI-generated by "
+            "sawc_derive (Analogical Prompting + MPSC) when the originating "
+            "vault entry was too thin (signature-only) to teach effectively. "
+            "Derived subtopics render with a visible badge."
+        ),
+    )
+    derived_code: Optional[str] = Field(
+        default=None,
+        description=(
+            "When code_source='derived', the AI-generated runnable code "
+            "body. Required if code_source='derived'; MUST be None if "
+            "code_source='verbatim'. Audited via Python AST parse at "
+            "render time — failures are reclassified as 'hallucinated' "
+            "and drop the audit."
         ),
     )
 
@@ -168,6 +213,38 @@ class Subtopic(BaseModel):
                 f"code_ref_hash {v!r} must be 16 lowercase hex chars"
             )
         return v
+
+    @field_validator("derived_code")
+    @classmethod
+    def _validate_derived_code(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        s = v.rstrip()
+        if not s.strip():
+            raise ValueError("derived_code, when set, must be non-empty")
+        # Coarse size guard — derived bodies are pedagogical examples,
+        # not full programs. The detailed AST/structure audit lives in
+        # render_audit_write.
+        if len(s) > 8000:
+            raise ValueError(
+                f"derived_code too long ({len(s)} chars; max 8000)"
+            )
+        return s
+
+    @model_validator(mode="after")
+    def _validate_source_code_pair(self) -> "Subtopic":
+        if self.code_source == "derived":
+            if not self.derived_code:
+                raise ValueError(
+                    "code_source='derived' requires non-empty derived_code"
+                )
+        else:  # verbatim
+            if self.derived_code is not None:
+                raise ValueError(
+                    "code_source='verbatim' must NOT set derived_code "
+                    "(use code_source='derived' or leave derived_code=None)"
+                )
+        return self
 
 
 class _LLMSectionDraft(BaseModel):

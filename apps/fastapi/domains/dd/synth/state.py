@@ -39,6 +39,14 @@ class SynthState(TypedDict, total=False):
     sawc_path:      Optional[str]
     sawc_stats:     Optional[dict]
 
+    # ── sawc_derive output (Ship #95, 2026-05-24) ──────────────────────
+    # AI-derived examples for thin subtopics. Field carries a DeriveStats-
+    # shaped dict (n_promoted, n_candidates_thin, attempts[], etc).
+    # Side effect: mutates sawc-latest.json in place to embed derived_code
+    # on the affected subtopics. No new path field — consumers read the
+    # same sawc-latest.json.
+    derive_stats:   Optional[dict]
+
     # ── checklist_eval output (future) ─────────────────────────────────
     checklist_path:  Optional[str]
     checklist_stats: Optional[dict]

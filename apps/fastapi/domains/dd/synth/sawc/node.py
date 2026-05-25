@@ -438,12 +438,13 @@ async def _draft_one_section(
         )
         return None, deployment, wall_ms, n_repairs
 
-    # Cross-ref validation (heading/hashes/citations)
+    # Cross-ref validation (heading/hashes/citations + Ship B/E alignment)
     issues = validate_section_against_inputs(
         draft,
         expected_heading=section_heading,
         allowed_hashes=allowed_hash_set,
         valid_source_keys=valid_source_set,
+        vault_rich=vault_rich,
     )
     # Repair if issues
     while issues and n_repairs < _MAX_REPAIR_ATTEMPTS:
@@ -481,6 +482,7 @@ async def _draft_one_section(
                 expected_heading=section_heading,
                 allowed_hashes=allowed_hash_set,
                 valid_source_keys=valid_source_set,
+                vault_rich=vault_rich,
             )
             # Accept ONLY if it strictly reduces violation count
             if len(new_issues) < len(issues):
@@ -618,6 +620,7 @@ async def _critic_pick_best(
     allowed_hashes: set[str],
     valid_source_keys: set[str],
     thread_id: str,
+    vault_rich: dict | None = None,
 ) -> tuple[int, Optional[str], Optional[str], float]:
     """Pairwise tournament picker. Returns
     (chosen_idx, deployment_critic, fallback_used, structural_score).
@@ -635,6 +638,7 @@ async def _critic_pick_best(
             allowed_hashes=allowed_hashes,
             valid_source_keys=valid_source_keys,
             n_primary_contribs=n_primary_contribs,
+            vault_rich=vault_rich,
         )
         for c in candidates
     ]
@@ -811,6 +815,7 @@ async def _write_section_best_of_n(
                 allowed_hashes=set(allowed_hashes),
                 valid_source_keys=set(valid_source_keys),
                 thread_id=thread_id,
+                vault_rich=vault_rich,
             )
         )
 
@@ -828,6 +833,7 @@ async def _write_section_best_of_n(
             expected_heading=section_heading,
             allowed_hashes=set(allowed_hashes),
             valid_source_keys=set(valid_source_keys),
+            vault_rich=vault_rich,
         )
 
         await emit_progress(

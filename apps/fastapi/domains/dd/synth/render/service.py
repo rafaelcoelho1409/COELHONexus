@@ -124,11 +124,24 @@ def build_section_context(
     code_ref_hash to `resolution_log`. This lets the caller compute
     audit stats in a single pass.
 
+    Per-subtopic logic (3-tier audit, Ship #96, 2026-05-24):
+      - code_source == "verbatim" (or unset legacy): substitute from
+        vault[hash]; verify byte-drift via re-hash → tier='verbatim',
+        or 'hallucinated' on miss/drift.
+      - code_source == "derived" with derived_code: wrap derived body
+        in a fenced block; emit a Markdown caption above. AST-parse
+        the body → tier='derived', or 'hallucinated' on AST failure.
+
     Returns a dict with:
       - section_id, heading, intro, anchor
-      - subtopics: list[{subheading, explanation, code_block, anchor}]
+      - subtopics: list[{subheading, explanation, code_block, anchor,
+                          code_source, derived_caption}]
       - citations: list[{source_basename, claim}]
     """
+    # Lazy import to avoid a render→sawc_derive cycle; service.python_ast_valid
+    # is the canonical hallucination gate for derived bodies.
+    from ..sawc_derive.service import python_ast_valid as _ast_valid
+
     section_id = section.get("section_id", "?")
     heading = section.get("heading", "?")
     intro = (section.get("intro") or "").strip()
@@ -140,22 +153,53 @@ def build_section_context(
         subheading = (sub.get("subheading") or "").strip()
         explanation = (sub.get("explanation") or "").strip()
         h = sub.get("code_ref_hash")
-        # Render code block from the vault. Missing/drifted hashes get
-        # logged for the audit but render as an empty fence so the
-        # chapter is still readable.
+        code_source = sub.get("code_source") or "verbatim"
+        derived_code = sub.get("derived_code") or ""
+
         code_block = ""
-        if h:
+        derived_caption = ""
+
+        if code_source == "derived" and derived_code:
+            # ── Derived path ──────────────────────────────────────────
+            ast_ok = _ast_valid(derived_code)
+            # Wrap in a python fence — the audit scans for sentinels,
+            # not for fences, so this is benign.
+            body = derived_code.rstrip()
+            code_block = f"```python\n{body}\n```"
+            short_hash = (h or "")[:8] if h else ""
+            derived_caption = (
+                f"> _Derived example (AI-generated, expanded from doc "
+                f"reference `{short_hash}…` via Analogical Prompting + "
+                f"MPSC; AST-validated)._\n"
+                if ast_ok else
+                f"> _Derived example (AI-generated, expanded from doc "
+                f"reference `{short_hash}…`; AST parse FAILED — flagged "
+                f"as hallucinated in audit)._\n"
+            )
+            tier = "derived" if ast_ok else "hallucinated"
+            resolution_log.append(CodeRefResolution(
+                hash=h or "",
+                found_in_vault=False,   # derived isn't FROM vault
+                byte_drift=False,
+                materialized_chars=len(body),
+                section_id=section_id,
+                tier=tier,
+            ))
+        elif h:
+            # ── Verbatim path (default) ───────────────────────────────
             if h in vault:
                 fence_text = vault[h]
                 code_block = fence_text
                 rehashed = _hash_block(fence_text)
                 byte_drift = (rehashed != h)
+                tier = "hallucinated" if byte_drift else "verbatim"
                 resolution_log.append(CodeRefResolution(
                     hash=h,
                     found_in_vault=True,
                     byte_drift=byte_drift,
                     materialized_chars=len(fence_text),
                     section_id=section_id,
+                    tier=tier,
                 ))
             else:
                 resolution_log.append(CodeRefResolution(
@@ -164,12 +208,15 @@ def build_section_context(
                     byte_drift=False,
                     materialized_chars=0,
                     section_id=section_id,
+                    tier="hallucinated",
                 ))
         sub_ctx.append({
-            "subheading":  subheading,
-            "explanation": explanation,
-            "code_block":  code_block,
-            "anchor":      _slugify(subheading),
+            "subheading":       subheading,
+            "explanation":      explanation,
+            "code_block":       code_block,
+            "anchor":           _slugify(subheading),
+            "code_source":      code_source,
+            "derived_caption":  derived_caption,
         })
 
     citations = []
@@ -339,18 +386,36 @@ def compute_audit(
         STILL present in the rendered chapter markdown — must be 0 for
         a passing audit
     """
-    referenced_hashes: set[str] = {r.hash for r in resolution_log}
+    # Referenced hashes = ANY tier with a hash. Derived subtopics still
+    # cite the originating thin vault entry via code_ref_hash for
+    # provenance, so they count toward "referenced" — preventing the
+    # underlying entry from being misclassified as orphan_unused.
+    referenced_hashes: set[str] = {
+        r.hash for r in resolution_log if r.hash
+    }
     n_total = len(resolution_log)
     n_resolved = sum(1 for r in resolution_log if r.found_in_vault)
-    n_missing = sorted({r.hash for r in resolution_log if not r.found_in_vault})
-    n_drift = sorted({r.hash for r in resolution_log if r.byte_drift})
+    n_missing = sorted({
+        r.hash for r in resolution_log
+        if r.tier == "hallucinated" and not r.found_in_vault and r.hash
+    })
+    n_drift = sorted({
+        r.hash for r in resolution_log
+        if r.byte_drift and r.hash
+    })
     n_orphan = sorted(set(vault.keys()) - referenced_hashes)
     sentinels_left = len(_SENTINEL_RE.findall(rendered_chapter_md or ""))
+
+    # Ship #96 — 3-tier counts.
+    n_verbatim = sum(1 for r in resolution_log if r.tier == "verbatim")
+    n_derived = sum(1 for r in resolution_log if r.tier == "derived")
+    n_hallucinated = sum(1 for r in resolution_log if r.tier == "hallucinated")
 
     audit_passed = (
         not n_missing
         and not n_drift
         and sentinels_left == 0
+        and n_hallucinated == 0
     )
 
     # Cap resolution_details to first 100 entries to keep the persisted
@@ -365,6 +430,9 @@ def compute_audit(
         n_byte_drift=n_drift,
         sentinels_in_output=sentinels_left,
         audit_passed=audit_passed,
+        n_verbatim=n_verbatim,
+        n_derived=n_derived,
+        n_hallucinated=n_hallucinated,
         resolution_details=capped_details,
     )
 

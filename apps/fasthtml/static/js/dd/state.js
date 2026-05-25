@@ -161,24 +161,28 @@ export const SYNTH_SUBSTEP_FIELDS = [
   'outline_path',          // outline_sdp
   'digest_path',           // digest_construct
   'sawc_path',             // sawc_write
+  'derive_stats',          // sawc_derive (Ship #95)
   'checklist_path',        // checklist_eval
   'mgsr_path',             // mgsr_replan
   'chapter_path',          // render_audit_write
 ];
 export const SYNTH_NODE_ORDER = [
   'outline_sdp', 'digest_construct',
-  'sawc_write', 'checklist_eval',
-  'mgsr_replan', 'render_audit_write',
+  'sawc_write', 'sawc_derive',
+  'checklist_eval', 'mgsr_replan',
+  'render_audit_write',
 ];
 export const SYNTH_NODE_LABELS = [
   'Outline (SDP)', 'Digest',
-  'SAWC write', 'Checklist eval',
-  'MGSR replan', 'Render + audit',
+  'SAWC write', 'SAWC derive',
+  'Checklist eval', 'MGSR replan',
+  'Render + audit',
 ];
 export const SYNTH_STEP_TO_FIELD = {
   outline_sdp:        'outline_path',
   digest_construct:   'digest_path',
   sawc_write:         'sawc_path',
+  sawc_derive:        'derive_stats',
   checklist_eval:     'checklist_path',
   mgsr_replan:        'mgsr_path',
   render_audit_write: 'chapter_path',

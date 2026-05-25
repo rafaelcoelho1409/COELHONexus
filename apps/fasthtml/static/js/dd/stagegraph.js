@@ -118,6 +118,45 @@ export const StageGraph = (function() {
           'line-dash-offset':   0,
         },
       },
+      // ── Loopback (cycle-closing) edges ─────────────────────────────
+      // Pattern 1 from the May 2026 SOTA review (CoRefine UX research):
+      // Sugiyama layouts already reverse feedback edges for layering;
+      // we tag the edge with kind='loopback' and style it as a distinct
+      // amber arc above the row so the cycle is visible at a glance.
+      // Dashed when dormant, solid + marching-ants when actively firing.
+      // Mirrors Temporal Web UI's retry-edge convention + AI SDK Elements'
+      // `animated` vs `temporary` edge taxonomy.
+      {
+        selector: "edge[kind = 'loopback']",
+        style: {
+          'line-color':            '#d97706',   // amber-600
+          'target-arrow-color':    '#d97706',
+          'curve-style':           'unbundled-bezier',
+          'control-point-distances': [-80],     // arcs ABOVE the row
+          'control-point-weights':   [0.5],
+          'width':                 2,
+          'line-style':            'dashed',
+          'line-dash-pattern':     [4, 4],
+          'line-dash-offset':      0,
+          'opacity':               0.55,
+          'target-arrow-shape':    'triangle',
+          'arrow-scale':           0.9,
+        },
+      },
+      {
+        selector: "edge[kind = 'loopback'][active = 'true']",
+        style: {
+          // Solid + brighter + thicker when the loop is actually firing
+          // (mgsr just routed RETHINK). The marching-ants timer still
+          // animates line-dash-offset for the "this is moving" signal.
+          'line-color':            '#b45309',   // amber-700, deeper
+          'target-arrow-color':    '#b45309',
+          'width':                 3,
+          'line-style':            'dashed',   // ants still march
+          'line-dash-pattern':     [8, 4],
+          'opacity':               1.0,
+        },
+      },
     ];
   }
 
@@ -146,6 +185,9 @@ export const StageGraph = (function() {
           source: e.source,
           target: e.target,
           active: 'false',
+          // Optional tag — when present, the stylesheet routes the edge
+          // through the `edge[kind = 'loopback']` block (amber arc).
+          ...(e.kind ? { kind: e.kind } : {}),
         },
       })),
     ];
@@ -195,6 +237,9 @@ export const StageGraph = (function() {
       _antsInterval._offset = next;
       active.style('line-dash-offset', next);
     }, 60);
+    // Loopback-edge presence triggers a slight upward arc — Cytoscape
+    // recomputes geometry when the edge is created, so we just need the
+    // stylesheet (above) to do its thing. No JS work here.
     return {
       cy,
       setStatus(nodeId, status, kpiText) {
@@ -215,12 +260,25 @@ export const StageGraph = (function() {
           });
         }
       },
+      // Toggle the CoRefine loopback edge into its "actively firing"
+      // visual. Called from the synth state poller when LangGraph's
+      // snap.next includes a node that's earlier in the topological
+      // order than a node whose output is already present (= a real
+      // loopback re-entry, not a first-pass progression).
+      setLoopActive(isActive) {
+        cy.edges("[kind = 'loopback']").forEach(e => {
+          e.data('active', isActive ? 'true' : 'false');
+        });
+      },
       reset() {
         cy.nodes().forEach(n => {
           n.data('status', _initial[n.id()] || 'pending');
           n.data('kpi', '');
         });
         cy.edges().forEach(e => e.data('active', 'false'));
+        cy.edges("[kind = 'loopback']").forEach(e => {
+          e.data('active', 'false');
+        });
       },
       destroy() {
         // Stop the marching-ants timer and tear down Cytoscape.

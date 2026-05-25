@@ -131,8 +131,40 @@ export function _kpiForSynthNode(nodeId, values) {
   return '';
 }
 
-export function _renderSynthGraph(values) {
+export function _renderSynthGraph(values, nextNodes) {
   if (!S.synthGraph) return;
+  // BUGFIX 2026-05-24: previously this routine inferred "currently
+  // running" by finding the FIRST not-done node (`i === doneCount`).
+  // That assumes monotonic progression, which CoRefine loopbacks break:
+  // after `mgsr_replan → RETHINK → sawc_write` re-enters, sawc's output
+  // field from iter 1 is still in the checkpoint values, so the loop
+  // misclassifies sawc as 'done' and lights up the next un-output node
+  // (typically render_audit_write) as 'running' even though Python is
+  // actually re-executing sawc_write.
+  //
+  // Fix: when the caller passes `nextNodes` (= snap.next from LangGraph
+  // state), use it as the authoritative "currently running" set. Any
+  // node in nextNodes that the synth thread is actively running gets
+  // status='running', overriding the field-presence heuristic.
+  // The heuristic stays as a fallback for the pre-first-checkpoint
+  // window (when nextNodes is empty/unknown).
+  const nextSet = (Array.isArray(nextNodes) && nextNodes.length > 0)
+    ? new Set(nextNodes) : null;
+  const useAuthoritative = nextSet !== null && S.synthThreadId !== null;
+  // 2026-05-25: per-node iter badge + global CoRefine chip.
+  // refine_iter is a SynthState field bumped by sawc_write each pass;
+  // it survives across the loopback because LangGraph checkpoints the
+  // value. Default 0 → no badge displayed (first pass / no run yet).
+  const refineIter = Number(values && values.refine_iter || 0);
+  const maxIter    = 5;   // matches graph.py:_MAX_REFINE_ITER
+  // A loopback is "actively firing" when sawc_write is in nextSet AND
+  // there's already a sawc output (i.e. we've completed at least iter 1
+  // and are re-entering). Same predicate the SAWC running-state uses.
+  const isLooping = (
+    refineIter >= 1 &&
+    useAuthoritative &&
+    nextSet.has('sawc_write')
+  );
   let doneCount = 0;
   let anyRunning = false;
   for (let i = 0; i < S.SYNTH_NODE_ORDER.length; i++) {
@@ -141,14 +173,31 @@ export function _renderSynthGraph(values) {
     const present = _synthFieldPresent(values, field);
     const isImpl = S.synthImplemented.has(nodeId);
     let status;
-    if (present)      { status = 'done'; doneCount++; }
-    else if (!isImpl) { status = 'future'; }
-    else if (i === doneCount && S.synthThreadId !== null) {
+    if (useAuthoritative && nextSet.has(nodeId)) {
+      // Authoritative running signal — overrides field presence.
       status = 'running'; anyRunning = true;
-    } else            { status = 'pending'; }
-    S.synthGraph.setStatus(nodeId, status,
-      present ? _kpiForSynthNode(nodeId, values) : '');
+    } else if (present) { status = 'done'; doneCount++; }
+    else if (!isImpl)   { status = 'future'; }
+    else if (i === doneCount && S.synthThreadId !== null) {
+      // Pre-checkpoint fallback for the very first superstep.
+      status = 'running'; anyRunning = true;
+    } else              { status = 'pending'; }
+    // Per-node iter badge on sawc_write only (the loop target). KPI text
+    // gets concatenated with the existing KPI line when present.
+    let kpiText = present ? _kpiForSynthNode(nodeId, values) : '';
+    if (nodeId === 'sawc_write' && refineIter >= 1) {
+      const badge = `iter ${refineIter}/${maxIter}`;
+      kpiText = kpiText ? `${badge} · ${kpiText}` : badge;
+    }
+    S.synthGraph.setStatus(nodeId, status, kpiText);
   }
+  // Drive the loopback edge state (amber arc — dashed dormant / solid
+  // animated when firing). Cheap no-op when the graph has no loopback
+  // edges (e.g. planner reuses StageGraph but has no cycle).
+  if (typeof S.synthGraph.setLoopActive === 'function') {
+    S.synthGraph.setLoopActive(isLooping);
+  }
+  _updateCoRefineChip(isLooping, refineIter, maxIter);
   const explicitStatus = (values && values.status) || null;
   const implCount = S.SYNTH_NODE_ORDER.filter(n => S.synthImplemented.has(n)).length;
   const progress = implCount ? doneCount + '/' + implCount : null;
@@ -311,6 +360,59 @@ export function _runSynthLayoutAndCenter(passLabel) {
   }
 }
 
+// ──────────────────────────────────────────────────────────────────
+// CoRefine chip — top-of-canvas iteration indicator (May 2026 SOTA
+// pattern; mirrors Temporal Web UI's run-level retry indicator).
+// Dormant: hidden. Active: amber pill showing "CoRefine · iter N/5".
+// ──────────────────────────────────────────────────────────────────
+const _COREFINE_CHIP_ID = 'fw-synth-corefine-chip';
+
+function _ensureCoRefineChip() {
+  let chip = document.getElementById(_COREFINE_CHIP_ID);
+  if (chip) return chip;
+  const root = document.getElementById('fw-synth-graph');
+  if (!root) return null;
+  chip = document.createElement('div');
+  chip.id = _COREFINE_CHIP_ID;
+  chip.className = 'fw-corefine-chip';
+  // Inline styles — avoids touching app CSS for this small affordance.
+  // Hidden by default; _updateCoRefineChip flips display + text.
+  chip.style.cssText = [
+    'position: absolute',
+    'top: 8px',
+    'left: 50%',
+    'transform: translateX(-50%)',
+    'padding: 4px 12px',
+    'border-radius: 999px',
+    'background: #fef3c7',                // amber-100
+    'color: #92400e',                     // amber-800
+    'border: 1px solid #d97706',          // amber-600
+    'font: 600 12px/1.0 Raleway, Helvetica Neue, Arial, sans-serif',
+    'letter-spacing: 0.02em',
+    'box-shadow: 0 1px 3px rgba(0,0,0,0.08)',
+    'pointer-events: none',               // never blocks canvas hits
+    'z-index: 5',
+    'display: none',
+  ].join('; ');
+  // Ensure parent is positioned so absolute children anchor correctly.
+  if (root && getComputedStyle(root).position === 'static') {
+    root.style.position = 'relative';
+  }
+  root.appendChild(chip);
+  return chip;
+}
+
+export function _updateCoRefineChip(isLooping, refineIter, maxIter) {
+  const chip = _ensureCoRefineChip();
+  if (!chip) return;
+  if (isLooping && refineIter >= 1) {
+    chip.textContent = `CoRefine · iter ${refineIter}/${maxIter}`;
+    chip.style.display = 'block';
+  } else {
+    chip.style.display = 'none';
+  }
+}
+
 export function _initSynthCanvas() {
   if (S.UI_MODE !== 'graph') return;
   const root = document.getElementById('fw-synth-graph');
@@ -331,6 +433,21 @@ export function _initSynthCanvas() {
       for (let i = 0; i < S.SYNTH_NODE_ORDER.length - 1; i++) {
         edges.push({ source: S.SYNTH_NODE_ORDER[i],
                      target: S.SYNTH_NODE_ORDER[i + 1] });
+      }
+      // ── CoRefine loopback edge (Pattern 1 from May 2026 UX research) ──
+      // The synth graph is CYCLIC: when checklist scores < 0.80, mgsr
+      // routes RETHINK and the graph re-enters sawc_write. Surface that
+      // structurally with a backward-arc edge tagged `kind='loopback'` —
+      // the stylesheet renders it as an amber arc above the row, dashed
+      // when dormant, solid+pulsing when actively firing. Source path:
+      // apps/fastapi/domains/dd/synth/graph.py:_route_after_mgsr.
+      if (S.SYNTH_NODE_ORDER.includes('sawc_write') &&
+          S.SYNTH_NODE_ORDER.includes('mgsr_replan')) {
+        edges.push({
+          source: 'mgsr_replan',
+          target: 'sawc_write',
+          kind:   'loopback',
+        });
       }
       console.log(
         `[synthGraph] canvas container ready, dims=${canvasEl.offsetWidth}x${canvasEl.offsetHeight}`
@@ -759,15 +876,24 @@ export function _renderSynthLiveProgress(stepName, ev) {
   if (text) el.textContent = text;
 }
 
-export function renderSynthCards(values) {
+export function renderSynthCards(values, nextNodes) {
   // Cards DOM was removed 2026-05-19 — S.synthCardsEl is null. The
   // per-card loop below now early-skips at `if (!c) continue;` but
   // `_renderSynthGraph` + `_refreshOpenSynthDrawer` at the tail MUST
   // still fire (they own the graph-canvas + drawer state). Previous
   // `if (!synthCardsEl) return;` short-circuit silently broke them.
+  //
+  // CoRefine fix (see _renderSynthGraph): `nextNodes` comes from
+  // snap.next on /state polls. When set, treat any node in it as
+  // the running one regardless of field presence; falls through to
+  // field-presence + first-not-done heuristic otherwise.
+  const nextSet = (Array.isArray(nextNodes) && nextNodes.length > 0)
+    ? new Set(nextNodes) : null;
+  const useAuthoritative = nextSet !== null && S.synthThreadId !== null;
   let doneCount = 0;
   for (let i = 0; i < S.SYNTH_SUBSTEP_FIELDS.length; i++) {
     const field = S.SYNTH_SUBSTEP_FIELDS[i];
+    const nodeId = S.SYNTH_NODE_ORDER[i];
     const c = synthCardEl(i);
     if (!c) {
       // Without cards we can't count done state from the DOM, so
@@ -781,7 +907,13 @@ export function renderSynthCards(values) {
     const present = _synthFieldPresent(values, field);
     const cardData = c.dataset.substep || '';
     const isImplemented = S.synthImplemented.has(cardData);
-    if (present) {
+    if (useAuthoritative && nextSet.has(nodeId)) {
+      // Authoritative running signal — beats field-presence so CoRefine
+      // loopbacks display the currently-re-executing node correctly.
+      c.classList.add('running');
+      c.classList.remove('done', 'failed', 'future');
+      icon.textContent = '◐'; icon.dataset.status = 'running';
+    } else if (present) {
       c.classList.add('done');
       c.classList.remove('running', 'failed', 'future');
       icon.textContent = '●'; icon.dataset.status = 'done';
@@ -813,7 +945,7 @@ export function renderSynthCards(values) {
   }
   // Mirror state into the Cytoscape canvas (no-op when ?ui=cards).
   // Drives node colors + KPI badges + the top-of-stage status pill.
-  _renderSynthGraph(values);
+  _renderSynthGraph(values, nextNodes);
   // Live-refresh drawer if open for a synth node (same pattern as
   // planner — _refreshOpenSynthDrawer is a no-op when not open).
   _refreshOpenSynthDrawer(values);
@@ -964,8 +1096,13 @@ export async function _refreshSynthCardsFromState(threadId, expectedField) {
       if (r.ok) {
         const data = await r.json();
         const values = data.values || {};
+        // data.next is LangGraph's snap.next — the authoritative set of
+        // nodes currently scheduled / executing. Passing it through lets
+        // _renderSynthGraph distinguish CoRefine-loop re-entries from
+        // truly completed steps (see comment there).
+        const nextNodes = Array.isArray(data.next) ? data.next : null;
         if (!expectedField || _synthFieldPresent(values, expectedField)) {
-          renderSynthCards(values);
+          renderSynthCards(values, nextNodes);
           return;
         }
       }
@@ -1133,7 +1270,10 @@ export function _onStripCellClick(cellEl) {
       const r = await fetch(S.API + '/synth/debug/graph/' + chTid + '/state');
       if (r.ok) {
         const data = await r.json();
-        renderSynthCards(data.values || {});
+        renderSynthCards(
+          data.values || {},
+          Array.isArray(data.next) ? data.next : null,
+        );
       }
     } catch (_) {}
     S.set_synthLiveEventReceived(false);
@@ -1471,6 +1611,7 @@ export async function _tryResumeActiveSynth(slug) {
     }
     const data = await r.json();
     const values = data.values || {};
+    const nextNodes = Array.isArray(data.next) ? data.next : null;
     const status = values.status;
     const allImplDone = _synthAllImplementedComplete(values);
     const effectivelyDone = (
@@ -1479,12 +1620,12 @@ export async function _tryResumeActiveSynth(slug) {
       allImplDone
     );
     if (effectivelyDone) {
-      renderSynthCards(values);
+      renderSynthCards(values, nextNodes);
       return false;
     }
     S.setSynthThreadId(tid);
     refreshSynthStartState();
-    renderSynthCards(values);
+    renderSynthCards(values, nextNodes);
     S.set_synthLiveEventReceived(false);
     pollSynthState(tid);
     if (status === 'running') {

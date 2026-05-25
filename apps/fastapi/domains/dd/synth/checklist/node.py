@@ -77,6 +77,7 @@ from .constants import (
     CHECKLIST_PROMPT_VERSION,
     CHECKLIST_SCHEMA_VERSION,
 )
+from .cocoa import cocoa_alignment_check
 from .faithfulness import atomic_claim_grounding
 from .types import (
     ChecklistEvaluation,
@@ -563,6 +564,74 @@ async def checklist_eval(state: SynthState) -> dict:
         overrode_bundled=(atomic_result is not None
                           and not atomic_result["passed"]),
         wall_ms=faithfulness_wall_ms,
+    )
+
+    # -- Augment: CoCoA two-stage code/explanation alignment (Ship C, 2026-05-25)
+    # The bundled judge's c11 (prose_code_first_not_meta_framing) and c12
+    # (code_refs_introduced_in_prose) verdicts are single-shot. Per arXiv
+    # 2410.03131 (CoCoA), a two-stage explainer→judge pipeline beats single-
+    # shot LLM-judge by +68% F1 on code-doc alignment. This pass overrides
+    # c11+c12 with FAIL when CoCoA finds explanation↔code drift below 85%.
+    # Fail-soft: any LLM infrastructure flake skips the override.
+    cocoa_t0 = time.monotonic()
+    cocoa_result: dict | None = None
+    try:
+        # Load merged vault for CoCoA's stage 1 (needs actual code bodies).
+        # Reuses render_audit_write's loader to stay byte-identical to what
+        # the renderer will substitute. Source keys come from the digest's
+        # per_source list.
+        from ..render.node import _load_per_source_vaults as _load_vault
+        per_source = digest.get("per_source") or []
+        source_keys = sorted({
+            s.get("source_key", "") for s in per_source if s.get("source_key")
+        })
+        merged_vault, _, _ = await _load_vault(minio, slug, source_keys)
+        cocoa_result = await cocoa_alignment_check(
+            sawc_payload=sawc,
+            vault=merged_vault,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[checklist_eval] CoCoA alignment crashed: "
+            f"{type(e).__name__}: {e} — skipping augmentation"
+        )
+        cocoa_result = None
+    cocoa_wall_ms = int((time.monotonic() - cocoa_t0) * 1000)
+
+    if cocoa_result is not None and not cocoa_result["passed"]:
+        # CoCoA found drift — override c11 + c12. Each gets the same
+        # alignment-rate-grounded feedback so mgsr_replan sees specific
+        # misaligned-subtopic samples and routes the reroll surgically.
+        cocoa_fb = cocoa_result["feedback"]
+        for i, r in enumerate(llm_results):
+            if r.name in (
+                "prose_code_first_not_meta_framing",
+                "code_refs_introduced_in_prose",
+            ):
+                llm_results[i] = CriterionResult(
+                    name=r.name,
+                    passed=False,
+                    kind=r.kind,
+                    feedback=(
+                        f"[CoCoA override] {cocoa_fb}"
+                        if cocoa_fb else
+                        f"[CoCoA override] alignment "
+                        f"{cocoa_result['alignment_rate']:.0%} below 85%"
+                    ),
+                )
+        llm_failed = [r.name for r in llm_results if not r.passed]
+        n_llm_passed = sum(1 for r in llm_results if r.passed)
+
+    await emit_progress(
+        thread_id, "checklist_eval", "cocoa_done",
+        method=(cocoa_result or {}).get("method", "skipped"),
+        n_pairs=(cocoa_result or {}).get("n_pairs", 0),
+        n_aligned=(cocoa_result or {}).get("n_aligned", 0),
+        n_misaligned=(cocoa_result or {}).get("n_misaligned", 0),
+        alignment_rate=(cocoa_result or {}).get("alignment_rate", 1.0),
+        overrode_bundled=(cocoa_result is not None
+                          and not cocoa_result["passed"]),
+        wall_ms=cocoa_wall_ms,
     )
 
     # -- Aggregate ----------------------------------------------------------
