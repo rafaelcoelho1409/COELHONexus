@@ -24,8 +24,27 @@ _REFINE_CONCURRENCY = 8
 _REFINE_MAX_TOKENS = 200
 # Cache version — bump on prompt redesign / hyperparam tweaks so old
 # blobs invalidate cleanly.
-_PROMPT_VERSION = "v1-2026-05-18"
+#   v2-2026-05-25 (Bundle 5b): c-TF-IDF noise-rescue layer added.
+_PROMPT_VERSION = "v2-2026-05-25"
 _BLOB_PREFIX = "planner"
+
+# ─── Bundle 5b (2026-05-25) — c-TF-IDF noise rescue ──────────────────────────
+# After GMM + LLM-judge finishes, sweep all docs still at cluster_id == -1
+# (noise) and vectorize them against the FINAL cluster c-TF-IDF representations.
+# Assign each to its best cosine match if similarity ≥ _RESCUE_THRESHOLD.
+# Mirrors BERTopic's reduce_outliers(strategy="c-tf-idf") — empirical fix for
+# the 16-unassigned-docs bug observed on FastMCP (`lifespans.md`,
+# `opentelemetry.md`, etc. silently dropped → caused ch-02/ch-03 14.9% drift).
+#
+# Threshold rationale: 0.10 cosine on TF-IDF vectors is the BERTopic default;
+# below that the doc is genuinely off-topic for every cluster and should stay
+# as noise (rare; mostly index pages and license-like content the off_topic
+# filter missed).
+_RESCUE_THRESHOLD = 0.10
+# Max ngram range / vocab cap mirror _compute_cluster_keywords for vocabulary
+# consistency.
+_RESCUE_MAX_FEATURES = 5000
+_RESCUE_DOC_CHARS    = 2400   # how much of each noise doc body to vectorize
 
 # Letter labels A-E for the top-5 candidates.
 _LABELS = list("ABCDE")

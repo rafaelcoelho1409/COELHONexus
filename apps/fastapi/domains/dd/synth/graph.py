@@ -111,6 +111,12 @@ IMPLEMENTED = (
 _CHECKLIST_THRESHOLD = 0.80
 _MAX_REFINE_ITER = 5
 _PLATEAU_DELTA = 0.03
+# Bundle 7 (2026-05-25) — Iter-1 short-circuit (no-recovery threshold).
+# Empirical: chapters scoring < 0.5 at iter=1 almost never recover above
+# 0.80 by iter=2 (best-seen-rescue at iter=1 ≈ best-seen-rescue at iter=2,
+# OP-12 ships the same draft either way). Skip iter 2 to save 5-15 min
+# per low-score chapter (30-40% of FastMCP chapters hit this).
+_NO_RECOVERY_FLOOR = 0.50
 
 
 def _route_after_mgsr(state: SynthState) -> str:
@@ -126,6 +132,20 @@ def _route_after_mgsr(state: SynthState) -> str:
             f"[synth-graph] {state.get('framework_slug')}/"
             f"{state.get('chapter_id')}: HALT success "
             f"(pass_rate={score:.2f} >= {_CHECKLIST_THRESHOLD})"
+        )
+        return "render_audit_write"
+
+    # Bundle 7 — iter-1 no-recovery short-circuit. At iter≤1 with score<0.5,
+    # iter 2 almost never produces score≥0.80 (RefineBench Nov 2025: cold-
+    # start refinement gains plateau quickly; -0.1pp DeepSeek-R1 on second
+    # iteration). Skip the wasted 5-15 min and let OP-12 best-seen-rescue
+    # ship the highest-scoring draft.
+    if refine_iter <= 1 and score < _NO_RECOVERY_FLOOR:
+        logger.info(
+            f"[synth-graph] {state.get('framework_slug')}/"
+            f"{state.get('chapter_id')}: HALT no-recovery "
+            f"(iter={refine_iter}, score={score:.2f} < {_NO_RECOVERY_FLOOR}); "
+            f"best-seen-rescue applies"
         )
         return "render_audit_write"
 

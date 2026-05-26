@@ -55,6 +55,11 @@ class PlannerState(TypedDict, total=False):
     # outline inline since it's small — ~1-3 KB).
     chapter_plan_ref: Optional[str]             # reduce — MinIO key of the JSON
     reduce_stats: Optional[dict]                # reduce — counts + outline for UI
+    # order_chapters output (Bundle 8, 2026-05-25) — pedagogical ordering.
+    # Stored as MinIO JSON with {order, samples, foundational_idx, ...}.
+    # plan_write reads this to reorder the outline before sanitization.
+    chapter_order_ref: Optional[str]            # order_chapters — MinIO key
+    order_chapters_stats: Optional[dict]        # order_chapters — order + telemetry
     # plan_write output — consumer-facing final plan with hydrated
     # `sources` per chapter, written as `planner/{slug}/plan-latest.json`
     # (mutable pointer) AND `planner/{slug}/plan/{hash}.json` (versioned).

@@ -55,6 +55,7 @@ from ..embed_corpus import load_embeddings
 from .constants import (
     _BOUNDARY_PROB_FLOOR,
     _CACHE_VERSION,
+    _CLUSTER_SELECTION_EPSILON,
     _HDBSCAN_MIN_SAMPLES,
     _UMAP_DIM,
     _UMAP_MIN_DIST,
@@ -62,6 +63,7 @@ from .constants import (
 )
 from .service import (
     _adaptive_min_cluster_size,
+    _adaptive_n_neighbors,
     _attach_otel_attrs,
     _blob_key,
     _pack_npz,
@@ -103,6 +105,10 @@ async def cluster(state: PlannerState) -> dict:
     # Adaptive HDBSCAN floor — scales with corpus size so small frameworks
     # produce meaningful cluster counts (see _adaptive_min_cluster_size).
     min_cluster_size = _adaptive_min_cluster_size(len(relevant_files))
+    # Adaptive UMAP n_neighbors (2026-05-26) — caps at _UMAP_N_NEIGHBORS_CAP
+    # but shrinks for tiny corpora so HDBSCAN can still find density modes.
+    # See _adaptive_n_neighbors() for the small-corpus failure rationale.
+    n_neighbors_adaptive = _adaptive_n_neighbors(len(relevant_files))
 
     # ── Cache fast-path ───────────────────────────────────────────────
     # Hash key parts (must include hyperparams that affect output so a
@@ -112,7 +118,8 @@ async def cluster(state: PlannerState) -> dict:
     from hashlib import sha256
     mh = sha256(
         ("|".join(sorted(relevant_files)) +
-         f"|umap{_UMAP_DIM}|hdbscan{min_cluster_size}"
+         f"|umap{_UMAP_DIM}n{n_neighbors_adaptive}"
+         f"|hdbscan{min_cluster_size}eps{_CLUSTER_SELECTION_EPSILON}"
          f"|{_CACHE_VERSION}").encode("utf-8"),
     ).hexdigest()[:16]
     blob_key = _blob_key(slug, mh)
@@ -181,7 +188,7 @@ async def cluster(state: PlannerState) -> dict:
     # Guardrails: degenerate corpora can't be UMAP'd. If N is too small to
     # produce meaningful clusters, return a single-cluster assignment and
     # let the operator see the warning in the stats.
-    min_for_clustering = max(min_cluster_size * 2, _UMAP_N_NEIGHBORS + 1)
+    min_for_clustering = max(min_cluster_size * 2, n_neighbors_adaptive + 1)
     if n_docs < min_for_clustering:
         elapsed = int((time.monotonic() - t0) * 1000)
         assignments = np.zeros(n_docs, dtype=np.int32)
@@ -227,7 +234,7 @@ async def cluster(state: PlannerState) -> dict:
     reducer = umap.UMAP(
         n_components=_UMAP_DIM,
         metric="cosine",
-        n_neighbors=min(_UMAP_N_NEIGHBORS, max(2, n_docs - 1)),
+        n_neighbors=min(n_neighbors_adaptive, max(2, n_docs - 1)),
         min_dist=_UMAP_MIN_DIST,
         random_state=42,
         n_jobs=1,   # required for deterministic output when random_state is set
@@ -252,6 +259,7 @@ async def cluster(state: PlannerState) -> dict:
         min_cluster_size=min_cluster_size,
         min_samples=_HDBSCAN_MIN_SAMPLES,
         cluster_selection_method="eom",
+        cluster_selection_epsilon=_CLUSTER_SELECTION_EPSILON,
         prediction_data=True,
         core_dist_n_jobs=1,
     )
@@ -301,18 +309,20 @@ async def cluster(state: PlannerState) -> dict:
 
     elapsed = int((time.monotonic() - t0) * 1000)
     stats = {
-        "n_clusters":         n_clusters,
-        "n_noise":            n_noise,
-        "n_boundary":         n_boundary,
-        "n_docs":             n_docs,
-        "wall_ms":            elapsed,
-        "store_path":         blob_key,
-        "cluster_sizes":      size_list[:30],   # cap for state payload size
-        "boundary_floor":     _BOUNDARY_PROB_FLOOR,
-        "umap_dim":           _UMAP_DIM,
-        "min_cluster_size":   min_cluster_size,
-        "blob_bytes":         len(blob),
-        "cache_hit":          False,
+        "n_clusters":                 n_clusters,
+        "n_noise":                    n_noise,
+        "n_boundary":                 n_boundary,
+        "n_docs":                     n_docs,
+        "wall_ms":                    elapsed,
+        "store_path":                 blob_key,
+        "cluster_sizes":              size_list[:30],   # cap for state payload size
+        "boundary_floor":             _BOUNDARY_PROB_FLOOR,
+        "umap_dim":                   _UMAP_DIM,
+        "umap_n_neighbors":           n_neighbors_adaptive,
+        "min_cluster_size":           min_cluster_size,
+        "cluster_selection_epsilon":  _CLUSTER_SELECTION_EPSILON,
+        "blob_bytes":                 len(blob),
+        "cache_hit":                  False,
     }
     _attach_otel_attrs(stats)
     logger.info(

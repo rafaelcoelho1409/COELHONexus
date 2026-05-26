@@ -2,7 +2,11 @@
 prompt builders, and LLM verdict coercion."""
 from __future__ import annotations
 
+import hashlib
+import random
+
 from .constants import (
+    CHECKLIST_PROMPT_VERSION,
     _DENSITY_MAX_AVG_EXPLANATION_WORDS,
     _DENSITY_MIN_AVG_EXPLANATION_WORDS,
     _LLM_CRITERIA,
@@ -428,6 +432,83 @@ def render_digest_for_grounding(
 # =============================================================================
 # LLM-judge prompts
 # =============================================================================
+# Bundle 9 (2026-05-25) — Per-criterion description block. Keys MUST be the
+# `_LLM_CRITERIA` names verbatim so the post-shuffle prompt template stays
+# consistent. Each value is the labelled description block that appears in
+# the prompt's CRITERIA section. The cN labels stay attached to their
+# criterion (they're identifiers, not positional markers), and the OUTPUT
+# JSON key order also follows the shuffle so the LLM's attention shape is
+# uniform across runs.
+_CRITERION_BLOCKS: dict[str, str] = {
+    "chapter_reads_coherently": (
+        "[c8] chapter_reads_coherently\n"
+        "  Reading sections in order, does the chapter flow as a single "
+        "document with smooth transitions, OR as disjoint reference "
+        "cards with abrupt scope shifts? PASS if it reads as one "
+        "document; FAIL if multiple sections feel like standalone "
+        "definitions with no connective tissue."
+    ),
+    "claims_grounded_in_sources": (
+        "[c9] claims_grounded_in_sources\n"
+        "  Spot-check 3-5 citations against the per-section grounding "
+        "above. Does each cited source actually back the specific claim "
+        "the section makes in prose nearby? PASS if claims align with "
+        "the digest's key_facts; FAIL if any cited source is being "
+        "stretched beyond what it supports."
+    ),
+    "terminology_consistent": (
+        "[c10] terminology_consistent\n"
+        "  Does the chapter use the SAME name for the SAME concept "
+        "across sections (e.g., not switching between 'field' and "
+        "'attribute' for the same Pydantic concept, or 'method' and "
+        "'function' interchangeably for the same API)? PASS if "
+        "terminology is stable; FAIL if you can point to ≥2 sections "
+        "using different names for the same thing."
+    ),
+    "prose_code_first_not_meta_framing": (
+        "[c11] prose_code_first_not_meta_framing\n"
+        "  Is each section's prose dense + production-focused (concrete "
+        "APIs, types, parameters, error modes), OR padded with meta-"
+        "framing ('In this chapter we will...', 'In summary...', 'It "
+        "is important to note that...')? PASS if prose is dense; FAIL "
+        "if meta-framing eats >20% of any section's `intro` or any "
+        "H3 subtopic's `explanation`."
+    ),
+    "code_refs_introduced_in_prose": (
+        "[c12] code_refs_introduced_in_prose\n"
+        "  In the v2 cookbook structure, each H3 subtopic emits "
+        "`{subheading} → {explanation} → [code-block]`. Does each "
+        "subtopic's explanation (1-2 sentences BEFORE the code) "
+        "actually introduce that specific code block — naming the "
+        "decorator/type/parameter the reader is about to see — OR is "
+        "it generic prose that could precede ANY code block? PASS if "
+        "explanations are tied to their specific code; FAIL if any "
+        "explanation reads as filler.\n"
+        "  NOTE: If a section has 0 subtopics (rare — usually a "
+        "placeholder), this criterion FAILS for that section. The "
+        "cookbook contract requires ≥3 subtopics per section."
+    ),
+}
+
+
+def _criterion_order_for(chapter_id: str) -> list[str]:
+    """Deterministic per-chapter shuffle of the 5 LLM criteria.
+
+    Caching contract: same chapter_id + same prompt_version → same order →
+    cache hits work. Different chapters get different orders → primacy /
+    recency bias averages out across the corpus (arXiv 2604.03684,
+    2301.08721; LLM-as-judge order-effect mitigation).
+    """
+    seed_material = (
+        f"{chapter_id}|{CHECKLIST_PROMPT_VERSION}".encode("utf-8")
+    )
+    seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:8], "big")
+    rng = random.Random(seed)
+    order = list(_LLM_CRITERIA)
+    rng.shuffle(order)
+    return order
+
+
 def build_judge_prompt(
     *,
     chapter_id: str,
@@ -440,12 +521,23 @@ def build_judge_prompt(
     """Build the batched LLM-judge prompt — one call returns all 5
     semantic criteria as a single JSON object. Prometheus-2-style
     binary rubric (CheckEval evidence: +0.45 inter-evaluator agreement
-    over continuous Likert)."""
+    over continuous Likert).
+
+    Bundle 9 (2026-05-25): the criterion blocks AND the output JSON key
+    order are now deterministically shuffled per chapter_id to mitigate
+    LLM position bias. Same chapter → same order (caching preserved);
+    different chapters → different orders (bias averages out)."""
     trunc_note = (
         "\n\nNOTE: The chapter text was truncated to fit the prompt — "
         "do NOT penalize 'incomplete chapter' or 'missing sections' if "
         "the visible content reads coherently up to the truncation point."
         if truncated else ""
+    )
+    order = _criterion_order_for(chapter_id)
+    criteria_block = "\n\n".join(_CRITERION_BLOCKS[name] for name in order)
+    output_lines = ",\n".join(
+        f'  {name!r:<40}: {{"passed": ..., "feedback": "..."}}'
+        for name in order
     )
     return (
         f"You are the Checklist Evaluator for chapter {chapter_id} "
@@ -466,60 +558,12 @@ def build_judge_prompt(
 
         f"== CRITERIA — answer each with PASS or FAIL + 1-sentence "
         f"specific feedback if FAIL ==\n\n"
-
-        f"[c8] chapter_reads_coherently\n"
-        f"  Reading sections in order, does the chapter flow as a single "
-        f"document with smooth transitions, OR as disjoint reference "
-        f"cards with abrupt scope shifts? PASS if it reads as one "
-        f"document; FAIL if multiple sections feel like standalone "
-        f"definitions with no connective tissue.\n\n"
-
-        f"[c9] claims_grounded_in_sources\n"
-        f"  Spot-check 3-5 citations against the per-section grounding "
-        f"above. Does each cited source actually back the specific claim "
-        f"the section makes in prose nearby? PASS if claims align with "
-        f"the digest's key_facts; FAIL if any cited source is being "
-        f"stretched beyond what it supports.\n\n"
-
-        f"[c10] terminology_consistent\n"
-        f"  Does the chapter use the SAME name for the SAME concept "
-        f"across sections (e.g., not switching between 'field' and "
-        f"'attribute' for the same Pydantic concept, or 'method' and "
-        f"'function' interchangeably for the same API)? PASS if "
-        f"terminology is stable; FAIL if you can point to ≥2 sections "
-        f"using different names for the same thing.\n\n"
-
-        f"[c11] prose_code_first_not_meta_framing\n"
-        f"  Is each section's prose dense + production-focused (concrete "
-        f"APIs, types, parameters, error modes), OR padded with meta-"
-        f"framing ('In this chapter we will...', 'In summary...', 'It "
-        f"is important to note that...')? PASS if prose is dense; FAIL "
-        f"if meta-framing eats >20% of any section's `intro` or any "
-        f"H3 subtopic's `explanation`.\n\n"
-
-        f"[c12] code_refs_introduced_in_prose\n"
-        f"  In the v2 cookbook structure, each H3 subtopic emits "
-        f"`{{subheading}} → {{explanation}} → [code-block]`. Does each "
-        f"subtopic's explanation (1-2 sentences BEFORE the code) "
-        f"actually introduce that specific code block — naming the "
-        f"decorator/type/parameter the reader is about to see — OR is "
-        f"it generic prose that could precede ANY code block? PASS if "
-        f"explanations are tied to their specific code; FAIL if any "
-        f"explanation reads as filler.\n"
-        f"  NOTE: If a section has 0 subtopics (rare — usually a "
-        f"placeholder), this criterion FAILS for that section. The "
-        f"cookbook contract requires ≥3 subtopics per section.\n\n"
+        f"{criteria_block}\n\n"
 
         f"OUTPUT — strict JSON, exactly these 5 keys (each value: "
         f'{{"passed": bool, "feedback": "1-sentence specific reason if '
         f'false; empty string if true"}}):\n'
-        f"{{\n"
-        f'  "chapter_reads_coherently":          {{"passed": ..., "feedback": "..."}},\n'
-        f'  "claims_grounded_in_sources":        {{"passed": ..., "feedback": "..."}},\n'
-        f'  "terminology_consistent":            {{"passed": ..., "feedback": "..."}},\n'
-        f'  "prose_code_first_not_meta_framing": {{"passed": ..., "feedback": "..."}},\n'
-        f'  "code_refs_introduced_in_prose":     {{"passed": ..., "feedback": "..."}}\n'
-        f"}}\n\n"
+        f"{{\n{output_lines}\n}}\n\n"
 
         f"Respond ONLY with valid JSON. NO prose commentary, NO markdown "
         f"wrapping. Feedback should name a specific section + symptom "

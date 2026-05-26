@@ -47,6 +47,7 @@ from ..progress import emit_progress
 from ..state import PlannerState
 from ..cluster import load_clusters
 from ..label import load_labels
+from ..order_chapters import load_chapter_order
 from ..reduce import load_outline
 from ..refine import load_refine
 
@@ -171,9 +172,49 @@ async def plan_write(state: PlannerState) -> dict:
         n_docs=len(cluster_keys),
     )
 
+    # ── Bundle 8 (2026-05-25) — Pedagogical reorder ──────────────────
+    # If order_chapters wrote a chapter_order_ref, apply that permutation to
+    # the outline's chapters list BEFORE sanitization. Fail-soft: if the
+    # ordering blob is missing / malformed / has wrong length, fall back to
+    # whatever order reduce emitted (identity).
+    order_ref = state.get("chapter_order_ref") or ""
+    raw_chapters = (outline or {}).get("chapters") or []
+    reorder_applied = False
+    if order_ref and raw_chapters:
+        try:
+            order_text = await minio.read_text(order_ref)
+            order = load_chapter_order(order_text)
+            if order is not None and len(order) == len(raw_chapters):
+                # Apply permutation; rewrite the 1-based `order` field so
+                # downstream consumers (UI / sanitization) see the new sequence.
+                reordered = [raw_chapters[i] for i in order]
+                for new_pos, ch in enumerate(reordered):
+                    if isinstance(ch, dict):
+                        ch["order"] = new_pos + 1
+                raw_chapters = reordered
+                reorder_applied = True
+                await emit_progress(
+                    thread_id, "plan_write", "reordered",
+                    order=order,
+                )
+                logger.info(
+                    f"[plan_write] {slug}: applied pedagogical order from "
+                    f"{order_ref!r}: {order}"
+                )
+            else:
+                logger.warning(
+                    f"[plan_write] {slug}: chapter_order_ref {order_ref!r} "
+                    f"length mismatch (got {len(order) if order else 'None'}, "
+                    f"expected {len(raw_chapters)}); identity order kept"
+                )
+        except Exception as e:
+            logger.warning(
+                f"[plan_write] {slug}: chapter_order_ref {order_ref!r} "
+                f"unreadable ({type(e).__name__}: {e}); identity order kept"
+            )
+
     # ── Hydrate + sanitize ─────────────────────────────────────────────
     cluster_to_keys = _build_cluster_to_keys(refined_assignments, cluster_keys)
-    raw_chapters = (outline or {}).get("chapters") or []
     chapters, n_dropped = _sanitize_chapters(raw_chapters, cluster_to_keys)
     n_sources_total = sum(len(c["sources"]) for c in chapters)
 
@@ -240,6 +281,7 @@ async def plan_write(state: PlannerState) -> dict:
         "versioned_path": versioned_key,
         "manifest_hash":  manifest_hash,
         "cache_hit":      False,
+        "reorder_applied": reorder_applied,
         "plan":           plan,
     }
     await emit_progress(

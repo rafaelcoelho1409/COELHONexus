@@ -36,17 +36,36 @@ def _fmt_bytes(n: int) -> str:
     return f"{f:.1f} TB"
 
 
+# 2026-05-26 — Module-level TTL cache (same pattern as docs_distiller's
+# _fetch_catalog). Without it, every / request issues a fresh blocking
+# httpx call → under load the Starlette threadpool worker hangs for up
+# to 3s, surfacing as "page keeps loading". Cache survives 60s; on
+# backend failure we serve the last known library rather than empty.
+_LIBRARY_TTL_S = 60.0
+_library_cache: dict = {"data": None, "ts": 0.0}
+
+
 def _fetch_library() -> list[dict]:
     """Server-side fetch of the library list. Empty list on any error
     so the homepage still renders against a degraded backend."""
+    import time
+    now = time.monotonic()
+    if (
+        _library_cache["data"] is not None
+        and (now - _library_cache["ts"]) < _LIBRARY_TTL_S
+    ):
+        return _library_cache["data"]
     try:
         r = httpx.get(
-            f"{FASTAPI_URL}/api/v1/docs-distiller/ingestion", timeout=3.0,
+            f"{FASTAPI_URL}/api/v1/docs-distiller/ingestion", timeout=2.5,
         )
         r.raise_for_status()
-        return r.json() or []
+        data = r.json() or []
+        _library_cache["data"] = data
+        _library_cache["ts"] = now
+        return data
     except Exception:
-        return []
+        return _library_cache["data"] or []
 
 
 def _Hero(has_library: bool):

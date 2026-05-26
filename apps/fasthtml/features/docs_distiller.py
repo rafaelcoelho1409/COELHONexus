@@ -18,6 +18,8 @@ Behavior contracts with the backend (forwarded via the FastHTML proxy):
 All HTML scaffolding lives here; CSS is in /static/css/app.css and the
 client-side wizard logic is in /static/js/docs_distiller.js.
 """
+import time
+
 import httpx
 from fasthtml.common import (
     Button, Div, Img, Input, Option, P, Script, Select, Span,
@@ -27,13 +29,37 @@ from proxy import FASTAPI_URL
 from shell import _Shell
 
 
+# 2026-05-26 — Module-level TTL cache. Every /docs-distiller GET used
+# to issue a fresh blocking httpx call to FastAPI. Under load (heavy
+# bandit cascades during synth/planner runs), the call could hold a
+# Starlette threadpool worker for up to 5s, surfacing as "page keeps
+# loading" in the browser. Cache survives 60s; on backend failure we
+# return the last good value rather than empty — so the picker keeps
+# working through brief FastAPI hiccups.
+_CATALOG_TTL_S = 60.0
+_catalog_cache: dict = {"data": None, "ts": 0.0}
+
+
 def _fetch_catalog() -> list[dict]:
+    now = time.monotonic()
+    if (
+        _catalog_cache["data"] is not None
+        and (now - _catalog_cache["ts"]) < _CATALOG_TTL_S
+    ):
+        return _catalog_cache["data"]
     try:
-        r = httpx.get(f"{FASTAPI_URL}/api/v1/docs-distiller/resolver", timeout=5.0)
+        r = httpx.get(
+            f"{FASTAPI_URL}/api/v1/docs-distiller/resolver", timeout=2.5,
+        )
         r.raise_for_status()
-        return r.json()
+        data = r.json() or []
+        _catalog_cache["data"] = data
+        _catalog_cache["ts"] = now
+        return data
     except Exception:
-        return []
+        # Backend hiccup — keep serving the last known catalog so the
+        # picker stays usable. Empty list only on a cold-start failure.
+        return _catalog_cache["data"] or []
 
 
 def _Step(n: int, label: str, active: bool = False):

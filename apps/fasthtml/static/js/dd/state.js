@@ -100,6 +100,7 @@ export const PLANNER_SUBSTEP_FIELDS = [
   'refine_assignments_ref',   // refine
   'cluster_labels_ref',       // label
   'chapter_plan_ref',         // reduce
+  'chapter_order_ref',        // order_chapters (Bundle 8, 2026-05-25)
   'plan_path',                // plan_write
 ];
 // Parallel to PLANNER_SUBSTEP_FIELDS — the node name (matches the
@@ -108,14 +109,14 @@ export const PLANNER_SUBSTEP_FIELDS = [
 export const PLANNER_NODE_ORDER = [
   'corpus_load', 'embed_corpus', 'off_topic',
   'cluster', 'refine', 'label',
-  'reduce', 'plan_write',
+  'reduce', 'order_chapters', 'plan_write',
 ];
 // Short labels for the graph canvas (same text as the card titles —
 // hardcoded here to keep StageGraph independent of DOM-card scraping).
 export const PLANNER_NODE_LABELS = [
   'Corpus load', 'Embed corpus', 'Off-topic filter',
   'Cluster', 'Refine (LITA)', 'Label',
-  'Reduce (outline)', 'Plan write',
+  'Reduce (outline)', 'Order chapters', 'Plan write',
 ];
 // Populated from GET /planner/info — names of substeps actually wired
 // into the runtime graph. Stubs aren't included; their cards render
@@ -227,14 +228,15 @@ export const _SYNTH_EVENT_BUFFER_PER_STEP = 200;
 
 // Mapping: SSE step name → the state field
 export const STEP_TO_FIELD = {
-  corpus_load:  'raw_files',
-  embed_corpus: 'embeddings_ref',
-  off_topic:    'relevant_files',
-  cluster:      'cluster_assignments_ref',
-  refine:       'refine_assignments_ref',
-  label:        'cluster_labels_ref',
-  reduce:       'chapter_plan_ref',
-  plan_write:   'plan_path',
+  corpus_load:    'raw_files',
+  embed_corpus:   'embeddings_ref',
+  off_topic:      'relevant_files',
+  cluster:        'cluster_assignments_ref',
+  refine:         'refine_assignments_ref',
+  label:          'cluster_labels_ref',
+  reduce:         'chapter_plan_ref',
+  order_chapters: 'chapter_order_ref',
+  plan_write:     'plan_path',
 };
 
 // Orphan detection timeout ms

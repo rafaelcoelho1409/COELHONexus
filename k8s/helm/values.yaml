@@ -401,7 +401,11 @@ celery:
   # 2026-05-24 — `planner` queue added: the 8-node LangGraph runs on Celery
   # workers (was in-process in FastAPI). See domains/dd/planner/task.py +
   # dispatch.py.
-  queues: "crawler,embedding,llm,planner,default"
+  # 2026-05-26 — `synth` queue added (Bundle 13): the per-chapter synth
+  # graph + study orchestrator + book_harmonize now run on Celery too.
+  # Same worker pod consumes both queues; Q_SYNTH soft_time_limit=6h so the
+  # long-running study orchestrator (~100-120 min for 6-8 chapters) fits.
+  queues: "crawler,embedding,llm,planner,synth,default"
   resources:
     requests:
       memory: "2Gi"

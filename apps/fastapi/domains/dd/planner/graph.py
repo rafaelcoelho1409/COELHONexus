@@ -29,6 +29,7 @@ from .corpus_load.node import corpus_load
 from .embed_corpus.node import embed_corpus
 from .label.node import label
 from .off_topic.node import off_topic
+from .order_chapters.node import order_chapters
 from .plan_write.node import plan_write
 from .reduce.node import reduce_node
 from .refine.node import refine
@@ -48,18 +49,20 @@ NODE_ORDER = (
     "refine",
     "label",
     "reduce",
+    "order_chapters",
     "plan_write",
 )
 
 NODE_REGISTRY = {
-    "corpus_load":  corpus_load,
-    "embed_corpus": embed_corpus,
-    "off_topic":    off_topic,
-    "cluster":      cluster,
-    "refine":       refine,
-    "label":        label,
-    "reduce":       reduce_node,
-    "plan_write":   plan_write,
+    "corpus_load":    corpus_load,
+    "embed_corpus":   embed_corpus,
+    "off_topic":      off_topic,
+    "cluster":        cluster,
+    "refine":         refine,
+    "label":          label,
+    "reduce":         reduce_node,
+    "order_chapters": order_chapters,
+    "plan_write":     plan_write,
 }
 
 # Primary state field each node writes. Used by /resume's catch-up
@@ -70,14 +73,15 @@ NODE_REGISTRY = {
 # invokes the missing node directly through NODE_REGISTRY and patches
 # state via `aupdate_state`, preserving SSE events end-to-end.
 NODE_TO_FIELD = {
-    "corpus_load":  "raw_files",
-    "embed_corpus": "embeddings_ref",
-    "off_topic":    "relevant_files",
-    "cluster":      "cluster_assignments_ref",
-    "refine":       "refine_assignments_ref",
-    "label":        "cluster_labels_ref",
-    "reduce":       "chapter_plan_ref",
-    "plan_write":   "plan_path",
+    "corpus_load":    "raw_files",
+    "embed_corpus":   "embeddings_ref",
+    "off_topic":      "relevant_files",
+    "cluster":        "cluster_assignments_ref",
+    "refine":         "refine_assignments_ref",
+    "label":          "cluster_labels_ref",
+    "reduce":         "chapter_plan_ref",
+    "order_chapters": "chapter_order_ref",
+    "plan_write":     "plan_path",
 }
 
 # ONLY these nodes are wired into the runtime graph. Order must match
@@ -91,6 +95,7 @@ IMPLEMENTED = (
     "refine",
     "label",
     "reduce",
+    "order_chapters",
     "plan_write",
 )
 

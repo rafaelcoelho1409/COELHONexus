@@ -5,7 +5,44 @@ import math
 
 import numpy as np
 
-from .constants import _BLOB_PREFIX, _BOUNDARY_PROB_FLOOR, _CACHE_VERSION
+from .constants import (
+    _BLOB_PREFIX,
+    _BOUNDARY_PROB_FLOOR,
+    _CACHE_VERSION,
+    _UMAP_N_NEIGHBORS_CAP,
+)
+
+
+def _adaptive_n_neighbors(n_docs: int) -> int:
+    """UMAP `n_neighbors` adaptive to corpus size (2026-05-26).
+
+    The fixed `n_neighbors=30` shipped in Bundle 5a (2026-05-25) is correct
+    for medium-to-large corpora (≥120 docs) — it biases UMAP toward global
+    topical structure, which is what density-based HDBSCAN downstream wants.
+    But for TINY corpora (Browser Use N=38), 30 ≈ 80% of the corpus → UMAP's
+    k-NN graph collapses into a near-complete graph, destroying local density
+    information → HDBSCAN sees a featureless manifold → labels everything
+    noise → planner returns 0 chapters.
+
+    Empirical evidence:
+      - Browser Use (N=38, n_neighbors=30): 0 clusters, 38/38 noise
+      - Claude Code (N=126, n_neighbors=30): 6 clusters (healthy)
+      - FastMCP    (N=335, n_neighbors=30): 14 clusters (healthy)
+
+    Adaptive formula: `min(_UMAP_N_NEIGHBORS_CAP, max(8, n_docs // 4))`.
+    Concrete sizing under cap=30:
+      -   38 docs (Browser Use)  → 9      (was 30 — broken)
+      -   90 docs                → 22
+      -  126 docs (Claude Code)  → 30     (cap binds; unchanged)
+      -  335 docs (FastMCP)      → 30     (cap binds; unchanged)
+      -  777 docs (LangChain)    → 30     (cap binds; unchanged)
+
+    Floor 8 = UMAP-recommended minimum for meaningful manifold learning
+    (below that, the k-NN graph fragments into disconnected components).
+    Divisor 4 = empirical: UMAP recommends `n_neighbors ≤ N/4` to preserve
+    local density for density-based downstream clustering (HDBSCAN docs).
+    """
+    return min(_UMAP_N_NEIGHBORS_CAP, max(8, n_docs // 4))
 
 
 def _adaptive_min_cluster_size(n_docs: int) -> int:

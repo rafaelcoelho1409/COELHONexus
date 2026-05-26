@@ -49,7 +49,6 @@ from domains.dd.synth.cancel import (
     _redis_url,
     clear_cancel,
     request_cancel,
-    watcher as cancel_watcher,
 )
 from domains.dd.synth.graph import (
     IMPLEMENTED,
@@ -62,17 +61,21 @@ from domains.dd.synth.progress import (
     emit_progress,
     subscribe_progress,
 )
+# Bundle 13 (2026-05-26) — synth now runs on Celery (queue synth-{env}).
+# These are the task handles we `.delay(...)` from the route handlers; the
+# async runners they wrap live in domains/dd/synth/dispatch.py.
+from domains.dd.synth.task import (
+    resume_synth as resume_synth_task,
+    run_single_chapter as run_single_chapter_task,
+    run_study as run_study_task,
+)
+from domains.dd.synth.dispatch import _STUDY_SEM
 
 
 logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
-
-
-# Strong refs to detached synth tasks so the event loop doesn't GC them
-# mid-run. Each task removes itself on completion via add_done_callback.
-_active_runs: set[asyncio.Task] = set()
 
 
 # =============================================================================
@@ -282,51 +285,10 @@ async def list_recent_synth() -> dict:
 
 
 # =============================================================================
-# Background-runner wrapper
+# Background runners + study orchestrator moved to domains/dd/synth/dispatch.py
+# (Bundle 13, 2026-05-26). They now run inside Celery workers on queue
+# synth-{env}; the FastAPI routes only enqueue via .delay().
 # =============================================================================
-async def _run_synth_background(
-    graph,
-    config: dict,
-    main_task: asyncio.Task,
-    watcher_task: asyncio.Task,
-    thread_id: str,
-) -> None:
-    """Await the synth graph task in the background, write terminal
-    status + emit SSE terminal event. Mirrors the planner pattern."""
-    terminal_patch: dict = {}
-    try:
-        await main_task
-        terminal_patch["status"] = "done"
-        logger.info(f"[synth] {thread_id}: done")
-    except asyncio.CancelledError:
-        terminal_patch["status"] = "cancelled"
-        logger.info(f"[synth] {thread_id}: cancelled by user")
-    except Exception as e:
-        terminal_patch["status"] = "failed"
-        terminal_patch["error"] = f"{type(e).__name__}: {e}"
-        logger.exception(
-            f"[synth] {thread_id}: run failed ({type(e).__name__}: {e})"
-        )
-    finally:
-        watcher_task.cancel()
-        try:
-            await watcher_task
-        except (asyncio.CancelledError, Exception):
-            pass
-
-    try:
-        await graph.aupdate_state(config, terminal_patch)
-    except Exception as e:
-        logger.warning(
-            f"[synth] {thread_id}: aupdate_state failed for terminal "
-            f"patch {terminal_patch!r}: {type(e).__name__}: {e}"
-        )
-
-    await emit_progress(
-        thread_id, "synth", "terminal",
-        status=terminal_patch.get("status", "unknown"),
-        error=terminal_patch.get("error"),
-    )
 
 
 # =============================================================================
@@ -392,431 +354,6 @@ def _make_study_thread_id(slug: str) -> str:
     return f"docs-distiller/study/{slug}/{uuid.uuid4()}"
 
 
-# =============================================================================
-# Study orchestrator
-# =============================================================================
-# Sequential per-chapter runner. POST /synth/{slug} (no chapter_id) spawns
-# this as a detached background task. For each chapter in the planner plan,
-# it kicks off a normal per-chapter graph.ainvoke and waits for completion
-# before moving to the next. The orchestrator emits study-level SSE events
-# on its own thread_id so the UI can show a chapter-progress strip that
-# updates in real time as chapters move pending → running → done.
-#
-# Concurrency: _STUDY_SEM = 1 (sequential). Bump to 2+ later if needed —
-# free-tier rotator + bandit handle ~30 concurrent calls cleanly, but
-# starting sequential makes the UX easier to follow.
-
-_STUDY_SEM = 1
-
-
-async def _run_book_harmonize(
-    *,
-    slug: str,
-    study_thread_id: str,
-    chapter_ids: list[str],
-) -> dict:
-    """Post-study cross-chapter coherence pass. Loads each chapter's rendered
-    README.md from MinIO, runs harmonize_book(), overwrites any chapter whose
-    patch passed validation. Content-addressed cache (Ship #5) skips work on
-    identical README contents.
-
-    Returns telemetry dict suitable for the study_done SSE payload."""
-    from domains.dd.ingestion.storage import get_storage
-    from domains.dd.resolver import _index_by_slug
-    from domains.dd.synth.book_harmonize import (
-        compute_harmonize_manifest_hash,
-        harmonize_book,
-    )
-
-    minio = get_storage()
-
-    # Resolve framework display name (best-effort)
-    entry = _index_by_slug().get(slug, {})
-    framework_name = entry.get("name") or entry.get("slug") or slug
-
-    # Load each chapter's rendered prose from MinIO. Skip any that
-    # didn't render (failed chapters won't have README.md).
-    chapters: list[dict] = []
-    skipped_missing: list[str] = []
-    for cid in chapter_ids:
-        key = f"synth/{slug}/{cid}/README.md"
-        try:
-            blob = await minio.read_bytes(key)
-        except Exception:
-            skipped_missing.append(cid)
-            continue
-        chapters.append({
-            "chapter_id": cid,
-            "title":      cid,   # title can be enriched later from render-latest.json
-            "prose":      blob.decode("utf-8", errors="replace"),
-        })
-
-    if len(chapters) < 2:
-        await emit_progress(
-            study_thread_id, "study", "book_harmonize_skipped",
-            reason="fewer_than_2_rendered_chapters",
-            n_rendered=len(chapters),
-        )
-        return {
-            "skipped": "fewer_than_2_rendered_chapters",
-            "n_rendered_chapters": len(chapters),
-            "missing_chapters": skipped_missing,
-        }
-
-    # ── Ship #5: content-addressed cache ───────────────────────────────
-    # Manifest hash is sha256 of (sorted chapter prose hashes + prompt
-    # version + schema version). On re-run with identical chapter content,
-    # this matches → skip the LLM work entirely. After a successful patch
-    # the README hashes change → next run is a cache miss → harmonize re-
-    # runs but finds no violations → writes new cache blob → third run is
-    # a clean hit (idempotent convergence).
-    manifest_hash = compute_harmonize_manifest_hash(chapters)
-    cache_key = f"synth/{slug}/book_harmonize/{manifest_hash}.json"
-    latest_key = f"synth/{slug}/book_harmonize-latest.json"
-    if await minio.exists(cache_key):
-        try:
-            cached_blob = await minio.read_bytes(cache_key)
-            cached = json.loads(cached_blob.decode("utf-8"))
-            cached["cache_hit"] = True
-            cached["manifest_hash"] = manifest_hash
-            await emit_progress(
-                study_thread_id, "study", "book_harmonize_done",
-                n_chapters=cached.get("n_chapters", 0),
-                n_atomic_claims=cached.get("n_atomic_claims", 0),
-                n_canonical_terms=cached.get("n_canonical_terms", 0),
-                n_chapters_with_issues=cached.get("n_chapters_with_issues", 0),
-                n_chapters_patched=cached.get("n_chapters_patched", 0),
-                n_chapters_overwritten=cached.get("n_chapters_overwritten", 0),
-                elapsed_ms=cached.get("elapsed_ms", 0),
-                cache_hit=True,
-            )
-            logger.info(
-                f"[book_harmonize] {slug}: CACHE HIT — manifest_hash="
-                f"{manifest_hash}, skipping LLM work"
-            )
-            return cached
-        except Exception as e:
-            logger.warning(
-                f"[book_harmonize] cache read failed at {cache_key!r}: "
-                f"{type(e).__name__}: {e} — recomputing"
-            )
-
-    await emit_progress(
-        study_thread_id, "study", "book_harmonize_start",
-        n_chapters=len(chapters),
-        manifest_hash=manifest_hash,
-    )
-
-    result = await harmonize_book(
-        framework_slug=slug,
-        framework_name=framework_name,
-        chapters=chapters,
-    )
-
-    # Overwrite README.md for chapters that produced a valid patch.
-    n_overwritten = 0
-    for patch in result.get("patches", []):
-        if not patch.get("patched"):
-            continue
-        new_prose = patch.get("new_prose")
-        if not new_prose:
-            continue
-        cid = patch["chapter_id"]
-        key = f"synth/{slug}/{cid}/README.md"
-        try:
-            await minio.write(
-                key, new_prose.encode("utf-8"),
-                content_type="text/markdown",
-            )
-            n_overwritten += 1
-        except Exception as e:
-            logger.warning(
-                f"[book_harmonize] {slug}/{cid}: overwrite failed "
-                f"({type(e).__name__}: {e})"
-            )
-
-    await emit_progress(
-        study_thread_id, "study", "book_harmonize_done",
-        n_chapters=result.get("n_chapters", 0),
-        n_atomic_claims=result.get("n_atomic_claims", 0),
-        n_canonical_terms=result.get("n_canonical_terms", 0),
-        n_chapters_with_issues=result.get("n_chapters_with_issues", 0),
-        n_chapters_patched=result.get("n_chapters_patched", 0),
-        n_chapters_overwritten=n_overwritten,
-        elapsed_ms=result.get("elapsed_ms", 0),
-    )
-    logger.info(
-        f"[book_harmonize] {slug}: "
-        f"{n_overwritten}/{result.get('n_chapters_with_issues', 0)} chapters "
-        f"overwritten with harmonized prose "
-        f"({result.get('n_chapters', 0)} total, "
-        f"{result.get('n_canonical_terms', 0)} canonical terms, "
-        f"{result.get('elapsed_ms', 0)}ms)"
-    )
-    final = {
-        **result,
-        "n_chapters_overwritten": n_overwritten,
-        "missing_chapters": skipped_missing,
-        "manifest_hash": manifest_hash,
-        "cache_hit": False,
-    }
-    # ── Persist cache for next restart ──────────────────────────────────
-    try:
-        blob = json.dumps(final, indent=2, ensure_ascii=False).encode("utf-8")
-        await minio.write(cache_key, blob, content_type="application/json")
-        await minio.write(latest_key, blob, content_type="application/json")
-    except Exception as e:
-        logger.warning(
-            f"[book_harmonize] cache write failed at {cache_key!r}: "
-            f"{type(e).__name__}: {e} (non-fatal)"
-        )
-    return final
-
-
-async def _run_study_orchestrator(
-    *,
-    slug: str,
-    study_thread_id: str,
-    chapter_ids: list[str],
-    mode: str,
-) -> None:
-    """Semaphore-gated orchestrator: run chapters through the synth graph.
-
-    Concurrency = `_STUDY_SEM` (default 1 — functionally sequential).
-    Bumping `_STUDY_SEM` enables true parallelism via `asyncio.gather`
-    over per-chapter coroutines, each gated by a shared Semaphore.
-
-    For each chapter:
-      1. Mint a per-chapter thread_id
-      2. Emit `chapter_running` on the study channel
-      3. Run graph.ainvoke for the chapter (all 6 nodes fire as usual)
-      4. On completion, emit `chapter_done` with status
-
-    Cancellation (POST /synth/{study_thread_id}/cancel sets the cancel
-    flag on the study thread):
-      - Queued chapters waiting on the semaphore short-circuit on the
-        cancel check before running
-      - In-flight chapters complete naturally (their per-chapter cancel
-        is independent — cancel each one to interrupt mid-pipeline)
-    """
-    n_total = len(chapter_ids)
-    await emit_progress(
-        study_thread_id, "study", "study_start",
-        slug=slug,
-        n_chapters=n_total,
-        chapter_ids=chapter_ids,
-        mode=mode,
-        concurrency=_STUDY_SEM,
-    )
-
-    # asyncio is single-threaded — naked dict mutation is race-free.
-    counters = {"completed": 0, "failed": 0, "cancelled": False}
-    sem = asyncio.Semaphore(_STUDY_SEM)
-
-    async def _study_cancelled() -> bool:
-        r = redis_aio.from_url(
-            _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-        )
-        try:
-            from domains.dd.synth.cancel import is_cancelled
-            return await is_cancelled(r, study_thread_id)
-        except Exception:
-            return False
-        finally:
-            try: await r.aclose()
-            except Exception: pass
-
-    async def _run_one(position: int, chapter_id: str) -> None:
-        # Fast pre-acquire cancel check — short-circuit deeply-queued
-        # chapters when a cancel arrives before their turn.
-        if await _study_cancelled():
-            counters["cancelled"] = True
-            return
-
-        async with sem:
-            # Re-check after acquiring the slot — a cancel may have
-            # fired while we waited behind the semaphore.
-            if await _study_cancelled():
-                counters["cancelled"] = True
-                return
-
-            chapter_thread_id = _make_thread_id(slug)
-            await emit_progress(
-                study_thread_id, "study", "chapter_running",
-                chapter_id=chapter_id,
-                chapter_thread_id=chapter_thread_id,
-                position=position,
-                n_total=n_total,
-            )
-
-            try:
-                graph = build_graph()
-            except RuntimeError as e:
-                counters["failed"] += 1
-                await emit_progress(
-                    study_thread_id, "study", "chapter_done",
-                    chapter_id=chapter_id,
-                    position=position, n_total=n_total,
-                    status="failed", error=str(e),
-                )
-                return
-
-            # Clear any stale cancel flag on the per-chapter thread.
-            r = redis_aio.from_url(
-                _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
-            )
-            try:
-                await clear_cancel(r, chapter_thread_id)
-            finally:
-                await r.aclose()
-
-            initial_state = {
-                "framework_slug": slug,
-                "chapter_id":     chapter_id,
-                "thread_id":      chapter_thread_id,
-                "synth_mode":     mode,
-                "status":         "running",
-            }
-            config = {"configurable": {"thread_id": chapter_thread_id}}
-
-            main_task = asyncio.create_task(
-                graph.ainvoke(initial_state, config),
-            )
-            watcher_task = asyncio.create_task(
-                cancel_watcher(chapter_thread_id, main_task),
-            )
-
-            chapter_status = "done"
-            chapter_error: str | None = None
-            try:
-                await main_task
-            except asyncio.CancelledError:
-                chapter_status = "cancelled"
-            except Exception as e:
-                chapter_status = "failed"
-                chapter_error = f"{type(e).__name__}: {e}"
-                logger.exception(
-                    f"[study-orchestrator] {slug}/{chapter_id}: chapter "
-                    f"run failed ({type(e).__name__}: {e})"
-                )
-            finally:
-                watcher_task.cancel()
-                try:
-                    await watcher_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-
-            # Patch terminal status into the per-chapter checkpointer.
-            try:
-                await graph.aupdate_state(
-                    config,
-                    {"status": chapter_status, "error": chapter_error},
-                )
-            except Exception as e:
-                logger.warning(
-                    f"[study-orchestrator] {slug}/{chapter_id}: "
-                    f"aupdate_state failed: {type(e).__name__}: {e}"
-                )
-
-            await emit_progress(
-                chapter_thread_id, "synth", "terminal",
-                status=chapter_status, error=chapter_error,
-            )
-
-            if chapter_status == "done":
-                counters["completed"] += 1
-            else:
-                counters["failed"] += 1
-            await emit_progress(
-                study_thread_id, "study", "chapter_done",
-                chapter_id=chapter_id,
-                chapter_thread_id=chapter_thread_id,
-                position=position,
-                n_total=n_total,
-                status=chapter_status,
-                error=chapter_error,
-            )
-            logger.info(
-                f"[study-orchestrator] {slug}/{chapter_id}: "
-                f"{chapter_status} ({position}/{n_total})"
-            )
-
-    # Schedule all chapters at once — the Semaphore caps the actual
-    # in-flight count. With _STUDY_SEM=1 this is functionally sequential.
-    # return_exceptions=True so one chapter's unexpected error can't
-    # cancel its still-queued siblings (each _run_one is already
-    # defensively wrapped, so this is belt-and-suspenders).
-    results = await asyncio.gather(
-        *[_run_one(i + 1, cid) for i, cid in enumerate(chapter_ids)],
-        return_exceptions=True,
-    )
-    for res in results:
-        if isinstance(res, Exception):
-            logger.error(
-                f"[study-orchestrator] {slug}: a chapter task raised "
-                f"unexpectedly: {type(res).__name__}: {res}"
-            )
-
-    n_completed = counters["completed"]
-    n_failed = counters["failed"]
-    cancelled = counters["cancelled"]
-    final_status = (
-        "cancelled" if cancelled
-        else ("failed" if n_failed and not n_completed else "done")
-    )
-
-    # === book_harmonize (cross-chapter coherence pass, 2026-05-24) =========
-    # After all chapters complete (or attempted), run a single book-level
-    # harmonization pass that detects + patches definition drift, terminology
-    # divergence, and cross-chapter contradictions. Skipped if <2 chapters
-    # completed (no cross-chapter coherence to validate).
-    # See docs/KD-SYNTH-SOTA-2026-05-24.md §3 #3.
-    harmonize_stats: dict | None = None
-    if (
-        not cancelled
-        and n_completed >= 2
-        and final_status != "failed"
-    ):
-        try:
-            harmonize_stats = await _run_book_harmonize(
-                slug=slug,
-                study_thread_id=study_thread_id,
-                chapter_ids=[
-                    cid for cid in chapter_ids
-                    # only chapters that produced render-latest.json
-                ],
-            )
-        except Exception as e:
-            logger.warning(
-                f"[study-orchestrator] {slug}: book_harmonize crashed "
-                f"({type(e).__name__}: {e}) — proceeding without it"
-            )
-            harmonize_stats = {"skipped": f"crash: {type(e).__name__}"}
-
-    await emit_progress(
-        study_thread_id, "study", "study_done",
-        n_completed=n_completed,
-        n_failed=n_failed,
-        n_total=n_total,
-        final_status=final_status,
-        book_harmonize=harmonize_stats,
-    )
-    # Mirror to a "synth"-step terminal event too so EventSource handlers
-    # that key off `step === 'synth' && kind === 'terminal'` close cleanly.
-    await emit_progress(
-        study_thread_id, "synth", "terminal",
-        status=final_status,
-        error=None,
-        n_completed=n_completed,
-        n_failed=n_failed,
-        n_total=n_total,
-    )
-    logger.info(
-        f"[study-orchestrator] {slug}: done — "
-        f"{n_completed}/{n_total} completed, {n_failed} failed, "
-        f"final_status={final_status}"
-    )
-
 
 # =============================================================================
 # Start synth — two modes:
@@ -877,14 +414,23 @@ async def start_synth(
         finally:
             await r.aclose()
 
-        bg_task = asyncio.create_task(_run_study_orchestrator(
-            slug=slug,
-            study_thread_id=study_thread_id,
-            chapter_ids=plan_chapter_ids,
-            mode=mode,
-        ))
-        _active_runs.add(bg_task)
-        bg_task.add_done_callback(_active_runs.discard)
+        # Bundle 13 — dispatch via Celery (queue synth-{env}). The route
+        # returns immediately with `status="queued"`; the worker emits
+        # progress events on Redis pub/sub that this FastAPI's SSE
+        # endpoints stream to the UI.
+        try:
+            async_result = run_study_task.delay(
+                study_thread_id, slug, plan_chapter_ids, mode,
+            )
+        except Exception as e:
+            logger.exception(
+                f"[synth-study] {study_thread_id}: celery dispatch failed: "
+                f"{type(e).__name__}: {e}"
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=f"celery dispatch failed: {type(e).__name__}: {e}",
+            )
 
         return {
             "study_thread_id": study_thread_id,
@@ -893,7 +439,8 @@ async def start_synth(
             "chapter_ids":     plan_chapter_ids,
             "mode":            mode,
             "concurrency":     _STUDY_SEM,
-            "status":          "running",
+            "status":          "queued",
+            "celery_task_id":  async_result.id,
             "latency_ms":      0,
         }
 
@@ -910,12 +457,8 @@ async def start_synth(
     if not thread_id:
         thread_id = _make_thread_id(slug, chapter_id)
 
-    try:
-        graph = build_graph()
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-
-    # Clear any stale cancel flag
+    # Clear stale cancel flag pre-dispatch (defense-in-depth — thread_id
+    # is fresh uuid so collision impossible, but explicit).
     r = redis_aio.from_url(
         _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
@@ -924,119 +467,50 @@ async def start_synth(
     finally:
         await r.aclose()
 
-    initial_state = {
-        "framework_slug": slug,
-        "chapter_id":     chapter_id,
-        "thread_id":      thread_id,
-        "synth_mode":     mode,
-        "status":         "running",
-    }
-    config = {"configurable": {"thread_id": thread_id}}
-
-    main_task = asyncio.create_task(graph.ainvoke(initial_state, config))
-    watcher_task = asyncio.create_task(cancel_watcher(thread_id, main_task))
-    bg_task = asyncio.create_task(
-        _run_synth_background(
-            graph, config, main_task, watcher_task, thread_id,
+    # Bundle 13 — single-chapter run on Celery (queue synth-{env}).
+    try:
+        async_result = run_single_chapter_task.delay(
+            thread_id, slug, chapter_id, mode,
         )
-    )
-    _active_runs.add(bg_task)
-    bg_task.add_done_callback(_active_runs.discard)
+    except Exception as e:
+        logger.exception(
+            f"[synth] {thread_id}: celery dispatch failed: "
+            f"{type(e).__name__}: {e}"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"celery dispatch failed: {type(e).__name__}: {e}",
+        )
 
     return {
-        "thread_id":  thread_id,
-        "slug":       slug,
-        "chapter_id": chapter_id,
-        "mode":       mode,
-        "status":     "running",
-        "latency_ms": 0,
+        "thread_id":      thread_id,
+        "slug":           slug,
+        "chapter_id":     chapter_id,
+        "mode":           mode,
+        "status":         "queued",
+        "celery_task_id": async_result.id,
+        "latency_ms":     0,
     }
 
 
 # =============================================================================
 # Resume
 # =============================================================================
-def _missing_implemented_nodes(state: dict) -> list[str]:
-    missing: list[str] = []
-    for name in IMPLEMENTED:
-        field = NODE_TO_FIELD.get(name)
-        if not field:
-            continue
-        val = state.get(field)
-        if val is None or val == "" or val == []:
-            missing.append(name)
-    return missing
-
-
-async def _run_missing_nodes_directly(
-    graph, config: dict, thread_id: str, missing: list[str],
-) -> None:
-    """Catch-up: run nodes that were added to IMPLEMENTED after the
-    thread completed (LangGraph would no-op ainvoke(None) on those)."""
-    terminal_patch: dict = {"status": "done"}
-    try:
-        for name in missing:
-            node_fn = NODE_REGISTRY.get(name)
-            if node_fn is None:
-                continue
-            snap = await graph.aget_state(config)
-            state = dict(snap.values or {})
-            state["thread_id"] = thread_id
-            result = await node_fn(state)
-            if not isinstance(result, dict):
-                continue
-            await graph.aupdate_state(config, result)
-            logger.info(
-                f"[synth] {thread_id}: catch-up ran missing node {name!r} "
-                f"→ fields {sorted(result.keys())}"
-            )
-    except Exception as e:
-        terminal_patch = {"status": "failed",
-                          "error": f"{type(e).__name__}: {e}"}
-        logger.exception(
-            f"[synth] {thread_id}: catch-up failed: {type(e).__name__}: {e}"
-        )
-
-    try:
-        await graph.aupdate_state(config, terminal_patch)
-    except Exception as e:
-        logger.warning(
-            f"[synth] {thread_id}: aupdate_state failed for catch-up "
-            f"terminal patch {terminal_patch!r}: {type(e).__name__}: {e}"
-        )
-
-    await emit_progress(
-        thread_id, "synth", "terminal",
-        status=terminal_patch.get("status", "unknown"),
-        error=terminal_patch.get("error"),
-    )
+# Bundle 13 — the resume catch-up helpers moved to
+# domains/dd/synth/dispatch.py (missing_implemented_nodes,
+# run_missing_nodes_async). Both are invoked from the Celery task now.
 
 
 @router.post("/{thread_id:path}/resume")
 async def resume_synth(thread_id: str) -> dict:
-    """Resume a synth run from its last checkpoint.
+    """Resume a synth run from its last checkpoint by dispatching the
+    `resume_synth` Celery task (queue synth-{env}).
 
-    Three paths (mirror planner.resume_planner):
-      1. status in {running, failed} → standard ainvoke(None) resume
-      2. status == done BUT new IMPLEMENTED nodes haven't run → catch-up
-      3. status == done AND no missing nodes → no-op
+    All three sub-paths (standard resume / catch-up missing nodes /
+    nothing to do) are handled inside `dispatch.resume_synth_async`.
+    The route returns immediately with the celery_task_id; the SSE
+    endpoint streams the worker's progress events to the UI.
     """
-    try:
-        graph = build_graph()
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-
-    config = {"configurable": {"thread_id": thread_id}}
-    snap = await graph.aget_state(config)
-    if snap.values == {}:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"no checkpoints for thread_id={thread_id!r}; call POST "
-                f"/synth/{{slug}} to start a fresh run"
-            ),
-        )
-
     r = redis_aio.from_url(
         _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
@@ -1045,50 +519,22 @@ async def resume_synth(thread_id: str) -> dict:
     finally:
         await r.aclose()
 
-    state = dict(snap.values or {})
-    if state.get("status") == "done":
-        missing = _missing_implemented_nodes(state)
-        if missing:
-            await emit_progress(thread_id, "synth", "catch_up", missing=missing)
-            try:
-                await graph.aupdate_state(config, {"status": "running"})
-            except Exception as e:
-                logger.warning(
-                    f"[synth] {thread_id}: pre-catch-up status reset "
-                    f"failed: {type(e).__name__}: {e}"
-                )
-            bg_task = asyncio.create_task(
-                _run_missing_nodes_directly(graph, config, thread_id, missing)
-            )
-            _active_runs.add(bg_task)
-            bg_task.add_done_callback(_active_runs.discard)
-            return {
-                "thread_id":     thread_id,
-                "status":        "catching_up",
-                "missing_nodes": missing,
-            }
-        return {
-            "thread_id": thread_id,
-            "status":    "done",
-            "note":      "all IMPLEMENTED nodes already have output",
-        }
-
-    await emit_progress(
-        thread_id, "synth", "resumed",
-        next_nodes=list(snap.next or []),
-    )
-    main_task = asyncio.create_task(graph.ainvoke(None, config))
-    watcher_task = asyncio.create_task(cancel_watcher(thread_id, main_task))
-    bg_task = asyncio.create_task(
-        _run_synth_background(graph, config, main_task, watcher_task, thread_id)
-    )
-    _active_runs.add(bg_task)
-    bg_task.add_done_callback(_active_runs.discard)
+    try:
+        async_result = resume_synth_task.delay(thread_id)
+    except Exception as e:
+        logger.exception(
+            f"[synth] {thread_id}: celery resume dispatch failed: "
+            f"{type(e).__name__}: {e}"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"celery dispatch failed: {type(e).__name__}: {e}",
+        )
 
     return {
-        "thread_id":  thread_id,
-        "status":     "resuming",
-        "next_nodes": list(snap.next or []),
+        "thread_id":      thread_id,
+        "status":         "queued",
+        "celery_task_id": async_result.id,
     }
 
 
@@ -1195,10 +641,46 @@ async def synth_events(thread_id: str) -> StreamingResponse:
     closes its end after handling the terminal event so it can flush
     the very last paint."""
 
+    # 2026-05-26 — Heartbeat every _SSE_HEARTBEAT_S to keep idle
+    # connections alive through k3d/traefik/nginx-class proxies (default
+    # idle-stream timeout 60s). During long Synth nodes (sawc_write LLM
+    # calls, book_harmonize) Redis pub/sub can have 30s-15min event gaps;
+    # without this, the proxy kills the TCP connection and the browser
+    # loses every event emitted in the down-window. SSE comments (`:`
+    # prefix) are ignored by clients but their bytes flow through TCP.
+    _SSE_HEARTBEAT_S = 15.0
+    _DONE = object()
+
     async def _gen():
         yield b": stream open\n\n"
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def _pump():
+            try:
+                async for event in subscribe_progress(thread_id):
+                    await queue.put(event)
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.warning(
+                    f"[synth-events] {thread_id}: pump crashed "
+                    f"({type(e).__name__}: {e})"
+                )
+            finally:
+                await queue.put(_DONE)
+
+        pump_task = asyncio.create_task(_pump())
         try:
-            async for event in subscribe_progress(thread_id):
+            while True:
+                try:
+                    event = await asyncio.wait_for(
+                        queue.get(), timeout=_SSE_HEARTBEAT_S,
+                    )
+                except asyncio.TimeoutError:
+                    yield b": keepalive\n\n"
+                    continue
+                if event is _DONE:
+                    return
                 try:
                     payload = json.dumps(event, default=str)
                 except Exception:
@@ -1206,6 +688,12 @@ async def synth_events(thread_id: str) -> StreamingResponse:
                 yield f"data: {payload}\n\n".encode("utf-8")
         except asyncio.CancelledError:
             return
+        finally:
+            pump_task.cancel()
+            try:
+                await pump_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
     return StreamingResponse(
         _gen(),

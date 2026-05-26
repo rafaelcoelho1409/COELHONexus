@@ -346,11 +346,46 @@ async def planner_events(thread_id: str) -> StreamingResponse:
     the client closes the EventSource. Server doesn't close the stream
     on its own — clients close after seeing terminal status."""
 
+    # 2026-05-26 — Heartbeat every _SSE_HEARTBEAT_S keeps idle SSE
+    # connections alive through k3d/traefik/nginx-class proxies (default
+    # idle-stream timeout 60s). Planner has long gaps during off_topic
+    # bandit cascade + cluster UMAP warm-up; without this the TCP
+    # connection gets dropped and the UI loses events emitted in the
+    # down-window. SSE comments (`:`) are ignored by clients but their
+    # bytes flow through TCP.
+    _SSE_HEARTBEAT_S = 15.0
+    _DONE = object()
+
     async def _gen():
-        # Initial comment-line keeps proxies happy + flushes headers.
         yield b": stream open\n\n"
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def _pump():
+            try:
+                async for event in subscribe_progress(thread_id):
+                    await queue.put(event)
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.warning(
+                    f"[planner-events] {thread_id}: pump crashed "
+                    f"({type(e).__name__}: {e})"
+                )
+            finally:
+                await queue.put(_DONE)
+
+        pump_task = asyncio.create_task(_pump())
         try:
-            async for event in subscribe_progress(thread_id):
+            while True:
+                try:
+                    event = await asyncio.wait_for(
+                        queue.get(), timeout=_SSE_HEARTBEAT_S,
+                    )
+                except asyncio.TimeoutError:
+                    yield b": keepalive\n\n"
+                    continue
+                if event is _DONE:
+                    return
                 try:
                     payload = json.dumps(event, default=str)
                 except Exception:
@@ -358,6 +393,12 @@ async def planner_events(thread_id: str) -> StreamingResponse:
                 yield f"data: {payload}\n\n".encode("utf-8")
         except asyncio.CancelledError:
             return
+        finally:
+            pump_task.cancel()
+            try:
+                await pump_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
     return StreamingResponse(
         _gen(),

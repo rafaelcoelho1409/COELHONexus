@@ -1378,16 +1378,35 @@ export async function pollStudyState(sid) {
         S.setStudyCurrentChapterThreadId(null);
       }
       S.setSynthThreadId(null);
-      if (status === 'done') {
-        // Step 5 auto-refresh
-        try {
-          const studyPanel = document.querySelector('#fw-step-5-panel');
-          if (studyPanel && studyPanel.classList.contains('active') &&
-              S.activeSlug) {
-            import('./study.js').then(m => m.loadStudyChapters(S.activeSlug)).catch(() => {});
-          }
-        } catch (_) {}
-      }
+      // NOTE: Step-5 auto-refresh moved to `chapter_ready` so the Study
+      // page reloads its chapter list THE INSTANT each chapter becomes
+      // readable, not after the whole book finishes.
+      return;
+    }
+    // Bundle 6 (2026-05-25) — Streaming chapter delivery.
+    // `chapter_ready` fires the moment a chapter's render_audit_write
+    // completes successfully — the chapter is now readable in MinIO. We:
+    //   - lock the cell to the `done` visual (idempotent with chapter_done)
+    //   - surface a toast (only for the user actively waiting on Study)
+    //   - reload the Step-5 Study list so the new chapter appears
+    //     immediately, instead of after ~2h when the orchestrator emits
+    //     its final `done` event.
+    if (ev.step === 'study' && ev.kind === 'chapter_ready') {
+      const cid = ev.chapter_id;
+      _markChStripCell(cid, 'done');
+      try {
+        const studyPanel = document.querySelector('#fw-step-5-panel');
+        if (studyPanel && studyPanel.classList.contains('active') &&
+            S.activeSlug) {
+          import('./study.js').then(m => m.loadStudyChapters(S.activeSlug)).catch(() => {});
+        }
+      } catch (_) {}
+      // Friendly notification so the user knows they can start reading.
+      try {
+        const pos = ev.position || '?';
+        const total = ev.n_total || S.studyChapterIds.length;
+        showToast('Chapter ' + cid + ' ready to read (' + pos + ' / ' + total + ')');
+      } catch (_) {}
       return;
     }
     // Ship #7 (2026-05-24): book_harmonize study-level events

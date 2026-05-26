@@ -34,6 +34,11 @@ Q_CRAWLER = f"crawler-{ENVIRONMENT}"
 # Planner queue — isolated from crawler so CPU-heavy UMAP+HDBSCAN+GMM
 # work doesn't contend with HTTP-fetch tasks. See domains/dd/planner/task.py.
 Q_PLANNER = f"planner-{ENVIRONMENT}"
+# Synth queue (Bundle 13, 2026-05-26) — isolated from planner so the
+# long-running per-chapter LangGraph + SAWC + CoCoA + book_harmonize CPU
+# bursts don't contend with the planner's UMAP/HDBSCAN warm-up. See
+# domains/dd/synth/task.py.
+Q_SYNTH = f"synth-{ENVIRONMENT}"
 
 
 app = Celery("coelhonexus")
@@ -53,6 +58,10 @@ app.config_from_object({
         # Planner runs the 8-node LangGraph (CPU-heavy cluster/refine +
         # LLM-bound off_topic/label/reduce) → planner queue
         "domains.dd.planner.task.*": {"queue": Q_PLANNER},
+        # Synth runs the per-chapter LangGraph + study orchestrator +
+        # book_harmonize (LLM-heavy + bursty CPU for CoCoA/atomic claim
+        # grounding) → synth queue
+        "domains.dd.synth.task.*": {"queue": Q_SYNTH},
     },
     "worker_prefetch_multiplier": 1,
     "broker_connection_retry_on_startup": True,
@@ -67,6 +76,7 @@ app.config_from_object({
 app.conf.include = [
     "domains.dd.ingestion.task",
     "domains.dd.planner.task",
+    "domains.dd.synth.task",
 ]
 
 

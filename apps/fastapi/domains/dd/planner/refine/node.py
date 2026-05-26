@@ -59,6 +59,8 @@ from .service import (
     _pick_representative_doc,
     _refine_one,
     load_refine,
+    native_resolve_boundary,
+    rescue_noise_via_ctfidf,
     softmax_resolve_boundary,
 )
 
@@ -70,8 +72,20 @@ def _gmm_mode_active() -> bool:
     """Phase D (2026-05-23): KD_REFINE_USE_GMM=1 enables the deterministic
     soft-membership boundary resolver fast-path. Default off — set the env
     per pod to enable. Cuts LLM-judge cost ~85% on LangChain-scale corpora
-    with ~3-5pp accuracy regression."""
+    with ~3-5pp accuracy regression.
+
+    Bundle 10 (2026-05-25): when GMM mode is active, the default resolver
+    is HDBSCAN-native (`native_resolve_boundary`) — row-normalized raw
+    soft membership, no temperature sharpening. Set KD_REFINE_LEGACY_GMM=1
+    to fall back to the prior softmax-sharpening behavior."""
     return os.environ.get("KD_REFINE_USE_GMM", "0") == "1"
+
+
+def _legacy_gmm_softmax() -> bool:
+    """Bundle 10: KD_REFINE_LEGACY_GMM=1 → use the old temperature-sharpened
+    softmax (`softmax_resolve_boundary`) instead of the new manifold-aligned
+    native resolver. Kept as an emergency rollback for the first FastMCP run."""
+    return os.environ.get("KD_REFINE_LEGACY_GMM", "0") == "1"
 
 
 @traced("refine")
@@ -204,16 +218,24 @@ async def refine(state: PlannerState) -> dict:
     # for the genuinely-uncertain residual. ~85% LLM-cost reduction at
     # LangChain scale with ~3-5pp boundary-assignment accuracy regression.
     gmm_used = _gmm_mode_active()
+    use_legacy_softmax = _legacy_gmm_softmax()
     gmm_assignments_for_boundary: np.ndarray | None = None
     gmm_posteriors_for_boundary: np.ndarray | None = None
     gmm_confident_mask: np.ndarray | None = None
+    resolver_kind = "softmax_sharpen" if use_legacy_softmax else "native_hdbscan"
     if gmm_used:
         valid_cluster_ids = set(cluster_keywords.keys())
+        # Bundle 10: default to HDBSCAN-native (raw soft, row-normalized);
+        # opt back into legacy temperature-sharpened softmax via env flag.
+        resolver_fn = (
+            softmax_resolve_boundary if use_legacy_softmax
+            else native_resolve_boundary
+        )
         (
             gmm_assignments_for_boundary,
             gmm_posteriors_for_boundary,
             gmm_confident_mask,
-        ) = softmax_resolve_boundary(
+        ) = resolver_fn(
             soft=soft,
             boundary_indices=boundary_indices,
             valid_cluster_ids=valid_cluster_ids,
@@ -225,9 +247,11 @@ async def refine(state: PlannerState) -> dict:
             n_confident=n_confident,
             n_residual=n_boundary - n_confident,
             threshold=_GMM_POSTERIOR_THRESHOLD,
+            resolver=resolver_kind,
         )
         logger.info(
-            f"[refine] {slug}: GMM fast-path resolved {n_confident}/{n_boundary} "
+            f"[refine] {slug}: {resolver_kind} resolved "
+            f"{n_confident}/{n_boundary} "
             f"({n_confident * 100 // max(n_boundary, 1)}%) boundary docs "
             f"deterministically (posterior ≥ {_GMM_POSTERIOR_THRESHOLD}); "
             f"LLM-judge will only run on the {n_boundary - n_confident} residual"
@@ -283,17 +307,21 @@ async def refine(state: PlannerState) -> dict:
             and gmm_confident_mask is not None
             and bool(gmm_confident_mask[pos])
         ):
+            deployment_tag = (
+                "gmm/softmax-sharpened" if use_legacy_softmax
+                else "hdbscan/native-soft"
+            )
             deterministic_decisions.append({
                 "doc_idx":        int(i),
                 "new_cluster_id": int(gmm_assignments_for_boundary[pos]),
                 "confidence":     float(gmm_posteriors_for_boundary[pos]),
                 "rationale":      (
-                    f"GMM softmax-sharpened posterior "
+                    f"{resolver_kind} posterior "
                     f"{float(gmm_posteriors_for_boundary[pos]):.3f} ≥ "
                     f"{_GMM_POSTERIOR_THRESHOLD} threshold"
                 ),
                 "meta":           {
-                    "deployment": "gmm/softmax-sharpened",
+                    "deployment": deployment_tag,
                     "latency_s":  0.0,
                 },
                 "error":          None,
@@ -315,11 +343,40 @@ async def refine(state: PlannerState) -> dict:
         new_cid = int(d.get("new_cluster_id", refined[idx]))
         refined[idx] = new_cid
 
+    # ── Bundle 5b (2026-05-25) — c-TF-IDF noise rescue ────────────────
+    # Sweep all docs still at -1 (noise) AFTER GMM+LLM-judge. Vectorize
+    # against the FINAL cluster c-TF-IDF representations and assign to best
+    # cosine match if ≥ threshold. Eliminates the 16-unassigned-docs failure
+    # mode that silently dropped `lifespans.md`/`opentelemetry.md`/etc and
+    # caused ch-02/ch-03 catastrophic drift.
+    n_noise_before_rescue = int((refined == -1).sum())
+    rescued_decisions: list[dict] = []
+    if n_noise_before_rescue > 0:
+        refined, rescued_decisions = rescue_noise_via_ctfidf(
+            refined=refined,
+            keys=cluster_keys,
+            bodies=bodies,
+        )
+        if rescued_decisions:
+            decisions.extend(rescued_decisions)
+            logger.info(
+                f"[refine] {slug}: c-TF-IDF rescue reassigned "
+                f"{len(rescued_decisions)}/{n_noise_before_rescue} "
+                f"noise docs to clusters (threshold cosine ≥ 0.10)"
+            )
+            await emit_progress(
+                thread_id, "refine", "rescued",
+                n_rescued=len(rescued_decisions),
+                n_noise_before=n_noise_before_rescue,
+                n_noise_after=int((refined == -1).sum()),
+            )
+
     n_changed = int((refined != assignments).sum())
     n_null = sum(
         1 for d in decisions if int(d.get("new_cluster_id", -2)) == -1
     )
     n_errors = sum(1 for d in decisions if d.get("error"))
+    n_rescued = len(rescued_decisions)
 
     # ── Persist to MinIO ───────────────────────────────────────────────
     # Strip heavy meta keys; keep what UI / debug needs.
@@ -353,6 +410,7 @@ async def refine(state: PlannerState) -> dict:
     elapsed = int((time.monotonic() - t0) * 1000)
     n_via_gmm = len(deterministic_decisions)
     n_via_llm = n_boundary - n_via_gmm
+    n_noise_final = int((refined == -1).sum())
     stats = {
         "n_docs":           n_docs,
         "n_boundary":       n_boundary,
@@ -372,16 +430,23 @@ async def refine(state: PlannerState) -> dict:
         "n_via_gmm":        n_via_gmm,
         "n_via_llm":        n_via_llm,
         "gmm_threshold":    _GMM_POSTERIOR_THRESHOLD if gmm_used else None,
+        "resolver_kind":    resolver_kind if gmm_used else None,
+        # Bundle 5b telemetry
+        "n_rescued_ctfidf":     n_rescued,
+        "n_noise_before_rescue": n_noise_before_rescue,
+        "n_noise_final":        n_noise_final,
     }
 
     await emit_progress(
         thread_id, "refine", "done",
         n_docs=n_docs, n_boundary=n_boundary,
-        n_changed=n_changed, n_null=n_null, wall_ms=elapsed,
+        n_changed=n_changed, n_null=n_null, n_rescued=n_rescued,
+        n_noise_final=n_noise_final, wall_ms=elapsed,
     )
     logger.info(
         f"[refine] {slug}: {n_boundary} boundary docs judged, "
         f"{n_changed} reassigned, {n_null} sent to noise, "
+        f"{n_rescued} c-TF-IDF rescued, {n_noise_final} final noise, "
         f"{n_errors} errors; {elapsed} ms"
     )
     return {"refine_assignments_ref": blob_key, "refine_stats": stats}

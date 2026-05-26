@@ -132,8 +132,17 @@ export const StageGraph = (function() {
           'line-color':            '#d97706',   // amber-600
           'target-arrow-color':    '#d97706',
           'curve-style':           'unbundled-bezier',
-          'control-point-distances': [-80],     // arcs ABOVE the row
-          'control-point-weights':   [0.5],
+          // Source = mgsr_replan (right end of row), Target = sawc_write
+          // (mid-left). Source→target vector points LEFT, so in Cytoscape's
+          // perpendicular-offset convention POSITIVE values bend the arc
+          // BELOW the row of nodes (toward the right/bottom of the canvas
+          // when reading left-to-right). Two control points biased toward
+          // the source side produce a wide arc that exits mgsr_replan
+          // rightward, swings down/around, and re-enters sawc_write from
+          // below — keeping the loopback OUTSIDE the row instead of
+          // overlapping the node bodies it used to pass behind.
+          'control-point-distances': [140, 90],
+          'control-point-weights':   [0.15, 0.85],
           'width':                 2,
           'line-style':            'dashed',
           'line-dash-pattern':     [4, 4],
