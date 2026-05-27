@@ -15,6 +15,7 @@ import {
   renderManifest, loadManifestForSlug, renderProgress, pollRun,
   triggerIngest,
 } from './ingestion.js';
+import { currentStage, navigateToStage } from './nav.js';
 
 // ============================================================
 // Sidebar action lock — disable every refresh + delete button while ANY
@@ -84,25 +85,16 @@ export function renderSidebar(items) {
   }).join('');
   S.sidebarList.innerHTML = html;
   S.sidebarList.querySelectorAll('.fw-lib-item').forEach(el => {
-    el.addEventListener('click', async ev => {
+    el.addEventListener('click', ev => {
       if (ev.target.closest('.fw-lib-refresh, .fw-lib-delete')) return;
       const slug = el.dataset.slug;
-      S.sidebarList.querySelectorAll('.fw-lib-item').forEach(
-        x => x.classList.remove('active'));
-      el.classList.add('active');
-      await loadManifestForSlug(slug);
-      // Library click swaps the ACTIVE FRAMEWORK without changing the
-      // user's current step. All 5 steps stay reachable for the
-      // newly-selected slug; Study (5) shows its own empty-state until
-      // that framework has rendered chapters.
-      S.setFarthestStep(Math.max(S.farthestStep, 5));
-      renderStepper();
-      const { refreshPlannerStartState } = await import('./planner.js');
-      refreshPlannerStartState();
-      const { refreshSynthStartState } = await import('./synth.js');
-      if (typeof refreshSynthStartState === 'function') {
-        refreshSynthStartState();
-      }
+      // Stage-route navigation: clicking a library item keeps the user
+      // on their current stage but swaps the framework. From Catalog
+      // (no slug context) we jump to Planner — the natural next step
+      // after picking an ingested framework.
+      const here = currentStage();
+      const dest = (here === 'catalog') ? 'planner' : here;
+      navigateToStage(dest, slug);
     });
   });
   S.sidebarList.querySelectorAll('.fw-lib-refresh').forEach(b => {

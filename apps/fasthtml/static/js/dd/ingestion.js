@@ -11,6 +11,7 @@ import {
   syncStepLocks,
 } from './ui.js';
 import { setProgressFramework } from './picker.js';
+import { navigateToStage } from './nav.js';
 
 // ============================================================
 // Step 3: render manifest entries into the page grid
@@ -88,6 +89,7 @@ export async function loadManifestForSlug(slug) {
 // ============================================================
 export function renderProgress(p) {
   if (!p) return;
+  if (!S.progressTier) return;   // not on the ingestion page — no-op
   S.progressTier.textContent = p.tier || '—';
   S.progressStatus.textContent = p.status || '—';
   S.progressUrl.textContent = p.last_url || '';
@@ -108,11 +110,14 @@ export async function pollRun(runId) {
   S.setPollAbort(false);
   S.setActiveRunId(runId);
   refreshGenerateState();   // disable Generate while this run is in flight
-  S.progressBox.style.display = '';   // reveal the live progress display
-  // Reset cancel button (a previous cancelled run may have left it
-  // in the "Cancelling…" + spinner state).
-  S.cancelBtn.disabled = false;
-  S.cancelBtn.innerHTML = 'Cancel ingestion';
+  // Progress UI only exists on the Ingestion page — guard so this
+  // function can be safely awaited from other stages (which still
+  // need the activeRunId state for the global running-dot indicator).
+  if (S.progressBox) S.progressBox.style.display = '';
+  if (S.cancelBtn) {
+    S.cancelBtn.disabled = false;
+    S.cancelBtn.innerHTML = 'Cancel ingestion';
+  }
   if (S.activeSlug) setProgressFramework(S.activeSlug);
   while (!S.pollAbort && S.activeRunId === runId) {
     try {
@@ -171,13 +176,13 @@ export async function pollRun(runId) {
   }
 }
 
-S.cancelBtn.addEventListener('click', async () => {
+S.cancelBtn?.addEventListener('click', async () => {
   if (!S.activeRunId) return;
   S.cancelBtn.disabled = true;
   S.cancelBtn.innerHTML =
     '<div class="fw-spinner" style="display:inline-block;' +
     'vertical-align:middle;margin-right:8px"></div>Cancelling…';
-  S.progressStatus.textContent = 'cancelling';
+  if (S.progressStatus) S.progressStatus.textContent = 'cancelling';
   try {
     await fetch(S.API + '/runs/' + S.activeRunId + '/cancel', {method: 'POST'});
   } catch (e) {
@@ -201,22 +206,17 @@ export async function triggerIngest(slug, refresh) {
     });
     const data = await r.json();
     if (data.status === 'cached') {
-      renderManifest(data.manifest);
-      showNotice('Loaded from cache · ingested ' +
-        fmtAge(data.manifest?.ingested_at) +
-        '. Click ↻ in the sidebar to refresh.');
-      S.setFarthestStep(Math.max(S.farthestStep, 5));
-      // Restore the synth view for this slug
-      const { _tryResumeActiveSynth } = await import('./synth.js');
-      _tryResumeActiveSynth(slug).catch(() => {});
-      showStep(4);   // jump to Synth stage
+      // Cached → the corpus already lives in MinIO; jump to Synth so
+      // the user can run/inspect chapter synthesis. The Synth page's
+      // own bootstrap will load the manifest + chapter state from URL.
+      navigateToStage('synth', slug);
       return;
     }
     if (data.status === 'queued') {
-      S.setActiveRunId(data.run_id);
-      refreshGenerateState();
-      jumpTo(2);
-      pollRun(data.run_id);
+      // Queued → land on the Ingestion stage carrying the run_id, so
+      // the destination page can resume polling without a separate
+      // /runs/active lookup.
+      navigateToStage('ingestion', slug, data.run_id);
       return;
     }
     if (data.status === 'locked') {
@@ -229,7 +229,7 @@ export async function triggerIngest(slug, refresh) {
   }
 }
 
-S.generate.addEventListener('click', () => {
+S.generate?.addEventListener('click', () => {
   if (!S.selected) return;
   triggerIngest(S.selected, false);
 });

@@ -32,6 +32,14 @@ html, body {
   line-height: 1.5;
 }
 
+/* DD-NAVBAR-SOTA-2026-05-27 (Wave C) — anchor & skip-link offset.
+   With the sticky topbar (~64px tall) pinned to the viewport top,
+   in-page anchor jumps (and the first jump from the .skip-link)
+   would land UNDER the bar. `scroll-padding-top` makes the browser
+   scroll the target ~80px below the viewport top so it clears the
+   sticky bar with a small breathing margin. */
+html { scroll-padding-top: 80px; }
+
 /* DD-NAVBAR-SOTA-2026-05-26 (Wave A2) — Cross-document View Transitions
    API. Chrome 111+/Safari 18+/Firefox 129+ get a smooth pill-morph
    between routes when the active nav-item carries `view-transition-name:
@@ -64,12 +72,43 @@ html, body {
   border-radius: 4px;
   padding: 32px 48px 56px 48px;
 }
+/* DD-NAVBAR-SOTA-2026-05-27 (Wave C) — sticky topbar wrap.
+   Full-bleed background, position: sticky so it pins at viewport top
+   when the user scrolls. Two state classes toggled by topbar.js:
+     .is-stuck   → bar is currently pinned (sentinel left viewport).
+                   Adds shadow + border so the bar visually detaches
+                   from the content scrolling beneath it.
+     .is-hidden  → user is scrolling DOWN past the threshold; slide
+                   the bar up out of view. Removed on any upward
+                   scroll or near the top of the page. Respects
+                   prefers-reduced-motion (transition disabled). */
+.topbar-wrap {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--card);
+  border-bottom: 1px solid transparent;
+  transition: transform 0.22s ease,
+              box-shadow  0.20s ease,
+              border-color 0.20s ease;
+  will-change: transform;
+}
+.topbar-wrap.is-stuck {
+  box-shadow: 0 1px 8px rgba(0,0,0,0.06);
+  border-bottom-color: var(--border);
+}
+.topbar-wrap.is-hidden { transform: translateY(-100%); }
+@media (prefers-reduced-motion: reduce) {
+  .topbar-wrap { transition: none; }
+  .topbar-wrap.is-hidden { transform: none; }
+}
+
 .topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 32px;
-  margin-bottom: 36px;
+  padding: 12px 40px;
 }
 .brand {
   display: flex;

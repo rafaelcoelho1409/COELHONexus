@@ -16,6 +16,17 @@ stay focused on their own content.
   - Each nav-item carries a hidden .nav-status-dot. topbar.js polls
     /api/v1/docs-distiller/runs/active and toggles .has-running on the
     matching item — surfaces running ingestion runs at-a-glance.
+
+2026-05-27 (DD-NAVBAR-SOTA Wave C):
+  - Topbar is now a full-bleed sticky bar OUTSIDE `.card` so it pins
+    to the viewport top (no longer indented by card padding). Pairs
+    with the auto-hide-on-scroll-down behavior in topbar.js: pinned
+    on load, slides up when scrolling down past the threshold, slides
+    back in on any upward scroll. NN/g pattern — keeps the ~22% nav-
+    time saving without the permanent screen-real-estate tax.
+  - html { scroll-padding-top } ensures the skip-link target + any
+    in-page anchors land BELOW the sticky bar instead of under it.
+  - prefers-reduced-motion is respected (no slide animation).
 """
 from fasthtml.common import (
     H1, A, Div, Link, Main, Meta, Nav, Script, Span, Style, Title,
@@ -124,23 +135,27 @@ def _Shell(active_key: str, title_text=None, body=None):
         # the <main id="content"> wrapper below. Hidden until focused
         # (see .skip-link in base.css).
         A("Skip to content", href = "#content", cls = "skip-link"),
+        # Wave C — sticky topbar lives OUTSIDE the card so it can pin
+        # to the viewport edge with a full-width background. The wrap
+        # carries `position: sticky` + stuck/hidden state classes (set
+        # by topbar.js); the inner `.topbar` keeps the brand+nav inset
+        # aligned with the card's horizontal padding.
         Div(
             Div(
-                Div(
-                    # Brand is a link to the home page. Same visual as before
-                    # — A inherits .brand's flex/colour styles.
-                    A(
-                        Span(cls = "brand-flag"),
-                        Span("COELHO Nexus"),
-                        href = "/",
-                        cls = "brand",
-                        aria_label = "COELHO Nexus home",
-                    ),
-                    # Wave B3 — semantic <nav> + aria-label="Primary" for
-                    # screen readers (WAI-ARIA APG, 2026 baseline).
-                    Nav(*nav_links, cls = "nav", aria_label = "Primary"),
-                    cls = "topbar",
+                A(
+                    Span(cls = "brand-flag"),
+                    Span("COELHO Nexus"),
+                    href = "/",
+                    cls = "brand",
+                    aria_label = "COELHO Nexus home",
                 ),
+                Nav(*nav_links, cls = "nav", aria_label = "Primary"),
+                cls = "topbar",
+            ),
+            cls = "topbar-wrap",
+        ),
+        Div(
+            Div(
                 title_row,
                 # Wave B3 — wrap the feature body in <main id="content">
                 # so the skip-link and screen readers have a landmark.

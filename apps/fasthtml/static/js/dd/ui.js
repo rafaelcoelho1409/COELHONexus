@@ -8,20 +8,23 @@ import { fmtBytes } from './utils.js';
 
 // ---- notice + toast ----
 export function showNotice(text) {
+  if (!S.noticeEl) return;
   S.noticeText.textContent = text;
   S.noticeEl.style.display = '';
   setTimeout(() => { S.noticeEl.style.display = 'none'; }, 8000);
 }
-export function hideNotice() { S.noticeEl.style.display = 'none'; }
+export function hideNotice() { if (S.noticeEl) S.noticeEl.style.display = 'none'; }
 export function showToast(text) {
+  if (!S.toastEl) return;
   S.toastText.textContent = text;
   S.toastEl.style.display = '';
 }
-export function hideToast() { S.toastEl.style.display = 'none'; }
-S.toastClose.addEventListener('click', hideToast);
+export function hideToast() { if (S.toastEl) S.toastEl.style.display = 'none'; }
+S.toastClose?.addEventListener('click', hideToast);
 
 // ---- in-page confirm modal (replacement for browser confirm()) ----
 export function showConfirm(title, message, confirmLabel) {
+  if (!S.modalEl) return Promise.resolve(false);
   S.modalTitleEl.textContent = title;
   S.modalMessageEl.textContent = message;
   S.modalConfirmBtn.textContent = confirmLabel || 'Confirm';
@@ -29,19 +32,20 @@ export function showConfirm(title, message, confirmLabel) {
   return new Promise(resolve => { S.set_modalResolver(resolve); });
 }
 export function closeModal(result) {
+  if (!S.modalEl) return;
   S.modalEl.classList.remove('visible');
   const r = S._modalResolver;
   S.set_modalResolver(null);
   if (r) r(result);
 }
-S.modalConfirmBtn.addEventListener('click', () => closeModal(true));
-S.modalCancelBtn.addEventListener('click', () => closeModal(false));
-S.modalEl.addEventListener('click', (e) => {
+S.modalConfirmBtn?.addEventListener('click', () => closeModal(true));
+S.modalCancelBtn?.addEventListener('click', () => closeModal(false));
+S.modalEl?.addEventListener('click', (e) => {
   // Click on the backdrop (outside the box) cancels.
   if (e.target === S.modalEl) closeModal(false);
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && S.modalEl.classList.contains('visible')) {
+  if (e.key === 'Escape' && S.modalEl?.classList.contains('visible')) {
     closeModal(false);
   }
 });
@@ -104,11 +108,11 @@ export async function renderDrawerContent() {
     S.drawerBody.innerHTML = '<div class="fw-empty">' + String(err) + '</div>';
   }
 }
-S.drawerPrev.addEventListener('click', () => drawerStep(-1));
-S.drawerNext.addEventListener('click', () => drawerStep(1));
-S.drawerClose.addEventListener('click', closeDrawer);
+S.drawerPrev?.addEventListener('click', () => drawerStep(-1));
+S.drawerNext?.addEventListener('click', () => drawerStep(1));
+S.drawerClose?.addEventListener('click', closeDrawer);
 document.addEventListener('keydown', (e) => {
-  if (!S.drawerEl.classList.contains('visible')) return;
+  if (!S.drawerEl?.classList.contains('visible')) return;
   // Don't hijack arrows when the user is typing in an input/textarea
   const tag = (document.activeElement?.tagName || '').toLowerCase();
   if (tag === 'input' || tag === 'textarea') return;

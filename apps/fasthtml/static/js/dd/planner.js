@@ -2192,7 +2192,7 @@ export async function cancelPlanner() {
   }
 }
 
-S.plannerStartBtn.addEventListener('click', () => {
+S.plannerStartBtn?.addEventListener('click', () => {
   // Dual-purpose: Start when idle, Cancel when a thread_id is set.
   if (S.plannerThreadId) {
     cancelPlanner();

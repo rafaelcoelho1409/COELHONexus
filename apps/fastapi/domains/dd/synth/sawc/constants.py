@@ -8,7 +8,10 @@ import re
 # Versioning + tunables
 # =============================================================================
 SAWC_SCHEMA_VERSION = "2.0-cookbook"
-SAWC_PROMPT_VERSION = "v2-cookbook-2026-05-24"
+# U3 (2026-05-27) — bumped to invalidate SAWC cache after adding the
+# NO-EMBELLISHMENT rule (rule #6) to the writer prompt. Prevents
+# cache hits returning Run 5's pre-rule prose.
+SAWC_PROMPT_VERSION = "v3-cookbook-noembellish-2026-05-27"
 
 # v2 schema (2026-05-24 evening): replaces flat paragraphs + code_refs with
 # a cookbook-style {intro, subtopics: [{subheading, explanation, code_ref_hash}]}

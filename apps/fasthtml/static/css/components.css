@@ -63,6 +63,44 @@
 .fw-step-panel { display: none; }
 .fw-step-panel.active { display: block; }
 
+/* ===== Stage sub-nav (2026-05-27 — server-side stage split) =====
+   Replaces the wizard's in-page stepper. Each stage is now its own
+   route (/docs-distiller, /docs-distiller/ingestion, /planner, etc.)
+   and these are real <a href> links — full page navigation. Visual
+   language mirrors the global topbar (Wave A1 filled-pill active
+   state) so the sub-nav feels like a continuation of the top nav. */
+.dd-substage-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 28px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.dd-substage {
+  padding: 8px 14px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-decoration: none;
+  border-radius: 6px;
+  letter-spacing: 0.02em;
+  opacity: 0.85;
+  transition: color 0.15s, background 0.15s, opacity 0.15s, font-weight 0.15s;
+}
+.dd-substage:hover {
+  color: var(--text);
+  background: rgba(196, 18, 48, 0.06);
+  opacity: 1;
+}
+.dd-substage.active {
+  color: var(--primary);
+  font-weight: 600;
+  background: rgba(196, 18, 48, 0.10);
+  opacity: 1;
+  view-transition-name: dd-substage-pill;
+}
+
 #fw-step-1-edit {
   display: flex; flex-direction: column; gap: 18px;
 }

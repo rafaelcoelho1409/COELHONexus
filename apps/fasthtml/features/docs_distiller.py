@@ -1,29 +1,35 @@
-"""Docs Distiller feature — 3-step wizard.
+"""Docs Distiller feature — server-side stage split.
 
-  Step 1  Catalog    — framework picker (search + chips + tile grid)
-  Step 2  Ingestion  — live progress + cancel button + downloaded files
-  Step 3  Study      — page grid backed by the persistent MinIO manifest
+Each stage of the pipeline has its OWN URL so users can bookmark,
+share, and use browser back/forward across the (often hours-long)
+flow. The framework slug is carried in the `?slug=` query string.
 
-A library sidebar (Steps 2 + 3) lists every framework already finalized
-in MinIO; each row has refresh + delete buttons.
+  /docs-distiller                        catalog (framework picker)
+  /docs-distiller/ingestion?slug=<s>     ingestion progress + files
+  /docs-distiller/planner?slug=<s>       planner DAG + outputs
+  /docs-distiller/synth?slug=<s>         synth DAG + chapter strip
+  /docs-distiller/study?slug=<s>         README / Challenges / Cards
+
+The shared chrome (library sidebar, stage sub-nav, modal, file drawer,
+node drawer, toast/notice) is rendered on every page so the client-side
+state.js refs resolve uniformly. Only ONE stage panel is rendered per
+page; the others' DOM is omitted entirely.
 
 Behavior contracts with the backend (forwarded via the FastHTML proxy):
   POST /runs                      → {status: cached|queued|locked, run_id?, manifest?}
   POST /runs/{id}/cancel          → cooperative cancel
   GET  /runs/{id}                 → live progress + manifest snapshot (Redis)
-  GET  /ingestion                 → sidebar data source (every finalized framework)
+  GET  /ingestion                 → sidebar data source
   GET  /ingestion/{slug}/manifest → canonical manifest from MinIO
   GET  /ingestion/{slug}/pages/{i}→ page body from MinIO
-
-All HTML scaffolding lives here; CSS is in /static/css/app.css and the
-client-side wizard logic is in /static/js/docs_distiller.js.
 """
 import time
 
 import httpx
 from fasthtml.common import (
-    Button, Div, Img, Input, Option, P, Script, Select, Span,
+    A, Button, Div, Img, Input, Nav, Option, P, Script, Select, Span,
 )
+from starlette.requests import Request
 
 from proxy import FASTAPI_URL
 from shell import _Shell
@@ -62,17 +68,6 @@ def _fetch_catalog() -> list[dict]:
         return _catalog_cache["data"] or []
 
 
-def _Step(n: int, label: str, active: bool = False):
-    cls = "fw-step active" if active else "fw-step"
-    return Div(
-        Span(str(n), cls="fw-step-circle"),
-        Span(label, cls="fw-step-label"),
-        cls=cls,
-        id=f"fw-step-{n}",
-        data_step=str(n),
-    )
-
-
 def _tile(f: dict):
     children = []
     # Multi-logo stack entries (e.g. LangChain - LangGraph - DeepAgents)
@@ -97,43 +92,144 @@ def _tile(f: dict):
     )
 
 
-def _Picker():
-    catalog = _fetch_catalog()
-    if not catalog:
-        return Div(
-            P(
-                "Could not load the framework catalog. "
-                "Make sure FastAPI is reachable at /api/v1/docs-distiller/resolver.",
-                cls="fw-empty",
-            ),
-            cls="fw-picker",
-        )
+# ============================================================ #
+# Stage sub-nav — primary navigation INSIDE Docs Distiller.    #
+# ============================================================ #
+# Real <a href> links (NO JS stepper) so each stage is its own
+# bookmarkable URL. The active slug is propagated across links
+# via ?slug= so the user keeps the framework when jumping stages.
+# Catalog never carries a slug (it's the picker).
+_STAGES = [
+    ("catalog",   "Catalog",   "/docs-distiller"),
+    ("ingestion", "Ingestion", "/docs-distiller/ingestion"),
+    ("planner",   "Planner",   "/docs-distiller/planner"),
+    ("synth",     "Synth",     "/docs-distiller/synth"),
+    ("study",     "Study",     "/docs-distiller/study"),
+]
 
-    cats = sorted({(f.get("category") or "Other") for f in catalog})
-    chips = [Span("All", cls="fw-chip active", data_chip="All")] + [
-        Span(c, cls="fw-chip", data_chip=c) for c in cats
-    ]
-    tiles = [_tile(f) for f in catalog]
 
-    # Step 1 — catalog picker (always visible, never locked)
-    step1_edit = Div(
+def _StageSubNav(active_key: str, slug: str | None):
+    """Stage sub-nav. Stages other than catalog get ?slug= appended
+    so the user keeps the framework context across page reloads."""
+    links = []
+    for key, label, href in _STAGES:
+        if key != "catalog" and slug:
+            href_with_slug = f"{href}?slug={slug}"
+        else:
+            href_with_slug = href
+        cls = "dd-substage active" if key == active_key else "dd-substage"
+        links.append(A(label, href=href_with_slug, cls=cls,
+                       data_substage=key))
+    return Nav(*links, cls="dd-substage-nav", aria_label="Docs Distiller stages")
+
+
+# ============================================================ #
+# Shared chrome — rendered on every stage page.                #
+# ============================================================ #
+def _Sidebar():
+    """Library sidebar — list of ingested frameworks. JS hydrates it
+    from GET /api/v1/docs-distiller/ingestion on every page."""
+    return Div(
+        P("Library", cls="fw-sidebar-title"),
         Div(
-            Input(
-                type="search", id="fw-search",
-                placeholder=f"Search {len(catalog)} frameworks…",
-                autocomplete="off", autofocus=True,
-                cls="fw-search",
-            ),
-            Span("", id="fw-count", cls="fw-count"),
-            cls="fw-search-row",
+            Div("Loading…", cls="fw-sidebar-empty"),
+            id="fw-sidebar-list",
         ),
-        Div(*chips, cls="fw-chips"),
-        Div(*tiles, cls="fw-grid", id="fw-grid"),
-        id="fw-step-1-edit",
+        id="fw-sidebar", cls="fw-sidebar",
     )
 
-    # Step 2 — live progress (visible only during a run) + cached file list
-    step2_body = Div(
+
+def _ConfirmModal():
+    """Reused by delete + future destructive actions."""
+    return Div(
+        Div(
+            Div("", id="fw-modal-title", cls="fw-modal-title"),
+            P("", id="fw-modal-message", cls="fw-modal-message"),
+            Div(
+                Button("Cancel", id="fw-modal-cancel", cls="btn-outline"),
+                Button("Confirm", id="fw-modal-confirm", cls="btn-primary"),
+                cls="fw-modal-actions",
+            ),
+            cls="fw-modal",
+        ),
+        id="fw-modal", cls="fw-modal-backdrop",
+    )
+
+
+def _FileDrawer():
+    """Right-anchored slide-out for viewing individual ingested pages."""
+    return Div(
+        Div(
+            Div(
+                Div("", id="fw-drawer-name", cls="fw-drawer-name"),
+                Div("", id="fw-drawer-meta", cls="fw-drawer-meta"),
+                cls="fw-drawer-title",
+            ),
+            Div(
+                Button("◀", id="fw-drawer-prev",
+                       cls="fw-drawer-btn", title="Previous (←)"),
+                Button("▶", id="fw-drawer-next",
+                       cls="fw-drawer-btn", title="Next (→)"),
+                Button("✕", id="fw-drawer-close",
+                       cls="fw-drawer-btn", title="Close (Esc)"),
+                cls="fw-drawer-controls",
+            ),
+            cls="fw-drawer-header",
+        ),
+        Div("", id="fw-drawer-body", cls="fw-drawer-body"),
+        id="fw-drawer", cls="fw-drawer",
+    )
+
+
+def _NodeDrawer():
+    """Right-anchored slide-out for planner/synth node inspection. See
+    docs/UI-ARCHITECTURE-SOTA-2026-05-18.md Day 3 — 3-zone layout."""
+    return Div(
+        Div(
+            Div(
+                Span("○", id="fw-node-drawer-icon",
+                     cls="fw-node-drawer-icon"),
+                Div(
+                    Div("", id="fw-node-drawer-title",
+                        cls="fw-drawer-name"),
+                    Div("", id="fw-node-drawer-meta",
+                        cls="fw-drawer-meta"),
+                    cls="fw-drawer-title",
+                ),
+                cls="fw-node-drawer-head-left",
+            ),
+            Div(
+                Button("✕", id="fw-node-drawer-close",
+                       cls="fw-drawer-btn", title="Close (Esc)"),
+                cls="fw-drawer-controls",
+            ),
+            cls="fw-drawer-header",
+        ),
+        Div("", id="fw-node-drawer-kpis", cls="fw-node-drawer-kpis"),
+        Div(
+            Div(
+                Div("Activity", cls="fw-node-drawer-section-title"),
+                Div(
+                    Div("Open a node to stream its events here.",
+                        cls="fw-empty",
+                        id="fw-node-drawer-log-empty"),
+                    Div("", id="fw-node-drawer-log",
+                        cls="fw-node-drawer-log"),
+                    cls="fw-node-drawer-log-wrap",
+                ),
+                cls="fw-node-drawer-section",
+            ),
+            Div("", id="fw-node-drawer-details",
+                cls="fw-node-drawer-details"),
+            id="fw-node-drawer-body", cls="fw-drawer-body",
+        ),
+        id="fw-node-drawer", cls="fw-drawer",
+    )
+
+
+def _NoticeAndToast():
+    """Cache notice + denied toast — both start hidden, JS toggles."""
+    return (
         Div(
             Span("", id="fw-cache-notice-text", cls="fw-notice-text"),
             id="fw-cache-notice", cls="fw-notice", style="display:none;",
@@ -143,6 +239,67 @@ def _Picker():
             Button("✕", id="fw-denied-toast-close", cls="fw-toast-close"),
             id="fw-denied-toast", cls="fw-toast", style="display:none;",
         ),
+    )
+
+
+def _StickyBar():
+    """Catalog-only sticky Generate bar. Other stages omit this."""
+    return Div(
+        Span(
+            "Selected: ",
+            Span("", id="fw-selected-name", cls="fw-selected-name"),
+            id="fw-selected-label", cls="fw-selected-label",
+        ),
+        Button("Start Ingestion", id="fw-generate", cls="btn-primary"),
+        id="fw-sticky-bar", cls="fw-sticky-bar",
+    )
+
+
+# ============================================================ #
+# Per-stage bodies — one panel each, no stepper, no panel       #
+# toggling. Each receives the resolved framework (name + logos) #
+# so the page can render its identity strip server-side rather  #
+# than waiting for JS to backfill it from the catalog tiles.    #
+# ============================================================ #
+def _CatalogBody(catalog: list[dict]):
+    if not catalog:
+        return Div(
+            P(
+                "Could not load the framework catalog. "
+                "Make sure FastAPI is reachable at /api/v1/docs-distiller/resolver.",
+                cls="fw-empty",
+            ),
+            cls="fw-step-panel active",
+            id="fw-step-1-panel",
+        )
+    cats = sorted({(f.get("category") or "Other") for f in catalog})
+    chips = [Span("All", cls="fw-chip active", data_chip="All")] + [
+        Span(c, cls="fw-chip", data_chip=c) for c in cats
+    ]
+    tiles = [_tile(f) for f in catalog]
+    return Div(
+        Div(
+            Div(
+                Input(
+                    type="search", id="fw-search",
+                    placeholder=f"Search {len(catalog)} frameworks…",
+                    autocomplete="off", autofocus=True,
+                    cls="fw-search",
+                ),
+                Span("", id="fw-count", cls="fw-count"),
+                cls="fw-search-row",
+            ),
+            Div(*chips, cls="fw-chips"),
+            Div(*tiles, cls="fw-grid", id="fw-grid"),
+            id="fw-step-1-edit",
+        ),
+        cls="fw-step-panel active",
+        id="fw-step-1-panel",
+    )
+
+
+def _IngestionBody(slug: str | None):
+    return Div(
         # Live progress display — JS hides it when activeRunId is null
         Div(
             Div(
@@ -162,10 +319,6 @@ def _Picker():
             Div("", id="fw-progress-url", cls="fw-progress-url"),
             Div(
                 Div(
-                    # Logo strip — JS populates with one or more <img>
-                    # elements. Supports the unified stack tiles which
-                    # carry a `logos: [...]` array (LangChain stack,
-                    # Grafana stack) as well as the single-logo case.
                     Div(id="fw-progress-logos", cls="fw-progress-logos"),
                     Span("", id="fw-progress-framework",
                          cls="fw-progress-framework"),
@@ -176,28 +329,30 @@ def _Picker():
             ),
             id="fw-progress-box", cls="fw-progress",
         ),
-        # File list — populated from the canonical MinIO manifest whenever
-        # the user navigates to Step 2 with an active framework selection.
         Div("", id="fw-step2-summary", cls="fw-pages-summary"),
         Div(
             Div(
                 "Pick a framework in the catalog or the sidebar to see "
-                "its downloaded files.",
+                "its downloaded files." if not slug else "Loading…",
                 cls="fw-empty",
             ),
             id="fw-step2-grid", cls="fw-page-grid",
         ),
+        cls="fw-step-panel active",
+        id="fw-step-2-panel",
     )
 
-    # Step 3 — Planner (Cytoscape DAG canvas only; cards removed 2026-05-19)
-    step3_body = Div(
-        # Header w/ Start button + progress meta
+
+def _PlannerBody(slug: str | None):
+    empty_msg = (
+        "Pick a framework from the library to view the planner pipeline."
+        if not slug else
+        "Loading planner state…"
+    )
+    return Div(
+        # Header — title row + status pill + framework strip + actions
         Div(
             Div(
-                # Title row — stage name + status pill share a flex line
-                # so the pill reads as "this is what Planner is doing
-                # right now" instead of floating above the canvas. Same
-                # pattern as Linear issue header + LangSmith run header.
                 Div(
                     Div("Planner", cls="fw-planner-title"),
                     Div(
@@ -208,29 +363,20 @@ def _Picker():
                     ),
                     cls="fw-planner-title-row",
                 ),
-                # Framework identity strip — logo(s) + catalog name. JS
-                # populates from the `frameworkInfo` map (built off the
-                # rendered catalog tiles) whenever activeSlug changes.
-                # Falls back to a hint when no framework is selected.
                 Div(
                     Div(id="fw-planner-fw-logos",
                         cls="fw-planner-fw-logos"),
-                    Span("Pick a framework to start.",
-                         id="fw-planner-fw-name",
-                         cls="fw-planner-fw-name"),
+                    Span(
+                        "Pick a framework to start." if not slug else slug,
+                        id="fw-planner-fw-name",
+                        cls=("fw-planner-fw-name fw-planner-fw-name-empty"
+                             if not slug else "fw-planner-fw-name"),
+                    ),
                     id="fw-planner-fw", cls="fw-planner-fw",
                 ),
                 cls="fw-planner-head-text",
             ),
             Div(
-                # Mode dropdown removed 2026-05-18 — the v1 LLM-vs-classical
-                # split was superseded by the unified LITA-pattern
-                # architecture (see docs/PLANNER-ARCHITECTURE-2026-05-17.md).
-                # Server still accepts ?mode= with default "llm"; client
-                # always sends "llm" implicitly.
-                # Progress label ("Step N of 8") removed 2026-05-18 — its
-                # info is now folded into the status pill (e.g. "WORKING
-                # · 4/8") which lives next to the title.
                 Button("Wipe planner", id="fw-planner-wipe",
                        cls="btn-outline", disabled=True,
                        title=("Delete this framework's planner cache "
@@ -242,34 +388,23 @@ def _Picker():
             ),
             cls="fw-planner-head",
         ),
-        # Substep timeline — Cytoscape DAG canvas is the only render
-        # path. The legacy vertical-cards layout was removed 2026-05-19
-        # because the DAG canvas is strictly better for this domain
-        # (one-click node inspection via NodeDrawer, visual stage
-        # ordering, KPI badges per node, live SSE-driven coloring).
-        # Empty-state placeholder shows when no slug is active.
+        Div(empty_msg, id="fw-planner-empty", cls="fw-stage-empty"),
         Div(
-            "Pick a framework from the library to view the planner pipeline.",
-            id="fw-planner-empty", cls="fw-stage-empty",
-        ),
-        Div(
-            # Cytoscape mount point. Sized via CSS; Cytoscape draws to
-            # a <canvas> child element it creates on init.
             Div(id="fw-planner-canvas", cls="fw-stage-canvas"),
             id="fw-planner-graph", cls="fw-planner-graph",
         ),
+        cls="fw-step-panel active",
+        id="fw-step-3-panel",
     )
 
-    # Step 4 — Synth (Cytoscape DAG canvas only; cards removed 2026-05-19).
-    # Per `docs/SYNTH-ARCHITECTURE-SOTA-2026-05-18.md`. The IMPLEMENTED set
-    # comes from GET /synth/info — nodes light up as they ship, mirroring
-    # the planner's incremental-rollout pattern. Node labels + descriptions
-    # for the canvas now live in apps/fasthtml/static/js/docs_distiller.js
-    # (SYNTH_NODE_LABELS) since the DAG is rendered client-side.
-    step4_body = Div(
-        # Header — mirrors Planner's pattern (title row with pill +
-        # framework chip below + actions on the right). See Day 5 of
-        # `docs/UI-ARCHITECTURE-SOTA-2026-05-18.md`.
+
+def _SynthBody(slug: str | None):
+    empty_msg = (
+        "Pick a framework from the library to view the synth pipeline."
+        if not slug else
+        "Loading synth state…"
+    )
+    return Div(
         Div(
             Div(
                 Div(
@@ -284,20 +419,17 @@ def _Picker():
                 ),
                 Div(
                     Div(id="fw-synth-fw-logos", cls="fw-planner-fw-logos"),
-                    Span("Pick a framework to start.",
-                         id="fw-synth-fw-name",
-                         cls="fw-planner-fw-name fw-planner-fw-name-empty"),
+                    Span(
+                        "Pick a framework to start." if not slug else slug,
+                        id="fw-synth-fw-name",
+                        cls=("fw-planner-fw-name fw-planner-fw-name-empty"
+                             if not slug else "fw-planner-fw-name"),
+                    ),
                     id="fw-synth-fw", cls="fw-planner-fw",
                 ),
                 cls="fw-planner-head-text",
             ),
             Div(
-                # Refine budget — per the SOTA doc step 8 (CoRefine halting):
-                # max replan iterations per chapter before forcing best-seen
-                # commit. DISABLED until v2: the synth graph is single-pass
-                # today (no StateGraph cycle back to sawc_write), so this
-                # value is inert. start_synth doesn't consume it yet either.
-                # Re-enable when the v2 refine loop + budget wiring lands.
                 Div(
                     Span("Refine budget", cls="fw-planner-mode-label"),
                     Select(
@@ -317,19 +449,7 @@ def _Picker():
             ),
             cls="fw-planner-head",
         ),
-        # Empty-state placeholder — mirrors planner's. Visible when
-        # activeSlug is null; JS hides it the moment a framework is
-        # picked from the library.
-        Div(
-            "Pick a framework from the library to view the synth pipeline.",
-            id="fw-synth-empty", cls="fw-stage-empty",
-        ),
-        # Chapter progress strip — visible only during STUDY mode runs
-        # (when `Start Synth` is clicked with no specific chapter, the
-        # orchestrator runs all chapters sequentially). JS populates one
-        # `.fw-chstrip-cell` per chapter and flips its data-status as
-        # `chapter_running`/`chapter_done` events arrive on the study
-        # SSE channel. Hidden by default; .visible class added by JS.
+        Div(empty_msg, id="fw-synth-empty", cls="fw-stage-empty"),
         Div(
             Div(
                 Span("Chapters", cls="fw-chstrip-title"),
@@ -339,24 +459,17 @@ def _Picker():
             Div(id="fw-chstrip-cells", cls="fw-chstrip-cells"),
             id="fw-chstrip", cls="fw-chstrip",
         ),
-        # Substep timeline — Cytoscape DAG canvas only (cards removed
-        # 2026-05-19; see planner-side comment for rationale).
         Div(
             Div(id="fw-synth-canvas", cls="fw-stage-canvas"),
             id="fw-synth-graph", cls="fw-planner-graph",
         ),
+        cls="fw-step-panel active",
+        id="fw-step-4-panel",
     )
 
-    # Step 5 — Study (chapter viewer for synthesized output)
-    # Three-column layout per Mintlify/Docusaurus/Fumadocs 2026 convention:
-    #   left:   chapter sidebar (rendered/not-rendered status per chapter)
-    #   center: tabs (README / Challenges / Cards) + content
-    #   right:  (optional) section TOC for the README tab
-    # JS populates everything from the artifact endpoints when activeSlug
-    # changes or the user lands on Step 5. Empty-state when no synth output
-    # exists yet for the framework.
-    step5_body = Div(
-        # Header: framework name + global "regenerate synth" hint
+
+def _StudyBody(slug: str | None):
+    return Div(
         Div(
             Div(
                 Div("Study", cls="fw-planner-title"),
@@ -370,30 +483,24 @@ def _Picker():
             ),
             Div(
                 Div(id="fw-study-fw-logos", cls="fw-planner-fw-logos"),
-                Span("Pick a framework with synthesized chapters.",
-                     id="fw-study-fw-name",
-                     cls="fw-planner-fw-name fw-planner-fw-name-empty"),
+                Span(
+                    "Pick a framework with synthesized chapters."
+                    if not slug else slug,
+                    id="fw-study-fw-name",
+                    cls=("fw-planner-fw-name fw-planner-fw-name-empty"
+                         if not slug else "fw-planner-fw-name"),
+                ),
                 id="fw-study-fw", cls="fw-planner-fw",
             ),
             cls="fw-planner-head-text",
         ),
-        # Empty-state placeholder — visible when no slug active OR no
-        # chapters rendered yet. JS hides this when there's content.
         Div(
             "Pick a framework from the library, then run Synth on its "
             "chapters to populate this study viewer.",
             id="fw-study-empty", cls="fw-stage-empty",
         ),
-        # Reader — chapter list is now a slide-out SIDE WINDOW (toggled by
-        # the `≡ Chapters` button in the tab strip); the materials reader
-        # takes the full main width. Backdrop dims the page while the
-        # window is open and closes it on click.
         Div(
-            # Backdrop — only interactive while the side window is open.
             Div(id="fw-study-side-backdrop", cls="fw-study-side-backdrop"),
-            # Slide-out chapter window (off-canvas left). JS toggles `.open`
-            # on both this and the backdrop. Same #fw-study-chapter-list id
-            # so the existing render/click logic is untouched.
             Div(
                 Div(
                     Span("Chapters", cls="fw-study-side-title"),
@@ -407,10 +514,7 @@ def _Picker():
                 cls="fw-study-side",
                 id="fw-study-side",
             ),
-            # MAIN: tabs + content (full width)
             Div(
-                # Tab strip — `≡ Chapters` toggle on the left, then the
-                # 3 artifact tabs.
                 Div(
                     Button("☰ Chapters", id="fw-study-toc-toggle",
                            cls="fw-study-toc-toggle", type="button",
@@ -426,13 +530,9 @@ def _Picker():
                            type="button"),
                     cls="fw-study-tabs",
                 ),
-                # Per-chapter heading strip (rendered when chapter
-                # selected — shows chapter title + audit status)
                 Div(id="fw-study-chapter-head",
                     cls="fw-study-chapter-head"),
-                # Tab panes — only the active one is shown via CSS
                 Div(
-                    # README pane — marked.js renders into here
                     Div(
                         Div(
                             "Open the ☰ Chapters window and pick a chapter.",
@@ -442,7 +542,6 @@ def _Picker():
                         cls="fw-study-pane fw-study-prose active",
                         data_tab="readme",
                     ),
-                    # Challenges pane — collapsible Q/A
                     Div(
                         Div(
                             "Pick a chapter to view its active-recall "
@@ -453,7 +552,6 @@ def _Picker():
                         cls="fw-study-pane fw-study-prose",
                         data_tab="challenges",
                     ),
-                    # Flashcards pane — flip-card study mode
                     Div(
                         Div(
                             "Pick a chapter to study its flashcards.",
@@ -471,160 +569,94 @@ def _Picker():
             cls="fw-study-grid",
             id="fw-study-grid",
         ),
+        cls="fw-step-panel active",
+        id="fw-step-5-panel",
     )
 
-    return Div(
-        # Stepper row — Catalog → Ingestion → Planner → Synth → Study
-        Div(
-            Div(
-                _Step(1, "Catalog", active=True),
-                Span(cls="fw-step-connector"),
-                _Step(2, "Ingestion"),
-                Span(cls="fw-step-connector"),
-                _Step(3, "Planner"),
-                Span(cls="fw-step-connector"),
-                _Step(4, "Synth"),
-                Span(cls="fw-step-connector"),
-                _Step(5, "Study"),
-                cls="fw-stepper",
-            ),
-            cls="fw-stepper-row",
-        ),
 
-        # Layout: sidebar + main step content
+# ============================================================ #
+# Page composer — wraps a stage body in the shared chrome.     #
+# ============================================================ #
+def _DDPage(active_stage: str, slug: str | None, body, with_sticky: bool = False):
+    """Compose: stage sub-nav → layout(sidebar + body) → overlays.
+
+    `active_stage` highlights the matching link in the sub-nav AND
+    is exposed on the root div as `data-dd-stage` so main.js can
+    branch its init sequence without re-parsing window.location.
+    """
+    notice, toast = _NoticeAndToast()
+    extras = []
+    if with_sticky:
+        extras.append(_StickyBar())
+    return Div(
+        _StageSubNav(active_stage, slug),
         Div(
-            # Sidebar (library) — always rendered; JS toggles visual state.
+            _Sidebar(),
             Div(
-                P("Library", cls="fw-sidebar-title"),
-                Div(
-                    Div("Loading…", cls="fw-sidebar-empty"),
-                    id="fw-sidebar-list",
-                ),
-                id="fw-sidebar", cls="fw-sidebar",
-            ),
-            # Main panel — holds the 5 step panels
-            Div(
-                Div(
-                    step1_edit,
-                    id="fw-step-1-panel", cls="fw-step-panel active",
-                ),
-                Div(step2_body, id="fw-step-2-panel", cls="fw-step-panel"),
-                Div(step3_body, id="fw-step-3-panel", cls="fw-step-panel"),
-                Div(step4_body, id="fw-step-4-panel", cls="fw-step-panel"),
-                Div(step5_body, id="fw-step-5-panel", cls="fw-step-panel"),
+                notice,
+                toast,
+                body,
                 cls="fw-main",
             ),
             cls="fw-layout",
         ),
-
-        # Sticky bar (Step 1 → Generate)
-        Div(
-            Span(
-                "Selected: ",
-                Span("", id="fw-selected-name", cls="fw-selected-name"),
-                id="fw-selected-label", cls="fw-selected-label",
-            ),
-            Button("Start Ingestion", id="fw-generate", cls="btn-primary"),
-            id="fw-sticky-bar", cls="fw-sticky-bar",
-        ),
-        # Generic confirm modal (reused by delete + future destructive actions)
-        Div(
-            Div(
-                Div("", id="fw-modal-title", cls="fw-modal-title"),
-                P("", id="fw-modal-message", cls="fw-modal-message"),
-                Div(
-                    Button("Cancel", id="fw-modal-cancel", cls="btn-outline"),
-                    Button("Confirm", id="fw-modal-confirm", cls="btn-primary"),
-                    cls="fw-modal-actions",
-                ),
-                cls="fw-modal",
-            ),
-            id="fw-modal", cls="fw-modal-backdrop",
-        ),
-        # File-content drawer (right-anchored slide-out). One instance; the
-        # JS pages it through the current manifest's entries via prev/next.
-        Div(
-            Div(
-                Div(
-                    Div("", id="fw-drawer-name", cls="fw-drawer-name"),
-                    Div("", id="fw-drawer-meta", cls="fw-drawer-meta"),
-                    cls="fw-drawer-title",
-                ),
-                Div(
-                    Button("◀", id="fw-drawer-prev",
-                           cls="fw-drawer-btn", title="Previous (←)"),
-                    Button("▶", id="fw-drawer-next",
-                           cls="fw-drawer-btn", title="Next (→)"),
-                    Button("✕", id="fw-drawer-close",
-                           cls="fw-drawer-btn", title="Close (Esc)"),
-                    cls="fw-drawer-controls",
-                ),
-                cls="fw-drawer-header",
-            ),
-            Div("", id="fw-drawer-body", cls="fw-drawer-body"),
-            id="fw-drawer", cls="fw-drawer",
-        ),
-        # Node-detail drawer — opens when the user clicks a node on the
-        # planner/synth canvas. Reuses `.fw-drawer` for slide-in chrome;
-        # body holds a 3-zone layout: (A) sticky header with status +
-        # KPIs, (B) live SSE event log (rAF-batched, sticky-bottom,
-        # 200-line cap), (C) collapsible <details> for Inputs/Outputs
-        # /Prompt. See `docs/UI-ARCHITECTURE-SOTA-2026-05-18.md` Day 3.
-        Div(
-            # Zone A — sticky header. Repurposes drawer-header chrome
-            # but swaps the file-paging controls for a single ✕ close.
-            Div(
-                Div(
-                    Span("○", id="fw-node-drawer-icon",
-                         cls="fw-node-drawer-icon"),
-                    Div(
-                        Div("", id="fw-node-drawer-title",
-                            cls="fw-drawer-name"),
-                        Div("", id="fw-node-drawer-meta",
-                            cls="fw-drawer-meta"),
-                        cls="fw-drawer-title",
-                    ),
-                    cls="fw-node-drawer-head-left",
-                ),
-                Div(
-                    Button("✕", id="fw-node-drawer-close",
-                           cls="fw-drawer-btn", title="Close (Esc)"),
-                    cls="fw-drawer-controls",
-                ),
-                cls="fw-drawer-header",
-            ),
-            # Zone A continued — KPI strip (inline, comma-separated).
-            Div("", id="fw-node-drawer-kpis", cls="fw-node-drawer-kpis"),
-            # Body wraps Zone B + Zone C so they share the scroll area.
-            Div(
-                # Zone B — live SSE event log.
-                Div(
-                    Div("Activity", cls="fw-node-drawer-section-title"),
-                    Div(
-                        Div("Open a node to stream its events here.",
-                            cls="fw-empty",
-                            id="fw-node-drawer-log-empty"),
-                        Div("", id="fw-node-drawer-log",
-                            cls="fw-node-drawer-log"),
-                        cls="fw-node-drawer-log-wrap",
-                    ),
-                    cls="fw-node-drawer-section",
-                ),
-                # Zone C — collapsible <details> for Inputs/Outputs/
-                # Prompt. Native HTML — zero JS for the toggle animation.
-                Div("", id="fw-node-drawer-details",
-                    cls="fw-node-drawer-details"),
-                id="fw-node-drawer-body", cls="fw-drawer-body",
-            ),
-            id="fw-node-drawer", cls="fw-drawer",
-        ),
+        *extras,
+        _ConfirmModal(),
+        _FileDrawer(),
+        _NodeDrawer(),
         Script(src="/static/js/dd/main.js", type="module"),
         cls="fw-picker",
+        data_dd_stage=active_stage,
+        data_dd_slug=(slug or ""),
     )
 
 
+def _slug_from_request(req: Request) -> str | None:
+    """Read ?slug= from query string; treat empty/whitespace as None."""
+    raw = (req.query_params.get("slug") or "").strip()
+    return raw or None
+
+
 def register(rt) -> None:
-    """Attach /docs-distiller to `rt`. The / route lives in features/home.py."""
+    """Attach the 5 Docs Distiller routes to `rt`."""
+
     @rt("/docs-distiller")
-    def docs_distiller():
-        return _Shell("docs-distiller", "Docs Distiller", body=_Picker())
+    def docs_distiller_catalog():
+        catalog = _fetch_catalog()
+        return _Shell(
+            "docs-distiller", "Docs Distiller",
+            body=_DDPage("catalog", None, _CatalogBody(catalog),
+                         with_sticky=True),
+        )
+
+    @rt("/docs-distiller/ingestion")
+    def docs_distiller_ingestion(req: Request):
+        slug = _slug_from_request(req)
+        return _Shell(
+            "docs-distiller", "Docs Distiller",
+            body=_DDPage("ingestion", slug, _IngestionBody(slug)),
+        )
+
+    @rt("/docs-distiller/planner")
+    def docs_distiller_planner(req: Request):
+        slug = _slug_from_request(req)
+        return _Shell(
+            "docs-distiller", "Docs Distiller",
+            body=_DDPage("planner", slug, _PlannerBody(slug)),
+        )
+
+    @rt("/docs-distiller/synth")
+    def docs_distiller_synth(req: Request):
+        slug = _slug_from_request(req)
+        return _Shell(
+            "docs-distiller", "Docs Distiller",
+            body=_DDPage("synth", slug, _SynthBody(slug)),
+        )
+
+    @rt("/docs-distiller/study")
+    def docs_distiller_study(req: Request):
+        slug = _slug_from_request(req)
+        return _Shell(
+            "docs-distiller", "Docs Distiller",
+            body=_DDPage("study", slug, _StudyBody(slug)),
+        )

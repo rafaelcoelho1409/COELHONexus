@@ -133,7 +133,35 @@ _USC_VOTE_RESPONSE_FORMAT = {"type": "json_object"}
 # count), ship it directly. Else fan out remaining N-1 candidates and
 # run the USC vote picker. Flag-gated via KD_OUTLINE_OPTIMAL_STOPPING
 # (default true). Same pattern as sawc/node.py Optimal-Stopping.
-_OUTLINE_OPTIMAL_STOPPING_MIN_SECTIONS = 5
+# T1 (2026-05-27) — adaptive floor for outline Optimal-Stopping.
+#
+# Run 4 evidence: BU ch-01 produced only 4 H2 sections (rendered 5) for
+# a 38-doc corpus whose adaptive cap was 12 — Optimal-Stopping's fixed
+# floor of 5 let the first draft short-circuit a chapter that should
+# have used the cap budget. Result: chapter felt like reference cards,
+# triggered `chapter_reads_coherently` + `terminology_consistent` LLM-
+# judge failures. Coupling the floor to ~70% of the adaptive cap means
+# we still benefit from Optimal-Stopping's sample-count savings while
+# refusing to short-circuit on under-generated outlines.
+_OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR = 5
+_OUTLINE_OPTIMAL_STOPPING_RATIO_OF_CAP = 0.7
+
+
+def _outline_optimal_stopping_min(n_sources: int | None) -> int:
+    """Minimum section count for Optimal-Stopping early-exit. Couples
+    to the adaptive cap so small corpora keep the cheap floor while
+    large corpora demand sample 1 use most of the available budget
+    before short-circuiting."""
+    if n_sources is None:
+        return _OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR
+    from .constants import max_h2_for_n_sources
+    cap = max_h2_for_n_sources(n_sources)
+    return max(
+        _OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR,
+        int(cap * _OUTLINE_OPTIMAL_STOPPING_RATIO_OF_CAP),
+    )
+
+
 _OUTLINE_OPTIMAL_STOPPING_ENABLED = os.environ.get(
     "KD_OUTLINE_OPTIMAL_STOPPING", "true",
 ).lower() in ("true", "1", "yes", "on")
@@ -387,10 +415,12 @@ async def _generate_samples(
 
     DD-SYNTH-SPEED-SOTA #B2 (2026-05-26) — Optimal-Stopping: fire sample 1
     first; if it parses cleanly, passes structure validation with zero
-    issues, AND has >= _OUTLINE_OPTIMAL_STOPPING_MIN_SECTIONS sections, ship
-    it alone and skip the remaining N-1 samples. Else fan out remaining
-    concurrently and let USC vote decide. arXiv 2510.01394 (Oct 2025):
-    15-35% sample reduction at equal Best-of-N quality. Disabled via
+    issues, AND has >= _outline_optimal_stopping_min(n_sources) sections,
+    ship it alone and skip the remaining N-1 samples. T1 (2026-05-27)
+    raised the floor from fixed-5 to ~70% of the adaptive cap so small
+    outlines don't short-circuit. Else fan out remaining concurrently
+    and let USC vote decide. arXiv 2510.01394 (Oct 2025): 15-35% sample
+    reduction at equal Best-of-N quality. Disabled via
     `KD_OUTLINE_OPTIMAL_STOPPING=false`.
 
     Failures (parse fail, None payload) are logged but don't block the rest.
@@ -413,7 +443,7 @@ async def _generate_samples(
                 if (
                     not issues0
                     and len(outline0.sections)
-                        >= _OUTLINE_OPTIMAL_STOPPING_MIN_SECTIONS
+                        >= _outline_optimal_stopping_min(n_sources)
                 ):
                     logger.info(
                         f"[outline_sdp] Optimal-Stopping fired — sample 0 "

@@ -22,6 +22,9 @@ export function indexTilesForFramework() {
 }
 
 export function setProgressFramework(slug) {
+  // Progress UI elements only exist on /docs-distiller/ingestion. On
+  // every other stage this function is a no-op.
+  if (!S.progressFramework) return;
   const info = S.frameworkInfo[slug] || {name: slug, logos: []};
   S.progressFramework.textContent = info.name || slug;
   if (info.logos && info.logos.length) {
@@ -53,7 +56,7 @@ export function applyFilter() {
   S.countEl.textContent = visible + ' of ' + S.total;
 }
 
-S.search.addEventListener('input', e => {
+S.search?.addEventListener('input', e => {
   S.setQuery(e.target.value.toLowerCase().trim());
   applyFilter();
 });
@@ -64,13 +67,14 @@ S.chips.forEach(c => c.addEventListener('click', () => {
   applyFilter();
 }));
 S.tiles.forEach(t => t.addEventListener('click', () => {
-  // Tile selection always works (catalog stays interactive). Whether
-  // the Generate button is clickable is governed by activeRunId.
-  if (S.currentStep !== 1) return;
+  // Tile selection always works (catalog stays interactive). The
+  // currentStep guard was relevant to the wizard-era single-page
+  // layout; with per-stage routes, tiles only exist on /docs-distiller
+  // (catalog) so the guard is implicit.
   S.tiles.forEach(x => x.classList.remove('selected'));
   t.classList.add('selected');
   S.setSelected(t.dataset.slug);
-  S.selectedName.textContent = t.dataset.name;
-  S.stickyBar.classList.add('visible');
+  if (S.selectedName) S.selectedName.textContent = t.dataset.name;
+  if (S.stickyBar) S.stickyBar.classList.add('visible');
   refreshGenerateState();
 }));

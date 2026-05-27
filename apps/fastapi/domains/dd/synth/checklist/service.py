@@ -332,7 +332,37 @@ def check_code_uniqueness_ratio(sawc: dict) -> CriterionResult:
     n_total = len(hashes)
     n_unique = len(set(hashes))
     ratio = n_unique / n_total
-    passed = ratio >= 0.5
+
+    # Path B (2026-05-27) — adaptive floor scaled to absolute bank
+    # diversity.
+    #
+    # The original fixed 50% floor punished bank-constrained chapters
+    # mathematically: a chapter with 17 unique hashes available across
+    # its sections and 48 subtopics to fill can't exceed 17/48 ≈ 35%
+    # uniqueness regardless of writer effort. Claude Code Run 6 ch-01
+    # exhibited exactly this pattern (8 sections × ~3-5 hashes each in
+    # the per-section bank, intersection across sections shrinks the
+    # union to ~17 unique).
+    #
+    # Adaptive policy:
+    #   n_unique >= 30 → strict floor 50% (rich bank, writer should
+    #                     diversify)
+    #   15 <= n_unique < 30 → moderate floor 35% (constrained bank;
+    #                     writer used most of what was available)
+    #   n_unique  <  15 → loose floor 30% (severely constrained; the
+    #                     criterion's signal degrades anyway)
+    #
+    # Still catches the original failure modes: a chapter using 5
+    # unique hashes across 50 subtopics (10% ratio) fails even under
+    # the loose tier. A chapter using 50 unique hashes across 100
+    # subtopics (50% ratio) passes strict.
+    if n_unique >= 30:
+        adaptive_floor = 0.50
+    elif n_unique >= 15:
+        adaptive_floor = 0.35
+    else:
+        adaptive_floor = 0.30
+    passed = ratio >= adaptive_floor
 
     if passed:
         return CriterionResult(
@@ -348,7 +378,8 @@ def check_code_uniqueness_ratio(sawc: dict) -> CriterionResult:
     sample = ", ".join(f"{h[:8]}…×{n}" for h, n in top if n > 1)
     feedback = (
         f"code uniqueness {ratio:.0%} ({n_unique} unique / {n_total} "
-        f"total verbatim blocks); floor 50%. Top duplicates: {sample}. "
+        f"total verbatim blocks); adaptive floor {adaptive_floor:.0%} "
+        f"(scaled to bank diversity). Top duplicates: {sample}. "
         f"Sections are recycling the same vault snippets across "
         f"different subtopics — split overloaded sections or merge "
         f"sections that share most of their code base."

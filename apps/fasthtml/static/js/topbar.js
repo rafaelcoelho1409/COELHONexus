@@ -1,19 +1,28 @@
-/* DD-NAVBAR-SOTA-2026-05-26 (Wave B1) — running-work status dot.
+/* DD-NAVBAR-SOTA topbar client behaviors.
  *
- * Polls /api/v1/docs-distiller/runs/active every 30s. When ANY active
- * ingestion run is in flight, the matching nav-item gets the
- * .has-running class which surfaces its .nav-status-dot (pulsing
- * sky-blue dot, top-right of the nav pill — see base.css).
+ * Wave B1 — running-work status dot:
+ *   Polls /api/v1/docs-distiller/runs/active every 30s. When ANY
+ *   active ingestion run is in flight, the matching nav-item gets
+ *   .has-running which surfaces a pulsing sky-blue .nav-status-dot.
+ *   Today: covers ingestion only. Synth/planner is a TODO.
+ *   Failure mode: silent. Any fetch/JSON error leaves the existing
+ *   class state untouched, so the dot just doesn't appear.
  *
- * Today: covers ingestion only (that's the only `*/active` endpoint we
- * have). Synth / planner detection is a TODO follow-up — would either
- * need a new /api/v1/docs-distiller/synth/active endpoint or a
- * client-side aggregator over /recent + per-thread state.
- *
- * Failure mode: silent. Any fetch/JSON error leaves the existing class
- * state untouched, so the dot just doesn't appear; no UI breakage.
+ * Wave C (2026-05-27) — sticky auto-hide topbar:
+ *   1. Stuck detection via IntersectionObserver sentinel. A 1px
+ *      element sits in normal flow ABOVE .topbar-wrap; once it
+ *      exits the viewport, the bar is pinned → toggle .is-stuck.
+ *      Sentinel uses negative margin to avoid any layout shift.
+ *   2. Auto-hide on scroll-down via passive scroll listener,
+ *      throttled with requestAnimationFrame. Threshold + delta
+ *      avoid flicker; near the top of the page the bar always
+ *      shows. prefers-reduced-motion disables the hide behavior
+ *      entirely (CSS also disables the transition).
  */
 (() => {
+  // -------------------------------------------------------------- //
+  // Wave B1 — running-work status dot                              //
+  // -------------------------------------------------------------- //
   const POLL_INTERVAL_MS = 30000;
   // Map backend feature → nav-item data-status-key. Multiple sources
   // can flag the same key (e.g. ingestion + synth both bump
@@ -21,9 +30,6 @@
   const FEATURE_TO_KEY = {
     ingestion: "docs-distiller",
   };
-
-  const item = (key) =>
-    document.querySelector(`.nav-item[data-status-key="${key}"]`);
 
   async function fetchActiveIngestion() {
     try {
@@ -77,4 +83,66 @@
     else start();
   });
   start();
+
+  // -------------------------------------------------------------- //
+  // Wave C — sticky stuck-detection + auto-hide on scroll-down     //
+  // -------------------------------------------------------------- //
+  const topbarWrap = document.querySelector(".topbar-wrap");
+  if (!topbarWrap) return;
+
+  // Sentinel: 1px element in normal flow with -1px margin so it
+  // contributes ZERO layout space but is observable. Placed right
+  // before .topbar-wrap so its intersection state mirrors whether
+  // the bar is currently pinned at the viewport edge.
+  const sentinel = document.createElement("div");
+  sentinel.setAttribute("aria-hidden", "true");
+  sentinel.style.cssText = "height:1px;margin-bottom:-1px;";
+  topbarWrap.parentNode.insertBefore(sentinel, topbarWrap);
+
+  const stuckObserver = new IntersectionObserver(
+    ([entry]) => {
+      topbarWrap.classList.toggle("is-stuck", !entry.isIntersecting);
+    },
+    { threshold: [0, 1] },
+  );
+  stuckObserver.observe(sentinel);
+
+  // Auto-hide on scroll-down. Tunables:
+  //   SCROLL_DELTA  — ignore micro-scrolls below this (px).
+  //   SHOW_BELOW_Y  — always show the bar when within this many px
+  //                   of the document top (avoids hiding right after
+  //                   the user lands on a page).
+  const SCROLL_DELTA = 6;
+  const SHOW_BELOW_Y = 80;
+  const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+  let lastY = window.scrollY;
+  let ticking = false;
+
+  function onScroll() {
+    if (ticking) return;
+    ticking = true;
+    window.requestAnimationFrame(() => {
+      const y = window.scrollY;
+      const dy = y - lastY;
+
+      if (motionQuery.matches) {
+        // Reduced motion — never hide the bar.
+        topbarWrap.classList.remove("is-hidden");
+      } else if (Math.abs(dy) >= SCROLL_DELTA) {
+        if (dy > 0 && y > SHOW_BELOW_Y) {
+          topbarWrap.classList.add("is-hidden");
+        } else {
+          topbarWrap.classList.remove("is-hidden");
+        }
+        lastY = y;
+      } else if (y <= SHOW_BELOW_Y) {
+        // Near the top regardless — make sure the bar is visible.
+        topbarWrap.classList.remove("is-hidden");
+      }
+
+      ticking = false;
+    });
+  }
+  window.addEventListener("scroll", onScroll, { passive: true });
 })();
