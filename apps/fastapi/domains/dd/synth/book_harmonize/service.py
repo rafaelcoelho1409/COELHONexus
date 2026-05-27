@@ -360,6 +360,7 @@ async def _extract_claims_and_terms(
             )
             raw, _ = await chat_judge_bandit_async(
                 prompt, max_tokens=_EXTRACT_MAX_TOKENS, temperature=0.0,
+                response_format={"type": "json_object"},
             )
             m = _JSON_RE.search(raw or "")
             if not m:
@@ -396,6 +397,7 @@ async def _canonicalize_terms(
         )
         raw, _ = await chat_judge_bandit_async(
             prompt, max_tokens=_CANONICALIZE_MAX_TOKENS, temperature=0.1,
+            response_format={"type": "json_object"},
         )
         m = _JSON_RE.search(raw or "")
         if not m:
@@ -457,6 +459,7 @@ async def _detect_violations(
             )
             raw, _ = await chat_judge_bandit_async(
                 prompt, max_tokens=_DETECT_MAX_TOKENS, temperature=0.0,
+                response_format={"type": "json_object"},
             )
             m = _JSON_RE.search(raw or "")
             if not m:

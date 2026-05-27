@@ -146,6 +146,19 @@ _MAX_SOURCE_CHARS = 100_000
 _BLOB_PREFIX = "synth"
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
+# DD-SYNTH-SPEED-SOTA #A1 (2026-05-26) — structured-output schema for the
+# per-source digest call. NIM + Mistral honor response_format=json_schema
+# server-side. Caller's existing Pydantic repair loop catches anything
+# that slips through (e.g. Gemini, where translation is rough).
+_DIGEST_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name":   "source_digest",
+        "schema": _LLMDigestPayload.model_json_schema(),
+        "strict": False,
+    },
+}
+
 
 # =============================================================================
 # Blob keys
@@ -257,6 +270,7 @@ async def _digest_one_source(
                 prompt,
                 max_tokens=_MAX_TOKENS_DRAFT,
                 temperature=_TEMPERATURE_DRAFT,
+                response_format=_DIGEST_RESPONSE_FORMAT,
             )
             deployment = (meta or {}).get("deployment")
         except Exception as e:
@@ -316,6 +330,7 @@ async def _digest_one_source(
                         repair_prompt,
                         max_tokens=_MAX_TOKENS_REPAIR,
                         temperature=_TEMPERATURE_REPAIR,
+                        response_format=_DIGEST_RESPONSE_FORMAT,
                     )
                     deployment = (rm or {}).get("deployment") or deployment
                     rp = _parse_json_response(rr)
@@ -373,6 +388,7 @@ async def _digest_one_source(
                         repair_prompt,
                         max_tokens=_MAX_TOKENS_REPAIR,
                         temperature=_TEMPERATURE_REPAIR,
+                        response_format=_DIGEST_RESPONSE_FORMAT,
                     )
                     deployment = (rm or {}).get("deployment") or deployment
                     rp = _parse_json_response(rr)

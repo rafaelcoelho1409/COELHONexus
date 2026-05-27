@@ -57,6 +57,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from hashlib import sha256
@@ -111,6 +112,31 @@ _MAX_TOKENS_REPAIR       = 8000
 _MAX_SOURCE_CHARS        = 180_000
 _SOURCE_CONCAT_SEPARATOR = "\n\n---\n\n"
 _TARGET_SECTIONS_HINT    = 8
+
+# DD-SYNTH-SPEED-SOTA #A2 (2026-05-26) — structured-output schema for the
+# outline candidate generator + repair calls. USC vote uses a smaller
+# {"chosen_index": int} payload — kept as json_object (no Pydantic schema)
+# so the picker stays prompt-driven.
+_OUTLINE_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name":   "chapter_outline",
+        "schema": ChapterOutline.model_json_schema(),
+        "strict": False,
+    },
+}
+_USC_VOTE_RESPONSE_FORMAT = {"type": "json_object"}
+
+# DD-SYNTH-SPEED-SOTA #B2 (2026-05-26) — Optimal-Stopping on outline
+# candidate generation. Fire candidate 1; if it passes the deterministic
+# gate (parsed cleanly + zero validation issues + reasonable section
+# count), ship it directly. Else fan out remaining N-1 candidates and
+# run the USC vote picker. Flag-gated via KD_OUTLINE_OPTIMAL_STOPPING
+# (default true). Same pattern as sawc/node.py Optimal-Stopping.
+_OUTLINE_OPTIMAL_STOPPING_MIN_SECTIONS = 5
+_OUTLINE_OPTIMAL_STOPPING_ENABLED = os.environ.get(
+    "KD_OUTLINE_OPTIMAL_STOPPING", "true",
+).lower() in ("true", "1", "yes", "on")
 
 _BLOB_PREFIX = "synth"
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -317,6 +343,7 @@ async def _draft_one_outline(
             prompt,
             max_tokens=_MAX_TOKENS_DRAFT,
             temperature=_TEMPERATURE_DRAFT,
+            response_format=_OUTLINE_RESPONSE_FORMAT,
         )
     except Exception as e:
         await emit_progress(
@@ -353,17 +380,64 @@ async def _draft_one_outline(
 
 async def _generate_samples(
     prompt: str, n: int, thread_id: str,
+    *,
+    n_sources: int | None = None,
 ) -> list[tuple[dict, dict]]:
-    """Fire N drafts concurrently. Returns list of (parsed, meta) for
-    successful parses. Failures are logged but don't block the rest.
+    """Fire N drafts (sequential w/ early-exit OR concurrent fan-out).
+
+    DD-SYNTH-SPEED-SOTA #B2 (2026-05-26) — Optimal-Stopping: fire sample 1
+    first; if it parses cleanly, passes structure validation with zero
+    issues, AND has >= _OUTLINE_OPTIMAL_STOPPING_MIN_SECTIONS sections, ship
+    it alone and skip the remaining N-1 samples. Else fan out remaining
+    concurrently and let USC vote decide. arXiv 2510.01394 (Oct 2025):
+    15-35% sample reduction at equal Best-of-N quality. Disabled via
+    `KD_OUTLINE_OPTIMAL_STOPPING=false`.
+
+    Failures (parse fail, None payload) are logged but don't block the rest.
     Each sample emits a `sample_done` SSE event on completion so the UI
-    sees steady progress through the long-running LLM phase."""
-    results = await asyncio.gather(*[
-        _draft_one_outline(
-            prompt, sample_idx=i, n_total=n, thread_id=thread_id,
+    sees steady progress through the long-running LLM phase.
+    """
+    if _OUTLINE_OPTIMAL_STOPPING_ENABLED and n >= 2:
+        r0 = await _draft_one_outline(
+            prompt, sample_idx=0, n_total=n, thread_id=thread_id,
         )
-        for i in range(n)
-    ])
+        results: list = [r0]
+        parsed0, _meta0 = r0
+        if parsed0 is not None:
+            outline0, _err = _try_parse_outline(parsed0)
+            if outline0 is not None:
+                dag0 = derive_dag(outline0.sections)
+                _, issues0 = validate_outline_structure(
+                    outline0, dag0, n_sources=n_sources,
+                )
+                if (
+                    not issues0
+                    and len(outline0.sections)
+                        >= _OUTLINE_OPTIMAL_STOPPING_MIN_SECTIONS
+                ):
+                    logger.info(
+                        f"[outline_sdp] Optimal-Stopping fired — sample 0 "
+                        f"clean ({len(outline0.sections)} sections, 0 issues); "
+                        f"skipping remaining {n - 1} samples"
+                    )
+                    successful: list[tuple[dict, dict]] = []
+                    if parsed0 is not None:
+                        successful.append(r0)
+                    return successful
+        remaining = await asyncio.gather(*[
+            _draft_one_outline(
+                prompt, sample_idx=i, n_total=n, thread_id=thread_id,
+            )
+            for i in range(1, n)
+        ])
+        results.extend(remaining)
+    else:
+        results = await asyncio.gather(*[
+            _draft_one_outline(
+                prompt, sample_idx=i, n_total=n, thread_id=thread_id,
+            )
+            for i in range(n)
+        ])
     successful: list[tuple[dict, dict]] = []
     for parsed, meta in results:
         if parsed is not None:
@@ -402,6 +476,7 @@ async def _usc_pick(
             prompt,
             max_tokens=_MAX_TOKENS_VOTE,
             temperature=_TEMPERATURE_VOTE,
+            response_format=_USC_VOTE_RESPONSE_FORMAT,
         )
         parsed = _parse_json_response(response)
         if parsed and "chosen_index" in parsed:
@@ -621,7 +696,9 @@ async def outline_sdp(state: SynthState) -> dict:
         sources_concat_md=sources_concat_md,
         target_sections_hint=_TARGET_SECTIONS_HINT,
     )
-    raw_samples = await _generate_samples(prompt, _N_SAMPLES, thread_id)
+    raw_samples = await _generate_samples(
+        prompt, _N_SAMPLES, thread_id, n_sources=len(sources),
+    )
 
     await emit_progress(
         thread_id, "outline_sdp", "samples_drafted",
@@ -640,7 +717,9 @@ async def outline_sdp(state: SynthState) -> dict:
             )
             continue
         dag = derive_dag(outline.sections)
-        _, issues = validate_outline_structure(outline, dag)
+        _, issues = validate_outline_structure(
+            outline, dag, n_sources=len(sources),
+        )
         candidates.append((outline, dag, issues))
 
     await emit_progress(
@@ -692,6 +771,7 @@ async def outline_sdp(state: SynthState) -> dict:
                 repair_prompt,
                 max_tokens=_MAX_TOKENS_REPAIR,
                 temperature=_TEMPERATURE_REPAIR,
+                response_format=_OUTLINE_RESPONSE_FORMAT,
             )
             parsed = _parse_json_response(repair_response)
             if not parsed:
@@ -708,7 +788,9 @@ async def outline_sdp(state: SynthState) -> dict:
                 )
                 continue
             new_dag = derive_dag(new_outline.sections)
-            _, new_issues = validate_outline_structure(new_outline, new_dag)
+            _, new_issues = validate_outline_structure(
+                new_outline, new_dag, n_sources=len(sources),
+            )
             # Only accept if it ACTUALLY improves things.
             if len(new_issues) <= len(issues):
                 outline = new_outline
@@ -720,6 +802,61 @@ async def outline_sdp(state: SynthState) -> dict:
                 f"{attempt + 1} failed: {type(e).__name__}: {e}"
             )
             continue
+
+    # S1 (2026-05-26 late evening) — Hard-enforce outline section-count cap.
+    #
+    # CORR-3 Q1 emitted the adaptive-cap violation as a soft issue in
+    # validate_outline_structure but Run 3 evidence showed the LLM
+    # ignores it: BU ch-02 shipped 30 H2 (cap=12) after 3 repairs, CC
+    # ch-01 shipped 20 H2 (cap=14). Soft pressure isn't enough.
+    #
+    # Programmatic trim: keep the first `cap` sections in topological
+    # stage order (foundational concepts first). Prune prerequisite
+    # references to dropped sections. Re-derive the DAG over the
+    # trimmed set. This guarantees bounded-output regardless of LLM
+    # compliance. Lost content was always defensible-by-fewer-than-3-
+    # source-docs anyway (the cap is `n_sources // 3`).
+    from .constants import _SECTIONS_MIN, max_h2_for_n_sources
+    adaptive_cap = max(_SECTIONS_MIN, max_h2_for_n_sources(len(sources)))
+    if len(outline.sections) > adaptive_cap:
+        n_before = len(outline.sections)
+        # Topological order: lower stage_index first.
+        sections_by_stage: list[tuple[int, OutlineSection]] = []
+        sid_to_section = {s.section_id: s for s in outline.sections}
+        for stage_idx in sorted(dag.stages.keys()):
+            for sid in dag.stages[stage_idx]:
+                if sid in sid_to_section:
+                    sections_by_stage.append((stage_idx, sid_to_section[sid]))
+        # Sections not in any stage (orphans) appended last.
+        seen = {s.section_id for _, s in sections_by_stage}
+        for s in outline.sections:
+            if s.section_id not in seen:
+                sections_by_stage.append((dag.max_stage + 1, s))
+        kept = [s for _, s in sections_by_stage[:adaptive_cap]]
+        kept_ids = {s.section_id for s in kept}
+        # Clean prereqs that point to dropped sections.
+        for s in kept:
+            s.prerequisites = [p for p in s.prerequisites if p in kept_ids]
+        outline = outline.model_copy(update={"sections": kept})
+        dag = derive_dag(outline.sections)
+        logger.warning(
+            f"[outline_sdp] {slug}/{chapter_id}: HARD-TRIM outline "
+            f"{n_before} → {len(outline.sections)} sections (adaptive_cap="
+            f"{adaptive_cap}, n_sources={len(sources)}). LLM ignored the "
+            f"soft cap signal after {n_repairs} repairs; programmatic "
+            f"trim restores the bound."
+        )
+        # Re-validate post-trim so downstream sees the actual remaining
+        # violations (not the pre-trim ones, which may include the
+        # cap-exceeded issue we just resolved).
+        _, issues = validate_outline_structure(
+            outline, dag, n_sources=len(sources),
+        )
+        await emit_progress(
+            thread_id, "outline_sdp", "hard_trimmed",
+            n_before=n_before, n_after=len(outline.sections),
+            adaptive_cap=adaptive_cap, n_sources=len(sources),
+        )
 
     final_violations = issues
 

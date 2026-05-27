@@ -43,6 +43,10 @@ from ..vault.types import VaultEntry
 from .constants import (
     _CONCURRENCY,
     _DD_PROCESS,
+    _DERIVED_MAX_CHARS,
+    _DERIVED_MAX_LINES,
+    _DERIVED_MIN_CHARS,
+    _DERIVED_MIN_LINES,
     _ENV_ENABLED,
     _MAX_DERIVES_PER_CHAPTER,
     _MAX_OUTPUT_TOKENS,
@@ -62,6 +66,30 @@ from .types import DeriveAttempt, DeriveStats
 
 
 logger = logging.getLogger(__name__)
+
+
+# DD-SYNTH-SPEED-SOTA #B3 (2026-05-26) — Optimal-Stopping for MPSC samples.
+# Fire sample 1; if it's AST-valid AND lands in the required LOC + char
+# band, ship it directly. Else fire remaining samples + run rank_mpsc_samples.
+# Flag-gated via KD_SAWC_DERIVE_OPTIMAL_STOPPING (default true).
+_DERIVE_OPTIMAL_STOPPING_ENABLED = os.environ.get(
+    "KD_SAWC_DERIVE_OPTIMAL_STOPPING", "true",
+).lower() in ("true", "1", "yes", "on")
+
+
+def _body_passes_derive_gate(body: str) -> bool:
+    """Deterministic 'good enough' gate for Optimal-Stopping on MPSC."""
+    if not body:
+        return False
+    if not python_ast_valid(body):
+        return False
+    n_chars = len(body)
+    if not (_DERIVED_MIN_CHARS <= n_chars <= _DERIVED_MAX_CHARS):
+        return False
+    n_lines = sum(1 for ln in body.splitlines() if ln.strip())
+    if not (_DERIVED_MIN_LINES <= n_lines <= _DERIVED_MAX_LINES):
+        return False
+    return True
 
 
 _BLOB_PREFIX = "synth"
@@ -159,6 +187,7 @@ async def _reexplain_one(
             max_tokens=_REEXPLAIN_MAX_TOKENS,
             temperature=0.4,
             dd_process=_DD_PROCESS_REEXPLAIN,
+            response_format={"type": "json_object"},
         )
     except Exception as e:
         logger.debug(
@@ -241,13 +270,30 @@ async def _derive_one_subtopic(
             explanation=str(subtopic.get("explanation") or ""),
             original_body=original_body,
         )
-        results = await asyncio.gather(
-            *[_sample_one(prompt) for _ in range(_N_MPSC_SAMPLES)],
-            return_exceptions=False,
-        )
+        # DD-SYNTH-SPEED-SOTA #B3 — Optimal-Stopping on MPSC samples
+        if _DERIVE_OPTIMAL_STOPPING_ENABLED and _N_MPSC_SAMPLES >= 2:
+            r0 = await _sample_one(prompt)
+            results = [r0]
+            if _body_passes_derive_gate(r0[0]):
+                pass  # ship sample 0 directly
+            else:
+                # Fan out remaining samples
+                remaining = await asyncio.gather(
+                    *[_sample_one(prompt) for _ in range(1, _N_MPSC_SAMPLES)],
+                    return_exceptions=False,
+                )
+                results.extend(remaining)
+        else:
+            results = await asyncio.gather(
+                *[_sample_one(prompt) for _ in range(_N_MPSC_SAMPLES)],
+                return_exceptions=False,
+            )
         bodies = [r[0] for r in results]
         deployment = next((r[1] for r in results if r[1]), None)
         n_valid = sum(1 for b in bodies if b and python_ast_valid(b))
+        # When Optimal-Stopping ships sample 0, the single-element body
+        # path is handled by rank_mpsc_samples (which scores by length
+        # and AST validity; with 1 sample it picks index 0 if it passes).
         chosen_idx, _scores = rank_mpsc_samples(bodies)
         wall_ms = int((time.monotonic() - t0) * 1000)
         if chosen_idx is None:

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
+from difflib import SequenceMatcher
 from typing import Optional
 
 from .constants import (
     _BANNED_HEADINGS_LC,
     _BANNED_LIST_HUMAN,
     _MAX_STAGE_DEPTH,
+    _OUTLINE_H2_FUZZY_DEDUP_THRESHOLD,
+    max_h2_for_n_sources,
 )
 from .types import ChapterOutline, OutlineDAG, OutlineSection
 
@@ -165,7 +168,10 @@ def derive_dag(sections: list[OutlineSection]) -> OutlineDAG:
 # Structural validators (post-Pydantic, fail-soft for repair loop)
 # =============================================================================
 def validate_outline_structure(
-    outline: ChapterOutline, dag: OutlineDAG,
+    outline: ChapterOutline,
+    dag: OutlineDAG,
+    *,
+    n_sources: Optional[int] = None,
 ) -> tuple[bool, list[str]]:
     """Return (ok, list_of_issues). Issues are natural-language strings
     suitable for feeding back to the LLM as repair instructions.
@@ -181,10 +187,60 @@ def validate_outline_structure(
       - DAG depth ≤ _MAX_STAGE_DEPTH (rejects linear-only outlines)
       - first-stage sections exist (would only fail if every section
         has prereqs — implies a cycle that FAS broke into a forest)
+      - [CORR-3 Q1] section count ≤ max_h2_for_n_sources(n_sources)
+        when n_sources is provided (adaptive cap based on corpus size)
+      - [CORR-3 Q3] no fuzzy-duplicate H2 headings (SequenceMatcher
+        ratio ≥ 0.85 on case-folded titles)
     """
     issues: list[str] = []
     ids = [s.section_id for s in outline.sections]
     headings_lc = [s.heading.casefold() for s in outline.sections]
+
+    # CORR-3 Q1 — adaptive section-count cap based on source pool size.
+    # Soft reject: feeds the repair loop with a specific cap so the LLM
+    # can merge sections or drop weak ones. Skipped when n_sources is
+    # None (caller didn't have the count handy — fall back to the
+    # _SECTIONS_MAX=40 ceiling enforced at the Pydantic level).
+    if n_sources is not None:
+        adaptive_cap = max_h2_for_n_sources(n_sources)
+        n_h2 = len(outline.sections)
+        if n_h2 > adaptive_cap:
+            issues.append(
+                f"Outline has {n_h2} H2 sections but only {n_sources} "
+                f"source documents — adaptive cap is {adaptive_cap}. "
+                f"Merge the most overlapping sections OR drop sections "
+                f"with the weakest source backing. A section must be "
+                f"defensible by ≥3 source docs; if it isn't, it doesn't "
+                f"belong as its own H2."
+            )
+
+    # CORR-3 Q3 — fuzzy-duplicate H2 detection. SequenceMatcher on case-
+    # folded titles. Catches "Click a submit button via CSS selector" /
+    # "Click submit button via CSS selector" (~0.94) at threshold 0.85.
+    near_dupes: list[tuple[str, str, float]] = []
+    n = len(outline.sections)
+    for i in range(n):
+        for j in range(i + 1, n):
+            ratio = SequenceMatcher(
+                None,
+                outline.sections[i].heading.casefold(),
+                outline.sections[j].heading.casefold(),
+            ).ratio()
+            if ratio >= _OUTLINE_H2_FUZZY_DEDUP_THRESHOLD:
+                near_dupes.append((
+                    outline.sections[i].heading,
+                    outline.sections[j].heading,
+                    ratio,
+                ))
+    if near_dupes:
+        sample = near_dupes[0]
+        issues.append(
+            f"Near-duplicate H2 section headings detected ({len(near_dupes)} "
+            f"pair(s)). Example: {sample[0]!r} vs {sample[1]!r} "
+            f"(similarity {sample[2]:.0%}). Merge them into a single "
+            f"section OR rewrite one to cover a clearly distinct topic; "
+            f"the writer will produce duplicate code/prose otherwise."
+        )
 
     if len(set(ids)) != len(ids):
         seen: set[str] = set()

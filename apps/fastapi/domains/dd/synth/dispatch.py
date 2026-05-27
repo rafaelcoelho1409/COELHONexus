@@ -356,7 +356,13 @@ async def _run_book_harmonize(
     )
 
     try:
+        # 2026-05-27 fix — harmonize_book() requires `framework_slug` as
+        # of book_harmonize/service.py (used for canonical-terms blob
+        # paths). Both BU and CC Run 3 studies crashed here, skipping
+        # the cross-chapter harmonization pass entirely. Slug is already
+        # in scope from the function signature above.
         result = await harmonize_book(
+            framework_slug=slug,
             framework_name=framework_name,
             chapters=chapters,
         )
@@ -423,7 +429,13 @@ async def _run_book_harmonize(
 # =============================================================================
 # Study orchestrator (Bundle 6 strict-order + Bundle 13 Celery-isolated)
 # =============================================================================
-_STUDY_SEM = int(os.environ.get("KD_STUDY_SEM", "1"))
+# 2026-05-26 (DD-SYNTH-SPEED-SOTA): bumped 1 → 2. Chapters are API-bound (not
+# CPU-bound) on single-node K8s; Bundle 6 streaming already delivers chapter 1
+# at iter-1 wall-time, so per-chapter latency is unchanged but study-level
+# throughput doubles. book_harmonize runs AFTER all chapters complete so the
+# cross-chapter cache contention is non-issue. Env override `KD_STUDY_SEM`
+# rolls back to 1 without redeploy if rotator rate-limits saturate.
+_STUDY_SEM = int(os.environ.get("KD_STUDY_SEM", "2"))
 
 
 def _make_thread_id(slug: str) -> str:

@@ -276,6 +276,91 @@ def check_code_density_appropriate(sawc: dict) -> CriterionResult:
     )
 
 
+def check_code_uniqueness_ratio(sawc: dict) -> CriterionResult:
+    """CORR-3 Q2 (2026-05-26 evening) — code-block uniqueness gate.
+
+    Empirical: Browser Use Run 1 ch-01 had 194 code blocks but only 20
+    unique bodies (10%), Run 2 ch-02 had 96 blocks with 20 unique (21%),
+    each with one snippet repeated up to 27 times across different
+    H3 subtopics. The chapter passed `code_density_appropriate` and
+    `density_within_bounds` but shipped pedagogically broken material.
+
+    This criterion catches the duplication pattern that the density
+    check doesn't:
+      - PASS when unique_code_bodies / total_code_blocks >= 0.5
+      - PASS vacuously when there are zero subtopics (let
+        code_density_appropriate flag that)
+      - FAIL otherwise, with a sample of the top offender(s) so
+        mgsr_replan can re-roll surgically.
+
+    Uses code_ref_hash as the uniqueness key — a single vault entry
+    cited from 4 different sections is still 4 duplicates of one body.
+    Excludes 'derived' subtopics from the duplicate count (sawc_derive
+    promotes thin signatures with bodies that are intentionally
+    different per call).
+    """
+    sections = sawc.get("sections") or []
+    if not sections:
+        return CriterionResult(
+            name="code_uniqueness_ratio",
+            passed=True,
+            kind="deterministic",
+            feedback="no sections — vacuously true",
+        )
+
+    hashes: list[str] = []
+    for s in sections:
+        for st in (s.get("subtopics") or []):
+            if not isinstance(st, dict):
+                continue
+            # Skip derived — its body is regenerated, so hash reuse here
+            # is fine (the body bytes will differ across subtopics).
+            if (st.get("code_source") or "verbatim") == "derived":
+                continue
+            h = st.get("code_ref_hash")
+            if h:
+                hashes.append(h)
+
+    if not hashes:
+        return CriterionResult(
+            name="code_uniqueness_ratio",
+            passed=True,
+            kind="deterministic",
+            feedback="no verbatim code blocks — vacuously true",
+        )
+
+    n_total = len(hashes)
+    n_unique = len(set(hashes))
+    ratio = n_unique / n_total
+    passed = ratio >= 0.5
+
+    if passed:
+        return CriterionResult(
+            name="code_uniqueness_ratio",
+            passed=True,
+            kind="deterministic",
+            feedback="",
+        )
+
+    # Build feedback: name the top offenders so mgsr_replan can target.
+    from collections import Counter
+    top = Counter(hashes).most_common(3)
+    sample = ", ".join(f"{h[:8]}…×{n}" for h, n in top if n > 1)
+    feedback = (
+        f"code uniqueness {ratio:.0%} ({n_unique} unique / {n_total} "
+        f"total verbatim blocks); floor 50%. Top duplicates: {sample}. "
+        f"Sections are recycling the same vault snippets across "
+        f"different subtopics — split overloaded sections or merge "
+        f"sections that share most of their code base."
+    )
+    return CriterionResult(
+        name="code_uniqueness_ratio",
+        passed=False,
+        kind="deterministic",
+        feedback=feedback,
+    )
+
+
 # Ordered list used by the node — stable iteration order = stable
 # pass-rate denominators across runs.
 DETERMINISTIC_CHECKS = (
@@ -287,6 +372,7 @@ DETERMINISTIC_CHECKS = (
     check_repair_rate_low,
     check_picker_fallback_rate_low,
     check_code_density_appropriate,
+    check_code_uniqueness_ratio,
 )
 
 

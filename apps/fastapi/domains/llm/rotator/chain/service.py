@@ -813,6 +813,21 @@ def _is_heavyweight(deployment_id: str) -> bool:
     return any(s in deployment_id for s in DD_SYNTH_WRITE_HEAVYWEIGHTS)
 
 
+# 2026-05-26 (DD-SYNTH-SPEED-SOTA #1) — providers known to accept the
+# OpenAI-style `response_format={"type": "json_schema", ...}` parameter via
+# LiteLLM without translation issues. Gemini is INTENTIONALLY excluded: its
+# native API uses `response_mime_type`+`response_schema` and LiteLLM's
+# translation has rough edges on nested Pydantic schemas. NIM hosts most of
+# our dd-synth pool (Kimi/Nemotron/GLM/MiniMax/DeepSeek/gpt-oss); Mistral
+# direct hosts Mistral-Large + magistral/devstral; both support json_schema.
+_RESPONSE_FORMAT_SAFE_PROVIDERS = (
+    "nvidia_nim/",
+    "mistral/",
+    "openai/",
+    "groq/",
+)
+
+
 async def chat_judge_bandit_async(
     prompt: str,
     *,
@@ -822,6 +837,7 @@ async def chat_judge_bandit_async(
     expected_pattern: str | None = None,
     dd_process: str | None = None,
     candidate_filter=None,
+    response_format: dict | None = None,
 ) -> tuple[str, dict]:
     """Bandit-routed single-shot text classification.
 
@@ -834,6 +850,15 @@ async def chat_judge_bandit_async(
             When provided, candidates that return False are excluded BEFORE
             predict_top_k. Used by SAWC writer to keep only heavyweight
             reasoning models in the pool.
+        response_format: optional LiteLLM-compatible structured-output spec
+            (typically `{"type": "json_schema", "json_schema": {...}}`).
+            When provided, attached ONLY to deployments whose provider
+            prefix is in `_RESPONSE_FORMAT_SAFE_PROVIDERS`; other providers
+            see no `response_format` kwarg and fall through to the caller's
+            post-call Pydantic repair loop. Per DD-SYNTH-SPEED-SOTA-2026-
+            05-26 §1 — empirical Pydantic-fail rate ~27% on free-form
+            generation; json_schema mode cuts retries ~92% on supported
+            providers.
 
     Pipeline:
       1. Build context vector (dd_process default "dd-grader", temporal
@@ -928,7 +953,7 @@ async def chat_judge_bandit_async(
             schema_valid = False
             response_text = ""
             try:
-                response = await litellm.acompletion(
+                acompletion_kwargs = dict(
                     model = deployment_id,
                     api_key = api_key,
                     messages = [{"role": "user", "content": prompt}],
@@ -936,6 +961,16 @@ async def chat_judge_bandit_async(
                     max_tokens = max_tokens,
                     timeout = timeout_s,
                 )
+                # DD-SYNTH-SPEED-SOTA #1 — attach response_format only for
+                # providers known to translate it cleanly via LiteLLM. The
+                # post-call Pydantic repair loop at each call site handles
+                # anything that slips through (or providers we skip here).
+                if response_format is not None and any(
+                    deployment_id.startswith(p)
+                    for p in _RESPONSE_FORMAT_SAFE_PROVIDERS
+                ):
+                    acompletion_kwargs["response_format"] = response_format
+                response = await litellm.acompletion(**acompletion_kwargs)
                 response_text = (response.choices[0].message.content or "").strip()
                 success = True
                 if pattern is not None:

@@ -97,6 +97,42 @@ OUTLINE_PROMPT_VERSION = "v1-2026-05-19"
 _SECTIONS_MIN = 4
 _SECTIONS_MAX = 40
 _MAX_STAGE_DEPTH = 4
+
+# CORR-3 Q1 (2026-05-26 evening) — adaptive outline section-count cap.
+# Empirical: Browser Use Run 1 produced 41 H2 sections from 38 source
+# documents — the outline LLM extrapolated topics with no source backing
+# (e.g. "Two-factor authentication handling" with zero citations). Cap
+# the H2 count proportionally to the source pool. Tunables:
+#   floor: 3 sections (a chapter has to have some structure)
+#   slope: roughly 1 section per 3 sources
+#   ceiling: 15 sections (above which the chapter splits poorly anyway)
+# Net: 38 sources → 12 sections; 252 sources (FastMCP) → 15 sections (cap).
+# The validator (validate_outline_structure) treats violations as
+# repair-loop feedback — soft reject, not hard fail.
+_OUTLINE_ADAPTIVE_FLOOR    = 3
+_OUTLINE_ADAPTIVE_CEILING  = 15
+_OUTLINE_ADAPTIVE_DIVISOR  = 3
+
+
+def max_h2_for_n_sources(n_sources: int) -> int:
+    """Adaptive ceiling for outline section count. See section-count cap
+    rationale above."""
+    if n_sources <= 0:
+        return _OUTLINE_ADAPTIVE_FLOOR
+    return min(
+        _OUTLINE_ADAPTIVE_CEILING,
+        max(_OUTLINE_ADAPTIVE_FLOOR, n_sources // _OUTLINE_ADAPTIVE_DIVISOR),
+    )
+
+
+# CORR-3 Q3 (2026-05-26 evening) — fuzzy H2 dedup threshold. Sequence-
+# matcher ratio above this on case-folded headings flags the pair as a
+# near-duplicate (added to validator issues for repair). 0.85 catches
+# "Click a submit button via CSS selector" / "Click submit button via
+# CSS selector" (~0.94) without false-positiving on legitimately
+# distinct headings like "Browser Initialization" / "Browser Disposal"
+# (~0.45).
+_OUTLINE_H2_FUZZY_DEDUP_THRESHOLD = 0.85
 _MAX_PREREQS_PER_NODE = 3
 _CHALLENGES_MIN = 5
 _CHALLENGES_MAX = 10

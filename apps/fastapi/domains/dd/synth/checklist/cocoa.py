@@ -230,6 +230,7 @@ async def _explain_blocks(blocks: list[dict]) -> dict[str, str]:
             max_tokens=_EXPLAINER_MAX_TOKENS,
             temperature=_EXPLAINER_TEMPERATURE,
             dd_process=_DD_PROCESS_EXPLAINER,
+            response_format={"type": "json_object"},
         )
     except Exception as e:
         logger.warning(
@@ -334,6 +335,7 @@ async def _judge_pairs(pairs: list[dict]) -> dict[str, dict]:
             max_tokens=_JUDGE_MAX_TOKENS,
             temperature=_JUDGE_TEMPERATURE,
             dd_process=_DD_PROCESS_JUDGE,
+            response_format={"type": "json_object"},
         )
     except Exception as e:
         logger.warning(

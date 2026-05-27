@@ -115,6 +115,18 @@ _MAX_REPAIR_ATTEMPTS    = 1
 _BLOB_PREFIX = "synth"
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
+# DD-SYNTH-SPEED-SOTA #A3 (2026-05-26) — structured-output schema for the
+# batched 5-criterion LLM judge + repair calls. NIM + Mistral honor
+# response_format=json_schema server-side; repair loop still handles slips.
+_JUDGE_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name":   "checklist_judge",
+        "schema": _LLMJudgePayload.model_json_schema(),
+        "strict": False,
+    },
+}
+
 
 # =============================================================================
 # Blob keys
@@ -240,6 +252,7 @@ async def _run_llm_judge(
             prompt,
             max_tokens=_MAX_TOKENS_JUDGE,
             temperature=_TEMPERATURE_JUDGE,
+            response_format=_JUDGE_RESPONSE_FORMAT,
         )
         deployment = (meta or {}).get("deployment")
     except Exception as e:
@@ -282,6 +295,7 @@ async def _run_llm_judge(
                 repair_prompt,
                 max_tokens=_MAX_TOKENS_REPAIR,
                 temperature=_TEMPERATURE_REPAIR,
+                response_format=_JUDGE_RESPONSE_FORMAT,
             )
             deployment = (rm or {}).get("deployment") or deployment
             rp = _parse_json_response(rr)
@@ -525,19 +539,53 @@ async def checklist_eval(state: SynthState) -> dict:
     # judge's verdict to FAIL with specific feedback. Conservative bias:
     # never upgrades the bundled judge — only downgrades it.
     # See docs/KD-SYNTH-SOTA-2026-05-24.md §3 #2.
-    faithfulness_t0 = time.monotonic()
-    try:
-        atomic_result = await atomic_claim_grounding(
-            chapter_prose=rendered_chapter,
-            grounding_blob=rendered_digest,
-        )
-    except Exception as e:
-        logger.warning(
-            f"[checklist_eval] atomic-claim grounding crashed: "
-            f"{type(e).__name__}: {e} — skipping augmentation"
-        )
-        atomic_result = None
-    faithfulness_wall_ms = int((time.monotonic() - faithfulness_t0) * 1000)
+    # DD-SYNTH-SPEED-SOTA #B1 (2026-05-26) — Parallelize CoCoA + atomic-
+    # claim grounding. Both run on the same chapter draft; they share NO
+    # state (atomic uses prose+digest; CoCoA uses sawc+vault). Running
+    # them concurrently via asyncio.gather drops the ~3-5 min serial path
+    # to ~max(2.5, 3.5) min ≈ 30-40% on the checklist tail. Each task is
+    # wrapped in its own try/except so the fail-soft semantics are
+    # preserved per-result.
+    async def _run_faithfulness():
+        t0 = time.monotonic()
+        try:
+            r = await atomic_claim_grounding(
+                chapter_prose=rendered_chapter,
+                grounding_blob=rendered_digest,
+            )
+            return r, int((time.monotonic() - t0) * 1000)
+        except Exception as e:
+            logger.warning(
+                f"[checklist_eval] atomic-claim grounding crashed: "
+                f"{type(e).__name__}: {e} — skipping augmentation"
+            )
+            return None, int((time.monotonic() - t0) * 1000)
+
+    async def _run_cocoa():
+        t0 = time.monotonic()
+        try:
+            from ..render.node import _load_per_source_vaults as _load_vault
+            per_source = digest.get("per_source") or []
+            source_keys = sorted({
+                s.get("source_key", "") for s in per_source
+                if s.get("source_key")
+            })
+            merged_vault, _, _ = await _load_vault(minio, slug, source_keys)
+            r = await cocoa_alignment_check(
+                sawc_payload=sawc,
+                vault=merged_vault,
+            )
+            return r, int((time.monotonic() - t0) * 1000)
+        except Exception as e:
+            logger.warning(
+                f"[checklist_eval] CoCoA alignment crashed: "
+                f"{type(e).__name__}: {e} — skipping augmentation"
+            )
+            return None, int((time.monotonic() - t0) * 1000)
+
+    (atomic_result, faithfulness_wall_ms), (cocoa_result, cocoa_wall_ms) = (
+        await asyncio.gather(_run_faithfulness(), _run_cocoa())
+    )
 
     if atomic_result is not None and not atomic_result["passed"]:
         # Override the bundled judge's `claims_grounded_in_sources` verdict.
@@ -566,38 +614,10 @@ async def checklist_eval(state: SynthState) -> dict:
         wall_ms=faithfulness_wall_ms,
     )
 
-    # -- Augment: CoCoA two-stage code/explanation alignment (Ship C, 2026-05-25)
-    # The bundled judge's c11 (prose_code_first_not_meta_framing) and c12
-    # (code_refs_introduced_in_prose) verdicts are single-shot. Per arXiv
-    # 2410.03131 (CoCoA), a two-stage explainer→judge pipeline beats single-
-    # shot LLM-judge by +68% F1 on code-doc alignment. This pass overrides
-    # c11+c12 with FAIL when CoCoA finds explanation↔code drift below 85%.
-    # Fail-soft: any LLM infrastructure flake skips the override.
-    cocoa_t0 = time.monotonic()
-    cocoa_result: dict | None = None
-    try:
-        # Load merged vault for CoCoA's stage 1 (needs actual code bodies).
-        # Reuses render_audit_write's loader to stay byte-identical to what
-        # the renderer will substitute. Source keys come from the digest's
-        # per_source list.
-        from ..render.node import _load_per_source_vaults as _load_vault
-        per_source = digest.get("per_source") or []
-        source_keys = sorted({
-            s.get("source_key", "") for s in per_source if s.get("source_key")
-        })
-        merged_vault, _, _ = await _load_vault(minio, slug, source_keys)
-        cocoa_result = await cocoa_alignment_check(
-            sawc_payload=sawc,
-            vault=merged_vault,
-        )
-    except Exception as e:
-        logger.warning(
-            f"[checklist_eval] CoCoA alignment crashed: "
-            f"{type(e).__name__}: {e} — skipping augmentation"
-        )
-        cocoa_result = None
-    cocoa_wall_ms = int((time.monotonic() - cocoa_t0) * 1000)
-
+    # CoCoA two-stage code/explanation alignment override path. Augments
+    # the bundled judge's c11/c12 verdicts when drift is detected. Note:
+    # the cocoa_result + cocoa_wall_ms were computed above in parallel
+    # with the atomic-claim check via _run_cocoa(). See arXiv 2410.03131.
     if cocoa_result is not None and not cocoa_result["passed"]:
         # CoCoA found drift — override c11 + c12. Each gets the same
         # alignment-rate-grounded feedback so mgsr_replan sees specific

@@ -263,6 +263,40 @@ def extract_memory_entry(
 # =============================================================================
 # Cross-reference validators (post-Pydantic, fail-soft for repair loop)
 # =============================================================================
+# S3 (2026-05-26 late evening) — hard vs soft issue classification.
+#
+# The repair loop in sawc/node.py burns budget on EVERY non-empty issue
+# list, even when the only issues are quality nudges the LLM can't
+# reliably close (subheading↔code identifier overlap, subtopic-count
+# shy of bank size). Run 3 evidence: 49+ subheading↔code mismatches and
+# 55+ subtopic-shy issues fired across 4 chapters, driving repair rates
+# 50-63% with no actual recovery — the LLM either re-picks the wrong
+# hash or shrugs.
+#
+# Issues prefixed with these strings are SOFT — they get reported via
+# the section's `.issues` field (so mgsr_replan + checklist see them)
+# but don't trigger the writer's repair loop. HARD issues (heading
+# drift, hallucinated hash, hallucinated source_key) still drive the
+# repair loop because those are correctness failures, not quality
+# nudges.
+_SOFT_ISSUE_PREFIXES = (
+    "subheading↔code mismatch",
+    "explanation↔code mismatch",
+    "subtopics has only ",
+)
+
+
+def hard_issues(issues: list[str]) -> list[str]:
+    """Filter to issues that should trigger the writer repair loop.
+    Soft quality-nudge issues are excluded — they still ship for
+    downstream visibility via the section's `.issues` field, but the
+    writer can't reliably close them in a repair cycle."""
+    return [
+        i for i in issues
+        if not any(i.startswith(p) for p in _SOFT_ISSUE_PREFIXES)
+    ]
+
+
 def validate_section_against_inputs(
     draft: _LLMSectionDraft,
     *,
@@ -516,7 +550,31 @@ def compute_sawc_stats(
     n_picker_fallbacks: int,
 ) -> SAWCStats:
     n_sections = len(sections)
-    n_sections_completed = sum(1 for s in sections if not s.issues)
+    # R3 (2026-05-26 late evening) — relaxed `n_sections_completed` from
+    # "zero issues" to "content-bearing." The previous definition counted
+    # only sections with EMPTY `issues` lists; in Run 3 this meant 0-2
+    # of 12-30 sections per chapter were counted as "completed" because
+    # most ship with soft warnings (subheading↔code identifier mismatch,
+    # subtopic-count shy of code-bank size). Those warnings describe
+    # quality nudges, not "section failed to write" — the chapter has
+    # the section, with content, in the right order. The checklist gate
+    # `check_all_sections_present` should fail only when sections are
+    # ABSENT (placeholders or missing content), not when they're
+    # imperfect.
+    def _is_present(s) -> bool:
+        if "placeholder" in (s.issues or []):
+            return False
+        if not (s.heading or "").strip():
+            return False
+        if not (s.intro or "").strip():
+            return False
+        if not s.subtopics:
+            return False
+        if not s.citations:
+            return False
+        return True
+
+    n_sections_completed = sum(1 for s in sections if _is_present(s))
     n_sections_fallback = sum(1 for s in sections if "placeholder" in s.issues)
     n_repairs = sum(s.n_repairs for s in sections)
     total_subtopics = sum(len(s.subtopics) for s in sections)

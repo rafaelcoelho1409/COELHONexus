@@ -71,6 +71,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from hashlib import sha256
@@ -95,6 +96,7 @@ from ..vault.types import VaultEntry
 from .constants import (
     SAWC_PROMPT_VERSION,
     SAWC_SCHEMA_VERSION,
+    _N_DRAFTS,
 )
 from .service import (
     build_critic_picker_prompt,
@@ -102,6 +104,7 @@ from .service import (
     build_writer_prompt,
     compute_sawc_stats,
     extract_memory_entry,
+    hard_issues,
     score_draft_structural,
     summarize_candidate,
     validate_section_against_inputs,
@@ -124,7 +127,9 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Tunables (quality > speed per project memory feedback_kd_quality_over_speed)
 # =============================================================================
-_N_DRAFTS              = 3       # MAMM-Refine recipe
+# 2026-05-26 (DD-SYNTH-SPEED-SOTA): removed stale local `_N_DRAFTS = 3`
+# override that was shadowing constants.py's `_N_DRAFTS = 2` (task #142,
+# MAMM-Refine N=3→N=2). The single source of truth is now constants.py.
 _CONCURRENCY           = 6       # max concurrent SECTIONS per stage
 _TEMPERATURE_DRAFT     = 0.5     # variety across drafts (MAMM diversity)
 _TEMPERATURE_CRITIC    = 0.0
@@ -133,6 +138,39 @@ _MAX_TOKENS_DRAFT      = 8000
 _MAX_TOKENS_CRITIC     = 300
 _MAX_TOKENS_REPAIR     = 8000
 _MAX_REPAIR_ATTEMPTS   = 2
+
+# DD-SYNTH-SPEED-SOTA #4 (2026-05-26) — Optimal-Stopping BoN sequential
+# decision rule (arXiv 2510.01394, Oct 2025). Fire draft 1, ship it if
+# "good enough" (zero violations + >=K subtopics + >=K citations), else
+# fire remaining N-1 drafts and run pairwise tournament. Default true;
+# env `KD_SAWC_OPTIMAL_STOPPING=false` reverts to fixed-N parallel.
+_OPTIMAL_STOPPING_MIN_SUBTOPICS = 4
+_OPTIMAL_STOPPING_MIN_CITATIONS = 2
+_OPTIMAL_STOPPING_ENABLED = os.environ.get(
+    "KD_SAWC_OPTIMAL_STOPPING", "true",
+).lower() in ("true", "1", "yes", "on")
+
+# R1 (2026-05-26 late evening) — reverted CORR-2 (json_object → json_schema).
+#
+# Empirical: Run 3 (post-CORR-2) made repair rates WORSE not better:
+#   BU ch-01: 37.5% → 50%
+#   BU ch-02: 57%   → 58%
+#   CC ch-01: (new) → 63%
+#   CC ch-02: (new) → 58%
+# Diagnosis: json_object lets the model emit valid-JSON-but-loose
+# structure that Pydantic field validators reject at a higher rate
+# (subheading word counts, citation min, explanation length bounds).
+# json_schema mode constrains the model's output shape server-side
+# closer to what Pydantic expects, even with strict=False. The
+# original Wave A1 read was correct; CORR-2 was the wrong call.
+_SAWC_DRAFT_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name":   "section_draft",
+        "schema": _LLMSectionDraft.model_json_schema(),
+        "strict": False,
+    },
+}
 
 _BLOB_PREFIX = "synth"
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -358,12 +396,16 @@ async def _draft_one_section(
         # bandit pool restricted to heavyweight reasoning models.
         # Workhorse arms (mistral-small, magistral-small, devstral-medium
         # under medium budget) stay reserved for dd-grader filter tasks.
+        # DD-SYNTH-SPEED-SOTA #1 (2026-05-26): response_format=json_schema
+        # is attached server-side for NIM/Mistral arms — repair loop below
+        # still handles Gemini and any provider slip-through.
         response, meta = await chat_judge_bandit_async(
             prompt,
             max_tokens=_MAX_TOKENS_DRAFT,
             temperature=_TEMPERATURE_DRAFT,
             dd_process="dd-synth-write",
             candidate_filter=_sawc_writer_filter,
+            response_format=_SAWC_DRAFT_RESPONSE_FORMAT,
         )
         deployment = (meta or {}).get("deployment")
     except Exception as e:
@@ -446,8 +488,11 @@ async def _draft_one_section(
         valid_source_keys=valid_source_set,
         vault_rich=vault_rich,
     )
-    # Repair if issues
-    while issues and n_repairs < _MAX_REPAIR_ATTEMPTS:
+    # S3 (2026-05-26 late evening) — repair only on HARD issues. Soft
+    # quality-nudge issues (subheading/explanation↔code mismatch,
+    # subtopic-shy-of-bank) still ship in .issues for downstream but
+    # don't burn the repair budget — the LLM can't reliably close them.
+    while hard_issues(issues) and n_repairs < _MAX_REPAIR_ATTEMPTS:
         n_repairs += 1
         repair_prompt = build_repair_prompt(
             framework=framework,
@@ -485,7 +530,8 @@ async def _draft_one_section(
                 vault_rich=vault_rich,
             )
             # Accept ONLY if it strictly reduces violation count
-            if len(new_issues) < len(issues):
+            # S3 — accept only when HARD issues strictly decreased.
+            if len(hard_issues(new_issues)) < len(hard_issues(issues)):
                 draft = new_draft
                 issues = new_issues
             else:
@@ -587,10 +633,14 @@ async def _pairwise_judge_match(
     )
 
     try:
+        # DD-SYNTH-SPEED-SOTA #A7 (2026-05-26): json_object forces the
+        # pairwise critic to emit valid JSON {"winner": "A"|"B", "reason": ...}
+        # without prose preamble, eliminating ~most parse-failed tiebreaks.
         response, meta = await chat_judge_bandit_async(
             prompt,
             max_tokens=_MAX_TOKENS_CRITIC,
             temperature=_TEMPERATURE_CRITIC,
+            response_format={"type": "json_object"},
         )
         deployment_critic = (meta or {}).get("deployment")
         parsed = _parse_json_response(response)
@@ -744,14 +794,22 @@ async def _write_section_best_of_n(
     chapter_title: str,
     thread_id: str,
 ) -> Section:
-    """Full per-section pipeline: N drafts → critic-pick → Section."""
+    """Full per-section pipeline: N drafts → critic-pick → Section.
+
+    DD-SYNTH-SPEED-SOTA #4 (2026-05-26) — Optimal-Stopping BoN: fire draft 1
+    sequentially; if it passes the deterministic "good enough" gate (zero
+    violations + >=N_min subtopics + >=N_min citations), ship it directly
+    and skip the remaining N-1 drafts. Otherwise fall through to the
+    original parallel fan-out + pairwise tournament. arXiv 2510.01394
+    (Oct 2025): 15-35% sample reduction at equal Best-of-N quality.
+    Disabled via `KD_SAWC_OPTIMAL_STOPPING=false`.
+    """
     async with sem:
         t0 = time.monotonic()
 
-        # Fire N=_N_DRAFTS writer calls in parallel
-        draft_tasks = [
-            _draft_one_section(
-                draft_idx=i,
+        def _make_draft_coro(idx: int):
+            return _draft_one_section(
+                draft_idx=idx,
                 n_total=_N_DRAFTS,
                 thread_id=thread_id,
                 framework=framework,
@@ -768,9 +826,38 @@ async def _write_section_best_of_n(
                 n_primary_contribs=n_primary_contribs,
                 vault_rich=vault_rich,
             )
-            for i in range(_N_DRAFTS)
-        ]
-        results = await asyncio.gather(*draft_tasks)
+
+        if _OPTIMAL_STOPPING_ENABLED and _N_DRAFTS >= 2:
+            # Fire draft 1 first, decide whether to fire the rest
+            r0 = await _make_draft_coro(0)
+            results = [r0]
+            draft1, _dep1, _wall1, _repairs1 = r0
+            good_enough = False
+            if draft1 is not None:
+                issues_1 = validate_section_against_inputs(
+                    draft1,
+                    expected_heading=section_heading,
+                    allowed_hashes=set(allowed_hashes),
+                    valid_source_keys=set(valid_source_keys),
+                    vault_rich=vault_rich,
+                )
+                if (
+                    len(issues_1) == 0
+                    and len(draft1.subtopics) >= _OPTIMAL_STOPPING_MIN_SUBTOPICS
+                    and len(draft1.citations) >= _OPTIMAL_STOPPING_MIN_CITATIONS
+                ):
+                    good_enough = True
+            if not good_enough:
+                # Fan out remaining drafts in parallel
+                remaining = await asyncio.gather(*[
+                    _make_draft_coro(i) for i in range(1, _N_DRAFTS)
+                ])
+                results.extend(remaining)
+        else:
+            # Original parallel fan-out (kill switch or N=1)
+            results = await asyncio.gather(*[
+                _make_draft_coro(i) for i in range(_N_DRAFTS)
+            ])
 
         # Filter to drafts that parsed + validated
         valid: list[tuple[int, _LLMSectionDraft, str, int, int]] = []

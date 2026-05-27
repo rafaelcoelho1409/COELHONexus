@@ -32,6 +32,15 @@ _INTRO_CHARS_MAX = 400
 # single match (already has `if len(candidates) <= 1: return 0,…` short-
 # circuit, so N=2 hits the standard knockout path with one round).
 _N_DRAFTS = 2
+# 2026-05-26 evening (CORR-1, post-Browser-Use-Run-2): reverted 1 → 2.
+# Empirical: with B4 active, ch-01 had 9/12 sections ship with non-empty
+# `issues` lists (failed `all_sections_present` despite no placeholders),
+# ch-02 had 19/20. The repair rate also went UP (37-57% vs 27% baseline)
+# suggesting the json_schema response_format (B1) was producing
+# Pydantic-rejected outputs the single repair couldn't close. Two repair
+# attempts restore the previous tolerance for tricky sections; the
+# response_format softening (CORR-2) in sawc/node.py reduces the input
+# pressure into the loop.
 _MAX_REPAIR_ATTEMPTS = 2
 _PARAGRAPHS_MIN = 2
 _PARAGRAPHS_MAX = 12

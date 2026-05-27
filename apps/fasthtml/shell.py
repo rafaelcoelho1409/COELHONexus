@@ -7,9 +7,18 @@ can cache them and IDE tooling treats them as real files.
 `_Shell(active_key, title_text, body=None)` wraps any feature body in the
 COELHO-Nexus topbar (brand + nav + title) so individual feature modules
 stay focused on their own content.
+
+2026-05-26 (DD-NAVBAR-SOTA Wave A+B):
+  - Topbar now uses filled-pill active state + View Transitions pill
+    morph between routes (zero JS cost, gracefully degrades).
+  - <nav aria-label="Primary"> + a skip-to-content link as the first
+    focusable element on every page (a11y baseline).
+  - Each nav-item carries a hidden .nav-status-dot. topbar.js polls
+    /api/v1/docs-distiller/runs/active and toggles .has-running on the
+    matching item — surfaces running ingestion runs at-a-glance.
 """
 from fasthtml.common import (
-    H1, A, Div, Link, Meta, Script, Span, Style, Title,
+    H1, A, Div, Link, Main, Meta, Nav, Script, Span, Style, Title,
 )
 
 
@@ -80,17 +89,27 @@ HEAD = (
     Link(rel="stylesheet", href="/static/css/dd/planner.css"),
     Link(rel="stylesheet", href="/static/css/dd/study.css"),
     Link(rel="stylesheet", href="/static/css/youtube.css"),
+    # DD-NAVBAR-SOTA-2026-05-26 (Wave B1) — running-work status dot
+    # polling. Hits /api/v1/docs-distiller/runs/active every 30s,
+    # toggles .has-running on the matching nav-item. defer so it
+    # doesn't block first paint.
+    Script(src = "/static/js/topbar.js", defer = True),
 )
 
 
 def _Shell(active_key: str, title_text=None, body=None):
     """Page chrome. Pass `title_text=None` to skip the burgundy-bordered
     title row (used by the home page which provides its own hero)."""
+    # Wave B1: each nav-item carries a hidden .nav-status-dot. topbar.js
+    # toggles .has-running on items whose `data-status-slug` is currently
+    # tracked as in-flight by the backend.
     nav_links = [
         A(
             label,
+            Span(cls = "nav-status-dot", aria_hidden = "true"),
             href = href,
             cls = "nav-item active" if key == active_key else "nav-item",
+            data_status_key = key,
         )
         for key, label, href in FEATURES
     ]
@@ -101,6 +120,10 @@ def _Shell(active_key: str, title_text=None, body=None):
     )
     return (
         Title("COELHO Nexus"),
+        # Wave B3 — skip-link is the first focusable element. Targets
+        # the <main id="content"> wrapper below. Hidden until focused
+        # (see .skip-link in base.css).
+        A("Skip to content", href = "#content", cls = "skip-link"),
         Div(
             Div(
                 Div(
@@ -109,14 +132,23 @@ def _Shell(active_key: str, title_text=None, body=None):
                     A(
                         Span(cls = "brand-flag"),
                         Span("COELHO Nexus"),
-                        href = "/", 
+                        href = "/",
                         cls = "brand",
+                        aria_label = "COELHO Nexus home",
                     ),
-                    Div(*nav_links, cls = "nav"),
+                    # Wave B3 — semantic <nav> + aria-label="Primary" for
+                    # screen readers (WAI-ARIA APG, 2026 baseline).
+                    Nav(*nav_links, cls = "nav", aria_label = "Primary"),
                     cls = "topbar",
                 ),
                 title_row,
-                Div(body if body is not None else "", cls = "panel"),
+                # Wave B3 — wrap the feature body in <main id="content">
+                # so the skip-link and screen readers have a landmark.
+                Main(
+                    body if body is not None else "",
+                    id = "content",
+                    cls = "panel",
+                ),
                 cls = "card",
             ),
             cls = "page",

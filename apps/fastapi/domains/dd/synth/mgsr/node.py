@@ -122,6 +122,19 @@ _MAX_REPAIR_ATTEMPTS  = 1
 _BLOB_PREFIX = "synth"
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
+# DD-SYNTH-SPEED-SOTA #A5 (2026-05-26) — structured-output schema for the
+# replan + repair calls. mgsr is fast-path most of the time (no LLM when
+# checklist passes), but the slow-path LLM call benefits from skipping
+# repair retries when the json_schema mode is honored server-side.
+_REPLAN_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name":   "mgsr_replan",
+        "schema": _LLMReplanPayload.model_json_schema(),
+        "strict": False,
+    },
+}
+
 
 # =============================================================================
 # Blob keys
@@ -248,6 +261,7 @@ async def _run_llm_replan(
             prompt,
             max_tokens=_MAX_TOKENS_REPLAN,
             temperature=_TEMPERATURE_REPLAN,
+            response_format=_REPLAN_RESPONSE_FORMAT,
         )
         deployment = (meta or {}).get("deployment")
     except Exception as e:
@@ -287,6 +301,7 @@ async def _run_llm_replan(
                 repair_prompt,
                 max_tokens=_MAX_TOKENS_REPAIR,
                 temperature=_TEMPERATURE_REPAIR,
+                response_format=_REPLAN_RESPONSE_FORMAT,
             )
             deployment = (rm or {}).get("deployment") or deployment
             rp = _parse_json_response(rr)
@@ -325,6 +340,7 @@ async def _run_llm_replan(
                 repair_prompt,
                 max_tokens=_MAX_TOKENS_REPAIR,
                 temperature=_TEMPERATURE_REPAIR,
+                response_format=_REPLAN_RESPONSE_FORMAT,
             )
             deployment = (rm or {}).get("deployment") or deployment
             rp = _parse_json_response(rr)
