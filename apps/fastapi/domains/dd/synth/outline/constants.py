@@ -92,7 +92,12 @@ import re
 # Versioning + tunables
 # =============================================================================
 OUTLINE_SCHEMA_VERSION = "1.0"
-OUTLINE_PROMPT_VERSION = "v1-2026-05-19"
+# U6 (2026-05-28) — bumped to invalidate outline cache after shipping:
+#   - U3 tightened H2 cap (divisor 3 → 4, ceiling 15 → 12)
+#   - U6 semantic H2 dedup via embeddings + repair feedback
+# Cached outlines would short-circuit BOTH improvements (cache fast-path
+# returns before hard-trim and semantic-dedup run).
+OUTLINE_PROMPT_VERSION = "v2-tight-semantic-2026-05-28"
 
 _SECTIONS_MIN = 4
 _SECTIONS_MAX = 40
@@ -104,14 +109,22 @@ _MAX_STAGE_DEPTH = 4
 # (e.g. "Two-factor authentication handling" with zero citations). Cap
 # the H2 count proportionally to the source pool. Tunables:
 #   floor: 3 sections (a chapter has to have some structure)
-#   slope: roughly 1 section per 3 sources
-#   ceiling: 15 sections (above which the chapter splits poorly anyway)
-# Net: 38 sources → 12 sections; 252 sources (FastMCP) → 15 sections (cap).
+#   slope: 1 section per 4 sources (U3 2026-05-28, tightened 3 → 4)
+#   ceiling: 12 sections (U3 2026-05-28, dropped 15 → 12)
+# Net: 22 sources → 5 sections; 60 sources → 12 sections (cap).
+#
+# U3 (2026-05-28) — tightened divisor 3 → 4 and ceiling 15 → 12 after
+# Claude Code run exposed bloated 6-8 H2 chapters with massive
+# cross-section recycling. Empirical: Permissions ch with 19 sources had
+# 6 H2s that all repeated the same `autoMode.environment` JSON block
+# under different framings. 4-5 well-developed H2s is the sweet spot
+# for chapter cohesion and reader pacing on these corpora.
+#
 # The validator (validate_outline_structure) treats violations as
 # repair-loop feedback — soft reject, not hard fail.
 _OUTLINE_ADAPTIVE_FLOOR    = 3
-_OUTLINE_ADAPTIVE_CEILING  = 15
-_OUTLINE_ADAPTIVE_DIVISOR  = 3
+_OUTLINE_ADAPTIVE_CEILING  = 12
+_OUTLINE_ADAPTIVE_DIVISOR  = 4
 
 
 def max_h2_for_n_sources(n_sources: int) -> int:

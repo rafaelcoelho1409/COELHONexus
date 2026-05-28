@@ -6,9 +6,7 @@
 import * as S from './state.js';
 import { fmtAge, fmtBytes } from './utils.js';
 import {
-  showNotice, showToast, showConfirm,
-  refreshGenerateState, showStep, renderStepper,
-  syncStepLocks,
+  showNotice, showToast, showConfirm, refreshGenerateState,
 } from './ui.js';
 import { setProgressFramework } from './picker.js';
 import {
@@ -40,26 +38,35 @@ function _setSidebarActionsLocked(locked) {
 // Sidebar — library list
 // ============================================================
 export function renderSidebar(items) {
+  // Defensive: re-query the list element instead of trusting the
+  // module-load cached S.sidebarList. The picker popover (which
+  // hosts #fw-sidebar-list) is rendered in the title row and is
+  // guaranteed to exist on every DD page, but re-querying makes
+  // this resilient to any future restructuring.
+  const list = document.querySelector('#fw-sidebar-list') || S.sidebarList;
+  if (!list) return;
+  // Defensive: accept only arrays. A backend error envelope
+  // (e.g. {"detail": "..."}) would otherwise NOT trip the empty
+  // branch (no .length === 0) but WOULD throw on .map() below.
+  if (!Array.isArray(items)) items = [];
   // Augment frameworkInfo from the library list so recovery + sidebar
   // clicks can label the loading box even for frameworks that aren't
   // in the catalog tile set (or were ingested via the audit endpoint).
-  if (items) {
-    items.forEach(it => {
-      if (it.slug && !S.frameworkInfo[it.slug]) {
-        // Prefer `logos` array from the catalog (multi-logo stack);
-        // fall back to the single `logo` for everyday entries.
-        const logos = (it.logos && it.logos.length)
-          ? it.logos
-          : (it.logo ? [it.logo] : []);
-        S.frameworkInfo[it.slug] = {
-          name: it.framework_name || it.slug,
-          logos,
-        };
-      }
-    });
-  }
-  if (!items || items.length === 0) {
-    S.sidebarList.innerHTML =
+  items.forEach(it => {
+    if (it && it.slug && !S.frameworkInfo[it.slug]) {
+      // Prefer `logos` array from the catalog (multi-logo stack);
+      // fall back to the single `logo` for everyday entries.
+      const logos = (it.logos && it.logos.length)
+        ? it.logos
+        : (it.logo ? [it.logo] : []);
+      S.frameworkInfo[it.slug] = {
+        name: it.framework_name || it.slug,
+        logos,
+      };
+    }
+  });
+  if (items.length === 0) {
+    list.innerHTML =
       '<div class="fw-sidebar-empty">' +
       'No ingested frameworks yet. Pick one in the catalog and click Start Ingestion.' +
       '</div>';
@@ -83,8 +90,8 @@ export function renderSidebar(items) {
       '" title="Delete this ingestion">🗑</button>' +
       '</div>';
   }).join('');
-  S.sidebarList.innerHTML = html;
-  S.sidebarList.querySelectorAll('.fw-lib-item').forEach(el => {
+  list.innerHTML = html;
+  list.querySelectorAll('.fw-lib-item').forEach(el => {
     el.addEventListener('click', ev => {
       if (ev.target.closest('.fw-lib-refresh, .fw-lib-delete')) return;
       const slug = el.dataset.slug;
@@ -97,7 +104,7 @@ export function renderSidebar(items) {
       navigateToStage(dest, slug);
     });
   });
-  S.sidebarList.querySelectorAll('.fw-lib-refresh').forEach(b => {
+  list.querySelectorAll('.fw-lib-refresh').forEach(b => {
     b.addEventListener('click', async ev => {
       ev.stopPropagation();
       // Lock all sidebar actions + swap the ↻ icon with a spinner so the
@@ -124,7 +131,7 @@ export function renderSidebar(items) {
   // (a re-render from loadLibrary() during an active run would otherwise
   // give them a fresh enabled state).
   refreshGenerateState();
-  S.sidebarList.querySelectorAll('.fw-lib-delete').forEach(b => {
+  list.querySelectorAll('.fw-lib-delete').forEach(b => {
     b.addEventListener('click', async ev => {
       ev.stopPropagation();
       const slug = b.dataset.slug;
@@ -199,7 +206,6 @@ export function renderSidebar(items) {
             'click Start Ingestion.' +
             '</div>';
         }
-        syncStepLocks();   // library may now be empty → lock Steps 2+3
       } catch (e) {
         // Restore on failure so the user can try again. The row stays —
         // only the icon + lock + visual fade get reverted.
@@ -221,12 +227,25 @@ export function renderSidebar(items) {
 export async function loadLibrary() {
   try {
     const r = await fetch(S.API + '/ingestion');
-    if (!r.ok) { renderSidebar([]); syncStepLocks(); return; }
-    renderSidebar(await r.json());
+    if (!r.ok) {
+      S.setIngestedSlugs(new Set());
+      renderSidebar([]); return;
+    }
+    const items = await r.json();
+    // Record which slugs are already ingested so the Catalog tab can
+    // green-badge their tiles (markIngestedTiles in picker.js reads
+    // this). Always set it — even when the picker list isn't on this
+    // page (e.g. the Catalog tab dropped the Library dropdown).
+    S.setIngestedSlugs(new Set(
+      (Array.isArray(items) ? items : [])
+        .map(it => it && it.slug)
+        .filter(Boolean)
+    ));
+    renderSidebar(items);
   } catch (e) {
+    S.setIngestedSlugs(new Set());
     renderSidebar([]);
   }
-  syncStepLocks();   // unlock/lock Steps 2+3 based on library presence
 }
 
 // ============================================================
@@ -252,9 +271,9 @@ export async function recoverActiveRuns() {
     const run = runs[0];
     S.setActiveSlug(run.slug);
     S.setActiveRunId(run.run_id);
-    S.setFarthestStep(Math.max(S.farthestStep, 2));
     refreshGenerateState();   // disables Start + sidebar refresh/delete
-    showStep(2);              // reveal the live progress box
+    // pollRun (below) reveals + drives the live progress box on the
+    // ingestion page; no stepper navigation needed (per-stage routes).
     setProgressFramework(run.slug);
     // Paint the last-known progress immediately so the UI is populated
     // before the first poll tick lands.

@@ -35,7 +35,12 @@ _JUDGE_KD_PROCESS = "dd-grader"
 _JUDGE_EXPECTED_LATENCY_S = 4.0
 # How many ranked deployments to cascade through before giving up. Matches
 # the bandit-driven chapter-pin cascade pattern in pick_synth_deployment_bandit.
-_JUDGE_BANDIT_TOP_K = 5
+# 2026-05-27 P2 — bumped 5 → 10 after planner Claude Code Run showed
+# "all 5 ranked deployments failed" RuntimeError in 36% of doc_distill
+# calls (NIM + Mistral burst-saturated, bandit's top-5 all 429'd).
+# Top-10 cascade gives access to broader provider mix (Groq Llama-3.3-
+# 70B, Mistral Small, Llama-4 Maverick on NIM) when top-5 are throttled.
+_JUDGE_BANDIT_TOP_K = 10
 _PROVIDER_CHAPTER_CAPS: dict[str, int] = {
     "nvidia_nim": 2,
     "groq":       2,

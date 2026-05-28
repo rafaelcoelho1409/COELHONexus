@@ -1,32 +1,9 @@
-/* ===== Layout: sidebar + main panel on every Docs Distiller stage ===== */
+/* ===== Layout: single-column main panel on every Docs Distiller stage.
+   (The old 260px left rail — .fw-sidebar/.fw-sidebar-title — was
+   removed 2026-05-27 when the library moved into the header dropdown.
+   .fw-sidebar-empty stays: the dropdown popover reuses it for its
+   loading/empty state, and .fw-lib-* below style the popover rows.) */
 .fw-layout { display: flex; gap: 24px; align-items: flex-start; }
-/* DD-LIBRARY-PIN-2026-05-27 — pinned resource picker.
-   The library is the user's primary "switch framework" surface; they
-   reach for it constantly across long-running pipeline pages (planner
-   DAG, synth chapter strip, study reader). 2026 SOTA for this shape
-   of resource picker is a sticky 240-280px left rail (Linear / Vercel
-   / Dagster / Mintlify all converge here): position: sticky so it
-   participates in flow until pinned, top offset clears the global
-   topbar (64px bar + 16px breathing = 80px), max-height bounded so
-   the inner list scrolls independently of the page. */
-.fw-sidebar {
-  width: 260px;
-  flex-shrink: 0;
-  border-right: 1px solid var(--border);
-  padding-right: 20px;
-  position: sticky;
-  top: 80px;
-  max-height: calc(100vh - 96px);
-  overflow-y: auto;
-}
-.fw-sidebar-title {
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-weight: 600;
-  margin: 0 0 12px 0;
-}
 .fw-sidebar-empty {
   padding: 20px 0;
   color: var(--text-muted);

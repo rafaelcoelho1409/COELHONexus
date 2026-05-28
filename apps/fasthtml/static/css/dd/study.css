@@ -47,6 +47,38 @@
   pointer-events: auto;
 }
 
+/* DD-STUDY-SOTA 2026-05-28 (Wave 2) — persistent chapter rail on
+   desktop. Every 2026 docs platform (Fumadocs / Mintlify / GitBook /
+   Docusaurus) pins the chapter nav on wide screens and only drops to an
+   off-canvas drawer on narrow ones. ≥1024px: 2-col grid, side window
+   un-fixed into a sticky in-flow rail, no backdrop, no hamburger. */
+@media (min-width: 1024px) {
+  .fw-study-grid {
+    display: grid;
+    grid-template-columns: 248px minmax(0, 1fr);
+    gap: 28px;
+    align-items: start;
+  }
+  .fw-study-side {
+    position: sticky;
+    top: 90px;
+    height: auto;
+    max-height: calc(100vh - 110px);
+    width: auto;
+    max-width: none;
+    transform: none;
+    box-shadow: none;
+    z-index: auto;
+    padding: 0 16px 0 2px;
+  }
+  .fw-study-side-backdrop { display: none; }
+  .fw-study-side-close,
+  .fw-study-toc-toggle { display: none; }   /* no drawer chrome on desktop */
+  /* Focus mode hides the rail + recenters the reader even on desktop. */
+  .fw-study-grid.focus-mode { display: block; }
+  .fw-study-grid.focus-mode .fw-study-side { display: none; }
+}
+
 .fw-study-side-header {
   display: flex;
   align-items: center;
@@ -367,103 +399,355 @@
   padding: 24px;
   box-sizing: border-box;
 }
-.fw-study-cards-progress {
-  font-size: 0.85rem;
-  color: var(--text-muted);
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
+/* (Old 3D flip-card rules removed 2026-05-28 — replaced by the FSRS
+   reviewer's .fw-fc-* styles below.) */
+
+/* ============================================================
+   DD-STUDY-SOTA 2026-05-28 — Study tab upgrades.
+   ============================================================ */
+
+/* ---- README pane: prose + sticky right-rail TOC (scroll-spy) ---- */
+.fw-study-content { scroll-behavior: smooth; }
+.fw-study-pane.fw-study-readme-pane.active {
+  display: flex;
+  gap: 28px;
+  align-items: flex-start;
 }
-.fw-study-card-wrap {
-  perspective: 1200px;
-  width: 100%;
-  max-width: 560px;
-  height: 320px;
-}
-.fw-study-card {
-  width: 100%;
-  height: 100%;
-  position: relative;
-  transform-style: preserve-3d;
-  transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-  cursor: pointer;
-}
-.fw-study-card.flipped { transform: rotateY(180deg); }
-.fw-study-card-face {
-  position: absolute;
-  inset: 0;
-  -webkit-backface-visibility: hidden;
-  backface-visibility: hidden;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--card);
-  padding: 38px 30px 26px;
+/* LEARN column — prose + recall stacked in one scroll; TOC rail beside. */
+.fw-study-learn-col {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  font-size: 1.05rem;
-  line-height: 1.55;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-  overflow: hidden;             /* clip; the body scrolls if needed */
 }
-.fw-study-card-face.back {
-  transform: rotateY(180deg);
-  background: rgba(196, 18, 48, 0.025);
-  border-color: var(--primary);
+.fw-study-readme-pane .fw-study-prose {
+  max-width: 66ch;            /* readability sweet spot (Baymard 50–75ch) */
 }
-.fw-study-card-face .label {
-  position: absolute;
-  top: 12px;
-  left: 16px;
-  font-size: 0.7rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+/* Recall block — the active-recall questions, welded to the end of the
+   reading flow (read → then self-test) instead of a separate tab. */
+.fw-study-recall {
+  margin-top: 28px;
+  padding-top: 18px;
+  border-top: 2px solid var(--border);
+  scroll-margin-top: 16px;
+}
+.fw-study-recall:empty { display: none; }
+/* Right-cluster controls in the tab strip: 🔍 Search + ⛶ Focus. */
+.fw-study-search-btn { margin-left: auto; }   /* push the cluster right */
+.fw-study-focus-toggle { margin-left: 6px; }
+.fw-study-search-btn,
+.fw-study-focus-toggle {
+  border: 1px solid var(--border);
+  background: var(--card);
   color: var(--text-muted);
+  font-size: 0.8rem;
+  font-family: inherit;
+  line-height: 1;
+  padding: 7px 11px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.fw-study-search-btn:hover,
+.fw-study-focus-toggle:hover { color: var(--primary); border-color: var(--primary); }
+
+/* ---- Cmd-K cross-chapter search overlay ---- */
+.fw-study-search-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: none;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+  background: rgba(0, 0, 0, 0.38);
+}
+.fw-study-search-overlay.open { display: flex; }
+.fw-study-search-box {
+  width: 640px;
+  max-width: 92vw;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+}
+.fw-study-search-input {
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 16px 18px;
+  font-size: 1rem;
+  font-family: inherit;
+  color: var(--text);
+  background: transparent;
+  outline: none;
+}
+.fw-study-search-results { overflow-y: auto; padding: 6px; }
+.fw-study-search-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.fw-study-search-row.sel,
+.fw-study-search-row:hover { background: rgba(196, 18, 48, 0.08); }
+.fw-study-search-ch { font-size: 0.74rem; color: var(--text-muted); flex-shrink: 0; max-width: 38%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fw-study-search-sub { font-size: 0.9rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fw-study-search-empty { padding: 18px; color: var(--text-muted); font-size: 0.85rem; text-align: center; }
+/* Focus mode — hide the TOC rail + center the column for distraction-free
+   reading. Toggled by the ⛶ button (JS adds .focus-mode to .fw-study-grid,
+   persisted in localStorage). */
+.fw-study-grid.focus-mode .fw-study-toc { display: none; }
+.fw-study-grid.focus-mode .fw-study-readme-pane.active { justify-content: center; }
+.fw-study-grid.focus-mode .fw-study-readme-pane .fw-study-prose { max-width: 72ch; }
+.fw-study-focus-toggle.active {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: rgba(196, 18, 48, 0.08);
+}
+.fw-study-prose h2, .fw-study-prose h3 { scroll-margin-top: 16px; }
+.fw-study-toc {
+  flex: 0 0 220px;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  max-height: calc(78vh - 40px);
+  overflow-y: auto;
+  padding-left: 16px;
+  border-left: 1px solid var(--border);
+}
+.fw-study-toc-title {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+.fw-study-toc-link {
+  display: block;
+  padding: 3px 0;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+  margin-left: -16px;
+  padding-left: 14px;
+  transition: color 0.12s, border-color 0.12s;
+}
+.fw-study-toc-link.h3 { padding-left: 26px; font-size: 0.78rem; }
+.fw-study-toc-link:hover { color: var(--text); }
+.fw-study-toc-link.active {
+  color: var(--primary);
+  border-left-color: var(--primary);
   font-weight: 600;
 }
-.fw-study-card-face .body {
-  font-family: 'Raleway', sans-serif;
-  color: var(--text);
-  width: 100%;
-  max-height: 100%;
-  overflow-y: auto;             /* long Q/A scrolls inside the card */
+
+/* ---- code-block copy button ---- */
+.fw-study-prose pre { position: relative; }
+.fw-code-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 3px 9px;
+  font-size: 0.68rem;
+  font-family: inherit;
+  color: var(--text-muted);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s, border-color 0.12s;
 }
-.fw-study-card-face .body code {
+.fw-study-prose pre:hover .fw-code-copy { opacity: 1; }
+.fw-code-copy:hover { color: var(--primary); border-color: var(--primary); }
+
+/* ---- flashcard reviewer (FSRS) ---- */
+.fw-fc-head {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.fw-fc-due {
+  color: var(--running-text);
+  background: var(--running-bg);
+  border: 1px solid var(--running-border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-weight: 700;
+}
+.fw-fc-card {
+  width: 100%;
+  max-width: 560px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 1px 10px rgba(0,0,0,0.05);
+  overflow: hidden;
+}
+.fw-fc-face { padding: 22px 24px; }
+.fw-fc-answer { border-top: 1px dashed var(--border); background: rgba(0,0,0,0.015); }
+.fw-fc-facelabel {
+  font-size: 0.64rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+.fw-fc-body {
+  margin-top: 8px;
+  font-size: 1.02rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+.fw-fc-body code {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 0.88em;
-  background: rgba(196, 18, 48, 0.08);
-  color: var(--primary);
+  font-size: 0.9em;
+  background: rgba(0,0,0,0.05);
   padding: 1px 5px;
   border-radius: 3px;
 }
-.fw-study-cards-actions {
+.fw-fc-reveal-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.fw-fc-grades {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  width: 100%;
+  max-width: 560px;
+}
+.fw-fc-grade {
   display: flex;
-  gap: 10px;
-  justify-content: center;
-}
-.fw-study-cards-actions button {
-  padding: 8px 18px;
-  font-size: 0.88rem;
-  font-family: inherit;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 6px;
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: 6px;
   background: var(--card);
-  color: var(--text);
+  font-family: inherit;
   cursor: pointer;
-  transition: border-color 0.12s, color 0.12s;
+  transition: background 0.12s, border-color 0.12s, transform 0.06s;
 }
-.fw-study-cards-actions button:hover {
-  border-color: var(--primary);
-  color: var(--primary);
+.fw-fc-grade:hover { transform: translateY(-1px); }
+.fw-fc-grade-label { font-size: 0.85rem; font-weight: 600; color: var(--text); }
+.fw-fc-grade-ivl { font-size: 0.7rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.fw-fc-grade.again:hover { border-color: var(--error-text); background: var(--error-bg); }
+.fw-fc-grade.hard:hover  { border-color: var(--notice-border); background: var(--notice-bg); }
+.fw-fc-grade.good:hover  { border-color: var(--running-border); background: var(--running-bg); }
+.fw-fc-grade.easy:hover  { border-color: var(--ingested-border); background: var(--ingested-bg); }
+.fw-fc-hint { font-size: 0.76rem; color: var(--text-muted); font-style: italic; }
+.fw-fc-done { display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--text-muted); }
+.fw-fc-done-check {
+  width: 44px; height: 44px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.3rem; color: var(--ingested-text);
+  background: var(--ingested-bg); border: 1px solid var(--ingested-border);
 }
-.fw-study-cards-actions button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+
+/* ---- challenges self-grade ---- */
+.fw-study-challenge {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 4px;
+  margin-bottom: 8px;
+  padding: 4px 4px 8px 4px;
+  transition: border-color 0.12s, background 0.12s;
 }
-.fw-study-cards-hint {
-  font-size: 0.78rem;
+.fw-study-challenge[data-grade="got"]    { border-left-color: var(--ingested-border); }
+.fw-study-challenge[data-grade="review"] { border-left-color: var(--notice-border); background: rgba(245,197,96,0.05); }
+.fw-study-challenge-grade {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px;
+}
+.fw-cg-btn {
+  font-size: 0.74rem;
+  font-family: inherit;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
   color: var(--text-muted);
-  font-style: italic;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.fw-study-challenge[data-grade="got"] .fw-cg-btn.got {
+  color: var(--ingested-text); border-color: var(--ingested-border); background: var(--ingested-bg); font-weight: 600;
+}
+.fw-study-challenge[data-grade="review"] .fw-cg-btn.review {
+  color: var(--notice-text); border-color: var(--notice-border); background: var(--notice-bg); font-weight: 600;
+}
+
+/* ---- sidebar: overall progress + per-chapter studied/due ---- */
+.fw-study-progress {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 10px 8px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.fw-study-due-total {
+  color: var(--running-text);
+  background: var(--running-bg);
+  border: 1px solid var(--running-border);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.fw-study-chapter-due {
+  flex-shrink: 0;
+  min-width: 18px;
+  text-align: center;
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: var(--running-text);
+  background: var(--running-bg);
+  border: 1px solid var(--running-border);
+  border-radius: 999px;
+  padding: 0 5px;
+}
+.fw-study-chapter-tick { flex-shrink: 0; color: var(--ingested-border); font-size: 0.8rem; }
+
+/* Cross-chapter "Review due" launcher (sidebar progress header). */
+.fw-study-review-due {
+  font-family: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--running-text);
+  background: var(--running-bg);
+  border: 1px solid var(--running-border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: filter 0.12s;
+}
+.fw-study-review-due:hover { filter: brightness(0.96); }
+/* Current chapter context shown in the flashcard head during global review. */
+.fw-fc-ctx {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ============================================================
@@ -474,15 +758,47 @@
    chapter with data-status in {pending, running, done, failed,
    cancelled}.
    ============================================================ */
+/* DD-SYNTH-SPLIT 2026-05-28 — 70/30 split: DAG canvas (left) | chapter
+   checklist (right). Flex so a hidden chapter panel (#fw-chstrip is
+   display:none until study mode) lets the graph fill 100%; when the
+   panel shows, the graph reflows to ~70%. Stacks vertically on narrow
+   viewports. JS re-fits the Cytoscape canvas when the panel toggles. */
+.fw-synth-split {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.fw-synth-split > #fw-synth-graph {
+  flex: 1 1 auto;
+  min-width: 0;            /* allow shrink to ~70%; canvas is width:100% */
+}
+.fw-synth-split > #fw-chstrip {
+  flex: 0 0 30%;
+  max-width: 30%;
+  margin: 0;               /* override the default 12px 0 */
+}
+/* Side-panel list scrolls within ~the canvas height for long books. */
+.fw-synth-split > #fw-chstrip .fw-chstrip-cells {
+  max-height: 660px;
+}
+@media (max-width: 860px) {
+  .fw-synth-split { flex-direction: column; }
+  .fw-synth-split > #fw-chstrip {
+    flex: 1 1 auto;
+    max-width: none;
+    width: 100%;
+  }
+}
+
 .fw-chstrip {
   display: none;
   flex-direction: column;
   gap: 6px;
   margin: 12px 0;
   padding: 10px 12px;
-  border: 1px solid var(--border, #2a1a1a);
+  border: 1px solid var(--border);
   border-radius: 2px;
-  background: var(--surface-2, #1a0e0e);
+  background: var(--bg);
 }
 .fw-chstrip.visible { display: flex; }
 .fw-chstrip-head {
@@ -502,34 +818,35 @@
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
+/* DD-CHAPTERS-SOTA 2026-05-28 — vertical task checklist. One row per
+   chapter: status glyph + ordinal + full title (wraps). The 2026
+   agent/pipeline task-list pattern. Capped height with internal scroll
+   so a long book (15+ chapters) doesn't push the DAG canvas down. */
 .fw-chstrip-cells {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
 }
 .fw-chstrip-cell {
-  flex: 1 1 0;
-  min-width: 120px;
-  max-width: 200px;
-  padding: 6px 8px;
-  border: 1px solid var(--border, #2a1a1a);
-  border-left: 3px solid var(--text-muted);
-  border-radius: 2px;
-  background: var(--surface, #0e0808);
-  font-size: 0.78rem;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-muted);
+  border-radius: 2px;
+  background: var(--card);
+  font-size: 0.82rem;
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
-.fw-chstrip-cell:hover {
-  background: rgba(168, 50, 50, 0.07);
-}
+.fw-chstrip-cell:hover { background: rgba(196, 18, 48, 0.05); }
 .fw-chstrip-cell.selected {
-  outline: 1px solid var(--accent, #a83232);
-  outline-offset: -1px;
-  background: rgba(168, 50, 50, 0.12);
+  border-left-color: var(--primary);
+  background: rgba(196, 18, 48, 0.08);
 }
 .fw-chstrip-cell .icon {
   flex: 0 0 auto;
@@ -537,11 +854,20 @@
   text-align: center;
   opacity: 0.9;
 }
+.fw-chstrip-cell .num {
+  flex: 0 0 auto;
+  min-width: 18px;
+  text-align: right;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.76rem;
+}
 .fw-chstrip-cell .label {
   flex: 1 1 auto;
+  min-width: 0;            /* required for ellipsis inside a flex child */
+  white-space: nowrap;     /* one clean line per chapter… */
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-overflow: ellipsis; /* …long titles truncate with “…” */
   color: var(--text);
 }
 .fw-chstrip-cell[data-status="pending"] .icon::before  { content: '○'; }
@@ -550,26 +876,27 @@
 .fw-chstrip-cell[data-status="failed"]  .icon::before  { content: '✕'; }
 .fw-chstrip-cell[data-status="cancelled"] .icon::before { content: '⊘'; }
 
+/* Running row — sky-blue (the app's --running-* convention). */
 .fw-chstrip-cell[data-status="running"] {
-  border-left-color: var(--accent, #a83232);
-  background: rgba(168, 50, 50, 0.10);
+  border-left-color: var(--running-border);
+  background: var(--running-bg);
 }
 .fw-chstrip-cell[data-status="running"] .icon {
+  color: var(--running-border);
   animation: fw-chstrip-spin 1.6s linear infinite;
   display: inline-block;
 }
-.fw-chstrip-cell[data-status="done"] {
-  border-left-color: #3a8a3a;
-}
-.fw-chstrip-cell[data-status="done"] .icon { color: #3a8a3a; }
+/* Done — green (shared --ingested-* success token). */
+.fw-chstrip-cell[data-status="done"] { border-left-color: var(--ingested-border); }
+.fw-chstrip-cell[data-status="done"] .icon { color: var(--ingested-border); }
 .fw-chstrip-cell[data-status="failed"] {
-  border-left-color: #c04848;
-  background: rgba(192, 72, 72, 0.10);
+  border-left-color: var(--error-text);
+  background: var(--error-bg);
 }
-.fw-chstrip-cell[data-status="failed"] .icon { color: #c04848; }
+.fw-chstrip-cell[data-status="failed"] .icon { color: var(--error-text); }
 .fw-chstrip-cell[data-status="cancelled"] {
-  border-left-color: #888;
-  opacity: 0.75;
+  border-left-color: var(--text-muted);
+  opacity: 0.7;
 }
 @keyframes fw-chstrip-spin {
   to { transform: rotate(360deg); }

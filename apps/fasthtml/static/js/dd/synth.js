@@ -1016,7 +1016,12 @@ export function refreshSynthStartState() {
     S.synthStartBtn.innerHTML = 'Cancel Synth';
   } else {
     const hasNodes = S.synthImplemented && S.synthImplemented.size > 0;
-    const ready = S.activeSlug && S.activeRunId === null && hasNodes;
+    // Synth REQUIRES a planner plan — block Start until one exists for
+    // this framework (mirrors the server-side _load_plan 404 guard, so
+    // the disabled button and the API agree). See main.js initSynth /
+    // _hydrateChStripFromChapters which set S.synthHasPlan.
+    const ready = S.activeSlug && S.activeRunId === null
+                  && hasNodes && S.synthHasPlan;
     if (ready) {
       S.synthStartBtn.removeAttribute('disabled');
       S.synthStartBtn.removeAttribute('title');
@@ -1029,6 +1034,11 @@ export function refreshSynthStartState() {
         );
       } else if (!S.activeSlug) {
         S.synthStartBtn.setAttribute('title', 'Pick a framework first.');
+      } else if (!S.synthHasPlan) {
+        S.synthStartBtn.setAttribute(
+          'title',
+          'Run the Planner first — Synth needs a chapter plan for this framework.',
+        );
       }
     }
     S.synthStartBtn.classList.add('btn-primary');
@@ -1118,20 +1128,83 @@ export async function _refreshSynthCardsFromState(threadId, expectedField) {
 export function _showChStrip(visible) {
   if (!S.chstripEl) return;
   S.chstripEl.classList.toggle('visible', !!visible);
+  // Showing/hiding the 30% chapter panel reflows the graph column
+  // (100% ↔ ~70%). Cytoscape latches its container size, so re-fit on
+  // the next frame (after layout settles) or the DAG renders at the
+  // stale width. No-op until the canvas is mounted.
+  if (S.synthGraph) {
+    requestAnimationFrame(() => { try { _resizeSynthCanvas(); } catch (_) {} });
+  }
 }
-export function _renderChStrip(chapterIds) {
+// Derive a readable label from a chapter id when no real title is
+// available yet (live SSE path only carries ids). Strips the "ch-NN-"
+// prefix and turns separators into spaces:
+//   ch-01-introduction-to-pydantic-basics → "Introduction to pydantic basics"
+// Used only as a fallback — _applyChStripTitles upgrades to the exact
+// backend title (e.g. "Introduction to Pydantic Basics") right after.
+function _humanizeChapterId(id) {
+  const s = String(id || '')
+    .replace(/^ch[-_]?\d+[-_]?/i, '')
+    .replace(/[-_]+/g, ' ')
+    .trim();
+  if (!s) return String(id || '');
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// Render the Chapters checklist. `items` may be an array of id STRINGS
+// (live SSE / POST paths, ids only) OR {id, title} OBJECTS (durable
+// hydrate path, exact titles). Vertical task-list layout: status glyph
+// + ordinal + chapter title, one row per chapter (DD-CHAPTERS-SOTA
+// 2026-05-28 — the agent/pipeline task-list pattern).
+export function _renderChStrip(items) {
   if (!S.chstripCellsEl) return;
-  S.setStudyChapterIds(chapterIds.slice());
-  S.setStudyChapterStatus(new Map(chapterIds.map(id => [id, 'pending'])));
+  const norm = (items || []).map(it =>
+    (typeof it === 'string')
+      ? { id: it, title: null }
+      : { id: it.id, title: it.title || null }
+  );
+  const ids = norm.map(c => c.id);
+  S.setStudyChapterIds(ids.slice());
+  S.setStudyChapterStatus(new Map(ids.map(id => [id, 'pending'])));
   S.setStudyCurrentChapterId(null);
-  S.chstripCellsEl.innerHTML = chapterIds.map(id => (
-    '<div class="fw-chstrip-cell" data-status="pending" ' +
-    'data-chapter-id="' + id.replace(/"/g, '&quot;') + '">' +
-    '  <span class="icon"></span>' +
-    '  <span class="label">' + id + '</span>' +
-    '</div>'
-  )).join('');
+  S.chstripCellsEl.innerHTML = norm.map((c, i) => {
+    const title = c.title || _humanizeChapterId(c.id);
+    // title="" → full chapter name on hover when the row ellipsis-
+    // truncates it (single-line rows; SOTA truncate+tooltip pattern).
+    return (
+      '<div class="fw-chstrip-cell" data-status="pending" ' +
+      'data-chapter-id="' + c.id.replace(/"/g, '&quot;') + '" ' +
+      'title="' + escapeHtml(title) + '">' +
+      '  <span class="icon"></span>' +
+      '  <span class="num">' + (i + 1) + '</span>' +
+      '  <span class="label">' + escapeHtml(title) + '</span>' +
+      '</div>'
+    );
+  }).join('');
   _updateChStripCounter();
+}
+
+// Upgrade the checklist labels from id-derived fallbacks to the exact
+// backend titles. Called right after a live _renderChStrip(ids) so the
+// rows show real chapter names within one fetch. Silent on failure —
+// the humanized fallback stays.
+export async function _applyChStripTitles(slug) {
+  if (!slug || !S.chstripCellsEl) return;
+  try {
+    const r = await fetch(S.API + '/synth/' + slug + '/study/chapters');
+    if (!r.ok) return;
+    const data = await r.json();
+    (data.chapters || []).forEach(c => {
+      if (!c || !c.id || !c.title) return;
+      const cell = S.chstripCellsEl.querySelector(
+        '.fw-chstrip-cell[data-chapter-id="' + c.id.replace(/"/g, '\\"') + '"]'
+      );
+      if (!cell) return;
+      const lbl = cell.querySelector('.label');
+      if (lbl) lbl.textContent = c.title;
+      cell.title = c.title;   // keep the hover tooltip in sync
+    });
+  } catch (_) { /* keep humanized fallback */ }
 }
 export function _markChStripCell(chapterId, status) {
   if (!S.chstripCellsEl) return;
@@ -1167,6 +1240,27 @@ export function _resetStudyState() {
   _showChStrip(false);
 }
 
+// Plan-existence gate for the Start Synth button. Synth REQUIRES a
+// planner plan; GET /synth/{slug}/study/chapters returns 404 when none
+// exists (it calls _load_plan server-side), so `r.ok` ⇔ a plan is
+// written. This mirrors the server's _load_plan guard so the disabled
+// button and the API agree (no bypass via a stray click). Fail-safe:
+// any error → treated as "no plan" → button stays blocked.
+export async function _refreshSynthPlanGate(slug) {
+  let hasPlan = false;
+  try {
+    if (slug) {
+      const r = await fetch(S.API + '/synth/' + slug + '/study/chapters');
+      if (r.ok) {
+        const data = await r.json();
+        hasPlan = (((data && data.chapters) || []).length > 0);
+      }
+    }
+  } catch (_) { /* network hiccup → no plan */ }
+  S.setSynthHasPlan(hasPlan);
+  refreshSynthStartState();
+}
+
 // Durable strip reconstruction — rebuilds the chapter progress strip from
 // MinIO-backed render status (GET /synth/{slug}/study/chapters) instead of
 // the ephemeral SSE snapshot. THIS is what makes the strip survive a page
@@ -1180,7 +1274,8 @@ export async function _hydrateChStripFromChapters(slug) {
     const chapters = (data.chapters || []).slice()
       .sort((a, b) => (a.order || 0) - (b.order || 0));
     if (chapters.length < 2) { _showChStrip(false); return false; }
-    _renderChStrip(chapters.map(c => c.id));
+    // Durable path — chapters carry exact titles; pass them through.
+    _renderChStrip(chapters.map(c => ({ id: c.id, title: c.title })));
     chapters.forEach(c => {
       if (!c) return;
       if (c.rendered) _markChStripCell(c.id, 'done');
@@ -1341,6 +1436,7 @@ export async function pollStudyState(sid) {
     if (ev.step === 'study' && ev.kind === 'study_start') {
       const ids = ev.chapter_ids || [];
       _renderChStrip(ids);
+      _applyChStripTitles(S.activeSlug);   // upgrade ids → real titles
       _showChStrip(true);
       _setSynthStagePill('working', 'Study running (0 / ' + ids.length + ')');
       return;
@@ -1456,6 +1552,16 @@ export async function pollStudyState(sid) {
           'Open Step 5 to study.');
         _setSynthStagePill('done', 'Done (' + ok + '/' + tot + ')');
       }
+      // Study finished (or cancelled) — forget the resume key + thread.
+      // Without this the key lingers and a page reload re-opens this
+      // finished study's SSE, replaying its cached Redis snapshot
+      // (chapter_ready + study_done) and re-marking every chapter "Done"
+      // — a phantom "cached study" that survives hard refresh even after
+      // the artifacts/checkpoints are wiped. The durable strip state is
+      // rebuilt from MinIO render status on reload (_hydrateChStripFrom-
+      // Chapters), not from this ephemeral replay, so dropping it is safe.
+      if (S.activeSlug) { try { _forgetActiveStudy(S.activeSlug); } catch (_) {} }
+      S.setStudyThreadId(null);
       return;
     }
     if (ev.step === 'synth' && ev.kind === 'terminal') {
@@ -1589,6 +1695,7 @@ export function _genSynthThreadId(slug) {
 // Page-refresh recovery for synth.
 export async function _tryResumeActiveSynth(slug) {
   S.setSynthThreadId(null);
+  S.setSynthHasPlan(false);   // re-gated below by _refreshSynthPlanGate
   resetSynthCards();
   refreshSynthStartState();
 
@@ -1642,22 +1749,18 @@ export async function _tryResumeActiveSynth(slug) {
       renderSynthCards(values, nextNodes);
       return false;
     }
-    S.setSynthThreadId(tid);
-    refreshSynthStartState();
-    renderSynthCards(values, nextNodes);
-    S.set_synthLiveEventReceived(false);
-    pollSynthState(tid);
-    if (status === 'running') {
-      setTimeout(async () => {
-        if (S.synthThreadId === tid && !S._synthLiveEventReceived) {
-          try {
-            await fetch(S.API + '/synth/' + tid + '/resume',
-              {method: 'POST'});
-          } catch (e) {}
-        }
-      }, S._ORPHAN_DETECT_MS);
-    }
-    return true;
+    // VIEW-ONLY (mirrors _tryResumeActivePlanner). A "running" synth
+    // checkpoint is NOT proof of a live task — a crashed/interrupted run
+    // leaves status stuck at "running" with no live process. So we paint
+    // the partial progress as a STATIC snapshot and never set
+    // synthThreadId (which would show "Working" + "Cancel"), never start
+    // pollSynthState, and never auto-POST /resume (which would silently
+    // restart synth compute just by navigating to the page). Continuing
+    // is always an explicit Start Synth click (smart-resume).
+    renderSynthCards(values, nextNodes);   // static view of partial progress
+    _setSynthStagePill('idle');            // accurate — nothing running now
+    refreshSynthStartState();              // Start Synth stays enabled
+    return false;
   } catch (e) {
     _forgetActiveSynth(slug);
     return false;
@@ -1737,6 +1840,7 @@ export async function startSynth() {
     S.setStudyThreadId(sid);
     _rememberActiveStudy(S.activeSlug, sid);
     _renderChStrip(chapterIds);
+    _applyChStripTitles(S.activeSlug);   // upgrade ids → real titles
     _showChStrip(true);
     _setSynthStagePill('working',
       'Study running (0 / ' + chapterIds.length + ')');
@@ -1840,6 +1944,14 @@ export async function wipeSynth(slug) {
     result = r.ok ? (await r.json()) : {http_status: r.status};
   } catch (e) { result = {error: String(e)}; }
   _forgetActiveSynth(slug);
+  _forgetActiveStudy(slug);  // study-orchestrator resume key — else a wiped
+                             // slug re-opens the finished study's SSE on
+                             // reload and replays its snapshot (see study_done)
+  // Wipe the framework's LOCAL study state too (FSRS decks + studied
+  // flags + challenge grades in dd:srs:v1 / dd:study:progress:v1). These
+  // aren't gated by the server, so without this the Study sidebar keeps
+  // showing phantom "N studied" / due-card badges for a wiped framework.
+  try { (await import('./srs.js')).forgetFramework(slug); } catch (_) {}
   if (S.activeSlug === slug) {
     S.setSynthThreadId(null);
     _resetStudyState();      // clears study-level state + HIDES the chapter strip

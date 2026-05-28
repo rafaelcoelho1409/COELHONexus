@@ -6,9 +6,7 @@
 import * as S from './state.js';
 import { sleep, fmtBytes, fmtAge } from './utils.js';
 import {
-  showNotice, hideNotice, showToast, hideToast,
-  refreshGenerateState, jumpTo, showStep, renderStepper,
-  syncStepLocks,
+  showNotice, hideNotice, showToast, hideToast, refreshGenerateState,
 } from './ui.js';
 import { setProgressFramework } from './picker.js';
 import { navigateToStage } from './nav.js';
@@ -58,15 +56,6 @@ export async function loadManifestForSlug(slug) {
   // Same per-slug recovery for the synth step (Step 4).
   const { _tryResumeActiveSynth } = await import('./synth.js');
   _tryResumeActiveSynth(slug).catch(() => {});
-  // If the user switches frameworks while ALREADY on the Study stage,
-  // the showStep(5) navigation hook won't fire — so refresh the Study
-  // view in place.
-  if (S.currentStep === 5) {
-    const study = await import('./study.js');
-    study.setStudyFramework(slug);
-    study.refreshStudyVisibility();
-    if (slug !== S.studyLoadedSlug) study.loadStudyChapters(slug);
-  }
   try {
     const r = await fetch(S.API + '/ingestion/' + slug + '/manifest');
     if (!r.ok) {

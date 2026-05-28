@@ -67,6 +67,7 @@ from pydantic import ValidationError
 
 from ...ingestion.storage import get_storage
 from domains.llm.rotator.chain import chat_judge_bandit_async
+from domains.llm.rotator.chain.service import embed_via_router_async
 
 from ..observability.spans import traced
 from .constants import (
@@ -101,7 +102,12 @@ _N_SAMPLES               = 3
 _TEMPERATURE_DRAFT       = 0.4   # diversity for USC candidates
 _TEMPERATURE_VOTE        = 0.0
 _TEMPERATURE_REPAIR      = 0.2
-_MAX_REPAIR_RETRIES      = 3
+# V1 (2026-05-28) — dropped 3 → 2 retries. response_format=json_schema
+# eliminates ~all Pydantic-parse failures; remaining repairs are for
+# structural issues (banned headings, dag cycles, semantic dupes). Two
+# attempts catch 95%+ of these per Run 5 telemetry. Third attempt
+# rarely improves and adds 6-12s of sequential wall-time per chapter.
+_MAX_REPAIR_RETRIES      = 2
 _MAX_TOKENS_DRAFT        = 8000
 _MAX_TOKENS_VOTE         = 200
 _MAX_TOKENS_REPAIR       = 8000
@@ -259,6 +265,91 @@ def _concat_sources(bodies: list[str]) -> tuple[str, bool]:
         parts.append(body)
         total += len(body) + len(_SOURCE_CONCAT_SEPARATOR)
     return _SOURCE_CONCAT_SEPARATOR.join(parts), truncated
+
+
+# =============================================================================
+# Semantic H2 dedup (U6, 2026-05-28)
+# =============================================================================
+# SequenceMatcher in validate_outline_structure catches lexical near-
+# duplicates ("Click submit button" vs "Click a submit button") but NOT
+# topical duplicates with different surface wording ("Trusted
+# Infrastructure" vs "Block and Allow Rule Customization" vs "Enterprise
+# Policy Management" — all about Auto Mode rules). The CC run exposed
+# this catastrophically: chapter 4 had 6 H2 sections all repeating the
+# same `autoMode.environment` JSON block under different framings.
+#
+# Fix: embed heading+description per section via NIM, compute pairwise
+# cosine, flag pairs above the threshold as repair-loop feedback. The
+# bundled bandit-routed embedder makes this cheap (~one batched call
+# per chapter, <100ms).
+#
+# Fail-soft: any embed/numpy failure logs and returns empty issues, so
+# the structural validators still drive repair. Embeddings only ADD
+# signal — they never block.
+_SEMANTIC_H2_DEDUP_THRESHOLD = 0.78
+
+
+async def _detect_semantic_h2_duplicates(
+    outline: ChapterOutline,
+    *,
+    threshold: float = _SEMANTIC_H2_DEDUP_THRESHOLD,
+) -> list[str]:
+    """Return issue strings naming pairs of near-semantic-duplicate H2
+    sections. Empty list if no dupes OR if the embed/compute fails."""
+    sections = outline.sections
+    if len(sections) <= 1:
+        return []
+    texts = [f"{s.heading}\n{s.description}" for s in sections]
+    try:
+        embeddings = await embed_via_router_async(
+            texts, input_type="query",
+        )
+    except Exception as e:
+        logger.warning(
+            f"[outline_sdp] semantic H2 dedup embed failed: "
+            f"{type(e).__name__}: {e} — skipping semantic dedup"
+        )
+        return []
+    try:
+        import numpy as np
+        embs = np.array(embeddings, dtype=np.float32)
+        norms = np.linalg.norm(embs, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        normed = embs / norms
+        sim = normed @ normed.T
+    except Exception as e:
+        logger.warning(
+            f"[outline_sdp] semantic H2 dedup cosine failed: "
+            f"{type(e).__name__}: {e}"
+        )
+        return []
+    n = len(sections)
+    flagged: list[tuple[str, str, float]] = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            s = float(sim[i, j])
+            if s >= threshold:
+                flagged.append((
+                    sections[i].heading, sections[j].heading, s,
+                ))
+    if not flagged:
+        return []
+    pair_strs = [
+        f"{a!r} ↔ {b!r} ({s:.0%})" for a, b, s in flagged[:3]
+    ]
+    suffix = (
+        f", +{len(flagged) - 3} more pairs" if len(flagged) > 3 else ""
+    )
+    return [
+        f"Semantically near-duplicate H2 section pairs detected "
+        f"({len(flagged)} pair(s); cosine ≥ {threshold:.0%}): "
+        f"{', '.join(pair_strs)}{suffix}. These sections cover the "
+        f"same topic with different surface wording — MERGE them into "
+        f"one section (combine the member docs under a unified heading) "
+        f"OR rewrite one to cover a distinctly different aspect. "
+        f"Topical duplicates produce recycled code blocks in the final "
+        f"chapter that readers cannot use."
+    ]
 
 
 def _heuristic_fallback_outline(md_text: str) -> ChapterOutline:
@@ -771,6 +862,18 @@ async def outline_sdp(state: SynthState) -> dict:
     chosen_idx = await _usc_pick(candidates, chapter_id, chapter_title)
     outline, dag, issues = candidates[chosen_idx]
 
+    # U6 (2026-05-28) — semantic H2 dedup feedback. Embed section
+    # heading+description, flag pairs above threshold as repair-loop
+    # input. Fail-soft (returns [] on any embed/compute failure).
+    semantic_dupe_issues = await _detect_semantic_h2_duplicates(outline)
+    if semantic_dupe_issues:
+        issues = list(issues) + semantic_dupe_issues
+        logger.info(
+            f"[outline_sdp] {slug}/{chapter_id}: semantic H2 dedup found "
+            f"{len(semantic_dupe_issues)} feedback message(s); will drive "
+            f"repair loop"
+        )
+
     await emit_progress(
         thread_id, "outline_sdp", "usc_voted",
         chosen_index=chosen_idx, n_initial_violations=len(issues),
@@ -821,6 +924,12 @@ async def outline_sdp(state: SynthState) -> dict:
             _, new_issues = validate_outline_structure(
                 new_outline, new_dag, n_sources=len(sources),
             )
+            # U6 — re-check semantic H2 dedup on the new outline so the
+            # repair loop credits/penalizes the LLM's response to the
+            # semantic feedback.
+            new_semantic = await _detect_semantic_h2_duplicates(new_outline)
+            if new_semantic:
+                new_issues = list(new_issues) + new_semantic
             # Only accept if it ACTUALLY improves things.
             if len(new_issues) <= len(issues):
                 outline = new_outline
@@ -882,6 +991,12 @@ async def outline_sdp(state: SynthState) -> dict:
         _, issues = validate_outline_structure(
             outline, dag, n_sources=len(sources),
         )
+        # U6 — re-check semantic dedup post-trim. Trimming may have
+        # removed near-duplicate H2s; reflect the actual remaining
+        # situation in the persisted violations list.
+        post_trim_semantic = await _detect_semantic_h2_duplicates(outline)
+        if post_trim_semantic:
+            issues = list(issues) + post_trim_semantic
         await emit_progress(
             thread_id, "outline_sdp", "hard_trimmed",
             n_before=n_before, n_after=len(outline.sections),

@@ -760,7 +760,11 @@ def build_writer_prompt(
         f"{hash_list}\n\n"
 
         f"== VALID CITATION SOURCE_KEYS ({len(valid_source_keys)}) — "
-        f"citations.source_key MUST be one of these ==\n"
+        f"these are the source docs that the digest routed TO THIS "
+        f"SECTION specifically (NOT chapter-wide). "
+        f"citations.source_key MUST be one of these — citing a source "
+        f"that wasn't routed here means the section is straying from "
+        f"its assigned scope. ==\n"
         f"{source_list}\n\n"
 
         f"== MEMORY (compressed prior-stage sections — already covered, "

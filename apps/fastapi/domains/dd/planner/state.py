@@ -68,6 +68,19 @@ class PlannerState(TypedDict, total=False):
     plan_path: Optional[str]                    # plan_write — MinIO key of latest pointer
     plan_write_stats: Optional[dict]            # plan_write — counts + inline plan for UI
 
+    # --- LLM-first planner state (2026-05-27, KD_PLANNER_LLM_FIRST=true) ---
+    # Per docs/DD-PLANNER-LLM-FIRST-SOTA-2026-05-27.md. These fields are
+    # populated when the LLM-first path is active; legacy fields above
+    # (cluster_assignments_ref, refine_assignments_ref, cluster_labels_ref)
+    # stay None on the LLM-first path. plan_write tolerates either path.
+    doc_distill_ref: Optional[str]              # doc_distill — MinIO key of {key→DocDistillate} JSON
+    doc_distill_stats: Optional[dict]           # doc_distill — counts + skip-pass flag
+    chapter_proposals_ref: Optional[str]        # chapter_propose — MinIO key of proposals JSON
+    propose_stats: Optional[dict]               # chapter_propose — chosen titles for UI
+    chapter_doc_assignments_ref: Optional[str]  # chapter_assign — MinIO key of doc×chapter matrix
+    assign_stats: Optional[dict]                # chapter_assign — coverage counts
+    select_stats: Optional[dict]                # chapter_select — chapter sizes for UI
+
     # --- bookkeeping ---
     status: Optional[str]                       # "running" | "done" | "failed" | "cancelled"
     error: Optional[str]                        # last-node error, if any

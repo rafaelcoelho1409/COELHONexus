@@ -128,103 +128,27 @@ document.addEventListener('click', (e) => {
   if (Number.isFinite(idx)) openDrawer(idx);
 });
 
-// ============================================================
-// Stepper navigation
-// ============================================================
-export function renderStepper() {
-  S.steps.forEach((s, i) => {
-    const n = i + 1;
-    s.classList.remove('active', 'completed');
-    if (n === S.currentStep) s.classList.add('active');
-    else if (n <= S.farthestStep) s.classList.add('completed');
-  });
-  S.connectors.forEach((c, i) => {
-    c.classList.toggle('complete', i + 1 < S.farthestStep);
-  });
-}
-
-// showStep is reassigned by study.js to hook Step 5 navigation.
-// We export a reference-holder object so the reassignment is visible
-// to all callers.
-export const stepFn = { showStep: null };
-
-export function showStep(n) {
-  // Delegate to the current implementation (may be wrapped by study.js)
-  stepFn.showStep(n);
-}
-
-// The "real" showStep logic — study.js wraps this.
-export function _showStepImpl(n) {
-  if (n > S.farthestStep) return;
-  S.setCurrentStep(n);
-  S.panels.forEach((p, i) => p.classList.toggle('active', i + 1 === n));
-  // Sticky bar appears on Step 1 whenever a tile is selected; Generate
-  // enablement is controlled by `refreshGenerateState()`.
-  S.stickyBar.classList.toggle('visible', n === 1 && S.selected !== null);
-  // Step 3 — Cytoscape latches container dimensions at init time;
-  // the canvas was initialized while the panel was display:none so
-  // its viewport is 0x0 until we explicitly tell it to resize after
-  // the panel becomes visible. Idempotent — no-op when ?ui=cards.
-  if (n === 3 && S.plannerGraph) {
-    // Dynamic import to avoid circular dependency at module parse time
-    import('./planner.js').then(m => m._resizePlannerCanvas());
-  }
-  if (n === 4 && S.synthGraph) {
-    import('./synth.js').then(m => m._resizeSynthCanvas());
-  }
-  // Step 2 — only show the live progress box during an active run;
-  // pull the canonical manifest into the file list otherwise.
-  if (n === 2) {
-    if (S.activeRunId !== null) {
-      S.progressBox.style.display = '';
-      S.step2Summary.innerHTML = '';
-      S.step2Grid.innerHTML =
-        '<div class="fw-empty">Ingestion in progress — materials will ' +
-        'appear here when it completes.</div>';
-    } else {
-      S.progressBox.style.display = 'none';
-      if (S.activeSlug) {
-        import('./ingestion.js').then(m => m.loadManifestForSlug(S.activeSlug));
-      }
-    }
-  }
-  // Step 3 — Planner. Refresh start-button enablement.
-  if (n === 3) {
-    import('./planner.js').then(m => m.refreshPlannerStartState());
-  }
-  renderStepper();
-}
-
-// Initialize the reference
-stepFn.showStep = _showStepImpl;
-
-export function syncStepLocks() {
-  // Steps 2-5 unlock when EITHER an ingestion is running OR the library
-  // has at least one finalized framework.
-  const hasLibrary =
-    S.sidebarList.querySelectorAll('.fw-lib-item').length > 0;
-  const ingestActive = S.activeRunId !== null;
-  if (hasLibrary || ingestActive) {
-    S.setFarthestStep(Math.max(S.farthestStep, 5));
-  } else {
-    S.setFarthestStep(1);
-    if (S.currentStep !== 1) {
-      S.setCurrentStep(1);
-      S.panels.forEach((p, i) => p.classList.toggle('active', i + 1 === 1));
-      S.stickyBar.classList.toggle('visible', S.selected !== null);
-    }
-  }
-  renderStepper();
-}
+// NOTE: the wizard-era stepper machinery (renderStepper / showStep /
+// _showStepImpl / stepFn / syncStepLocks / advance / jumpTo + the
+// `.fw-step` click handler) was removed 2026-05-28 — per-stage routes
+// (/docs-distiller/<stage>) replaced the single-page stepper, so stage
+// navigation is now real <a href> links + main.js stage init.
 
 export function refreshGenerateState() {
   // Disable Start Ingestion + every sidebar Refresh button while an
-  // ingestion is in flight.
+  // ingestion is in flight. The Start Ingestion button (#fw-generate)
+  // only exists on /docs-distiller (catalog) — null-guarded so this
+  // function can be safely called from any stage page (e.g. by
+  // renderSidebar after the library list re-renders, which would
+  // otherwise throw on non-catalog pages and bubble up to the
+  // loadLibrary catch block — rendering the popover empty).
   const ingestActive = S.activeRunId !== null;
-  if (!S.selected || ingestActive) {
-    S.generate.setAttribute('disabled', 'disabled');
-  } else {
-    S.generate.removeAttribute('disabled');
+  if (S.generate) {
+    if (!S.selected || ingestActive) {
+      S.generate.setAttribute('disabled', 'disabled');
+    } else {
+      S.generate.removeAttribute('disabled');
+    }
   }
   document.querySelectorAll('.fw-lib-refresh, .fw-lib-delete').forEach(b => {
     if (ingestActive) {
@@ -235,18 +159,3 @@ export function refreshGenerateState() {
   });
 }
 
-export function advance() {
-  if (S.currentStep >= 4) return;
-  S.setFarthestStep(Math.max(S.farthestStep, S.currentStep + 1));
-  showStep(S.currentStep + 1);
-}
-
-export function jumpTo(step) {
-  S.setFarthestStep(Math.max(S.farthestStep, step));
-  showStep(step);
-}
-
-S.steps.forEach((s, i) => s.addEventListener('click', () => {
-  const target = i + 1;
-  if (target <= S.farthestStep) showStep(target);
-}));

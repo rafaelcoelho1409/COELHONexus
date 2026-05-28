@@ -5,6 +5,7 @@
 
 import * as S from './state.js';
 import { refreshGenerateState } from './ui.js';
+import { navigateToStage } from './nav.js';
 
 export function indexTilesForFramework() {
   S.tiles.forEach(t => {
@@ -52,25 +53,81 @@ export function applyFilter() {
     t.style.display = show ? '' : 'none';
     if (show) visible++;
   });
-  S.grid.classList.toggle('fw-grid-empty', visible === 0);
-  S.countEl.textContent = visible + ' of ' + S.total;
+  if (S.grid) S.grid.classList.toggle('fw-grid-empty', visible === 0);
+  if (S.countEl) S.countEl.textContent = visible + ' of ' + S.total;
+}
+
+// Green-badge the catalog tiles whose slug is already in the /ingestion
+// library (S.ingestedSlugs, populated by loadLibrary). Called from
+// main.js initCatalog after the library fetch resolves. Replaces the
+// Catalog tab's Library dropdown — ingested status shows inline.
+export function markIngestedTiles() {
+  S.tiles.forEach(t => {
+    t.classList.toggle('fw-tile-ingested', S.ingestedSlugs.has(t.dataset.slug));
+  });
 }
 
 S.search?.addEventListener('input', e => {
   S.setQuery(e.target.value.toLowerCase().trim());
   applyFilter();
 });
-S.chips.forEach(c => c.addEventListener('click', () => {
-  S.chips.forEach(x => x.classList.remove('active'));
-  c.classList.add('active');
-  S.setActiveChip(c.dataset.chip);
-  applyFilter();
-}));
+
+// Category filter dropdown (catalog row-3 toolbar) — replaces the old
+// .fw-chip row. Open/close mirrors the framework picker; choosing an
+// option sets S.activeChip + re-filters. Guarded: only wires up when
+// the dropdown is on the page (catalog only).
+const catFilter = document.querySelector('#dd-catfilter');
+if (catFilter) {
+  const catTrigger = catFilter.querySelector('#dd-catfilter-trigger');
+  const catLabel = catFilter.querySelector('#dd-catfilter-label');
+  const catPopover = catFilter.querySelector('#dd-catfilter-popover');
+  const setCatOpen = (open) => {
+    catFilter.classList.toggle('open', open);
+    catTrigger?.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+  catTrigger?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setCatOpen(!catFilter.classList.contains('open'));
+  });
+  document.addEventListener('click', (e) => {
+    if (catFilter.classList.contains('open') && !catFilter.contains(e.target)) {
+      setCatOpen(false);
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && catFilter.classList.contains('open')) {
+      setCatOpen(false);
+      catTrigger?.focus();
+    }
+  });
+  // Close on scroll — the toolbar is .topbar-collapsible (overflow
+  // hidden); closing returns overflow to hidden before any auto-hide
+  // collapse so the popover never clips mid-animation.
+  window.addEventListener('scroll', () => {
+    if (catFilter.classList.contains('open')) setCatOpen(false);
+  }, { passive: true });
+  catPopover?.querySelectorAll('.dd-catfilter-option').forEach(opt => {
+    opt.addEventListener('click', () => {
+      catPopover.querySelectorAll('.dd-catfilter-option')
+        .forEach(o => o.classList.remove('active'));
+      opt.classList.add('active');
+      const chip = opt.dataset.chip;
+      S.setActiveChip(chip);
+      if (catLabel) catLabel.textContent = chip;
+      applyFilter();
+      setCatOpen(false);
+    });
+  });
+}
+
 S.tiles.forEach(t => t.addEventListener('click', () => {
-  // Tile selection always works (catalog stays interactive). The
-  // currentStep guard was relevant to the wizard-era single-page
-  // layout; with per-stage routes, tiles only exist on /docs-distiller
-  // (catalog) so the guard is implicit.
+  // Already-ingested tiles jump straight to their Planner — the corpus
+  // is downloaded, so the next step is planning (user's choice). Non-
+  // ingested tiles select for ingestion (sticky bar → Start Ingestion).
+  if (t.classList.contains('fw-tile-ingested')) {
+    navigateToStage('planner', t.dataset.slug);
+    return;
+  }
   S.tiles.forEach(x => x.classList.remove('selected'));
   t.classList.add('selected');
   S.setSelected(t.dataset.slug);

@@ -18,6 +18,13 @@
   --running-bg: #e0f2fe;
   --running-border: #0369a1;
   --running-text: #0c4a6e;
+  /* Ingested / done status — green. Reuses the study chapter
+     "rendered" green (#2a8b46) so success state is consistent across
+     the app. Distinct from burgundy (primary) and sky-blue (running).
+     Used to badge already-ingested catalog tiles. */
+  --ingested-bg: #e8f6ee;
+  --ingested-border: #2a8b46;
+  --ingested-text: #1f7a3d;
 }
 * { box-sizing: border-box; }
 html, body {
@@ -32,13 +39,14 @@ html, body {
   line-height: 1.5;
 }
 
-/* DD-NAVBAR-SOTA-2026-05-27 (Wave C) — anchor & skip-link offset.
-   With the sticky topbar (~64px tall) pinned to the viewport top,
-   in-page anchor jumps (and the first jump from the .skip-link)
-   would land UNDER the bar. `scroll-padding-top` makes the browser
-   scroll the target ~80px below the viewport top so it clears the
-   sticky bar with a small breathing margin. */
-html { scroll-padding-top: 80px; }
+/* DD-NAVBAR-SOTA-2026-05-28 (Wave D / Wave F) — anchor & skip-link offset.
+   The sticky topbar now spans up to THREE rows on Docs Distiller
+   pages (brand+nav / title+picker / stage tabs). Worst case is
+   ~64px + ~52px + ~38px ≈ 154px when all three are visible at
+   scroll-top. Padding set to 160px so anchor targets clear the
+   full header. Non-DD pages eat a harmless ~60-90px of extra anchor
+   offset — invisible in practice since they lack in-page anchors. */
+html { scroll-padding-top: 160px; }
 
 /* DD-NAVBAR-SOTA-2026-05-26 (Wave A2) — Cross-document View Transitions
    API. Chrome 111+/Safari 18+/Firefox 129+ get a smooth pill-morph
@@ -64,13 +72,21 @@ html { scroll-padding-top: 80px; }
   transition: top 0.18s;
 }
 .skip-link:focus { top: 8px; outline: 2px solid var(--primary-dark); }
-.page { padding: 32px 40px 96px 40px; }
+/* DD-NAVBAR-SOTA-2026-05-28 (Wave E) — flat page chrome.
+   Removed the white "card" island. Content now flows on the page
+   background, inset by the same 40px horizontal gutter the topbar
+   uses (`.topbar { padding: 12px 40px }`), so brand and content
+   share a single vertical gridline. Matches the 2026 SOTA flat-
+   surface layout (Linear / Vercel / Notion). The .card wrapper is
+   kept as a no-op container so existing DOM/selectors don't break;
+   only its visual treatment is stripped. */
+.page { padding: 28px 40px 96px 40px; }
 .card {
-  background: var(--card);
   width: 100%;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 32px 48px 56px 48px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
 }
 /* DD-NAVBAR-SOTA-2026-05-27 (Wave C) — sticky topbar wrap.
    Full-bleed background, position: sticky so it pins at viewport top
@@ -88,19 +104,15 @@ html { scroll-padding-top: 80px; }
   z-index: 50;
   background: var(--card);
   border-bottom: 1px solid transparent;
-  transition: transform 0.22s ease,
-              box-shadow  0.20s ease,
+  transition: box-shadow 0.20s ease,
               border-color 0.20s ease;
-  will-change: transform;
 }
 .topbar-wrap.is-stuck {
   box-shadow: 0 1px 8px rgba(0,0,0,0.06);
   border-bottom-color: var(--border);
 }
-.topbar-wrap.is-hidden { transform: translateY(-100%); }
 @media (prefers-reduced-motion: reduce) {
   .topbar-wrap { transition: none; }
-  .topbar-wrap.is-hidden { transform: none; }
 }
 
 .topbar {
@@ -232,21 +244,53 @@ html { scroll-padding-top: 80px; }
   white-space: nowrap;
 }
 .btn-outline:hover { border-color: var(--text-muted); }
-.title-row {
+/* DD-NAVBAR-SOTA-2026-05-28 (Wave D) — title row inside topbar.
+   Renders as a row of `.topbar-wrap`. Padding matches `.topbar`;
+   horizontal divider above. */
+.topbar-wrap .title-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding-left: 16px;
-  border-left: 6px solid var(--primary);
-  margin-bottom: 32px;
+  padding: 12px 40px;
+  border-top: 1px solid var(--border);
+  margin: 0;
+}
+
+/* Wave F / Wave G — smart auto-hide. Any topbar row marked
+   `.topbar-collapsible` slides away on scroll-down (topbar.js toggles
+   `.is-hidden`); rows WITHOUT this class (brand+nav, stage tabs) stay
+   pinned so identity + stage switching are never lost mid-scroll
+   (Stripe Apps pattern). Collapse via max-height+padding so lower
+   rows slide up to meet the pinned rows — no translateY ghosting.
+   max-height is generous (200px) so a wrapped toolbar on narrow
+   viewports isn't clipped in its expanded state. */
+.topbar-wrap .topbar-collapsible {
+  max-height: 200px;
+  overflow: hidden;
+  transition: max-height 0.24s ease,
+              padding 0.22s ease,
+              opacity 0.18s ease,
+              border-top-color 0.18s ease;
+}
+.topbar-wrap .topbar-collapsible.is-hidden {
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  opacity: 0;
+  border-top-color: transparent;
+}
+@media (prefers-reduced-motion: reduce) {
+  .topbar-wrap .topbar-collapsible { transition: none; }
 }
 .title {
-  font-size: 1.55rem;
-  font-weight: 400;
+  font-size: 1.15rem;
+  font-weight: 500;
   color: var(--text);
   line-height: 1.25;
   margin: 0;
+  padding-left: 16px;
+  border-left: 6px solid var(--primary);
 }
 .panel { min-height: 360px; }
 

@@ -121,7 +121,12 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Tunables (quality > speed)
 # =============================================================================
-_CONCURRENCY        = 16    # max concurrent per-source LLM calls
+_CONCURRENCY        = 24    # max concurrent per-source LLM calls
+# V4 (2026-05-28) — bumped 16 → 24 after per-arm cooldown (60s) and
+# bandit drift control stabilized. Empirical evidence: 2026-05-27 run
+# with concurrency 16 saw no 429 cascades for digest (cooldown caught
+# every per-arm spike). 24 is conservative — expected per-chapter
+# digest wall-time drop of ~20-25% on 60+ source chapters.
 # Bumped 2026-05-25 from 6 → 16. Digest is the single heaviest synth
 # step (~17 min for FastMCP's 252 sources at N=6) because it fans out
 # one LLM call per ingested page. At ~4s per page, wall time ≈

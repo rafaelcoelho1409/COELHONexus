@@ -108,9 +108,30 @@ HEAD = (
 )
 
 
-def _Shell(active_key: str, title_text=None, body=None):
-    """Page chrome. Pass `title_text=None` to skip the burgundy-bordered
-    title row (used by the home page which provides its own hero)."""
+def _Shell(active_key: str, title_text=None, body=None, title_actions=None,
+           subnav_row=None, toolbar_row=None):
+    """Page chrome — sticky header composed of up to four stacked rows
+    inside `.topbar-wrap`:
+
+        row 1  brand + global nav pills            (always)
+        row 2  feature title + title_actions        (when `title_text`)
+        row 2' stage tab strip (`subnav_row`)       (Docs Distiller)
+        row 3  contextual toolbar (`toolbar_row`)   (Docs Distiller)
+
+    Pass `title_text=None` to skip the H1 title row (Home provides its
+    own hero; Docs Distiller drops it because the active nav pill IS the
+    page-title surrogate and the stage tabs carry identity).
+
+    `title_actions` — right-aligned content inside the title row (e.g. a
+    feature action). The title row uses `justify-content: space-between`.
+
+    `subnav_row` — the stage tab strip. Stays PINNED while scrolling so
+    stage switching is never lost.
+
+    `toolbar_row` — contextual, per-stage tools (status pill, Start/Wipe
+    actions, search, framework picker). Marked `.topbar-collapsible` so
+    the smart auto-hide in topbar.js slides ONLY this row away on
+    scroll-down — rows 1 + 2/2' stay pinned (Stripe Apps pattern)."""
     # Wave B1: each nav-item carries a hidden .nav-status-dot. topbar.js
     # toggles .has-running on items whose `data-status-slug` is currently
     # tracked as in-flight by the backend.
@@ -124,9 +145,14 @@ def _Shell(active_key: str, title_text=None, body=None):
         )
         for key, label, href in FEATURES
     ]
+    # The title row is `.topbar-collapsible` so non-DD features (YouTube,
+    # Coming Soon) auto-hide it on scroll-down. DD passes title_text=None
+    # and uses `toolbar_row` (also collapsible) instead.
     title_row = (
         Div(
-            H1(title_text, cls = "title"), cls = "title-row")
+            H1(title_text, cls = "title"),
+            (title_actions if title_actions is not None else ""),
+            cls = "title-row topbar-collapsible")
         if title_text else ""
     )
     return (
@@ -135,11 +161,14 @@ def _Shell(active_key: str, title_text=None, body=None):
         # the <main id="content"> wrapper below. Hidden until focused
         # (see .skip-link in base.css).
         A("Skip to content", href = "#content", cls = "skip-link"),
-        # Wave C — sticky topbar lives OUTSIDE the card so it can pin
-        # to the viewport edge with a full-width background. The wrap
-        # carries `position: sticky` + stuck/hidden state classes (set
-        # by topbar.js); the inner `.topbar` keeps the brand+nav inset
-        # aligned with the card's horizontal padding.
+        # Wave C / Wave D (2026-05-28) — sticky topbar wraps BOTH rows:
+        #   row 1: brand + global nav pills (always present)
+        #   row 2: feature title + feature actions (present when
+        #          `title_text` is set; rendered via `title_row`)
+        # Both pin together when scrolling and auto-hide together
+        # (Linear / Stripe Apps pattern — single cohesive sticky
+        # header). The .card below no longer renders the title row,
+        # so the main content gets the reclaimed vertical space.
         Div(
             Div(
                 A(
@@ -152,11 +181,13 @@ def _Shell(active_key: str, title_text=None, body=None):
                 Nav(*nav_links, cls = "nav", aria_label = "Primary"),
                 cls = "topbar",
             ),
+            title_row,
+            (subnav_row if subnav_row is not None else ""),
+            (toolbar_row if toolbar_row is not None else ""),
             cls = "topbar-wrap",
         ),
         Div(
             Div(
-                title_row,
                 # Wave B3 — wrap the feature body in <main id="content">
                 # so the skip-link and screen readers have a landmark.
                 Main(

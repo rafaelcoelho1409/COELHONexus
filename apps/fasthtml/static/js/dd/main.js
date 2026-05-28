@@ -20,15 +20,20 @@ import { currentStage, currentSlug, currentRunId } from './nav.js';
 // module-init. Null-safe; safe on every stage.
 import './picker.js';
 import './ingestion.js';
+// Header framework dropdown — registers open/close + search filter.
+// Self-no-ops if the picker isn't on the current page (it ships on
+// every DD stage page today, but the guard is cheap insurance).
+import './fw_picker.js';
 import { _initPlannerCanvas, _toggleStageEmpty, NodeDrawer } from './planner.js';
 import {
   loadLibrary, recoverActiveRuns, recoverActivePlanner, loadPlannerInfo,
 } from './library.js';
 import {
   _initSynthCanvas, loadSynthInfo, recoverActiveSynth, _setNodeDrawerRef,
+  _refreshSynthPlanGate,
 } from './synth.js';
 import './study.js';
-import { indexTilesForFramework } from './picker.js';
+import { indexTilesForFramework, markIngestedTiles } from './picker.js';
 import { pollRun } from './ingestion.js';
 
 // Synth's live-update hot path needs synchronous access to the planner-
@@ -56,26 +61,37 @@ async function initCatalog() {
   if (S.countEl && S.total > 0) {
     S.countEl.textContent = S.total + ' of ' + S.total;
   }
+  // loadLibrary() (already awaited in the boot sequence below) populated
+  // S.ingestedSlugs — green-badge the tiles that are already downloaded.
+  try { markIngestedTiles(); } catch (_) {}
   refreshGenerateState();
 }
 
 async function initIngestion() {
   // Explicit ?run= → resume polling directly (no /runs/active round
   // trip). This is the path the catalog page redirects through after
-  // POST /runs returns `queued`.
+  // POST /runs returns `queued`. pollRun sets S.activeRunId
+  // synchronously and reveals the progress box.
   if (runId) {
     pollRun(runId);
   } else {
     try { await recoverActiveRuns(); }
     catch (e) { console.warn('[init] ingestion-recover failed:', e); }
   }
-  // Render the manifest file grid for the URL's slug whenever the
-  // user lands directly on /docs-distiller/ingestion?slug=...
-  if (slug) {
+  if (slug && S.activeRunId === null) {
+    // No ingestion in flight → load the finalized manifest into the
+    // file grid (the user is viewing an already-ingested framework).
     try {
       const { loadManifestForSlug } = await import('./ingestion.js');
       loadManifestForSlug(slug).catch(() => {});
     } catch (_) {}
+  } else if (S.activeRunId !== null && S.step2Grid) {
+    // Ingestion IS in flight — the manifest doesn't exist yet (fetching
+    // it would 404). Show an in-progress note; pollRun's done-handler
+    // populates the grid with the real files once the run completes.
+    S.step2Grid.innerHTML =
+      '<div class="fw-empty">Ingestion in progress — materials will ' +
+      'appear here when it completes.</div>';
   }
 }
 
@@ -110,6 +126,10 @@ async function initSynth() {
       const { _tryResumeActiveSynth } = await import('./synth.js');
       await _tryResumeActiveSynth(slug);
     } catch (e) { console.warn('[init] synth-resume failed:', e); }
+    // Gate Start Synth on planner-plan existence (mirrors the server's
+    // _load_plan 404). Independent of resume so it always runs.
+    try { await _refreshSynthPlanGate(slug); }
+    catch (e) { console.warn('[init] synth-plan-gate failed:', e); }
   }
 }
 

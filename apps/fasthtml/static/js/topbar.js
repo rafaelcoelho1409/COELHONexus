@@ -85,7 +85,7 @@
   start();
 
   // -------------------------------------------------------------- //
-  // Wave C — sticky stuck-detection + auto-hide on scroll-down     //
+  // Wave C / Wave F — sticky stuck-detection + smart auto-hide     //
   // -------------------------------------------------------------- //
   const topbarWrap = document.querySelector(".topbar-wrap");
   if (!topbarWrap) return;
@@ -107,17 +107,31 @@
   );
   stuckObserver.observe(sentinel);
 
-  // Auto-hide on scroll-down. Tunables:
+  // Wave F / Wave G — smart auto-hide. The header is up to four stacked
+  // rows: brand+nav, (feature title), stage tabs, contextual toolbar.
+  // We collapse only the rows marked `.topbar-collapsible` (the feature
+  // title row on non-DD pages; the contextual toolbar on DD pages) —
+  // brand+nav and the stage tabs stay PINNED so identity + stage
+  // switching are never lost mid-scroll. The CSS collapses each row via
+  // max-height+padding so lower rows slide up cleanly.
+  //
+  // If there are no collapsible rows (e.g. Home), the toggle is a no-op.
+  //
+  // Tunables:
   //   SCROLL_DELTA  — ignore micro-scrolls below this (px).
-  //   SHOW_BELOW_Y  — always show the bar when within this many px
-  //                   of the document top (avoids hiding right after
-  //                   the user lands on a page).
+  //   SHOW_BELOW_Y  — always show when within this many px of the
+  //                   document top (avoids hiding right after landing).
+  const collapsibles = topbarWrap.querySelectorAll(".topbar-collapsible");
   const SCROLL_DELTA = 6;
   const SHOW_BELOW_Y = 80;
   const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   let lastY = window.scrollY;
   let ticking = false;
+
+  function setHidden(hidden) {
+    collapsibles.forEach((el) => el.classList.toggle("is-hidden", hidden));
+  }
 
   function onScroll() {
     if (ticking) return;
@@ -127,18 +141,14 @@
       const dy = y - lastY;
 
       if (motionQuery.matches) {
-        // Reduced motion — never hide the bar.
-        topbarWrap.classList.remove("is-hidden");
+        // Reduced motion — never hide.
+        setHidden(false);
       } else if (Math.abs(dy) >= SCROLL_DELTA) {
-        if (dy > 0 && y > SHOW_BELOW_Y) {
-          topbarWrap.classList.add("is-hidden");
-        } else {
-          topbarWrap.classList.remove("is-hidden");
-        }
+        setHidden(dy > 0 && y > SHOW_BELOW_Y);
         lastY = y;
       } else if (y <= SHOW_BELOW_Y) {
-        // Near the top regardless — make sure the bar is visible.
-        topbarWrap.classList.remove("is-hidden");
+        // Near the top regardless — make sure row 2 is visible.
+        setHidden(false);
       }
 
       ticking = false;

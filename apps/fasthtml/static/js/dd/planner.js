@@ -2,7 +2,7 @@
 import * as S from './state.js';
 import { StageGraph } from './stagegraph.js';
 import { sleep, fmtBytes, fmtAge, escapeHtml, formatFieldValue } from './utils.js';
-import { showStep, showConfirm, showNotice, showToast, syncStepLocks, renderStepper, refreshGenerateState } from './ui.js';
+import { showConfirm, showNotice, showToast, refreshGenerateState } from './ui.js';
 import { loadManifestForSlug, renderManifest } from './ingestion.js';
 
 
@@ -191,6 +191,29 @@ export function _kpiForNode(nodeId, values) {
       const s = stats('reduce_stats');
       return s && (s.n_chapters !== undefined)
         ? `ch=${s.n_chapters}` : '';
+    }
+    // ─── LLM-first nodes (DD-PLANNER-LLM-FIRST-SOTA-2026-05-27) ───
+    case 'doc_distill': {
+      const s = stats('doc_distill_stats');
+      if (!s) return '';
+      if (s.skipped) return `skip:N≤80`;
+      return (s.n_distilled !== undefined)
+        ? `n=${s.n_distilled}/${s.n_files || '?'}` : '';
+    }
+    case 'chapter_propose': {
+      const s = stats('propose_stats');
+      return s && (s.n_proposals !== undefined)
+        ? `props=${s.n_proposals}` : '';
+    }
+    case 'chapter_assign': {
+      const s = stats('assign_stats');
+      return s && (s.n_assigned !== undefined)
+        ? `assigned=${s.n_assigned}/${s.n_docs || '?'}` : '';
+    }
+    case 'chapter_select': {
+      const s = stats('select_stats');
+      return s && (s.n_chapters_out !== undefined)
+        ? `ch=${s.n_chapters_out}` : '';
     }
     case 'plan_write': {
       const s = stats('plan_write_stats');
@@ -707,9 +730,11 @@ export function _initPlannerCanvas() {
 // ============================================================
 
 export function refreshPlannerStartState() {
+  if (!S.plannerStartBtn) return;   // not on the planner page
   // Three states for the Start/Cancel button:
   //  - idle, ready    → "Start Planner" enabled
-  //  - idle, blocked  → "Start Planner" disabled (no slug or ingest active)
+  //  - idle, blocked  → "Start Planner" disabled (no slug, ingest active,
+  //                     or no ingested corpus yet)
   //  - running        → button becomes "Cancel Planner" (always enabled
   //                     during a run; same behavior pattern as Step 2's
   //                     ingestion cancel)
@@ -720,9 +745,25 @@ export function refreshPlannerStartState() {
     S.plannerStartBtn.classList.remove('btn-primary');
     S.plannerStartBtn.innerHTML = 'Cancel Planner';
   } else {
-    const ready = S.activeSlug && S.activeRunId == null;
-    if (ready) S.plannerStartBtn.removeAttribute('disabled');
-    else S.plannerStartBtn.setAttribute('disabled', 'disabled');
+    // CORPUS-FIRST GATE — the planner needs an ingested corpus. Mirrors
+    // the server-side read_framework_manifest 404 so the disabled button
+    // and the API agree. S.ingestedSlugs is populated by loadLibrary.
+    const hasCorpus = S.ingestedSlugs.has(S.activeSlug);
+    const ready = S.activeSlug && S.activeRunId == null && hasCorpus;
+    if (ready) {
+      S.plannerStartBtn.removeAttribute('disabled');
+      S.plannerStartBtn.removeAttribute('title');
+    } else {
+      S.plannerStartBtn.setAttribute('disabled', 'disabled');
+      if (!S.activeSlug) {
+        S.plannerStartBtn.setAttribute('title', 'Pick a framework first.');
+      } else if (!hasCorpus) {
+        S.plannerStartBtn.setAttribute('title',
+          'Ingest this framework first — the planner needs its corpus.');
+      } else {
+        S.plannerStartBtn.removeAttribute('title');
+      }
+    }
     S.plannerStartBtn.classList.add('btn-primary');
     S.plannerStartBtn.classList.remove('btn-outline');
     S.plannerStartBtn.innerHTML = 'Start Planner';
@@ -1107,11 +1148,266 @@ const SUBSTEP_RENDERERS = {
     return '<div class="fw-stat-grid">' + cards + '</div>' + table + depRow + foot;
   },
 
-  // cluster — UMAP+HDBSCAN density clustering with soft membership.
-  // KPI cards: #clusters / #noise / #boundary docs / wall_ms. Compact
-  // cluster-size distribution row underneath so the operator can spot
-  // pathologies (one giant cluster, all-noise, etc.).
-  3: function renderCluster(values) {
+  // 2026-05-27 P4 — LLM-first renderers replacing the legacy
+  // cluster/refine/label/reduce path. PLANNER_NODE_ORDER indices
+  // 3-6 are now doc_distill/chapter_propose/chapter_assign/
+  // chapter_select. plan_write moved 7→8 to match the new 9-slot
+  // PLANNER_SUBSTEP_FIELDS ordering.
+
+  // doc_distill — per-doc summary + key terms via parallel rotator.
+  // Skip-pass for N ≤ 80 (pass-through to chapter_propose's raw-body
+  // path). KPI cards show distill success/failure + cache + wall.
+  3: function renderDocDistill(values) {
+    const s = values.doc_distill_stats || {};
+    if (!s.n_files && !s.skipped) {
+      return '<div class="fw-empty">no doc_distill stats reported</div>';
+    }
+    const kpi = (label, value, sub) =>
+      '<div class="fw-stat-card">' +
+        '<div class="fw-stat-card-label">' + escapeHtml(label) + '</div>' +
+        '<div class="fw-stat-card-value">' + escapeHtml(value) + '</div>' +
+        (sub ? '<div class="fw-stat-card-sub">' + escapeHtml(sub) + '</div>' : '') +
+      '</div>';
+
+    if (s.skipped === 'pass_through_small_n') {
+      const cards =
+        kpi('Skipped', 'PASS-THROUGH', 'small-N optimization') +
+        kpi('Files',   String(s.n_files || 0), 'no LLM call needed') +
+        kpi('Reason',  'N ≤ 80',               'proposer ingests raw bodies') +
+        kpi('Wall',    (s.wall_ms || 0) + ' ms', 'cheap');
+      return '<div class="fw-stat-grid">' + cards + '</div>' +
+        '<div class="fw-stat-foot">' +
+          'doc_distill bypassed; chapter_propose reads doc bodies directly. ' +
+          'Triggered only when relevant_files ≤ 80 — keeps small corpora fast.' +
+        '</div>';
+    }
+    const n = s.n_files || 0;
+    const distilled = s.n_distilled || 0;
+    const failed = s.n_failed || 0;
+    const successPct = n ? Math.round(distilled / n * 100) : 0;
+    const cards =
+      kpi('Distilled', distilled.toLocaleString(),
+          successPct + '% of ' + n.toLocaleString()) +
+      kpi('Failed',    String(failed),
+          failed ? 'rate-limited (429) or parse-fail' : 'clean run') +
+      kpi('Cache',     s.cache_hit ? 'HIT' : 'cold',
+          s.cache_hit ? 'reused stored distillates' : 'fresh distillation') +
+      kpi('Wall',      (s.wall_ms || 0) + ' ms',
+          n && s.wall_ms ? Math.round(n / s.wall_ms * 1000) + ' docs/s' : null);
+    const foot =
+      '<div class="fw-stat-foot">' +
+        'hash <code style="font-family:JetBrains Mono,monospace;font-size:0.72rem">' +
+          escapeHtml((s.manifest_hash || '').slice(0, 12)) + '</code>' +
+        ' · per-doc summary + 5 key terms · concurrency 8' +
+        (failed
+          ? ' · <strong style="color:var(--accent)">' + failed +
+              ' docs skipped, downstream still works on ' + distilled + '</strong>'
+          : '') +
+      '</div>';
+    return '<div class="fw-stat-grid">' + cards + '</div>' + foot;
+  },
+
+  // chapter_propose — long-context LLM proposes 6-15 candidate chapters
+  // from distillates + structural seeds (markdown headings + file-tree
+  // namespaces). N=3 parallel samples + USC vote picks the best.
+  4: function renderChapterPropose(values) {
+    const s = values.propose_stats || {};
+    const titles = s.titles || [];
+    if (!s.n_proposals && !titles.length) {
+      return '<div class="fw-empty">no chapter_propose stats reported</div>';
+    }
+    const kpi = (label, value, sub) =>
+      '<div class="fw-stat-card">' +
+        '<div class="fw-stat-card-label">' + escapeHtml(label) + '</div>' +
+        '<div class="fw-stat-card-value">' + escapeHtml(value) + '</div>' +
+        (sub ? '<div class="fw-stat-card-sub">' + escapeHtml(sub) + '</div>' : '') +
+      '</div>';
+
+    const samplesValid = s.n_samples_valid !== undefined
+      ? s.n_samples_valid + '/3' : '?';
+    const cards =
+      kpi('Proposals',   String(s.n_proposals || 0),
+          'candidate chapters') +
+      kpi('Samples OK',  samplesValid,
+          'USC-voted winner: idx ' + (s.chosen_idx ?? '?')) +
+      kpi('From docs',   (s.n_files || 0).toLocaleString(),
+          'distillates + structural seeds') +
+      kpi('Wall',        (s.wall_ms || 0) + ' ms',
+          s.cache_hit ? 'cache HIT' : 'cold');
+
+    const titlesList = titles.length
+      ? '<div class="fw-stat-dist" style="margin-top:14px">' +
+          '<div class="fw-stat-dist-title">Proposed chapters (chosen sample)</div>' +
+          '<ol style="margin:8px 0 0;padding:0 0 0 20px;font-size:0.85rem;color:var(--text)">' +
+            titles.map(t =>
+              '<li style="padding:3px 0">' + escapeHtml(t) + '</li>',
+            ).join('') +
+          '</ol>' +
+        '</div>'
+      : '';
+    const foot =
+      '<div class="fw-stat-foot">' +
+        'hash <code style="font-family:JetBrains Mono,monospace;font-size:0.72rem">' +
+          escapeHtml((s.manifest_hash || '').slice(0, 12)) + '</code>' +
+        ' · long-context LLM call via FGTS-VA · ' +
+        '<strong>N=3 samples + USC vote</strong>' +
+      '</div>';
+    return '<div class="fw-stat-grid">' + cards + '</div>' + titlesList + foot;
+  },
+
+  // chapter_assign — per-doc LLM scores membership against each proposal
+  // (confidence 0-1, multi-assignment allowed). Concurrent rotator calls;
+  // chapter_select consumes the matrix downstream.
+  5: function renderChapterAssign(values) {
+    const s = values.assign_stats || {};
+    if (!s.n_docs) {
+      return '<div class="fw-empty">no chapter_assign stats reported</div>';
+    }
+    const kpi = (label, value, sub) =>
+      '<div class="fw-stat-card">' +
+        '<div class="fw-stat-card-label">' + escapeHtml(label) + '</div>' +
+        '<div class="fw-stat-card-value">' + escapeHtml(value) + '</div>' +
+        (sub ? '<div class="fw-stat-card-sub">' + escapeHtml(sub) + '</div>' : '') +
+      '</div>';
+
+    const assigned = s.n_assigned || 0;
+    const failed = s.n_failed || 0;
+    const cards =
+      kpi('Assigned',   assigned.toLocaleString(),
+          'of ' + (s.n_docs || 0).toLocaleString() + ' docs') +
+      kpi('Proposals',  String(s.n_proposals || 0),
+          'each doc scored against all') +
+      kpi('Failed',     String(failed),
+          failed ? 'rate-limited or parse-fail' : 'clean run') +
+      kpi('Wall',       (s.wall_ms || 0) + ' ms',
+          s.cache_hit ? 'cache HIT' : 'cold');
+
+    // Coverage breakdown — per-proposal count of docs with confidence ≥0.5.
+    let cov = '';
+    const cc = s.coverage_count || {};
+    const proposalsList = (values.propose_stats || {}).titles || [];
+    const covEntries = Object.entries(cc)
+      .map(([idx, n]) => ({ idx: parseInt(idx), n: parseInt(n) }))
+      .sort((a, b) => b.n - a.n);
+    if (covEntries.length) {
+      const maxN = covEntries[0].n || 1;
+      const rows = covEntries.map(e => {
+        const title = proposalsList[e.idx] || ('proposal #' + e.idx);
+        const pct = Math.max(2, Math.round(e.n / maxN * 100));
+        return '<tr style="border-bottom:1px solid var(--border)">' +
+          '<td style="padding:6px 8px;font-family:JetBrains Mono,monospace;font-size:0.72rem;color:var(--text-muted);width:40px">' +
+            '[' + e.idx + ']' +
+          '</td>' +
+          '<td style="padding:6px 8px;font-size:0.85rem">' + escapeHtml(title) + '</td>' +
+          '<td style="padding:6px 8px;width:80px;text-align:right;font-variant-numeric:tabular-nums">' +
+            e.n + ' docs' +
+          '</td>' +
+          '<td style="padding:6px 8px;width:140px">' +
+            '<div style="width:' + pct + '%;height:10px;background:var(--accent,#4a7);border-radius:2px"></div>' +
+          '</td>' +
+          '</tr>';
+      }).join('');
+      cov =
+        '<div class="fw-stat-dist" style="margin-top:14px">' +
+          '<div class="fw-stat-dist-title">Coverage per proposal (docs with confidence ≥0.5)</div>' +
+          '<div style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:4px">' +
+            '<table style="width:100%;border-collapse:collapse;font-family:Raleway">' +
+              '<tbody>' + rows + '</tbody>' +
+            '</table>' +
+          '</div>' +
+        '</div>';
+    }
+    const foot =
+      '<div class="fw-stat-foot">' +
+        'hash <code style="font-family:JetBrains Mono,monospace;font-size:0.72rem">' +
+          escapeHtml((s.manifest_hash || '').slice(0, 12)) + '</code>' +
+        ' · per-doc rotator call · concurrency 8' +
+      '</div>';
+    return '<div class="fw-stat-grid">' + cards + '</div>' + cov + foot;
+  },
+
+  // chapter_select — pure-algorithm greedy coverage. Picks minimum
+  // chapter set covering ≥95% of docs above confidence threshold, then
+  // prunes <3-doc chapters unless structurally pinned.
+  6: function renderChapterSelect(values) {
+    const s = values.select_stats || {};
+    if (!s.n_chapters_out && !(s.chapter_titles || []).length) {
+      return '<div class="fw-empty">no chapter_select stats reported</div>';
+    }
+    const kpi = (label, value, sub) =>
+      '<div class="fw-stat-card">' +
+        '<div class="fw-stat-card-label">' + escapeHtml(label) + '</div>' +
+        '<div class="fw-stat-card-value">' + escapeHtml(value) + '</div>' +
+        (sub ? '<div class="fw-stat-card-sub">' + escapeHtml(sub) + '</div>' : '') +
+      '</div>';
+
+    const out = s.n_chapters_out || 0;
+    const propIn = s.n_proposals_in || 0;
+    const pruned = s.n_pruned || 0;
+    const cov = s.coverage_fraction !== undefined
+      ? Math.round(s.coverage_fraction * 100) + '%' : '?';
+    const cards =
+      kpi('Selected', String(out),
+          'from ' + propIn + ' proposals') +
+      kpi('Pruned',   String(pruned),
+          pruned ? '<3 docs, unpinned' : 'all kept') +
+      kpi('Coverage', cov,
+          (s.n_assigned_docs || 0) + ' of ' +
+          (s.n_total_docs || 0) + ' docs') +
+      kpi('Wall',     (s.wall_ms || 0) + ' ms', 'pure algorithm');
+
+    const titles = s.chapter_titles || [];
+    const sizes  = s.chapter_sizes  || [];
+    let list = '';
+    if (titles.length) {
+      const maxSize = Math.max(...sizes, 1);
+      const rows = titles.map((t, i) => {
+        const n = sizes[i] || 0;
+        const pct = Math.max(2, Math.round(n / maxSize * 100));
+        return '<tr style="border-bottom:1px solid var(--border)">' +
+          '<td style="padding:6px 8px;font-family:JetBrains Mono,monospace;font-size:0.72rem;color:var(--text-muted);width:50px;text-align:right">' +
+            'ch-' + (i + 1).toString().padStart(2, '0') +
+          '</td>' +
+          '<td style="padding:6px 8px;font-size:0.9rem;font-weight:500">' +
+            escapeHtml(t) +
+          '</td>' +
+          '<td style="padding:6px 8px;width:80px;text-align:right;font-variant-numeric:tabular-nums">' +
+            n + ' docs' +
+          '</td>' +
+          '<td style="padding:6px 8px;width:140px">' +
+            '<div style="width:' + pct + '%;height:10px;background:var(--accent,#4a7);border-radius:2px"></div>' +
+          '</td>' +
+          '</tr>';
+      }).join('');
+      list =
+        '<div class="fw-stat-dist" style="margin-top:14px">' +
+          '<div class="fw-stat-dist-title">Final chapter set (' +
+            titles.length + ', balanced)</div>' +
+          '<div style="max-height:380px;overflow-y:auto;border:1px solid var(--border);border-radius:4px">' +
+            '<table style="width:100%;border-collapse:collapse;font-family:Raleway">' +
+              '<tbody>' + rows + '</tbody>' +
+            '</table>' +
+          '</div>' +
+        '</div>';
+    }
+    const foot =
+      '<div class="fw-stat-foot">' +
+        'hash <code style="font-family:JetBrains Mono,monospace;font-size:0.72rem">' +
+          escapeHtml((s.manifest_hash || '').slice(0, 12)) + '</code>' +
+        ' · greedy coverage (≥95% target, &lt;3-doc prune) · no LLM' +
+      '</div>';
+    return '<div class="fw-stat-grid">' + cards + '</div>' + list + foot;
+  },
+
+  // ============================================================
+  // LEGACY (deprecated 2026-05-27) — cluster/refine/label/reduce
+  // ============================================================
+  // These run only under KD_PLANNER_LLM_FIRST=false (emergency
+  // fallback). Renderers retained for that case but NOT mapped to
+  // any PLANNER_NODE_ORDER index in the LLM-first default UI.
+  // Kept under named keys so dead-code-elimination doesn't drop them.
+  // To restore for legacy debugging: change UI mapping in state.js.
+  _legacy_cluster: function renderCluster(values) {
     const s = values.cluster_stats || {};
     if (!s.n_docs) {
       return '<div class="fw-empty">no cluster stats reported</div>';
@@ -1169,10 +1465,9 @@ const SUBSTEP_RENDERERS = {
     return '<div class="fw-stat-grid">' + cards + '</div>' + dist + foot;
   },
 
-  // refine — LITA boundary-doc reassignment via bandit-routed big-LLM.
-  // KPI cards: boundary count + reassigned + null + wall. Recent
-  // decisions table shows per-doc verdicts with deployment + latency.
-  4: function renderRefine(values) {
+  // LEGACY refine — LITA boundary-doc reassignment. Now under
+  // KD_PLANNER_LLM_FIRST=false only.
+  _legacy_refine: function renderRefine(values) {
     const s = values.refine_stats || {};
     const total = s.n_boundary || 0;
     if (!s.n_docs && !total) {
@@ -1243,12 +1538,13 @@ const SUBSTEP_RENDERERS = {
     return '<div class="fw-stat-grid">' + cards + '</div>' + depRow + foot;
   },
 
-  // label — KeyLLM-style cluster naming via bandit-routed big-LLM with
+  // LEGACY label — KeyLLM-style cluster naming. Now under
+  // KD_PLANNER_LLM_FIRST=false only.
   // Universal Self-Consistency + 2-round sibling-aware re-labeling.
   // KPI cards: clusters / unanimous vs USC-voted / round 2 / wall.
   // Below: full label list as a sortable table so the operator can
   // verify names match cluster contents.
-  5: function renderLabel(values) {
+  _legacy_label: function renderLabel(values) {
     const s = values.label_stats || {};
     const n = s.n_clusters || 0;
     const labelsMap = s.labels || {};
@@ -1349,12 +1645,12 @@ const SUBSTEP_RENDERERS = {
     return '<div class="fw-stat-grid">' + cards + '</div>' + table + depRow + foot;
   },
 
-  // reduce — 4-12 chapter outline merged from labeled clusters.
+  // LEGACY reduce — 4-12 chapter outline merged from labeled clusters.
   // KPI cards: chapters / input clusters / repairs / wall_ms.
   // Below: the full ordered outline with title + description + member
   // cluster IDs. This is the FINAL human-facing artifact of the
   // planner pipeline.
-  6: function renderReduce(values) {
+  _legacy_reduce: function renderReduce(values) {
     const s = values.reduce_stats || {};
     const outline = s.outline || {};
     const chapters = outline.chapters || [];
@@ -1446,7 +1742,10 @@ const SUBSTEP_RENDERERS = {
   // Below: the final outline with title, description, per-chapter
   // source count + first-N source paths (so a developer can sanity-
   // check which docs ended up where). Last card of the pipeline.
-  7: function renderPlanWrite(values) {
+  // 2026-05-27 P4 — re-keyed 7 → 8 to match the LLM-first 9-slot
+  // PLANNER_SUBSTEP_FIELDS (index 7 is now order_chapters, which
+  // renders via KPI-only on the graph; no rich drawer panel).
+  8: function renderPlanWrite(values) {
     const s = values.plan_write_stats || {};
     const plan = s.plan || {};
     const chapters = (plan.chapters || []).slice();
@@ -1809,6 +2108,20 @@ export function _renderLiveProgress(stepName, ev) {
     else if (ev.kind === 'refined')          text = '· self-refine done; validating coverage…';
     else if (ev.kind === 'repair_attempt')   text = '· repair attempt ' + (ev.attempt||0) + ': missing ' + (ev.missing||0) + ', dup ' + (ev.duplicate||0) + ', unknown ' + (ev.unknown||0);
     else if (ev.kind === 'done')             text = '✓ ' + (ev.n_chapters||0) + ' chapters' + (ev.n_repairs ? ' (' + ev.n_repairs + ' repair' + (ev.n_repairs > 1 ? 's' : '') + ')' : '') + (ev.forced_repair ? ' [forced]' : '') + ' · ' + (ev.wall_ms||0) + ' ms';
+  } else if (stepName === 'doc_distill') {
+    if (ev.kind === 'start')           text = '· distilling ' + (ev.n_files||0) + ' docs… (skip≤' + (ev.pass_through_threshold||80) + ')';
+    else if (ev.kind === 'done' && ev.skipped) text = '✓ skipped (small N pass-through, ' + (ev.wall_ms||0) + ' ms)';
+    else if (ev.kind === 'done')       text = '✓ ' + (ev.n_distilled||0) + ' distilled' + (ev.n_failed ? ' · ' + ev.n_failed + ' failed' : '') + ' (' + (ev.cache_hit ? 'cache hit' : ((ev.wall_ms||0) + ' ms')) + ')';
+  } else if (stepName === 'chapter_propose') {
+    if (ev.kind === 'start')           text = '· loading distillates + extracting structural seeds…';
+    else if (ev.kind === 'sampling')   text = '· firing N=' + (ev.n_samples||3) + ' proposals (' + (ev.n_heading_seeds||0) + ' heading + ' + (ev.n_namespace_seeds||0) + ' namespace seeds)…';
+    else if (ev.kind === 'done')       text = '✓ ' + (ev.n_proposals||0) + ' chapters proposed' + (ev.titles ? ': ' + (ev.titles||[]).slice(0,3).join(', ') + (ev.titles.length>3 ? '…' : '') : '') + ' (' + (ev.cache_hit ? 'cache hit' : ((ev.wall_ms||0) + ' ms')) + ')';
+  } else if (stepName === 'chapter_assign') {
+    if (ev.kind === 'start')           text = '· scoring ' + (ev.n_docs||0) + ' docs against ' + (ev.n_proposals||0) + ' chapter proposals…';
+    else if (ev.kind === 'done')       text = '✓ ' + (ev.n_assigned||0) + ' assigned' + (ev.n_failed ? ' · ' + ev.n_failed + ' failed' : '') + ' (' + (ev.cache_hit ? 'cache hit' : ((ev.wall_ms||0) + ' ms')) + ')';
+  } else if (stepName === 'chapter_select') {
+    if (ev.kind === 'start')           text = '· greedy coverage over ' + (ev.n_proposals||0) + ' proposals · ' + (ev.n_docs||0) + ' docs' + (ev.n_pinned ? ' · ' + ev.n_pinned + ' pinned' : '') + '…';
+    else if (ev.kind === 'done')       text = '✓ ' + (ev.n_chapters||0) + ' chapters selected' + (ev.n_pruned ? ' · ' + ev.n_pruned + ' pruned' : '') + ' · ' + Math.round((ev.coverage||0)*100) + '% coverage (' + (ev.wall_ms||0) + ' ms)';
   } else if (stepName === 'plan_write') {
     if (ev.kind === 'start')           text = '· hashing inputs… (manifest ' + ((ev.manifest_hash||'').slice(0,8)) + ')';
     else if (ev.kind === 'loaded')     text = '· loaded ' + (ev.n_chapters_in||0) + ' chapters · ' + (ev.n_clusters||0) + ' clusters · ' + (ev.n_docs||0) + ' docs';
@@ -2074,34 +2387,33 @@ export async function _tryResumeActivePlanner(slug) {
       renderPlannerCards(values);
       return false;
     }
-    // Still "running" — paint what we have so far + reconnect to SSE.
-    // Resume policy: ONLY auto-/resume for an orphaned in-flight task
-    // (status === 'running' with no live events arriving within
-    // S._ORPHAN_DETECT_MS — pod restart killed the bg task). DO NOT
-    // auto-/resume on the "status=done but new nodes pending" case
-    // here; that would trigger compute every time the user clicks
-    // a framework tile, cascading into parallel runs across slugs.
-    // Extending an existing thread with new nodes is an EXPLICIT
-    // action — the user clicks Start Planner, which routes through
-    // smart Start Planner (POST /resume if thread exists). Or
-    // page-load recoverActivePlanner does it for the single restored
-    // slug. Navigation between slugs is view-only.
-    S.setPlannerThreadId(tid);
-    refreshPlannerStartState();
-    renderPlannerCards(values);
-    S.set_liveEventReceived(false);
-    pollPlannerState(tid);
-    if (status === 'running') {
-      setTimeout(async () => {
-        if (S.plannerThreadId === tid && !S._liveEventReceived) {
-          try {
-            await fetch(S.API + '/planner/' + tid + '/resume',
-              {method: 'POST'});
-          } catch (e) {}
-        }
-      }, S._ORPHAN_DETECT_MS);
-    }
-    return true;
+    // Non-terminal checkpoint ("running" / incomplete). This runs on
+    // EVERY navigation to a framework's Planner page, so it is strictly
+    // VIEW-ONLY. A checkpoint with status="running" is NOT proof of a
+    // live task: a crashed/interrupted/pod-restarted run leaves the
+    // status stuck at "running" forever (see planner.py /resume
+    // docstring), and there is no backend liveness signal to tell a
+    // live run from a dead one.
+    //
+    // So we paint the partial progress as a STATIC snapshot and DO NOT:
+    //   - set S.plannerThreadId — which would flip the pill to
+    //     "Working · N/9" (via _renderPlannerGraph) and the button to
+    //     "Cancel", falsely implying a live run;
+    //   - start pollPlannerState (live polling);
+    //   - auto-POST /resume — which previously kicked off REAL compute
+    //     just by visiting the page. THAT is the bug this fixes: a
+    //     stale "running" checkpoint (e.g. FastMCP) showed "Working 5/9"
+    //     and silently restarted the planner with no Start click.
+    //
+    // Live progress only ever runs in the session that explicitly
+    // clicked Start Planner (startPlanner → smart-resume → pollPlannerState).
+    // To continue an incomplete plan, the user clicks Start Planner: it
+    // finds this thread via /planner/recent and POSTs /resume. Resuming
+    // is therefore always an explicit, intentional action.
+    renderPlannerCards(values);     // static view of the partial progress
+    _setPlannerStagePill('idle');   // accurate — nothing is running now
+    refreshPlannerStartState();     // Start Planner stays enabled (resume)
+    return false;
   } catch (e) {
     _forgetActivePlanner(slug);
     return false;

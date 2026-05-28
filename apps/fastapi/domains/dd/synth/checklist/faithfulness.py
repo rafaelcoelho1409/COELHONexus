@@ -42,11 +42,33 @@ import asyncio
 import json
 import logging
 import re
+from hashlib import sha256
 
 from domains.llm.rotator.chain import chat_judge_bandit_async
 
+from ...ingestion.storage import get_storage
+
 
 logger = logging.getLogger(__name__)
+
+# V3 (2026-05-28) — atomic-claim extract cache.
+# Extraction is a 1500-token LLM call per chapter. Same prose → same
+# claims under a fixed prompt version, so a per-prose-hash cache turns
+# repeat calls (mgsr_replan loop iterations, re-runs on same plan) into
+# free MinIO reads (~10ms). Same caching pattern as cocoa.py stage-1
+# per-hash abstractions. Bumps `method` from atomic_claim_v2 → v3 so
+# stale downstream verdicts invalidate.
+_EXTRACT_PROMPT_VERSION = "v3-cache-2026-05-28"
+_CLAIMS_CACHE_PREFIX = f"synth-cache/atomic-claims/{_EXTRACT_PROMPT_VERSION}"
+
+
+def _prose_cache_key(prose: str) -> str:
+    """Content-addressed cache key — first 16 hex of sha256 over the
+    truncated prose body. Truncation matches what gets sent to the LLM
+    (so two prose snippets that share the same first _PROSE_CHARS get
+    the same key, which is the right semantics since the tail is
+    invisible to the extractor anyway)."""
+    return sha256(prose.encode("utf-8")).hexdigest()[:16]
 
 
 _EXTRACT_PROMPT = """Extract the atomic factual claims from this chapter prose.
@@ -89,13 +111,7 @@ JSON: {{"claims": ["claim 1", "claim 2", ...]}}"""
 #
 # Method version bump (atomic_claim_v1 → v2) so any downstream cache
 # keyed on `method` invalidates cleanly.
-_JUDGE_PROMPT = """Is this atomic claim faithful to the source documentation below?
-
-CLAIM: {claim}
-
---- SOURCE DOCUMENTATION (excerpt) ---
-{source}
---- END SOURCE ---
+_JUDGE_PROMPT = """Is the atomic claim at the END faithful to the source documentation?
 
 A claim is SUPPORTED when ANY of these hold:
   (a) the source explicitly states it; OR
@@ -117,7 +133,13 @@ Be charitable: code-first documentation often states facts BY
 demonstrating them. Don't fail claims that the source backs through
 example.
 
-Answer in strict JSON: {{"supported": true | false, "evidence": "short quote OR symbol from source if supported, else empty"}}"""
+Answer in strict JSON: {{"supported": true | false, "evidence": "short quote OR symbol from source if supported, else empty"}}
+
+--- SOURCE DOCUMENTATION (excerpt) ---
+{source}
+--- END SOURCE ---
+
+CLAIM: {claim}"""
 
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -218,11 +240,36 @@ async def atomic_claim_grounding(
         "unsupported_ratio": round(unsupported_ratio, 3),
         "unsupported_claims": unsupported,
         "feedback": feedback,
-        "method": "atomic_claim_v2",
+        "method": "atomic_claim_v3",
     }
 
 
 async def _extract_claims(prose: str) -> list[str]:
+    # V3 cache fast-path. Look up by sha256(prose). Hit returns the
+    # cached claims; miss runs the LLM call and writes back. Cache
+    # writes are best-effort.
+    minio = get_storage()
+    cache_key = f"{_CLAIMS_CACHE_PREFIX}/{_prose_cache_key(prose)}.json"
+    try:
+        if await minio.exists(cache_key):
+            raw_text = await minio.read_text(cache_key)
+            data = json.loads(raw_text or "{}")
+            cached_claims = data.get("claims") or []
+            if isinstance(cached_claims, list) and cached_claims:
+                logger.info(
+                    f"[atomic-claim-grounding] cache HIT — {len(cached_claims)} "
+                    f"claims for prose key {cache_key.rsplit('/', 1)[-1]}"
+                )
+                return [
+                    str(c).strip() for c in cached_claims
+                    if isinstance(c, str) and c.strip()
+                ][:_MAX_CLAIMS]
+    except Exception as e:
+        logger.debug(
+            f"[atomic-claim-grounding] cache read failed: "
+            f"{type(e).__name__}: {e}"
+        )
+
     try:
         prompt = _EXTRACT_PROMPT.format(
             max_claims=_MAX_CLAIMS, prose_chars=len(prose), prose=prose,
@@ -237,7 +284,7 @@ async def _extract_claims(prose: str) -> list[str]:
         data = json.loads(m.group(0))
         claims = data.get("claims") or []
         # Sanitize: strings only, non-empty, capped
-        return [
+        out = [
             str(c).strip() for c in claims
             if isinstance(c, str) and c.strip()
         ][:_MAX_CLAIMS]
@@ -247,6 +294,20 @@ async def _extract_claims(prose: str) -> list[str]:
             f"{type(e).__name__}: {e}"
         )
         return []
+
+    # Best-effort cache write.
+    try:
+        await minio.write(
+            cache_key,
+            json.dumps({"claims": out}, ensure_ascii=False),
+            content_type="application/json",
+        )
+    except Exception as e:
+        logger.debug(
+            f"[atomic-claim-grounding] cache write failed: "
+            f"{type(e).__name__}: {e}"
+        )
+    return out
 
 
 async def _judge_claim(

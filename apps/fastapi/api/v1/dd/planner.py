@@ -46,6 +46,7 @@ import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
 from starlette.responses import StreamingResponse
 
+from domains.dd.ingestion.storage import get_storage, read_framework_manifest
 from domains.dd.planner.cancel import (
     _redis_url,
     clear_cancel,
@@ -111,6 +112,17 @@ async def start_planner(
         raise HTTPException(
             status_code=400,
             detail=f"invalid mode {mode!r}; expected one of {sorted(_VALID_MODES)}",
+        )
+
+    # CORPUS-FIRST GATE (server-side anti-bypass, mirrors synth's plan
+    # gate). The planner needs an ingested corpus — reject if no finalized
+    # ingestion manifest exists, so a direct POST that skips the disabled
+    # Start Planner button fails fast instead of dispatching a doomed run
+    # (corpus_load would find nothing).
+    if not await read_framework_manifest(get_storage(), slug):
+        raise HTTPException(
+            status_code=404,
+            detail=f"no ingested corpus for {slug!r} — run ingestion first",
         )
 
     if not thread_id:

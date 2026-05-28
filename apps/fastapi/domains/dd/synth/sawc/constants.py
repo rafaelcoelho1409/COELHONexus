@@ -8,10 +8,13 @@ import re
 # Versioning + tunables
 # =============================================================================
 SAWC_SCHEMA_VERSION = "2.0-cookbook"
-# U3 (2026-05-27) — bumped to invalidate SAWC cache after adding the
-# NO-EMBELLISHMENT rule (rule #6) to the writer prompt. Prevents
-# cache hits returning Run 5's pre-rule prose.
-SAWC_PROMPT_VERSION = "v3-cookbook-noembellish-2026-05-27"
+# U7 (2026-05-28) — bumped to invalidate SAWC cache after shipping:
+#   - U2 cross-section vault-hash dedup (sawc/node.py)
+#   - U7 per-section source-doc binding (sawc/node.py)
+#   - upstream U3 H2 cap tightening + U6 semantic H2 dedup (outline)
+# These together change the inputs the writer sees per section, so
+# stale cached drafts no longer reflect the intended structure.
+SAWC_PROMPT_VERSION = "v4-deduped-bindings-2026-05-28"
 
 # v2 schema (2026-05-24 evening): replaces flat paragraphs + code_refs with
 # a cookbook-style {intro, subtopics: [{subheading, explanation, code_ref_hash}]}

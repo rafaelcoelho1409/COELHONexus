@@ -15,10 +15,6 @@ export const total = tiles.length;
 export const generate = document.querySelector('#fw-generate');
 export const selectedName = document.querySelector('#fw-selected-name');
 export const stickyBar = document.querySelector('#fw-sticky-bar');
-// -------- stepper --------
-export const steps = document.querySelectorAll('.fw-step');
-export const connectors = document.querySelectorAll('.fw-step-connector');
-export const panels = document.querySelectorAll('.fw-step-panel');
 // -------- step 2 progress + file list --------
 export const progressBox = document.querySelector('#fw-progress-box');
 export const progressTier = document.querySelector('#fw-progress-tier');
@@ -70,12 +66,14 @@ export const plannerFwNameEl   = document.querySelector('#fw-planner-fw-name');
 // State
 export let activeChip = 'All';
 export let query = '';
+// Set of slugs with a finalized ingestion (populated by loadLibrary
+// from GET /ingestion). Used on the Catalog tab to green-badge tiles
+// that have already been downloaded.
+export let ingestedSlugs = new Set();
 export let selected = null;            // slug picked in Step 1
 export let activeSlug = null;          // slug currently shown in Step 3
 export let activeRunId = null;         // run currently being polled
 export let pollAbort = false;
-export let currentStep = 1;
-export let farthestStep = 1;
 // -------- planner --------
 export let plannerThreadId = null;
 // Used by _tryResumeActivePlanner's orphan-detection timeout: cleared
@@ -90,33 +88,41 @@ export let _offTopicSort = {col: null, dir: 'asc'};
 export let _lastOffTopicValues = null;
 export let plannerPollAbort = false;
 // Substep order MUST match `NODE_ORDER` in
-// services/docs_distiller/planner/graph.py AND the field each node
+// apps/fastapi/domains/dd/planner/graph.py AND the field each node
 // writes (`state.<field>`).
+//
+// 2026-05-27 — switched to the LLM-first path (default
+// KD_PLANNER_LLM_FIRST=true; see DD-PLANNER-LLM-FIRST-SOTA-2026-05-
+// 27.md). The legacy 4-node middle (cluster/refine/label/reduce) is
+// kept as a backend fallback but NOT shown in the graph — users who
+// opt into legacy via env flag will see the 4 LLM-first node
+// positions greyed as 'future'. That's the right tradeoff: the
+// canonical UI shows the canonical path.
 export const PLANNER_SUBSTEP_FIELDS = [
-  'raw_files',                // corpus_load
-  'embeddings_ref',           // embed_corpus
-  'relevant_files',           // off_topic
-  'cluster_assignments_ref',  // cluster
-  'refine_assignments_ref',   // refine
-  'cluster_labels_ref',       // label
-  'chapter_plan_ref',         // reduce
-  'chapter_order_ref',        // order_chapters (Bundle 8, 2026-05-25)
-  'plan_path',                // plan_write
+  'raw_files',                  // corpus_load
+  'embeddings_ref',             // embed_corpus
+  'relevant_files',             // off_topic
+  'doc_distill_ref',            // doc_distill (LLM-first)
+  'chapter_proposals_ref',      // chapter_propose
+  'chapter_doc_assignments_ref',// chapter_assign
+  'chapter_plan_ref',           // chapter_select (same field as legacy reduce)
+  'chapter_order_ref',          // order_chapters (Bundle 8, 2026-05-25)
+  'plan_path',                  // plan_write
 ];
 // Parallel to PLANNER_SUBSTEP_FIELDS — the node name (matches the
 // server-side step name in SSE events). Used by the SSE handler to
 // map step → previous step → expected checkpoint field.
 export const PLANNER_NODE_ORDER = [
   'corpus_load', 'embed_corpus', 'off_topic',
-  'cluster', 'refine', 'label',
-  'reduce', 'order_chapters', 'plan_write',
+  'doc_distill', 'chapter_propose', 'chapter_assign', 'chapter_select',
+  'order_chapters', 'plan_write',
 ];
 // Short labels for the graph canvas (same text as the card titles —
 // hardcoded here to keep StageGraph independent of DOM-card scraping).
 export const PLANNER_NODE_LABELS = [
   'Corpus load', 'Embed corpus', 'Off-topic filter',
-  'Cluster', 'Refine (LITA)', 'Label',
-  'Reduce (outline)', 'Order chapters', 'Plan write',
+  'Doc distill', 'Chapter propose', 'Chapter assign', 'Chapter select',
+  'Order chapters', 'Plan write',
 ];
 // Populated from GET /planner/info — names of substeps actually wired
 // into the runtime graph. Stubs aren't included; their cards render
@@ -192,6 +198,11 @@ export const SYNTH_STEP_TO_FIELD = {
 // Populated from GET /synth/info. Cards whose substep isn't in this
 // set stay "⏳ future" — same pattern as plannerImplemented.
 export let synthImplemented = new Set();
+// Whether the active framework has a planner plan (planner-latest.json).
+// Synth requires it — gates the Start Synth button. Set from
+// GET /synth/{slug}/study/chapters (404 ⇒ no plan). Default false so the
+// button stays disabled until a plan is confirmed.
+export let synthHasPlan = false;
 export let synthThreadId = null;
 export let _synthLiveEventReceived = false;
 export let synthPollAbort = false;
@@ -226,17 +237,27 @@ export const chstripCounterEl = document.querySelector('#fw-chstrip-counter');
 export const _synthEventBuffer = new Map();
 export const _SYNTH_EVENT_BUFFER_PER_STEP = 200;
 
-// Mapping: SSE step name → the state field
+// Mapping: SSE step name → the state field. 2026-05-27 extended with
+// LLM-first nodes (doc_distill, chapter_propose, chapter_assign,
+// chapter_select). chapter_select reuses `chapter_plan_ref` (same as
+// legacy reduce) so order_chapters + plan_write are path-agnostic.
 export const STEP_TO_FIELD = {
-  corpus_load:    'raw_files',
-  embed_corpus:   'embeddings_ref',
-  off_topic:      'relevant_files',
-  cluster:        'cluster_assignments_ref',
-  refine:         'refine_assignments_ref',
-  label:          'cluster_labels_ref',
-  reduce:         'chapter_plan_ref',
-  order_chapters: 'chapter_order_ref',
-  plan_write:     'plan_path',
+  corpus_load:      'raw_files',
+  embed_corpus:     'embeddings_ref',
+  off_topic:        'relevant_files',
+  // legacy:
+  cluster:          'cluster_assignments_ref',
+  refine:           'refine_assignments_ref',
+  label:            'cluster_labels_ref',
+  reduce:           'chapter_plan_ref',
+  // LLM-first:
+  doc_distill:      'doc_distill_ref',
+  chapter_propose:  'chapter_proposals_ref',
+  chapter_assign:   'chapter_doc_assignments_ref',
+  chapter_select:   'chapter_plan_ref',
+  // shared tail:
+  order_chapters:   'chapter_order_ref',
+  plan_write:       'plan_path',
 };
 
 // Orphan detection timeout ms
@@ -270,9 +291,8 @@ export const studyTocToggle     = document.querySelector('#fw-study-toc-toggle')
 // Per-framework study state
 export let studyChapters    = [];
 export let studyActiveChapter = null;
-export let studyActiveTab   = 'readme';
+export let studyActiveTab   = 'learn';
 export let studyCards       = [];
-export let studyCardIdx     = 0;
 export let studyLoadedSlug  = null;
 export let studyLoadedCid   = null;
 
@@ -283,12 +303,11 @@ export let studyLoadedCid   = null;
 // ============================================================
 export function setActiveChip(v)       { activeChip = v; }
 export function setQuery(v)            { query = v; }
+export function setIngestedSlugs(v)    { ingestedSlugs = v; }
 export function setSelected(v)         { selected = v; }
 export function setActiveSlug(v)       { activeSlug = v; }
 export function setActiveRunId(v)      { activeRunId = v; }
 export function setPollAbort(v)        { pollAbort = v; }
-export function setCurrentStep(v)      { currentStep = v; }
-export function setFarthestStep(v)     { farthestStep = v; }
 export function setPlannerThreadId(v)  { plannerThreadId = v; }
 export function set_liveEventReceived(v) { _liveEventReceived = v; }
 export function set_offTopicSort(v)    { _offTopicSort = v; }
@@ -301,6 +320,7 @@ export function setCurrentManifestEntries(v) { currentManifestEntries = v; }
 export function setDrawerIdx(v)        { drawerIdx = v; }
 export function set_modalResolver(v)   { _modalResolver = v; }
 export function setSynthImplemented(v) { synthImplemented = v; }
+export function setSynthHasPlan(v)     { synthHasPlan = v; }
 export function setSynthThreadId(v)    { synthThreadId = v; }
 export function set_synthLiveEventReceived(v) { _synthLiveEventReceived = v; }
 export function setSynthPollAbort(v)   { synthPollAbort = v; }
@@ -317,6 +337,5 @@ export function setStudyChapters(v)    { studyChapters = v; }
 export function setStudyActiveChapter(v) { studyActiveChapter = v; }
 export function setStudyActiveTab(v)   { studyActiveTab = v; }
 export function setStudyCards(v)       { studyCards = v; }
-export function setStudyCardIdx(v)     { studyCardIdx = v; }
 export function setStudyLoadedSlug(v)  { studyLoadedSlug = v; }
 export function setStudyLoadedCid(v)   { studyLoadedCid = v; }

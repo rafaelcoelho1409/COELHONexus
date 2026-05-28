@@ -130,7 +130,12 @@ logger = logging.getLogger(__name__)
 # 2026-05-26 (DD-SYNTH-SPEED-SOTA): removed stale local `_N_DRAFTS = 3`
 # override that was shadowing constants.py's `_N_DRAFTS = 2` (task #142,
 # MAMM-Refine N=3→N=2). The single source of truth is now constants.py.
-_CONCURRENCY           = 6       # max concurrent SECTIONS per stage
+_CONCURRENCY           = 8       # max concurrent SECTIONS per stage
+# V5 (2026-05-28) — bumped 6 → 8. With the new tighter H2 cap (U3,
+# divisor 4 → ceiling 12), chapters typically have 4-8 sections; running
+# 8 concurrent means even 8-section single-stage DAGs finish in one
+# wave (was: two waves of 6+2). Per-arm cooldown (60s) + FGTS-VA drift
+# control protect against bandit contention.
 _TEMPERATURE_DRAFT     = 0.5     # variety across drafts (MAMM diversity)
 _TEMPERATURE_CRITIC    = 0.0
 _TEMPERATURE_REPAIR    = 0.2
@@ -338,6 +343,92 @@ def _try_parse_draft(
         return None, _shorten_pydantic_error(e)
     except Exception as e:
         return None, f"{type(e).__name__}: {str(e)[:200]}"
+
+
+# =============================================================================
+# Cross-section vault-hash dedup (2026-05-28, U2)
+# =============================================================================
+# Empirical (Claude Code 10-chapter run): every chapter showed 3-6 H2
+# sections recycling the same 5-10 code blocks. Root cause is in
+# digest_construct: multiple source docs independently claim the same
+# vault hash for DIFFERENT sections (rule 5 in the digest prompt forbids
+# multi-section claims WITHIN a single source, but does not forbid
+# DIFFERENT sources from each claiming the same hash for different
+# sections). CLI corpora are worst case — many `export FOO=...` snippets
+# share content-addressed hashes across docs.
+#
+# Fix: globally enforce that each vault hash appears in AT MOST ONE
+# section. For hashes claimed by ≥2 sections, keep them in the section
+# with the strongest claim (primary > supporting > tangential), ties
+# broken by smallest existing code-ref pool (load-balance toward thin
+# sections). Removed claims drop the hash from other sections'
+# `code_refs` arrays; contribution metadata (summary, key_facts) stays
+# intact so prose grounding is preserved.
+_RELEVANCE_RANK = {"primary": 0, "supporting": 1, "tangential": 2}
+
+
+def _dedupe_vault_hashes_across_sections(
+    per_section_index: dict[str, list[dict]],
+) -> tuple[int, int]:
+    """Modify `per_section_index` in-place so each vault hash appears in
+    at most one section. Returns (n_hashes_deduped, n_refs_removed).
+
+    `n_hashes_deduped` = how many distinct hashes had ≥2 section claims
+    `n_refs_removed`   = total code_ref entries removed (one hash can be
+                         removed from multiple losing sections; this is the
+                         sum over all losing sections)
+    """
+    from collections import defaultdict
+
+    # Pass 1: for each (hash, section), find the BEST relevance any
+    # contribution in that section asserts for the hash.
+    hash_section_best_rel: dict[tuple[str, str], str] = {}
+    for sid, contribs in per_section_index.items():
+        for c in contribs:
+            rel = c.get("relevance") or "tangential"
+            for h in (c.get("code_refs") or []):
+                key = (h, sid)
+                cur = hash_section_best_rel.get(key)
+                if cur is None or _RELEVANCE_RANK.get(rel, 9) < _RELEVANCE_RANK.get(cur, 9):
+                    hash_section_best_rel[key] = rel
+
+    # Pass 2: group by hash; only hashes claimed by ≥2 distinct sections
+    # need deduplication.
+    hash_section_options: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for (h, sid), rel in hash_section_best_rel.items():
+        hash_section_options[h].append((sid, rel))
+
+    # Snapshot pool sizes for tie-breaking (use original sizes; don't
+    # update during the loop — order-dependent tie-break would make
+    # behavior non-deterministic across iterations).
+    section_pool_sizes: dict[str, int] = {
+        sid: sum(len(c.get("code_refs") or []) for c in contribs)
+        for sid, contribs in per_section_index.items()
+    }
+
+    n_hashes_deduped = 0
+    n_refs_removed = 0
+    for h, options in hash_section_options.items():
+        if len(options) <= 1:
+            continue
+        n_hashes_deduped += 1
+        # Pick: strongest relevance, then smallest pool, then sorted sid
+        # (final tiebreak deterministic).
+        best_sid = min(options, key=lambda x: (
+            _RELEVANCE_RANK.get(x[1], 9),
+            section_pool_sizes.get(x[0], 0),
+            x[0],
+        ))[0]
+        # Strip h from every OTHER section's contributions.
+        for sid, _rel in options:
+            if sid == best_sid:
+                continue
+            for c in per_section_index[sid]:
+                refs = c.get("code_refs") or []
+                if h in refs:
+                    c["code_refs"] = [r for r in refs if r != h]
+                    n_refs_removed += 1
+    return n_hashes_deduped, n_refs_removed
 
 
 # =============================================================================
@@ -1064,6 +1155,20 @@ async def sawc_write(state: SynthState) -> dict:
     per_section_index: dict[str, list[dict]] = (
         digest_payload.get("per_section") or {}
     )
+    # U2 (2026-05-28) — enforce global vault-hash uniqueness across
+    # sections. Digest_construct allows different sources to claim the
+    # same hash for different sections, which on CLI corpora produces
+    # massive code-block recycling across 3-5 H2s per chapter. See
+    # `_dedupe_vault_hashes_across_sections` rationale above.
+    n_hashes_deduped, n_refs_removed = _dedupe_vault_hashes_across_sections(
+        per_section_index,
+    )
+    if n_hashes_deduped:
+        logger.info(
+            f"[sawc_write] {slug}/{chapter_id}: cross-section dedup — "
+            f"{n_hashes_deduped} hashes claimed by multiple sections; "
+            f"removed {n_refs_removed} duplicate code_ref entries"
+        )
     per_source_list: list[dict] = digest_payload.get("per_source") or []
     valid_source_keys: list[str] = sorted({
         s.get("source_key", "") for s in per_source_list
@@ -1292,6 +1397,28 @@ async def sawc_write(state: SynthState) -> dict:
             n_primary_contribs = sum(
                 1 for c in contributions if c.get("relevance") == "primary"
             )
+            # U7 (2026-05-28) — per-section source-doc binding. Restrict
+            # citations to source docs that digest_construct actually
+            # routed to THIS section, NOT chapter-wide. Combined with
+            # U2 vault-hash dedup, this prevents the writer from citing
+            # sources that "belong to" other sections — closing the
+            # belt-and-suspenders loop on cross-section drift.
+            #
+            # Fail-safe: if a section ends up with zero contributing
+            # sources (digest under-routed), fall back to chapter-wide
+            # so the writer still has SOMETHING to cite. Empirically
+            # rare but possible on small corpora.
+            section_source_keys: list[str] = sorted({
+                c.get("source_key", "") for c in contributions
+                if c.get("source_key")
+            })
+            if not section_source_keys:
+                section_source_keys = valid_source_keys
+                logger.info(
+                    f"[sawc_write] {sid}: digest routed 0 sources to "
+                    f"this section; falling back to chapter-wide "
+                    f"({len(valid_source_keys)} sources) for citations"
+                )
             return await _write_section_best_of_n(
                 sem=sem,
                 section_id=sid,
@@ -1303,7 +1430,7 @@ async def sawc_write(state: SynthState) -> dict:
                 contributions=contributions,
                 allowed_hashes=allowed_hashes,
                 vault_rich=vault_rich,
-                valid_source_keys=valid_source_keys,
+                valid_source_keys=section_source_keys,
                 memory=memory_snapshot,
                 n_primary_contribs=n_primary_contribs,
                 framework=slug,

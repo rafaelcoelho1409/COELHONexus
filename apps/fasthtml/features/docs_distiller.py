@@ -27,7 +27,7 @@ import time
 
 import httpx
 from fasthtml.common import (
-    A, Button, Div, Img, Input, Nav, Option, P, Script, Select, Span,
+    A, Button, Div, Img, Input, Nav, P, Script, Span,
 )
 from starlette.requests import Request
 
@@ -83,6 +83,10 @@ def _tile(f: dict):
         children.append(Img(src=f["logo"], alt="", cls="fw-tile-logo"))
     children.append(Div(f["name"], cls="fw-tile-name"))
     children.append(Div(f.get("category") or "—", cls="fw-tile-cat"))
+    # Hidden ingested badge — revealed by CSS only when picker.js adds
+    # `.fw-tile-ingested` (slug found in the /ingestion library). Shows
+    # which catalog frameworks have already been downloaded.
+    children.append(Span("✓ Ingested", cls="fw-tile-badge", aria_hidden="true"))
     return Div(
         *children,
         cls="fw-tile",
@@ -126,16 +130,85 @@ def _StageSubNav(active_key: str, slug: str | None):
 # ============================================================ #
 # Shared chrome — rendered on every stage page.                #
 # ============================================================ #
-def _Sidebar():
-    """Library sidebar — list of ingested frameworks. JS hydrates it
-    from GET /api/v1/docs-distiller/ingestion on every page."""
+def _FrameworkPicker(slug: str | None, catalog: list[dict] | None = None):
+    """Header-anchored framework picker (2026 SOTA pattern, replaces
+    the 260px left rail).
+
+    Visual: a chevroned button in the title row showing the current
+    selection ("LangChain ▾") or a placeholder ("Library ▾"). Click
+    opens a right-aligned popover containing a search input + the
+    list of ingested frameworks. Each item carries the same refresh /
+    delete actions the old sidebar had — same DOM ids so library.js's
+    renderSidebar() targets the popover list without changes.
+
+    Why header instead of sidebar:
+      - The picker is used to SWITCH frameworks, not to browse them
+        continuously. It belongs to the navigation chrome, not the
+        content area.
+      - Reclaims 260px of horizontal real estate on every stage page
+        — biggest win on planner / synth DAG canvases and the study
+        reader where horizontal room is scarce.
+      - Matches GitHub repo switcher / Vercel project switcher /
+        Linear workspace dropdown — the established 2026 pattern for
+        a primary resource picker inside a multi-page workspace.
+    """
+    # Resolve the current selection's display info from the catalog
+    # so the trigger button can render server-side with the right
+    # name + logo — no JS flicker. Multi-logo stacks (LangChain bundle,
+    # Grafana bundle) render the first logo as the trigger badge.
+    info = None
+    if slug:
+        catalog = catalog or _fetch_catalog()
+        for f in catalog or []:
+            if f.get("slug") == slug:
+                info = f
+                break
+    label = (info or {}).get("name") or slug or "Library"
+    logos = (info or {}).get("logos") or []
+    primary_logo = logos[0] if logos else (info or {}).get("logo")
+
+    trigger_children = []
+    if primary_logo:
+        trigger_children.append(
+            Img(src=primary_logo, alt="", cls="dd-fw-picker-logo"))
+    trigger_children.append(Span(label, cls="dd-fw-picker-label"))
+    trigger_children.append(Span("▾", cls="dd-fw-picker-chevron",
+                                 aria_hidden="true"))
+
     return Div(
-        P("Library", cls="fw-sidebar-title"),
-        Div(
-            Div("Loading…", cls="fw-sidebar-empty"),
-            id="fw-sidebar-list",
+        Button(
+            *trigger_children,
+            type="button",
+            id="dd-fw-picker-trigger",
+            cls="dd-fw-picker-trigger",
+            aria_haspopup="listbox",
+            aria_expanded="false",
+            aria_label="Switch ingested framework",
         ),
-        id="fw-sidebar", cls="fw-sidebar",
+        Div(
+            Input(
+                type="search",
+                id="dd-fw-picker-search",
+                placeholder="Search ingested frameworks…",
+                cls="dd-fw-picker-search",
+                autocomplete="off",
+            ),
+            # `id="fw-sidebar-list"` is preserved so library.js's
+            # existing renderSidebar() and refresh/delete handlers
+            # work unchanged. Only the wrapper has moved — from a
+            # 260px left rail into this popover.
+            Div(
+                Div("Loading…", cls="fw-sidebar-empty"),
+                id="fw-sidebar-list",
+                cls="dd-fw-picker-list",
+            ),
+            id="dd-fw-picker-popover",
+            cls="dd-fw-picker-popover",
+            role="listbox",
+        ),
+        cls="dd-fw-picker",
+        id="dd-fw-picker",
+        data_dd_slug=(slug or ""),
     )
 
 
@@ -256,6 +329,155 @@ def _StickyBar():
 
 
 # ============================================================ #
+# Stage toolbar (2026-05-28) — row 3 of the sticky header.      #
+# ============================================================ #
+# Left = per-stage contextual tools (status pill, Start/Wipe
+# actions, catalog search). Right = the framework Library picker
+# (resource-level, present on every stage). This row carries
+# `.topbar-collapsible` so it slides away on scroll-down while the
+# brand/nav (row 1) and stage tabs (row 2) stay pinned.
+#
+# IMPORTANT: every interactive element keeps its original id/class
+# so the existing JS (state.js global lookups + planner/synth/study
+# handlers) resolves it unchanged — only its DOM location moved out
+# of the stage body and into this toolbar.
+def _PlannerPill():
+    return Div(
+        Span("Idle", cls="fw-stage-pill-text", id="fw-planner-pill-text"),
+        cls="fw-stage-pill", id="fw-planner-pill", data_status="idle",
+    )
+
+
+def _PlannerActions():
+    return Div(
+        Button("Wipe planner", id="fw-planner-wipe",
+               cls="btn-outline", disabled=True,
+               title=("Delete this framework's planner cache "
+                      "(MinIO embeddings + Postgres checkpoints "
+                      "+ browser state)")),
+        Button("Start Planner", id="fw-planner-start",
+               cls="btn-primary", disabled=True),
+        cls="fw-planner-head-actions",
+    )
+
+
+def _SynthPill():
+    return Div(
+        Span("Idle", cls="fw-stage-pill-text", id="fw-synth-pill-text"),
+        cls="fw-stage-pill", id="fw-synth-pill", data_status="idle",
+    )
+
+
+def _SynthActions():
+    # Refine-budget dropdown removed 2026-05-28 — it was inert (the synth
+    # graph is single-pass; the v2 self-refine loop never consumed it).
+    # startSynth defaults the budget to '5' when #fw-synth-budget is
+    # absent (synth.js: `S.synthBudgetSel && ... || '5'`).
+    return Div(
+        Button("Wipe synth", id="fw-synth-wipe",
+               cls="btn-outline", disabled=True),
+        Button("Start Synth", id="fw-synth-start",
+               cls="btn-primary", disabled=True),
+        cls="fw-planner-head-actions",
+    )
+
+
+def _StudyPill():
+    return Div(
+        Span("Idle", cls="fw-stage-pill-text", id="fw-study-pill-text"),
+        cls="fw-stage-pill", id="fw-study-pill", data_status="idle",
+    )
+
+
+def _CatalogSearch(catalog: list[dict] | None):
+    n = len(catalog or [])
+    return Div(
+        Input(
+            type="search", id="fw-search",
+            placeholder=f"Search {n} frameworks…",
+            autocomplete="off", autofocus=True,
+            cls="fw-search",
+        ),
+        Span("", id="fw-count", cls="fw-count"),
+        cls="fw-search-row",
+    )
+
+
+def _CategoryFilter(catalog: list[dict] | None):
+    """Catalog category filter — custom popover dropdown (replaces the
+    old chip row). Single-select; "All" default; each option carries a
+    per-category count. Same open/close + scroll-close behavior as the
+    framework picker (wired in picker.js). picker.js reads the chosen
+    `data-chip` into S.activeChip and calls applyFilter()."""
+    catalog = catalog or []
+    counts: dict[str, int] = {}
+    for f in catalog:
+        c = f.get("category") or "Other"
+        counts[c] = counts.get(c, 0) + 1
+    cats = sorted(counts)
+    options = [
+        Button(
+            Span("All", cls="dd-catfilter-option-label"),
+            Span(str(len(catalog)), cls="dd-catfilter-count"),
+            cls="dd-catfilter-option active", data_chip="All",
+            type="button", role="option",
+        )
+    ]
+    for c in cats:
+        options.append(Button(
+            Span(c, cls="dd-catfilter-option-label"),
+            Span(str(counts[c]), cls="dd-catfilter-count"),
+            cls="dd-catfilter-option", data_chip=c,
+            type="button", role="option",
+        ))
+    return Div(
+        Button(
+            Span("Category:", cls="dd-catfilter-prefix"),
+            Span("All", id="dd-catfilter-label", cls="dd-catfilter-label"),
+            Span("▾", cls="dd-catfilter-chevron", aria_hidden="true"),
+            id="dd-catfilter-trigger", cls="dd-catfilter-trigger",
+            type="button", aria_haspopup="listbox", aria_expanded="false",
+            aria_label="Filter frameworks by category",
+        ),
+        Div(*options, cls="dd-catfilter-popover", role="listbox",
+            id="dd-catfilter-popover"),
+        cls="dd-catfilter", id="dd-catfilter",
+    )
+
+
+def _StageToolbar(active_stage: str, slug: str | None,
+                  catalog: list[dict] | None = None):
+    """Row 3 — contextual tools on the left, framework picker on the
+    right. Left content varies per stage.
+
+    Catalog is special: the grid IS the framework list, so the Library
+    picker is DROPPED (its job — surfacing ingested frameworks — is done
+    inline by green-badging the already-ingested tiles, see picker.js
+    markIngestedTiles). Catalog's left = search + category dropdown."""
+    if active_stage == "catalog":
+        left = [_CatalogSearch(catalog), _CategoryFilter(catalog)]
+    elif active_stage == "planner":
+        left = [_PlannerPill(), _PlannerActions()]
+    elif active_stage == "synth":
+        left = [_SynthPill(), _SynthActions()]
+    elif active_stage == "study":
+        left = [_StudyPill()]
+    else:  # ingestion — progress lives in the body; no toolbar tools
+        left = []
+    children = [Div(*left, cls="dd-toolbar-left")]
+    if active_stage != "catalog":
+        children.append(Div(
+            _FrameworkPicker(slug, catalog),
+            cls="dd-toolbar-right",
+        ))
+    return Div(
+        *children,
+        cls="dd-toolbar topbar-collapsible",
+        id="dd-toolbar",
+    )
+
+
+# ============================================================ #
 # Per-stage bodies — one panel each, no stepper, no panel       #
 # toggling. Each receives the resolved framework (name + logos) #
 # so the page can render its identity strip server-side rather  #
@@ -272,24 +494,12 @@ def _CatalogBody(catalog: list[dict]):
             cls="fw-step-panel active",
             id="fw-step-1-panel",
         )
-    cats = sorted({(f.get("category") or "Other") for f in catalog})
-    chips = [Span("All", cls="fw-chip active", data_chip="All")] + [
-        Span(c, cls="fw-chip", data_chip=c) for c in cats
-    ]
     tiles = [_tile(f) for f in catalog]
+    # Search + count AND the category filter both moved to the row-3
+    # toolbar (_CatalogSearch + _CategoryFilter). The body is now just
+    # the tile grid.
     return Div(
         Div(
-            Div(
-                Input(
-                    type="search", id="fw-search",
-                    placeholder=f"Search {len(catalog)} frameworks…",
-                    autocomplete="off", autofocus=True,
-                    cls="fw-search",
-                ),
-                Span("", id="fw-count", cls="fw-count"),
-                cls="fw-search-row",
-            ),
-            Div(*chips, cls="fw-chips"),
             Div(*tiles, cls="fw-grid", id="fw-grid"),
             id="fw-step-1-edit",
         ),
@@ -300,7 +510,11 @@ def _CatalogBody(catalog: list[dict]):
 
 def _IngestionBody(slug: str | None):
     return Div(
-        # Live progress display — JS hides it when activeRunId is null
+        # Live progress display — hidden by default; pollRun() reveals it
+        # only while an ingestion is actually in flight (display=''). On a
+        # plain visit with no active run, recoverActiveRuns() returns
+        # early without touching it, so without this `display:none` the
+        # box would sit visible showing a stale "—" / indeterminate bar.
         Div(
             Div(
                 Span("—", id="fw-progress-tier", cls="fw-progress-tier"),
@@ -327,13 +541,14 @@ def _IngestionBody(slug: str | None):
                 Button("Cancel ingestion", id="fw-cancel", cls="btn-outline"),
                 cls="fw-progress-actions",
             ),
-            id="fw-progress-box", cls="fw-progress",
+            id="fw-progress-box", cls="fw-progress", style="display:none;",
         ),
         Div("", id="fw-step2-summary", cls="fw-pages-summary"),
         Div(
             Div(
-                "Pick a framework in the catalog or the sidebar to see "
-                "its downloaded files." if not slug else "Loading…",
+                "Pick a framework from the Library dropdown above, or "
+                "ingest a new one from the Catalog tab, to see its "
+                "downloaded files." if not slug else "Loading…",
                 cls="fw-empty",
             ),
             id="fw-step2-grid", cls="fw-page-grid",
@@ -349,45 +564,11 @@ def _PlannerBody(slug: str | None):
         if not slug else
         "Loading planner state…"
     )
+    # Header moved to the row-3 toolbar (_PlannerPill + _PlannerActions).
+    # The "Planner" title is redundant with the active stage tab and the
+    # framework identity strip is redundant with the Library picker, so
+    # both are dropped — the body is now just the empty-state + DAG.
     return Div(
-        # Header — title row + status pill + framework strip + actions
-        Div(
-            Div(
-                Div(
-                    Div("Planner", cls="fw-planner-title"),
-                    Div(
-                        Span("Idle", cls="fw-stage-pill-text",
-                             id="fw-planner-pill-text"),
-                        cls="fw-stage-pill", id="fw-planner-pill",
-                        data_status="idle",
-                    ),
-                    cls="fw-planner-title-row",
-                ),
-                Div(
-                    Div(id="fw-planner-fw-logos",
-                        cls="fw-planner-fw-logos"),
-                    Span(
-                        "Pick a framework to start." if not slug else slug,
-                        id="fw-planner-fw-name",
-                        cls=("fw-planner-fw-name fw-planner-fw-name-empty"
-                             if not slug else "fw-planner-fw-name"),
-                    ),
-                    id="fw-planner-fw", cls="fw-planner-fw",
-                ),
-                cls="fw-planner-head-text",
-            ),
-            Div(
-                Button("Wipe planner", id="fw-planner-wipe",
-                       cls="btn-outline", disabled=True,
-                       title=("Delete this framework's planner cache "
-                              "(MinIO embeddings + Postgres checkpoints "
-                              "+ browser state)")),
-                Button("Start Planner", id="fw-planner-start",
-                       cls="btn-primary", disabled=True),
-                cls="fw-planner-head-actions",
-            ),
-            cls="fw-planner-head",
-        ),
         Div(empty_msg, id="fw-planner-empty", cls="fw-stage-empty"),
         Div(
             Div(id="fw-planner-canvas", cls="fw-stage-canvas"),
@@ -404,64 +585,34 @@ def _SynthBody(slug: str | None):
         if not slug else
         "Loading synth state…"
     )
+    # Header moved to the row-3 toolbar (_SynthPill + _SynthActions).
+    # Body = empty-state + a 70/30 split: DAG canvas (left) | chapter
+    # checklist (right). The chapter list lives in a narrow side panel
+    # (where a vertical list belongs) instead of a full-width strip;
+    # clicking a chapter focuses its sub-graph on the canvas
+    # (_onStripCellClick, already wired). Canvas + #fw-chstrip both
+    # start display:none — JS reveals the graph when a framework is
+    # active and the chapter panel only in study mode (≥2 chapters),
+    # so a non-study run keeps the graph at full width (flex).
     return Div(
-        Div(
-            Div(
-                Div(
-                    Div("Synth", cls="fw-planner-title"),
-                    Div(
-                        Span("Idle", cls="fw-stage-pill-text",
-                             id="fw-synth-pill-text"),
-                        cls="fw-stage-pill", id="fw-synth-pill",
-                        data_status="idle",
-                    ),
-                    cls="fw-planner-title-row",
-                ),
-                Div(
-                    Div(id="fw-synth-fw-logos", cls="fw-planner-fw-logos"),
-                    Span(
-                        "Pick a framework to start." if not slug else slug,
-                        id="fw-synth-fw-name",
-                        cls=("fw-planner-fw-name fw-planner-fw-name-empty"
-                             if not slug else "fw-planner-fw-name"),
-                    ),
-                    id="fw-synth-fw", cls="fw-planner-fw",
-                ),
-                cls="fw-planner-head-text",
-            ),
-            Div(
-                Div(
-                    Span("Refine budget", cls="fw-planner-mode-label"),
-                    Select(
-                        Option("v2 — coming soon", value="5", selected=True),
-                        id="fw-synth-budget", cls="fw-planner-mode-select",
-                        disabled=True,
-                        title=("Self-refine loop is deferred to v2 — every "
-                               "chapter runs a single pass today."),
-                    ),
-                    cls="fw-planner-mode-box",
-                ),
-                Button("Wipe synth", id="fw-synth-wipe",
-                       cls="btn-outline", disabled=True),
-                Button("Start Synth", id="fw-synth-start",
-                       cls="btn-primary", disabled=True),
-                cls="fw-planner-head-actions",
-            ),
-            cls="fw-planner-head",
-        ),
         Div(empty_msg, id="fw-synth-empty", cls="fw-stage-empty"),
         Div(
+            # LEFT (~70%) — Cytoscape DAG canvas.
             Div(
-                Span("Chapters", cls="fw-chstrip-title"),
-                Span(id="fw-chstrip-counter", cls="fw-chstrip-counter"),
-                cls="fw-chstrip-head",
+                Div(id="fw-synth-canvas", cls="fw-stage-canvas"),
+                id="fw-synth-graph", cls="fw-planner-graph",
             ),
-            Div(id="fw-chstrip-cells", cls="fw-chstrip-cells"),
-            id="fw-chstrip", cls="fw-chstrip",
-        ),
-        Div(
-            Div(id="fw-synth-canvas", cls="fw-stage-canvas"),
-            id="fw-synth-graph", cls="fw-planner-graph",
+            # RIGHT (~30%) — chapter checklist (study mode only).
+            Div(
+                Div(
+                    Span("Chapters", cls="fw-chstrip-title"),
+                    Span(id="fw-chstrip-counter", cls="fw-chstrip-counter"),
+                    cls="fw-chstrip-head",
+                ),
+                Div(id="fw-chstrip-cells", cls="fw-chstrip-cells"),
+                id="fw-chstrip", cls="fw-chstrip",
+            ),
+            cls="fw-synth-split",
         ),
         cls="fw-step-panel active",
         id="fw-step-4-panel",
@@ -469,31 +620,10 @@ def _SynthBody(slug: str | None):
 
 
 def _StudyBody(slug: str | None):
+    # Status pill moved to the row-3 toolbar (_StudyPill). The reader's
+    # own README/Challenges/Flashcards tabs stay in the body — they're
+    # content navigation within a chapter, not stage-level chrome.
     return Div(
-        Div(
-            Div(
-                Div("Study", cls="fw-planner-title"),
-                Div(
-                    Span("Idle", cls="fw-stage-pill-text",
-                         id="fw-study-pill-text"),
-                    cls="fw-stage-pill", id="fw-study-pill",
-                    data_status="idle",
-                ),
-                cls="fw-planner-title-row",
-            ),
-            Div(
-                Div(id="fw-study-fw-logos", cls="fw-planner-fw-logos"),
-                Span(
-                    "Pick a framework with synthesized chapters."
-                    if not slug else slug,
-                    id="fw-study-fw-name",
-                    cls=("fw-planner-fw-name fw-planner-fw-name-empty"
-                         if not slug else "fw-planner-fw-name"),
-                ),
-                id="fw-study-fw", cls="fw-planner-fw",
-            ),
-            cls="fw-planner-head-text",
-        ),
         Div(
             "Pick a framework from the library, then run Synth on its "
             "chapters to populate this study viewer.",
@@ -515,42 +645,56 @@ def _StudyBody(slug: str | None):
                 id="fw-study-side",
             ),
             Div(
+                # 2-mode reader (2026-05-28): LEARN = prose + recall in
+                # one scroll; FLASHCARDS = the FSRS reviewer as a separate
+                # drill mode. (SOTA: weave read+recall, keep flashcard
+                # review distinct.) ⛶ = focus mode (hide rail + recenter).
                 Div(
                     Button("☰ Chapters", id="fw-study-toc-toggle",
                            cls="fw-study-toc-toggle", type="button",
                            title="Show chapters"),
-                    Button("README", cls="fw-study-tab active",
-                           data_tab="readme",
-                           type="button"),
-                    Button("Challenges", cls="fw-study-tab",
-                           data_tab="challenges",
+                    Button("Learn", cls="fw-study-tab active",
+                           data_tab="learn",
                            type="button"),
                     Button("Flashcards", cls="fw-study-tab",
                            data_tab="flashcards",
                            type="button"),
+                    Button("🔍 Search", id="fw-study-search-btn",
+                           cls="fw-study-search-btn", type="button",
+                           title="Search all chapters (⌘K / Ctrl-K)"),
+                    Button("⛶", id="fw-study-focus-toggle",
+                           cls="fw-study-focus-toggle", type="button",
+                           title="Focus mode (distraction-free reading)"),
                     cls="fw-study-tabs",
                 ),
                 Div(id="fw-study-chapter-head",
                     cls="fw-study-chapter-head"),
                 Div(
+                    # LEARN pane = a scrolling column (prose + recall) +
+                    # the right-rail TOC. The prose article keeps id
+                    # `fw-study-readme`; the recall block keeps id
+                    # `fw-study-challenges` so study.js writes to both
+                    # unchanged — they just share one scroll now.
                     Div(
                         Div(
-                            "Open the ☰ Chapters window and pick a chapter.",
-                            cls="fw-empty",
+                            Div(
+                                Div(
+                                    "Open the ☰ Chapters window and pick a "
+                                    "chapter.",
+                                    cls="fw-empty",
+                                ),
+                                id="fw-study-readme",
+                                cls="fw-study-prose",
+                            ),
+                            Div(
+                                id="fw-study-challenges",
+                                cls="fw-study-recall fw-study-prose",
+                            ),
+                            cls="fw-study-learn-col",
                         ),
-                        id="fw-study-readme",
-                        cls="fw-study-pane fw-study-prose active",
-                        data_tab="readme",
-                    ),
-                    Div(
-                        Div(
-                            "Pick a chapter to view its active-recall "
-                            "questions.",
-                            cls="fw-empty",
-                        ),
-                        id="fw-study-challenges",
-                        cls="fw-study-pane fw-study-prose",
-                        data_tab="challenges",
+                        Div(id="fw-study-toc", cls="fw-study-toc"),
+                        cls="fw-study-pane fw-study-readme-pane active",
+                        data_tab="learn",
                     ),
                     Div(
                         Div(
@@ -578,20 +722,24 @@ def _StudyBody(slug: str | None):
 # Page composer — wraps a stage body in the shared chrome.     #
 # ============================================================ #
 def _DDPage(active_stage: str, slug: str | None, body, with_sticky: bool = False):
-    """Compose: stage sub-nav → layout(sidebar + body) → overlays.
+    """Compose: main panel → overlays.
 
-    `active_stage` highlights the matching link in the sub-nav AND
-    is exposed on the root div as `data-dd-stage` so main.js can
-    branch its init sequence without re-parsing window.location.
+    `active_stage` is exposed on the root div as `data-dd-stage` so
+    main.js can branch its init sequence without re-parsing
+    window.location.
+
+    2026-05-27: library sidebar moved into a header-anchored
+    `_FrameworkPicker` dropdown (passed via _Shell's title_actions).
+    2026-05-28: stage sub-nav moved INTO `.topbar-wrap` as a third
+    sticky row (passed via _Shell's subnav_row). `_DDPage` no longer
+    renders either piece of nav — only the stage body + overlays.
     """
     notice, toast = _NoticeAndToast()
     extras = []
     if with_sticky:
         extras.append(_StickyBar())
     return Div(
-        _StageSubNav(active_stage, slug),
         Div(
-            _Sidebar(),
             Div(
                 notice,
                 toast,
@@ -620,11 +768,17 @@ def _slug_from_request(req: Request) -> str | None:
 def register(rt) -> None:
     """Attach the 5 Docs Distiller routes to `rt`."""
 
+    # Note: title_text is intentionally omitted (None) so the H1 title
+    # row is NOT rendered — the active nav pill + the stage tab strip
+    # carry page identity. Row 2 = stage tabs (subnav_row), row 3 =
+    # contextual toolbar (toolbar_row, holds the framework picker).
     @rt("/docs-distiller")
     def docs_distiller_catalog():
         catalog = _fetch_catalog()
         return _Shell(
-            "docs-distiller", "Docs Distiller",
+            "docs-distiller",
+            subnav_row=_StageSubNav("catalog", None),
+            toolbar_row=_StageToolbar("catalog", None, catalog),
             body=_DDPage("catalog", None, _CatalogBody(catalog),
                          with_sticky=True),
         )
@@ -633,7 +787,9 @@ def register(rt) -> None:
     def docs_distiller_ingestion(req: Request):
         slug = _slug_from_request(req)
         return _Shell(
-            "docs-distiller", "Docs Distiller",
+            "docs-distiller",
+            subnav_row=_StageSubNav("ingestion", slug),
+            toolbar_row=_StageToolbar("ingestion", slug),
             body=_DDPage("ingestion", slug, _IngestionBody(slug)),
         )
 
@@ -641,7 +797,9 @@ def register(rt) -> None:
     def docs_distiller_planner(req: Request):
         slug = _slug_from_request(req)
         return _Shell(
-            "docs-distiller", "Docs Distiller",
+            "docs-distiller",
+            subnav_row=_StageSubNav("planner", slug),
+            toolbar_row=_StageToolbar("planner", slug),
             body=_DDPage("planner", slug, _PlannerBody(slug)),
         )
 
@@ -649,7 +807,9 @@ def register(rt) -> None:
     def docs_distiller_synth(req: Request):
         slug = _slug_from_request(req)
         return _Shell(
-            "docs-distiller", "Docs Distiller",
+            "docs-distiller",
+            subnav_row=_StageSubNav("synth", slug),
+            toolbar_row=_StageToolbar("synth", slug),
             body=_DDPage("synth", slug, _SynthBody(slug)),
         )
 
@@ -657,6 +817,8 @@ def register(rt) -> None:
     def docs_distiller_study(req: Request):
         slug = _slug_from_request(req)
         return _Shell(
-            "docs-distiller", "Docs Distiller",
+            "docs-distiller",
+            subnav_row=_StageSubNav("study", slug),
+            toolbar_row=_StageToolbar("study", slug),
             body=_DDPage("study", slug, _StudyBody(slug)),
         )

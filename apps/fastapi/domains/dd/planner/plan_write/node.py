@@ -77,7 +77,12 @@ async def plan_write(state: PlannerState) -> dict:
     reduce_ref = state.get("chapter_plan_ref") or ""
     embeddings_ref = state.get("embeddings_ref") or ""
 
-    if not slug or not cluster_ref or not refine_ref or not reduce_ref:
+    # 2026-05-27 — tolerate missing cluster/refine refs on the LLM-first
+    # path (KD_PLANNER_LLM_FIRST=true). In that mode, chapter_select wrote
+    # `member_doc_keys` directly to the chapter_plan_ref outline; we hydrate
+    # sources from those instead of looking up cluster→keys.
+    llm_first_mode = (not cluster_ref) or (not refine_ref)
+    if not slug or not reduce_ref:
         return {
             "plan_path": "",
             "status": "done",
@@ -151,19 +156,45 @@ async def plan_write(state: PlannerState) -> dict:
             )
 
     # ── Load upstream artifacts ────────────────────────────────────────
-    cluster_blob = await minio.read_bytes(cluster_ref)
-    cluster_keys, _orig_assigns, _max_probs, _soft = load_clusters(cluster_blob)
-    refine_blob = await minio.read_bytes(refine_ref)
-    refine_keys, refined_assignments, _, _ = load_refine(refine_blob)
-    if cluster_keys != refine_keys:
-        raise RuntimeError(
-            f"plan_write: key mismatch — cluster has {len(cluster_keys)} "
-            f"keys, refine has {len(refine_keys)}; pipeline integrity broken"
-        )
-    labels_text = await minio.read_text(labels_ref)
-    labels = load_labels(labels_text)
+    # LLM-first path (chapter_select): no cluster/refine/labels artifacts
+    # — chapters carry `member_doc_keys` directly in the outline.
     reduce_text = await minio.read_text(reduce_ref)
     outline = load_outline(reduce_text)
+
+    if llm_first_mode:
+        # Skip cluster/refine/labels loads. Build a synthetic
+        # cluster_to_keys from outline.chapters' member_doc_keys + assign
+        # each chapter a synthetic cluster_id = its order.
+        cluster_keys = []
+        refined_assignments_list: list[int] = []
+        # Synthetic: each chapter index = its synthetic cluster_id.
+        for synth_cid, ch in enumerate((outline or {}).get("chapters") or []):
+            mdk = (ch or {}).get("member_doc_keys") or []
+            # ensure the chapter carries member_cluster_ids consistent with
+            # the synthetic id so _sanitize_chapters' cluster lookup works.
+            if isinstance(ch, dict):
+                ch["member_cluster_ids"] = [synth_cid]
+            for k in mdk:
+                cluster_keys.append(k)
+                refined_assignments_list.append(synth_cid)
+        import numpy as _np
+        refined_assignments = _np.array(refined_assignments_list, dtype=_np.int64)
+        labels: dict[int, str] = {
+            synth_cid: ((outline or {}).get("chapters") or [{}])[synth_cid].get("title") or ""
+            for synth_cid in range(len((outline or {}).get("chapters") or []))
+        }
+    else:
+        cluster_blob = await minio.read_bytes(cluster_ref)
+        cluster_keys, _orig_assigns, _max_probs, _soft = load_clusters(cluster_blob)
+        refine_blob = await minio.read_bytes(refine_ref)
+        refine_keys, refined_assignments, _, _ = load_refine(refine_blob)
+        if cluster_keys != refine_keys:
+            raise RuntimeError(
+                f"plan_write: key mismatch — cluster has {len(cluster_keys)} "
+                f"keys, refine has {len(refine_keys)}; pipeline integrity broken"
+            )
+        labels_text = await minio.read_text(labels_ref)
+        labels = load_labels(labels_text)
 
     await emit_progress(
         thread_id, "plan_write", "loaded",

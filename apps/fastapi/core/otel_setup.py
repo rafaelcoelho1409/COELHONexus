@@ -39,6 +39,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,57 @@ logger = logging.getLogger(__name__)
 _otel_initialized: bool = False
 _tracer = None
 _meter = None
+
+
+class _DedupeRateLimitFilter(logging.Filter):
+    """Collapses repetitive OTLP export-failure logs.
+
+    Telemetry export is BEST-EFFORT — when the collector (Alloy/LangFuse)
+    is unreachable, the OTLP exporter's retry loop emits a WARNING + ERROR
+    every few seconds, flooding application logs (observed: ~90% of celery-
+    worker log volume when Alloy's :4317 receiver refused). This filter
+    lets the FIRST occurrence of each distinct message through (so you
+    still learn telemetry is degraded) then suppresses repeats for
+    `interval_s`. Keyed on the message PREFIX so variants that only differ
+    in the trailing "retrying in N.NNs" still collapse to one.
+    """
+    def __init__(self, interval_s: float = 300.0):
+        super().__init__()
+        self._interval = interval_s
+        self._last: dict = {}
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        key = (record.name, record.levelno, str(record.msg)[:80])
+        now = time.monotonic()
+        prev = self._last.get(key)
+        if prev is None or (now - prev) >= self._interval:
+            self._last[key] = now
+            return True
+        return False
+
+
+# OTLP exporter loggers that emit the retry spam. Filters don't cascade to
+# child loggers, so we attach to each leaf by name (a name that doesn't
+# exist yet is created lazily — harmless).
+_OTEL_NOISY_LOGGERS = (
+    "opentelemetry.exporter.otlp.proto.grpc.exporter",
+    "opentelemetry.exporter.otlp.proto.grpc.trace_exporter",
+    "opentelemetry.exporter.otlp.proto.grpc.metric_exporter",
+    "opentelemetry.exporter.otlp.proto.http.trace_exporter",
+    "opentelemetry.sdk.trace.export",
+)
+_otel_log_filter = _DedupeRateLimitFilter()
+
+
+def _quiet_otel_export_logs() -> None:
+    """Attach the rate-limit filter to the OTLP exporter loggers so a flaky
+    or unreachable collector degrades QUIETLY (one log per 5 min) instead
+    of flooding. Idempotent — the same filter instance is reused, so
+    re-init (per Celery fork) never double-adds."""
+    for name in _OTEL_NOISY_LOGGERS:
+        lg = logging.getLogger(name)
+        if _otel_log_filter not in lg.filters:
+            lg.addFilter(_otel_log_filter)
 
 
 def _build_resource():
@@ -281,6 +333,11 @@ def init_otel(also_instrument_fastapi_app=None) -> bool:
     try:
         from opentelemetry import trace
         from opentelemetry.sdk.trace import TracerProvider
+
+        # Keep best-effort telemetry from flooding app logs when the
+        # collector is down/unreachable. Attached before exporters so the
+        # very first failed export is already rate-limited.
+        _quiet_otel_export_logs()
 
         resource = _build_resource()
         tracer_provider = TracerProvider(resource=resource)

@@ -1,82 +1,32 @@
-/* ===== Stepper ===== */
-.fw-stepper-row {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 32px;
-}
-.fw-stepper { flex: 1; display: flex; align-items: center; }
-.fw-step {
-  display: flex; align-items: center; gap: 10px;
-  flex-shrink: 0; cursor: not-allowed; user-select: none;
-  opacity: 0.5; transition: opacity 0.2s;
-}
-.fw-step.completed,
-.fw-step.active { cursor: pointer; opacity: 1; }
-.fw-step-circle {
-  width: 28px; height: 28px; border-radius: 50%;
-  border: 2px solid var(--border); background: var(--card);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 0.78rem; font-weight: 600;
-  color: var(--text-muted); transition: all 0.2s;
-}
-.fw-step.active .fw-step-circle {
-  border-color: var(--primary); color: var(--primary);
-}
-.fw-step.completed .fw-step-circle {
-  background: var(--primary); border-color: var(--primary);
-  color: #fff;
-}
-.fw-step-label {
-  font-size: 0.85rem; font-weight: 500;
-  color: var(--text-muted); letter-spacing: 0.02em; white-space: nowrap;
-}
-.fw-step.active .fw-step-label {
-  color: var(--primary); font-weight: 600;
-}
-.fw-step.completed .fw-step-label { color: var(--text); }
-/* Hover affordance on clickable steps — underline label + ring the circle */
-.fw-step.active:hover .fw-step-label,
-.fw-step.completed:hover .fw-step-label {
-  text-decoration: underline;
-  text-underline-offset: 4px;
-}
-.fw-step.active:hover .fw-step-circle,
-.fw-step.completed:hover .fw-step-circle {
-  box-shadow: 0 0 0 3px rgba(196, 18, 48, 0.12);
-}
-.fw-step-connector {
-  flex: 1; height: 2px; background: var(--border);
-  margin: 0 14px; min-width: 24px; transition: background 0.2s;
-}
-.fw-step-connector.complete { background: var(--primary); }
-.fw-new-study {
-  color: var(--primary);
-  font-size: 0.82rem; font-weight: 500;
-  cursor: pointer; background: none; border: 0;
-  padding: 6px 10px; font-family: inherit;
-  letter-spacing: 0.02em; visibility: hidden; white-space: nowrap;
-}
-.fw-new-study.visible { visibility: visible; }
-.fw-new-study:hover { color: var(--primary-dark); }
-
+/* Per-stage body panel. (The wizard stepper — .fw-stepper/.fw-step/
+   .fw-step-connector/.fw-new-study — was removed 2026-05-28 with the
+   move to per-stage routes; only the panel wrapper remains.) */
 .fw-step-panel { display: none; }
 .fw-step-panel.active { display: block; }
 
-/* ===== Stage sub-nav (2026-05-27 — server-side stage split) =====
-   Replaces the wizard's in-page stepper. Each stage is now its own
-   route (/docs-distiller, /docs-distiller/ingestion, /planner, etc.)
-   and these are real <a href> links — full page navigation. Visual
-   language mirrors the global topbar (Wave A1 filled-pill active
-   state) so the sub-nav feels like a continuation of the top nav. */
+/* ===== Stage sub-nav (2026-05-27 / 2026-05-28 Wave F) =====
+   Pinned third row of `.topbar-wrap`. Real <a href> links so each
+   stage is its own URL. Visual language mirrors the global topbar
+   (Wave A1 filled-pill active state) so the sub-nav feels like a
+   continuation of the top nav.
+
+   Mobile: overflow-x: auto + scroll-snap so a narrow viewport can
+   swipe through the 5 stages without breaking the header layout.
+   Scrollbar hidden cross-browser; snap-align: start keeps the
+   tapped tab anchored to the left edge after a swipe. */
 .dd-substage-nav {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-bottom: 28px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
+  padding: 12px 40px;
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
+.dd-substage-nav::-webkit-scrollbar { display: none; }
 .dd-substage {
   padding: 8px 14px;
   font-size: 0.82rem;
@@ -86,6 +36,9 @@
   border-radius: 6px;
   letter-spacing: 0.02em;
   opacity: 0.85;
+  flex-shrink: 0;
+  scroll-snap-align: start;
+  white-space: nowrap;
   transition: color 0.15s, background 0.15s, opacity 0.15s, font-weight 0.15s;
 }
 .dd-substage:hover {
@@ -99,6 +52,258 @@
   background: rgba(196, 18, 48, 0.10);
   opacity: 1;
   view-transition-name: dd-substage-pill;
+}
+
+/* ===== Stage toolbar (2026-05-28 Wave G) — row 3 of the sticky header.
+   Left = contextual per-stage tools (status pill, Start/Wipe actions,
+   catalog search). Right = the framework Library picker. The whole row
+   is `.topbar-collapsible` (auto-hides on scroll-down). Wraps on narrow
+   viewports so the picker drops below the left tools instead of
+   overflowing. */
+.dd-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 24px;
+  flex-wrap: wrap;
+  padding: 12px 40px;
+  border-top: 1px solid var(--border);
+}
+.dd-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.dd-toolbar-left:empty { display: none; }
+.dd-toolbar-right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: auto;   /* always hug the right edge, even when left is empty */
+}
+/* Catalog search sits in the toolbar now — shrink it to row height and
+   give it a sensible fixed-ish width (it had flex:1 for the old body
+   layout, which would collapse to min-content inside the toolbar). */
+.dd-toolbar .fw-search-row { width: 340px; max-width: 46vw; }
+.dd-toolbar .fw-search {
+  padding: 8px 12px;
+  font-size: 0.85rem;
+}
+/* The toolbar is `.topbar-collapsible` → `overflow: hidden`, which would
+   clip any open popover (Library picker OR category filter). When either
+   is open, let the toolbar overflow so the popover escapes. Both close
+   on window scroll, so this never coexists with an auto-hide collapse.
+   `:has()` is universally supported in 2026. */
+.dd-toolbar:has(.dd-fw-picker.open),
+.dd-toolbar:has(.dd-catfilter.open) { overflow: visible; }
+
+/* ===== Category filter dropdown (2026-05-28) — catalog row-3 toolbar.
+   Replaces the old chip row. Trigger shows "Category: All ▾"; popover
+   lists All + each category with a count. Visual language matches the
+   framework picker so the two toolbar dropdowns feel like one family. */
+.dd-catfilter { position: relative; flex-shrink: 0; }
+.dd-catfilter-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s, background 0.15s;
+}
+.dd-catfilter-trigger:hover {
+  border-color: var(--text-muted);
+  background: rgba(0, 0, 0, 0.02);
+}
+.dd-catfilter.open .dd-catfilter-trigger {
+  border-color: var(--primary);
+  background: rgba(196, 18, 48, 0.04);
+}
+.dd-catfilter-prefix {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.dd-catfilter-label { color: var(--text); }
+.dd-catfilter-chevron {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  transition: transform 0.18s;
+}
+.dd-catfilter.open .dd-catfilter-chevron {
+  transform: rotate(180deg);
+  color: var(--primary);
+}
+.dd-catfilter-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 220px;
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08),
+              0 2px 4px rgba(0, 0, 0, 0.04);
+  padding: 6px;
+  z-index: 60;
+  display: none;
+  flex-direction: column;
+  gap: 2px;
+}
+.dd-catfilter.open .dd-catfilter-popover { display: flex; }
+.dd-catfilter-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.84rem;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.dd-catfilter-option:hover { background: rgba(196, 18, 48, 0.06); }
+.dd-catfilter-option.active {
+  color: var(--primary);
+  font-weight: 600;
+  background: rgba(196, 18, 48, 0.10);
+}
+.dd-catfilter-count {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.dd-catfilter-option.active .dd-catfilter-count { color: var(--primary); }
+
+/* ===== Framework picker (2026-05-27 — header-anchored resource picker)
+   Replaces the 260px left rail. Trigger button lives in the title row
+   (right-aligned via .title-row's space-between flex). Click opens a
+   right-aligned popover containing search + the existing library list.
+   Pattern mirrors GitHub repo switcher / Vercel project picker /
+   Linear workspace dropdown.
+*/
+.dd-fw-picker {
+  position: relative;
+}
+.dd-fw-picker-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  letter-spacing: 0.01em;
+  transition: border-color 0.15s, background 0.15s;
+  white-space: nowrap;
+  max-width: 320px;
+}
+.dd-fw-picker-trigger:hover {
+  border-color: var(--text-muted);
+  background: rgba(0, 0, 0, 0.02);
+}
+.dd-fw-picker.open .dd-fw-picker-trigger {
+  border-color: var(--primary);
+  background: rgba(196, 18, 48, 0.04);
+}
+.dd-fw-picker-logo {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.dd-fw-picker-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+.dd-fw-picker-chevron {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  margin-left: 2px;
+  transition: transform 0.18s;
+}
+.dd-fw-picker.open .dd-fw-picker-chevron {
+  transform: rotate(180deg);
+  color: var(--primary);
+}
+
+/* Popover — anchored to the trigger's right edge, opens downward.
+   z-index sits above sticky topbar (50) but below modals (1000+). */
+.dd-fw-picker-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 360px;
+  max-height: min(70vh, 520px);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08),
+              0 2px 4px rgba(0, 0, 0, 0.04);
+  padding: 10px;
+  z-index: 60;
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+}
+.dd-fw-picker.open .dd-fw-picker-popover {
+  display: flex;
+}
+.dd-fw-picker-search {
+  width: 100%;
+  padding: 9px 12px;
+  font-family: inherit;
+  font-size: 0.84rem;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+  transition: border-color 0.15s;
+  flex-shrink: 0;
+}
+.dd-fw-picker-search:focus {
+  border-color: var(--primary);
+}
+.dd-fw-picker-list {
+  flex: 1;
+  overflow-y: auto;
+  /* Subtle inset so scrollbar doesn't sit flush against the border. */
+  padding-right: 2px;
+}
+/* Empty/loading rows inside the popover share the sidebar style. */
+.dd-fw-picker-list .fw-sidebar-empty {
+  padding: 12px 4px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text-muted);
 }
 
 #fw-step-1-edit {

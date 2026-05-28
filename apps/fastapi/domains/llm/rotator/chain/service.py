@@ -828,6 +828,32 @@ _RESPONSE_FORMAT_SAFE_PROVIDERS = (
 )
 
 
+# 2026-05-27 P3 — in-process per-arm cooldown after 429 (rate_limit).
+# When a deployment hits 429, mark it as cooling for _ARM_COOLDOWN_S so
+# subsequent cascade picks in the same burst-window skip it. Avoids
+# the empirical failure mode where 16 parallel doc_distill workers
+# cascade through the same 5 top-ranked arms — all 429-saturated —
+# 16 times each.
+#
+# Scope: per-process dict. Each Celery prefork worker has its own; that's
+# fine since prefork concurrency=2 means burst pressure is bounded per
+# worker. Cooldown self-expires; _prune_arm_cooldown() runs lazily at the
+# start of every bandit call to drop stale entries.
+_ARM_COOLDOWN_S = 60.0
+_arm_cooldown: dict[str, float] = {}   # deployment_id → expiry (monotonic)
+
+
+def _prune_arm_cooldown() -> None:
+    """Drop expired cooldown entries lazily. Cheap: O(N) over a typically
+    <10-entry dict."""
+    if not _arm_cooldown:
+        return
+    now = time.monotonic()
+    expired = [d for d, exp in _arm_cooldown.items() if exp <= now]
+    for d in expired:
+        _arm_cooldown.pop(d, None)
+
+
 async def chat_judge_bandit_async(
     prompt: str,
     *,
@@ -877,7 +903,13 @@ async def chat_judge_bandit_async(
     failure (Redis down, no candidates ranked, etc.) so the planner
     never wedges on a misconfigured bandit.
     """
+    # 2026-05-27 P3 — in-process arm cooldown. When a deployment returns
+    # a 429 (rate_limit), we mark it as "cooling" for _ARM_COOLDOWN_S so
+    # subsequent cascade picks within the same burst-window skip it.
+    # Avoids the empirical failure mode where a 16-way concurrent batch
+    # hits the same 5 arms 16 times each, all 429ing.
     effective_process = dd_process or _JUDGE_KD_PROCESS
+    _prune_arm_cooldown()
     rds = await _redis_for_bandit()
     if rds is None:
         # No Redis = no bandit. Fall back to Router-shuffle.
@@ -909,6 +941,26 @@ async def chat_judge_bandit_async(
             redis = rds,
             k = _JUDGE_BANDIT_TOP_K,
         )
+        # 2026-05-27 P3 — filter cooling arms from this call's cascade
+        # *before* iterating. Cooldown is in-process (single celery
+        # worker), short (60s default), and reset on success. If filter
+        # leaves zero candidates, fall through to original ranked so
+        # cascade still attempts something (better to hit 429 than 503).
+        if _arm_cooldown:
+            now = time.monotonic()
+            filtered = [
+                (d, u, n) for d, u, n in ranked
+                if _arm_cooldown.get(d, 0.0) <= now
+            ]
+            if filtered:
+                if len(filtered) < len(ranked):
+                    skipped = len(ranked) - len(filtered)
+                    logger.info(
+                        f"[dd-judge-bandit] cooldown filtered "
+                        f"{skipped} arm(s) from cascade for "
+                        f"{effective_process}"
+                    )
+                ranked = filtered
     except Exception as e:
         logger.warning(f"[dd-judge-bandit] predict_top_k failed: {e}; "
                        f"falling back to router-shuffle")
@@ -982,6 +1034,13 @@ async def chat_judge_bandit_async(
             except Exception as e:
                 error_class = _classify_error(e)
                 last_error = f"{type(e).__name__}: {str(e)[:120]}"
+                # 2026-05-27 P3 — on 429, blacklist this arm for the
+                # rest of the burst window (default 60s). Subsequent
+                # cascade calls for ANY dd_process will skip it.
+                if error_class == "rate_limit":
+                    _arm_cooldown[deployment_id] = (
+                        time.monotonic() + _ARM_COOLDOWN_S
+                    )
             latency_s = float(time.monotonic() - t0)
             reward = bandit.compose_reward(
                 success = success,

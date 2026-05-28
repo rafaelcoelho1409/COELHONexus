@@ -74,24 +74,50 @@ _JUDGE_MAX_TOKENS     = 4000
 _EXPLAINER_TEMPERATURE = 0.0
 _JUDGE_TEMPERATURE     = 0.0
 
-# U1 (2026-05-27) — lowered 0.85 → 0.70.
+# U4 (2026-05-28) — reverted 0.70 → 0.85.
 #
 # Pass threshold for CoCoA — fraction of aligned subtopics required for
 # c11/c12 to remain at the bundled-judge's verdict. Below this, CoCoA
 # overrides with FAIL.
 #
-# History: 0.85 was the original target from the CoCoA paper (arXiv
-# 2410.03131) for high-quality reference docs. Empirically the free-
-# tier bandit pool produces alignment in the 58-78% range across BU
-# Run 5 chapters even when the prose is qualitatively reasonable — the
-# CoCoA judge counts minor descriptive embellishments ("the method
-# initializes a Browser instance and starts it") as drift even when
-# the spec covers `Browser.start()`. 0.70 still catches catastrophic
-# drift (model writing about unrelated APIs, sample drift ≥30%) while
-# accepting the empirical distribution. The bundled judge's c11/c12
-# verdicts still stand when CoCoA is above this floor — CoCoA only
-# overrides DOWNWARD.
-_ALIGN_PASS_FRACTION = 0.70
+# History:
+#   - 0.85 (original, CoCoA paper arXiv 2410.03131)
+#   - 0.70 (U1, 2026-05-27) — relaxed to fix BU ch-01 regression where
+#     the bandit pool's minor embellishments tripped 0.85.
+#   - 0.85 (U4, 2026-05-28) — REVERTED. Empirically on Claude Code, the
+#     0.70 floor let through catastrophic code-prose mismatches
+#     (e.g. prose about "Pin Model Version" paired with `aws sso login`
+#     code). The keyword-overlap pre-check (U5 below) replaces the BU
+#     rationale: minor embellishments will still be flagged by the LLM
+#     judge, but won't trip the floor as long as MOST pairs share
+#     identifier overlap.
+_ALIGN_PASS_FRACTION = 0.85
+
+# U5 (2026-05-28) — structural keyword-overlap pre-check.
+#
+# Catches catastrophic mismatches BEFORE the LLM judge: if the
+# explanation contains ZERO identifiers from the code body, mark as
+# misaligned automatically (saves an LLM call AND reliably catches the
+# `ANTHROPIC_API_KEY`-prose-with-`aws-sso-login`-code class of failure
+# the CC run exposed). Identifiers extracted from code body by regex;
+# Python/JS keywords + common short tokens excluded so the check has
+# signal. Threshold = 1: at least one shared identifier required.
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
+# Common words that don't carry alignment signal even if they appear in
+# code (control-flow keywords, generic verbs). Lowercase. Frozenset for
+# O(1) membership.
+_NOISE_IDENTS = frozenset({
+    "for", "and", "the", "with", "from", "import", "return", "true",
+    "false", "none", "null", "this", "self", "type", "string", "int",
+    "bool", "list", "dict", "set", "tuple", "any", "all", "function",
+    "async", "await", "class", "def", "let", "var", "const", "new",
+    "try", "except", "finally", "throw", "throws", "while", "case",
+    "switch", "break", "continue", "yield", "lambda", "print", "log",
+    "console", "data", "value", "result", "options", "params", "args",
+    "main", "init", "name", "key", "id", "config", "test", "tests",
+    "example", "examples", "default", "true", "false",
+})
+_MIN_IDENT_LEN = 3
 
 # Per-code-body excerpt cap when rendering code blocks into the explainer
 # prompt. Most code blocks are well under 600 chars; the cap is defense.
@@ -111,6 +137,35 @@ def _parse_json(text: str) -> dict | None:
         return json.loads(m.group())
     except Exception:
         return None
+
+
+def _extract_identifiers(text: str) -> set[str]:
+    """Lowercased identifiers ≥_MIN_IDENT_LEN chars, filtered against
+    _NOISE_IDENTS. Used by the structural keyword-overlap pre-check."""
+    if not text:
+        return set()
+    out: set[str] = set()
+    for m in _IDENT_RE.finditer(text):
+        tok = m.group(0).lower()
+        if len(tok) < _MIN_IDENT_LEN:
+            continue
+        if tok in _NOISE_IDENTS:
+            continue
+        out.add(tok)
+    return out
+
+
+def _has_keyword_overlap(*, code_body: str, explanation: str) -> bool:
+    """True iff `explanation` mentions ≥1 informative identifier from
+    `code_body`. Catches the worst mismatches structurally (prose about
+    `ANTHROPIC_API_KEY` paired with `aws sso login` code → zero overlap →
+    False). Identifier extraction strips common keywords so generic
+    prose doesn't fake a pass."""
+    code_idents = _extract_identifiers(code_body)
+    if not code_idents:
+        return True   # nothing to anchor against → don't false-fail
+    expl_idents = _extract_identifiers(explanation)
+    return bool(code_idents & expl_idents)
 
 
 # =============================================================================
@@ -456,6 +511,42 @@ async def cocoa_alignment_check(
             "feedback":       "no subtopics with both code body + prose",
         }
 
+    # U5 (2026-05-28) — structural keyword-overlap pre-check. Any pair
+    # whose explanation shares ZERO informative identifiers with its
+    # code body is auto-flagged misaligned. Catches catastrophic
+    # mismatches (CC ch-01 had 6 such cases) without burning LLM calls
+    # AND adds a hard structural floor under the LLM judge's looser
+    # semantic threshold. Failing pairs skip the explainer + judge
+    # stages entirely.
+    structural_misaligned: list[dict] = []
+    pairs_for_llm: list[dict] = []
+    for p in pairs:
+        if _has_keyword_overlap(
+            code_body=p.get("body", ""),
+            explanation=p.get("explanation", ""),
+        ):
+            pairs_for_llm.append(p)
+        else:
+            structural_misaligned.append({
+                "section_id": p.get("section_id"),
+                "subheading": p["subheading"],
+                "reason": (
+                    "explanation shares zero informative identifiers "
+                    "with the cited code body (structural pre-check); "
+                    "prose is talking about a different API"
+                ),
+            })
+    if structural_misaligned:
+        logger.info(
+            f"[cocoa] keyword-overlap pre-check flagged "
+            f"{len(structural_misaligned)}/{n_pairs} pairs as structurally "
+            f"misaligned; LLM judge will only see "
+            f"{len(pairs_for_llm)} pairs"
+        )
+    # The LLM stages only see the pairs that PASSED the structural
+    # pre-check. Misaligned ones are merged back at the verdict stage.
+    pairs = pairs_for_llm
+
     # Slice by _MAX_SUBTOPICS_PER_BATCH so prompts don't balloon.
     batches: list[list[dict]] = [
         pairs[i:i + _MAX_SUBTOPICS_PER_BATCH]
@@ -523,7 +614,7 @@ async def cocoa_alignment_check(
         }
 
     n_aligned = 0
-    misaligned: list[dict] = []
+    misaligned: list[dict] = list(structural_misaligned)   # U5 merge
     by_id = {p["id"]: p for p in pairs}
     for pid, v in verdicts.items():
         p = by_id.get(pid)
@@ -538,7 +629,12 @@ async def cocoa_alignment_check(
                 "reason": v.get("reason") or "explanation does not ground to the cited code",
             })
 
-    n_judged = n_aligned + len(misaligned)
+    # n_pairs is the ORIGINAL total (includes structurally-misaligned).
+    # n_judged is the denominator for the alignment rate — should also
+    # be the original total, otherwise structural misalignments leak
+    # into a deflated rate. The structural pre-check is part of the
+    # alignment signal, not a separate channel.
+    n_judged = n_pairs
     rate = (n_aligned / n_judged) if n_judged else 1.0
     passed = rate >= _ALIGN_PASS_FRACTION
 

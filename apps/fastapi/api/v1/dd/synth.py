@@ -41,7 +41,7 @@ import uuid
 from urllib.parse import quote
 
 import redis.asyncio as redis_aio
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 from starlette.responses import StreamingResponse
 
 from domains.dd.ingestion.storage import get_storage
@@ -117,7 +117,7 @@ _VALID_ARTIFACTS = {
 
 
 @router.get("/{slug}/study/chapters")
-async def list_study_chapters(slug: str) -> dict:
+async def list_study_chapters(slug: str, response: Response) -> dict:
     """Chapter list for the Step 5 study viewer. For each chapter in
     `planner/{slug}/plan-latest.json`, returns whether render_audit_write
     has produced its artifacts yet — drives the sidebar status badges.
@@ -139,6 +139,10 @@ async def list_study_chapters(slug: str) -> dict:
         ]
       }
     """
+    # Never let the browser serve a stale render-status snapshot — these
+    # `rendered` flags drive the Study sidebar + auto-open, and a cached
+    # 200 from before a wipe would show phantom "synthesized" chapters.
+    response.headers["Cache-Control"] = "no-store"
     plan = await _load_plan(slug)
     chapters_in: list[dict] = plan.get("chapters") or []
     if not chapters_in:
@@ -390,6 +394,13 @@ async def start_synth(
             detail=f"invalid mode {mode!r}; expected one of {sorted(_VALID_MODES)}",
         )
 
+    # PLANNER-FIRST GATE (server-side anti-bypass). Synth cannot run
+    # without a planner plan. _load_plan raises 404 ("run the planner
+    # first") when planner/{slug}/plan-latest.json is absent, so a direct
+    # POST that skips the disabled Start Synth button is still rejected.
+    # This is the single synth entry point — STUDY mode and single-chapter
+    # mode below both depend on the plan loaded here; /resume only acts on
+    # an already-checkpointed thread, so there is no bypass path.
     plan = await _load_plan(slug)
     plan_chapter_ids: list[str] = sorted(
         c["id"] for c in (plan.get("chapters") or [])
@@ -787,7 +798,13 @@ async def wipe_synth(slug: str) -> dict:
     user = os.environ.get("POSTGRES_USER", "postgres")
     dsn = f"postgresql://{user}:{pw}@{host}:{port}/{db}"
 
-    pattern = f"docs-distiller/synth/{slug}/%"
+    # Cover BOTH per-chapter synth threads AND the study-orchestrator
+    # threads for this slug — they live under distinct thread_id prefixes
+    # (docs-distiller/synth/{slug}/ vs docs-distiller/study/{slug}/).
+    patterns = [
+        f"docs-distiller/synth/{slug}/%",
+        f"docs-distiller/study/{slug}/%",
+    ]
     counts: dict = {}
     try:
         async with await psycopg.AsyncConnection.connect(
@@ -796,22 +813,60 @@ async def wipe_synth(slug: str) -> dict:
             for tbl in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
                 async with conn.cursor() as cur:
                     try:
-                        await cur.execute(
-                            f"DELETE FROM {tbl} WHERE thread_id LIKE %s",
-                            (pattern,),
-                        )
-                        counts[tbl] = cur.rowcount
+                        rows = 0
+                        for pat in patterns:
+                            await cur.execute(
+                                f"DELETE FROM {tbl} WHERE thread_id LIKE %s",
+                                (pat,),
+                            )
+                            rows += cur.rowcount
+                        counts[tbl] = rows
                     except Exception as e:
                         counts[tbl] = f"skipped: {type(e).__name__}: {e}"
     except Exception as e:
         logger.warning(f"[synth-wipe] Postgres delete failed for {slug!r}: {e}")
         counts["error"] = f"{type(e).__name__}: {e}"
 
+    # Redis cleanup — the SSE progress snapshots
+    # (`dd:synth:{thread_id}:events:snapshot`, TTL 24h), pub/sub channel
+    # keys, and cancel flags for every per-chapter AND study-orchestrator
+    # thread of this slug. WITHOUT this, a wiped slug "comes back from the
+    # dead": on the next page load `pollStudyState` opens the study
+    # thread's SSE, which replays the cached snapshot (chapter_ready +
+    # study_done events) and re-marks every chapter "Done" — the artifacts
+    # and checkpoints are gone but the UI shows a fully-cached study that
+    # survives even a hard refresh. Anchored patterns (.../synth/{slug}/
+    # and .../study/{slug}/) avoid substring-slug collisions (e.g.
+    # "claude-code" vs "claude-code-extra").
+    n_redis = 0
+    try:
+        r = redis_aio.from_url(
+            _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        )
+        try:
+            for kind in ("synth", "study"):
+                match = f"dd:synth:docs-distiller/{kind}/{slug}/*"
+                batch: list = []
+                async for k in r.scan_iter(match=match, count=500):
+                    batch.append(k)
+                    if len(batch) >= 500:
+                        n_redis += await r.delete(*batch)
+                        batch = []
+                if batch:
+                    n_redis += await r.delete(*batch)
+        finally:
+            await r.aclose()
+    except Exception as e:
+        logger.warning(f"[synth-wipe] Redis delete failed for {slug!r}: {e}")
+        n_redis = -1
+
     logger.info(
-        f"[synth-wipe] {slug}: minio={n_minio} blobs, postgres={counts}"
+        f"[synth-wipe] {slug}: minio={n_minio} blobs, postgres={counts}, "
+        f"redis={n_redis} keys"
     )
     return {
         "slug":                  slug,
         "minio_blobs_deleted":   n_minio,
         "postgres_rows_deleted": counts,
+        "redis_keys_deleted":    n_redis,
     }
