@@ -212,7 +212,7 @@ export const StageGraph = (function() {
       cytoscape._dagreRegistered = true;
     }
     const layoutConfig = hasDagre
-      ? { name: 'dagre', rankDir: 'TB', nodeSep: 36, rankSep: 56,
+      ? { name: 'dagre', rankDir: 'LR', nodeSep: 36, rankSep: 56,
           padding: 32, animate: false, fit: false }
       : { name: 'breadthfirst', directed: true, padding: 32,
           spacingFactor: 1.4, animate: false, grid: false, fit: false };

@@ -29,7 +29,7 @@ export function _runPlannerLayoutAndCenter(passLabel) {
     cy.resize();
     const hasDagre = !!cytoscape._dagreRegistered;
     const layout = cy.layout(hasDagre
-      ? { name: 'dagre', rankDir: 'TB', nodeSep: 36, rankSep: 56,
+      ? { name: 'dagre', rankDir: 'LR', nodeSep: 36, rankSep: 56,
           padding: 32, animate: false, fit: false }
       : { name: 'breadthfirst', directed: true, padding: 32,
           spacingFactor: 1.4, animate: false, fit: false }
