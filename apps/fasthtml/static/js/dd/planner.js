@@ -4,6 +4,9 @@ import { StageGraph } from './stagegraph.js';
 import { sleep, fmtBytes, fmtAge, escapeHtml, formatFieldValue } from './utils.js';
 import { showConfirm, showNotice, showToast, refreshGenerateState } from './ui.js';
 import { loadManifestForSlug, renderManifest } from './ingestion.js';
+import {
+  startElapsed, stopElapsed, showElapsed, isElapsedRunning,
+} from './timing.js';
 
 
 export function _resizePlannerCanvas() {
@@ -2158,6 +2161,13 @@ export async function _refreshCardsFromState(threadId, expectedField) {
 // that node's checkpoint is committed. Used by the retry-fetch above
 // so we wait for the previous node's commit before re-rendering.
 
+// Wall-clock ms at which the current planner run started — set on an
+// explicit Start (Date.now()) or recovered from the live-run registry's
+// `started_ts` on refresh, so the navbar timer continues from the real run
+// start (not from 0) when reconnecting. 0 = no known run.
+let _plannerRunStartMs = 0;
+export function _setPlannerRunStartMs(ms) { _plannerRunStartMs = ms || 0; }
+
 export async function pollPlannerState(threadId) {
   // 2026-canonical pattern: Server-Sent Events instead of HTTP polling.
   // Backend pub/sub channel (Redis) is bridged by the FastAPI
@@ -2192,10 +2202,24 @@ export async function pollPlannerState(threadId) {
     // step now.
     if (ev.ts && (Date.now() / 1000 - ev.ts) < 20) {
       S.set_liveEventReceived(true);
+      // Live navbar wall-clock — idempotent, starts ticking on the FIRST
+      // fresh event (so a dead run's stale snapshot replay never starts it).
+      // Seed from the run's real start so a refresh reconnect continues the
+      // timer instead of restarting at 0.
+      const base = _plannerRunStartMs
+        ? Math.max(0, Date.now() - _plannerRunStartMs)
+        : 0;
+      startElapsed('planner', base);
     }
 
     // Planner-level terminal event: end the stream + reset UI.
     if (ev.step === 'planner' && ev.kind === 'terminal') {
+      // Freeze the navbar total at the authoritative wall-clock (carried in
+      // the terminal event — a separate post-terminal event would be missed
+      // because the stream closes here).
+      stopElapsed('planner', Number(ev.total_wall_ms || 0) || undefined);
+      _plannerRunStartMs = 0;   // run ended — don't seed a future ticker
+
       // Pull the final state once so the cards reflect the very last
       // checkpoint. status field is set by aupdate_state right before
       // the terminal SSE event is emitted, so retry-by-status is the
@@ -2350,6 +2374,48 @@ export async function _tryResumeActivePlanner(slug) {
   resetPlannerCards();
   refreshPlannerStartState();
 
+  // LIVE-RUN RECONNECT (2026-05-29). A server-side registry
+  // (`dd:planner:current:{slug}`, set by start_planner, cleared on
+  // terminal/cancel/wipe) is the authoritative "is a run live NOW?" signal
+  // — a checkpoint with status="running" is NOT (a crashed/pod-restarted
+  // run leaves it stuck forever). If the registry says active, reconnect to
+  // the live SSE: the snapshot replay repaints the current running step and
+  // fresh events resume the live progress + timer. This is READ-ONLY — it
+  // does NOT POST /resume (only an explicit Start does), so a stale entry
+  // can never restart compute; worst case it shows the last step until the
+  // 1h registry TTL lapses (timer won't tick without fresh events).
+  try {
+    const ar = await fetch(S.API + '/planner/' + slug + '/active');
+    if (ar.ok) {
+      const a = await ar.json();
+      if (a && a.active && a.thread_id) {
+        _plannerRunStartMs = a.started_ts
+          ? a.started_ts * 1000
+          : Date.now();
+        S.setPlannerThreadId(a.thread_id);
+        try { localStorage.setItem(_plannerStorageKey(slug), a.thread_id); }
+        catch (_) {}
+        _setPlannerStagePill('working');
+        refreshPlannerStartState();      // Start → Cancel
+        pollPlannerState(a.thread_id);    // snapshot replay + live SSE
+        return true;
+      }
+    }
+  } catch (_) { /* fall through to view-only recovery */ }
+
+  // Persisted planner total → navbar (finished/cached runs survive refresh).
+  // Skip if a live run is currently ticking so we don't clobber it.
+  if (!isElapsedRunning('planner')) {
+    fetch(S.API + '/planner/' + slug + '/timing')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        if (d && !isElapsedRunning('planner')) {
+          showElapsed('planner', Number(d.total_wall_ms || 0));
+        }
+      })
+      .catch(() => {});
+  }
+
   let tid = null;
   try { tid = localStorage.getItem(_plannerStorageKey(slug)); }
   catch (e) { return false; }
@@ -2448,6 +2514,9 @@ export async function startPlanner() {
   if (!tid) tid = _genPlannerThreadId(S.activeSlug);
   S.setPlannerThreadId(tid);
   _rememberActivePlanner(S.activeSlug, tid);   // page-refresh recovery
+  // Mark the run start for the navbar timer (a refresh reconnect recovers
+  // this from the registry's started_ts instead). A fresh start begins ~now.
+  _plannerRunStartMs = Date.now();
   refreshPlannerStartState();   // button flips to "Cancel Planner"
   // Kick off polling in parallel with the main POST so the user sees
   // cards advance progressively.

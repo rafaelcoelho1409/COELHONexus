@@ -97,9 +97,34 @@ OUTLINE_SCHEMA_VERSION = "1.0"
 #   - U6 semantic H2 dedup via embeddings + repair feedback
 # Cached outlines would short-circuit BOTH improvements (cache fast-path
 # returns before hard-trim and semantic-dedup run).
-OUTLINE_PROMPT_VERSION = "v2-tight-semantic-2026-05-28"
+# v3 (2026-05-29, DD-SYNTH-SECTION-RECYCLING #2) — scope-orthogonality:
+#   - HARD RULE 7 forbids scope-twin sections (same APIs/examples, distinct
+#     headings) in build_outline_prompt
+#   - scope-overlap detector lowered cosine 0.78 → 0.74 + lexical backstop
+# v4 (2026-05-29 PM, DD-SYNTH-SECTION-COUNT) — section-count overhaul after
+# the CC re-run showed v3 did NOT reduce over-sectioning: 12/13 chapters
+# shipped 4 H2s against an adaptive cap of 3, carrying a PERMANENT
+# unresolved cap violation, because three constants contradicted each other:
+#   - Pydantic min_length = 4   (every chapter FORCED to ≥4 sections)
+#   - adaptive cap        = 3   (validator flagged 4 > 3 forever)
+#   - hard-trim floor max(_SECTIONS_MIN=4, cap=3) = 4  (never trimmed 4→3)
+# The LLM was ALSO told "~8 sections (4-40)" by the prompt + rewarded for
+# "6-12" by the USC rubric. Net: one guaranteed-redundant section per
+# chapter → hollow "see other section" cross-refs after render dedup.
+# This bump reconciles the whole chain: Pydantic min 4→2, adaptive floor
+# 3→2 / ceiling 12→10, hard-trim uses the adaptive cap DIRECTLY, the
+# prompt target is now the adaptive cap (not a fixed 8), and the USC
+# rubric rewards proximity to that cap. See [[project_synth_section_count]].
+OUTLINE_PROMPT_VERSION = "v4-adaptive-sections-2026-05-29"
 
-_SECTIONS_MIN = 4
+# _SECTIONS_MIN lowered 4 → 2 (v4, 2026-05-29 PM). The old floor of 4 was
+# the ROOT of the over-sectioning deadlock: it forced every chapter to ≥4
+# sections (Pydantic min_length) AND floored the hard-trim at 4, so a
+# 4-section outline could never be trimmed to the adaptive cap of 3 yet was
+# permanently flagged for exceeding it. 2 is the smallest count that still
+# reads as a structured chapter; small/monolithic chapters (e.g. a 6-doc
+# "OpenTelemetry config" chapter) legitimately want 2 sections, not 4.
+_SECTIONS_MIN = 2
 _SECTIONS_MAX = 40
 _MAX_STAGE_DEPTH = 4
 
@@ -117,13 +142,23 @@ _MAX_STAGE_DEPTH = 4
 # Claude Code run exposed bloated 6-8 H2 chapters with massive
 # cross-section recycling. Empirical: Permissions ch with 19 sources had
 # 6 H2s that all repeated the same `autoMode.environment` JSON block
-# under different framings. 4-5 well-developed H2s is the sweet spot
-# for chapter cohesion and reader pacing on these corpora.
+# under different framings.
 #
-# The validator (validate_outline_structure) treats violations as
-# repair-loop feedback — soft reject, not hard fail.
-_OUTLINE_ADAPTIVE_FLOOR    = 3
-_OUTLINE_ADAPTIVE_CEILING  = 12
+# v4 (2026-05-29 PM) — floor 3 → 2, ceiling 12 → 10 after the CC re-run
+# showed the LLM-first planner emits SMALL chapters (4-17 docs, avg 8.5)
+# and the LLM has a hard prior for 4 H2s regardless of size. With the old
+# floor of 3, a 4-6 doc monolithic chapter was still forced to 3 sections
+# (≈1 redundant). divisor stays 4 (it is what makes a 13-doc chapter cap
+# at 3 — correct; the bug was never the divisor, it was floor/min/trim
+# disagreeing). Net cap by source count: 4-11 → 2, 12-15 → 3, 16-19 → 4,
+# 20+ → 5.. (ceiling 10). This is now the SINGLE source of truth for
+# section count — Pydantic min, prompt target, USC rubric, hard-trim, and
+# the validator all read max_h2_for_n_sources().
+#
+# The validator (validate_outline_structure) treats the count as a SOFT
+# repair signal; node.py hard-trims to this cap deterministically.
+_OUTLINE_ADAPTIVE_FLOOR    = 2
+_OUTLINE_ADAPTIVE_CEILING  = 10
 _OUTLINE_ADAPTIVE_DIVISOR  = 4
 
 

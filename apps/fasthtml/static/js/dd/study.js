@@ -3,6 +3,11 @@ import * as S from './state.js';
 import { escapeHtml } from './utils.js';
 import * as srs from './srs.js';
 import { openDrawer } from './ui.js';
+import { fmtMs, showElapsed } from './timing.js';
+
+// Persisted study total wall-clock (ms) from GET /synth/{slug}/study/chapters
+// (`study_total_wall_ms`). Shown in the sidebar header + navbar total.
+let _studyTotalWallMs = 0;
 
 // ---- flashcard review session (module-local) ----
 // _fcSession is the queue of due cards as {cid, idx} tuples; _fcPos points
@@ -109,21 +114,35 @@ export function _renderStudySidebar() {
   }
   const slug = S.activeSlug;
   // Header progress counts SYNTHESIZED chapters (those with synth output
-  // on the server), NOT chapters the user has personally opened — so
-  // "0 / 13 synthesized" reads correctly on a fresh or just-wiped
-  // framework. Per-chapter reading progress still shows via the ✓
-  // "studied" tick on each row. `totalDue` is gated on `rendered` too:
-  // a wiped chapter's lingering local SRS deck (keyed slug::cid, never
-  // reconciled with the server, survives wipes + hard refresh) must not
-  // resurface as phantom due-card counts.
+  // on the server), NOT chapters the user has personally opened. `totalDue`
+  // is gated on `rendered` too: a wiped chapter's lingering local SRS deck
+  // (keyed slug::cid, never reconciled with the server, survives wipes +
+  // hard refresh) must not resurface as phantom due-card counts.
   const synthesized = S.studyChapters.filter(ch => ch.rendered).length;
+  // Nothing synthesized yet — fresh framework OR just after Wipe Synth.
+  // Don't list the planner's chapter names as if a study exists (that's
+  // what made a wiped framework still "show the old synth"); show a clean
+  // empty note instead. The list returns as soon as ≥1 chapter renders.
+  if (synthesized === 0) {
+    S.studyChapterListEl.innerHTML =
+      '<div class="fw-empty" style="font-size:0.8rem;padding:8px 4px">' +
+      'No chapters synthesized yet. Run Synth to generate this study.' +
+      '</div>';
+    return;
+  }
   let totalDue = 0;
   S.studyChapters.forEach(ch => {
     if (ch.rendered) totalDue += srs.deckDueCount(slug, ch.id);
   });
+  const totalTimeHtml = _studyTotalWallMs > 0
+    ? '<span class="fw-study-total-time" title="Total Synth wall-clock ' +
+      '(cumulative chapter time + book harmonize)">⏱ ' +
+      fmtMs(_studyTotalWallMs) + '</span>'
+    : '';
   const progressHtml =
     '<div class="fw-study-progress">' +
       '<span>' + synthesized + ' / ' + S.studyChapters.length + ' synthesized</span>' +
+      totalTimeHtml +
       (totalDue ? '<button type="button" class="fw-study-review-due" ' +
         'title="Review all due flashcards across chapters">▶ Review ' +
         totalDue + ' due</button>' : '') +
@@ -148,6 +167,13 @@ export function _renderStudySidebar() {
       ? '<span class="fw-study-chapter-due" title="' + due +
         ' flashcards due">' + due + '</span>'
       : '';
+    // Per-chapter synth wall-clock (from study-timing-latest.json via the
+    // chapters API). Only shown once measured (>0).
+    const tms = Number(ch.wall_ms || 0);
+    const timeBadge = tms > 0
+      ? '<span class="fw-study-chapter-time" title="Synth time for this ' +
+        'chapter">' + fmtMs(tms) + '</span>'
+      : '';
     return (
       '<button type="button" class="' + cls + '" ' +
       'data-chapter-id="' + escapeHtml(ch.id) + '" ' +
@@ -156,6 +182,7 @@ export function _renderStudySidebar() {
           icon + '</span>' +
         '<span class="fw-study-chapter-title">' +
           escapeHtml(title) + '</span>' +
+        timeBadge +
         dueBadge +
       '</button>'
     );
@@ -697,6 +724,14 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// Always show a freshly-opened chapter from the top — reset the `.page`
+// scroll region (the app-shell scroll container) no matter where the user
+// had scrolled. `instant` so there's no distracting glide on chapter switch.
+function _scrollReaderTop() {
+  const page = document.querySelector('.page');
+  if (page) page.scrollTo({ top: 0, behavior: 'instant' });
+}
+
 export async function openStudyChapter(cid) {
   if (!S.activeSlug || !cid) return;
   const ch = S.studyChapters.find(c => c.id === cid);
@@ -710,6 +745,7 @@ export async function openStudyChapter(cid) {
       '<div class="fw-empty">No challenges available — chapter not synthesized.</div>';
     S.studyFlashcardsEl.innerHTML =
       '<div class="fw-empty">No flashcards available — chapter not synthesized.</div>';
+    _scrollReaderTop();
     return;
   }
   S.setStudyActiveChapter(cid);
@@ -731,6 +767,7 @@ export async function openStudyChapter(cid) {
   srs.markChapterStudied(S.activeSlug, cid, true);
   _renderStudySidebar();
   _setStudyStagePill('done', 'Reading · ' + (ch.title || cid));
+  _scrollReaderTop();   // new chapter always starts at the top
 }
 
 export async function loadStudyChapters(slug) {
@@ -755,6 +792,9 @@ export async function loadStudyChapters(slug) {
     S.setStudyChapters((data.chapters || []).sort(
       (a, b) => (a.order || 0) - (b.order || 0)
     ));
+    _studyTotalWallMs = Number(data.study_total_wall_ms || 0);
+    // Mirror the persisted Synth total onto the navbar row-3 indicator.
+    showElapsed('synth', _studyTotalWallMs);
     S.setStudyLoadedSlug(slug);
     _renderStudySidebar();
     // Auto-open the first rendered chapter (if any) so the user

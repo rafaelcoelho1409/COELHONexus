@@ -78,6 +78,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from hashlib import sha256
 from typing import Optional
@@ -99,6 +100,7 @@ from .types import (
 from .service import (
     build_section_context,
     compute_audit,
+    dedupe_and_align_sections,
     merge_vault_entries,
     render_challenges_md,
     render_chapter_md,
@@ -485,6 +487,23 @@ async def render_audit_write(state: SynthState) -> dict:
         )
         for s in sections
     ]
+    # Write-path quality pass (docs/DD-SYNTH-SECTION-RECYCLING-2026-05-29.md
+    # fixes #1 + #4): cross-reference within-chapter recycled code blocks +
+    # omit misrouted ones. Audit-safe — only rewrites code_block strings, so
+    # resolution_log/sentinel counts computed below stay consistent.
+    dedup_stats = dedupe_and_align_sections(
+        sections_ctx,
+        drop_mismatch=os.environ.get(
+            "KD_RENDER_DROP_MISMATCH", "true",
+        ).lower() not in ("0", "false", "no"),
+    )
+    if dedup_stats["n_dedup"] or dedup_stats["n_mismatch"]:
+        logger.info(
+            f"[render_audit_write] {slug}/{chapter_id}: write-path pass — "
+            f"{dedup_stats['n_dedup']} recycled code block(s) cross-referenced, "
+            f"{dedup_stats['n_mismatch']} misrouted block(s) omitted"
+        )
+
     # v2 cookbook schema (2026-05-24): each section has subtopics rather
     # than flat paragraphs. The stat is renamed but kept under the same
     # key in RenderResult for compatibility with the persisted blob shape.
@@ -511,6 +530,8 @@ async def render_audit_write(state: SynthState) -> dict:
         n_code_refs_drift=len(audit.n_byte_drift),
         sentinels_in_output=audit.sentinels_in_output,
         audit_passed=audit.audit_passed,
+        n_code_deduped=dedup_stats["n_dedup"],
+        n_code_mismatch_omitted=dedup_stats["n_mismatch"],
     )
 
     # ── Write 3 content artifacts to MinIO ─────────────────────────────
@@ -596,6 +617,8 @@ async def render_audit_write(state: SynthState) -> dict:
         "n_vault_files_loaded": n_loaded,
         "n_vault_files_skipped": n_skipped,
         "n_vault_entries":      len(vault),
+        "n_code_deduped":       dedup_stats["n_dedup"],
+        "n_code_mismatch_omitted": dedup_stats["n_mismatch"],
         "wall_ms":              elapsed,
         "store_path":           latest_key,
         "versioned_path":       versioned_key,

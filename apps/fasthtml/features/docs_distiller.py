@@ -344,6 +344,10 @@ def _StickyBar():
 def _PlannerPill():
     return Div(
         Span("Idle", cls="fw-stage-pill-text", id="fw-planner-pill-text"),
+        # Total planner wall-clock — updated live by planner.js (ticks while
+        # running) and from GET /planner/{slug}/timing on load/cached runs.
+        Span("", cls="fw-stage-elapsed", id="fw-planner-elapsed",
+             title="Total Planner time"),
         cls="fw-stage-pill", id="fw-planner-pill", data_status="idle",
     )
 
@@ -364,6 +368,11 @@ def _PlannerActions():
 def _SynthPill():
     return Div(
         Span("Idle", cls="fw-stage-pill-text", id="fw-synth-pill-text"),
+        # Total synth wall-clock (cumulative chapter wall + book_harmonize) —
+        # updated live by synth.js and from /synth/{slug}/study/chapters
+        # (study_total_wall_ms) on load/cached studies.
+        Span("", cls="fw-stage-elapsed", id="fw-synth-elapsed",
+             title="Total Synth time"),
         cls="fw-stage-pill", id="fw-synth-pill", data_status="idle",
     )
 

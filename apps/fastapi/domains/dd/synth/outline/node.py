@@ -117,7 +117,9 @@ _MAX_TOKENS_REPAIR       = 8000
 # for the schema + rules block.
 _MAX_SOURCE_CHARS        = 180_000
 _SOURCE_CONCAT_SEPARATOR = "\n\n---\n\n"
-_TARGET_SECTIONS_HINT    = 8
+# (v4 2026-05-29 PM) The fixed section-count hint of 8 was removed — the
+# outline prompt now receives the per-chapter adaptive cap
+# (max_h2_for_n_sources) as its target instead. See build_outline_prompt.
 
 # DD-SYNTH-SPEED-SOTA #A2 (2026-05-26) — structured-output schema for the
 # outline candidate generator + repair calls. USC vote uses a smaller
@@ -286,7 +288,44 @@ def _concat_sources(bodies: list[str]) -> tuple[str, bool]:
 # Fail-soft: any embed/numpy failure logs and returns empty issues, so
 # the structural validators still drive repair. Embeddings only ADD
 # signal — they never block.
-_SEMANTIC_H2_DEDUP_THRESHOLD = 0.78
+# DD-SYNTH-SECTION-RECYCLING-2026-05-29 (#2) — scope-twin sections with
+# DISTINCT headings (e.g. ch-04 "Session Management" vs "Remote Control",
+# both covering persist/resume/InMemory/S3/continue) slipped past the old
+# 0.78 heading-embedding check AND the 0.85 fuzzy-heading check, leaving
+# hollow "see other section" chapters once the render-time body dedup (#1)
+# stripped the duplicated code. Two changes:
+#   - lower the embedding cosine threshold 0.78 → 0.74
+#   - add a lexical content-word overlap backstop that needs NO embeddings
+#     (still fires if the embedder is down) and catches near-verbatim
+#     descriptions outright.
+# Both feed the SOFT repair loop (advisory) — never a hard merge — and pair
+# with #1 which neutralizes any code symptom regardless. Aggressive flagging
+# is intentional: a chapter whose sections all overlap SHOULD collapse to
+# fewer, sharper sections.
+_SEMANTIC_H2_DEDUP_THRESHOLD = 0.74
+_SCOPE_LEXICAL_JACCARD = 0.40
+
+_SCOPE_STOPWORDS = frozenset({
+    "the", "and", "for", "this", "with", "that", "from", "section", "show",
+    "how", "use", "using", "via", "your", "each", "into", "onto", "claude",
+    "code", "example", "demonstrate", "learn", "cover", "when", "what",
+    "where", "which", "while", "they", "them", "then", "here", "run",
+    "creat", "make", "field", "valu", "option", "config", "setup", "set",
+})
+
+
+def _scope_words(text: str) -> set[str]:
+    """Lightly-stemmed content words (≥4 chars) of a heading+description,
+    for lexical scope-overlap detection. Stopword-filtered."""
+    out: set[str] = set()
+    for t in re.findall(r"[a-z][a-z0-9_]{3,}", (text or "").lower()):
+        for suf in ("ing", "tions", "tion", "ment", "ions", "ers", "es",
+                    "ed", "ity", "al", "s"):
+            if t.endswith(suf) and len(t) - len(suf) >= 3:
+                t = t[: -len(suf)]
+                break
+        out.add(t)
+    return out - _SCOPE_STOPWORDS
 
 
 async def _detect_semantic_h2_duplicates(
@@ -294,23 +333,24 @@ async def _detect_semantic_h2_duplicates(
     *,
     threshold: float = _SEMANTIC_H2_DEDUP_THRESHOLD,
 ) -> list[str]:
-    """Return issue strings naming pairs of near-semantic-duplicate H2
-    sections. Empty list if no dupes OR if the embed/compute fails."""
+    """Return issue strings naming pairs of SCOPE-duplicate H2 sections —
+    flagged by embedding cosine (semantic) OR lexical content-word overlap.
+    Empty list if none. Fail-soft: the lexical pass still runs when the
+    embedder is unavailable, so detection never depends solely on the LLM
+    embedding service."""
     sections = outline.sections
     if len(sections) <= 1:
         return []
-    texts = [f"{s.heading}\n{s.description}" for s in sections]
+    n = len(sections)
+    words = [_scope_words(f"{s.heading} {s.description}") for s in sections]
+
+    # Embedding cosine (semantic signal) — best-effort.
+    sim = None
     try:
         embeddings = await embed_via_router_async(
-            texts, input_type="query",
+            [f"{s.heading}\n{s.description}" for s in sections],
+            input_type="query",
         )
-    except Exception as e:
-        logger.warning(
-            f"[outline_sdp] semantic H2 dedup embed failed: "
-            f"{type(e).__name__}: {e} — skipping semantic dedup"
-        )
-        return []
-    try:
         import numpy as np
         embs = np.array(embeddings, dtype=np.float32)
         norms = np.linalg.norm(embs, axis=1, keepdims=True)
@@ -319,36 +359,41 @@ async def _detect_semantic_h2_duplicates(
         sim = normed @ normed.T
     except Exception as e:
         logger.warning(
-            f"[outline_sdp] semantic H2 dedup cosine failed: "
-            f"{type(e).__name__}: {e}"
+            f"[outline_sdp] semantic H2 dedup embed/cosine failed: "
+            f"{type(e).__name__}: {e} — falling back to lexical scope check"
         )
-        return []
-    n = len(sections)
-    flagged: list[tuple[str, str, float]] = []
+        sim = None
+
+    flagged: list[tuple[str, str, float, str]] = []
     for i in range(n):
         for j in range(i + 1, n):
-            s = float(sim[i, j])
-            if s >= threshold:
+            cos = float(sim[i, j]) if sim is not None else 0.0
+            wi, wj = words[i], words[j]
+            jac = (len(wi & wj) / len(wi | wj)) if (wi or wj) else 0.0
+            if cos >= threshold or jac >= _SCOPE_LEXICAL_JACCARD:
                 flagged.append((
-                    sections[i].heading, sections[j].heading, s,
+                    sections[i].heading, sections[j].heading,
+                    max(cos, jac),
+                    "cosine" if cos >= threshold else "lexical",
                 ))
     if not flagged:
         return []
     pair_strs = [
-        f"{a!r} ↔ {b!r} ({s:.0%})" for a, b, s in flagged[:3]
+        f"{a!r} ↔ {b!r} ({s:.0%} {w})" for a, b, s, w in flagged[:3]
     ]
     suffix = (
         f", +{len(flagged) - 3} more pairs" if len(flagged) > 3 else ""
     )
     return [
-        f"Semantically near-duplicate H2 section pairs detected "
-        f"({len(flagged)} pair(s); cosine ≥ {threshold:.0%}): "
-        f"{', '.join(pair_strs)}{suffix}. These sections cover the "
-        f"same topic with different surface wording — MERGE them into "
-        f"one section (combine the member docs under a unified heading) "
-        f"OR rewrite one to cover a distinctly different aspect. "
-        f"Topical duplicates produce recycled code blocks in the final "
-        f"chapter that readers cannot use."
+        f"Scope-duplicate H2 section pairs detected ({len(flagged)} "
+        f"pair(s); embedding cosine ≥ {threshold:.0%} OR content-word "
+        f"overlap ≥ {_SCOPE_LEXICAL_JACCARD:.0%}): "
+        f"{', '.join(pair_strs)}{suffix}. These sections cover the SAME "
+        f"scope (same APIs / examples) with different wording — MERGE each "
+        f"pair into ONE section under a unified heading, OR re-scope one to "
+        f"a genuinely distinct capability. Overlapping sections make the "
+        f"writer recycle code; the renderer then strips the duplicates, "
+        f"leaving hollow 'see other section' sections."
     ]
 
 
@@ -577,10 +622,15 @@ async def _usc_pick(
     candidates: list[tuple[ChapterOutline, OutlineDAG, list[str]]],
     chapter_id: str,
     chapter_title: str,
+    adaptive_cap: int,
 ) -> int:
     """Run the USC picker over `candidates` (outline, dag, issues).
     Returns the chosen index. Falls back to 0 (first valid) on any
-    picker failure."""
+    picker failure.
+
+    `adaptive_cap` is the per-chapter section-count ceiling
+    (max_h2_for_n_sources); the picker rewards candidates AT or just
+    under it and penalizes over-decomposed ones (v4, 2026-05-29 PM)."""
     if len(candidates) <= 1:
         return 0
     summaries = [
@@ -591,6 +641,7 @@ async def _usc_pick(
         candidates_summary=summaries,
         chapter_id=chapter_id,
         chapter_title=chapter_title,
+        adaptive_cap=adaptive_cap,
     )
     try:
         response, _ = await chat_judge_bandit_async(
@@ -808,6 +859,14 @@ async def outline_sdp(state: SynthState) -> dict:
             )
 
     # -- Build prompt + draft N samples -------------------------------------
+    # v4 (2026-05-29 PM) — the target hint is now the ADAPTIVE CAP, not a
+    # fixed 8. The old fixed-8 hint (plus a USC rubric rewarding "6-12")
+    # actively pushed the LLM to over-section small chapters; it then got
+    # hard-trimmed (or, pre-v4, deadlocked). Asking for the right count up
+    # front means the winning candidate rarely needs trimming and the
+    # sections are scoped for that count from the start.
+    from .constants import max_h2_for_n_sources
+    adaptive_target = max_h2_for_n_sources(len(sources))
     prompt = build_outline_prompt(
         framework=slug,
         chapter_id=chapter_id,
@@ -815,7 +874,7 @@ async def outline_sdp(state: SynthState) -> dict:
         chapter_description=chapter_description,
         n_vault_hashes=n_vault_hashes,
         sources_concat_md=sources_concat_md,
-        target_sections_hint=_TARGET_SECTIONS_HINT,
+        target_sections_hint=adaptive_target,
     )
     raw_samples = await _generate_samples(
         prompt, _N_SAMPLES, thread_id, n_sources=len(sources),
@@ -859,7 +918,9 @@ async def outline_sdp(state: SynthState) -> dict:
         candidates = [(outline, dag, ["heuristic_fallback"])]
 
     # -- USC pick best candidate --------------------------------------------
-    chosen_idx = await _usc_pick(candidates, chapter_id, chapter_title)
+    chosen_idx = await _usc_pick(
+        candidates, chapter_id, chapter_title, adaptive_cap=adaptive_target,
+    )
     outline, dag, issues = candidates[chosen_idx]
 
     # U6 (2026-05-28) — semantic H2 dedup feedback. Embed section
@@ -955,8 +1016,16 @@ async def outline_sdp(state: SynthState) -> dict:
     # trimmed set. This guarantees bounded-output regardless of LLM
     # compliance. Lost content was always defensible-by-fewer-than-3-
     # source-docs anyway (the cap is `n_sources // 3`).
-    from .constants import _SECTIONS_MIN, max_h2_for_n_sources
-    adaptive_cap = max(_SECTIONS_MIN, max_h2_for_n_sources(len(sources)))
+    # v4 (2026-05-29 PM) — trim to the adaptive cap DIRECTLY. The old
+    # `max(_SECTIONS_MIN, cap)` floored the trim at 4 (= old _SECTIONS_MIN),
+    # which made it a NO-OP for the universal 4-section outlines the LLM
+    # emits: validate flagged 4 > cap 3, but the trimmer's effective cap was
+    # max(4, 3) = 4, so it never fired and 12/13 CC chapters shipped one
+    # redundant section with a permanent unresolved violation. The adaptive
+    # floor is now 2 (= _SECTIONS_MIN), so trimming to the cap is always
+    # schema-valid.
+    from .constants import max_h2_for_n_sources
+    adaptive_cap = max_h2_for_n_sources(len(sources))
     if len(outline.sections) > adaptive_cap:
         n_before = len(outline.sections)
         # Topological order: lower stage_index first.

@@ -325,8 +325,8 @@
   border-radius: 3px;
 }
 .fw-study-prose pre {
-  background: #0d1117;
-  color: #c9d1d9;
+  background: #22272e;   /* GitHub Dark Dimmed — softer than #0d1117 */
+  color: #adbac7;
   padding: 14px 18px;
   border-radius: 4px;
   overflow-x: auto;
@@ -709,6 +709,7 @@
   gap: 2px;
   padding: 10px 6px;
   border: 1px solid var(--border);
+  border-top: 3px solid var(--border);   /* grade-hue accent (set per grade) */
   border-radius: 6px;
   background: var(--card);
   font-family: inherit;
@@ -718,10 +719,17 @@
 .fw-fc-grade:hover { transform: translateY(-1px); }
 .fw-fc-grade-label { font-size: 0.85rem; font-weight: 600; color: var(--text); }
 .fw-fc-grade-ivl { font-size: 0.7rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.fw-fc-grade.again:hover { border-color: var(--error-text); background: var(--error-bg); }
-.fw-fc-grade.hard:hover  { border-color: var(--notice-border); background: var(--notice-bg); }
-.fw-fc-grade.good:hover  { border-color: var(--running-border); background: var(--running-bg); }
-.fw-fc-grade.easy:hover  { border-color: var(--ingested-border); background: var(--ingested-bg); }
+/* Wong color-blind-safe grade scale — hue accent always visible (top
+   border), full outline + faint tint on hover. Label + order stay the
+   primary signal. */
+.fw-fc-grade.again { border-top-color: var(--grade-again); }
+.fw-fc-grade.hard  { border-top-color: var(--grade-hard); }
+.fw-fc-grade.good  { border-top-color: var(--grade-good); }
+.fw-fc-grade.easy  { border-top-color: var(--grade-easy); }
+.fw-fc-grade.again:hover { border-color: var(--grade-again); background: color-mix(in srgb, var(--grade-again) 12%, var(--card)); }
+.fw-fc-grade.hard:hover  { border-color: var(--grade-hard);  background: color-mix(in srgb, var(--grade-hard)  12%, var(--card)); }
+.fw-fc-grade.good:hover  { border-color: var(--grade-good);  background: color-mix(in srgb, var(--grade-good)  12%, var(--card)); }
+.fw-fc-grade.easy:hover  { border-color: var(--grade-easy);  background: color-mix(in srgb, var(--grade-easy)  12%, var(--card)); }
 .fw-fc-hint { font-size: 0.76rem; color: var(--text-muted); font-style: italic; }
 .fw-fc-done { display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--text-muted); }
 .fw-fc-done-check {
@@ -798,6 +806,24 @@
   padding: 0 5px;
 }
 .fw-study-chapter-tick { flex-shrink: 0; color: var(--ingested-border); font-size: 0.8rem; }
+
+/* Per-chapter synth wall-clock (sidebar row) + total (sidebar header). */
+.fw-study-chapter-time {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 0.64rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  opacity: 0.9;
+}
+/* Keep the due badge tight to the time when both are present. */
+.fw-study-chapter-time + .fw-study-chapter-due { margin-left: 6px; }
+.fw-study-total-time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--text);
+}
 
 /* Cross-chapter "Review due" launcher (sidebar progress header). */
 .fw-study-review-due {
@@ -945,6 +971,16 @@
   text-overflow: ellipsis; /* …long titles truncate with “…” */
   color: var(--text);
 }
+/* Per-chapter synth wall-clock badge, right-aligned in the cell. Set live
+   on chapter_done and on durable hydrate (timing.js / synth.js). */
+.fw-chstrip-cell .time {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  opacity: 0.85;
+}
+.fw-chstrip-cell .time:empty { display: none; }
 .fw-chstrip-cell[data-status="pending"] .icon::before  { content: '○'; }
 .fw-chstrip-cell[data-status="running"] .icon::before  { content: '◐'; }
 .fw-chstrip-cell[data-status="done"]    .icon::before  { content: '✔'; }

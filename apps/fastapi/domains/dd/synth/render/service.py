@@ -240,6 +240,132 @@ def build_section_context(
 
 
 # =============================================================================
+# Write-path quality pass — within-chapter recycling + mismatch
+# (docs/DD-SYNTH-SECTION-RECYCLING-2026-05-29.md, fixes #1 + #4)
+# =============================================================================
+# Runs AFTER build_section_context (so resolution_log / audit counts are
+# already fixed) and BEFORE render_chapter_md. It ONLY rewrites the
+# `code_block` string of a subtopic — never touches code_ref_hash, the
+# resolution_log, or introduces sentinels — so the round-trip audit verdict
+# is unaffected (a deduped/dropped block was still "resolved"; it just isn't
+# displayed).
+#
+#   #1 cross-section body dedup — a non-trivial code BODY that already
+#      appeared in an earlier subtopic (anywhere in the chapter) is replaced
+#      with a one-line cross-reference to its first occurrence; the first
+#      occurrence is kept. Catches the ~45% within-chapter recycling that
+#      vault-HASH dedup misses: identical fence_text coming from different
+#      source docs carries different (salted) hashes, so a hash-level dedup
+#      never sees them as the same.
+#   #4 per-subtopic mismatch — a non-trivial code body whose identifiers have
+#      ZERO overlap with its subheading+explanation is replaced with a short
+#      "omitted — misrouted" note (prose kept). Catches the "theme JSON under
+#      an Install heading" class. Deliberately conservative (needs ≥N code
+#      identifiers + a clean zero overlap) and env-toggleable so a false
+#      positive is visible and easy to disable.
+
+# Dedup only bodies with real heft — tiny one-liners (e.g. `claude --version`)
+# recur legitimately and must NOT be cross-referenced away.
+_DEDUP_MIN_LINES = 3
+_DEDUP_MIN_CHARS = 80
+# Mismatch needs enough identifiers to judge + a clean zero overlap.
+_MISMATCH_MIN_CODE_IDENTS = 4
+
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
+_NOISE_IDENTS = frozenset({
+    "the", "and", "for", "this", "with", "that", "from", "import", "async",
+    "await", "def", "class", "return", "none", "true", "false", "str", "int",
+    "self", "get", "set", "use", "run", "via", "your", "null", "var", "let",
+    "const", "new", "function", "type", "name", "value", "data", "code",
+})
+
+
+def _code_inner(code_block: str) -> str:
+    """Strip the leading ```lang line and trailing ``` fence from a
+    materialized code_block, returning the inner body. '' if not fenced."""
+    if not code_block or "```" not in code_block:
+        return ""
+    body = code_block.strip()
+    nl = body.find("\n")
+    if nl == -1:
+        return ""
+    body = body[nl + 1:]            # drop the opening ```lang line
+    end = body.rfind("```")
+    if end != -1:
+        body = body[:end]           # drop the closing fence
+    return body.strip("\n")
+
+
+def _norm_body(inner: str) -> str:
+    """Whitespace-collapsed body for duplicate detection. Conservative —
+    no comment stripping (avoids false merges); indentation-insensitive."""
+    return re.sub(r"\s+", " ", inner).strip()
+
+
+def _idents(text: str) -> set[str]:
+    return {w.lower() for w in _IDENT_RE.findall(text or "")} - _NOISE_IDENTS
+
+
+def dedupe_and_align_sections(
+    sections_ctx: list[dict],
+    *,
+    drop_mismatch: bool = True,
+) -> dict:
+    """Mutate `sections_ctx` in place; return {n_dedup, n_mismatch}.
+
+    See the module note above. Pure + deterministic given identical input."""
+    seen: dict[str, tuple[str, str, str]] = {}   # norm_body -> (heading, sub, anchor)
+    n_dedup = 0
+    n_mismatch = 0
+    for sec in sections_ctx:
+        heading = sec.get("heading") or "?"
+        for sub in (sec.get("subtopics") or []):
+            inner = _code_inner(sub.get("code_block") or "")
+            if not inner:
+                continue
+            subheading = sub.get("subheading") or "?"
+            nontrivial = (
+                inner.count("\n") + 1 >= _DEDUP_MIN_LINES
+                or len(inner) >= _DEDUP_MIN_CHARS
+            )
+
+            # #1 — cross-section body dedup (non-trivial bodies only)
+            if nontrivial:
+                key = _norm_body(inner)
+                prev = seen.get(key)
+                if prev and (prev[0], prev[1]) != (heading, subheading):
+                    fh, fsub, fanchor = prev
+                    ref = (f"[**{fh} → {fsub}**](#{fanchor})"
+                           if fanchor else f"**{fh} → {fsub}**")
+                    sub["code_block"] = (
+                        f"> _↳ Same code as {ref}; shown once, not repeated._"
+                    )
+                    sub["derived_caption"] = ""
+                    n_dedup += 1
+                    continue
+
+            # #4 — per-subtopic mismatch (kept blocks only)
+            if drop_mismatch:
+                ci = _idents(inner)
+                if len(ci) >= _MISMATCH_MIN_CODE_IDENTS:
+                    ti = _idents(subheading + " " + (sub.get("explanation") or ""))
+                    if not (ci & ti):
+                        sub["code_block"] = (
+                            "> _(Code example omitted — it did not match this "
+                            "subtopic and was likely misrouted.)_"
+                        )
+                        sub["derived_caption"] = ""
+                        n_mismatch += 1
+                        continue   # do NOT register a misrouted block as canonical
+
+            if nontrivial:
+                seen.setdefault(
+                    key, (heading, subheading, sub.get("anchor") or ""),
+                )
+    return {"n_dedup": n_dedup, "n_mismatch": n_mismatch}
+
+
+# =============================================================================
 # Rendering — three pure transforms
 # =============================================================================
 def _build_toc(sections_ctx: list[dict]) -> list[dict]:

@@ -102,6 +102,7 @@ from .service import (
     compute_coverage_stats,
     derive_source_title_fallback,
     extract_vault_hashes,
+    merge_overlapping_sections,
     validate_source_digest,
 )
 from .types import (
@@ -676,6 +677,8 @@ async def digest_construct(state: SynthState) -> dict:
                 "n_sections":           cov.get("n_sections", 0),
                 "n_sections_covered":   cov.get("sections_with_primary", 0),
                 "n_empty_sections":     len(cov.get("empty_sections") or []),
+                "n_merged_sections":    len(cached.get("merged_sections") or {}),
+                "merged_sections":      cached.get("merged_sections") or {},
                 "n_over_spread":        len(cov.get("over_spread_sources") or []),
                 "n_orphan_code_refs":   cov.get("orphan_code_refs", 0),
                 "n_pydantic_fail":      cached.get("n_pydantic_fail", 0),
@@ -740,6 +743,25 @@ async def digest_construct(state: SynthState) -> dict:
 
     # ── Aggregate per-section index + coverage stats (deterministic) ──
     section_ids = [s["section_id"] for s in outline_sections]
+
+    # Fix #3 (DD-SYNTH-SECTION-COUNT, 2026-05-29 PM) — source-pool merge.
+    # Fold sections whose PRIMARY source pools overlap heavily into one
+    # (the definitive overlap signal; see merge_overlapping_sections). The
+    # returned per_source has losing contributions re-tagged to their
+    # winner, so the rebuilt per_section index naturally has losers empty;
+    # sawc_write skips merged sections so they never render as hollow
+    # cross-references.
+    per_source, merged_sections = merge_overlapping_sections(
+        per_source, outline_sections,
+    )
+    if merged_sections:
+        logger.info(
+            f"[digest_construct] {slug}/{chapter_id}: source-pool merge "
+            f"folded {len(merged_sections)} section(s) → "
+            f"{sorted(set(merged_sections.values()))} "
+            f"(losers: {sorted(merged_sections)})"
+        )
+
     per_section = build_per_section_index(per_source, section_ids)
     coverage = compute_coverage_stats(
         per_source=per_source,
@@ -757,6 +779,7 @@ async def digest_construct(state: SynthState) -> dict:
         per_source=per_source,
         per_section=per_section,
         coverage_stats=coverage,
+        merged_sections=merged_sections,
     )
     payload = chapter_digest.model_dump()
     payload["outline_manifest_hash"] = outline_manifest_hash
@@ -779,6 +802,8 @@ async def digest_construct(state: SynthState) -> dict:
         "n_sections_covered":   coverage.sections_with_primary,
         "n_empty_sections":     len(coverage.empty_sections),
         "empty_sections":       coverage.empty_sections,
+        "n_merged_sections":    len(merged_sections),
+        "merged_sections":      merged_sections,
         "n_over_spread":        len(coverage.over_spread_sources),
         "over_spread_sources":  coverage.over_spread_sources,
         "n_orphan_code_refs":   coverage.orphan_code_refs,
@@ -799,6 +824,7 @@ async def digest_construct(state: SynthState) -> dict:
         n_sections=stats["n_sections"],
         n_sections_covered=stats["n_sections_covered"],
         n_empty_sections=stats["n_empty_sections"],
+        n_merged_sections=stats["n_merged_sections"],
         n_orphan_code_refs=stats["n_orphan_code_refs"],
         n_pydantic_fail=n_pydantic_fail,
         wall_ms=elapsed,

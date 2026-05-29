@@ -270,3 +270,8 @@ class ChapterDigest(BaseModel):
     per_source: list[SourceDigest]
     per_section: dict[str, list[SectionContribution]]
     coverage_stats: CoverageStats
+    # v3 (2026-05-29 PM) — source-pool merge result: {loser_section_id:
+    # winner_section_id}. Losers have had their contributions folded into
+    # the winner in `per_section` and carry an empty list; sawc_write skips
+    # them so they never render. Empty when no sections were merged.
+    merged_sections: dict[str, str] = Field(default_factory=dict)

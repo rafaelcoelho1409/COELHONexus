@@ -9,6 +9,13 @@ import { sleep, escapeHtml, formatFieldValue } from './utils.js';
 import {
   showToast, showConfirm, refreshGenerateState,
 } from './ui.js';
+import { fmtMs, startElapsed, stopElapsed, showElapsed } from './timing.js';
+
+// Wall-clock ms at which the current study run started — set on an explicit
+// Start (Date.now()) or recovered from the live-run registry's `started_ts`
+// on refresh, so the navbar Synth timer CONTINUES from the real run start
+// instead of restarting at 0 when reconnecting. 0 = no known run.
+let _synthRunStartMs = 0;
 
 // ============================================================
 // Day 5 — Synth canvas parity. Mirrors planner's helpers so each
@@ -999,10 +1006,11 @@ export function resetSynthCards() {
 
 export function refreshSynthStartState() {
   if (!S.synthStartBtn) return;
-  // Three states for the Start/Cancel button (mirrors planner):
-  //  - running        → "Cancel Synth"
-  //  - idle, ready    → "Start Synth" enabled
-  //  - idle, blocked  → "Start Synth" disabled
+  // States for the Start/Resume/Stop button:
+  //  - running               → "Stop Synth"
+  //  - idle, partial render   → "Resume Synth" (keeps completed chapters)
+  //  - idle, ready (no/all)   → "Start Synth" enabled
+  //  - idle, blocked          → "Start Synth" disabled
   // Until the first synth node ships, "ready" requires the server's
   // /synth/info implemented list to be non-empty — otherwise clicking
   // Start would just hit the 503 stub. Show the button but disabled
@@ -1013,7 +1021,7 @@ export function refreshSynthStartState() {
     S.synthStartBtn.removeAttribute('disabled');
     S.synthStartBtn.classList.add('btn-outline');
     S.synthStartBtn.classList.remove('btn-primary');
-    S.synthStartBtn.innerHTML = 'Cancel Synth';
+    S.synthStartBtn.innerHTML = 'Stop Synth';
   } else {
     const hasNodes = S.synthImplemented && S.synthImplemented.size > 0;
     // Synth REQUIRES a planner plan — block Start until one exists for
@@ -1043,7 +1051,22 @@ export function refreshSynthStartState() {
     }
     S.synthStartBtn.classList.add('btn-primary');
     S.synthStartBtn.classList.remove('btn-outline');
-    S.synthStartBtn.innerHTML = 'Start Synth';
+    // Start vs Resume: when SOME (but not all) chapters are already
+    // synthesized, the next run RESUMES — the backend orchestrator skips
+    // rendered chapters, so completed work is kept and only the unfinished
+    // chapter(s) re-run. Count rendered cells from the chapter strip.
+    const _cells = S.chstripCellsEl
+      ? S.chstripCellsEl.querySelectorAll('.fw-chstrip-cell') : [];
+    let _rendered = 0;
+    _cells.forEach((c) => { if (c.dataset.status === 'done') _rendered++; });
+    const _partial = _cells.length > 0 && _rendered > 0
+                     && _rendered < _cells.length;
+    S.synthStartBtn.innerHTML = _partial ? 'Resume Synth' : 'Start Synth';
+    if (ready && _partial) {
+      S.synthStartBtn.setAttribute('title',
+        'Resume — keeps completed chapters; re-runs only the unfinished '
+        + 'one(s). Use Wipe Synth to erase everything and start over.');
+    }
   }
   if (S.synthWipeBtn) {
     if (S.activeSlug && !running && S.synthImplemented.size > 0) {
@@ -1178,6 +1201,7 @@ export function _renderChStrip(items) {
       '  <span class="icon"></span>' +
       '  <span class="num">' + (i + 1) + '</span>' +
       '  <span class="label">' + escapeHtml(title) + '</span>' +
+      '  <span class="time"></span>' +
       '</div>'
     );
   }).join('');
@@ -1214,6 +1238,17 @@ export function _markChStripCell(chapterId, status) {
   );
   if (cell) cell.dataset.status = status;
   _updateChStripCounter();
+}
+// Per-chapter synth wall-clock, shown on the chstrip cell. `ms` from the
+// `chapter_done` SSE event (live) or render-status API (persisted hydrate).
+export function _markChStripCellTime(chapterId, ms) {
+  if (!S.chstripCellsEl || !(Number(ms) > 0)) return;
+  const cell = S.chstripCellsEl.querySelector(
+    '.fw-chstrip-cell[data-chapter-id="' + chapterId.replace(/"/g, '\\"') + '"]'
+  );
+  if (!cell) return;
+  const t = cell.querySelector('.time');
+  if (t) t.textContent = fmtMs(ms);
 }
 export function _updateChStripCounter() {
   if (!S.chstripCounterEl) return;
@@ -1273,12 +1308,15 @@ export async function _hydrateChStripFromChapters(slug) {
     const data = await r.json();
     const chapters = (data.chapters || []).slice()
       .sort((a, b) => (a.order || 0) - (b.order || 0));
-    if (chapters.length < 2) { _showChStrip(false); return false; }
+    if (chapters.length < 2) { _showChStrip(false); refreshSynthStartState(); return false; }
     // Durable path — chapters carry exact titles; pass them through.
     _renderChStrip(chapters.map(c => ({ id: c.id, title: c.title })));
+    // Persisted Synth total → navbar (survives refresh / cached studies).
+    showElapsed('synth', Number(data.study_total_wall_ms || 0));
     chapters.forEach(c => {
       if (!c) return;
       if (c.rendered) _markChStripCell(c.id, 'done');
+      _markChStripCellTime(c.id, c.wall_ms);   // persisted per-chapter wall
       // Persist the durable thread_id (from render-latest.json) so a
       // post-refresh click can re-open the chapter's graph canvas.
       if (c.thread_id) {
@@ -1290,6 +1328,9 @@ export async function _hydrateChStripFromChapters(slug) {
       }
     });
     _showChStrip(true);
+    // Strip now reflects server render status → update Start/Resume label
+    // (partial render → "Resume Synth", all/none → "Start Synth").
+    refreshSynthStartState();
     return true;
   } catch (e) {
     return false;
@@ -1399,7 +1440,7 @@ export async function pollStudyState(sid) {
   // Helper: open per-chapter SSE for the currently-active chapter if
   // we haven't already. Debounced (120 ms).
   let _studyAttachTimer = null;
-  const _maybeAttachCurrentChapterSSE = () => {
+  const _maybeAttachCurrentChapterSSE = async () => {
     // If the user pinned to a specific chapter (clicked its strip cell),
     // do NOT yank the canvas back to the orchestrator's current chapter.
     if (S.studyPinnedChapterId &&
@@ -1414,6 +1455,21 @@ export async function pollStudyState(sid) {
     }
     S.setSynthThreadId(chTid);
     S.set_synthLiveEventReceived(false);
+    // Immediately paint the running chapter's CURRENT node progress from its
+    // checkpoint — otherwise, attaching mid-node (e.g. during a long
+    // sawc_write) leaves the canvas on the empty default graph until the next
+    // live event fires. Mirrors the strip-cell-click path. Then stream live.
+    try {
+      const r = await fetch(S.API + '/synth/debug/graph/' + chTid + '/state');
+      if (r.ok && S.synthThreadId === chTid) {
+        const data = await r.json();
+        renderSynthCards(
+          data.values || {},
+          Array.isArray(data.next) ? data.next : null,
+        );
+      }
+    } catch (_) { /* fall back to live events only */ }
+    if (S.synthThreadId !== chTid) return;   // switched chapters during fetch
     pollSynthState(chTid);
     _highlightStripCell(S.studyCurrentChapterId);
   };
@@ -1465,6 +1521,7 @@ export async function pollStudyState(sid) {
       const cid = ev.chapter_id;
       const status = ev.status || 'done';
       _markChStripCell(cid, status);
+      _markChStripCellTime(cid, ev.wall_ms);   // per-chapter wall on the cell
       if (status === 'failed') {
         showToast('Chapter ' + cid + ' failed: ' +
           (ev.error || 'unknown error') + ' — continuing.');
@@ -1534,6 +1591,9 @@ export async function pollStudyState(sid) {
         clearTimeout(_studyAttachTimer);
         _studyAttachTimer = null;
       }
+      // Freeze the navbar total at the authoritative cumulative wall-clock.
+      stopElapsed('synth', Number(ev.total_wall_ms || 0) || undefined);
+      _synthRunStartMs = 0;   // run ended — don't seed a future ticker
       S.setStudyCurrentChapterId(null);
       S.setStudyCurrentChapterThreadId(null);
       const ok = ev.n_completed || 0;
@@ -1562,6 +1622,10 @@ export async function pollStudyState(sid) {
       // Chapters), not from this ephemeral replay, so dropping it is safe.
       if (S.activeSlug) { try { _forgetActiveStudy(S.activeSlug); } catch (_) {} }
       S.setStudyThreadId(null);
+      // Re-sync strip + Start/Resume button from authoritative server render
+      // status now the run ended: a cancelled/partial run → "Resume Synth"
+      // (keeps completed chapters); a full run → "Start Synth".
+      if (S.activeSlug) _hydrateChStripFromChapters(S.activeSlug).catch(() => {});
       return;
     }
     if (ev.step === 'synth' && ev.kind === 'terminal') {
@@ -1699,9 +1763,33 @@ export async function _tryResumeActiveSynth(slug) {
   resetSynthCards();
   refreshSynthStartState();
 
-  // STUDY mode recovery.
-  const sid = _getActiveStudy(slug);
+  // STUDY mode recovery. Prefer the browser's remembered thread; if absent
+  // (cleared storage / another tab), the live-run registry confirms a run is
+  // live for this slug so a plain refresh still reconnects and restores the
+  // running-chapter blue highlight + live graph. We ALWAYS read the registry
+  // (cheap Redis GET) for its `started_ts` so the navbar timer SEEDS from the
+  // real run start and continues — study_start's own ts can age out of the
+  // 200-event SSE snapshot on a long book, so the registry is the durable seed.
+  let sid = _getActiveStudy(slug);
+  let startedTs = null;
+  try {
+    const ar = await fetch(S.API + '/synth/' + slug + '/active');
+    if (ar.ok) {
+      const ad = await ar.json();
+      if (ad && ad.active && ad.study_thread_id) {
+        if (!sid) { sid = ad.study_thread_id; _rememberActiveStudy(slug, sid); }
+        startedTs = ad.started_ts || null;
+      }
+    }
+  } catch (_) { /* offline / no live run → fall through to hydrate */ }
   if (sid) {
+    // Seed + start the navbar timer immediately (study-thread events are
+    // sparse — ~one per chapter boundary — so waiting for a fresh event
+    // would leave it blank for minutes mid-chapter). /active already
+    // confirmed liveness; the 5s-no-replay guard below stops it if the
+    // registry turns out stale.
+    _synthRunStartMs = startedTs ? startedTs * 1000 : Date.now();
+    startElapsed('synth', Math.max(0, Date.now() - _synthRunStartMs));
     _resetStudyState();
     S.setStudyThreadId(sid);
     _showChStrip(true);
@@ -1715,6 +1803,12 @@ export async function _tryResumeActiveSynth(slug) {
         _forgetActiveStudy(slug);
         S.setStudyThreadId(null);
         _resetStudyState();
+        // Stale registry (run already finished/crashed, nothing to replay) —
+        // stop the live ticker and fall back to the durable strip + the
+        // PERSISTED total (hydrate calls showElapsed with study_total_wall_ms).
+        _synthRunStartMs = 0;
+        stopElapsed('synth');
+        _hydrateChStripFromChapters(slug).catch(() => {});
         refreshSynthStartState();
       }
     }, 5000);
@@ -1839,6 +1933,10 @@ export async function startSynth() {
     }
     S.setStudyThreadId(sid);
     _rememberActiveStudy(S.activeSlug, sid);
+    // Mark run start + start the navbar timer (a refresh recovers the start
+    // from the registry's started_ts instead). Fresh start begins ~now.
+    _synthRunStartMs = Date.now();
+    startElapsed('synth', 0);
     _renderChStrip(chapterIds);
     _applyChStripTitles(S.activeSlug);   // upgrade ids → real titles
     _showChStrip(true);
@@ -1899,11 +1997,13 @@ export async function cancelSynth() {
       // Now flip the visuals — refreshSynthStartState will see no
       // running threads → enable Wipe + reset the Start button cleanly.
       refreshSynthStartState();
+      // Re-sync the strip + Start/Resume label from server render status.
+      if (S.activeSlug) _hydrateChStripFromChapters(S.activeSlug).catch(() => {});
       showToast(
-        'Cancel sent. Cleanup is still finishing in the background. '
-        + 'Previously-completed nodes are preserved — click Wipe Synth '
-        + 'to delete the whole cache, or Resume to continue from the '
-        + 'last checkpoint.'
+        'Stop sent. Cleanup is still finishing in the background. '
+        + 'Previously-completed chapters are preserved — click Resume Synth '
+        + 'to continue from the unfinished chapter, or Wipe Synth to erase '
+        + 'everything and start over.'
       );
     }
   }, CANCEL_TIMEOUT_MS);
@@ -1924,14 +2024,14 @@ export async function cancelSynth() {
     } else {
       clearTimeout(safetyTimer);
       S.synthStartBtn.removeAttribute('disabled');
-      S.synthStartBtn.innerHTML = 'Cancel Synth';
-      showToast('Cancel request failed: HTTP ' + r.status);
+      S.synthStartBtn.innerHTML = 'Stop Synth';
+      showToast('Stop request failed: HTTP ' + r.status);
     }
   } catch (e) {
     clearTimeout(safetyTimer);
     S.synthStartBtn.removeAttribute('disabled');
-    S.synthStartBtn.innerHTML = 'Cancel Synth';
-    showToast('Cancel request failed: ' + String(e));
+    S.synthStartBtn.innerHTML = 'Stop Synth';
+    showToast('Stop request failed: ' + String(e));
   }
 }
 
@@ -1994,10 +2094,13 @@ if (S.synthCardsEl) {
   });
 }
 
-// Synth start/cancel button.
+// Synth Start / Resume / Stop button. Running (study OR single-chapter) →
+// Stop (cancel); otherwise Start/Resume (startSynth resumes via the backend
+// skip-rendered orchestrator, so completed chapters are kept).
 if (S.synthStartBtn) {
   S.synthStartBtn.addEventListener('click', () => {
-    if (S.synthThreadId) cancelSynth();
+    const running = S.synthThreadId !== null || S.studyThreadId !== null;
+    if (running) cancelSynth();
     else startSynth();
   });
 }
@@ -2061,7 +2164,7 @@ if (S.synthWipeBtn) {
     if (running) {
       showToast(
         'A Synth run is in progress (synth=' + S.synthThreadId
-        + ', study=' + S.studyThreadId + '). Click Cancel Synth first. '
+        + ', study=' + S.studyThreadId + '). Click Stop Synth first. '
         + 'If the state is stuck, run `ddForceResetSynthUI()` in console.'
       );
       return;

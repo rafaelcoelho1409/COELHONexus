@@ -321,17 +321,26 @@ def build_outline_prompt(
 ) -> str:
     """Build the OUTLINE_SDP prompt.
 
-    `target_sections_hint` is a soft target (default 8); the schema's
-    hard min/max are 4/40. SurveyGen-I §3.1 doesn't fix a target but
-    their reported chapters average 6-12 subsections.
+    `target_sections_hint` is the per-chapter adaptive section count
+    (max_h2_for_n_sources, computed from the source pool); the schema's
+    hard min/max are 2/40. v4 (2026-05-29 PM): this is a REAL target, not
+    a fixed ~8 — over-sectioning a small chapter forces the writer to
+    recycle the same code across near-duplicate sections, which the
+    renderer then strips into hollow "see other section" cross-refs.
     """
     return (
         f"You are the Chapter Outliner — `outline_sdp`, step 3 of the "
         f"Docs Distiller synth pipeline. Per SurveyGen-I PlanEvo "
         f"(arXiv 2508.14317 §3.1), your single job is to PRE-DECOMPOSE "
-        f"the chapter into 4-40 sections (soft target ~{target_sections_hint}) "
-        f"with EXPLICIT inter-section dependencies. You write NO prose "
-        f"bodies and place NO code — that happens downstream in "
+        f"the chapter into about {target_sections_hint} sections "
+        f"(TARGET = {target_sections_hint}, sized to this chapter's source "
+        f"pool; hard range 2-40) with EXPLICIT inter-section dependencies. "
+        f"Emitting MORE than ~{target_sections_hint} sharply-distinct "
+        f"sections for this chapter is almost always wrong — the extra "
+        f"sections end up covering the same APIs/config as the others and "
+        f"get stripped to hollow cross-references downstream. Fewer, "
+        f"well-developed sections beat many overlapping ones. You write NO "
+        f"prose bodies and place NO code — that happens downstream in "
         f"`sawc_write` after `digest_construct` routes the source "
         f"material to your sections.\n\n"
 
@@ -357,7 +366,7 @@ def build_outline_prompt(
         f'      "prerequisites": ["s_id", ...],  /* 0-3 ids of EARLIER sections */\n'
         f'      "needs_code":    true            /* false for design narratives */\n'
         f'    }},\n'
-        f'    ... 4-40 entries ...\n'
+        f'    ... ~{target_sections_hint} entries (hard range 2-40) ...\n'
         f'  ],\n'
         f'  "challenges": [\n'
         f'    "5-10 active-recall questions; mix conceptual + applied; one string per item"\n'
@@ -391,7 +400,21 @@ def build_outline_prompt(
         f"linearize the chapter (kills parallel writing downstream).\n"
         f"6. needs_code: true if the section will reference code patterns / "
         f"APIs / configs / runnable examples. false for pure design "
-        f"narrative, ecosystem context, or conceptual material.\n\n"
+        f"narrative, ecosystem context, or conceptual material.\n"
+        f"7. **SCOPE ORTHOGONALITY (DD-SYNTH-SECTION-RECYCLING-2026-05-29)**: "
+        f"every section must teach a DISTINCT capability. Two sections that "
+        f"would draw on the SAME APIs / commands / config / code examples "
+        f"are ONE section — even when their headings read differently. "
+        f"Before emitting, check EVERY pair of sections: if you cannot name "
+        f"a concrete code example that belongs to section A but NOT to "
+        f"section B, MERGE them. Anti-example (DO NOT do this): a chapter "
+        f"with both 'Session Management' AND 'Remote Control' where both "
+        f"cover persist / resume / InMemory store / S3 / continue — those "
+        f"are the SAME scope and must be ONE section. Overlapping sections "
+        f"force the writer to recycle identical code; the renderer then "
+        f"strips the duplicates, leaving hollow 'see other section' "
+        f"chapters. Fewer, sharply-distinct sections beat many overlapping "
+        f"ones.\n\n"
 
         f"== DECOMPOSITION GUIDANCE ==\n"
         f"- Each section should cover ~5-15 vault hashes (estimate from "
@@ -427,6 +450,7 @@ def build_usc_vote_prompt(
     candidates_summary: list[dict],
     chapter_id: str,
     chapter_title: str,
+    adaptive_cap: int = 0,
 ) -> str:
     """USC picker prompt — Universal Self-Consistency rubric over N
     candidate outlines.
@@ -464,6 +488,17 @@ def build_usc_vote_prompt(
             f"     headings: {headings_short}"
         )
     candidates_block = "\n".join(lines)
+    cap_clause = (
+        f"AT or just under {adaptive_cap} (the adaptive cap sized to this "
+        f"chapter's source pool). A candidate with MORE than {adaptive_cap} "
+        f"sections is over-decomposed — its extra sections will overlap the "
+        f"others and be stripped to hollow cross-references; prefer the "
+        f"candidate with ~{adaptive_cap} sharply-distinct sections. Fewer "
+        f"is better than more here."
+        if adaptive_cap
+        else "near the adaptive cap for the chapter's source pool; fewer, "
+             "sharply-distinct sections beat many overlapping ones"
+    )
     return (
         f"You are picking the SINGLE BEST outline for chapter "
         f"{chapter_id} ({chapter_title!r}) from {len(candidates_summary)} "
@@ -475,9 +510,7 @@ def build_usc_vote_prompt(
         f"missing prereqs, deep DAG, cycles). A candidate with "
         f"violations LOSES to any candidate without — even if its "
         f"headings are better.\n"
-        f"2. Section count within the soft sweet spot (6-12 for typical "
-        f"chapters; 12-20 for hash-dense chapters). Outliers (≤5 or "
-        f"≥30) signal under/over-decomposition.\n"
+        f"2. Section count {cap_clause}\n"
         f"3. DAG shape: prefer 2-3 stages with multiple branches over "
         f"1 stage (no deps at all — wasted scheduling info) or 4+ "
         f"stages (over-linearized).\n"

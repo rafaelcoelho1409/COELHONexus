@@ -26,6 +26,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from typing import Optional
 
@@ -459,6 +460,47 @@ async def _study_cancelled(study_thread_id: str) -> bool:
         except Exception: pass
 
 
+def _study_timing_key(slug: str) -> str:
+    """MinIO key for the persisted study timing roll-up (per-chapter wall +
+    total). Lets the Study sidebar + navbar show times after a refresh and
+    for already-finished/cached studies (hybrid live+persisted model)."""
+    return f"synth/{slug}/study-timing-latest.json"
+
+
+async def _persist_study_timing(
+    slug: str,
+    *,
+    per_chapter_ms: dict[str, int],
+    harmonize_ms: int,
+    session_wall_ms: int,
+    finished_ts: float,
+) -> None:
+    """Best-effort write of the study timing blob. Total = cumulative
+    per-chapter wall + book_harmonize (resume-stable), NOT the session
+    wall (which undercounts on a resume that skips rendered chapters)."""
+    total = sum(int(v) for v in per_chapter_ms.values()) + int(harmonize_ms)
+    payload = {
+        "slug":           slug,
+        "total_wall_ms":  total,
+        "per_chapter_ms": {k: int(v) for k, v in per_chapter_ms.items()},
+        "harmonize_ms":   int(harmonize_ms),
+        "session_wall_ms": int(session_wall_ms),
+        "finished_ts":    finished_ts,
+    }
+    try:
+        from ..ingestion.storage import get_storage
+        await get_storage().write(
+            _study_timing_key(slug),
+            json.dumps(payload, indent=2),
+            content_type="application/json",
+        )
+    except Exception as e:
+        logger.warning(
+            f"[study-orchestrator] {slug}: timing persist failed "
+            f"({type(e).__name__}: {e})"
+        )
+
+
 async def run_study_async(
     study_thread_id: str,
     slug: str,
@@ -478,6 +520,20 @@ async def run_study_async(
 
     Returns terminal dict with final_status + counters."""
     n_total = len(chapter_ids)
+    study_t0 = time.monotonic()
+    # Per-chapter wall (ms). Seed from a prior timing blob so chapters
+    # SKIPPED this run (already rendered) keep their previously-measured
+    # time instead of dropping to 0 on a resume.
+    chapter_ms: dict[str, int] = {}
+    try:
+        from ..ingestion.storage import get_storage as _gs
+        _prior = json.loads(await _gs().read_text(_study_timing_key(slug)))
+        chapter_ms.update(
+            {str(k): int(v)
+             for k, v in (_prior.get("per_chapter_ms") or {}).items()}
+        )
+    except Exception:
+        pass
     await emit_progress(
         study_thread_id, "study", "study_start",
         slug=slug,
@@ -495,12 +551,49 @@ async def run_study_async(
             counters["cancelled"] = True
             return
 
+        # RESUME — skip chapters already fully rendered. A re-run after Stop
+        # (or a Start over a partially-synthesized framework) continues from
+        # the first unfinished chapter WITHOUT redoing the completed ones.
+        # Nothing rendered → nothing skipped (full Start). Wipe Synth deletes
+        # render-latest.json, so a post-wipe run re-renders everything.
+        try:
+            from ..ingestion.storage import get_storage
+            _minio = get_storage()
+            if await _minio.exists(
+                f"synth/{slug}/{chapter_id}/render-latest.json"
+            ):
+                counters["completed"] += 1
+                await emit_progress(
+                    study_thread_id, "study", "chapter_done",
+                    chapter_id=chapter_id, position=position, n_total=n_total,
+                    status="done", skipped=True,
+                    wall_ms=chapter_ms.get(chapter_id, 0),
+                )
+                await emit_progress(
+                    study_thread_id, "study", "chapter_ready",
+                    chapter_id=chapter_id, position=position, n_total=n_total,
+                    render_path=f"synth/{slug}/{chapter_id}/README.md",
+                    challenges_path=f"synth/{slug}/{chapter_id}/challenges.md",
+                    flashcards_path=f"synth/{slug}/{chapter_id}/flashcards.json",
+                )
+                logger.info(
+                    f"[study-orchestrator] {slug}/{chapter_id}: "
+                    f"SKIP (already rendered) ({position}/{n_total})"
+                )
+                return
+        except Exception as e:
+            logger.warning(
+                f"[study-orchestrator] {slug}/{chapter_id}: resume-skip "
+                f"check failed ({type(e).__name__}: {e}) — rendering anyway"
+            )
+
         async with sem:
             if await _study_cancelled(study_thread_id):
                 counters["cancelled"] = True
                 return
 
             chapter_thread_id = _make_thread_id(slug)
+            ch_t0 = time.monotonic()
             await emit_progress(
                 study_thread_id, "study", "chapter_running",
                 chapter_id=chapter_id,
@@ -581,8 +674,10 @@ async def run_study_async(
                 status=chapter_status, error=chapter_error,
             )
 
+            ch_wall_ms = int((time.monotonic() - ch_t0) * 1000)
             if chapter_status == "done":
                 counters["completed"] += 1
+                chapter_ms[chapter_id] = ch_wall_ms
             else:
                 counters["failed"] += 1
             await emit_progress(
@@ -593,6 +688,7 @@ async def run_study_async(
                 n_total=n_total,
                 status=chapter_status,
                 error=chapter_error,
+                wall_ms=ch_wall_ms,
             )
             # Bundle 6 — chapter_ready (streaming delivery)
             if chapter_status == "done":
@@ -602,6 +698,7 @@ async def run_study_async(
                     chapter_thread_id=chapter_thread_id,
                     position=position,
                     n_total=n_total,
+                    wall_ms=ch_wall_ms,
                     render_path=f"synth/{slug}/{chapter_id}/README.md",
                     challenges_path=f"synth/{slug}/{chapter_id}/challenges.md",
                     flashcards_path=f"synth/{slug}/{chapter_id}/flashcards.json",
@@ -653,6 +750,19 @@ async def run_study_async(
             )
             harmonize_stats = {"skipped": f"crash: {type(e).__name__}"}
 
+    # Timing roll-up (hybrid: persisted so it survives refresh + shows on
+    # cached studies; the navbar total = cumulative chapter wall + harmonize).
+    harmonize_ms = int((harmonize_stats or {}).get("elapsed_ms", 0) or 0)
+    session_wall_ms = int((time.monotonic() - study_t0) * 1000)
+    total_wall_ms = sum(int(v) for v in chapter_ms.values()) + harmonize_ms
+    await _persist_study_timing(
+        slug,
+        per_chapter_ms=chapter_ms,
+        harmonize_ms=harmonize_ms,
+        session_wall_ms=session_wall_ms,
+        finished_ts=time.time(),
+    )
+
     await emit_progress(
         study_thread_id, "study", "study_done",
         n_completed=n_completed,
@@ -660,6 +770,10 @@ async def run_study_async(
         n_total=n_total,
         final_status=final_status,
         book_harmonize=harmonize_stats,
+        total_wall_ms=total_wall_ms,
+        harmonize_ms=harmonize_ms,
+        session_wall_ms=session_wall_ms,
+        per_chapter_ms=chapter_ms,
     )
     # Mirror to "synth"-step terminal so EventSource handlers close cleanly.
     await emit_progress(
@@ -670,6 +784,21 @@ async def run_study_async(
         n_failed=n_failed,
         n_total=n_total,
     )
+    # Clear the live-run registry (set by start_synth) — the run has ended,
+    # so a later page refresh must NOT reconnect to this finished study.
+    try:
+        _rc = redis_aio.from_url(
+            _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        )
+        try:
+            await _rc.delete(f"dd:study:current:{slug}")
+        finally:
+            await _rc.aclose()
+    except Exception as e:
+        logger.warning(
+            f"[study-orchestrator] {slug}: active-run clear failed: "
+            f"{type(e).__name__}: {e}"
+        )
     logger.info(
         f"[study-orchestrator] {slug}: done — "
         f"{n_completed}/{n_total} completed, {n_failed} failed, "

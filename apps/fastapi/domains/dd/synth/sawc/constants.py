@@ -14,7 +14,11 @@ SAWC_SCHEMA_VERSION = "2.0-cookbook"
 #   - upstream U3 H2 cap tightening + U6 semantic H2 dedup (outline)
 # These together change the inputs the writer sees per section, so
 # stale cached drafts no longer reflect the intended structure.
-SAWC_PROMPT_VERSION = "v4-deduped-bindings-2026-05-28"
+# v5 (2026-05-29) — rule 9b "no boilerplate recycling" added to the writer
+# prompt (DD-SYNTH-SECTION-RECYCLING-2026-05-29 fix #3). Pairs with the
+# render-time cross-section body dedup; bumped so the re-run regenerates
+# drafts under the new instruction.
+SAWC_PROMPT_VERSION = "v5-no-recycle-2026-05-29"
 
 # v2 schema (2026-05-24 evening): replaces flat paragraphs + code_refs with
 # a cookbook-style {intro, subtopics: [{subheading, explanation, code_ref_hash}]}

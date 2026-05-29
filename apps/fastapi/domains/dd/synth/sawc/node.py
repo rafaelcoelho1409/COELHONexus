@@ -1198,8 +1198,29 @@ async def sawc_write(state: SynthState) -> dict:
     stages: dict[int, list[str]] = {
         int(k): list(v) for k, v in stages_raw.items()
     }
+    # Fix #3 (DD-SYNTH-SECTION-COUNT, 2026-05-29 PM) — drop sections the
+    # digest's source-pool merge folded into another section. Their
+    # contributions were re-tagged to the winner, so writing them would
+    # produce an empty shell that Ship-A bank-padding then back-fills with
+    # chapter-wide canonical code → exactly the hollow recycled section we
+    # set out to eliminate. Skip them entirely (render reads sawc output,
+    # so they vanish from the book).
+    merged_away: set[str] = set(
+        (digest_payload.get("merged_sections") or {}).keys()
+    )
+    if merged_away:
+        stages = {
+            k: [sid for sid in v if sid not in merged_away]
+            for k, v in stages.items()
+        }
+        stages = {k: v for k, v in stages.items() if v}
+        logger.info(
+            f"[sawc_write] {slug}/{chapter_id}: skipping "
+            f"{len(merged_away)} digest-merged section(s) "
+            f"{sorted(merged_away)}"
+        )
     sorted_stage_indices = sorted(stages.keys())
-    n_sections = len(outline_sections)
+    n_sections = sum(len(v) for v in stages.values())
     n_stages = len(sorted_stage_indices)
 
     await emit_progress(

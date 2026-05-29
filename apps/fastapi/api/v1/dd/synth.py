@@ -37,6 +37,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from urllib.parse import quote
 
@@ -149,6 +150,20 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
         return {"framework_slug": slug, "chapters": []}
 
     minio = get_storage()
+
+    # Persisted timing roll-up (per-chapter wall + study total) so the
+    # sidebar + navbar show times after a refresh / for cached studies.
+    per_chapter_ms: dict = {}
+    study_total_wall_ms = 0
+    try:
+        _t = json.loads(
+            await minio.read_text(f"synth/{slug}/study-timing-latest.json")
+        )
+        per_chapter_ms = _t.get("per_chapter_ms") or {}
+        study_total_wall_ms = int(_t.get("total_wall_ms") or 0)
+    except Exception:
+        pass
+
     out: list[dict] = []
     for ch in chapters_in:
         cid = (ch or {}).get("id")
@@ -166,6 +181,7 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
             "rendered":   rendered,
             "audit_passed": False,
             "render_path": render_key if rendered else None,
+            "wall_ms":    int(per_chapter_ms.get(cid, 0) or 0),
         }
         if rendered:
             try:
@@ -185,7 +201,49 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
                 # but audit unknown
                 pass
         out.append(entry)
-    return {"framework_slug": slug, "chapters": out}
+    return {
+        "framework_slug": slug,
+        "chapters": out,
+        "study_total_wall_ms": study_total_wall_ms,
+    }
+
+
+@router.get("/{slug}/active")
+async def synth_active(slug: str, response: Response) -> dict:
+    """Is a STUDY synth run currently live for `slug`?
+
+    Returns the study orchestrator's thread_id when one is registered (see
+    start_synth → `dd:study:current:{slug}`), so a page refresh can
+    reconnect to its SSE and restore the running-chapter highlight + live
+    graph WITHOUT relying on browser localStorage. Cleared on terminal/wipe.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        r = redis_aio.from_url(
+            _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        )
+        try:
+            sid = await r.get(f"dd:study:current:{slug}")
+        finally:
+            await r.aclose()
+    except Exception:
+        return {"active": False}
+    if not sid:
+        return {"active": False}
+    if isinstance(sid, (bytes, bytearray)):
+        sid = sid.decode("utf-8", "replace")
+    # New form: JSON {study_thread_id, started_ts}. Legacy form: plain
+    # thread_id string. Tolerate both so an in-flight run started before this
+    # change still reconnects.
+    try:
+        data = json.loads(sid)
+        return {
+            "active": True,
+            "study_thread_id": data.get("study_thread_id"),
+            "started_ts": data.get("started_ts"),
+        }
+    except Exception:
+        return {"active": True, "study_thread_id": str(sid), "started_ts": None}
 
 
 @router.get("/{slug}/study/{chapter_id}/artifact/{artifact_name}")
@@ -441,6 +499,36 @@ async def start_synth(
             raise HTTPException(
                 status_code=503,
                 detail=f"celery dispatch failed: {type(e).__name__}: {e}",
+            )
+
+        # Register the live study run so a page refresh — even with cleared
+        # browser storage or in another tab — can reconnect to its SSE and
+        # restore the running-chapter blue highlight + live graph. Cleared on
+        # study terminal (orchestrator) and on Wipe Synth.
+        try:
+            r2 = redis_aio.from_url(
+                _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+            )
+            try:
+                # JSON value carries started_ts so a refresh can SEED the
+                # navbar timer from the real run start (continuous), not 0.
+                # study_start's own ts can age out of the 200-event SSE
+                # snapshot on a long book, so the registry is the durable
+                # source. synth_active tolerates the legacy plain-string form.
+                await r2.set(
+                    f"dd:study:current:{slug}",
+                    json.dumps({
+                        "study_thread_id": study_thread_id,
+                        "started_ts": time.time(),
+                    }),
+                    ex=14400,
+                )
+            finally:
+                await r2.aclose()
+        except Exception as e:
+            logger.warning(
+                f"[synth-study] {slug}: active-run register failed: "
+                f"{type(e).__name__}: {e}"
             )
 
         return {
@@ -854,6 +942,8 @@ async def wipe_synth(slug: str) -> dict:
                         batch = []
                 if batch:
                     n_redis += await r.delete(*batch)
+            # Live-run registry (see start_synth /active) — drop it too.
+            n_redis += await r.delete(f"dd:study:current:{slug}")
         finally:
             await r.aclose()
     except Exception as e:

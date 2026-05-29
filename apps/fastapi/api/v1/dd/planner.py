@@ -40,10 +40,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 
 import redis.asyncio as redis_aio
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from starlette.responses import StreamingResponse
 
 from domains.dd.ingestion.storage import get_storage, read_framework_manifest
@@ -86,6 +87,25 @@ async def planner_info() -> dict:
             {"key": "classical", "label": "Classical + LLM", "enabled": False},
         ],
     }
+
+
+@router.get("/{slug}/timing")
+async def planner_timing(slug: str, response: Response) -> dict:
+    """Persisted planner total wall-clock for the navbar indicator. Returns
+    `{total_wall_ms, finished_ts}` (0 / null when no run has finished yet).
+    Written by run_planner_async after the graph terminates."""
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        raw = await get_storage().read_text(
+            f"planner/{slug}/planner-timing-latest.json"
+        )
+        data = json.loads(raw)
+        return {
+            "total_wall_ms": int(data.get("total_wall_ms") or 0),
+            "finished_ts":   data.get("finished_ts"),
+        }
+    except Exception:
+        return {"total_wall_ms": 0, "finished_ts": None}
 
 
 _VALID_MODES = {"llm", "classical"}
@@ -150,6 +170,31 @@ async def start_planner(
             detail=f"celery dispatch failed: {type(e).__name__}: {e}",
         )
 
+    # Register the live planner run so a page refresh / navigation — even
+    # with cleared browser storage or in another tab — can reconnect to its
+    # SSE and restore the running step + the live timer. Mirrors synth's
+    # `dd:study:current:{slug}`. `started_ts` seeds the navbar timer so it
+    # continues from the real run start, not from 0. Cleared on planner
+    # terminal (dispatch), Cancel, and Wipe. 1h TTL bounds a crashed run's
+    # stale key (planner runs are short — minutes, not hours).
+    try:
+        r2 = redis_aio.from_url(
+            _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        )
+        try:
+            await r2.set(
+                f"dd:planner:current:{slug}",
+                json.dumps({"thread_id": thread_id, "started_ts": time.time()}),
+                ex=3600,
+            )
+        finally:
+            await r2.aclose()
+    except Exception as e:
+        logger.warning(
+            f"[planner] {slug}: active-run register failed: "
+            f"{type(e).__name__}: {e}"
+        )
+
     return {
         "thread_id":      thread_id,
         "slug":           slug,
@@ -158,6 +203,39 @@ async def start_planner(
         "celery_task_id": async_result.id,
         "latency_ms":     0,
     }
+
+
+@router.get("/{slug}/active")
+async def planner_active(slug: str, response: Response) -> dict:
+    """Is a planner run currently live for `slug`? Returns the registered
+    thread_id + started_ts (epoch seconds) so a page refresh can reconnect
+    to its SSE — restoring the running step + a continuous timer — without
+    relying on browser localStorage. Cleared on terminal/cancel/wipe."""
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        r = redis_aio.from_url(
+            _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        )
+        try:
+            raw = await r.get(f"dd:planner:current:{slug}")
+        finally:
+            await r.aclose()
+    except Exception:
+        return {"active": False}
+    if not raw:
+        return {"active": False}
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", "replace")
+    try:
+        data = json.loads(raw)
+        return {
+            "active": True,
+            "thread_id": data.get("thread_id"),
+            "started_ts": data.get("started_ts"),
+        }
+    except Exception:
+        # Legacy/plain value — still signal active with no timer seed.
+        return {"active": True, "thread_id": str(raw), "started_ts": None}
 
 
 @router.post("/{thread_id:path}/resume")
@@ -328,13 +406,29 @@ async def wipe_planner(slug: str) -> dict:
         logger.warning(f"[planner-wipe] Postgres delete failed for {slug!r}: {e}")
         counts["error"] = f"{type(e).__name__}: {e}"
 
+    # 3. Redis live-run registry — drop it so a wiped framework never shows
+    #    a phantom "running" planner on refresh.
+    n_redis = 0
+    try:
+        rc = redis_aio.from_url(
+            _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        )
+        try:
+            n_redis = await rc.delete(f"dd:planner:current:{slug}")
+        finally:
+            await rc.aclose()
+    except Exception as e:
+        logger.warning(f"[planner-wipe] Redis delete failed for {slug!r}: {e}")
+
     logger.info(
-        f"[planner-wipe] {slug}: minio={n_minio} blobs, postgres={counts}"
+        f"[planner-wipe] {slug}: minio={n_minio} blobs, postgres={counts}, "
+        f"redis={n_redis}"
     )
     return {
         "slug":                  slug,
         "minio_blobs_deleted":   n_minio,
         "postgres_rows_deleted": counts,
+        "redis_keys_deleted":    n_redis,
     }
 
 
@@ -438,6 +532,11 @@ async def cancel_planner(thread_id: str) -> dict:
     )
     try:
         await request_cancel(r, thread_id)
+        # Drop the live-run registry immediately (the terminal path also
+        # clears it, but a cancel may race a dead task). slug = 2nd segment
+        # of `docs-distiller/{slug}/{uuid}`.
+        if thread_id.count("/") >= 2:
+            await r.delete(f"dd:planner:current:{thread_id.split('/')[1]}")
     finally:
         await r.aclose()
     return {"thread_id": thread_id, "status": "cancel_requested"}

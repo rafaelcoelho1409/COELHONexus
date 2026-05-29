@@ -1,11 +1,11 @@
 :root {
-  --bg: #fafafa;
-  --card: #ffffff;
+  --bg: #f7f5f1;        /* warm paper off-white — less glare for long reads */
+  --card: #fffdf9;      /* reading column, slightly warm */
   --primary: #c41230;
   --primary-dark: #65201f;
-  --text: #2a2a2a;
-  --text-muted: #8b8b8b;
-  --border: #e5e5e5;
+  --text: #1f1d1b;      /* near-black warm — ~14:1 on --card (WCAG AAA) */
+  --text-muted: #6b6864;/* AA on --card (the old #8b8b8b failed AAA) */
+  --border: #e6e2db;    /* warm hairline */
   --notice-bg: #fef7e0;
   --notice-border: #f5c560;
   --notice-text: #6b4d10;
@@ -25,6 +25,13 @@
   --ingested-bg: #e8f6ee;
   --ingested-border: #2a8b46;
   --ingested-text: #1f7a3d;
+  /* FSRS flashcard grade scale — Wong color-blind-safe palette (Nature
+     std; safe across deutan/protan/tritan). Hue + button order/label carry
+     the signal, never hue alone — avoids the red→amber→green CVD trap. */
+  --grade-again: #d55e00;
+  --grade-hard:  #e69f00;
+  --grade-good:  #0072b2;
+  --grade-easy:  #009e73;
 }
 * { box-sizing: border-box; }
 html, body {

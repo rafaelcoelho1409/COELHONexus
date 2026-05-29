@@ -10,7 +10,10 @@ from jinja2 import Environment, StrictUndefined
 # Versioning
 # =============================================================================
 RENDER_SCHEMA_VERSION = "2.0-cookbook"
-RENDER_TEMPLATE_VERSION = "v2-cookbook-2026-05-24"
+# v3 (2026-05-29): added the write-path dedupe_and_align_sections pass
+# (cross-section code recycling + misrouted-block omission). Bumped so the
+# render cache invalidates and chapters re-render through the new pass.
+RENDER_TEMPLATE_VERSION = "v3-dedup-align-2026-05-29"
 
 # Same algorithm as `synth/vault.py:_hash_block` — 16-hex SHA-256
 # prefix. MUST match or the audit will false-fail. If vault.py ever

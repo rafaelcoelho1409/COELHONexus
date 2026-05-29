@@ -438,6 +438,19 @@
   white-space: nowrap;
   vertical-align: middle;
 }
+/* Total Planner/Synth wall-clock shown inside the row-3 status pill.
+   Updated live (ticks while running) by timing.js, persisted-fallback on
+   load. Empty until measured. */
+.fw-stage-elapsed {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+  opacity: 0.85;
+}
+.fw-stage-elapsed:empty { display: none; }
+.fw-stage-elapsed[data-running="1"] { color: var(--running-border); }
 .fw-stage-pill[data-status="working"] {
   border-color: var(--running-border);
   color: var(--running-border);

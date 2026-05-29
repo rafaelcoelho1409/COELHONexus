@@ -3,13 +3,31 @@ from __future__ import annotations
 
 import re
 
-from .constants import _OVER_SPREAD_THRESHOLD, _VAULT_HASH_IN_TEXT_RE
+from collections import defaultdict
+
+from .constants import (
+    _MAX_KEY_FACTS_PER_CONTRIB,
+    _MERGE_CONTAINMENT,
+    _MERGE_JACCARD,
+    _MERGE_MIN_PRIMARY_TO_DEFEND,
+    _OVER_SPREAD_THRESHOLD,
+    _VAULT_HASH_IN_TEXT_RE,
+)
 from .types import (
     CoverageStats,
     SectionContribution,
     SourceDigest,
     _LLMDigestPayload,
 )
+
+
+_RELEVANCE_RANK = {"primary": 0, "supporting": 1, "tangential": 2}
+
+
+def _best_relevance(a: str, b: str) -> str:
+    """Return the stronger of two relevance grades (primary > supporting
+    > tangential)."""
+    return a if _RELEVANCE_RANK.get(a, 9) <= _RELEVANCE_RANK.get(b, 9) else b
 
 
 # =============================================================================
@@ -47,6 +65,154 @@ def build_per_section_index(
             key=lambda c: (_RELEVANCE_ORDER.get(c.relevance, 9), id(c))
         )
     return per_section
+
+
+def _resolve_merge(merged: dict[str, str], sid: str) -> str:
+    """Follow a merge chain loser→winner→... to the terminal winner."""
+    seen: set[str] = set()
+    while sid in merged and sid not in seen:
+        seen.add(sid)
+        sid = merged[sid]
+    return sid
+
+
+def merge_overlapping_sections(
+    per_source: list[SourceDigest],
+    outline_sections: list[dict],
+    *,
+    jaccard: float = _MERGE_JACCARD,
+    containment: float = _MERGE_CONTAINMENT,
+    min_primary_to_defend: int = _MERGE_MIN_PRIMARY_TO_DEFEND,
+) -> tuple[list[SourceDigest], dict[str, str]]:
+    """Fix #3 (DD-SYNTH-SECTION-COUNT, 2026-05-29 PM) — fold sections whose
+    PRIMARY source pools overlap heavily into a single section.
+
+    This is the definitive overlap signal the outline-time heading/embedding
+    proxy cannot see: two sections with DIFFERENT headings (e.g. ch-13's
+    "Cost Tracking" vs "OpenTelemetry Configuration") that nonetheless draw
+    on the SAME 2-3 source documents are the same scope, and the writer will
+    recycle the same code into both — which the renderer then strips into
+    hollow "see other section" cross-references.
+
+    Returns `(retagged_per_source, merged_map)` where `merged_map` is
+    `{loser_section_id: winner_section_id}`. The returned per_source has each
+    losing contribution re-tagged to its winner (deduped within each source,
+    unioning code_refs/key_facts, keeping the stronger relevance), so
+    rebuilding `build_per_section_index` over it yields the merged index with
+    losers as empty lists. Pure + deterministic given identical input.
+
+    Merge rule for a pair (BIG = more primaries, SMALL = fewer; ties broken
+    by outline order so the EARLIER/foundational section wins):
+      - Jaccard(primaries) >= `jaccard`  → strong mutual overlap, OR
+      - containment(small ⊆ big) >= `containment` AND SMALL brings fewer
+        than `min_primary_to_defend` primary sources the BIG one lacks
+        (i.e. SMALL is not independently defensible).
+    Sections with zero primaries are never a merge TARGET on their own but
+    can be folded when subsumed (containment of an empty set is treated as
+    1.0 with 0 unique). Conservative by design — render-time dedup (#1) is
+    the safety net for residual overlap.
+    """
+    order = {
+        s.get("section_id"): i for i, s in enumerate(outline_sections)
+    }
+
+    def pools(merged: dict[str, str]) -> dict[str, set[str]]:
+        prim: dict[str, set[str]] = defaultdict(set)
+        for src in per_source:
+            for c in src.contributes_to:
+                if c.relevance == "primary":
+                    prim[_resolve_merge(merged, c.section_id)].add(
+                        src.source_key
+                    )
+        return prim
+
+    merged_map: dict[str, str] = {}
+    # All section_ids that currently receive any contribution.
+    live_ids = {
+        _resolve_merge(merged_map, c.section_id)
+        for src in per_source for c in src.contributes_to
+    }
+
+    while True:
+        prim = pools(merged_map)
+        live = sorted(
+            (sid for sid in live_ids if sid not in merged_map),
+            key=lambda s: order.get(s, 9_999),
+        )
+        chosen: tuple[str, str] | None = None
+        for i in range(len(live)):
+            for j in range(i + 1, len(live)):
+                a, b = live[i], live[j]
+                pa, pb = prim.get(a, set()), prim.get(b, set())
+                if not pa and not pb:
+                    continue
+                # BIG = more primaries; tie → earlier outline order.
+                if (len(pa), -order.get(a, 9_999)) >= (
+                    len(pb), -order.get(b, 9_999)
+                ):
+                    big, small, pbig, psmall = a, b, pa, pb
+                else:
+                    big, small, pbig, psmall = b, a, pb, pa
+                union = pbig | psmall
+                inter = pbig & psmall
+                jac = (len(inter) / len(union)) if union else 0.0
+                contain = (len(inter) / len(psmall)) if psmall else 1.0
+                unique_small = len(psmall - pbig)
+                if jac >= jaccard or (
+                    contain >= containment
+                    and unique_small < min_primary_to_defend
+                ):
+                    chosen = (small, big)  # (loser, winner)
+                    break
+            if chosen:
+                break
+        if not chosen:
+            break
+        loser, winner = chosen
+        merged_map[loser] = winner
+
+    # Collapse any transitive chains so every loser maps to a terminal winner.
+    merged_map = {
+        loser: _resolve_merge(merged_map, winner)
+        for loser, winner in merged_map.items()
+    }
+    if not merged_map:
+        return per_source, {}
+
+    # Re-tag per_source: every contribution to a loser now points to its
+    # winner; dedup contributions that collide within a single source.
+    retagged: list[SourceDigest] = []
+    for src in per_source:
+        by_sid: dict[str, SectionContribution] = {}
+        for c in src.contributes_to:
+            tgt = _resolve_merge(merged_map, c.section_id)
+            if tgt == c.section_id and tgt not in merged_map.values():
+                # Untouched section — keep as-is unless a collision occurs.
+                pass
+            existing = by_sid.get(tgt)
+            if existing is None:
+                by_sid[tgt] = (
+                    c if c.section_id == tgt
+                    else c.model_copy(update={"section_id": tgt})
+                )
+            else:
+                by_sid[tgt] = existing.model_copy(update={
+                    "section_id": tgt,
+                    "relevance": _best_relevance(
+                        existing.relevance, c.relevance
+                    ),
+                    "code_refs": list(dict.fromkeys(
+                        existing.code_refs + c.code_refs
+                    )),
+                    "key_facts": list(dict.fromkeys(
+                        existing.key_facts + c.key_facts
+                    ))[:_MAX_KEY_FACTS_PER_CONTRIB],
+                    "summary": existing.summary,
+                })
+        retagged.append(
+            src.model_copy(update={"contributes_to": list(by_sid.values())})
+        )
+    return retagged, merged_map
 
 
 def compute_coverage_stats(
@@ -290,8 +456,13 @@ def build_digest_prompt(
         f"3. relevance must be HONEST: 'primary' = this source is the "
         f"   main authority for that section; 'supporting' = useful "
         f"   detail but not the lead reference; 'tangential' = mentions "
-        f"   in passing. A source claiming 'primary' in >3 sections will "
-        f"   be flagged as over-spread (likely hallucinated).\n"
+        f"   in passing. Route each code example to the ONE section it "
+        f"   most belongs in (DD-SYNTH-SECTION-RECYCLING-2026-05-29 #5). "
+        f"   A source claiming 'primary' in >2 sections is flagged as "
+        f"   over-spread — spreading the same code across sections forces "
+        f"   the chapter to de-duplicate it into hollow cross-references. "
+        f"   Pick the single best home; demote the rest to 'supporting' "
+        f"   only when genuinely needed.\n"
         f"4. code_refs MUST be 16-hex strings from `vault_hashes_in_source` "
         f"   above. Routing a hash that isn't in that list is a hard "
         f"   violation (you can't see hashes that aren't here).\n"
@@ -306,8 +477,8 @@ def build_digest_prompt(
         f"   Each fact should be verifiable from the source.\n\n"
 
         f"== DECOMPOSITION GUIDANCE ==\n"
-        f"- Most sources contribute to 1-3 sections, not all of them. "
-        f"Be selective.\n"
+        f"- Most sources contribute to 1-2 sections, not all of them. "
+        f"Be selective — over-spreading is the #1 cause of recycled code.\n"
         f"- If the source is broadly about ONE section's topic, that "
         f"section gets 'primary' and others may not appear at all.\n"
         f"- If the source is a reference / catalog covering multiple "

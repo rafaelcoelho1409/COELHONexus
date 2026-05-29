@@ -63,7 +63,7 @@ HEAD = (
     # Theme: GitHub Dark (matches the burgundy + sharp-radius aesthetic).
     Link(
         rel = "stylesheet",
-        href = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/styles/github-dark.min.css",
+        href = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/styles/github-dark-dimmed.min.css",
     ),
     Script(
         src = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/highlight.min.js",
