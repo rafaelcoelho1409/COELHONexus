@@ -382,10 +382,36 @@ def _SynthActions():
     )
 
 
-def _StudyPill():
+def _StudyTabs():
+    # Reader mode switch (Learn / Flashcards) + the mobile chapter-drawer
+    # toggle, relocated to the row-3 toolbar (2026-05-28). IDs/classes are
+    # preserved so study.js bindings (S.studyTabBtns, #fw-study-toc-toggle)
+    # keep working unchanged. ☰ Chapters is hidden on desktop (persistent
+    # rail) via CSS; the Learn/Flashcards pair renders as a segmented control.
     return Div(
-        Span("Idle", cls="fw-stage-pill-text", id="fw-study-pill-text"),
-        cls="fw-stage-pill", id="fw-study-pill", data_status="idle",
+        Button("☰ Chapters", id="fw-study-toc-toggle",
+               cls="fw-study-toc-toggle", type="button",
+               title="Show chapters"),
+        Div(
+            Button("Learn", cls="fw-study-tab active",
+                   data_tab="learn", type="button"),
+            Button("Flashcards", cls="fw-study-tab",
+                   data_tab="flashcards", type="button"),
+            cls="fw-study-modes", role="tablist",
+        ),
+        cls="fw-study-toolgroup",
+    )
+
+
+def _StudyViewButtons():
+    # Search + Focus utilities for the right side of the study toolbar.
+    return (
+        Button("🔍 Search", id="fw-study-search-btn",
+               cls="fw-study-search-btn", type="button",
+               title="Search all chapters (⌘K / Ctrl-K)"),
+        Button("⛶", id="fw-study-focus-toggle",
+               cls="fw-study-focus-toggle", type="button",
+               title="Focus mode (distraction-free reading)"),
     )
 
 
@@ -461,15 +487,14 @@ def _StageToolbar(active_stage: str, slug: str | None,
     elif active_stage == "synth":
         left = [_SynthPill(), _SynthActions()]
     elif active_stage == "study":
-        left = [_StudyPill()]
+        left = [_StudyTabs()]
     else:  # ingestion — progress lives in the body; no toolbar tools
         left = []
     children = [Div(*left, cls="dd-toolbar-left")]
     if active_stage != "catalog":
-        children.append(Div(
-            _FrameworkPicker(slug, catalog),
-            cls="dd-toolbar-right",
-        ))
+        right = list(_StudyViewButtons()) if active_stage == "study" else []
+        right.append(_FrameworkPicker(slug, catalog))
+        children.append(Div(*right, cls="dd-toolbar-right"))
     return Div(
         *children,
         cls="dd-toolbar topbar-collapsible",
@@ -645,28 +670,11 @@ def _StudyBody(slug: str | None):
                 id="fw-study-side",
             ),
             Div(
-                # 2-mode reader (2026-05-28): LEARN = prose + recall in
-                # one scroll; FLASHCARDS = the FSRS reviewer as a separate
-                # drill mode. (SOTA: weave read+recall, keep flashcard
-                # review distinct.) ⛶ = focus mode (hide rail + recenter).
-                Div(
-                    Button("☰ Chapters", id="fw-study-toc-toggle",
-                           cls="fw-study-toc-toggle", type="button",
-                           title="Show chapters"),
-                    Button("Learn", cls="fw-study-tab active",
-                           data_tab="learn",
-                           type="button"),
-                    Button("Flashcards", cls="fw-study-tab",
-                           data_tab="flashcards",
-                           type="button"),
-                    Button("🔍 Search", id="fw-study-search-btn",
-                           cls="fw-study-search-btn", type="button",
-                           title="Search all chapters (⌘K / Ctrl-K)"),
-                    Button("⛶", id="fw-study-focus-toggle",
-                           cls="fw-study-focus-toggle", type="button",
-                           title="Focus mode (distraction-free reading)"),
-                    cls="fw-study-tabs",
-                ),
+                # 2-mode reader (2026-05-28): LEARN = prose + recall in one
+                # scroll; FLASHCARDS = the FSRS reviewer as a separate drill
+                # mode. The mode switch (Learn/Flashcards) + Search + Focus
+                # live in the row-3 toolbar now (_StudyTabs/_StudyViewButtons);
+                # only the chapter-head + panes remain in the body.
                 Div(id="fw-study-chapter-head",
                     cls="fw-study-chapter-head"),
                 Div(

@@ -110,28 +110,22 @@ HEAD = (
 
 def _Shell(active_key: str, title_text=None, body=None, title_actions=None,
            subnav_row=None, toolbar_row=None):
-    """Page chrome — sticky header composed of up to four stacked rows
-    inside `.topbar-wrap`:
+    """Page chrome — header rows inside `.topbar-wrap` (grid row 1 of the
+    app-shell; see base.css `.shell`):
 
-        row 1  brand + global nav pills            (always)
-        row 2  feature title + title_actions        (when `title_text`)
-        row 2' stage tab strip (`subnav_row`)       (Docs Distiller)
-        row 3  contextual toolbar (`toolbar_row`)   (Docs Distiller)
+        row 1  brand + global nav pills                       (always)
+        row 2  `.feature-row`: feature title (red bar) on the
+               left + stage tabs (`subnav_row`) on the right  (when either)
+        row 3  contextual toolbar (`toolbar_row`)             (Docs Distiller)
 
-    Pass `title_text=None` to skip the H1 title row (Home provides its
-    own hero; Docs Distiller drops it because the active nav pill IS the
-    page-title surrogate and the stage tabs carry identity).
+    The feature title is `title_text` when given (YouTube); otherwise, when a
+    `subnav_row` is present (Docs Distiller), it's derived from FEATURES so the
+    name shows beside the tabs. Home passes neither → no row 2.
 
-    `title_actions` — right-aligned content inside the title row (e.g. a
-    feature action). The title row uses `justify-content: space-between`.
-
-    `subnav_row` — the stage tab strip. Stays PINNED while scrolling so
-    stage switching is never lost.
-
+    `title_actions` — right-side content of row 2 when there is no `subnav_row`.
+    `subnav_row` — the stage tab strip (right cluster of row 2).
     `toolbar_row` — contextual, per-stage tools (status pill, Start/Wipe
-    actions, search, framework picker). Marked `.topbar-collapsible` so
-    the smart auto-hide in topbar.js slides ONLY this row away on
-    scroll-down — rows 1 + 2/2' stay pinned (Stripe Apps pattern)."""
+    actions, search, framework picker)."""
     # Wave B1: each nav-item carries a hidden .nav-status-dot. topbar.js
     # toggles .has-running on items whose `data-status-slug` is currently
     # tracked as in-flight by the backend.
@@ -145,15 +139,20 @@ def _Shell(active_key: str, title_text=None, body=None, title_actions=None,
         )
         for key, label, href in FEATURES
     ]
-    # The title row is `.topbar-collapsible` so non-DD features (YouTube,
-    # Coming Soon) auto-hide it on scroll-down. DD passes title_text=None
-    # and uses `toolbar_row` (also collapsible) instead.
-    title_row = (
+    # Row 2 — the feature title (red bar) + optional stage tabs on ONE line.
+    # Explicit title_text wins (YouTube); otherwise, when a stage sub-nav is
+    # present (Docs Distiller), derive the feature label from FEATURES so the
+    # name shows beside the tabs. Home passes neither → no row 2.
+    if title_text is None and subnav_row is not None:
+        title_text = next(
+            (label for key, label, _ in FEATURES if key == active_key), None)
+    feature_row = (
         Div(
-            H1(title_text, cls = "title"),
-            (title_actions if title_actions is not None else ""),
-            cls = "title-row topbar-collapsible")
-        if title_text else ""
+            (H1(title_text, cls = "title") if title_text else ""),
+            (subnav_row if subnav_row is not None
+             else (title_actions if title_actions is not None else "")),
+            cls = "feature-row topbar-collapsible")
+        if (title_text or subnav_row is not None) else ""
     )
     return (
         Title("COELHO Nexus"),
@@ -169,34 +168,40 @@ def _Shell(active_key: str, title_text=None, body=None, title_actions=None,
         # (Linear / Stripe Apps pattern — single cohesive sticky
         # header). The .card below no longer renders the title row,
         # so the main content gets the reclaimed vertical space.
+        # DD-APP-SHELL-2026-05-28 — full-viewport grid shell. `.shell` is a
+        # 100dvh grid: row 1 (auto) = the header; row 2 (1fr) = the scrolling
+        # content region. The document never scrolls; .page scrolls internally.
+        # This replaced the position:sticky header + JS viewport-fit hack.
         Div(
             Div(
-                A(
-                    Span(cls = "brand-flag"),
-                    Span("COELHO Nexus"),
-                    href = "/",
-                    cls = "brand",
-                    aria_label = "COELHO Nexus home",
+                Div(
+                    A(
+                        Span(cls = "brand-flag"),
+                        Span("COELHO Nexus"),
+                        href = "/",
+                        cls = "brand",
+                        aria_label = "COELHO Nexus home",
+                    ),
+                    Nav(*nav_links, cls = "nav", aria_label = "Primary"),
+                    cls = "topbar",
                 ),
-                Nav(*nav_links, cls = "nav", aria_label = "Primary"),
-                cls = "topbar",
+                feature_row,
+                (toolbar_row if toolbar_row is not None else ""),
+                cls = "topbar-wrap",
             ),
-            title_row,
-            (subnav_row if subnav_row is not None else ""),
-            (toolbar_row if toolbar_row is not None else ""),
-            cls = "topbar-wrap",
-        ),
-        Div(
             Div(
-                # Wave B3 — wrap the feature body in <main id="content">
-                # so the skip-link and screen readers have a landmark.
-                Main(
-                    body if body is not None else "",
-                    id = "content",
-                    cls = "panel",
+                Div(
+                    # Wave B3 — wrap the feature body in <main id="content">
+                    # so the skip-link and screen readers have a landmark.
+                    Main(
+                        body if body is not None else "",
+                        id = "content",
+                        cls = "panel",
+                    ),
+                    cls = "card",
                 ),
-                cls = "card",
+                cls = "page",
             ),
-            cls = "page",
+            cls = "shell",
         ),
     )

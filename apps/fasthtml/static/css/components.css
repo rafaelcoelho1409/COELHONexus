@@ -18,8 +18,8 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 12px 40px;
-  border-top: 1px solid var(--border);
+  flex-shrink: 1;      /* row 2 right cluster — title stays, tabs shrink/scroll */
+  min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   scroll-snap-type: x mandatory;
@@ -28,8 +28,8 @@
 }
 .dd-substage-nav::-webkit-scrollbar { display: none; }
 .dd-substage {
-  padding: 8px 14px;
-  font-size: 0.82rem;
+  padding: 5px 12px;
+  font-size: 0.8rem;
   font-weight: 500;
   color: var(--text-muted);
   text-decoration: none;
@@ -64,9 +64,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px 24px;
+  gap: 10px 24px;
   flex-wrap: wrap;
-  padding: 12px 40px;
+  padding: 7px 40px;
   border-top: 1px solid var(--border);
 }
 .dd-toolbar-left {
@@ -80,6 +80,7 @@
 .dd-toolbar-right {
   display: flex;
   align-items: center;
+  gap: 10px;
   flex-shrink: 0;
   margin-left: auto;   /* always hug the right edge, even when left is empty */
 }

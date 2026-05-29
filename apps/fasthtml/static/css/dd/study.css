@@ -6,10 +6,15 @@
 
 .fw-study-grid {
   display: block;          /* single column — chapter list is now an overlay */
-  margin-top: 18px;
+  margin-top: 0;
   min-height: 600px;
   position: relative;
 }
+/* Pull DD content up tight under the sticky 3-row header (the page's
+   default 28px top padding reads as a big gap below the toolbar row).
+   Scoped to DD pages via the `.fw-picker` root so other features keep
+   their default top padding. */
+.page:has(.fw-picker) { padding-top: 10px; }
 
 /* Chapter list — slide-out SIDE WINDOW (off-canvas left). Toggled by the
    `☰ Chapters` button; `.open` slides it in. Fixed so it overlays the page
@@ -55,28 +60,31 @@
 @media (min-width: 1024px) {
   .fw-study-grid {
     display: grid;
-    grid-template-columns: 248px minmax(0, 1fr);
-    gap: 28px;
+    grid-template-columns: 240px minmax(0, 1fr);
+    gap: 0;                  /* rail + content flush — no divider gutter */
     align-items: start;
   }
   .fw-study-side {
     position: sticky;
-    top: 90px;
+    top: 0;                       /* header is outside .page now (app-shell) */
     height: auto;
-    max-height: calc(100vh - 110px);
+    max-height: calc(100dvh - 168px);  /* ≈ 3-row header; rail scrolls if longer */
     width: auto;
     max-width: none;
     transform: none;
     box-shadow: none;
     z-index: auto;
-    padding: 0 16px 0 2px;
+    padding: 16px 16px 0 2px;
   }
+  /* Small breathing gutter so the prose isn't glued to the rail. */
+  .fw-study-main { padding-left: 18px; }
   .fw-study-side-backdrop { display: none; }
   .fw-study-side-close,
   .fw-study-toc-toggle { display: none; }   /* no drawer chrome on desktop */
-  /* Focus mode hides the rail + recenters the reader even on desktop. */
+  /* Focus mode hides the rail + lets the reader fill the full width. */
   .fw-study-grid.focus-mode { display: block; }
   .fw-study-grid.focus-mode .fw-study-side { display: none; }
+  .fw-study-grid.focus-mode .fw-study-main { padding-left: 0; }
 }
 
 .fw-study-side-header {
@@ -183,44 +191,51 @@
   overflow: hidden;
 }
 
-/* CENTER — main reader area */
+/* CENTER — main reader area. Flat / full-bleed (no card border or bg):
+   the content fills the grid column edge-to-edge so it respects ONLY the
+   page's L/R padding, matching the rest of the app's flat surfaces. */
 .fw-study-main {
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: var(--card);
   display: flex;
   flex-direction: column;
   min-height: 600px;
 }
 
-/* Tab strip */
-.fw-study-tabs {
+/* Reader controls live in the row-3 toolbar (2026-05-28). ☰ Chapters
+   (mobile only) sits before a compact Learn/Flashcards segmented control. */
+.fw-study-toolgroup {
   display: flex;
-  gap: 0;
-  border-bottom: 1px solid var(--border);
-  background: rgba(0, 0, 0, 0.02);
-  padding: 0;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.fw-study-modes {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
 }
 .fw-study-tab {
-  padding: 12px 20px;
-  font-size: 0.85rem;
-  font-weight: 500;
+  padding: 5px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
   font-family: inherit;
   background: transparent;
   border: 0;
-  border-bottom: 2px solid transparent;
+  border-radius: 6px;
   color: var(--text-muted);
   cursor: pointer;
-  transition: color 0.12s, border-color 0.12s, background-color 0.12s;
+  white-space: nowrap;
+  transition: color 0.12s, background-color 0.12s;
 }
 .fw-study-tab:hover {
   color: var(--text);
-  background: rgba(0, 0, 0, 0.03);
+  background: rgba(0, 0, 0, 0.04);
 }
 .fw-study-tab.active {
   color: var(--primary);
-  border-bottom-color: var(--primary);
-  background: var(--card);
+  background: rgba(196, 18, 48, 0.10);
 }
 .fw-study-tab[disabled] {
   color: var(--text-muted);
@@ -228,31 +243,36 @@
   opacity: 0.5;
 }
 
-/* Per-chapter heading strip */
+/* Per-chapter heading strip — compact single row: title + meta inline. */
 .fw-study-chapter-head {
-  padding: 16px 28px;
+  padding: 8px 0;
   border-bottom: 1px dashed var(--border);
   display: none;
 }
-.fw-study-chapter-head.visible { display: block; }
-.fw-study-chapter-head-title {
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 4px;
-}
-.fw-study-chapter-head-meta {
-  font-size: 0.78rem;
-  color: var(--text-muted);
+.fw-study-chapter-head.visible {
   display: flex;
-  gap: 14px;
+  align-items: center;
+  gap: 12px;
   flex-wrap: wrap;
 }
+.fw-study-chapter-head-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.fw-study-chapter-head-meta {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
 .fw-study-chapter-head-meta .badge {
-  padding: 1px 8px;
+  padding: 0 6px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  font-size: 0.7rem;
+  font-size: 0.66rem;
   letter-spacing: 0.02em;
 }
 .fw-study-chapter-head-meta .badge.pass { border-color: #2a8b46; color: #2a8b46; }
@@ -261,12 +281,11 @@
 /* Tab content panes */
 .fw-study-content {
   flex: 1;
-  overflow-y: auto;
-  max-height: 78vh;
+  min-height: 0;   /* content flows into the .page scroll region (app-shell) */
 }
 .fw-study-pane {
   display: none;
-  padding: 28px 36px;
+  padding: 24px 0;          /* L/R handled by the page padding (full-bleed) */
 }
 .fw-study-pane.active { display: block; }
 
@@ -396,9 +415,13 @@
   justify-content: center;       /* vertically centre the card block */
   gap: 22px;
   min-height: 66vh;              /* fill the reader so centring is visible */
-  padding: 24px;
+  padding: 24px 0;               /* full-bleed width — page padding handles L/R */
   box-sizing: border-box;
 }
+/* The flashcards pane must be a centred flex column, but .fw-study-pane.active
+   (display:block) outranks .fw-study-cards. Re-assert flex with equal-or-higher
+   specificity so the card actually centres. */
+.fw-study-pane.fw-study-cards.active { display: flex; }
 /* (Old 3D flip-card rules removed 2026-05-28 — replaced by the FSRS
    reviewer's .fw-fc-* styles below.) */
 
@@ -407,10 +430,9 @@
    ============================================================ */
 
 /* ---- README pane: prose + sticky right-rail TOC (scroll-spy) ---- */
-.fw-study-content { scroll-behavior: smooth; }
 .fw-study-pane.fw-study-readme-pane.active {
   display: flex;
-  gap: 28px;
+  gap: 22px;
   align-items: flex-start;
 }
 /* LEARN column — prose + recall stacked in one scroll; TOC rail beside. */
@@ -421,7 +443,21 @@
   flex-direction: column;
 }
 .fw-study-readme-pane .fw-study-prose {
-  max-width: 66ch;            /* readability sweet spot (Baymard 50–75ch) */
+  max-width: none;            /* fill the reader width up to the TOC rail */
+}
+/* Empty / placeholder state — when the prose holds ONLY the message
+   (no rendered chapter), break the 66ch cap and center it in the reader
+   box (horizontally + vertically). Real content (>1 child) is unaffected,
+   so it keeps the left-aligned 66ch measure. */
+.fw-study-prose:has(> .fw-empty:only-child) {
+  max-width: none;
+  min-height: 55vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.fw-study-prose > .fw-empty:only-child {
+  max-width: 460px;
 }
 /* Recall block — the active-recall questions, welded to the end of the
    reading flow (read → then self-test) instead of a separate tab. */
@@ -432,18 +468,61 @@
   scroll-margin-top: 16px;
 }
 .fw-study-recall:empty { display: none; }
-/* Right-cluster controls in the tab strip: 🔍 Search + ⛶ Focus. */
-.fw-study-search-btn { margin-left: auto; }   /* push the cluster right */
-.fw-study-focus-toggle { margin-left: 6px; }
+/* Citation blocks ("Sources for this section:") folded into a collapsed
+   <details> by study.js — keeps the prose scannable; sources on demand. */
+.fw-study-prose .fw-study-sources {
+  margin: 6px 0 18px 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.015);
+}
+.fw-study-prose .fw-study-sources > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.fw-study-prose .fw-study-sources > summary::-webkit-details-marker { display: none; }
+.fw-study-prose .fw-study-sources > summary::before {
+  content: '▸';
+  color: var(--primary);
+  transition: transform 0.15s;
+}
+.fw-study-prose .fw-study-sources[open] > summary::before { transform: rotate(90deg); }
+.fw-study-prose .fw-study-sources > ul,
+.fw-study-prose .fw-study-sources > ol {
+  margin: 0;
+  padding: 4px 18px 12px 40px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+/* Clickable source-file basename → opens the ingested page in the drawer. */
+.fw-study-prose .fw-source-file {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+.fw-study-prose .fw-source-file:hover,
+.fw-study-prose .fw-source-file:focus-visible {
+  background: rgba(196, 18, 48, 0.14);
+  outline: none;
+}
+/* Reader utilities in the row-3 toolbar: 🔍 Search + ⛶ Focus. */
 .fw-study-search-btn,
 .fw-study-focus-toggle {
   border: 1px solid var(--border);
   background: var(--card);
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-family: inherit;
   line-height: 1;
-  padding: 7px 11px;
+  padding: 6px 10px;
   border-radius: 4px;
   cursor: pointer;
   white-space: nowrap;
@@ -500,12 +579,8 @@
 .fw-study-search-ch { font-size: 0.74rem; color: var(--text-muted); flex-shrink: 0; max-width: 38%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fw-study-search-sub { font-size: 0.9rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fw-study-search-empty { padding: 18px; color: var(--text-muted); font-size: 0.85rem; text-align: center; }
-/* Focus mode — hide the TOC rail + center the column for distraction-free
-   reading. Toggled by the ⛶ button (JS adds .focus-mode to .fw-study-grid,
-   persisted in localStorage). */
-.fw-study-grid.focus-mode .fw-study-toc { display: none; }
-.fw-study-grid.focus-mode .fw-study-readme-pane.active { justify-content: center; }
-.fw-study-grid.focus-mode .fw-study-readme-pane .fw-study-prose { max-width: 72ch; }
+/* Focus mode hides ONLY the left chapter rail (see the ≥1024px block);
+   the right-rail TOC stays and the prose already fills the reader width. */
 .fw-study-focus-toggle.active {
   color: var(--primary);
   border-color: var(--primary);
@@ -517,7 +592,7 @@
   position: sticky;
   top: 0;
   align-self: flex-start;
-  max-height: calc(78vh - 40px);
+  max-height: calc(100dvh - 168px);   /* sticks at .page top; scrolls if longer */
   overflow-y: auto;
   padding-left: 16px;
   border-left: 1px solid var(--border);
@@ -590,7 +665,7 @@
 }
 .fw-fc-card {
   width: 100%;
-  max-width: 560px;
+  max-width: none;               /* fill the full reader width */
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--card);
@@ -625,7 +700,7 @@
   grid-template-columns: repeat(4, 1fr);
   gap: 8px;
   width: 100%;
-  max-width: 560px;
+  max-width: none;               /* match the full-width card */
 }
 .fw-fc-grade {
   display: flex;

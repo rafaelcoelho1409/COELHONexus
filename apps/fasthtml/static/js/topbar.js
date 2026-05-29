@@ -85,74 +85,23 @@
   start();
 
   // -------------------------------------------------------------- //
-  // Wave C / Wave F — sticky stuck-detection + smart auto-hide     //
+  // App-shell (2026-05-28) — the header is a FIXED grid row (row 1 of
+  // `.shell`); `.page` (row 2) is the scroll region. The document never
+  // scrolls, so the old sentinel + smart-auto-hide machinery is gone.
+  // We just toggle `.is-stuck` (shadow + divider) once `.page` scrolls,
+  // so the header visually detaches from the content beneath it.
   // -------------------------------------------------------------- //
   const topbarWrap = document.querySelector(".topbar-wrap");
-  if (!topbarWrap) return;
+  const page = document.querySelector(".page");
+  if (!topbarWrap || !page) return;
 
-  // Sentinel: 1px element in normal flow with -1px margin so it
-  // contributes ZERO layout space but is observable. Placed right
-  // before .topbar-wrap so its intersection state mirrors whether
-  // the bar is currently pinned at the viewport edge.
-  const sentinel = document.createElement("div");
-  sentinel.setAttribute("aria-hidden", "true");
-  sentinel.style.cssText = "height:1px;margin-bottom:-1px;";
-  topbarWrap.parentNode.insertBefore(sentinel, topbarWrap);
-
-  const stuckObserver = new IntersectionObserver(
-    ([entry]) => {
-      topbarWrap.classList.toggle("is-stuck", !entry.isIntersecting);
-    },
-    { threshold: [0, 1] },
-  );
-  stuckObserver.observe(sentinel);
-
-  // Wave F / Wave G — smart auto-hide. The header is up to four stacked
-  // rows: brand+nav, (feature title), stage tabs, contextual toolbar.
-  // We collapse only the rows marked `.topbar-collapsible` (the feature
-  // title row on non-DD pages; the contextual toolbar on DD pages) —
-  // brand+nav and the stage tabs stay PINNED so identity + stage
-  // switching are never lost mid-scroll. The CSS collapses each row via
-  // max-height+padding so lower rows slide up cleanly.
-  //
-  // If there are no collapsible rows (e.g. Home), the toggle is a no-op.
-  //
-  // Tunables:
-  //   SCROLL_DELTA  — ignore micro-scrolls below this (px).
-  //   SHOW_BELOW_Y  — always show when within this many px of the
-  //                   document top (avoids hiding right after landing).
-  const collapsibles = topbarWrap.querySelectorAll(".topbar-collapsible");
-  const SCROLL_DELTA = 6;
-  const SHOW_BELOW_Y = 80;
-  const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
-
-  let lastY = window.scrollY;
-  let ticking = false;
-
-  function setHidden(hidden) {
-    collapsibles.forEach((el) => el.classList.toggle("is-hidden", hidden));
-  }
-
-  function onScroll() {
-    if (ticking) return;
-    ticking = true;
-    window.requestAnimationFrame(() => {
-      const y = window.scrollY;
-      const dy = y - lastY;
-
-      if (motionQuery.matches) {
-        // Reduced motion — never hide.
-        setHidden(false);
-      } else if (Math.abs(dy) >= SCROLL_DELTA) {
-        setHidden(dy > 0 && y > SHOW_BELOW_Y);
-        lastY = y;
-      } else if (y <= SHOW_BELOW_Y) {
-        // Near the top regardless — make sure row 2 is visible.
-        setHidden(false);
-      }
-
-      ticking = false;
-    });
-  }
-  window.addEventListener("scroll", onScroll, { passive: true });
+  let stuckTicking = false;
+  const syncStuck = () =>
+    topbarWrap.classList.toggle("is-stuck", page.scrollTop > 4);
+  page.addEventListener("scroll", () => {
+    if (stuckTicking) return;
+    stuckTicking = true;
+    requestAnimationFrame(() => { stuckTicking = false; syncStuck(); });
+  }, { passive: true });
+  syncStuck();
 })();

@@ -2,6 +2,7 @@
 import * as S from './state.js';
 import { escapeHtml } from './utils.js';
 import * as srs from './srs.js';
+import { openDrawer } from './ui.js';
 
 // ---- flashcard review session (module-local) ----
 // _fcSession is the queue of due cards as {cid, idx} tuples; _fcPos points
@@ -30,9 +31,9 @@ if (S.studyTocToggle) S.studyTocToggle.addEventListener('click', toggleStudySide
 if (S.studySideClose) S.studySideClose.addEventListener('click', closeStudySide);
 if (S.studySideBackdrop) S.studySideBackdrop.addEventListener('click', closeStudySide);
 
-// Focus mode — hide the chapter rail + TOC and recenter the reader for
-// distraction-free reading. Toggles `.focus-mode` on .fw-study-grid;
-// persisted in localStorage so it sticks across chapters/reloads.
+// Focus mode — hide the left chapter rail and let the reader fill the
+// freed width (the right-rail TOC stays). Toggles `.focus-mode` on
+// .fw-study-grid; persisted in localStorage so it sticks across reloads.
 const _FOCUS_KEY = 'dd:study:focus';
 function _applyFocusMode(on) {
   const grid = document.querySelector('#fw-study-grid');
@@ -147,9 +148,6 @@ export function _renderStudySidebar() {
       ? '<span class="fw-study-chapter-due" title="' + due +
         ' flashcards due">' + due + '</span>'
       : '';
-    const studiedTick = studiedFlag
-      ? '<span class="fw-study-chapter-tick" title="Studied">✓</span>'
-      : '';
     return (
       '<button type="button" class="' + cls + '" ' +
       'data-chapter-id="' + escapeHtml(ch.id) + '" ' +
@@ -158,7 +156,7 @@ export function _renderStudySidebar() {
           icon + '</span>' +
         '<span class="fw-study-chapter-title">' +
           escapeHtml(title) + '</span>' +
-        dueBadge + studiedTick +
+        dueBadge +
       '</button>'
     );
   }).join('');
@@ -243,10 +241,10 @@ function _buildReadmeToc() {
       h.tagName.toLowerCase() + '" data-target="' + h.id + '">' +
       escapeHtml(h.textContent || '') + '</a>'
     ).join('') + recallLink;
-  // The reader scrolls inside `.fw-study-content`, not the document —
-  // so the observer root must be that container (else scroll-spy never
-  // fires). rootMargin shrinks the active band to the top slice.
-  const scrollRoot = S.studyReadmeEl.closest('.fw-study-content') || null;
+  // App-shell: the scroll container is `.page` (the 1fr grid row), so the
+  // observer root must be `.page` (else scroll-spy never fires). rootMargin
+  // shrinks the active band to the top slice of that scroll region.
+  const scrollRoot = S.studyReadmeEl.closest('.page') || null;
   _scrollSpyObserver = new IntersectionObserver((entries) => {
     entries.forEach(en => {
       if (!en.isIntersecting) return;
@@ -281,6 +279,99 @@ function _addCodeCopyButtons() {
   });
 }
 
+// ---- "Sources for this section" → open the ingested page in the drawer ----
+// The right-side file drawer (ui.js) is index-based over the ingestion
+// manifest (S.currentManifestEntries). We lazily fetch that manifest — the
+// SAME data the Ingestion page uses — and index it by page-file basename so
+// a citation basename (synth's `source_basename` = basename of the page's
+// MinIO key) resolves to a drawer entry. Cached per active slug.
+let _srcIndex = null;
+let _srcIndexSlug = null;
+function _entryBasename(e) {
+  if (e.key) return e.key.replace(/\/+$/, '').split('/').pop();
+  // Manifests written before `key` was stored: reconstruct page_key's
+  // basename `<idx:04d>-<slug>.md` (see storage/constants.py:page_key).
+  return String(e.idx).padStart(4, '0') + '-' + (e.slug || 'page') + '.md';
+}
+async function _ensureSourceIndex() {
+  if (_srcIndex && _srcIndexSlug === S.activeSlug) return _srcIndex;
+  const map = new Map();
+  try {
+    const r = await fetch(S.API + '/ingestion/' + S.activeSlug + '/manifest');
+    if (r.ok) {
+      const entries = (await r.json()).entries || [];
+      S.setCurrentManifestEntries(entries);   // drawer prev/next walk these
+      entries.forEach((e, i) => {
+        const bn = _entryBasename(e).toLowerCase();
+        if (bn) map.set(bn, i);
+      });
+    }
+  } catch (_) { /* leave the map empty → clicks no-op */ }
+  _srcIndex = map;
+  _srcIndexSlug = S.activeSlug;
+  return _srcIndex;
+}
+async function _openSourceFile(basename) {
+  if (!basename || !S.activeSlug) return;
+  const map = await _ensureSourceIndex();
+  const k = basename.trim().toLowerCase();
+  let idx = map.get(k);
+  if (idx == null && k.endsWith('.md')) idx = map.get(k.slice(0, -3));
+  if (idx == null && !k.endsWith('.md')) idx = map.get(k + '.md');
+  if (idx == null) return;   // unknown source — silently ignore
+  openDrawer(idx);
+}
+
+// Post-process the rendered README DOM:
+//   1) Drop the inline "## Contents" list + its trailing `---` divider —
+//      the sticky right-rail TOC (scroll-spy) makes it redundant.
+//   2) Fold every "Sources for this section:" citation block into a
+//      collapsed <details> so the prose stays scannable; sources on demand.
+//      Each source's .md basename becomes a clickable link that opens the
+//      ingested page in the same drawer the Ingestion page uses.
+function _postProcessReadme() {
+  const root = S.studyReadmeEl;
+  if (!root) return;
+  root.querySelectorAll('h2').forEach((h) => {
+    if ((h.textContent || '').trim().toLowerCase() !== 'contents') return;
+    let n = h.nextElementSibling;
+    h.remove();
+    while (n && (n.tagName === 'UL' || n.tagName === 'OL')) {
+      const next = n.nextElementSibling;
+      n.remove();
+      n = next;
+    }
+    if (n && n.tagName === 'HR') n.remove();   // the `---` under Contents
+  });
+  Array.from(root.querySelectorAll('p')).forEach((p) => {
+    const label = (p.textContent || '').trim().toLowerCase().replace(/:$/, '');
+    if (label !== 'sources for this section') return;
+    const list = p.nextElementSibling;
+    const n = (list && (list.tagName === 'UL' || list.tagName === 'OL'))
+      ? list.children.length : 0;
+    const det = document.createElement('details');
+    det.className = 'fw-study-sources';
+    const sum = document.createElement('summary');
+    sum.textContent = 'Sources for this section' + (n ? ' (' + n + ')' : '');
+    det.appendChild(sum);
+    p.replaceWith(det);
+    if (n) {
+      det.appendChild(list);
+      // First <code> in each line is the source file basename — make it
+      // an openable link into the drawer.
+      det.querySelectorAll('li').forEach((li) => {
+        const code = li.querySelector('code');
+        if (!code) return;
+        code.classList.add('fw-source-file');
+        code.dataset.basename = (code.textContent || '').trim();
+        code.setAttribute('role', 'button');
+        code.setAttribute('tabindex', '0');
+        code.title = 'Open this source file';
+      });
+    }
+  });
+}
+
 export async function _loadStudyReadme(slug, cid) {
   if (!S.studyReadmeEl) return;
   S.studyReadmeEl.innerHTML =
@@ -291,6 +382,7 @@ export async function _loadStudyReadme(slug, cid) {
       ? marked.parse(raw)
       : ('<pre>' + escapeHtml(raw) + '</pre>');
     S.studyReadmeEl.innerHTML = md;
+    _postProcessReadme();
     // Apply syntax highlighting if highlight.js is loaded.
     if (typeof hljs !== 'undefined') {
       S.studyReadmeEl.querySelectorAll('pre code').forEach(block => {
@@ -383,6 +475,20 @@ if (S.studyChallengesEl) {
     row.dataset.grade = next;
     srs.setChallengeGrade(S.activeSlug, S.studyLoadedCid, idx, next);
   });
+}
+
+// Source-file links inside "Sources for this section" boxes — open the raw
+// ingested page in the same right-side drawer the Ingestion page uses.
+if (S.studyReadmeEl) {
+  const onSourceActivate = (ev) => {
+    const code = ev.target.closest('.fw-source-file');
+    if (!code) return;
+    if (ev.type === 'keydown' && ev.key !== 'Enter' && ev.key !== ' ') return;
+    ev.preventDefault();
+    _openSourceFile(code.dataset.basename);
+  };
+  S.studyReadmeEl.addEventListener('click', onSourceActivate);
+  S.studyReadmeEl.addEventListener('keydown', onSourceActivate);
 }
 
 // Build the due-card queue for the current chapter. `reviewAll` ignores
@@ -599,7 +705,7 @@ export async function openStudyChapter(cid) {
     _renderStudyChapterHead(ch);
     S.studyReadmeEl.innerHTML =
       '<div class="fw-empty">This chapter has not been synthesized yet. ' +
-      'Run Synth (Step 4) on this chapter first.</div>';
+      'Run Synth on this chapter first.</div>';
     S.studyChallengesEl.innerHTML =
       '<div class="fw-empty">No challenges available — chapter not synthesized.</div>';
     S.studyFlashcardsEl.innerHTML =
@@ -661,7 +767,7 @@ export async function loadStudyChapters(slug) {
         'No rendered chapters yet — run Synth first.');
       S.studyReadmeEl.innerHTML =
         '<div class="fw-empty">No chapters have been synthesized for ' +
-        'this framework yet. Run Synth (Step 4) to generate content.</div>';
+        'this framework yet. Run Synth to generate content.</div>';
     }
   } catch (e) {
     S.studyChapterListEl.innerHTML =
@@ -700,6 +806,9 @@ if (S.studyChapterListEl) {
 // Visibility toggle — show empty-state when no slug active. Also
 // exposed as a function so other code paths (slug click, step nav)
 // can re-trigger after S.activeSlug changes.
+// (The JS viewport-fit hack was removed 2026-05-28 — the app-shell grid
+// in base.css makes `.page` the scroll region, so the reader fits the
+// viewport via CSS with no measuring.)
 export function refreshStudyVisibility() {
   if (!S.studyEmptyEl || !S.studyGridEl) return;
   if (!S.activeSlug) {

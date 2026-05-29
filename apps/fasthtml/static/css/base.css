@@ -30,6 +30,8 @@
 html, body {
   margin: 0;
   padding: 0;
+  height: 100%;            /* app-shell: let .shell own a 100dvh grid */
+  overflow: hidden;        /* the document never scrolls; .page does */
   background: var(--bg);
   color: var(--text);
   font-family: 'Raleway', 'HelveticaNeue', 'Helvetica Neue',
@@ -80,7 +82,24 @@ html { scroll-padding-top: 160px; }
    surface layout (Linear / Vercel / Notion). The .card wrapper is
    kept as a no-op container so existing DOM/selectors don't break;
    only its visual treatment is stripped. */
-.page { padding: 28px 40px 96px 40px; }
+/* DD-APP-SHELL-2026-05-28 — full-viewport grid. Row 1 (auto) is the header,
+   row 2 (1fr) is the scrolling content. The document never scrolls; .page
+   scrolls internally. `100dvh` avoids the mobile URL-bar jump (Baseline 2025).
+   Replaces the old position:sticky header + JS viewport-fit hack. */
+.shell {
+  height: 100dvh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  overflow: hidden;
+}
+.page {
+  padding: 28px 40px 40px 40px;
+  min-height: 0;             /* let the 1fr row shrink so it can scroll */
+  overflow-y: auto;          /* THIS is the scroll region, not the document */
+  scrollbar-gutter: stable;  /* reserve gutter → no reflow on content change */
+  scroll-padding-top: 16px;  /* anchor/ToC jumps clear the scroll-region top */
+  scroll-behavior: smooth;
+}
 .card {
   width: 100%;
   background: transparent;
@@ -99,8 +118,7 @@ html { scroll-padding-top: 160px; }
                    scroll or near the top of the page. Respects
                    prefers-reduced-motion (transition disabled). */
 .topbar-wrap {
-  position: sticky;
-  top: 0;
+  position: relative;   /* header is grid row 1; z-index keeps popovers above .page */
   z-index: 50;
   background: var(--card);
   border-bottom: 1px solid transparent;
@@ -247,50 +265,34 @@ html { scroll-padding-top: 160px; }
 /* DD-NAVBAR-SOTA-2026-05-28 (Wave D) — title row inside topbar.
    Renders as a row of `.topbar-wrap`. Padding matches `.topbar`;
    horizontal divider above. */
-.topbar-wrap .title-row {
+/* Row 2 — feature title (red bar) on the left + stage tabs on the right.
+   Compact: tighter vertical padding than row 1. */
+.topbar-wrap .feature-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 12px 40px;
+  padding: 6px 40px;
   border-top: 1px solid var(--border);
   margin: 0;
+  flex-wrap: nowrap;
 }
 
-/* Wave F / Wave G — smart auto-hide. Any topbar row marked
-   `.topbar-collapsible` slides away on scroll-down (topbar.js toggles
-   `.is-hidden`); rows WITHOUT this class (brand+nav, stage tabs) stay
-   pinned so identity + stage switching are never lost mid-scroll
-   (Stripe Apps pattern). Collapse via max-height+padding so lower
-   rows slide up to meet the pinned rows — no translateY ghosting.
-   max-height is generous (200px) so a wrapped toolbar on narrow
-   viewports isn't clipped in its expanded state. */
-.topbar-wrap .topbar-collapsible {
-  max-height: 200px;
-  overflow: hidden;
-  transition: max-height 0.24s ease,
-              padding 0.22s ease,
-              opacity 0.18s ease,
-              border-top-color 0.18s ease;
-}
-.topbar-wrap .topbar-collapsible.is-hidden {
-  max-height: 0;
-  padding-top: 0;
-  padding-bottom: 0;
-  opacity: 0;
-  border-top-color: transparent;
-}
-@media (prefers-reduced-motion: reduce) {
-  .topbar-wrap .topbar-collapsible { transition: none; }
-}
+/* `.topbar-collapsible` (the title row / contextual toolbar) — the old
+   scroll-driven auto-hide was removed with the app-shell grid (the header
+   is a fixed grid row now, so it never needs to hide). The class is kept
+   on the DOM as a styling hook but no longer collapses; left as a no-op so
+   a wrapped toolbar on narrow viewports is never clipped. */
 .title {
-  font-size: 1.15rem;
-  font-weight: 500;
+  font-size: 0.98rem;
+  font-weight: 600;
   color: var(--text);
-  line-height: 1.25;
+  line-height: 1.2;
   margin: 0;
-  padding-left: 16px;
-  border-left: 6px solid var(--primary);
+  padding-left: 11px;
+  border-left: 5px solid var(--primary);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .panel { min-height: 360px; }
 
