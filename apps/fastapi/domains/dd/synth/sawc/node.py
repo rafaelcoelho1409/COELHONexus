@@ -452,6 +452,8 @@ async def _draft_one_section(
     memory: list[dict],
     n_primary_contribs: int,
     vault_rich: dict | None = None,
+    prose_mode: bool = False,
+    already_shown_hashes: set[str] | None = None,
 ) -> tuple[Optional[_LLMSectionDraft], Optional[str], int, int]:
     """One writer call → parse → Pydantic → cross-ref → repair.
 
@@ -479,6 +481,8 @@ async def _draft_one_section(
         memory=memory,
         n_primary_contribs=n_primary_contribs,
         vault_rich=vault_rich,
+        prose_mode=prose_mode,
+        already_shown_hashes=already_shown_hashes,
     )
 
     deployment: Optional[str] = None
@@ -542,6 +546,7 @@ async def _draft_one_section(
             memory=memory,
             current_json=json.dumps(current, indent=2),
             issues=issues,
+            prose_mode=prose_mode,
         )
         try:
             rr, rm = await chat_judge_bandit_async(
@@ -599,6 +604,7 @@ async def _draft_one_section(
             memory=memory,
             current_json=json.dumps(draft.model_dump(), indent=2),
             issues=issues,
+            prose_mode=prose_mode,
         )
         try:
             rr, rm = await chat_judge_bandit_async(
@@ -884,6 +890,8 @@ async def _write_section_best_of_n(
     chapter_id: str,
     chapter_title: str,
     thread_id: str,
+    prose_mode: bool = False,
+    already_shown_hashes: set[str] | None = None,
 ) -> Section:
     """Full per-section pipeline: N drafts → critic-pick → Section.
 
@@ -916,6 +924,8 @@ async def _write_section_best_of_n(
                 memory=memory,
                 n_primary_contribs=n_primary_contribs,
                 vault_rich=vault_rich,
+                prose_mode=prose_mode,
+                already_shown_hashes=already_shown_hashes,
             )
 
         if _OPTIMAL_STOPPING_ENABLED and _N_DRAFTS >= 2:
@@ -1327,6 +1337,10 @@ async def sawc_write(state: SynthState) -> dict:
     sem = asyncio.Semaphore(_CONCURRENCY)
     memory_ledger: list[MemoryEntry] = []
     completed_sections: dict[str, Section] = {}
+    # Fix #3 — cross-section recycling: code_ref_hashes already rendered as
+    # subtopics by COMPLETED (prior-stage) sections of this chapter. Passed to
+    # later sections' writer prompts so they reference rather than re-show.
+    chapter_used_hashes: set[str] = set()
     n_total_drafts_fired = 0
     n_critic_picks = 0
     n_picker_fallbacks = 0
@@ -1440,6 +1454,10 @@ async def sawc_write(state: SynthState) -> dict:
                     f"this section; falling back to chapter-wide "
                     f"({len(valid_source_keys)} sources) for citations"
                 )
+            # PROSE PATH (Fix #1): no code in this section's bank (after the
+            # Ship-A chapter-wide padding above) → conceptual section. The
+            # writer emits prose subtopics instead of failing to a placeholder.
+            prose_mode = not allowed_hashes
             return await _write_section_best_of_n(
                 sem=sem,
                 section_id=sid,
@@ -1458,6 +1476,8 @@ async def sawc_write(state: SynthState) -> dict:
                 chapter_id=chapter_id,
                 chapter_title=chapter_title,
                 thread_id=thread_id,
+                prose_mode=prose_mode,
+                already_shown_hashes=set(chapter_used_hashes),
             )
 
         section_results = await asyncio.gather(
@@ -1506,6 +1526,13 @@ async def sawc_write(state: SynthState) -> dict:
                     f"[sawc_write] memory extract failed for {sid}: "
                     f"{type(e).__name__}: {e}"
                 )
+
+            # Fix #3 — record this section's rendered code so later stages'
+            # sections reference rather than re-emit it (anti-recycling).
+            for st in (getattr(sec, "subtopics", None) or []):
+                h = getattr(st, "code_ref_hash", "")
+                if h:
+                    chapter_used_hashes.add(h)
 
         stage_ms = int((time.monotonic() - stage_t0) * 1000)
         await emit_progress(

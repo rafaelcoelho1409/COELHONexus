@@ -331,10 +331,11 @@ def validate_section_against_inputs(
             f"{expected_heading!r}. Echo the outline heading verbatim."
         )
 
-    # v2 cookbook schema: validate subtopics' code_ref_hash field
+    # v2 cookbook schema: validate subtopics' code_ref_hash field.
+    # Empty hashes are PROSE subtopics (no-code section) — exempt.
     bad_hashes = [
         s.code_ref_hash for s in draft.subtopics
-        if s.code_ref_hash not in allowed_hashes
+        if s.code_ref_hash and s.code_ref_hash not in allowed_hashes
     ]
     if bad_hashes:
         issues.append(
@@ -504,7 +505,8 @@ def score_draft_structural(
     # v2 cookbook scoring: subtopic count + explanation density + heading
     # match + citation count drive the structural score.
     n_vault_violations = sum(
-        1 for s in draft.subtopics if s.code_ref_hash not in allowed_hashes
+        1 for s in draft.subtopics
+        if s.code_ref_hash and s.code_ref_hash not in allowed_hashes
     )
     n_citation_violations = sum(
         1 for c in draft.citations if c.source_key not in valid_source_keys
@@ -669,6 +671,8 @@ def build_writer_prompt(
     memory: list[dict],
     n_primary_contribs: int,
     vault_rich: dict | None = None,
+    prose_mode: bool = False,
+    already_shown_hashes: set[str] | None = None,
 ) -> str:
     """Build the per-section per-draft writer prompt.
 
@@ -679,12 +683,40 @@ def build_writer_prompt(
             </code>` envelopes so the LLM can pick pedagogically valuable
             hashes from informed context. When None, falls back to plain
             hash listing (legacy behavior).
+        prose_mode: PROSE PATH (2026-05-30). True for a conceptual section
+            with NO code in its sources (empty bank). The writer emits prose
+            subtopics (empty code_ref_hash) instead of failing to a
+            placeholder. Auto-enabled when allowed_hashes is empty.
+        already_shown_hashes: cross-section anti-recycling (Fix #3). Hashes a
+            PRIOR section of this chapter already turned into a subtopic — the
+            writer is told to reference, not re-show, them.
     """
     prereqs_str = (
         ", ".join(section_prerequisites)
         if section_prerequisites
         else "(none — this is a stage-0 section)"
     )
+    # A section with an empty code bank is a conceptual/prose topic — write
+    # prose subtopics rather than failing to an empty placeholder.
+    prose = prose_mode or not allowed_hashes
+
+    # Fix #3 — cross-section recycling: list the canonical code already shown
+    # earlier in THIS chapter so the writer references instead of re-emitting.
+    already_shown_hashes = already_shown_hashes or set()
+    shown_here = sorted(h for h in (already_shown_hashes or set()) if h)
+    already_shown_block = ""
+    if shown_here and not prose:
+        listing = ", ".join(shown_here[:40])
+        if len(shown_here) > 40:
+            listing += f", … ({len(shown_here) - 40} more)"
+        already_shown_block = (
+            f"== ALREADY SHOWN EARLIER IN THIS CHAPTER (do NOT re-pick) ==\n"
+            f"These hashes were already rendered as subtopics in earlier "
+            f"sections. Re-picking one makes this section a hollow 'see above' "
+            f"cross-reference (a render-time pass strips the duplicate). PREFER "
+            f"hashes NOT in this list; only re-pick if it is genuinely central "
+            f"to THIS section's distinct angle:\n  {listing}\n\n"
+        )
 
     # Visible Vault rendering — see Ship #1 in
     # docs/KD-CODE-FIRST-SOTA-2026-05-24.md. The LLM sees the FULL code
@@ -727,6 +759,39 @@ def build_writer_prompt(
         if valid_source_keys
         else "  (no sources — citations may be empty)"
     )
+
+    # Prose vs code-first: build the bank section + a top-of-prompt directive.
+    if prose:
+        prose_note = (
+            "🟦 PROSE MODE — this section's sources have NO code; it is a "
+            "CONCEPTUAL topic. The CODE-FIRST rules below (pick a hash first, "
+            "code-density, identifier grounding, no-recycle) are SUSPENDED. "
+            "Set EVERY subtopic's code_ref_hash to \"\" (empty) and write "
+            "substantial, source-grounded conceptual prose. Still emit ≥3 "
+            "DISTINCT subtopics and ground each to the contributions / "
+            "citations below — state only what the sources say.\n\n"
+        )
+        bank_section = (
+            "== PROSE SECTION — NO CODE BANK ==\n"
+            "Teach this concept as prose. Emit 3-6 subtopics, each:\n"
+            "  - code_ref_hash: \"\"   (EMPTY — no code to anchor)\n"
+            "  - subheading: 2-10 words naming the concept / step / policy\n"
+            "  - explanation: a substantial 40-80 word paragraph that "
+            "actually TEACHES it, grounded in the contributions + citations "
+            "(no invented specifics — no numbers, flags, or APIs the sources "
+            "don't state).\n"
+        )
+    else:
+        prose_note = ""
+        bank_section = (
+            f"== ALLOWED CODE BANK ({len(allowed_hashes)} entries) — these "
+            f"are the actual code blocks available for THIS section. "
+            f"Each `<code id=...>` envelope shows the FULL code body. PICK "
+            f"3-8 BEST ONES — each becomes one subtopic. Reason about each "
+            f"block fully; the explanation must reference specific lines / "
+            f"decorators / arguments. ==\n"
+            f"{hash_list}"
+        )
     return (
         f"You are the Section Writer — step 6 of the Docs Distiller "
         f"synth pipeline. Write ONE section of one chapter as a "
@@ -742,6 +807,8 @@ def build_writer_prompt(
         f"section. Each code block teaches ONE pedagogically valuable "
         f"thing.\n\n"
 
+        f"{prose_note}"
+
         f"FRAMEWORK: {framework}\n"
         f"CHAPTER: {chapter_id} — {chapter_title}\n"
         f"SECTION (H2): {section_id} — {section_heading}\n"
@@ -751,13 +818,9 @@ def build_writer_prompt(
         f"== GROUNDED CONTRIBUTIONS (your subtopics MUST cover these) ==\n"
         f"{_format_contributions_block(contributions)}\n\n"
 
-        f"== ALLOWED CODE BANK ({len(allowed_hashes)} entries) — these "
-        f"are the actual code blocks available for THIS section. "
-        f"Each `<code id=...>` envelope shows the FULL code body. PICK "
-        f"3-8 BEST ONES — each becomes one subtopic. Reason about each "
-        f"block fully; the explanation must reference specific lines / "
-        f"decorators / arguments. ==\n"
-        f"{hash_list}\n\n"
+        f"{already_shown_block}"
+
+        f"{bank_section}\n\n"
 
         f"== VALID CITATION SOURCE_KEYS ({len(valid_source_keys)}) — "
         f"these are the source docs that the digest routed TO THIS "
@@ -951,16 +1014,24 @@ def build_repair_prompt(
     memory: list[dict],
     current_json: str,
     issues: list[str],
+    prose_mode: bool = False,
 ) -> str:
     """Repair prompt — same context as writer prompt, plus the
     issue list, asking for a fixed version preserving good fields."""
+    prose = prose_mode or not allowed_hashes
     prereqs_str = (
         ", ".join(section_prerequisites)
         if section_prerequisites else "(none)"
     )
     hash_list = (
-        "\n".join(f"  - {h}" for h in allowed_hashes)
-        if allowed_hashes else "  (none)"
+        "PROSE MODE — this section has NO code. Set EVERY subtopic's "
+        "code_ref_hash to \"\" (empty) and write substantial source-grounded "
+        "conceptual prose (3-6 distinct subtopics, 40-80 word explanations)."
+        if prose
+        else (
+            "\n".join(f"  - {h}" for h in allowed_hashes)
+            if allowed_hashes else "  (none)"
+        )
     )
     source_list = (
         "\n".join(f"  - {k}" for k in valid_source_keys)
@@ -999,7 +1070,7 @@ def build_repair_prompt(
         f'  "intro": "1-2 sentence section framing",\n'
         f'  "subtopics": [\n'
         f'    {{"subheading": "2-10 words", "explanation": "8-80 words", '
-        f'"code_ref_hash": "16-hex"}},\n'
+        f'"code_ref_hash": "{"" if prose else "16-hex"}"}},\n'
         f'    ... 3-12 entries ...\n'
         f'  ],\n'
         f'  "citations": [{{"source_key": "...", "claim": "..."}}, ...]\n'

@@ -18,7 +18,14 @@ SAWC_SCHEMA_VERSION = "2.0-cookbook"
 # prompt (DD-SYNTH-SECTION-RECYCLING-2026-05-29 fix #3). Pairs with the
 # render-time cross-section body dedup; bumped so the re-run regenerates
 # drafts under the new instruction.
-SAWC_PROMPT_VERSION = "v5-no-recycle-2026-05-29"
+# v6 (2026-05-30, DD-SYNTH-PROSE-PATH) — after LangFuse shipped 2 EMPTY
+# placeholder chapters (data-retention, troubleshooting), two writer changes:
+#   - PROSE PATH: a section whose code bank is empty (conceptual/no-code
+#     topic) now emits PROSE subtopics (code_ref_hash="") instead of failing
+#     to a placeholder. Schema (Subtopic.code_ref_hash) made optional.
+#   - cross-section recycling (Fix #3): the prompt now lists hashes already
+#     shown by earlier sections of the chapter so the writer references them.
+SAWC_PROMPT_VERSION = "v6-prose-path-2026-05-30"
 
 # v2 schema (2026-05-24 evening): replaces flat paragraphs + code_refs with
 # a cookbook-style {intro, subtopics: [{subheading, explanation, code_ref_hash}]}

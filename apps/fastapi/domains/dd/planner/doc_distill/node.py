@@ -176,6 +176,71 @@ def _try_validate(d: dict) -> tuple[Optional[DocDistillate], Optional[str]]:
 
 
 # -------------------------------------------------------------- #
+# Fallback distillate (Fix #4, 2026-05-30)                        #
+# -------------------------------------------------------------- #
+_FB_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
+_FB_STOP = frozenset({
+    "the", "and", "for", "this", "with", "that", "from", "your", "into",
+    "via", "are", "use", "how", "you", "can", "will", "not", "but", "its",
+    "has", "see", "all", "one", "two", "any",
+})
+
+
+def _doc_title(source_key: str, body: str) -> str:
+    """First H1 heading, else a filename-derived title."""
+    m = re.search(r"(?m)^#\s+(.+)$", body or "")
+    if m:
+        t = m.group(1).strip().strip("#").strip()
+        if t:
+            return t
+    base = source_key.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    base = re.sub(r"^\d+-", "", base)
+    return " ".join(w.capitalize() for w in base.split("-")) or source_key
+
+
+def _fallback_distillate(source_key: str, body: str) -> DocDistillate:
+    """Deterministic minimal distillate used when the LLM distill fails, so a
+    doc that HAS content still reaches chapter_assign + chapter_select instead
+    of being silently dropped from the book (LangFuse lost ~6 genuine docs
+    this way; CC ~18). Derived from the doc's H1/filename + identifier tokens
+    — weak signal, but the title alone routes most docs to a sensible chapter."""
+    title = _doc_title(source_key, body)
+    words = (
+        f"Reference documentation covering {title} and its usage, "
+        f"configuration, and related concepts in the framework."
+    ).split()
+    if len(words) < _SUMMARY_WORDS_MIN:
+        words += ("from the official documentation set describing core "
+                  "concepts and configuration").split()
+    summary = " ".join(words[:_SUMMARY_WORDS_MAX])
+
+    terms: list[str] = []
+    seen: set[str] = set()
+    for tok in _FB_IDENT_RE.findall(body or ""):
+        low = tok.lower()
+        if low in _FB_STOP or low in seen:
+            continue
+        seen.add(low)
+        terms.append(tok[:_KEY_TERM_CHARS_MAX])
+        if len(terms) >= _KEY_TERMS_MAX:
+            break
+    if len(terms) < _KEY_TERMS_MIN:
+        for w in title.split():
+            if len(w) >= _KEY_TERM_CHARS_MIN and w.lower() not in seen:
+                seen.add(w.lower())
+                terms.append(w[:_KEY_TERM_CHARS_MAX])
+            if len(terms) >= _KEY_TERMS_MIN:
+                break
+    for g in ("overview", "reference", "guide"):
+        if len(terms) >= _KEY_TERMS_MIN:
+            break
+        if g not in seen:
+            seen.add(g)
+            terms.append(g)
+    return DocDistillate(summary=summary, key_terms=terms[:_KEY_TERMS_MAX])
+
+
+# -------------------------------------------------------------- #
 # Per-doc worker                                                  #
 # -------------------------------------------------------------- #
 async def _distill_one(
@@ -183,8 +248,10 @@ async def _distill_one(
     minio,
     framework: str,
     source_key: str,
-) -> tuple[str, Optional[DocDistillate], int]:
-    """Returns (source_key, distillate or None, wall_ms)."""
+) -> tuple[str, Optional[DocDistillate], int, bool]:
+    """Returns (source_key, distillate or None, wall_ms, used_fallback).
+    distillate is None only when the doc has NO readable content; a doc with
+    content but a failed LLM distill gets a deterministic fallback (Fix #4)."""
     async with sem:
         t0 = time.monotonic()
         try:
@@ -194,12 +261,13 @@ async def _distill_one(
                 f"[doc_distill] failed to read {source_key}: "
                 f"{type(e).__name__}: {e}"
             )
-            return source_key, None, int((time.monotonic() - t0) * 1000)
+            return source_key, None, int((time.monotonic() - t0) * 1000), False
 
         if not (body or "").strip():
-            return source_key, None, int((time.monotonic() - t0) * 1000)
+            return source_key, None, int((time.monotonic() - t0) * 1000), False
 
         prompt = _build_prompt(framework, source_key, body)
+        distillate: Optional[DocDistillate] = None
         try:
             # 2026-05-27 — route through `dd-reduce-label` (non-reasoning
             # curated pool). Same rationale as chapter_assign: short
@@ -212,43 +280,47 @@ async def _distill_one(
                 response_format=_DISTILL_RESPONSE_FORMAT,
                 dd_process="dd-reduce-label",
             )
+            parsed = _parse(raw)
+            if parsed:
+                distillate, err = _try_validate(parsed)
+                # ONE repair attempt on Pydantic-fail.
+                if distillate is None and _MAX_REPAIR_ATTEMPTS > 0:
+                    repair_prompt = (
+                        prompt
+                        + f"\n\nPRIOR OUTPUT was REJECTED: {err}\n"
+                        + f"Emit valid JSON exactly per the schema above."
+                    )
+                    # same dd_process so the bandit's reward state stays coherent
+                    raw2, _ = await chat_judge_bandit_async(
+                        repair_prompt,
+                        max_tokens=_MAX_TOKENS,
+                        temperature=0.0,
+                        response_format=_DISTILL_RESPONSE_FORMAT,
+                        dd_process="dd-reduce-label",
+                    )
+                    parsed2 = _parse(raw2)
+                    if parsed2:
+                        distillate, _ = _try_validate(parsed2)
         except Exception as e:
             logger.warning(
                 f"[doc_distill] LLM failed for {source_key}: "
                 f"{type(e).__name__}: {e}"
             )
-            return source_key, None, int((time.monotonic() - t0) * 1000)
 
-        parsed = _parse(raw)
-        if not parsed:
-            return source_key, None, int((time.monotonic() - t0) * 1000)
-
-        distillate, err = _try_validate(parsed)
-        # ONE repair attempt on Pydantic-fail.
-        if distillate is None and _MAX_REPAIR_ATTEMPTS > 0:
-            repair_prompt = (
-                prompt
-                + f"\n\nPRIOR OUTPUT was REJECTED: {err}\n"
-                + f"Emit valid JSON exactly per the schema above."
+        # Fix #4 — never silently drop a doc that HAS content. A failed LLM
+        # distill falls back to a deterministic minimal distillate so the doc
+        # still flows through chapter_assign + chapter_select into the book.
+        used_fallback = False
+        if distillate is None:
+            distillate = _fallback_distillate(source_key, body)
+            used_fallback = True
+            logger.info(
+                f"[doc_distill] {source_key}: LLM distill failed — using "
+                f"deterministic fallback distillate (doc kept, not dropped)"
             )
-            try:
-                # 2026-05-27 — same dd_process as the primary call so the
-                # bandit's cooldown / reward state stays coherent.
-                raw2, _ = await chat_judge_bandit_async(
-                    repair_prompt,
-                    max_tokens=_MAX_TOKENS,
-                    temperature=0.0,
-                    response_format=_DISTILL_RESPONSE_FORMAT,
-                    dd_process="dd-reduce-label",
-                )
-                parsed2 = _parse(raw2)
-                if parsed2:
-                    distillate, _ = _try_validate(parsed2)
-            except Exception:
-                pass
 
         wall_ms = int((time.monotonic() - t0) * 1000)
-        return source_key, distillate, wall_ms
+        return source_key, distillate, wall_ms, used_fallback
 
 
 # -------------------------------------------------------------- #
@@ -358,12 +430,22 @@ async def doc_distill(state: PlannerState) -> dict:
     results = await asyncio.gather(*tasks, return_exceptions=False)
 
     distillates: dict[str, dict] = {}
-    failures: list[str] = []
-    for k, dist, _wall in results:
+    failures: list[str] = []        # no content at all (read fail / empty)
+    fallbacks: list[str] = []       # content present but LLM distill failed
+    for k, dist, _wall, used_fb in results:
         if dist is not None:
             distillates[k] = dist.model_dump()
+            if used_fb:
+                fallbacks.append(k)
         else:
             failures.append(k)
+
+    if fallbacks:
+        logger.warning(
+            f"[doc_distill] {slug}: {len(fallbacks)} doc(s) used a fallback "
+            f"distillate (LLM distill failed but content kept): "
+            f"{fallbacks[:20]}"
+        )
 
     payload = {
         "prompt_version": _PROMPT_VERSION,
@@ -374,6 +456,8 @@ async def doc_distill(state: PlannerState) -> dict:
         "n_distilled":    len(distillates),
         "n_failed":       len(failures),
         "failures":       failures[:20],  # cap for blob size
+        "n_fallback":     len(fallbacks),
+        "fallbacks":      fallbacks[:20],
     }
     blob = json.dumps(payload, indent=2, ensure_ascii=False)
     await minio.write(vkey, blob, content_type="application/json")
@@ -384,6 +468,7 @@ async def doc_distill(state: PlannerState) -> dict:
         "n_files": n,
         "n_distilled": len(distillates),
         "n_failed": len(failures),
+        "n_fallback": len(fallbacks),
         "manifest_hash": manifest,
         "cache_hit": False,
         "wall_ms": wall_ms,
@@ -391,6 +476,6 @@ async def doc_distill(state: PlannerState) -> dict:
     await emit_progress(
         thread_id, "doc_distill", "done",
         cache_hit=False, n_distilled=len(distillates),
-        n_failed=len(failures), wall_ms=wall_ms,
+        n_failed=len(failures), n_fallback=len(fallbacks), wall_ms=wall_ms,
     )
     return {"doc_distill_ref": lkey, "doc_distill_stats": stats}

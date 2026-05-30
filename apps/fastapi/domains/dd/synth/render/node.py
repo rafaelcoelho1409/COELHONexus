@@ -521,10 +521,30 @@ async def render_audit_write(state: SynthState) -> dict:
         rendered_chapter_md=chapter_md,
     )
 
+    # CONTENT-PRESENT GATE (Fix #2, 2026-05-30). A section the SAWC writer
+    # couldn't draft renders as an empty placeholder (0 subtopics). The
+    # byte-exact vault audit can't see this — a placeholder has no code refs,
+    # so it PASSES audit while being empty (this masked LangFuse ch-07/ch-08).
+    # Count placeholder sections and FAIL the audit when any exist, so the
+    # chapter surfaces as not-ready (Study sidebar reads audit_passed) instead
+    # of silently shipping blank.
+    n_placeholder_sections = sum(
+        1 for s in sections_ctx if not (s.get("subtopics"))
+    )
+    if n_placeholder_sections:
+        audit = audit.model_copy(update={"audit_passed": False})
+        logger.warning(
+            f"[render_audit_write] {slug}/{chapter_id}: "
+            f"{n_placeholder_sections}/{len(sections_ctx)} section(s) are EMPTY "
+            f"placeholders (writer produced 0 subtopics) — failing audit. The "
+            f"prose path should prevent this; investigate the section's sources."
+        )
+
     await emit_progress(
         thread_id, "render_audit_write", "rendered",
         chapter_chars=len(chapter_md),
         n_sections_rendered=len(sections_ctx),
+        n_placeholder_sections=n_placeholder_sections,
         n_code_refs_resolved=audit.n_resolved,
         n_code_refs_missing=len(audit.n_missing),
         n_code_refs_drift=len(audit.n_byte_drift),

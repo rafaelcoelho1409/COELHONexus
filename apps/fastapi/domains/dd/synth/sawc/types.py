@@ -114,13 +114,17 @@ class Subtopic(BaseModel):
     # prose dramatically reduces drift — the prose then conditions on a
     # KNOWN code body instead of an imagined topic.
     code_ref_hash: str = Field(
+        default="",
         description=(
-            "16-hex vault hash REQUIRED — one code block per Subtopic. "
-            "PICK THIS FIRST. MUST be in the section's allowed_hashes "
-            "shown in the prompt. For 'verbatim' subtopics, the renderer "
-            "materializes the code from vault[code_ref_hash]. For 'derived' "
-            "subtopics, the hash anchors provenance back to the originating "
-            "docs entry."
+            "16-hex vault hash — one code block per Subtopic. PICK THIS "
+            "FIRST. MUST be in the section's allowed_hashes shown in the "
+            "prompt. For 'verbatim' subtopics, the renderer materializes the "
+            "code from vault[code_ref_hash]. For 'derived' subtopics, the "
+            "hash anchors provenance back to the originating docs entry. "
+            "PROSE PATH (2026-05-30): leave EMPTY (\"\") for a conceptual / "
+            "prose-only section that has NO code in its sources — the "
+            "subtopic then renders as subheading + explanation with no code "
+            "block. Only allowed when the prompt says PROSE MODE."
         ),
     )
     subheading: str = Field(
@@ -208,9 +212,12 @@ class Subtopic(BaseModel):
     @field_validator("code_ref_hash")
     @classmethod
     def _validate_hash(cls, v: str) -> str:
-        if not _HASH_RE.match(v):
+        # Empty = PROSE subtopic (conceptual/no-code section; see the prose
+        # path note in the field description). Non-empty must be 16-hex.
+        if v and not _HASH_RE.match(v):
             raise ValueError(
-                f"code_ref_hash {v!r} must be 16 lowercase hex chars"
+                f"code_ref_hash {v!r} must be 16 lowercase hex chars "
+                f"(or empty \"\" for a prose subtopic)"
             )
         return v
 
@@ -325,7 +332,9 @@ class _LLMSectionDraft(BaseModel):
                 f"subtopics count must be {_SUBTOPICS_MIN}-"
                 f"{_SUBTOPICS_MAX}; got {len(v)}"
             )
-        hashes = [s.code_ref_hash for s in v]
+        # Empty hashes (prose subtopics) are exempt from the uniqueness
+        # check — a prose-only section legitimately has several "" hashes.
+        hashes = [s.code_ref_hash for s in v if s.code_ref_hash]
         if len(set(hashes)) != len(hashes):
             raise ValueError(
                 f"duplicate code_ref_hash across subtopics: {hashes}"

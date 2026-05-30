@@ -36,4 +36,9 @@ _TEMPERATURE = 0.2
 _MAX_REPAIR_ATTEMPTS = 1
 
 _BLOB_PREFIX = "planner"
-_PROMPT_VERSION = "v1-2026-05-27"
+# v2 (2026-05-30) — fallback distillate on LLM-distill failure (Fix #4): a
+# doc with content but a failed distill is no longer silently dropped from
+# the book; it gets a deterministic title/identifier-derived distillate so it
+# flows through chapter_assign + chapter_select. Bumped so a re-plan
+# re-distills (and applies the fallback) instead of cache-hitting old drops.
+_PROMPT_VERSION = "v2-fallback-distill-2026-05-30"
