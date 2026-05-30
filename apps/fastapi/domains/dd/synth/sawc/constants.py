@@ -25,7 +25,12 @@ SAWC_SCHEMA_VERSION = "2.0-cookbook"
 #     to a placeholder. Schema (Subtopic.code_ref_hash) made optional.
 #   - cross-section recycling (Fix #3): the prompt now lists hashes already
 #     shown by earlier sections of the chapter so the writer references them.
-SAWC_PROMPT_VERSION = "v6-prose-path-2026-05-30"
+# v7 (2026-05-30) — prose-path TRIGGER fix. v6 computed prose_mode from the
+# post-Ship-A-padding bank, so a no-code section in a chapter with a few stray
+# hashes got padded → prose_mode off → empty placeholder (LangFuse ch-05/ch-09).
+# v7 gates prose_mode on the DIGEST-ROUTED count (pre-padding) OR a sub-minimum
+# padded bank. Bumped so cached placeholder sections re-render as prose.
+SAWC_PROMPT_VERSION = "v7-prose-trigger-2026-05-30"
 
 # v2 schema (2026-05-24 evening): replaces flat paragraphs + code_refs with
 # a cookbook-style {intro, subtopics: [{subheading, explanation, code_ref_hash}]}

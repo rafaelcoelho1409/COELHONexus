@@ -97,6 +97,7 @@ from .constants import (
     SAWC_PROMPT_VERSION,
     SAWC_SCHEMA_VERSION,
     _N_DRAFTS,
+    _SUBTOPICS_MIN,
 )
 from .service import (
     build_critic_picker_prompt,
@@ -1395,6 +1396,13 @@ async def sawc_write(state: SynthState) -> dict:
             for c in contributions:
                 for h in (c.get("code_refs") or []):
                     allowed_hashes_set.add(h)
+            # PROSE-PATH trigger input (Fix, 2026-05-30): the count of code
+            # GENUINELY routed to this section by the digest, BEFORE the
+            # Ship-A chapter-wide padding below. The padding pulls stray
+            # chapter hashes into a no-code section, which previously flipped
+            # prose_mode off and produced an empty placeholder (LangFuse
+            # ch-05/ch-09). prose_mode is decided from this pre-padding count.
+            n_routed_hashes = len(allowed_hashes_set)
             # Ship A: augment thin digest-routed banks with chapter-wide
             # vault. Threshold = 6 (below which most sections empirically
             # emit too few code_refs). Pad with up to 20 highest-pedagogy
@@ -1454,10 +1462,16 @@ async def sawc_write(state: SynthState) -> dict:
                     f"this section; falling back to chapter-wide "
                     f"({len(valid_source_keys)} sources) for citations"
                 )
-            # PROSE PATH (Fix #1): no code in this section's bank (after the
-            # Ship-A chapter-wide padding above) → conceptual section. The
-            # writer emits prose subtopics instead of failing to a placeholder.
-            prose_mode = not allowed_hashes
+            # PROSE PATH (Fix #1, trigger corrected 2026-05-30): a section is
+            # conceptual/prose when the digest routed it NO real code
+            # (n_routed_hashes == 0), OR when even after Ship-A padding the
+            # bank can't sustain the minimum code subtopics (tiny no-code
+            # chapter — nothing to pad from). Gating on n_routed (not the
+            # padded bank) means a no-code section in a chapter that has a few
+            # stray hashes still goes prose instead of failing to a
+            # placeholder. Code-rich chapters are unaffected: a section with
+            # ≥1 routed hash and a paddable bank stays code-first.
+            prose_mode = (n_routed_hashes == 0) or (len(allowed_hashes) < _SUBTOPICS_MIN)
             return await _write_section_best_of_n(
                 sem=sem,
                 section_id=sid,

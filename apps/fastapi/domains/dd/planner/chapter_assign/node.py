@@ -54,7 +54,11 @@ _BODY_CHARS = 4_000
 _CONFIDENCE_THRESHOLD = 0.5
 
 _BLOB_PREFIX = "planner"
-_PROMPT_VERSION = "v1-2026-05-27"
+# v2 (2026-05-30) — lexical fallback assignment on assign-LLM failure (mirror
+# of doc_distill's fallback): a doc whose scoring call fails is routed to its
+# best word-overlap chapter at threshold confidence instead of being dropped
+# from the book. Bumped so a re-plan re-runs assign with the fallback active.
+_PROMPT_VERSION = "v2-assign-fallback-2026-05-30"
 
 
 class ChapterScore(BaseModel):
@@ -160,6 +164,44 @@ def _build_prompt(
     )
 
 
+# Fix (chapter_assign fallback, 2026-05-30) — mirror of doc_distill's fallback.
+_FB_WORD_RE = re.compile(r"[a-z0-9]{3,}")
+_FB_STOP = frozenset({
+    "the", "and", "for", "this", "with", "that", "from", "your", "into", "via",
+    "are", "use", "how", "you", "can", "will", "not", "but", "its", "has",
+    "langfuse", "data", "api", "sdk", "using", "configure", "setup", "guide",
+    "overview", "reference", "documentation", "covering", "usage", "concepts",
+})
+
+
+def _fallback_assign_scores(
+    doc_summary: str, doc_terms: list[str], proposals: list[dict],
+) -> list[dict]:
+    """Lexical-overlap fallback used when the assign LLM call FAILS — routes
+    the doc to its best word-overlap chapter at threshold confidence so it
+    isn't silently dropped from the book (the assign-node equivalent of the
+    doc_distill fallback). Single-membership: only the best chapter is scored.
+    Empty when there are no proposals to match against."""
+    if not proposals:
+        return []
+    dw = {
+        w for w in _FB_WORD_RE.findall(
+            (doc_summary + " " + " ".join(doc_terms)).lower()
+        ) if w not in _FB_STOP
+    }
+    best_i, best_ov = 0, -1
+    for i, p in enumerate(proposals):
+        text = (
+            (p.get("title") or "") + " " + (p.get("description") or "")
+            + " " + " ".join(p.get("key_concepts") or [])
+        )
+        pw = {w for w in _FB_WORD_RE.findall(text.lower()) if w not in _FB_STOP}
+        ov = len(dw & pw)
+        if ov > best_ov:
+            best_ov, best_i = ov, i
+    return [{"chapter_idx": best_i, "confidence": _CONFIDENCE_THRESHOLD}]
+
+
 async def _assign_one(
     sem: asyncio.Semaphore,
     minio,
@@ -167,8 +209,10 @@ async def _assign_one(
     source_key: str,
     distillate: Optional[dict],
     proposals: list[dict],
-) -> tuple[str, Optional[list[dict]], int]:
-    """Returns (source_key, scores_list_or_None, wall_ms)."""
+) -> tuple[str, Optional[list[dict]], int, bool]:
+    """Returns (source_key, scores_list_or_None, wall_ms, used_fallback).
+    scores is None only when the doc has no content AND no proposals; a doc
+    with content whose assign LLM call fails gets lexical-fallback scores."""
     async with sem:
         t0 = time.monotonic()
         doc_summary = (distillate or {}).get("summary") or ""
@@ -180,7 +224,7 @@ async def _assign_one(
             except Exception:
                 pass
             if not doc_body:
-                return source_key, None, int((time.monotonic() - t0) * 1000)
+                return source_key, None, int((time.monotonic() - t0) * 1000), False
 
         prompt = _build_prompt(
             framework=framework, source_key=source_key,
@@ -188,17 +232,11 @@ async def _assign_one(
             doc_body=doc_body, proposals=proposals,
         )
 
+        scores: Optional[list[dict]] = None
         try:
             # 2026-05-27 — route through `dd-reduce-label` (non-reasoning
-            # curated pool: Groq Llama-3.3-70B, Gemini Flash-Lite,
-            # Nemotron-3-super, gpt-oss-120b, Mistral Large/Small,
-            # Llama-4 Maverick) instead of the default `dd-grader` which
-            # the FGTS-VA bandit was over-favoring to reasoning models
-            # (GLM-5.1 hit 51% of calls in prior runs). For short
-            # structured JSON scoring, reasoning model <think> blocks
-            # add 10-25s overhead per call — wrong tool. Per-call
-            # latency drops 1-3s vs 10-25s; total wall-time on this
-            # stage drops ~5-10×.
+            # curated pool). For short structured JSON scoring, reasoning
+            # model <think> blocks add 10-25s overhead per call — wrong tool.
             raw, _ = await chat_judge_bandit_async(
                 prompt,
                 max_tokens=_MAX_TOKENS,
@@ -206,29 +244,36 @@ async def _assign_one(
                 response_format=_ASSIGN_RESPONSE_FORMAT,
                 dd_process="dd-reduce-label",
             )
+            parsed = _parse(raw)
+            if parsed:
+                assignment = DocAssignment.model_validate(parsed)
+                # Sanitize: keep only valid chapter_idx + clamp confidence.
+                n_proposals = len(proposals)
+                scores = [
+                    {"chapter_idx": s.chapter_idx, "confidence": s.confidence}
+                    for s in assignment.scores
+                    if 0 <= s.chapter_idx < n_proposals
+                ]
         except Exception as e:
             logger.warning(
-                f"[chapter_assign] LLM failed for {source_key}: "
+                f"[chapter_assign] LLM/parse/validate failed for {source_key}: "
                 f"{type(e).__name__}: {e}"
             )
-            return source_key, None, int((time.monotonic() - t0) * 1000)
 
-        parsed = _parse(raw)
-        if not parsed:
-            return source_key, None, int((time.monotonic() - t0) * 1000)
-        try:
-            assignment = DocAssignment.model_validate(parsed)
-        except Exception:
-            return source_key, None, int((time.monotonic() - t0) * 1000)
-
-        # Sanitize: keep only valid chapter_idx + clamp confidence.
-        n_proposals = len(proposals)
-        scores = [
-            {"chapter_idx": s.chapter_idx, "confidence": s.confidence}
-            for s in assignment.scores
-            if 0 <= s.chapter_idx < n_proposals
-        ]
-        return source_key, scores, int((time.monotonic() - t0) * 1000)
+        # Fix — never silently drop a doc on an assign FAILURE. Fall back to a
+        # lexical best-overlap assignment so the doc reaches chapter_select.
+        # (A SUCCESSFUL call that honestly returned no scores is left as-is —
+        # the LLM judged it irrelevant; only None = a failed call triggers this.)
+        used_fallback = False
+        if scores is None:
+            scores = _fallback_assign_scores(doc_summary, doc_terms, proposals)
+            used_fallback = bool(scores)
+            if used_fallback:
+                logger.info(
+                    f"[chapter_assign] {source_key}: assign failed — lexical "
+                    f"fallback → chapter {scores[0]['chapter_idx']} (doc kept)"
+                )
+        return source_key, scores, int((time.monotonic() - t0) * 1000), used_fallback
 
 
 def _manifest_hash(*, slug: str, proposals_ref: str, source_keys: list[str]) -> str:
@@ -325,17 +370,27 @@ async def chapter_assign(state: PlannerState) -> dict:
 
     assignments: dict[str, list[dict]] = {}
     n_failed = 0
+    fallbacks: list[str] = []
     coverage_count: dict[int, int] = {i: 0 for i in range(len(proposals_dicts))}
-    for k, scores, _wall in results:
+    for k, scores, _wall, used_fb in results:
         if scores is None:
             n_failed += 1
             continue
         assignments[k] = scores
+        if used_fb:
+            fallbacks.append(k)
         for s in scores:
             if s["confidence"] >= _CONFIDENCE_THRESHOLD:
                 coverage_count[s["chapter_idx"]] = coverage_count.get(
                     s["chapter_idx"], 0,
                 ) + 1
+
+    if fallbacks:
+        logger.warning(
+            f"[chapter_assign] {slug}: {len(fallbacks)} doc(s) used a lexical "
+            f"fallback assignment (assign LLM failed but doc kept): "
+            f"{fallbacks[:20]}"
+        )
 
     payload = {
         "prompt_version":     _PROMPT_VERSION,
@@ -345,6 +400,8 @@ async def chapter_assign(state: PlannerState) -> dict:
         "n_docs":             len(relevant_files),
         "n_assigned":         len(assignments),
         "n_failed":           n_failed,
+        "n_fallback":         len(fallbacks),
+        "fallbacks":          fallbacks[:20],
         "n_proposals":        len(proposals_dicts),
         "coverage_count":     coverage_count,
         "confidence_thresh":  _CONFIDENCE_THRESHOLD,
@@ -358,6 +415,7 @@ async def chapter_assign(state: PlannerState) -> dict:
         "n_docs": len(relevant_files),
         "n_assigned": len(assignments),
         "n_failed": n_failed,
+        "n_fallback": len(fallbacks),
         "n_proposals": len(proposals_dicts),
         "coverage_count": coverage_count,
         "cache_hit": False,
@@ -367,6 +425,6 @@ async def chapter_assign(state: PlannerState) -> dict:
     await emit_progress(
         thread_id, "chapter_assign", "done",
         cache_hit=False, n_assigned=len(assignments), n_failed=n_failed,
-        wall_ms=wall_ms,
+        n_fallback=len(fallbacks), wall_ms=wall_ms,
     )
     return {"chapter_doc_assignments_ref": lkey, "assign_stats": stats}
