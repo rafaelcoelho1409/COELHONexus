@@ -1,4 +1,5 @@
-"""chapter_propose — LLM proposes 6-15 chapters covering corpus surface.
+"""chapter_propose — LLM proposes ~target_chapters_for_n_docs() chapters
+covering the corpus surface (adaptive to corpus size; v2 2026-05-31).
 
 Pipeline:
   1. Load relevant_files + doc_distill (if available) + raw bodies
@@ -43,6 +44,7 @@ from .constants import (
     _PROMPT_VERSION,
     _TEMPERATURE_PROPOSE,
     _TEMPERATURE_VOTE,
+    target_chapters_for_n_docs,
 )
 from .service import (
     ChapterProposal,
@@ -263,6 +265,12 @@ async def chapter_propose(state: PlannerState) -> dict:
         source_keys=relevant_files, bodies_by_key=bodies_by_key,
     )
 
+    # Adaptive per-corpus chapter target (fixes under-chaptering of large
+    # corpora). Also raises the optimal-stopping floor to ~0.7×target so a big
+    # corpus doesn't early-stop on a too-small sample-0.
+    target_chapters = target_chapters_for_n_docs(len(relevant_files))
+    stop_floor = max(_OPTIMAL_STOPPING_MIN_PROPOSALS, round(0.7 * target_chapters))
+
     prompt = build_propose_prompt(
         framework=slug,
         source_keys=relevant_files,
@@ -270,11 +278,14 @@ async def chapter_propose(state: PlannerState) -> dict:
         bodies_by_key=bodies_by_key if distillates_map is None else None,
         seeds=seeds,
         body_chars_per_doc=_BODY_CHARS_PER_DOC,
+        target_chapters=target_chapters,
     )
 
     await emit_progress(
         thread_id, "chapter_propose", "sampling",
         n_samples=_N_SAMPLES, prompt_chars=len(prompt),
+        target_chapters=target_chapters, stop_floor=stop_floor,
+        n_docs=len(relevant_files),
         n_heading_seeds=len(seeds.get("headings") or []),
         n_namespace_seeds=len(seeds.get("namespaces") or []),
     )
@@ -288,12 +299,12 @@ async def chapter_propose(state: PlannerState) -> dict:
         samples: list = [s0]
         if (
             s0 is not None
-            and len(s0.proposals) >= _OPTIMAL_STOPPING_MIN_PROPOSALS
+            and len(s0.proposals) >= stop_floor
         ):
             logger.info(
                 f"[chapter_propose] Optimal-Stopping fired — sample 0 "
                 f"clean ({len(s0.proposals)} proposals ≥ "
-                f"{_OPTIMAL_STOPPING_MIN_PROPOSALS}); skipping remaining "
+                f"{stop_floor}, target={target_chapters}); skipping remaining "
                 f"{_N_SAMPLES - 1} samples"
             )
         else:

@@ -253,10 +253,14 @@ def build_propose_prompt(
     bodies_by_key: Optional[dict[str, str]],
     seeds: dict,
     body_chars_per_doc: int,
+    target_chapters: int,
 ) -> str:
     """Build the proposer prompt. When `distillates` is None, the proposer
     sees full doc bodies (pass-through path for small N). Otherwise it
-    sees summaries + key_terms."""
+    sees summaries + key_terms.
+
+    `target_chapters` is the adaptive per-corpus target (sized to doc count)
+    that steers the proposer away from under-chaptering large corpora."""
     if distillates is not None:
         corpus_block = _render_distillates_block(distillates, source_keys)
         corpus_label = "DOC DISTILLATES"
@@ -271,9 +275,13 @@ def build_propose_prompt(
 
     return (
         f"You are the Chapter Planner for the {framework} documentation.\n\n"
-        f"Your job: propose a balanced set of {_PROPOSALS_MIN}-"
-        f"{_PROPOSALS_MAX} chapters that COVER THE FULL SURFACE AREA of "
-        f"this framework. Each chapter must:\n"
+        f"Your job: propose a balanced set of about {target_chapters} chapters "
+        f"(TARGET={target_chapters}, sized to this corpus of "
+        f"{len(source_keys)} docs; stay close to it, hard range "
+        f"{_PROPOSALS_MIN}-{_PROPOSALS_MAX}) that COVER THE FULL SURFACE AREA "
+        f"of this framework. Too FEW chapters forces unrelated topics to share "
+        f"one over-broad chapter; aim for ~{target_chapters} so each chapter is "
+        f"a cohesive, single-topic unit. Each chapter must:\n"
         f"  - have a concrete, specific title ({_TITLE_MIN_WORDS}-"
         f"{_TITLE_MAX_WORDS} words; no generic 'Introduction'/"
         f"'Overview'/'Conclusion')\n"

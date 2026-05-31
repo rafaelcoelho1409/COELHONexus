@@ -3,9 +3,37 @@ from __future__ import annotations
 import re
 
 
-# Chapter-count bounds (Pydantic-enforced).
+# Chapter-count bounds (Pydantic-enforced ABSOLUTE limits). The per-corpus
+# TARGET is adaptive — see target_chapters_for_n_docs below. The schema range
+# is wide so the proposer can land anywhere the adaptive target points; the
+# prompt + optimal-stopping floor steer it to the right count for the corpus.
 _PROPOSALS_MIN = 4
-_PROPOSALS_MAX = 18
+_PROPOSALS_MAX = 30   # was 18 — capped large corpora into mega-chapters
+                      # (LangChain 777 docs → 13 ch / 57 docs-per-ch). Raised
+                      # so the adaptive target (≤24) is never schema-clipped.
+
+# Adaptive chapter-count target (2026-05-31, DD-PLANNER-UNDERCHAPTERING).
+# Previously the proposer aimed for a FIXED 4-18 regardless of corpus size, so
+# big corpora got too few chapters → mega-chapters that bind the synth section
+# ceiling (LangChain ch-01 = 184 docs / 10 sections / 18 docs-per-section).
+# Anchored to the corpora that decomposed WELL (~8-11 docs/chapter):
+#   browser-use 44→~5, langfuse 97→~9, claude-code 140→13 (exact), and now
+#   langchain 777→24 (≈32 docs/ch, healthy) instead of 13 (57 docs/ch).
+# Sub-linear via the ceiling so a huge corpus stays a sane book size.
+_PROPOSALS_DIVISOR = 11    # ~docs per chapter (anchors CC 140 → 13)
+_PROPOSALS_TARGET_FLOOR = 5
+_PROPOSALS_TARGET_CEILING = 24
+
+
+def target_chapters_for_n_docs(n_docs: int) -> int:
+    """Per-corpus target chapter count (guides the proposer + optimal-stopping
+    floor). Clamped to [_PROPOSALS_TARGET_FLOOR, _PROPOSALS_TARGET_CEILING]."""
+    if n_docs <= 0:
+        return _PROPOSALS_TARGET_FLOOR
+    return min(
+        _PROPOSALS_TARGET_CEILING,
+        max(_PROPOSALS_TARGET_FLOOR, round(n_docs / _PROPOSALS_DIVISOR)),
+    )
 
 # LLM context budget.
 _MAX_TOKENS_PROPOSE = 6000
@@ -26,9 +54,9 @@ _MAX_REPAIR_ATTEMPTS = 1
 # of LLM calls in the best case (sample 0 clean). Same pattern as
 # outline_sdp's `_OUTLINE_OPTIMAL_STOPPING_*`.
 #
-# Floor of 6 because the LLM-first planner aims for 6-15 chapters
-# (chapter_propose schema allows 4-18; below 6 we'd rather fan out for
-# a chance at richer coverage). Tuneable per corpus.
+# Absolute floor of 6; the NODE scales this up to ~0.7×(adaptive target) per
+# corpus so a large corpus doesn't early-stop on a too-small sample-0 (e.g.
+# target 24 → effective floor ~17). Small corpora keep 6.
 _OPTIMAL_STOPPING_MIN_PROPOSALS = 6
 import os as _os
 _OPTIMAL_STOPPING_ENABLED = _os.environ.get(
@@ -51,7 +79,11 @@ _CLI_PATTERN_RE = re.compile(
 )
 
 _BLOB_PREFIX = "planner"
-_PROMPT_VERSION = "v1-2026-05-27"
+# v2 (2026-05-31) — adaptive chapter-count target (target_chapters_for_n_docs)
+# replaces the fixed 4-18, fixing under-chaptering of large corpora. Bumped so
+# a re-plan re-proposes under the new target instead of cache-hitting the old
+# mega-chapter set.
+_PROMPT_VERSION = "v2-adaptive-count-2026-05-31"
 
 # Chapter title bounds.
 _TITLE_MIN_WORDS = 2
