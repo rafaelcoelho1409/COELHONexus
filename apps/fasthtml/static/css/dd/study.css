@@ -645,6 +645,100 @@
 .fw-study-prose pre:hover .fw-code-copy { opacity: 1; }
 .fw-code-copy:hover { color: var(--primary); border-color: var(--primary); }
 
+/* ---- language badge (top-left of code blocks) + room for the badge row ---- */
+.fw-study-prose pre { padding-top: 24px; }
+.fw-code-lang {
+  position: absolute;
+  top: 6px;
+  left: 12px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #768390;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  opacity: 0.85;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ---- terminal / console blocks (ANSI colors preserved via <font>) ---- */
+.fw-study-prose pre.fw-terminal {
+  background: #1b1b1b;
+  color: #d4d4d4;
+  border: 1px solid #000;
+}
+.fw-study-prose pre.fw-terminal code { white-space: pre; }
+.fw-study-prose pre.fw-terminal font { font-style: normal; font-weight: inherit; }
+.fw-study-prose pre.fw-terminal .fw-code-lang { color: #6e7681; }
+
+/* ---- mermaid diagrams ---- */
+.fw-mermaid {
+  margin: 0 0 16px 0;
+  padding: 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  text-align: center;
+  overflow-x: auto;
+}
+.fw-mermaid svg { max-width: 100%; height: auto; }
+
+/* ---- tables ---- */
+.fw-study-prose table {
+  border-collapse: collapse;
+  margin: 0 0 16px 0;
+  font-size: 0.88rem;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.fw-study-prose th, .fw-study-prose td {
+  border: 1px solid var(--border);
+  padding: 7px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+.fw-study-prose thead th {
+  background: rgba(196, 18, 48, 0.07);
+  color: var(--primary-dark);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.fw-study-prose tbody tr:nth-child(even) { background: rgba(0, 0, 0, 0.02); }
+
+/* ---- callouts / admonitions (marked-alert) ---- */
+.markdown-alert {
+  border-left: 4px solid var(--border);
+  padding: 10px 14px;
+  margin: 0 0 14px 0;
+  border-radius: 0 4px 4px 0;
+  background: var(--bg);
+}
+.markdown-alert > :last-child { margin-bottom: 0; }
+.markdown-alert-title {
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  text-transform: capitalize;
+}
+.markdown-alert-note      { border-left-color: #0969da; background: rgba(9, 105, 218, 0.05); }
+.markdown-alert-tip       { border-left-color: #1a7f37; background: rgba(26, 127, 55, 0.05); }
+.markdown-alert-important  { border-left-color: #8250df; background: rgba(130, 80, 223, 0.05); }
+.markdown-alert-warning   { border-left-color: #9a6700; background: rgba(154, 103, 0, 0.06); }
+.markdown-alert-caution   { border-left-color: var(--primary); background: rgba(196, 18, 48, 0.05); }
+
+/* ---- KaTeX math (ML / math materials) ---- */
+.fw-study-prose .katex { font-size: 1.05em; }
+.fw-study-prose .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 6px 2px;
+  margin: 0 0 14px 0;
+}
+
 /* ---- flashcard reviewer (FSRS) ---- */
 .fw-fc-head {
   display: flex;

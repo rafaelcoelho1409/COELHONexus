@@ -285,19 +285,141 @@ function _buildReadmeToc() {
   heads.forEach(h => _scrollSpyObserver.observe(h));
 }
 
-// Add a "Copy" button to every code block (vanilla; no deps).
+// ---- rich content renderers (code / terminal / mermaid / math / callouts) ----
+// marked extensions (KaTeX math, GitHub-style callouts) + mermaid are loaded
+// ONCE, lazily, as ES modules so they stay off the initial critical path. The
+// cached promise is awaited before the first parse.
+let _renderersPromise = null;
+let _mermaid = null;
+function _initContentRenderers() {
+  if (_renderersPromise) return _renderersPromise;
+  _renderersPromise = (async () => {
+    // Math + callouts — registered on the global `marked` (CDN, shell.py HEAD).
+    try {
+      const [katexExt, alertExt] = await Promise.all([
+        import('https://cdn.jsdelivr.net/npm/marked-katex-extension@5/+esm'),
+        import('https://cdn.jsdelivr.net/npm/marked-alert@2/+esm'),
+      ]);
+      if (typeof marked !== 'undefined') {
+        try { marked.use(alertExt.default()); } catch (_) {}
+        try { marked.use(katexExt.default({ throwOnError: false, nonStandard: false })); } catch (_) {}
+      }
+    } catch (_) { /* math/callouts optional — degrade to plain markdown */ }
+    // Mermaid — diagrams. securityLevel:'strict' is load-bearing (untrusted
+    // LLM diagram source). theme:'base' recolored to the warm-paper/burgundy
+    // palette. v11.15+ sanitizes its own SVG output.
+    try {
+      const m = await import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs');
+      _mermaid = m.default;
+      _mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        theme: 'base',
+        themeVariables: {
+          background: '#fffdf9', primaryColor: '#fef7e0',
+          primaryBorderColor: '#c41230', primaryTextColor: '#1f1d1b',
+          lineColor: '#c41230', secondaryColor: '#f7f5f1', tertiaryColor: '#fffdf9',
+        },
+      });
+    } catch (_) { _mermaid = null; }
+  })();
+  return _renderersPromise;
+}
+
+// ```mermaid fences → <div class="mermaid"> holding the RAW graph text (safe);
+// rendered to SVG lazily, on-visible, by _lazyRenderBlocks.
+function _renderMermaidBlocks(root) {
+  if (!root) return;
+  root.querySelectorAll('pre > code.language-mermaid').forEach((code) => {
+    const div = document.createElement('div');
+    div.className = 'mermaid fw-mermaid';
+    div.textContent = code.textContent || '';      // text, never HTML
+    (code.parentElement || code).replaceWith(div);
+  });
+}
+
+// Terminal/console output → dark terminal block. ANSI colors arrive as escaped
+// <font color>/<b> HTML (FastAPI-docs style); re-render that presentational
+// subset safely (DOMPurify allow-list) so colors show instead of literal tags.
+// Plain console blocks just get terminal styling + skip syntax highlighting.
+const _TERM_LANG_RE = /\blanguage-(console|shell|shell-session|shellsession|bash|sh|zsh|terminal|ansi)\b/i;
+function _renderTerminalBlocks(root) {
+  if (!root) return;
+  root.querySelectorAll('pre > code').forEach((code) => {
+    const txt = code.textContent || '';
+    // `<font color=` is the ANSI-to-HTML signature (terminal converters emit it;
+    // real code almost never does). Don't match bare <b> — that would mangle
+    // HTML/markup code examples. <b> is still allowed in the re-render below.
+    const ansiHtml = /<font\s+color=/i.test(txt);
+    if (!(_TERM_LANG_RE.test(code.className || '') || ansiHtml)) return;
+    code.parentElement.classList.add('fw-terminal');
+    code.dataset.noHighlight = '1';               // never hljs terminal output
+    if (ansiHtml && typeof DOMPurify !== 'undefined') {
+      code.innerHTML = DOMPurify.sanitize(txt, {
+        ALLOWED_TAGS: ['font', 'b', 'strong', 'i', 'em', 'u', 'span', 'br'],
+        ALLOWED_ATTR: ['color', 'style', 'class'],
+      });
+    }
+  });
+}
+
+// Lazily highlight code + render mermaid as each block nears the viewport. One
+// IntersectionObserver for both — keeps first paint cheap on chapters with
+// dozens of code blocks / diagrams (highlight + mermaid layout are the cost).
+let _blockRenderObserver = null;
+function _lazyRenderBlocks(root) {
+  if (!root) return;
+  if (_blockRenderObserver) { _blockRenderObserver.disconnect(); _blockRenderObserver = null; }
+  const targets = [
+    ...root.querySelectorAll('pre > code:not([data-no-highlight])'),
+    ...root.querySelectorAll('.mermaid'),
+  ];
+  if (!targets.length) return;
+  const render = (el) => {
+    if (el.classList.contains('mermaid')) {
+      if (_mermaid) { try { _mermaid.run({ nodes: [el] }); } catch (_) {} }
+    } else if (typeof hljs !== 'undefined') {
+      try { hljs.highlightElement(el); } catch (_) {}
+    }
+  };
+  if (!('IntersectionObserver' in window)) { targets.forEach(render); return; }
+  const scrollRoot = root.closest('.page') || null;
+  _blockRenderObserver = new IntersectionObserver((entries, obs) => {
+    entries.forEach((en) => {
+      if (!en.isIntersecting) return;
+      obs.unobserve(en.target);
+      render(en.target);
+    });
+  }, { root: scrollRoot, rootMargin: '300px 0px 300px 0px', threshold: 0 });
+  targets.forEach((t) => _blockRenderObserver.observe(t));
+}
+
+// Add a language badge + "Copy" button to every code/terminal block.
 function _addCodeCopyButtons() {
   if (!S.studyReadmeEl) return;
   S.studyReadmeEl.querySelectorAll('pre').forEach(pre => {
     if (pre.querySelector('.fw-code-copy')) return;
+    const code = pre.querySelector('code');
+    let lang = '';
+    if (pre.classList.contains('fw-terminal')) lang = 'Terminal';
+    else if (code) {
+      const m = (code.className || '').match(/language-([\w+#.-]+)/);
+      if (m && m[1] && m[1] !== 'mermaid') lang = m[1];
+    }
+    if (lang) {
+      const badge = document.createElement('span');
+      badge.className = 'fw-code-lang';
+      badge.textContent = lang;
+      pre.appendChild(badge);
+    }
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'fw-code-copy';
     btn.textContent = 'Copy';
     btn.addEventListener('click', async () => {
-      const code = pre.querySelector('code')?.innerText ?? pre.innerText;
+      const c = pre.querySelector('code')?.innerText ?? pre.innerText;
       try {
-        await navigator.clipboard.writeText(code);
+        await navigator.clipboard.writeText(c);
         btn.textContent = 'Copied';
       } catch (_) { btn.textContent = 'Copy failed'; }
       setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
@@ -404,20 +526,29 @@ export async function _loadStudyReadme(slug, cid) {
   S.studyReadmeEl.innerHTML =
     '<div class="fw-empty">Loading chapter…</div>';
   try {
+    await _initContentRenderers();   // marked extensions + mermaid (once)
     const raw = await _loadStudyArtifact(slug, cid, 'README.md');
-    const md = (typeof marked !== 'undefined')
-      ? marked.parse(raw)
-      : ('<pre>' + escapeHtml(raw) + '</pre>');
-    S.studyReadmeEl.innerHTML = md;
-    _postProcessReadme();
-    // Apply syntax highlighting if highlight.js is loaded.
-    if (typeof hljs !== 'undefined') {
-      S.studyReadmeEl.querySelectorAll('pre code').forEach(block => {
-        try { hljs.highlightElement(block); } catch (_) {}
+    // SANITIZE marked's output — chapter markdown is untrusted LLM content.
+    // Keep presentational <font>/<b> (terminal colors) + table/link attrs;
+    // DOMPurify strips <script>, on*-handlers, javascript: URLs, etc. If either
+    // lib is missing, fall back to safe escaped <pre> (never inject raw HTML).
+    let md;
+    if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+      md = DOMPurify.sanitize(marked.parse(raw), {
+        ADD_TAGS: ['font'],
+        ADD_ATTR: ['color', 'target', 'align'],
       });
+    } else {
+      md = '<pre>' + escapeHtml(raw) + '</pre>';
     }
+    S.studyReadmeEl.innerHTML = md;
+    const root = S.studyReadmeEl;
+    _postProcessReadme();
+    _renderMermaidBlocks(root);    // ```mermaid → <div.mermaid>
+    _renderTerminalBlocks(root);   // console output → terminal block + colors
+    _addCodeCopyButtons();         // language badge + copy
     _buildReadmeToc();
-    _addCodeCopyButtons();
+    _lazyRenderBlocks(root);       // hljs + mermaid render on-visible
   } catch (e) {
     S.studyReadmeEl.innerHTML =
       '<div class="fw-empty">Failed to load README.md: ' +

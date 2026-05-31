@@ -83,11 +83,25 @@ HEAD = (
     # Theme: GitHub Dark (matches the burgundy + sharp-radius aesthetic).
     Link(
         rel = "stylesheet",
-        href = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/styles/github-dark-dimmed.min.css",
+        href = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark-dimmed.min.css",
     ),
     Script(
-        src = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/highlight.min.js",
+        src = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js",
         defer = True,
+    ),
+    # Study-page rich rendering (2026-05-31). DOMPurify sanitizes the
+    # marked.parse() output before it's inserted (the chapter markdown is
+    # untrusted LLM output) — fixes the prior raw-innerHTML XSS sink. KaTeX
+    # CSS styles the math that marked-katex-extension renders. mermaid +
+    # the marked extensions (katex/alert) are dynamically imported as ES
+    # modules inside static/js/dd/study.js (kept off the critical path).
+    Script(
+        src = "https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js",
+        defer = True,
+    ),
+    Link(
+        rel = "stylesheet",
+        href = "https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css",
     ),
     # Cytoscape.js — DAG canvas for per-stage LangGraph visualization
     # (Planner / Synth / Curator / Critic / Assembler). Pinned to a 3.x
