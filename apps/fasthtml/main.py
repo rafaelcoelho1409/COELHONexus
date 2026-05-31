@@ -17,7 +17,7 @@ from starlette.staticfiles import StaticFiles
 
 import proxy
 import routes
-from features import docs_distiller, home, youtube_content_search
+from features import docs_distiller, home, settings, youtube_content_search
 from shell import HEAD
 
 
@@ -58,6 +58,7 @@ proxy.register(rt)
 home.register(rt)
 docs_distiller.register(rt)
 youtube_content_search.register(rt)
+settings.register(rt)
 routes.register(rt)
 
 

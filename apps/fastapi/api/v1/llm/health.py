@@ -18,7 +18,10 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from langchain_core.messages import HumanMessage
 
-from domains.llm.rotator.chain import build_llm_fallback_chain
+from domains.llm.rotator.chain import (
+    build_llm_fallback_chain,
+    ensure_dynamic_catalog,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -28,6 +31,9 @@ router = APIRouter()
 
 @router.get("")
 async def llm_health() -> JSONResponse:
+    # Reflect the latest BYOK selection (rebuild the dynamic catalog if the
+    # /settings generation moved) before probing.
+    await ensure_dynamic_catalog()
     chain = build_llm_fallback_chain()
     t0 = time.monotonic()
     try:

@@ -32,3 +32,6 @@ class ProviderConfig:
     response_shape: str                        # "openai" | "gemini"
     free_filter: FreeFilter
     enabled: bool = True
+    required: bool = False                      # key is MANDATORY (e.g. NIM powers
+                                               # embeddings + reranking — the whole
+                                               # DD pipeline can't run without it)

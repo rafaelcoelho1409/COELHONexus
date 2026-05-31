@@ -45,8 +45,11 @@ import httpx
 import os
 import asyncio
 import logging
+from typing import Any
 
 from core.otel_setup import get_meter
+# BYOK key resolution — user-store key (settings UI) overrides the env var.
+from domains.llm.credentials import resolve_key
 
 from .constants import (
     _GEMINI_FREE_NAME_PREFIXES,
@@ -144,10 +147,10 @@ async def _fetch_provider(
     as "no signal from this provider on this call" — other providers still
     contribute.
     """
-    api_key = os.environ.get(cfg.key_env, "").strip()
+    api_key = resolve_key(cfg.key_env)
     if not api_key:
         logger.info(
-            f"[discovery] {cfg.name}: {cfg.key_env} unset — skipping"
+            f"[discovery] {cfg.name}: {cfg.key_env} unset (store + env) — skipping"
         )
         return []
     headers: dict[str, str] = {"Accept": "application/json"}
@@ -247,6 +250,94 @@ async def list_all_alive_models(
         f"{len(out)} providers"
     )
     return out
+
+
+def required_providers() -> list[str]:
+    """Provider ids whose key is MANDATORY (e.g. NIM — embeddings + reranking).
+    The whole Docs Distiller pipeline can't run without these."""
+    return [pid for pid, cfg in PROVIDERS.items() if getattr(cfg, "required", False)]
+
+
+def missing_required_keys() -> list[dict]:
+    """Required providers with NO resolvable key (store or env). Empty == ready.
+    Each entry: {id, key_env}. Used to gate DD runs + drive the /settings
+    readiness banner."""
+    out: list[dict] = []
+    for pid, cfg in PROVIDERS.items():
+        if getattr(cfg, "required", False) and not resolve_key(cfg.key_env):
+            out.append({"id": pid, "key_env": cfg.key_env})
+    return out
+
+
+async def probe_provider_key(
+    provider_id: str,
+    api_key: str | None = None,
+) -> dict:
+    """Validate a provider key by hitting its `/v1/models` endpoint.
+
+    `api_key=None` → resolve via the store/env (test the *current* key).
+    A passed key is probed directly and NOT stored (test-before-save). Returns:
+      {ok, status, n_free_models, n_total_models, error}
+    status ∈ {reachable, missing_key, invalid_key, rate_limited, unreachable,
+              unknown_provider}. A 429 is reported ok=True/`rate_limited` (the
+      key authenticated; it's just throttled).
+    """
+    cfg = PROVIDERS.get(provider_id)
+    base = {"n_free_models": 0, "n_total_models": 0}
+    if cfg is None:
+        return {"ok": False, "status": "unknown_provider",
+                "error": f"unknown provider {provider_id!r}", **base}
+    key = ((api_key if api_key is not None else resolve_key(cfg.key_env)) or "").strip()
+    if not key:
+        return {"ok": False, "status": "missing_key",
+                "error": f"{cfg.key_env} not set", **base}
+    headers: dict[str, str] = {"Accept": "application/json"}
+    params: dict[str, str] = {}
+    if cfg.auth_style == "bearer":
+        headers["Authorization"] = f"Bearer {key}"
+    elif cfg.auth_style == "query-key":
+        params["key"] = key
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                cfg.url, headers=headers, params=params,
+                timeout=DISCOVERY_HTTP_TIMEOUT_S,
+            )
+    except Exception as e:
+        return {"ok": False, "status": "unreachable",
+                "error": f"{type(e).__name__}: {str(e)[:200]}", **base}
+    if resp.status_code in (401, 403):
+        return {"ok": False, "status": "invalid_key",
+                "error": f"HTTP {resp.status_code}", **base}
+    if resp.status_code == 429:
+        return {"ok": True, "status": "rate_limited",
+                "error": "HTTP 429 (key valid, throttled)", **base}
+    if resp.status_code >= 400:
+        return {"ok": False, "status": "unreachable",
+                "error": f"HTTP {resp.status_code}: {resp.text[:160]}", **base}
+    try:
+        body = resp.json()
+    except Exception:
+        body = {}
+    items = _normalize_response(cfg.response_shape, body)
+    free = [m for m in items if _FILTER_DISPATCH[cfg.free_filter](m)]
+    return {"ok": True, "status": "reachable", "error": None,
+            "n_free_models": len(free), "n_total_models": len(items)}
+
+
+async def list_provider_free_models(provider_id: str) -> list[str]:
+    """Free-tier model ids for ONE provider (UI available-models list).
+
+    Bypasses the registry `enabled` flag (so a user with a key for an
+    otherwise-disabled provider still sees its models); honors the key
+    resolution (store > env). [] if no key / unreachable / unknown provider.
+    """
+    cfg = PROVIDERS.get(provider_id)
+    if cfg is None:
+        return []
+    async with httpx.AsyncClient() as client:
+        records = await _fetch_provider(client, cfg)
+    return sorted(r.model_id for r in records if r.model_id)
 
 
 def list_all_alive_models_sync(

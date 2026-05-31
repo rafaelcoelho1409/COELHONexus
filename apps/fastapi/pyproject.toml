@@ -40,6 +40,10 @@ dependencies = [
     "litellm==1.83.13",
     # langchain-litellm PINNED EXACT — 0.6.4 matches the clean litellm 1.83.x line.
     "langchain-litellm==0.6.4",
+    # BYOK credential store (domains/llm/credentials) — Fernet at-rest encryption
+    # of user-supplied provider API keys in MinIO. cryptography is the canonical
+    # low-footgun Python crypto lib; Fernet = AES-128-CBC + HMAC-SHA256.
+    "cryptography>=42",
     "numpy>=1.26,<2.2",                # LinUCB sufficient-statistics matrix algebra
     # Planner cluster node — UMAP dim-reduction + HDBSCAN density clustering.
     # IMPORTANT: hdbscan == scikit-learn-contrib/hdbscan, NOT sklearn.cluster.HDBSCAN

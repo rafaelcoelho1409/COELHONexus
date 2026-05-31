@@ -34,6 +34,9 @@ PROVIDERS: dict[str, ProviderConfig] = {
         auth_style = "bearer",
         response_shape = "openai",
         free_filter = FreeFilter.ALL,
+        required = True,    # MANDATORY — NIM hosts the embedding + reranking models
+                            # every Docs Distiller run depends on (dd-embed pool +
+                            # off_topic/faithfulness rerank), not just chat LLMs.
     ),
     "cerebras": ProviderConfig(
         name = "cerebras",

@@ -92,12 +92,21 @@ from .constants import (
     DD_RERANK_MODEL_NAME,
     _NIM_RERANK_BASE,
     _PROVIDER_CHAPTER_CAPS,
+    _DYNAMIC_TOP_K,
+    _DYNAMIC_STEP_TO_GROUP,
+    _DYNAMIC_STEP_TIMEOUT_S,
+    _DYNAMIC_MIN_PARAM_B,
+    _DYNAMIC_QUALITY_FLOOR_STEPS,
     _router_instance,
     _pinned_chain_cache,
     _pinned_to_parent,
     _dynamic_entries,
     _dynamic_catalog_initialized
 )
+# BYOK key resolution — user-store key (settings UI) overrides the env var
+# (Helm configmap). See domains/llm/credentials. Sync + never-raises, so the
+# provider entry-builders below can call it in place of os.environ.get.
+from domains.llm.credentials import resolve_key
 
 
 logger = logging.getLogger(__name__)
@@ -160,7 +169,7 @@ def _groq_entry(group: str, model: str, timeout_s: int = 120) -> dict:
         "model_name": group,
         "litellm_params": {
             "model": f"groq/{model}",
-            "api_key": _env("GROQ_API_KEY"),
+            "api_key": resolve_key("GROQ_API_KEY"),
             "timeout": timeout_s,
             "max_retries": 0,
         },
@@ -173,7 +182,7 @@ def _nim_entry(group: str, model: str, timeout_s: int = 120) -> dict:
         "model_name": group,
         "litellm_params": {
             "model": f"nvidia_nim/{model}",
-            "api_key": _env("NVIDIA_API_KEY"),
+            "api_key": resolve_key("NVIDIA_API_KEY"),
             "timeout": timeout_s,
             "max_retries": 0,
         },
@@ -185,7 +194,7 @@ def _cerebras_entry(group: str, model: str, timeout_s: int = 120) -> dict:
         "model_name": group,
         "litellm_params": {
             "model": f"cerebras/{model}",
-            "api_key": _env("CEREBRAS_API_KEY"),
+            "api_key": resolve_key("CEREBRAS_API_KEY"),
             "timeout": timeout_s,
             "max_retries": 0,
         },
@@ -197,7 +206,7 @@ def _mistral_entry(group: str, model: str, timeout_s: int = 120) -> dict:
         "model_name": group,
         "litellm_params": {
             "model": f"mistral/{model}",
-            "api_key": _env("MISTRAL_API_KEY"),
+            "api_key": resolve_key("MISTRAL_API_KEY"),
             "timeout": timeout_s,
             "max_retries": 0,
         },
@@ -209,7 +218,7 @@ def _gemini_entry(group: str, model: str, timeout_s: int = 120) -> dict:
         "model_name": group,
         "litellm_params": {
             "model": f"gemini/{model}",
-            "api_key": _env("GOOGLE_API_KEY"),
+            "api_key": resolve_key("GOOGLE_API_KEY"),
             "timeout": timeout_s,
             "max_retries": 0,
         },
@@ -221,7 +230,7 @@ def _deepseek_entry(group: str, model: str, timeout_s: int = 120) -> dict:
         "model_name": group,
         "litellm_params": {
             "model": f"deepseek/{model}",
-            "api_key": _env("DEEPSEEK_API_KEY"),
+            "api_key": resolve_key("DEEPSEEK_API_KEY"),
             "timeout": timeout_s,
             "max_retries": 0,
         },
@@ -233,7 +242,7 @@ def _sambanova_entry(group: str, model: str, timeout_s: int = 120) -> dict:
         "model_name": group,
         "litellm_params": {
             "model": f"sambanova/{model}",
-            "api_key": _env("SAMBANOVA_API_KEY"),
+            "api_key": resolve_key("SAMBANOVA_API_KEY"),
             "timeout": timeout_s,
             "max_retries": 0,
         },
@@ -571,13 +580,31 @@ def _embed_entries() -> list:
             "model_name": DD_EMBED_GROUP,
             "litellm_params": {
                 "model":           f"nvidia_nim/{DD_EMBED_MODEL_NAME}",
-                "api_key":         _env("NVIDIA_API_KEY"),
+                "api_key":         resolve_key("NVIDIA_API_KEY"),
                 "timeout":         120,
                 "max_retries":     0,
                 "encoding_format": "float",
             },
         },
     ]
+
+
+# NVIDIA NIM is MANDATORY: it hosts the embedding + reranking models the whole
+# DD pipeline runs on. resolve_key checks the user store first, then the env.
+_NIM_REQUIRED_MSG = (
+    "NVIDIA_API_KEY is not set (Settings store or env). NVIDIA NIM powers the "
+    "mandatory embedding + reranking models — add your NVIDIA NIM key in "
+    "Settings before running Docs Distiller."
+)
+
+
+def _require_nim_key() -> str:
+    """Return the resolved NVIDIA NIM key, or raise a clear, actionable error.
+    Single source of the 'NIM is required' message for embed + rerank."""
+    key = resolve_key("NVIDIA_API_KEY")
+    if not key:
+        raise RuntimeError(_NIM_REQUIRED_MSG)
+    return key
 
 
 def embed_via_router_sync(
@@ -604,6 +631,7 @@ def embed_via_router_sync(
     """
     if not texts:
         return []
+    _require_nim_key()
     router = _get_router()
     clean = [t if (t and t.strip()) else " " for t in texts]
     out: list[list[float]] = []
@@ -644,6 +672,7 @@ async def embed_via_router_async(
     precedence over progress reporting."""
     if not texts:
         return []
+    _require_nim_key()
     router = _get_router()
     clean = [t if (t and t.strip()) else " " for t in texts]
     total = len(clean)
@@ -908,6 +937,9 @@ async def chat_judge_bandit_async(
     # subsequent cascade picks within the same burst-window skip it.
     # Avoids the empirical failure mode where a 16-way concurrent batch
     # hits the same 5 arms 16 times each, all 429ing.
+    # BYOK: rebuild the dynamic catalog if the user's /settings selection moved
+    # (cheap gen check) so the bandit ranks ONLY over enabled∩selected models.
+    await ensure_dynamic_catalog()
     effective_process = dd_process or _JUDGE_KD_PROCESS
     _prune_arm_cooldown()
     rds = await _redis_for_bandit()
@@ -978,7 +1010,7 @@ async def chat_judge_bandit_async(
             "latency_s": None, 
             "reward": None,
             "fallback": "predict_failed"}
-    api_key = _env("NVIDIA_API_KEY") or _env("GROQ_API_KEY") or ""
+    api_key = resolve_key("NVIDIA_API_KEY") or resolve_key("GROQ_API_KEY") or ""
     last_error: str | None = None
     attempts = 0
     try:
@@ -993,12 +1025,11 @@ async def chat_judge_bandit_async(
                 "groq":       "GROQ_API_KEY",
                 "cerebras":   "CEREBRAS_API_KEY",
                 "mistral":    "MISTRAL_API_KEY",
-                "gemini":     "GEMINI_API_KEY",
-                "openai":     "OPENAI_API_KEY",
+                "gemini":     "GOOGLE_API_KEY",   # canonical key_env (matches registry)
                 "deepseek":   "DEEPSEEK_API_KEY",
                 "sambanova":  "SAMBANOVA_API_KEY",
             }.get(provider, "NVIDIA_API_KEY")
-            api_key = _env(provider_key_env) or _env("NVIDIA_API_KEY") or ""
+            api_key = resolve_key(provider_key_env) or resolve_key("NVIDIA_API_KEY") or ""
             t0 = time.monotonic()
             error_class: str | None = None
             success = False
@@ -1109,11 +1140,7 @@ async def rerank_via_router_async(
     """
     if not documents:
         return []
-    api_key = _env("NVIDIA_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "dd-rerank: NVIDIA_API_KEY env var not set — required for NIM rerank"
-        )
+    api_key = _require_nim_key()
     # Model slug in URL strips the "nvidia/" prefix — that's the NIM
     # path convention (`/v1/retrieval/nvidia/{slug}/reranking`).
     model_slug = DD_RERANK_MODEL_NAME.split("/", 1)[-1]
@@ -1245,6 +1272,153 @@ def _all_entries() -> list:
 
 
 # =============================================================================
+# BYOK provider/model selection filter + rotator invalidation
+# =============================================================================
+# The settings UI writes a non-secret selection blob to the credential store
+# (llm/settings.json): which providers are enabled and, per provider, whether
+# ALL free models are used or a CUSTOM subset. `_apply_selection_filter` trims
+# the (static) chat catalog to keyed ∩ enabled ∩ selected. Infra pools
+# (dd-keylm, dd-embed) are NEVER trimmed — embeddings are mandatory.
+#
+# A user-visible change bumps a Redis generation counter; `_get_router` does a
+# throttled (≤1 GET / _GEN_THROTTLE_S / process) read of it and rebuilds the
+# cached Router when it moves — so a key/selection change in the FastAPI
+# process propagates to every Celery worker without a redeploy.
+_SETTINGS_GEN_REDIS_KEY = "dd:rotator:settings_gen"
+_GEN_THROTTLE_S = 10.0
+_settings_gen_local: int = 0       # gen this process's Router was built at
+_settings_gen_cache: int = 0       # last value read from Redis
+_settings_gen_read_at: float = 0.0
+_dynamic_built_gen: int = -1       # settings-gen the dynamic catalog was built at
+
+# LiteLLM model-prefix → registry provider id (settings.json uses registry ids).
+_LITELLM_PREFIX_TO_PROVIDER: dict[str, str] = {
+    "groq": "groq", "nvidia_nim": "nim", "cerebras": "cerebras",
+    "mistral": "mistral", "gemini": "gemini",
+    "deepseek": "deepseek", "sambanova": "sambanova",
+}
+
+
+def _entry_provider_and_model(entry: dict) -> tuple[str, str]:
+    m = (entry.get("litellm_params") or {}).get("model", "")
+    prefix, _, model = m.partition("/")
+    return _LITELLM_PREFIX_TO_PROVIDER.get(prefix, prefix), model
+
+
+def _read_selection(force: bool = False) -> dict:
+    """The user's BYOK selection blob (TTL-cached in the store; force=True
+    bypasses the cache for the dynamic-catalog rebuild). {} on error."""
+    try:
+        from domains.llm.credentials import get_store
+        return get_store().read_settings(force=force) or {}
+    except Exception:
+        return {}
+
+
+def _provider_mode(provider_id: str, sel: dict) -> str:
+    """'all' (use every free model, opt-in new) or 'custom' (only selected)."""
+    return (sel.get("mode") or {}).get(provider_id, "all")
+
+
+def _selection_allows(provider_id: str, model_id: str, sel: dict) -> bool:
+    """Canonical BYOK predicate — shared by the entry filter (static/dynamic
+    catalog) AND the discovery-record path (dynamic catalog build). Provider ids
+    here are the REGISTRY ids (groq/nim/...) used in settings.json."""
+    enabled = sel.get("enabled")                 # list[provider] or None == all
+    if enabled is not None and provider_id not in enabled:
+        return False
+    if _provider_mode(provider_id, sel) == "custom":
+        return model_id in ((sel.get("selected") or {}).get(provider_id) or [])
+    return True
+
+
+def _apply_selection_filter(entries: list[dict]) -> list[dict]:
+    """Trim chat entries to the user's enabled providers + selected models.
+
+    No selection stored → returns entries unchanged (today's behavior). The
+    no-empty guard: if a selection would empty the pool, the filter is ignored
+    (logged) so the rotator never starves and DD/YCS never break."""
+    sel = _read_selection()
+    if not sel:
+        return entries
+    out = [
+        e for e in entries
+        if _selection_allows(*_entry_provider_and_model(e), sel)
+    ]
+    if not out:
+        logger.warning(
+            "[llm-chain] user selection emptied the chat catalog — ignoring "
+            "filter (no-empty guard) so the rotator stays alive"
+        )
+        return entries
+    return out
+
+
+def _read_settings_gen() -> int:
+    """Throttled sync read of the Redis settings-generation counter."""
+    global _settings_gen_cache, _settings_gen_read_at
+    now = time.monotonic()
+    if _settings_gen_read_at and (now - _settings_gen_read_at) < _GEN_THROTTLE_S:
+        return _settings_gen_cache
+    _settings_gen_read_at = now
+    try:
+        host = _env("REDIS_HOST")
+        if host:
+            import redis as _redis_sync
+            r = _redis_sync.Redis(
+                host=host,
+                port=int(_env("REDIS_PORT", "6379")),
+                password=_env("REDIS_PASSWORD") or None,
+                socket_timeout=2,
+                socket_connect_timeout=2,
+            )
+            try:
+                v = r.get(_SETTINGS_GEN_REDIS_KEY)
+            finally:
+                r.close()
+            _settings_gen_cache = int(v) if v else 0
+    except Exception:
+        pass  # Redis blip → keep last known gen; never block the hot path
+    return _settings_gen_cache
+
+
+def reset_rotator(*, bump_gen: bool = True) -> int:
+    """Drop the cached Router + pinned-chain caches so the next build re-reads
+    provider keys (resolve_key) + the user selection. When `bump_gen`, also
+    INCR the Redis generation so other processes rebuild on their next access.
+    Returns the new generation (or the local one if Redis is unreachable)."""
+    global _router_instance, _settings_gen_local
+    _router_instance = None
+    _pinned_chain_cache.clear()
+    _pinned_to_parent.clear()
+    new_gen = _settings_gen_local
+    if bump_gen:
+        try:
+            host = _env("REDIS_HOST")
+            if host:
+                import redis as _redis_sync
+                r = _redis_sync.Redis(
+                    host=host,
+                    port=int(_env("REDIS_PORT", "6379")),
+                    password=_env("REDIS_PASSWORD") or None,
+                    socket_timeout=2,
+                    socket_connect_timeout=2,
+                )
+                try:
+                    new_gen = int(r.incr(_SETTINGS_GEN_REDIS_KEY))
+                finally:
+                    r.close()
+        except Exception as e:
+            logger.warning("[llm-chain] settings-gen bump failed: %s", e)
+    global _settings_gen_cache, _settings_gen_read_at
+    _settings_gen_cache = new_gen
+    _settings_gen_read_at = 0.0          # force a fresh read next access
+    _settings_gen_local = new_gen
+    logger.info("[llm-chain] rotator reset (settings gen=%d)", new_gen)
+    return new_gen
+
+
+# =============================================================================
 # Unified Router — single instance shared across all factories
 # =============================================================================
 def _get_router() -> Router:
@@ -1252,10 +1426,23 @@ def _get_router() -> Router:
     Build the unified LiteLLM Router once per process. Shared state lives in
     Redis (cooldown cache + per-deployment TPM/RPM tracking) so all Celery
     workers see the same circuit-breaker state.
+
+    Rebuilds when the Redis settings-generation counter moves (a key/selection
+    change in any process) so BYOK edits propagate without a redeploy.
     """
-    global _router_instance
-    if _router_instance is not None:
+    global _router_instance, _settings_gen_local
+    gen = _read_settings_gen()
+    if _router_instance is not None and gen == _settings_gen_local:
         return _router_instance
+    if _router_instance is not None and gen != _settings_gen_local:
+        logger.info(
+            "[llm-chain] settings gen %d→%d — rebuilding rotator",
+            _settings_gen_local, gen,
+        )
+        _router_instance = None
+        _pinned_chain_cache.clear()
+        _pinned_to_parent.clear()
+    _settings_gen_local = gen
     # Cascade + circuit-breaker policy
     # -------------------------------------------------------------------
     # In LiteLLM Router, `num_retries` is the CASCADE length: on failure,
@@ -1304,11 +1491,16 @@ def _get_router() -> Router:
         # in one Router so they share the cooldown circuit-breaker + Redis
         # state. The factory + helper functions select which group via the
         # `model=` arg on ChatLiteLLMRouter / Router.embedding.
+        # Chat pools (dd-all / dd-reduce-label / dd-synth) already honor the
+        # user's provider+model selection — the `*_current()` accessors apply
+        # `_apply_selection_filter` at the source. Infra pools (dd-keylm,
+        # dd-embed) are kept unconditionally — embeddings are mandatory and not
+        # user-curated.
         model_list = (
             _all_entries_current()
-            + _keylm_entries()
             + _reduce_label_entries_current()
             + _synth_entries_current()
+            + _keylm_entries()
             + _embed_entries()
         ),
         # simple-shuffle is recommended for production (LiteLLM docs): doesn't
@@ -1490,6 +1682,9 @@ async def pick_synth_deployment_bandit(
     On any failure (bandit cells missing, Redis unavailable, etc.), falls
     back to the deterministic round-robin via pick_synth_deployment(seed).
     """
+    # BYOK: rebuild the dynamic catalog if the /settings selection moved so the
+    # chapter pin is chosen ONLY from enabled∩selected models.
+    await ensure_dynamic_catalog()
     entries = _synth_entries_current()
     if not entries:
         raise RuntimeError("SYNTH_GROUP is empty — cannot pin a deployment")
@@ -1841,25 +2036,37 @@ def _record_to_entry(group: str, record, timeout_s: int) -> dict | None:
     return None
 
 
+# NOTE: all three apply `_apply_selection_filter` so the user's BYOK
+# provider/model selection is honored EVERYWHERE these feed — not just the
+# LiteLLM Router's model_list, but also the FGTS-VA bandit candidate pools
+# (`chat_judge_bandit_async`, `pick_synth_deployment_bandit`) which call
+# `litellm.acompletion` directly, bypassing the Router. Single source of truth
+# so the bandit never ranks/picks a deselected model or disabled provider.
+# The no-empty guard inside the filter keeps each pool alive if a selection
+# would empty it. Settings are read through the store's TTL cache, so calling
+# these per-bandit-call is cheap.
 def _all_entries_current() -> list:
-    """Active catalog for dd-all — dynamic if available, else static fallback."""
+    """Active catalog for dd-all — dynamic if available, else static fallback;
+    trimmed to the user's enabled providers + selected models."""
     if _dynamic_catalog_initialized and _dynamic_entries.get("dd-all"):
-        return _dynamic_entries["dd-all"]
-    return _all_entries()
+        return _apply_selection_filter(_dynamic_entries["dd-all"])
+    return _apply_selection_filter(_all_entries())
 
 
 def _synth_entries_current() -> list:
-    """Active catalog for dd-synth — dynamic if available, else static fallback."""
+    """Active catalog for dd-synth — dynamic if available, else static fallback;
+    trimmed to the user's enabled providers + selected models."""
     if _dynamic_catalog_initialized and _dynamic_entries.get("dd-synth"):
-        return _dynamic_entries["dd-synth"]
-    return _synth_entries()
+        return _apply_selection_filter(_dynamic_entries["dd-synth"])
+    return _apply_selection_filter(_synth_entries())
 
 
 def _reduce_label_entries_current() -> list:
-    """Active catalog for dd-reduce-label — dynamic if available, else static."""
+    """Active catalog for dd-reduce-label — dynamic if available, else static;
+    trimmed to the user's enabled providers + selected models."""
     if _dynamic_catalog_initialized and _dynamic_entries.get("dd-reduce-label"):
-        return _dynamic_entries["dd-reduce-label"]
-    return _reduce_label_entries()
+        return _apply_selection_filter(_dynamic_entries["dd-reduce-label"])
+    return _apply_selection_filter(_reduce_label_entries())
 
 
 def _build_redis_url_for_bench() -> str | None:
@@ -1874,87 +2081,207 @@ def _build_redis_url_for_bench() -> str | None:
     return f"redis://{host}:{port}"
 
 
-async def init_dynamic_catalog() -> bool:
-    """Populate _dynamic_entries from live discovery + benchmark ranking.
+# Capability floor for the "All free" heavy pools (see _DYNAMIC_MIN_PARAM_B).
+# Parses parameter size from the model id; MoE markers mean "capable despite low
+# active params" → always kept. Provider-agnostic (validated across NIM / Groq /
+# Gemini / Cerebras / Mistral naming): the `\d+x\d+` + `mixtral` alternatives
+# catch Mistral's `mixtral-8x7b`/`8x22b` (the `\b\d+x\b` form misses `8x7b`);
+# `\d+e\b` catches `maverick-17b-128e`.
+_PARAM_SIZE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*b\b", re.IGNORECASE)
+_MOE_RE = re.compile(
+    r"\d+\s*x\s*\d+|\b\d+\s*x\b|\d+e\b|\bmoe\b|mixtral|mixture",
+    re.IGNORECASE,
+)
 
-    Idempotent — re-calling is a no-op once initialized successfully.
-    Call from FastAPI lifespan startup BEFORE the first build_*_chain().
-    Returns True on success (dynamic catalog active), False if it fell back
-    to the static catalog.
+# Non-chat model TYPES that live discovery returns but can't serve
+# chat/structured generation (embedders, rerankers, vision encoders, OCR/ASR/
+# TTS, safety classifiers, reward models). They 100% fail a distill/assign/synth
+# call, so they're excluded from EVERY chat pool regardless of size. Generic
+# substrings → provider-agnostic (NIM `baai/bge-m3` + `google/deplot` were the
+# leak on the FastAPI run; Groq/Mistral/etc. host their own embedders too).
+# NOTE: the rotator's OWN embedder lives in the separate, unfiltered dd-embed
+# pool, so excluding "embed" here never touches embeddings.
+_NON_CHAT_MARKERS = (
+    "embed", "bge", "e5-", "-e5", "gte-", "rerank", "deplot", "ocr",
+    "whisper", "clip", "siglip", "-vit", "vit-", "guard", "reward",
+)
 
-    Behavior:
-      - DD_DYNAMIC_CATALOG=0 → skip entirely, use static.
-      - Discovery returns 0 models → fall back, log warning.
-      - Benchmark fetch raises → fall back, log warning.
-      - Per-step top-K is empty (all unscored AND no static fallback) → still
-        materialize Router with whatever the static catalog returns.
-    """
-    global _dynamic_catalog_initialized, _dynamic_entries
-    if _dynamic_catalog_initialized:
+
+def _is_non_chat_model(model_id: str) -> bool:
+    """True for embedder/reranker/vision-encoder/ASR/TTS/classifier/reward
+    models — never valid in a chat pool. Provider-agnostic."""
+    name = (model_id or "").lower()
+    return any(m in name for m in _NON_CHAT_MARKERS)
+
+
+def _passes_capability_floor(model_id: str, min_b: float) -> bool:
+    """True if a discovered model is large enough for strict structured
+    generation. MoE → always True. Else True iff the largest '<N>b' token is
+    >= min_b. No parseable size → True (benefit of the doubt — usually a newer
+    named frontier model). min_b <= 0 disables the floor."""
+    if min_b <= 0:
         return True
+    name = (model_id or "").lower()
+    if _MOE_RE.search(name):
+        return True
+    sizes = [float(x) for x in _PARAM_SIZE_RE.findall(name)]
+    if sizes:
+        return max(sizes) >= min_b
+    return True
+
+
+async def init_dynamic_catalog(force: bool = False) -> bool:
+    """Build _dynamic_entries from live discovery + benchmark ranking, FILTERED
+    BY the user's BYOK selection (provider enable + per-provider all/custom).
+
+      - provider in 'all' mode    → all its discovered free models are eligible,
+        benchmark-ranked, then the pool is capped at the per-step top-K.
+      - provider in 'custom' mode → ONLY the selected model_ids, and they are
+        ALWAYS kept (never dropped by the top-K cap) so explicit test picks run.
+      - no selection at all        → top-K benchmark slice of every discovered
+        free model (sane default, prevents the firehose).
+
+    Idempotent unless force=True (rebuild after a selection change). Returns True
+    if the dynamic catalog is active, False on fallback to the static catalog.
+    Safe: any failure (discovery down, benchmark error, 0 models) → static
+    fallback, which is still selection-filtered by the `*_current()` accessors.
+    """
+    global _dynamic_catalog_initialized, _dynamic_entries, _dynamic_built_gen
     flag = os.environ.get("DD_DYNAMIC_CATALOG", "1").strip().lower()
     if flag not in ("1", "true", "yes", "on"):
         logger.info("[llm-chain] DD_DYNAMIC_CATALOG=0 — using static catalog")
         return False
+    if _dynamic_catalog_initialized and not force:
+        return True
+    gen_at_build = _read_settings_gen()
+    # Stamp the attempted gen up front (regardless of success/failure) so a
+    # failed build — e.g. no keys yet at fresh boot → discovery returns 0 —
+    # does NOT retry discovery on every bandit call. `ensure_dynamic_catalog`
+    # only rebuilds when the gen MOVES (the user changed /settings, which bumps
+    # it), so adding a key kicks a fresh attempt. Also damps the concurrent-
+    # rebuild herd at the moment a gen change lands.
+    _dynamic_built_gen = gen_at_build
+    sel = _read_selection(force=True)   # freshest selection for the rebuild
+    try:
+        _min_param_b = float(os.environ.get(
+            "KD_DYNAMIC_MIN_PARAM_B", _DYNAMIC_MIN_PARAM_B))
+    except (TypeError, ValueError):
+        _min_param_b = _DYNAMIC_MIN_PARAM_B
     try:
         redis_url = _build_redis_url_for_bench()
         rds = redis_aio.from_url(redis_url) if redis_url else None
+        new_entries: dict[str, list[dict]] = {}
         try:
             by_provider = await discovery.list_all_alive_models()
             alive = [r for records in by_provider.values() for r in records]
             if not alive:
                 raise RuntimeError("discovery returned 0 alive models")
+            # Apply BYOK selection up front (per-provider all/custom). No-empty
+            # guard: a selection that leaves nothing falls back to all discovered.
+            if sel:
+                alive_sel = [
+                    r for r in alive
+                    if _selection_allows(r.provider, r.model_id, sel)
+                ]
+                if not alive_sel:
+                    logger.warning(
+                        "[llm-chain] dynamic catalog: selection emptied the "
+                        "discovered pool — using all discovered (no-empty guard)"
+                    )
+                    alive_sel = alive
+            else:
+                alive_sel = alive
             logger.info(
-                f"[llm-chain] dynamic catalog: discovery returned "
-                f"{len(alive)} models across {len(by_provider)} providers"
+                f"[llm-chain] dynamic catalog: {len(alive)} discovered, "
+                f"{len(alive_sel)} after selection across "
+                f"{len(by_provider)} providers"
             )
             for step, top_k in _DYNAMIC_TOP_K.items():
                 group_name = _DYNAMIC_STEP_TO_GROUP[step]
                 timeout_s = _DYNAMIC_STEP_TIMEOUT_S[step]
                 try:
                     ranked = await benchmarks.rank_for_step(
-                        step, 
-                        alive, 
-                        redis = rds)
+                        step, alive_sel, redis=rds)
                 except Exception as e:
                     logger.warning(
                         f"[llm-chain] rank_for_step({step}) failed: "
                         f"{type(e).__name__}: {e}; using static for this step"
                     )
                     continue
-                # Take top-K with composite_score > 0 first, then fill with
-                # unscored top-tier-fallback entries until we hit top_k or
-                # exhaust the ranked list.
-                scored_top: list = []
-                unscored_top: list = []
+                # Custom-mode records = explicit user choices → ALWAYS kept
+                # (never cut by top-K, never floored). All-mode records fill the
+                # remaining top-K budget, benchmark order (scored first, unscored
+                # backfill).
+                custom_recs: list = []
+                scored_all: list = []
+                unscored_all: list = []
                 for record, score in ranked:
-                    if score > 0:
-                        scored_top.append(record)
+                    if _provider_mode(record.provider, sel) == "custom":
+                        custom_recs.append(record)
+                    elif score > 0:
+                        scored_all.append(record)
                     else:
-                        unscored_top.append(record)
-                pool_records = scored_top[:top_k]
-                # Backfill with unscored (provider-tier-sorted) if we have
-                # room — keeps the pool deep enough for cooldown redundancy.
-                if len(pool_records) < top_k:
-                    pool_records.extend(unscored_top[: top_k - len(pool_records)])
+                        unscored_all.append(record)
+                # Filter the auto-"all" fill (custom picks above are exempt —
+                # explicit choice wins). Two gates:
+                #   1. non-chat exclusion on EVERY chat pool — embedders/
+                #      rerankers/etc. can't do any chat task (fixes the bge-m3 /
+                #      deplot leak).
+                #   2. capability size floor on the HEAVY structured-generation
+                #      pools only (dd-all / dd-synth) — drops the tiny tail
+                #      (gemma-2-2b, granite-8b, ...); dd-reduce-label is exempt
+                #      (small fast models are fine for ordering/labels).
+                fill = scored_all + unscored_all
+                orig_fill = fill
+                n_nonchat = sum(1 for r in fill if _is_non_chat_model(r.model_id))
+                fill = [r for r in fill if not _is_non_chat_model(r.model_id)]
+                n_size = 0
+                if step in _DYNAMIC_QUALITY_FLOOR_STEPS and _min_param_b > 0:
+                    floored = [
+                        r for r in fill
+                        if _passes_capability_floor(r.model_id, _min_param_b)
+                    ]
+                    n_size = len(fill) - len(floored)
+                    fill = floored
+                # No-empty guard: never starve a pool. If both gates emptied the
+                # auto-fill AND there are no custom picks, revert to unfiltered.
+                if not fill and not custom_recs:
+                    logger.warning(
+                        f"[llm-chain] dynamic catalog: {step} filters emptied the "
+                        f"pool — keeping unfiltered (no-empty guard)"
+                    )
+                    fill = orig_fill
+                else:
+                    if n_nonchat:
+                        logger.info(
+                            f"[llm-chain] dynamic catalog: {step} dropped "
+                            f"{n_nonchat} non-chat model(s) (embedder/reranker/etc.)"
+                        )
+                    if n_size:
+                        logger.info(
+                            f"[llm-chain] dynamic catalog: {step} quality floor "
+                            f"(>={_min_param_b:g}B or MoE) dropped {n_size} "
+                            f"small model(s)"
+                        )
+                budget = max(0, top_k - len(custom_recs))
+                pool_records = custom_recs + fill[:budget]
                 entries: list[dict] = []
                 seen_litellm_models: set[str] = set()
                 for r in pool_records:
                     entry = _record_to_entry(group_name, r, timeout_s)
                     if entry is None:
                         continue
-                    # Dedupe by litellm_params.model so we don't include the
-                    # same (provider, model_id) twice in one pool.
                     key = entry["litellm_params"]["model"]
                     if key in seen_litellm_models:
                         continue
                     seen_litellm_models.add(key)
                     entries.append(entry)
                 if entries:
-                    _dynamic_entries[step] = entries
+                    new_entries[step] = entries
                     logger.info(
-                        f"[llm-chain] dynamic catalog: {step} → "
-                        f"{len(entries)} entries (top-K={top_k})"
+                        f"[llm-chain] dynamic catalog: {step} → {len(entries)} "
+                        f"entries ({len(custom_recs)} custom-pinned, cap "
+                        f"top-K={top_k})"
                     )
                 else:
                     logger.warning(
@@ -1967,15 +2294,23 @@ async def init_dynamic_catalog() -> bool:
                     await rds.aclose()
                 except Exception:
                     pass
-        # Mark initialized if at least one step got dynamic entries
-        if _dynamic_entries:
+        # Atomic swap — populate a temp dict then replace in place (no await
+        # between clear+update, so concurrent readers never see a half-built map).
+        if new_entries:
+            _dynamic_entries.clear()
+            _dynamic_entries.update(new_entries)
             _dynamic_catalog_initialized = True
+            _dynamic_built_gen = gen_at_build
             logger.info(
                 f"[llm-chain] dynamic catalog ACTIVE for: "
-                f"{sorted(_dynamic_entries.keys())}"
+                f"{sorted(_dynamic_entries.keys())} (gen={gen_at_build})"
             )
             return True
-        logger.warning("[llm-chain] dynamic catalog: 0 steps populated; full static fallback")
+        logger.warning(
+            "[llm-chain] dynamic catalog: 0 steps populated; full static fallback")
+        _dynamic_entries.clear()
+        _dynamic_catalog_initialized = False
+        _dynamic_built_gen = gen_at_build
         return False
 
     except Exception as e:
@@ -1986,6 +2321,21 @@ async def init_dynamic_catalog() -> bool:
         _dynamic_entries.clear()
         _dynamic_catalog_initialized = False
         return False
+
+
+async def ensure_dynamic_catalog() -> None:
+    """Lazy (re)build of the dynamic catalog on the async hot path when the BYOK
+    settings generation has moved (selection changed in any process) or it was
+    never built. Cheap when fresh — one throttled Redis gen read. This is what
+    propagates a /settings change to every Celery worker without a redeploy."""
+    flag = os.environ.get("DD_DYNAMIC_CATALOG", "1").strip().lower()
+    if flag not in ("1", "true", "yes", "on"):
+        return
+    # Rebuild only when the settings generation MOVES (selection changed in any
+    # process). A failed attempt already stamped this gen, so we don't hammer
+    # discovery while keyless — adding a key bumps the gen and kicks a rebuild.
+    if _read_settings_gen() != _dynamic_built_gen:
+        await init_dynamic_catalog(force=True)
 
 
 def init_dynamic_catalog_sync() -> bool:

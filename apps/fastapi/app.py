@@ -53,6 +53,30 @@ async def lifespan(app: FastAPI):
             f"MinIO is reachable + creds are correct."
         )
 
+    # BYOK credential store — eager KEK init + cache load so the first rotator
+    # build resolves user keys from cache (not a cold MinIO GET). Best-effort:
+    # on failure the rotator falls back to env keys (today's behavior).
+    try:
+        from domains.llm.credentials import warm as warm_credentials
+        warm_credentials()
+    except Exception as e:
+        logger.warning(
+            f"[lifespan] LLM credential store warm failed: "
+            f"{type(e).__name__}: {e}. Rotator will use env keys only."
+        )
+
+    # Build the selection-driven dynamic catalog (live discovery + benchmark
+    # rank, filtered to the user's BYOK provider/model selection). Best-effort:
+    # on failure the rotator falls back to the selection-filtered static catalog.
+    try:
+        from domains.llm.rotator.chain import init_dynamic_catalog
+        await init_dynamic_catalog()
+    except Exception as e:
+        logger.warning(
+            f"[lifespan] dynamic catalog init failed: "
+            f"{type(e).__name__}: {e}. Rotator will use the static catalog."
+        )
+
     try:
         await init_checkpointer()
     except Exception as e:

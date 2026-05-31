@@ -101,3 +101,24 @@ def _ensure_minio_bucket(**_kwargs) -> None:
             f"({type(e).__name__}: {e}); ingestion tasks will fail until "
             f"MinIO is reachable + creds are correct"
         )
+    # BYOK credential store warm — so synth/planner Celery tasks resolve
+    # user-supplied keys from cache. Best-effort; env fallback otherwise.
+    try:
+        from domains.llm.credentials import warm as warm_credentials
+        warm_credentials()
+    except Exception as e:
+        logger.warning(
+            f"[worker-init] LLM credential store warm failed "
+            f"({type(e).__name__}: {e}); rotator will use env keys only"
+        )
+    # Build the selection-driven dynamic catalog so the first synth/judge task
+    # resolves against the user's selected models. Rebuilds lazily on a
+    # /settings change (Redis settings-gen check on the bandit path).
+    try:
+        from domains.llm.rotator.chain import init_dynamic_catalog_sync
+        init_dynamic_catalog_sync()
+    except Exception as e:
+        logger.warning(
+            f"[worker-init] dynamic catalog init failed "
+            f"({type(e).__name__}: {e}); rotator will use the static catalog"
+        )

@@ -262,6 +262,30 @@ searxng:
 # Secret containing credentials (created by upload_env_to_k3d.sh)
 secretName: coelhonexus-secret
 
+# BYOK LLM credential store (apps/fastapi/domains/llm/credentials).
+# Provider keys are normally entered through the global /settings UI and stored
+# Fernet-encrypted in MinIO (llm/credentials.enc) — they survive skaffold/pod
+# restarts via the MinIO PVC with NO Helm config. This block only governs the
+# OPTIONAL key-encryption-key (KEK) hardening + first-boot env import.
+llmCredentials:
+  # true → this chart provisions a Helm-managed Secret holding a stable
+  # KD_CREDS_KEY (the Fernet KEK), generated ONCE and retained across upgrades
+  # (lookup-retain idiom), injected into fastapi + celery. Separates the unlock
+  # key from the ciphertext (stronger than the in-MinIO autogen KEK).
+  #
+  # DEFAULT false: when KD_CREDS_KEY is unset the store auto-generates + persists
+  # a KEK inside MinIO, so zero-config persistence already works. Turn this on
+  # for a FRESH install to get KEK separation. Enabling it AFTER keys were saved
+  # is safe — the store transparently migrates existing ciphertext to the new
+  # KEK on first read.
+  manageKek: false
+  kekSecretName: coelhonexus-creds-kek
+  kekSecretKey: kd-creds-key
+  # true → sets KD_CREDS_IMPORT_ENV=1 so the process imports any provider keys
+  # still present in the environment into the encrypted store on boot (lets you
+  # then drop the plaintext configmap/secret entries). Default off.
+  importEnvKeys: false
+
 # Secret key mappings (upload_env_to_k3d.sh converts UPPER_CASE to lower-case)
 # Maps secret keys back to expected environment variable names
 secretMappings:
@@ -275,24 +299,31 @@ secretMappings:
     key: aws-access-key-id
   - envName: AWS_SECRET_ACCESS_KEY
     key: aws-secret-access-key
-  - envName: OPENAI_API_KEY
-    key: openai-api-key
-  - envName: GROQ_API_KEY
-    key: groq-api-key
-  - envName: NVIDIA_API_KEY
-    key: nvidia-api-key
-  - envName: SAMBANOVA_API_KEY
-    key: sambanova-api-key
-  - envName: CEREBRAS_API_KEY
-    key: cerebras-api-key
-  - envName: MISTRAL_API_KEY
-    key: mistral-api-key
-  - envName: GOOGLE_API_KEY
-    key: google-api-key
-  - envName: DEEPSEEK_API_KEY
-    key: deepseek-api-key
-  - envName: ZHIPU_API_KEY
-    key: zhipu-api-key
+  # ---------------------------------------------------------------------------
+  # LLM rotator provider API keys — now supplied by the USER through the global
+  # /settings UI (BYOK), encrypted at rest in MinIO (llm/credentials.enc), NOT
+  # injected from Helm. resolve_key() reads the store; with these mappings
+  # commented out there is no env fallback, so the rotator uses ONLY UI-entered
+  # keys. The values themselves are NOT erased — they remain in
+  # coelhonexus-secret / your .env. Uncomment any line to restore the env path
+  # (or one-time: set llmCredentials.importEnvKeys=true to migrate them into the
+  # store on next boot). NIM (NVIDIA_API_KEY) powers mandatory embeddings/rerank
+  # too, so enter it in /settings before running a DD pipeline.
+  # - envName: GROQ_API_KEY
+  #   key: groq-api-key
+  # - envName: NVIDIA_API_KEY
+  #   key: nvidia-api-key
+  # - envName: SAMBANOVA_API_KEY
+  #   key: sambanova-api-key
+  # - envName: CEREBRAS_API_KEY
+  #   key: cerebras-api-key
+  # - envName: MISTRAL_API_KEY
+  #   key: mistral-api-key
+  # - envName: GOOGLE_API_KEY
+  #   key: google-api-key
+  # - envName: DEEPSEEK_API_KEY
+  #   key: deepseek-api-key
+  # ---------------------------------------------------------------------------
   - envName: ELASTICSEARCH_PASSWORD
     key: elasticsearch-password
   - envName: QDRANT_API_KEY

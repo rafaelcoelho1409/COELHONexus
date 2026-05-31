@@ -46,6 +46,7 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from starlette.responses import StreamingResponse
 
 from domains.dd.ingestion.storage import get_storage
+from domains.llm.rotator.discovery import missing_required_keys
 from domains.dd.synth.cancel import (
     _redis_url,
     clear_cancel,
@@ -450,6 +451,20 @@ async def start_synth(
         raise HTTPException(
             status_code=400,
             detail=f"invalid mode {mode!r}; expected one of {sorted(_VALID_MODES)}",
+        )
+
+    # NIM-REQUIRED GATE — synth reranks/grounds via NVIDIA NIM (faithfulness +
+    # CoCoA). Fail fast with an actionable message if the NIM key isn't set.
+    _missing = missing_required_keys()
+    if _missing:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "NVIDIA NIM API key required — it powers the mandatory embedding "
+                "+ reranking models this run needs. Add "
+                + ", ".join(m["key_env"] for m in _missing)
+                + " in Settings (/settings), then retry."
+            ),
         )
 
     # PLANNER-FIRST GATE (server-side anti-bypass). Synth cannot run

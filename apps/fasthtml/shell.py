@@ -29,7 +29,27 @@ stay focused on their own content.
   - prefers-reduced-motion is respected (no slide animation).
 """
 from fasthtml.common import (
-    H1, A, Div, Link, Main, Meta, Nav, Script, Span, Style, Title,
+    H1, A, Div, Link, Main, Meta, Nav, NotStr, Script, Span, Style, Title,
+)
+
+
+# Feather "settings" cog — inline SVG so it inherits currentColor + needs no
+# extra asset. Lives in topbar row 1 (every page) → links to the global
+# /settings page (BYOK provider keys + model selection).
+_GEAR_SVG = NotStr(
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" '
+    'aria-hidden="true"><circle cx="12" cy="12" r="3"></circle>'
+    '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83'
+    'l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0'
+    'v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1'
+    '-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3'
+    'a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06'
+    'a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1'
+    '-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33'
+    'l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9'
+    'a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z">'
+    '</path></svg>'
 )
 
 
@@ -100,6 +120,7 @@ HEAD = (
     Link(rel="stylesheet", href="/static/css/dd/planner.css"),
     Link(rel="stylesheet", href="/static/css/dd/study.css"),
     Link(rel="stylesheet", href="/static/css/youtube.css"),
+    Link(rel="stylesheet", href="/static/css/settings.css"),
     # DD-NAVBAR-SOTA-2026-05-26 (Wave B1) — running-work status dot
     # polling. Hits /api/v1/docs-distiller/runs/active every 30s,
     # toggles .has-running on the matching nav-item. defer so it
@@ -183,6 +204,14 @@ def _Shell(active_key: str, title_text=None, body=None, title_actions=None,
                         aria_label = "COELHO Nexus home",
                     ),
                     Nav(*nav_links, cls = "nav", aria_label = "Primary"),
+                    A(
+                        _GEAR_SVG,
+                        href = "/settings",
+                        cls = ("settings-gear active" if active_key == "settings"
+                               else "settings-gear"),
+                        aria_label = "Settings",
+                        title = "Settings",
+                    ),
                     cls = "topbar",
                 ),
                 feature_row,

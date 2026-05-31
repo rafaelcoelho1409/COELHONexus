@@ -17,11 +17,13 @@ from .service import (
     embed_via_router_sync,
     get_entries_for_group,
     get_parent_group,
+    ensure_dynamic_catalog,
     init_dynamic_catalog,
     init_dynamic_catalog_sync,
     pick_synth_deployment,
     pick_synth_deployment_bandit,
     rerank_via_router_async,
+    reset_rotator,
 )
 
 __all__ = [
@@ -47,4 +49,6 @@ __all__ = [
     "build_reduce_label_chain",
     "init_dynamic_catalog",
     "init_dynamic_catalog_sync",
+    "ensure_dynamic_catalog",
+    "reset_rotator",
 ]

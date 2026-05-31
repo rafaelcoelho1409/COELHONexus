@@ -204,6 +204,18 @@ template:
               name: coelhonexus-{{ .appName }}-configmap
         env:
           {{- include "coelhonexus.secretEnvVars" .root | nindent 10 }}
+          {{- if .root.Values.llmCredentials.manageKek }}
+          - name: KD_CREDS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: {{ .root.Values.llmCredentials.kekSecretName }}
+                key: {{ .root.Values.llmCredentials.kekSecretKey }}
+                optional: true
+          {{- end }}
+          {{- if .root.Values.llmCredentials.importEnvKeys }}
+          - name: KD_CREDS_IMPORT_ENV
+            value: "1"
+          {{- end }}
 {{- end -}}
 
 

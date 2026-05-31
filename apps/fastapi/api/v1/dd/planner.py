@@ -48,6 +48,7 @@ from fastapi import APIRouter, HTTPException, Response
 from starlette.responses import StreamingResponse
 
 from domains.dd.ingestion.storage import get_storage, read_framework_manifest
+from domains.llm.rotator.discovery import missing_required_keys
 from domains.dd.planner.cancel import (
     _redis_url,
     clear_cancel,
@@ -132,6 +133,21 @@ async def start_planner(
         raise HTTPException(
             status_code=400,
             detail=f"invalid mode {mode!r}; expected one of {sorted(_VALID_MODES)}",
+        )
+
+    # NIM-REQUIRED GATE — the planner embeds the whole corpus + reranks via
+    # NVIDIA NIM. Fail fast with an actionable message instead of a cryptic
+    # mid-run embedding failure if the NIM key isn't set (store or env).
+    _missing = missing_required_keys()
+    if _missing:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "NVIDIA NIM API key required — it powers the mandatory embedding "
+                "+ reranking models this run needs. Add "
+                + ", ".join(m["key_env"] for m in _missing)
+                + " in Settings (/settings), then retry."
+            ),
         )
 
     # CORPUS-FIRST GATE (server-side anti-bypass, mirrors synth's plan

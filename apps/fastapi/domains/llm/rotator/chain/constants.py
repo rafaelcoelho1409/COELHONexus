@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # type-only — never imported at runtime (no circular import)
+    from litellm import Router
+    from langchain_litellm.chat_models import ChatLiteLLMRouter
+
 GROUP = "dd-all"
 KEYLM_GROUP = "dd-keylm"
 REDUCE_LABEL_GROUP = "dd-reduce-label"
@@ -47,7 +53,6 @@ _PROVIDER_CHAPTER_CAPS: dict[str, int] = {
     "cerebras":   2,
     "mistral":    3,
     "gemini":     1,
-    "openai":     2,
 }
 # =============================================================================
 # DYNAMIC CATALOG — discovery + benchmarks → top-K per step (Phase 1, 2026-05-14)
@@ -73,6 +78,20 @@ _DYNAMIC_STEP_TIMEOUT_S: dict[str, int] = {
     "dd-synth":         180,    # reasoning models burn <think> tokens
     "dd-reduce-label":   90,    # non-reasoning, fast
 }
+
+# Quality floor for "All free" model selection (2026-05-31). Live discovery
+# returns EVERY free model a provider hosts — including tiny ones (gemma-2-2b,
+# granite-8b, gemma-3n-e4b) that can't reliably emit the strict structured
+# output the heavy pools need (doc_distill JSON distillates, chapter_assign,
+# SAWC). Those produced ~12% deterministic-fallback distillates on the FastAPI
+# planner run. So for the heavy structured-generation pools we drop discovered
+# models below a parameter-size floor UNLESS they're MoE (capable despite low
+# active params) or the user CUSTOM-selected them (explicit choice always wins).
+# dd-reduce-label is exempt — small fast models are fine for ordering/labels.
+# Override the floor via env KD_DYNAMIC_MIN_PARAM_B (e.g. 0 = include all,
+# 70 = only the largest) for testing.
+_DYNAMIC_MIN_PARAM_B: float = 20.0
+_DYNAMIC_QUALITY_FLOOR_STEPS: frozenset = frozenset({"dd-all", "dd-synth"})
 
 
 _router_instance: Router | None = None
