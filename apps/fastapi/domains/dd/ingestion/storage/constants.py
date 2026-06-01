@@ -73,4 +73,18 @@ def live_manifest_key(run_id: str) -> str:
     return f"dd:runs:{run_id}:manifest"
 
 
+# Artifact keys — content-addressed media (images, gifs, videos, audio)
+# extracted from fetched HTML by domains/dd/ingestion/artifacts.py. The
+# filename IS ``{sha256[:16]}.{ext}`` so dedup is automatic across pages
+# AND across re-ingestions: the same logo on 50 pages → 1 stored blob.
+# Lives under the canonical ``ingestion/{slug}/`` prefix (NOT the raw
+# prefix) so a single ``DELETE /ingestion/{slug}`` wipe clears artifacts
+# too. The 1-year Cache-Control set at put_object lets the browser cache
+# aggressively — content-addressing makes that always-safe (the bytes
+# at ``abc123.png`` never change identity).
+def artifact_key(framework_slug: str, name: str) -> str:
+    safe_name = (name or "").strip().strip("/").replace("..", "")[:120]
+    return f"{framework_prefix(framework_slug)}artifacts/{safe_name}"
+
+
 _TTL_S = 7200

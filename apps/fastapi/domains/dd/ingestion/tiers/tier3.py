@@ -23,7 +23,9 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
+from ..artifacts import extract_and_save_artifacts
 from ..extract import extract_title, html_to_markdown
+from ..storage import Store
 from ..filters import (
     NON_TARGET_LANGUAGE_PATH_RE,
     build_language_filter,
@@ -108,6 +110,8 @@ async def _fetch_page(
     url: str,
     *,
     progress: Progress,
+    framework_slug: str | None = None,
+    store: Store | None = None,
 ) -> tuple[str, str, str, str] | None:
     t0 = time.monotonic()
     try:
@@ -131,6 +135,26 @@ async def _fetch_page(
         return None
 
     raw = resp.text or ""
+    # HTML-side artifact extraction (parity with Tier 4) — must run
+    # BEFORE html_to_markdown because markdownify drops <video>,
+    # <audio>, and collapses <picture><source srcset> down to the
+    # inner <img>. The downstream md-side extractor in Store.add_page
+    # is a safety net but only sees the post-conversion `<img>` set.
+    if framework_slug and store is not None:
+        try:
+            raw, n_art = await extract_and_save_artifacts(
+                raw, url, slug=framework_slug, store=store, client=client,
+            )
+            if n_art:
+                logger.info(
+                    f"[tier-3] {url}: saved {n_art} artifact(s) "
+                    f"to ingestion/{framework_slug}/artifacts/"
+                )
+        except Exception as e:
+            logger.warning(
+                f"[tier-3] artifact extraction failed for {url}: "
+                f"{type(e).__name__}: {e}"
+            )
     body = html_to_markdown(raw, source_url=url)
     title = extract_title(raw)
 
@@ -222,7 +246,10 @@ async def run(
             nonlocal written
             async with sem:
                 await progress.raise_if_cancelled()
-                r = await _fetch_page(client, u, progress=progress)
+                r = await _fetch_page(
+                    client, u, progress=progress,
+                    framework_slug=framework_slug, store=store,
+                )
             if r is not None:
                 slug, src_url, body, title = r
                 await store.add_page(

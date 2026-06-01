@@ -30,8 +30,6 @@ frameworks:
 - name: Alibi Explain
   logo: https://raw.githubusercontent.com/SeldonIO/alibi/master/doc/source/_static/Alibi_Explain_Logo_rgb.png
   docs: https://docs.seldon.ai/alibi-explain
-  llms_full: https://docs.seldon.ai/alibi-explain/llms-full.txt
-  llms_txt: https://docs.seldon.ai/alibi-explain/llms.txt
   sitemap: https://docs.seldon.ai/alibi-explain/sitemap-pages.xml
   github: https://github.com/seldonio/alibi
   category: Python

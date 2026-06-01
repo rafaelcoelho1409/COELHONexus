@@ -24,8 +24,10 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
+from ..artifacts import extract_and_save_artifacts
 from ..extract import extract_title, html_to_markdown
 from ..progress import Progress
+from ..storage import Store
 from ..storage import Store
 from .types import EmptyLinksDetected
 
@@ -111,6 +113,8 @@ async def _fetch_one(
     *,
     progress: Progress,
     tier_name: str,
+    framework_slug: str | None = None,
+    store: Store | None = None,
 ) -> tuple[str, str, str, str] | None:
     """Returns (slug, url, body_markdown, title) on success, None on failure.
     Records progress + URL log internally."""
@@ -137,8 +141,28 @@ async def _fetch_one(
 
     raw = resp.text or ""
     if _is_markdown_response(resp):
+        # Pre-baked markdown — md-side extractor in Store.add_page will
+        # handle ![alt](url) + inline <img> refs. No HTML phase here.
         body_md = raw
     else:
+        # HTML phase — run the richer HTML-side extractor BEFORE
+        # markdownify (which drops <video>/<audio> and collapses
+        # <picture><source srcset> to inner <img>). Parity with Tier 4.
+        if framework_slug and store is not None:
+            try:
+                raw, n_art = await extract_and_save_artifacts(
+                    raw, url, slug=framework_slug, store=store, client=client,
+                )
+                if n_art:
+                    logger.info(
+                        f"[tier-2] {url}: saved {n_art} artifact(s) "
+                        f"to ingestion/{framework_slug}/artifacts/"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"[tier-2] artifact extraction failed for {url}: "
+                    f"{type(e).__name__}: {e}"
+                )
         body_md = html_to_markdown(raw, source_url=url)
         if not title:
             title = extract_title(raw) or title
@@ -233,6 +257,7 @@ async def run(
                 await progress.raise_if_cancelled()
                 r = await _fetch_one(
                     client, title, link, progress=progress, tier_name="llms_txt",
+                    framework_slug=framework_slug, store=store,
                 )
             if r is not None:
                 slug, src_url, body, t = r

@@ -46,6 +46,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from .constants import (
+    artifact_key,
     _TTL_S,
     framework_prefix,
     live_manifest_key,
@@ -451,6 +452,15 @@ class Store:
         # but worker CPU + Redis bandwidth stay bounded.
         self._live_last_flush = 0.0
         self._live_throttle_s = 1.0
+        # Lazy-init httpx client for the universal markdown-side artifact
+        # extractor (see add_page). Tier 4 already cached artifacts at the
+        # HTML stage with its own client; this one catches every other
+        # tier (Tier 1 llms-full, Tier 2 llms.txt, Tier 3 sitemap-as-md,
+        # Tier 5 GitHub) so every saved page lands with stable
+        # ``/api/v1/.../artifacts/`` URLs regardless of dispatch path.
+        # Closed in `finalize`.
+        self._artifact_client: "httpx.AsyncClient | None" = None
+        self._artifact_lock = asyncio.Lock()
 
     async def add_page(
         self,
@@ -473,6 +483,34 @@ class Store:
         `ingestion-raw/{slug}/pages/...` so backfills + normalizer
         version bumps stay reversible.
         """
+        # Universal markdown-side artifact hook — Tier 1/2/3/5 don't go
+        # through the HTML-stage extractor in tier4, so any image URL in
+        # the markdown body still points at upstream. Run a cheap pass
+        # here BEFORE normalization to materialize them into MinIO and
+        # rewrite the URLs. No-op when the body has nothing to extract
+        # (e.g. Tier 4 markdown that's already been rewritten at the
+        # HTML stage — those URLs start with `/api/v1/.../artifacts/`
+        # and are skipped by the extractor). Best-effort: a fetch error
+        # leaves the original URL in place and the page still saves.
+        if url:
+            try:
+                from ..artifacts import extract_and_save_artifacts_from_md
+                client = await self._get_artifact_client()
+                body, n_art = await extract_and_save_artifacts_from_md(
+                    body, url, slug=self.framework_slug,
+                    store=self, client=client,
+                )
+                if n_art:
+                    logger.info(
+                        f"[store] md-artifacts: {n_art} saved for "
+                        f"slug={slug!r} url={url[:80]!r}"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"[store] md-artifact extraction failed for "
+                    f"slug={slug!r}: {type(e).__name__}: {e}"
+                )
+
         # Normalize before MinIO write. Best-effort: ingestion failures
         # MUST NOT cascade from a normalizer bug, so on exception we
         # fall through to the raw body.
@@ -525,6 +563,66 @@ class Store:
             )
         await self._write_live_manifest()
         return entry
+
+    async def _get_artifact_client(self):
+        """Lazy-init the singleton httpx client used by the markdown
+        artifact extractor (Tier 1/2/3/5). One connection pool per Store
+        instance so back-to-back add_page calls reuse keepalive
+        sockets. Closed by ``close()``."""
+        if self._artifact_client is not None:
+            return self._artifact_client
+        async with self._artifact_lock:
+            if self._artifact_client is not None:
+                return self._artifact_client
+            import httpx
+            self._artifact_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(30.0, connect=10.0),
+                headers={
+                    "User-Agent": "COELHONexus-DocsDistiller-Artifacts/1.0",
+                    "Accept": "image/*, video/*, audio/*, */*;q=0.5",
+                },
+                limits=httpx.Limits(
+                    max_connections=20, max_keepalive_connections=10,
+                ),
+                follow_redirects=True,
+            )
+            return self._artifact_client
+
+    async def close(self) -> None:
+        """Release shared resources held by the Store — currently just
+        the lazy httpx artifact client. Idempotent. Safe to call from
+        the dispatch finally-block even when no artifacts were extracted
+        (the lazy init never fired and there's nothing to close)."""
+        if self._artifact_client is not None:
+            try:
+                await self._artifact_client.aclose()
+            except Exception as e:
+                logger.warning(f"[store] artifact client close failed: {e}")
+            finally:
+                self._artifact_client = None
+
+    async def add_artifact(
+        self, *, slug: str, name: str, data: bytes, content_type: str,
+    ) -> str:
+        """Persist a media artifact (image / gif / video / audio) extracted
+        from a fetched page to ``ingestion/{slug}/artifacts/{name}``. The
+        ``name`` is content-addressed (``{sha256[:16]}.{ext}``) so reuploads
+        of the same bytes idempotently overwrite the same key — safe under
+        concurrent calls from different pages of the same run.
+
+        ``slug`` here is the framework slug, NOT the per-page slug — the
+        storage layer wraps a single Store instance per framework, so we
+        accept and ignore mismatches (logged) rather than write to a
+        different framework's prefix by mistake.
+        """
+        if slug and slug != self.framework_slug:
+            logger.warning(
+                f"[store] add_artifact slug mismatch: got {slug!r}, "
+                f"store is bound to {self.framework_slug!r}; using bound slug"
+            )
+        key = artifact_key(self.framework_slug, name)
+        await self.minio.write(key, data, content_type=content_type)
+        return key
 
     async def _build_and_persist_vault(
         self, idx: int, slug: str, body: str,

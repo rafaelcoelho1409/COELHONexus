@@ -336,6 +336,10 @@ async def run(run_id: str, slug: str) -> dict:
         except Exception:
             pass
         try:
+            await store.close()
+        except Exception:
+            pass
+        try:
             await progress.close()
         except Exception:
             pass

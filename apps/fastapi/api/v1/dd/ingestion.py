@@ -24,7 +24,8 @@ import logging
 import os
 
 import redis.asyncio as redis_aio
-from fastapi import APIRouter, HTTPException
+from botocore.exceptions import ClientError
+from fastapi import APIRouter, HTTPException, Response
 
 from domains.dd.ingestion.progress import release_lock, read_lock
 from domains.dd.ingestion.storage import (
@@ -35,8 +36,26 @@ from domains.dd.ingestion.storage import (
     read_framework_manifest,
     read_framework_page,
 )
+from domains.dd.ingestion.storage.constants import artifact_key
 
 from domains.dd.resolver import _index_by_slug
+
+
+# MIME types we serve from the artifact endpoint. Derived from the
+# filename extension (the artifact filename IS ``{sha256[:16]}.{ext}``),
+# so every served byte stream gets the right Content-Type without an
+# extra MinIO HEAD call.
+_ARTIFACT_MIME: dict[str, str] = {
+    "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+    "gif": "image/gif", "svg": "image/svg+xml", "webp": "image/webp",
+    "avif": "image/avif", "ico": "image/x-icon", "bmp": "image/bmp",
+    "tiff": "image/tiff",
+    "mp4": "video/mp4", "webm": "video/webm", "mov": "video/quicktime",
+    "mkv": "video/x-matroska", "ogv": "video/ogg",
+    "mp3": "audio/mpeg", "ogg": "audio/ogg", "wav": "audio/wav",
+    "m4a": "audio/mp4", "aac": "audio/aac", "flac": "audio/flac",
+    "weba": "audio/webm",
+}
 
 
 logger = logging.getLogger(__name__)
@@ -105,6 +124,45 @@ async def get_page(slug: str, idx: int) -> dict:
             detail=f"page idx={idx} not found for {slug!r}",
         )
     return {"slug": slug, "idx": idx, "body": body}
+
+
+@router.get("/{slug}/artifacts/{name}")
+async def get_artifact(slug: str, name: str) -> Response:
+    """Stream an extracted media artifact (image / gif / video / audio)
+    from ``ingestion/{slug}/artifacts/{name}``. Content-addressed by
+    SHA-256, so served bytes are immutable for the life of the slug —
+    1-year ``Cache-Control: immutable`` is safe.
+
+    Markdown rendered in the FastHTML drawer references this endpoint
+    directly via the URLs that `domains/dd/ingestion/artifacts.py`
+    rewrites at ingest time. No upstream-URL fallback: a missing
+    artifact returns 404 so the caller (markdown ``<img>``) renders the
+    browser's broken-image icon and the absence is visible.
+    """
+    safe_name = (name or "").strip().strip("/").replace("..", "")
+    if not safe_name or "/" in safe_name:
+        raise HTTPException(status_code=400, detail="invalid artifact name")
+    key = artifact_key(slug, safe_name)
+    minio = get_storage()
+    try:
+        data = await minio.read_bytes(key)
+    except ClientError as e:
+        code = (e.response or {}).get("Error", {}).get("Code", "")
+        if code in ("404", "NoSuchKey"):
+            raise HTTPException(
+                status_code=404,
+                detail=f"artifact {safe_name!r} not found for {slug!r}",
+            )
+        raise
+    ext = safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else ""
+    media_type = _ARTIFACT_MIME.get(ext, "application/octet-stream")
+    return Response(
+        content=data, media_type=media_type,
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "Content-Length": str(len(data)),
+        },
+    )
 
 
 @router.delete("/{slug}")

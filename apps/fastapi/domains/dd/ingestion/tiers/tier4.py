@@ -30,6 +30,7 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
+from ..artifacts import extract_and_save_artifacts
 from ..extract import extract_title, html_to_markdown
 from ..objects_inv import Inventory, fetch_inventory
 from ..page_split import maybe_split_page
@@ -244,6 +245,8 @@ async def _fetch_one(
     *,
     progress: Progress,
     inventory: Inventory | None = None,
+    framework_slug: str | None = None,
+    store: Store | None = None,
 ) -> list[tuple[str, str, str, str]]:
     """Fetch + extract. Returns a list of ``(slug, src_url, body_md, title)``:
     one entry per page in the common case, or N entries when the page
@@ -272,6 +275,29 @@ async def _fetch_one(
     raw = resp.text or ""
     title = extract_title(raw)
     base_slug = _slugify(title or urlparse(url).path)
+
+    # Artifact extraction — download every <img>/<video>/<audio>/<source>
+    # reference (including inline base64 data URLs that bloat notebook
+    # pages like UMAP basic_usage.html @ 4.2 MB) to MinIO and rewrite the
+    # HTML to use ``/api/v1/.../artifacts/{name}`` paths. Saved markdown
+    # then carries our stable references — no upstream-CDN rot, no 4 MB
+    # of inline base64 in the digest. Best-effort: a flaky CDN drops the
+    # affected asset back to its original URL, page still renders.
+    if framework_slug and store is not None:
+        try:
+            raw, n_artifacts = await extract_and_save_artifacts(
+                raw, url, slug=framework_slug, store=store, client=client,
+            )
+            if n_artifacts:
+                logger.info(
+                    f"[tier-4] {url}: saved {n_artifacts} artifact(s) "
+                    f"to ingestion/{framework_slug}/artifacts/"
+                )
+        except Exception as e:
+            logger.warning(
+                f"[tier-4] artifact extraction failed for {url}: "
+                f"{type(e).__name__}: {e}"
+            )
 
     # Anchor-dense / autodoc pages: split into N virtual sub-pages so the
     # digest treats each section as its own source. No-op for ordinary
@@ -475,6 +501,7 @@ async def run(
                 await progress.raise_if_cancelled()
                 results = await _fetch_one(
                     client, u, progress=progress, inventory=inventory,
+                    framework_slug=framework_slug, store=store,
                 )
             if not results:
                 failed.append(u)

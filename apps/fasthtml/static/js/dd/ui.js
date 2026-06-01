@@ -99,10 +99,14 @@ export async function renderDrawerContent() {
     }
     const data = await r.json();
     const raw = data.body || '';
-    const md = (typeof marked !== 'undefined')
-      ? marked.parse(raw)
-      : '<pre>' + raw.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</pre>';
-    S.drawerBody.innerHTML = '<article class="fw-markdown">' + md + '</article>';
+    // Rich render — same pipeline as the Study page: marked parse +
+    // DOMPurify sanitize + lazy hljs + mermaid + KaTeX + ANSI terminal
+    // blocks. The <article.fw-markdown> wrapper preserves the existing
+    // typography styles.
+    S.drawerBody.innerHTML = '<article class="fw-markdown"></article>';
+    const article = S.drawerBody.querySelector('article');
+    const { renderMarkdownInto } = await import('./content_renderer.js');
+    await renderMarkdownInto(article, raw, {});
     S.drawerBody.scrollTop = 0;
   } catch (err) {
     S.drawerBody.innerHTML = '<div class="fw-empty">' + String(err) + '</div>';

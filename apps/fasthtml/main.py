@@ -54,6 +54,25 @@ app, rt = fast_app(
 )
 
 
+# Remove FastHTML's built-in catch-all static-extension route, which
+# `fast_app(...)` injects unconditionally as
+# `/{fname:path}.{ext:static}` (regex matches png/jpg/svg/css/js/woff/…)
+# and points at the working-directory `static_path='.'`. With our
+# explicit `/static` Mount above, that catch-all only does harm — it
+# intercepts ANY URL ending in a known asset extension BEFORE the
+# `/api/{path:path}` proxy gets to see it, including the artifact
+# endpoint `/api/v1/.../artifacts/{sha}.png` which now returns 404 from
+# the FastHTML container instead of being forwarded to FastAPI. We
+# identify the route by its unique compiled regex pattern (path string
+# contains `{fname:path}` + `{ext:static}`) and drop it from the
+# starlette router. The `/static` mount + every explicit app route is
+# untouched.
+app.router.routes = [
+    r for r in app.router.routes
+    if getattr(r, "path", "") != "/{fname:path}.{ext:static}"
+]
+
+
 proxy.register(rt)
 home.register(rt)
 docs_distiller.register(rt)
