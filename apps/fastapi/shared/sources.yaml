@@ -36,12 +36,12 @@ frameworks:
 
 - name: Ansible
   logo: https://cdn.simpleicons.org/ansible
-  docs: https://docs.ansible.com/
+  docs: https://docs.ansible.com/ansible/latest/
   github: https://github.com/ansible/ansible
 
 - name: Apache Airflow
-  logo: https://cdn.simpleicons.org/apacheairflow
-  docs: https://airflow.apache.org/docs/
+  logo: https://upload.wikimedia.org/wikipedia/commons/d/de/AirflowLogo.png
+  docs: https://airflow.apache.org/docs/apache-airflow/stable/
   github: https://github.com/apache/airflow
   category: Python
 
@@ -62,7 +62,7 @@ frameworks:
   category: Programming Language
 
 - name: Browser Use
-  logo: https://browser-use.com/logo-white.svg
+  logo: https://mintcdn.com/browseruse-0aece648/lNAyHi2yxyXHwQ6v/logo/dark.svg?fit=max&auto=format&n=lNAyHi2yxyXHwQ6v&q=85&s=711fa3bb6b312e888023b697db9112be
   docs: https://docs.browser-use.com/open-source/
   llms_full: https://docs.browser-use.com/open-source/llms-full.txt
   llms_txt: https://docs.browser-use.com/open-source/llms.txt

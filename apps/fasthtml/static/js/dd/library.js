@@ -8,7 +8,11 @@ import { fmtAge, fmtBytes } from './utils.js';
 import {
   showNotice, showToast, showConfirm, refreshGenerateState,
 } from './ui.js';
-import { setProgressFramework } from './picker.js';
+import {
+  ensureFrameworkInfo,
+  setProgressFramework,
+  updatePickerTrigger,
+} from './picker.js';
 import {
   renderManifest, loadManifestForSlug, renderProgress, pollRun,
   triggerIngest,
@@ -65,7 +69,49 @@ export function renderSidebar(items) {
       };
     }
   });
-  if (items.length === 0) {
+  // In-progress pseudo-entry: when a run is active AND its slug isn't
+  // in the finalized library list yet, prepend a placeholder row so the
+  // user can navigate back into the Ingestion page from any stage
+  // without losing track of what's being extracted. No refresh /
+  // delete buttons (you can't refresh a running run; deleting mid-run
+  // would leak the lock). Click routes to /ingestion regardless of
+  // current stage so the live progress box is visible. The pseudo-
+  // entry disappears naturally when loadLibrary() refreshes after the
+  // run finalizes — the slug then exists in `items` and the real
+  // entry replaces it. We kick off ensureFrameworkInfo before
+  // building the markup so the placeholder shows the catalog display
+  // name + logo instead of the raw slug.
+  let pseudo = '';
+  if (S.activeRunId && S.activeSlug &&
+      !items.some(it => it && it.slug === S.activeSlug)) {
+    const slug = S.activeSlug;
+    // Fire-and-forget hydration: if cache is empty the first render
+    // shows the slug, then a re-render after resolve fills in the name.
+    // We re-render by calling renderSidebar(items) once the promise
+    // resolves — items hasn't mutated so this is cheap.
+    if (!S.frameworkInfo[slug] || S.frameworkInfo[slug].name === slug) {
+      ensureFrameworkInfo(slug).then(info => {
+        if (info && info.name && info.name !== slug) renderSidebar(items);
+      }).catch(() => {});
+    }
+    const info = S.frameworkInfo[slug] || {name: slug, logos: []};
+    const logoUrl = info.logos && info.logos.length ? info.logos[0] : '';
+    const logo = logoUrl
+      ? '<img class="fw-lib-logo" src="' + logoUrl + '" alt="">'
+      : '';
+    pseudo = '<div class="fw-lib-item fw-lib-item-ingesting active"' +
+      ' data-slug="' + slug + '">' +
+      logo +
+      '<div style="flex:1;min-width:0">' +
+      '<div class="fw-lib-name">' + (info.name || slug) + '</div>' +
+      '<div class="fw-lib-meta">' +
+      '<span class="fw-spinner fw-lib-spinner"></span>' +
+      '<span>Ingesting…</span>' +
+      '</div>' +
+      '</div>' +
+      '</div>';
+  }
+  if (items.length === 0 && !pseudo) {
     list.innerHTML =
       '<div class="fw-sidebar-empty">' +
       'No ingested frameworks yet. Pick one in the catalog and click Start Ingestion.' +
@@ -90,11 +136,18 @@ export function renderSidebar(items) {
       '" title="Delete this ingestion">🗑</button>' +
       '</div>';
   }).join('');
-  list.innerHTML = html;
+  list.innerHTML = pseudo + html;
   list.querySelectorAll('.fw-lib-item').forEach(el => {
     el.addEventListener('click', ev => {
       if (ev.target.closest('.fw-lib-refresh, .fw-lib-delete')) return;
       const slug = el.dataset.slug;
+      // The in-progress pseudo-entry has no real corpus yet, so the
+      // only useful destination is the Ingestion page where its
+      // progress box lives — override stage-route logic.
+      if (el.classList.contains('fw-lib-item-ingesting')) {
+        navigateToStage('ingestion', slug, S.activeRunId || undefined);
+        return;
+      }
       // Stage-route navigation: clicking a library item keeps the user
       // on their current stage but swaps the framework. From Catalog
       // (no slug context) we jump to Planner — the natural next step
@@ -272,6 +325,13 @@ export async function recoverActiveRuns() {
     S.setActiveSlug(run.slug);
     S.setActiveRunId(run.run_id);
     refreshGenerateState();   // disables Start + sidebar refresh/delete
+    // Paint the header `Library ▾` button with the recovered slug's
+    // display name + logo. Server-side render didn't get a slug in
+    // the URL (user clicked the Ingestion nav tab, not the link from
+    // Catalog with `?slug=...`), so without this the button keeps
+    // showing the placeholder "Library" while the sidebar + progress
+    // box correctly reflect the in-flight framework.
+    updatePickerTrigger(run.slug).catch(() => {});
     // pollRun (below) reveals + drives the live progress box on the
     // ingestion page; no stepper navigation needed (per-stage routes).
     setProgressFramework(run.slug);

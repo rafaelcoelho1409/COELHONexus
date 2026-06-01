@@ -492,32 +492,56 @@ async def run(
         # failed URLs in a shared list for Phase 4b Playwright escalation.
         # See tier3_sitemap for the broader rationale (bounded memory,
         # partial-persistence on crash, smooth progress bar).
+        #
+        # TWO counters — they have different units:
+        #   urls_done  = number of source URLs whose fetch has FINISHED
+        #                (success OR failure). This is the numerator the
+        #                progress bar uses against `total = len(filtered)`,
+        #                so the percentage stays bounded 0–100%.
+        #   written    = number of MinIO writes (= count of saved markdown
+        #                pages). One source URL typically writes ONE page,
+        #                but inventory-driven page_split inflates autodoc
+        #                pages into N virtual sub-pages (Airflow's
+        #                example_dags/*.html → 10 sub-pages each, etc.).
+        #                Reported as "pages_written" in the final manifest
+        #                so the user sees how much corpus was actually
+        #                materialized.
+        # Before this fix `current = written` and the bar overflowed to
+        # `251 / 190 (100%)` on Airflow because the autodoc multiplier
+        # outran the URL count.
         written = 0
+        urls_done = 0
         failed: list[str] = []
 
         async def _bound(u: str):
-            nonlocal written
-            async with sem:
-                await progress.raise_if_cancelled()
-                results = await _fetch_one(
-                    client, u, progress=progress, inventory=inventory,
-                    framework_slug=framework_slug, store=store,
-                )
-            if not results:
-                failed.append(u)
-            else:
-                # ``results`` is normally 1-element, but anchor-dense /
-                # autodoc pages explode into N virtual sub-pages (one
-                # source per section) so the digest stage treats them
-                # as distinct documents.
-                for slug, src_url, body, title in results:
-                    await store.add_page(
-                        slug=slug, url=src_url, body=body,
-                        tier="http", title=title,
+            nonlocal written, urls_done
+            try:
+                async with sem:
+                    await progress.raise_if_cancelled()
+                    results = await _fetch_one(
+                        client, u, progress=progress, inventory=inventory,
+                        framework_slug=framework_slug, store=store,
                     )
-                    written += 1
-            await progress.update(current=written, last_url=u)
-            return results
+                if not results:
+                    failed.append(u)
+                else:
+                    # ``results`` is normally 1-element, but anchor-dense /
+                    # autodoc pages explode into N virtual sub-pages (one
+                    # source per section) so the digest stage treats them
+                    # as distinct documents.
+                    for slug, src_url, body, title in results:
+                        await store.add_page(
+                            slug=slug, url=src_url, body=body,
+                            tier="http", title=title,
+                        )
+                        written += 1
+                return results
+            finally:
+                # Always advance the URL counter (incl. on fetch_error /
+                # cancellation / unhandled exception) so the progress bar
+                # never gets stuck — `try/finally` is load-bearing here.
+                urls_done += 1
+                await progress.update(current=urls_done, last_url=u)
 
         await asyncio.gather(
             *(_bound(u) for u in filtered),

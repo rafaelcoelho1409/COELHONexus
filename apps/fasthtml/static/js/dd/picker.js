@@ -22,11 +22,79 @@ export function indexTilesForFramework() {
   });
 }
 
-export function setProgressFramework(slug) {
+// Hydrate `S.frameworkInfo[slug]` from the resolver API when not
+// already cached from a catalog tile or library-list scan. Catalog
+// tiles ONLY exist on the Catalog stage — every other stage (Ingestion,
+// Planner, Synth, Study) loads without them, so a deep-link or full
+// page reload at /docs-distiller/ingestion?slug=X has no catalog
+// metadata for the active slug → the progress box would fall back to
+// printing the raw slug ("apache-airflow"). This helper closes that
+// gap by fetching the canonical catalog entry on demand.
+export async function ensureFrameworkInfo(slug) {
+  if (!slug) return null;
+  const cached = S.frameworkInfo[slug];
+  // Treat "name == slug" as a fallback-stub (not yet hydrated from the
+  // catalog) so we re-fetch and pick up the real display name + logo.
+  if (cached && cached.name && cached.name !== slug) return cached;
+  try {
+    const r = await fetch(S.API + '/resolver/' + encodeURIComponent(slug));
+    if (!r.ok) return cached || null;
+    const entry = await r.json();
+    const logos = (entry.logos && entry.logos.length)
+      ? entry.logos
+      : (entry.logo ? [entry.logo] : []);
+    const info = { name: entry.name || slug, logos };
+    S.frameworkInfo[slug] = info;
+    return info;
+  } catch (_) { return cached || null; }
+}
+
+// Update the header `#dd-fw-picker-trigger` button (label text +
+// optional logo image) to reflect the active framework. The trigger
+// is server-rendered at page load from the `?slug=` query param, so
+// any code path that sets the active slug AFTER initial render needs
+// to also call this — otherwise the button keeps showing "Library"
+// even though the rest of the UI knows which framework is loading.
+// Concrete trigger case: user clicks the top-nav "Ingestion" tab
+// (URL: `/docs-distiller/ingestion` — no slug param) while a run is
+// in flight. `recoverActiveRuns` discovers it via /runs/active and
+// sets `S.activeSlug` — and now this helper paints the button so the
+// user sees the framework name + logo above the progress box.
+export async function updatePickerTrigger(slug) {
+  const trigger = document.querySelector('#dd-fw-picker-trigger');
+  if (!trigger) return;
+  const label = trigger.querySelector('.dd-fw-picker-label');
+  if (!slug) {
+    if (label) label.textContent = 'Library';
+    const oldLogo = trigger.querySelector('.dd-fw-picker-logo');
+    if (oldLogo) oldLogo.remove();
+    return;
+  }
+  const info = (await ensureFrameworkInfo(slug)) || {name: slug, logos: []};
+  if (label) label.textContent = info.name || slug;
+  const logoUrl = (info.logos && info.logos.length) ? info.logos[0] : null;
+  let logo = trigger.querySelector('.dd-fw-picker-logo');
+  if (logoUrl) {
+    if (!logo) {
+      logo = document.createElement('img');
+      logo.className = 'dd-fw-picker-logo';
+      logo.alt = '';
+      trigger.insertBefore(logo, trigger.firstChild);
+    }
+    if (logo.getAttribute('src') !== logoUrl) logo.setAttribute('src', logoUrl);
+  } else if (logo) {
+    logo.remove();
+  }
+}
+
+export async function setProgressFramework(slug) {
   // Progress UI elements only exist on /docs-distiller/ingestion. On
   // every other stage this function is a no-op.
   if (!S.progressFramework) return;
-  const info = S.frameworkInfo[slug] || {name: slug, logos: []};
+  // Hydrate from /resolver/{slug} if the catalog-tile cache doesn't
+  // have this slug yet (the Ingestion page has no catalog tiles so
+  // indexTilesForFramework never ran for it).
+  const info = (await ensureFrameworkInfo(slug)) || {name: slug, logos: []};
   S.progressFramework.textContent = info.name || slug;
   if (info.logos && info.logos.length) {
     S.progressLogos.innerHTML = info.logos.map(u =>

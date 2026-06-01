@@ -45,6 +45,40 @@
   margin-top: 2px;
   letter-spacing: 0.02em;
 }
+/* In-progress pseudo-entry — rendered when activeRunId is set but the
+ * slug hasn't appeared in the finalized library list yet. The dashed
+ * border + soft burgundy tint distinguish it from the .active steady
+ * state (solid border, same tint) so users can tell at a glance that
+ * this row is mid-ingestion. The spinner replaces the "N pages · age"
+ * metadata since neither exists yet. */
+.fw-lib-item.fw-lib-item-ingesting {
+  background: rgba(196, 18, 48, 0.04);
+  border: 1px dashed var(--primary);
+  cursor: progress;
+}
+.fw-lib-item.fw-lib-item-ingesting:hover {
+  background: rgba(196, 18, 48, 0.08);
+  border-style: dashed;
+}
+.fw-lib-item.fw-lib-item-ingesting .fw-lib-name {
+  font-style: italic;
+}
+.fw-lib-item.fw-lib-item-ingesting .fw-lib-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--primary);
+  font-weight: 500;
+}
+/* Smaller spinner sized for the sidebar meta row (the global .fw-spinner
+ * defaults to 16px which crowds the 0.68rem text). */
+.fw-spinner.fw-lib-spinner {
+  width: 10px;
+  height: 10px;
+  border-width: 2px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
 .fw-lib-logo {
   flex-shrink: 0;
   width: 22px;
