@@ -55,10 +55,12 @@ frameworks:
   logo: https://cdn.simpleicons.org/python
   docs: https://docs.python.org/3/library/asyncio.html
   category: Python
+  path_filter:
+    include: ["/library/asyncio"]
 
 - name: Bash
-  logo: https://cdn.simpleicons.org/gnubash
-  docs: https://www.gnu.org/software/bash/manual/bash.html
+  logo: https://cdn.freebiesupply.com/logos/large/2x/bash-1-logo-black-and-white.png
+  docs: https://www.gnu.org/software/bash/manual/html_node/index.html
   category: Programming Language
 
 - name: Browser Use
@@ -71,7 +73,7 @@ frameworks:
   category: Python
 
 - name: CatBoost
-  logo: https://upload.wikimedia.org/wikipedia/commons/c/cc/CatBoostLogo.png
+  logo: https://yastatic.net/s3/locdoc/daas-static/catboost/71b237a322eec6f2889af0dae2a9c549.svg
   docs: https://catboost.ai/docs/en/
   sitemap: https://catboost.ai/docs/sitemap.xml
   github: https://github.com/catboost/catboost
@@ -79,8 +81,7 @@ frameworks:
 
 - name: Celery (Python)
   logo: https://cdn.simpleicons.org/celery
-  docs: https://docs.celeryq.dev/en/
-  sitemap: https://docs.celeryq.dev/sitemap.xml
+  docs: https://docs.celeryq.dev/en/stable/
   github: https://github.com/celery/celery
   category: Python
 

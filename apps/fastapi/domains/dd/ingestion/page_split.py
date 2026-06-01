@@ -52,6 +52,26 @@ _AUTODOC_MIN_BLOCKS = 4
 # Tier 4 ``_MIN_OK_BYTES = 200``).
 _MIN_BODY_BYTES = 200
 
+# Per-sub-page byte floor specifically for INVENTORY-driven splits.
+# Higher than `_MIN_BODY_BYTES` because the heuristic anchor / autodoc
+# paths kick in on pages with FEW big sections (where a 200 B floor is
+# fine), while objects.inv-driven splits run on canonical Sphinx pages
+# that may carry HUNDREDS of trivial 1-line symbol entries (CPython's
+# `library/threading.html` lists ~25 py:exception sub-classes each at
+# ~300 B; `library/curses.html` lists hundreds of single-function py:
+# function entries at 295-400 B). Splitting per-entity there shatters
+# the corpus into 1000+ standalone-meaningless stubs. Raising the floor
+# to ~800 B keeps only sub-pages with enough context to be useful as
+# their own corpus chunks.
+_INVENTORY_MIN_BODY_BYTES = 800
+
+# After the per-sub-page filter, if fewer than this many useful
+# sub-pages survive, abandon the split entirely and let the parent page
+# be stored whole. This is the quality gate: a page that yields only
+# 1-2 substantive symbols (the rest were stubs) is more coherent as
+# one document than as 1-2 fragments + 30 dropped stubs.
+_INVENTORY_MIN_SPLITS = 4
+
 # Sphinx autodoc declaration containers across Sphinx generations and
 # languages. ``dl.py.class`` is modern (Sphinx 2+ `domain.objtype`
 # convention); ``dl.class`` is the pre-namespaced form still emitted by
@@ -182,6 +202,7 @@ def _split_by_inventory(
     out: list[SubPage] = []
     parent_url = source_url.split("#", 1)[0]
     seen: set[str] = set()
+    n_stubs_dropped = 0
     for ent in chosen:
         if not ent.anchor or ent.anchor in seen:
             continue
@@ -189,7 +210,8 @@ def _split_by_inventory(
         if container is None:
             continue
         body_md = html_to_markdown(str(container), source_url=source_url)
-        if len(body_md.encode("utf-8")) < _MIN_BODY_BYTES:
+        if len(body_md.encode("utf-8")) < _INVENTORY_MIN_BODY_BYTES:
+            n_stubs_dropped += 1
             continue
         seen.add(ent.anchor)
         title_text = (ent.dispname or ent.name).rstrip("¶").strip()[:160]
@@ -204,6 +226,21 @@ def _split_by_inventory(
             title=title,
             body_md=body_md,
         ))
+    # Quality gate. If most of the inventory entities for this page were
+    # 1-line symbol stubs (CPython-style: `errno.ENOTCAPABLE` constants,
+    # `threading.BrokenBarrierError` declarations, etc.) and fewer than
+    # `_INVENTORY_MIN_SPLITS` substantive sub-pages survived, the parent
+    # page IS the better corpus chunk — return [] so the caller stores
+    # the whole page intact instead of a handful of disconnected fragments.
+    if len(out) < _INVENTORY_MIN_SPLITS:
+        if out or n_stubs_dropped:
+            logger.info(
+                f"[page-split] inventory split abandoned for {source_url}: "
+                f"only {len(out)} useful sub-page(s) survived "
+                f"(dropped {n_stubs_dropped} stub(s) <{_INVENTORY_MIN_BODY_BYTES}B); "
+                f"keeping parent page whole"
+            )
+        return []
     return out
 
 

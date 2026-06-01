@@ -278,5 +278,9 @@ async def run(
         await progress.finish(status="failed")
         raise RuntimeError(f"Tier 2: {url} all {len(links)} pages failed")
 
+    # ``links`` is the parsed llms.txt order — author-curated chapter
+    # sequence. Undo the asyncio.gather completion-order race so the
+    # saved manifest matches it.
+    store.reorder_by_url_list([u for _, u in links])
     await progress.finish(status="done")
     return written

@@ -271,5 +271,10 @@ async def run(
         await progress.finish(status="failed")
         raise RuntimeError(f"Tier 3: {url} all pages failed")
 
+    # Sitemaps are typically authored in reading / TOC order, so
+    # ``deduped`` already holds the canonical chapter sequence. The
+    # asyncio.gather race randomized the saved manifest's idx order —
+    # restore the canonical order before finalizing.
+    store.reorder_by_url_list(deduped)
     await progress.finish(status="done")
     return written

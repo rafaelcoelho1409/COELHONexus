@@ -386,7 +386,19 @@ async def run(
             docs_root_path += "/"
         docs_root = f"{parsed.scheme}://{parsed.netloc}{docs_root_path}"
         inventory = await fetch_inventory(docs_root, client=client)
-        inv_pages = inventory.doc_pages() if inventory else set()
+        # Build an ORDERED list of doc pages from the inventory file —
+        # NOT the set returned by `doc_pages()` whose iteration order is
+        # non-deterministic. Inventory file order ≈ Sphinx source-tree
+        # order ≈ author chapter order, so this is the right tiebreaker
+        # for pages NOT in the toctree (orphan std:label refs etc.).
+        inv_pages: list[str] = []
+        if inventory:
+            _seen_inv: set[str] = set()
+            for ent in inventory.entities:
+                if ent.role in ("std:doc", "std:label") and ent.page_url \
+                        and ent.page_url not in _seen_inv:
+                    _seen_inv.add(ent.page_url)
+                    inv_pages.append(ent.page_url)
         if inventory:
             logger.info(
                 f"[tier-4] objects.inv: {inventory.project} "
@@ -403,7 +415,19 @@ async def run(
             logger.info(
                 f"[tier-4] toctree sidebar contributed {len(toctree)} URLs"
             )
-        seeds = sorted({url, *enriched, *seeded, *inv_pages, *toctree})
+        # Order-preserving union — `sorted(set(...))` would alphabetize
+        # the seeds, which destroys the toctree / inventory chapter
+        # order that Bash's GNU multi-page manual depends on. Priority
+        # order chosen so the most-author-curated source wins ties:
+        # toctree (sphinx_nav DOM, in document order) > objects.inv
+        # (Sphinx inventory) > seeder (sitemap+CC) > enrichment > self.
+        seeds: list[str] = []
+        _seen: set[str] = set()
+        for src in (toctree, inv_pages, seeded, enriched, [url]):
+            for u in src:
+                if u not in _seen:
+                    _seen.add(u)
+                    seeds.append(u)
 
         # ----------------------------------------------------------------
         # Phase 2 — httpx BFS to fill the gap if discovery is sparse
@@ -575,6 +599,13 @@ async def run(
             f"Tier 4: all {len(filtered)} URL fetches failed in both 4a + 4b"
         )
 
+    # Re-sort the manifest into discovery order. ``asyncio.gather`` /
+    # ``_bound`` raced the per-URL fetches; the first one to complete
+    # got idx=0, etc. — so without this step the saved manifest lists
+    # pages in network-completion order, not the chapter order encoded
+    # in ``filtered`` (which inherited toctree / inventory ordering).
+    # ``filtered`` is the authoritative chapter sequence here.
+    store.reorder_by_url_list(filtered)
     await progress.finish(status="done")
     return written
 

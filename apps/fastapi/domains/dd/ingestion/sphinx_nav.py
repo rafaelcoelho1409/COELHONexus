@@ -221,9 +221,18 @@ async def discover_via_toctree(
     if not sidebar0 and not body0:
         return []  # not a Sphinx/MkDocs site
 
-    discovered: set[str] = {landing_url}
+    # Insertion-ORDER preserving dedup. `dict.fromkeys` + later
+    # `list(dict.keys())` gives O(1) "already seen" lookups while keeping
+    # the order in which URLs were first encountered. THAT order matches
+    # the toctree / sidebar nav order — which IS the author's intended
+    # chapter order. Returning a sorted set instead would scramble it
+    # alphabetically (Bash's `html_node/index.html` then ingests
+    # "Aliases.html" before "Shell-Operation.html" — wrong).
+    discovered: dict[str, None] = {landing_url: None}
     for src in (sidebar0, body0):
-        discovered.update(u for u in src if _in_scope(u))
+        for u in src:
+            if u not in discovered and _in_scope(u):
+                discovered[u] = None
 
     # Fast path: landing sidebar lists a full tree already (non-collapsed
     # theme). We still keep landing body links from this pass.
@@ -232,7 +241,7 @@ async def discover_via_toctree(
             f"[sphinx-nav] {host}{subtree or ''}: {len(discovered)} URLs "
             f"(landing sidebar full tree, body added {len(body0)})"
         )
-        return sorted(discovered)
+        return list(discovered.keys())
 
     # Expand: re-read BOTH surfaces on each discovered section page.
     # ``max_pages`` is the hard cap on extra HTTP fetches (+1 for landing).
@@ -249,11 +258,11 @@ async def discover_via_toctree(
         for page in results:
             for link in page["sidebar"]:
                 if link not in discovered and _in_scope(link):
-                    discovered.add(link)
+                    discovered[link] = None
                     new.append(link)
             for link in page["body"]:
                 if link not in discovered and _in_scope(link):
-                    discovered.add(link)
+                    discovered[link] = None
                     new.append(link)
                     body_recovered += 1
         frontier = new
@@ -264,4 +273,5 @@ async def discover_via_toctree(
         f"({fetched} pages read, depth≤{max_depth}, body recovered "
         f"{body_recovered} extras)"
     )
-    return sorted(discovered)
+    # Preserve insertion order — see comment at the dedup map above.
+    return list(discovered.keys())

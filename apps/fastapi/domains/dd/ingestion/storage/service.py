@@ -588,6 +588,43 @@ class Store:
             )
             return self._artifact_client
 
+    def reorder_by_url_list(self, url_list: list[str]) -> None:
+        """Reorder cached manifest entries to match the chapter order
+        implied by ``url_list``.
+
+        Why: tiers 2/3/4 fetch URLs in parallel via ``asyncio.gather``,
+        and ``add_page``'s idx-assign lock hands out idx=0 to the fastest
+        fetch. Without this reorder the manifest lists pages in
+        fetch-completion (≈ network-roulette) order, NOT discovery
+        (≈ author-intended) order — Bash's GNU multi-page manual is
+        the canonical visible failure: ``html_node/index.html`` enumerates
+        chapters in reading order, but the saved corpus shows them
+        alphabetically by page-title slug.
+
+        Sort key:
+          1. position of the entry's PARENT URL in ``url_list`` (sub-pages
+             from ``page_split`` share their parent's position so they
+             cluster together)
+          2. original ``idx`` as tiebreaker (preserves the order within a
+             page_split bucket, AND pushes any URL not in ``url_list`` —
+             e.g. an enrichment probe — to the END in stable order)
+
+        The ``idx`` field on each entry is left unchanged: it ties to the
+        MinIO key prefix (``pages/{idx:04d}-...md``) which we DON'T
+        rename. Consumers (FastHTML drawer, ``GET /pages/{idx}``) iterate
+        the manifest entry list directly OR look up by ``entry.key`` —
+        both work with non-sequential idx. The reorder only affects DISPLAY
+        order in the array, not the storage key.
+        """
+        if not url_list or not self._cached_manifest:
+            return
+        url_pos = {u: i for i, u in enumerate(url_list)}
+        sentinel = len(url_list)
+        def _key(entry):
+            base = (entry.url or "").split("#", 1)[0]
+            return (url_pos.get(base, sentinel), entry.idx)
+        self._cached_manifest.sort(key=_key)
+
     async def close(self) -> None:
         """Release shared resources held by the Store — currently just
         the lazy httpx artifact client. Idempotent. Safe to call from
