@@ -64,6 +64,17 @@ async function initCatalog() {
   // loadLibrary() (already awaited in the boot sequence below) populated
   // S.ingestedSlugs — green-badge the tiles that are already downloaded.
   try { markIngestedTiles(); } catch (_) {}
+  // Discover any in-flight ingestion (started from THIS tab earlier OR
+  // from another tab / framework). Sets S.activeRunId + S.activeSlug so
+  // refreshGenerateState below can block the Start Ingestion button AND
+  // swap the bottom bar from "Selected: X" to "Ingesting: <active>".
+  // Previously this only fired on the Ingestion stage — leaving the
+  // Catalog blind to cross-tab / cross-slug runs. pollRun (kicked off
+  // inside recoverActiveRuns) is null-safe re: the missing progress box
+  // here, so the background poll continues and the Catalog learns when
+  // the run finishes.
+  try { await recoverActiveRuns(); }
+  catch (e) { console.warn('[init] catalog ingestion-recover failed:', e); }
   refreshGenerateState();
 }
 

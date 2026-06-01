@@ -132,13 +132,35 @@
 }
 .fw-sticky-bar.visible { transform: translateY(0); }
 .fw-selected-label {
-  flex: 1;
   color: var(--text-muted);
   font-size: 0.88rem;
 }
 .fw-selected-name {
   color: var(--primary); font-weight: 600;
 }
+/* Ingesting label — sits beside Selected, only revealed (display:'')
+ * by ui.js refreshGenerateState when activeRunId is set. */
+.fw-ingesting-label {
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
+}
+.fw-ingesting-prefix {
+  /* Burgundy tint distinguishes from neutral "Selected:" — signals
+   * "this is the live pipeline activity, not the user's selection". */
+  color: var(--primary);
+  font-weight: 500;
+}
+.fw-ingesting-name {
+  color: var(--primary);
+  font-weight: 600;
+}
+/* Keep Start Ingestion right-aligned whether one or both labels show. */
+.fw-sticky-bar > #fw-generate { margin-left: auto; }
 .fw-empty {
   color: var(--text-muted);
   padding: 32px;

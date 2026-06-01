@@ -2,7 +2,10 @@
 import * as S from './state.js';
 import { StageGraph } from './stagegraph.js';
 import { sleep, fmtBytes, fmtAge, escapeHtml, formatFieldValue } from './utils.js';
-import { showConfirm, showNotice, showToast, refreshGenerateState } from './ui.js';
+import {
+  showConfirm, showNotice, showToast, refreshGenerateState,
+  fetchPipelineState, cascadeImpactText,
+} from './ui.js';
 import { loadManifestForSlug, renderManifest } from './ingestion.js';
 import {
   startElapsed, stopElapsed, showElapsed, isElapsedRunning,
@@ -2588,11 +2591,17 @@ S.plannerStartBtn?.addEventListener('click', () => {
 if (S.plannerWipeBtn) {
   S.plannerWipeBtn.addEventListener('click', async () => {
     if (!S.activeSlug || S.plannerThreadId) return;
+    // Probe downstream state so the confirm dialog reports the real
+    // cascade (Synth + Study get nuked when planner is wiped — they
+    // depend on the planner's chapter map).
+    const state = await fetchPipelineState(S.activeSlug);
+    const cascade = cascadeImpactText(state, 'planner');
     const ok = await showConfirm(
       'Wipe planner cache for ' + S.activeSlug + '?',
       'Deletes MinIO embedding blobs (forces a cold re-embed next ' +
       'run), Postgres LangGraph checkpoints (all threads for this ' +
-      'slug), and the browser-cached thread_id. Cannot be undone.',
+      'slug), and the browser-cached thread_id.' + cascade +
+      ' Cannot be undone.',
       'Wipe',
     );
     if (!ok) return;
@@ -2601,14 +2610,33 @@ if (S.plannerWipeBtn) {
     S.plannerWipeBtn.textContent = 'Wiping…';
     try {
       const result = await wipePlanner(S.activeSlug);
+      // Cascade downstream — Synth's chapter outputs and the Study
+      // renders MUST go too because they were produced from THIS
+      // planner's plan-latest.json. Skip the cascade call when there's
+      // nothing to delete (avoids one round-trip + a meaningless toast).
+      let synthDeleted = 0;
+      if (state && (state.synth || state.study)) {
+        try {
+          const { wipeSynth } = await import('./synth.js');
+          const sr = await wipeSynth(S.activeSlug);
+          synthDeleted = (sr && sr.minio_objects_deleted) || 0;
+        } catch (e) {
+          console.warn('[wipePlanner] cascade wipeSynth failed:', e);
+          showToast('Planner wiped but Synth cascade failed: ' + String(e));
+        }
+      }
       const minio = (result && result.minio_blobs_deleted) || 0;
       const pg = result && result.postgres_rows_deleted;
       const pgTotal = pg
         ? Object.values(pg).reduce(
             (a, b) => a + (typeof b === 'number' ? b : 0), 0)
         : 0;
+      const tail = synthDeleted
+        ? ' Cascaded: ' + synthDeleted + ' Synth/Study object(s) deleted.'
+        : '';
       showToast('Planner cache wiped for ' + S.activeSlug +
-        ' (' + minio + ' MinIO blobs, ' + pgTotal + ' Postgres rows).');
+        ' (' + minio + ' MinIO blobs, ' + pgTotal + ' Postgres rows).' +
+        tail);
     } catch (e) {
       showToast('Wipe failed: ' + String(e));
     } finally {

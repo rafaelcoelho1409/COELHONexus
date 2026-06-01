@@ -89,7 +89,43 @@ async def start_run(body: StartRunBody) -> dict:
         _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
-        # 1. Single-flight: is something already running for this slug?
+        # 1a. GLOBAL single-flight: is ANY ingestion currently running?
+        # The per-slug lock below catches same-slug double-triggers, but
+        # a cross-slug double-trigger (start Asyncio while Bash is mid-
+        # crawl) would otherwise slip through and race for the Celery
+        # worker pool. The UX contract is "one ingestion at a time", so
+        # we reject early with the running slug + run_id so the FastHTML
+        # caller can surface a clear message.
+        cursor = 0
+        running_slug = None
+        running_run_id = None
+        while True:
+            cursor, keys = await r.scan(cursor=cursor, match="dd:lock:*", count=100)
+            for k in keys:
+                ks = k.decode() if isinstance(k, bytes) else k
+                other_slug = ks.split("dd:lock:", 1)[-1]
+                if other_slug == body.slug:
+                    continue   # same-slug case is handled by step 1b below
+                val = await r.get(ks)
+                if val is None:
+                    continue
+                running_slug = other_slug
+                running_run_id = val.decode() if isinstance(val, bytes) else val
+                break
+            if running_slug is not None or cursor == 0:
+                break
+        if running_slug is not None:
+            return {
+                "status": "locked",
+                "slug": running_slug,
+                "run_id": running_run_id,
+                "message": (
+                    f"Another ingestion is running ({running_slug!r}, "
+                    f"run_id={running_run_id}). Wait for it to finish or "
+                    f"cancel it before starting {body.slug!r}."
+                ),
+            }
+        # 1b. Single-flight: is something already running for this slug?
         active = await read_lock(r, body.slug)
         if active:
             return {

@@ -80,13 +80,13 @@ frameworks:
   category: Python
 
 - name: Celery (Python)
-  logo: https://cdn.simpleicons.org/celery
+  logo: https://docs.celeryq.dev/en/stable/_static/celery_512.png
   docs: https://docs.celeryq.dev/en/stable/
   github: https://github.com/celery/celery
   category: Python
 
 - name: Claude Code
-  logo: https://cdn.simpleicons.org/claude
+  logo: https://mintcdn.com/claude-code/c5r9_6tjPMzFdDDT/logo/dark.svg?fit=max&auto=format&n=c5r9_6tjPMzFdDDT&q=85&s=1298a0c3b3a1da603b190d0de0e31712
   docs: https://code.claude.com/docs/en/
   llms_full: https://code.claude.com/docs/llms-full.txt
   llms_txt: https://code.claude.com/docs/llms.txt
@@ -101,7 +101,7 @@ frameworks:
   category: Python
 
 - name: Dagster
-  logo: https://docs.dagster.io/images/dagster-primary-mark.svg
+  logo: https://docs.dagster.io/img/dagster-docs-logo-dark.svg
   docs: https://docs.dagster.io
   llms_full: https://docs.dagster.io/llms-full.txt
   llms_txt: https://docs.dagster.io/llms.txt
@@ -109,7 +109,7 @@ frameworks:
   category: Python
 
 - name: Dask
-  logo: https://cdn.simpleicons.org/dask
+  logo: https://docs.dask.org/en/stable/_static/images/dask-horizontal-white.svg
   llms_full: https://docs.dask.org/llms-full.txt
   llms_txt: https://docs.dask.org/llms.txt
   github: https://github.com/dask/dask
@@ -124,37 +124,37 @@ frameworks:
   github: https://github.com/dbt-labs/dbt-core
 
 - name: Delta Lake (Python)
-  logo: https://cdn.simpleicons.org/databricks
+  logo: https://docs.delta.io/_astro/delta-lake-logo-dark.Dx7tzbyv.svg
   docs: https://docs.delta.io/api/latest/python/spark/
   category: Python
 
 - name: Docker
-  logo: https://cdn.simpleicons.org/docker
+  logo: https://upload.wikimedia.org/wikipedia/commons/1/1e/Docker_Logo.png
   docs: https://docs.docker.com/
   sitemap: https://docs.docker.com/sitemap.xml
   github: https://github.com/docker/cli
 
 - name: DuckDB
-  logo: https://cdn.simpleicons.org/duckdb
+  logo: https://duckdb.org/images/logo-dl/DuckDB_Logo-horizontal.svg
   docs: https://duckdb.org/docs/
   sitemap: https://duckdb.org/sitemap.xml
   github: https://github.com/duckdb/duckdb
   category: Python
 
 - name: ElasticSearch
-  logo: https://cdn.simpleicons.org/elasticsearch
+  logo: https://upload.wikimedia.org/wikipedia/commons/thumb/f/f4/Elasticsearch_logo.svg/3840px-Elasticsearch_logo.svg.png
   docs: https://www.elastic.co/docs
   sitemap: https://www.elastic.co/docs/sitemap.xml
   github: https://github.com/elastic/elasticsearch
 
 - name: ElasticSearch (Python)
-  logo: https://cdn.simpleicons.org/elasticsearch
+  logo: https://upload.wikimedia.org/wikipedia/commons/thumb/f/f4/Elasticsearch_logo.svg/3840px-Elasticsearch_logo.svg.png
   docs: https://elasticsearch-py.readthedocs.io/
   github: https://github.com/elastic/elasticsearch-py
   category: Python
 
 - name: Evidently
-  logo: https://cdn.prod.website-files.com/660ef16a9e0687d9cc2746d7/66180fbf4f40e9ed73ca2d39_evidently_ai_logo_fi.png
+  logo: https://mintcdn.com/evi/gn-d62Rtg7HFSug2/logo/evidently_ai_logo_docs_dark.svg?fit=max&auto=format&n=gn-d62Rtg7HFSug2&q=85&s=ef8bd36f926452f7826a150472cc41fa
   docs: https://docs.evidentlyai.com/
   llms_full: https://docs.evidentlyai.com/llms-full.txt
   llms_txt: https://docs.evidentlyai.com/llms.txt
@@ -163,14 +163,14 @@ frameworks:
   category: Python
 
 - name: FastAPI
-  logo: https://cdn.simpleicons.org/fastapi
+  logo: https://fastapi.tiangolo.com/img/logo-margin/logo-teal.png
   docs: https://fastapi.tiangolo.com/
   sitemap: https://fastapi.tiangolo.com/sitemap.xml
   github: https://github.com/fastapi/fastapi
   category: Python
 
 - name: FastEmbed
-  logo: https://cdn.simpleicons.org/qdrant
+  logo: https://qdrant.tech/img/qdrant-logo.svg
   docs: https://qdrant.github.io/fastembed/
   github: https://github.com/qdrant/fastembed
   category: Python
@@ -192,23 +192,23 @@ frameworks:
   category: Python
 
 - name: Git
-  logo: https://cdn.simpleicons.org/git
+  logo: https://git-scm.com/images/logo@2x.png
   docs: https://git-scm.com/docs/git
   github: https://github.com/git/git
 
 - name: GitHub
-  logo: https://cdn.simpleicons.org/github
+  logo: https://brand.github.com/_next/static/media/logo-03.cc5e5332.png
   docs: https://docs.github.com/en
   llms_txt: https://docs.github.com/llms.txt
 
 - name: GitLab
-  logo: https://cdn.simpleicons.org/gitlab
+  logo: https://upload.wikimedia.org/wikipedia/commons/thumb/e/e1/GitLab_logo.svg/3840px-GitLab_logo.svg.png
   docs: https://docs.gitlab.com/
   sitemap: https://docs.gitlab.com/en-us/sitemap.xml
   github: https://github.com/gitlabhq/gitlabhq
 
 - name: Go
-  logo: https://cdn.simpleicons.org/go
+  logo: https://go.dev/images/go-logo-white.svg
   docs: https://go.dev/doc/
   github: https://github.com/golang/go
   category: Programming Language
@@ -226,7 +226,7 @@ frameworks:
   github: https://github.com/grafana/grafana
 
 - name: Helm
-  logo: https://cdn.simpleicons.org/helm
+  logo: https://helm.sh/img/helm.svg
   docs: https://helm.sh/docs/
   sitemap: https://helm.sh/sitemap.xml
   github: https://github.com/helm/helm
@@ -246,7 +246,7 @@ frameworks:
   github: https://github.com/k3d-io/k3d
 
 - name: Kafka (Python)
-  logo: https://cdn.simpleicons.org/apachekafka
+  logo: https://kafka.apache.org/logos/kafka_logo--simple.png
   docs: https://kafka-python.readthedocs.io/en/
   sitemap: https://kafka-python.readthedocs.io/sitemap.xml
   github: https://github.com/dpkp/kafka-python
@@ -258,7 +258,7 @@ frameworks:
   github: https://github.com/kubeflow/kubeflow
 
 - name: Kubernetes
-  logo: https://cdn.simpleicons.org/kubernetes
+  logo: https://upload.wikimedia.org/wikipedia/commons/6/67/Kubernetes_logo.svg
   docs: https://kubernetes.io/docs/
   sitemap: https://kubernetes.io/en/sitemap.xml
   github: https://github.com/kubernetes/kubernetes
@@ -277,7 +277,7 @@ frameworks:
   category: Python
 
 - name: LangFuse
-  logo: https://avatars.githubusercontent.com/u/134601687?s=48&v=4
+  logo: https://langfuse.com/langfuse-wordart.svg
   docs: https://langfuse.com/docs
   llms_txt: https://langfuse.com/llms-docs.txt
   sitemap: https://langfuse.com/sitemap-0.xml
@@ -285,7 +285,7 @@ frameworks:
   category: Python
 
 - name: LiteLLM
-  logo: https://docs.litellm.ai/img/favicon.ico
+  logo: https://storage.googleapis.com/arize-phoenix-assets/assets/images/phoenix-docs-images/76dcba22-image.jpeg
   docs: https://docs.litellm.ai/
   llms_full: https://docs.litellm.ai/llms-full.txt
   llms_txt: https://docs.litellm.ai/llms.txt
@@ -306,14 +306,14 @@ frameworks:
   category: Python
 
 - name: Metasploit
-  logo: https://cdn.simpleicons.org/metasploit
+  logo: https://docs.metasploit.com/assets/images/metasploit-logo-dark-external-use.svg
   docs: https://docs.metasploit.com/
   sitemap: https://docs.metasploit.com/sitemap.xml
   github: https://github.com/rapid7/metasploit-framework
   category: Pentest
 
 - name: MLflow
-  logo: https://cdn.simpleicons.org/mlflow
+  logo: https://mlflow.org/docs/latest/images/logo-dark.svg
   docs: https://mlflow.org/docs/latest/
   llms_txt: https://mlflow.org/llms.txt
   sitemap: https://mlflow.org/docs/latest/sitemap.xml
@@ -321,7 +321,7 @@ frameworks:
   category: Python
 
 - name: Neo4j
-  logo: https://cdn.simpleicons.org/neo4j
+  logo: https://dist.neo4j.com/wp-content/uploads/20230926084108/Logo_FullColor_RGB_TransBG.svg
   docs: https://neo4j.com/docs/
   llms_full: https://neo4j.com/llms-full.txt
   llms_txt: https://neo4j.com/llms.txt
@@ -329,65 +329,65 @@ frameworks:
   github: https://github.com/neo4j/neo4j
 
 - name: Neo4j (Python)
-  logo: https://cdn.simpleicons.org/neo4j
+  logo: https://dist.neo4j.com/wp-content/uploads/20230926084108/Logo_FullColor_RGB_TransBG.svg
   docs: https://neo4j.com/docs/python-manual/
   category: Python
 
 - name: NetworkX
-  logo: https://cdn.jsdelivr.net/gh/devicons/devicon/icons/networkx/networkx-original.svg
+  logo: https://networkx.org/documentation/stable/_static/networkx_banner.svg
   docs: https://networkx.org/documentation/
   github: https://github.com/networkx/networkx
   category: Python
 
 - name: NeuralProphet
-  logo: https://cdn.simpleicons.org/meta
+  logo: https://neuralprophet.com/_static/np_highres.svg
   docs: https://neuralprophet.com/
   github: https://github.com/ourownstory/neural_prophet
   category: Python
 
 - name: NMAP
-  logo: https://nmap.org/images/nmap-logo-256x256.png
+  logo: https://nmap.org/images/sitelogo-2x.png
   docs: https://nmap.org/docs.html
   github: https://github.com/nmap/nmap
   category: Pentest
 
 - name: Novu (Python)
-  logo: https://cdn.simpleicons.org/novu
+  logo: https://assets.super.so/1e9f5a51-c4c6-4fca-b6e8-25fa0186f139/images/8d09c31d-2a84-4b6e-825d-c44a0020bb0d/Group_1321321858.svg
   docs: https://novu-python.readthedocs.io/en/
   sitemap: https://docs.novu.co/sitemap.xml
   github: https://github.com/novuhq/novu-py
   category: Python
 
 - name: Numba
-  logo: https://cdn.simpleicons.org/numba
+  logo: https://numba.pydata.org/_static/numba-blue-horizontal-rgb.svg
   docs: https://numba.readthedocs.io/en/
   github: https://github.com/numba/numba
   category: Python
 
 - name: NumPy
-  logo: https://cdn.simpleicons.org/numpy
+  logo: https://numpy.org/doc/stable/_static/numpylogo.svg
   docs: https://numpy.org/doc/stable/
   github: https://github.com/numpy/numpy
   category: Python
 
 - name: NVIDIA DCGM Exporter
-  logo: https://cdn.simpleicons.org/nvidia
+  logo: https://docs.nvidia.com/datacenter/dcgm/latest/_static/nvidia-logo-horiz-rgb-wht-for-screen.svg
   docs: https://docs.nvidia.com/datacenter/dcgm/latest/gpu-telemetry/dcgm-exporter.html
   github: https://github.com/NVIDIA/dcgm-exporter
 
 - name: NVIDIA GPU Operator
-  logo: https://cdn.simpleicons.org/nvidia
+  logo: https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/_static/nvidia-logo-horiz-rgb-wht-for-screen.svg
   docs: https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/
   github: https://github.com/nvidia/gpu-operator
 
 - name: NVIDIA Merlin
-  logo: https://cdn.simpleicons.org/nvidia
+  logo: https://avatars.githubusercontent.com/u/81591093?s=200&v=4
   docs: https://nvidia-merlin.github.io/Merlin/
   github: https://github.com/NVIDIA-Merlin/Merlin
   category: Python
 
 - name: NVIDIA Triton Inference Server
-  logo: https://cdn.simpleicons.org/nvidia
+  logo: https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/_static/nvidia-logo-horiz-rgb-wht-for-screen.svg
   docs: https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/
   github: https://github.com/triton-inference-server/server
 
@@ -398,19 +398,19 @@ frameworks:
   category: Python
 
 - name: OpenTelemetry
-  logo: https://cdn.simpleicons.org/opentelemetry
+  logo: https://opensource.microsoft.com/blog/wp-content/uploads/2019/05/opentelemetry-horizontal-color.png
   docs: https://opentelemetry.io/docs/
   sitemap: https://opentelemetry.io/en/sitemap.xml
   github: https://github.com/open-telemetry
 
 - name: OpenTelemetry (Python)
-  logo: https://cdn.simpleicons.org/opentelemetry
+  logo: https://opensource.microsoft.com/blog/wp-content/uploads/2019/05/opentelemetry-horizontal-color.png
   docs: https://opentelemetry.io/docs/languages/python/
   github: https://github.com/open-telemetry/opentelemetry-python
   category: Python
 
 - name: OpenVINO
-  logo: https://cdn.simpleicons.org/intel
+  logo: https://docs.openvino.ai/2026/_static/logo.svg
   docs: https://docs.openvino.ai/2026/
   github: https://github.com/openvinotoolkit/openvino
   category: Python
@@ -424,39 +424,39 @@ frameworks:
   category: Python
 
 - name: Optuna
-  logo: https://cdn.simpleicons.org/optuna
+  logo: https://optuna.readthedocs.io/en/stable/_static/optuna-logo.png
   docs: https://optuna.readthedocs.io/en/
   github: https://github.com/optuna/optuna
   category: Python
 
 - name: Pandas
-  logo: https://cdn.simpleicons.org/pandas
+  logo: https://pandas.pydata.org/static/img/pandas_white.svg
   docs: https://pandas.pydata.org/docs/
   github: https://github.com/pandas-dev/pandas
   category: Python
 
 - name: Pennylane
-  logo: https://avatars.githubusercontent.com/u/64286425?s=280&v=4
+  logo: https://assets.cloud.pennylane.ai/docs/pennylane-logo-with-wordmark.svg
   docs: https://docs.pennylane.ai/en/
   github: https://github.com/PennyLaneAI/pennylane
   category: Python
 
 - name: Playwright (Python)
-  logo: https://cdn.jsdelivr.net/gh/devicons/devicon/icons/playwright/playwright-original.svg
+  logo: https://upload.wikimedia.org/wikipedia/commons/thumb/7/75/Playwright_Logo.svg/3840px-Playwright_Logo.svg.png
   docs: https://playwright.dev/python/docs/intro
   sitemap: https://playwright.dev/sitemap.xml
   github: https://github.com/microsoft/playwright-python
   category: Python
 
 - name: Plotly (Python)
-  logo: https://cdn.simpleicons.org/plotly
+  logo: https://plotly.github.io/documentation/all_static/images/graphing_library.svg
   docs: https://plotly.com/python/
   sitemap: https://plotly.com/python/sitemap.xml
   github: https://github.com/plotly/plotly.py
   category: Python
 
 - name: PostgreSQL
-  logo: https://cdn.simpleicons.org/postgresql
+  logo: https://images.icon-icons.com/2699/PNG/512/postgresql_logo_icon_170836.png
   docs: https://www.postgresql.org/docs/
   sitemap: https://www.postgresql.org/sitemap.xml
   github: https://github.com/postgres/postgres
@@ -480,31 +480,31 @@ frameworks:
   category: Python
 
 - name: PyIceberg
-  logo: https://py.iceberg.apache.org/assets/images/iceberg-logo-icon.png
+  logo: https://upload.wikimedia.org/wikipedia/commons/thumb/9/95/Apache_Iceberg_Logo.svg/3840px-Apache_Iceberg_Logo.svg.png
   docs: https://py.iceberg.apache.org/
   sitemap: https://py.iceberg.apache.org/sitemap.xml
   github: https://github.com/apache/iceberg-python
   category: Python
 
 - name: PySpark
-  logo: https://cdn.simpleicons.org/apachespark
+  logo: https://spark.apache.org/images/spark-logo-rev.svg
   docs: https://spark.apache.org/docs/latest/api/python/
   category: Python
 
 - name: PyTorch
-  logo: https://cdn.simpleicons.org/pytorch
+  logo: https://docs.pytorch.org/docs/2.12/_static/img/logo-white.svg
   docs: https://docs.pytorch.org/
   github: https://github.com/pytorch/pytorch
   category: Python
 
 - name: PyTorch Geometric
-  logo: https://raw.githubusercontent.com/pyg-team/pyg_sphinx_theme/master/pyg_sphinx_theme/static/img/pyg_logo.png
+  logo: https://raw.githubusercontent.com/pyg-team/pyg_sphinx_theme/master/pyg_sphinx_theme/static/img/pyg_logo_text.svg
   docs: https://pytorch-geometric.readthedocs.io/en/
   github: https://github.com/pyg-team/pytorch_geometric
   category: Python
 
 - name: PyTorch Lightning
-  logo: https://cdn.simpleicons.org/lightning
+  logo: https://lightning.ai/static/logo-with-text-dark-XEKB6mjM.svg
   docs: https://lightning.ai/docs/pytorch/
   github: https://github.com/Lightning-AI/pytorch-lightning
   category: Python
@@ -515,12 +515,12 @@ frameworks:
   category: Python
 
 - name: Python
-  logo: https://cdn.simpleicons.org/python
+  logo: https://upload.wikimedia.org/wikipedia/commons/thumb/f/f8/Python_logo_and_wordmark.svg/3840px-Python_logo_and_wordmark.svg.png
   docs: https://docs.python.org/3/
   category: Programming Language
 
 - name: Qdrant
-  logo: https://cdn.simpleicons.org/qdrant
+  logo: https://qdrant.tech/img/qdrant-logo.svg
   docs: https://qdrant.tech/documentation/
   llms_full: https://qdrant.tech/llms-full.txt
   llms_txt: https://qdrant.tech/llms.txt
@@ -528,39 +528,39 @@ frameworks:
   github: https://github.com/qdrant/qdrant
 
 - name: Qdrant (Python)
-  logo: https://cdn.simpleicons.org/qdrant
+  logo: https://qdrant.tech/img/qdrant-logo.svg
   docs: https://python-client.qdrant.tech
   github: https://github.com/qdrant/qdrant-client
   category: Python
 
 - name: Qiskit
-  logo: https://cdn.simpleicons.org/qiskit
+  logo: https://logowik.com/content/uploads/images/qiskit9093.logowik.com.webp
   docs: https://quantum.cloud.ibm.com/docs/en/api/qiskit
   github: https://github.com/Qiskit/qiskit
   category: Python
 
 - name: Ray
-  logo: https://cdn.simpleicons.org/ray
+  logo: https://docs.ray.io/en/latest/_images/ray_svg_logo.svg
   docs: https://docs.ray.io/en/
   sitemap: https://docs.ray.io/sitemap.xml
   github: https://github.com/ray-project/ray
   category: Python
 
 - name: RecBole
-  logo: https://recbole.io/images/logo.png
+  logo: https://recbole.io/docs/_images/logo.png
   docs: https://recbole.io/docs/
   github: https://github.com/rucaibox/recbole
   category: Python
 
 - name: Redis
-  logo: https://cdn.simpleicons.org/redis
+  logo: https://upload.wikimedia.org/wikipedia/commons/thumb/e/ee/Redis_logo.svg/3840px-Redis_logo.svg.png
   docs: https://redis.io/docs/
   llms_txt: https://redis.io/llms.txt
   sitemap: https://redis.io/docs/latest/sitemap.xml
   github: https://github.com/redis/redis
 
 - name: Redis (Python)
-  logo: https://cdn.simpleicons.org/redis
+  logo: https://upload.wikimedia.org/wikipedia/commons/thumb/e/ee/Redis_logo.svg/3840px-Redis_logo.svg.png
   docs: https://redis.io/docs/latest/develop/clients/redis-py/
   github: https://github.com/redis/redis-py
   category: Python
@@ -588,25 +588,25 @@ frameworks:
   category: Programming Language
 
 - name: Scikit-Learn
-  logo: https://cdn.simpleicons.org/scikitlearn
+  logo: https://scikit-learn.org/stable/_static/scikit-learn-logo-without-subtitle.svg
   docs: https://scikit-learn.org/
   github: https://github.com/scikit-learn/scikit-learn
   category: Python
 
 - name: Scikit-Learn Extra
-  logo: https://cdn.simpleicons.org/scikitlearn
+  logo: https://scikit-learn.org/stable/_static/scikit-learn-logo-without-subtitle.svg
   docs: https://scikit-learn-extra.readthedocs.io/en/
   github: https://github.com/scikit-learn-contrib/scikit-learn-extra
   category: Python
 
 - name: Scikit-Survival
-  logo: https://cdn.simpleicons.org/scikitlearn
+  logo: https://scikit-learn.org/stable/_static/scikit-learn-logo-without-subtitle.svg
   docs: https://scikit-survival.readthedocs.io/en/
   github: https://github.com/sebp/scikit-survival
   category: Python
 
 - name: Seaborn
-  logo: https://seaborn.pydata.org/_images/logo-tall-lightbg.svg
+  logo: https://seaborn.pydata.org/_static/logo-wide-lightbg.svg
   docs: https://seaborn.pydata.org/
   github: https://github.com/mwaskom/seaborn
   category: Python
@@ -618,7 +618,7 @@ frameworks:
   category: Python
 
 - name: SGLang
-  logo: https://raw.githubusercontent.com/sgl-project/sglang/main/assets/logo.png
+  logo: https://mintcdn.com/lmsysorg/iZdDMbLWP1BLEIzC/logo/logo.png?fit=max&auto=format&n=iZdDMbLWP1BLEIzC&q=85&s=b27d467947ee2167744cb07b69badf00
   docs: https://docs.sglang.io/
   llms_full: https://docs.sglang.io/llms-full.txt
   llms_txt: https://docs.sglang.io/llms.txt
@@ -639,13 +639,13 @@ frameworks:
   category: Python
 
 - name: Skaffold
-  logo: https://cdn.simpleicons.org/skaffold
+  logo: https://raw.githubusercontent.com/GoogleContainerTools/skaffold/main/logo/skaffold.png
   docs: https://skaffold.dev/docs/
   sitemap: https://skaffold.dev/sitemap.xml
   github: https://github.com/GoogleContainerTools/skaffold
 
 - name: Skforecast
-  logo: https://skforecast.org/latest/img/logo-skforecast.png
+  logo: https://skforecast.org/latest/img/banner-landing-page-dark-mode-skforecast-no-background.png#only-dark
   docs: https://skforecast.org/
   llms_full: https://skforecast.org/latest/llms-full.txt
   llms_txt: https://skforecast.org/latest/llms.txt
@@ -654,13 +654,13 @@ frameworks:
   category: Python
 
 - name: Statsmodels
-  logo: https://www.statsmodels.org/stable/_static/statsmodels-logo-v2-bw.svg
+  logo: https://www.statsmodels.org/stable/_images/statsmodels-logo-v2-horizontal.svg
   docs: https://www.statsmodels.org/
   github: https://github.com/statsmodels/statsmodels
   category: Python
 
 - name: Streamlit
-  logo: https://cdn.simpleicons.org/streamlit
+  logo: https://streamlit.io/images/brand/streamlit-logo-primary-colormark-darktext.png
   docs: https://docs.streamlit.io/
   llms_full: https://docs.streamlit.io/llms-full.txt
   llms_txt: https://docs.streamlit.io/llms.txt
@@ -669,7 +669,7 @@ frameworks:
   category: Python
 
 - name: Supervision (Roboflow)
-  logo: https://cdn.simpleicons.org/roboflow
+  logo: https://media.roboflow.com/open-source/supervision/rf-supervision-banner.png
   docs: https://supervision.roboflow.com/
   llms_txt: https://supervision.roboflow.com/llms.txt
   sitemap: https://supervision.roboflow.com/sitemap.xml 
@@ -682,26 +682,26 @@ frameworks:
   github: https://github.com/nvidia/tensorrt
 
 - name: TensorRT-LLM
-  logo: https://cdn.simpleicons.org/nvidia
+  logo: https://nvidia.github.io/TensorRT-LLM/_static/nvidia-logo-horiz-rgb-wht-for-screen.svg
   docs: https://nvidia.github.io/TensorRT-LLM
   github: https://github.com/NVIDIA/TensorRT-LLM
 
 - name: Terraform
-  logo: https://cdn.simpleicons.org/terraform
+  logo: https://upload.wikimedia.org/wikipedia/commons/thumb/0/04/Terraform_Logo.svg/1280px-Terraform_Logo.svg.png
   docs: https://developer.hashicorp.com/terraform/docs/
   llms_full: https://www.mintlify.com/hashicorp/terraform/llms-full.txt
   github: https://github.com/hashicorp/terraform
 
 - name: Terragrunt
-  logo: https://cdn.gruntwork.io/img/terragrunt-brand/Terragrunt%20Logo%20Color%20Dark.png
+  logo: https://docs.terragrunt.com/_astro/horizontal-logo-light.Db4qwxSo.svg
   docs: https://docs.terragrunt.com/
   llms_full: https://docs.terragrunt.com/llms-full.txt
   llms_txt: https://docs.terragrunt.com/llms.txt
   github: https://github.com/gruntwork-io/terragrunt
 
 - name: TerraTorch
-  logo: https://raw.githubusercontent.com/torchgeo/terratorch/main/assets/logo_white.png
-  docs: https://terrastackai.github.io/terratorch/
+  logo: https://torchgeo.org/terratorch/stable/figs/logo.png
+  docs: https://torchgeo.org/terratorch/stable/
   sitemap: https://terrastackai.github.io/terratorch/sitemap.xml
   github: https://github.com/terrastackai/terratorch
   category: Python
@@ -715,14 +715,14 @@ frameworks:
   category: Python
 
 - name: Ultralytics
-  logo: https://cdn.simpleicons.org/ultralytics
+  logo: https://cdn.prod.website-files.com/680a070c3b99253410dd3dcf/68e4eb1e9893320b26cc02c3_Ultralytics%20Logo.png.svg
   docs: https://docs.ultralytics.com/
   sitemap: https://docs.ultralytics.com/sitemap.xml
   github: https://github.com/ultralytics/ultralytics
   category: Python
 
 - name: UMAP
-  logo: https://umap-learn.readthedocs.io/en/latest/_static/logo.png
+  logo: https://umap-learn.readthedocs.io/en/latest/_images/logo_large.png
   docs: https://umap-learn.readthedocs.io/en/latest/
   github: https://github.com/lmcinnes/umap
   category: Python
@@ -735,14 +735,14 @@ frameworks:
   category: Python
 
 - name: vLLM
-  logo: https://cdn.simpleicons.org/vllm
+  logo: https://docs.vllm.ai/en/latest/assets/logos/vllm-logo-text-dark.png
   docs: https://docs.vllm.ai/en/
   sitemap: https://docs.vllm.ai/sitemap.xml
   github: https://github.com/vllm-project/vllm
   category: Python
 
 - name: XGBoost
-  logo: https://raw.githubusercontent.com/dmlc/dmlc.github.io/master/img/logo-m/xgboost.png
+  logo: https://xgboost.ai/images/logo/xgboost-logo.png
   docs: https://xgboost.readthedocs.io/
   github: https://github.com/dmlc/xgboost
   category: Python

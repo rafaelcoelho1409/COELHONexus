@@ -220,5 +220,17 @@ export async function triggerIngest(slug, refresh) {
 
 S.generate?.addEventListener('click', () => {
   if (!S.selected) return;
+  // Defense in depth — the button is `disabled` via refreshGenerateState
+  // while a run is in flight, but a user could remove the attribute via
+  // DevTools, and assistive-tech shortcuts can sometimes activate a
+  // visually-disabled control. The runtime guard ensures we NEVER
+  // POST /runs while activeRunId is set, even if the disabled attr
+  // was bypassed; the backend's per-slug single-flight lock catches
+  // the same-slug race, but cross-slug double-trigger would slip
+  // through without this client gate.
+  if (S.activeRunId) {
+    showToast('Another ingestion is running — wait for it to finish.');
+    return;
+  }
   triggerIngest(S.selected, false);
 });

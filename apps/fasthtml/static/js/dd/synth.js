@@ -8,6 +8,7 @@ import { StageGraph } from './stagegraph.js';
 import { sleep, escapeHtml, formatFieldValue } from './utils.js';
 import {
   showToast, showConfirm, refreshGenerateState,
+  fetchPipelineState, cascadeImpactText,
 } from './ui.js';
 import { fmtMs, startElapsed, stopElapsed, showElapsed } from './timing.js';
 
@@ -2169,11 +2170,18 @@ if (S.synthWipeBtn) {
       );
       return;
     }
+    // Probe pipeline state so the confirm dialog tells the user
+    // whether they're erasing rendered Study chapters along with the
+    // Synth thread state. Study lives UNDER synth/{slug}/ in MinIO, so
+    // wiping Synth always wipes Study — no separate cascade call.
+    const state = await fetchPipelineState(S.activeSlug);
+    const cascade = cascadeImpactText(state, 'synth');
     const ok = await showConfirm(
       'Wipe synth cache for ' + S.activeSlug + '?',
       ('Deletes MinIO chapter artifacts + Postgres checkpoints + ' +
        'browser state for ' + S.activeSlug +
-       '. Planner cache is untouched. This cannot be undone.'),
+       '. Planner cache is untouched.' + cascade +
+       ' This cannot be undone.'),
       'Wipe',
     );
     if (!ok) return;

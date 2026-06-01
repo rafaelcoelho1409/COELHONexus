@@ -7,6 +7,7 @@ import * as S from './state.js';
 import { fmtAge, fmtBytes } from './utils.js';
 import {
   showNotice, showToast, showConfirm, refreshGenerateState,
+  fetchPipelineState, cascadeImpactText,
 } from './ui.js';
 import {
   ensureFrameworkInfo,
@@ -191,12 +192,18 @@ export function renderSidebar(items) {
       const row = b.closest('.fw-lib-item');
       const displayName = row.querySelector('.fw-lib-name')?.textContent || slug;
 
+      // Probe what's actually cached downstream so the confirm dialog
+      // tells the user the real cascade impact. The DELETE /ingestion
+      // backend endpoint already wipes planner + synth + study server-
+      // side; we don't need to call them separately, only to LABEL the
+      // user-visible cascade accurately.
+      const state = await fetchPipelineState(slug);
+      const cascade = cascadeImpactText(state, 'ingestion');
       const ok = await showConfirm(
         'Delete framework',
         'Permanently delete "' + displayName + '"? Full wipe — removes ' +
-        'the ingested corpus, raw monolith, synth vault sentinels, and ' +
-        'any planner/synth artifacts for this framework. ' +
-        'This cannot be undone.',
+        'the ingested corpus, raw monolith, and synth vault sentinels.' +
+        cascade + ' This cannot be undone.',
         'Delete'
       );
       if (!ok) return;

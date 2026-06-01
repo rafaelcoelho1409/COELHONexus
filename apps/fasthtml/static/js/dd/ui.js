@@ -31,6 +31,56 @@ export function showConfirm(title, message, confirmLabel) {
   S.modalEl.classList.add('visible');
   return new Promise(resolve => { S.set_modalResolver(resolve); });
 }
+
+// ---- pipeline-state probe + cascade-message helper ----------------
+// Single shared fetch the three wipe / delete handlers use to label
+// their confirm dialogs with accurate cascade impact. Falls back to
+// "everything is cached" (the conservative show-all-warnings shape)
+// if the endpoint fails — better to over-warn than to silently delete
+// downstream artifacts the user didn't realize were there.
+export async function fetchPipelineState(slug) {
+  if (!slug) return null;
+  try {
+    const r = await fetch(S.API + '/pipeline/' + encodeURIComponent(slug) +
+                           '/state');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } catch (e) {
+    console.warn('[fetchPipelineState]', slug, e);
+    return {
+      slug, ingestion: true, planner: true, synth: true, study: true,
+    };
+  }
+}
+
+// Build the cascade-impact tail for a confirm message. ``fromStage`` is
+// the stage being wiped — only downstream stages from that point are
+// listed. Returns a string that READS NICELY appended to the destructive
+// action description ("Wipe planner cache for X? Deletes...") so the
+// user sees the same shape regardless of which button they clicked.
+export function cascadeImpactText(state, fromStage) {
+  if (!state) return '';
+  // Downstream order — what gets cascaded for each entry-point.
+  const downstream = {
+    ingestion: ['planner', 'synth', 'study'],
+    planner:   ['synth', 'study'],
+    synth:     ['study'],
+  }[fromStage] || [];
+  const cached = downstream.filter(s => state[s]);
+  if (cached.length === 0) return '';
+  const labels = {
+    planner: 'cached Planner artifacts',
+    synth:   'cached Synth chapter outputs',
+    study:   'rendered Study chapters',
+  };
+  const parts = cached.map(s => labels[s]);
+  let list;
+  if (parts.length === 1) list = parts[0];
+  else if (parts.length === 2) list = parts.join(' and ');
+  else list = parts.slice(0, -1).join(', ') + ', and ' + parts.slice(-1);
+  return ' Cascades downstream — will ALSO delete the ' + list +
+         ' for this framework.';
+}
 export function closeModal(result) {
   if (!S.modalEl) return;
   S.modalEl.classList.remove('visible');
@@ -152,6 +202,54 @@ export function refreshGenerateState() {
       S.generate.setAttribute('disabled', 'disabled');
     } else {
       S.generate.removeAttribute('disabled');
+    }
+  }
+  // Bottom-bar labels — only present on the Catalog stage
+  // (#fw-sticky-bar in _StickyBar). TWO parallel groups, BOTH visible
+  // when a run is in flight:
+  //
+  //   Selected:   <tile the user clicked>      (always — that's the
+  //                                              picker's source of truth)
+  //   Ingesting:  <active framework>           (only when activeRunId set;
+  //                                              hidden via display:none
+  //                                              the rest of the time)
+  //
+  // Selected stays current with the user's last tile click so they can
+  // queue up the NEXT ingestion mentally while the current one runs;
+  // Ingesting reflects the pipeline reality. Both names hydrate async
+  // via the same singleton ensureFrameworkInfo / catalog tile cache.
+  const nameEl = document.querySelector('#fw-selected-name');
+  if (nameEl) {
+    if (!S.selected) nameEl.textContent = '';
+    else if (S.frameworkInfo[S.selected]) {
+      nameEl.textContent = S.frameworkInfo[S.selected].name || S.selected;
+    }
+  }
+  const ingLabel = document.querySelector('#fw-ingesting-label');
+  const ingNameEl = document.querySelector('#fw-ingesting-name');
+  if (ingLabel && ingNameEl) {
+    if (ingestActive && S.activeSlug) {
+      ingLabel.style.display = '';
+      const cached = S.frameworkInfo[S.activeSlug];
+      ingNameEl.textContent = (cached && cached.name) || S.activeSlug;
+      // Hydrate from the resolver if not cached. Same singleton fetch
+      // the progress card + picker trigger use, so one round-trip
+      // populates all three UI surfaces.
+      const cachedSlug = S.activeSlug;
+      const cachedRunId = S.activeRunId;
+      import('./picker.js').then(({ ensureFrameworkInfo }) => {
+        ensureFrameworkInfo(cachedSlug).then((info) => {
+          // Re-check state — the run may have finished or switched
+          // frameworks between the kick-off and the hydrate response.
+          if (S.activeRunId === cachedRunId && S.activeSlug === cachedSlug
+              && info && info.name && ingNameEl) {
+            ingNameEl.textContent = info.name;
+          }
+        }).catch(() => {});
+      }).catch(() => {});
+    } else {
+      ingLabel.style.display = 'none';
+      ingNameEl.textContent = '';
     }
   }
   document.querySelectorAll('.fw-lib-refresh, .fw-lib-delete').forEach(b => {

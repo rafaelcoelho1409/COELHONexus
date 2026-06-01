@@ -316,12 +316,30 @@ def _NoticeAndToast():
 
 
 def _StickyBar():
-    """Catalog-only sticky Generate bar. Other stages omit this."""
+    """Catalog-only sticky Generate bar. Other stages omit this.
+
+    Two parallel labels — both visible when an ingestion is in flight:
+      • `Selected: <tile the user clicked>`  (always present)
+      • `Ingesting: <active framework>`      (only when activeRunId set)
+    The Ingesting label is hidden via CSS `display:none` until ui.js
+    refreshGenerateState reveals it. Layout: flex row, both labels on
+    the left, Start Ingestion button on the right."""
     return Div(
         Span(
-            "Selected: ",
+            Span("Selected:", id="fw-selected-prefix",
+                 cls="fw-selected-prefix"),
+            " ",
             Span("", id="fw-selected-name", cls="fw-selected-name"),
             id="fw-selected-label", cls="fw-selected-label",
+        ),
+        Span(
+            Span("", id="fw-ingesting-spinner", cls="fw-spinner fw-lib-spinner",
+                 aria_hidden="true"),
+            Span("Ingesting:", cls="fw-ingesting-prefix"),
+            " ",
+            Span("", id="fw-ingesting-name", cls="fw-ingesting-name"),
+            id="fw-ingesting-label", cls="fw-ingesting-label",
+            style="display:none;",
         ),
         Button("Start Ingestion", id="fw-generate", cls="btn-primary"),
         id="fw-sticky-bar", cls="fw-sticky-bar",
