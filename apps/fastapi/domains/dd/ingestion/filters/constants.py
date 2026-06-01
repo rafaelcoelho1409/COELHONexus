@@ -108,17 +108,31 @@ NON_TARGET_LANGUAGE_PATH_RE = re.compile(
 # content under those paths; we let the semantic off_topic filter in the
 # planner handle those.
 DEFAULT_EXCLUDE_PATH_PATTERNS: tuple[str, ...] = (
-    r"/events?(/|$)",
-    r"/blog(/|$)",
-    r"/news(/|$)",
-    r"/changelog(/|$)",
-    r"/release[-_]?notes?(/|$)",
-    r"/releases(/|$)",
-    r"/jobs?(/|$)",
-    r"/careers?(/|$)",
-    r"/hiring(/|$)",
-    r"/sponsors?(/|$)",
-    r"/meetups?(/|$)",
+    # Marketing / community
+    r"/events?(\.html?|/|$)",
+    r"/blog(\.html?|/|$)",
+    r"/news(\.html?|/|$)",
+    r"/jobs?(\.html?|/|$)",
+    r"/careers?(\.html?|/|$)",
+    r"/hiring(\.html?|/|$)",
+    r"/sponsors?(\.html?|/|$)",
+    r"/meetups?(\.html?|/|$)",
+    # Release churn — both directory and file forms. The single-file
+    # variant catches Kafka `changelog.html` (69 H2s), SHAP
+    # `release_notes.html` (91 H2s), Novu `changelog.html`, ADTK
+    # `releasehistory.html`. The version-tag form catches XGBoost-style
+    # `v2.1.0.html` per-version release pages.
+    r"/changelogs?(\.html?|/|$)",
+    r"/release[-_]?notes?(\.html?|/|$)",
+    r"/releases(\.html?|/|$)",
+    r"/release[-_]?history(\.html?|/|$)",
+    r"/releasehistory(\.html?|/|$)",
+    r"/whats[-_]?new(\.html?|/|$)",
+    r"/whatsnew(\.html?|/|$)",
+    r"/history(\.html?|/|$)",
+    r"/migration[-_]?guide(\.html?|/|$)",
+    r"/upgrad(?:e|ing)(\.html?|/|$)",
+    r"/v\d+(?:\.\d+){1,3}(?:\.html?)?$",
 )
 
 _DEFAULT_EXCLUDE_RE = re.compile(

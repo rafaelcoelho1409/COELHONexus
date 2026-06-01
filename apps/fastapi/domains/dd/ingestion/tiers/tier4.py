@@ -31,6 +31,8 @@ from tenacity import (
 )
 
 from ..extract import extract_title, html_to_markdown
+from ..objects_inv import Inventory, fetch_inventory
+from ..page_split import maybe_split_page
 from ..filters import (
     NON_TARGET_LANGUAGE_PATH_RE,
     build_language_filter,
@@ -40,6 +42,7 @@ from ..filters import (
 )
 from ..progress import Progress
 from ..seeder import discover_urls as _seeder_discover
+from ..sphinx_nav import discover_via_toctree as _toctree_discover
 from ..storage import Store
 
 
@@ -240,7 +243,13 @@ async def _fetch_one(
     url: str,
     *,
     progress: Progress,
-) -> tuple[str, str, str, str] | None:
+    inventory: Inventory | None = None,
+) -> list[tuple[str, str, str, str]]:
+    """Fetch + extract. Returns a list of ``(slug, src_url, body_md, title)``:
+    one entry per page in the common case, or N entries when the page
+    matches an anchor-dense / autodoc split pattern (see
+    ``page_split.maybe_split_page``). Empty list on fetch / extract failure.
+    """
     t0 = time.monotonic()
     try:
         resp = await _get(client, url)
@@ -250,7 +259,7 @@ async def _fetch_one(
             fetch_ms=int((time.monotonic() - t0) * 1000),
             error_msg=f"{type(e).__name__}: {e}",
         )
-        return None
+        return []
     fetch_ms = int((time.monotonic() - t0) * 1000)
     if resp.status_code != 200:
         await progress.record_url(
@@ -259,10 +268,34 @@ async def _fetch_one(
             bytes_fetched=len(resp.content or b""),
             error_msg=f"HTTP {resp.status_code}",
         )
-        return None
+        return []
     raw = resp.text or ""
-    body = html_to_markdown(raw, source_url=url)
     title = extract_title(raw)
+    base_slug = _slugify(title or urlparse(url).path)
+
+    # Anchor-dense / autodoc pages: split into N virtual sub-pages so the
+    # digest treats each section as its own source. No-op for ordinary
+    # pages. When ``inventory`` is given (Sphinx ``objects.inv`` was
+    # available), the splitter uses deterministic per-entity anchors
+    # instead of heuristic thresholds.
+    try:
+        subs = maybe_split_page(raw, url, parent_title=title, inventory=inventory)
+    except Exception as e:
+        logger.warning(f"[tier-4] page_split failed for {url}: {e}")
+        subs = []
+    if subs:
+        await progress.record_url(
+            url, status="success", tier="http",
+            http_code=resp.status_code, fetch_ms=fetch_ms,
+            bytes_fetched=len(raw),
+            extracted_chars=sum(len(s.body_md) for s in subs),
+        )
+        return [
+            (f"{base_slug}--{s.slug_suffix}"[:120], s.sub_url, s.body_md, s.title)
+            for s in subs
+        ]
+
+    body = html_to_markdown(raw, source_url=url)
     if len(body.encode("utf-8")) < _MIN_OK_BYTES:
         await progress.record_url(
             url, status="extract_empty", tier="http",
@@ -270,14 +303,13 @@ async def _fetch_one(
             bytes_fetched=len(raw), extracted_chars=len(body),
             error_msg="extracted body too short",
         )
-        return None
+        return []
     await progress.record_url(
         url, status="success", tier="http",
         http_code=resp.status_code, fetch_ms=fetch_ms,
         bytes_fetched=len(raw), extracted_chars=len(body),
     )
-    slug = _slugify(title or urlparse(url).path)
-    return (slug, url, body, title or slug)
+    return [(base_slug, url, body, title or base_slug)]
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +349,35 @@ async def run(
         # ----------------------------------------------------------------
         enriched = await _seed_enrichment(url, client)
         seeded = await _seeder_discover(host, raw_path)
-        seeds = sorted({url, *enriched, *seeded})
+        # Phase 1b — Sphinx ``objects.inv`` canonical inventory (L2 of
+        # the SOTA cascade). When present, this is the deterministic
+        # source-of-truth for every toctree-reachable page and every
+        # documented entity anchor — no heuristic DOM parsing required.
+        # ``None`` when the site isn't Sphinx-built, in which case Phase
+        # 1c (DOM-based ``sphinx_nav``) does the discovery instead.
+        docs_root_path = subtree if subtree else "/"
+        if not docs_root_path.endswith("/"):
+            docs_root_path += "/"
+        docs_root = f"{parsed.scheme}://{parsed.netloc}{docs_root_path}"
+        inventory = await fetch_inventory(docs_root, client=client)
+        inv_pages = inventory.doc_pages() if inventory else set()
+        if inventory:
+            logger.info(
+                f"[tier-4] objects.inv: {inventory.project} "
+                f"v{inventory.version} — {len(inv_pages)} doc pages, "
+                f"{len(inventory.entities)} entities"
+            )
+        # Phase 1c — DOM-based sidebar+body toctree discovery
+        # (fallback when objects.inv absent; complement when present —
+        # may catch theme-rendered links the inventory omits).
+        toctree = await _toctree_discover(
+            url, host=host, subtree=subtree, client=client,
+        )
+        if toctree:
+            logger.info(
+                f"[tier-4] toctree sidebar contributed {len(toctree)} URLs"
+            )
+        seeds = sorted({url, *enriched, *seeded, *inv_pages, *toctree})
 
         # ----------------------------------------------------------------
         # Phase 2 — httpx BFS to fill the gap if discovery is sparse
@@ -364,6 +424,24 @@ async def run(
         logger.info(
             f"[tier-4] {len(seeds)} discovered → {len(filtered)} after filter"
         )
+        # Coverage oracle — when objects.inv was found, compare its
+        # canonical page set against what we'll actually crawl. Pages in
+        # the inventory but not in ``filtered`` are missed (typically
+        # nothing, or release-churn paths the filter intentionally
+        # dropped); pages in ``filtered`` but not in the inventory are
+        # extras the DOM scrape contributed.
+        if inventory:
+            inv_set = inventory.doc_pages()
+            kept_set = {u.split("#", 1)[0] for u in filtered}
+            gap = inv_set - kept_set
+            extras = kept_set - inv_set
+            logger.info(
+                f"[tier-4 oracle] inventory={len(inv_set)} pages, "
+                f"crawling={len(kept_set)}, missing={len(gap)}, "
+                f"extras-from-dom={len(extras)}"
+            )
+            for u in sorted(gap)[:10]:
+                logger.info(f"[tier-4 oracle]   MISSING: {u}")
 
         # ----------------------------------------------------------------
         # Phase 3 — SPA gate; if majority look like shells, skip 4a
@@ -395,18 +473,24 @@ async def run(
             nonlocal written
             async with sem:
                 await progress.raise_if_cancelled()
-                r = await _fetch_one(client, u, progress=progress)
-            if r is None:
+                results = await _fetch_one(
+                    client, u, progress=progress, inventory=inventory,
+                )
+            if not results:
                 failed.append(u)
             else:
-                slug, src_url, body, title = r
-                await store.add_page(
-                    slug=slug, url=src_url, body=body,
-                    tier="http", title=title,
-                )
-                written += 1
+                # ``results`` is normally 1-element, but anchor-dense /
+                # autodoc pages explode into N virtual sub-pages (one
+                # source per section) so the digest stage treats them
+                # as distinct documents.
+                for slug, src_url, body, title in results:
+                    await store.add_page(
+                        slug=slug, url=src_url, body=body,
+                        tier="http", title=title,
+                    )
+                    written += 1
             await progress.update(current=written, last_url=u)
-            return r
+            return results
 
         await asyncio.gather(
             *(_bound(u) for u in filtered),

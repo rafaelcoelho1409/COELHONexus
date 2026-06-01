@@ -23,12 +23,12 @@ frameworks:
 
 - name: ADTK
   logo: https://adtk.readthedocs.io/en/stable/_static/arundo_logo_black.png
-  docs: https://adtk.readthedocs.io/en/stable/
+  docs: https://adtk.readthedocs.io/en/stable/index.html
   github: https://github.com/arundo/adtk
   category: Python
 
 - name: Alibi Explain
-  logo: https://i.imgur.com/YkzQHRp.png
+  logo: https://raw.githubusercontent.com/SeldonIO/alibi/master/doc/source/_static/Alibi_Explain_Logo_rgb.png
   docs: https://docs.seldon.ai/alibi-explain
   llms_full: https://docs.seldon.ai/alibi-explain/llms-full.txt
   llms_txt: https://docs.seldon.ai/alibi-explain/llms.txt
