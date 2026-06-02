@@ -89,21 +89,50 @@ async function initIngestion() {
     try { await recoverActiveRuns(); }
     catch (e) { console.warn('[init] ingestion-recover failed:', e); }
   }
+  // After bootstrap (`S.setActiveSlug(slug)` at top of main.js) AND
+  // `recoverActiveRuns` (which may overwrite `S.activeSlug` with the
+  // in-flight framework), four cases on the Ingestion page:
+  //
+  //   A. No URL slug AND no in-flight run     → nothing to render.
+  //   B. URL slug AND no in-flight run        → load URL slug's manifest.
+  //   C. URL slug == in-flight slug           → show "in progress" placeholder.
+  //   D. URL slug != in-flight slug           → user opened a DONE framework
+  //      while ANOTHER framework's ingestion runs in the background. Load
+  //      this framework's manifest WITHOUT clobbering `S.activeSlug` (so
+  //      the bottom-bar "Ingesting" indicator + global running-dot keep
+  //      pointing at the background run). Hide the progress box — it
+  //      belongs to the OTHER run, not the one being viewed.
   if (slug && S.activeRunId === null) {
-    // No ingestion in flight → load the finalized manifest into the
-    // file grid (the user is viewing an already-ingested framework).
+    // CASE B
     try {
       const { loadManifestForSlug } = await import('./ingestion.js');
       loadManifestForSlug(slug).catch(() => {});
     } catch (_) {}
+  } else if (slug && S.activeRunId !== null && S.activeSlug !== slug) {
+    // CASE D — open the done framework's file list without disturbing
+    // the in-flight run's bookkeeping.
+    if (S.progressBox) S.progressBox.style.display = 'none';
+    try {
+      const { loadManifestForSlug } = await import('./ingestion.js');
+      loadManifestForSlug(slug, { preserveActiveSlug: true })
+        .catch(() => {});
+    } catch (_) {}
+    // Sync the header dropdown trigger label to the framework being
+    // VIEWED (recoverActiveRuns labelled it with the in-flight slug —
+    // override here so the dropdown matches the visible content).
+    try {
+      const { updatePickerTrigger } = await import('./picker.js');
+      updatePickerTrigger(slug).catch(() => {});
+    } catch (_) {}
   } else if (S.activeRunId !== null && S.step2Grid) {
-    // Ingestion IS in flight — the manifest doesn't exist yet (fetching
-    // it would 404). Show an in-progress note; pollRun's done-handler
+    // CASE C — viewing the in-flight slug. Manifest doesn't exist yet
+    // (fetching would 404); show the placeholder. pollRun's done-handler
     // populates the grid with the real files once the run completes.
     S.step2Grid.innerHTML =
       '<div class="fw-empty">Ingestion in progress — materials will ' +
       'appear here when it completes.</div>';
   }
+  // CASE A: nothing to render.
 }
 
 async function initPlanner() {

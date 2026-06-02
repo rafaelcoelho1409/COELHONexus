@@ -202,12 +202,17 @@ export async function renderDrawerContent() {
   else S.drawerPrev.removeAttribute('disabled');
   if (S.drawerIdx >= S.currentManifestEntries.length - 1) S.drawerNext.setAttribute('disabled', 'disabled');
   else S.drawerNext.removeAttribute('disabled');
-  // Highlight the currently-viewing card across both step grids
+  // Highlight the currently-viewing card across both step grids.
+  // `data-idx` on rendered cards is the ARRAY POSITION (see
+  // ingestion.js renderManifestTo for the why) — match it against
+  // `S.drawerIdx` (also an array position), NOT `e.idx` (the entry's
+  // storage idx, which would mis-target a different card whenever the
+  // manifest was reordered post-fetch).
   document.querySelectorAll('.fw-page-card.viewing').forEach(
     c => c.classList.remove('viewing')
   );
   document.querySelectorAll(
-    '.fw-page-card[data-idx="' + e.idx + '"]'
+    '.fw-page-card[data-idx="' + S.drawerIdx + '"]'
   ).forEach(c => c.classList.add('viewing'));
   S.drawerBody.innerHTML = '<div class="fw-empty">Loading…</div>';
   try {

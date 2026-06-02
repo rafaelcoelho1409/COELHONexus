@@ -34,8 +34,19 @@ export function renderManifestTo(summaryEl, gridEl, m) {
       (m.entries.length) + ' pages · ' + fmtBytes(m.total_bytes || 0) + '</span>' +
       '<span>' + (m.tier_kind || '') + ' · ' + fmtAge(m.ingested_at) + '</span>';
   }
-  if (gridEl) gridEl.innerHTML = m.entries.map(e =>
-    '<div class="fw-page-card" data-idx="' + e.idx + '">' +
+  // `data-idx` MUST be the ARRAY POSITION in `m.entries`, NOT the
+  // entry's stored `e.idx` field. The two diverged once `reorder_by_
+  // url_list` shipped (Tier 2/3/4 fetch in completion order but the
+  // manifest is sorted by URL post-fetch — entries.array_position !=
+  // entry.idx). The drawer's openDrawer(idx) + drawerStep(±1) +
+  // currentManifestEntries[idx] semantics all assume array position;
+  // study.js's source-index map (study.js:_ensureSourceIndex) also
+  // stores array positions — using `i` keeps every caller aligned.
+  // The entry's storage idx is still available as `e.idx` inside the
+  // drawer (renderDrawerContent reads it for the `/pages/{e.idx}`
+  // fetch URL), so backend addressing is unaffected.
+  if (gridEl) gridEl.innerHTML = m.entries.map((e, i) =>
+    '<div class="fw-page-card" data-idx="' + i + '">' +
     '<div class="fw-page-title">' + (e.title || e.slug) + '</div>' +
     '<div class="fw-page-meta">' + (e.tier || '') + ' · ' + fmtBytes(e.bytes) + '</div>' +
     '</div>'
@@ -48,8 +59,17 @@ export function renderManifest(m) {
   renderManifestTo(S.step2Summary, S.step2Grid, m);
 }
 
-export async function loadManifestForSlug(slug) {
-  S.setActiveSlug(slug);
+export async function loadManifestForSlug(slug, opts = {}) {
+  // `preserveActiveSlug` lets a caller render a framework's manifest
+  // WITHOUT clobbering `S.activeSlug` — used by the Ingestion page when
+  // the user opens a DONE framework's file list while a DIFFERENT
+  // framework is currently being ingested in the background. The
+  // bottom-bar "Ingesting" indicator + global running-dot must keep
+  // pointing at the in-flight slug, so `activeSlug` stays where it is.
+  const preserveActiveSlug = !!opts.preserveActiveSlug;
+  if (!preserveActiveSlug) {
+    S.setActiveSlug(slug);
+  }
   // Page-refresh recovery for the planner step.
   const { _tryResumeActivePlanner } = await import('./planner.js');
   _tryResumeActivePlanner(slug).catch(() => {});
@@ -116,16 +136,28 @@ export async function pollRun(runId) {
       renderProgress(data.progress);
       const st = data.progress?.status;
       if (st === 'done') {
+        const completedSlug = S.activeSlug;
         S.setActiveRunId(null);
         refreshGenerateState();
-        await loadManifestForSlug(S.activeSlug);
+        // Only refresh the file grid if the user is currently viewing
+        // the framework that just completed. If they navigated to
+        // another framework's view while this ingestion ran in the
+        // background, don't clobber that view with the just-completed
+        // framework's manifest.
+        let urlSlug = null;
+        try {
+          urlSlug = new URL(window.location.href).searchParams.get('slug');
+        } catch (_) {}
+        if (!urlSlug || urlSlug === completedSlug) {
+          await loadManifestForSlug(completedSlug);
+        }
         const { loadLibrary } = await import('./library.js');
         await loadLibrary();
         // Stay on Step 2 (Ingestion) so the user sees the just-populated
         // file grid instead of auto-advancing to Planner. The stepper
         // unlocks Step 3+ via loadLibrary → syncStepLocks; the user
         // clicks through manually when they're ready.
-        S.progressBox.style.display = 'none';   // hide the 100% progress bar
+        if (S.progressBox) S.progressBox.style.display = 'none';
         const { refreshPlannerStartState } = await import('./planner.js');
         refreshPlannerStartState();             // enable Step 3 Start button
         return;
