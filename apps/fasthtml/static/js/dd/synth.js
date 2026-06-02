@@ -7,8 +7,9 @@ import * as S from './state.js';
 import { StageGraph } from './stagegraph.js';
 import { sleep, escapeHtml, formatFieldValue } from './utils.js';
 import {
-  showToast, showConfirm, refreshGenerateState,
+  showToast, showNotice, showConfirm, refreshGenerateState,
   fetchPipelineState, cascadeImpactText,
+  refreshCrossStageBlocker, crossStageBlockerFor,
 } from './ui.js';
 import { fmtMs, startElapsed, stopElapsed, showElapsed } from './timing.js';
 
@@ -1029,8 +1030,13 @@ export function refreshSynthStartState() {
     // this framework (mirrors the server-side _load_plan 404 guard, so
     // the disabled button and the API agree). See main.js initSynth /
     // _hydrateChStripFromChapters which set S.synthHasPlan.
+    // CROSS-STAGE GATE — Planner and Synth must not run simultaneously
+    // (LLM-resource contention). When a planner is in flight ANYWHERE
+    // (any slug), Start Synth is disabled with an explanatory tooltip.
+    // The server enforces this too via POST /synth's locked-response.
+    const blocker = crossStageBlockerFor('synth');
     const ready = S.activeSlug && S.activeRunId === null
-                  && hasNodes && S.synthHasPlan;
+                  && hasNodes && S.synthHasPlan && !blocker;
     if (ready) {
       S.synthStartBtn.removeAttribute('disabled');
       S.synthStartBtn.removeAttribute('title');
@@ -1048,6 +1054,8 @@ export function refreshSynthStartState() {
           'title',
           'Run the Planner first — Synth needs a chapter plan for this framework.',
         );
+      } else if (blocker) {
+        S.synthStartBtn.setAttribute('title', blocker.title);
       }
     }
     S.synthStartBtn.classList.add('btn-primary');
@@ -1909,6 +1917,16 @@ export async function startSynth() {
               'substeps light up as nodes ship.');
     return;
   }
+  // PRE-DISPATCH cross-stage check — refresh the global blocker so a
+  // planner started in another tab is caught here rather than only at
+  // the server. Cheap one round-trip.
+  try { await refreshCrossStageBlocker(); } catch (_) {}
+  const preBlocker = crossStageBlockerFor('synth');
+  if (preBlocker) {
+    showNotice(preBlocker.notice);
+    refreshSynthStartState();
+    return;
+  }
   resetSynthCards();
   _resetSynthEventBuffer();
   _resetStudyState();
@@ -1926,6 +1944,18 @@ export async function startSynth() {
       return;
     }
     const data = await r.json();
+    // LOCKED RESPONSE — server-side single-flight gate rejected our
+    // dispatch (cross-stage planner running OR cross-slug synth
+    // running). Surface the explanatory message inline and refresh
+    // the global blocker so the disabled-button state catches up.
+    if (data && data.status === 'locked') {
+      try { await refreshCrossStageBlocker(); } catch (_) {}
+      refreshSynthStartState();
+      showNotice(data.message ||
+        ('Synth blocked: another ' + (data.stage || 'pipeline') +
+         ' run is in flight (' + (data.slug || '?') + ').'));
+      return;
+    }
     const sid = data.study_thread_id;
     const chapterIds = data.chapter_ids || [];
     if (!sid) {
@@ -2019,6 +2049,9 @@ export async function cancelSynth() {
           + n + ' chapter thread(s); the in-flight node will abort. '
           + 'Previously-completed node outputs are preserved.');
       }
+      // Refresh the cross-stage blocker — once the lock releases via
+      // the task's CAD-finally, Planner's Start button should unblock.
+      try { await refreshCrossStageBlocker(); } catch (_) {}
       // Don't reset the button here — wait for the SSE `terminal` event
       // which signals the watcher actually fired and the task cancelled.
       // The safetyTimer above is the fallback if that never happens.

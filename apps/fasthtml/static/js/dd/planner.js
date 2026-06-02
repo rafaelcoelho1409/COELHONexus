@@ -5,6 +5,7 @@ import { sleep, fmtBytes, fmtAge, escapeHtml, formatFieldValue } from './utils.j
 import {
   showConfirm, showNotice, showToast, refreshGenerateState,
   fetchPipelineState, cascadeImpactText,
+  refreshCrossStageBlocker, crossStageBlockerFor,
 } from './ui.js';
 import { loadManifestForSlug, renderManifest } from './ingestion.js';
 import {
@@ -755,7 +756,14 @@ export function refreshPlannerStartState() {
     // the server-side read_framework_manifest 404 so the disabled button
     // and the API agree. S.ingestedSlugs is populated by loadLibrary.
     const hasCorpus = S.ingestedSlugs.has(S.activeSlug);
-    const ready = S.activeSlug && S.activeRunId == null && hasCorpus;
+    // CROSS-STAGE GATE — Planner and Synth must not run simultaneously
+    // (LLM-resource contention). When a synth is in flight ANYWHERE
+    // (any slug), Start Planner is disabled with an explanatory
+    // tooltip; the server enforces this too via POST /planner's
+    // locked-response path.
+    const blocker = crossStageBlockerFor('planner');
+    const ready = S.activeSlug && S.activeRunId == null && hasCorpus
+                  && !blocker;
     if (ready) {
       S.plannerStartBtn.removeAttribute('disabled');
       S.plannerStartBtn.removeAttribute('title');
@@ -766,6 +774,8 @@ export function refreshPlannerStartState() {
       } else if (!hasCorpus) {
         S.plannerStartBtn.setAttribute('title',
           'Ingest this framework first — the planner needs its corpus.');
+      } else if (blocker) {
+        S.plannerStartBtn.setAttribute('title', blocker.title);
       } else {
         S.plannerStartBtn.removeAttribute('title');
       }
@@ -2515,6 +2525,18 @@ export async function startPlanner() {
   } catch (e) { /* fall through to fresh thread */ }
 
   if (!tid) tid = _genPlannerThreadId(S.activeSlug);
+  // PRE-DISPATCH cross-stage check — refresh the global blocker so a
+  // synth started in another tab (after this page's last cache update)
+  // is caught here rather than only at the server. This catches the
+  // race "synth started 30 seconds ago in tab 2 → user clicks Start
+  // Planner in tab 1". Cheap, one round-trip.
+  try { await refreshCrossStageBlocker(); } catch (_) {}
+  const preBlocker = crossStageBlockerFor('planner');
+  if (preBlocker) {
+    showNotice(preBlocker.notice);
+    refreshPlannerStartState();   // re-apply disabled state
+    return;
+  }
   S.setPlannerThreadId(tid);
   _rememberActivePlanner(S.activeSlug, tid);   // page-refresh recovery
   // Mark the run start for the navbar timer (a refresh reconnect recovers
@@ -2540,11 +2562,25 @@ export async function startPlanner() {
       refreshPlannerStartState();
       return;
     }
+    const data = await r.json();
+    // LOCKED RESPONSE — the server-side single-flight gate (cross-stage
+    // synth running OR same-stage planner running for another slug)
+    // rejected our dispatch. Roll back the local thread_id state, show
+    // the server's explanatory message inline, and refresh the global
+    // blocker so the disabled-button state catches up.
+    if (data && data.status === 'locked') {
+      S.setPlannerThreadId(null);
+      try { await refreshCrossStageBlocker(); } catch (_) {}
+      refreshPlannerStartState();
+      showNotice(data.message ||
+        ('Planner blocked: another ' + (data.stage || 'pipeline') +
+         ' run is in flight (' + (data.slug || '?') + ').'));
+      return;
+    }
     // POST now returns immediately with status="running" — the
     // background graph task runs server-side and the polling loop
     // (pollPlannerState above) owns terminal-state detection +
-    // resetting S.plannerThreadId / the button. Nothing to do here.
-    await r.json();   // drain the body
+    // resetting S.plannerThreadId / the button.
   } catch (e) {
     markPlannerFailed('Request failed: ' + String(e));
     S.setPlannerThreadId(null);
@@ -2567,6 +2603,11 @@ export async function cancelPlanner() {
     // status='cancelled'. THAT response triggers the UI cleanup
     // (refreshPlannerStartState in startPlanner's finally).
     await fetch(S.API + '/planner/' + tid + '/cancel', {method: 'POST'});
+    // Refresh the cross-stage blocker — once cancel propagates and
+    // the lock releases (task finally fires), Synth's Start button
+    // should unblock. Fire-and-forget on this tab; the Synth tab
+    // re-checks on its own page load + click anyway.
+    try { await refreshCrossStageBlocker(); } catch (_) {}
   } catch (e) {
     // If the cancel POST itself fails, restore the button so the user
     // can retry. The startPlanner POST is still in flight either way.

@@ -160,7 +160,80 @@ def _parse_data_url(src: str) -> Artifact | None:
     )
 
 
-async def _fetch_remote(url: str, client: httpx.AsyncClient) -> Artifact | None:
+# Image extensions eligible for the Sphinx ``_images/`` fallback probe.
+_IMAGE_EXTS = frozenset({
+    "png", "jpg", "jpeg", "gif", "svg", "webp", "avif", "bmp", "tiff", "ico",
+})
+
+# Per-host cache of the canonical *versioned* docs base, discovered by
+# following the host-root redirect ONCE (RTD/Sphinx sites 302 ``/`` ->
+# ``/en/stable/``). Module-level so it survives across pages within a
+# worker — version bases don't move inside a deploy. host -> base URL
+# (always ends with ``/``); a failed probe caches the bare host root so a
+# dead host isn't re-probed on every image.
+_version_base_cache: dict[str, str] = {}
+
+
+def _is_imageish_url(url: str) -> bool:
+    parts = (urlparse(url).path or "").rsplit(".", 1)
+    if len(parts) != 2:
+        return False
+    return parts[1].split("?", 1)[0].split("#", 1)[0].lower() in _IMAGE_EXTS
+
+
+async def _discover_version_base(
+    scheme: str, host: str, client: httpx.AsyncClient,
+) -> str:
+    """Follow the host-root redirect once to learn the canonical versioned
+    docs base (RTD/Sphinx 302 ``/`` -> ``/en/stable/``). Cached per host.
+    Returns a URL ending in ``/``."""
+    if host in _version_base_cache:
+        return _version_base_cache[host]
+    root = f"{scheme}://{host}/"
+    base = root
+    try:
+        r = await client.get(root, timeout=15.0, follow_redirects=True)
+        fp = urlparse(str(r.url))
+        path = fp.path or "/"
+        if not path.endswith("/"):
+            path = path.rsplit("/", 1)[0] + "/"
+        base = f"{fp.scheme}://{fp.netloc}{path}"
+    except Exception:
+        base = root
+    _version_base_cache[host] = base
+    return base
+
+
+async def _sphinx_image_fallbacks(
+    url: str, client: httpx.AsyncClient,
+) -> list[str]:
+    """Derive Sphinx ``_images/`` candidates for an image URL that failed
+    to fetch. Tier-1 llms-full bundles routinely carry page-relative image
+    refs (``images/foo.svg``) that resolve to a 404 against the bundle URL
+    — the real asset lives at ``{versioned_docs_base}/_images/{basename}``
+    (Sphinx's flat image dir). Returns absolute candidates in priority
+    order; empty when ``url`` isn't an image or is already an ``_images``
+    path that genuinely 404'd."""
+    if not _is_imageish_url(url):
+        return []
+    p = urlparse(url)
+    basename = (p.path or "").rsplit("/", 1)[-1]
+    if not basename or "/_images/" in (p.path or ""):
+        return []
+    vbase = await _discover_version_base(p.scheme, p.netloc, client)
+    cands: list[str] = []
+    for c in (
+        urljoin(vbase, f"_images/{basename}"),
+        f"{p.scheme}://{p.netloc}/_images/{basename}",
+    ):
+        if c != url and c not in cands:
+            cands.append(c)
+    return cands
+
+
+async def _fetch_remote_once(
+    url: str, client: httpx.AsyncClient,
+) -> Artifact | None:
     try:
         r = await client.get(url, timeout=_TIMEOUT_S, follow_redirects=True)
     except Exception:
@@ -179,6 +252,22 @@ async def _fetch_remote(url: str, client: httpx.AsyncClient) -> Artifact | None:
         ct = _EXT_MIME.get(ext, "application/octet-stream")
     return Artifact(name=_hash_name(data, ext), data=data,
                     content_type=ct, source_url=url)
+
+
+async def _fetch_remote(url: str, client: httpx.AsyncClient) -> Artifact | None:
+    """Fetch a remote artifact, with a Sphinx ``_images/`` fallback for
+    page-relative image refs that 404 on naive resolution (Tier 1/2/3
+    markdown bundles). The fallback only fires on failure of an image-ish
+    URL, so non-image and well-resolved refs pay nothing extra."""
+    art = await _fetch_remote_once(url, client)
+    if art is not None:
+        return art
+    for cand in await _sphinx_image_fallbacks(url, client):
+        art = await _fetch_remote_once(cand, client)
+        if art is not None:
+            logger.info(f"[artifacts] _images fallback: {url} -> {cand}")
+            return art
+    return None
 
 
 def _pick_largest_srcset(srcset: str, base_url: str) -> str | None:

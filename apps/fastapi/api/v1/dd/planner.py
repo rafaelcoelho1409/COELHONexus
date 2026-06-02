@@ -111,6 +111,23 @@ async def planner_timing(slug: str, response: Response) -> dict:
 
 _VALID_MODES = {"llm", "classical"}
 
+# Server-side single-flight lock for planner runs. One planner of any slug
+# at a time across the whole deployment (mirrors POST /runs ingestion).
+# TTL matches the Celery `time_limit` hard ceiling — after the hard limit
+# the worker is killed and any never-fired finally is leak-insured by TTL.
+_PLANNER_LOCK_TTL_S = 3660
+
+
+# Compare-and-delete release script — only DEL the lock if its value
+# still matches the thread_id we wrote. Prevents a resume/finally from
+# accidentally clearing a lock acquired by a later, racing start of the
+# same slug (the original lock's TTL expired, a fresh start fired in
+# between, then the slow original task finally fired its release).
+_CAD_RELEASE_LUA = (
+    "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+    "return redis.call('DEL', KEYS[1]) end return 0"
+)
+
 
 @router.post("/{slug}")
 async def start_planner(
@@ -164,27 +181,130 @@ async def start_planner(
     if not thread_id:
         thread_id = f"docs-distiller/{slug}/{uuid.uuid4()}"
 
-    # Clear stale cancel flag pre-dispatch (cheap defense-in-depth —
-    # thread_id is fresh uuid so collision impossible, but explicit).
+    # Server-side single-flight gate (mirrors POST /runs). Three phases:
+    #   0.  CROSS-STAGE — Planner and Synth must NOT run simultaneously
+    #       (they fight for the same best free-tier LLM resources,
+    #       degrading quality on both pipelines). Reject if any synth
+    #       lock exists, regardless of slug. Ingestion is independent.
+    #   1a. GLOBAL same-stage — any OTHER slug's planner running?
+    #   1b. SAME-SLUG — atomic SET NX on dd:planner:lock:{slug}.
+    # All `locked` responses carry a `stage` field so the FastHTML caller
+    # can render the appropriate "running on X" affordance.
+    # The Celery dispatch happens INSIDE the same try-block so a dispatch
+    # failure releases the lock instead of leaking it for the TTL.
+    # clear_cancel is folded in to reuse the same Redis connection.
     r = redis_aio.from_url(
         _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
+        # 0. CROSS-STAGE — is any SYNTH currently running anywhere?
+        cursor = 0
+        while True:
+            cursor, keys = await r.scan(
+                cursor=cursor, match="dd:synth:lock:*", count=100,
+            )
+            for k in keys:
+                ks = k.decode() if isinstance(k, bytes) else k
+                synth_slug = ks.split("dd:synth:lock:", 1)[-1]
+                val = await r.get(ks)
+                if val is None:
+                    continue
+                synth_thread = (
+                    val.decode() if isinstance(val, bytes) else val
+                )
+                return {
+                    "status": "locked",
+                    "slug": synth_slug,
+                    "thread_id": synth_thread,
+                    "stage": "synth",
+                    "message": (
+                        f"A synth is running ({synth_slug!r}, "
+                        f"thread_id={synth_thread}). Planner and Synth "
+                        f"share the same LLM resources — running both "
+                        f"at once degrades quality on each. Wait for "
+                        f"the synth to finish or cancel it before "
+                        f"starting a planner."
+                    ),
+                }
+            if cursor == 0:
+                break
+
+        # 1a. GLOBAL — any OTHER slug's planner currently running?
+        cursor = 0
+        while True:
+            cursor, keys = await r.scan(
+                cursor=cursor, match="dd:planner:lock:*", count=100,
+            )
+            for k in keys:
+                ks = k.decode() if isinstance(k, bytes) else k
+                other_slug = ks.split("dd:planner:lock:", 1)[-1]
+                if other_slug == slug:
+                    continue   # same-slug handled by SET NX below
+                val = await r.get(ks)
+                if val is None:
+                    continue
+                other_thread = (
+                    val.decode() if isinstance(val, bytes) else val
+                )
+                return {
+                    "status": "locked",
+                    "slug": other_slug,
+                    "thread_id": other_thread,
+                    "stage": "planner",
+                    "message": (
+                        f"Another planner is running ({other_slug!r}, "
+                        f"thread_id={other_thread}). Wait for it to "
+                        f"finish or cancel it before starting {slug!r}."
+                    ),
+                }
+            if cursor == 0:
+                break
+
+        # 1b. SAME-SLUG — atomic SET NX. Failure → another planner of
+        # this slug is already running.
+        acquired = await r.set(
+            f"dd:planner:lock:{slug}", thread_id,
+            nx=True, ex=_PLANNER_LOCK_TTL_S,
+        )
+        if not acquired:
+            existing = await r.get(f"dd:planner:lock:{slug}")
+            existing_tid = (
+                existing.decode() if isinstance(existing, bytes)
+                else existing
+            ) if existing else None
+            return {
+                "status": "locked",
+                "slug": slug,
+                "thread_id": existing_tid,
+                "stage": "planner",
+                "message": (
+                    f"A planner of {slug!r} is already running "
+                    f"(thread_id={existing_tid}). Wait for it to finish "
+                    f"or cancel it before retrying."
+                ),
+            }
+
         await clear_cancel(r, thread_id)
+
+        # Dispatch INSIDE the lock-holding block so a failed dispatch
+        # releases the lock immediately (no need to wait for the TTL).
+        try:
+            async_result = run_planner_task.delay(thread_id, slug, mode)
+        except Exception as e:
+            try:
+                await r.delete(f"dd:planner:lock:{slug}")
+            except Exception:
+                pass
+            logger.exception(
+                f"[planner] {thread_id}: celery dispatch failed: "
+                f"{type(e).__name__}: {e}"
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=f"celery dispatch failed: {type(e).__name__}: {e}",
+            )
     finally:
         await r.aclose()
-
-    try:
-        async_result = run_planner_task.delay(thread_id, slug, mode)
-    except Exception as e:
-        logger.exception(
-            f"[planner] {thread_id}: celery dispatch failed: "
-            f"{type(e).__name__}: {e}"
-        )
-        raise HTTPException(
-            status_code=503,
-            detail=f"celery dispatch failed: {type(e).__name__}: {e}",
-        )
 
     # Register the live planner run so a page refresh / navigation — even
     # with cleared browser storage or in another tab — can reconnect to its
@@ -422,15 +542,20 @@ async def wipe_planner(slug: str) -> dict:
         logger.warning(f"[planner-wipe] Postgres delete failed for {slug!r}: {e}")
         counts["error"] = f"{type(e).__name__}: {e}"
 
-    # 3. Redis live-run registry — drop it so a wiped framework never shows
-    #    a phantom "running" planner on refresh.
+    # 3. Redis live-run registry + single-flight lock — drop both so a
+    #    wiped framework never shows a phantom "running" planner on refresh
+    #    AND so the next Start Planner click for this slug isn't rejected
+    #    with "already running" by a stale lock that survived the wipe.
     n_redis = 0
     try:
         rc = redis_aio.from_url(
             _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
         )
         try:
-            n_redis = await rc.delete(f"dd:planner:current:{slug}")
+            n_redis = await rc.delete(
+                f"dd:planner:current:{slug}",
+                f"dd:planner:lock:{slug}",
+            )
         finally:
             await rc.aclose()
     except Exception as e:

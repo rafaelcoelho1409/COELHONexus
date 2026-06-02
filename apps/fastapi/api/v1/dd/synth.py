@@ -393,6 +393,13 @@ def _pick_first_chapter_id(plan: dict) -> str | None:
 
 _VALID_MODES = {"quality", "fast"}
 
+# Server-side single-flight lock for synth runs. One synth (study or
+# single-chapter) of any slug at a time across the whole deployment
+# (mirrors POST /runs ingestion). TTL matches the study orchestrator
+# Celery `time_limit` hard ceiling — long enough to cover the worst-case
+# study, short enough to leak-insure a crashed worker.
+_SYNTH_LOCK_TTL_S = 21900
+
 
 def _make_thread_id(slug: str, chapter_id: str | None = None) -> str:
     """Canonical per-chapter synth thread_id. MUST match
@@ -489,32 +496,132 @@ async def start_synth(
     if chapter_id is None:
         study_thread_id = thread_id or _make_study_thread_id(slug)
 
-        # Clear stale cancel flag on the study thread
+        # Server-side single-flight gate (mirrors POST /runs). Three phases:
+        #   0.  CROSS-STAGE — Planner and Synth must NOT run simultaneously
+        #       (LLM-resource contention degrades both pipelines).
+        #   1a. GLOBAL same-stage — any OTHER slug's synth running?
+        #   1b. SAME-SLUG — atomic SET NX on dd:synth:lock:{slug}.
+        # Every `locked` response carries a `stage` field so the FastHTML
+        # caller can render the appropriate "running on X" affordance.
         r = redis_aio.from_url(
             _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
         )
         try:
+            # 0. CROSS-STAGE — is any PLANNER currently running anywhere?
+            cursor = 0
+            while True:
+                cursor, keys = await r.scan(
+                    cursor=cursor, match="dd:planner:lock:*", count=100,
+                )
+                for k in keys:
+                    ks = k.decode() if isinstance(k, bytes) else k
+                    planner_slug = ks.split("dd:planner:lock:", 1)[-1]
+                    val = await r.get(ks)
+                    if val is None:
+                        continue
+                    planner_thread = (
+                        val.decode() if isinstance(val, bytes) else val
+                    )
+                    return {
+                        "status": "locked",
+                        "slug": planner_slug,
+                        "thread_id": planner_thread,
+                        "stage": "planner",
+                        "message": (
+                            f"A planner is running ({planner_slug!r}, "
+                            f"thread_id={planner_thread}). Planner and "
+                            f"Synth share the same LLM resources — "
+                            f"running both at once degrades quality on "
+                            f"each. Wait for the planner to finish or "
+                            f"cancel it before starting a synth."
+                        ),
+                    }
+                if cursor == 0:
+                    break
+
+            # 1a. GLOBAL — any OTHER slug's synth currently running?
+            cursor = 0
+            while True:
+                cursor, keys = await r.scan(
+                    cursor=cursor, match="dd:synth:lock:*", count=100,
+                )
+                for k in keys:
+                    ks = k.decode() if isinstance(k, bytes) else k
+                    other_slug = ks.split("dd:synth:lock:", 1)[-1]
+                    if other_slug == slug:
+                        continue   # same-slug handled by SET NX below
+                    val = await r.get(ks)
+                    if val is None:
+                        continue
+                    other_thread = (
+                        val.decode() if isinstance(val, bytes) else val
+                    )
+                    return {
+                        "status": "locked",
+                        "slug": other_slug,
+                        "thread_id": other_thread,
+                        "stage": "synth",
+                        "message": (
+                            f"Another synth is running ({other_slug!r}, "
+                            f"thread_id={other_thread}). Wait for it to "
+                            f"finish or cancel it before starting {slug!r}."
+                        ),
+                    }
+                if cursor == 0:
+                    break
+
+            # 1b. SAME-SLUG — atomic SET NX. Failure → another synth of
+            # this slug is already running (study OR single-chapter).
+            acquired = await r.set(
+                f"dd:synth:lock:{slug}", study_thread_id,
+                nx=True, ex=_SYNTH_LOCK_TTL_S,
+            )
+            if not acquired:
+                existing = await r.get(f"dd:synth:lock:{slug}")
+                existing_tid = (
+                    existing.decode() if isinstance(existing, bytes)
+                    else existing
+                ) if existing else None
+                return {
+                    "status": "locked",
+                    "slug": slug,
+                    "thread_id": existing_tid,
+                    "stage": "synth",
+                    "message": (
+                        f"A synth of {slug!r} is already running "
+                        f"(thread_id={existing_tid}). Wait for it to "
+                        f"finish or cancel it before retrying."
+                    ),
+                }
+
             await clear_cancel(r, study_thread_id)
+
+            # Bundle 13 — dispatch via Celery (queue synth-{env}). The
+            # route returns immediately with `status="queued"`; the worker
+            # emits progress events on Redis pub/sub that this FastAPI's
+            # SSE endpoints stream to the UI.
+            try:
+                async_result = run_study_task.delay(
+                    study_thread_id, slug, plan_chapter_ids, mode,
+                )
+            except Exception as e:
+                try:
+                    await r.delete(f"dd:synth:lock:{slug}")
+                except Exception:
+                    pass
+                logger.exception(
+                    f"[synth-study] {study_thread_id}: celery dispatch "
+                    f"failed: {type(e).__name__}: {e}"
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"celery dispatch failed: "
+                        f"{type(e).__name__}: {e}"
+                    ),
+                )
         finally:
             await r.aclose()
-
-        # Bundle 13 — dispatch via Celery (queue synth-{env}). The route
-        # returns immediately with `status="queued"`; the worker emits
-        # progress events on Redis pub/sub that this FastAPI's SSE
-        # endpoints stream to the UI.
-        try:
-            async_result = run_study_task.delay(
-                study_thread_id, slug, plan_chapter_ids, mode,
-            )
-        except Exception as e:
-            logger.exception(
-                f"[synth-study] {study_thread_id}: celery dispatch failed: "
-                f"{type(e).__name__}: {e}"
-            )
-            raise HTTPException(
-                status_code=503,
-                detail=f"celery dispatch failed: {type(e).__name__}: {e}",
-            )
 
         # Register the live study run so a page refresh — even with cleared
         # browser storage or in another tab — can reconnect to its SSE and
@@ -571,30 +678,122 @@ async def start_synth(
     if not thread_id:
         thread_id = _make_thread_id(slug, chapter_id)
 
-    # Clear stale cancel flag pre-dispatch (defense-in-depth — thread_id
-    # is fresh uuid so collision impossible, but explicit).
+    # Server-side single-flight gate — same shape as STUDY mode above
+    # (same `dd:synth:lock:{slug}` namespace, so a single-chapter run is
+    # blocked while a study orchestrator is running for the same slug,
+    # and vice versa). Same three phases: cross-stage / global / per-slug.
     r = redis_aio.from_url(
         _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
+        # 0. CROSS-STAGE — is any PLANNER currently running anywhere?
+        cursor = 0
+        while True:
+            cursor, keys = await r.scan(
+                cursor=cursor, match="dd:planner:lock:*", count=100,
+            )
+            for k in keys:
+                ks = k.decode() if isinstance(k, bytes) else k
+                planner_slug = ks.split("dd:planner:lock:", 1)[-1]
+                val = await r.get(ks)
+                if val is None:
+                    continue
+                planner_thread = (
+                    val.decode() if isinstance(val, bytes) else val
+                )
+                return {
+                    "status": "locked",
+                    "slug": planner_slug,
+                    "thread_id": planner_thread,
+                    "stage": "planner",
+                    "message": (
+                        f"A planner is running ({planner_slug!r}, "
+                        f"thread_id={planner_thread}). Planner and "
+                        f"Synth share the same LLM resources — running "
+                        f"both at once degrades quality on each. Wait "
+                        f"for the planner to finish or cancel it before "
+                        f"starting a synth."
+                    ),
+                }
+            if cursor == 0:
+                break
+
+        # 1a. GLOBAL — any OTHER slug's synth currently running?
+        cursor = 0
+        while True:
+            cursor, keys = await r.scan(
+                cursor=cursor, match="dd:synth:lock:*", count=100,
+            )
+            for k in keys:
+                ks = k.decode() if isinstance(k, bytes) else k
+                other_slug = ks.split("dd:synth:lock:", 1)[-1]
+                if other_slug == slug:
+                    continue
+                val = await r.get(ks)
+                if val is None:
+                    continue
+                other_thread = (
+                    val.decode() if isinstance(val, bytes) else val
+                )
+                return {
+                    "status": "locked",
+                    "slug": other_slug,
+                    "thread_id": other_thread,
+                    "stage": "synth",
+                    "message": (
+                        f"Another synth is running ({other_slug!r}, "
+                        f"thread_id={other_thread}). Wait for it to "
+                        f"finish or cancel it before starting {slug!r}."
+                    ),
+                }
+            if cursor == 0:
+                break
+
+        # 1b. SAME-SLUG — atomic SET NX.
+        acquired = await r.set(
+            f"dd:synth:lock:{slug}", thread_id,
+            nx=True, ex=_SYNTH_LOCK_TTL_S,
+        )
+        if not acquired:
+            existing = await r.get(f"dd:synth:lock:{slug}")
+            existing_tid = (
+                existing.decode() if isinstance(existing, bytes)
+                else existing
+            ) if existing else None
+            return {
+                "status": "locked",
+                "slug": slug,
+                "thread_id": existing_tid,
+                "stage": "synth",
+                "message": (
+                    f"A synth of {slug!r} is already running "
+                    f"(thread_id={existing_tid}). Wait for it to finish "
+                    f"or cancel it before retrying."
+                ),
+            }
+
         await clear_cancel(r, thread_id)
+
+        # Bundle 13 — single-chapter run on Celery (queue synth-{env}).
+        try:
+            async_result = run_single_chapter_task.delay(
+                thread_id, slug, chapter_id, mode,
+            )
+        except Exception as e:
+            try:
+                await r.delete(f"dd:synth:lock:{slug}")
+            except Exception:
+                pass
+            logger.exception(
+                f"[synth] {thread_id}: celery dispatch failed: "
+                f"{type(e).__name__}: {e}"
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=f"celery dispatch failed: {type(e).__name__}: {e}",
+            )
     finally:
         await r.aclose()
-
-    # Bundle 13 — single-chapter run on Celery (queue synth-{env}).
-    try:
-        async_result = run_single_chapter_task.delay(
-            thread_id, slug, chapter_id, mode,
-        )
-    except Exception as e:
-        logger.exception(
-            f"[synth] {thread_id}: celery dispatch failed: "
-            f"{type(e).__name__}: {e}"
-        )
-        raise HTTPException(
-            status_code=503,
-            detail=f"celery dispatch failed: {type(e).__name__}: {e}",
-        )
 
     return {
         "thread_id":      thread_id,
@@ -957,8 +1156,14 @@ async def wipe_synth(slug: str) -> dict:
                         batch = []
                 if batch:
                     n_redis += await r.delete(*batch)
-            # Live-run registry (see start_synth /active) — drop it too.
-            n_redis += await r.delete(f"dd:study:current:{slug}")
+            # Live-run registry (see start_synth /active) AND the
+            # single-flight lock — drop both so a wiped slug isn't
+            # rejected on the next Start Synth click by a stale lock
+            # that survived the wipe.
+            n_redis += await r.delete(
+                f"dd:study:current:{slug}",
+                f"dd:synth:lock:{slug}",
+            )
         finally:
             await r.aclose()
     except Exception as e:

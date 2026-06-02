@@ -53,6 +53,77 @@ export async function fetchPipelineState(slug) {
   }
 }
 
+// ---- cross-stage proactive gate -----------------------------------
+// Planner and Synth must NOT run simultaneously: they fight for the
+// same free-tier LLM rotator pool and degrade each other's output
+// quality. The server enforces this with locked-response gates at
+// POST /planner and POST /synth, but the UI should ALSO disable the
+// Start buttons proactively so the user sees the constraint before
+// clicking (and so a click that races a remote start gets a clear
+// message instead of looking like a silent no-op).
+//
+// `GET /pipeline/active` returns `{planner: {slug, thread_id} | null,
+// synth: {slug, thread_id} | null}` — the cached result is what the
+// Start-state refreshers read synchronously to decide whether to
+// disable the button + which "running on X" tooltip to show.
+//
+// Cache lifecycle: refreshCrossStageBlocker() is called from
+// initPlanner / initSynth on page load, after every Start / Cancel
+// click, and could be polled (not done today — the rare-cross-tab
+// case is fine to catch at click-time via the server's locked
+// response). Fallback on fetch error: both `null` (no blocker) so a
+// transient network blip doesn't lock the user out.
+let _crossStageBlocker = { planner: null, synth: null };
+
+export async function fetchActivePipelineStage() {
+  try {
+    const r = await fetch(S.API + '/pipeline/active');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } catch (e) {
+    console.warn('[fetchActivePipelineStage]', e);
+    return { planner: null, synth: null };
+  }
+}
+
+export async function refreshCrossStageBlocker() {
+  _crossStageBlocker = await fetchActivePipelineStage();
+  return _crossStageBlocker;
+}
+
+export function getCrossStageBlocker() {
+  return _crossStageBlocker;
+}
+
+// Build the "you cannot start because the OTHER stage is running"
+// blocking message for either Planner or Synth Start buttons. Returns
+// null when nothing is blocking, otherwise an object with `title` for
+// the tooltip + `notice` for an inline toast. `mySlug` lets us avoid
+// blocking a Planner run for slug X while a Synth IS running but it's
+// on slug X too — wait, no. The constraint is "Planner + Synth never
+// concurrent, ANY slug". So mySlug is unused for blocking but kept
+// for parity with future per-slug rules.
+export function crossStageBlockerFor(myStage) {
+  const b = _crossStageBlocker || {};
+  const other = myStage === 'planner' ? 'synth' : 'planner';
+  const otherLock = b[other];
+  if (!otherLock || !otherLock.slug) return null;
+  const otherLabel = other.charAt(0).toUpperCase() + other.slice(1);
+  return {
+    stage: other,
+    slug: otherLock.slug,
+    thread_id: otherLock.thread_id,
+    title: otherLabel + ' is running on ' + otherLock.slug +
+           ' — Planner and Synth share LLM resources and cannot run ' +
+           'at the same time. Wait for it to finish or cancel it first.',
+    notice: otherLabel + ' is running on ' + otherLock.slug + '. ' +
+            'Planner and Synth share the same LLM resources and ' +
+            'cannot run at the same time without degrading each ' +
+            "other's quality — wait for the other stage to finish " +
+            'or cancel it before starting this one.',
+  };
+}
+
 // Build the cascade-impact tail for a confirm message. ``fromStage`` is
 // the stage being wiped — only downstream stages from that point are
 // listed. Returns a string that READS NICELY appended to the destructive

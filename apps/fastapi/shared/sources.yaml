@@ -103,8 +103,7 @@ frameworks:
 - name: Dagster
   logo: https://docs.dagster.io/img/dagster-docs-logo-dark.svg
   docs: https://docs.dagster.io
-  llms_full: https://docs.dagster.io/llms-full.txt
-  llms_txt: https://docs.dagster.io/llms.txt
+  sitemap: https://docs.dagster.io/sitemap.xml
   github: https://github.com/dagster-io/dagster
   category: Python
 
@@ -291,6 +290,14 @@ frameworks:
   llms_txt: https://docs.litellm.ai/llms.txt
   sitemap: https://docs.litellm.ai/sitemap.xml
   github: https://github.com/BerriAI/litellm
+  category: Python
+
+- name: Locust
+  logo: https://upload.wikimedia.org/wikipedia/commons/e/eb/Locust-logo.png
+  docs: https://docs.locust.io/en/stable/
+  llms_full: https://docs.locust.io/en/stable/llms-full.txt
+  llms_txt: https://docs.locust.io/en/stable/llms.txt
+  github: https://github.com/locustio/locust
   category: Python
 
 - name: Luigi
@@ -702,8 +709,8 @@ frameworks:
 - name: TerraTorch
   logo: https://torchgeo.org/terratorch/stable/figs/logo.png
   docs: https://torchgeo.org/terratorch/stable/
-  sitemap: https://terrastackai.github.io/terratorch/sitemap.xml
-  github: https://github.com/terrastackai/terratorch
+  sitemap: https://torchgeo.org/terratorch/1.2.8/sitemap.xml
+  github: https://github.com/torchgeo/terratorch
   category: Python
 
 - name: TRL
@@ -725,6 +732,15 @@ frameworks:
   logo: https://umap-learn.readthedocs.io/en/latest/_images/logo_large.png
   docs: https://umap-learn.readthedocs.io/en/latest/
   github: https://github.com/lmcinnes/umap
+  category: Python
+
+- name: Unsloth
+  logo: https://raw.githubusercontent.com/unslothai/unsloth/main/images/unsloth%20logo%20white%20text.png
+  docs: https://unsloth.ai/docs
+  llms_full: https://unsloth.ai/docs/llms-full.txt
+  llms_txt: https://unsloth.ai/docs/llms.txt
+  sitemap: https://unsloth.ai/docs/sitemap-pages.xml
+  github: https://github.com/unslothai/unsloth
   category: Python
 
 - name: VectorBT

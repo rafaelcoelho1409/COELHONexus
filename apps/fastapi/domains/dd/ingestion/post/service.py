@@ -30,10 +30,17 @@ import re
 from ..storage import ManifestEntry, Store
 from .constants import (
     MONOLITH_SPLIT_THRESHOLD_BYTES,
+    SPLIT_MAX_SECTION_BYTES,
     SPLIT_MIN_SECTION_BYTES,
     _SOURCE_LINE_RE,
     _SOURCE_MIN_MARKERS,
 )
+
+
+# Used by the H2 sub-split to extract the parent's `# Title` line so it
+# can be prepended to each H2 sub-section. Anchored on a line-start
+# `#` followed by a single space and at least one non-newline char.
+_H1_PREFIX_RE = re.compile(r"^(#\s+[^\n]+)\n+", re.MULTILINE)
 
 
 logger = logging.getLogger(__name__)
@@ -188,6 +195,10 @@ def split_monolith(
     Boundary strategy precedence:
       1. `Source: <url>` markers (true upstream page boundaries)
       2. H1 fallback (splits on H1 only, NOT H2 — H2 is subsection)
+      3. SIZE-AWARE H2/H3 SUB-SPLIT when (1) and (2) don't yield ≥3
+         sections (Docusaurus-style "one site-level H1 over the whole
+         bundle" pattern — dbt's llms-full.txt has exactly 1 H1 across
+         10 MB; Streamlit/Mintlify have many H1s).
 
     Below MONOLITH_SPLIT_THRESHOLD_BYTES → returns the body unchanged as
     a single-entry list (idempotent for already-small or pre-split corpora).
@@ -200,8 +211,48 @@ def split_monolith(
     if sections is None:
         sections = _split_markdown_by_headings(body, split_levels=(1,))
         strategy = "h1-fallback"
+
     if len(sections) < 3:
-        return [(parent_slug, body)], 0, 0
+        # Boundary strategies (1) and (2) didn't yield enough sections —
+        # most often the Docusaurus pattern where the whole bundle lives
+        # under one site-title H1 (dbt). Drop through to the size-aware
+        # sub-split which handles H2/H3 recursively. If THAT also fails
+        # to produce ≥2 viable sub-pages, the original "no split" return
+        # below kicks in.
+        logger.info(
+            f"[post] split_monolith: {strategy} → only {len(sections)} "
+            f"H1 section(s) (input {len(body)//1024} KB); falling through "
+            f"to size-aware H2/H3 sub-split"
+        )
+        writes_only_one: list[tuple[str, str]] = [(parent_slug, body)]
+        expanded = _h2_subsplit_oversized(writes_only_one, parent_slug)
+        if len(expanded) <= 1:
+            # Sub-split didn't help either — return the original monolith
+            # unchanged (apply_to_store detects this via the `body ==
+            # original` identity check and reports was_split=False).
+            return [(parent_slug, body)], 0, 0
+        # Final dedup on the recursively-sub-split output. _size_aware_
+        # recursive_split already drops stubs at each level, but the
+        # cross-level recursion could (rarely) emit two sub-pages with
+        # identical bodies — e.g. a Docusaurus "Was this page helpful?"
+        # footer that the parent's H3 split produced as a stand-alone
+        # entry under multiple H2 parents. Cheap SHA256-of-body pass.
+        seen_fallthrough: set[str] = set()
+        deduped: list[tuple[str, str]] = []
+        dropped = 0
+        for s, b in expanded:
+            h = hashlib.sha256(b.encode("utf-8")).hexdigest()
+            if h in seen_fallthrough:
+                dropped += 1
+                continue
+            seen_fallthrough.add(h)
+            deduped.append((s, b))
+        if dropped:
+            logger.info(
+                f"[post] fall-through dedup: -{dropped} dupes; "
+                f"{len(deduped)} survive (was {len(expanded)})"
+            )
+        return deduped, 0, dropped
 
     logger.info(
         f"[post] split_monolith: {strategy} → {len(sections)} sections "
@@ -250,7 +301,153 @@ def split_monolith(
             f"[post] split cleanup: -{stubs_dropped} stubs, "
             f"-{duplicates_dropped} dupes; {len(writes)} survive (was {pre})"
         )
+
+    # Size-aware H2/H3 sub-split — opt-in, opt-out at the per-section
+    # level. The H1 pass above leaves us with publisher-curated page
+    # boundaries; this pass ONLY touches sections that are still huge
+    # (> SPLIT_MAX_SECTION_BYTES). It re-splits them on H2 (then H3
+    # recursively when an H2 sub-page is still oversized) with the
+    # parent's `# Title` prepended to each sub-section so each sub-page
+    # is self-contained and identifiable. Designed to be a strict
+    # superset of the H1-only behavior:
+    #   - section ≤ SPLIT_MAX_SECTION_BYTES → kept unchanged (NO touch)
+    #   - section > SPLIT_MAX_SECTION_BYTES but yields <2 viable
+    #     sub-sections at any tried level → kept unchanged (no useful
+    #     structure to leverage; e.g. one monolithic prose page like
+    #     Dask's "Compatibility with numpy functions" — 126 KB, zero H2s)
+    #   - otherwise → replaced by the (recursively-sub-split) sub-pages
+    # Anchored on Dask's 722 KB Changelog (single-level H2 split → ~206
+    # navigable per-version pages) AND dbt's 10 MB Docusaurus bundle
+    # (recursive H2→H3 split → ~1,100 navigable per-page entries).
+    writes = _h2_subsplit_oversized(writes, parent_slug)
     return writes, stubs_dropped, duplicates_dropped
+
+
+def _h2_subsplit_oversized(
+    writes: list[tuple[str, str]], parent_slug: str,
+) -> list[tuple[str, str]]:
+    """Iterate `writes`; replace any section above SPLIT_MAX_SECTION_BYTES
+    with its recursive H2-then-H3 sub-sections (parent `# Title`
+    prepended for context). Returns a new list — never mutates `writes`
+    in place. Same `(slug, body)` shape as the caller expects.
+
+    Per section, tries H2 first; if any H2 sub-page is STILL oversized,
+    recursively tries H3 on that sub-page. Stops at H3 (deeper levels
+    are content structure, not page structure).
+
+    A section is replaced ONLY when the sub-split yields ≥ 2
+    stub-eligible sub-sections at the tried level. Sections without
+    a meaningful H2 OR H3 structure (one giant heading + tiny stubs,
+    OR no nested headings at all) fall through unchanged. The H1
+    prefix ensures each sub-page carries the parent's page title —
+    so a chunk of Dask's Changelog shows up in the corpus as
+    ``# Changelog\\n\\n## 2024.5.0`` rather than a context-free
+    ``## 2024.5.0`` that the LLM can't place.
+    """
+    expanded: list[tuple[str, str]] = []
+    n_expanded = 0
+    n_added_subsections = 0
+    for s, b in writes:
+        # Extract the page-level H1 prefix ONCE per top-level section,
+        # then pass it down through the recursion so nested sub-pages
+        # all inherit the same "you are reading FROM page X" anchor.
+        h1_match = _H1_PREFIX_RE.match(b)
+        h1_prefix = (h1_match.group(1) + "\n\n") if h1_match else ""
+
+        sub_pages = _size_aware_recursive_split(
+            s, b, h1_prefix=h1_prefix, levels=(2, 3),
+        )
+        if len(sub_pages) > 1:
+            expanded.extend(sub_pages)
+            n_expanded += 1
+            n_added_subsections += len(sub_pages)
+        else:
+            # _size_aware_recursive_split returned [(s, b)] — no viable
+            # sub-structure at any tried level, keep original intact.
+            expanded.append((s, b))
+
+    if n_expanded:
+        delta = n_added_subsections - n_expanded
+        logger.info(
+            f"[post] h2-subsplit: {n_expanded} oversized section(s) "
+            f"(> {SPLIT_MAX_SECTION_BYTES // 1024} KB) expanded into "
+            f"{n_added_subsections} sub-pages (+{delta} net entries)"
+        )
+    return expanded
+
+
+def _size_aware_recursive_split(
+    slug: str,
+    body: str,
+    h1_prefix: str,
+    levels: tuple[int, ...],
+) -> list[tuple[str, str]]:
+    """Recursively sub-split `body` ONLY if it's above the size cap.
+    Tries each level in `levels` in order (typically `(2, 3)`); when a
+    level produces ≥ 2 viable sub-pages, RECURSES on each sub-page with
+    the remaining levels. When a level can't split (no headings, or
+    every sub-page is a stub), falls through to the next level on the
+    SAME original body — not on stub fragments.
+
+    Each sub-page is prepended with `h1_prefix` (the parent page's
+    ``# Title``) so it stays self-contained: an H3 deep in dbt's API
+    Reference reads ``# dbt Developer Hub\\n\\n### About the Discovery
+    API schema`` instead of a context-free ``### About...``.
+
+    Returns ``[(slug, body)]`` unchanged when the body is within the
+    cap OR no viable sub-structure exists at any tried level.
+    """
+    if len(body.encode("utf-8")) <= SPLIT_MAX_SECTION_BYTES:
+        return [(slug, body)]
+    if not levels:
+        return [(slug, body)]
+
+    level = levels[0]
+    rest_levels = levels[1:]
+
+    sub_sections = _split_markdown_by_headings(body, split_levels=(level,))
+    sub_writes: list[tuple[str, str]] = []
+    for sub_h1, sub_h2, sub_b in sub_sections:
+        # _split_markdown_by_headings returns (h1_carrier, heading,
+        # body) — at level=2, `heading` is the H2 title; at level=3
+        # it's the H3 title (the function carries h1 forward but we
+        # don't track h1 across non-H1 splits).
+        heading = sub_h2 if sub_h2 else sub_h1
+        if not heading:
+            continue   # preamble before the first heading at this level
+        body_with_context = (
+            h1_prefix + sub_b
+            if h1_prefix and not sub_b.startswith(h1_prefix)
+            else sub_b
+        )
+        sub_slug_part = _slugify_heading(heading, "sub")
+        new_slug = (
+            sub_slug_part if sub_slug_part.startswith(slug)
+            else f"{slug}-{sub_slug_part}"
+        )
+        sub_writes.append((new_slug, body_with_context))
+
+    sub_writes = [
+        (ss, sb) for ss, sb in sub_writes
+        if len(sb.encode("utf-8")) >= SPLIT_MIN_SECTION_BYTES
+    ]
+
+    if len(sub_writes) < 2:
+        # No useful structure at this level — try the next level on the
+        # ORIGINAL body. NOT on the stub-dropped fragments; we want to
+        # apply H3 to the full body, not to the leftover after H2's
+        # noise was stripped.
+        return _size_aware_recursive_split(slug, body, h1_prefix, rest_levels)
+
+    # This level produced viable sub-pages. Recurse on each sub-page
+    # with the remaining levels — sub-pages still over the cap get
+    # broken down further.
+    out: list[tuple[str, str]] = []
+    for ss, sb in sub_writes:
+        out.extend(
+            _size_aware_recursive_split(ss, sb, h1_prefix, rest_levels)
+        )
+    return out
 
 
 def dedup_pages(

@@ -112,17 +112,31 @@ async function initPlanner() {
   catch (e) { console.warn('[init] planner-info failed:', e); }
   try { _initPlannerCanvas(); }
   catch (e) { console.warn('[init] planner-canvas failed:', e); }
+  // CROSS-STAGE GATE — refresh the global blocker so the Start Planner
+  // button is correctly disabled when a synth is running on any slug.
+  // Fire-and-forget; refreshPlannerStartState reads the cached result.
+  try {
+    const { refreshCrossStageBlocker } = await import('./ui.js');
+    await refreshCrossStageBlocker();
+  } catch (e) { console.warn('[init] planner cross-stage-gate failed:', e); }
   if (slug) {
     try {
-      const { _tryResumeActivePlanner, setPlannerFramework } = await import('./planner.js');
+      const { _tryResumeActivePlanner, setPlannerFramework,
+              refreshPlannerStartState } = await import('./planner.js');
       setPlannerFramework(slug);
       await _tryResumeActivePlanner(slug);
+      refreshPlannerStartState();
     } catch (e) { console.warn('[init] planner-resume failed:', e); }
   } else {
     // No slug → just hydrate localStorage from /planner/recent so the
-    // user's next library click can resume cleanly.
+    // user's next library click can resume cleanly. Still refresh the
+    // Start state so the button picks up the cross-stage blocker.
     try { await recoverActivePlanner(); }
     catch (e) { console.warn('[init] planner-recover failed:', e); }
+    try {
+      const { refreshPlannerStartState } = await import('./planner.js');
+      refreshPlannerStartState();
+    } catch (_) {}
   }
 }
 
@@ -132,15 +146,29 @@ async function initSynth() {
   catch (e) { console.warn('[init] synth-info failed:', e); }
   try { _initSynthCanvas(); }
   catch (e) { console.warn('[init] synth-canvas failed:', e); }
+  // CROSS-STAGE GATE — same mirror as initPlanner. Refresh BEFORE the
+  // start-state refresher fires so the Start Synth button sees the
+  // current planner-active blocker on first render.
+  try {
+    const { refreshCrossStageBlocker } = await import('./ui.js');
+    await refreshCrossStageBlocker();
+  } catch (e) { console.warn('[init] synth cross-stage-gate failed:', e); }
   if (slug) {
     try {
-      const { _tryResumeActiveSynth } = await import('./synth.js');
+      const { _tryResumeActiveSynth, refreshSynthStartState } =
+        await import('./synth.js');
       await _tryResumeActiveSynth(slug);
+      refreshSynthStartState();
     } catch (e) { console.warn('[init] synth-resume failed:', e); }
     // Gate Start Synth on planner-plan existence (mirrors the server's
     // _load_plan 404). Independent of resume so it always runs.
     try { await _refreshSynthPlanGate(slug); }
     catch (e) { console.warn('[init] synth-plan-gate failed:', e); }
+  } else {
+    try {
+      const { refreshSynthStartState } = await import('./synth.js');
+      refreshSynthStartState();
+    } catch (_) {}
   }
 }
 

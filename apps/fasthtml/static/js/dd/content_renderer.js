@@ -289,6 +289,98 @@ function _restoreMath(html, slots) {
   });
 }
 
+// =====================================================================
+// Raw-HTML block protect / restore — the load-bearing piece for TABLES.
+//
+// PROBLEM (Dask / pandas / xarray / any Jupyter-derived docs):
+//   Tier-1 llms-full bundles embed Jupyter's HTML repr verbatim — nested
+//   `<table>` blocks (often with an inline `<svg>` chunk-diagram) that
+//   contain BLANK LINES and deep indentation, e.g.
+//       <table>
+//           <tbody>
+//                                  <-- blank line
+//               <tr> <th> Bytes </th> ... </tr>
+//   CommonMark terminates a type-6 HTML block at the FIRST blank line, so
+//   marked closes the block at `<tbody>` and then re-reads the 16-space-
+//   indented `<tr>` continuation as an INDENTED CODE BLOCK — emitting
+//   `<pre><code>&lt;tr&gt;…</code></pre>`. The table shatters into a
+//   half-rendered header + a wall of escaped tag soup.
+//
+// SOLUTION (same shape as _protectMath): pull every balanced top-level
+// raw-HTML block (`<table>/<svg>/<figure>`) out to an opaque
+// `@@FWHTML{n}@@` placeholder BEFORE marked.parse, then splice the
+// untouched HTML back into marked's OUTPUT — crucially BEFORE DOMPurify,
+// so the restored table/svg is still sanitized (DOMPurify's default
+// profile already allows table + svg elements + their attrs). Fenced
+// code regions are skipped so a documented ```html <table> example is
+// shown as code, not rendered as a live table.
+// =====================================================================
+const _HTML_BLOCK_OPEN_RE = /^\s*<(table|svg|figure)(?:[\s/>]|$)/i;
+
+function _protectHtmlBlocks(raw) {
+  const lines = raw.split('\n');
+  const out = [];
+  const slots = [];
+  let i = 0;
+  let inFence = false;
+  let fenceChar = '';
+  while (i < lines.length) {
+    const line = lines[i];
+    // Track fenced-code regions (``` or ~~~) so we never protect HTML
+    // that's being shown AS an example inside a code block.
+    const fm = line.match(/^\s*(`{3,}|~{3,})/);
+    if (fm) {
+      const c = fm[1][0];
+      if (!inFence) { inFence = true; fenceChar = c; }
+      else if (c === fenceChar) { inFence = false; fenceChar = ''; }
+      out.push(line); i++; continue;
+    }
+    if (inFence) { out.push(line); i++; continue; }
+    const m = line.match(_HTML_BLOCK_OPEN_RE);
+    if (!m) { out.push(line); i++; continue; }
+    // Capture from this line until the matching close tag, counting
+    // same-name opens/closes so a nested `<table>` inside `<table>`
+    // (Dask's array repr) is balanced correctly.
+    const tag = m[1].toLowerCase();
+    const openRe = new RegExp('<' + tag + '\\b', 'gi');
+    const closeRe = new RegExp('</' + tag + '\\s*>', 'gi');
+    let depth = 0;
+    let j = i;
+    let closed = false;
+    const cap = [];
+    for (; j < lines.length; j++) {
+      const L = lines[j];
+      cap.push(L);
+      depth += (L.match(openRe) || []).length;
+      depth -= (L.match(closeRe) || []).length;
+      if (depth <= 0) { closed = true; break; }
+    }
+    if (!closed) {
+      // Unbalanced (truncated doc / malformed) — leave the line as-is and
+      // let marked handle it however it would have.
+      out.push(line); i++; continue;
+    }
+    slots.push(cap.join('\n'));
+    // Blank lines around the placeholder so marked treats it as its own
+    // standalone paragraph (and doesn't glue it to adjacent prose).
+    out.push('');
+    out.push(`@@FWHTML${slots.length - 1}@@`);
+    out.push('');
+    i = j + 1;
+  }
+  return { safe: out.join('\n'), slots };
+}
+
+function _restoreHtmlBlocks(html, slots) {
+  if (!slots.length) return html;
+  // marked wraps a lone placeholder line in <p>…</p>; strip that wrapper
+  // when splicing the block back so we don't nest block HTML inside <p>.
+  return html.replace(
+    /(?:<p>\s*)?@@FWHTML(\d+)@@(?:\s*<\/p>)?/g,
+    (_, i) => slots[+i] || '',
+  );
+}
+
 // KaTeX auto-render delimiter list — matches what we extract above plus
 // the additional LaTeX environments KaTeX supports natively. Bare
 // `\begin{aligned}` works because protect/restore already rewrote
@@ -320,14 +412,22 @@ export async function renderMarkdownInto(rootEl, rawMd, opts = {}) {
   await initContentRenderers();
   let html;
   if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
-    // Protect math regions FIRST so marked's `\_` / `*` / `_` escape
+    // Protect raw HTML blocks (tables/svg/figure) FIRST — their internal
+    // blank lines would otherwise terminate the CommonMark HTML block and
+    // shove the indented continuation into an escaped <pre><code>.
+    const { safe: htmlSafe, slots: htmlSlots } = _protectHtmlBlocks(rawMd);
+    // Then protect math regions so marked's `\_` / `*` / `_` escape
     // rules never touch the math content.
-    const { safe, slots } = _protectMath(rawMd);
+    const { safe, slots } = _protectMath(htmlSafe);
+    // Splice the untouched HTML blocks back into marked's output BEFORE
+    // sanitizing, so the restored table/svg is run through DOMPurify too.
+    let parsed = marked.parse(safe);
+    parsed = _restoreHtmlBlocks(parsed, htmlSlots);
     // SANITIZE marked's OUTPUT — page bodies are untrusted (LLM-emitted
     // chapter markdown, or third-party doc HTML converted to markdown).
     // Keep presentational <font>/<b> (terminal colors) + table/link attrs;
     // DOMPurify strips <script>, on*-handlers, javascript: URLs, etc.
-    html = DOMPurify.sanitize(marked.parse(safe), {
+    html = DOMPurify.sanitize(parsed, {
       ADD_TAGS: ['font'],
       ADD_ATTR: ['color', 'target', 'align'],
     });
