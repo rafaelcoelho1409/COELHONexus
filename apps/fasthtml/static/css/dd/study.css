@@ -880,13 +880,6 @@
   color: var(--text-muted);
   font-weight: 600;
 }
-.fw-study-due-total {
-  color: var(--running-text);
-  background: var(--running-bg);
-  border: 1px solid var(--running-border);
-  border-radius: 999px;
-  padding: 1px 8px;
-}
 .fw-study-chapter-due {
   flex-shrink: 0;
   min-width: 18px;
@@ -899,7 +892,6 @@
   border-radius: 999px;
   padding: 0 5px;
 }
-.fw-study-chapter-tick { flex-shrink: 0; color: var(--ingested-border); font-size: 0.8rem; }
 
 /* Per-chapter synth wall-clock (sidebar row) + total (sidebar header). */
 .fw-study-chapter-time {

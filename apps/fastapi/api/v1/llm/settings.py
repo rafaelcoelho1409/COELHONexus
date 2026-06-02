@@ -24,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Literal
-
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field

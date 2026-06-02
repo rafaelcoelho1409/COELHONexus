@@ -124,7 +124,9 @@ frameworks:
 
 - name: Delta Lake (Python)
   logo: https://docs.delta.io/_astro/delta-lake-logo-dark.Dx7tzbyv.svg
-  docs: https://docs.delta.io/api/latest/python/spark/
+  docs: https://delta-io.github.io/delta-rs/
+  sitemap: https://delta-io.github.io/delta-rs/sitemap.xml
+  github: https://github.com/delta-io/delta-rs
   category: Python
 
 - name: Docker

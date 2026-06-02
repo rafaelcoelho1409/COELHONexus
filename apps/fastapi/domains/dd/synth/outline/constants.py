@@ -43,7 +43,7 @@ INPUTS / OUTPUTS
     framework_slug         — e.g. "langchain-langgraph-deepagents"
     chapter_id             — e.g. "ch-03-runtime"
     chapter_title          — e.g. "Runtime"
-    chapter_description    — 1-line goal from planner reduce
+    chapter_description    — 1-line goal from planner chapter_select
     n_vault_hashes         — estimated code-block count (rough)
     sources_concat_md      — normalized markdown of all assigned sources
                               (corpus_normalize already ran; vault sentinels

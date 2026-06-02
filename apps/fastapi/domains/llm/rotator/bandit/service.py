@@ -154,10 +154,9 @@ logger = logging.getLogger(__name__)
 # governs only how a score is computed at predict() time. See module docstring.
 #
 # DEFAULT (2026-05-23 onward): FGTS-VA is the active mode. User explicitly
-# skipped the shadow-validation window — same pattern as the 2026-05-16 LinUCB
-# rollout when KD_USE_PARETO_BANDIT was retired. Rationale: FGTS-VA subsumes
-# LinTS (which subsumes LinUCB at the limit of zero posterior variance), so
-# the "ladder" of phases ships as one default. Per the SOTA doc, the operational
+# skipped the shadow-validation window. Rationale: FGTS-VA subsumes LinTS
+# (which subsumes LinUCB at the limit of zero posterior variance), so the
+# "ladder" of phases ships as one default. Per the SOTA doc, the operational
 # phases (3b, 4a, 4b, etc.) remain deferred until LangFuse + OTel give us
 # signal.
 #

@@ -188,7 +188,7 @@ def _outline_latest_key(slug: str, chapter_id: str) -> str:
 # =============================================================================
 def _parse_json_response(text: str) -> Optional[dict]:
     """Best-effort JSON extraction. Tolerates ```json fences + leading
-    prose. Same approach as outline_sdp / planner.reduce."""
+    prose. Same approach as outline_sdp / planner.chapter_select."""
     if not text:
         return None
     cleaned = text.strip()

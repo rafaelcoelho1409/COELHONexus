@@ -177,11 +177,6 @@
   max-height: 320px;
   overflow-y: auto;
 }
-.fw-empty-inline {
-  color: var(--text-muted);
-  font-style: italic;
-  font-size: 0.85rem;
-}
 /* Rich results panel — hosts the SUBSTEP_RENDERERS[idx](values) HTML
    that the legacy card body used to show. The renderers emit their
    own KPI grids, tables, outline blocks etc.; this container just
@@ -287,18 +282,6 @@
   padding-bottom: 16px;
   border-bottom: 1px solid var(--border);
 }
-.fw-planner-head-text { flex: 1; min-width: 0; }
-.fw-planner-title {
-  font-size: 1.05rem;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 4px;
-}
-.fw-planner-subtitle {
-  font-size: 0.82rem;
-  color: var(--text-muted);
-  line-height: 1.4;
-}
 /* Framework identity strip — logo(s) + catalog name, sits right below
    the Planner title row. Mirrors Step 2's progress-framework strip but
    sized for a header rather than a loading box. */
@@ -337,48 +320,6 @@
   gap: 14px;
   flex-shrink: 0;
 }
-.fw-planner-progress-label {
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  letter-spacing: 0.02em;
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-}
-.fw-planner-mode-box {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-.fw-planner-mode-label {
-  font-size: 0.66rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-  font-weight: 600;
-}
-.fw-planner-mode-select {
-  font-family: 'Raleway', sans-serif;
-  font-size: 0.82rem;
-  font-weight: 500;
-  color: var(--text);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 6px 28px 6px 10px;
-  cursor: pointer;
-  outline: none;
-  appearance: none;
-  -webkit-appearance: none;
-  /* tiny inline chevron — same color as text-muted */
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='%238b8b8b' d='M0 0l5 6 5-6z'/></svg>");
-  background-repeat: no-repeat;
-  background-position: right 9px center;
-  transition: border-color 0.15s;
-}
-.fw-planner-mode-select:hover { border-color: var(--text-muted); }
-.fw-planner-mode-select:focus { border-color: var(--primary); }
-.fw-planner-mode-select option:disabled {
-  color: var(--text-muted);
-}
 .fw-planner-cards {
   display: flex;
   flex-direction: column;
@@ -415,12 +356,6 @@
 /* Title row — stage name + status pill share a flex line so the pill
    sits visually attached to the stage identity. Used by the planner
    header (and synth when it gets the same treatment). */
-.fw-planner-title-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
 .fw-stage-pill {
   display: inline-flex;
   align-items: center;
@@ -647,29 +582,10 @@
 }
 .fw-planner-card.done .fw-planner-card-icon { color: #2a8b46; }
 .fw-planner-card.failed .fw-planner-card-icon { color: var(--error-text); }
-.fw-planner-card-text { flex: 1; min-width: 0; }
-.fw-planner-card-title {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--text);
-  line-height: 1.2;
-}
-.fw-planner-card-desc {
-  font-size: 0.72rem;
-  color: var(--text-muted);
-  margin-top: 2px;
-  line-height: 1.4;
-}
 .fw-planner-card-latency {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 0.72rem;
   color: var(--text-muted);
-  flex-shrink: 0;
-}
-.fw-planner-card-chevron {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  transition: transform 0.2s;
   flex-shrink: 0;
 }
 .fw-planner-card.expanded .fw-planner-card-chevron {

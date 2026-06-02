@@ -32,8 +32,17 @@ from ...ingestion.storage import get_storage
 
 from ..observability.spans import traced
 from ..progress import emit_progress
-from ..reduce import load_outline
 from ..state import PlannerState
+
+
+def load_outline(text: str) -> dict:
+    """Parse the chapter-select outline JSON. Tolerates empty/malformed
+    input by returning ``{}``. Replaces the equivalent helper that used
+    to live in the deleted ``..reduce`` module."""
+    try:
+        return json.loads(text or "") or {}
+    except Exception:
+        return {}
 
 from .constants import (
     _N_SAMPLES,

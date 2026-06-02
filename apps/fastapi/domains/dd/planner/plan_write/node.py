@@ -1,20 +1,18 @@
-"""Substep 8 — plan_write: persist the FINAL chapter plan to MinIO.
+"""Substep 9 — plan_write: persist the FINAL chapter plan to MinIO.
 
-Per `docs/PLANNER-ARCHITECTURE-2026-05-17.md` + May 2026 SOTA report
-(SurveyGen-I arXiv 2508.14317 + SurveyForge arXiv 2503.04629 +
-LLMxMapReduce-V2 arXiv 2504.05732 + TnT-LLM arXiv 2403.12173 +
+Per `docs/DD-PLANNER-LLM-FIRST-SOTA-2026-05-27.md` + May 2026 SOTA
+references (SurveyGen-I arXiv 2508.14317 + SurveyForge arXiv 2503.04629
++ LLMxMapReduce-V2 arXiv 2504.05732 + TnT-LLM arXiv 2403.12173 +
 Atlas/SLSA v1.1 provenance idioms). Pipeline:
 
-  1. Load reduce outline + refine assignments + cluster keys + labels.
-  2. Hydrate each chapter's `sources` from refined cluster_id → MinIO
-     doc-key map (flat array of keys per SurveyForge / LLMxMapReduce —
-     downstream chapter synthesizer does its own read_many()).
+  1. Load the chapter-select outline from MinIO. The outline already
+     carries each chapter's `member_doc_keys` (set by chapter_select).
+  2. Optionally apply pedagogical reordering from order_chapters.
   3. Light sanitization (~no LLM): smart title-case, description trim
      and clamp, drop chapters with empty sources, re-number `order`
      1..N contiguous, generate stable `id = ch-{order}-{slug}`.
-  4. Embed upstream provenance refs inline (5 *_ref pointers + prompt
-     versions + corpus_doc_count) per Atlas/SLSA "consumer-facing
-     artifact carries digests of its inputs" pattern.
+  4. Embed upstream provenance refs inline per Atlas/SLSA "consumer-
+     facing artifact carries digests of its inputs" pattern.
   5. Write the hash-keyed versioned blob at
      `planner/{slug}/plan/{hash}.json`, then PUT a mutable latest
      pointer at `planner/{slug}/plan-latest.json` (MinIO/S3 has no
@@ -29,9 +27,9 @@ Notes:
   SurveyForge refines during writing, not post-hoc). Skipped per
   research recommendation — spend the rotator budget on chapter
   synthesis instead.
-- The reduce node already produces a content-addressed hash-keyed
-  blob at `planner/{slug}/chapters/{hash}.json`; this node produces
-  a CONSUMER-facing artifact with file lists hydrated.
+- chapter_select produces a content-addressed hash-keyed outline at
+  `planner/{slug}/chapters/{hash}.json`; this node produces a
+  CONSUMER-facing artifact with file lists hydrated.
 """
 from __future__ import annotations
 
@@ -40,16 +38,14 @@ import logging
 import time
 from datetime import datetime, timezone
 
+import numpy as np
+
 from ...ingestion.storage import get_storage
 
 from ..observability.spans import traced
 from ..progress import emit_progress
 from ..state import PlannerState
-from ..cluster import load_clusters
-from ..label import load_labels
 from ..order_chapters import load_chapter_order
-from ..reduce import load_outline
-from ..refine import load_refine
 
 from .constants import (
     _PROMPT_VERSION,
@@ -67,22 +63,24 @@ from .service import (
 logger = logging.getLogger(__name__)
 
 
+def _load_outline(text: str) -> dict:
+    """Parse the JSON outline written by chapter_select. Tolerates an
+    empty/malformed blob (returns ``{}`` so downstream can render an
+    empty plan rather than crash mid-run)."""
+    try:
+        return json.loads(text or "") or {}
+    except Exception:
+        return {}
+
+
 @traced("plan_write")
 async def plan_write(state: PlannerState) -> dict:
     slug = state.get("framework_slug")
     thread_id = state.get("thread_id") or ""
-    cluster_ref = state.get("cluster_assignments_ref") or ""
-    refine_ref = state.get("refine_assignments_ref") or ""
-    labels_ref = state.get("cluster_labels_ref") or ""
-    reduce_ref = state.get("chapter_plan_ref") or ""
+    chapter_plan_ref = state.get("chapter_plan_ref") or ""
     embeddings_ref = state.get("embeddings_ref") or ""
 
-    # 2026-05-27 — tolerate missing cluster/refine refs on the LLM-first
-    # path (KD_PLANNER_LLM_FIRST=true). In that mode, chapter_select wrote
-    # `member_doc_keys` directly to the chapter_plan_ref outline; we hydrate
-    # sources from those instead of looking up cluster→keys.
-    llm_first_mode = (not cluster_ref) or (not refine_ref)
-    if not slug or not reduce_ref:
+    if not slug or not chapter_plan_ref:
         return {
             "plan_path": "",
             "status": "done",
@@ -90,16 +88,13 @@ async def plan_write(state: PlannerState) -> dict:
 
     t0 = time.monotonic()
 
-    manifest_hash = _compute_manifest_hash(
-        cluster_ref, refine_ref, labels_ref, reduce_ref, _SCHEMA_VERSION,
-    )
+    manifest_hash = _compute_manifest_hash(chapter_plan_ref, _SCHEMA_VERSION)
     versioned_key = _versioned_blob_key(slug, manifest_hash)
     latest_key = _latest_blob_key(slug)
     minio = get_storage()
 
     # Emit `start` unconditionally so the UI shows a live "running"
-    # status line even on cache hit (other nodes follow the same
-    # convention — see label.py / reduce.py SSE flow).
+    # status line even on cache hit.
     await emit_progress(
         thread_id, "plan_write", "start",
         manifest_hash=manifest_hash,
@@ -155,46 +150,24 @@ async def plan_write(state: PlannerState) -> dict:
                 f"({type(e).__name__}: {e}); regenerating"
             )
 
-    # ── Load upstream artifacts ────────────────────────────────────────
-    # LLM-first path (chapter_select): no cluster/refine/labels artifacts
-    # — chapters carry `member_doc_keys` directly in the outline.
-    reduce_text = await minio.read_text(reduce_ref)
-    outline = load_outline(reduce_text)
+    # ── Load chapter-select outline ───────────────────────────────────
+    # chapter_select writes member_doc_keys directly on each chapter;
+    # we build a synthetic cluster_id (= chapter index) so the existing
+    # _build_cluster_to_keys + _sanitize_chapters helpers keep working
+    # unchanged.
+    outline_text = await minio.read_text(chapter_plan_ref)
+    outline = _load_outline(outline_text)
 
-    if llm_first_mode:
-        # Skip cluster/refine/labels loads. Build a synthetic
-        # cluster_to_keys from outline.chapters' member_doc_keys + assign
-        # each chapter a synthetic cluster_id = its order.
-        cluster_keys = []
-        refined_assignments_list: list[int] = []
-        # Synthetic: each chapter index = its synthetic cluster_id.
-        for synth_cid, ch in enumerate((outline or {}).get("chapters") or []):
-            mdk = (ch or {}).get("member_doc_keys") or []
-            # ensure the chapter carries member_cluster_ids consistent with
-            # the synthetic id so _sanitize_chapters' cluster lookup works.
-            if isinstance(ch, dict):
-                ch["member_cluster_ids"] = [synth_cid]
-            for k in mdk:
-                cluster_keys.append(k)
-                refined_assignments_list.append(synth_cid)
-        import numpy as _np
-        refined_assignments = _np.array(refined_assignments_list, dtype=_np.int64)
-        labels: dict[int, str] = {
-            synth_cid: ((outline or {}).get("chapters") or [{}])[synth_cid].get("title") or ""
-            for synth_cid in range(len((outline or {}).get("chapters") or []))
-        }
-    else:
-        cluster_blob = await minio.read_bytes(cluster_ref)
-        cluster_keys, _orig_assigns, _max_probs, _soft = load_clusters(cluster_blob)
-        refine_blob = await minio.read_bytes(refine_ref)
-        refine_keys, refined_assignments, _, _ = load_refine(refine_blob)
-        if cluster_keys != refine_keys:
-            raise RuntimeError(
-                f"plan_write: key mismatch — cluster has {len(cluster_keys)} "
-                f"keys, refine has {len(refine_keys)}; pipeline integrity broken"
-            )
-        labels_text = await minio.read_text(labels_ref)
-        labels = load_labels(labels_text)
+    cluster_keys: list[str] = []
+    refined_assignments_list: list[int] = []
+    for synth_cid, ch in enumerate((outline or {}).get("chapters") or []):
+        mdk = (ch or {}).get("member_doc_keys") or []
+        if isinstance(ch, dict):
+            ch["member_cluster_ids"] = [synth_cid]
+        for k in mdk:
+            cluster_keys.append(k)
+            refined_assignments_list.append(synth_cid)
+    refined_assignments = np.array(refined_assignments_list, dtype=np.int64)
 
     await emit_progress(
         thread_id, "plan_write", "loaded",
@@ -207,7 +180,7 @@ async def plan_write(state: PlannerState) -> dict:
     # If order_chapters wrote a chapter_order_ref, apply that permutation to
     # the outline's chapters list BEFORE sanitization. Fail-soft: if the
     # ordering blob is missing / malformed / has wrong length, fall back to
-    # whatever order reduce emitted (identity).
+    # whatever order chapter_select emitted (identity).
     order_ref = state.get("chapter_order_ref") or ""
     raw_chapters = (outline or {}).get("chapters") or []
     reorder_applied = False
@@ -249,8 +222,8 @@ async def plan_write(state: PlannerState) -> dict:
     chapters, n_dropped = _sanitize_chapters(raw_chapters, cluster_to_keys)
     n_sources_total = sum(len(c["sources"]) for c in chapters)
 
-    # Account for docs that ended up in NO chapter (cluster id reduce
-    # never assigned, or noise that was orphaned).
+    # Account for docs that ended up in NO chapter (assignment never
+    # placed them, or chapter_select trimmed the chapter).
     unassigned_keys = sorted(set(cluster_keys) - {
         k for c in chapters for k in c["sources"]
     })
@@ -272,17 +245,13 @@ async def plan_write(state: PlannerState) -> dict:
         "chapters":       chapters,
         "unassigned":     unassigned_keys,
         "provenance": {
-            "embeddings_ref":  embeddings_ref,
-            "cluster_ref":     cluster_ref,
-            "refine_ref":      refine_ref,
-            "labels_ref":      labels_ref,
-            "reduce_ref":      reduce_ref,
-            "prompt_versions": {"plan_write": _PROMPT_VERSION},
-            "corpus_doc_count": len(cluster_keys),
-            "cluster_count":   len({
+            "embeddings_ref":    embeddings_ref,
+            "chapter_plan_ref":  chapter_plan_ref,
+            "prompt_versions":   {"plan_write": _PROMPT_VERSION},
+            "corpus_doc_count":  len(cluster_keys),
+            "chapter_count":     len({
                 int(c) for c in refined_assignments if int(c) >= 0
             }),
-            "label_count":     sum(1 for lid in labels if int(lid) >= 0),
         },
         "stats": {
             "n_chapters":   len(chapters),

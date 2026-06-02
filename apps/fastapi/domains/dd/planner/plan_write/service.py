@@ -144,12 +144,14 @@ def _sanitize_chapters(
 
 
 def _compute_manifest_hash(
-    cluster_ref: str, refine_ref: str, labels_ref: str,
-    reduce_ref: str, schema_version: str,
+    chapter_plan_ref: str, schema_version: str,
 ) -> str:
+    """Hash the inputs that determine the rendered plan. Today there's
+    only one upstream artifact — chapter_select's outline ref — but
+    the prompt_version is folded in so a prompt update invalidates the
+    cache without an outline change."""
     payload = (
-        f"cluster={cluster_ref}|refine={refine_ref}|"
-        f"labels={labels_ref}|reduce={reduce_ref}|"
+        f"chapter_plan={chapter_plan_ref}|"
         f"schema={schema_version}|prompt={_PROMPT_VERSION}"
     )
     return sha256(payload.encode("utf-8")).hexdigest()[:16]

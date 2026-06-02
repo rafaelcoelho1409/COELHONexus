@@ -45,13 +45,6 @@ dependencies = [
     # low-footgun Python crypto lib; Fernet = AES-128-CBC + HMAC-SHA256.
     "cryptography>=42",
     "numpy>=1.26,<2.2",                # LinUCB sufficient-statistics matrix algebra
-    # Planner cluster node — UMAP dim-reduction + HDBSCAN density clustering.
-    # IMPORTANT: hdbscan == scikit-learn-contrib/hdbscan, NOT sklearn.cluster.HDBSCAN
-    # (the latter is ~12× slower and missing all_points_membership_vectors(),
-    # which the LITA refine step REQUIRES to identify boundary docs by
-    # soft-membership probability).
-    "umap-learn>=0.5.8",
-    "hdbscan>=0.8.43",
     # Rotator deps — now hard deps (were optional/try-except-guarded):
     "rapidfuzz>=3.0",                  # benchmarks L2 model-name canonicalization (token_set_ratio)
     "river>=0.21",                     # ParetoBandit drift detection (ADWIN) in pareto_drift

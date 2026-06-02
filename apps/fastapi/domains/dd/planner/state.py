@@ -18,11 +18,9 @@ class PlannerState(TypedDict, total=False):
     # --- inputs (set at graph kick-off) ---
     framework_slug: str
     thread_id: str               # also LangFuse session_id
-    # "llm"        — every substep that has an LLM path uses the rotator
-    # "classical"  — substeps with classical fallbacks (map → numpy
-    #                community_detection + KeyLLM; etc.) use them instead.
-    # Plumbed through state today; only the LLM path is implemented. When
-    # classical lands, nodes branch on this field. Default "llm".
+    # Reserved for future modes (e.g. "llm-fast" / "llm-thorough"). Today
+    # only "llm" is wired; nodes branch on this field when alternative
+    # modes ship. Default "llm".
     planner_mode: str
 
     # --- node outputs (one per substep) ---
@@ -35,26 +33,22 @@ class PlannerState(TypedDict, total=False):
     embed_stats: Optional[dict]                 # embed_corpus — files/dim/cache_hit/wall_ms
     relevant_files: Optional[list[str]]         # off_topic (post-embedding filter)
     off_topic_stats: Optional[dict]             # off_topic observability dict
-    # cluster output — soft-membership matrix (N×K) stored in MinIO; state
-    # carries pointer + summary stats. refine + label + reduce nodes load
-    # the .npz blob via load_clusters().
-    cluster_assignments_ref: Optional[str]      # cluster — MinIO key of the .npz
-    cluster_stats: Optional[dict]               # cluster — counts/sizes/wall
-    # refine output — LITA boundary-doc reassignment. Stored as MinIO .npz
-    # with (keys, refined_assignments, original_assignments, decisions_json).
-    # State carries only the pointer + summary stats.
-    refine_assignments_ref: Optional[str]       # refine — MinIO key of the .npz
-    refine_stats: Optional[dict]                # refine — counts/changed/null/wall
-    # label output — KeyLLM-style 2-4 word names per refined cluster.
-    # Stored as MinIO JSON with {labels, n_round2, round1_decisions}.
-    cluster_labels_ref: Optional[str]           # label — MinIO key of the JSON
-    label_stats: Optional[dict]                 # label — counts + label map for UI
-    # reduce output — 4-12 chapter outline merged from labeled clusters.
-    # Stored as MinIO JSON with {outline, n_clusters_in, n_repairs, ...}.
-    # State carries the pointer + summary stats (which include the full
-    # outline inline since it's small — ~1-3 KB).
-    chapter_plan_ref: Optional[str]             # reduce — MinIO key of the JSON
-    reduce_stats: Optional[dict]                # reduce — counts + outline for UI
+
+    # --- LLM-first planner path (canonical since 2026-05-27) ---
+    # Per docs/DD-PLANNER-LLM-FIRST-SOTA-2026-05-27.md.
+    doc_distill_ref: Optional[str]              # doc_distill — MinIO key of {key→DocDistillate} JSON
+    doc_distill_stats: Optional[dict]           # doc_distill — counts + skip-pass flag
+    chapter_proposals_ref: Optional[str]        # chapter_propose — MinIO key of proposals JSON
+    propose_stats: Optional[dict]               # chapter_propose — chosen titles for UI
+    chapter_doc_assignments_ref: Optional[str]  # chapter_assign — MinIO key of doc×chapter matrix
+    assign_stats: Optional[dict]                # chapter_assign — coverage counts
+    # chapter_select writes the consumer-facing outline blob here. The
+    # field name predates the LLM-first rename (was the reduce-node
+    # output) — kept for backward compat with on-disk plan blobs.
+    chapter_plan_ref: Optional[str]             # chapter_select — MinIO key of the outline JSON
+    select_stats: Optional[dict]                # chapter_select — chapter sizes for UI
+
+    # --- shared tail ---
     # order_chapters output (Bundle 8, 2026-05-25) — pedagogical ordering.
     # Stored as MinIO JSON with {order, samples, foundational_idx, ...}.
     # plan_write reads this to reorder the outline before sanitization.
@@ -67,19 +61,6 @@ class PlannerState(TypedDict, total=False):
     # inline plan for UI rendering).
     plan_path: Optional[str]                    # plan_write — MinIO key of latest pointer
     plan_write_stats: Optional[dict]            # plan_write — counts + inline plan for UI
-
-    # --- LLM-first planner state (2026-05-27, KD_PLANNER_LLM_FIRST=true) ---
-    # Per docs/DD-PLANNER-LLM-FIRST-SOTA-2026-05-27.md. These fields are
-    # populated when the LLM-first path is active; legacy fields above
-    # (cluster_assignments_ref, refine_assignments_ref, cluster_labels_ref)
-    # stay None on the LLM-first path. plan_write tolerates either path.
-    doc_distill_ref: Optional[str]              # doc_distill — MinIO key of {key→DocDistillate} JSON
-    doc_distill_stats: Optional[dict]           # doc_distill — counts + skip-pass flag
-    chapter_proposals_ref: Optional[str]        # chapter_propose — MinIO key of proposals JSON
-    propose_stats: Optional[dict]               # chapter_propose — chosen titles for UI
-    chapter_doc_assignments_ref: Optional[str]  # chapter_assign — MinIO key of doc×chapter matrix
-    assign_stats: Optional[dict]                # chapter_assign — coverage counts
-    select_stats: Optional[dict]                # chapter_select — chapter sizes for UI
 
     # --- bookkeeping ---
     status: Optional[str]                       # "running" | "done" | "failed" | "cancelled"

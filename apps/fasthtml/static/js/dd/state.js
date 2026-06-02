@@ -91,13 +91,9 @@ export let plannerPollAbort = false;
 // apps/fastapi/domains/dd/planner/graph.py AND the field each node
 // writes (`state.<field>`).
 //
-// 2026-05-27 — switched to the LLM-first path (default
-// KD_PLANNER_LLM_FIRST=true; see DD-PLANNER-LLM-FIRST-SOTA-2026-05-
-// 27.md). The legacy 4-node middle (cluster/refine/label/reduce) is
-// kept as a backend fallback but NOT shown in the graph — users who
-// opt into legacy via env flag will see the 4 LLM-first node
-// positions greyed as 'future'. That's the right tradeoff: the
-// canonical UI shows the canonical path.
+// LLM-first path (canonical since 2026-05-27 — see
+// DD-PLANNER-LLM-FIRST-SOTA-2026-05-27.md). The legacy 4-node middle
+// (cluster/refine/label/reduce) was removed 2026-06-02.
 export const PLANNER_SUBSTEP_FIELDS = [
   'raw_files',                  // corpus_load
   'embeddings_ref',             // embed_corpus
@@ -237,25 +233,15 @@ export const chstripCounterEl = document.querySelector('#fw-chstrip-counter');
 export const _synthEventBuffer = new Map();
 export const _SYNTH_EVENT_BUFFER_PER_STEP = 200;
 
-// Mapping: SSE step name → the state field. 2026-05-27 extended with
-// LLM-first nodes (doc_distill, chapter_propose, chapter_assign,
-// chapter_select). chapter_select reuses `chapter_plan_ref` (same as
-// legacy reduce) so order_chapters + plan_write are path-agnostic.
+// Mapping: SSE step name → the state field.
 export const STEP_TO_FIELD = {
   corpus_load:      'raw_files',
   embed_corpus:     'embeddings_ref',
   off_topic:        'relevant_files',
-  // legacy:
-  cluster:          'cluster_assignments_ref',
-  refine:           'refine_assignments_ref',
-  label:            'cluster_labels_ref',
-  reduce:           'chapter_plan_ref',
-  // LLM-first:
   doc_distill:      'doc_distill_ref',
   chapter_propose:  'chapter_proposals_ref',
   chapter_assign:   'chapter_doc_assignments_ref',
   chapter_select:   'chapter_plan_ref',
-  // shared tail:
   order_chapters:   'chapter_order_ref',
   plan_write:       'plan_path',
 };
