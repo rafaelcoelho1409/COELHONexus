@@ -29,7 +29,7 @@ import httpx
 import redis.asyncio as redis_aio
 from rapidfuzz import fuzz as _rf_fuzz, process as _rf_process
 
-from core.otel_setup import get_meter
+from core.otel import get_meter
 
 from .config import CACHE_TTL
 from .domain import (

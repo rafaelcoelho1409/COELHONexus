@@ -19,7 +19,7 @@ from typing import Any
 
 import httpx
 
-from core.otel_setup import get_meter
+from core.otel import get_meter
 from domains.llm.credentials import resolve_key
 
 from .config import PROVIDERS

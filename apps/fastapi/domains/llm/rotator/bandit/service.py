@@ -27,7 +27,7 @@ import numpy as np
 if TYPE_CHECKING:
     import redis.asyncio as redis_aio
 
-from core.otel_setup import get_meter
+from core.otel import get_meter
 
 from .domain import Mode, score_cell
 from .entities import CellState

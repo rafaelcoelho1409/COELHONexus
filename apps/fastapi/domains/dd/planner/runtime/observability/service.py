@@ -2,7 +2,7 @@
 
 `@traced("name")` wraps any async node coroutine so its execution becomes
 a top-level OTel span. The span is emitted by the global tracer provider
-set up in `core.otel_setup.init_otel()` — which dual-exports to Alloy
+set up in `core.otel.init_otel()` — which dual-exports to Alloy
 (gRPC) AND LangFuse (OTLP/HTTP).
 
 In LangFuse, each wrapped node shows up as its own observation under the
@@ -21,7 +21,7 @@ from typing import Awaitable, Callable
 
 from opentelemetry import trace as _otel_trace
 
-from core.otel_setup import get_tracer
+from core.otel import get_tracer
 
 
 logger = logging.getLogger(__name__)

@@ -1,5 +1,5 @@
-"""core — cross-cutting infrastructure (config, telemetry, logging, exceptions).
+"""core — cross-cutting infrastructure (OTel/LangFuse telemetry).
 
-No business logic. Domains and the API layer may import from here; `core`
-must never import from `domains/`.
+No business logic. Domains and the API layer import from here; `core`
+never imports from `domains/`.
 """

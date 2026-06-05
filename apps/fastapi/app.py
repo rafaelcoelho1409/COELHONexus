@@ -28,7 +28,7 @@ from domains.dd.planner.runtime.checkpoint import (
     init_checkpointer,
 )
 from api.v1.llm import router as llm_router
-from core.otel_setup import init_otel
+from core.otel import init_otel
 
 
 logger = logging.getLogger(__name__)
