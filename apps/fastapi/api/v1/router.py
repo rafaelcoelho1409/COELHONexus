@@ -1,11 +1,4 @@
-"""Versioned API surface (v1) — composition only, no business logic.
-
-Domain routers are included here as each domain is ported:
-  Step 2 → llm, Step 3 → docs_distiller (youtube later).
-
-app.py mounts this under /api:  app.include_router(api_v1, prefix="/api")
-→ final paths e.g. /api/v1/docs-distiller/...
-"""
+"""v1 API surface. app.py mounts under /api → /api/v1/..."""
 from fastapi import APIRouter
 
 from .dd import router as dd_router

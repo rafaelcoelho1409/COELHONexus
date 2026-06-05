@@ -1,5 +1,4 @@
-"""Docs Distiller feature router — aggregates every endpoint module under
-this package into a single APIRouter mounted by app.py."""
+"""Docs Distiller feature router — aggregates the dd/ sub-routers."""
 from fastapi import APIRouter
 
 from .debug import router as _debug_router

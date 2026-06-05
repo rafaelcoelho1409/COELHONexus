@@ -1,17 +1,5 @@
-"""LLM rotator health probe.
-
-Single endpoint that fires one round-trip through the production rotator
-(LiteLLM Router + ParetoBandit) so an operator can verify, in one curl,
-that the whole stack — env keys, provider catalogs, cooldown state in
-Redis, OTel exporters to Alloy + LangFuse — is wired correctly.
-
-  GET /api/v1/llm/health
-      → {ok, model_used, latency_ms, content_preview}
-
-A failure path returns {ok: false, error_type, error_message} with a 503;
-the operator can correlate that against the LangFuse trace (search by
-trace_id returned in the response body when OTel is up).
-"""
+"""One round-trip through the production rotator. Verifies env keys,
+provider catalogs, Redis cooldown state, OTel exporters."""
 import logging
 import time
 from fastapi import APIRouter
@@ -31,8 +19,6 @@ router = APIRouter()
 
 @router.get("")
 async def llm_health() -> JSONResponse:
-    # Reflect the latest BYOK selection (rebuild the dynamic catalog if the
-    # /settings generation moved) before probing.
     await ensure_dynamic_catalog()
     chain = build_llm_fallback_chain()
     t0 = time.monotonic()

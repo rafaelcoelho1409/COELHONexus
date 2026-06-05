@@ -403,9 +403,15 @@ async def _run_book_harmonize(
     return payload
 
 
-def _make_thread_id(slug: str) -> str:
+def make_thread_id(slug: str) -> str:
     """Per-chapter thread_id; JS-side pre-generation uses the same format."""
     return f"{CHAPTER_THREAD_PREFIX}/{slug}/{uuid.uuid4()}"
+
+
+def make_study_thread_id(slug: str) -> str:
+    """Per-study orchestrator thread_id; distinct prefix from per-chapter
+    so SQL/Redis pattern-matchers can tell them apart."""
+    return f"{STUDY_THREAD_PREFIX}/{slug}/{uuid.uuid4()}"
 
 
 async def _study_cancelled(study_thread_id: str) -> bool:
@@ -537,7 +543,7 @@ async def run_study_async(
                 counters["cancelled"] = True
                 return
 
-            chapter_thread_id = _make_thread_id(slug)
+            chapter_thread_id = make_thread_id(slug)
             ch_t0 = time.monotonic()
             await emit_progress(
                 study_thread_id, "study", "chapter_running",

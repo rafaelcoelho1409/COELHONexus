@@ -1,30 +1,12 @@
-"""Docs Distiller — Runs router (in-flight ingestion lifecycle).
+"""In-flight ingestion lifecycle. Single-flight per slug via Redis lock;
+the running tier polls a cancel flag and surrenders cleanly."""
 
-Endpoints:
-  POST   /api/v1/docs-distiller/runs          body: {slug, refresh?:bool}
-      -> 200 {status: "cached", manifest}    if MinIO has a finalized manifest
-      -> 200 {status: "queued", run_id}      acquired single-flight lock, Celery task dispatched
-      -> 200 {status: "locked", run_id}      another ingest of this slug is already running
+from .schemas import StartRunBody
 
-  POST   /api/v1/docs-distiller/runs/{run_id}/cancel
-      -> sets cancel flag; the running tier picks it up between fetches,
-        raises IngestCancelled, dispatcher wipes the partial MinIO
-        prefix and releases the lock.
-
-  GET    /api/v1/docs-distiller/runs/{run_id}
-      -> progress + live manifest + url-records + post-summary (Redis)
-
-  GET    /api/v1/docs-distiller/runs/{run_id}/url-records
-  GET    /api/v1/docs-distiller/runs/{run_id}/pages/{idx}
-      -> per-run convenience reads (also available via the `/ingestion`
-        endpoints once the run completes and the manifest moves to MinIO).
-"""
-import os
 import uuid
 
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
 
 from domains.dd.ingestion.progress import (
     acquire_lock,
@@ -39,63 +21,28 @@ from domains.dd.ingestion.progress import (
 from domains.dd.ingestion.storage import (
     framework_prefix,
     get_storage,
-)
-from domains.dd.ingestion.storage import (
     read_framework_manifest,
-    read_framework_page,
     read_live_manifest,
 )
+from domains.dd.planner.keys import redis_url
 
-from domains.dd.resolver import index_by_slug
+from ..dependencies import get_catalog_entry
 
 
 router = APIRouter()
 
 
-def _redis_url() -> str:
-    host = os.environ.get("REDIS_HOST", "redis-master.redis.svc.cluster.local")
-    port = os.environ.get("REDIS_PORT", "6379")
-    pwd = os.environ.get("REDIS_PASSWORD", "")
-    return f"redis://:{pwd}@{host}:{port}" if pwd else f"redis://{host}:{port}"
-
-
-class StartRunBody(BaseModel):
-    slug: str
-    refresh: bool = False
-
 
 @router.post("")
 async def start_run(body: StartRunBody) -> dict:
-    """Single-flight ingestion. Returns one of three statuses:
-
-      "cached"  — MinIO already has a finalized manifest for this slug
-                  (and the request didn't set refresh=true). No Celery
-                  task spawned. UI advances straight to Step 3 with a
-                  brief "loaded from cache · ingested X ago" notice.
-      "queued"  — lock acquired, Celery task dispatched, returns the
-                  new run_id for live progress polling.
-      "locked"  — another ingest of this slug is already in flight;
-                  returns the active run_id so the UI can attach to it
-                  (or show a "denied" warning).
-    """
-    catalog = index_by_slug()
-    if body.slug not in catalog:
-        raise HTTPException(
-            status_code=404,
-            detail=f"unknown framework slug: {body.slug!r}",
-        )
+    """Status: cached (manifest present, no refresh) / queued (lock
+    acquired, Celery dispatched) / locked (another in flight)."""
+    entry = await get_catalog_entry(body.slug)
 
     r = redis_aio.from_url(
-        _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
-        # 1a. GLOBAL single-flight: is ANY ingestion currently running?
-        # The per-slug lock below catches same-slug double-triggers, but
-        # a cross-slug double-trigger (start Asyncio while Bash is mid-
-        # crawl) would otherwise slip through and race for the Celery
-        # worker pool. The UX contract is "one ingestion at a time", so
-        # we reject early with the running slug + run_id so the FastHTML
-        # caller can surface a clear message.
         cursor = 0
         running_slug = None
         running_run_id = None
@@ -105,7 +52,7 @@ async def start_run(body: StartRunBody) -> dict:
                 ks = k.decode() if isinstance(k, bytes) else k
                 other_slug = ks.split("dd:lock:", 1)[-1]
                 if other_slug == body.slug:
-                    continue   # same-slug case is handled by step 1b below
+                    continue
                 val = await r.get(ks)
                 if val is None:
                     continue
@@ -125,7 +72,6 @@ async def start_run(body: StartRunBody) -> dict:
                     f"cancel it before starting {body.slug!r}."
                 ),
             }
-        # 1b. Single-flight: is something already running for this slug?
         active = await read_lock(r, body.slug)
         if active:
             return {
@@ -139,7 +85,6 @@ async def start_run(body: StartRunBody) -> dict:
                 ),
             }
 
-        # 2. Cached: skip ingestion unless refresh requested.
         minio = get_storage()
         if not body.refresh:
             cached = await read_framework_manifest(minio, body.slug)
@@ -151,23 +96,10 @@ async def start_run(body: StartRunBody) -> dict:
                     "manifest": cached,
                 }
         else:
-            # Refresh: wipe every ingestion-side prefix before queuing so
-            # the new run writes against a clean slate. Without this, old
-            # pages (especially when the new run produces fewer pages than
-            # the previous one — e.g. after a splitter change) stay as
-            # orphans and contaminate later reads + `delete_prefix` calls.
-            # Covers ALL prefixes the ingestion task touches:
-            #   ingestion/{slug}/         canonical pages + manifest
-            #   ingestion-raw/{slug}/     pre-normalization monolith
-            #   synth-vault/{slug}/       sentinelized bodies for synth
-            # Planner/synth artifacts are deliberately preserved — refresh
-            # is "re-ingest this framework", not "wipe everything". Users
-            # have separate /planner/{slug}/wipe and /synth/{slug}/wipe
-            # endpoints when they want to nuke downstream state too.
             import logging
             _log = logging.getLogger(__name__)
             for prefix in (
-                framework_prefix(body.slug),       # ingestion/{slug}/
+                framework_prefix(body.slug),
                 f"ingestion-raw/{body.slug}/",
                 f"synth-vault/{body.slug}/",
             ):
@@ -179,17 +111,12 @@ async def start_run(body: StartRunBody) -> dict:
                             f"from {prefix!r} before re-ingestion"
                         )
                 except Exception as e:
-                    # Per-prefix best-effort — don't block re-ingestion on
-                    # cleanup failure. New writes will overwrite colliding
-                    # keys; only stale leftovers might survive.
                     _log.warning(
                         f"[runs] refresh wipe failed for {prefix!r}: {e}"
                     )
 
-        # 3. Acquire lock + queue task.
         run_id = uuid.uuid4().hex
         if not await acquire_lock(r, body.slug, run_id):
-            # Race: someone else acquired between our read_lock and acquire.
             active = await read_lock(r, body.slug)
             return {
                 "status": "locked",
@@ -200,15 +127,6 @@ async def start_run(body: StartRunBody) -> dict:
 
         await clear_cancel(r, run_id)
 
-        # Late import — defer the Celery app import past FastAPI startup.
-        # Wrap the dispatch in try/except so any post-acquire failure releases
-        # the lock instead of leaking it for 35 minutes. Without this guard,
-        # an ImportError / Celery-broker outage / network blip between
-        # acquire_lock() and run_ingestion.delay() leaves dd:lock:{slug} in
-        # Redis and the user sees "Another ingestion is already running" on
-        # every subsequent click until the TTL expires. Verified failure mode
-        # from the 2026-05-23 relative-import bug; defensive against future
-        # regressions in this exact path.
         try:
             from domains.dd.ingestion.task import run_ingestion
             run_ingestion.delay(run_id, body.slug)
@@ -230,24 +148,13 @@ async def start_run(body: StartRunBody) -> dict:
 
 @router.get("/active")
 async def list_active_runs() -> dict:
-    """Return every in-flight ingestion (lock-held with a still-running
-    progress record). Page-reload recovery: the FastHTML UI calls this on
-    init so that closing/reopening a tab mid-ingestion restores the
-    progress display + resumes polling — and crucially prevents the user
-    from triggering a duplicate run for a slug that's already in flight.
-
-    Source of truth: `dd:lock:*` keys in Redis (set when POST /runs
-    acquires the single-flight lock, released in dispatch.py's finally
-    block). Cross-checked with the per-run progress record so we don't
-    show locks whose progress was never written (rare race window).
-    """
+    """Lock-held runs with progress; cross-checked so locks without a
+    written progress record (rare race) aren't surfaced."""
     r = redis_aio.from_url(
-        _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     active: list[dict] = []
     try:
-        # SCAN > KEYS for safety on large keyspaces; same semantics here
-        # since the lock set is tiny (1 per active framework).
         cursor = 0
         while True:
             cursor, keys = await r.scan(cursor=cursor, match="dd:lock:*", count=100)
@@ -262,8 +169,6 @@ async def list_active_runs() -> dict:
                     if isinstance(run_id_raw, bytes) else run_id_raw
                 )
                 progress = await read_progress(r, run_id)
-                # Only surface runs that have written progress AND aren't
-                # already terminal (in case the lock is being released).
                 if progress and progress.get("status") in ("running", "idle"):
                     active.append({
                         "slug": slug,
@@ -279,11 +184,8 @@ async def list_active_runs() -> dict:
 
 @router.post("/{run_id}/cancel")
 async def cancel_run(run_id: str) -> dict:
-    """Sets the cancel flag for `run_id`. The running tier picks it up
-    between fetches (<=1s latency), raises IngestCancelled, and the
-    dispatcher wipes the partial MinIO prefix + releases the lock."""
     r = redis_aio.from_url(
-        _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
         await request_cancel(r, run_id)
@@ -294,11 +196,10 @@ async def cancel_run(run_id: str) -> dict:
 
 @router.get("/{run_id}")
 async def get_run(run_id: str) -> dict:
-    """In-flight snapshot: progress + live manifest + post-process summary.
-    Reads exclusively from Redis (canonical post-finalize manifest lives
-    in MinIO under /ingestion/{slug})."""
+    """In-flight snapshot from Redis (canonical post-finalize manifest
+    lives in MinIO under /ingestion/{slug})."""
     r = redis_aio.from_url(
-        _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
         progress = await read_progress(r, run_id)
@@ -321,7 +222,7 @@ async def get_run(run_id: str) -> dict:
 @router.get("/{run_id}/url-records")
 async def get_url_records(run_id: str) -> list[dict]:
     r = redis_aio.from_url(
-        _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
         return await read_url_records(r, run_id)
@@ -331,11 +232,8 @@ async def get_url_records(run_id: str) -> list[dict]:
 
 @router.get("/{run_id}/pages/{idx}")
 async def get_page(run_id: str, idx: int) -> dict:
-    """Convenience: resolve run_id -> framework_slug via the live manifest,
-    then read the body from MinIO. Persistent-side equivalent lives at
-    /api/v1/docs-distiller/ingestion/{slug}/pages/{idx}."""
     r = redis_aio.from_url(
-        _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
         manifest = await read_live_manifest(r, run_id)

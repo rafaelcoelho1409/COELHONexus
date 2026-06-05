@@ -157,3 +157,12 @@ def compute_manifest_hash(
         f"schema={schema_version}|prompt={PROMPT_VERSION}"
     )
     return sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+def pick_first_chapter_id(plan: dict) -> str | None:
+    """First chapter id from a plan dict; None when the plan has no usable
+    chapters. Used by /synth route when caller omits ?chapter_id="""
+    for ch in (plan.get("chapters") or []):
+        cid = (ch or {}).get("id")
+        if cid:
+            return cid
+    return None

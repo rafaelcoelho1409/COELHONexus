@@ -1,47 +1,14 @@
-"""Planner endpoints — kick off + cancel + per-thread debug.
-
-The graph itself runs in a Celery worker (queue `planner-{env}`); FastAPI
-is purely the HTTP/SSE layer. Both POST routes dispatch to Celery via
-`.delay()` and return immediately. SSE/cancel/checkpoint all work cross-
-process: Redis pub/sub for events, Redis flag for cancel, Postgres for
-LangGraph checkpoints. The shared async runners live in
-`domains/dd/planner/dispatch.py`; the Celery task wrappers in
-`domains/dd/planner/task.py`.
-
-Migrated 2026-05-24 — see commit history for the prior in-process path.
-
-  POST /planner/{slug}?mode=llm
-      → dispatches `run_planner` Celery task. Returns immediately with
-        `thread_id` + `status="queued"` + `celery_task_id`. The UI polls
-        /debug/graph/{thread_id}/state + subscribes to /events for live
-        progress.
-
-  POST /planner/{thread_id}/resume
-      → dispatches `resume_planner` Celery task. Handles all three resume
-        paths (standard / catch-up missing nodes / no-op) inside the
-        worker via `dispatch.resume_planner_async`.
-
-  POST /planner/{thread_id}/cancel
-      → sets the cancel flag in Redis. The watcher running inside the
-        Celery worker's async runner picks it up within ~1s and cancels
-        the graph (propagates LangGraph's CancelledError).
-
-  GET /planner/debug/graph/{thread_id}/state
-      → current state for the thread (latest checkpoint).
-
-  GET /planner/debug/graph/{thread_id}/history
-      → every checkpoint (super-step) in the thread, newest first.
-
-Replay + fork endpoints (POST /replay, POST /edit) ship later once
-the per-checkpoint replay UX is wired.
-"""
+"""Planner endpoints. Graph runs in Celery worker `planner-{env}`; FastAPI
+is the HTTP/SSE layer. SSE via Redis pub/sub, cancel via Redis flag,
+checkpoints in Postgres."""
 from __future__ import annotations
+
+from .params import PLANNER_LOCK_TTL_S, VALID_MODES
 
 import asyncio
 import json
 import logging
 import time
-import uuid
 
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException, Response
@@ -49,21 +16,16 @@ from starlette.responses import StreamingResponse
 
 from domains.dd.ingestion.storage import get_storage, read_framework_manifest
 from domains.llm.rotator.discovery import missing_required_keys
-from domains.dd.planner.cancel import (
-    clear_cancel,
-    request_cancel,
-)
-from domains.dd.planner.graph import (
-    IMPLEMENTED,
-    NODE_ORDER,
-    build_graph,
-)
+from domains.dd.planner.cancel import clear_cancel, request_cancel
+from domains.dd.planner.graph import IMPLEMENTED, NODE_ORDER, build_graph
 from domains.dd.planner.keys import (
     active_run_key,
     lock_key,
     planner_timing_key,
+    postgres_url,
     redis_url,
 )
+from domains.dd.planner.dispatch import make_thread_id
 from domains.dd.planner.progress import subscribe_progress
 from domains.dd.planner.task import (
     resume_planner as resume_planner_task,
@@ -79,15 +41,9 @@ router = APIRouter()
 
 @router.get("/info")
 async def planner_info() -> dict:
-    """Catalog of planner substeps + which are wired into the runtime
-    graph. The UI uses this to mark unimplemented cards as "future" and
-    to suppress the misleading "running" indicator on substeps that the
-    runtime will silently skip."""
     return {
         "node_order": list(NODE_ORDER),
         "implemented": list(IMPLEMENTED),
-        # Modes the planner CAN run in. The UI surfaces this so it can
-        # render an enabled/disabled toggle. Today only "llm" is wired.
         "modes": [
             {"key": "llm",       "label": "LLM-only",        "enabled": True},
             {"key": "classical", "label": "Classical + LLM", "enabled": False},
@@ -97,9 +53,6 @@ async def planner_info() -> dict:
 
 @router.get("/{slug}/timing")
 async def planner_timing(slug: str, response: Response) -> dict:
-    """Persisted planner total wall-clock for the navbar indicator. Returns
-    `{total_wall_ms, finished_ts}` (0 / null when no run has finished yet).
-    Written by run_planner_async after the graph terminates."""
     response.headers["Cache-Control"] = "no-store"
     try:
         raw = await get_storage().read_text(planner_timing_key(slug))
@@ -112,52 +65,19 @@ async def planner_timing(slug: str, response: Response) -> dict:
         return {"total_wall_ms": 0, "finished_ts": None}
 
 
-_VALID_MODES = {"llm", "classical"}
 
-# Server-side single-flight lock for planner runs. One planner of any slug
-# at a time across the whole deployment (mirrors POST /runs ingestion).
-# TTL matches the Celery `time_limit` hard ceiling — after the hard limit
-# the worker is killed and any never-fired finally is leak-insured by TTL.
-_PLANNER_LOCK_TTL_S = 3660
-
-
-# Compare-and-delete release script — only DEL the lock if its value
-# still matches the thread_id we wrote. Prevents a resume/finally from
-# accidentally clearing a lock acquired by a later, racing start of the
-# same slug (the original lock's TTL expired, a fresh start fired in
-# between, then the slow original task finally fired its release).
-_CAD_RELEASE_LUA = (
-    "if redis.call('GET', KEYS[1]) == ARGV[1] then "
-    "return redis.call('DEL', KEYS[1]) end return 0"
-)
 
 
 @router.post("/{slug}")
 async def start_planner(
     slug: str, mode: str = "llm", thread_id: str | None = None,
 ) -> dict:
-    """Kick off a planner run for `slug` by dispatching the `run_planner`
-    Celery task. Returns IMMEDIATELY with `thread_id` + `status="queued"` —
-    the UI polls /debug/graph/{thread_id}/state for progress and subscribes
-    to /events for live SSE updates.
-
-    If the caller supplies `thread_id`, it's used as-is — the UI generates
-    a UUID client-side BEFORE the POST returns, so the Cancel button +
-    the polling loop both have a real thread_id from click 1 (no 'pending'
-    dead-zone).
-
-    The graph itself executes inside a Celery worker (queue `planner-{env}`)
-    via `dispatch.run_planner_async`. SSE/cancel/checkpoint all work cross-
-    process via Redis pub/sub + Redis flag + Postgres respectively."""
-    if mode not in _VALID_MODES:
+    if mode not in VALID_MODES:
         raise HTTPException(
             status_code=400,
-            detail=f"invalid mode {mode!r}; expected one of {sorted(_VALID_MODES)}",
+            detail=f"invalid mode {mode!r}; expected one of {sorted(VALID_MODES)}",
         )
 
-    # NIM-REQUIRED GATE — the planner embeds the whole corpus + reranks via
-    # NVIDIA NIM. Fail fast with an actionable message instead of a cryptic
-    # mid-run embedding failure if the NIM key isn't set (store or env).
     _missing = missing_required_keys()
     if _missing:
         raise HTTPException(
@@ -170,11 +90,6 @@ async def start_planner(
             ),
         )
 
-    # CORPUS-FIRST GATE (server-side anti-bypass, mirrors synth's plan
-    # gate). The planner needs an ingested corpus — reject if no finalized
-    # ingestion manifest exists, so a direct POST that skips the disabled
-    # Start Planner button fails fast instead of dispatching a doomed run
-    # (corpus_load would find nothing).
     if not await read_framework_manifest(get_storage(), slug):
         raise HTTPException(
             status_code=404,
@@ -182,25 +97,12 @@ async def start_planner(
         )
 
     if not thread_id:
-        thread_id = f"docs-distiller/{slug}/{uuid.uuid4()}"
+        thread_id = make_thread_id(slug)
 
-    # Server-side single-flight gate (mirrors POST /runs). Three phases:
-    #   0.  CROSS-STAGE — Planner and Synth must NOT run simultaneously
-    #       (they fight for the same best free-tier LLM resources,
-    #       degrading quality on both pipelines). Reject if any synth
-    #       lock exists, regardless of slug. Ingestion is independent.
-    #   1a. GLOBAL same-stage — any OTHER slug's planner running?
-    #   1b. SAME-SLUG — atomic SET NX on dd:planner:lock:{slug}.
-    # All `locked` responses carry a `stage` field so the FastHTML caller
-    # can render the appropriate "running on X" affordance.
-    # The Celery dispatch happens INSIDE the same try-block so a dispatch
-    # failure releases the lock instead of leaking it for the TTL.
-    # clear_cancel is folded in to reuse the same Redis connection.
     r = redis_aio.from_url(
         redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
-        # 0. CROSS-STAGE — is any SYNTH currently running anywhere?
         cursor = 0
         while True:
             cursor, keys = await r.scan(
@@ -232,7 +134,6 @@ async def start_planner(
             if cursor == 0:
                 break
 
-        # 1a. GLOBAL — any OTHER slug's planner currently running?
         cursor = 0
         while True:
             cursor, keys = await r.scan(
@@ -242,7 +143,7 @@ async def start_planner(
                 ks = k.decode() if isinstance(k, bytes) else k
                 other_slug = ks.split("dd:planner:lock:", 1)[-1]
                 if other_slug == slug:
-                    continue   # same-slug handled by SET NX below
+                    continue
                 val = await r.get(ks)
                 if val is None:
                     continue
@@ -263,11 +164,9 @@ async def start_planner(
             if cursor == 0:
                 break
 
-        # 1b. SAME-SLUG — atomic SET NX. Failure → another planner of
-        # this slug is already running.
         acquired = await r.set(
             lock_key(slug), thread_id,
-            nx=True, ex=_PLANNER_LOCK_TTL_S,
+            nx=True, ex=PLANNER_LOCK_TTL_S,
         )
         if not acquired:
             existing = await r.get(lock_key(slug))
@@ -289,8 +188,6 @@ async def start_planner(
 
         await clear_cancel(r, thread_id)
 
-        # Dispatch INSIDE the lock-holding block so a failed dispatch
-        # releases the lock immediately (no need to wait for the TTL).
         try:
             async_result = run_planner_task.delay(thread_id, slug, mode)
         except Exception as e:
@@ -309,13 +206,6 @@ async def start_planner(
     finally:
         await r.aclose()
 
-    # Register the live planner run so a page refresh / navigation — even
-    # with cleared browser storage or in another tab — can reconnect to its
-    # SSE and restore the running step + the live timer. Mirrors synth's
-    # `dd:study:current:{slug}`. `started_ts` seeds the navbar timer so it
-    # continues from the real run start, not from 0. Cleared on planner
-    # terminal (dispatch), Cancel, and Wipe. 1h TTL bounds a crashed run's
-    # stale key (planner runs are short — minutes, not hours).
     try:
         r2 = redis_aio.from_url(
             redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
@@ -346,10 +236,7 @@ async def start_planner(
 
 @router.get("/{slug}/active")
 async def planner_active(slug: str, response: Response) -> dict:
-    """Is a planner run currently live for `slug`? Returns the registered
-    thread_id + started_ts (epoch seconds) so a page refresh can reconnect
-    to its SSE — restoring the running step + a continuous timer — without
-    relying on browser localStorage. Cleared on terminal/cancel/wipe."""
+    """Page-refresh recovery without browser localStorage."""
     response.headers["Cache-Control"] = "no-store"
     try:
         r = redis_aio.from_url(
@@ -373,31 +260,11 @@ async def planner_active(slug: str, response: Response) -> dict:
             "started_ts": data.get("started_ts"),
         }
     except Exception:
-        # Legacy/plain value — still signal active with no timer seed.
         return {"active": True, "thread_id": str(raw), "started_ts": None}
 
 
 @router.post("/{thread_id:path}/resume")
 async def resume_planner(thread_id: str) -> dict:
-    """Resume a planner run from its last LangGraph checkpoint by
-    dispatching the `resume_planner` Celery task.
-
-    Used by the FastHTML page-refresh recovery: when a worker pod restart
-    kills the in-flight task, the state.status stays "running" but no live
-    events arrive. The UI detects the orphan (no SSE events in ~5s) and
-    POSTs here to continue from where it left off.
-
-    Three execution paths handled inside `dispatch.resume_planner_async`:
-      1. `status` ∈ {"running", "failed"} → standard `ainvoke(None)`
-         resume from the last committed checkpoint.
-      2. `status == "done"` BUT some IMPLEMENTED nodes have no output
-         field in state → catch-up path. This happens when a new node
-         was added to IMPLEMENTED AFTER the thread completed; the worker
-         runs each missing node directly via NODE_REGISTRY + aupdate_state,
-         preserving SSE events naturally.
-      3. `status == "done"` AND no missing nodes → terminal "done" event
-         with no work performed.
-    """
     r = redis_aio.from_url(
         redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
@@ -427,33 +294,13 @@ async def resume_planner(thread_id: str) -> dict:
 
 @router.get("/recent")
 async def list_recent_planners() -> dict:
-    """List the most recent thread per framework slug. Used by the
-    FastHTML page-refresh recovery on browsers that wipe localStorage
-    between sessions (Brave private mode, mobile Safari, etc.) — when
-    no client-side hint exists, the JS falls back to this endpoint to
-    discover which slugs have cached LangGraph state.
-
-    thread_id format is `docs-distiller/{slug}/{uuid}` so split_part
-    extracts the slug. DISTINCT ON returns one row per slug — the one
-    with the latest checkpoint_id (LangGraph uses UUIDv6, sortable)."""
-    import os
-    from urllib.parse import quote
+    """Per-slug thread selection prefers the thread with the MOST
+    checkpoints — sorting by checkpoint_id alone picks abandoned threads
+    that died early over later threads that completed all nodes."""
     import psycopg
 
-    pw = quote(os.environ.get("POSTGRES_PASSWORD", ""), safe="")
-    host = os.environ.get("POSTGRES_HOST", "localhost")
-    port = os.environ.get("POSTGRES_PORT", "5432")
-    db = os.environ.get(
-        "POSTGRES_DATABASE", os.environ.get("POSTGRES_DB", "postgres"),
-    )
-    user = os.environ.get("POSTGRES_USER", "postgres")
-    dsn = f"postgresql://{user}:{pw}@{host}:{port}/{db}"
+    dsn = postgres_url()
 
-    # Per-slug thread selection: prefer the thread with the MOST
-    # checkpoints (proxy for "ran longest = most node-fields committed").
-    # Sorting only by checkpoint_id (timestamp) was picking abandoned
-    # threads that died after corpus_load over earlier threads that
-    # successfully completed all 3 nodes.
     out: list[dict] = []
     try:
         async with await psycopg.AsyncConnection.connect(dsn) as conn:
@@ -488,18 +335,10 @@ async def list_recent_planners() -> dict:
 
 @router.delete("/{slug}/wipe")
 async def wipe_planner(slug: str) -> dict:
-    """Delete ALL planner state for `slug`: MinIO embedding blobs (under
-    planner/{slug}/) AND Postgres LangGraph checkpoints (across every
-    thread_id matching docs-distiller/{slug}/%).
-
-    Browser-side cache (`dd:planner:active:{slug}` in localStorage) is
-    the caller's responsibility — the JS wipePlanner() helper does that
-    in the same call. Returns deletion counts for both stores."""
-    import os
-    from urllib.parse import quote
+    """Wipes MinIO planner/{slug}/, Postgres checkpoints, Redis lock +
+    active-run registry. Drops the lock so the next Start Planner click
+    isn't rejected by a stale lock that survived the wipe."""
     import psycopg
-
-    from domains.dd.ingestion.storage import get_storage
 
     if not slug or "/" in slug:
         raise HTTPException(
@@ -507,7 +346,6 @@ async def wipe_planner(slug: str) -> dict:
             detail=f"invalid slug {slug!r}; slashes not allowed",
         )
 
-    # 1. MinIO embeddings cache
     minio = get_storage()
     try:
         n_minio = await minio.delete_prefix(f"planner/{slug}/")
@@ -515,14 +353,7 @@ async def wipe_planner(slug: str) -> dict:
         logger.warning(f"[planner-wipe] MinIO delete failed for {slug!r}: {e}")
         n_minio = -1
 
-    # 2. Postgres LangGraph checkpoints — direct query; LangGraph
-    #    doesn't expose a delete-thread API.
-    pw = quote(os.environ.get("POSTGRES_PASSWORD", ""), safe="")
-    host = os.environ.get("POSTGRES_HOST", "localhost")
-    port = os.environ.get("POSTGRES_PORT", "5432")
-    db = os.environ.get("POSTGRES_DB", "coelhonexus")
-    user = os.environ.get("POSTGRES_USER", "postgres")
-    dsn = f"postgresql://{user}:{pw}@{host}:{port}/{db}"
+    dsn = postgres_url()
 
     counts: dict = {}
     pattern = f"docs-distiller/{slug}/%"
@@ -530,7 +361,6 @@ async def wipe_planner(slug: str) -> dict:
         async with await psycopg.AsyncConnection.connect(
             dsn, autocommit=True,
         ) as conn:
-            # Order matters: write-side tables FIRST (they may FK to checkpoints).
             for tbl in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
                 async with conn.cursor() as cur:
                     try:
@@ -545,10 +375,6 @@ async def wipe_planner(slug: str) -> dict:
         logger.warning(f"[planner-wipe] Postgres delete failed for {slug!r}: {e}")
         counts["error"] = f"{type(e).__name__}: {e}"
 
-    # 3. Redis live-run registry + single-flight lock — drop both so a
-    #    wiped framework never shows a phantom "running" planner on refresh
-    #    AND so the next Start Planner click for this slug isn't rejected
-    #    with "already running" by a stale lock that survived the wipe.
     n_redis = 0
     try:
         rc = redis_aio.from_url(
@@ -578,31 +404,9 @@ async def wipe_planner(slug: str) -> dict:
 
 @router.get("/{thread_id:path}/events")
 async def planner_events(thread_id: str) -> StreamingResponse:
-    """Server-Sent Events stream of mid-node progress for `thread_id`.
-
-    Backed by a Redis pub/sub channel that each planner node publishes
-    to during its run (`services/docs_distiller/planner/progress.py`).
-    Subscribers also receive a catch-up replay of any events that landed
-    BEFORE they connected (from a per-thread snapshot list), so late
-    subscribers don't miss the early "start" event.
-
-    Event format: `data: <json>\\n\\n` (text/event-stream). Each JSON
-    object carries at minimum `step`, `kind`, `ts`; per-event extras
-    vary by step (e.g. embed_corpus emits `chunks_done`/`chunks_total`
-    in its `batch` events).
-
-    The connection stays open until the client disconnects OR the
-    planner emits a `done` event for the final node + we observe it +
-    the client closes the EventSource. Server doesn't close the stream
-    on its own — clients close after seeing terminal status."""
-
-    # 2026-05-26 — Heartbeat every _SSE_HEARTBEAT_S keeps idle SSE
-    # connections alive through k3d/traefik/nginx-class proxies (default
-    # idle-stream timeout 60s). Planner has long gaps during off_topic
-    # bandit cascade + cluster UMAP warm-up; without this the TCP
-    # connection gets dropped and the UI loses events emitted in the
-    # down-window. SSE comments (`:`) are ignored by clients but their
-    # bytes flow through TCP.
+    """Initial `: stream open` forces proxies to flush headers (avoids
+    first-event delay). 15s heartbeat keeps the connection alive through
+    k3d/traefik during long off_topic/cluster gaps."""
     _SSE_HEARTBEAT_S = 15.0
     _DONE = object()
 
@@ -656,8 +460,6 @@ async def planner_events(thread_id: str) -> StreamingResponse:
         headers={
             "Cache-Control":     "no-cache, no-transform",
             "Connection":        "keep-alive",
-            # nginx-style proxies sometimes buffer event-stream by default;
-            # this header tells them to flush as it arrives.
             "X-Accel-Buffering": "no",
         },
     )
@@ -665,20 +467,11 @@ async def planner_events(thread_id: str) -> StreamingResponse:
 
 @router.post("/{thread_id:path}/cancel")
 async def cancel_planner(thread_id: str) -> dict:
-    """Set the cancel flag for `thread_id`. The watcher running beside
-    the planner task picks it up within ~1s and cancels the graph,
-    returning status='cancelled' from POST /planner/{slug}.
-
-    Path uses `:path` to allow the slug-prefixed thread_id structure
-    (`docs-distiller/{slug}/{uuid}`) without URL-encoding."""
     r = redis_aio.from_url(
         redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
         await request_cancel(r, thread_id)
-        # Drop the live-run registry immediately (the terminal path also
-        # clears it, but a cancel may race a dead task). slug = 2nd segment
-        # of `docs-distiller/{slug}/{uuid}`.
         if thread_id.count("/") >= 2:
             await r.delete(active_run_key(thread_id.split('/')[1]))
     finally:
@@ -688,7 +481,6 @@ async def cancel_planner(thread_id: str) -> dict:
 
 @router.get("/debug/graph/{thread_id:path}/state")
 async def get_graph_state(thread_id: str) -> dict:
-    """Latest checkpoint for `thread_id`. 404 if no checkpoints exist."""
     try:
         graph = build_graph()
     except RuntimeError as e:
@@ -712,7 +504,6 @@ async def get_graph_state(thread_id: str) -> dict:
 
 @router.get("/debug/graph/{thread_id:path}/history")
 async def get_graph_history(thread_id: str) -> dict:
-    """Every checkpoint for `thread_id`, newest first."""
     try:
         graph = build_graph()
     except RuntimeError as e:

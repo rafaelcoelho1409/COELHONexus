@@ -1,43 +1,27 @@
-"""BYOK settings API — provider keys + provider/model selection.
-
-The FastHTML `/settings` page (a server-side BFF) drives every endpoint here
-through the `/api/*` reverse proxy, so raw keys travel browser→FastHTML→FastAPI
-once on save and NEVER come back: responses only ever carry masked status
-(`has_key`/`source`/`last4`).
-
-Routes (mounted at /api/v1/llm/settings):
-  GET    /providers              — fast: masked key status + enable + mode (no net)
-  GET    /providers/{id}/models  — net: discovered free models + current selection
-  POST   /providers/{id}/key     — test-connect → encrypt+store → reset rotator
-  DELETE /providers/{id}/key     — drop user key → revert to env fallback
-  POST   /providers/{id}/test    — probe the CURRENT resolved key
-  PATCH  /providers/{id}         — enable / disable a provider
-  POST   /providers/{id}/models  — set mode (all|custom) + custom selection
-
-Every mutation calls `reset_rotator()` so the change propagates to all processes
-(the rotator bumps a Redis generation; workers rebuild on next access).
-Selection lives in the credential store's plaintext `llm/settings.json`:
-  {"enabled":[provider...], "mode":{provider:"all|custom"}, "selected":{provider:[id...]}}
-"""
+"""BYOK provider keys + selection. Raw keys travel browser→FastAPI once
+on save; responses carry only masked status (`has_key`/`source`/`last4`).
+Every mutation calls `reset_rotator()` so the change propagates across
+workers via the Redis generation bump."""
 from __future__ import annotations
+
+from .params import PROVIDER_META
+from .schemas import EnableBody, KeyBody, ModelsBody
 
 import asyncio
 import logging
 from dataclasses import asdict
-from typing import Literal
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from domains.llm.credentials import UnmanagedKeyEnv, get_store
 from domains.llm.rotator.chain import reset_rotator
 from domains.llm.rotator.discovery import (
+    PROVIDERS,
     list_provider_free_models,
     missing_required_keys,
     probe_provider_key,
 )
-from domains.llm.rotator.discovery import PROVIDERS
 
 
 logger = logging.getLogger(__name__)
@@ -45,43 +29,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# Display metadata. `kind` drives the free/paid badge (all free for now).
-_PROVIDER_META: dict[str, dict] = {
-    "groq":      {"name": "Groq",          "kind": "free"},
-    "nim":       {"name": "NVIDIA NIM",    "kind": "free"},
-    "cerebras":  {"name": "Cerebras",      "kind": "free"},
-    "mistral":   {"name": "Mistral",       "kind": "free"},
-    "gemini":    {"name": "Google Gemini", "kind": "free"},
-    "sambanova": {"name": "SambaNova",     "kind": "free"},
-    "deepseek":  {"name": "DeepSeek",      "kind": "free"},
-}
 
 
-class KeyBody(BaseModel):
-    api_key: str = Field(min_length=1)
-    force: bool = False     # store even if the test-connect probe fails
 
 
-class EnableBody(BaseModel):
-    enabled: bool
 
 
-class ModelsBody(BaseModel):
-    mode: Literal["all", "custom"]
-    selected: list[str] = Field(default_factory=list)
-
-
-# --------------------------------------------------------------------------- #
-# selection helpers (sync — run in threadpool from the async routes)
-# --------------------------------------------------------------------------- #
 def _registry_default_enabled() -> list[str]:
     return [pid for pid, cfg in PROVIDERS.items() if cfg.enabled]
 
 
 def _ensure_enabled(settings: dict, pid: str, on: bool) -> dict:
-    """Toggle one provider in the enabled list. Seeds a fresh list from the
-    registry defaults the first time (so turning ONE provider on/off doesn't
-    silently disable all the others)."""
+    """Seeds enabled from registry defaults on first write so toggling
+    one provider doesn't silently disable all the others."""
     en = settings.get("enabled")
     if en is None:
         en = _registry_default_enabled()
@@ -98,7 +58,7 @@ def _provider_view(pid: str, settings: dict) -> dict:
     enabled = (pid in en_list) if en_list is not None else cfg.enabled
     mode = (settings.get("mode") or {}).get(pid, "all")
     selected = (settings.get("selected") or {}).get(pid, [])
-    meta = _PROVIDER_META.get(pid, {"name": pid, "kind": "free"})
+    meta = PROVIDER_META.get(pid, {"name": pid, "kind": "free"})
     return {
         "id": pid,
         "name": meta["name"],
@@ -119,8 +79,8 @@ def _all_provider_views() -> list[dict]:
 
 
 def _enable_and_default_mode(pid: str) -> None:
-    """On a successful key save: enable the provider + default it to All-free
-    (auto-include newly discovered models) unless the user already chose a mode."""
+    """Default new providers to All-free so newly discovered models
+    auto-include unless the user already chose a mode."""
     store = get_store()
     settings = store.read_settings() or {}
     _ensure_enabled(settings, pid, on=True)
@@ -156,34 +116,27 @@ def _require_provider(pid: str) -> None:
         raise HTTPException(status_code=404, detail=f"unknown provider {pid!r}")
 
 
-# --------------------------------------------------------------------------- #
-# routes
-# --------------------------------------------------------------------------- #
 @router.get("/providers")
 async def list_providers() -> JSONResponse:
     views = await run_in_threadpool(_all_provider_views)
     missing = await run_in_threadpool(missing_required_keys)
     return JSONResponse(content={
         "providers": views,
-        "ready": not missing,                # required keys all present?
-        "missing_required": missing,         # [{id, key_env}] still unset
+        "ready": not missing,
+        "missing_required": missing,
     })
 
 
 @router.get("/readiness")
 async def readiness() -> JSONResponse:
-    """Is the rotator runnable? Required keys (NVIDIA NIM — embeddings +
-    reranking) must be present. DD run-start endpoints gate on this; the UI
-    shows a banner. `ready:false` → set the missing key(s) in Settings."""
+    """NVIDIA NIM required (embeddings + reranking). DD run-start
+    endpoints gate on this."""
     missing = await run_in_threadpool(missing_required_keys)
     return JSONResponse(content={"ready": not missing, "missing_required": missing})
 
 
 @router.get("/providers/health")
 async def providers_health() -> JSONResponse:
-    """Probe every keyed provider in parallel (the UI 'Test all' button + an
-    ops one-shot). Periodic re-check without Celery beat: a dashboard/uptime
-    monitor can poll this endpoint."""
     statuses = await run_in_threadpool(
         lambda: {pid: get_store().key_status(PROVIDERS[pid].key_env) for pid in PROVIDERS}
     )
@@ -215,7 +168,6 @@ async def set_provider_key(pid: str, body: KeyBody) -> JSONResponse:
     cfg = PROVIDERS[pid]
     probe = await probe_provider_key(pid, api_key=body.api_key)
     if not probe["ok"] and not body.force:
-        # Don't persist a key that can't authenticate; surface why.
         raise HTTPException(
             status_code=400,
             detail={"message": "key validation failed", "probe": probe},
@@ -244,7 +196,7 @@ async def delete_provider_key(pid: str) -> JSONResponse:
 @router.post("/providers/{pid}/test")
 async def test_provider_key(pid: str) -> JSONResponse:
     _require_provider(pid)
-    probe = await probe_provider_key(pid, api_key=None)   # current resolved key
+    probe = await probe_provider_key(pid, api_key=None)
     return JSONResponse(content={"id": pid, **probe})
 
 
@@ -260,8 +212,6 @@ async def patch_provider(pid: str, body: EnableBody) -> JSONResponse:
 async def set_provider_models(pid: str, body: ModelsBody) -> JSONResponse:
     _require_provider(pid)
     if body.mode == "custom" and not body.selected:
-        # No-empty-pool guard: a custom provider must keep ≥1 model (else
-        # switch to All or disable the provider).
         raise HTTPException(
             status_code=400,
             detail="custom mode needs at least one selected model "

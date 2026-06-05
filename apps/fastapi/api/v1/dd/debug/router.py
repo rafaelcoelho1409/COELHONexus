@@ -1,87 +1,35 @@
-"""Docs Distiller — Debug router (dev-time stage isolation).
+"""Dev-time stage isolation. Synchronous (no Celery, no lock, no
+progress writes) so exceptions surface with full stack traces.
+Not gated — single-user dev cluster only."""
 
-Lets you run each ingestion stage independently without re-executing the
-whole pipeline. All endpoints are synchronous (no Celery, no
-single-flight lock, no progress writes that affect production state) so a
-curl gives you the result immediately and exceptions surface with full
-stack traces.
+from .params import KIND_BY_TIER, TIER_BY_KIND
 
-Pair with the snapshot endpoints to freeze state before a tweak, then
-restore if the change made things worse.
-
-Endpoints (all under /api/v1/docs-distiller/debug):
-
-  POST /resolve/{slug}                       — returns the resolver's best-source pick
-  POST /ingest/{slug}?tier=N                 — runs ONE tier in isolation, writes to canonical MinIO path
-  POST /post/{slug}                          — re-runs post-process against current MinIO content
-  POST /finalize/{slug}                      — re-writes the canonical manifest from in-memory state
-
-  POST   /snapshot/{slug}?label=…            — freeze current state under _snapshots/{ts}
-  GET    /snapshots/{slug}                   — list snapshot timestamps (newest first)
-  POST   /restore/{slug}?ts=…               — overwrite canonical with the snapshot
-  DELETE /snapshot/{slug}?ts=…               — delete a snapshot
-
-Not gated by env in this MVP — single-user dev cluster. Add a feature flag
-before exposing to multi-tenant or prod.
-"""
-import os
 import time
-import uuid
 from typing import Optional
 
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
 
 from domains.dd.ingestion import post
-from domains.dd.ingestion.storage import snapshot
-from domains.dd.ingestion.tiers import (
-    tier1,
-    tier2,
-    tier3,
-    tier4,
-    tier5,
-    ManifestDetected,
+from domains.dd.ingestion.storage import (
+    Store,
+    get_storage,
+    snapshot,
 )
+from domains.dd.ingestion.tiers import ManifestDetected, tier3, tier4
 from domains.dd.ingestion.progress import Progress
-from domains.dd.ingestion.storage import get_storage
-from domains.dd.ingestion.storage import Store
+from domains.dd.planner.keys import redis_url
 
-from domains.dd.resolver import index_by_slug
+from ..dependencies import CatalogEntry
 
 
 router = APIRouter()
 
 
-_TIER_BY_KIND = {
-    "llms_full": (1, tier1),
-    "llms_txt":  (2, tier2),
-    "sitemap":   (3, tier3),
-    "docs":      (4, tier4),
-    "github":    (5, tier5),
-}
-_KIND_BY_TIER = {n: kind for kind, (n, _) in _TIER_BY_KIND.items()}
 
 
-def _redis_url() -> str:
-    host = os.environ.get("REDIS_HOST", "redis-master.redis.svc.cluster.local")
-    port = os.environ.get("REDIS_PORT", "6379")
-    pwd = os.environ.get("REDIS_PASSWORD", "")
-    return f"redis://:{pwd}@{host}:{port}" if pwd else f"redis://{host}:{port}"
-
-
-def _entry_or_404(slug: str) -> dict:
-    entry = index_by_slug().get(slug)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"unknown slug: {slug!r}")
-    return entry
-
-
-# =============================================================================
-# Stage 1 — Resolve
-# =============================================================================
 @router.post("/resolve/{slug}")
-async def debug_resolve(slug: str) -> dict:
-    entry = _entry_or_404(slug)
+async def debug_resolve(slug: str, entry: CatalogEntry) -> dict:
     best = None
     available: list[dict] = []
     for kind in ("llms_full", "llms_txt", "sitemap", "docs", "github"):
@@ -104,21 +52,18 @@ async def debug_resolve(slug: str) -> dict:
 @router.post("/ingest/{slug}")
 async def debug_ingest_one_tier(
     slug: str,
+    entry: CatalogEntry,
     tier: int,
     language: Optional[str] = None,
 ) -> dict:
-    """Run one tier in isolation. `tier` ∈ 1..5 (1=llms_full, 2=llms_txt,
-    3=sitemap, 4=docs/HTTP, 5=github). The chosen tier writes pages to the
-    canonical per-framework MinIO path, overwriting prior bodies for the
-    same indices. Re-running tier 4 after tweaking a filter, for example,
-    just calls this endpoint — no Celery, no full pipeline."""
-    if tier not in _KIND_BY_TIER:
+    """tier ∈ 1..5 (llms_full / llms_txt / sitemap / docs / github).
+    Writes to the canonical MinIO path, overwriting same-idx bodies."""
+    if tier not in KIND_BY_TIER:
         raise HTTPException(
             status_code=400,
             detail=f"tier must be 1..5, got {tier}",
         )
-    entry = _entry_or_404(slug)
-    kind = _KIND_BY_TIER[tier]
+    kind = KIND_BY_TIER[tier]
     url = entry.get(kind)
     if not url:
         raise HTTPException(
@@ -129,13 +74,13 @@ async def debug_ingest_one_tier(
     debug_run_id = f"debug-tier{tier}-{slug}-{int(time.time())}"
     progress = Progress(debug_run_id)
     r = redis_aio.from_url(
-        _redis_url(), socket_connect_timeout=3.0, socket_timeout=10.0,
+        redis_url(), socket_connect_timeout=3.0, socket_timeout=10.0,
     )
     minio = get_storage()
     store = Store(debug_run_id, slug, r, minio)
 
     try:
-        mod = _TIER_BY_KIND[kind][1]
+        mod = TIER_BY_KIND[kind][1]
         kwargs: dict = {
             "url": url, "framework_slug": slug,
             "progress": progress, "store": store,
@@ -173,19 +118,14 @@ async def debug_ingest_one_tier(
             pass
 
 
-# =============================================================================
-# Stage 3 — Post-process (against the current canonical MinIO state)
-# =============================================================================
 @router.post("/post/{slug}")
-async def debug_post(slug: str) -> dict:
-    """Re-run `post.apply_to_store` against whatever's currently in MinIO
-    for this framework. Useful when tuning SPLIT_MIN_SECTION_BYTES or the
-    monolith threshold without re-downloading."""
-    _entry_or_404(slug)
+async def debug_post(slug: str, entry: CatalogEntry) -> dict:
+    """Re-runs post-process against current MinIO content (useful when
+    tuning SPLIT_MIN_SECTION_BYTES without re-downloading)."""
     debug_run_id = f"debug-post-{slug}-{int(time.time())}"
     progress = Progress(debug_run_id)
     r = redis_aio.from_url(
-        _redis_url(), socket_connect_timeout=3.0, socket_timeout=10.0,
+        redis_url(), socket_connect_timeout=3.0, socket_timeout=10.0,
     )
     minio = get_storage()
 
@@ -228,18 +168,13 @@ async def debug_post(slug: str) -> dict:
             pass
 
 
-# =============================================================================
-# Stage 4 — Finalize (re-write the canonical manifest)
-# =============================================================================
 @router.post("/finalize/{slug}")
-async def debug_finalize(slug: str) -> dict:
-    """Re-write the canonical MinIO manifest from the existing in-memory
-    state (loaded from the prior manifest). Useful when the manifest
-    payload shape changes."""
-    entry = _entry_or_404(slug)
+async def debug_finalize(slug: str, entry: CatalogEntry) -> dict:
+    """Re-writes the canonical manifest from prior in-memory state.
+    Useful when the manifest payload shape changes."""
     debug_run_id = f"debug-finalize-{slug}-{int(time.time())}"
     r = redis_aio.from_url(
-        _redis_url(), socket_connect_timeout=3.0, socket_timeout=10.0,
+        redis_url(), socket_connect_timeout=3.0, socket_timeout=10.0,
     )
     minio = get_storage()
 
@@ -268,20 +203,16 @@ async def debug_finalize(slug: str) -> dict:
             pass
 
 
-# =============================================================================
-# Snapshots
-# =============================================================================
 @router.post("/snapshot/{slug}")
 async def debug_take_snapshot(
-    slug: str, label: Optional[str] = None,
+    slug: str,
+    entry: CatalogEntry, label: Optional[str] = None,
 ) -> dict:
-    _entry_or_404(slug)
     return await snapshot.take(get_storage(), slug, label=label)
 
 
 @router.get("/snapshots/{slug}")
-async def debug_list_snapshots(slug: str) -> dict:
-    _entry_or_404(slug)
+async def debug_list_snapshots(slug: str, entry: CatalogEntry) -> dict:
     return {
         "slug": slug,
         "snapshots": await snapshot.list_snapshots(get_storage(), slug),
@@ -289,8 +220,7 @@ async def debug_list_snapshots(slug: str) -> dict:
 
 
 @router.post("/restore/{slug}")
-async def debug_restore_snapshot(slug: str, ts: str) -> dict:
-    _entry_or_404(slug)
+async def debug_restore_snapshot(slug: str, entry: CatalogEntry, ts: str) -> dict:
     try:
         return await snapshot.restore(get_storage(), slug, ts)
     except ValueError as e:
@@ -298,6 +228,5 @@ async def debug_restore_snapshot(slug: str, ts: str) -> dict:
 
 
 @router.delete("/snapshot/{slug}")
-async def debug_delete_snapshot(slug: str, ts: str) -> dict:
-    _entry_or_404(slug)
+async def debug_delete_snapshot(slug: str, entry: CatalogEntry, ts: str) -> dict:
     return await snapshot.delete_snapshot(get_storage(), slug, ts)

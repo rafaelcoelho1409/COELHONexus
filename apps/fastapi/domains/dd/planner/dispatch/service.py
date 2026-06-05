@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from typing import Optional
 
 import redis.asyncio as redis_aio
@@ -35,6 +36,18 @@ from .domain import missing_implemented_nodes
 
 
 logger = logging.getLogger(__name__)
+
+
+
+PLANNER_THREAD_PREFIX = "docs-distiller"
+
+
+def make_thread_id(slug: str) -> str:
+    """Per-planner-run thread_id. Format: `docs-distiller/{slug}/{uuid}`.
+    Matches the JS-pre-generated id format so the Cancel button has a real
+    thread_id from click 1 (no 'pending' dead-zone)."""
+    return f"{PLANNER_THREAD_PREFIX}/{slug}/{uuid.uuid4()}"
+
 
 
 async def _persist_planner_timing(slug: str, total_wall_ms: int) -> None:
