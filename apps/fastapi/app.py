@@ -23,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.v1.dd import router as dd_router
 from domains.dd.ingestion.storage import get_storage
-from domains.dd.planner.checkpoint import (
+from domains.dd.planner.runtime.checkpoint import (
     close_checkpointer,
     init_checkpointer,
 )

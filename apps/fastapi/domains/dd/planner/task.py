@@ -13,8 +13,8 @@ import redis as redis_sync
 
 from celery_app import app
 
-from .checkpoint import init_checkpointer
-from .dispatch import resume_planner_async, run_planner_async
+from .runtime.checkpoint import init_checkpointer
+from .runtime.dispatch import resume_planner_async, run_planner_async
 from .keys import lock_key, redis_url
 from .params import REDIS_CONNECT_TIMEOUT_S, REDIS_OP_TIMEOUT_S
 

@@ -20,8 +20,8 @@ import redis as redis_sync
 
 from celery_app import app
 
-from ..planner.checkpoint import init_checkpointer
-from .dispatch import (
+from ..planner.runtime.checkpoint import init_checkpointer
+from .runtime.dispatch import (
     resume_synth_async,
     run_single_chapter_async,
     run_study_async,

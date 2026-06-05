@@ -21,8 +21,8 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from ..artifacts import extract_and_save_artifacts_from_md
-from ...synth.corpus_normalize import normalize_doc
-from ...synth.vault import build_manifest
+from ...synth.nodes.corpus_normalize import normalize_doc
+from ...synth.nodes.vault import build_manifest
 from .entities import ContentType, ManifestEntry
 from .keys import (
     artifact_key,
