@@ -1,24 +1,26 @@
 """COELHO Nexus — FastHTML application entry point.
 
-Assembly only: build the app, mount /static, register every feature/page
-router, then serve. Everything else lives in dedicated modules:
+Assembly only: build the app, mount /static, register every feature
+router, then serve. Everything else lives in dedicated packages:
 
-  shell.py                       — HEAD + topbar layout (_Shell)
-  proxy.py                       — /api/{path:path} → FastAPI reverse proxy
-  features/home.py               — / landing page (hero + live stats + features)
-  features/docs_distiller.py     — /docs-distiller wizard (_Picker)
-  routes.py                      — /coming-soon, /health
-  static/css/                    — split stylesheets (base, components, dd/*, home, youtube)
-  static/js/dd/                  — ES module wizard client-side logic
+  layout/                — HEAD + topbar/_Shell page chrome
+  proxy.py               — /api/{path:path} → FastAPI reverse proxy
+  features/<name>/       — one package per feature, exposing register(rt)
+    home/                — / landing
+    docs_distiller/      — /docs-distiller wizard (5 stage pages)
+    settings/            — /settings BYOK + model selection
+    youtube/             — /youtube-content-search placeholder
+    common/              — /coming-soon, /health
+  static/css/            — split stylesheets (base, components, dd/*, …)
+  static/js/dd/          — ES module wizard client-side logic
 """
 from fasthtml.common import fast_app, serve
 from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
 
 import proxy
-import routes
-from features import docs_distiller, home, settings, youtube_content_search
-from shell import HEAD
+from features import common, docs_distiller, home, settings, youtube
+from layout.head import HEAD
 
 
 class _RevalidateStatics(StaticFiles):
@@ -27,16 +29,12 @@ class _RevalidateStatics(StaticFiles):
     CSS ships as <link>s and JS as native ES modules. Module sub-imports
     (`import './synth.js'`) resolve relative to the importing module's
     URL and DON'T inherit any `?v=` query on the entry <script>, so
-    query-string versioning can't reliably bust the whole module graph —
-    which is why edits sometimes "don't show up" until a manual hard
-    refresh.
+    query-string versioning can't reliably bust the whole module graph.
 
     Sending `Cache-Control: no-cache` makes the browser revalidate each
-    asset against its ETag / Last-Modified (which Starlette's StaticFiles
-    already emits): unchanged files come back as a fast 304, changed
-    files download fresh. Net: a skaffold redeploy is reflected on the
-    next normal navigation — no hard refresh, no stale CSS/JS.
-    """
+    asset against its ETag / Last-Modified (which Starlette emits):
+    unchanged → fast 304, changed → fresh download. A skaffold redeploy
+    is reflected on the next normal navigation."""
     async def get_response(self, path, scope):
         resp = await super().get_response(path, scope)
         resp.headers["Cache-Control"] = "no-cache"
@@ -44,29 +42,24 @@ class _RevalidateStatics(StaticFiles):
 
 
 app, rt = fast_app(
-    pico=False,
-    htmx=False,
-    default_hdrs=False,
-    live=False,
-    hdrs=HEAD,
-    routes=[Mount("/static", _RevalidateStatics(directory="static"),
-                  name="static")],
+    pico = False,
+    htmx = False,
+    default_hdrs = False,
+    live = False,
+    hdrs = HEAD,
+    routes = [Mount("/static", _RevalidateStatics(directory = "static"),
+                    name = "static")],
 )
 
 
 # Remove FastHTML's built-in catch-all static-extension route, which
-# `fast_app(...)` injects unconditionally as
-# `/{fname:path}.{ext:static}` (regex matches png/jpg/svg/css/js/woff/…)
-# and points at the working-directory `static_path='.'`. With our
-# explicit `/static` Mount above, that catch-all only does harm — it
-# intercepts ANY URL ending in a known asset extension BEFORE the
-# `/api/{path:path}` proxy gets to see it, including the artifact
-# endpoint `/api/v1/.../artifacts/{sha}.png` which now returns 404 from
-# the FastHTML container instead of being forwarded to FastAPI. We
-# identify the route by its unique compiled regex pattern (path string
-# contains `{fname:path}` + `{ext:static}`) and drop it from the
-# starlette router. The `/static` mount + every explicit app route is
-# untouched.
+# `fast_app(...)` injects unconditionally as `/{fname:path}.{ext:static}`
+# (regex matches png/jpg/svg/css/js/woff/…) and points at the working-
+# directory `static_path = '.'`. With our explicit `/static` Mount above,
+# that catch-all only does harm — it intercepts ANY URL ending in a known
+# asset extension BEFORE the `/api/{path:path}` proxy gets to see it,
+# including artifact endpoints like `/api/v1/.../artifacts/{sha}.png`
+# which then 404 from FastHTML instead of being forwarded to FastAPI.
 app.router.routes = [
     r for r in app.router.routes
     if getattr(r, "path", "") != "/{fname:path}.{ext:static}"
@@ -76,9 +69,9 @@ app.router.routes = [
 proxy.register(rt)
 home.register(rt)
 docs_distiller.register(rt)
-youtube_content_search.register(rt)
+youtube.register(rt)
 settings.register(rt)
-routes.register(rt)
+common.register(rt)
 
 
 if __name__ == "__main__":

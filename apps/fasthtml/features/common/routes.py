@@ -1,11 +1,7 @@
-"""Non-feature page routes: placeholder pages + health probe.
-
-Feature pages live in their own `features/<name>.py` modules so they
-can keep their helper components close. Everything else is here.
-"""
+"""Non-feature pages: placeholder + health probe."""
 from starlette.responses import PlainTextResponse
 
-from shell import _Shell
+from layout.shell import _Shell
 
 
 def register(rt) -> None:
