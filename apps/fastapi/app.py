@@ -12,7 +12,9 @@ Add lifespan deps + routers as more features land.
 import logging
 from contextlib import asynccontextmanager
 
-
+# basicConfig BEFORE first-party imports so module-load log calls
+# (e.g. domains.llm.rotator.chain registers LiteLLM's OTel callback at
+# import time and logs about it) use our format, not stderr default.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -21,14 +23,15 @@ logging.basicConfig(
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.v1.dd import router as dd_router
+from api.v1.router import api_v1
+from core.otel import init_otel
 from domains.dd.ingestion.storage import get_storage
 from domains.dd.planner.runtime.checkpoint import (
     close_checkpointer,
     init_checkpointer,
 )
-from api.v1.llm import router as llm_router
-from core.otel import init_otel
+from domains.llm.credentials import warm as warm_credentials
+from domains.llm.rotator.chain import init_dynamic_catalog
 
 
 logger = logging.getLogger(__name__)
@@ -57,7 +60,6 @@ async def lifespan(app: FastAPI):
     # build resolves user keys from cache (not a cold MinIO GET). Best-effort:
     # on failure the rotator falls back to env keys (today's behavior).
     try:
-        from domains.llm.credentials import warm as warm_credentials
         warm_credentials()
     except Exception as e:
         logger.warning(
@@ -69,7 +71,6 @@ async def lifespan(app: FastAPI):
     # rank, filtered to the user's BYOK provider/model selection). Best-effort:
     # on failure the rotator falls back to the selection-filtered static catalog.
     try:
-        from domains.llm.rotator.chain import init_dynamic_catalog
         await init_dynamic_catalog()
     except Exception as e:
         logger.warning(
@@ -109,17 +110,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(
-    dd_router,
-    prefix="/api/v1/docs-distiller",
-    tags=["Docs Distiller"],
-)
-
-app.include_router(
-    llm_router,
-    prefix="/api/v1/llm",
-    tags=["LLM Rotator"],
-)
+app.include_router(api_v1, prefix="/api")
 
 
 @app.get("/")

@@ -11,7 +11,7 @@ import logging
 
 import redis as redis_sync
 
-from celery_app import app
+from core.celery import app
 
 from .runtime.checkpoint import init_checkpointer
 from .runtime.dispatch import resume_planner_async, run_planner_async

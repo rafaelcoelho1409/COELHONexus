@@ -41,12 +41,12 @@ spec:
           command:
             - celery
             - -A
-            - celery_app
+            - core.celery
             - worker
             # Environment-suffixed queue names (e.g. "llm-local" or
             # "llm-production"). Prevents dev and prod workers from stealing
             # each other's tasks on the shared Redis broker. Must stay in sync
-            # with task_routes in apps/fastapi/celery_app.py.
+            # with TASK_ROUTES in apps/fastapi/core/celery/params.py.
             - -Q
             - {{- $env := .Values.environment -}}{{- $queues := splitList "," .Values.celery.queues -}}{{- $suffixed := list -}}{{- range $queues -}}{{- $suffixed = append $suffixed (printf "%s-%s" . $env) -}}{{- end }} {{ join "," $suffixed }}
             - -c

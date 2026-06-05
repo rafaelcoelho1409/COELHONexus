@@ -432,7 +432,7 @@ celery:
   # ForkPoolWorker SIGKILL storms. Parent celery process loads numba/transformers/
   # langchain/litellm/sklearn at ~1.8GB RSS; every forked child inherits that
   # baseline via COW and trips the worker_max_memory_per_child=2GB recycling
-  # guard (celery_app.py:109) the moment Python refcounting copies pages.
+  # guard (core/celery/service.py) the moment Python refcounting copies pages.
   # With concurrency=5 the pod also exceeded the 4Gi memory limit (5 × 2GB +
   # parent ≈ 11.8GB). concurrency=2 gives 2 in-flight tasks (each chapter's
   # synthesize_chapter task spawns 8 parallel section-synth LLM calls anyway,
