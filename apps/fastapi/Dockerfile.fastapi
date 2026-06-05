@@ -23,15 +23,16 @@ RUN apt-get update && \
 
 ENV PATH="/usr/local/bin:$PATH"
 
-# Copy dependency files first (for layer caching)
-COPY pyproject.toml ./
+# Copy lockfile + pyproject first (layer caching: deps re-resolve only if
+# either changes). uv.lock is committed in source; uv sync --frozen errors
+# on drift, guaranteeing the image matches what was tested in CI.
+COPY pyproject.toml uv.lock ./
 
-# Install dependencies (no PyTorch — embeddings use ONNX via FastEmbed).
-# The unclecode-litellm vs litellm namespace collision is resolved at
-# resolution time via `[tool.uv] override-dependencies` in pyproject.toml —
-# no post-install patching needed here.
+# Install pinned dependencies. No PyTorch — embeddings use ONNX via FastEmbed.
+# The unclecode-litellm vs litellm namespace collision is handled at lock
+# time by `[tool.uv] override-dependencies` in pyproject.toml — no post-
+# install patching needed.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv lock && \
     uv sync --frozen --no-install-project --no-dev
 
 # Copy application code

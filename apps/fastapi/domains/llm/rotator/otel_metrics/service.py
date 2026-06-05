@@ -1,5 +1,5 @@
 """KD-pipeline-specific OpenTelemetry metrics — emitted to the same meter
-configured by core.otel so they land in Mimir (via Alloy) alongside
+configured by infra.otel so they land in Mimir (via Alloy) alongside
 LiteLLM's auto-emitted per-deployment metrics.
 
 Adds KD signals LiteLLM has no awareness of: chapter outcomes, refiner
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 
-from core.otel import get_meter
+from infra.otel import get_meter
 
 from .config import INSTRUMENTS
 

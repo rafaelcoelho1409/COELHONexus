@@ -24,7 +24,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.v1.router import api_v1
-from core.otel import init_otel
+from infra.otel import init_otel
 from domains.dd.ingestion.storage import get_storage
 from domains.dd.planner.runtime.checkpoint import (
     close_checkpointer,

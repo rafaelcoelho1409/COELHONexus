@@ -1,4 +1,4 @@
-"""Resolver — curated framework catalog from `shared/sources.yaml`."""
+"""Resolver — curated framework catalog from `sources.yaml`."""
 from .domain import pick_best_source, slugify
 from .params import SOURCES_PATH, TIER_ORDER
 from .service import index_by_slug, load_catalog

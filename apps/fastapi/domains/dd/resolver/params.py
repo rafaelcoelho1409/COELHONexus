@@ -7,6 +7,4 @@ from pathlib import Path
 # Highest → lowest priority for picking the best source per framework.
 TIER_ORDER = ("llms_full", "llms_txt", "sitemap", "docs", "github")
 
-# `apps/fastapi/shared/sources.yaml` — resolved relative to this file so
-# `python -m` style invocations still find it.
-SOURCES_PATH = Path(__file__).resolve().parents[3] / "shared" / "sources.yaml"
+SOURCES_PATH = Path(__file__).resolve().parent / "sources.yaml"

@@ -4,32 +4,33 @@ version = "1.0.0"
 description = "COELHO Nexus - FastAPI base shell"
 requires-python = ">=3.13"
 dependencies = [
-    "fastapi",
-    "uvicorn[standard]",
-    "pydantic",
-    "python-dotenv",
-    "httpx",
-    "celery[redis]",
-    "redis",
-    "pyyaml",
+    # Web framework — cap major (1.0 will signal API stability changes)
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.32,<1.0",
+    "pydantic>=2.9,<3.0",              # v3 is a full rewrite
+    "python-dotenv>=1.0,<2.0",
+    "httpx>=0.27,<1.0",
+    "celery[redis]>=5.4,<6.0",
+    "redis>=5.0,<7.0",                 # 5→6 was stable; cap before 7
+    "pyyaml>=6.0,<7.0",
     # Ingestion stack
-    "beautifulsoup4",                  # HTML parsing for sitemap + tier 4 fallback
-    "lxml",                            # fast XML parser for sitemap.xml
-    "markdownify",                     # HTML → markdown (tier 3, tier 4 httpx path)
-    "markdown-it-py>=3.0",             # token-aware monolith splitter (post-process)
-    "mdit-py-plugins>=0.4",            # frontmatter / deflist / footnote tokens
-    "tenacity",                        # exponential-backoff retry helper
-    "aioboto3>=13.0",                  # async S3 client for MinIO (page-body storage)
+    "beautifulsoup4>=4.12,<5.0",       # HTML parsing for sitemap + tier 4 fallback
+    "lxml>=5.0,<7.0",                  # fast XML parser for sitemap.xml
+    "markdownify>=0.13,<2.0",          # HTML → markdown (tier 3, tier 4 httpx path)
+    "markdown-it-py>=3.0,<4.0",        # token-aware monolith splitter (post-process)
+    "mdit-py-plugins>=0.4,<1.0",       # frontmatter / deflist / footnote tokens
+    "tenacity>=8.0,<10.0",             # exponential-backoff retry helper
+    "aioboto3>=13.0,<15.0",            # async S3 client for MinIO (page-body storage)
     "crawl4ai>=0.8.0,<0.9",            # AsyncUrlSeeder + Playwright-CDP BFS fallback
     # YouTube ingestion stack (services/youtube/) — yt-dlp + PO Token plugin (the
     # legacy stack as of 2026-05; per docs/YCS-MIGRATION-SOTA-2026-05-19.md this
     # also covers transcript extraction via --write-auto-subs, so Playwright CDP
     # is only the fallback tier and is not a hard dependency at v0).
-    "yt-dlp",                          # YouTube metadata + auto-subtitle extraction
-    "bgutil-ytdlp-pot-provider>=1.3.0",# PO Token plugin (auto-discovered by yt-dlp)
+    "yt-dlp>=2025.1",                  # date-versioned; rolling release
+    "bgutil-ytdlp-pot-provider>=1.3.0,<2.0",
     "curl_cffi>=0.11,<0.15",           # Browser impersonation for yt-dlp (0.15 unsupported)
-    "qdrant-client",                   # Qdrant vector DB client (services/youtube/store.py)
-    "langchain-text-splitters",        # RecursiveCharacterTextSplitter for transcript chunking
+    "qdrant-client>=1.10,<2.0",        # Qdrant vector DB client (services/youtube/store.py)
+    "langchain-text-splitters>=0.3,<1.0",
     # LLM rotator stack (services/llm/) — LiteLLM Router + ParetoBandit adaptive routing.
     # litellm PINNED EXACT — v1.82.7/v1.82.8 supply-chain compromised (2026-03-24
     # Trivy CI/CD breach); v1.83.12 AND v1.83.14 ship cost_calculator.py importing
@@ -43,26 +44,28 @@ dependencies = [
     # BYOK credential store (domains/llm/credentials) — Fernet at-rest encryption
     # of user-supplied provider API keys in MinIO. cryptography is the canonical
     # low-footgun Python crypto lib; Fernet = AES-128-CBC + HMAC-SHA256.
-    "cryptography>=42",
+    "cryptography>=46,<47",            # langchain-litellm 0.6.4 floor (46.0.5)
     "numpy>=1.26,<2.2",                # LinUCB sufficient-statistics matrix algebra
     # Rotator deps — now hard deps (were optional/try-except-guarded):
-    "rapidfuzz>=3.0",                  # benchmarks L2 model-name canonicalization (token_set_ratio)
-    "river>=0.21",                     # ParetoBandit drift detection (ADWIN) in pareto_drift
+    "rapidfuzz>=3.0,<4.0",             # benchmarks L2 model-name canonicalization (token_set_ratio)
+    "river>=0.21,<1.0",                # ParetoBandit drift detection (ADWIN) in pareto_drift
     # OpenTelemetry — emits LLM call spans to Alloy (gRPC) and LangFuse (HTTP/OTLP).
-    "opentelemetry-api>=1.30",
-    "opentelemetry-sdk>=1.30",
-    "opentelemetry-exporter-otlp-proto-grpc>=1.30",
-    "opentelemetry-exporter-otlp-proto-http>=1.30",
-    "opentelemetry-instrumentation-fastapi>=0.50b0",
-    "opentelemetry-instrumentation-httpx>=0.50b0",
-    "opentelemetry-instrumentation-redis>=0.50b0",
-    "opentelemetry-instrumentation-celery>=0.50b0",
-    "opentelemetry-instrumentation-logging>=0.50b0",
+    # Stable APIs capped before 2.0; instrumentation packs pre-1.0 capped before 1.0.
+    "opentelemetry-api>=1.30,<2.0",
+    "opentelemetry-sdk>=1.30,<2.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.30,<2.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.30,<2.0",
+    "opentelemetry-instrumentation-fastapi>=0.50b0,<1.0",
+    "opentelemetry-instrumentation-httpx>=0.50b0,<1.0",
+    "opentelemetry-instrumentation-redis>=0.50b0,<1.0",
+    "opentelemetry-instrumentation-celery>=0.50b0,<1.0",
+    "opentelemetry-instrumentation-logging>=0.50b0,<1.0",
     # LangGraph (planner graph + AsyncPostgresSaver checkpointing).
-    "langgraph",
-    "langgraph-checkpoint-postgres",   # Postgres-backed checkpointer; every super-step writes one row
-    "psycopg[binary]",                 # async driver for AsyncPostgresSaver — binary wheel, no libpq needed
-    "langchain-core",                  # BaseChatModel + HumanMessage — already pulled transitively but pin for clarity
+    # Pre-1.0 churn → cap minor; bump deliberately after testing.
+    "langgraph>=0.2,<1.0",
+    "langgraph-checkpoint-postgres>=2.0,<3.0",
+    "psycopg[binary]>=3.2,<4.0",       # async driver for AsyncPostgresSaver — binary wheel, no libpq needed
+    "langchain-core>=1.2.21,<2.0",   # langchain-litellm 0.6.4 floor
     # Tokenizer — Rust-backed BPE for byte-exact NIM parity in embed_corpus
     # chunk-boundary math. 3.3 MB wheel vs ~50-60 MB for `transformers`; pure
     # CPU, no torch, no inference, just tokenizer encode/decode.
@@ -101,5 +104,5 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
-    "pyflakes>=3.2.0",
+    "pyflakes>=3.2,<4.0",
 ]

@@ -76,7 +76,7 @@ logger = logging.getLogger(__name__)
 
 # When OTEL_EXPORTER_OTLP_ENDPOINT is set, LiteLLM emits a span per LLM call
 # (model, deployment_id, provider, token counts, latency, error type) through
-# the TracerProvider configured in core.otel. dd_process metadata propagates
+# the TracerProvider configured in infra.otel. dd_process metadata propagates
 # via config={"metadata": {"dd_process": "..."}} on ainvoke.
 if "OTEL_EXPORTER_OTLP_ENDPOINT" in os.environ:
     try:

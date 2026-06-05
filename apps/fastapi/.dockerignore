@@ -1,0 +1,30 @@
+# Build artifacts that would clobber the freshly-built /app/.venv
+.venv/
+*.egg-info/
+build/
+dist/
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local runtime + logs
+logs/
+*.log
+
+# Git + IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+
+# Secrets / env (defense-in-depth — never bake into image)
+.env
+.env.*
+
+# Docs not needed at runtime
+*.md

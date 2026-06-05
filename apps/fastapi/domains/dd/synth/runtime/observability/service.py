@@ -17,7 +17,7 @@ from typing import Awaitable, Callable
 
 from opentelemetry import trace as _otel_trace
 
-from core.otel import get_tracer
+from infra.otel import get_tracer
 
 
 logger = logging.getLogger(__name__)

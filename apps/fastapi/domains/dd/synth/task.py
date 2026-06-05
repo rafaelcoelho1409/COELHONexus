@@ -18,7 +18,7 @@ import logging
 
 import redis as redis_sync
 
-from core.celery import app
+from infra.celery import app
 
 from ..planner.runtime.checkpoint import init_checkpointer
 from .runtime.dispatch import (

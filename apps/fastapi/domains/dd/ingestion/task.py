@@ -3,7 +3,7 @@ progress + manifest flow back through Redis."""
 import asyncio
 import logging
 
-from core.celery import app
+from infra.celery import app
 
 from .dispatch import run as _run_dispatch
 
