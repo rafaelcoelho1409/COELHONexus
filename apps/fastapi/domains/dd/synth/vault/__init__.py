@@ -1,50 +1,37 @@
-"""Vault sentinelization subpackage — re-exports all public names."""
-from .constants import (
-    _VAULT_HASH_LEN,
-    _SENTINEL_FORMAT_VERSION,
-    _HASH_ALGO,
-    _SENTINEL_RE,
-    _SENTINEL_HASH_RE,
-)
-from .types import (
-    VaultEntry,
-    VaultManifest,
-    AuditReport,
-)
-from .service import (
-    _hash_block,
-    _make_sentinel,
-    _parse_info_string,
-    sentinelize_doc,
-    materialize,
+"""Vault sentinelization subpackage — re-exports public surface."""
+from .domain import (
     audit_roundtrip,
     build_manifest,
-    format_entry_for_prompt,
     format_entries_for_prompt,
-    score_entry_pedagogy,
+    format_entry_for_prompt,
+    materialize,
     rank_hashes_by_pedagogy,
-    get_or_build_source_vault,
+    score_entry_pedagogy,
+    sentinelize_doc,
 )
+from .params import VAULT_HASH_LEN
+from .patterns import SENTINEL_HASH_RE, SENTINEL_RE
+from .schemas import AuditReport, VaultEntry, VaultManifest
+from .service import get_or_build_source_vault
+from .versions import HASH_ALGO, SENTINEL_FORMAT_VERSION
+
 
 __all__ = [
-    "_VAULT_HASH_LEN",
-    "_SENTINEL_FORMAT_VERSION",
-    "_HASH_ALGO",
-    "_SENTINEL_RE",
-    "_SENTINEL_HASH_RE",
+    "AuditReport",
+    "HASH_ALGO",
+    "SENTINEL_FORMAT_VERSION",
+    "SENTINEL_HASH_RE",
+    "SENTINEL_RE",
+    "VAULT_HASH_LEN",
     "VaultEntry",
     "VaultManifest",
-    "AuditReport",
-    "_hash_block",
-    "_make_sentinel",
-    "_parse_info_string",
-    "sentinelize_doc",
-    "materialize",
     "audit_roundtrip",
     "build_manifest",
-    "format_entry_for_prompt",
     "format_entries_for_prompt",
-    "score_entry_pedagogy",
-    "rank_hashes_by_pedagogy",
+    "format_entry_for_prompt",
     "get_or_build_source_vault",
+    "materialize",
+    "rank_hashes_by_pedagogy",
+    "score_entry_pedagogy",
+    "sentinelize_doc",
 ]

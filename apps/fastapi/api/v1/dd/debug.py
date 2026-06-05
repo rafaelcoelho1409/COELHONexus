@@ -32,10 +32,8 @@ from typing import Optional
 import redis.asyncio as redis_aio
 from fastapi import APIRouter, HTTPException
 
-from domains.dd.ingestion import (
-    post,
-    snapshot,
-)
+from domains.dd.ingestion import post
+from domains.dd.ingestion.storage import snapshot
 from domains.dd.ingestion.tiers import (
     tier1,
     tier2,
@@ -48,7 +46,7 @@ from domains.dd.ingestion.progress import Progress
 from domains.dd.ingestion.storage import get_storage
 from domains.dd.ingestion.storage import Store
 
-from domains.dd.resolver import _index_by_slug
+from domains.dd.resolver import index_by_slug
 
 
 router = APIRouter()
@@ -72,7 +70,7 @@ def _redis_url() -> str:
 
 
 def _entry_or_404(slug: str) -> dict:
-    entry = _index_by_slug().get(slug)
+    entry = index_by_slug().get(slug)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"unknown slug: {slug!r}")
     return entry

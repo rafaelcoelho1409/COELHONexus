@@ -35,6 +35,30 @@ binding constraint. Token budgets are intentionally generous; truncation
 only kicks in for pathologically long chapters.
 """
 from __future__ import annotations
+from .keys import digest_latest_key, latest_blob_key, sawc_latest_key, versioned_blob_key
+from .params import (
+    DENSITY_MAX_AVG_EXPLANATION_WORDS,
+    DENSITY_MAX_CHARS_PER_PARA,
+    DENSITY_MIN_AVG_EXPLANATION_WORDS,
+    DENSITY_MIN_CHARS_PER_PARA,
+    FEEDBACK_MAX_CHARS,
+    FEEDBACK_MIN_CHARS,
+    LLM_CRITERIA,
+    MAX_RENDERED_CHAPTER_CHARS,
+    MIN_AVG_CODE_REFS_PER_SECTION,
+    MIN_CITATIONS_PER_SECTION,
+    MIN_CODE_REF_COVERAGE_FRACTION,
+    PASS_THRESHOLD,
+    PICKER_FALLBACK_RATE_MAX,
+    REPAIR_RATE_MAX,
+)
+from .schemas import (
+    ChecklistEvaluation,
+    CriterionResult,
+    LLMJudgePayload,
+    LLMVerdict,
+)
+from .versions import CHECKLIST_PROMPT_VERSION, CHECKLIST_SCHEMA_VERSION
 
 import json
 import logging
@@ -48,9 +72,7 @@ from ...ingestion.storage import get_storage
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
 # Tunables
-# =============================================================================
 COCOA_PROMPT_VERSION = "v1-cocoa-2026-05-25"
 
 # Per-hash abstraction cache (Bundle 5, 2026-05-25). Stage 1 abstractions
@@ -168,9 +190,7 @@ def _has_keyword_overlap(*, code_body: str, explanation: str) -> bool:
     return bool(code_idents & expl_idents)
 
 
-# =============================================================================
 # Stage 1 — Explainer: abstract every code block into a behavioral NL spec
-# =============================================================================
 _EXPLAINER_PROMPT = """You are the Code Explainer (CoCoA stage 1).
 
 For each code snippet below, write ONE concise behavioral abstraction (1
@@ -202,7 +222,7 @@ def _render_blocks_for_explainer(blocks: list[dict]) -> str:
         lang = b.get("lang") or ""
         body = (b.get("body") or "")[:_CODE_EXCERPT_CHARS]
         parts.append(
-            f"[id={bid}, lang={lang}]\n```{lang}\n{body}\n```"
+            f"[id = {bid}, lang = {lang}]\n```{lang}\n{body}\n```"
         )
     return "\n\n".join(parts)
 
@@ -235,7 +255,7 @@ async def _write_cached_abstraction(minio, h: str, spec: str) -> None:
         await minio.write(
             key,
             json.dumps({"spec": spec}),
-            content_type="application/json",
+            content_type = "application/json",
         )
     except Exception as e:
         logger.debug(
@@ -267,7 +287,7 @@ async def _explain_blocks(blocks: list[dict]) -> dict[str, str]:
     minio = get_storage()
 
     # Partition into cache hits vs misses. Blocks without `hash` or
-    # flagged `code_source='derived'` go straight to the LLM (no cache).
+    # flagged `code_source = 'derived'` go straight to the LLM (no cache).
     cached: dict[str, str] = {}
     misses: list[dict] = []
     for b in blocks:
@@ -291,15 +311,15 @@ async def _explain_blocks(blocks: list[dict]) -> dict[str, str]:
         return cached
 
     prompt = _EXPLAINER_PROMPT.format(
-        blocks_block=_render_blocks_for_explainer(misses),
+        blocks_block = _render_blocks_for_explainer(misses),
     )
     try:
         response, _ = await chat_judge_bandit_async(
             prompt,
-            max_tokens=_EXPLAINER_MAX_TOKENS,
-            temperature=_EXPLAINER_TEMPERATURE,
-            dd_process=_DD_PROCESS_EXPLAINER,
-            response_format={"type": "json_object"},
+            max_tokens = _EXPLAINER_MAX_TOKENS,
+            temperature = _EXPLAINER_TEMPERATURE,
+            dd_process = _DD_PROCESS_EXPLAINER,
+            response_format = {"type": "json_object"},
         )
     except Exception as e:
         logger.warning(
@@ -335,9 +355,7 @@ async def _explain_blocks(blocks: list[dict]) -> dict[str, str]:
     return {**cached, **fresh}
 
 
-# =============================================================================
 # Stage 2 — Judge: align prose explanation against the explainer's spec
-# =============================================================================
 _JUDGE_PROMPT = """You are the Alignment Judge (CoCoA stage 2).
 
 For each row below, decide if the documentation EXPLANATION faithfully
@@ -361,7 +379,7 @@ OUTPUT — strict JSON, exactly this shape:
   "verdicts": [
     {{"id": "<the integer id>",
       "aligned": true | false,
-      "reason": "<short string; required when aligned=false, optional otherwise>"}},
+      "reason": "<short string; required when aligned = false, optional otherwise>"}},
     ...
   ]
 }}
@@ -382,7 +400,7 @@ def _render_pairs_for_judge(pairs: list[dict]) -> str:
         sub  = (p.get("subheading") or "").strip()
         expl = (p.get("explanation") or "").strip()
         parts.append(
-            f"[id={pid}]\n"
+            f"[id = {pid}]\n"
             f"  SUBHEADING:  {sub}\n"
             f"  EXPLANATION: {expl}\n"
             f"  SPEC:        {spec}"
@@ -396,15 +414,15 @@ async def _judge_pairs(pairs: list[dict]) -> dict[str, dict]:
     if not pairs:
         return {}
     prompt = _JUDGE_PROMPT.format(
-        pairs_block=_render_pairs_for_judge(pairs),
+        pairs_block = _render_pairs_for_judge(pairs),
     )
     try:
         response, _ = await chat_judge_bandit_async(
             prompt,
-            max_tokens=_JUDGE_MAX_TOKENS,
-            temperature=_JUDGE_TEMPERATURE,
-            dd_process=_DD_PROCESS_JUDGE,
-            response_format={"type": "json_object"},
+            max_tokens = _JUDGE_MAX_TOKENS,
+            temperature = _JUDGE_TEMPERATURE,
+            dd_process = _DD_PROCESS_JUDGE,
+            response_format = {"type": "json_object"},
         )
     except Exception as e:
         logger.warning(
@@ -428,9 +446,7 @@ async def _judge_pairs(pairs: list[dict]) -> dict[str, dict]:
     return out
 
 
-# =============================================================================
 # Public entrypoint
-# =============================================================================
 async def cocoa_alignment_check(
     *,
     sawc_payload: dict,
@@ -457,8 +473,8 @@ async def cocoa_alignment_check(
         "feedback":            str,     # 1-sentence summary for mgsr_replan
       }
 
-    Fail-soft: any infrastructure failure returns passed=True with
-    method='cocoa_skipped' so the bundled judge stays authoritative.
+    Fail-soft: any infrastructure failure returns passed = True with
+    method = 'cocoa_skipped' so the bundled judge stays authoritative.
     """
     sections = sawc_payload.get("sections") or []
 
@@ -522,8 +538,8 @@ async def cocoa_alignment_check(
     pairs_for_llm: list[dict] = []
     for p in pairs:
         if _has_keyword_overlap(
-            code_body=p.get("body", ""),
-            explanation=p.get("explanation", ""),
+            code_body = p.get("body", ""),
+            explanation = p.get("explanation", ""),
         ):
             pairs_for_llm.append(p)
         else:
@@ -663,9 +679,7 @@ async def cocoa_alignment_check(
     }
 
 
-# =============================================================================
 # Tiny helpers
-# =============================================================================
 def _strip_fences(s: str) -> str:
     """Strip leading/trailing ```lang ... ``` fence markers from a vault
     body so the explainer sees clean code."""

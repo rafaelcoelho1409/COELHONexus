@@ -13,7 +13,7 @@ Tier priority (highest -> lowest): llms_full > llms_txt > sitemap > docs > githu
 """
 from fastapi import APIRouter, HTTPException
 
-from domains.dd.resolver import _index_by_slug, _load_catalog, _pick_best_source
+from domains.dd.resolver import index_by_slug, load_catalog, pick_best_source
 
 router = APIRouter()
 
@@ -22,13 +22,13 @@ router = APIRouter()
 def list_catalog() -> list[dict]:
     """Full catalog with slugs injected. Re-read every request so YAML
     edits land without a pod restart."""
-    return _load_catalog()
+    return load_catalog()
 
 
 @router.get("/{slug}")
 def resolve_one(slug: str) -> dict:
     """One entry + `best_source` (the tier-picked URL for Ingestion)."""
-    entry = _index_by_slug().get(slug)
+    entry = index_by_slug().get(slug)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"framework '{slug}' not found")
-    return {**entry, "best_source": _pick_best_source(entry)}
+    return {**entry, "best_source": pick_best_source(entry)}

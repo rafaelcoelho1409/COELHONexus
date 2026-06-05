@@ -1,5 +1,8 @@
 """Unified LLM rotator — LiteLLM Router + chain factories + embed/judge helpers."""
-from .constants import DD_EMBED_MODEL_NAME
+from __future__ import annotations
+
+from .domain import is_heavyweight
+from .keys import DD_EMBED_MODEL_NAME
 from .service import (
     build_curator_llm,
     build_keylm_chain,
@@ -15,9 +18,9 @@ from .service import (
     chat_judge_bandit_async,
     embed_via_router_async,
     embed_via_router_sync,
+    ensure_dynamic_catalog,
     get_entries_for_group,
     get_parent_group,
-    ensure_dynamic_catalog,
     init_dynamic_catalog,
     init_dynamic_catalog_sync,
     pick_synth_deployment,
@@ -28,27 +31,28 @@ from .service import (
 
 __all__ = [
     "DD_EMBED_MODEL_NAME",
-    "embed_via_router_sync",
-    "embed_via_router_async",
-    "chat_judge_async",
-    "chat_judge_bandit_async",
-    "rerank_via_router_async",
-    "build_llm_fallback_chain",
-    "build_resolver_llm_chain",
-    "build_synth_fallback_chain",
-    "build_synth_pool_chain",
-    "pick_synth_deployment",
-    "pick_synth_deployment_bandit",
-    "get_parent_group",
-    "get_entries_for_group",
-    "build_pinned_chain_any",
-    "build_synth_pinned_chain",
-    "build_refine_llm_chain",
     "build_curator_llm",
     "build_keylm_chain",
+    "build_llm_fallback_chain",
+    "build_pinned_chain_any",
     "build_reduce_label_chain",
+    "build_refine_llm_chain",
+    "build_resolver_llm_chain",
+    "build_synth_fallback_chain",
+    "build_synth_pinned_chain",
+    "build_synth_pool_chain",
+    "chat_judge_async",
+    "chat_judge_bandit_async",
+    "embed_via_router_async",
+    "embed_via_router_sync",
+    "ensure_dynamic_catalog",
+    "get_entries_for_group",
+    "get_parent_group",
     "init_dynamic_catalog",
     "init_dynamic_catalog_sync",
-    "ensure_dynamic_catalog",
+    "is_heavyweight",
+    "pick_synth_deployment",
+    "pick_synth_deployment_bandit",
+    "rerank_via_router_async",
     "reset_rotator",
 ]

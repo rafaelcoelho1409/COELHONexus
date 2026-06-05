@@ -47,16 +47,16 @@ from typing import Optional
 from domains.llm.rotator.chain import chat_judge_bandit_async
 
 
+from .versions import (
+    BOOK_HARMONIZE_PROMPT_VERSION,
+    BOOK_HARMONIZE_SCHEMA_VERSION,
+)
+
+
 logger = logging.getLogger(__name__)
 
 
-BOOK_HARMONIZE_SCHEMA_VERSION = "1.0"
-BOOK_HARMONIZE_PROMPT_VERSION = "v1-2026-05-24"
-
-
-# =============================================================================
 # Cache key (Ship #5, 2026-05-24)
-# =============================================================================
 def compute_harmonize_manifest_hash(chapters: list[dict]) -> str:
     """Content-addressed cache key for the cross-chapter harmonization pass.
 
@@ -85,9 +85,7 @@ def compute_harmonize_manifest_hash(chapters: list[dict]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-# =============================================================================
 # Tunables
-# =============================================================================
 _MAX_CLAIMS_PER_CHAPTER = 20
 _PROSE_CHARS_FOR_CLAIMS = 10000
 _PROSE_CHARS_FOR_PATCH = 16000
@@ -100,9 +98,7 @@ _PER_CHAPTER_CONCURRENCY = 4
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
-# =============================================================================
 # Prompts
-# =============================================================================
 _EXTRACT_CLAIMS_PROMPT = """Extract the atomic factual claims from this chapter of a distilled technical book.
 
 Atomic claim = a single verifiable assertion about the technology (e.g., "library X
@@ -201,9 +197,7 @@ Output: the full chapter prose, minimally edited. NO commentary, NO explanation,
 NO JSON wrapping — output ONLY the markdown."""
 
 
-# =============================================================================
 # Main entry point
-# =============================================================================
 async def harmonize_book(
     *,
     framework_slug: str,
@@ -346,9 +340,7 @@ async def harmonize_book(
     }
 
 
-# =============================================================================
 # Helpers
-# =============================================================================
 async def _extract_claims_and_terms(
     sem: asyncio.Semaphore, chapter: dict,
 ) -> dict:

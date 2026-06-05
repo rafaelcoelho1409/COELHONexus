@@ -51,22 +51,17 @@ from __future__ import annotations
 import hashlib
 import re
 
-from .constants import (
-    _VAULT_HASH_LEN,
-    _SENTINEL_RE,
-    _SENTINEL_HASH_RE,
-)
-from .types import VaultEntry, VaultManifest, AuditReport
+from .params import VAULT_HASH_LEN
+from .patterns import SENTINEL_HASH_RE, SENTINEL_RE
+from .schemas import AuditReport, VaultEntry, VaultManifest
 
-
-# ── Internal helpers ───────────────────────────────────────────────────
 
 def _hash_block(payload: str, salt: int = 0) -> str:
     """16-hex SHA-256 prefix. Salt is used on the astronomically rare
     per-doc collision (two distinct fences whose hashes truncate to
     the same prefix)."""
     seed = payload if salt == 0 else f"{payload}|{salt}"
-    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:_VAULT_HASH_LEN]
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:VAULT_HASH_LEN]
 
 
 def _make_sentinel(digest: str, lang: str = "") -> str:
@@ -87,8 +82,6 @@ def _parse_info_string(info: str) -> tuple[str, str]:
     parts = info.split(None, 1)
     return (parts[0] or "", info)
 
-
-# ── Public API ─────────────────────────────────────────────────────────
 
 def sentinelize_doc(md_text: str) -> tuple[str, dict[str, VaultEntry]]:
     """Replace every fenced code block in `md_text` with an opaque
@@ -116,7 +109,7 @@ def sentinelize_doc(md_text: str) -> tuple[str, dict[str, VaultEntry]]:
         ValueError: input already contains vault-shaped sentinels
             (would create ambiguous restoration).
     """
-    if _SENTINEL_RE.search(md_text):
+    if SENTINEL_RE.search(md_text):
         raise ValueError(
             "source already contains vault sentinels — cannot safely "
             "re-vault (double-vault bug or adversarial input)"
@@ -249,7 +242,7 @@ def audit_roundtrip(
 
     vault_hashes = set(vault.keys())
     # Hash counts in output (incl. duplicates).
-    found_hashes: list[str] = _SENTINEL_HASH_RE.findall(llm_output)
+    found_hashes: list[str] = SENTINEL_HASH_RE.findall(llm_output)
     found_set = set(found_hashes)
 
     missing = sorted(vault_hashes - found_set)
@@ -275,7 +268,6 @@ def audit_roundtrip(
     )
 
 
-# ── Visible-Vault helpers (2026-05-24, Ship #1) ───────────────────────
 #
 # Original vault design hid code from the LLM by replacing fences with
 # opaque hash sentinels. Empirical failure mode (FastMCP chapter 1): the
@@ -366,7 +358,6 @@ def format_entries_for_prompt(
     return "\n\n".join(out)
 
 
-# ── Ship #2 (2026-05-24) — Code inventory pedagogical scoring ─────────
 #
 # Lightweight scorer applied to vault entries to surface the most
 # pedagogically valuable code blocks per section. Used by the SAWC writer
@@ -444,9 +435,7 @@ def rank_hashes_by_pedagogy(
     return [h for _, h in scored]
 
 
-# ─────────────────────────────────────────────────────────────────────
 # CRITICAL FIX (2026-05-24 evening) — read-time vault provisioning
-# ─────────────────────────────────────────────────────────────────────
 # Root-cause discovery: ingestion produces per-page markdown files at
 # `ingestion/{slug}/pages/{idx}-{slug}.md` but the vault builder only ran
 # on the consolidated `llms-full.txt` crawl, producing exactly ONE
@@ -535,8 +524,6 @@ async def get_or_build_source_vault(
     except Exception:
         return raw, {}
 
-
-# ── Convenience builder for the ingestion-time pipeline ────────────────
 
 def build_manifest(
     framework: str,

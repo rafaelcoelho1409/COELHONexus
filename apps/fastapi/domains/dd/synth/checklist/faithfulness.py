@@ -37,6 +37,30 @@ EMPIRICAL BASELINE (free-tier on LLM-AggreFact):
   vs current cosine ......... ~65-68% on technical content
 """
 from __future__ import annotations
+from .keys import digest_latest_key, latest_blob_key, sawc_latest_key, versioned_blob_key
+from .params import (
+    DENSITY_MAX_AVG_EXPLANATION_WORDS,
+    DENSITY_MAX_CHARS_PER_PARA,
+    DENSITY_MIN_AVG_EXPLANATION_WORDS,
+    DENSITY_MIN_CHARS_PER_PARA,
+    FEEDBACK_MAX_CHARS,
+    FEEDBACK_MIN_CHARS,
+    LLM_CRITERIA,
+    MAX_RENDERED_CHAPTER_CHARS,
+    MIN_AVG_CODE_REFS_PER_SECTION,
+    MIN_CITATIONS_PER_SECTION,
+    MIN_CODE_REF_COVERAGE_FRACTION,
+    PASS_THRESHOLD,
+    PICKER_FALLBACK_RATE_MAX,
+    REPAIR_RATE_MAX,
+)
+from .schemas import (
+    ChecklistEvaluation,
+    CriterionResult,
+    LLMJudgePayload,
+    LLMVerdict,
+)
+from .versions import CHECKLIST_PROMPT_VERSION, CHECKLIST_SCHEMA_VERSION
 
 import asyncio
 import json
@@ -77,7 +101,7 @@ An atomic claim is a single verifiable fact about the technology being documente
 Examples of valid claims:
   - "Library X uses Y as its default serialization format"
   - "The timeout parameter defaults to 30 seconds"
-  - "Function foo returns a list of strings when called with bar=True"
+  - "Function foo returns a list of strings when called with bar = True"
 
 NOT claims (skip these):
   - Generic motivation ("This makes the API easier to use")
@@ -272,11 +296,11 @@ async def _extract_claims(prose: str) -> list[str]:
 
     try:
         prompt = _EXTRACT_PROMPT.format(
-            max_claims=_MAX_CLAIMS, prose_chars=len(prose), prose=prose,
+            max_claims = _MAX_CLAIMS, prose_chars = len(prose), prose = prose,
         )
         raw, _ = await chat_judge_bandit_async(
-            prompt, max_tokens=_EXTRACT_MAX_TOKENS, temperature=0.0,
-            response_format={"type": "json_object"},
+            prompt, max_tokens = _EXTRACT_MAX_TOKENS, temperature = 0.0,
+            response_format = {"type": "json_object"},
         )
         m = _JSON_RE.search(raw or "")
         if not m:
@@ -299,8 +323,8 @@ async def _extract_claims(prose: str) -> list[str]:
     try:
         await minio.write(
             cache_key,
-            json.dumps({"claims": out}, ensure_ascii=False),
-            content_type="application/json",
+            json.dumps({"claims": out}, ensure_ascii = False),
+            content_type = "application/json",
         )
     except Exception as e:
         logger.debug(
@@ -314,14 +338,14 @@ async def _judge_claim(
     sem: asyncio.Semaphore, claim: str, source: str,
 ) -> dict:
     """Verify ONE atomic claim against the source. Fail-soft: any failure
-    returns supported=True so we don't override the bundled judge on
+    returns supported = True so we don't override the bundled judge on
     infra hiccups."""
     async with sem:
         try:
-            prompt = _JUDGE_PROMPT.format(claim=claim, source=source)
+            prompt = _JUDGE_PROMPT.format(claim = claim, source = source)
             raw, _ = await chat_judge_bandit_async(
-                prompt, max_tokens=_JUDGE_MAX_TOKENS, temperature=0.0,
-                response_format={"type": "json_object"},
+                prompt, max_tokens = _JUDGE_MAX_TOKENS, temperature = 0.0,
+                response_format = {"type": "json_object"},
             )
             m = _JSON_RE.search(raw or "")
             if not m:

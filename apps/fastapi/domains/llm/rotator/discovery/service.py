@@ -1,157 +1,51 @@
-"""
-Provider discovery service — live parallel fan-out across provider `/v1/models`.
+"""Imperative Shell — parallel /v1/models fan-out, key validation, OTel.
 
-DESIGN (2026-05-13): Replaces the static-list rotator catalog in llm_chain.py
-where every model was hardcoded and EOLs only surfaced as 410/404 cascade
-exhaustions at call time. This module hits each provider's discovery endpoint
-ON DEMAND (not on a cron, not from a cache), applies a free-tier filter per
-provider, and returns one consolidated `{provider: [DiscoveryRecord, ...]}`.
+Each call is fresh — no cron, no staleness. Total latency = max(provider
+response times) ≈ 0.5-1.5s because all enabled providers run in parallel.
+Fail-soft: a provider that errors returns [] for itself; the others still
+contribute.
 
-The rotator builder calls `list_all_alive_models()` whenever it (re)materializes
-its LiteLLM Router. Each call is fresh — no staleness, no cache invalidation,
-no CI cron to maintain. Total latency = max(provider response times) ≈ 0.5-1.5s
-because all 8 providers are fetched in parallel via asyncio.gather.
-
-Composition (decoupled layers):
-   Discovery  →  Model Card enrichment  →  Rotator builder  →  LiteLLM Router
-   (here)        (config/model_catalog)    (llm_chain.py)      (existing)
-
-Provider matrix (validated 2026-05-13):
-
-  Provider     Endpoint                                              Free-filter rule
-  ──────────   ──────────────────────────────────────────────────    ─────────────────────────────
-  groq         api.groq.com/openai/v1/models                         all (account-tier gate)
-  nim          integrate.api.nvidia.com/v1/models                    all (account-tier gate)
-  cerebras     api.cerebras.ai/v1/models                             all (account-tier gate)
-  mistral      api.mistral.ai/v1/models                              not deprecated (date < now)
-  gemini       generativelanguage.googleapis.com/v1beta/models       free-tier name prefixes
-  sambanova    api.sambanova.ai/v1/models                            pricing.prompt == 0  (DISABLED)
-  deepseek     api.deepseek.com/v1/models                            paid-only            (DISABLED)
-
-OTel metrics emitted per call (for the FastAPI `/admin/rotator/models` route
-and rotator-rebuild call sites):
-  dd.rotator_models_alive            Gauge       per-provider live model count
-  dd.rotator_discovery_duration_s    Histogram   per-call wall-clock
-  dd.rotator_discovery_error_total   Counter     per-(provider, error_type) fetch failures
-
-Fail-soft: a provider that errors during a fan-out returns [] for that
-provider only. The other 7 still produce results. Caller decides whether
-empty == failure or empty == "provider has no free models today."
+OTel metrics:
+    dd.rotator_models_alive          Gauge       per-provider live model count
+    dd.rotator_discovery_duration_s  Histogram   per-call wall-clock
+    dd.rotator_discovery_error_total Counter     per-(provider, error_type)
 """
 from __future__ import annotations
-import datetime as dt
-import time
-import httpx
-import os
+
 import asyncio
 import logging
+import time
 from typing import Any
 
+import httpx
+
 from core.otel_setup import get_meter
-# BYOK key resolution — user-store key (settings UI) overrides the env var.
 from domains.llm.credentials import resolve_key
 
-from .constants import (
-    _GEMINI_FREE_NAME_PREFIXES,
-    DISCOVERY_HTTP_TIMEOUT_S,
-    PROVIDERS,
-    _metric_instruments
-)
-from .types import (
-    ProviderConfig,
-    DiscoveryRecord,
-    FreeFilter,
-)
+from .config import PROVIDERS
+from .domain import FILTER_DISPATCH, model_id, normalize_response
+from .entities import DiscoveryRecord, ProviderConfig
+from .params import DISCOVERY_HTTP_TIMEOUT_S
 
 
 logger = logging.getLogger(__name__)
 
 
-def _filter_all(_m: dict) -> bool:
-    return True
+_metric_instruments: dict[str, Any] = {}
 
 
-def _filter_mistral(m: dict) -> bool:
-    """Drop models whose deprecation date is in the past."""
-    dep = m.get("deprecation") or m.get("deprecation_date")
-    if not dep:
-        return True
-    try:
-        deadline = dt.datetime.fromisoformat(str(dep).replace("Z", "+00:00"))
-        return deadline.timestamp() > time.time()
-    except Exception:
-        return True
-
-
-def _filter_gemini(m: dict) -> bool:
-    name = (m.get("name") or "").strip()
-    return name.startswith(_GEMINI_FREE_NAME_PREFIXES)
-
-
-def _filter_sambanova_pricing(m: dict) -> bool:
-    """pricing.prompt == 0 AND pricing.completion == 0 → truly free."""
-    pricing = m.get("pricing") or {}
-    try:
-        return float(pricing.get("prompt", 1)) == 0.0 and \
-               float(pricing.get("completion", 1)) == 0.0
-    except (TypeError, ValueError):
-        return False
-
-
-def _filter_always_false(_m: dict) -> bool:
-    """For providers held disabled (paywalled, etc)."""
-    return False
-
-
-# FreeFilter enum value -> predicate. PROVIDERS (constants.py) stores the enum
-# member; this dispatch keeps the predicate functions in service.py, so there
-# is no constants -> service circular import.
-_FILTER_DISPATCH = {
-    FreeFilter.ALL: _filter_all,
-    FreeFilter.MISTRAL: _filter_mistral,
-    FreeFilter.GEMINI: _filter_gemini,
-    FreeFilter.SAMBANOVA_PRICING: _filter_sambanova_pricing,
-    FreeFilter.ALWAYS_FALSE: _filter_always_false,
-}
-
-
-# =============================================================================
-# Response shape normalizers
-# =============================================================================
-def _normalize_response(shape: str, body: dict) -> list[dict]:
-    """Provider responses → list of model dicts."""
-    if shape == "gemini":
-        return list(body.get("models") or [])
-    # OpenAI-compatible: response['data'] is the list
-    return list(body.get("data") or [])
-
-
-def _model_id(provider: str, raw: dict) -> str:
-    """Extract canonical model id from a provider response item."""
-    if provider == "gemini":
-        # Gemini returns 'name': 'models/gemini-2.5-pro' — strip the prefix
-        return (raw.get("name") or "").removeprefix("models/")
-    return str(raw.get("id") or raw.get("name") or "")
-
-
-# =============================================================================
+# --------------------------------------------------------------------------- #
 # HTTP fetch (single provider)
-# =============================================================================
+# --------------------------------------------------------------------------- #
 async def _fetch_provider(
     client: httpx.AsyncClient,
     cfg: ProviderConfig,
 ) -> list[DiscoveryRecord]:
-    """One provider's /v1/models call → list of free-tier DiscoveryRecord.
-
-    Returns [] on auth-missing / network error / non-2xx. Caller treats empty
-    as "no signal from this provider on this call" — other providers still
-    contribute.
-    """
+    """One provider's /v1/models → free-tier records. [] on missing key / network
+    error / non-2xx — caller treats empty as "no signal from this provider"."""
     api_key = resolve_key(cfg.key_env)
     if not api_key:
-        logger.info(
-            f"[discovery] {cfg.name}: {cfg.key_env} unset (store + env) — skipping"
-        )
+        logger.info(f"[discovery] {cfg.name}: {cfg.key_env} unset (store + env) — skipping")
         return []
     headers: dict[str, str] = {"Accept": "application/json"}
     params: dict[str, str] = {}
@@ -170,54 +64,37 @@ async def _fetch_provider(
         body = resp.json()
     except httpx.HTTPStatusError as e:
         err_type = f"http_{e.response.status_code}"
-        logger.warning(
-            f"[discovery] {cfg.name} HTTP {e.response.status_code}: "
-            f"{str(e)[:200]}"
-        )
+        logger.warning(f"[discovery] {cfg.name} HTTP {e.response.status_code}: {str(e)[:200]}")
         _record_discovery_error(cfg.name, err_type)
         return []
     except Exception as e:
         err_type = type(e).__name__
-        logger.warning(
-            f"[discovery] {cfg.name} fetch failed: {err_type}: {str(e)[:200]}"
-        )
+        logger.warning(f"[discovery] {cfg.name} fetch failed: {err_type}: {str(e)[:200]}")
         _record_discovery_error(cfg.name, err_type)
         return []
-    items = _normalize_response(cfg.response_shape, body)
-    filtered = [m for m in items if _FILTER_DISPATCH[cfg.free_filter](m)]
+    items = normalize_response(cfg.response_shape, body)
+    filtered = [m for m in items if FILTER_DISPATCH[cfg.free_filter](m)]
     now = time.time()
-    records = [
+    return [
         DiscoveryRecord(
-            provider = cfg.name,
-            model_id = _model_id(cfg.name, m),
-            fetched_at = now,
-            raw = m,
-        )
+            provider = cfg.name, 
+            model_id = mid, 
+            fetched_at = now, 
+            raw = m)
         for m in filtered
-        if _model_id(cfg.name, m)
+        if (mid := model_id(cfg.name, m))
     ]
-    return records
 
 
-# =============================================================================
-# Public API — main entry point
-# =============================================================================
+# --------------------------------------------------------------------------- #
+# Public API
+# --------------------------------------------------------------------------- #
 async def list_all_alive_models(
     *,
     only_providers: list[str] | None = None,
 ) -> dict[str, list[DiscoveryRecord]]:
-    """Fan out across all enabled providers' /v1/models in parallel.
-
-    Returns {provider: [DiscoveryRecord, ...]} containing only providers that
-    are enabled and whose free-tier filter accepted at least one model. A
-    provider that errors out is present with an empty list (caller can detect
-    via empty + OTel error counter).
-
-    Args:
-        only_providers: optional subset to query. None = all enabled providers.
-                        Useful for the rotator's per-group rebuild path or for
-                        provider-specific health checks.
-    """
+    """Parallel fan-out across enabled providers. {provider: [records]}.
+    Errored providers appear with [] (caller detects via OTel error counter)."""
     start = time.time()
     selected = [
         cfg for cfg in PROVIDERS.values()
@@ -234,8 +111,7 @@ async def list_all_alive_models(
     for cfg, result in zip(selected, results):
         if isinstance(result, Exception):
             logger.warning(
-                f"[discovery] {cfg.name} task raised: "
-                f"{type(result).__name__}: {result}"
+                f"[discovery] {cfg.name} task raised: {type(result).__name__}: {result}"
             )
             _record_discovery_error(cfg.name, type(result).__name__)
             out[cfg.name] = []
@@ -246,25 +122,22 @@ async def list_all_alive_models(
     _record_discovery_duration(duration)
     logger.info(
         f"[discovery] fan-out complete in {duration:.2f}s — "
-        f"{sum(len(v) for v in out.values())} models across "
-        f"{len(out)} providers"
+        f"{sum(len(v) for v in out.values())} models across {len(out)} providers"
     )
     return out
 
 
 def required_providers() -> list[str]:
-    """Provider ids whose key is MANDATORY (e.g. NIM — embeddings + reranking).
-    The whole Docs Distiller pipeline can't run without these."""
-    return [pid for pid, cfg in PROVIDERS.items() if getattr(cfg, "required", False)]
+    """Provider ids whose key is MANDATORY (e.g. NIM — embeddings + reranking)."""
+    return [pid for pid, cfg in PROVIDERS.items() if cfg.required]
 
 
 def missing_required_keys() -> list[dict]:
-    """Required providers with NO resolvable key (store or env). Empty == ready.
-    Each entry: {id, key_env}. Used to gate DD runs + drive the /settings
-    readiness banner."""
+    """Required providers with no resolvable key. Empty == ready. Gates DD
+    runs + drives the /settings readiness banner."""
     out: list[dict] = []
     for pid, cfg in PROVIDERS.items():
-        if getattr(cfg, "required", False) and not resolve_key(cfg.key_env):
+        if cfg.required and not resolve_key(cfg.key_env):
             out.append({"id": pid, "key_env": cfg.key_env})
     return out
 
@@ -273,15 +146,12 @@ async def probe_provider_key(
     provider_id: str,
     api_key: str | None = None,
 ) -> dict:
-    """Validate a provider key by hitting its `/v1/models` endpoint.
+    """Validate a provider key by hitting its /v1/models. `api_key=None` →
+    resolve via store/env (test the current key). A passed key is probed
+    directly and NOT stored (test-before-save).
 
-    `api_key=None` → resolve via the store/env (test the *current* key).
-    A passed key is probed directly and NOT stored (test-before-save). Returns:
-      {ok, status, n_free_models, n_total_models, error}
     status ∈ {reachable, missing_key, invalid_key, rate_limited, unreachable,
-              unknown_provider}. A 429 is reported ok=True/`rate_limited` (the
-      key authenticated; it's just throttled).
-    """
+              unknown_provider}. 429 → ok=True/rate_limited (key authenticated)."""
     cfg = PROVIDERS.get(provider_id)
     base = {"n_free_models": 0, "n_total_models": 0}
     if cfg is None:
@@ -300,9 +170,10 @@ async def probe_provider_key(
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.get(
-                cfg.url, headers=headers, params=params,
-                timeout=DISCOVERY_HTTP_TIMEOUT_S,
-            )
+                cfg.url, 
+                headers = headers, 
+                params = params,
+                timeout = DISCOVERY_HTTP_TIMEOUT_S)
     except Exception as e:
         return {"ok": False, "status": "unreachable",
                 "error": f"{type(e).__name__}: {str(e)[:200]}", **base}
@@ -319,19 +190,16 @@ async def probe_provider_key(
         body = resp.json()
     except Exception:
         body = {}
-    items = _normalize_response(cfg.response_shape, body)
-    free = [m for m in items if _FILTER_DISPATCH[cfg.free_filter](m)]
+    items = normalize_response(cfg.response_shape, body)
+    free = [m for m in items if FILTER_DISPATCH[cfg.free_filter](m)]
     return {"ok": True, "status": "reachable", "error": None,
             "n_free_models": len(free), "n_total_models": len(items)}
 
 
 async def list_provider_free_models(provider_id: str) -> list[str]:
-    """Free-tier model ids for ONE provider (UI available-models list).
-
-    Bypasses the registry `enabled` flag (so a user with a key for an
-    otherwise-disabled provider still sees its models); honors the key
-    resolution (store > env). [] if no key / unreachable / unknown provider.
-    """
+    """Free-tier model ids for ONE provider (UI available-models list). Bypasses
+    the registry `enabled` flag so a user with a key for an otherwise-disabled
+    provider still sees its models."""
     cfg = PROVIDERS.get(provider_id)
     if cfg is None:
         return []
@@ -345,30 +213,14 @@ def list_all_alive_models_sync(
     only_providers: list[str] | None = None,
 ) -> dict[str, list[DiscoveryRecord]]:
     """Sync wrapper for non-async callers (Celery task body, debug CLI).
-
-    Don't call from within an event loop (FastAPI request handler). Use
-    `await list_all_alive_models(...)` there.
-    """
-    return asyncio.run(
-        list_all_alive_models(only_providers = only_providers))
+    Do NOT call from inside an event loop."""
+    return asyncio.run(list_all_alive_models(only_providers = only_providers))
 
 
-def flat_alive_list(
-    by_provider: dict[str, list[DiscoveryRecord]],
-) -> list[DiscoveryRecord]:
-    """Flatten {provider: [records]} → single list (rotator-builder convenience)."""
-    out: list[DiscoveryRecord] = []
-    for records in by_provider.values():
-        out.extend(records)
-    return out
-
-
-# =============================================================================
-# OTel metric helpers
-# =============================================================================
+# --------------------------------------------------------------------------- #
+# OTel instruments
+# --------------------------------------------------------------------------- #
 def _ensure_metrics() -> dict[str, Any]:
-    """Lazy-create OTel instruments. No-op if otel_setup didn't initialize."""
-
     if _metric_instruments:
         return _metric_instruments
     try:
@@ -388,34 +240,24 @@ def _ensure_metrics() -> dict[str, Any]:
             name = "dd.rotator_discovery_error_total",
             description = "Discovery fetch errors — labels: provider, error_type",
         )
-        logger.info(
-            f"[discovery] {len(_metric_instruments)} OTel instruments registered"
-        )
+        logger.info(f"[discovery] {len(_metric_instruments)} OTel instruments registered")
     except Exception as e:
-        logger.warning(
-            f"[discovery] OTel instrument init failed: "
-            f"{type(e).__name__}: {e}"
-        )
+        logger.warning(f"[discovery] OTel instrument init failed: {type(e).__name__}: {e}")
     return _metric_instruments
 
 
 def _record_models_alive(provider: str, count: int) -> None:
-    inst = _ensure_metrics()
-    g = inst.get("alive_gauge")
+    g = _ensure_metrics().get("alive_gauge")
     if g is None:
         return
     try:
-        g.set(
-            count, 
-            attributes = {
-                "provider": provider})
+        g.set(count, attributes = {"provider": provider})
     except Exception:
         pass
 
 
 def _record_discovery_duration(duration_s: float) -> None:
-    inst = _ensure_metrics()
-    h = inst.get("duration_hist")
+    h = _ensure_metrics().get("duration_hist")
     if h is None:
         return
     try:
@@ -425,15 +267,10 @@ def _record_discovery_duration(duration_s: float) -> None:
 
 
 def _record_discovery_error(provider: str, error_type: str) -> None:
-    inst = _ensure_metrics()
-    c = inst.get("error_counter")
+    c = _ensure_metrics().get("error_counter")
     if c is None:
         return
     try:
-        c.add(
-            1, 
-            attributes = {
-                "provider": provider, 
-                "error_type": error_type})
+        c.add(1, attributes = {"provider": provider, "error_type": error_type})
     except Exception:
         pass

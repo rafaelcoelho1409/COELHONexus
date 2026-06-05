@@ -48,7 +48,6 @@ from starlette.responses import StreamingResponse
 from domains.dd.ingestion.storage import get_storage
 from domains.llm.rotator.discovery import missing_required_keys
 from domains.dd.synth.cancel import (
-    _redis_url,
     clear_cancel,
     request_cancel,
 )
@@ -59,6 +58,13 @@ from domains.dd.synth.graph import (
     NODE_TO_FIELD,
     build_graph,
 )
+from domains.dd.synth.keys import (
+    active_study_key,
+    lock_key,
+    redis_url,
+    study_timing_key,
+)
+from domains.dd.synth.params import STUDY_SEM
 from domains.dd.synth.progress import (
     emit_progress,
     subscribe_progress,
@@ -71,7 +77,6 @@ from domains.dd.synth.task import (
     run_single_chapter as run_single_chapter_task,
     run_study as run_study_task,
 )
-from domains.dd.synth.dispatch import _STUDY_SEM
 
 
 logger = logging.getLogger(__name__)
@@ -158,7 +163,7 @@ async def list_study_chapters(slug: str, response: Response) -> dict:
     study_total_wall_ms = 0
     try:
         _t = json.loads(
-            await minio.read_text(f"synth/{slug}/study-timing-latest.json")
+            await minio.read_text(study_timing_key(slug))
         )
         per_chapter_ms = _t.get("per_chapter_ms") or {}
         study_total_wall_ms = int(_t.get("total_wall_ms") or 0)
@@ -221,10 +226,10 @@ async def synth_active(slug: str, response: Response) -> dict:
     response.headers["Cache-Control"] = "no-store"
     try:
         r = redis_aio.from_url(
-            _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+            redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
         )
         try:
-            sid = await r.get(f"dd:study:current:{slug}")
+            sid = await r.get(active_study_key(slug))
         finally:
             await r.aclose()
     except Exception:
@@ -504,7 +509,7 @@ async def start_synth(
         # Every `locked` response carries a `stage` field so the FastHTML
         # caller can render the appropriate "running on X" affordance.
         r = redis_aio.from_url(
-            _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+            redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
         )
         try:
             # 0. CROSS-STAGE — is any PLANNER currently running anywhere?
@@ -573,11 +578,11 @@ async def start_synth(
             # 1b. SAME-SLUG — atomic SET NX. Failure → another synth of
             # this slug is already running (study OR single-chapter).
             acquired = await r.set(
-                f"dd:synth:lock:{slug}", study_thread_id,
+                lock_key(slug), study_thread_id,
                 nx=True, ex=_SYNTH_LOCK_TTL_S,
             )
             if not acquired:
-                existing = await r.get(f"dd:synth:lock:{slug}")
+                existing = await r.get(lock_key(slug))
                 existing_tid = (
                     existing.decode() if isinstance(existing, bytes)
                     else existing
@@ -606,7 +611,7 @@ async def start_synth(
                 )
             except Exception as e:
                 try:
-                    await r.delete(f"dd:synth:lock:{slug}")
+                    await r.delete(lock_key(slug))
                 except Exception:
                     pass
                 logger.exception(
@@ -629,7 +634,7 @@ async def start_synth(
         # study terminal (orchestrator) and on Wipe Synth.
         try:
             r2 = redis_aio.from_url(
-                _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+                redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
             )
             try:
                 # JSON value carries started_ts so a refresh can SEED the
@@ -638,7 +643,7 @@ async def start_synth(
                 # snapshot on a long book, so the registry is the durable
                 # source. synth_active tolerates the legacy plain-string form.
                 await r2.set(
-                    f"dd:study:current:{slug}",
+                    active_study_key(slug),
                     json.dumps({
                         "study_thread_id": study_thread_id,
                         "started_ts": time.time(),
@@ -659,7 +664,7 @@ async def start_synth(
             "n_chapters":      len(plan_chapter_ids),
             "chapter_ids":     plan_chapter_ids,
             "mode":            mode,
-            "concurrency":     _STUDY_SEM,
+            "concurrency":     STUDY_SEM,
             "status":          "queued",
             "celery_task_id":  async_result.id,
             "latency_ms":      0,
@@ -683,7 +688,7 @@ async def start_synth(
     # blocked while a study orchestrator is running for the same slug,
     # and vice versa). Same three phases: cross-stage / global / per-slug.
     r = redis_aio.from_url(
-        _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
         # 0. CROSS-STAGE — is any PLANNER currently running anywhere?
@@ -751,11 +756,11 @@ async def start_synth(
 
         # 1b. SAME-SLUG — atomic SET NX.
         acquired = await r.set(
-            f"dd:synth:lock:{slug}", thread_id,
+            lock_key(slug), thread_id,
             nx=True, ex=_SYNTH_LOCK_TTL_S,
         )
         if not acquired:
-            existing = await r.get(f"dd:synth:lock:{slug}")
+            existing = await r.get(lock_key(slug))
             existing_tid = (
                 existing.decode() if isinstance(existing, bytes)
                 else existing
@@ -781,7 +786,7 @@ async def start_synth(
             )
         except Exception as e:
             try:
-                await r.delete(f"dd:synth:lock:{slug}")
+                await r.delete(lock_key(slug))
             except Exception:
                 pass
             logger.exception(
@@ -825,7 +830,7 @@ async def resume_synth(thread_id: str) -> dict:
     endpoint streams the worker's progress events to the UI.
     """
     r = redis_aio.from_url(
-        _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
         await clear_cancel(r, thread_id)
@@ -872,7 +877,7 @@ async def cancel_synth(thread_id: str) -> dict:
     to each. The chapter watchers pick up within ~1s and cancel cleanly.
     """
     r = redis_aio.from_url(
-        _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     propagated_to: list[str] = []
     try:
@@ -1143,7 +1148,7 @@ async def wipe_synth(slug: str) -> dict:
     n_redis = 0
     try:
         r = redis_aio.from_url(
-            _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+            redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
         )
         try:
             for kind in ("synth", "study"):
@@ -1161,8 +1166,8 @@ async def wipe_synth(slug: str) -> dict:
             # rejected on the next Start Synth click by a stale lock
             # that survived the wipe.
             n_redis += await r.delete(
-                f"dd:study:current:{slug}",
-                f"dd:synth:lock:{slug}",
+                active_study_key(slug),
+                lock_key(slug),
             )
         finally:
             await r.aclose()

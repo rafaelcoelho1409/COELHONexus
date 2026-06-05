@@ -1,46 +1,59 @@
-"""sawc service — all function definitions.
+"""SAWC — Structure-Aware Writing Controller for one chapter.
 
-v2 cookbook schema (2026-05-24 evening): output is structured as
-{heading, intro, subtopics: [{subheading, explanation, code_ref_hash}],
-citations}. Each subtopic renders as one H3 + 1-2 sentence prose +
-ONE code block. See `sawc/types.py` and
-`docs/KD-CODE-FIRST-IMPLEMENTATION-2026-05-24.md`.
-
-Bundle 3 additions (2026-05-25):
-  - Ship A: schema reorder (hash → subheading → explanation) — types.py.
-  - Ship E: subheading↔code identifier check in validate_section_against_inputs.
-  - Ship B: explanation↔code identifier overlap check in same validator.
-  Both Ship B/E route through the existing 2-attempt repair loop —
-  the writer re-emits offending subtopics until alignment holds.
-"""
+v2 cookbook schema: {heading, intro, subtopics: [{subheading, explanation,
+code_ref_hash}], citations}. Each subtopic renders as H3 + 1-2 sentence
+prose + ONE code block. Best-of-N drafts + critic-picker (MAMM-Refine);
+2-attempt repair loop fixes alignment violations."""
 from __future__ import annotations
-
-import ast
-import re
-
-from .constants import (
-    _MEMORY_SUMMARY_CHARS_MIN,
-    _MEMORY_SUMMARY_CHARS_MAX,
-    _MEMORY_TERM_CHARS_MAX,
-    _MEMORY_TERMS_MAX,
-    _SUBTOPICS_MIN,
-    _SUBTOPICS_MAX,
-    _EXPLANATION_WORDS_MIN,
-    _EXPLANATION_WORDS_MAX,
+from .keys import digest_latest_key, latest_blob_key, outline_latest_key, versioned_blob_key
+from .params import (
+    CITATION_CLAIM_CHARS_MAX,
+    CITATION_CLAIM_CHARS_MIN,
+    CITATIONS_MAX,
+    CITATIONS_MIN,
+    CODE_REFS_MAX,
+    EXPLANATION_WORDS_MAX,
+    EXPLANATION_WORDS_MIN,
+    HEADING_MAX_WORDS,
+    HEADING_MIN_WORDS,
+    INTRO_CHARS_MAX,
+    INTRO_CHARS_MIN,
+    MAX_REPAIR_ATTEMPTS,
+    MEMORY_SUMMARY_CHARS_MAX,
+    MEMORY_SUMMARY_CHARS_MIN,
+    MEMORY_TERM_CHARS_MAX,
+    MEMORY_TERM_CHARS_MIN,
+    MEMORY_TERMS_MAX,
+    MEMORY_TERMS_MIN,
+    N_DRAFTS,
+    PARAGRAPH_CHARS_MAX,
+    PARAGRAPH_CHARS_MIN,
+    PARAGRAPHS_MAX,
+    PARAGRAPHS_MIN,
+    PLACEMENT_HINT_CHARS_MAX,
+    PLACEMENT_HINT_CHARS_MIN,
+    SUBHEADING_MAX_WORDS,
+    SUBHEADING_MIN_WORDS,
+    SUBTOPICS_MAX,
+    SUBTOPICS_MIN,
 )
-from .types import (
-    _LLMSectionDraft,
+from .patterns import HASH_RE, SECTION_ID_RE
+from .schemas import (
+    ChapterDraft,
     Citation,
+    LLMSectionDraft,
     MemoryEntry,
     SAWCStats,
     Section,
     Subtopic,
 )
+from .versions import SAWC_PROMPT_VERSION, SAWC_SCHEMA_VERSION
+
+import ast
+import re
 
 
-# =============================================================================
 # Code-body identifier extraction (Ship B + E)
-# =============================================================================
 # Cheap stopword set — tokens too generic to count as "code-anchored".
 _IDENT_STOPWORDS = frozenset({
     "self", "cls", "str", "int", "bool", "list", "dict", "set", "tuple",
@@ -181,9 +194,7 @@ def _identifier_overlap(prose: str, code: str) -> tuple[set[str], set[str]]:
     )
 
 
-# =============================================================================
 # Deterministic memory extraction (v1: no extra LLM call)
-# =============================================================================
 def extract_memory_entry(
     section: Section,
     section_contributions: list[dict],
@@ -194,7 +205,7 @@ def extract_memory_entry(
 
     v1 strategy (deterministic — saves N extra LLM calls per chapter):
       - summary: first paragraph of the section, trimmed to fit
-                  _MEMORY_SUMMARY_CHARS_MAX
+                  MEMORY_SUMMARY_CHARS_MAX
       - key_terminology: extract from contributions[*].key_facts —
                           take the first N words of each fact that
                           looks like an API/type name (capitalized
@@ -212,9 +223,9 @@ def extract_memory_entry(
     if section.subtopics:
         parts.append(section.subtopics[0].explanation.strip())
     summary = " ".join(parts).strip()
-    if len(summary) > _MEMORY_SUMMARY_CHARS_MAX:
-        summary = summary[: _MEMORY_SUMMARY_CHARS_MAX - 1].rsplit(" ", 1)[0] + "…"
-    if len(summary) < _MEMORY_SUMMARY_CHARS_MIN:
+    if len(summary) > MEMORY_SUMMARY_CHARS_MAX:
+        summary = summary[: MEMORY_SUMMARY_CHARS_MAX - 1].rsplit(" ", 1)[0] + "…"
+    if len(summary) < MEMORY_SUMMARY_CHARS_MIN:
         # Pad with the heading + a generic phrase so the Pydantic min
         # passes; mgsr_replan will flag thin sections via checklist_eval
         summary = (
@@ -222,7 +233,7 @@ def extract_memory_entry(
             if summary
             else f"{section_heading}: (no content)"
         )
-        if len(summary) < _MEMORY_SUMMARY_CHARS_MIN:
+        if len(summary) < MEMORY_SUMMARY_CHARS_MIN:
             summary = summary + " — content pending refinement."
 
     # --- terminology: extract code-ish identifiers from key_facts ---
@@ -232,12 +243,12 @@ def extract_memory_entry(
             # Pull `inline_code` spans
             for m in re.finditer(r"`([^`]+)`", fact):
                 t = m.group(1).strip()
-                if 2 <= len(t) <= _MEMORY_TERM_CHARS_MAX:
+                if 2 <= len(t) <= MEMORY_TERM_CHARS_MAX:
                     candidates.append(t)
             # Pull capitalized identifiers (PascalCase or camelCase)
             for m in re.finditer(r"\b([A-Z][a-zA-Z0-9_]{2,})\b", fact):
                 t = m.group(1).strip()
-                if 3 <= len(t) <= _MEMORY_TERM_CHARS_MAX:
+                if 3 <= len(t) <= MEMORY_TERM_CHARS_MAX:
                     candidates.append(t)
 
     # dedupe case-fold-aware
@@ -249,36 +260,21 @@ def extract_memory_entry(
             continue
         seen.add(key)
         terminology.append(t)
-        if len(terminology) >= _MEMORY_TERMS_MAX:
+        if len(terminology) >= MEMORY_TERMS_MAX:
             break
 
     return MemoryEntry(
-        section_id=section.section_id,
-        heading=section_heading,
-        summary=summary,
-        key_terminology=terminology,
+        section_id = section.section_id,
+        heading = section_heading,
+        summary = summary,
+        key_terminology = terminology,
     )
 
 
-# =============================================================================
 # Cross-reference validators (post-Pydantic, fail-soft for repair loop)
-# =============================================================================
-# S3 (2026-05-26 late evening) — hard vs soft issue classification.
-#
-# The repair loop in sawc/node.py burns budget on EVERY non-empty issue
-# list, even when the only issues are quality nudges the LLM can't
-# reliably close (subheading↔code identifier overlap, subtopic-count
-# shy of bank size). Run 3 evidence: 49+ subheading↔code mismatches and
-# 55+ subtopic-shy issues fired across 4 chapters, driving repair rates
-# 50-63% with no actual recovery — the LLM either re-picks the wrong
-# hash or shrugs.
-#
-# Issues prefixed with these strings are SOFT — they get reported via
-# the section's `.issues` field (so mgsr_replan + checklist see them)
-# but don't trigger the writer's repair loop. HARD issues (heading
-# drift, hallucinated hash, hallucinated source_key) still drive the
-# repair loop because those are correctness failures, not quality
-# nudges.
+# Soft issues (quality nudges) report via .issues but don't trigger the
+# repair loop — the LLM can't reliably close them and burns budget retrying.
+# Hard issues (heading drift, hallucinated hash/source) still repair.
 _SOFT_ISSUE_PREFIXES = (
     "subheading↔code mismatch",
     "explanation↔code mismatch",
@@ -298,7 +294,7 @@ def hard_issues(issues: list[str]) -> list[str]:
 
 
 def validate_section_against_inputs(
-    draft: _LLMSectionDraft,
+    draft: LLMSectionDraft,
     *,
     expected_heading: str,
     allowed_hashes: set[str],
@@ -354,9 +350,9 @@ def validate_section_against_inputs(
     elif n_allowed >= 6:
         floor = 3
     elif n_allowed >= 3:
-        floor = max(_SUBTOPICS_MIN, 3)
+        floor = max(SUBTOPICS_MIN, 3)
     else:
-        floor = _SUBTOPICS_MIN
+        floor = SUBTOPICS_MIN
     if n_used < floor:
         sorted_bank = sorted(allowed_hashes)[:30]
         bank_listing = ", ".join(sorted_bank)
@@ -381,7 +377,6 @@ def validate_section_against_inputs(
             f"Pick ONLY from the source_keys listed in the prompt."
         )
 
-    # ── Ship B + E: subheading and explanation must ground to the code ──
     # Skipped when vault_rich is unavailable (back-compat with older callers).
     if vault_rich:
         # Derived subtopics have their own validation path (AST gate in
@@ -413,7 +408,7 @@ def validate_section_against_inputs(
             # tightly-named patterns like 'Minimal Tool Definition').
             sub_overlap = _prose_tokens(s.subheading) & code_idents
             if not sub_overlap:
-                head_words = _first_lines_word_set(body, n_lines=3)
+                head_words = _first_lines_word_set(body, n_lines = 3)
                 head_overlap = {
                     w.lower() for w in _prose_tokens(s.subheading)
                 } & head_words
@@ -465,11 +460,9 @@ def validate_section_against_inputs(
     return issues
 
 
-# =============================================================================
 # Picker fallback — structural scoring (Self-Certainty proxy)
-# =============================================================================
 def score_draft_structural(
-    draft: _LLMSectionDraft,
+    draft: LLMSectionDraft,
     *,
     expected_heading: str,
     allowed_hashes: set[str],
@@ -497,10 +490,10 @@ def score_draft_structural(
     """
     issues = validate_section_against_inputs(
         draft,
-        expected_heading=expected_heading,
-        allowed_hashes=allowed_hashes,
-        valid_source_keys=valid_source_keys,
-        vault_rich=vault_rich,
+        expected_heading = expected_heading,
+        allowed_hashes = allowed_hashes,
+        valid_source_keys = valid_source_keys,
+        vault_rich = vault_rich,
     )
     # v2 cookbook scoring: subtopic count + explanation density + heading
     # match + citation count drive the structural score.
@@ -541,9 +534,7 @@ def score_draft_structural(
     return round(score, 3)
 
 
-# =============================================================================
 # Coverage stats (deterministic aggregate)
-# =============================================================================
 def compute_sawc_stats(
     sections: list[Section],
     n_stages: int,
@@ -552,17 +543,8 @@ def compute_sawc_stats(
     n_picker_fallbacks: int,
 ) -> SAWCStats:
     n_sections = len(sections)
-    # R3 (2026-05-26 late evening) — relaxed `n_sections_completed` from
-    # "zero issues" to "content-bearing." The previous definition counted
-    # only sections with EMPTY `issues` lists; in Run 3 this meant 0-2
-    # of 12-30 sections per chapter were counted as "completed" because
-    # most ship with soft warnings (subheading↔code identifier mismatch,
-    # subtopic-count shy of code-bank size). Those warnings describe
-    # quality nudges, not "section failed to write" — the chapter has
-    # the section, with content, in the right order. The checklist gate
-    # `check_all_sections_present` should fail only when sections are
-    # ABSENT (placeholders or missing content), not when they're
-    # imperfect.
+    # `n_sections_completed` = content-bearing, NOT "zero issues" — soft
+    # warnings still ship the section; gate fires only on actual absence.
     def _is_present(s) -> bool:
         if "placeholder" in (s.issues or []):
             return False
@@ -586,28 +568,26 @@ def compute_sawc_stats(
         for s in sections for st in s.subtopics
     )
     return SAWCStats(
-        n_sections=n_sections,
-        n_sections_completed=n_sections_completed,
-        n_sections_fallback=n_sections_fallback,
-        n_stages=n_stages,
-        n_total_drafts_fired=n_total_drafts_fired,
-        n_critic_picks=n_critic_picks,
-        n_picker_fallbacks=n_picker_fallbacks,
-        n_repairs=n_repairs,
-        total_subtopics=total_subtopics,
-        total_citations=total_citations,
-        avg_subtopics_per_section=(
+        n_sections = n_sections,
+        n_sections_completed = n_sections_completed,
+        n_sections_fallback = n_sections_fallback,
+        n_stages = n_stages,
+        n_total_drafts_fired = n_total_drafts_fired,
+        n_critic_picks = n_critic_picks,
+        n_picker_fallbacks = n_picker_fallbacks,
+        n_repairs = n_repairs,
+        total_subtopics = total_subtopics,
+        total_citations = total_citations,
+        avg_subtopics_per_section = (
             total_subtopics / n_sections if n_sections else 0.0
         ),
-        avg_explanation_words=(
+        avg_explanation_words = (
             total_expl_words / total_subtopics if total_subtopics else 0.0
         ),
     )
 
 
-# =============================================================================
 # Prompt templates
-# =============================================================================
 def _format_contributions_block(contributions: list[dict]) -> str:
     """Pretty-format the digest's per_section[section_id] contributions for
     the writer prompt."""
@@ -679,7 +659,7 @@ def build_writer_prompt(
     Args:
         vault_rich: optional dict[hash → VaultEntry-like dict] giving the
             LLM full visibility into each allowed code block (Visible Vault,
-            2026-05-24 Ship #1). When provided, renders `<code id=...>{body}
+            2026-05-24 Ship #1). When provided, renders `<code id = ...>{body}
             </code>` envelopes so the LLM can pick pedagogically valuable
             hashes from informed context. When None, falls back to plain
             hash listing (legacy behavior).
@@ -718,21 +698,17 @@ def build_writer_prompt(
             f"to THIS section's distinct angle:\n  {listing}\n\n"
         )
 
-    # Visible Vault rendering — see Ship #1 in
-    # docs/KD-CODE-FIRST-SOTA-2026-05-24.md. The LLM sees the FULL code
-    # body (no truncation, per feedback_kd_quality_over_speed) so it can
-    # pick canonical examples and write tight commentary. The renderer
-    # substitutes the vault entry verbatim at render time, so prompt-side
-    # variance doesn't affect output fidelity.
+    # Visible vault — LLM sees full code bodies; render still substitutes
+    # via hash so output is byte-perfect.
     if allowed_hashes and vault_rich:
-        from ..vault.service import format_entry_for_prompt
-        from ..vault.types import VaultEntry as _VaultEntry
+        from ..vault.domain import format_entry_for_prompt
+        from ..vault.schemas import VaultEntry as _VaultEntry
 
         envelopes: list[str] = []
         for h in allowed_hashes:
             entry = vault_rich.get(h)
             if entry is None:
-                envelopes.append(f'<code id="{h}" missing="true"/>')
+                envelopes.append(f'<code id = "{h}" missing = "true"/>')
                 continue
             # Coerce dict → VaultEntry if needed for type compatibility.
             if isinstance(entry, dict):
@@ -740,7 +716,7 @@ def build_writer_prompt(
                     entry = _VaultEntry(**entry)
                 except Exception:
                     envelopes.append(
-                        f'<code id="{h}" lang="{entry.get("lang","text")}">\n'
+                        f'<code id = "{h}" lang = "{entry.get("lang","text")}">\n'
                         f'{entry.get("fence_text") or ""}\n'
                         f'</code>'
                     )
@@ -786,7 +762,7 @@ def build_writer_prompt(
         bank_section = (
             f"== ALLOWED CODE BANK ({len(allowed_hashes)} entries) — these "
             f"are the actual code blocks available for THIS section. "
-            f"Each `<code id=...>` envelope shows the FULL code body. PICK "
+            f"Each `<code id = ...>` envelope shows the FULL code body. PICK "
             f"3-8 BEST ONES — each becomes one subtopic. Reason about each "
             f"block fully; the explanation must reference specific lines / "
             f"decorators / arguments. ==\n"
@@ -796,7 +772,7 @@ def build_writer_prompt(
         f"You are the Section Writer — step 6 of the Docs Distiller "
         f"synth pipeline. Write ONE section of one chapter as a "
         f"COOKBOOK — a sequence of (subheading, explanation, code block) "
-        f"triples. This is one of N=3 best-of-N drafts; a critic LLM "
+        f"triples. This is one of N = 3 best-of-N drafts; a critic LLM "
         f"will pick the best afterwards (MAMM-Refine arXiv 2503.15272).\n\n"
 
         f"⚡ CRITICAL PURPOSE — this is a CODE-FIRST learning resource. "
@@ -892,7 +868,7 @@ def build_writer_prompt(
         f"       pages, retrieving all pages, and closing the session' — "
         f"       UNLESS the code shows these three methods.\n"
         f"     ✗ 'The @sandbox decorator accepts a max_steps parameter to "
-        f"       limit agent loop iterations' — UNLESS `max_steps=` "
+        f"       limit agent loop iterations' — UNLESS `max_steps = ` "
         f"       appears in the code block.\n"
         f"     ✗ 'Browser Use's pricing is $X per Y' — UNLESS the digest "
         f"       contains pricing facts.\n"
@@ -925,7 +901,7 @@ def build_writer_prompt(
         f"    Choose hashes that demonstrate THIS section's distinct angle.\n"
         f"10. Every `citations[*].source_key` MUST be one of the valid "
         f"    source_keys above. Aim for {n_primary_contribs}+ citations.\n"
-        f"11. NO inline `<code-ref hash=\"...\"/>` tags anywhere. NO "
+        f"11. NO inline `<code-ref hash = \"...\"/>` tags anywhere. NO "
         f"    ```code fences``` in `intro` or `explanation`. The renderer "
         f"    materializes code per-subtopic from `code_ref_hash`.\n"
         f"12. NO `# docs:` / `# src:` source-id leaks in prose. Use the "
@@ -957,17 +933,17 @@ def build_critic_picker_prompt(
     for i, c in enumerate(candidates_summary):
         violations = c.get("violations") or []
         viol_str = (
-            f" violations=({len(violations)}: " + "; ".join(violations[:3]) + ")"
+            f" violations = ({len(violations)}: " + "; ".join(violations[:3]) + ")"
             if violations
-            else " violations=(none)"
+            else " violations = (none)"
         )
         lines.append(
-            f"  [{i}] subtopics={c.get('n_subtopics')}, "
-            f"intro_chars={c.get('intro_chars')}, "
-            f"avg_expl_words={c.get('avg_expl_words', 0):.0f}, "
-            f"citations={c.get('n_citations')}, "
-            f"heading_match={'✓' if c.get('heading_match') else '✗'}, "
-            f"structural_score={c.get('structural_score', 0):.2f}"
+            f"  [{i}] subtopics = {c.get('n_subtopics')}, "
+            f"intro_chars = {c.get('intro_chars')}, "
+            f"avg_expl_words = {c.get('avg_expl_words', 0):.0f}, "
+            f"citations = {c.get('n_citations')}, "
+            f"heading_match = {'✓' if c.get('heading_match') else '✗'}, "
+            f"structural_score = {c.get('structural_score', 0):.2f}"
             f"{viol_str}"
         )
     candidates_block = "\n".join(lines)
@@ -985,7 +961,7 @@ def build_critic_picker_prompt(
         f"   with any violations LOSES to any clean candidate.\n"
         f"2. Subtopic count in sweet spot: 4-6 subtopics is ideal; "
         f"   3 is acceptable; 7-8 is OK for content-heavy sections.\n"
-        f"3. Citation count near or above n_primary_contribs="
+        f"3. Citation count near or above n_primary_contribs = "
         f"{n_primary_contribs} (one citation per primary contribution).\n"
         f"4. Average explanation words 15-60 (concise per subtopic).\n"
         f"5. Highest structural_score (a deterministic proxy combining "
@@ -1081,11 +1057,9 @@ def build_repair_prompt(
     )
 
 
-# =============================================================================
 # Candidate summarization for the critic prompt
-# =============================================================================
 def summarize_candidate(
-    draft: _LLMSectionDraft,
+    draft: LLMSectionDraft,
     *,
     expected_heading: str,
     allowed_hashes: set[str],
@@ -1099,10 +1073,10 @@ def summarize_candidate(
     outline_sdp's same-pattern argument)."""
     issues = validate_section_against_inputs(
         draft,
-        expected_heading=expected_heading,
-        allowed_hashes=allowed_hashes,
-        valid_source_keys=valid_source_keys,
-        vault_rich=vault_rich,
+        expected_heading = expected_heading,
+        allowed_hashes = allowed_hashes,
+        valid_source_keys = valid_source_keys,
+        vault_rich = vault_rich,
     )
     n_subtopics = len(draft.subtopics)
     total_expl_words = sum(
@@ -1112,11 +1086,11 @@ def summarize_candidate(
     intro_chars = len(draft.intro or "")
     structural_score = score_draft_structural(
         draft,
-        expected_heading=expected_heading,
-        allowed_hashes=allowed_hashes,
-        valid_source_keys=valid_source_keys,
-        n_primary_contribs=n_primary_contribs,
-        vault_rich=vault_rich,
+        expected_heading = expected_heading,
+        allowed_hashes = allowed_hashes,
+        valid_source_keys = valid_source_keys,
+        n_primary_contribs = n_primary_contribs,
+        vault_rich = vault_rich,
     )
     return {
         "n_subtopics":      n_subtopics,
@@ -1130,3 +1104,540 @@ def summarize_candidate(
         "structural_score": structural_score,
         "violations":       issues,
     }
+
+
+async def sawc_write_run(state: SynthState) -> dict:
+    """Run the Structure-Aware Writing Controller for one chapter."""
+    slug = state.get("framework_slug")
+    chapter_id = state.get("chapter_id")
+    thread_id = state.get("thread_id") or ""
+
+    if not slug or not chapter_id:
+        return {
+            "sawc_path":  "",
+            "sawc_stats": {"skipped": "no_slug_or_chapter_id", "wall_ms": 0},
+            "status": "failed",
+            "error":  "framework_slug or chapter_id missing from SynthState",
+        }
+
+    t0 = time.monotonic()
+    minio = get_storage()
+
+    outline_key = _outline_latest_key(slug, chapter_id)
+    digest_key = _digest_latest_key(slug, chapter_id)
+
+    if not await minio.exists(outline_key):
+        return {
+            "sawc_path":  "",
+            "sawc_stats": {
+                "skipped":     "outline_not_found",
+                "outline_key": outline_key,
+                "wall_ms":     int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"outline {outline_key!r} not in MinIO — run outline_sdp first",
+        }
+    if not await minio.exists(digest_key):
+        return {
+            "sawc_path":  "",
+            "sawc_stats": {
+                "skipped":    "digest_not_found",
+                "digest_key": digest_key,
+                "wall_ms":    int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"digest {digest_key!r} not in MinIO — run digest_construct first",
+        }
+
+    try:
+        outline_text = await minio.read_text(outline_key)
+        outline_payload = json.loads(outline_text)
+        digest_text = await minio.read_text(digest_key)
+        digest_payload = json.loads(digest_text)
+    except Exception as e:
+        return {
+            "sawc_path":  "",
+            "sawc_stats": {
+                "skipped": "inputs_unreadable",
+                "wall_ms": int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"outline/digest unreadable: {type(e).__name__}: {e}",
+        }
+
+    outline_data = outline_payload.get("outline") or {}
+    outline_sections = outline_data.get("sections") or []
+    challenges = outline_data.get("challenges") or []
+    flashcards = outline_data.get("flashcards") or []
+    dag = outline_payload.get("dag") or {}
+    stages_raw = dag.get("stages") or {}
+    chapter_title = outline_payload.get("chapter_title") or chapter_id
+    outline_manifest_hash = outline_payload.get("manifest_hash") or ""
+
+    per_section_index: dict[str, list[dict]] = (
+        digest_payload.get("per_section") or {}
+    )
+    # Cross-section vault-hash uniqueness — digest allows the same hash
+    # for different sections; without dedup CLI corpora recycle 3-5 H2s.
+    n_hashes_deduped, n_refs_removed = _dedupe_vault_hashes_across_sections(
+        per_section_index,
+    )
+    if n_hashes_deduped:
+        logger.info(
+            f"[sawc_write] {slug}/{chapter_id}: cross-section dedup — "
+            f"{n_hashes_deduped} hashes claimed by multiple sections; "
+            f"removed {n_refs_removed} duplicate code_ref entries"
+        )
+    per_source_list: list[dict] = digest_payload.get("per_source") or []
+    valid_source_keys: list[str] = sorted({
+        s.get("source_key", "") for s in per_source_list
+        if s.get("source_key")
+    })
+    digest_manifest_hash = digest_payload.get("digest_manifest_hash") or ""
+
+    if not outline_sections or not stages_raw:
+        return {
+            "sawc_path":  "",
+            "sawc_stats": {
+                "skipped":    "empty_outline_or_stages",
+                "n_sections": len(outline_sections),
+                "n_stages":   len(stages_raw),
+                "wall_ms":    int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"outline has {len(outline_sections)} sections, dag "
+                      f"has {len(stages_raw)} stages — both must be >0",
+        }
+
+    # Build section_id → outline_section lookup
+    sections_by_id: dict[str, dict] = {
+        s["section_id"]: s for s in outline_sections
+    }
+    # Normalize stage keys to int and sort
+    stages: dict[int, list[str]] = {
+        int(k): list(v) for k, v in stages_raw.items()
+    }
+    # Skip sections that digest source-pool merge folded elsewhere —
+    # contributions are re-tagged to the winner; writing them produces a
+    # hollow shell that bank-padding then back-fills with canonical code.
+    merged_away: set[str] = set(
+        (digest_payload.get("merged_sections") or {}).keys()
+    )
+    if merged_away:
+        stages = {
+            k: [sid for sid in v if sid not in merged_away]
+            for k, v in stages.items()
+        }
+        stages = {k: v for k, v in stages.items() if v}
+        logger.info(
+            f"[sawc_write] {slug}/{chapter_id}: skipping "
+            f"{len(merged_away)} digest-merged section(s) "
+            f"{sorted(merged_away)}"
+        )
+    sorted_stage_indices = sorted(stages.keys())
+    n_sections = sum(len(v) for v in stages.values())
+    n_stages = len(sorted_stage_indices)
+
+    await emit_progress(
+        thread_id, "sawc_write", "start",
+        chapter_id = chapter_id,
+        chapter_title = chapter_title,
+        n_stages = n_stages,
+        n_sections = n_sections,
+        n_total_drafts = n_sections * N_DRAFTS,
+    )
+
+    # Track the iteration counter for the CoRefine loop (2026-05-24).
+    # Each sawc_write invocation bumps it by 1; refine_iter is part of the
+    # manifest hash so loop iterations don't cache-hit each other.
+    incoming_refine_iter = int(state.get("refine_iter") or 0)
+    refine_iter = incoming_refine_iter + 1
+
+    # Best-seen iteration tracking — checklist score updated in mgsr_replan
+    # after sawc returns; render falls back to this at budget halt.
+    incoming_best_score = state.get("best_seen_score")
+    incoming_best_path = state.get("best_seen_sawc_path")
+    incoming_prev_score = state.get("prev_checklist_score")
+
+    manifest_hash = _compute_manifest_hash(
+        outline_manifest_hash = outline_manifest_hash,
+        digest_manifest_hash = digest_manifest_hash,
+        refine_iter = refine_iter,
+    )
+    versioned_key = _versioned_blob_key(slug, chapter_id, manifest_hash)
+    latest_key    = _latest_blob_key(slug, chapter_id)
+
+    if await minio.exists(versioned_key) and await minio.exists(latest_key):
+        try:
+            cached_text = await minio.read_text(versioned_key)
+            cached = json.loads(cached_text)
+            cov = (cached or {}).get("coverage_stats") or {}
+            elapsed = int((time.monotonic() - t0) * 1000)
+            stats = {
+                "n_sections":      cov.get("n_sections", 0),
+                "n_completed":     cov.get("n_sections_completed", 0),
+                "n_fallback":      cov.get("n_sections_fallback", 0),
+                "n_repairs":       cov.get("n_repairs", 0),
+                "n_stages":        cov.get("n_stages", 0),
+                "n_total_drafts_fired": cov.get("n_total_drafts_fired", 0),
+                "n_picker_fallbacks":   cov.get("n_picker_fallbacks", 0),
+                "wall_ms":         elapsed,
+                "store_path":      latest_key,
+                "versioned_path":  versioned_key,
+                "manifest_hash":   manifest_hash,
+                "cache_hit":       True,
+                "prompt_version":  cached.get("prompt_version"),
+            }
+            await emit_progress(
+                thread_id, "sawc_write", "done",
+                n_sections = stats["n_sections"],
+                n_completed = stats["n_completed"],
+                n_fallback = stats["n_fallback"],
+                n_repairs = stats["n_repairs"],
+                total_drafts_fired = stats["n_total_drafts_fired"],
+                wall_ms = elapsed, cache_hit = True,
+            )
+            logger.info(
+                f"[sawc_write] {slug}/{chapter_id}: CACHE HIT — "
+                f"{stats['n_completed']}/{stats['n_sections']} sections, "
+                f"{stats['n_repairs']} repairs, {elapsed} ms"
+            )
+            # Cache hit preserves best-seen — same draft, unchanged tracking.
+            patch = {
+                "sawc_path":   latest_key,
+                "sawc_stats":  stats,
+                "refine_iter": refine_iter,
+            }
+            if incoming_best_path:
+                patch["best_seen_sawc_path"] = incoming_best_path
+            if incoming_best_score is not None:
+                patch["best_seen_score"] = incoming_best_score
+            return patch
+        except Exception as e:
+            logger.warning(
+                f"[sawc_write] {slug}/{chapter_id}: cached blob "
+                f"{versioned_key!r} unreadable ({type(e).__name__}: {e}); "
+                f"recomputing"
+            )
+
+    # Load the full vault entries for every source contributing to this
+    # chapter so the writer prompt can render <code id = "..." lang = "...">
+    # {body}</code> envelopes — the LLM sees actual code instead of opaque
+    # hashes. Render-time substitution still uses the same hash → vault[id]
+    # path so byte-perfect fidelity is preserved (Deterministic Quoting,
+    # Yeung 2025; arXiv 2601.03640).
+    vault_rich, n_vaults_loaded, n_vaults_skipped = await _load_chapter_vault_rich(
+        minio, slug, valid_source_keys,
+    )
+    logger.info(
+        f"[sawc_write] {slug}/{chapter_id}: visible vault loaded — "
+        f"{len(vault_rich)} entries across {n_vaults_loaded} sources "
+        f"(skipped {n_vaults_skipped})"
+    )
+
+    sem = asyncio.Semaphore(_CONCURRENCY)
+    memory_ledger: list[MemoryEntry] = []
+    completed_sections: dict[str, Section] = {}
+    # Fix #3 — cross-section recycling: code_ref_hashes already rendered as
+    # subtopics by COMPLETED (prior-stage) sections of this chapter. Passed to
+    # later sections' writer prompts so they reference rather than re-show.
+    chapter_used_hashes: set[str] = set()
+    n_total_drafts_fired = 0
+    n_critic_picks = 0
+    n_picker_fallbacks = 0
+
+    for stage_idx in sorted_stage_indices:
+        stage_section_ids = stages[stage_idx]
+        stage_t0 = time.monotonic()
+        await emit_progress(
+            thread_id, "sawc_write", "stage_start",
+            stage_idx = stage_idx,
+            n_sections_in_stage = len(stage_section_ids),
+            section_ids = stage_section_ids,
+        )
+
+        # Freeze memory snapshot for this stage — all sections at this
+        # stage see the SAME memory (per SurveyGen-I §3.2.2: memory
+        # accumulates BETWEEN stages, not within)
+        memory_snapshot = [m.model_dump() for m in memory_ledger]
+
+        async def _run_section(sid: str) -> Section:
+            outline_sec = sections_by_id.get(sid)
+            if not outline_sec:
+                logger.warning(
+                    f"[sawc_write] section_id {sid!r} in stages but not in "
+                    f"outline.sections — emitting placeholder"
+                )
+                return _placeholder_section(
+                    section_id = sid,
+                    heading = sid,
+                    n_repairs = 0,
+                    deployment_writer = None,
+                )
+            contributions = per_section_index.get(sid) or []
+            # Allowed hashes = union of code_refs across contributions
+            # (digest-routed). Padded below from chapter-wide vault when
+            # under-routing leaves the bank thin.
+            allowed_hashes_set: set[str] = set()
+            for c in contributions:
+                for h in (c.get("code_refs") or []):
+                    allowed_hashes_set.add(h)
+            # Gate prose_mode on PRE-pad count — post-pad would pull stray
+            # hashes into a no-code section and emit empty placeholders.
+            n_routed_hashes = len(allowed_hashes_set)
+            # Pad thin banks (<6 hashes) with up to 20 pedagogically-ranked
+            # chapter-wide hashes; LLM picks 3-6 via visible-vault renderer.
+            _MIN_BANK_SIZE = 6
+            _BANK_PAD_TO = 20
+            if vault_rich and len(allowed_hashes_set) < _MIN_BANK_SIZE:
+                chapter_wide = list(vault_rich.keys())
+                ranked_chapter = _rank_hashes_by_pedagogy(
+                    chapter_wide, vault_rich,
+                )
+                needed = _BANK_PAD_TO - len(allowed_hashes_set)
+                pads = [
+                    h for h in ranked_chapter
+                    if h not in allowed_hashes_set
+                ][:needed]
+                if pads:
+                    allowed_hashes_set.update(pads)
+                    logger.info(
+                        f"[sawc_write] {sid}: digest-routed bank had "
+                        f"{len(allowed_hashes_set) - len(pads)} hashes < "
+                        f"{_MIN_BANK_SIZE}; padded with {len(pads)} pedagogically-"
+                        f"ranked chapter-wide hashes → bank size now "
+                        f"{len(allowed_hashes_set)}"
+                    )
+
+            # Re-order by pedagogical score (canonical small examples
+            # first); fall back to sorted-hash if vault is empty.
+            if vault_rich:
+                allowed_hashes = _rank_hashes_by_pedagogy(
+                    sorted(allowed_hashes_set), vault_rich,
+                )
+            else:
+                allowed_hashes = sorted(allowed_hashes_set)
+            n_primary_contribs = sum(
+                1 for c in contributions if c.get("relevance") == "primary"
+            )
+            # U7 (2026-05-28) — per-section source-doc binding. Restrict
+            # citations to source docs that digest_construct actually
+            # routed to THIS section, NOT chapter-wide. Combined with
+            # U2 vault-hash dedup, this prevents the writer from citing
+            # sources that "belong to" other sections — closing the
+            # belt-and-suspenders loop on cross-section drift.
+            #
+            # Fail-safe: if a section ends up with zero contributing
+            # sources (digest under-routed), fall back to chapter-wide
+            # so the writer still has SOMETHING to cite. Empirically
+            # rare but possible on small corpora.
+            section_source_keys: list[str] = sorted({
+                c.get("source_key", "") for c in contributions
+                if c.get("source_key")
+            })
+            if not section_source_keys:
+                section_source_keys = valid_source_keys
+                logger.info(
+                    f"[sawc_write] {sid}: digest routed 0 sources to "
+                    f"this section; falling back to chapter-wide "
+                    f"({len(valid_source_keys)} sources) for citations"
+                )
+            # PROSE PATH (Fix #1, trigger corrected 2026-05-30): a section is
+            # conceptual/prose when the digest routed it NO real code
+            # (n_routed_hashes == 0), OR when even after Ship-A padding the
+            # bank can't sustain the minimum code subtopics (tiny no-code
+            # chapter — nothing to pad from). Gating on n_routed (not the
+            # padded bank) means a no-code section in a chapter that has a few
+            # stray hashes still goes prose instead of failing to a
+            # placeholder. Code-rich chapters are unaffected: a section with
+            # ≥1 routed hash and a paddable bank stays code-first.
+            prose_mode = (n_routed_hashes == 0) or (len(allowed_hashes) < SUBTOPICS_MIN)
+            return await _write_section_best_of_n(
+                sem = sem,
+                section_id = sid,
+                section_heading = outline_sec.get("heading") or sid,
+                section_description = outline_sec.get("description") or "",
+                section_prerequisites = (
+                    outline_sec.get("prerequisites") or []
+                ),
+                contributions = contributions,
+                allowed_hashes = allowed_hashes,
+                vault_rich = vault_rich,
+                valid_source_keys = section_source_keys,
+                memory = memory_snapshot,
+                n_primary_contribs = n_primary_contribs,
+                framework = slug,
+                chapter_id = chapter_id,
+                chapter_title = chapter_title,
+                thread_id = thread_id,
+                prose_mode = prose_mode,
+                already_shown_hashes = set(chapter_used_hashes),
+            )
+
+        section_results = await asyncio.gather(
+            *(_run_section(sid) for sid in stage_section_ids),
+            return_exceptions = True,
+        )
+
+        n_stage_completed = 0
+        n_stage_failed = 0
+        for sid, result in zip(stage_section_ids, section_results):
+            if isinstance(result, BaseException):
+                logger.warning(
+                    f"[sawc_write] {sid}: gather raised "
+                    f"{type(result).__name__}: {result} — emitting placeholder"
+                )
+                completed_sections[sid] = _placeholder_section(
+                    section_id = sid,
+                    heading = sections_by_id.get(sid, {}).get("heading", sid),
+                    n_repairs = 0,
+                    deployment_writer = None,
+                )
+                n_stage_failed += 1
+            else:
+                completed_sections[sid] = result
+                # All non-placeholder sections count toward drafts fired
+                n_total_drafts_fired += N_DRAFTS
+                n_critic_picks += 1
+                if result.fallback_picker == "structural_score":
+                    n_picker_fallbacks += 1
+                if "placeholder" in result.issues:
+                    n_stage_failed += 1
+                else:
+                    n_stage_completed += 1
+
+            # Accumulate memory entry deterministically
+            sec = completed_sections[sid]
+            contribs = per_section_index.get(sid) or []
+            try:
+                memory_ledger.append(extract_memory_entry(
+                    sec,
+                    section_contributions = contribs,
+                    section_heading = sec.heading,
+                ))
+            except Exception as e:
+                logger.warning(
+                    f"[sawc_write] memory extract failed for {sid}: "
+                    f"{type(e).__name__}: {e}"
+                )
+
+            # Fix #3 — record this section's rendered code so later stages'
+            # sections reference rather than re-emit it (anti-recycling).
+            for st in (getattr(sec, "subtopics", None) or []):
+                h = getattr(st, "code_ref_hash", "")
+                if h:
+                    chapter_used_hashes.add(h)
+
+        stage_ms = int((time.monotonic() - stage_t0) * 1000)
+        await emit_progress(
+            thread_id, "sawc_write", "stage_done",
+            stage_idx = stage_idx,
+            n_completed = n_stage_completed,
+            n_failed = n_stage_failed,
+            wall_ms = stage_ms,
+        )
+
+    # Preserve outline order so downstream consumers can iterate sections
+    # in reading order (sawc returns stage-grouped order; flatten back)
+    section_order = [s["section_id"] for s in outline_sections]
+    final_sections = [
+        completed_sections[sid] for sid in section_order
+        if sid in completed_sections
+    ]
+
+    coverage = compute_sawc_stats(
+        sections = final_sections,
+        n_stages = n_stages,
+        n_total_drafts_fired = n_total_drafts_fired,
+        n_critic_picks = n_critic_picks,
+        n_picker_fallbacks = n_picker_fallbacks,
+    )
+
+    chapter_draft = ChapterDraft(
+        chapter_id = chapter_id,
+        chapter_title = chapter_title,
+        framework_slug = slug,
+        sections = final_sections,
+        memory_final = memory_ledger,
+        challenges = challenges,
+        flashcards = flashcards,
+        coverage_stats = coverage,
+    )
+
+    payload = chapter_draft.model_dump()
+    payload["outline_manifest_hash"] = outline_manifest_hash
+    payload["digest_manifest_hash"]  = digest_manifest_hash
+    payload["sawc_manifest_hash"]    = manifest_hash
+
+    blob_bytes = json.dumps(payload, indent = 2, ensure_ascii = False)
+    await minio.write(
+        versioned_key, blob_bytes, content_type = "application/json",
+    )
+    await minio.write(
+        latest_key, blob_bytes, content_type = "application/json",
+    )
+
+    elapsed = int((time.monotonic() - t0) * 1000)
+    stats = {
+        "n_sections":            coverage.n_sections,
+        "n_completed":           coverage.n_sections_completed,
+        "n_fallback":            coverage.n_sections_fallback,
+        "n_stages":              coverage.n_stages,
+        "n_total_drafts_fired":  coverage.n_total_drafts_fired,
+        "n_critic_picks":        coverage.n_critic_picks,
+        "n_picker_fallbacks":    coverage.n_picker_fallbacks,
+        "n_repairs":             coverage.n_repairs,
+        "total_subtopics":       coverage.total_subtopics,
+        "total_citations":       coverage.total_citations,
+        "avg_subtopics_per_section": coverage.avg_subtopics_per_section,
+        "avg_explanation_words":     coverage.avg_explanation_words,
+        "wall_ms":               elapsed,
+        "store_path":            latest_key,
+        "versioned_path":        versioned_key,
+        "manifest_hash":         manifest_hash,
+        "cache_hit":             False,
+        "prompt_version":        SAWC_PROMPT_VERSION,
+    }
+    await emit_progress(
+        thread_id, "sawc_write", "done",
+        n_sections = stats["n_sections"],
+        n_completed = stats["n_completed"],
+        n_fallback = stats["n_fallback"],
+        n_repairs = stats["n_repairs"],
+        total_drafts_fired = stats["n_total_drafts_fired"],
+        wall_ms = elapsed,
+    )
+    logger.info(
+        f"[sawc_write] {slug}/{chapter_id}: "
+        f"{stats['n_completed']}/{stats['n_sections']} sections written, "
+        f"{stats['n_fallback']} fallbacks, {stats['n_repairs']} repairs, "
+        f"{stats['n_total_drafts_fired']} drafts fired, "
+        f"{stats['n_picker_fallbacks']} picker fallbacks, "
+        f"refine_iter = {refine_iter}, {elapsed} ms"
+    )
+    # mgsr_replan updates best-seen with the checklist score; here we
+    # just forward + default to the current versioned key on first iter.
+    patch = {
+        "sawc_path":   latest_key,
+        "sawc_stats":  stats,
+        "refine_iter": refine_iter,
+    }
+    if incoming_best_path:
+        patch["best_seen_sawc_path"] = incoming_best_path
+    else:
+        # First iteration — current sawc IS the best-seen. We track the
+        # VERSIONED key (immutable) not the latest pointer, so render can
+        # load this specific iteration even after subsequent iterations
+        # overwrite latest_key.
+        patch["best_seen_sawc_path"] = versioned_key
+    if incoming_best_score is not None:
+        patch["best_seen_score"] = incoming_best_score
+    return patch
+
+
+# Convenience loader for downstream nodes
+def load_sawc_payload(text: str) -> dict:
+    """Parse the persisted sawc blob. Returns the full payload dict;
+    downstream nodes pick the fields they need (sections, memory_final,
+    coverage_stats, etc.)."""
+    return json.loads(text)

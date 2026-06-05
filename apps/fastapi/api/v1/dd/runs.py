@@ -46,7 +46,7 @@ from domains.dd.ingestion.storage import (
     read_live_manifest,
 )
 
-from domains.dd.resolver import _index_by_slug
+from domains.dd.resolver import index_by_slug
 
 
 router = APIRouter()
@@ -78,7 +78,7 @@ async def start_run(body: StartRunBody) -> dict:
                   returns the active run_id so the UI can attach to it
                   (or show a "denied" warning).
     """
-    catalog = _index_by_slug()
+    catalog = index_by_slug()
     if body.slug not in catalog:
         raise HTTPException(
             status_code=404,

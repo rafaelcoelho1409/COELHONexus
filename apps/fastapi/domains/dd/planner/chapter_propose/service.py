@@ -1,367 +1,325 @@
-"""chapter_propose — pure helpers (no I/O, no LLM)."""
+"""chapter_propose I/O shell — body loader, LLM draft+vote, latest-blob
+loader, and the chapter_propose_run orchestration."""
 from __future__ import annotations
 
-import re
-from collections import Counter
+import asyncio
+import json
+import logging
+import time
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from domains.llm.rotator.chain import chat_judge_bandit_async
 
-from .constants import (
-    _CONCEPT_CHARS_MAX,
-    _CONCEPT_CHARS_MIN,
-    _CONCEPTS_MAX,
-    _CONCEPTS_MIN,
-    _DESCRIPTION_CHARS_MAX,
-    _DESCRIPTION_CHARS_MIN,
-    _PROPOSALS_MAX,
-    _PROPOSALS_MIN,
-    _SEED_MAX_HEADINGS,
-    _SEED_MAX_NAMESPACES,
-    _TITLE_MAX_WORDS,
-    _TITLE_MIN_WORDS,
-    _CLI_PATTERN_RE,
+from ...ingestion.storage import get_storage
+from ..doc_distill import load_distillates
+from ..progress import emit_progress
+from ..state import PlannerState
+
+from .domain import (
+    extract_structural_seeds,
+    manifest_hash,
+    parse,
+    summarize_proposal,
+    target_chapters_for_n_docs,
+    try_validate,
 )
+from .keys import latest_key, versioned_key
+from .params import (
+    BODY_CHARS_PER_DOC,
+    MAX_REPAIR_ATTEMPTS,
+    MAX_TOKENS_PROPOSE,
+    MAX_TOKENS_VOTE,
+    N_SAMPLES,
+    OPTIMAL_STOPPING_ENABLED,
+    OPTIMAL_STOPPING_MIN_PROPOSALS,
+    TEMPERATURE_PROPOSE,
+    TEMPERATURE_VOTE,
+)
+from .prompts import build_propose_prompt, build_usc_vote_prompt
+from .schemas import (
+    PROPOSE_RESPONSE_FORMAT,
+    VOTE_RESPONSE_FORMAT,
+    ChapterProposalList,
+)
+from .versions import PROMPT_VERSION
 
 
-# -------------------------------------------------------------- #
-# Pydantic schemas                                                #
-# -------------------------------------------------------------- #
-class ChapterProposal(BaseModel):
-    """One candidate chapter from the proposer LLM."""
-    title: str = Field(
-        description=(
-            f"{_TITLE_MIN_WORDS}-{_TITLE_MAX_WORDS} words. Concrete noun "
-            f"phrase. Avoid generic 'Introduction', 'Overview', "
-            f"'Conclusion' — name the specific topic."
-        ),
+logger = logging.getLogger(__name__)
+
+
+async def load_bodies(
+    minio, source_keys: list[str], max_chars: int,
+) -> dict[str, str]:
+    """Read all source bodies in parallel — needed for structural seed
+    extraction (and full-body pass-through on small N)."""
+    sem = asyncio.Semaphore(16)
+
+    async def _one(k: str) -> tuple[str, str]:
+        async with sem:
+            try:
+                body = await minio.read_text(k)
+                return k, (body or "")[:max_chars]
+            except Exception:
+                return k, ""
+
+    results = await asyncio.gather(*[_one(k) for k in source_keys])
+    return {k: b for k, b in results}
+
+
+async def draft_one(
+    prompt: str, sample_idx: int,
+) -> Optional[ChapterProposalList]:
+    try:
+        raw, _meta = await chat_judge_bandit_async(
+            prompt,
+            max_tokens = MAX_TOKENS_PROPOSE,
+            temperature = TEMPERATURE_PROPOSE,
+            response_format = PROPOSE_RESPONSE_FORMAT,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[chapter_propose] sample {sample_idx} LLM failed: "
+            f"{type(e).__name__}: {e}"
+        )
+        return None
+    parsed = parse(raw)
+    if not parsed:
+        return None
+    payload, err = try_validate(parsed)
+    if payload is None and MAX_REPAIR_ATTEMPTS > 0:
+        # ONE repair attempt at temp=0.
+        repair_prompt = (
+            prompt
+            + f"\n\nPRIOR OUTPUT REJECTED: {err}\nEmit valid JSON per the schema."
+        )
+        try:
+            raw2, _ = await chat_judge_bandit_async(
+                repair_prompt,
+                max_tokens = MAX_TOKENS_PROPOSE,
+                temperature = 0.0,
+                response_format = PROPOSE_RESPONSE_FORMAT,
+            )
+            parsed2 = parse(raw2)
+            if parsed2:
+                payload, _ = try_validate(parsed2)
+        except Exception:
+            pass
+    return payload
+
+
+async def usc_pick(
+    framework: str, candidates: list[ChapterProposalList],
+) -> int:
+    if len(candidates) <= 1:
+        return 0
+    summaries = [summarize_proposal(c.proposals) for c in candidates]
+    prompt = build_usc_vote_prompt(
+        framework = framework, candidates_summary = summaries,
     )
-    description: str = Field(
-        description=(
-            f"{_DESCRIPTION_CHARS_MIN}-{_DESCRIPTION_CHARS_MAX} chars. "
-            f"One sentence describing what readers learn in this chapter."
-        ),
-    )
-    key_concepts: list[str] = Field(
-        description=(
-            f"{_CONCEPTS_MIN}-{_CONCEPTS_MAX} technical concepts/identifiers/"
-            f"commands that belong in this chapter. Specific names, not "
-            f"abstract topics."
-        ),
-    )
-
-    @field_validator("title")
-    @classmethod
-    def _validate_title(cls, v: str) -> str:
-        s = " ".join(v.strip().split())
-        n = len(s.split())
-        if not (_TITLE_MIN_WORDS <= n <= _TITLE_MAX_WORDS):
-            raise ValueError(
-                f"title must be {_TITLE_MIN_WORDS}-{_TITLE_MAX_WORDS} "
-                f"words; got {n}"
-            )
-        return s
-
-    @field_validator("description")
-    @classmethod
-    def _validate_description(cls, v: str) -> str:
-        s = " ".join(v.strip().split())
-        if not (_DESCRIPTION_CHARS_MIN <= len(s) <= _DESCRIPTION_CHARS_MAX):
-            raise ValueError(
-                f"description must be {_DESCRIPTION_CHARS_MIN}-"
-                f"{_DESCRIPTION_CHARS_MAX} chars; got {len(s)}"
-            )
-        return s
-
-    @field_validator("key_concepts")
-    @classmethod
-    def _validate_concepts(cls, v: list[str]) -> list[str]:
-        if not (_CONCEPTS_MIN <= len(v) <= _CONCEPTS_MAX):
-            raise ValueError(
-                f"key_concepts count must be {_CONCEPTS_MIN}-"
-                f"{_CONCEPTS_MAX}; got {len(v)}"
-            )
-        out: list[str] = []
-        seen: set[str] = set()
-        for c in v:
-            s = " ".join(c.strip().split())
-            if not (_CONCEPT_CHARS_MIN <= len(s) <= _CONCEPT_CHARS_MAX):
-                raise ValueError(
-                    f"concept length must be {_CONCEPT_CHARS_MIN}-"
-                    f"{_CONCEPT_CHARS_MAX}; got {len(s)}"
-                )
-            k = s.casefold()
-            if k in seen:
-                continue
-            seen.add(k)
-            out.append(s)
-        if len(out) < _CONCEPTS_MIN:
-            raise ValueError(
-                f"after dedup only {len(out)} key_concepts "
-                f"(minimum {_CONCEPTS_MIN})"
-            )
-        return out
-
-
-class ChapterProposalList(BaseModel):
-    """LLM output — a list of chapter proposals."""
-    proposals: list[ChapterProposal] = Field(
-        description=(
-            f"{_PROPOSALS_MIN}-{_PROPOSALS_MAX} chapter proposals covering "
-            f"the full corpus surface area. Each chapter is a distinct "
-            f"topic. Aim for balance — every chapter should be backed by "
-            f"≥3 source docs."
-        ),
+    try:
+        raw, _ = await chat_judge_bandit_async(
+            prompt,
+            max_tokens = MAX_TOKENS_VOTE,
+            temperature = TEMPERATURE_VOTE,
+            response_format = VOTE_RESPONSE_FORMAT,
+        )
+        parsed = parse(raw)
+        if parsed and "chosen_index" in parsed:
+            idx = int(parsed["chosen_index"])
+            if 0 <= idx < len(candidates):
+                return idx
+    except Exception as e:
+        logger.warning(
+            f"[chapter_propose] USC pick failed: {type(e).__name__}: {e}"
+        )
+    # Fallback: max-chapters (coverage > picker silence).
+    return max(
+        range(len(candidates)),
+        key = lambda i: len(candidates[i].proposals),
     )
 
-    @field_validator("proposals")
-    @classmethod
-    def _validate_count(cls, v: list[ChapterProposal]) -> list[ChapterProposal]:
-        if not (_PROPOSALS_MIN <= len(v) <= _PROPOSALS_MAX):
-            raise ValueError(
-                f"proposals count must be {_PROPOSALS_MIN}-"
-                f"{_PROPOSALS_MAX}; got {len(v)}"
+
+async def load_proposals(
+    minio, slug: str,
+) -> Optional[ChapterProposalList]:
+    try:
+        text = await minio.read_text(latest_key(slug))
+        data = json.loads(text)
+        return ChapterProposalList.model_validate({
+            "proposals": data.get("proposals") or [],
+        })
+    except Exception:
+        return None
+
+
+async def chapter_propose_run(state: PlannerState) -> dict:
+    """Load corpus + seeds → fire N sampled proposals (with Optimal-
+    Stopping on sample 0) → USC-pick → persist."""
+    slug = state.get("framework_slug")
+    thread_id = state.get("thread_id") or ""
+    relevant_files = (
+        state.get("relevant_files") or state.get("raw_files") or []
+    )
+    distill_ref = state.get("doc_distill_ref")
+
+    if not slug or not relevant_files:
+        return {
+            "chapter_proposals_ref": None,
+            "propose_stats": {"skipped": "no_files"},
+        }
+
+    t0 = time.monotonic()
+    n = len(relevant_files)
+    minio = get_storage()
+
+    manifest = manifest_hash(
+        slug = slug, source_keys = relevant_files, distill_ref = distill_ref,
+    )
+    vkey = versioned_key(slug, manifest)
+    lkey = latest_key(slug)
+    if await minio.exists(vkey) and await minio.exists(lkey):
+        try:
+            cached = json.loads(await minio.read_text(vkey))
+            wall_ms = int((time.monotonic() - t0) * 1000)
+            stats = {
+                "n_files": n,
+                "n_proposals": len(cached.get("proposals") or []),
+                "cache_hit": True,
+                "wall_ms": wall_ms,
+                "manifest_hash": manifest,
+                "titles": [
+                    p.get("title") for p in cached.get("proposals") or []
+                ],
+            }
+            await emit_progress(
+                thread_id, "chapter_propose", "done",
+                cache_hit = True,
+                n_proposals = stats["n_proposals"],
+                wall_ms = wall_ms,
             )
-        # Reject duplicate titles (case-insensitive).
-        seen: set[str] = set()
-        for p in v:
-            k = p.title.casefold()
-            if k in seen:
-                raise ValueError(
-                    f"duplicate chapter title (case-insensitive): "
-                    f"{p.title!r}"
-                )
-            seen.add(k)
-        return v
+            return {
+                "chapter_proposals_ref": lkey,
+                "propose_stats": stats,
+            }
+        except Exception:
+            pass
 
+    await emit_progress(
+        thread_id, "chapter_propose", "start",
+        n_files = n, distill_available = bool(distill_ref),
+    )
 
-# -------------------------------------------------------------- #
-# Structural seeding                                              #
-# -------------------------------------------------------------- #
-_H2_RE = re.compile(r"(?m)^\s{0,3}#{1,2}\s+(.+?)$")
+    # Load distillates (if available) AND raw bodies (always, for seeds).
+    distillates_map = None
+    if distill_ref:
+        distillates_map = await load_distillates(minio, slug)
+        if not distillates_map:
+            distillates_map = None
+    bodies_by_key = await load_bodies(
+        minio, relevant_files, BODY_CHARS_PER_DOC * 2,
+    )
 
+    seeds = extract_structural_seeds(
+        source_keys = relevant_files, bodies_by_key = bodies_by_key,
+    )
 
-def _extract_h12_headings(body: str, max_n: int) -> list[str]:
-    """First N H1/H2 headings from a markdown body."""
-    out: list[str] = []
-    for m in _H2_RE.finditer(body or ""):
-        h = " ".join(m.group(1).strip().split())
-        # Skip generic / boilerplate headings.
-        if h.casefold() in {
-            "introduction", "overview", "summary", "conclusion",
-            "getting started", "about", "preface", "epilogue",
-        }:
-            continue
-        out.append(h)
-        if len(out) >= max_n:
-            break
-    return out
+    # Adaptive target; raise stop-floor to ~0.7× so big corpora don't early-stop.
+    target_chapters = target_chapters_for_n_docs(len(relevant_files))
+    stop_floor = max(
+        OPTIMAL_STOPPING_MIN_PROPOSALS,
+        round(0.7 * target_chapters),
+    )
 
+    prompt = build_propose_prompt(
+        framework = slug,
+        source_keys = relevant_files,
+        distillates = distillates_map,
+        bodies_by_key = bodies_by_key if distillates_map is None else None,
+        seeds = seeds,
+        body_chars_per_doc = BODY_CHARS_PER_DOC,
+        target_chapters = target_chapters,
+    )
 
-def _namespace_from_key(source_key: str) -> Optional[str]:
-    """Extract a 'namespace' from a source key. Captures CLI subcommand
-    patterns + file-tree top-level directories under `commands/`."""
-    m = _CLI_PATTERN_RE.search(source_key)
-    if m:
-        return m.group(1).lower()
-    # Fallback: file-tree top-level directory after `ingestion/{slug}/`.
-    parts = source_key.split("/")
-    if len(parts) >= 4 and parts[0] == "ingestion":
-        # e.g. ingestion/claude-code/pages/0012-foo.md → "pages"
-        # Less useful but at least signals structure.
-        return parts[2].lower()
-    return None
+    await emit_progress(
+        thread_id, "chapter_propose", "sampling",
+        n_samples = N_SAMPLES, prompt_chars = len(prompt),
+        target_chapters = target_chapters, stop_floor = stop_floor,
+        n_docs = len(relevant_files),
+        n_heading_seeds = len(seeds.get("headings") or []),
+        n_namespace_seeds = len(seeds.get("namespaces") or []),
+    )
 
-
-def extract_structural_seeds(
-    *,
-    source_keys: list[str],
-    bodies_by_key: dict[str, str],
-) -> dict:
-    """Extract structural seeds from the corpus:
-      - top-level H1/H2 headings (deduped, capped)
-      - file-tree namespaces (CLI subcommands, doc sections)
-    """
-    headings_counter: Counter[str] = Counter()
-    for key in source_keys:
-        body = bodies_by_key.get(key) or ""
-        for h in _extract_h12_headings(body, max_n=4):
-            headings_counter[h] += 1
-
-    namespaces_counter: Counter[str] = Counter()
-    for key in source_keys:
-        ns = _namespace_from_key(key)
-        if ns:
-            namespaces_counter[ns] += 1
-
-    # Filter rare headings (appear in only 1 doc) — too narrow to be a
-    # chapter seed. Keep ones that occur ≥2.
-    seed_headings = [
-        h for h, n in headings_counter.most_common(_SEED_MAX_HEADINGS) if n >= 2
-    ][:_SEED_MAX_HEADINGS]
-    seed_namespaces = [
-        ns for ns, n in namespaces_counter.most_common(_SEED_MAX_NAMESPACES)
-        if n >= 2
-    ]
-
-    return {
-        "headings":   seed_headings,
-        "namespaces": seed_namespaces,
-    }
-
-
-# -------------------------------------------------------------- #
-# Prompt construction                                             #
-# -------------------------------------------------------------- #
-def _render_distillates_block(
-    distillates: dict[str, dict], source_keys: list[str],
-) -> str:
-    """Render per-doc distillates (summary + key_terms) into a token-tight
-    block for the proposer prompt."""
-    lines: list[str] = []
-    for i, key in enumerate(source_keys, 1):
-        d = distillates.get(key) or {}
-        summary = (d.get("summary") or "").strip()
-        terms = d.get("key_terms") or []
-        if not summary:
-            continue
-        terms_str = ", ".join(terms[:8])
-        lines.append(f"[{i}] {key}\n    summary: {summary}\n    terms: {terms_str}")
-    return "\n".join(lines)
-
-
-def _render_full_bodies_block(
-    bodies_by_key: dict[str, str], source_keys: list[str],
-    body_chars_per_doc: int,
-) -> str:
-    """Render full doc bodies (truncated) for small-N pass-through."""
-    parts: list[str] = []
-    for i, key in enumerate(source_keys, 1):
-        body = (bodies_by_key.get(key) or "").strip()
-        if not body:
-            continue
-        snippet = body[:body_chars_per_doc]
-        parts.append(f"=== DOC [{i}] {key} ===\n{snippet}\n")
-    return "\n".join(parts)
-
-
-def build_propose_prompt(
-    *,
-    framework: str,
-    source_keys: list[str],
-    distillates: Optional[dict[str, dict]],
-    bodies_by_key: Optional[dict[str, str]],
-    seeds: dict,
-    body_chars_per_doc: int,
-    target_chapters: int,
-) -> str:
-    """Build the proposer prompt. When `distillates` is None, the proposer
-    sees full doc bodies (pass-through path for small N). Otherwise it
-    sees summaries + key_terms.
-
-    `target_chapters` is the adaptive per-corpus target (sized to doc count)
-    that steers the proposer away from under-chaptering large corpora."""
-    if distillates is not None:
-        corpus_block = _render_distillates_block(distillates, source_keys)
-        corpus_label = "DOC DISTILLATES"
+    # Optimal-Stopping (CGES): if sample 0 parses cleanly AND ≥ stop_floor proposals, ship.
+    samples: list[ChapterProposalList | None]
+    if OPTIMAL_STOPPING_ENABLED and N_SAMPLES >= 2:
+        s0 = await draft_one(prompt, 0)
+        samples = [s0]
+        if s0 is not None and len(s0.proposals) >= stop_floor:
+            logger.info(
+                f"[chapter_propose] Optimal-Stopping fired — sample 0 "
+                f"clean ({len(s0.proposals)} proposals ≥ {stop_floor}, "
+                f"target={target_chapters}); skipping remaining "
+                f"{N_SAMPLES - 1} samples"
+            )
+        else:
+            remaining = await asyncio.gather(*[
+                draft_one(prompt, i) for i in range(1, N_SAMPLES)
+            ])
+            samples.extend(remaining)
     else:
-        corpus_block = _render_full_bodies_block(
-            bodies_by_key or {}, source_keys, body_chars_per_doc,
+        samples = list(await asyncio.gather(*[
+            draft_one(prompt, i) for i in range(N_SAMPLES)
+        ]))
+    valid: list[ChapterProposalList] = [s for s in samples if s is not None]
+
+    if not valid:
+        wall_ms = int((time.monotonic() - t0) * 1000)
+        await emit_progress(
+            thread_id, "chapter_propose", "done",
+            error = "all_samples_failed", wall_ms = wall_ms,
         )
-        corpus_label = "DOC BODIES (small-N pass-through)"
+        return {
+            "chapter_proposals_ref": None,
+            "propose_stats": {
+                "error": "all_samples_failed",
+                "n_files": n,
+                "wall_ms": wall_ms,
+            },
+        }
 
-    headings_block = ", ".join(seeds.get("headings") or []) or "(none)"
-    namespaces_block = ", ".join(seeds.get("namespaces") or []) or "(none)"
+    chosen_idx = await usc_pick(slug, valid)
+    chosen = valid[chosen_idx]
 
-    return (
-        f"You are the Chapter Planner for the {framework} documentation.\n\n"
-        f"Your job: propose a balanced set of about {target_chapters} chapters "
-        f"(TARGET={target_chapters}, sized to this corpus of "
-        f"{len(source_keys)} docs; stay close to it, hard range "
-        f"{_PROPOSALS_MIN}-{_PROPOSALS_MAX}) that COVER THE FULL SURFACE AREA "
-        f"of this framework. Too FEW chapters forces unrelated topics to share "
-        f"one over-broad chapter; aim for ~{target_chapters} so each chapter is "
-        f"a cohesive, single-topic unit. Each chapter must:\n"
-        f"  - have a concrete, specific title ({_TITLE_MIN_WORDS}-"
-        f"{_TITLE_MAX_WORDS} words; no generic 'Introduction'/"
-        f"'Overview'/'Conclusion')\n"
-        f"  - cover a DISTINCT topic from every other chapter\n"
-        f"  - be backed by ≥3 docs from the corpus\n"
-        f"  - list {_CONCEPTS_MIN}-{_CONCEPTS_MAX} specific concepts/"
-        f"identifiers/commands that belong in it\n\n"
-        f"== STRUCTURAL SIGNALS extracted from the corpus ==\n"
-        f"Top recurring headings (appear in ≥2 docs):\n"
-        f"  {headings_block}\n"
-        f"File-tree namespaces (likely top-level groupings):\n"
-        f"  {namespaces_block}\n\n"
-        f"== CORPUS — {len(source_keys)} {corpus_label} ==\n"
-        f"{corpus_block}\n"
-        f"== END CORPUS ==\n\n"
-        f"OUTPUT — STRICT JSON:\n"
-        f"{{\n"
-        f'  "proposals": [\n'
-        f'    {{\n'
-        f'      "title":        "Concrete Topic Name",\n'
-        f'      "description":  "One sentence describing what readers '
-        f'learn here.",\n'
-        f'      "key_concepts": ["concept1", "command-name", "TypeName", ...]\n'
-        f'    }},\n'
-        f'    ...\n'
-        f'  ]\n'
-        f"}}\n\n"
-        f"HARD RULES:\n"
-        f"1. Between {_PROPOSALS_MIN} and {_PROPOSALS_MAX} chapters.\n"
-        f"2. Titles UNIQUE case-insensitively.\n"
-        f"3. NEVER use generic content-type names ('Introduction', "
-        f"'Conclusion', 'Overview', 'Getting Started', 'About', "
-        f"'Background', 'References') as a chapter title.\n"
-        f"4. PREFER chapters that correspond to structural signals "
-        f"above (a 'commands/plugin' namespace → likely a 'Plugin "
-        f"Management' chapter).\n"
-        f"5. For CLI tools: ensure every TOP-LEVEL subcommand visible "
-        f"in the corpus has chapter coverage somewhere.\n"
-        f"6. Avoid mega-chapters: if your draft has any chapter that "
-        f"would absorb >40% of the docs, SPLIT it.\n\n"
-        f"Respond ONLY with valid JSON. No prose, no markdown wrap."
-    )
-
-
-def build_usc_vote_prompt(
-    *,
-    framework: str,
-    candidates_summary: list[dict],
-) -> str:
-    """Pick the best of N proposal samples by balance + coverage rubric."""
-    lines: list[str] = []
-    for i, c in enumerate(candidates_summary):
-        n_chapters = c.get("n_chapters", 0)
-        titles = c.get("titles") or []
-        max_concept_count = c.get("max_concept_count", 0)
-        lines.append(
-            f"CANDIDATE {i}: {n_chapters} chapters, max concepts in any "
-            f"chapter = {max_concept_count}"
-        )
-        lines.append("  Titles: " + ", ".join(titles[:_PROPOSALS_MAX]))
-    block = "\n".join(lines)
-    return (
-        f"You are the Universal Self-Consistency picker. Pick the BEST "
-        f"of {len(candidates_summary)} chapter proposal sets for "
-        f"{framework}.\n\n"
-        f"== CANDIDATES ==\n{block}\n\n"
-        f"Pick by:\n"
-        f"  1. Balance (no single chapter dominates concepts)\n"
-        f"  2. Coverage (more chapters = more coverage, up to {_PROPOSALS_MAX})\n"
-        f"  3. Specificity (concrete titles, not 'Overview'/'Introduction')\n\n"
-        f"OUTPUT — STRICT JSON:\n"
-        f'{{"chosen_index": <int>, "reason": "<short>"}}'
-    )
-
-
-def summarize_proposal(props: list[ChapterProposal]) -> dict:
-    """Compact summary for the USC vote picker."""
-    return {
-        "n_chapters":         len(props),
-        "titles":             [p.title for p in props],
-        "max_concept_count":  max((len(p.key_concepts) for p in props), default=0),
-        "total_concepts":     sum(len(p.key_concepts) for p in props),
+    payload = {
+        "prompt_version":  PROMPT_VERSION,
+        "framework_slug":  slug,
+        "manifest_hash":   manifest,
+        "n_samples_valid": len(valid),
+        "n_samples_total": N_SAMPLES,
+        "chosen_idx":      chosen_idx,
+        "seeds":           seeds,
+        "proposals":       [p.model_dump() for p in chosen.proposals],
     }
+    blob = json.dumps(payload, indent = 2, ensure_ascii = False)
+    await minio.write(vkey, blob, content_type = "application/json")
+    await minio.write(lkey, blob, content_type = "application/json")
+
+    wall_ms = int((time.monotonic() - t0) * 1000)
+    stats = {
+        "n_files": n,
+        "n_proposals": len(chosen.proposals),
+        "n_samples_valid": len(valid),
+        "chosen_idx": chosen_idx,
+        "cache_hit": False,
+        "wall_ms": wall_ms,
+        "manifest_hash": manifest,
+        "titles": [p.title for p in chosen.proposals],
+    }
+    await emit_progress(
+        thread_id, "chapter_propose", "done",
+        cache_hit = False,
+        n_proposals = len(chosen.proposals),
+        wall_ms = wall_ms,
+        titles = stats["titles"],
+    )
+    return {"chapter_proposals_ref": lkey, "propose_stats": stats}

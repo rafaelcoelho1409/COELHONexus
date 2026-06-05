@@ -20,6 +20,7 @@ REDIS_PORT: "{{ .Values.redis.port }}"
 MINIO_HOST: "{{ .Values.minio.host }}"
 MINIO_PORT: "{{ .Values.minio.port }}"
 MINIO_ENDPOINT: "{{ .Values.minio.endpoint }}"
+MINIO_BUCKET_COELHONEXUS: "{{ .Values.minio.bucket }}"
 POSTGRES_HOST: "{{ .Values.postgresql.host }}"
 POSTGRES_PORT: "{{ .Values.postgresql.port }}"
 POSTGRES_USER: "{{ .Values.postgresql.user }}"
@@ -104,6 +105,11 @@ DD_PARETO_BANDIT_DISABLE: "{{ .Values.dd.paretoBanditDisable }}"
 # Phase D (2026-05-23): deterministic soft-membership boundary resolver for refine.
 # See dd.refineUseGmm in values.yaml + docs/KD-PLANNER-SOTA-IMPROVEMENTS-2026-05-23.md.
 KD_REFINE_USE_GMM: "{{ .Values.dd.refineUseGmm }}"
+# chapter_propose / sawc_derive Optimal-Stopping feature flags.
+KD_PROPOSE_OPTIMAL_STOPPING: "{{ .Values.dd.proposeOptimalStopping }}"
+KD_SAWC_DERIVE_OPTIMAL_STOPPING: "{{ .Values.dd.sawcDeriveOptimalStopping }}"
+# Per-study chapter concurrency semaphore.
+KD_STUDY_SEM: "{{ .Values.dd.studySem }}"
 {{- end -}}
 
 

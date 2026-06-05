@@ -23,20 +23,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import asdict
 from typing import Literal
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from domains.llm.credentials import get_store
+from domains.llm.credentials import UnmanagedKeyEnv, get_store
 from domains.llm.rotator.chain import reset_rotator
 from domains.llm.rotator.discovery import (
     list_provider_free_models,
     missing_required_keys,
     probe_provider_key,
 )
-from domains.llm.rotator.discovery.constants import PROVIDERS
+from domains.llm.rotator.discovery import PROVIDERS
 
 
 logger = logging.getLogger(__name__)
@@ -108,7 +109,7 @@ def _provider_view(pid: str, settings: dict) -> dict:
         "enabled": enabled,
         "mode": mode,
         "selected_count": len(selected),
-        **status,   # has_key, source, last4
+        **asdict(status),    # has_key, source, last4
     }
 
 
@@ -186,7 +187,7 @@ async def providers_health() -> JSONResponse:
     statuses = await run_in_threadpool(
         lambda: {pid: get_store().key_status(PROVIDERS[pid].key_env) for pid in PROVIDERS}
     )
-    keyed = [pid for pid, st in statuses.items() if st["has_key"]]
+    keyed = [pid for pid, st in statuses.items() if st.has_key]
     probes = await asyncio.gather(*[probe_provider_key(pid, None) for pid in keyed])
     return JSONResponse(content={
         "results": [{"id": pid, **probe} for pid, probe in zip(keyed, probes)],
@@ -204,7 +205,7 @@ async def provider_models(pid: str) -> JSONResponse:
         "selected": (settings.get("selected") or {}).get(pid, []),
         "mode": (settings.get("mode") or {}).get(pid, "all"),
         "has_key": (await run_in_threadpool(
-            get_store().key_status, PROVIDERS[pid].key_env))["has_key"],
+            get_store().key_status, PROVIDERS[pid].key_env)).has_key,
     })
 
 
@@ -219,19 +220,25 @@ async def set_provider_key(pid: str, body: KeyBody) -> JSONResponse:
             status_code=400,
             detail={"message": "key validation failed", "probe": probe},
         )
-    masked = await run_in_threadpool(get_store().set_key, cfg.key_env, body.api_key)
+    try:
+        masked = await run_in_threadpool(get_store().set_key, cfg.key_env, body.api_key)
+    except UnmanagedKeyEnv as e:
+        raise HTTPException(status_code=400, detail=str(e))
     await run_in_threadpool(_enable_and_default_mode, pid)
     await run_in_threadpool(reset_rotator)
-    return JSONResponse(content={"id": pid, "key": masked, "probe": probe})
+    return JSONResponse(content={"id": pid, "key": asdict(masked), "probe": probe})
 
 
 @router.delete("/providers/{pid}/key")
 async def delete_provider_key(pid: str) -> JSONResponse:
     _require_provider(pid)
     cfg = PROVIDERS[pid]
-    status = await run_in_threadpool(get_store().delete_key, cfg.key_env)
+    try:
+        status = await run_in_threadpool(get_store().delete_key, cfg.key_env)
+    except UnmanagedKeyEnv as e:
+        raise HTTPException(status_code=400, detail=str(e))
     await run_in_threadpool(reset_rotator)
-    return JSONResponse(content={"id": pid, **status})
+    return JSONResponse(content={"id": pid, **asdict(status)})
 
 
 @router.post("/providers/{pid}/test")

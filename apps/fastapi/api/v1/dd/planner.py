@@ -50,7 +50,6 @@ from starlette.responses import StreamingResponse
 from domains.dd.ingestion.storage import get_storage, read_framework_manifest
 from domains.llm.rotator.discovery import missing_required_keys
 from domains.dd.planner.cancel import (
-    _redis_url,
     clear_cancel,
     request_cancel,
 )
@@ -58,6 +57,12 @@ from domains.dd.planner.graph import (
     IMPLEMENTED,
     NODE_ORDER,
     build_graph,
+)
+from domains.dd.planner.keys import (
+    active_run_key,
+    lock_key,
+    planner_timing_key,
+    redis_url,
 )
 from domains.dd.planner.progress import subscribe_progress
 from domains.dd.planner.task import (
@@ -97,9 +102,7 @@ async def planner_timing(slug: str, response: Response) -> dict:
     Written by run_planner_async after the graph terminates."""
     response.headers["Cache-Control"] = "no-store"
     try:
-        raw = await get_storage().read_text(
-            f"planner/{slug}/planner-timing-latest.json"
-        )
+        raw = await get_storage().read_text(planner_timing_key(slug))
         data = json.loads(raw)
         return {
             "total_wall_ms": int(data.get("total_wall_ms") or 0),
@@ -194,7 +197,7 @@ async def start_planner(
     # failure releases the lock instead of leaking it for the TTL.
     # clear_cancel is folded in to reuse the same Redis connection.
     r = redis_aio.from_url(
-        _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
         # 0. CROSS-STAGE — is any SYNTH currently running anywhere?
@@ -263,11 +266,11 @@ async def start_planner(
         # 1b. SAME-SLUG — atomic SET NX. Failure → another planner of
         # this slug is already running.
         acquired = await r.set(
-            f"dd:planner:lock:{slug}", thread_id,
+            lock_key(slug), thread_id,
             nx=True, ex=_PLANNER_LOCK_TTL_S,
         )
         if not acquired:
-            existing = await r.get(f"dd:planner:lock:{slug}")
+            existing = await r.get(lock_key(slug))
             existing_tid = (
                 existing.decode() if isinstance(existing, bytes)
                 else existing
@@ -292,7 +295,7 @@ async def start_planner(
             async_result = run_planner_task.delay(thread_id, slug, mode)
         except Exception as e:
             try:
-                await r.delete(f"dd:planner:lock:{slug}")
+                await r.delete(lock_key(slug))
             except Exception:
                 pass
             logger.exception(
@@ -315,11 +318,11 @@ async def start_planner(
     # stale key (planner runs are short — minutes, not hours).
     try:
         r2 = redis_aio.from_url(
-            _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+            redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
         )
         try:
             await r2.set(
-                f"dd:planner:current:{slug}",
+                active_run_key(slug),
                 json.dumps({"thread_id": thread_id, "started_ts": time.time()}),
                 ex=3600,
             )
@@ -350,10 +353,10 @@ async def planner_active(slug: str, response: Response) -> dict:
     response.headers["Cache-Control"] = "no-store"
     try:
         r = redis_aio.from_url(
-            _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+            redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
         )
         try:
-            raw = await r.get(f"dd:planner:current:{slug}")
+            raw = await r.get(active_run_key(slug))
         finally:
             await r.aclose()
     except Exception:
@@ -396,7 +399,7 @@ async def resume_planner(thread_id: str) -> dict:
          with no work performed.
     """
     r = redis_aio.from_url(
-        _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
         await clear_cancel(r, thread_id)
@@ -549,12 +552,12 @@ async def wipe_planner(slug: str) -> dict:
     n_redis = 0
     try:
         rc = redis_aio.from_url(
-            _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+            redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
         )
         try:
             n_redis = await rc.delete(
-                f"dd:planner:current:{slug}",
-                f"dd:planner:lock:{slug}",
+                active_run_key(slug),
+                lock_key(slug),
             )
         finally:
             await rc.aclose()
@@ -669,7 +672,7 @@ async def cancel_planner(thread_id: str) -> dict:
     Path uses `:path` to allow the slug-prefixed thread_id structure
     (`docs-distiller/{slug}/{uuid}`) without URL-encoding."""
     r = redis_aio.from_url(
-        _redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
+        redis_url(), socket_connect_timeout=3.0, socket_timeout=5.0,
     )
     try:
         await request_cancel(r, thread_id)
@@ -677,7 +680,7 @@ async def cancel_planner(thread_id: str) -> dict:
         # clears it, but a cancel may race a dead task). slug = 2nd segment
         # of `docs-distiller/{slug}/{uuid}`.
         if thread_id.count("/") >= 2:
-            await r.delete(f"dd:planner:current:{thread_id.split('/')[1]}")
+            await r.delete(active_run_key(thread_id.split('/')[1]))
     finally:
         await r.aclose()
     return {"thread_id": thread_id, "status": "cancel_requested"}

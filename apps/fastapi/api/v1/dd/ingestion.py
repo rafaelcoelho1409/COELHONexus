@@ -36,9 +36,9 @@ from domains.dd.ingestion.storage import (
     read_framework_manifest,
     read_framework_page,
 )
-from domains.dd.ingestion.storage.constants import artifact_key
+from domains.dd.ingestion.storage import artifact_key
 
-from domains.dd.resolver import _index_by_slug
+from domains.dd.resolver import index_by_slug
 
 
 # MIME types we serve from the artifact endpoint. Derived from the
@@ -75,7 +75,7 @@ async def list_library() -> list[dict]:
     most-recently-ingested first. Joins MinIO manifests with the resolver
     catalog so each row carries the logo URL (for the sidebar avatar)."""
     minio = get_storage()
-    catalog = _index_by_slug()
+    catalog = index_by_slug()
     slugs = await minio.list_subfolders("ingestion/")
     if not slugs:
         return []

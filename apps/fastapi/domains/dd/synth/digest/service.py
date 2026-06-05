@@ -1,575 +1,837 @@
-"""digest_construct service — all functions."""
+"""digest_construct — LLM-assigned source-to-section routing.
+
+Step 4 of the synth pipeline (per
+`docs/SYNTH-ARCHITECTURE-SOTA-2026-05-18.md` + the digest_construct
+deep research report). The second LLM-driven synth graph node, runs
+after outline_sdp commits its checkpoint.
+
+WHAT IT DOES (per chapter):
+
+  1. Loads the outline blob produced by outline_sdp from
+     `synth/{slug}/{chapter_id}/outline-latest.json`. The blob carries
+     both the outline sections AND the source_keys, so this node has
+     everything it needs in one read.
+  2. Reads each source page from MinIO (normalized + sentinelized).
+  3. For each source, extracts the vault hashes present (so the LLM
+     only routes hashes it ACTUALLY sees, not hallucinated ones).
+  4. Fires ONE LLM call PER SOURCE in parallel (capped at
+     `_CONCURRENCY` via `asyncio.Semaphore` — matches planner pattern).
+     Emits a `source_done` SSE event AS each source completes (real-
+     time UI progress through the long parallel-fan-out phase).
+  5. Parses + Pydantic-validates each digest. Cross-references the
+     LLM output against the outline's section_ids + the source's
+     actual vault hashes; on issues, runs a repair LLM call.
+  6. Aggregates: builds `per_section` index (inverse of per_source),
+     computes `CoverageStats` (empty sections, over-spread sources,
+     orphan code_refs, fan-out metrics).
+  7. Persists the full `ChapterDigest` to MinIO (versioned + latest
+     pointer, content-addressed by manifest hash).
+  8. Returns state patch with `digest_path` + `digest_stats`.
+
+CACHING — content-addressed:
+
+  versioned: synth/{slug}/{chapter_id}/digest/{manifest_hash}.json
+  latest:    synth/{slug}/{chapter_id}/digest-latest.json
+
+  Manifest hash includes:
+    outline_manifest_hash  (the outline this digest is keyed to)
+    sources_sha            (sorted source MinIO keys)
+    sources_bytes          (post-concat byte count — invalidates on
+                            ingestion changes)
+    n_sources
+    prompt_version
+    schema_version
+
+  Cache hit returns immediately + emits `done` SSE with cache_hit = true.
+
+FAIL-SOFT BEHAVIOR (matches outline_sdp's pattern):
+
+  - One source's LLM call fails: log + emit `sample_done(ok = false)`,
+    skip that source's digest, continue. Empty contributions for that
+    source surface in the aggregate as missing coverage; mgsr_replan
+    can request a retry.
+  - Pydantic validation fails on a source's digest: run one repair
+    LLM call with `validate_source_digest` issues as the feedback. If
+    repair also fails, drop that source's digest (same as above).
+  - All N sources fail: emit a minimal ChapterDigest with empty
+    per_source + empty per_section (no contributions). mgsr_replan
+    surfaces the coverage_stats.empty_sections = ALL list and can
+    request a full retry.
+
+SSE EVENTS (per the established pattern in outline_sdp):
+
+  start              — chapter_id, chapter_title, n_sections, n_sources
+  outline_loaded     — n_sections, n_sources, n_total_vault_hashes
+  source_done        — source_idx, n_total, ok, source_key,
+                        n_contributions, wall_ms, deployment, error?
+  digests_aggregated — n_digests_ok, n_pydantic_fail, n_total
+  done               — n_sources, n_sections_covered, n_empty_sections,
+                        n_orphan_code_refs, wall_ms, cache_hit
+
+OBSERVABILITY:
+
+  Each `source_done` event includes the deployment ID picked by the
+  ParetoBandit so we can see fan-out across providers in real-time.
+  The `dd-grader` bandit cells share state with outline_sdp's cells —
+  successful digest calls reinforce the same deployments that worked
+  for outline drafting.
+"""
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
 import re
+import time
+from hashlib import sha256
+from typing import Optional
 
-from collections import defaultdict
+from pydantic import ValidationError
 
-from .constants import (
-    _MAX_KEY_FACTS_PER_CONTRIB,
-    _MERGE_CONTAINMENT,
-    _MERGE_JACCARD,
-    _MERGE_MIN_PRIMARY_TO_DEFEND,
-    _OVER_SPREAD_THRESHOLD,
-    _VAULT_HASH_IN_TEXT_RE,
+from ...ingestion.storage import get_storage
+from domains.llm.rotator.chain import chat_judge_bandit_async
+
+from .keys import latest_blob_key, outline_latest_key, versioned_blob_key
+from .params import (
+    MAX_CONTRIBS_PER_SOURCE,
+    MAX_KEY_FACTS_PER_CONTRIB,
+    MERGE_CONTAINMENT,
+    MERGE_JACCARD,
+    MERGE_MIN_PRIMARY_TO_DEFEND,
+    MIN_KEY_FACTS_PER_CONTRIB,
+    OVER_SPREAD_THRESHOLD,
 )
-from .types import (
+from .patterns import HASH_RE, SECTION_ID_RE, VAULT_HASH_IN_TEXT_RE
+from .schemas import (
+    ChapterDigest,
     CoverageStats,
+    LLMDigestPayload,
+    Relevance,
     SectionContribution,
     SourceDigest,
-    _LLMDigestPayload,
 )
+from .versions import DIGEST_PROMPT_VERSION, DIGEST_SCHEMA_VERSION
+from .domain import (
+    build_digest_prompt,
+    build_per_section_index,
+    build_repair_prompt,
+    compute_coverage_stats,
+    derive_source_title_fallback,
+    extract_vault_hashes,
+    merge_overlapping_sections,
+    validate_source_digest,
+)
+from ..progress import emit_progress
+from ..state import SynthState
 
 
-_RELEVANCE_RANK = {"primary": 0, "supporting": 1, "tangential": 2}
+logger = logging.getLogger(__name__)
 
 
-def _best_relevance(a: str, b: str) -> str:
-    """Return the stronger of two relevance grades (primary > supporting
-    > tangential)."""
-    return a if _RELEVANCE_RANK.get(a, 9) <= _RELEVANCE_RANK.get(b, 9) else b
+# Tunables (quality > speed)
+_CONCURRENCY        = 24    # max concurrent per-source LLM calls
+# V4 (2026-05-28) — bumped 16 → 24 after per-arm cooldown (60s) and
+# bandit drift control stabilized. Empirical evidence: 2026-05-27 run
+# with concurrency 16 saw no 429 cascades for digest (cooldown caught
+# every per-arm spike). 24 is conservative — expected per-chapter
+# digest wall-time drop of ~20-25% on 60+ source chapters.
+# Bumped 2026-05-25 from 6 → 16. Digest is the single heaviest synth
+# step (~17 min for FastMCP's 252 sources at N = 6) because it fans out
+# one LLM call per ingested page. At ~4s per page, wall time ≈
+# n_sources × per_call_s / N. The FGTS-VA bandit distributes across
+# ~30 free-tier providers (NIM, Mistral, Gemini, Cerebras, Groq, etc.)
+# so per-provider 429s under N = 16 are absorbed by the bandit's
+# existing cooldown + arm rotation — no per-call code change needed.
+# Expected: 252 × 4s / 16 ≈ 65s ideal; realistic ≈ 7-9 min after
+# accounting for repair attempts, larger-page outliers, and bandit
+# cooldown headroom. Quality is byte-identical (same prompts, same
+# model pool); this is pure throughput.
+_TEMPERATURE_DRAFT  = 0.1   # routing decisions should be ~deterministic
+_TEMPERATURE_REPAIR = 0.0
+_MAX_TOKENS_DRAFT   = 6000
+_MAX_TOKENS_REPAIR  = 6000
+_MAX_REPAIR_ATTEMPTS = 2
+
+# Per-source body cap — generous since each LLM sees ONLY one source.
+# Most pages are <30K chars; cap at 100K to be safe.
+_MAX_SOURCE_CHARS = 100_000
+
+_BLOB_PREFIX = "synth"
+_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+# DD-SYNTH-SPEED-SOTA #A1 (2026-05-26) — structured-output schema for the
+# per-source digest call. NIM + Mistral honor response_format = json_schema
+# server-side. Caller's existing Pydantic repair loop catches anything
+# that slips through (e.g. Gemini, where translation is rough).
+_DIGEST_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name":   "source_digest",
+        "schema": LLMDigestPayload.model_json_schema(),
+        "strict": False,
+    },
+}
 
 
-# =============================================================================
-# Deterministic aggregation
-# =============================================================================
-def build_per_section_index(
-    per_source: list[SourceDigest],
-    section_ids: list[str],
-) -> dict[str, list[SectionContribution]]:
-    """Invert per-source contributions -> per-section list.
-
-    `section_ids` is the canonical list from the outline; sections with
-    zero contributions still appear as empty lists (so checklist_eval
-    can detect missing coverage easily).
-
-    Within each section, contributions are sorted by relevance
-    (primary -> supporting -> tangential), then by source_key for
-    stable ordering.
-    """
-    _RELEVANCE_ORDER = {"primary": 0, "supporting": 1, "tangential": 2}
-
-    per_section: dict[str, list[SectionContribution]] = {
-        sid: [] for sid in section_ids
-    }
-    for src in per_source:
-        for contrib in src.contributes_to:
-            if contrib.section_id in per_section:
-                per_section[contrib.section_id].append(contrib)
-            # silently drop contributions to unknown section_ids;
-            # validate_source_digest catches this for the LLM to repair
-
-    # Stable sort within each section
-    for sid in per_section:
-        per_section[sid].sort(
-            key=lambda c: (_RELEVANCE_ORDER.get(c.relevance, 9), id(c))
-        )
-    return per_section
+# Blob keys
+def _versioned_blob_key(slug: str, chapter_id: str, manifest_hash: str) -> str:
+    return (
+        f"{_BLOB_PREFIX}/{slug}/{chapter_id}/digest/{manifest_hash}.json"
+    )
 
 
-def _resolve_merge(merged: dict[str, str], sid: str) -> str:
-    """Follow a merge chain loser→winner→... to the terminal winner."""
-    seen: set[str] = set()
-    while sid in merged and sid not in seen:
-        seen.add(sid)
-        sid = merged[sid]
-    return sid
+def _latest_blob_key(slug: str, chapter_id: str) -> str:
+    return f"{_BLOB_PREFIX}/{slug}/{chapter_id}/digest-latest.json"
 
 
-def merge_overlapping_sections(
-    per_source: list[SourceDigest],
+def _outline_latest_key(slug: str, chapter_id: str) -> str:
+    return f"{_BLOB_PREFIX}/{slug}/{chapter_id}/outline-latest.json"
+
+
+# JSON helpers
+def _parse_json_response(text: str) -> Optional[dict]:
+    """Best-effort JSON extraction. Tolerates ```json fences + leading
+    prose. Same approach as outline_sdp / planner.chapter_select."""
+    if not text:
+        return None
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+    m = _JSON_RE.search(text)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(0))
+    except Exception:
+        return None
+
+
+def _shorten_pydantic_error(e: ValidationError) -> str:
+    errs = e.errors()
+    if not errs:
+        return "Pydantic validation failed (no detail)"
+    lines = []
+    for err in errs[:4]:
+        loc = ".".join(str(x) for x in err.get("loc", []))
+        msg = err.get("msg", "")
+        lines.append(f"{loc}: {msg}")
+    suffix = f" (+{len(errs) - 4} more)" if len(errs) > 4 else ""
+    return "; ".join(lines) + suffix
+
+
+def _try_parse_payload(
+    raw: dict,
+) -> tuple[Optional[LLMDigestPayload], Optional[str]]:
+    try:
+        return LLMDigestPayload.model_validate(raw), None
+    except ValidationError as e:
+        return None, _shorten_pydantic_error(e)
+    except Exception as e:
+        return None, f"{type(e).__name__}: {str(e)[:200]}"
+
+
+# Per-source pipeline
+async def _digest_one_source(
+    *,
+    sem: asyncio.Semaphore,
+    sample_idx: int,
+    n_total: int,
+    thread_id: str,
+    chapter_id: str,
+    chapter_title: str,
+    framework: str,
     outline_sections: list[dict],
-    *,
-    jaccard: float = _MERGE_JACCARD,
-    containment: float = _MERGE_CONTAINMENT,
-    min_primary_to_defend: int = _MERGE_MIN_PRIMARY_TO_DEFEND,
-) -> tuple[list[SourceDigest], dict[str, str]]:
-    """Fix #3 (DD-SYNTH-SECTION-COUNT, 2026-05-29 PM) — fold sections whose
-    PRIMARY source pools overlap heavily into a single section.
-
-    This is the definitive overlap signal the outline-time heading/embedding
-    proxy cannot see: two sections with DIFFERENT headings (e.g. ch-13's
-    "Cost Tracking" vs "OpenTelemetry Configuration") that nonetheless draw
-    on the SAME 2-3 source documents are the same scope, and the writer will
-    recycle the same code into both — which the renderer then strips into
-    hollow "see other section" cross-references.
-
-    Returns `(retagged_per_source, merged_map)` where `merged_map` is
-    `{loser_section_id: winner_section_id}`. The returned per_source has each
-    losing contribution re-tagged to its winner (deduped within each source,
-    unioning code_refs/key_facts, keeping the stronger relevance), so
-    rebuilding `build_per_section_index` over it yields the merged index with
-    losers as empty lists. Pure + deterministic given identical input.
-
-    Merge rule for a pair (BIG = more primaries, SMALL = fewer; ties broken
-    by outline order so the EARLIER/foundational section wins):
-      - Jaccard(primaries) >= `jaccard`  → strong mutual overlap, OR
-      - containment(small ⊆ big) >= `containment` AND SMALL brings fewer
-        than `min_primary_to_defend` primary sources the BIG one lacks
-        (i.e. SMALL is not independently defensible).
-    Sections with zero primaries are never a merge TARGET on their own but
-    can be folded when subsumed (containment of an empty set is treated as
-    1.0 with 0 unique). Conservative by design — render-time dedup (#1) is
-    the safety net for residual overlap.
-    """
-    order = {
-        s.get("section_id"): i for i, s in enumerate(outline_sections)
-    }
-
-    def pools(merged: dict[str, str]) -> dict[str, set[str]]:
-        prim: dict[str, set[str]] = defaultdict(set)
-        for src in per_source:
-            for c in src.contributes_to:
-                if c.relevance == "primary":
-                    prim[_resolve_merge(merged, c.section_id)].add(
-                        src.source_key
-                    )
-        return prim
-
-    merged_map: dict[str, str] = {}
-    # All section_ids that currently receive any contribution.
-    live_ids = {
-        _resolve_merge(merged_map, c.section_id)
-        for src in per_source for c in src.contributes_to
-    }
-
-    while True:
-        prim = pools(merged_map)
-        live = sorted(
-            (sid for sid in live_ids if sid not in merged_map),
-            key=lambda s: order.get(s, 9_999),
-        )
-        chosen: tuple[str, str] | None = None
-        for i in range(len(live)):
-            for j in range(i + 1, len(live)):
-                a, b = live[i], live[j]
-                pa, pb = prim.get(a, set()), prim.get(b, set())
-                if not pa and not pb:
-                    continue
-                # BIG = more primaries; tie → earlier outline order.
-                if (len(pa), -order.get(a, 9_999)) >= (
-                    len(pb), -order.get(b, 9_999)
-                ):
-                    big, small, pbig, psmall = a, b, pa, pb
-                else:
-                    big, small, pbig, psmall = b, a, pb, pa
-                union = pbig | psmall
-                inter = pbig & psmall
-                jac = (len(inter) / len(union)) if union else 0.0
-                contain = (len(inter) / len(psmall)) if psmall else 1.0
-                unique_small = len(psmall - pbig)
-                if jac >= jaccard or (
-                    contain >= containment
-                    and unique_small < min_primary_to_defend
-                ):
-                    chosen = (small, big)  # (loser, winner)
-                    break
-            if chosen:
-                break
-        if not chosen:
-            break
-        loser, winner = chosen
-        merged_map[loser] = winner
-
-    # Collapse any transitive chains so every loser maps to a terminal winner.
-    merged_map = {
-        loser: _resolve_merge(merged_map, winner)
-        for loser, winner in merged_map.items()
-    }
-    if not merged_map:
-        return per_source, {}
-
-    # Re-tag per_source: every contribution to a loser now points to its
-    # winner; dedup contributions that collide within a single source.
-    retagged: list[SourceDigest] = []
-    for src in per_source:
-        by_sid: dict[str, SectionContribution] = {}
-        for c in src.contributes_to:
-            tgt = _resolve_merge(merged_map, c.section_id)
-            if tgt == c.section_id and tgt not in merged_map.values():
-                # Untouched section — keep as-is unless a collision occurs.
-                pass
-            existing = by_sid.get(tgt)
-            if existing is None:
-                by_sid[tgt] = (
-                    c if c.section_id == tgt
-                    else c.model_copy(update={"section_id": tgt})
-                )
-            else:
-                by_sid[tgt] = existing.model_copy(update={
-                    "section_id": tgt,
-                    "relevance": _best_relevance(
-                        existing.relevance, c.relevance
-                    ),
-                    "code_refs": list(dict.fromkeys(
-                        existing.code_refs + c.code_refs
-                    )),
-                    "key_facts": list(dict.fromkeys(
-                        existing.key_facts + c.key_facts
-                    ))[:_MAX_KEY_FACTS_PER_CONTRIB],
-                    "summary": existing.summary,
-                })
-        retagged.append(
-            src.model_copy(update={"contributes_to": list(by_sid.values())})
-        )
-    return retagged, merged_map
-
-
-def compute_coverage_stats(
-    per_source: list[SourceDigest],
-    per_section: dict[str, list[SectionContribution]],
-    section_ids: list[str],
-    all_vault_hashes: list[str],
-) -> CoverageStats:
-    """Compute coverage metrics for downstream consumers.
-
-    `all_vault_hashes` is the union of every hash mentioned in any
-    source — used to identify orphans (hashes no contribution claims).
-    """
-    n_sources = len(per_source)
-    n_sections = len(section_ids)
-
-    sections_with_primary = sum(
-        1 for sid in section_ids
-        if any(c.relevance == "primary" for c in per_section.get(sid, []))
-    )
-
-    empty_sections = [
-        sid for sid in section_ids
-        if not per_section.get(sid)
-    ]
-
-    # Over-spread sources: claim "primary" in too many sections (suggests
-    # the LLM hallucinated relevance or the source is genuinely broad —
-    # mgsr_replan can decide whether to merge sections or accept it)
-    over_spread_sources: list[str] = []
-    for src in per_source:
-        n_primary = sum(
-            1 for c in src.contributes_to if c.relevance == "primary"
-        )
-        if n_primary > _OVER_SPREAD_THRESHOLD:
-            over_spread_sources.append(src.source_key)
-
-    # Orphan code_refs: hashes present in some source but routed to no
-    # section by anyone (whether unassigned by that source OR omitted
-    # entirely from another source's contribs)
-    claimed_hashes: set[str] = set()
-    for sid, contribs in per_section.items():
-        for c in contribs:
-            claimed_hashes.update(c.code_refs)
-    all_hashes_set = set(all_vault_hashes)
-    orphan_code_refs = len(all_hashes_set - claimed_hashes)
-
-    # Avg fan-out metrics
-    total_contribs = sum(len(s.contributes_to) for s in per_source)
-    avg_sources_per_section = (
-        sum(len(per_section.get(sid, [])) for sid in section_ids) / n_sections
-        if n_sections else 0.0
-    )
-    avg_sections_per_source = (
-        total_contribs / n_sources if n_sources else 0.0
-    )
-
-    return CoverageStats(
-        n_sources=n_sources,
-        n_sections=n_sections,
-        sections_with_primary=sections_with_primary,
-        empty_sections=empty_sections,
-        over_spread_sources=over_spread_sources,
-        orphan_code_refs=orphan_code_refs,
-        avg_sources_per_section=avg_sources_per_section,
-        avg_sections_per_source=avg_sections_per_source,
-    )
-
-
-def validate_source_digest(
-    payload: _LLMDigestPayload,
-    *,
     valid_section_ids: set[str],
-    valid_vault_hashes: set[str],
-) -> list[str]:
-    """Cross-reference validator beyond per-field schema rules.
+    source_key: str,
+    source_md: str,
+) -> Optional[SourceDigest]:
+    """One source's full digest lifecycle: prompt → LLM → parse →
+    validate → repair-if-needed → SourceDigest. Returns None on
+    irrecoverable failure.
 
-    Returns a list of natural-language issue strings suitable for
-    feeding back to the LLM as repair instructions. Empty list = clean.
+    Emits one `source_done` event per source (real-time progress
+    through the fan-out)."""
+    async with sem:
+        t0 = time.monotonic()
+        source_vault_hashes = extract_vault_hashes(source_md)
+        valid_hash_set = set(source_vault_hashes)
 
-    Pydantic already enforces format-level rules (section_id regex,
-    hash regex, length bounds, duplicate detection). This catches
-    CROSS-source/outline invariants:
+        prompt = build_digest_prompt(
+            chapter_id = chapter_id,
+            chapter_title = chapter_title,
+            framework = framework,
+            outline_sections = outline_sections,
+            source_key = source_key,
+            source_md = source_md[:_MAX_SOURCE_CHARS],
+            source_vault_hashes = source_vault_hashes,
+        )
 
-      - section_ids must EXIST in the outline (not just match the regex)
-      - code_refs must EXIST in this source's vault_hashes (LLM
-        sometimes hallucinates hash values)
-      - unassigned_code_refs must also be in vault_hashes
-      - a code_ref cannot appear in BOTH a contribution AND unassigned
-    """
-    issues: list[str] = []
-    bad_section_ids: set[str] = set()
-    bad_code_refs_per_contrib: dict[str, list[str]] = {}
-    contrib_hash_to_section: dict[str, str] = {}
+        deployment: Optional[str] = None
+        try:
+            response, meta = await chat_judge_bandit_async(
+                prompt,
+                max_tokens = _MAX_TOKENS_DRAFT,
+                temperature = _TEMPERATURE_DRAFT,
+                response_format = _DIGEST_RESPONSE_FORMAT,
+            )
+            deployment = (meta or {}).get("deployment")
+        except Exception as e:
+            wall_ms = int((time.monotonic() - t0) * 1000)
+            await emit_progress(
+                thread_id, "digest_construct", "source_done",
+                sample_idx = sample_idx, n_total = n_total,
+                source_key = source_key, ok = False,
+                error = f"{type(e).__name__}: {str(e)[:120]}",
+                wall_ms = wall_ms,
+            )
+            logger.warning(
+                f"[digest_construct] {source_key}: LLM call failed: "
+                f"{type(e).__name__}: {e}"
+            )
+            return None
 
-    for c in payload.contributes_to:
-        if c.section_id not in valid_section_ids:
-            bad_section_ids.add(c.section_id)
-        bad = [h for h in c.code_refs if h not in valid_vault_hashes]
-        if bad:
-            bad_code_refs_per_contrib[c.section_id] = bad
-        for h in c.code_refs:
-            if h in contrib_hash_to_section:
-                issues.append(
-                    f"vault hash {h!r} routed to both section "
-                    f"{contrib_hash_to_section[h]!r} and "
-                    f"{c.section_id!r} — a hash can only belong to ONE "
-                    f"section. Drop the less-confident assignment."
+        parsed = _parse_json_response(response)
+        if not parsed:
+            wall_ms = int((time.monotonic() - t0) * 1000)
+            await emit_progress(
+                thread_id, "digest_construct", "source_done",
+                sample_idx = sample_idx, n_total = n_total,
+                source_key = source_key, ok = False,
+                error = "parse_failed", wall_ms = wall_ms,
+                deployment = deployment,
+            )
+            logger.info(
+                f"[digest_construct] {source_key}: response not parseable as JSON"
+            )
+            return None
+
+        payload, err = _try_parse_payload(parsed)
+        if payload is None:
+            # Pydantic rejected — try ONE repair pass before giving up
+            attempt = 0
+            current = parsed
+            while attempt < _MAX_REPAIR_ATTEMPTS and payload is None:
+                attempt += 1
+                # The "issues" feedback for a Pydantic failure is the
+                # error string; for content-level failures we'll use
+                # the richer validate_source_digest output below
+                issues = [f"Pydantic schema rejected the previous output: {err}"]
+                repair_prompt = build_repair_prompt(
+                    chapter_id = chapter_id,
+                    chapter_title = chapter_title,
+                    framework = framework,
+                    outline_sections = outline_sections,
+                    source_key = source_key,
+                    source_md = source_md[:_MAX_SOURCE_CHARS],
+                    source_vault_hashes = source_vault_hashes,
+                    current_json = json.dumps(current, indent = 2),
+                    issues = issues,
                 )
-            else:
-                contrib_hash_to_section[h] = c.section_id
+                try:
+                    rr, rm = await chat_judge_bandit_async(
+                        repair_prompt,
+                        max_tokens = _MAX_TOKENS_REPAIR,
+                        temperature = _TEMPERATURE_REPAIR,
+                        response_format = _DIGEST_RESPONSE_FORMAT,
+                    )
+                    deployment = (rm or {}).get("deployment") or deployment
+                    rp = _parse_json_response(rr)
+                    if rp:
+                        current = rp
+                        payload, err = _try_parse_payload(rp)
+                except Exception as e:
+                    logger.warning(
+                        f"[digest_construct] {source_key}: repair "
+                        f"attempt {attempt} failed: "
+                        f"{type(e).__name__}: {e}"
+                    )
+                    break
 
-    if bad_section_ids:
-        issues.append(
-            f"contributions reference unknown section_ids: "
-            f"{sorted(bad_section_ids)}. Use ONLY ids from the outline "
-            f"(s1..sN as listed in the prompt)."
+            if payload is None:
+                wall_ms = int((time.monotonic() - t0) * 1000)
+                await emit_progress(
+                    thread_id, "digest_construct", "source_done",
+                    sample_idx = sample_idx, n_total = n_total,
+                    source_key = source_key, ok = False,
+                    error = f"pydantic_fail: {err}", wall_ms = wall_ms,
+                    deployment = deployment,
+                )
+                logger.info(
+                    f"[digest_construct] {source_key}: pydantic-reject "
+                    f"after {_MAX_REPAIR_ATTEMPTS} repairs: {err}"
+                )
+                return None
+
+        # Content-level cross-reference validation
+        issues = validate_source_digest(
+            payload,
+            valid_section_ids = valid_section_ids,
+            valid_vault_hashes = valid_hash_set,
         )
-    for sid, bad in bad_code_refs_per_contrib.items():
-        issues.append(
-            f"section {sid!r}: code_refs {bad} are not in this source's "
-            f"vault_hashes — only assign hashes present in the source."
+        if issues:
+            # Run a content-repair pass with the actionable issues
+            attempt = 0
+            current = payload.model_dump()
+            while attempt < _MAX_REPAIR_ATTEMPTS and issues:
+                attempt += 1
+                repair_prompt = build_repair_prompt(
+                    chapter_id = chapter_id,
+                    chapter_title = chapter_title,
+                    framework = framework,
+                    outline_sections = outline_sections,
+                    source_key = source_key,
+                    source_md = source_md[:_MAX_SOURCE_CHARS],
+                    source_vault_hashes = source_vault_hashes,
+                    current_json = json.dumps(current, indent = 2),
+                    issues = issues,
+                )
+                try:
+                    rr, rm = await chat_judge_bandit_async(
+                        repair_prompt,
+                        max_tokens = _MAX_TOKENS_REPAIR,
+                        temperature = _TEMPERATURE_REPAIR,
+                        response_format = _DIGEST_RESPONSE_FORMAT,
+                    )
+                    deployment = (rm or {}).get("deployment") or deployment
+                    rp = _parse_json_response(rr)
+                    if not rp:
+                        break
+                    new_payload, new_err = _try_parse_payload(rp)
+                    if new_payload is None:
+                        break
+                    new_issues = validate_source_digest(
+                        new_payload,
+                        valid_section_ids = valid_section_ids,
+                        valid_vault_hashes = valid_hash_set,
+                    )
+                    # Only accept if it actually improves
+                    if len(new_issues) <= len(issues):
+                        payload = new_payload
+                        current = payload.model_dump()
+                        issues = new_issues
+                    else:
+                        break
+                except Exception as e:
+                    logger.warning(
+                        f"[digest_construct] {source_key}: content-"
+                        f"repair attempt {attempt} failed: "
+                        f"{type(e).__name__}: {e}"
+                    )
+                    break
+
+            # If issues remain, we KEEP the digest anyway but log a
+            # warning — `build_per_section_index` silently drops
+            # unknown section_id contribs, so the aggregate stays
+            # consistent. mgsr_replan can flag the source for revisit.
+            if issues:
+                logger.info(
+                    f"[digest_construct] {source_key}: kept with "
+                    f"{len(issues)} unresolved issues: {issues[0][:80]}"
+                )
+
+        # Fallback for ugly LLM titles
+        if (
+            not payload.source_title
+            or payload.source_title.lower() in {"untitled", "n/a", "none"}
+        ):
+            payload.source_title = derive_source_title_fallback(
+                source_md, source_key
+            )
+
+        wall_ms = int((time.monotonic() - t0) * 1000)
+        src_digest = SourceDigest(
+            source_key = source_key,
+            source_title = payload.source_title,
+            overall_summary = payload.overall_summary,
+            contributes_to = payload.contributes_to,
+            unassigned_code_refs = payload.unassigned_code_refs,
+            deployment = deployment,
+            wall_ms = wall_ms,
+        )
+        await emit_progress(
+            thread_id, "digest_construct", "source_done",
+            sample_idx = sample_idx, n_total = n_total,
+            source_key = source_key, ok = True,
+            n_contributions = len(payload.contributes_to),
+            n_unassigned = len(payload.unassigned_code_refs),
+            wall_ms = wall_ms,
+            deployment = deployment,
+        )
+        return src_digest
+
+
+# Manifest hash
+def _compute_manifest_hash(
+    *,
+    outline_manifest_hash: str,
+    source_keys: list[str],
+    sources_bytes: int,
+) -> str:
+    payload = (
+        f"outline = {outline_manifest_hash}|"
+        f"sources = {','.join(sorted(source_keys))}|"
+        f"n = {len(source_keys)}|"
+        f"bytes = {sources_bytes}|"
+        f"prompt = {DIGEST_PROMPT_VERSION}|"
+        f"schema = {DIGEST_SCHEMA_VERSION}"
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+# The node
+async def digest_construct_run(state: SynthState) -> dict:
+    """Run the LLM-assigned source-to-section router for one chapter."""
+    slug = state.get("framework_slug")
+    chapter_id = state.get("chapter_id")
+    thread_id = state.get("thread_id") or ""
+
+    if not slug or not chapter_id:
+        return {
+            "digest_path":  "",
+            "digest_stats": {
+                "skipped": "no_slug_or_chapter_id", "wall_ms": 0,
+            },
+            "status": "failed",
+            "error":  "framework_slug or chapter_id missing from SynthState",
+        }
+
+    t0 = time.monotonic()
+    minio = get_storage()
+
+    # ── Load outline blob (the canonical input — has outline + sources) ─
+    outline_key = _outline_latest_key(slug, chapter_id)
+    if not await minio.exists(outline_key):
+        return {
+            "digest_path":  "",
+            "digest_stats": {
+                "skipped": "outline_not_found",
+                "outline_key": outline_key,
+                "wall_ms": int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  (
+                f"outline {outline_key!r} not in MinIO; run outline_sdp first"
+            ),
+        }
+
+    try:
+        outline_text = await minio.read_text(outline_key)
+        outline_payload = json.loads(outline_text)
+    except Exception as e:
+        return {
+            "digest_path":  "",
+            "digest_stats": {
+                "skipped": "outline_unreadable",
+                "wall_ms": int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"outline-latest.json unreadable: {type(e).__name__}: {e}",
+        }
+
+    outline_data = outline_payload.get("outline") or {}
+    outline_sections = outline_data.get("sections") or []
+    source_keys = sorted(outline_payload.get("source_keys") or [])
+    chapter_title = outline_payload.get("chapter_title") or chapter_id
+    outline_manifest_hash = outline_payload.get("manifest_hash") or ""
+
+    if not outline_sections or not source_keys:
+        return {
+            "digest_path":  "",
+            "digest_stats": {
+                "skipped": "empty_outline_or_sources",
+                "n_sections": len(outline_sections),
+                "n_sources": len(source_keys),
+                "wall_ms": int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  (
+                f"outline has {len(outline_sections)} sections and "
+                f"{len(source_keys)} sources — both must be >0"
+            ),
+        }
+
+    valid_section_ids = {s["section_id"] for s in outline_sections}
+
+    await emit_progress(
+        thread_id, "digest_construct", "start",
+        chapter_id = chapter_id,
+        chapter_title = chapter_title,
+        n_sections = len(outline_sections),
+        n_sources = len(source_keys),
+    )
+
+    bodies = await minio.read_many(source_keys)
+
+    # When ingestion produced per-page markdown files at
+    # `ingestion/{slug}/pages/...` but didn't build matching per-page
+    # vaults (e.g., the consolidated llms-full crawl built only one mega-
+    # vault), the per-source markdown has no sentinels and the digest
+    # LLM finds zero vault hashes → emits empty code_refs → sawc ends up
+    # with allowed_hashes = [] → final chapter has zero code blocks.
+    # Fix: sentinelize each source on-the-fly here. The resulting
+    # vault entries are accumulated below and the sentinelized bodies
+    # replace the raw ones for downstream LLM input.
+    from ..vault.domain import sentinelize_doc as _sentinelize_doc
+    runtime_vault_entries: dict = {}
+    sentinelized_bodies: list[bytes | str | None] = []
+    for sk, raw_body in zip(source_keys, bodies):
+        if not raw_body:
+            sentinelized_bodies.append(raw_body)
+            continue
+        body_text = (
+            raw_body.decode("utf-8", errors = "replace")
+            if isinstance(raw_body, (bytes, bytearray))
+            else raw_body
+        )
+        if "<code-ref hash = " in body_text:
+            # Already sentinelized at the source (the pre-built path
+            # would have produced this).
+            sentinelized_bodies.append(body_text)
+            continue
+        try:
+            sentinelized, entries = _sentinelize_doc(body_text)
+            sentinelized_bodies.append(sentinelized)
+            # Convert VaultEntry → dict for downstream JSON serialization
+            for h, e in entries.items():
+                if h not in runtime_vault_entries:
+                    runtime_vault_entries[h] = (
+                        e.model_dump() if hasattr(e, "model_dump") else dict(e)
+                    )
+        except Exception as exc:
+            logger.warning(
+                f"[digest_construct] runtime-sentinelize failed for "
+                f"{sk!r}: {type(exc).__name__}: {exc}; using raw body"
+            )
+            sentinelized_bodies.append(body_text)
+    bodies = sentinelized_bodies
+    if runtime_vault_entries:
+        logger.info(
+            f"[digest_construct] {slug}/{chapter_id}: runtime-sentinelized "
+            f"{sum(1 for b in bodies if b and '<code-ref hash = ' in str(b))} "
+            f"sources, accumulated {len(runtime_vault_entries)} vault entries"
         )
 
-    bad_unassigned = [
-        h for h in payload.unassigned_code_refs
-        if h not in valid_vault_hashes
+    # Pair (source_key, body); drop empties + log
+    pairs: list[tuple[str, str]] = []
+    for k, b in zip(source_keys, bodies):
+        if b:
+            pairs.append((k, b))
+        else:
+            logger.warning(
+                f"[digest_construct] empty body for source {k!r}; skipping"
+            )
+
+    if not pairs:
+        return {
+            "digest_path":  "",
+            "digest_stats": {
+                "skipped": "all_sources_empty",
+                "wall_ms": int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  "every source body returned empty from MinIO",
+        }
+
+    total_bytes = sum(len(b) for _, b in pairs)
+    # Aggregate vault hashes across all sources for the orphan check
+    all_vault_hashes: set[str] = set()
+    for _, body in pairs:
+        all_vault_hashes.update(extract_vault_hashes(body))
+
+    await emit_progress(
+        thread_id, "digest_construct", "outline_loaded",
+        n_sections = len(outline_sections),
+        n_sources = len(pairs),
+        n_total_vault_hashes = len(all_vault_hashes),
+        total_bytes = total_bytes,
+    )
+
+    manifest_hash = _compute_manifest_hash(
+        outline_manifest_hash = outline_manifest_hash,
+        source_keys = [k for k, _ in pairs],
+        sources_bytes = total_bytes,
+    )
+    versioned_key = _versioned_blob_key(slug, chapter_id, manifest_hash)
+    latest_key    = _latest_blob_key(slug, chapter_id)
+
+    if await minio.exists(versioned_key) and await minio.exists(latest_key):
+        try:
+            cached_text = await minio.read_text(versioned_key)
+            cached = json.loads(cached_text)
+            cov = (cached or {}).get("coverage_stats") or {}
+            elapsed = int((time.monotonic() - t0) * 1000)
+            stats = {
+                "n_sources":            len(cached.get("per_source") or []),
+                "n_sections":           cov.get("n_sections", 0),
+                "n_sections_covered":   cov.get("sections_with_primary", 0),
+                "n_empty_sections":     len(cov.get("empty_sections") or []),
+                "n_merged_sections":    len(cached.get("merged_sections") or {}),
+                "merged_sections":      cached.get("merged_sections") or {},
+                "n_over_spread":        len(cov.get("over_spread_sources") or []),
+                "n_orphan_code_refs":   cov.get("orphan_code_refs", 0),
+                "n_pydantic_fail":      cached.get("n_pydantic_fail", 0),
+                "wall_ms":              elapsed,
+                "store_path":           latest_key,
+                "versioned_path":       versioned_key,
+                "manifest_hash":        manifest_hash,
+                "cache_hit":            True,
+                "prompt_version":       cached.get("prompt_version"),
+            }
+            await emit_progress(
+                thread_id, "digest_construct", "done",
+                n_sources = stats["n_sources"],
+                n_sections = stats["n_sections"],
+                n_sections_covered = stats["n_sections_covered"],
+                n_empty_sections = stats["n_empty_sections"],
+                n_orphan_code_refs = stats["n_orphan_code_refs"],
+                wall_ms = elapsed, cache_hit = True,
+            )
+            logger.info(
+                f"[digest_construct] {slug}/{chapter_id}: CACHE HIT — "
+                f"{stats['n_sources']} sources, "
+                f"{stats['n_sections_covered']}/{stats['n_sections']} "
+                f"sections covered, {elapsed} ms"
+            )
+            return {"digest_path": latest_key, "digest_stats": stats}
+        except Exception as e:
+            logger.warning(
+                f"[digest_construct] {slug}/{chapter_id}: cached blob "
+                f"{versioned_key!r} unreadable ({type(e).__name__}: {e}); "
+                f"recomputing"
+            )
+
+    sem = asyncio.Semaphore(_CONCURRENCY)
+    tasks = [
+        _digest_one_source(
+            sem = sem,
+            sample_idx = i,
+            n_total = len(pairs),
+            thread_id = thread_id,
+            chapter_id = chapter_id,
+            chapter_title = chapter_title,
+            framework = slug,
+            outline_sections = outline_sections,
+            valid_section_ids = valid_section_ids,
+            source_key = key,
+            source_md = body,
+        )
+        for i, (key, body) in enumerate(pairs)
     ]
-    if bad_unassigned:
-        issues.append(
-            f"unassigned_code_refs {bad_unassigned} are not in this "
-            f"source's vault_hashes."
+    results = await asyncio.gather(*tasks)
+    per_source: list[SourceDigest] = [r for r in results if r is not None]
+    n_pydantic_fail = sum(1 for r in results if r is None)
+
+    await emit_progress(
+        thread_id, "digest_construct", "digests_aggregated",
+        n_digests_ok = len(per_source),
+        n_pydantic_fail = n_pydantic_fail,
+        n_total = len(pairs),
+    )
+
+    section_ids = [s["section_id"] for s in outline_sections]
+
+    # Fix #3 (DD-SYNTH-SECTION-COUNT, 2026-05-29 PM) — source-pool merge.
+    # Fold sections whose PRIMARY source pools overlap heavily into one
+    # (the definitive overlap signal; see merge_overlapping_sections). The
+    # returned per_source has losing contributions re-tagged to their
+    # winner, so the rebuilt per_section index naturally has losers empty;
+    # sawc_write skips merged sections so they never render as hollow
+    # cross-references.
+    per_source, merged_sections = merge_overlapping_sections(
+        per_source, outline_sections,
+    )
+    if merged_sections:
+        logger.info(
+            f"[digest_construct] {slug}/{chapter_id}: source-pool merge "
+            f"folded {len(merged_sections)} section(s) → "
+            f"{sorted(set(merged_sections.values()))} "
+            f"(losers: {sorted(merged_sections)})"
         )
 
-    overlap = set(payload.unassigned_code_refs) & set(
-        contrib_hash_to_section.keys()
-    )
-    if overlap:
-        issues.append(
-            f"vault hashes {sorted(overlap)} appear BOTH in a "
-            f"contribution AND in unassigned_code_refs — pick one. "
-            f"If you routed it, drop from unassigned. If unsure, drop "
-            f"from contribution."
-        )
-
-    return issues
-
-
-# =============================================================================
-# Prompt templates
-# =============================================================================
-def _format_outline_compact(outline_sections: list[dict]) -> str:
-    """Format outline as a compact block for the digest prompt.
-
-    Each entry: `[s1] Heading — description`. Skips DAG/prereqs (the
-    digest LLM only needs to know WHICH sections exist + their topic);
-    DAG was already used by outline_sdp and is preserved separately.
-    """
-    lines: list[str] = []
-    for s in outline_sections:
-        lines.append(
-            f"[{s.get('section_id', '?')}] {s.get('heading', '?')} — "
-            f"{s.get('description', '?')}"
-        )
-    return "\n".join(lines)
-
-
-def build_digest_prompt(
-    *,
-    chapter_id: str,
-    chapter_title: str,
-    framework: str,
-    outline_sections: list[dict],
-    source_key: str,
-    source_md: str,
-    source_vault_hashes: list[str],
-) -> str:
-    """Build the per-source digest prompt.
-
-    The LLM sees ONE source at a time + the FULL outline. It decides
-    which sections this source contributes to (multi-label, with a
-    relevance grade per assignment) and routes vault sentinels.
-    """
-    outline_block = _format_outline_compact(outline_sections)
-    hash_block = (
-        "\n".join(f"  - {h}" for h in source_vault_hashes)
-        if source_vault_hashes
-        else "  (none — this source has no fenced code blocks)"
-    )
-    return (
-        f"You are the Digest Constructor — step 4 of the Docs Distiller "
-        f"synth pipeline. The chapter outline has already been "
-        f"decomposed by outline_sdp (step 3). Your job is to read ONE "
-        f"source page and decide which sections it contributes to + "
-        f"WHAT specifically.\n\n"
-
-        f"This is per-source LLM-assigned routing (replaces deprecated "
-        f"Phase B cosine routing). Borrows the per-source-digest "
-        f"pattern from LLMxMapReduce-V3 (arXiv 2510.10890) + the typed "
-        f"paper-card schema from IterSurvey (arXiv 2510.21900). Your "
-        f"output drives sawc_write's section drafting downstream.\n\n"
-
-        f"FRAMEWORK: {framework}\n"
-        f"CHAPTER: {chapter_id} — {chapter_title}\n\n"
-
-        f"== OUTLINE SECTIONS (each is `[id] heading — description`) ==\n"
-        f"{outline_block}\n"
-        f"== END OUTLINE ==\n\n"
-
-        f"== SOURCE: {source_key} ==\n"
-        f"VAULT HASHES PRESENT IN THIS SOURCE "
-        f"({len(source_vault_hashes)}):\n"
-        f"{hash_block}\n\n"
-
-        f"SOURCE MARKDOWN:\n"
-        f"{source_md}\n"
-        f"== END SOURCE ==\n\n"
-
-        f"== OUTPUT — strict JSON matching this schema ==\n"
-        f"{{\n"
-        f'  "source_title": "3-200 chars",\n'
-        f'  "overall_summary": "1-paragraph what this source is about (30-800 chars)",\n'
-        f'  "contributes_to": [\n'
-        f'    {{\n'
-        f'      "section_id":  "s1",     /* MUST be one of the outline ids above */\n'
-        f'      "relevance":   "primary" | "supporting" | "tangential",\n'
-        f'      "summary":     "1-3 sentences (20-600 chars) — what THIS source contributes to THIS section",\n'
-        f'      "key_facts":   ["fact 1", ...],  /* 1-5 concrete claims, 6-300 chars each */\n'
-        f'      "code_refs":   ["12-hex", ...]   /* vault hashes from THIS source that BELONG to this section; subset of vault_hashes_in_source above */\n'
-        f'    }},\n'
-        f'    ... 0-20 entries ...\n'
-        f'  ],\n'
-        f'  "unassigned_code_refs": ["12-hex", ...]   /* vault hashes you couldn\'t confidently route */\n'
-        f"}}\n\n"
-
-        f"== HARD RULES ==\n"
-        f"1. section_id MUST be one of the outline ids above. Inventing "
-        f"   ids like 's99' or 's_intro' is a hard violation.\n"
-        f"2. OMIT sections this source doesn't actually contribute to. "
-        f"   Do NOT pad with empty 'not applicable' contributions.\n"
-        f"3. relevance must be HONEST: 'primary' = this source is the "
-        f"   main authority for that section; 'supporting' = useful "
-        f"   detail but not the lead reference; 'tangential' = mentions "
-        f"   in passing. Route each code example to the ONE section it "
-        f"   most belongs in (DD-SYNTH-SECTION-RECYCLING-2026-05-29 #5). "
-        f"   A source claiming 'primary' in >2 sections is flagged as "
-        f"   over-spread — spreading the same code across sections forces "
-        f"   the chapter to de-duplicate it into hollow cross-references. "
-        f"   Pick the single best home; demote the rest to 'supporting' "
-        f"   only when genuinely needed.\n"
-        f"4. code_refs MUST be 16-hex strings from `vault_hashes_in_source` "
-        f"   above. Routing a hash that isn't in that list is a hard "
-        f"   violation (you can't see hashes that aren't here).\n"
-        f"5. A single vault hash can appear in AT MOST ONE contribution. "
-        f"   If you're unsure, put it in `unassigned_code_refs`.\n"
-        f"6. A vault hash cannot appear in BOTH contributes_to AND "
-        f"   unassigned_code_refs.\n"
-        f"7. summary should be CONCRETE — name actual APIs / types / "
-        f"   methods. Avoid 'demonstrates various patterns' or 'discusses "
-        f"   concepts'.\n"
-        f"8. key_facts are STANDALONE claims — no 'see above' references. "
-        f"   Each fact should be verifiable from the source.\n\n"
-
-        f"== DECOMPOSITION GUIDANCE ==\n"
-        f"- Most sources contribute to 1-2 sections, not all of them. "
-        f"Be selective — over-spreading is the #1 cause of recycled code.\n"
-        f"- If the source is broadly about ONE section's topic, that "
-        f"section gets 'primary' and others may not appear at all.\n"
-        f"- If the source is a reference / catalog covering multiple "
-        f"sections, expect 3-5 'supporting' contributions.\n"
-        f"- 'tangential' should be rare — only when the source briefly "
-        f"references a concept relevant to a section.\n\n"
-
-        f"Respond ONLY with valid JSON matching the schema above. NO "
-        f"prose commentary, NO markdown wrapping, NO explanation."
+    per_section = build_per_section_index(per_source, section_ids)
+    coverage = compute_coverage_stats(
+        per_source = per_source,
+        per_section = per_section,
+        section_ids = section_ids,
+        all_vault_hashes = list(all_vault_hashes),
     )
 
-
-def build_repair_prompt(
-    *,
-    chapter_id: str,
-    chapter_title: str,
-    framework: str,
-    outline_sections: list[dict],
-    source_key: str,
-    source_md: str,
-    source_vault_hashes: list[str],
-    current_json: str,
-    issues: list[str],
-) -> str:
-    """Repair prompt — given an LLM digest that failed validation, ask
-    for a fixed version with the SAME schema. Issues are
-    machine-readable strings produced by `validate_source_digest`."""
-    outline_block = _format_outline_compact(outline_sections)
-    hash_block = (
-        "\n".join(f"  - {h}" for h in source_vault_hashes)
-        if source_vault_hashes
-        else "  (none)"
+    chapter_digest = ChapterDigest(
+        chapter_id = chapter_id,
+        chapter_title = chapter_title,
+        framework_slug = slug,
+        n_pydantic_fail = n_pydantic_fail,
+        per_source = per_source,
+        per_section = per_section,
+        coverage_stats = coverage,
+        merged_sections = merged_sections,
     )
-    issues_block = "\n".join(f"- {x}" for x in issues)
-    return (
-        f"Fix structural issues in this source digest. Keep the same "
-        f"JSON schema (source_title + overall_summary + contributes_to "
-        f"+ unassigned_code_refs). Preserve good fields; only change "
-        f"what's needed to clear the issues below.\n\n"
+    payload = chapter_digest.model_dump()
+    payload["outline_manifest_hash"] = outline_manifest_hash
+    payload["digest_manifest_hash"]  = manifest_hash
+    payload["source_keys"]           = [k for k, _ in pairs]
+    payload["n_total_vault_hashes"]  = len(all_vault_hashes)
 
-        f"CHAPTER: {chapter_id} — {chapter_title}\n"
-        f"FRAMEWORK: {framework}\n"
-        f"SOURCE: {source_key}\n\n"
-
-        f"OUTLINE SECTIONS (use ONLY these section_ids):\n"
-        f"{outline_block}\n\n"
-
-        f"VAULT HASHES PRESENT IN THIS SOURCE (use ONLY these for code_refs):\n"
-        f"{hash_block}\n\n"
-
-        f"SOURCE MARKDOWN (for context):\n"
-        f"{source_md}\n\n"
-
-        f"CURRENT DIGEST:\n{current_json}\n\n"
-
-        f"ISSUES TO FIX:\n{issues_block}\n\n"
-
-        f"Respond ONLY with valid JSON matching the original schema. "
-        f"NO commentary, NO markdown wrapping."
+    blob_bytes = json.dumps(payload, indent = 2, ensure_ascii = False)
+    await minio.write(
+        versioned_key, blob_bytes, content_type = "application/json",
+    )
+    await minio.write(
+        latest_key, blob_bytes, content_type = "application/json",
     )
 
+    elapsed = int((time.monotonic() - t0) * 1000)
+    stats = {
+        "n_sources":            len(per_source),
+        "n_sections":           coverage.n_sections,
+        "n_sections_covered":   coverage.sections_with_primary,
+        "n_empty_sections":     len(coverage.empty_sections),
+        "empty_sections":       coverage.empty_sections,
+        "n_merged_sections":    len(merged_sections),
+        "merged_sections":      merged_sections,
+        "n_over_spread":        len(coverage.over_spread_sources),
+        "over_spread_sources":  coverage.over_spread_sources,
+        "n_orphan_code_refs":   coverage.orphan_code_refs,
+        "n_total_vault_hashes": len(all_vault_hashes),
+        "n_pydantic_fail":      n_pydantic_fail,
+        "avg_sources_per_section": coverage.avg_sources_per_section,
+        "avg_sections_per_source": coverage.avg_sections_per_source,
+        "wall_ms":              elapsed,
+        "store_path":           latest_key,
+        "versioned_path":       versioned_key,
+        "manifest_hash":        manifest_hash,
+        "cache_hit":            False,
+        "prompt_version":       DIGEST_PROMPT_VERSION,
+    }
+    await emit_progress(
+        thread_id, "digest_construct", "done",
+        n_sources = stats["n_sources"],
+        n_sections = stats["n_sections"],
+        n_sections_covered = stats["n_sections_covered"],
+        n_empty_sections = stats["n_empty_sections"],
+        n_merged_sections = stats["n_merged_sections"],
+        n_orphan_code_refs = stats["n_orphan_code_refs"],
+        n_pydantic_fail = n_pydantic_fail,
+        wall_ms = elapsed,
+    )
+    logger.info(
+        f"[digest_construct] {slug}/{chapter_id}: "
+        f"{stats['n_sources']}/{len(pairs)} sources digested, "
+        f"{stats['n_sections_covered']}/{stats['n_sections']} sections "
+        f"with primary, {stats['n_empty_sections']} empty, "
+        f"{stats['n_orphan_code_refs']} orphan refs, {elapsed} ms"
+    )
+    return {"digest_path": latest_key, "digest_stats": stats}
 
-# =============================================================================
-# Helpers
-# =============================================================================
-def extract_vault_hashes(md_text: str) -> list[str]:
-    """Find every vault sentinel `<code-ref hash="..."/>` in `md_text`
-    and return the unique 16-hex hashes in order of first occurrence."""
-    seen: set[str] = set()
-    out: list[str] = []
-    for m in _VAULT_HASH_IN_TEXT_RE.finditer(md_text or ""):
-        h = m.group(1)
-        if h not in seen:
-            seen.add(h)
-            out.append(h)
-    return out
 
-
-def derive_source_title_fallback(md_text: str, source_key: str) -> str:
-    """If the LLM-emitted source_title is unusable, derive one from the
-    markdown's first H1 OR from the source_key filename."""
-    if md_text:
-        m = re.search(r"^#\s+(.+)$", md_text, re.MULTILINE)
-        if m:
-            title = m.group(1).strip().strip("#").strip()
-            if 3 <= len(title) <= 200:
-                return title
-    # Fallback: derive from filename
-    base = source_key.rsplit("/", 1)[-1] or source_key
-    base = base.rsplit(".", 1)[0]
-    # Strip leading 4-digit index pattern (e.g. "0022-foo")
-    base = re.sub(r"^\d+-", "", base)
-    title = " ".join(p.capitalize() for p in base.split("-")[:8])
-    return title or source_key
+# Convenience loader for downstream nodes
+def load_digest_payload(text: str) -> dict:
+    """Parse the persisted digest blob. Returns the full payload dict;
+    downstream nodes pick the fields they need (per_section,
+    coverage_stats, etc.)."""
+    return json.loads(text)

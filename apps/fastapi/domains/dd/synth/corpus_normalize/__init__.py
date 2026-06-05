@@ -1,72 +1,19 @@
-"""corpus_normalize subpackage — re-exports all public names."""
-from .constants import (
-    _NORMALIZER_VERSION,
-    _MDX_WRAPPER_TAGS,
-    _MDX_TAGS_PATTERN,
-    _MDX_OPEN_TAG_RE,
-    _MDX_CLOSE_TAG_RE,
-    _FENCE_META_ATTRS,
-    _FENCE_META_HINT_RE,
-    _BOUNDARY_RE,
-    _FRONTMATTER_RE,
-    _ADMON_KINDS,
-    _ADMON_OPEN_RE,
-    _ADMON_CLOSE_RE,
-    _GITBOOK_HINT_OPEN_RE,
-    _GITBOOK_HINT_CLOSE_RE,
-    _GITBOOK_TABS_OPEN_RE,
-    _GITBOOK_TABS_CLOSE_RE,
-    _ZERO_WIDTH_RE,
-    _ENTITY_DECODES,
-)
-from .types import (
-    NormalizeStats,
-    NormalizedDoc,
-)
-from .service import (
-    normalize_doc,
-    _unicode_pass,
-    _frontmatter_pass,
-    _boundary_pass,
-    _identify_fence_ranges,
-    _strip_fence_info_string,
-    _token_aware_passes,
-    _rewrite_fence_opener,
-    _strip_admonition_markers,
-    _strip_mdx_wrapper_tags,
-    _whitespace_entity_pass,
-)
+"""corpus_normalize — ingestion-time markdown cleanup.
 
-__all__ = [
-    "_NORMALIZER_VERSION",
-    "_MDX_WRAPPER_TAGS",
-    "_MDX_TAGS_PATTERN",
-    "_MDX_OPEN_TAG_RE",
-    "_MDX_CLOSE_TAG_RE",
-    "_FENCE_META_ATTRS",
-    "_FENCE_META_HINT_RE",
-    "_BOUNDARY_RE",
-    "_FRONTMATTER_RE",
-    "_ADMON_KINDS",
-    "_ADMON_OPEN_RE",
-    "_ADMON_CLOSE_RE",
-    "_GITBOOK_HINT_OPEN_RE",
-    "_GITBOOK_HINT_CLOSE_RE",
-    "_GITBOOK_TABS_OPEN_RE",
-    "_GITBOOK_TABS_CLOSE_RE",
-    "_ZERO_WIDTH_RE",
-    "_ENTITY_DECODES",
-    "NormalizeStats",
-    "NormalizedDoc",
-    "normalize_doc",
-    "_unicode_pass",
-    "_frontmatter_pass",
-    "_boundary_pass",
-    "_identify_fence_ranges",
-    "_strip_fence_info_string",
-    "_token_aware_passes",
-    "_rewrite_fence_opener",
-    "_strip_admonition_markers",
-    "_strip_mdx_wrapper_tags",
-    "_whitespace_entity_pass",
-]
+Strips rendering noise from ingested framework docs BEFORE any downstream
+consumer (file viewer, embed_corpus, off_topic, cluster, synth) sees the
+bytes. Replaces the deprecated post-hoc 9-pass `_scrub_assembled_markdown`
+passes 0-2 by moving the cleanup to INPUT-PREP.
+
+See:
+  - docs/SYNTH-ARCHITECTURE-SOTA-2026-05-18.md (synth step 2)
+  - May-2026 SOTA research: MDKEYCHUNKER (arXiv 2603.23533) + Markdown-
+    First Semantics (Steakhouse 2026) + MARCUS (2506.07116)
+
+Pure functions, no I/O. Idempotent: normalize(normalize(x)) == normalize(x).
+"""
+from .domain import normalize_doc
+from .schemas import NormalizedDoc, NormalizeStats
+
+
+__all__ = ["NormalizedDoc", "NormalizeStats", "normalize_doc"]

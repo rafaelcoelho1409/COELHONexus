@@ -1,30 +1,13 @@
-"""Planner LangGraph — sequential nodes, AsyncPostgresSaver-checkpointed.
+"""Planner LangGraph — strictly sequential, AsyncPostgresSaver-checkpointed.
 
-Each substep is its own LangGraph node so we get one checkpoint after
-each, one top-level OTel span (and therefore one LangFuse observation)
-per substep, and one /debug/graph/{thread_id}/replay?checkpoint_id=...
-target per substep.
+One node per substep → one checkpoint, one OTel span, one /debug/replay
+target each. Only nodes in `IMPLEMENTED` are wired; the rest are
+catalogued in NODE_ORDER for the UI but skipped at runtime.
 
-Incremental rollout: the graph wires ONLY nodes listed in `IMPLEMENTED`.
-Stubs aren't run — clicking "Start Planner" only executes substeps that
-have been fully transplanted, avoiding misleading "done" states and
-prevent later-substep crashes when they depend on outputs the earlier
-ones don't yet produce. Add a node's name to `IMPLEMENTED` (in order)
-as soon as its real implementation lands.
-
-Strictly sequential — cache_lookup was removed 2026-05-18 (its role is
-now covered by smart Start Planner thread reuse + LangGraph's native
-ainvoke(None) skip-completed-nodes behavior).
-
-LLM-first pipeline (canonical since 2026-05-27 — see
-docs/DD-PLANNER-LLM-FIRST-SOTA-2026-05-27.md):
-  corpus_load → embed_corpus → off_topic
-    → doc_distill → chapter_propose → chapter_assign → chapter_select
+LLM-first pipeline:
+  corpus_load → embed_corpus → off_topic → doc_distill
+    → chapter_propose → chapter_assign → chapter_select
     → order_chapters → plan_write
-The legacy UMAP+HDBSCAN+c-TF-IDF path (cluster → refine → label →
-reduce) was removed 2026-06-02 — see git history for the prior
-implementation and docs/archive/PLANNER-CLASSICAL-REFERENCE.md for the
-algorithm-level notes.
 """
 from __future__ import annotations
 
@@ -48,8 +31,8 @@ from .state import PlannerState
 logger = logging.getLogger(__name__)
 
 
-# Canonical substep order. Every node listed here MUST be wired below in
-# `NODE_REGISTRY` and listed in `IMPLEMENTED` to be included in the graph.
+# Canonical substep order. Every entry must also appear in NODE_REGISTRY
+# and IMPLEMENTED to be wired into the runtime graph.
 NODE_ORDER = (
     "corpus_load",
     "embed_corpus",
@@ -74,13 +57,9 @@ NODE_REGISTRY = {
     "plan_write":       plan_write,
 }
 
-# Primary state field each node writes. Used by /resume's catch-up path
-# to detect IMPLEMENTED nodes that haven't run yet for a thread (e.g.
-# when a node lands AFTER a thread already completed — LangGraph would
-# otherwise short-circuit `ainvoke(None)` because the old checkpoint's
-# END marker is already consumed). The catch-up code invokes the missing
-# node directly through NODE_REGISTRY and patches state via
-# `aupdate_state`, preserving SSE events end-to-end.
+# Primary output field per node. /resume's catch-up path uses this to
+# detect IMPLEMENTED nodes that haven't run for a thread that already
+# reached END (LangGraph's ainvoke(None) would otherwise short-circuit).
 NODE_TO_FIELD = {
     "corpus_load":      "raw_files",
     "embed_corpus":     "embeddings_ref",
@@ -98,14 +77,7 @@ IMPLEMENTED = tuple(NODE_ORDER)
 
 def build_graph():
     """Build + compile the planner graph with the shared AsyncPostgresSaver.
-    Only nodes in `IMPLEMENTED` get wired; the others are tracked in the
-    catalog (NODE_ORDER) for the UI but skipped at runtime.
-
-    cache_lookup (the v1 early-exit node) was removed 2026-05-18 — its
-    role is now covered by the smart Start Planner flow: client checks
-    /planner/recent → reuses existing thread → graph.ainvoke(None, config)
-    → LangGraph compares channel versions and skips committed nodes
-    automatically. No special routing edge needed."""
+    Only nodes in `IMPLEMENTED` get wired; others are catalogued only."""
     active = [n for n in NODE_ORDER if n in IMPLEMENTED]
     if not active:
         raise RuntimeError(

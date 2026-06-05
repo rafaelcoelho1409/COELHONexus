@@ -43,6 +43,9 @@ minio:
   host: minio.minio.svc.cluster.local
   port: 9000
   endpoint: "http://minio.minio.svc.cluster.local:9000"
+  # Bucket for COELHONexus artifacts (ingestion/, synth/, planner/, llm/).
+  # Read via os.environ["MINIO_BUCKET_COELHONEXUS"] in storage/credentials.
+  bucket: "coelhonexus"
 
 redis:
   # In-cluster ClusterIP service (redis-master.redis)
@@ -251,6 +254,17 @@ dd:
   # 405 boundary docs) at ~3-5pp accuracy regression vs pure LLM-judge.
   # Trade-off worth it at scale per Wiley 2025 boundary-resolver comparison.
   refineUseGmm: "1"
+
+  # chapter_propose Optimal-Stopping (CGES): if sample 0 emits ≥ stop-floor
+  # proposals, ship without firing remaining N-1. "true"/"1"/"yes"/"on" enable.
+  proposeOptimalStopping: "true"
+
+  # sawc_derive Optimal-Stopping: same shape as proposeOptimalStopping above.
+  sawcDeriveOptimalStopping: "true"
+
+  # Per-study chapter concurrency. 2 = the empirical sweet spot for rotator
+  # rate-limit headroom; roll back to "1" if 429 cascades resume.
+  studySem: "2"
 
 # SearXNG — in-cluster metasearch used by Knowledge Distiller to resolve
 # official documentation URLs (and any future web-search need). Internal DNS

@@ -1,30 +1,44 @@
 from __future__ import annotations
+from .keys import latest_blob_key, versioned_blob_key
+from .params import (
+    BANNED_HEADINGS_LC,
+    BANNED_LIST_HUMAN,
+    CHALLENGES_MAX,
+    CHALLENGES_MIN,
+    DESCRIPTION_MAX_CHARS,
+    DESCRIPTION_MIN_CHARS,
+    FLASHCARDS_MAX,
+    FLASHCARDS_MIN,
+    HEADING_MAX_WORDS,
+    HEADING_MIN_WORDS,
+    MAX_PREREQS_PER_NODE,
+    MAX_STAGE_DEPTH,
+    OUTLINE_ADAPTIVE_CEILING,
+    OUTLINE_ADAPTIVE_DIVISOR,
+    OUTLINE_ADAPTIVE_FLOOR,
+    OUTLINE_H2_FUZZY_DEDUP_THRESHOLD,
+    SECTIONS_MAX,
+    SECTIONS_MIN,
+    max_h2_for_n_sources,
+)
+from .patterns import SECTION_ID_RE
+from .schemas import (
+    ChapterOutline,
+    Flashcard,
+    OutlineDAG,
+    OutlineSection,
+)
+from .versions import OUTLINE_PROMPT_VERSION, OUTLINE_SCHEMA_VERSION
 
 from collections import defaultdict, deque
 from difflib import SequenceMatcher
 from typing import Optional
 
-from .constants import (
-    _BANNED_HEADINGS_LC,
-    _BANNED_LIST_HUMAN,
-    _MAX_STAGE_DEPTH,
-    _OUTLINE_H2_FUZZY_DEDUP_THRESHOLD,
-    max_h2_for_n_sources,
-)
-from .types import ChapterOutline, OutlineDAG, OutlineSection
 
-
-# =============================================================================
 # DAG primitives (pure)
-# =============================================================================
 def build_edges(sections: list[OutlineSection]) -> list[tuple[str, str]]:
-    """Materialize edges from each section's `prerequisites` field.
-
-    Edge (p, s) means "p is a prerequisite of s" — reader absorbs p
-    BEFORE s. Silently skips prereqs that reference unknown section_ids
-    (validate_outline_structure flags those separately so callers can
-    decide whether to retry vs auto-prune).
-    """
+    """Edge (p, s) means p is a prerequisite of s. Unknown prereqs are
+    silently skipped (validate_outline_structure flags them separately)."""
     known = {s.section_id for s in sections}
     edges: list[tuple[str, str]] = []
     for s in sections:
@@ -37,12 +51,7 @@ def build_edges(sections: list[OutlineSection]) -> list[tuple[str, str]]:
 def _find_cycle(
     nodes: list[str], edges: list[tuple[str, str]],
 ) -> Optional[list[str]]:
-    """Return ONE cycle (list of nodes in cycle order) if any, else None.
-
-    Uses iterative DFS with a recursion stack to support large graphs
-    without hitting Python's recursion limit (sections capped at 40 so
-    overflow can't happen in practice, but cheap to be safe).
-    """
+    """One cycle (nodes in order) or None. Iterative DFS — sections cap at 40."""
     adj: dict[str, list[str]] = defaultdict(list)
     for u, v in edges:
         adj[u].append(v)
@@ -85,13 +94,8 @@ def _find_cycle(
 def break_cycles_fas(
     nodes: list[str], edges: list[tuple[str, str]],
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """Remove edges until acyclic. Returns (kept_edges, removed_edges).
-
-    Greedy strategy (mirrors SurveyGen-I's "remove one edge per cycle"):
-    on each detected cycle, remove the LAST edge in the cycle path.
-    Last-edge removal heuristic = preserve the longest dependency
-    prefix; rarely matters since LLM-generated cycles are usually small.
-    """
+    """Remove edges until acyclic. Greedy: drop the LAST edge per cycle
+    (preserves longest dep prefix). SurveyGen-I style."""
     kept = list(edges)
     removed: list[tuple[str, str]] = []
     while True:
@@ -114,12 +118,8 @@ def break_cycles_fas(
 def compute_stage_indices(
     nodes: list[str], edges: list[tuple[str, str]],
 ) -> dict[str, int]:
-    """Longest-path topological labeling.
-
-    `τ(s) = 0 if In(s) = ∅ else max(τ(p)+1 for p in In(s))` — matches
-    SurveyGen-I §3.1 formula. Returns {node: stage_index}. Assumes
-    `edges` is acyclic (caller must run `break_cycles_fas` first).
-    """
+    """Longest-path topological labeling (SurveyGen-I §3.1).
+    `τ(s) = 0 if In(s) = ∅ else max(τ(p)+1 ...)`. Edges must be acyclic."""
     in_edges: dict[str, list[str]] = {n: [] for n in nodes}
     out_edges: dict[str, list[str]] = {n: [] for n in nodes}
     for u, v in edges:
@@ -139,11 +139,7 @@ def compute_stage_indices(
 
 
 def derive_dag(sections: list[OutlineSection]) -> OutlineDAG:
-    """One-shot DAG derivation: edges + cycle-break + stage_index.
-
-    The complete deterministic pipeline that follows a validated
-    ChapterOutline. Idempotent.
-    """
+    """One-shot DAG: edges → break cycles → stage_index. Idempotent."""
     nodes = [s.section_id for s in sections]
     raw_edges = build_edges(sections)
     edges, removed = break_cycles_fas(nodes, raw_edges)
@@ -151,56 +147,36 @@ def derive_dag(sections: list[OutlineSection]) -> OutlineDAG:
     stages: dict[int, list[str]] = defaultdict(list)
     for n, i in stage_index.items():
         stages[i].append(n)
-    # Stable order within stage = LLM-emitted section order.
+    # Stable within-stage order = LLM-emitted section order.
     order = {n: i for i, n in enumerate(nodes)}
     for i in stages:
-        stages[i].sort(key=lambda n: order[n])
+        stages[i].sort(key = lambda n: order[n])
     return OutlineDAG(
-        edges=edges,
-        stage_index=stage_index,
-        stages=dict(stages),
-        max_stage=max(stage_index.values()) if stage_index else 0,
-        removed_edges=removed,
+        edges = edges,
+        stage_index = stage_index,
+        stages = dict(stages),
+        max_stage = max(stage_index.values()) if stage_index else 0,
+        removed_edges = removed,
     )
 
 
-# =============================================================================
 # Structural validators (post-Pydantic, fail-soft for repair loop)
-# =============================================================================
 def validate_outline_structure(
     outline: ChapterOutline,
     dag: OutlineDAG,
     *,
     n_sources: Optional[int] = None,
 ) -> tuple[bool, list[str]]:
-    """Return (ok, list_of_issues). Issues are natural-language strings
-    suitable for feeding back to the LLM as repair instructions.
-
-    Pydantic already enforces section-level rules (id format, heading
-    length, description length, prereq count). This function checks
-    CROSS-section invariants:
-
-      - section_ids are globally unique
-      - case-folded headings are unique
-      - no banned headings appear
-      - every prereq references an existing section_id
-      - DAG depth ≤ _MAX_STAGE_DEPTH (rejects linear-only outlines)
-      - first-stage sections exist (would only fail if every section
-        has prereqs — implies a cycle that FAS broke into a forest)
-      - [CORR-3 Q1] section count ≤ max_h2_for_n_sources(n_sources)
-        when n_sources is provided (adaptive cap based on corpus size)
-      - [CORR-3 Q3] no fuzzy-duplicate H2 headings (SequenceMatcher
-        ratio ≥ 0.85 on case-folded titles)
-    """
+    """(ok, issues). NL-string issues feed the repair-prompt loop.
+    Cross-section invariants (Pydantic handles per-section): unique ids/
+    headings, no banned headings, valid prereqs, DAG depth ≤ cap,
+    fuzzy-dup H2 detection (SequenceMatcher ≥ 0.85), adaptive section count."""
     issues: list[str] = []
     ids = [s.section_id for s in outline.sections]
     headings_lc = [s.heading.casefold() for s in outline.sections]
 
-    # CORR-3 Q1 — adaptive section-count cap based on source pool size.
-    # Soft reject: feeds the repair loop with a specific cap so the LLM
-    # can merge sections or drop weak ones. Skipped when n_sources is
-    # None (caller didn't have the count handy — fall back to the
-    # _SECTIONS_MAX=40 ceiling enforced at the Pydantic level).
+    # Adaptive cap from source pool size; falls back to SECTIONS_MAX
+    # ceiling when n_sources is None.
     if n_sources is not None:
         adaptive_cap = max_h2_for_n_sources(n_sources)
         n_h2 = len(outline.sections)
@@ -214,9 +190,7 @@ def validate_outline_structure(
                 f"belong as its own H2."
             )
 
-    # CORR-3 Q3 — fuzzy-duplicate H2 detection. SequenceMatcher on case-
-    # folded titles. Catches "Click a submit button via CSS selector" /
-    # "Click submit button via CSS selector" (~0.94) at threshold 0.85.
+    # Fuzzy-dup H2 detection (SequenceMatcher ≥ 0.85 catches ~0.94 near-dupes).
     near_dupes: list[tuple[str, str, float]] = []
     n = len(outline.sections)
     for i in range(n):
@@ -226,7 +200,7 @@ def validate_outline_structure(
                 outline.sections[i].heading.casefold(),
                 outline.sections[j].heading.casefold(),
             ).ratio()
-            if ratio >= _OUTLINE_H2_FUZZY_DEDUP_THRESHOLD:
+            if ratio >= OUTLINE_H2_FUZZY_DEDUP_THRESHOLD:
                 near_dupes.append((
                     outline.sections[i].heading,
                     outline.sections[j].heading,
@@ -262,7 +236,7 @@ def validate_outline_structure(
 
     bad_headings = [
         s.heading for s in outline.sections
-        if s.heading.casefold() in _BANNED_HEADINGS_LC
+        if s.heading.casefold() in BANNED_HEADINGS_LC
     ]
     if bad_headings:
         issues.append(
@@ -279,10 +253,10 @@ def validate_outline_structure(
                     f"{prereq!r} which does not exist in the outline."
                 )
 
-    if dag.max_stage > _MAX_STAGE_DEPTH:
+    if dag.max_stage > MAX_STAGE_DEPTH:
         issues.append(
             f"DAG depth {dag.max_stage} exceeds maximum "
-            f"{_MAX_STAGE_DEPTH}. Outline is too linear — flatten by "
+            f"{MAX_STAGE_DEPTH}. Outline is too linear — flatten by "
             f"removing transitive prerequisites (only direct deps; "
             f"don't chain s1→s2→s3→s4 when s3 is the only true prereq "
             f"of s4)."
@@ -298,7 +272,7 @@ def validate_outline_structure(
 
     if not any(i == 0 for i in dag.stage_index.values()):
         issues.append(
-            "No section has stage_index=0 — every section claims a "
+            "No section has stage_index = 0 — every section claims a "
             "prerequisite. At least one section MUST have empty "
             "prerequisites (the chapter's entry point)."
         )
@@ -306,9 +280,7 @@ def validate_outline_structure(
     return (len(issues) == 0, issues)
 
 
-# =============================================================================
 # Prompt templates
-# =============================================================================
 def build_outline_prompt(
     *,
     framework: str,
@@ -321,13 +293,9 @@ def build_outline_prompt(
 ) -> str:
     """Build the OUTLINE_SDP prompt.
 
-    `target_sections_hint` is the per-chapter adaptive section count
-    (max_h2_for_n_sources, computed from the source pool); the schema's
-    hard min/max are 2/40. v4 (2026-05-29 PM): this is a REAL target, not
-    a fixed ~8 — over-sectioning a small chapter forces the writer to
-    recycle the same code across near-duplicate sections, which the
-    renderer then strips into hollow "see other section" cross-refs.
-    """
+    `target_sections_hint` is the adaptive per-chapter cap (real target,
+    not a fixed ~8 — over-sectioning forces code recycling that the
+    renderer strips into hollow cross-refs)."""
     return (
         f"You are the Chapter Outliner — `outline_sdp`, step 3 of the "
         f"Docs Distiller synth pipeline. Per SurveyGen-I PlanEvo "
@@ -351,7 +319,7 @@ def build_outline_prompt(
         f"the source material below.\n\n"
 
         f"== SOURCE MATERIAL (already normalized; vault sentinels like "
-        f"`<code-ref hash=\"...\"/>` may appear — IGNORE them, "
+        f"`<code-ref hash = \"...\"/>` may appear — IGNORE them, "
         f"digest_construct handles routing) ==\n"
         f"{sources_concat_md}\n"
         f"== END SOURCE MATERIAL ==\n\n"
@@ -382,7 +350,7 @@ def build_outline_prompt(
         f"downstream nodes — do NOT renumber on subsequent rewrites.\n"
         f"2. heading: 2-8 words, topic-y/code-y, NO leading '#'. BANNED "
         f"(case-insensitive — these are content-types, not topics): "
-        f"{_BANNED_LIST_HUMAN}.\n"
+        f"{BANNED_LIST_HUMAN}.\n"
         f"3. description: 20-400 chars, ONE specific topic. Used by "
         f"`digest_construct` to route source material — vague descriptions "
         f"cause mis-routing. Examples of good: 'how to wire DI overrides "
@@ -468,22 +436,22 @@ def build_usc_vote_prompt(
     for i, c in enumerate(candidates_summary):
         violations = c.get("violations") or []
         viol_str = (
-            f" violations=({len(violations)}: " + "; ".join(violations[:3]) + ")"
-            if violations else " violations=(none)"
+            f" violations = ({len(violations)}: " + "; ".join(violations[:3]) + ")"
+            if violations else " violations = (none)"
         )
         headings = c.get("headings") or []
         headings_short = ", ".join(f"{h!r}" for h in headings[:6])
         if len(headings) > 6:
             headings_short += f", ... +{len(headings) - 6} more"
         lines.append(
-            f"[{i}] n_sections={c.get('n_sections')}, "
-            f"max_stage={c.get('max_stage')}, "
-            f"n_stages={c.get('n_stages')}, "
-            f"avg_prereqs={c.get('avg_prereqs', 0.0):.2f}, "
-            f"n_removed_edges={c.get('n_removed_edges', 0)}, "
-            f"n_challenges={c.get('n_challenges')}, "
-            f"n_flashcards={c.get('n_flashcards')}, "
-            f"avg_desc_chars={c.get('avg_desc_chars', 0):.0f}"
+            f"[{i}] n_sections = {c.get('n_sections')}, "
+            f"max_stage = {c.get('max_stage')}, "
+            f"n_stages = {c.get('n_stages')}, "
+            f"avg_prereqs = {c.get('avg_prereqs', 0.0):.2f}, "
+            f"n_removed_edges = {c.get('n_removed_edges', 0)}, "
+            f"n_challenges = {c.get('n_challenges')}, "
+            f"n_flashcards = {c.get('n_flashcards')}, "
+            f"avg_desc_chars = {c.get('avg_desc_chars', 0):.0f}"
             f"{viol_str}\n"
             f"     headings: {headings_short}"
         )
@@ -571,9 +539,7 @@ def build_repair_prompt(
     )
 
 
-# =============================================================================
 # Helpers used by the LangGraph node
-# =============================================================================
 def summarize_candidate(
     outline: ChapterOutline, dag: OutlineDAG, issues: list[str],
 ) -> dict:
@@ -600,6 +566,444 @@ def summarize_candidate(
 
 def count_vault_sentinels(md_text: str) -> int:
     """Cheap estimate of vault size for prompt context. Looks for
-    `<code-ref hash="..."/>` tags that `corpus_normalize` + ingestion's
+    `<code-ref hash = "..."/>` tags that `corpus_normalize` + ingestion's
     `vault_sentinelize` leave behind."""
-    return md_text.count("<code-ref hash=")
+    return md_text.count("<code-ref hash = ")
+
+
+async def outline_sdp_run(state: SynthState) -> dict:
+    """Run the Structure-Driven Planner for one chapter."""
+    slug = state.get("framework_slug")
+    chapter_id = state.get("chapter_id")
+    thread_id = state.get("thread_id") or ""
+
+    if not slug or not chapter_id:
+        return {
+            "outline_path":  "",
+            "outline_stats": {
+                "skipped": "no_slug_or_chapter_id",
+                "wall_ms": 0,
+            },
+            "status": "failed",
+            "error":  "framework_slug or chapter_id missing from SynthState",
+        }
+
+    t0 = time.monotonic()
+    minio = get_storage()
+
+    # -- Load planner plan + locate chapter ---------------------------------
+    plan_key = _planner_latest_key(slug)
+    if not await minio.exists(plan_key):
+        return {
+            "outline_path":  "",
+            "outline_stats": {
+                "skipped": "plan_not_found",
+                "plan_key": plan_key,
+                "wall_ms": int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"planner plan {plan_key!r} not in MinIO; run planner first",
+        }
+
+    plan_text = await minio.read_text(plan_key)
+    try:
+        plan = json.loads(plan_text)
+    except Exception as e:
+        return {
+            "outline_path":  "",
+            "outline_stats": {
+                "skipped": "plan_unreadable",
+                "wall_ms": int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"plan-latest.json unreadable: {type(e).__name__}: {e}",
+        }
+
+    chapter = _find_chapter(plan, chapter_id)
+    if chapter is None:
+        return {
+            "outline_path":  "",
+            "outline_stats": {
+                "skipped":     "chapter_not_in_plan",
+                "wall_ms":     int((time.monotonic() - t0) * 1000),
+                "known_ids":   [c.get("id") for c in (plan.get("chapters") or [])],
+            },
+            "status": "failed",
+            "error":  f"chapter {chapter_id!r} not in plan-latest.json",
+        }
+
+    chapter_title       = chapter.get("title") or chapter_id
+    chapter_description = chapter.get("description") or ""
+    sources             = sorted(chapter.get("sources") or [])
+    if not sources:
+        return {
+            "outline_path":  "",
+            "outline_stats": {
+                "skipped": "no_sources",
+                "wall_ms": int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"chapter {chapter_id!r} has zero sources in plan",
+        }
+
+    await emit_progress(
+        thread_id, "outline_sdp", "start",
+        chapter_id = chapter_id,
+        chapter_title = chapter_title,
+        n_sources = len(sources),
+    )
+
+    # -- Read source bodies -------------------------------------------------
+    # Each source is already corpus_normalized + vault_sentinelized by
+    # ingestion (the 2026-05-19 architecture cleanup). We just concat.
+    bodies = await minio.read_many(sources)
+    bodies = [b for b in bodies if b]
+    if not bodies:
+        return {
+            "outline_path":  "",
+            "outline_stats": {
+                "skipped": "source_bodies_empty",
+                "wall_ms": int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  "all source bodies came back empty",
+        }
+    sources_concat_md, truncated = _concat_sources(bodies)
+    n_vault_hashes = count_vault_sentinels(sources_concat_md)
+
+    await emit_progress(
+        thread_id, "outline_sdp", "sources_loaded",
+        n_sources = len(sources),
+        n_bodies = len(bodies),
+        bytes = len(sources_concat_md),
+        truncated = truncated,
+        n_vault_hashes = n_vault_hashes,
+    )
+
+    # -- Cache fast-path ----------------------------------------------------
+    manifest_hash = _compute_manifest_hash(
+        sources = sources,
+        sources_bytes = len(sources_concat_md),
+        chapter_title = chapter_title,
+        chapter_description = chapter_description,
+    )
+    versioned_key = _versioned_blob_key(slug, chapter_id, manifest_hash)
+    latest_key    = _latest_blob_key(slug, chapter_id)
+
+    if await minio.exists(versioned_key) and await minio.exists(latest_key):
+        try:
+            cached_text = await minio.read_text(versioned_key)
+            cached = json.loads(cached_text)
+            outline_dict = (cached or {}).get("outline") or {}
+            dag_dict     = (cached or {}).get("dag") or {}
+            elapsed = int((time.monotonic() - t0) * 1000)
+            stats = {
+                "n_sections":   len(outline_dict.get("sections") or []),
+                "n_challenges": len(outline_dict.get("challenges") or []),
+                "n_flashcards": len(outline_dict.get("flashcards") or []),
+                "max_stage":    int(dag_dict.get("max_stage", 0)),
+                "n_stages":     len(dag_dict.get("stages") or {}),
+                "n_removed_edges": len(dag_dict.get("removed_edges") or []),
+                "wall_ms":      elapsed,
+                "store_path":   latest_key,
+                "versioned_path": versioned_key,
+                "manifest_hash":  manifest_hash,
+                "cache_hit":    True,
+                "prompt_version": cached.get("prompt_version"),
+            }
+            await emit_progress(
+                thread_id, "outline_sdp", "done",
+                n_sections = stats["n_sections"],
+                max_stage = stats["max_stage"],
+                wall_ms = elapsed, cache_hit = True,
+            )
+            logger.info(
+                f"[outline_sdp] {slug}/{chapter_id}: CACHE HIT — "
+                f"{stats['n_sections']} sections, max_stage = "
+                f"{stats['max_stage']}, {elapsed} ms"
+            )
+            return {"outline_path": latest_key, "outline_stats": stats}
+        except Exception as e:
+            logger.warning(
+                f"[outline_sdp] {slug}/{chapter_id}: cached blob "
+                f"{versioned_key!r} unreadable ({type(e).__name__}: {e}); "
+                f"recomputing"
+            )
+
+    # -- Build prompt + draft N samples -------------------------------------
+    # v4 (2026-05-29 PM) — the target hint is now the ADAPTIVE CAP, not a
+    # fixed 8. The old fixed-8 hint (plus a USC rubric rewarding "6-12")
+    # actively pushed the LLM to over-section small chapters; it then got
+    # hard-trimmed (or, pre-v4, deadlocked). Asking for the right count up
+    # front means the winning candidate rarely needs trimming and the
+    # sections are scoped for that count from the start.
+        adaptive_target = max_h2_for_n_sources(len(sources))
+    prompt = build_outline_prompt(
+        framework = slug,
+        chapter_id = chapter_id,
+        chapter_title = chapter_title,
+        chapter_description = chapter_description,
+        n_vault_hashes = n_vault_hashes,
+        sources_concat_md = sources_concat_md,
+        target_sections_hint = adaptive_target,
+    )
+    raw_samples = await _generate_samples(
+        prompt, _N_SAMPLES, thread_id, n_sources = len(sources),
+    )
+
+    await emit_progress(
+        thread_id, "outline_sdp", "samples_drafted",
+        n_samples = len(raw_samples), n_requested = _N_SAMPLES,
+    )
+
+    # -- Parse + Pydantic-validate each -------------------------------------
+    candidates: list[tuple[ChapterOutline, OutlineDAG, list[str]]] = []
+    pydantic_failures = 0
+    for parsed_dict, meta in raw_samples:
+        outline, err = _try_parse_outline(parsed_dict)
+        if outline is None:
+            pydantic_failures += 1
+            logger.info(
+                f"[outline_sdp] {slug}/{chapter_id}: pydantic-reject — {err}"
+            )
+            continue
+        dag = derive_dag(outline.sections)
+        _, issues = validate_outline_structure(
+            outline, dag, n_sources = len(sources),
+        )
+        candidates.append((outline, dag, issues))
+
+    await emit_progress(
+        thread_id, "outline_sdp", "samples_validated",
+        n_candidates = len(candidates), n_pydantic_fail = pydantic_failures,
+    )
+
+    # -- Fallback if NO candidates parsed -----------------------------------
+    if not candidates:
+        logger.warning(
+            f"[outline_sdp] {slug}/{chapter_id}: ALL {_N_SAMPLES} samples "
+            f"failed to parse; emitting heuristic fallback outline"
+        )
+        outline = _heuristic_fallback_outline(sources_concat_md)
+        dag = derive_dag(outline.sections)
+        candidates = [(outline, dag, ["heuristic_fallback"])]
+
+    # -- USC pick best candidate --------------------------------------------
+    chosen_idx = await _usc_pick(
+        candidates, chapter_id, chapter_title, adaptive_cap = adaptive_target,
+    )
+    outline, dag, issues = candidates[chosen_idx]
+
+    # U6 (2026-05-28) — semantic H2 dedup feedback. Embed section
+    # heading+description, flag pairs above threshold as repair-loop
+    # input. Fail-soft (returns [] on any embed/compute failure).
+    semantic_dupe_issues = await _detect_semantic_h2_duplicates(outline)
+    if semantic_dupe_issues:
+        issues = list(issues) + semantic_dupe_issues
+        logger.info(
+            f"[outline_sdp] {slug}/{chapter_id}: semantic H2 dedup found "
+            f"{len(semantic_dupe_issues)} feedback message(s); will drive "
+            f"repair loop"
+        )
+
+    await emit_progress(
+        thread_id, "outline_sdp", "usc_voted",
+        chosen_index = chosen_idx, n_initial_violations = len(issues),
+    )
+
+    # -- Repair loop --------------------------------------------------------
+    n_repairs = 0
+    for attempt in range(_MAX_REPAIR_RETRIES):
+        if not issues:
+            break
+        n_repairs += 1
+        await emit_progress(
+            thread_id, "outline_sdp", "repair_attempt",
+            attempt = attempt + 1,
+            n_violations = len(issues),
+        )
+        repair_prompt = build_repair_prompt(
+            framework = slug,
+            chapter_id = chapter_id,
+            chapter_title = chapter_title,
+            chapter_description = chapter_description,
+            current_outline_json = json.dumps(outline.model_dump(), indent = 2),
+            issues = issues,
+            sources_concat_md = sources_concat_md,
+        )
+        try:
+            repair_response, _ = await chat_judge_bandit_async(
+                repair_prompt,
+                max_tokens = _MAX_TOKENS_REPAIR,
+                temperature = _TEMPERATURE_REPAIR,
+                response_format = _OUTLINE_RESPONSE_FORMAT,
+            )
+            parsed = _parse_json_response(repair_response)
+            if not parsed:
+                logger.warning(
+                    f"[outline_sdp] {slug}/{chapter_id}: repair attempt "
+                    f"{attempt + 1} produced unparseable JSON; keeping prior"
+                )
+                continue
+            new_outline, err = _try_parse_outline(parsed)
+            if new_outline is None:
+                logger.warning(
+                    f"[outline_sdp] {slug}/{chapter_id}: repair attempt "
+                    f"{attempt + 1} pydantic-rejected: {err}"
+                )
+                continue
+            new_dag = derive_dag(new_outline.sections)
+            _, new_issues = validate_outline_structure(
+                new_outline, new_dag, n_sources = len(sources),
+            )
+            # U6 — re-check semantic H2 dedup on the new outline so the
+            # repair loop credits/penalizes the LLM's response to the
+            # semantic feedback.
+            new_semantic = await _detect_semantic_h2_duplicates(new_outline)
+            if new_semantic:
+                new_issues = list(new_issues) + new_semantic
+            # Only accept if it ACTUALLY improves things.
+            if len(new_issues) <= len(issues):
+                outline = new_outline
+                dag = new_dag
+                issues = new_issues
+        except Exception as e:
+            logger.warning(
+                f"[outline_sdp] {slug}/{chapter_id}: repair attempt "
+                f"{attempt + 1} failed: {type(e).__name__}: {e}"
+            )
+            continue
+
+    # S1 (2026-05-26 late evening) — Hard-enforce outline section-count cap.
+    #
+    # CORR-3 Q1 emitted the adaptive-cap violation as a soft issue in
+    # validate_outline_structure but Run 3 evidence showed the LLM
+    # ignores it: BU ch-02 shipped 30 H2 (cap = 12) after 3 repairs, CC
+    # ch-01 shipped 20 H2 (cap = 14). Soft pressure isn't enough.
+    #
+    # Programmatic trim: keep the first `cap` sections in topological
+    # stage order (foundational concepts first). Prune prerequisite
+    # references to dropped sections. Re-derive the DAG over the
+    # trimmed set. This guarantees bounded-output regardless of LLM
+    # compliance. Lost content was always defensible-by-fewer-than-3-
+    # source-docs anyway (the cap is `n_sources // 3`).
+    # v4 (2026-05-29 PM) — trim to the adaptive cap DIRECTLY. The old
+    # `max(SECTIONS_MIN, cap)` floored the trim at 4 (= old SECTIONS_MIN),
+    # which made it a NO-OP for the universal 4-section outlines the LLM
+    # emits: validate flagged 4 > cap 3, but the trimmer's effective cap was
+    # max(4, 3) = 4, so it never fired and 12/13 CC chapters shipped one
+    # redundant section with a permanent unresolved violation. The adaptive
+    # floor is now 2 (= SECTIONS_MIN), so trimming to the cap is always
+    # schema-valid.
+        adaptive_cap = max_h2_for_n_sources(len(sources))
+    if len(outline.sections) > adaptive_cap:
+        n_before = len(outline.sections)
+        # Topological order: lower stage_index first.
+        sections_by_stage: list[tuple[int, OutlineSection]] = []
+        sid_to_section = {s.section_id: s for s in outline.sections}
+        for stage_idx in sorted(dag.stages.keys()):
+            for sid in dag.stages[stage_idx]:
+                if sid in sid_to_section:
+                    sections_by_stage.append((stage_idx, sid_to_section[sid]))
+        # Sections not in any stage (orphans) appended last.
+        seen = {s.section_id for _, s in sections_by_stage}
+        for s in outline.sections:
+            if s.section_id not in seen:
+                sections_by_stage.append((dag.max_stage + 1, s))
+        kept = [s for _, s in sections_by_stage[:adaptive_cap]]
+        kept_ids = {s.section_id for s in kept}
+        # Clean prereqs that point to dropped sections.
+        for s in kept:
+            s.prerequisites = [p for p in s.prerequisites if p in kept_ids]
+        outline = outline.model_copy(update = {"sections": kept})
+        dag = derive_dag(outline.sections)
+        logger.warning(
+            f"[outline_sdp] {slug}/{chapter_id}: HARD-TRIM outline "
+            f"{n_before} → {len(outline.sections)} sections (adaptive_cap = "
+            f"{adaptive_cap}, n_sources = {len(sources)}). LLM ignored the "
+            f"soft cap signal after {n_repairs} repairs; programmatic "
+            f"trim restores the bound."
+        )
+        # Re-validate post-trim so downstream sees the actual remaining
+        # violations (not the pre-trim ones, which may include the
+        # cap-exceeded issue we just resolved).
+        _, issues = validate_outline_structure(
+            outline, dag, n_sources = len(sources),
+        )
+        # U6 — re-check semantic dedup post-trim. Trimming may have
+        # removed near-duplicate H2s; reflect the actual remaining
+        # situation in the persisted violations list.
+        post_trim_semantic = await _detect_semantic_h2_duplicates(outline)
+        if post_trim_semantic:
+            issues = list(issues) + post_trim_semantic
+        await emit_progress(
+            thread_id, "outline_sdp", "hard_trimmed",
+            n_before = n_before, n_after = len(outline.sections),
+            adaptive_cap = adaptive_cap, n_sources = len(sources),
+        )
+
+    final_violations = issues
+
+    # -- Persist + return ---------------------------------------------------
+    payload = _serialize_outline_with_dag(outline, dag)
+    payload["framework_slug"]   = slug
+    payload["chapter_id"]       = chapter_id
+    payload["chapter_title"]    = chapter_title
+    payload["manifest_hash"]    = manifest_hash
+    payload["source_keys"]      = sources
+    payload["n_vault_hashes"]   = n_vault_hashes
+    payload["truncated"]        = truncated
+    payload["n_repairs"]        = n_repairs
+    payload["final_violations"] = final_violations
+
+    blob_bytes = json.dumps(payload, indent = 2, ensure_ascii = False)
+    await minio.write(
+        versioned_key, blob_bytes, content_type = "application/json",
+    )
+    await minio.write(
+        latest_key, blob_bytes, content_type = "application/json",
+    )
+
+    elapsed = int((time.monotonic() - t0) * 1000)
+    stats = {
+        "n_sections":     len(outline.sections),
+        "n_challenges":   len(outline.challenges),
+        "n_flashcards":   len(outline.flashcards),
+        "max_stage":      dag.max_stage,
+        "n_stages":       len(dag.stages),
+        "n_removed_edges": len(dag.removed_edges),
+        "n_repairs":      n_repairs,
+        "n_violations":   len(final_violations),
+        "violations":     final_violations,
+        "n_samples":      len(candidates),
+        "n_vault_hashes": n_vault_hashes,
+        "truncated":      truncated,
+        "wall_ms":        elapsed,
+        "store_path":     latest_key,
+        "versioned_path": versioned_key,
+        "manifest_hash":  manifest_hash,
+        "cache_hit":      False,
+        "prompt_version": OUTLINE_PROMPT_VERSION,
+    }
+    await emit_progress(
+        thread_id, "outline_sdp", "done",
+        n_sections = stats["n_sections"],
+        max_stage = stats["max_stage"],
+        n_repairs = n_repairs,
+        n_violations = stats["n_violations"],
+        wall_ms = elapsed,
+    )
+    logger.info(
+        f"[outline_sdp] {slug}/{chapter_id}: {stats['n_sections']} "
+        f"sections, max_stage = {stats['max_stage']}, "
+        f"n_stages = {stats['n_stages']}, n_repairs = {n_repairs}, "
+        f"violations = {len(final_violations)}, {elapsed} ms"
+    )
+    return {"outline_path": latest_key, "outline_stats": stats}
+
+
+# Convenience loader for downstream nodes
+def load_outline_payload(text: str) -> dict:
+    """Parse the persisted outline blob. Returns the full payload dict;
+    downstream nodes pick the fields they need (outline, dag, etc.)."""
+    return json.loads(text)

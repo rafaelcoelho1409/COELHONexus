@@ -1,361 +1,90 @@
-"""
-Adaptive contextual bandit routing for the LLM rotator.
+"""Imperative Shell — Redis I/O, mode resolution, predict/update orchestration,
+slot reservations, OTel.
 
-DESIGN (Phase 2, 2026-05-14): LinUCB with geometric forgetting on sufficient
-statistics, following arXiv:2604.00136 (Taberner-Miller, Mar 2026). Per-
-(deployment, dd_process) cell state lives in Redis. Reward signal blends
-success rate, latency relative to expected, and KD-specific hash-recall ratio.
-
-DESIGN (Phase 3, 2026-05-23): three scoring modes share the same `(A_a, b_a)`
-state — switchable per-call or via env without invalidating the Redis posterior.
-
-ACTIVATED 2026-05-23 — FGTS-VA is the DEFAULT mode. User explicitly skipped
-the shadow-validation window (same pattern as the 2026-05-16 LinUCB rollout).
-To revert without code changes, use the env kill-switches below.
-
-Modes:
-  • ucb     LinUCB (Li et al. ICML 2010) — Phase 2 baseline. Deterministic UCB.
-  • ts      LinTS (Agrawal & Goyal ICML 2013) — Phase 3a. Posterior sampling
-            from N(A_a^-1 b_a, TS_SCALE²·A_a^-1). Faster convergence on
-            sample-poor problems (Chapelle & Li NIPS 2011).
-  • fgts_va FGTS-VA (NeurIPS 2025, arXiv:2511.02123) — Phase 3c, DEFAULT.
-            LinTS with per-arm noise variance σ̂²_a (EWMA on squared predictive
-            residuals) replacing fixed TS_SCALE², plus additive feel-good
-            optimism bonus β·√(ψᵀA^-1ψ). Tighter regret on heterogeneous-noise
-            arms — true for free-tier rotation.
+Pure scoring + reward + context-vector logic lives in domain.py; CellState
+data + invariant mutations live in entities.py. Activated default since
+2026-05-23: FGTS-VA (NeurIPS 2025). Mode is per-call (predict()/predict_top_k()
+accept a `mode=` override) so a shadow-A/B harness can route real traffic
+under one mode while computing the counterfactual under another. See
+docs/KD-ROTATOR-BANDIT-SOTA-2026-05-23.md.
 
 Env vars (priority order):
-  KD_BANDIT_MODE = ucb | ts | fgts_va   explicit selection
-  KD_DISABLE_BANDIT_TS = 1               kill-switch → ucb (full revert)
-  KD_DISABLE_FGTS_VA   = 1               kill-switch → ts  (revert one step)
-  (none set)                              DEFAULT = fgts_va
-
-The mode is per-call (predict()/predict_top_k() accept a `mode` override) so
-shadow-A/B harness can route real traffic with one mode while computing the
-hypothetical pick under another for the `dd.pareto_shadow_agreement` metric.
-
-Source-of-truth doc: docs/KD-ROTATOR-BANDIT-SOTA-2026-05-23.md
-
-Composes with the rest of the stack:
-
-    domains.llm.discovery.list_all_alive_models()      → DiscoveryRecord per provider
-                          ↓
-    domains.llm.benchmarks.rank_for_step()              → benchmark prior per cell
-                          ↓
-    domains.llm_chain (Phase 1 dynamic catalog)     → Router model_list per step
-                          ↓
-    domains.llm.rotator.bandit (Phase 2-3 — THIS module) → scoring refines per-call selection
-       ↓                                        ↑
-       ↓                              reward update from OTel span events
-       ↓
-    LiteLLM CustomRoutingStrategy (Phase 2 Day 4)    → actual routing decision
-
-Cell state (one per (deployment, dd_process)):
-    A_a:   (CONTEXT_DIM × CONTEXT_DIM) regularized covariance matrix
-    b_a:   (CONTEXT_DIM,)              accumulated reward × context
-    n_obs:                              total observations
-    benchmark_prior:                    warm-start composite score
-    last_updated:                       unix ts for staleness checks
-
-UCB selection (per ParetoBandit paper):
-    θ̂_a = A_a^-1 · b_a
-    score_a(ψ) = ψ^T · θ̂_a + α · √(ψ^T · A_a^-1 · ψ)
-    pick argmax_a score_a, breaking ties by lowest n_obs (exploration tiebreak)
-
-Posterior update on reward r given context ψ:
-    A_a ← (1 - γ) · A_a + ψ · ψ^T
-    b_a ← (1 - γ) · b_a + r · ψ
-    n_obs += 1
-
-The (1 - γ) factor implements **geometric forgetting** — old observations
-decay exponentially. γ ≈ 0.01 means each update decays history by 1%; after
-~100 updates per cell, ancient observations contribute ~37% (e^-1) of their
-original weight. This is what makes the bandit robust to non-stationary
-behavior (provider quality regression, rate-limit drift, model EOL).
-
-WARM-START via benchmark prior:
-    score_init = benchmark composite from domains.llm.benchmarks.compute_composite_score()
-    θ̂_a(0)    = score_init · 1_unit_vector
-    A_a(0)    = (1/max(score_init, 0.1)) · I_d         ← stronger prior for higher scores
-    b_a(0)    = A_a(0) · θ̂_a(0)
-
-So Day 1 ranking == Phase 1 ranking. PILOT-equivalent. The bandit's value emerges
-as observations accumulate.
-
-CONTEXT VECTOR (16 dims, intentionally small for fast convergence):
-    [0]     constant bias                                 = 1.0
-    [1]     chapter_number_normalized                     log(n+1) / log(20)
-    [2]     expected_hash_count_normalized                log(n+1) / log(500)
-    [3]     has_thinking_budget                           0 / 1
-    [4-6]   vault_size_bucket (small/medium/large)        one-hot
-    [7-15]  dd_process one-hot                            one-hot over 9 dd_processes
-
-Cache layout:
-    dd:rotator:pareto:cell:{deployment_id}:{dd_process}   → JSON blob, 90d TTL
-
-OTel metrics emitted (current — see service.py _ensure_metrics for source of truth):
-    dd.pareto_predict_total{dd_process, mode}        Counter — calls to predict()
-    dd.pareto_update_total{dd_process, outcome}      Counter — updates by reward bucket
-    dd.pareto_score{mode}                            Histogram — winning score per pick
-    dd.pareto_sigma_sq                               Histogram — per-arm noise variance EWMA
-    dd.pareto_shadow_agreement_total{dd_process}     Counter — counterfactual mode agreement
-
-The shadow_agreement counter is wired but currently unused — reserved for the
-future shadow-A/B harness that compares the live mode's pick against a
-counterfactual pick under a different mode (via predict(..., mode=other_mode)).
-
-Public API (async; sync wrappers provided where needed):
-    await init_bandit_warm_start(deployments, redis)         # called at lifespan
-    await predict(dd_process, context, redis)                 # returns (deployment, debug)
-    await update(deployment, dd_process, context, reward, redis)
-    await get_cell_state(deployment, dd_process, redis)       # introspection
-    await get_all_cells(redis)                                # admin endpoint backing
-    make_context_vector(...)                                  # feature extraction helper
+    KD_BANDIT_MODE = ucb | ts | fgts_va    explicit selection
+    KD_DISABLE_BANDIT_TS = 1                kill-switch → ucb (full revert)
+    KD_DISABLE_FGTS_VA   = 1                kill-switch → ts  (revert one step)
+    (none set)                              DEFAULT = fgts_va
 """
 from __future__ import annotations
-import logging
-import numpy as np
-import os
-import time
-import redis
+
 import asyncio
 import json
-from typing import Any, Literal, TYPE_CHECKING
+import logging
+import os
+from typing import Any, TYPE_CHECKING
+
+import numpy as np
+
 if TYPE_CHECKING:
     import redis.asyncio as redis_aio
 
 from core.otel_setup import get_meter
 
-from .constants import (
-    CONTEXT_DIM,
-    _DD_PROCESS_IDX,
-    _PROVIDER_IDX,
-    ERROR_CLASS_PENALTIES,
+from .domain import Mode, score_cell
+from .entities import CellState
+from .keys import (
     CACHE_PREFIX,
-    CELL_TTL_S,
-    FGTS_FEEL_GOOD_BETA,
-    FGTS_VA_SIGMA_MIN_SQ,
-    TS_SCALE,
-    UCB_ALPHA,
-    _metric_instruments,
+    cell_key,
+    provider_slot_key,
+    reservation_key,
 )
-from .types import (
-    CellState
+from .params import (
+    CELL_TTL_S, 
+    UCB_ALPHA
 )
 
 
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# Mode resolution — env-driven default, per-call override
-# =============================================================================
-# Three scoring modes share the same (A_a, b_a) state; the mode parameter
-# governs only how a score is computed at predict() time. See module docstring.
-#
-# DEFAULT (2026-05-23 onward): FGTS-VA is the active mode. User explicitly
-# skipped the shadow-validation window. Rationale: FGTS-VA subsumes LinTS
-# (which subsumes LinUCB at the limit of zero posterior variance), so the
-# "ladder" of phases ships as one default. Per the SOTA doc, the operational
-# phases (3b, 4a, 4b, etc.) remain deferred until LangFuse + OTel give us
-# signal.
-#
-# Mode is selected in this priority order:
-#   1. Per-call `mode` kwarg                                  (shadow-A/B harness)
-#   2. KD_BANDIT_MODE env var (values: ucb / ts / fgts_va)    (explicit override)
-#   3. KD_DISABLE_FGTS_VA=1                                   (kill-switch → ts)
-#   4. KD_DISABLE_BANDIT_TS=1                                 (kill-switch → ucb)
-#   5. DEFAULT: fgts_va
-Mode = Literal["ucb", "ts", "fgts_va"]
-
-
 def _resolve_mode(override: Mode | None = None) -> Mode:
-    """Pick the scoring mode per the priority order in this module's header."""
+    """Resolution priority: kwarg → KD_BANDIT_MODE env → kill-switches → fgts_va."""
     if override is not None:
         return override
-    # 2. Explicit env-driven mode selection
-    explicit = os.environ.get("KD_BANDIT_MODE", "").strip().lower()
-    if explicit in ("ucb", "ts", "fgts_va"):
-        return explicit  # type: ignore[return-value]
-    # 3-4. Kill-switches for staged emergency revert
-    if os.environ.get("KD_DISABLE_BANDIT_TS", "0") == "1":
+    if "KD_BANDIT_MODE" in os.environ:
+        explicit = os.environ["KD_BANDIT_MODE"].strip().lower()
+        if explicit in ("ucb", "ts", "fgts_va"):
+            return explicit  # type: ignore[return-value]
+    if "KD_DISABLE_BANDIT_TS" in os.environ and os.environ["KD_DISABLE_BANDIT_TS"] == "1":
         return "ucb"
-    if os.environ.get("KD_DISABLE_FGTS_VA", "0") == "1":
+    if "KD_DISABLE_FGTS_VA" in os.environ and os.environ["KD_DISABLE_FGTS_VA"] == "1":
         return "ts"
-    # 5. Default
     return "fgts_va"
 
 
-# Shared module-level RNG for posterior sampling. numpy's Generator is safe to
-# call concurrently from asyncio coroutines because it doesn't share Python
-# state across calls — each .multivariate_normal() draw is self-contained.
+# Shared module-level RNG. numpy.Generator draws are self-contained and safe
+# to call concurrently from asyncio coroutines.
 _RNG = np.random.default_rng()
 
 
-# Announce the active mode at import time so the FastAPI / Celery worker logs
-# always show which bandit family is running. The bandit module is
-# imported by chain/service.py, which is imported by app.py — so this fires
-# exactly once per worker process at startup.
 try:
-    _startup_mode = _resolve_mode()
-    logger.info(f"[pareto] bandit scoring mode at startup: {_startup_mode}")
+    logger.info(f"[pareto] bandit scoring mode at startup: {_resolve_mode()}")
 except Exception:
     pass
 
 
-def _score_cell(
-    cell: CellState,
-    context: np.ndarray,
-    mode: Mode,
-    *,
-    alpha: float = UCB_ALPHA,
-) -> tuple[float, float, float]:
-    """Dispatch to the right scoring method. Returns (total, exploit, explore)
-    triple shared across all three modes so predict()'s debug payload is
-    mode-independent."""
-    if mode == "fgts_va":
-        return cell.ts_score_va(
-            context,
-            rng = _RNG,
-            sigma_min_sq = FGTS_VA_SIGMA_MIN_SQ,
-            feel_good_beta = FGTS_FEEL_GOOD_BETA,
-        )
-    if mode == "ts":
-        return cell.ts_score(context, rng = _RNG, scale = TS_SCALE)
-    return cell.ucb_score(context, alpha = alpha)
-
-
-# =============================================================================
-# Context vector construction
-# =============================================================================
-def make_context_vector(
-    dd_process: str,
-    *,
-    chapter_number: int = 0,
-    expected_hash_count: int = 0,
-    has_thinking_budget: bool = False,
-    vault_size: int = 0,
-    time_now: float | None = None,
-    recent_error_rates: dict[str, float] | None = None,
-) -> np.ndarray:
-    """Build a 25-dim context vector from request + temporal features.
-
-    Layout (expanded 2026-05-14 to add temporal + load signals):
-        [0]      constant bias                                  = 1.0
-        [1]      chapter_number_normalized        log(n+1)/log(20)
-        [2]      expected_hash_count_normalized   log(n+1)/log(500)
-        [3]      has_thinking_budget              0/1
-        [4-6]    vault_size_bucket (small/med/large)   one-hot
-        [7-15]   dd_process one-hot               over 9 processes (CONTEXT_DIM=25)
-        [16]     hour_of_day_sin                  sin(2π·hour/24)   diurnal cycle
-        [17]     hour_of_day_cos                  cos(2π·hour/24)   orthogonal
-        [18]     day_of_week_normalized           weekday/6
-        [19-23]  recent_5min_error_rate_per_provider [groq, nim, cerebras, mistral, gemini]
-
-    sin/cos hour encoding teaches the bandit that 23:00 and 00:00 are adjacent
-    (linear encoding would treat them as far apart). Per-provider recent
-    error rates let the bandit learn "NIM is degrading right now" even if
-    our pinned NIM deployment looks individually OK.
-    """
-    v = np.zeros(CONTEXT_DIM, dtype = np.float64)
-    v[0] = 1.0
-    v[1] = float(np.log1p(max(0, chapter_number)) / np.log(20.0))
-    v[2] = float(np.log1p(max(0, expected_hash_count)) / np.log(500.0))
-    v[3] = 1.0 if has_thinking_budget else 0.0
-    # vault_size buckets — small <50, medium 50-200, large >200
-    if vault_size <= 50:
-        v[4] = 1.0
-    elif vault_size <= 200:
-        v[5] = 1.0
-    else:
-        v[6] = 1.0
-    # dd_process one-hot
-    idx = _DD_PROCESS_IDX.get(dd_process)
-    if idx is not None:
-        v[7 + idx] = 1.0
-    # Temporal — sin/cos hour + day-of-week
-    ts = time_now if time_now is not None else time.time()
-    tm = time.gmtime(ts)
-    hour_frac = (tm.tm_hour + tm.tm_min / 60.0) / 24.0
-    v[16] = float(np.sin(2 * np.pi * hour_frac))
-    v[17] = float(np.cos(2 * np.pi * hour_frac))
-    v[18] = float(tm.tm_wday / 6.0)
-    # Per-provider recent error rate. Default 0 if unknown (treat as healthy).
-    if recent_error_rates:
-        for provider, rate in recent_error_rates.items():
-            slot = _PROVIDER_IDX.get(provider)
-            if slot is not None:
-                v[19 + slot] = float(max(0.0, min(1.0, rate)))
-    return v
-
-
-# =============================================================================
-# Reward composition — call this from OTel/LiteLLM callback with raw observations
-# =============================================================================
-def compose_reward(
-    *,
-    success: bool,
-    schema_valid: bool = False,
-    latency_s: float | None = None,
-    expected_latency_s: float | None = None,
-    hash_recall: float | None = None,
-    error_class: str | None = None,
-) -> float:
-    """Build a scalar reward in approximately [-0.8, +1.0] range.
-
-    Multi-signal reward (Phase 2 enhancement #1, 2026-05-14):
-        Success path components (sum ~1.0 when all present):
-            w_success       = 0.30   binary
-            w_schema_valid  = 0.25   binary
-            w_latency       = 0.20   centered-at-0 when latency == expected
-            w_hash_recall   = 0.25   continuous, KD-specific structured-output recall
-
-        Failure path (success=False): the reward is fully driven by error_class:
-            429 rate_limit     → -0.10   (transient; "try later" not "broken")
-            timeout            → -0.30
-            5xx server_error   → -0.50
-            auth_error         → -0.80
-            schema_invalid     → -0.40
-            content_filter     → -0.20
-            unknown            → -0.40
-
-    This lets the bandit distinguish "this deployment is rate-limited right
-    now" from "this deployment is structurally broken" — different reward
-    magnitudes lead to different cooldown/exploration dynamics.
-    """
-    if not success:
-        return float(ERROR_CLASS_PENALTIES.get(error_class or "unknown", -0.40))
-    r = 0.0
-    r += 0.30  # success itself
-    if schema_valid:
-        r += 0.25
-    if latency_s is not None and expected_latency_s and expected_latency_s > 0:
-        ratio = float(latency_s) / float(expected_latency_s)
-        lat_signal = max(-2.0, min(2.0, 1.0 - ratio))    # [-2, 2]
-        r += 0.20 * (lat_signal / 2.0)                    # [-0.20, +0.20]
-    if hash_recall is not None:
-        r += 0.25 * max(0.0, min(1.0, float(hash_recall)))
-    return r
-
-
-# =============================================================================
+# --------------------------------------------------------------------------- #
 # Redis persistence
-# =============================================================================
-def _cell_key(deployment: str, dd_process: str) -> str:
-    return f"{CACHE_PREFIX}{deployment}:{dd_process}"
-
-
+# --------------------------------------------------------------------------- #
 async def get_cell_state(
     deployment: str,
     dd_process: str,
     *,
     redis: "redis_aio.Redis | None",
 ) -> CellState | None:
-    """Read one cell from Redis. Returns None if absent / unreadable."""
     if redis is None:
         return None
     try:
-        raw = await redis.get(_cell_key(deployment, dd_process))
+        raw = await redis.get(cell_key(deployment, dd_process))
         if raw is None:
             return None
         if isinstance(raw, bytes):
@@ -371,12 +100,11 @@ async def save_cell_state(
     *,
     redis: "redis_aio.Redis | None",
 ) -> bool:
-    """Persist one cell to Redis. Returns True on success."""
     if redis is None:
         return False
     try:
         await redis.set(
-            _cell_key(state.deployment, state.dd_process),
+            cell_key(state.deployment, state.dd_process),
             json.dumps(state.to_dict()),
             ex = CELL_TTL_S,
         )
@@ -391,11 +119,6 @@ async def get_all_cells(
     redis: "redis_aio.Redis | None",
     pattern: str | None = None,
 ) -> list[CellState]:
-    """Scan all cells in Redis. Optional pattern restricts the scan.
-
-    Pattern format: pass a Redis glob like "*dd-synth" to match only dd-synth
-    cells, or None for everything.
-    """
     if redis is None:
         return []
     out: list[CellState] = []
@@ -416,39 +139,29 @@ async def get_all_cells(
     return out
 
 
-# =============================================================================
-# Warm-start — populate all (deployment, dd_process) cells from benchmark prior
-# =============================================================================
 async def init_bandit_warm_start(
     deployments_by_step: dict[str, list[tuple[str, float]]],
     *,
     redis: "redis_aio.Redis | None",
     overwrite: bool = False,
 ) -> int:
-    """Initialize cells for all (deployment, dd_process) pairs.
-
-    Args:
-        deployments_by_step: {dd_process: [(deployment_id, benchmark_score), ...]}
-            Caller produces this by calling
-                domains.llm_chain._all_entries_current()  (for dd-all),
-                domains.llm_chain._synth_entries_current() (for dd-synth), etc.
-            and looking up benchmark scores via domains.llm.benchmarks.rank_for_step.
-        redis: Redis client (None → no persistence, returns 0).
-        overwrite: when True, replaces existing cells; when False, leaves them.
-
-    Returns: number of cells created or refreshed.
-    """
+    """Initialize cells for all (deployment, dd_process) pairs from benchmark priors."""
     if redis is None or not deployments_by_step:
         return 0
     count = 0
     for dd_process, deployments in deployments_by_step.items():
         for deployment_id, score in deployments:
             if not overwrite:
-                existing = await get_cell_state(deployment_id, dd_process, redis = redis)
+                existing = await get_cell_state(
+                    deployment_id, 
+                    dd_process, 
+                    redis = redis)
                 if existing is not None:
                     continue
             cell = CellState.fresh(deployment_id, dd_process, score)
-            if await save_cell_state(cell, redis = redis):
+            if await save_cell_state(
+                cell, 
+                redis = redis):
                 count += 1
     logger.info(
         f"[pareto] warm-start: initialized {count} cells across "
@@ -457,9 +170,9 @@ async def init_bandit_warm_start(
     return count
 
 
-# =============================================================================
-# Predict — pick the highest-UCB deployment for a given (dd_process, context)
-# =============================================================================
+# --------------------------------------------------------------------------- #
+# Predict / update
+# --------------------------------------------------------------------------- #
 async def predict(
     dd_process: str,
     context: np.ndarray,
@@ -469,43 +182,25 @@ async def predict(
     alpha: float = UCB_ALPHA,
     mode: Mode | None = None,
 ) -> tuple[str | None, dict[str, Any]]:
-    """Pick deployment via the configured scoring mode. Returns (deployment_id, debug).
-
-    Args:
-        dd_process: the step being routed (must be in DD_PROCESSES).
-        context: CONTEXT_DIM context vector from make_context_vector(...).
-        candidate_deployments: list of deployment_id strings to consider.
-            Typically the litellm_params.model strings from Phase 1's
-            _xxx_entries_current() for the matching step.
-        redis: Redis client. Required for cell lookup; if None, returns the
-            first candidate as a degenerate fallback.
-        alpha: UCB exploration coefficient (used when mode == "ucb").
-        mode: scoring mode override. None → resolved from env (see
-            _resolve_mode). Pass an explicit value to compute the
-            counterfactual for shadow A/B without touching env state.
-
-    Returns: (deployment_id, {"scores": [...], "winner_n_obs": int, "mode": ..., ...})
-        On no candidates or all-cells-missing, deployment_id is None.
-    """
+    """Pick deployment via the configured scoring mode."""
     if not candidate_deployments:
         return None, {"reason": "no_candidates"}
     resolved_mode = _resolve_mode(mode)
-    # Look up cell state for each candidate (batched gather)
     cells = await asyncio.gather(
         *[get_cell_state(d, dd_process, redis = redis) for d in candidate_deployments]
     )
     scored: list[tuple[str, float, float, float, int]] = []
     for deployment, cell in zip(candidate_deployments, cells):
         if cell is None:
-            # No state yet — synthesize a cold cell with low prior (encourages exploration)
             cell = CellState.fresh(deployment, dd_process, benchmark_prior = 0.0)
-        total, exploit, explore = _score_cell(cell, context, resolved_mode, alpha = alpha)
+        total, exploit, explore = score_cell(
+            cell, 
+            context, 
+            resolved_mode, 
+            rng = _RNG, 
+            alpha = alpha)
         scored.append((deployment, total, exploit, explore, cell.n_obs))
-    # argmax with tie-break by lowest n_obs (exploration of under-sampled arms).
-    # For TS/FGTS-VA modes the random sample already provides natural tie-breaking,
-    # but we keep the n_obs tiebreak as a deterministic fallback for the
-    # benchmark-prior cold start path where multiple arms can produce identical
-    # scores (zero perturbation under degenerate covariance).
+    # Tie-break by lowest n_obs → favors exploration of under-sampled arms.
     scored.sort(key = lambda x: (-x[1], x[4], x[0]))
     winner = scored[0]
     _record_predict(dd_process, resolved_mode)
@@ -517,8 +212,7 @@ async def predict(
         "winner_explore_bonus": winner[3],
         "winner_n_obs":         winner[4],
         "mode":                 resolved_mode,
-        # `winner_ucb` retained for backward-compat with existing dashboards;
-        # for ts / fgts_va modes this is the sampled posterior score, not a UCB bound.
+        # Retained for backward-compat with dashboards that key on `winner_ucb`.
         "winner_ucb":           winner[1],
         "all_scores": [
             {"deployment": d, "score": t, "exploit": e, "explore": x, "n_obs": n}
@@ -528,9 +222,6 @@ async def predict(
     return winner[0], debug
 
 
-# =============================================================================
-# Update — apply reward to one cell
-# =============================================================================
 async def update(
     deployment: str,
     dd_process: str,
@@ -539,36 +230,22 @@ async def update(
     *,
     redis: "redis_aio.Redis | None",
 ) -> bool:
-    """Apply one observation's reward to the (deployment, dd_process) cell.
-
-    Read cell → apply geometric forgetting + add observation → write back.
-    Returns True on success, False on Redis failure (observation lost).
-
-    Update is mode-agnostic: A_a, b_a, and sigma_sq_ewma are always advanced
-    by every observation regardless of which scoring mode is currently active
-    at predict-time. This means flipping KD_USE_LINTS or KD_USE_FGTS_VA at
-    runtime works seamlessly — the new mode reads the same accumulated state.
-    """
+    """Apply one observation. Posterior advance is mode-agnostic — flipping
+    KD_BANDIT_MODE later picks up the same accumulated state."""
     if redis is None:
         return False
     cell = await get_cell_state(deployment, dd_process, redis = redis)
     if cell is None:
-        # Cell missing — create fresh (no benchmark prior available here)
         cell = CellState.fresh(deployment, dd_process, benchmark_prior = 0.0)
     cell.apply_update(context, reward)
     ok = await save_cell_state(cell, redis = redis)
     if ok:
         outcome = "positive" if reward > 0.5 else ("neutral" if reward > 0 else "negative")
         _record_update(dd_process, outcome)
-        # Track per-arm noise variance — useful for FGTS-VA observability
-        # regardless of currently-active mode (we always update sigma_sq_ewma).
         _record_sigma_sq(cell.sigma_sq_ewma)
     return ok
 
 
-# =============================================================================
-# Top-K prediction — for cascade-aware routing (Phase 2 enhancement #3)
-# =============================================================================
 async def predict_top_k(
     dd_process: str,
     context: np.ndarray,
@@ -579,20 +256,7 @@ async def predict_top_k(
     alpha: float = UCB_ALPHA,
     mode: Mode | None = None,
 ) -> list[tuple[str, float, int]]:
-    """Return the top-K deployments ranked by score under the configured mode.
-
-    Used by helpers.py for cascade-aware routing: try #1 → on fail try #2 →
-    on fail try #3 → fall back to Phase 1 simple-shuffle Router. Each
-    attempt gets its own error-class-typed reward submission.
-
-    Args:
-        mode: scoring mode override (see predict() docstring); None → env-
-            resolved default.
-
-    Returns: [(deployment_id, score, n_obs), ...] sorted desc by score.
-    Length <= min(k, len(candidates)). Empty when no candidates. The `score`
-    semantics depend on the active mode (UCB upper bound vs sampled posterior).
-    """
+    """Top-K ranking for cascade-aware routing (try #1 → #2 → #3 on failure)."""
     if not candidate_deployments:
         return []
     resolved_mode = _resolve_mode(mode)
@@ -603,10 +267,13 @@ async def predict_top_k(
     for deployment, cell in zip(candidate_deployments, cells):
         if cell is None:
             cell = CellState.fresh(deployment, dd_process, benchmark_prior = 0.0)
-        total, _exploit, _bonus = _score_cell(cell, context, resolved_mode, alpha = alpha)
+        total, _exploit, _bonus = score_cell(
+            cell, 
+            context, 
+            resolved_mode, 
+            rng = _RNG, 
+            alpha = alpha)
         scored.append((deployment, total, cell.n_obs))
-    # Sort: highest score first, ties broken by lowest n_obs (favor exploration
-    # of under-sampled arms), then by deployment string for determinism.
     scored.sort(key = lambda x: (-x[1], x[2], x[0]))
     _record_predict(dd_process, resolved_mode)
     if scored:
@@ -614,20 +281,9 @@ async def predict_top_k(
     return scored[: max(1, k)]
 
 
-# =============================================================================
-# Provisional reservations — thundering-herd protection (Phase 3, 2026-05-14)
-# =============================================================================
-# Canary v4 evidence (2026-05-14): two concurrent chapters (ch02 + ch04) both
-# queried the bandit within 1s, both saw `deepseek-v4-pro` at n_obs=0 with
-# the maximum UCB exploration bonus, neither saw the other's pending pick.
-# Both pinned to it; both hung simultaneously on a `<think>` token timeout.
-#
-# Pattern: each successful pick attempts an atomic claim of
-#   dd:rotator:pareto:reserved:{dd_process}:{deployment}
-# via SET NX EX. Concurrent pickers see the claim and skip to the next-best
-# arm. Callers can either release explicitly at end-of-use, or rely on TTL
-# expiry for self-healing (workers crashing mid-call leave dangling
-# reservations that expire within ttl_s).
+# --------------------------------------------------------------------------- #
+# Reservations — thundering-herd protection (cell-level + provider-level)
+# --------------------------------------------------------------------------- #
 async def try_reserve(
     deployment: str,
     dd_process: str,
@@ -635,21 +291,16 @@ async def try_reserve(
     redis: "redis_aio.Redis | None",
     ttl_s: int = 60,
 ) -> bool:
-    """Atomic claim of (deployment, dd_process) for ttl_s seconds.
-
-    Returns True when this caller now holds the reservation. Returns False
-    only when the key was already set by a concurrent caller and we should
-    pick a different arm.
-
-    Fail-soft: if redis is None or the SET call raises, returns True (i.e.
-    "you may proceed without protection"). This preserves old behavior on
-    Redis outage rather than blocking the chapter.
-    """
+    """Atomic claim of (deployment, dd_process). False ⇒ another caller holds
+    it; pick a different arm. Fail-soft on Redis errors → True."""
     if redis is None:
         return True
-    key = f"dd:rotator:pareto:reserved:{dd_process}:{deployment}"
     try:
-        claimed = await redis.set(key, "1", ex = ttl_s, nx = True)
+        claimed = await redis.set(
+            reservation_key(deployment, dd_process), 
+            "1", 
+            ex = ttl_s, 
+            nx = True)
         return bool(claimed)
     except Exception:
         return True
@@ -661,36 +312,14 @@ async def release_reservation(
     *,
     redis: "redis_aio.Redis | None",
 ) -> None:
-    """Best-effort release. Safe to call multiple times; no-op when redis
-    is None or unavailable. If never called, the reservation expires via
-    TTL set by try_reserve()."""
     if redis is None:
         return
     try:
-        await redis.delete(f"dd:rotator:pareto:reserved:{dd_process}:{deployment}")
+        await redis.delete(reservation_key(deployment, dd_process))
     except Exception:
         pass
 
 
-# =============================================================================
-# Provider-level slot reservations — Batch 2 speed fix (2026-05-14)
-# =============================================================================
-# Canary v7 evidence: bandit top-3 picks were all NIM deployments (glm-5.1,
-# deepseek-v4-flash, kimi-k2.6) because NIM has the most high-benchmark-prior
-# models. Per-process asyncio semaphore (NIM=2) then serialized them, dropping
-# effective concurrency from 3 → 2.
-#
-# Provider-slot reservations gate chapter-level picks at the DISTRIBUTED level
-# (Redis-backed, cross-Celery-worker). When NIM has 2 active chapter pins,
-# the next chapter's bandit iteration sees provider-full and forces selection
-# from Groq/Cerebras/Mistral. Restores actual 3x concurrency without burning
-# rate-limit budget.
-#
-# Pattern: per-provider, numbered slot keys
-#   dd:rotator:provider_slot:nvidia_nim:0
-#   dd:rotator:provider_slot:nvidia_nim:1
-# Each slot atomically claimed via SET NX EX. Release by deleting the specific
-# slot key. TTL=1800s matches chapter-pin TTL so stale slots self-heal.
 async def try_reserve_provider_slot(
     provider: str,
     *,
@@ -698,18 +327,17 @@ async def try_reserve_provider_slot(
     max_slots: int,
     ttl_s: int = 1800,
 ) -> int | None:
-    """Atomically claim one of `max_slots` numbered slots for the provider.
-    Returns the claimed slot index (0..max_slots-1) on success, or None if
-    every slot is taken.
-
-    Fail-soft: redis=None → returns 0 (i.e. "you may proceed without
-    protection") to match the existing try_reserve fail-soft semantics."""
+    """Claim one of `max_slots` numbered slots. Returns the slot index or
+    None when all are taken. Fail-soft on Redis None → returns 0."""
     if redis is None:
         return 0
     for slot_idx in range(max_slots):
-        key = f"dd:rotator:provider_slot:{provider}:{slot_idx}"
         try:
-            claimed = await redis.set(key, "1", ex=ttl_s, nx=True)
+            claimed = await redis.set(
+                provider_slot_key(provider, slot_idx), 
+                "1", 
+                ex = ttl_s, 
+                nx = True)
             if claimed:
                 return slot_idx
         except Exception:
@@ -723,20 +351,20 @@ async def release_provider_slot(
     *,
     redis: "redis_aio.Redis | None",
 ) -> None:
-    """Best-effort release. Safe to call multiple times. No-op when
-    redis is None, slot_idx is None, or the delete raises."""
-
     if redis is None or slot_idx is None:
         return
     try:
-        await redis.delete(f"dd:rotator:provider_slot:{provider}:{slot_idx}")
+        await redis.delete(provider_slot_key(provider, slot_idx))
     except Exception:
         pass
 
 
-# =============================================================================
-# OTel metric instruments
-# =============================================================================
+# --------------------------------------------------------------------------- #
+# OTel instruments
+# --------------------------------------------------------------------------- #
+_metric_instruments: dict[str, Any] = {}
+
+
 def _ensure_metrics() -> dict[str, Any]:
     if _metric_instruments:
         return _metric_instruments
@@ -752,9 +380,6 @@ def _ensure_metrics() -> dict[str, Any]:
             name = "dd.pareto_update_total",
             description = "Bandit update() calls — labels: dd_process, outcome ∈ {positive, neutral, negative}",
         )
-        # 2026-05-23 — renamed from `dd.pareto_ucb_score` (semantics now cover all
-        # three modes via `mode` label, not just UCB). Old dashboards querying
-        # `dd.pareto_ucb_score` need to be updated to filter on `mode="ucb"`.
         _metric_instruments["score_hist"] = meter.create_histogram(
             name = "dd.pareto_score",
             description = (
@@ -766,12 +391,7 @@ def _ensure_metrics() -> dict[str, Any]:
         )
         _metric_instruments["sigma_sq_hist"] = meter.create_histogram(
             name = "dd.pareto_sigma_sq",
-            description = (
-                "Per-arm EWMA noise variance estimate after each update() — "
-                "used by FGTS-VA to scale posterior sampling. Histogram width "
-                "tells you whether arms have heterogeneous noise (justifying "
-                "FGTS-VA over plain LinTS)."
-            ),
+            description = "Per-arm EWMA noise variance estimate after each update().",
             unit = "1",
         )
         _metric_instruments["shadow_agreement"] = meter.create_counter(
@@ -785,8 +405,7 @@ def _ensure_metrics() -> dict[str, Any]:
 
 
 def _record_predict(dd_process: str, mode: Mode = "ucb") -> None:
-    inst = _ensure_metrics()
-    c = inst.get("predict_counter")
+    c = _ensure_metrics().get("predict_counter")
     if c is None:
         return
     try:
@@ -796,8 +415,7 @@ def _record_predict(dd_process: str, mode: Mode = "ucb") -> None:
 
 
 def _record_update(dd_process: str, outcome: str) -> None:
-    inst = _ensure_metrics()
-    c = inst.get("update_counter")
+    c = _ensure_metrics().get("update_counter")
     if c is None:
         return
     try:
@@ -807,19 +425,17 @@ def _record_update(dd_process: str, outcome: str) -> None:
 
 
 def _record_score(score: float, mode: Mode = "ucb") -> None:
-    inst = _ensure_metrics()
-    h = inst.get("score_hist")
+    h = _ensure_metrics().get("score_hist")
     if h is None:
         return
     try:
-        h.record(score, attributes = {"mode": mode})
+        h.record(score, attributes={"mode": mode})
     except Exception:
         pass
 
 
 def _record_sigma_sq(sigma_sq: float) -> None:
-    inst = _ensure_metrics()
-    h = inst.get("sigma_sq_hist")
+    h = _ensure_metrics().get("sigma_sq_hist")
     if h is None:
         return
     try:
@@ -829,8 +445,7 @@ def _record_sigma_sq(sigma_sq: float) -> None:
 
 
 def _record_shadow_agreement(dd_process: str, agreement: bool) -> None:
-    inst = _ensure_metrics()
-    c = inst.get("shadow_agreement")
+    c = _ensure_metrics().get("shadow_agreement")
     if c is None:
         return
     try:
@@ -840,6 +455,3 @@ def _record_shadow_agreement(dd_process: str, agreement: bool) -> None:
         })
     except Exception:
         pass
-
-
-

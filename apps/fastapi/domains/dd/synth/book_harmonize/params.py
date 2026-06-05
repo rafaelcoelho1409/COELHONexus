@@ -1,0 +1,12 @@
+"""book_harmonize tunables — prose budgets + LLM caps + concurrency."""
+from __future__ import annotations
+
+
+MAX_CLAIMS_PER_CHAPTER = 20
+PROSE_CHARS_FOR_CLAIMS = 10000
+PROSE_CHARS_FOR_PATCH = 16000
+DETECT_MAX_TOKENS = 800
+PATCH_MAX_TOKENS = 14000
+EXTRACT_MAX_TOKENS = 1000
+CANONICALIZE_MAX_TOKENS = 1500
+PER_CHAPTER_CONCURRENCY = 4

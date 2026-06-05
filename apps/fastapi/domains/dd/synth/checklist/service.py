@@ -1,27 +1,36 @@
 """checklist_eval service — deterministic pre-gates, aggregation, rendering,
 prompt builders, and LLM verdict coercion."""
 from __future__ import annotations
+from .keys import digest_latest_key, latest_blob_key, sawc_latest_key, versioned_blob_key
+from .params import (
+    DENSITY_MAX_AVG_EXPLANATION_WORDS,
+    DENSITY_MAX_CHARS_PER_PARA,
+    DENSITY_MIN_AVG_EXPLANATION_WORDS,
+    DENSITY_MIN_CHARS_PER_PARA,
+    FEEDBACK_MAX_CHARS,
+    FEEDBACK_MIN_CHARS,
+    LLM_CRITERIA,
+    MAX_RENDERED_CHAPTER_CHARS,
+    MIN_AVG_CODE_REFS_PER_SECTION,
+    MIN_CITATIONS_PER_SECTION,
+    MIN_CODE_REF_COVERAGE_FRACTION,
+    PASS_THRESHOLD,
+    PICKER_FALLBACK_RATE_MAX,
+    REPAIR_RATE_MAX,
+)
+from .schemas import (
+    ChecklistEvaluation,
+    CriterionResult,
+    LLMJudgePayload,
+    LLMVerdict,
+)
+from .versions import CHECKLIST_PROMPT_VERSION, CHECKLIST_SCHEMA_VERSION
 
 import hashlib
 import random
 
-from .constants import (
-    CHECKLIST_PROMPT_VERSION,
-    _DENSITY_MAX_AVG_EXPLANATION_WORDS,
-    _DENSITY_MIN_AVG_EXPLANATION_WORDS,
-    _LLM_CRITERIA,
-    _MAX_RENDERED_CHAPTER_CHARS,
-    _MIN_CITATIONS_PER_SECTION,
-    _PASS_THRESHOLD,
-    _PICKER_FALLBACK_RATE_MAX,
-    _REPAIR_RATE_MAX,
-)
-from .types import CriterionResult, _LLMJudgePayload
 
-
-# =============================================================================
 # Deterministic pre-gates (7 — pure Python, zero LLM cost)
-# =============================================================================
 # Each function takes the parsed sawc payload dict and returns one
 # CriterionResult. Stable interface so the node can iterate them in
 # a list without per-check special-casing.
@@ -38,10 +47,10 @@ def check_all_sections_present(sawc: dict) -> CriterionResult:
     n_total = int(cs.get("n_sections", 0))
     passed = (n_total > 0) and (n_done == n_total)
     return CriterionResult(
-        name="all_sections_present",
-        passed=passed,
-        kind="deterministic",
-        feedback=(
+        name = "all_sections_present",
+        passed = passed,
+        kind = "deterministic",
+        feedback = (
             ""
             if passed
             else f"only {n_done}/{n_total} sections completed (sawc reported "
@@ -56,10 +65,10 @@ def check_no_placeholder_sections(sawc: dict) -> CriterionResult:
     n_fb = int(cs.get("n_sections_fallback", 0))
     passed = n_fb == 0
     return CriterionResult(
-        name="no_placeholder_sections",
-        passed=passed,
-        kind="deterministic",
-        feedback=(
+        name = "no_placeholder_sections",
+        passed = passed,
+        kind = "deterministic",
+        feedback = (
             ""
             if passed
             else f"{n_fb} section(s) are placeholders (all 3 writer drafts "
@@ -89,10 +98,10 @@ def check_unique_headings(sawc: dict) -> CriterionResult:
             f"{sorted(set(dupes))[:3]}. mgsr_replan should rename or merge."
         )
     return CriterionResult(
-        name="unique_headings",
-        passed=passed,
-        kind="deterministic",
-        feedback=feedback,
+        name = "unique_headings",
+        passed = passed,
+        kind = "deterministic",
+        feedback = feedback,
     )
 
 
@@ -101,17 +110,17 @@ def check_all_sections_cite_at_least_1(sawc: dict) -> CriterionResult:
     thin: list[str] = []
     for s in sections:
         n_cites = len(s.get("citations") or [])
-        if n_cites < _MIN_CITATIONS_PER_SECTION:
+        if n_cites < MIN_CITATIONS_PER_SECTION:
             thin.append(s.get("section_id", "?"))
     passed = not thin
     return CriterionResult(
-        name="all_sections_cite_at_least_1",
-        passed=passed,
-        kind="deterministic",
-        feedback=(
+        name = "all_sections_cite_at_least_1",
+        passed = passed,
+        kind = "deterministic",
+        feedback = (
             ""
             if passed
-            else f"sections with <{_MIN_CITATIONS_PER_SECTION} citation(s): "
+            else f"sections with <{MIN_CITATIONS_PER_SECTION} citation(s): "
                  f"{thin}. add a citation grounding each section's primary "
                  f"claim."
         ),
@@ -125,8 +134,8 @@ def check_density_within_bounds(sawc: dict) -> CriterionResult:
     contextualized code; too verbose = wall-of-text before the code."""
     cs = sawc.get("coverage_stats") or {}
     avg = float(cs.get("avg_explanation_words", 0))
-    floor = _DENSITY_MIN_AVG_EXPLANATION_WORDS
-    ceil = _DENSITY_MAX_AVG_EXPLANATION_WORDS
+    floor = DENSITY_MIN_AVG_EXPLANATION_WORDS
+    ceil = DENSITY_MAX_AVG_EXPLANATION_WORDS
     passed = floor <= avg <= ceil
     if passed:
         feedback = ""
@@ -143,10 +152,10 @@ def check_density_within_bounds(sawc: dict) -> CriterionResult:
             f"point, the prose just sets it up."
         )
     return CriterionResult(
-        name="density_within_bounds",
-        passed=passed,
-        kind="deterministic",
-        feedback=feedback,
+        name = "density_within_bounds",
+        passed = passed,
+        kind = "deterministic",
+        feedback = feedback,
     )
 
 
@@ -155,16 +164,16 @@ def check_repair_rate_low(sawc: dict) -> CriterionResult:
     n_repairs = int(cs.get("n_repairs", 0))
     n_drafts = int(cs.get("n_total_drafts_fired", 0))
     rate = (n_repairs / n_drafts) if n_drafts else 0.0
-    passed = rate < _REPAIR_RATE_MAX
+    passed = rate < REPAIR_RATE_MAX
     return CriterionResult(
-        name="repair_rate_low",
-        passed=passed,
-        kind="deterministic",
-        feedback=(
+        name = "repair_rate_low",
+        passed = passed,
+        kind = "deterministic",
+        feedback = (
             ""
             if passed
             else f"high writer-repair rate ({n_repairs}/{n_drafts} = "
-                 f"{rate:.0%}; ceiling {_REPAIR_RATE_MAX:.0%}). The writer "
+                 f"{rate:.0%}; ceiling {REPAIR_RATE_MAX:.0%}). The writer "
                  f"struggled with Pydantic+cross-ref compliance — consider "
                  f"a clearer outline or tighter contributions."
         ),
@@ -176,16 +185,16 @@ def check_picker_fallback_rate_low(sawc: dict) -> CriterionResult:
     n_fb = int(cs.get("n_picker_fallbacks", 0))
     n_picks = int(cs.get("n_critic_picks", 0))
     rate = (n_fb / n_picks) if n_picks else 0.0
-    passed = rate < _PICKER_FALLBACK_RATE_MAX
+    passed = rate < PICKER_FALLBACK_RATE_MAX
     return CriterionResult(
-        name="picker_fallback_rate_low",
-        passed=passed,
-        kind="deterministic",
-        feedback=(
+        name = "picker_fallback_rate_low",
+        passed = passed,
+        kind = "deterministic",
+        feedback = (
             ""
             if passed
             else f"high critic-picker fallback rate ({n_fb}/{n_picks} = "
-                 f"{rate:.0%}; ceiling {_PICKER_FALLBACK_RATE_MAX:.0%}). "
+                 f"{rate:.0%}; ceiling {PICKER_FALLBACK_RATE_MAX:.0%}). "
                  f"the critic LLM frequently returned malformed JSON; "
                  f"the structural-score fallback handled it, but quality "
                  f"signal is degraded."
@@ -194,36 +203,18 @@ def check_picker_fallback_rate_low(sawc: dict) -> CriterionResult:
 
 
 def check_code_density_appropriate(sawc: dict) -> CriterionResult:
-    """Ship #3 (2026-05-24) — code-first gate. Updated 2026-05-24 PM
-    for v2 cookbook schema: each section now has `subtopics`, with each
-    subtopic carrying ONE `code_ref_hash`. So the count is `len(subtopics)`.
-
-    The chapter passes when:
-      (a) the average subtopics-per-section is ≥
-          _MIN_AVG_CODE_REFS_PER_SECTION (default 2.0); AND
-      (b) the writer used the code bank — at least
-          _MIN_CODE_REF_COVERAGE_FRACTION of `allowed_hashes` per
-          section ended up in a subtopic.
-
-    Sections with zero allowed_hashes are exempt from the coverage
-    check (concept-only sections have no code to cite). The average
-    check still applies — most sections must emit code or the chapter
-    is too prose-heavy regardless.
-
-    Failure feedback names the offending sections so mgsr_replan can
-    decide whether to re-roll those specifically or accept as-is.
-    """
-    from .constants import (
-        _MIN_AVG_CODE_REFS_PER_SECTION,
-        _MIN_CODE_REF_COVERAGE_FRACTION,
-    )
+    """Code-first gate (v2 cookbook): subtopic count == code-block count.
+    Passes when (a) avg subtopics/section ≥ MIN_AVG_CODE_REFS_PER_SECTION
+    AND (b) ≥ MIN_CODE_REF_COVERAGE_FRACTION of allowed_hashes per section
+    landed in a subtopic. Sections with no allowed_hashes are exempt from
+    the coverage check; the average check still applies."""
     sections = sawc.get("sections") or []
     if not sections:
         return CriterionResult(
-            name="code_density_appropriate",
-            passed=False,
-            kind="deterministic",
-            feedback="no sections — chapter is empty",
+            name = "code_density_appropriate",
+            passed = False,
+            kind = "deterministic",
+            feedback = "no sections — chapter is empty",
         )
 
     n_refs_per_section: list[tuple[str, int]] = []
@@ -231,22 +222,19 @@ def check_code_density_appropriate(sawc: dict) -> CriterionResult:
     n_total_refs = 0
     for s in sections:
         sid = s.get("section_id", "?")
-        # v2 cookbook: each subtopic carries exactly one code_ref_hash,
-        # so subtopic count == code-block count for the section.
         subtopics = s.get("subtopics") or []
         n_refs = sum(1 for st in subtopics if (st or {}).get("code_ref_hash"))
         n_total_refs += n_refs
         n_refs_per_section.append((sid, n_refs))
-        # Coverage check uses the allowed_hashes_count if recorded.
         n_allowed = int(s.get("n_allowed_hashes") or 0)
         if n_allowed >= 3:
             coverage = n_refs / max(1, n_allowed)
-            if coverage < _MIN_CODE_REF_COVERAGE_FRACTION:
+            if coverage < MIN_CODE_REF_COVERAGE_FRACTION:
                 thin_coverage.append(f"{sid}({n_refs}/{n_allowed})")
     avg = n_total_refs / len(sections)
     passed = (
-        avg >= _MIN_AVG_CODE_REFS_PER_SECTION
-        and len(thin_coverage) <= len(sections) // 2  # tolerate 50% thin
+        avg >= MIN_AVG_CODE_REFS_PER_SECTION
+        and len(thin_coverage) <= len(sections) // 2   # tolerate 50% thin
     )
     if passed:
         feedback = ""
@@ -254,7 +242,7 @@ def check_code_density_appropriate(sawc: dict) -> CriterionResult:
         zeros = [sid for sid, n in n_refs_per_section if n == 0]
         feedback = (
             f"code density too low: avg {avg:.2f} subtopics/section "
-            f"(floor {_MIN_AVG_CODE_REFS_PER_SECTION}); "
+            f"(floor {MIN_AVG_CODE_REFS_PER_SECTION}); "
             f"{len(zeros)} sections with 0 code subtopics"
         )
         if zeros[:5]:
@@ -269,43 +257,34 @@ def check_code_density_appropriate(sawc: dict) -> CriterionResult:
             "must emit ≥3 (subheading, explanation, code block) subtopics."
         )
     return CriterionResult(
-        name="code_density_appropriate",
-        passed=passed,
-        kind="deterministic",
-        feedback=feedback,
+        name = "code_density_appropriate",
+        passed = passed,
+        kind = "deterministic",
+        feedback = feedback,
     )
 
 
 def check_code_uniqueness_ratio(sawc: dict) -> CriterionResult:
-    """CORR-3 Q2 (2026-05-26 evening) — code-block uniqueness gate.
+    """Code-block uniqueness gate. Earlier corpora showed chapters with
+    100s of code blocks but only ~10-20% unique bodies (one snippet
+    repeated 27× across H3s). The density check doesn't catch that —
+    this does.
 
-    Empirical: Browser Use Run 1 ch-01 had 194 code blocks but only 20
-    unique bodies (10%), Run 2 ch-02 had 96 blocks with 20 unique (21%),
-    each with one snippet repeated up to 27 times across different
-    H3 subtopics. The chapter passed `code_density_appropriate` and
-    `density_within_bounds` but shipped pedagogically broken material.
+    Adaptive floor (scales with bank diversity to avoid math-impossible
+    failures):
+      n_unique ≥ 30 → strict 0.50  (rich bank — writer should diversify)
+      15 ≤ n_unique < 30 → 0.35    (constrained — writer used what was there)
+      n_unique < 15 → 0.30         (severely constrained — signal degrades)
 
-    This criterion catches the duplication pattern that the density
-    check doesn't:
-      - PASS when unique_code_bodies / total_code_blocks >= 0.5
-      - PASS vacuously when there are zero subtopics (let
-        code_density_appropriate flag that)
-      - FAIL otherwise, with a sample of the top offender(s) so
-        mgsr_replan can re-roll surgically.
-
-    Uses code_ref_hash as the uniqueness key — a single vault entry
-    cited from 4 different sections is still 4 duplicates of one body.
-    Excludes 'derived' subtopics from the duplicate count (sawc_derive
-    promotes thin signatures with bodies that are intentionally
-    different per call).
-    """
+    Uses code_ref_hash as the uniqueness key. Excludes 'derived' subtopics
+    (sawc_derive regenerates body per call → hash reuse is fine)."""
     sections = sawc.get("sections") or []
     if not sections:
         return CriterionResult(
-            name="code_uniqueness_ratio",
-            passed=True,
-            kind="deterministic",
-            feedback="no sections — vacuously true",
+            name = "code_uniqueness_ratio",
+            passed = True,
+            kind = "deterministic",
+            feedback = "no sections — vacuously true",
         )
 
     hashes: list[str] = []
@@ -313,8 +292,6 @@ def check_code_uniqueness_ratio(sawc: dict) -> CriterionResult:
         for st in (s.get("subtopics") or []):
             if not isinstance(st, dict):
                 continue
-            # Skip derived — its body is regenerated, so hash reuse here
-            # is fine (the body bytes will differ across subtopics).
             if (st.get("code_source") or "verbatim") == "derived":
                 continue
             h = st.get("code_ref_hash")
@@ -323,39 +300,16 @@ def check_code_uniqueness_ratio(sawc: dict) -> CriterionResult:
 
     if not hashes:
         return CriterionResult(
-            name="code_uniqueness_ratio",
-            passed=True,
-            kind="deterministic",
-            feedback="no verbatim code blocks — vacuously true",
+            name = "code_uniqueness_ratio",
+            passed = True,
+            kind = "deterministic",
+            feedback = "no verbatim code blocks — vacuously true",
         )
 
     n_total = len(hashes)
     n_unique = len(set(hashes))
     ratio = n_unique / n_total
 
-    # Path B (2026-05-27) — adaptive floor scaled to absolute bank
-    # diversity.
-    #
-    # The original fixed 50% floor punished bank-constrained chapters
-    # mathematically: a chapter with 17 unique hashes available across
-    # its sections and 48 subtopics to fill can't exceed 17/48 ≈ 35%
-    # uniqueness regardless of writer effort. Claude Code Run 6 ch-01
-    # exhibited exactly this pattern (8 sections × ~3-5 hashes each in
-    # the per-section bank, intersection across sections shrinks the
-    # union to ~17 unique).
-    #
-    # Adaptive policy:
-    #   n_unique >= 30 → strict floor 50% (rich bank, writer should
-    #                     diversify)
-    #   15 <= n_unique < 30 → moderate floor 35% (constrained bank;
-    #                     writer used most of what was available)
-    #   n_unique  <  15 → loose floor 30% (severely constrained; the
-    #                     criterion's signal degrades anyway)
-    #
-    # Still catches the original failure modes: a chapter using 5
-    # unique hashes across 50 subtopics (10% ratio) fails even under
-    # the loose tier. A chapter using 50 unique hashes across 100
-    # subtopics (50% ratio) passes strict.
     if n_unique >= 30:
         adaptive_floor = 0.50
     elif n_unique >= 15:
@@ -366,13 +320,12 @@ def check_code_uniqueness_ratio(sawc: dict) -> CriterionResult:
 
     if passed:
         return CriterionResult(
-            name="code_uniqueness_ratio",
-            passed=True,
-            kind="deterministic",
-            feedback="",
+            name = "code_uniqueness_ratio",
+            passed = True,
+            kind = "deterministic",
+            feedback = "",
         )
 
-    # Build feedback: name the top offenders so mgsr_replan can target.
     from collections import Counter
     top = Counter(hashes).most_common(3)
     sample = ", ".join(f"{h[:8]}…×{n}" for h, n in top if n > 1)
@@ -385,15 +338,14 @@ def check_code_uniqueness_ratio(sawc: dict) -> CriterionResult:
         f"sections that share most of their code base."
     )
     return CriterionResult(
-        name="code_uniqueness_ratio",
-        passed=False,
-        kind="deterministic",
-        feedback=feedback,
+        name = "code_uniqueness_ratio",
+        passed = False,
+        kind = "deterministic",
+        feedback = feedback,
     )
 
 
-# Ordered list used by the node — stable iteration order = stable
-# pass-rate denominators across runs.
+# Ordered list — stable iteration = stable pass-rate denominators.
 DETERMINISTIC_CHECKS = (
     check_all_sections_present,
     check_no_placeholder_sections,
@@ -407,9 +359,7 @@ DETERMINISTIC_CHECKS = (
 )
 
 
-# =============================================================================
 # Aggregation helpers
-# =============================================================================
 def aggregate_pass_rate(
     results: list[CriterionResult],
 ) -> tuple[int, int, float, bool]:
@@ -418,7 +368,7 @@ def aggregate_pass_rate(
     n_total = len(results)
     n_passed = sum(1 for r in results if r.passed)
     pass_rate = (n_passed / n_total) if n_total else 0.0
-    chapter_passed = pass_rate >= _PASS_THRESHOLD
+    chapter_passed = pass_rate >= PASS_THRESHOLD
     return n_passed, n_total, pass_rate, chapter_passed
 
 
@@ -433,13 +383,11 @@ def collect_failed_feedback(results: list[CriterionResult]) -> list[str]:
     return out
 
 
-# =============================================================================
 # Chapter rendering for the LLM-judge prompt
-# =============================================================================
 def render_chapter_for_judge(
     sawc: dict,
     *,
-    char_cap: int = _MAX_RENDERED_CHAPTER_CHARS,
+    char_cap: int = MAX_RENDERED_CHAPTER_CHARS,
 ) -> tuple[str, bool]:
     """Render the persisted v2 cookbook sections into a markdown-ish
     block the LLM-judge can read. Mirrors the final-render structure
@@ -546,11 +494,9 @@ def render_digest_for_grounding(
     return "\n".join(parts)
 
 
-# =============================================================================
 # LLM-judge prompts
-# =============================================================================
 # Bundle 9 (2026-05-25) — Per-criterion description block. Keys MUST be the
-# `_LLM_CRITERIA` names verbatim so the post-shuffle prompt template stays
+# `LLM_CRITERIA` names verbatim so the post-shuffle prompt template stays
 # consistent. Each value is the labelled description block that appears in
 # the prompt's CRITERIA section. The cN labels stay attached to their
 # criterion (they're identifiers, not positional markers), and the OUTPUT
@@ -621,7 +567,7 @@ def _criterion_order_for(chapter_id: str) -> list[str]:
     )
     seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:8], "big")
     rng = random.Random(seed)
-    order = list(_LLM_CRITERIA)
+    order = list(LLM_CRITERIA)
     rng.shuffle(order)
     return order
 
@@ -721,14 +667,12 @@ def build_repair_prompt(
     )
 
 
-# =============================================================================
 # LLM verdict → CriterionResult coercion
-# =============================================================================
 def llm_payload_to_criteria(
-    payload: _LLMJudgePayload,
+    payload: LLMJudgePayload,
 ) -> list[CriterionResult]:
     """Map the parsed LLM judge response into 5 CriterionResult entries,
-    preserving the `_LLM_CRITERIA` order."""
+    preserving the `LLM_CRITERIA` order."""
     name_to_verdict = {
         "chapter_reads_coherently":          payload.chapter_reads_coherently,
         "claims_grounded_in_sources":        payload.claims_grounded_in_sources,
@@ -738,14 +682,408 @@ def llm_payload_to_criteria(
     }
     return [
         CriterionResult(
-            name=name,
-            passed=name_to_verdict[name].passed,
-            kind="llm_judge",
-            feedback=(
+            name = name,
+            passed = name_to_verdict[name].passed,
+            kind = "llm_judge",
+            feedback = (
                 name_to_verdict[name].feedback
                 if not name_to_verdict[name].passed
                 else ""
             ),
         )
-        for name in _LLM_CRITERIA
+        for name in LLM_CRITERIA
     ]
+
+
+async def checklist_eval_run(state: SynthState) -> dict:
+    """Run the binary checklist evaluator for one chapter."""
+    slug = state.get("framework_slug")
+    chapter_id = state.get("chapter_id")
+    thread_id = state.get("thread_id") or ""
+
+    if not slug or not chapter_id:
+        return {
+            "checklist_path":  "",
+            "checklist_stats": {
+                "skipped": "no_slug_or_chapter_id", "wall_ms": 0,
+            },
+            "status": "failed",
+            "error":  "framework_slug or chapter_id missing from SynthState",
+        }
+
+    t0 = time.monotonic()
+    minio = get_storage()
+
+    # -- Load sawc + digest blobs -------------------------------------------
+    sawc_key = _sawc_latest_key(slug, chapter_id)
+    digest_key = _digest_latest_key(slug, chapter_id)
+
+    if not await minio.exists(sawc_key):
+        return {
+            "checklist_path":  "",
+            "checklist_stats": {
+                "skipped":  "sawc_not_found",
+                "sawc_key": sawc_key,
+                "wall_ms":  int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"sawc {sawc_key!r} not in MinIO — run sawc_write first",
+        }
+    if not await minio.exists(digest_key):
+        return {
+            "checklist_path":  "",
+            "checklist_stats": {
+                "skipped":    "digest_not_found",
+                "digest_key": digest_key,
+                "wall_ms":    int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"digest {digest_key!r} not in MinIO — run digest_construct first",
+        }
+
+    try:
+        sawc_text = await minio.read_text(sawc_key)
+        sawc = json.loads(sawc_text)
+        digest_text = await minio.read_text(digest_key)
+        digest = json.loads(digest_text)
+    except Exception as e:
+        return {
+            "checklist_path":  "",
+            "checklist_stats": {
+                "skipped": "inputs_unreadable",
+                "wall_ms": int((time.monotonic() - t0) * 1000),
+            },
+            "status": "failed",
+            "error":  f"sawc/digest unreadable: {type(e).__name__}: {e}",
+        }
+
+    chapter_title = sawc.get("chapter_title") or chapter_id
+    sawc_manifest_hash = sawc.get("sawc_manifest_hash") or ""
+    digest_manifest_hash = digest.get("digest_manifest_hash") or ""
+
+    await emit_progress(
+        thread_id, "checklist_eval", "start",
+        chapter_id = chapter_id,
+        chapter_title = chapter_title,
+        n_total_criteria = len(DETERMINISTIC_CHECKS) + len(LLM_CRITERIA),
+        pass_threshold = 0.80,
+    )
+
+    # -- Cache fast-path ----------------------------------------------------
+    manifest_hash = _compute_manifest_hash(
+        sawc_manifest_hash = sawc_manifest_hash,
+        digest_manifest_hash = digest_manifest_hash,
+    )
+    versioned_key = _versioned_blob_key(slug, chapter_id, manifest_hash)
+    latest_key    = _latest_blob_key(slug, chapter_id)
+
+    if await minio.exists(versioned_key) and await minio.exists(latest_key):
+        try:
+            cached_text = await minio.read_text(versioned_key)
+            cached = json.loads(cached_text)
+            elapsed = int((time.monotonic() - t0) * 1000)
+            stats = {
+                "n_total":         cached.get("n_total", 0),
+                "n_passed":        cached.get("n_passed", 0),
+                "pass_rate":       cached.get("pass_rate", 0.0),
+                "chapter_passed":  cached.get("chapter_passed", False),
+                "n_failed_feedback": len(cached.get("failed_feedback") or []),
+                "wall_ms":         elapsed,
+                "store_path":      latest_key,
+                "versioned_path":  versioned_key,
+                "manifest_hash":   manifest_hash,
+                "cache_hit":       True,
+                "prompt_version":  cached.get("prompt_version"),
+            }
+            await emit_progress(
+                thread_id, "checklist_eval", "done",
+                n_total = stats["n_total"],
+                n_passed = stats["n_passed"],
+                pass_rate = stats["pass_rate"],
+                chapter_passed = stats["chapter_passed"],
+                n_failed_feedback = stats["n_failed_feedback"],
+                wall_ms = elapsed, cache_hit = True,
+            )
+            logger.info(
+                f"[checklist_eval] {slug}/{chapter_id}: CACHE HIT — "
+                f"{stats['n_passed']}/{stats['n_total']} "
+                f"({stats['pass_rate']:.0%}), passed = "
+                f"{stats['chapter_passed']}, {elapsed} ms"
+            )
+            return {"checklist_path": latest_key, "checklist_stats": stats}
+        except Exception as e:
+            logger.warning(
+                f"[checklist_eval] {slug}/{chapter_id}: cached blob "
+                f"{versioned_key!r} unreadable ({type(e).__name__}: {e}); "
+                f"recomputing"
+            )
+
+    # -- Layer 1: 7 deterministic pre-gates ---------------------------------
+    pre_results: list[CriterionResult] = []
+    for fn in DETERMINISTIC_CHECKS:
+        try:
+            pre_results.append(fn(sawc))
+        except Exception as e:
+            # Defensive: a check shouldn't crash, but if it does we
+            # surface a clear FAIL so the operator can see which one
+            logger.warning(
+                f"[checklist_eval] pre-gate {fn.__name__} crashed: "
+                f"{type(e).__name__}: {e}"
+            )
+            pre_results.append(CriterionResult(
+                name = fn.__name__.replace("check_", ""),
+                passed = False,
+                kind = "deterministic",
+                feedback = f"pre_gate_crashed: {type(e).__name__}",
+            ))
+
+    pre_failed = [r.name for r in pre_results if not r.passed]
+    n_pre_passed = sum(1 for r in pre_results if r.passed)
+    await emit_progress(
+        thread_id, "checklist_eval", "pregates_done",
+        n_pregate = len(pre_results),
+        n_passed = n_pre_passed,
+        names_failed = pre_failed,
+    )
+
+    # -- Render chapter + digest for the LLM-judge prompt -------------------
+    rendered_chapter, truncated = render_chapter_for_judge(sawc)
+    rendered_digest = render_digest_for_grounding(digest)
+
+    await emit_progress(
+        thread_id, "checklist_eval", "judge_request",
+        chapter_chars = len(rendered_chapter),
+        digest_chars = len(rendered_digest),
+        truncated = truncated,
+    )
+
+    # -- Layer 2: 1 batched LLM-judge call ----------------------------------
+    llm_results, deployment, repaired, judge_wall_ms = await _run_llm_judge(
+        thread_id = thread_id,
+        chapter_id = chapter_id,
+        chapter_title = chapter_title,
+        framework = slug,
+        rendered_chapter = rendered_chapter,
+        rendered_digest = rendered_digest,
+        truncated = truncated,
+    )
+
+    llm_failed = [r.name for r in llm_results if not r.passed]
+    n_llm_passed = sum(1 for r in llm_results if r.passed)
+    await emit_progress(
+        thread_id, "checklist_eval", "judge_done",
+        n_llm = len(llm_results),
+        n_passed = n_llm_passed,
+        names_failed = llm_failed,
+        wall_ms = judge_wall_ms,
+        deployment = deployment,
+        repaired = repaired,
+    )
+
+    # -- Augment: atomic-claim grounding check (2026-05-24) -----------------
+    # The bundled judge above gives a coarse PASS/FAIL on
+    # `claims_grounded_in_sources` based on a 3-5 citation spot-check. This
+    # separate pass extracts atomic claims + verifies each against the digest
+    # grounding via bandit-routed LLM calls (per-claim, parallel concurrency = 8).
+    # If atomic check finds any unsupported claim, we OVERRIDE the bundled
+    # judge's verdict to FAIL with specific feedback. Conservative bias:
+    # never upgrades the bundled judge — only downgrades it.
+    # See docs/KD-SYNTH-SOTA-2026-05-24.md §3 #2.
+    # DD-SYNTH-SPEED-SOTA #B1 (2026-05-26) — Parallelize CoCoA + atomic-
+    # claim grounding. Both run on the same chapter draft; they share NO
+    # state (atomic uses prose+digest; CoCoA uses sawc+vault). Running
+    # them concurrently via asyncio.gather drops the ~3-5 min serial path
+    # to ~max(2.5, 3.5) min ≈ 30-40% on the checklist tail. Each task is
+    # wrapped in its own try/except so the fail-soft semantics are
+    # preserved per-result.
+    async def _run_faithfulness():
+        t0 = time.monotonic()
+        try:
+            r = await atomic_claim_grounding(
+                chapter_prose = rendered_chapter,
+                grounding_blob = rendered_digest,
+            )
+            return r, int((time.monotonic() - t0) * 1000)
+        except Exception as e:
+            logger.warning(
+                f"[checklist_eval] atomic-claim grounding crashed: "
+                f"{type(e).__name__}: {e} — skipping augmentation"
+            )
+            return None, int((time.monotonic() - t0) * 1000)
+
+    async def _run_cocoa():
+        t0 = time.monotonic()
+        try:
+            from ..render.service import _load_per_source_vaults as _load_vault
+            per_source = digest.get("per_source") or []
+            source_keys = sorted({
+                s.get("source_key", "") for s in per_source
+                if s.get("source_key")
+            })
+            merged_vault, _, _ = await _load_vault(minio, slug, source_keys)
+            r = await cocoa_alignment_check(
+                sawc_payload = sawc,
+                vault = merged_vault,
+            )
+            return r, int((time.monotonic() - t0) * 1000)
+        except Exception as e:
+            logger.warning(
+                f"[checklist_eval] CoCoA alignment crashed: "
+                f"{type(e).__name__}: {e} — skipping augmentation"
+            )
+            return None, int((time.monotonic() - t0) * 1000)
+
+    (atomic_result, faithfulness_wall_ms), (cocoa_result, cocoa_wall_ms) = (
+        await asyncio.gather(_run_faithfulness(), _run_cocoa())
+    )
+
+    if atomic_result is not None and not atomic_result["passed"]:
+        # Override the bundled judge's `claims_grounded_in_sources` verdict.
+        # Find the entry by name and rebuild it as a failure with the
+        # atomic-claim feedback. CriterionResult shape is preserved.
+        for i, r in enumerate(llm_results):
+            if r.name == "claims_grounded_in_sources":
+                llm_results[i] = CriterionResult(
+                    name = r.name,
+                    passed = False,
+                    kind = r.kind,
+                    feedback = atomic_result["feedback"],
+                )
+                break
+        # Recompute the pass counts for telemetry consistency.
+        llm_failed = [r.name for r in llm_results if not r.passed]
+        n_llm_passed = sum(1 for r in llm_results if r.passed)
+
+    await emit_progress(
+        thread_id, "checklist_eval", "faithfulness_done",
+        method = (atomic_result or {}).get("method", "skipped"),
+        n_claims = (atomic_result or {}).get("n_claims", 0),
+        n_unsupported = (atomic_result or {}).get("n_unsupported", 0),
+        overrode_bundled = (atomic_result is not None
+                          and not atomic_result["passed"]),
+        wall_ms = faithfulness_wall_ms,
+    )
+
+    # CoCoA two-stage code/explanation alignment override path. Augments
+    # the bundled judge's c11/c12 verdicts when drift is detected. Note:
+    # the cocoa_result + cocoa_wall_ms were computed above in parallel
+    # with the atomic-claim check via _run_cocoa(). See arXiv 2410.03131.
+    if cocoa_result is not None and not cocoa_result["passed"]:
+        # CoCoA found drift — override c11 + c12. Each gets the same
+        # alignment-rate-grounded feedback so mgsr_replan sees specific
+        # misaligned-subtopic samples and routes the reroll surgically.
+        cocoa_fb = cocoa_result["feedback"]
+        for i, r in enumerate(llm_results):
+            if r.name in (
+                "prose_code_first_not_meta_framing",
+                "code_refs_introduced_in_prose",
+            ):
+                llm_results[i] = CriterionResult(
+                    name = r.name,
+                    passed = False,
+                    kind = r.kind,
+                    feedback = (
+                        f"[CoCoA override] {cocoa_fb}"
+                        if cocoa_fb else
+                        f"[CoCoA override] alignment "
+                        f"{cocoa_result['alignment_rate']:.0%} below 85%"
+                    ),
+                )
+        llm_failed = [r.name for r in llm_results if not r.passed]
+        n_llm_passed = sum(1 for r in llm_results if r.passed)
+
+    await emit_progress(
+        thread_id, "checklist_eval", "cocoa_done",
+        method = (cocoa_result or {}).get("method", "skipped"),
+        n_pairs = (cocoa_result or {}).get("n_pairs", 0),
+        n_aligned = (cocoa_result or {}).get("n_aligned", 0),
+        n_misaligned = (cocoa_result or {}).get("n_misaligned", 0),
+        alignment_rate = (cocoa_result or {}).get("alignment_rate", 1.0),
+        overrode_bundled = (cocoa_result is not None
+                          and not cocoa_result["passed"]),
+        wall_ms = cocoa_wall_ms,
+    )
+
+    # -- Aggregate ----------------------------------------------------------
+    all_results = list(pre_results) + list(llm_results)
+    n_passed, n_total, pass_rate, chapter_passed = aggregate_pass_rate(
+        all_results
+    )
+    failed_feedback = collect_failed_feedback(all_results)
+
+    # -- Persist ------------------------------------------------------------
+    evaluation = ChecklistEvaluation(
+        chapter_id = chapter_id,
+        chapter_title = chapter_title,
+        framework_slug = slug,
+        criteria = all_results,
+        n_passed = n_passed,
+        n_total = n_total,
+        pass_rate = pass_rate,
+        chapter_passed = chapter_passed,
+        failed_feedback = failed_feedback,
+        n_llm_judge_repairs = (1 if repaired else 0),
+        deployment_judge = deployment,
+        wall_ms = int((time.monotonic() - t0) * 1000),
+    )
+    payload = evaluation.model_dump()
+    payload["sawc_manifest_hash"]      = sawc_manifest_hash
+    payload["digest_manifest_hash"]    = digest_manifest_hash
+    payload["checklist_manifest_hash"] = manifest_hash
+
+    blob_bytes = json.dumps(payload, indent = 2, ensure_ascii = False)
+    await minio.write(
+        versioned_key, blob_bytes, content_type = "application/json",
+    )
+    await minio.write(
+        latest_key, blob_bytes, content_type = "application/json",
+    )
+
+    elapsed = int((time.monotonic() - t0) * 1000)
+    stats = {
+        "n_total":            n_total,
+        "n_passed":           n_passed,
+        "pass_rate":          pass_rate,
+        "chapter_passed":     chapter_passed,
+        "n_failed_feedback":  len(failed_feedback),
+        "n_pregate_passed":   n_pre_passed,
+        "n_pregate_total":    len(pre_results),
+        "n_llm_passed":       n_llm_passed,
+        "n_llm_total":        len(llm_results),
+        "names_failed":       [r.name for r in all_results if not r.passed],
+        "judge_wall_ms":      judge_wall_ms,
+        "judge_repaired":     repaired,
+        "wall_ms":            elapsed,
+        "store_path":         latest_key,
+        "versioned_path":     versioned_key,
+        "manifest_hash":      manifest_hash,
+        "cache_hit":          False,
+        "prompt_version":     CHECKLIST_PROMPT_VERSION,
+        "deployment_judge":   deployment,
+    }
+    await emit_progress(
+        thread_id, "checklist_eval", "done",
+        n_total = n_total,
+        n_passed = n_passed,
+        pass_rate = pass_rate,
+        chapter_passed = chapter_passed,
+        n_failed_feedback = len(failed_feedback),
+        wall_ms = elapsed,
+    )
+    logger.info(
+        f"[checklist_eval] {slug}/{chapter_id}: "
+        f"{n_passed}/{n_total} criteria passed "
+        f"({pass_rate:.0%}, threshold 80%, chapter_passed = {chapter_passed}); "
+        f"pre = {n_pre_passed}/{len(pre_results)}, llm = {n_llm_passed}/{len(llm_results)}; "
+        f"{len(failed_feedback)} feedback strings; "
+        f"judge_wall = {judge_wall_ms}ms, total = {elapsed}ms"
+    )
+    return {"checklist_path": latest_key, "checklist_stats": stats}
+
+
+# Convenience loader for downstream nodes
+def load_checklist_payload(text: str) -> dict:
+    """Parse the persisted checklist blob. Downstream (mgsr_replan)
+    consumes `failed_feedback` + per-criterion `feedback` for guided
+    refinement instructions."""
+    return json.loads(text)

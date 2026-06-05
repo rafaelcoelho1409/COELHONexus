@@ -1,60 +1,51 @@
-"""embed_corpus helpers — hashing, serialization, chunking, OTel."""
+"""embed_corpus I/O shell — HF tokenizer + chunking + embed_corpus_run.
+
+Tokenizer is a process-singleton from the `tokenizers` Rust wheel (~3 MB,
+deterministic BPE lookup, NO model weights / NO inference — preserves the
+no-local-inference architecture rule)."""
 from __future__ import annotations
 
-import hashlib
-import io
 import logging
-import unicodedata
+import time
 
 import numpy as np
 
-from domains.llm.rotator.chain import DD_EMBED_MODEL_NAME
-
-from .constants import (
-    _CACHE_VERSION,
-    _CHUNK_CHARS,
-    _CHUNK_CHARS_FALLBACK,
-    _EMBED_PREFIX,
-    _TOKEN_HARD_CAP,
-    _TOKEN_TARGET,
+from domains.llm.rotator.chain import (
+    DD_EMBED_MODEL_NAME,
+    embed_via_router_async,
 )
+
+from ...ingestion.storage import get_storage
+from ..observability import attach_span_attrs
+from ..progress import emit_progress
+from ..state import PlannerState
+
+from .domain import (
+    l2_normalize,
+    load_embeddings,
+    manifest_hash,
+    normalize_content,
+    pack_npz,
+)
+from .keys import blob_key
+from .params import CHUNK_CHARS_FALLBACK, TOKEN_TARGET
 
 
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# Tokenizer — HuggingFace AutoTokenizer for byte-exact token counting (2026-05-25)
-# =============================================================================
-# Loaded ONCE per process. Tokenizer only — NOT the model weights. ~15 MB
-# disk, ~20-50 MB RAM, no GPU, no inference. Equivalent to a deterministic
-# text→int lookup, just with BPE merge rules. Does NOT violate
-# `project_local_vs_rotator_architecture` (which bans model INFERENCE,
-# not text encoding).
-#
-# Why byte-exact matters: NIM's `llama-nemotron-embed-1b-v2` server uses
-# this exact tokenizer. Running it client-side gives the same count NIM
-# will measure → can pack right up to 7800/8192 with zero overflow risk.
 _TOKENIZER = None
 
 
-def _get_tokenizer():
-    """Lazy-load the HuggingFace tokenizer once per process. Returns None
-    on any load failure — caller then falls back to the char-based cap
-    so embedding still works (just less efficiently).
-
-    Uses the standalone `tokenizers` Rust library (3.3 MB wheel) directly,
-    not `transformers` (50-60 MB). `Tokenizer.from_pretrained(model_id)`
-    fetches the same `tokenizer.json` NIM uses server-side via
-    huggingface_hub — exact-count parity with no model weights loaded.
-    """
+def get_tokenizer():
+    """Lazy process-singleton. None on load failure → caller falls back
+    to char-based chunking. Uses the standalone `tokenizers` wheel (not
+    transformers) for exact NIM-server-side token-count parity."""
     global _TOKENIZER
     if _TOKENIZER is not None:
         return _TOKENIZER
     try:
-        # Defer the import until first use so app boot stays fast even
-        # when embed_corpus isn't on the hot path.
-        from tokenizers import Tokenizer
+        from tokenizers import Tokenizer   # deferred — keeps app boot fast
         _TOKENIZER = Tokenizer.from_pretrained(DD_EMBED_MODEL_NAME)
         logger.info(
             f"[embed_corpus] tokenizer loaded — {DD_EMBED_MODEL_NAME} "
@@ -70,156 +61,196 @@ def _get_tokenizer():
     return _TOKENIZER
 
 
-def normalize_content(text: str) -> str:
-    """Phase B (2026-05-23) — canonical text normalization applied before any
-    content-hashing. Fixes the "COLD twice on identical manifest" pattern
-    observed across FastMCP+LangChain runs (research-confirmed: content-
-    normalization drift is a known cache-miss cause; CRLF vs LF was the
-    likely culprit). Stable normalization rules:
-
-      1. NFC Unicode normalization (canonical composed form)
-      2. Line endings: CRLF → LF
-      3. Strip leading/trailing whitespace
-    """
-    return (
-        unicodedata.normalize("NFC", text or "")
-        .replace("\r\n", "\n")
-        .strip()
-    )
+def _char_chunks(body: str) -> list[str]:
+    if len(body) <= CHUNK_CHARS_FALLBACK:
+        return [body]
+    return [
+        body[i:i + CHUNK_CHARS_FALLBACK]
+        for i in range(0, len(body), CHUNK_CHARS_FALLBACK)
+    ]
 
 
-def _manifest_hash(keys: list[str], total_bytes: int) -> str:
-    """Stable cache key — same corpus (same keys + same byte count + same
-    model + same cache version) → same hash → same MinIO blob. Re-runs
-    after a re-ingestion that changes the corpus produce a different
-    hash and re-embed. Model swaps also invalidate cleanly because the
-    DD_EMBED_MODEL_NAME is part of the digest.
+def chunk_doc(body: str) -> list[str]:
+    """Split body into ≤TOKEN_TARGET-token chunks via exact-tokenizer
+    encode → slice → decode. Char-fallback (CHUNK_CHARS_FALLBACK, ≤8192
+    tokens at 1.0 char/token worst case) on tokenizer-load failure.
 
-    Phase B (2026-05-23): added explicit dim + input_type fields. The dim
-    matters because the new 8B embedder is 4096-D vs the legacy 1B's 2048-D
-    — if both versions ever co-exist via env override, their blobs must not
-    collide. The cache-version bump in constants is also a safety belt.
-    """
-    h = hashlib.sha256()
-    h.update(f"model={DD_EMBED_MODEL_NAME}|".encode("utf-8"))
-    h.update(f"version={_CACHE_VERSION}|".encode("utf-8"))
-    h.update(f"input_type=passage|".encode("utf-8"))
-    h.update(f"bytes={total_bytes}|".encode("utf-8"))
-    for k in sorted(keys):
-        h.update(k.encode("utf-8"))
-        h.update(b"\n")
-    return h.hexdigest()[:16]
-
-
-def _blob_key(slug: str, manifest_hash: str) -> str:
-    return f"{_EMBED_PREFIX}/{slug}/embeddings/{manifest_hash}.npz"
-
-
-def _pack_npz(keys: list[str], vectors: np.ndarray) -> bytes:
-    """Serialize {keys, vectors} to a compressed .npz byte blob.
-    vectors must already be the float32 2-D matrix; keys go in as
-    object-dtype 1-D array."""
-    arr_keys = np.array(keys, dtype=object)
-    buf = io.BytesIO()
-    np.savez_compressed(buf, keys=arr_keys, vectors=vectors)
-    return buf.getvalue()
-
-
-def load_embeddings(blob_bytes: bytes) -> tuple[list[str], np.ndarray]:
-    """Inverse of _pack_npz. Returned for use by downstream nodes
-    (off_topic, cluster) so they share one decoder. Vectors are already
-    L2-normalized (so cosine = dot product)."""
-    buf = io.BytesIO(blob_bytes)
-    with np.load(buf, allow_pickle=True) as data:
-        keys = [str(k) for k in data["keys"].tolist()]
-        vectors = np.asarray(data["vectors"], dtype=np.float32)
-    return keys, vectors
-
-
-def _l2_normalize(mat: np.ndarray) -> np.ndarray:
-    """Row-wise L2 normalize. Zero-norm rows return zero (would have
-    produced NaN otherwise — happens on empty embeddings)."""
-    norms = np.linalg.norm(mat, axis=1, keepdims=True)
-    norms = np.where(norms == 0.0, 1.0, norms)
-    return (mat / norms).astype(np.float32)
-
-
-def _chunk_doc(body: str) -> list[str]:
-    """Split a doc body into <=_TOKEN_TARGET-token pieces (2026-05-25
-    upgrade — replaces the 8000-char heuristic that used only ~25% of
-    the model's 8192-token capacity).
-
-    Strategy: encode the body once via the model's exact tokenizer,
-    slice the token-id list at _TOKEN_TARGET boundaries, then decode
-    each slice back to text. Result: chunks are guaranteed ≤ _TOKEN_TARGET
-    tokens regardless of content density (English vs heavy-code differ
-    by 1.5× in chars/token), and we pack right up to ~95% of the server
-    cap with no overflow risk.
-
-    Fail-soft: if AutoTokenizer can't load (offline / disk-cache miss /
-    weird env), fall back to char-based chunking at _CHUNK_CHARS_FALLBACK
-    (8000 chars guarantees ≤8192 tokens even at 1.0 char/token worst-case).
-    Combined with the NIM-side `truncate="END"` flag (in the rotator
-    wrapper), this gives belt-and-suspenders safety.
-
-    Naive fixed-size chunking beat semantic chunking 69% vs 54% on the
-    Vecta 2026 RAG benchmark, so we don't try sentence boundaries —
-    the embedding model handles partial-sentence inputs fine.
-    """
+    No sentence boundaries — naive fixed-size beat semantic 69%→54% on
+    the Vecta 2026 RAG benchmark."""
     if not body:
         return [" "]
-    tok = _get_tokenizer()
+    tok = get_tokenizer()
     if tok is None:
-        # Char-based fallback: safe at 1.0 char/token worst-case (8000
-        # chars ≤ 8192 tokens always). Conservative but correct.
-        if len(body) <= _CHUNK_CHARS_FALLBACK:
-            return [body]
-        return [
-            body[i:i + _CHUNK_CHARS_FALLBACK]
-            for i in range(0, len(body), _CHUNK_CHARS_FALLBACK)
-        ]
+        return _char_chunks(body)
     try:
-        # tokenizers.Tokenizer.encode(text) returns an Encoding object;
-        # `.ids` is the int list. `add_special_tokens=False` keeps the
-        # BPE output pure (no [CLS]/[SEP]/etc) — matches what NIM's
-        # passage-encoding path sees server-side.
-        ids = tok.encode(body, add_special_tokens=False).ids
+        ids = tok.encode(body, add_special_tokens = False).ids
     except Exception as e:
         logger.warning(
             f"[embed_corpus] tokenizer.encode failed: "
             f"{type(e).__name__}: {e} — using char-based fallback"
         )
-        if len(body) <= _CHUNK_CHARS_FALLBACK:
-            return [body]
-        return [
-            body[i:i + _CHUNK_CHARS_FALLBACK]
-            for i in range(0, len(body), _CHUNK_CHARS_FALLBACK)
-        ]
-    if len(ids) <= _TOKEN_TARGET:
+        return _char_chunks(body)
+    if len(ids) <= TOKEN_TARGET:
         return [body]
     chunks: list[str] = []
-    for i in range(0, len(ids), _TOKEN_TARGET):
-        sliced = ids[i:i + _TOKEN_TARGET]
+    for i in range(0, len(ids), TOKEN_TARGET):
+        sliced = ids[i:i + TOKEN_TARGET]
         try:
-            # tokenizers' decode is also Rust-backed; skip_special_tokens
-            # ensures no marker bleed in the re-encoded text.
-            chunks.append(tok.decode(sliced, skip_special_tokens=True))
+            chunks.append(tok.decode(sliced, skip_special_tokens = True))
         except Exception:
-            # Per-chunk decode failure — skip; the rest of the doc still
-            # contributes via mean-pool downstream.
+            # Per-chunk decode failure — rest of doc still contributes via mean-pool.
             continue
-    return chunks or [body[:_CHUNK_CHARS_FALLBACK]]
+    return chunks or [body[:CHUNK_CHARS_FALLBACK]]
 
 
-def _attach_otel_attrs(stats: dict) -> None:
-    """Decorate the active @traced span with embed.* attributes so
-    LangFuse + Alloy see the metrics under the embed_corpus span."""
-    try:
-        from opentelemetry import trace as _otel_trace
-        span = _otel_trace.get_current_span()
-        for k, v in stats.items():
-            if v is None:
-                continue
-            span.set_attribute(f"embed.{k}", v)
-    except Exception:
-        pass
+async def embed_corpus_run(state: PlannerState) -> dict:
+    """One-shot embedding pass over the corpus. Caches under
+    `planner/{slug}/embeddings/{manifest_hash}.npz`; cold path chunks,
+    embeds each chunk as a passage, L2-normalizes, mean-pools per doc."""
+    slug = state.get("framework_slug")
+    thread_id = state.get("thread_id") or ""
+    raw_files = state.get("raw_files") or []
+    corpus_stats = state.get("corpus_stats") or {}
+    if not slug or not raw_files:
+        return {
+            "embeddings_ref": "",
+            "embed_stats": {
+                "files": 0, "dim": 0, "cache_hit": False,
+                "wall_ms": 0, "store_path": "", "skipped": "no input",
+            },
+        }
+
+    total_bytes = int(corpus_stats.get("total_bytes") or 0)
+    mh = manifest_hash(raw_files, total_bytes)
+    blob_path = blob_key(slug, mh)
+    minio = get_storage()
+
+    t0 = time.monotonic()
+    await emit_progress(
+        thread_id, "embed_corpus", "start",
+        files = len(raw_files),
+        model = DD_EMBED_MODEL_NAME,
+    )
+    if await minio.exists(blob_path):
+        try:
+            blob = await minio.read_bytes(blob_path)
+            cached_keys, cached_vecs = load_embeddings(blob)
+            dim = int(cached_vecs.shape[1]) if cached_vecs.ndim == 2 else 0
+            elapsed = int((time.monotonic() - t0) * 1000)
+            stats = {
+                "files":         len(cached_keys),
+                "dim":           dim,
+                "cache_hit":     True,
+                "wall_ms":       elapsed,
+                "store_path":    blob_path,
+                "manifest_hash": mh,
+                "model":         DD_EMBED_MODEL_NAME,
+            }
+            attach_span_attrs("embed", stats)
+            logger.info(
+                f"[embed_corpus] {slug}: CACHE HIT — {len(cached_keys)} "
+                f"vectors ({dim}-D), {elapsed} ms"
+            )
+            await emit_progress(
+                thread_id, "embed_corpus", "done",
+                cache_hit = True,
+                files = len(cached_keys),
+                dim = dim,
+                wall_ms = elapsed,
+            )
+            return {"embeddings_ref": blob_path, "embed_stats": stats}
+        except Exception as e:
+            logger.warning(
+                f"[embed_corpus] {slug}: cached blob {blob_path!r} "
+                f"unreadable ({type(e).__name__}: {e}); re-embedding"
+            )
+
+    # Cold path: chunk → embed → L2-norm → mean-pool → re-norm.
+    bodies = await minio.read_many(raw_files)
+
+    # normalize_content before chunking — whitespace drift would otherwise
+    # embed the same content differently across runs (COLD-twice cache miss).
+    flat_inputs: list[str] = []
+    per_doc_chunk_counts: list[int] = []
+    chunked_count = 0
+    for body in bodies:
+        chunks = chunk_doc(normalize_content(body or ""))
+        if len(chunks) > 1:
+            chunked_count += 1
+        flat_inputs.extend(chunks)
+        per_doc_chunk_counts.append(len(chunks))
+
+    await emit_progress(
+        thread_id, "embed_corpus", "chunks_prepared",
+        chunks_total = len(flat_inputs),
+        docs_chunked = chunked_count,
+        docs_total = len(raw_files),
+    )
+
+    async def _on_batch(n_done: int, n_total: int, batch_size: int) -> None:
+        await emit_progress(
+            thread_id, "embed_corpus", "batch",
+            chunks_done = n_done,
+            chunks_total = n_total,
+            batch_size = batch_size,
+        )
+
+    # Single rotator call (auto-batched). passage = indexed docs, not query.
+    flat_vectors = await embed_via_router_async(
+        flat_inputs, input_type = "passage", on_batch = _on_batch,
+    )
+    if len(flat_vectors) != len(flat_inputs):
+        raise RuntimeError(
+            f"embed_corpus: rotator returned {len(flat_vectors)} vectors "
+            f"for {len(flat_inputs)} chunks (slug={slug})"
+        )
+
+    flat_mat = np.asarray(flat_vectors, dtype = np.float32)
+    flat_mat = l2_normalize(flat_mat)
+
+    # Mean-pool chunks → one vector / doc, re-norm so cosine = dot product.
+    pooled = np.zeros((len(raw_files), flat_mat.shape[1]), dtype = np.float32)
+    offset = 0
+    for i, n_chunks in enumerate(per_doc_chunk_counts):
+        chunk_block = flat_mat[offset:offset + n_chunks]
+        pooled[i] = chunk_block.mean(axis = 0)
+        offset += n_chunks
+    pooled = l2_normalize(pooled)
+
+    blob = pack_npz(raw_files, pooled)
+    await minio.write(
+        blob_path, blob, content_type = "application/octet-stream",
+    )
+
+    dim = int(pooled.shape[1]) if pooled.ndim == 2 else 0
+    elapsed = int((time.monotonic() - t0) * 1000)
+    stats = {
+        "files":           len(raw_files),
+        "dim":             dim,
+        "cache_hit":       False,
+        "wall_ms":         elapsed,
+        "store_path":      blob_path,
+        "manifest_hash":   mh,
+        "model":           DD_EMBED_MODEL_NAME,
+        "chunked_count":   chunked_count,
+        "chunks_total":    len(flat_inputs),
+        "blob_bytes":      len(blob),
+    }
+    attach_span_attrs("embed", stats)
+    logger.info(
+        f"[embed_corpus] {slug}: COLD — {len(raw_files)} vectors "
+        f"({dim}-D), {elapsed} ms, blob={len(blob) // 1024} KB, "
+        f"chunked={chunked_count}/{len(raw_files)} docs "
+        f"({len(flat_inputs)} total chunks)"
+    )
+    await emit_progress(
+        thread_id, "embed_corpus", "done",
+        cache_hit = False,
+        files = len(raw_files),
+        dim = dim,
+        wall_ms = elapsed,
+        blob_bytes = len(blob),
+        chunked_count = chunked_count,
+        chunks_total = len(flat_inputs),
+    )
+    return {"embeddings_ref": blob_path, "embed_stats": stats}

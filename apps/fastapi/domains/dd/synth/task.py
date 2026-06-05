@@ -1,32 +1,20 @@
 """Celery tasks: docs distiller synth.
 
 Bridges Celery's sync execution model to the async LangGraph synth.
-Queued from the FastAPI synth endpoints; the worker picks tasks up
-from the `synth-{env}` queue, runs the per-chapter graph (or study
-orchestrator), and persists every checkpoint to Postgres via the
-shared AsyncPostgresSaver. The FastAPI SSE endpoint subscribes to
-the Redis pub/sub channels the worker publishes to, so live progress
-streams to the UI from the worker process.
+Queued from the FastAPI synth endpoints; the worker picks tasks up from
+the `synth-{env}` queue, runs the per-chapter graph (or study
+orchestrator), and persists every checkpoint to Postgres via the shared
+AsyncPostgresSaver. The FastAPI SSE endpoint subscribes to the Redis
+pub/sub channels the worker publishes to, so live progress streams to
+the UI from the worker process.
 
 Three tasks (mirrors `domains/dd/planner/task.py` structurally):
-  - run_single_chapter(thread_id, slug, chapter_id, mode):
-        single-chapter run; delegates to dispatch.run_single_chapter_async.
-  - resume_synth(thread_id):
-        resume from last checkpoint; handles standard resume + catch-up
-        for missing IMPLEMENTED nodes via dispatch.resume_synth_async.
-  - run_study(study_thread_id, slug, chapter_ids, mode):
-        strict-order orchestrator (Bundle 6 streaming) — runs all
-        chapters then book_harmonize. Long-running (~80-120 min on
-        6-chapter books today; ~30-45 min once `KD_STUDY_SEM > 1`).
-
-Reuses the planner's checkpoint module: synth and planner threads share
-the same AsyncPostgresSaver pool (same Postgres tables; threads are
-namespaced by id prefix). `init_checkpointer()` is idempotent so any
-task can call it safely on first execution in a worker process.
+  - run_single_chapter(thread_id, slug, chapter_id, mode)
+  - resume_synth(thread_id)
+  - run_study(study_thread_id, slug, chapter_ids, mode)
 """
 import asyncio
 import logging
-import os
 
 import redis as redis_sync
 
@@ -38,6 +26,8 @@ from .dispatch import (
     run_single_chapter_async,
     run_study_async,
 )
+from .keys import lock_key, redis_url
+from .params import REDIS_CONNECT_TIMEOUT_S, REDIS_OP_TIMEOUT_S
 
 
 logger = logging.getLogger(__name__)
@@ -54,8 +44,8 @@ _CAD_RELEASE_LUA = (
 
 def _slug_from_synth_thread_id(thread_id: str) -> str | None:
     """Synth thread_ids come in two shapes:
-      - per-chapter: `docs-distiller/synth/{slug}/{uuid}`  -> parts[2]
-      - study:       `docs-distiller/study/{slug}/{uuid}`  -> parts[2]
+      - per-chapter: `docs-distiller/synth/{slug}/{uuid}`  → parts[2]
+      - study:       `docs-distiller/study/{slug}/{uuid}`  → parts[2]
     Both store under `dd:synth:lock:{slug}` so the same release call
     works for both. Returns None on malformed input."""
     parts = (thread_id or "").split("/", 3)
@@ -74,23 +64,13 @@ def _release_synth_lock(slug: str, thread_id: str) -> None:
     if not slug or not thread_id:
         return
     try:
-        host = os.environ.get(
-            "REDIS_HOST", "redis-master.redis.svc.cluster.local",
-        )
-        port = os.environ.get("REDIS_PORT", "6379")
-        pwd = os.environ.get("REDIS_PASSWORD", "")
-        url = (
-            f"redis://:{pwd}@{host}:{port}" if pwd
-            else f"redis://{host}:{port}"
-        )
         r = redis_sync.from_url(
-            url, socket_connect_timeout=3.0, socket_timeout=5.0,
+            redis_url(),
+            socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,
+            socket_timeout = REDIS_OP_TIMEOUT_S,
         )
         try:
-            r.eval(
-                _CAD_RELEASE_LUA, 1,
-                f"dd:synth:lock:{slug}", thread_id,
-            )
+            r.eval(_CAD_RELEASE_LUA, 1, lock_key(slug), thread_id)
         finally:
             r.close()
     except Exception as e:
@@ -102,21 +82,21 @@ def _release_synth_lock(slug: str, thread_id: str) -> None:
 
 async def _init_and_run(coro):
     """Per-task: ensure the AsyncPostgresSaver is open in THIS worker
-    process's interpreter (idempotent — module-scope cache guards),
-    then run the requested coroutine. Same pattern as planner/task.py."""
+    process's interpreter (idempotent — module-scope cache guards), then
+    run the requested coroutine. Same pattern as planner/task.py."""
     await init_checkpointer()
     return await coro
 
 
 @app.task(
-    name="domains.dd.synth.task.run_single_chapter",
-    bind=True,
-    acks_late=False,
-    track_started=True,
+    name = "domains.dd.synth.task.run_single_chapter",
+    bind = True,
+    acks_late = False,
+    track_started = True,
     # Per-chapter synth runs typically 10-24 min; 60min soft / 65min hard
     # gives 2-3× headroom for slow chapters that hit max CoRefine iters.
-    soft_time_limit=3600,
-    time_limit=3660,
+    soft_time_limit = 3600,
+    time_limit = 3660,
 )
 def run_single_chapter(
     self,
@@ -160,12 +140,12 @@ def run_single_chapter(
 
 
 @app.task(
-    name="domains.dd.synth.task.resume_synth",
-    bind=True,
-    acks_late=False,
-    track_started=True,
-    soft_time_limit=3600,
-    time_limit=3660,
+    name = "domains.dd.synth.task.resume_synth",
+    bind = True,
+    acks_late = False,
+    track_started = True,
+    soft_time_limit = 3600,
+    time_limit = 3660,
 )
 def resume_synth(self, thread_id: str) -> dict:
     """Resume a synth run from its last LangGraph checkpoint. Handles
@@ -173,9 +153,9 @@ def resume_synth(self, thread_id: str) -> dict:
     nodes) internally.
 
     Like resume_planner: doesn't acquire the lock (resume picks up a
-    dead task's thread), but DOES CAD-release on completion so the
-    lock isn't held until its TTL after the resume finishes. CAD makes
-    this safe even if a fresh start has acquired in the meantime."""
+    dead task's thread), but DOES CAD-release on completion so the lock
+    isn't held until its TTL after the resume finishes. CAD makes this
+    safe even if a fresh start has acquired in the meantime."""
     logger.info(f"[task] resume_synth thread_id={thread_id}")
     slug = _slug_from_synth_thread_id(thread_id)
     try:
@@ -196,15 +176,15 @@ def resume_synth(self, thread_id: str) -> dict:
 
 
 @app.task(
-    name="domains.dd.synth.task.run_study",
-    bind=True,
-    acks_late=False,
-    track_started=True,
+    name = "domains.dd.synth.task.run_study",
+    bind = True,
+    acks_late = False,
+    track_started = True,
     # Study orchestrator runs N chapters back-to-back + book_harmonize.
     # FastMCP 8-chapter run = ~120 min; Claude Code 6-chapter ~100 min.
     # 6h soft / 6h05m hard gives 3× headroom even for 12-chapter books.
-    soft_time_limit=21600,
-    time_limit=21900,
+    soft_time_limit = 21600,
+    time_limit = 21900,
 )
 def run_study(
     self,
@@ -217,10 +197,10 @@ def run_study(
     Each chapter runs to completion before the next starts. After the
     chapter loop, runs `book_harmonize` if ≥2 chapters completed.
 
-    Outer try/finally releases the global single-flight lock acquired
-    by POST /synth/{slug} (study branch). Per-chapter runs spawned by
-    the orchestrator do NOT acquire individual locks — they run within
-    the umbrella of this study's lock."""
+    Outer try/finally releases the global single-flight lock acquired by
+    POST /synth/{slug} (study branch). Per-chapter runs spawned by the
+    orchestrator do NOT acquire individual locks — they run within the
+    umbrella of this study's lock."""
     logger.info(
         f"[task] run_study study_thread_id={study_thread_id} slug={slug} "
         f"n_chapters={len(chapter_ids)} mode={mode}"

@@ -18,28 +18,23 @@ from typing import Optional, TypedDict
 
 
 class SynthState(TypedDict, total=False):
-    # ── inputs (set at graph kick-off) ─────────────────────────────────
     framework_slug: str
     chapter_id:     str            # e.g. "ch-03-runtime"
     thread_id:      str            # also LangFuse session_id
     synth_mode:     str            # "quality" (default) | "fast"
 
-    # ── outline_sdp output ─────────────────────────────────────────────
     # MinIO key of the latest pointer (`synth/{slug}/{chapter_id}/
     # outline-latest.json`). Versioned blob lives at
     # `synth/{slug}/{chapter_id}/outline/{manifest_hash}.json`.
     outline_path:   Optional[str]
     outline_stats:  Optional[dict] # counts + DAG shape + cache_hit + wall_ms
 
-    # ── digest_construct output (future) ───────────────────────────────
     digest_path:    Optional[str]
     digest_stats:   Optional[dict]
 
-    # ── sawc_write output (future) ─────────────────────────────────────
     sawc_path:      Optional[str]
     sawc_stats:     Optional[dict]
 
-    # ── sawc_derive output (Ship #95, 2026-05-24) ──────────────────────
     # AI-derived examples for thin subtopics. Field carries a DeriveStats-
     # shaped dict (n_promoted, n_candidates_thin, attempts[], etc).
     # Side effect: mutates sawc-latest.json in place to embed derived_code
@@ -47,19 +42,15 @@ class SynthState(TypedDict, total=False):
     # same sawc-latest.json.
     derive_stats:   Optional[dict]
 
-    # ── checklist_eval output (future) ─────────────────────────────────
     checklist_path:  Optional[str]
     checklist_stats: Optional[dict]
 
-    # ── mgsr_replan output (future) ────────────────────────────────────
     mgsr_path:      Optional[str]
     mgsr_stats:     Optional[dict]
 
-    # ── render_audit_write output (future) ─────────────────────────────
     chapter_path:   Optional[str]
     chapter_stats:  Optional[dict]
 
-    # ── mgsr→sawc loop closure (2026-05-24, CoRefine-style halting) ────
     # Iteration counter incremented each time sawc_write fires. Used by
     # the conditional edge after mgsr_replan to enforce the 5-iter budget.
     refine_iter:           Optional[int]
@@ -72,6 +63,5 @@ class SynthState(TypedDict, total=False):
     best_seen_sawc_path:   Optional[str]
     best_seen_score:       Optional[float]
 
-    # ── bookkeeping ────────────────────────────────────────────────────
     status:         Optional[str]  # "running" | "done" | "failed" | "cancelled"
     error:          Optional[str]
