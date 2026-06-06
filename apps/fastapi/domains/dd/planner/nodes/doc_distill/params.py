@@ -37,6 +37,22 @@ TEMPERATURE = 0.2
 # summaries are short and any miss is cheap to retry.
 MAX_REPAIR_ATTEMPTS = 1
 
+# 2026-06-05 — Transient-error retry budget per doc.
+#
+# Memory `project_planner_cc_coverage_2026_05_29` flagged 17 silent
+# distill failures on the Claude Code corpus with NO retry path before
+# the deterministic fallback. The fallback is a safety net, but a real
+# distillate (when retry succeeds) gives chapter_propose + chapter_assign
+# a far better routing signal than the title-derived stub.
+#
+# We retry only on TRANSIENT errors (rate-limit, timeout) — the bandit
+# rotates to a different deployment on the retry, so a saturated NIM /
+# Groq arm typically clears within one attempt. Non-transient errors
+# (validation, auth, context-length) fall through immediately.
+MAX_TRANSIENT_RETRIES = 2
+# Exponential-ish backoff between transient retries (seconds).
+RETRY_BACKOFF_S = (2.0, 5.0)
+
 BLOB_PREFIX = "planner"
 
 # Stop-words for the fallback distillate identifier scan.

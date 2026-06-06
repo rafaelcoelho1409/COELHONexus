@@ -1,0 +1,162 @@
+@layer features {
+/* ===== Shared rich-content typography =====
+   `.fw-markdown` is the wrapper that content_renderer.js mounts inside
+   ANY drawer / chapter view to host the rendered .md output (marked +
+   DOMPurify + lazy hljs + mermaid + KaTeX + ANSI terminal blocks).
+
+   The OLD reference (commit f5bff8e) kept these rules globally in
+   `planner.css` so the Ingestion drawer + Planner node drawer + Study
+   chapter view ALL got the typography for free. After the per-stage
+   CSS split, `.fw-markdown` ended up wrapped in `@scope (.fw-node-drawer)`
+   (planner/drawer.css) and `.fw-study-pane` (study/tabs.css), so the
+   Ingestion drawer — which is `aside#fw-drawer` and matches NEITHER
+   scope — rendered the .md body unstyled (browser defaults: tiny
+   serif heads, no code background, no monospace, etc).
+
+   This file restores the OLD's universal application. Loaded AFTER
+   drawer.css + tabs.css so a tie inside their @scopes still resolves
+   here — keeping all three surfaces visually consistent. */
+
+/* ---- prose ---- */
+.fw-markdown {
+  font-size: 0.92rem;
+  color: var(--text);
+  line-height: 1.65;
+}
+.fw-markdown h1, .fw-markdown h2, .fw-markdown h3,
+.fw-markdown h4, .fw-markdown h5, .fw-markdown h6 {
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1.4em 0 0.5em;
+}
+.fw-markdown h1 { font-size: 1.5rem; }
+.fw-markdown h2 { font-size: 1.25rem; }
+.fw-markdown h3 { font-size: 1.1rem; }
+.fw-markdown h4 { font-size: 0.98rem; }
+.fw-markdown h5, .fw-markdown h6 { font-size: 0.92rem; }
+.fw-markdown p { margin: 0.7em 0; }
+.fw-markdown ul, .fw-markdown ol {
+  margin: 0.5em 0;
+  padding-left: 1.6em;
+}
+.fw-markdown li { margin: 0.2em 0; }
+.fw-markdown a {
+  color: var(--primary);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--primary);
+}
+.fw-markdown a:hover { border-bottom-style: solid; }
+.fw-markdown code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.85em;
+  padding: 0.12em 0.4em;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 3px;
+}
+.fw-markdown pre {
+  position: relative;          /* anchor for .fw-code-copy + .fw-code-lang */
+  background: #1f2429;
+  color: #e6e9ef;
+  padding: 24px 16px 14px 16px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  margin: 1em 0;
+}
+.fw-markdown pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: inherit;
+}
+.fw-markdown blockquote {
+  margin: 1em 0;
+  padding: 0.3em 0 0.3em 14px;
+  border-left: 3px solid var(--primary);
+  color: var(--text-muted);
+}
+.fw-markdown table {
+  border-collapse: collapse;
+  margin: 1em 0;
+  font-size: 0.85rem;
+}
+.fw-markdown th, .fw-markdown td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+.fw-markdown th { background: rgba(0, 0, 0, 0.03); font-weight: 600; }
+.fw-markdown hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 1.4em 0;
+}
+.fw-markdown img { max-width: 100%; height: auto; }
+
+/* ---- code-block copy button + language badge ---- */
+.fw-code-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 3px 9px;
+  font-size: 0.68rem;
+  font-family: inherit;
+  color: var(--text-muted);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s, border-color 0.12s;
+}
+.fw-markdown pre:hover .fw-code-copy { opacity: 1; }
+.fw-code-copy:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+.fw-code-lang {
+  position: absolute;
+  top: 6px;
+  left: 12px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #768390;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  opacity: 0.85;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ---- terminal / console blocks (ANSI colors preserved via <font>) ---- */
+.fw-markdown pre.fw-terminal {
+  background: #1b1b1b;
+  color: #d4d4d4;
+  border: 1px solid #000;
+}
+.fw-markdown pre.fw-terminal code { white-space: pre; }
+.fw-markdown pre.fw-terminal font { font-style: normal; font-weight: inherit; }
+.fw-markdown pre.fw-terminal .fw-code-lang { color: #6e7681; }
+
+/* ---- mermaid diagrams ---- */
+.fw-mermaid {
+  margin: 0 0 16px 0;
+  padding: 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  text-align: center;
+  overflow-x: auto;
+}
+.fw-mermaid svg { max-width: 100%; height: auto; }
+
+/* ---- file-card "currently viewing" indicator (Ingestion page) ---- */
+.fw-page-card.viewing {
+  background: rgba(196, 18, 48, 0.06);
+  border-left: 3px solid var(--primary);
+  padding-left: 11px;
+}
+}

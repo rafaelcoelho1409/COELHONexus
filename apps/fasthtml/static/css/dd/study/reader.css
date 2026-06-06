@@ -1,0 +1,90 @@
+@layer features {
+@scope (.fw-study-main) {
+/* CENTER — main reader area. Flat / full-bleed (no card border or bg):
+   the content fills the grid column edge-to-edge so it respects ONLY the
+   page's L/R padding, matching the rest of the app's flat surfaces. */
+.fw-study-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 600px;
+}
+
+/* Reader controls live in the row-3 toolbar (2026-05-28). ☰ Chapters
+   (mobile only) sits before a compact Learn/Flashcards segmented control. */
+.fw-study-toolgroup {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.fw-study-modes {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+.fw-study-tab {
+  padding: 5px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-family: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.12s, background-color 0.12s;
+}
+.fw-study-tab:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.04);
+}
+.fw-study-tab.active {
+  color: var(--primary);
+  background: rgba(196, 18, 48, 0.10);
+}
+.fw-study-tab[disabled] {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Per-chapter heading strip — compact single row: title + meta inline. */
+.fw-study-chapter-head {
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--border);
+  display: none;
+}
+.fw-study-chapter-head.visible {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.fw-study-chapter-head-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.fw-study-chapter-head-meta {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.fw-study-chapter-head-meta .badge {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.66rem;
+  letter-spacing: 0.02em;
+}
+.fw-study-chapter-head-meta .badge.pass { border-color: #2a8b46; color: #2a8b46; }
+.fw-study-chapter-head-meta .badge.fail { border-color: var(--error-border); color: var(--error-text); }
+}
+}

@@ -1,0 +1,190 @@
+@layer base {
+/* DD-NAVBAR-SOTA-2026-05-27 (Wave C) — sticky topbar wrap.
+   Full-bleed background, position: sticky so it pins at viewport top
+   when the user scrolls. Two state classes toggled by topbar.js:
+     .is-stuck   → bar is currently pinned (sentinel left viewport).
+                   Adds shadow + border so the bar visually detaches
+                   from the content scrolling beneath it.
+     .is-hidden  → user is scrolling DOWN past the threshold; slide
+                   the bar up out of view. Removed on any upward
+                   scroll or near the top of the page. Respects
+                   prefers-reduced-motion (transition disabled). */
+.topbar-wrap {
+  position: relative;   /* header is grid row 1; z-index keeps popovers above .page */
+  z-index: 50;
+  background: var(--card);
+  border-bottom: 1px solid transparent;
+  transition: box-shadow 0.20s ease,
+              border-color 0.20s ease;
+}
+.topbar-wrap.is-stuck {
+  box-shadow: 0 1px 8px rgba(0,0,0,0.06);
+  border-bottom-color: var(--border);
+}
+@media (prefers-reduced-motion: reduce) {
+  .topbar-wrap { transition: none; }
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 32px;
+  padding: 12px 40px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  color: var(--primary);
+  font-weight: 600;
+  font-size: 1.55rem;
+  letter-spacing: 0.01em;
+}
+.brand-flag {
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 0 28px 28px;
+  border-color: transparent transparent var(--primary) transparent;
+  display: inline-block;
+}
+.nav { display: flex; gap: 4px; flex: 1; justify-content: center; }
+
+/* DD-NAVBAR-SOTA-2026-05-26 Wave A1/A3/B2/B1 — Linear-2026 compact tabs.
+   A1: active state is now a filled pill (tinted burgundy background)
+       instead of color-only.
+   A3: hover preview uses the same burgundy tint at lower opacity so the
+       click→active transition feels continuous.
+   A2: active item carries `view-transition-name: nav-pill` so the
+       cross-document View Transitions API morphs the pill between
+       routes (see @view-transition rule above).
+   B2: inactive items dim to opacity 0.85; hover lifts to ~1.0.
+   B1: status-dot CSS for "running work" badge (filled by topbar.js
+       polling /api/v1/docs-distiller/runs/active).
+*/
+.nav-item {
+  position: relative;            /* anchor for .nav-status-dot */
+  padding: 9px 16px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  border-radius: 6px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  opacity: 0.85;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, opacity 0.15s,
+              font-weight 0.15s;
+}
+.nav-item:hover {
+  color: var(--text);
+  background: rgba(196,18,48,0.06);
+  opacity: 1;
+}
+.nav-item.active {
+  color: var(--primary);
+  font-weight: 600;
+  background: rgba(196,18,48,0.10);
+  opacity: 1;
+  view-transition-name: nav-pill;
+}
+
+/* Status dot — sky-blue pulsing indicator, anchored top-right of the
+   nav-item it belongs to. Surfaced when topbar.js sets
+   .nav-item.has-running on the matching item (see static/js/topbar.js).
+   Sky-blue matches the --running-* palette used elsewhere (planner /
+   synth progress chips). */
+.nav-status-dot {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--running-border);
+  box-shadow: 0 0 0 0 rgba(3,105,161,0.55);
+  animation: nav-status-pulse 1.6s ease-out infinite;
+  pointer-events: none;
+}
+.nav-item .nav-status-dot { display: none; }
+.nav-item.has-running .nav-status-dot { display: inline-block; }
+
+@keyframes nav-status-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(3,105,161,0.55); }
+  70%  { box-shadow: 0 0 0 6px rgba(3,105,161,0.00); }
+  100% { box-shadow: 0 0 0 0 rgba(3,105,161,0.00); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-status-dot { animation: none; }
+}
+.btn-primary {
+  background: var(--primary);
+  color: #ffffff;
+  border: 0;
+  padding: 9px 22px;
+  font-size: 0.78rem;
+  font-family: inherit;
+  border-radius: 3px;
+  cursor: pointer;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.btn-primary:hover { background: var(--primary-dark); }
+.btn-primary:disabled,
+.btn-primary[disabled] {
+  background: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.btn-primary:disabled:hover { background: var(--text-muted); }
+.btn-outline {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 8px 18px;
+  font-size: 0.78rem;
+  font-family: inherit;
+  border-radius: 3px;
+  cursor: pointer;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.btn-outline:hover { border-color: var(--text-muted); }
+/* DD-NAVBAR-SOTA-2026-05-28 (Wave D) — title row inside topbar.
+   Renders as a row of `.topbar-wrap`. Padding matches `.topbar`;
+   horizontal divider above. */
+/* Row 2 — feature title (red bar) on the left + stage tabs on the right.
+   Compact: tighter vertical padding than row 1. */
+.topbar-wrap .feature-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 6px 40px;
+  border-top: 1px solid var(--border);
+  margin: 0;
+  flex-wrap: nowrap;
+}
+
+/* `.topbar-collapsible` (the title row / contextual toolbar) — the old
+   scroll-driven auto-hide was removed with the app-shell grid (the header
+   is a fixed grid row now, so it never needs to hide). The class is kept
+   on the DOM as a styling hook but no longer collapses; left as a no-op so
+   a wrapped toolbar on narrow viewports is never clipped. */
+.title {
+  font-size: 0.98rem;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.2;
+  margin: 0;
+  padding-left: 11px;
+  border-left: 5px solid var(--primary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.panel { min-height: 360px; }
+}

@@ -3,4 +3,4 @@ changes. Cache invalidates cleanly."""
 from __future__ import annotations
 
 
-PROMPT_VERSION = "v1-2026-05-25"
+PROMPT_VERSION = "v2-nested-outline-fix-2026-06-06"

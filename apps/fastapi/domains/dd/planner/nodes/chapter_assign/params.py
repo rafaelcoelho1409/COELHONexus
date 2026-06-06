@@ -20,6 +20,26 @@ BODY_CHARS = 4_000
 # chapter_select uses this to gate which assignments count for coverage.
 CONFIDENCE_THRESHOLD = 0.5
 
+# 2026-06-05 — RESCUE FLOOR for the post-scoring rescue pass.
+#
+# Memory `project_planner_cc_coverage_2026_05_29` flagged ~18 GENUINE
+# content docs silently dropped at chapter_select because their LLM
+# confidence scores were JUST below CONFIDENCE_THRESHOLD across every
+# proposal. The judge was effectively saying "this fits multiple
+# chapters at 0.4, none cleanly" — but greedy_select's `assignable`
+# filter excludes everything below 0.5, so those docs never reach a
+# chapter.
+#
+# RESCUE policy: if a doc's MAX confidence across all proposals is
+# below CONFIDENCE_THRESHOLD but >= RESCUE_FLOOR, floor its best score
+# up to CONFIDENCE_THRESHOLD. This preserves single-membership semantics
+# (only ONE score is rescued — the best one) and keeps the lineage of
+# what the LLM actually scored visible in the persisted blob via a
+# `rescued` list. Docs whose max is below RESCUE_FLOOR are left alone —
+# the LLM is genuinely saying "this doesn't belong anywhere", and
+# forcing them in would inject noise into chapter content.
+RESCUE_FLOOR = 0.3
+
 BLOB_PREFIX = "planner"
 
 # Stop-words for the lexical-overlap fallback assignment.

@@ -1,0 +1,15 @@
+@layer features {
+@scope (.fw-study-grid) {
+.fw-study-grid {
+  display: block;          /* single column — chapter list is now an overlay */
+  margin-top: 0;
+  min-height: 600px;
+  position: relative;
+}
+/* Pull DD content up tight under the sticky 3-row header (the page's
+   default 28px top padding reads as a big gap below the toolbar row).
+   Scoped to DD pages via the `.fw-picker` root so other features keep
+   their default top padding. */
+.page:has(.fw-picker) { padding-top: 10px; }
+}
+}

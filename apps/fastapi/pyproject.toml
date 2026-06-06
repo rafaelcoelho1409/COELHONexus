@@ -26,11 +26,43 @@ dependencies = [
     # legacy stack as of 2026-05; per docs/YCS-MIGRATION-SOTA-2026-05-19.md this
     # also covers transcript extraction via --write-auto-subs, so Playwright CDP
     # is only the fallback tier and is not a hard dependency at v0).
-    "yt-dlp>=2025.1",                  # date-versioned; rolling release
+    # CVE-2026-26331 (RCE via `--netrc-cmd`) is patched in 2026.02.21.
+    # We don't use `--netrc-cmd`, but pinning the floor at the patched
+    # release closes the audit alert with no downside (yt-dlp is rolling
+    # so the version bump just tracks upstream).
+    "yt-dlp>=2026.02.21",              # date-versioned; rolling release
     "bgutil-ytdlp-pot-provider>=1.3.0,<2.0",
     "curl_cffi>=0.11,<0.15",           # Browser impersonation for yt-dlp (0.15 unsupported)
+    # Playwright async client — connects to the in-cluster `playwright-headed`
+    # CDP sidecar at port 9222 to DOM-scrape YouTube transcripts (YouTube blocks
+    # headless and yt-dlp subtitle paths 429 on rate limit). Chromium ships in
+    # the sidecar image; this dep only needs the Python client library
+    # (no `playwright install`). See Wave 4 of docs/YCS-PORT-PLAN-2026-06-06.md.
+    "playwright>=1.40,<2.0",
     "qdrant-client>=1.10,<2.0",        # Qdrant vector DB client (services/youtube/store.py)
-    "langchain-text-splitters>=0.3,<1.0",
+    # langchain-text-splitters 1.x — required for langchain-core 1.x
+    # compat. Pre-1.0 releases are pinned against langchain-core<1.0
+    # which conflicts with our >=1.2.21 floor.
+    "langchain-text-splitters>=1.1,<2.0",
+    # YCS persistence layer (Wave 2 of docs/YCS-PORT-PLAN-2026-06-06.md):
+    # Elasticsearch holds video metadata + transcripts (deprecated indexes
+    # `coelhonexus-youtube-metadata` + `-transcriptions`); Neo4j holds the
+    # entity-knowledge-graph (Video / Channel / Entity / Relationship nodes).
+    # langchain_neo4j provides `Neo4jGraph` for LLMGraphTransformer + entity
+    # retrieval. flashrank is the deprecated cross-encoder reranker.
+    "elasticsearch[async]>=8,<9",
+    "neo4j>=5,<6",
+    "langchain_neo4j>=0.1,<1.0",
+    "flashrank>=0.2,<1.0",
+    # FastEmbedSparse BM25 wrapper used by YCS embeddings. langchain-qdrant
+    # 1.x — required for langchain-core 1.x compat; pre-1.0 releases pin
+    # langchain-core<1.0 which conflicts with our >=1.2.21 floor.
+    "langchain-qdrant>=1.1,<2.0",
+    "langchain-experimental>=0.3,<1.0", # LLMGraphTransformer for YCS graph_builder
+    # ChatOpenAI client used as the 13-model `with_fallbacks` chain that powers
+    # the YCS agents router + neo4j ingestion task (Groq+NIM behind OpenAI-
+    # compatible endpoints). Deprecated pinned 1.1.10; floor matches.
+    "langchain-openai>=1.1,<2.0",
     # LLM rotator stack (services/llm/) — LiteLLM Router + ParetoBandit adaptive routing.
     # litellm PINNED EXACT — v1.82.7/v1.82.8 supply-chain compromised (2026-03-24
     # Trivy CI/CD breach); v1.83.12 AND v1.83.14 ship cost_calculator.py importing
@@ -44,7 +76,12 @@ dependencies = [
     # BYOK credential store (domains/llm/credentials) — Fernet at-rest encryption
     # of user-supplied provider API keys in MinIO. cryptography is the canonical
     # low-footgun Python crypto lib; Fernet = AES-128-CBC + HMAC-SHA256.
-    "cryptography>=46,<47",            # langchain-litellm 0.6.4 floor (46.0.5)
+    # Floor 46.0.7 patches CVE-2026-39892 (buffer overflow when non-contiguous
+    # Python buffers are passed to wheel-side APIs) + CVE-2026-26007 (binary-
+    # curve private-key leakage on uncommon SECT* curves). Cap raised to <49
+    # so uv can pick 48.0.0 (ships OpenSSL 3.5.6 + additional name-constraints
+    # fix for wildcard DNS SAN leafs). langchain-litellm 0.6.4 floor is 46.0.5.
+    "cryptography>=46.0.7,<49",
     "numpy>=1.26,<2.2",                # LinUCB sufficient-statistics matrix algebra
     # Rotator deps — now hard deps (were optional/try-except-guarded):
     "rapidfuzz>=3.0,<4.0",             # benchmarks L2 model-name canonicalization (token_set_ratio)
@@ -60,10 +97,13 @@ dependencies = [
     "opentelemetry-instrumentation-redis>=0.50b0,<1.0",
     "opentelemetry-instrumentation-celery>=0.50b0,<1.0",
     "opentelemetry-instrumentation-logging>=0.50b0,<1.0",
-    # LangGraph (planner graph + AsyncPostgresSaver checkpointing).
-    # Pre-1.0 churn → cap minor; bump deliberately after testing.
-    "langgraph>=0.2,<1.0",
-    "langgraph-checkpoint-postgres>=2.0,<3.0",
+    # LangGraph 1.0 (Oct 2026) is GA with ZERO breaking changes — the only
+    # deprecation is `langgraph.prebuilt` moving to `langchain.agents`, which
+    # our code doesn't import (it's a transitive dep only). Same for the
+    # checkpoint package, which jumped to 3.x alongside the langgraph 1.x
+    # core. See https://changelog.langchain.com/announcements/langgraph-1-0-...
+    "langgraph>=1.0,<2.0",
+    "langgraph-checkpoint-postgres>=3.0,<4.0",
     "psycopg[binary]>=3.2,<4.0",       # async driver for AsyncPostgresSaver — binary wheel, no libpq needed
     "langchain-core>=1.2.21,<2.0",   # langchain-litellm 0.6.4 floor
     # Tokenizer — Rust-backed BPE for byte-exact NIM parity in embed_corpus

@@ -1,0 +1,21 @@
+"""ycs/rag/standard/nodes/grade — GRADE node.
+
+Calls into the deprecated `DocumentGrader` (per-doc parallel
+`asyncio.gather` of structured-output LLM calls).
+
+Direct port of deprecated `graphs/youtube/rag.py:L69-78`."""
+from __future__ import annotations
+
+from domains.ycs.grader import DocumentGrader
+
+from ...state import YouTubeRAGState
+
+
+async def grade_documents(
+    state: YouTubeRAGState, grader: DocumentGrader,
+) -> dict:
+    """LLM evaluates each document for relevance IN PARALLEL."""
+    relevant_docs = await grader.grade_documents(
+        state["question"], state["documents"],
+    )
+    return {"documents": relevant_docs}

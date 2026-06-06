@@ -1,0 +1,7 @@
+@layer features {
+@scope (.fw-layout) {
+/* ===== Layout: single-column main panel on every Docs Distiller stage.
+   (The old 260px left rail — .fw-sidebar/.fw-sidebar-title — was
+   removed 2026-05-27 when the library moved into the header dropdown.
+}
+}

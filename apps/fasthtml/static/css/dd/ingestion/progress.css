@@ -1,0 +1,90 @@
+@layer features {
+@scope (.fw-progress) {
+/* ===== Step 2 progress display ===== */
+.fw-progress {
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+}
+.fw-progress-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px;
+}
+.fw-progress-tier {
+  font-size: 0.95rem; font-weight: 600; color: var(--text);
+}
+.fw-progress-status {
+  font-size: 0.78rem; color: var(--text-muted);
+  letter-spacing: 0.02em; text-transform: uppercase;
+}
+.fw-progress-bar {
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 10px;
+  position: relative;
+}
+.fw-progress-fill {
+  height: 100%;
+  background: var(--primary);
+  width: 0%;
+  transition: width 0.3s ease;
+}
+.fw-progress-bar.indeterminate .fw-progress-fill {
+  width: 35%;
+  animation: fw-indet 1.2s ease-in-out infinite;
+}
+@keyframes fw-indet {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(310%); }
+}
+.fw-progress-meta {
+  display: flex; justify-content: space-between;
+  font-size: 0.78rem; color: var(--text-muted);
+  margin-bottom: 10px;
+}
+.fw-progress-url {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.72rem; color: var(--text-muted);
+  background: rgba(0, 0, 0, 0.03);
+  padding: 6px 10px; border-radius: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fw-progress-actions {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;  /* framework-box left, cancel button right */
+  gap: 12px;
+}
+.fw-progress-framework-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.fw-progress-logos {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.fw-progress-logo {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.fw-progress-framework {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+}
+}

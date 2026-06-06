@@ -1,0 +1,1403 @@
+@layer features {
+/* ===== YouTube Content Search (3-step wizard: Source → Ingest → Ask) =====
+   Stage navigation lives in the shell's row 2 via `.dd-substage-nav`
+   (shared with Docs Distiller — see components/sub_nav.css). The
+   in-body wizard stepper was removed 2026-06-07; the only remaining
+   consumer of `.ycs-step-circle` is the Ask live-progress chip strip
+   (`.ycs-ask-stages`), whose own block defines its overrides. */
+/* Stacking-context lift — `.topbar-wrap` has z-index: 50 and emits an
+   8px box-shadow below itself when stuck. The Search panel's sticky
+   form (z-index 5, local to `.page`) sits BELOW that shadow in the
+   global stacking order, so the shadow paints on top of the form's
+   top edge and reads visually as a "gap" between the topbar and the
+   sticky form. Lifting `.ycs-page` to z-index 51 (via `position:
+   relative` to create the stacking context) gets the entire YCS
+   content tree above the topbar's shadow so the sticky form glues
+   flush to the topbar row 3. */
+.ycs-page { position: relative; z-index: 51; }
+.ycs-root { display: flex; flex-direction: column; gap: 24px; }
+
+/* Base chip used ONLY by `.ycs-ask-stages` (Slice 9 Ask live stages).
+   Kept here because the .ycs-ask-stages rule below relies on the
+   border / background / display / typography defaults defined here. */
+.ycs-step-circle {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 2px solid var(--border); background: var(--card);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.78rem; font-weight: 600;
+  color: var(--text-muted); transition: all 0.2s;
+}
+
+/* ----- Step 1 · Source · 4-mode tabs (Search / Videos / Playlist / Channel)
+       The tab strip lives in the shell's row-3 toolbar (StageToolbar →
+       SourceModeTabs). The pills literally reuse `.dd-substage-nav` +
+       `.dd-substage` (see components/sub_nav.css) so they render
+       identically to row 2's Source | Ingest | Ask. */
+.ycs-source-panels { display: flex; flex-direction: column; gap: 0; }
+/* Only the active panel renders. The `display: flex` lives on the
+   active rule (not on a sibling `.ycs-direct-form` / `.ycs-search-panel`
+   class) so it can't accidentally win over the hide rule via cascade
+   order — both lived at single-class specificity (0,1,0) and the
+   later one won, which is why all 4 panels rendered simultaneously. */
+.ycs-tab-body { display: none; }
+.ycs-tab-body.active {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ycs-tab-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+/* ----- Smart-paste suggestion chip (June 2026 SOTA: detect-suggest-
+        never-hijack). Renders inline below the input when a paste
+        looks like content for a DIFFERENT mode. One click switches
+        mode + injects the content; × dismisses. Idiom: Raycast / Arc. */
+.ycs-paste-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  background: rgba(196, 18, 48, 0.06);
+  border: 1px solid rgba(196, 18, 48, 0.18);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  color: var(--text);
+  animation: ycs-chip-in 0.15s ease-out;
+}
+@keyframes ycs-chip-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.ycs-paste-chip-text { flex: 1; min-width: 0; }
+.ycs-paste-chip-text strong {
+  color: var(--primary);
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.ycs-paste-chip-accept {
+  appearance: none;
+  background: var(--primary);
+  color: #fff;
+  border: 0;
+  padding: 4px 12px;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.ycs-paste-chip-accept:hover { background: var(--primary-dark); }
+.ycs-paste-chip-dismiss {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 2px 6px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.12s, background 0.12s;
+}
+.ycs-paste-chip-dismiss:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+/* ----- Single-line URL input (Channel + Playlist tabs).
+       Mirrors `.ycs-search-input` but no flex/companion field — it
+       fills the row alone. */
+.ycs-url-input {
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+}
+.ycs-url-input:focus { border-color: var(--primary); }
+
+/* ----- URL preview / unfurl card (Channel + Playlist tabs).
+       SOTA: paste URL → render parsed display inline, gate submit on
+       parse success. `data-state` is the single source of truth —
+       hidden | parsed | invalid. */
+.ycs-url-preview {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  transition: opacity 0.12s, transform 0.12s;
+}
+.ycs-url-preview[data-state="hidden"] { display: none; }
+.ycs-url-preview[data-state="parsed"] {
+  background: rgba(42, 139, 70, 0.06);
+  border: 1px solid rgba(42, 139, 70, 0.22);
+  color: var(--text);
+  animation: ycs-chip-in 0.15s ease-out;
+}
+.ycs-url-preview[data-state="invalid"] {
+  background: rgba(196, 18, 48, 0.05);
+  border: 1px solid rgba(196, 18, 48, 0.16);
+  color: var(--text);
+  animation: ycs-chip-in 0.15s ease-out;
+}
+.ycs-url-preview-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  font-weight: 600;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+.ycs-url-preview[data-state="parsed"] .ycs-url-preview-icon {
+  background: #2a8b46; color: #fff;
+}
+.ycs-url-preview[data-state="invalid"] .ycs-url-preview-icon {
+  background: var(--primary); color: #fff;
+}
+.ycs-url-preview-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+.ycs-url-preview-kind {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.ycs-url-preview-id {
+  font-family: 'JetBrains Mono', monospace, ui-monospace;
+  font-size: 0.82rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ycs-url-preview-hint {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.ycs-url-preview-reset {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.12s, background 0.12s;
+  flex-shrink: 0;
+}
+.ycs-url-preview-reset:hover {
+  background: rgba(196, 18, 48, 0.08);
+  color: var(--primary);
+}
+/* SOTA: paste URL → input is REPLACED by the unfurl card. The input
+   still lives in the DOM (so its `name` ships in FormData on submit)
+   but is hidden visually. */
+.ycs-url-input-hidden { display: none; }
+
+/* ----- Route-queue strip (Channel + Playlist tabs).
+       Renders above the URL input when items have been routed in
+       from the Search tab's bulk-action bar. Each chip is clickable
+       (loads that item into the URL input) and has × to drop. */
+.ycs-route-queue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.015);
+}
+.ycs-route-queue[data-state="empty"] { display: none; }
+.ycs-route-queue-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+.ycs-route-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px 3px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-family: 'JetBrains Mono', monospace, ui-monospace;
+  font-size: 0.74rem;
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.ycs-route-chip:hover {
+  border-color: var(--primary);
+  background: rgba(196, 18, 48, 0.04);
+}
+.ycs-route-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1;
+}
+.ycs-route-chip-x:hover { background: var(--primary); color: #fff; }
+
+/* ----- Options ▸ disclosure (Channel + Playlist secondary config).
+       Native <details> for keyboard accessibility. */
+.ycs-options-collapse {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.015);
+}
+.ycs-options-summary {
+  padding: 10px 14px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  transition: color 0.12s, background 0.12s;
+}
+.ycs-options-summary::-webkit-details-marker { display: none; }
+.ycs-options-summary::before {
+  content: "▸";
+  display: inline-block;
+  width: 1em;
+  margin-right: 6px;
+  transition: transform 0.12s;
+}
+.ycs-options-collapse[open] .ycs-options-summary::before { transform: rotate(90deg); }
+.ycs-options-summary:hover { color: var(--text); }
+.ycs-options-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--border);
+}
+
+/* Disabled submit (Channel + Playlist while no URL parsed). */
+.btn-primary:disabled,
+.btn-primary[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ----- Videos paste-to-chips preview (SOTA: Linear paste-many idiom).
+       Live chip list below the textarea, with a count header. Each
+       chip's `data-state` is one of:
+         valid     — bare 11-char ID, green check
+         recovered — extracted from URL, amber recycle
+         invalid   — didn't parse, red ×
+       Drag-drop adds .dragover to the textarea. */
+.ycs-textarea.dragover {
+  border-color: var(--primary);
+  background: rgba(196, 18, 48, 0.04);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+.ycs-paste-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ycs-paste-preview[data-state="empty"] { display: none; }
+.ycs-paste-count {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.ycs-paste-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ycs-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 6px;
+  border-radius: 999px;
+  font-family: 'JetBrains Mono', monospace, ui-monospace;
+  font-size: 0.74rem;
+  border: 1px solid;
+  animation: ycs-chip-in 0.12s ease-out;
+}
+.ycs-chip[data-state="valid"] {
+  background: rgba(42, 139, 70, 0.07);
+  border-color: rgba(42, 139, 70, 0.24);
+  color: #1a3a23;
+}
+.ycs-chip[data-state="recovered"] {
+  background: rgba(217, 119, 6, 0.08);
+  border-color: rgba(217, 119, 6, 0.28);
+  color: #6b3206;
+}
+.ycs-chip[data-state="invalid"] {
+  background: rgba(196, 18, 48, 0.06);
+  border-color: rgba(196, 18, 48, 0.22);
+  color: #7a2228;
+}
+.ycs-chip-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #fff;
+}
+.ycs-chip[data-state="valid"]     .ycs-chip-glyph { background: #2a8b46; }
+.ycs-chip[data-state="recovered"] .ycs-chip-glyph { background: #d97706; }
+.ycs-chip[data-state="invalid"]   .ycs-chip-glyph { background: var(--primary); }
+.ycs-chip-id { line-height: 1.2; }
+/* Sticky top region (search form + filter chips + results-head).
+   Wraps the form AND the filters/density toggle together so neither
+   hides the other when scrolling. `.page` has `padding-top: 28px` by
+   default; for the Search panel we override it to 0 (selector below)
+   so this wrapper glues flush to the topbar without negative-margin
+   hacks. The wrapper lives inside `.ycs-tab-body#ycs-tab-search` so
+   switching tabs auto-hides it (parent `display: none`). */
+.ycs-search-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg);
+  padding-block: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 1px 0 var(--border);
+}
+/* Form is a plain block — sticky behavior is on the wrapper above.
+   Reset any inherited sticky/margin from earlier iterations. */
+#ycs-search-form { margin: 0; padding: 0; }
+/* `.page` reserves 28px padding-top above its content. On the Search
+   panel that creates a visible gap between row 3 and the sticky
+   wrapper (results scroll through it). When Search is the active
+   tab — and ONLY then — zero out the padding so the wrapper sits
+   flush. Other tabs (Videos / Channel / Playlist / Ingest / Ask)
+   keep the default breathing room since the `:has()` selector won't
+   match. */
+.shell:has(.ycs-tab-body#ycs-tab-search.active) > .page { padding-top: 0; }
+/* When .page padding-top is gone, the non-Search tabs that share the
+   same .page need their own top padding (Source / Videos / Playlist /
+   Channel are siblings under .ycs-source-panels; only Search has the
+   sticky wrapper that provides its own). */
+.ycs-tab-body.active:not(#ycs-tab-search) { padding-top: 28px; }
+.ycs-search-row {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  margin-bottom: 12px;   /* breathing room above the filter chip bar */
+}
+.ycs-search-input {
+  flex: 1;
+  padding: 12px 16px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+}
+.ycs-search-input:focus { border-color: var(--primary); }
+
+/* ----- Inline filter chip bar (SOTA Linear / Vercel / Height idiom).
+       Replaces the old `.ycs-filters-toggle` collapsible. `+ Filter`
+       opens a typeahead menu; each selection becomes an editable chip
+       with × to dismiss. Hidden inputs (#ycs-fh-*) mirror chip state
+       so FormData stays the source of truth at submit time. */
+/* Wide filter+controls row. Left: `+ Filter` button + active chips
+   (grows to fill). Right: inline pagination + page-size + density.
+   Wraps to two lines on narrow viewports so the controls don't clip. */
+.ycs-filters-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px 16px;
+  flex-wrap: wrap;
+}
+.ycs-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  flex: 1 1 240px;   /* takes available room; controls cluster auto-sizes */
+  min-width: 0;
+}
+.ycs-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 3px 10px;
+  background: rgba(196, 18, 48, 0.07);
+  border: 1px solid rgba(196, 18, 48, 0.20);
+  border-radius: 999px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  appearance: none;
+  transition: background 0.12s, border-color 0.12s;
+  animation: ycs-chip-in 0.12s ease-out;
+}
+.ycs-filter-chip:hover {
+  background: rgba(196, 18, 48, 0.10);
+  border-color: rgba(196, 18, 48, 0.30);
+}
+.ycs-filter-chip-key {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.ycs-filter-chip-val { font-weight: 500; }
+.ycs-filter-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  transition: color 0.12s, background 0.12s;
+}
+.ycs-filter-chip-x:hover {
+  background: var(--primary);
+  color: #fff;
+}
+.ycs-filter-add {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px 3px 8px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.ycs-filter-add:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: rgba(196, 18, 48, 0.04);
+}
+.ycs-filter-add-icon {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+.ycs-filter-menu {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 180px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.10), 0 2px 4px rgba(0, 0, 0, 0.04);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ycs-filter-menu-item {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 7px 10px;
+  text-align: left;
+  font-family: inherit;
+  font-size: 0.84rem;
+  color: var(--text);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.ycs-filter-menu-item:hover {
+  background: rgba(196, 18, 48, 0.06);
+  color: var(--primary);
+}
+.ycs-filter-editor {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 6px);
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.10), 0 2px 4px rgba(0, 0, 0, 0.04);
+  min-width: 220px;
+}
+.ycs-filter-editor-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.ycs-filter-editor-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.85rem;
+  outline: none;
+  transition: border-color 0.12s;
+}
+.ycs-filter-editor-input:focus { border-color: var(--primary); }
+
+.ycs-filter-field { display: flex; flex-direction: column; gap: 4px; }
+.ycs-filter-label {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.ycs-filter-input,
+.ycs-filter-select {
+  padding: 8px 10px;
+  font-size: 0.85rem;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+}
+.ycs-filter-input:focus,
+.ycs-filter-select:focus { border-color: var(--primary); }
+.ycs-filter-check-wrap {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 0;
+}
+.ycs-filter-check-label {
+  font-size: 0.85rem; color: var(--text);
+}
+
+/* ----- Results list (NN/g compact stacked list, optional Comfortable).
+       Cards are terrible for ranked content (hide ranking + waste
+       space + slow scanning). The default density is `compact` —
+       48px thumb stacked list — with a `comfortable` fallback that
+       restores the 160px card view. Toggle persists via localStorage
+       (search.js). */
+.ycs-search-empty {
+  padding: 20px;
+  color: var(--text-muted);
+  font-style: italic;
+  border: 1px dashed var(--border);
+  border-radius: 3px;
+  text-align: center;
+}
+/* Inline status text used by Videos / Channel / Playlist form-actions
+   rows (Search consolidated theirs into `.ycs-pagination-range`). */
+.ycs-search-status {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-style: italic;
+  min-height: 1.2em;
+}
+.ycs-search-status.running { color: var(--running-text, var(--primary)); font-style: normal; }
+.ycs-search-status.error {
+  color: var(--error-text, var(--primary));
+  font-style: normal;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* Right-side cluster of the filter row: inline pagination + page-size
+   + density toggle. GitHub Issues / Linear inbox idiom — result-view
+   controls grouped together. */
+.ycs-results-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  margin-left: auto;   /* push to the right even when chips wrap */
+}
+.ycs-page-size {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 4px 26px 4px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.74rem;
+  font-weight: 500;
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+                    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position: calc(100% - 12px) 50%, calc(100% - 8px) 50%;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+  transition: color 0.12s, border-color 0.12s;
+}
+.ycs-page-size:hover { color: var(--text); border-color: var(--text-muted); }
+.ycs-page-size:focus { outline: none; border-color: var(--primary); color: var(--primary); }
+.ycs-density-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px;
+  background: var(--card);
+}
+.ycs-density-btn {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 3px 10px;
+  font-family: inherit;
+  font-size: 0.74rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+.ycs-density-btn.active {
+  background: rgba(196, 18, 48, 0.10);
+  color: var(--primary);
+  font-weight: 600;
+}
+.ycs-density-btn:not(.active):hover { color: var(--text); }
+
+.ycs-search-results {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ----- Compact density (default) — NN/g stacked list ----- */
+.ycs-search-results[data-density="compact"] { gap: 0; }
+.ycs-search-results[data-density="compact"] .ycs-result {
+  display: grid;
+  grid-template-columns: 22px 64px 1fr auto;
+  gap: 12px;
+  padding: 8px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  align-items: center;
+  transition: background 0.12s;
+}
+.ycs-search-results[data-density="compact"] .ycs-result:hover {
+  background: rgba(196, 18, 48, 0.025);
+}
+.ycs-search-results[data-density="compact"] .ycs-result-thumb {
+  width: 64px;
+  height: 36px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #000;
+  display: block;
+  flex-shrink: 0;
+  position: relative;
+}
+.ycs-search-results[data-density="compact"] .ycs-result-title {
+  font-size: 0.86rem;
+  -webkit-line-clamp: 1;
+  font-weight: 500;
+}
+.ycs-search-results[data-density="compact"] .ycs-result-meta {
+  font-size: 0.74rem;
+}
+.ycs-search-results[data-density="compact"] .ycs-result-desc {
+  display: none;   /* compact = title + meta only */
+}
+
+/* ----- Comfortable density (toggle) — original card layout ----- */
+.ycs-search-results[data-density="comfortable"] { gap: 12px; }
+.ycs-search-results[data-density="comfortable"] .ycs-result {
+  display: grid;
+  grid-template-columns: 22px 160px 1fr auto;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  transition: border-color 0.15s;
+}
+.ycs-search-results[data-density="comfortable"] .ycs-result:hover {
+  border-color: var(--text-muted);
+}
+.ycs-search-results[data-density="comfortable"] .ycs-result-thumb {
+  position: relative;
+  width: 160px; height: 90px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #000;
+  display: block;
+  flex-shrink: 0;
+}
+.ycs-search-results .ycs-result-thumb img {
+  width: 100%; height: 100%; object-fit: cover;
+}
+
+/* ----- Hover quick-actions (Raycast idiom) — right edge of each row ----- */
+.ycs-result-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.ycs-result:hover .ycs-result-actions { opacity: 1; }
+.ycs-result-action {
+  appearance: none;
+  background: rgba(0, 0, 0, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-family: 'JetBrains Mono', monospace, ui-monospace;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.ycs-result-action:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: rgba(196, 18, 48, 0.04);
+}
+
+/* ----- Multi-select checkbox + bulk-action floating bar.
+       Each result row carries a hover-or-checked checkbox at the
+       leftmost column (Gmail / GitHub Issues / Linear idiom). When
+       ≥1 row is selected, the search results container gets a
+       `.has-selection` class which keeps every checkbox visible
+       (so the user can see selection state at a glance), and a
+       floating capsule appears at the bottom of the panel: `N
+       selected · → Videos · → Channels · ×`. */
+.ycs-result-check {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--primary);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.ycs-result:hover .ycs-result-check,
+.ycs-result-check:checked,
+.ycs-search-results.has-selection .ycs-result-check {
+  opacity: 1;
+}
+.ycs-result-check:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.ycs-bulk-bar {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(140%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 6px 16px;
+  background: var(--text);
+  color: var(--bg);
+  border-radius: 999px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22),
+              0 2px 6px rgba(0, 0, 0, 0.10);
+  z-index: 60;
+  font-family: inherit;
+  font-size: 0.82rem;
+  transition: transform 0.22s ease;
+}
+.ycs-bulk-bar.visible { transform: translateX(-50%) translateY(0); }
+.ycs-bulk-count {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding-right: 8px;
+  border-right: 1px solid rgba(255, 255, 255, 0.15);
+}
+.ycs-bulk-btn {
+  appearance: none;
+  background: rgba(255, 255, 255, 0.10);
+  color: inherit;
+  border: 0;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 500;
+  transition: background 0.12s;
+}
+.ycs-bulk-btn:hover { background: rgba(255, 255, 255, 0.20); }
+.ycs-bulk-clear {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.65);
+}
+.ycs-bulk-clear:hover {
+  background: rgba(255, 255, 255, 0.10);
+  color: #fff;
+}
+.ycs-bulk-btn:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+.ycs-bulk-btn:disabled:hover { background: rgba(255, 255, 255, 0.10); }
+
+/* ----- Per-kind badge on each search result.
+       Videos don't render a badge (default); channels and playlists
+       get a small colored pill before the title so the user can scan
+       the kind at a glance and the bulk-action bar knows what to do
+       with each pick. */
+.ycs-result-kind {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1.4;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+/* `!important` defeats any inherited <a> color that could swallow the
+   badge text — the title row's <a> is right next to the badge and
+   browsers sometimes propagate link color through inline-flex sibs. */
+.ycs-result-kind[data-kind="video"]    { background: rgba(120, 120, 120, 0.14); color: #555 !important;  border-color: rgba(120, 120, 120, 0.20); }
+.ycs-result-kind[data-kind="channel"]  { background: rgba(54, 162, 235, 0.18);  color: #1e5b8a !important; border-color: rgba(54, 162, 235, 0.32); }
+.ycs-result-kind[data-kind="playlist"] { background: rgba(255, 159, 64, 0.20);  color: #8a4a14 !important; border-color: rgba(255, 159, 64, 0.36); }
+
+/* Title row — wraps the badge + title link so the title can use
+   `-webkit-line-clamp` (which only works with display: -webkit-box)
+   without the badge getting eaten by the clamp's box model. */
+.ycs-result-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.ycs-result-title-row .ycs-result-kind { flex-shrink: 0; margin-right: 0; }
+.ycs-result-title-row .ycs-result-title { min-width: 0; flex: 1; }
+
+/* ----- Inline pagination (lives in the results-controls cluster on
+       the filter row). Three slots: Prev icon button — range/status
+       text — Next icon button. Range doubles as the status line so
+       there's no separate status element competing for row space:
+       `data-state` switches color/style; `textContent` carries the
+       message. */
+.ycs-pagination-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  min-height: 28px;
+}
+.ycs-pagination-range {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  padding: 0 8px;
+  white-space: nowrap;
+  min-width: 80px;
+  text-align: center;
+}
+.ycs-pagination-inline[data-state="empty"] .ycs-pagination-range::before {
+  content: "—";
+  color: var(--text-muted);
+  opacity: 0.4;
+}
+.ycs-pagination-inline[data-state="empty"] .ycs-pagination-range { color: transparent; }
+.ycs-pagination-inline[data-state="running"] .ycs-pagination-range {
+  color: var(--running-text, var(--primary));
+  font-style: italic;
+}
+.ycs-pagination-inline[data-state="error"] .ycs-pagination-range {
+  color: var(--error-text, var(--primary));
+  font-style: normal;
+}
+.ycs-pagination-btn {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+.ycs-pagination-btn:hover:not(:disabled) {
+  color: var(--primary);
+  background: rgba(196, 18, 48, 0.08);
+}
+.ycs-pagination-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.ycs-result-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.ycs-result-title {
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-decoration: none;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ycs-result-title:hover { color: var(--primary); }
+.ycs-result-meta {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.01em;
+}
+.ycs-result-desc {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ycs-result-add {
+  align-self: flex-start;
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.ycs-result-add:hover { border-color: var(--primary); color: var(--primary); }
+.ycs-result-add.added {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.ycs-result-add.added:hover { background: var(--primary-dark); }
+
+/* ----- Cart footer ----- */
+.ycs-cart {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.02);
+  position: sticky;
+  bottom: 16px;
+}
+.ycs-cart-count {
+  color: var(--text);
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.ycs-intro {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.55;
+  margin: 0 0 8px 0;
+  max-width: 720px;
+}
+.ycs-input {
+  padding: 12px 16px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+.ycs-input:focus { border-color: var(--primary); }
+.ycs-textarea { resize: vertical; min-height: 72px; line-height: 1.5; }
+.ycs-actions { display: flex; justify-content: flex-end; }
+
+/* ----- Recent searches (Slice 2 · history strip) ----- */
+.ycs-history {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.ycs-history-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.ycs-history-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+.ycs-history-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 6px 12px;
+  font-size: 0.82rem;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+  text-decoration: none;
+  max-width: 320px;
+}
+.ycs-history-pill:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.ycs-history-pill-query {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ycs-history-pill-meta {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  flex-shrink: 0;
+}
+.ycs-history-pill.has-filters::after {
+  content: "⚙";
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  margin-left: 2px;
+}
+
+/* ----- Slice 3 · Ingest stage · job progress + library grid ----- */
+.ycs-job {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.02);
+  margin-bottom: 20px;
+}
+.ycs-job-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.ycs-job-status {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.ycs-job-status[data-status="running"] { color: var(--running-text); }
+.ycs-job-status[data-status="done"]    { color: var(--ok-text, var(--primary)); }
+.ycs-job-status[data-status="failed"]  { color: var(--error-text); }
+.ycs-job-status[data-status="cancelled"] { color: var(--text-muted); }
+.ycs-job-phase {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+.ycs-job-bar {
+  height: 6px;
+  width: 100%;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.ycs-job-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--primary);
+  transition: width 0.3s ease;
+}
+.ycs-job-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+.ycs-job-actions { display: flex; justify-content: flex-end; }
+
+.ycs-lib-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+.ycs-lib-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  text-decoration: none;
+  color: var(--text);
+  transition: border-color 0.15s;
+}
+.ycs-lib-card:hover { border-color: var(--primary); }
+.ycs-lib-card-head { display: flex; flex-direction: column; gap: 2px; }
+.ycs-lib-card-kind {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.ycs-lib-card-label {
+  color: var(--text);
+  font-size: 0.92rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ycs-lib-card-meta {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+/* ----- Slice 9 · Ask · live stages + answer + citations ----- */
+.ycs-ask-stages {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0 12px;
+}
+.ycs-ask-stages .ycs-step-circle {
+  width: auto;
+  height: auto;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.4;
+  transition: opacity 0.2s, border-color 0.2s, color 0.2s;
+}
+.ycs-ask-stages .ycs-step-circle.active {
+  opacity: 1;
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.ycs-ask-stages .ycs-step-circle.done {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+.ycs-ask-output { margin-top: 8px; display: flex; flex-direction: column; gap: 16px; }
+.ycs-ask-answer {
+  font-size: 0.96rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.ycs-ask-citations { display: flex; flex-direction: column; gap: 8px; }
+
+/* ===== Wave 5 additions ===== */
+
+/* ---- Source · transcript options + form actions ---- */
+.ycs-trans-opts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 18px;
+  padding: 12px 14px;
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  align-items: end;
+}
+.ycs-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 4px;
+}
+.ycs-form-actions .ycs-search-status { flex: 1; min-height: 1.2em; }
+
+/* ---- Ingest · empty + job summary + fail mark ---- */
+.ycs-empty-card {
+  padding: 16px 18px;
+  color: var(--text-muted);
+  font-style: italic;
+  border: 1px dashed var(--border);
+  border-radius: 3px;
+  text-align: center;
+}
+.ycs-job-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text);
+  font-size: 0.84rem;
+  margin-top: 2px;
+}
+.ycs-job-summary-row strong {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-right: 8px;
+}
+.ycs-fail { color: var(--error-text); font-weight: 500; }
+.ycs-pipe-actions { margin: 6px 0 12px 0; }
+
+/* ---- Ask · mode pill row ---- */
+.ycs-mode-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-right: 8px;
+}
+.ycs-mode-row {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  margin: 6px 0;
+}
+.ycs-mode-pill {
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text-muted);
+  cursor: pointer;
+  letter-spacing: 0.02em;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.ycs-mode-pill:hover { color: var(--text); border-color: var(--text-muted); }
+.ycs-mode-pill.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+/* ---- Ask · LLM config panel ---- */
+.ycs-llm-fields {
+  display: none;
+  padding: 16px 18px;
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  margin-top: 6px;
+}
+#ycs-llm-form.ycs-llm-open .ycs-llm-fields,
+#ycs-llm-form.ycs-llm-open .ycs-form-actions {
+  display: grid;
+}
+#ycs-llm-form.ycs-llm-open .ycs-form-actions {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  margin-top: 10px;
+}
+#ycs-llm-form .ycs-form-actions { display: none; }
+
+}

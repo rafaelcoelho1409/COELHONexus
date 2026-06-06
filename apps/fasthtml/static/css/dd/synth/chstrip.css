@@ -1,0 +1,165 @@
+@layer features {
+@scope (.fw-synth-split) {
+/* ============================================================
+   Chapter progress strip — shown only during STUDY-mode synth
+   runs (Start Synth without picking a chapter). Sits above the
+   Cytoscape canvas and below the synth header. Hidden by
+   default; .visible flips display flex on. Each cell is one
+   chapter with data-status in {pending, running, done, failed,
+   cancelled}.
+   ============================================================ */
+/* DD-SYNTH-SPLIT 2026-05-28 — 70/30 split: DAG canvas (left) | chapter
+   checklist (right). Flex so a hidden chapter panel (#fw-chstrip is
+   display:none until study mode) lets the graph fill 100%; when the
+   panel shows, the graph reflows to ~70%. Stacks vertically on narrow
+   viewports. JS re-fits the Cytoscape canvas when the panel toggles. */
+.fw-synth-split {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.fw-synth-split > #fw-synth-graph {
+  flex: 1 1 auto;
+  min-width: 0;            /* allow shrink to ~70%; canvas is width:100% */
+}
+.fw-synth-split > #fw-chstrip {
+  flex: 0 0 30%;
+  max-width: 30%;
+  margin: 0;               /* override the default 12px 0 */
+}
+/* Side-panel list scrolls within ~the canvas height for long books. */
+.fw-synth-split > #fw-chstrip .fw-chstrip-cells {
+  max-height: 660px;
+}
+@media (max-width: 860px) {
+  .fw-synth-split { flex-direction: column; }
+  .fw-synth-split > #fw-chstrip {
+    flex: 1 1 auto;
+    max-width: none;
+    width: 100%;
+  }
+}
+
+.fw-chstrip {
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--bg);
+}
+.fw-chstrip.visible { display: flex; }
+.fw-chstrip-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.fw-chstrip-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.fw-chstrip-counter {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+/* DD-CHAPTERS-SOTA 2026-05-28 — vertical task checklist. One row per
+   chapter: status glyph + ordinal + full title (wraps). The 2026
+   agent/pipeline task-list pattern. Capped height with internal scroll
+   so a long book (15+ chapters) doesn't push the DAG canvas down. */
+.fw-chstrip-cells {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.fw-chstrip-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-muted);
+  border-radius: 2px;
+  background: var(--card);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.fw-chstrip-cell:hover { background: rgba(196, 18, 48, 0.05); }
+.fw-chstrip-cell.selected {
+  border-left-color: var(--primary);
+  background: rgba(196, 18, 48, 0.08);
+}
+.fw-chstrip-cell .icon {
+  flex: 0 0 auto;
+  width: 14px;
+  text-align: center;
+  opacity: 0.9;
+}
+.fw-chstrip-cell .num {
+  flex: 0 0 auto;
+  min-width: 18px;
+  text-align: right;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.76rem;
+}
+.fw-chstrip-cell .label {
+  flex: 1 1 auto;
+  min-width: 0;            /* required for ellipsis inside a flex child */
+  white-space: nowrap;     /* one clean line per chapter… */
+  overflow: hidden;
+  text-overflow: ellipsis; /* …long titles truncate with “…” */
+  color: var(--text);
+}
+/* Per-chapter synth wall-clock badge, right-aligned in the cell. Set live
+   on chapter_done and on durable hydrate (timing.js / synth.js). */
+.fw-chstrip-cell .time {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  opacity: 0.85;
+}
+.fw-chstrip-cell .time:empty { display: none; }
+.fw-chstrip-cell[data-status="pending"] .icon::before  { content: '○'; }
+.fw-chstrip-cell[data-status="running"] .icon::before  { content: '◐'; }
+.fw-chstrip-cell[data-status="done"]    .icon::before  { content: '✔'; }
+.fw-chstrip-cell[data-status="failed"]  .icon::before  { content: '✕'; }
+.fw-chstrip-cell[data-status="cancelled"] .icon::before { content: '⊘'; }
+
+/* Running row — sky-blue (the app's --running-* convention). */
+.fw-chstrip-cell[data-status="running"] {
+  border-left-color: var(--running-border);
+  background: var(--running-bg);
+}
+.fw-chstrip-cell[data-status="running"] .icon {
+  color: var(--running-border);
+  animation: fw-chstrip-spin 1.6s linear infinite;
+  display: inline-block;
+}
+/* Done — green (shared --ingested-* success token). */
+.fw-chstrip-cell[data-status="done"] { border-left-color: var(--ingested-border); }
+.fw-chstrip-cell[data-status="done"] .icon { color: var(--ingested-border); }
+.fw-chstrip-cell[data-status="failed"] {
+  border-left-color: var(--error-text);
+  background: var(--error-bg);
+}
+.fw-chstrip-cell[data-status="failed"] .icon { color: var(--error-text); }
+.fw-chstrip-cell[data-status="cancelled"] {
+  border-left-color: var(--text-muted);
+  opacity: 0.7;
+}
+@keyframes fw-chstrip-spin {
+  to { transform: rotate(360deg); }
+}
+}
+}

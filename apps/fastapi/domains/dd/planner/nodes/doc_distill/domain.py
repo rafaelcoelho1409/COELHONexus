@@ -40,6 +40,29 @@ def try_validate(d: dict) -> tuple[Optional[DocDistillate], Optional[str]]:
         return None, str(e)[:200]
 
 
+# Per-doc failure-reason buckets. `rate_limit` and `timeout` are TRANSIENT
+# (caller retries); the rest fall through to the deterministic fallback
+# immediately. The classifier is intentionally string-matching — provider
+# clients raise different exception classes for the same operational
+# condition (LiteLLM rate-limit vs httpx 429 vs Google InternalServerError
+# with "quota" in the message), so the lowest-common-denominator signal is
+# substring presence in the str(exc).
+def classify_error(exc: Exception) -> str:
+    name = type(exc).__name__
+    msg = str(exc).lower()
+    if "rate" in msg or "429" in msg or "quota" in msg or "throttle" in msg:
+        return "rate_limit"
+    if "timeout" in msg or "timeout" in name.lower() or "timed out" in msg:
+        return "timeout"
+    if "context" in msg and ("length" in msg or "size" in msg or "window" in msg):
+        return "context_length"
+    if "auth" in msg or "401" in msg or "403" in msg or "permission" in msg:
+        return "auth"
+    if "connection" in msg or "network" in msg or "refused" in msg:
+        return "connection"
+    return name or "unknown"
+
+
 def doc_title(source_key: str, body: str) -> str:
     """First H1 heading, else a filename-derived title."""
     m = H1_RE.search(body or "")

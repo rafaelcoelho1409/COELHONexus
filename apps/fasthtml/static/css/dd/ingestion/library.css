@@ -1,0 +1,138 @@
+@layer features {
+/* ===== Library popover rows (Framework picker dropdown contents) =====
+   These rules style the `.fw-lib-item` rows that renderSidebar() injects
+   into `#fw-sidebar-list` inside the framework-picker popover. They
+   MUST NOT be wrapped in `@scope (.fw-sidebar-list)` — the element is
+   an ID, not a class, so the scope selector never matched and the
+   popover rendered unstyled (sidebar.js's rows had no border/padding/
+   spinner). The OLD reference (commit f5bff8e) kept these unscoped in
+   ingestion.css; restoring that. */
+.fw-layout { display: flex; gap: 24px; align-items: flex-start; }
+.fw-sidebar-empty {
+  padding: 20px 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+.fw-lib-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-bottom: 4px;
+  border: 1px solid transparent;
+  transition: background 0.15s, border-color 0.15s;
+}
+.fw-lib-item:hover {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: var(--border);
+}
+.fw-lib-item.active {
+  background: rgba(196, 18, 48, 0.06);
+  border-color: var(--primary);
+}
+.fw-lib-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fw-lib-meta {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+  letter-spacing: 0.02em;
+}
+/* In-progress pseudo-entry — rendered when activeRunId is set but the
+ * slug hasn't appeared in the finalized library list yet. The dashed
+ * border + soft burgundy tint distinguish it from the .active steady
+ * state (solid border, same tint) so users can tell at a glance that
+ * this row is mid-ingestion. The spinner replaces the "N pages · age"
+ * metadata since neither exists yet. */
+.fw-lib-item.fw-lib-item-ingesting {
+  background: rgba(196, 18, 48, 0.04);
+  border: 1px dashed var(--primary);
+  cursor: progress;
+}
+.fw-lib-item.fw-lib-item-ingesting:hover {
+  background: rgba(196, 18, 48, 0.08);
+  border-style: dashed;
+}
+.fw-lib-item.fw-lib-item-ingesting .fw-lib-name {
+  font-style: italic;
+}
+.fw-lib-item.fw-lib-item-ingesting .fw-lib-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--primary);
+  font-weight: 500;
+}
+/* Smaller spinner sized for the sidebar meta row (the global .fw-spinner
+ * defaults to 16px which crowds the 0.68rem text). */
+.fw-spinner.fw-lib-spinner {
+  width: 10px;
+  height: 10px;
+  border-width: 2px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+.fw-lib-logo {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+.fw-lib-refresh,
+.fw-lib-delete {
+  flex-shrink: 0;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.85rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.fw-lib-refresh:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+.fw-lib-refresh:disabled,
+.fw-lib-refresh[disabled] {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+.fw-lib-refresh:disabled:hover {
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+.fw-lib-delete:hover {
+  color: #fff;
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.fw-lib-delete:disabled,
+.fw-lib-delete[disabled] {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+.fw-lib-delete:disabled:hover {
+  color: var(--text-muted);
+  background: transparent;
+  border-color: var(--border);
+}
+}

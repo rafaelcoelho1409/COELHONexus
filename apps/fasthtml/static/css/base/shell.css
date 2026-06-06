@@ -1,0 +1,35 @@
+@layer base {
+/* DD-NAVBAR-SOTA-2026-05-28 (Wave E) — flat page chrome.
+   Removed the white "card" island. Content now flows on the page
+   background, inset by the same 40px horizontal gutter the topbar
+   uses (`.topbar { padding: 12px 40px }`), so brand and content
+   share a single vertical gridline. Matches the 2026 SOTA flat-
+   surface layout (Linear / Vercel / Notion). The .card wrapper is
+   kept as a no-op container so existing DOM/selectors don't break;
+   only its visual treatment is stripped. */
+/* DD-APP-SHELL-2026-05-28 — full-viewport grid. Row 1 (auto) is the header,
+   row 2 (1fr) is the scrolling content. The document never scrolls; .page
+   scrolls internally. `100dvh` avoids the mobile URL-bar jump (Baseline 2025).
+   Replaces the old position:sticky header + JS viewport-fit hack. */
+.shell {
+  height: 100dvh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  overflow: hidden;
+}
+.page {
+  padding: 28px 40px 40px 40px;
+  min-height: 0;             /* let the 1fr row shrink so it can scroll */
+  overflow-y: auto;          /* THIS is the scroll region, not the document */
+  scrollbar-gutter: stable;  /* reserve gutter → no reflow on content change */
+  scroll-padding-top: 16px;  /* anchor/ToC jumps clear the scroll-region top */
+  scroll-behavior: smooth;
+}
+.card {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+}
+}

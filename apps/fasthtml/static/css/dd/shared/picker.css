@@ -1,0 +1,16 @@
+@layer features {
+@scope (.fw-picker) {
+/* Layout wrapper for every Docs Distiller stage (.fw-picker)
+   + the generic empty-state placeholder used across stages. */
+
+/* ===== Framework picker (Step 1) ===== */
+.fw-picker { display: flex; flex-direction: column; gap: 18px; }
+
+.fw-empty {
+  color: var(--text-muted);
+  padding: 32px;
+  text-align: center;
+  font-size: 0.9rem;
+}
+}
+}

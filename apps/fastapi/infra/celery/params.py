@@ -25,21 +25,32 @@ Q_DEFAULT = f"default-{ENVIRONMENT}"
 Q_CRAWLER = f"crawler-{ENVIRONMENT}"
 Q_PLANNER = f"planner-{ENVIRONMENT}"
 Q_SYNTH = f"synth-{ENVIRONMENT}"
+Q_YCS = f"ycs-{ENVIRONMENT}"
 
 
-# Task modules loaded at worker startup.
+# Task modules loaded at worker startup. YCS task modules are the Wave 4
+# port of deprecated `tasks/youtube/{crawler,qdrant,neo4j,pipeline}.py`
+# (renamed: `extract` for crawler; `qdrant_task` / `neo4j_task` to dodge
+# the `qdrant_client` / `neo4j` package collisions; `pipeline_task` for
+# the chain wrapper).
 TASK_INCLUDE = [
     "domains.dd.ingestion.task",
     "domains.dd.planner.task",
     "domains.dd.synth.task",
+    "domains.ycs.extract.task",
+    "domains.ycs.qdrant_task.task",
+    "domains.ycs.neo4j_task.task",
+    "domains.ycs.pipeline_task.task",
 ]
 
 
 # Routing — queue per task module. Isolation prevents the planner's
 # CPU-heavy clustering from contending with HTTP-fetch ingestion, and
-# the synth's LLM+CoCoA bursts from contending with planner.
+# the synth's LLM+CoCoA bursts from contending with planner. YCS gets its
+# own queue so transcript/embed bursts don't contend with DD.
 TASK_ROUTES = {
     "domains.dd.ingestion.task.*": {"queue": Q_CRAWLER},
     "domains.dd.planner.task.*":   {"queue": Q_PLANNER},
     "domains.dd.synth.task.*":     {"queue": Q_SYNTH},
+    "domains.ycs.*":               {"queue": Q_YCS},
 }

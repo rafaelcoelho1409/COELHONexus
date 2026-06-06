@@ -1,0 +1,281 @@
+@layer features {
+/* No `@scope (.fw-node-drawer)` — the drawer wrapper has `id="fw-node-drawer"`
+   + `cls="fw-drawer"` (NOT a `.fw-node-drawer` class). The scope selector
+   never matched, so every `.fw-node-drawer-*` rule below was orphaned —
+   icon / KPI strip / log lines / log severity / "is-new" highlight /
+   details panel all rendered with browser defaults. OLD reference
+   (commit f5bff8e) kept these unscoped in planner.css. */
+/* ===== Node-detail drawer (Day 3 of UI-redesign sprint) =====
+   Reuses .fw-drawer chrome; adds 3 zones: header status icon, KPI
+   strip, live log, collapsible details. See
+   docs/UI-ARCHITECTURE-SOTA-2026-05-18.md. */
+.fw-node-drawer-head-left {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.fw-node-drawer-icon {
+  font-size: 1.15rem;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text-muted);
+}
+.fw-node-drawer-icon[data-status="running"] {
+  color: var(--running-border);
+  border-color: var(--running-border);
+  background: var(--running-bg);
+}
+.fw-node-drawer-icon[data-status="done"] {
+  color: #2a8b46;
+  border-color: #2a8b46;
+}
+.fw-node-drawer-icon[data-status="failed"] {
+  color: var(--error-text);
+  border-color: var(--error-border);
+}
+.fw-node-drawer-kpis {
+  flex-shrink: 0;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  background: rgba(0, 0, 0, 0.015);
+}
+.fw-node-drawer-kpi {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.fw-node-drawer-kpi-label {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.fw-node-drawer-kpi-value {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.85rem;
+  color: var(--text);
+  font-weight: 500;
+}
+.fw-node-drawer-section {
+  margin-bottom: 22px;
+}
+.fw-node-drawer-section-title {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.fw-node-drawer-log-wrap {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fafafa;
+  overflow: hidden;
+}
+.fw-node-drawer-log {
+  max-height: 360px;
+  overflow-y: auto;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--text);
+  /* contain: strict so the log scroll doesn't reflow the parent */
+  contain: content;
+}
+.fw-node-drawer-log-line {
+  padding: 3px 12px;
+  border-left: 3px solid transparent;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.fw-node-drawer-log-line.severity-error {
+  background: var(--error-bg);
+  border-left-color: var(--error-border);
+  color: var(--error-text);
+}
+.fw-node-drawer-log-line.severity-warn {
+  background: var(--notice-bg);
+  border-left-color: var(--notice-border);
+  color: var(--notice-text);
+}
+/* "Since last viewed" highlight (Day 4.1) — burgundy left-border on
+   events whose timestamp is newer than the previous drawer-open for
+   the same node. Falls back to standard severity styles otherwise. */
+.fw-node-drawer-log-line.is-new {
+  border-left-color: var(--primary);
+  background: rgba(196, 18, 48, 0.025);
+}
+/* Cross-fade (Day 4.4) — body opacity dips while content swaps when
+   switching nodes without closing the drawer first. Transition is on
+   the body element; class is added/removed by NodeDrawer.open(). */
+#fw-node-drawer-body {
+  transition: opacity 0.14s ease;
+}
+#fw-node-drawer-body.fw-node-drawer-fading {
+  opacity: 0.25;
+}
+.fw-node-drawer-log .fw-empty {
+  padding: 24px 16px;
+  font-style: italic;
+}
+.fw-node-drawer-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fw-node-drawer-detail {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+}
+.fw-node-drawer-detail > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 12px 16px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+.fw-node-drawer-detail > summary::before {
+  content: '▸';
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+  display: inline-block;
+}
+.fw-node-drawer-detail[open] > summary::before {
+  transform: rotate(90deg);
+}
+.fw-node-drawer-detail > summary::-webkit-details-marker { display: none; }
+.fw-node-drawer-detail-body {
+  padding: 0 16px 16px 36px;
+  font-size: 0.82rem;
+  color: var(--text);
+}
+.fw-node-drawer-detail-body pre {
+  margin: 0;
+  padding: 12px;
+  background: #f5f5f5;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+}
+/* Rich results panel — hosts the SUBSTEP_RENDERERS[idx](values) HTML
+   that the legacy card body used to show. The renderers emit their
+   own KPI grids, tables, outline blocks etc.; this container just
+   gives them clean spacing inside the drawer. */
+.fw-node-drawer-results {
+  margin-bottom: 22px;
+}
+.fw-node-drawer-waiting {
+  padding: 32px 16px;
+  text-align: center;
+  font-style: italic;
+  margin-bottom: 22px;
+}
+/* Markdown prose inside the drawer */
+.fw-markdown {
+  font-size: 0.92rem;
+  color: var(--text);
+  line-height: 1.65;
+}
+.fw-markdown h1, .fw-markdown h2, .fw-markdown h3,
+.fw-markdown h4, .fw-markdown h5, .fw-markdown h6 {
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1.4em 0 0.5em;
+}
+.fw-markdown h1 { font-size: 1.5rem; }
+.fw-markdown h2 { font-size: 1.25rem; }
+.fw-markdown h3 { font-size: 1.1rem; }
+.fw-markdown h4 { font-size: 0.98rem; }
+.fw-markdown h5, .fw-markdown h6 { font-size: 0.92rem; }
+.fw-markdown p { margin: 0.7em 0; }
+.fw-markdown ul, .fw-markdown ol {
+  margin: 0.5em 0;
+  padding-left: 1.6em;
+}
+.fw-markdown li { margin: 0.2em 0; }
+.fw-markdown a {
+  color: var(--primary);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--primary);
+}
+.fw-markdown a:hover { border-bottom-style: solid; }
+.fw-markdown code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.85em;
+  padding: 0.12em 0.4em;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 3px;
+}
+.fw-markdown pre {
+  background: #1f2429;
+  color: #e6e9ef;
+  padding: 14px 16px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  margin: 1em 0;
+}
+.fw-markdown pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: inherit;
+}
+.fw-markdown blockquote {
+  margin: 1em 0;
+  padding: 0.3em 0 0.3em 14px;
+  border-left: 3px solid var(--primary);
+  color: var(--text-muted);
+}
+.fw-markdown table {
+  border-collapse: collapse;
+  margin: 1em 0;
+  font-size: 0.85rem;
+}
+.fw-markdown th, .fw-markdown td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+.fw-markdown th { background: rgba(0, 0, 0, 0.03); font-weight: 600; }
+.fw-markdown hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 1.4em 0;
+}
+.fw-markdown img { max-width: 100%; height: auto; }
+.fw-page-card.viewing {
+  background: rgba(196, 18, 48, 0.06);
+  border-left: 3px solid var(--primary);
+  padding-left: 11px;
+}
+}

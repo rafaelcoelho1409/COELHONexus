@@ -16,6 +16,7 @@ from ...state import PlannerState
 
 from .domain import (
     build_fallback_distillate,
+    classify_error,
     manifest_hash,
     parse,
     try_validate,
@@ -25,7 +26,9 @@ from .params import (
     CONCURRENCY,
     MAX_REPAIR_ATTEMPTS,
     MAX_TOKENS,
+    MAX_TRANSIENT_RETRIES,
     PASS_THROUGH_THRESHOLD,
+    RETRY_BACKOFF_S,
     TEMPERATURE,
 )
 from .prompts import build_prompt
@@ -36,15 +39,21 @@ from .versions import PROMPT_VERSION
 logger = logging.getLogger(__name__)
 
 
+_TRANSIENT_REASONS = frozenset({"rate_limit", "timeout", "connection"})
+
+
 async def distill_one(
     sem: asyncio.Semaphore,
     minio,
     framework: str,
     source_key: str,
-) -> tuple[str, Optional[DocDistillate], int, bool]:
-    """(source_key, distillate or None, wall_ms, used_fallback).
+) -> tuple[str, Optional[DocDistillate], int, bool, Optional[str]]:
+    """(source_key, distillate or None, wall_ms, used_fallback, failure_reason).
     distillate=None only when doc has no readable content; failed LLM
-    with content gets a deterministic fallback."""
+    with content gets a deterministic fallback. failure_reason is None
+    on full success, else the bucket from `classify_error` (or
+    'parse_fail' / 'validate_fail') so the operator can tell
+    rate-limit pressure from genuine schema failures."""
     async with sem:
         t0 = time.monotonic()
         try:
@@ -57,31 +66,41 @@ async def distill_one(
             return (
                 source_key, None,
                 int((time.monotonic() - t0) * 1000),
-                False,
+                False, "read_fail",
             )
 
         if not (body or "").strip():
             return (
                 source_key, None,
                 int((time.monotonic() - t0) * 1000),
-                False,
+                False, "empty_body",
             )
 
         prompt = build_prompt(framework, source_key, body)
         distillate: Optional[DocDistillate] = None
-        try:
-            # dd-reduce-label = non-reasoning pool (no <think>, 2-3× faster).
-            raw, _meta = await chat_judge_bandit_async(
-                prompt,
-                max_tokens = MAX_TOKENS,
-                temperature = TEMPERATURE,
-                response_format = DISTILL_RESPONSE_FORMAT,
-                dd_process = "dd-reduce-label",
-            )
-            parsed = parse(raw)
-            if parsed:
+        failure_reason: Optional[str] = None
+
+        # v3 (2026-06-05) — retry loop over TRANSIENT errors only. The
+        # bandit rotates to a different deployment on each retry, so a
+        # saturated NIM/Groq arm typically clears within one attempt.
+        # Non-transient failures (parse, validate, auth) skip the retry
+        # and fall through to the deterministic fallback immediately.
+        for attempt in range(MAX_TRANSIENT_RETRIES + 1):
+            try:
+                # dd-reduce-label = non-reasoning pool (no <think>, 2-3× faster).
+                raw, _meta = await chat_judge_bandit_async(
+                    prompt,
+                    max_tokens = MAX_TOKENS,
+                    temperature = TEMPERATURE,
+                    response_format = DISTILL_RESPONSE_FORMAT,
+                    dd_process = "dd-reduce-label",
+                )
+                parsed = parse(raw)
+                if not parsed:
+                    failure_reason = "parse_fail"
+                    break   # parse failures don't get retried
                 distillate, err = try_validate(parsed)
-                if distillate is None and MAX_REPAIR_ATTEMPTS > 0:   # one repair attempt
+                if distillate is None and MAX_REPAIR_ATTEMPTS > 0:
                     repair_prompt = (
                         prompt
                         + f"\n\nPRIOR OUTPUT was REJECTED: {err}\n"
@@ -97,11 +116,26 @@ async def distill_one(
                     parsed2 = parse(raw2)
                     if parsed2:
                         distillate, _ = try_validate(parsed2)
-        except Exception as e:
-            logger.warning(
-                f"[doc_distill] LLM failed for {source_key}: "
-                f"{type(e).__name__}: {e}"
-            )
+                if distillate is not None:
+                    failure_reason = None
+                    break   # success
+                failure_reason = "validate_fail"
+                break       # validation failures don't get retried
+            except Exception as e:
+                failure_reason = classify_error(e)
+                is_transient = failure_reason in _TRANSIENT_REASONS
+                can_retry = attempt < MAX_TRANSIENT_RETRIES
+                logger.warning(
+                    f"[doc_distill] {source_key} attempt {attempt + 1}: "
+                    f"{failure_reason} ({type(e).__name__}: {e})"
+                )
+                if is_transient and can_retry:
+                    backoff = RETRY_BACKOFF_S[
+                        min(attempt, len(RETRY_BACKOFF_S) - 1)
+                    ]
+                    await asyncio.sleep(backoff)
+                    continue
+                break
 
         # Failed LLM (with content) → deterministic fallback so doc still flows downstream.
         used_fallback = False
@@ -109,12 +143,13 @@ async def distill_one(
             distillate = build_fallback_distillate(source_key, body)
             used_fallback = True
             logger.info(
-                f"[doc_distill] {source_key}: LLM distill failed — using "
-                f"deterministic fallback distillate (doc kept, not dropped)"
+                f"[doc_distill] {source_key}: distill failed "
+                f"({failure_reason or 'unknown'}) — using deterministic "
+                f"fallback distillate (doc kept, not dropped)"
             )
 
         wall_ms = int((time.monotonic() - t0) * 1000)
-        return source_key, distillate, wall_ms, used_fallback
+        return source_key, distillate, wall_ms, used_fallback, failure_reason
 
 
 async def load_distillates(minio, slug: str) -> dict:
@@ -205,22 +240,35 @@ async def doc_distill_run(state: PlannerState) -> dict:
     results = await asyncio.gather(*tasks, return_exceptions = False)
 
     distillates: dict[str, dict] = {}
-    failures: list[str] = []        # no content at all (read fail / empty)
-    fallbacks: list[str] = []       # content present but LLM distill failed
-    for k, dist, _wall, used_fb in results:
+    failures: list[dict] = []       # no content at all (read fail / empty)
+    fallbacks: list[dict] = []      # content present but LLM distill failed
+    # v3 (2026-06-05) — bucket-counter so the planner UI / logs can
+    # distinguish rate-limit pressure (operational, retry will eventually
+    # succeed) from genuine schema failures (prompt drift, model bug).
+    failure_reasons: dict[str, int] = {}
+    for k, dist, _wall, used_fb, reason in results:
         if dist is not None:
             distillates[k] = dist.model_dump()
             if used_fb:
-                fallbacks.append(k)
+                fallbacks.append({"key": k, "reason": reason or "unknown"})
+                r = reason or "unknown"
+                failure_reasons[r] = failure_reasons.get(r, 0) + 1
         else:
-            failures.append(k)
+            failures.append({"key": k, "reason": reason or "unknown"})
+            r = reason or "unknown"
+            failure_reasons[r] = failure_reasons.get(r, 0) + 1
 
     if fallbacks:
-        logger.warning(
-            f"[doc_distill] {slug}: {len(fallbacks)} doc(s) used a "
-            f"fallback distillate (LLM distill failed but content kept): "
-            f"{fallbacks[:20]}"
-        )
+        # Group fallback keys by reason for a single-line log that's
+        # legible at WARNING level (one entry per bucket).
+        by_reason: dict[str, list[str]] = {}
+        for fb in fallbacks:
+            by_reason.setdefault(fb["reason"], []).append(fb["key"])
+        for r, keys in by_reason.items():
+            logger.warning(
+                f"[doc_distill] {slug}: {len(keys)} doc(s) fell back due "
+                f"to {r}: {keys[:10]}"
+            )
 
     payload = {
         "prompt_version": PROMPT_VERSION,
@@ -233,6 +281,7 @@ async def doc_distill_run(state: PlannerState) -> dict:
         "failures":       failures[:20],  # cap for blob size
         "n_fallback":     len(fallbacks),
         "fallbacks":      fallbacks[:20],
+        "failure_reasons": failure_reasons,
     }
     blob = json.dumps(payload, indent = 2, ensure_ascii = False)
     await minio.write(vkey, blob, content_type = "application/json")
@@ -244,6 +293,7 @@ async def doc_distill_run(state: PlannerState) -> dict:
         "n_distilled": len(distillates),
         "n_failed": len(failures),
         "n_fallback": len(fallbacks),
+        "failure_reasons": failure_reasons,
         "manifest_hash": manifest,
         "cache_hit": False,
         "wall_ms": wall_ms,
@@ -254,6 +304,7 @@ async def doc_distill_run(state: PlannerState) -> dict:
         n_distilled = len(distillates),
         n_failed = len(failures),
         n_fallback = len(fallbacks),
+        failure_reasons = failure_reasons,
         wall_ms = wall_ms,
     )
     return {"doc_distill_ref": lkey, "doc_distill_stats": stats}

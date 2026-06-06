@@ -1,0 +1,50 @@
+@layer base {
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;            /* app-shell: let .shell own a 100dvh grid */
+  overflow: hidden;        /* the document never scrolls; .page does */
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Raleway', 'HelveticaNeue', 'Helvetica Neue',
+               Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+/* DD-NAVBAR-SOTA-2026-05-28 (Wave D / Wave F) — anchor & skip-link offset.
+   The sticky topbar now spans up to THREE rows on Docs Distiller
+   pages (brand+nav / title+picker / stage tabs). Worst case is
+   ~64px + ~52px + ~38px ≈ 154px when all three are visible at
+   scroll-top. Padding set to 160px so anchor targets clear the
+   full header. Non-DD pages eat a harmless ~60-90px of extra anchor
+   offset — invisible in practice since they lack in-page anchors. */
+html { scroll-padding-top: 160px; }
+
+/* DD-NAVBAR-SOTA-2026-05-26 (Wave A2) — Cross-document View Transitions
+   API. Chrome 111+/Safari 18+/Firefox 129+ get a smooth pill-morph
+   between routes when the active nav-item carries `view-transition-name:
+   nav-pill`. Older browsers ignore this rule entirely — zero JS cost,
+   zero regression risk. */
+@view-transition { navigation: auto; }
+
+/* Skip-link target — keep visually hidden until focused, then surface
+   at the top of the viewport. Wave B3 (a11y baseline). */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 8px;
+  background: var(--primary);
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 4px;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.82rem;
+  z-index: 1000;
+  transition: top 0.18s;
+}
+.skip-link:focus { top: 8px; outline: 2px solid var(--primary-dark); }
+}

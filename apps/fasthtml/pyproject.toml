@@ -6,13 +6,17 @@ requires-python = ">=3.13"
 dependencies = [
     # FastHTML — Answer.AI's HTMX-first server-rendered framework. Pulls
     # Starlette + Uvicorn + fastcore + python-fasthtml itself transitively.
-    "python-fasthtml>=0.12,<0.14",
-    # httpx — async HTTP client used for the FastAPI /health round-trip.
-    "httpx>=0.27,<0.28",
+    # 0.14 removed `RouteX`/`RouterX`/`jupy_app`/`FastJupy` and replaced
+    # `ws_hdr`/`cts_hdr` with `exts=`. Our `fast_app(...)` call uses none
+    # of those, so the bump is a no-op for our code.
+    "python-fasthtml>=0.14,<0.15",
+    # httpx — async HTTP client used for the FastAPI /health round-trip
+    # and the `/api/{path:path}` reverse proxy. Cap matches apps/fastapi.
+    "httpx>=0.28,<1.0",
     # uvicorn[standard] — adds httptools, uvloop, watchfiles, websockets.
     # watchfiles enables --reload-include / --reload-exclude (uvicorn falls
-    # back to StatReload otherwise). Same as apps/fastapi.
-    "uvicorn[standard]>=0.32,<0.36",
+    # back to StatReload otherwise). Cap matches apps/fastapi.
+    "uvicorn[standard]>=0.32,<1.0",
 ]
 
 [build-system]

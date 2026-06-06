@@ -1,0 +1,78 @@
+@layer features {
+/* No `@scope (.fw-planner-head)` — that wrapper was DEAD CODE: the
+   `.fw-planner-head` element was dropped when the header moved to the
+   row-3 toolbar (PlannerPill + PlannerActions), so every rule beneath
+   was orphaned. In particular `.fw-stage-empty` lost `display: none`,
+   `.fw-planner-head-actions` lost its flex row, `.fw-planner-cards`
+   lost its vertical stack. OLD reference (commit f5bff8e) kept these
+   unscoped in planner.css. */
+/* ===== Planner (Step 3) — substep timeline ===== */
+.fw-planner-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+/* Framework identity strip — logo(s) + catalog name, sits right below
+   the Planner title row. Mirrors Step 2's progress-framework strip but
+   sized for a header rather than a loading box. */
+.fw-planner-fw {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+.fw-planner-fw-logos {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.fw-planner-fw-logo {
+  height: 22px;
+  width: auto;
+  max-width: 28px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.fw-planner-fw-name {
+  font-size: 0.92rem;
+  font-weight: 500;
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+.fw-planner-fw-name.fw-planner-fw-name-empty {
+  font-size: 0.82rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.fw-planner-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
+.fw-planner-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* Empty-state placeholder — shown by JS when activeSlug is null on a
+   stage panel (Planner / Synth). Matches the visual weight of an
+   empty file grid so the user reads it as a clear prompt, not as a
+   missing UI element. */
+.fw-stage-empty {
+  display: none;                   /* JS toggles to '' when shown */
+  padding: 80px 32px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  line-height: 1.5;
+  background: var(--card);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  margin-top: 18px;
+}
+}

@@ -1,0 +1,65 @@
+@layer components {
+/* ===== Stage sub-nav (2026-05-27 / 2026-05-28 Wave F) =====
+   Pinned third row of `.topbar-wrap`. Real <a href> links so each
+   stage is its own URL. Visual language mirrors the global topbar
+   (Wave A1 filled-pill active state) so the sub-nav feels like a
+   continuation of the top nav.
+
+   Mobile: overflow-x: auto + scroll-snap so a narrow viewport can
+   swipe through the 5 stages without breaking the header layout.
+   Scrollbar hidden cross-browser; snap-align: start keeps the
+   tapped tab anchored to the left edge after a swipe. */
+.dd-substage-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 1;      /* row 2 right cluster — title stays, tabs shrink/scroll */
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.dd-substage-nav::-webkit-scrollbar { display: none; }
+.dd-substage {
+  /* Button reset — the same class is reused on <button> pills (YCS
+     row-3 SourceModeTabs) where the UA defaults would otherwise
+     paint a native button: `appearance: button` (3D chrome on
+     Safari, flat-grey on Chrome), non-inheriting `line-height: normal`
+     (taller than anchor siblings), system color. Harmless on <a>. */
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: 0;
+  font-family: inherit;
+  font-size: 0.8rem;
+  line-height: inherit;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 5px 12px;
+  font-weight: 500;
+  text-decoration: none;
+  border-radius: 6px;
+  letter-spacing: 0.02em;
+  opacity: 0.85;
+  flex-shrink: 0;
+  scroll-snap-align: start;
+  white-space: nowrap;
+  /* 120ms — 2026 SOTA segmented-control switch motion (Primer / Linear /
+     Vercel). 150ms felt slightly draggy; 100ms reads as abrupt. */
+  transition: color 0.12s, background 0.12s, opacity 0.12s, font-weight 0.12s;
+}
+.dd-substage:hover {
+  color: var(--text);
+  background: rgba(196, 18, 48, 0.06);
+  opacity: 1;
+}
+.dd-substage.active {
+  color: var(--primary);
+  font-weight: 600;
+  background: rgba(196, 18, 48, 0.10);
+  opacity: 1;
+  view-transition-name: dd-substage-pill;
+}
+}

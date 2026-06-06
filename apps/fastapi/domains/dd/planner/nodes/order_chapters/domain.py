@@ -8,11 +8,29 @@ from .patterns import FOUNDATIONAL_RE, JSON_RE
 
 
 def load_outline(text: str) -> dict:
-    """Parse the chapter-select outline. {} on empty/malformed input."""
+    """Parse the chapter-select outline. {} on empty/malformed input.
+
+    NORMALIZES the chapters list to the top level. chapter_select writes
+    its plan blob as `{"outline": {"chapters": [...]}, ...}` (nested),
+    while this loader's callers expect the legacy reduce-node shape
+    `{"chapters": [...]}` (flat). Without normalization, `outline.get
+    ("chapters")` returns nothing on the new format and order_chapters
+    falls into the `n_chapters <= 1` skip path → `chapter_order_ref=""`
+    → plan_write inherits an empty chapter list → final plan ships with
+    0 chapters even though chapter_select successfully assigned all
+    docs to 4+ chapters (browser-use 2026-06-06 regression)."""
     try:
-        return json.loads(text or "") or {}
+        d = json.loads(text or "") or {}
     except Exception:
         return {}
+    if not isinstance(d, dict):
+        return {}
+    # New nested form: chapters live under d["outline"]["chapters"].
+    inner = d.get("outline")
+    if isinstance(inner, dict) and isinstance(inner.get("chapters"), list):
+        d = dict(d)
+        d["chapters"] = inner["chapters"]
+    return d
 
 
 def is_foundational(title: str) -> bool:

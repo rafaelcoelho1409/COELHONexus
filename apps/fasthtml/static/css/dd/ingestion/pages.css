@@ -1,0 +1,54 @@
+@layer features {
+/* ===== Step 3 page list =====
+   No `@scope (.fw-page-grid)` — `.fw-pages-summary` is rendered as a
+   SIBLING of `.fw-page-grid` (see IngestionBody: #fw-step2-summary +
+   #fw-step2-grid are siblings), so scoping at the grid level would
+   strip the summary row's styles. OLD reference (commit f5bff8e) kept
+   these unscoped in ingestion.css; restoring. */
+.fw-page-grid {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.fw-page-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 14px;
+  background: var(--card);
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+}
+.fw-page-card:last-child { border-bottom: 0; }
+.fw-page-card:hover { background: rgba(0, 0, 0, 0.03); }
+.fw-page-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fw-page-meta {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.fw-pages-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 14px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+.fw-pages-summary strong { color: var(--text); font-weight: 600; }
+}

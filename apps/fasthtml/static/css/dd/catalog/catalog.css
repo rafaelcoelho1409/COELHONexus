@@ -1,0 +1,170 @@
+@layer features {
+/* No `@scope (.fw-picker)` here — `.fw-search`, `.fw-search-row`, and
+   `.fw-count` are rendered in the row-3 toolbar (OUTSIDE the .fw-picker
+   body wrapper), so scoping would hide them. The OLD reference (commit
+   f5bff8e) kept these unscoped in picker.css; restoring that behavior.
+   Tile + sticky-bar selectors below ARE specific enough not to need a
+   @scope barrier — every .fw-tile / .fw-sticky-bar lives inside the DD
+   body anyway. */
+.fw-search-row { display: flex; align-items: center; gap: 16px; }
+.fw-search {
+  flex: 1;
+  padding: 12px 16px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+}
+.fw-search:focus { border-color: var(--primary); }
+.fw-count {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+/* (Catalog category chips — .fw-chips/.fw-chip — removed 2026-05-28;
+   the category filter moved to the row-3 toolbar dropdown, .dd-catfilter
+   in components.css.) */
+.fw-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+}
+.fw-grid.fw-grid-empty {
+  display: block;
+  padding: 24px 0;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+.fw-grid.fw-grid-empty::after {
+  content: 'No frameworks match this filter.';
+}
+.fw-tile {
+  position: relative;            /* anchor for .fw-tile-badge */
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  background: var(--card);
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.fw-tile:hover { border-color: var(--text-muted); }
+.fw-tile.selected {
+  border-color: var(--primary);
+  background: rgba(196, 18, 48, 0.04);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+/* Ingested marker (2026-05-28) — catalog tiles whose framework already
+   exists in the /ingestion library get a green border + a corner
+   "✓ Ingested" badge (picker.js toggles `.fw-tile-ingested`). Replaces
+   the Library dropdown on the Catalog tab: ingested status is now shown
+   inline on the grid. Clicking an ingested tile jumps to its Planner. */
+.fw-tile-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: none;                 /* shown only on .fw-tile-ingested */
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ingested-text);
+  background: var(--ingested-bg);
+  border: 1px solid var(--ingested-border);
+  border-radius: 999px;
+  pointer-events: none;
+}
+.fw-tile.fw-tile-ingested {
+  border-color: var(--ingested-border);
+}
+.fw-tile.fw-tile-ingested:hover {
+  border-color: var(--ingested-text);
+}
+.fw-tile.fw-tile-ingested .fw-tile-badge { display: inline-flex; }
+/* If an ingested tile is ALSO the current selection, keep the burgundy
+   selection ring dominant (selection is the active intent). */
+.fw-tile.fw-tile-ingested.selected { border-color: var(--primary); }
+.fw-tile-logo {
+  height: 28px; width: auto; max-width: 100%;
+  display: block; margin-bottom: 10px; object-fit: contain;
+}
+/* Multi-logo strip — for unified stack tiles (e.g. LangChain - LangGraph
+   - DeepAgents). Each component's logo shows side-by-side. */
+.fw-tile-logos {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+  min-height: 28px;
+}
+.fw-tile-logo-multi {
+  height: 24px;
+  width: auto;
+  max-width: 32px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.fw-tile-name {
+  font-size: 0.92rem; font-weight: 500;
+  color: var(--text); word-break: break-word;
+}
+.fw-tile-cat {
+  font-size: 0.68rem; color: var(--text-muted);
+  margin-top: 6px; text-transform: uppercase; letter-spacing: 0.05em;
+}
+.fw-sticky-bar {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.05);
+  padding: 14px 40px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  z-index: 50;
+  transform: translateY(100%);
+  transition: transform 0.25s ease;
+}
+.fw-sticky-bar.visible { transform: translateY(0); }
+.fw-selected-label {
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+.fw-selected-name {
+  color: var(--primary); font-weight: 600;
+}
+/* Ingesting label — sits beside Selected, only revealed (display:'')
+ * by ui.js refreshGenerateState when activeRunId is set. */
+.fw-ingesting-label {
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
+}
+.fw-ingesting-prefix {
+  /* Burgundy tint distinguishes from neutral "Selected:" — signals
+   * "this is the live pipeline activity, not the user's selection". */
+  color: var(--primary);
+  font-weight: 500;
+}
+.fw-ingesting-name {
+  color: var(--primary);
+  font-weight: 600;
+}
+/* Keep Start Ingestion right-aligned whether one or both labels show. */
+.fw-sticky-bar > #fw-generate { margin-left: auto; }
+}

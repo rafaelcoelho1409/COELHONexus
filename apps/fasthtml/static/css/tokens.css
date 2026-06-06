@@ -1,0 +1,53 @@
+/* Cascade layer order — single source of truth for CSS precedence.
+   Declared once, before any @layer'd file loads. Browsers establish layer
+   order from the FIRST time each name is mentioned, so this declaration
+   guarantees layering even when downstream files load in any order.
+
+       reset       — normalize / opinionated reset (currently empty slot)
+       base        — :root tokens, html/body, view-transition, a11y primitives
+       components  — shared widgets (fw-step-panel, dd-substage-nav, buttons)
+       layout      — page-chrome containers (currently merged into base/components)
+       features    — per-feature styles (home, settings, youtube, dd/*)
+       overrides   — utility classes, ad-hoc one-offs, !important escape hatches
+
+   Future: anything that must beat a feature's own rules (e.g. a "dark mode"
+   override) lands in @layer overrides without needing !important. */
+@layer reset, base, components, layout, features, overrides;
+
+@layer base {
+:root {
+  --bg: #f7f5f1;        /* warm paper off-white — less glare for long reads */
+  --card: #fffdf9;      /* reading column, slightly warm */
+  --primary: #c41230;
+  --primary-dark: #65201f;
+  --text: #1f1d1b;      /* near-black warm — ~14:1 on --card (WCAG AAA) */
+  --text-muted: #6b6864;/* AA on --card (the old #8b8b8b failed AAA) */
+  --border: #e6e2db;    /* warm hairline */
+  --notice-bg: #fef7e0;
+  --notice-border: #f5c560;
+  --notice-text: #6b4d10;
+  --error-bg: #fde7e9;
+  --error-border: #e8a3aa;
+  --error-text: #7a2228;
+  /* Running / in-progress status — sky blue, distinct from burgundy
+     primary AND from the red/error palette. SOTA convention across
+     Linear, GitHub Actions, Dagster, LangSmith. */
+  --running-bg: #e0f2fe;
+  --running-border: #0369a1;
+  --running-text: #0c4a6e;
+  /* Ingested / done status — green. Reuses the study chapter
+     "rendered" green (#2a8b46) so success state is consistent across
+     the app. Distinct from burgundy (primary) and sky-blue (running).
+     Used to badge already-ingested catalog tiles. */
+  --ingested-bg: #e8f6ee;
+  --ingested-border: #2a8b46;
+  --ingested-text: #1f7a3d;
+  /* FSRS flashcard grade scale — Wong color-blind-safe palette (Nature
+     std; safe across deutan/protan/tritan). Hue + button order/label carry
+     the signal, never hue alone — avoids the red→amber→green CVD trap. */
+  --grade-again: #d55e00;
+  --grade-hard:  #e69f00;
+  --grade-good:  #0072b2;
+  --grade-easy:  #009e73;
+}
+}

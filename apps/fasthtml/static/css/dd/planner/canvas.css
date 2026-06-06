@@ -1,0 +1,293 @@
+@layer features {
+/* No `@scope (.fw-planner-graph)` — it locked `.fw-stage-pill`,
+   `.fw-stage-elapsed`, and the planner card / KPI rules below to
+   descendants of `.fw-planner-graph`, but PILL + ELAPSED live in the
+   row-3 toolbar (OUTSIDE `.fw-planner-graph`), and the card / KPI
+   ruleset is consumed by both the planner BODY canvas and the planner
+   drawer's stat cards. With the scope active, the toolbar pill rendered
+   completely unstyled. OLD reference (commit f5bff8e) kept everything
+   unscoped in planner.css. */
+/* ===== Stage graph canvas (Day 1 of UI-redesign sprint, ?ui=graph) =====
+   Render path 2 for the per-stage substep timeline. Coexists with
+   `.fw-planner-cards` in the DOM; JS toggles `display:none` based on
+   the `?ui=` URL flag. Cytoscape draws into `.fw-stage-canvas` as a
+   <canvas> child element.
+   See docs/UI-ARCHITECTURE-SOTA-2026-05-18.md. */
+.fw-planner-graph {
+  display: none;                 /* JS shows when UI_MODE === 'graph' */
+  flex-direction: column;
+  gap: 14px;
+}
+/* Title row — stage name + status pill share a flex line so the pill
+   sits visually attached to the stage identity. Used by the planner
+   header (and synth when it gets the same treatment). */
+.fw-stage-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.4;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+/* Total Planner/Synth wall-clock shown inside the row-3 status pill.
+   Updated live (ticks while running) by timing.js, persisted-fallback on
+   load. Empty until measured. */
+.fw-stage-elapsed {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+  opacity: 0.85;
+}
+.fw-stage-elapsed:empty { display: none; }
+.fw-stage-elapsed[data-running="1"] { color: var(--running-border); }
+.fw-stage-pill[data-status="working"] {
+  border-color: var(--running-border);
+  color: var(--running-border);
+  background: var(--running-bg);
+}
+.fw-stage-pill[data-status="working"]::before {
+  content: '✻ ';
+  animation: fw-stage-pill-spin 2.4s linear infinite;
+  display: inline-block;
+}
+.fw-stage-pill[data-status="done"] {
+  border-color: #2a8b46;
+  color: #2a8b46;
+}
+.fw-stage-pill[data-status="done"]::before { content: '✔ '; }
+.fw-stage-pill[data-status="failed"] {
+  border-color: var(--error-border);
+  color: var(--error-text);
+}
+.fw-stage-pill[data-status="failed"]::before { content: '✕ '; }
+@keyframes fw-stage-pill-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.fw-stage-canvas {
+  width: 100%;
+  /* Tall enough for 8-9 nodes at native size (200x60 + dagre rankSep
+     56 → ~840px tall for 8 nodes) — canvas scrolls within the panel
+     if a stage outgrows it. Increased from 520→720 after the dagre
+     switch + node size bump (200x60 was 150x48). */
+  height: 720px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+  /* Cytoscape needs a positioned ancestor + non-zero size to layout
+     its internal <canvas>. The size above + relative below satisfy it. */
+  position: relative;
+  overflow: hidden;
+  /* Subtle inner shadow so the canvas reads as a panel, not a card edge. */
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.015);
+}
+.fw-planner-card {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+  overflow: hidden;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.fw-planner-card.running {
+  border-color: var(--running-border);
+  box-shadow: 0 0 0 2px rgba(3, 105, 161, 0.10);
+}
+.fw-planner-card.done { border-color: var(--border); }
+.fw-planner-card.failed { border-color: var(--error-border); }
+.fw-planner-card.future {
+  opacity: 0.55;
+  background: rgba(0, 0, 0, 0.015);
+}
+.fw-planner-card.future .fw-planner-card-icon {
+  color: var(--text-muted);
+  animation: none;
+}
+.fw-planner-card.future .fw-planner-card-title {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* ===== Substep stats — KPI grid + distribution + footer ===== */
+/* Used inside expanded substep cards. Designed per 2026 dashboard
+   best practices: 4 headline KPIs max, one visual element per card,
+   responsive (4-col → 2-col → 1-col), Raleway label + JetBrains-Mono
+   numbers. */
+.fw-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.fw-stat-card {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+  padding: 12px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.fw-stat-card-label {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-family: 'Raleway', sans-serif;
+}
+.fw-stat-card-value {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+.fw-stat-card-sub {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  margin-top: 2px;
+}
+
+.fw-stat-dist {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 12px 14px;
+  background: var(--card);
+  margin-bottom: 14px;
+}
+.fw-stat-dist-title {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-family: 'Raleway', sans-serif;
+  margin-bottom: 10px;
+}
+.fw-stat-dist-row {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+}
+.fw-stat-dist-cell {
+  text-align: left;
+}
+.fw-stat-dist-key {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  font-family: 'Raleway', sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 3px;
+}
+.fw-stat-dist-val {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.fw-stat-foot {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  padding-top: 4px;
+}
+.fw-stat-foot strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Responsive — 2 cols on tablet, 1 col on phone */
+@media (max-width: 900px) {
+  .fw-stat-grid { grid-template-columns: repeat(2, 1fr); }
+  .fw-stat-dist-row { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 560px) {
+  .fw-stat-grid { grid-template-columns: 1fr; }
+  .fw-stat-dist-row { grid-template-columns: repeat(2, 1fr); }
+}
+.fw-planner-card-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  cursor: pointer;
+  user-select: none;
+}
+.fw-planner-card-head:hover { background: rgba(0, 0, 0, 0.02); }
+.fw-planner-card-icon {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.05rem;
+  line-height: 1;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.fw-planner-card.running .fw-planner-card-icon {
+  color: var(--running-border);
+  animation: fw-spin 1.2s linear infinite;
+}
+.fw-planner-card.done .fw-planner-card-icon { color: #2a8b46; }
+.fw-planner-card.failed .fw-planner-card-icon { color: var(--error-text); }
+.fw-planner-card-latency {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.fw-planner-card.expanded .fw-planner-card-chevron {
+  transform: rotate(180deg);
+}
+.fw-planner-card-body {
+  border-top: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.02);
+  padding: 14px 16px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.75rem;
+  color: var(--text);
+  line-height: 1.5;
+  max-height: 320px;
+  overflow-y: auto;
+  display: none;
+}
+.fw-planner-card.expanded .fw-planner-card-body { display: block; }
+.fw-planner-card-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.fw-planner-card-body .fw-empty {
+  padding: 8px 0;
+  text-align: left;
+  font-family: 'Raleway', sans-serif;
+  font-size: 0.8rem;
+}
+.fw-planner-error {
+  color: var(--error-text);
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  padding: 8px 10px;
+  border-radius: 3px;
+  font-family: 'Raleway', sans-serif;
+  font-size: 0.8rem;
+  margin-bottom: 8px;
+}
+}

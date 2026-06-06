@@ -22,6 +22,7 @@ from .params import (
     CONCURRENCY,
     CONFIDENCE_THRESHOLD,
     MAX_TOKENS,
+    RESCUE_FLOOR,
     TEMPERATURE,
 )
 from .prompts import build_prompt
@@ -204,9 +205,6 @@ async def chapter_assign_run(state: PlannerState) -> dict:
     assignments: dict[str, list[dict]] = {}
     n_failed = 0
     fallbacks: list[str] = []
-    coverage_count: dict[int, int] = {
-        i: 0 for i in range(len(proposals_dicts))
-    }
     for k, scores, _wall, used_fb in results:
         if scores is None:
             n_failed += 1
@@ -214,6 +212,53 @@ async def chapter_assign_run(state: PlannerState) -> dict:
         assignments[k] = scores
         if used_fb:
             fallbacks.append(k)
+
+    # v3 (2026-06-05) — RESCUE PASS. Sub-threshold-but-above-floor docs
+    # get their best score floored to CONFIDENCE_THRESHOLD so they enter
+    # greedy_select's `assignable` set. Without this, the [0.3, 0.5)
+    # confidence band silently drops genuine content (~18 docs on CC).
+    # Done in-place on the assignments dict so the persisted blob
+    # reflects the post-rescue scoring; the original LLM scores are
+    # still visible in the per-doc score list (only the BEST score is
+    # nudged).
+    rescued: list[dict] = []
+    for k, scores in assignments.items():
+        if not scores:
+            continue
+        # Find the best (chapter_idx, confidence) tuple.
+        best_idx = 0
+        best_conf = float(scores[0].get("confidence") or 0.0)
+        for i, s in enumerate(scores[1:], 1):
+            c = float(s.get("confidence") or 0.0)
+            if c > best_conf:
+                best_conf = c
+                best_idx = i
+        if best_conf < CONFIDENCE_THRESHOLD and best_conf >= RESCUE_FLOOR:
+            original = best_conf
+            scores[best_idx]["confidence"] = CONFIDENCE_THRESHOLD
+            scores[best_idx]["rescued_from"] = original
+            rescued.append({
+                "key":           k,
+                "chapter_idx":   scores[best_idx]["chapter_idx"],
+                "original_conf": original,
+            })
+
+    if rescued:
+        logger.warning(
+            f"[chapter_assign] {slug}: rescued {len(rescued)} doc(s) "
+            f"from the [{RESCUE_FLOOR}, {CONFIDENCE_THRESHOLD}) confidence "
+            f"band — floored best score to {CONFIDENCE_THRESHOLD} so they "
+            f"reach a chapter instead of being silently dropped at "
+            f"chapter_select. Sample: "
+            f"{[(r['key'], r['original_conf']) for r in rescued[:10]]}"
+        )
+
+    # Rebuild coverage_count AFTER rescue so the post-rescue picture is
+    # what flows into the stats payload.
+    coverage_count: dict[int, int] = {
+        i: 0 for i in range(len(proposals_dicts))
+    }
+    for k, scores in assignments.items():
         for s in scores:
             if s["confidence"] >= CONFIDENCE_THRESHOLD:
                 coverage_count[s["chapter_idx"]] = coverage_count.get(
@@ -237,9 +282,12 @@ async def chapter_assign_run(state: PlannerState) -> dict:
         "n_failed":           n_failed,
         "n_fallback":         len(fallbacks),
         "fallbacks":          fallbacks[:20],
+        "n_rescued":          len(rescued),
+        "rescued":            rescued[:20],
         "n_proposals":        len(proposals_dicts),
         "coverage_count":     coverage_count,
         "confidence_thresh":  CONFIDENCE_THRESHOLD,
+        "rescue_floor":       RESCUE_FLOOR,
     }
     blob = json.dumps(payload, indent = 2, ensure_ascii = False)
     await minio.write(vkey, blob, content_type = "application/json")
@@ -251,6 +299,7 @@ async def chapter_assign_run(state: PlannerState) -> dict:
         "n_assigned": len(assignments),
         "n_failed": n_failed,
         "n_fallback": len(fallbacks),
+        "n_rescued": len(rescued),
         "n_proposals": len(proposals_dicts),
         "coverage_count": coverage_count,
         "cache_hit": False,
@@ -263,6 +312,7 @@ async def chapter_assign_run(state: PlannerState) -> dict:
         n_assigned = len(assignments),
         n_failed = n_failed,
         n_fallback = len(fallbacks),
+        n_rescued = len(rescued),
         wall_ms = wall_ms,
     )
     return {

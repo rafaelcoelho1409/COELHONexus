@@ -20,7 +20,11 @@ from .keys import (
     select_latest_key,
     select_versioned_key,
 )
-from .params import MIN_DOCS_PER_CHAPTER, MIN_KEPT_CHAPTERS
+from .params import (
+    CONFIDENCE_THRESHOLD,
+    MIN_DOCS_PER_CHAPTER,
+    MIN_KEPT_CHAPTERS,
+)
 from .versions import PROMPT_VERSION
 
 
@@ -126,16 +130,46 @@ async def chapter_select_run(state: PlannerState) -> dict:
         if ci in docs_per_chapter:
             docs_per_chapter[ci].append(k)
 
+    # v2 (2026-06-05) — orphan-protection. Before deciding what to prune,
+    # build a per-doc lookup of every chapter where that doc has an
+    # above-threshold score. A small chapter is then prune-eligible ONLY
+    # if every one of its members has at least one alternative selected
+    # chapter to land in. Otherwise pruning silently orphans docs (the
+    # CC "Skills and Custom Commands" failure mode).
+    above_threshold_chapters: dict[str, set[int]] = {}
+    for k, scores in assignments.items():
+        above_threshold_chapters[k] = {
+            int(s["chapter_idx"])
+            for s in scores
+            if float(s.get("confidence") or 0.0) >= CONFIDENCE_THRESHOLD
+            and int(s["chapter_idx"]) in set(selected)
+        }
+
     pruned: list[int] = []
     kept: list[int] = []
+    orphan_protected: list[int] = []
     for ci in selected:
-        if len(docs_per_chapter.get(ci, [])) < MIN_DOCS_PER_CHAPTER:
-            if ci in pinned:
-                kept.append(ci)
-            else:
-                pruned.append(ci)
-        else:
+        members = docs_per_chapter.get(ci, [])
+        below_min = len(members) < MIN_DOCS_PER_CHAPTER
+        if not below_min:
             kept.append(ci)
+            continue
+        if ci in pinned:
+            kept.append(ci)
+            continue
+        # Below-min, unpinned: check for orphan risk. A member doc is at
+        # risk if removing `ci` leaves it with no above-threshold chapter.
+        creates_orphan = False
+        for k in members:
+            alternatives = above_threshold_chapters.get(k, set()) - {ci}
+            if not alternatives:
+                creates_orphan = True
+                break
+        if creates_orphan:
+            kept.append(ci)
+            orphan_protected.append(ci)
+        else:
+            pruned.append(ci)
 
     # Restore lowest-pruned (by doc count) if too few chapters kept.
     if len(kept) < MIN_KEPT_CHAPTERS and pruned:
@@ -189,20 +223,22 @@ async def chapter_select_run(state: PlannerState) -> dict:
     n_total_docs = len(assignments)
 
     select_payload = {
-        "prompt_version":     PROMPT_VERSION,
-        "framework_slug":     slug,
-        "manifest_hash":      manifest,
-        "selected_indices":   kept,
-        "pruned_indices":     pruned,
-        "pinned_indices":     sorted(pinned),
-        "n_proposals_in":     len(proposals),
-        "n_chapters_out":     len(kept),
-        "n_assigned_docs":    n_assigned_docs,
-        "n_total_docs":       n_total_docs,
-        "coverage_fraction":  (
+        "prompt_version":        PROMPT_VERSION,
+        "framework_slug":        slug,
+        "manifest_hash":         manifest,
+        "selected_indices":      kept,
+        "pruned_indices":        pruned,
+        "pinned_indices":        sorted(pinned),
+        "orphan_protected":      orphan_protected,
+        "n_proposals_in":        len(proposals),
+        "n_chapters_out":        len(kept),
+        "n_orphan_protected":    len(orphan_protected),
+        "n_assigned_docs":       n_assigned_docs,
+        "n_total_docs":          n_total_docs,
+        "coverage_fraction":     (
             n_assigned_docs / n_total_docs if n_total_docs else 0.0
         ),
-        "chapters":           out_chapters,
+        "chapters":              out_chapters,
     }
     plan_payload = {
         "prompt_version":  PROMPT_VERSION,
@@ -237,22 +273,31 @@ async def chapter_select_run(state: PlannerState) -> dict:
 
     wall_ms = int((time.monotonic() - t0) * 1000)
     stats = {
-        "n_proposals_in":   len(proposals),
-        "n_chapters_out":   len(kept),
-        "n_pruned":         len(pruned),
-        "n_assigned_docs":  n_assigned_docs,
-        "n_total_docs":     n_total_docs,
-        "coverage_fraction": (
+        "n_proposals_in":     len(proposals),
+        "n_chapters_out":     len(kept),
+        "n_pruned":           len(pruned),
+        "n_orphan_protected": len(orphan_protected),
+        "n_assigned_docs":    n_assigned_docs,
+        "n_total_docs":       n_total_docs,
+        "coverage_fraction":  (
             n_assigned_docs / n_total_docs if n_total_docs else 0.0
         ),
-        "wall_ms":          wall_ms,
-        "manifest_hash":    manifest,
-        "chapter_titles":   [c["title"] for c in out_chapters],
-        "chapter_sizes":    [c["n_member_docs"] for c in out_chapters],
+        "wall_ms":            wall_ms,
+        "manifest_hash":      manifest,
+        "chapter_titles":     [c["title"] for c in out_chapters],
+        "chapter_sizes":      [c["n_member_docs"] for c in out_chapters],
     }
+    if orphan_protected:
+        logger.info(
+            f"[chapter_select] {slug}: orphan-protected "
+            f"{len(orphan_protected)} small chapter(s) whose members had "
+            f"no alternative above-threshold chapter: {orphan_protected}"
+        )
     await emit_progress(
         thread_id, "chapter_select", "done",
-        n_chapters = len(kept), n_pruned = len(pruned),
+        n_chapters = len(kept),
+        n_pruned = len(pruned),
+        n_orphan_protected = len(orphan_protected),
         coverage = stats["coverage_fraction"],
         wall_ms = wall_ms,
         titles = stats["chapter_titles"],

@@ -7,9 +7,9 @@ router, then serve. Everything else lives in dedicated packages:
   proxy.py               — /api/{path:path} → FastAPI reverse proxy
   features/<name>/       — one package per feature, exposing register(rt)
     home/                — / landing
-    docs_distiller/      — /docs-distiller wizard (5 stage pages)
+    dd/                  — /docs-distiller wizard (5 stage pages)
     settings/            — /settings BYOK + model selection
-    youtube/             — /youtube-content-search placeholder
+    ycs/                 — /youtube-content-search 3-step wizard
     common/              — /coming-soon, /health
   static/css/            — split stylesheets (base, components, dd/*, …)
   static/js/dd/          — ES module wizard client-side logic
@@ -19,7 +19,7 @@ from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
 
 import proxy
-from features import common, docs_distiller, home, settings, youtube
+from features import common, dd, home, settings, ycs
 from layout.head import HEAD
 
 
@@ -68,8 +68,8 @@ app.router.routes = [
 
 proxy.register(rt)
 home.register(rt)
-docs_distiller.register(rt)
-youtube.register(rt)
+dd.register(rt)
+ycs.register(rt)
 settings.register(rt)
 common.register(rt)
 

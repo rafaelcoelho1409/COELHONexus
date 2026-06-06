@@ -1,0 +1,39 @@
+@layer components {
+/* Per-stage body panel. (The wizard stepper — .fw-stepper/.fw-step/
+   .fw-step-connector/.fw-new-study — was removed 2026-05-28 with the
+   move to per-stage routes; only the panel wrapper remains.) */
+.fw-step-panel { display: none; }
+.fw-step-panel.active { display: block; }
+
+
+#fw-step-1-edit {
+  display: flex; flex-direction: column; gap: 18px;
+}
+
+.fw-readonly {
+  padding: 18px 20px;
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.fw-readonly .fw-readonly-name {
+  color: var(--primary); font-weight: 600;
+}
+.fw-readonly-hint {
+  display: block; margin-top: 10px;
+  font-size: 0.78rem; color: var(--text-muted);
+}
+.fw-step-placeholder {
+  padding: 64px 24px; text-align: center;
+  color: var(--text-muted); font-size: 0.92rem;
+  border: 2px dashed var(--border); border-radius: 4px;
+  line-height: 1.6;
+}
+.fw-step-placeholder-title {
+  font-size: 1.1rem; font-weight: 500;
+  color: var(--text); margin-bottom: 10px;
+}
+}
