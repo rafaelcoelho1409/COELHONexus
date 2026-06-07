@@ -1,5 +1,4 @@
 @layer features {
-@scope (.fw-study-side) {
 /* Chapter list — slide-out SIDE WINDOW (off-canvas left). Toggled by the
    `☰ Chapters` button; `.open` slides it in. Fixed so it overlays the page
    and the materials reader keeps the full width underneath. */
@@ -34,6 +33,5 @@
 .fw-study-side-backdrop.open {
   opacity: 1;
   pointer-events: auto;
-}
 }
 }

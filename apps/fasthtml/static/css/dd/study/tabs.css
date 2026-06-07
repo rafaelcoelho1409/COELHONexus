@@ -1,5 +1,4 @@
 @layer features {
-@scope (.fw-study-pane) {
 /* Tab content panes */
 .fw-study-content {
   flex: 1;
@@ -659,5 +658,4 @@
   white-space: nowrap;
 }
 
-}
 }

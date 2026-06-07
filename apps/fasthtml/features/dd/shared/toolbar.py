@@ -16,7 +16,7 @@ def StageToolbar(active_stage: str, slug: str | None,
     if active_stage == "catalog":
         left = [CatalogSearch(catalog), CategoryFilter(catalog)]
     elif active_stage == "planner":
-        left = [PlannerPill(), PlannerActions()]
+        left = [PlannerActions(), PlannerPill()]
     elif active_stage == "synth":
         # Pill on the RIGHT of Wipe/Stop buttons (changed 2026-06-07).
         # Old-commit order was [Pill, Actions]; the new layout puts the

@@ -1,5 +1,4 @@
 @layer features {
-@scope (.fw-study-rail) {
 /* DD-STUDY-SOTA 2026-05-28 (Wave 2) — persistent chapter rail on
    desktop. Every 2026 docs platform (Fumadocs / Mintlify / GitBook /
    Docusaurus) pins the chapter nav on wide screens and only drops to an
@@ -137,6 +136,5 @@
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-}
 }
 }

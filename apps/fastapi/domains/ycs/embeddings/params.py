@@ -32,6 +32,12 @@ EMBEDDING_MODEL = os.environ.get(
 
 # Dimensions per model id. Used to size the Qdrant dense vector slot at
 # collection-create time. Mirror of deprecated MODEL_DIMENSIONS map.
+# `baai/bge-m3` was added 2026-06-07 for the graph_builder semantic
+# entity-resolution check (Option 2 fix for false fuzzy merges) — the
+# Qdrant path keeps using `llama-nemotron-embed-1b-v2`. BGE-M3 was
+# picked empirically: it's multilingual (100+ langs, key for the
+# Brazilian Portuguese entities) and gives a clean cosine gap between
+# true and false merges at threshold 0.85 on short entity-ID strings.
 MODEL_DIMENSIONS: dict[str, int] = {
     "nvidia/llama-nemotron-embed-1b-v2":             2048,
     "nvidia/llama-3.2-nv-embedqa-1b-v2":             2048,
@@ -41,6 +47,7 @@ MODEL_DIMENSIONS: dict[str, int] = {
     "nvidia/nv-embedqa-e5-v5":                       1024,
     "nvidia/nv-embed-v1":                            4096,
     "nvidia/nv-embedcode-7b-v1":                     4096,
+    "baai/bge-m3":                                   1024,
 }
 
 # Retry / batch / pacing — deprecated `embeddings.py:L98, L148, L156`.

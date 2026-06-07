@@ -1,5 +1,4 @@
 @layer features {
-@scope (.fw-study-main) {
 /* CENTER — main reader area. Flat / full-bleed (no card border or bg):
    the content fills the grid column edge-to-edge so it respects ONLY the
    page's L/R padding, matching the rest of the app's flat surfaces. */
@@ -86,5 +85,4 @@
 }
 .fw-study-chapter-head-meta .badge.pass { border-color: #2a8b46; color: #2a8b46; }
 .fw-study-chapter-head-meta .badge.fail { border-color: var(--error-border); color: var(--error-text); }
-}
 }

@@ -24,16 +24,57 @@ from langchain_experimental.graph_transformers import LLMGraphTransformer
 from langchain_neo4j import Neo4jGraph
 from rapidfuzz import fuzz
 
+from domains.ycs.embeddings import NVIDIAEmbeddings
+
 from . import domain
 from .params import (
     DEFAULT_BATCH_SIZE,
+    EMBED_COSINE_CUTOFF,
     FUZZ_MERGE_CUTOFF,
     INTER_BATCH_SLEEP_S,
+    RESOLVE_EMBED_MODEL,
     SCHEMA_DISCOVERY_SAMPLE_CHAR_CAP,
     SCHEMA_DISCOVERY_SAMPLE_COUNT,
 )
 from .prompts import EXTRACTION_INSTRUCTIONS, SCHEMA_DISCOVERY_PROMPT
 from .schemas import SchemaDiscovery
+
+
+# Lazy singleton — re-used across resolve_entities calls within the
+# same Celery worker process. NVIDIAEmbeddings owns its own httpx
+# client + retry/backoff, so once warm it's free to reuse.
+_resolve_embedder: NVIDIAEmbeddings | None = None
+
+
+def _get_resolve_embedder() -> NVIDIAEmbeddings:
+    global _resolve_embedder
+    if _resolve_embedder is None:
+        _resolve_embedder = NVIDIAEmbeddings(model = RESOLVE_EMBED_MODEL)
+    return _resolve_embedder
+
+
+def _embed_ids_for_resolution(ids: list[str]) -> dict[str, list[float]]:
+    """Embed a batch of entity-id strings via NIM BGE-M3, returning a
+    `{id: vector}` map for downstream cosine comparisons.
+
+    Best-effort: any NIM hiccup logs a warning and returns `{}` — the
+    caller falls back to fuzz-only behavior (drops the semantic gate
+    but doesn't crash entity resolution). This degrades correctness
+    silently (a NIM outage could let through false merges), but
+    preserves availability — same tradeoff as Steps 1+2's wide
+    try/except guards."""
+    if not ids:
+        return {}
+    try:
+        vecs = _get_resolve_embedder().embed_documents(ids)
+    except Exception as e:
+        logger.warning(
+            f"[ycs:graph:resolve] NIM embedding failed; falling back "
+            f"to fuzz-only merge for this label "
+            f"({type(e).__name__}: {str(e)[:120]})"
+        )
+        return {}
+    return {ids[i]: vecs[i] for i in range(min(len(ids), len(vecs)))}
 
 
 logger = logging.getLogger(__name__)
@@ -268,7 +309,22 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     except Exception as e:
         logger.warning(f"[ycs:graph:resolve] exact merge failed: {e}")
 
-    # Step 3 — rapidfuzz fuzzy merge (per label, skip numeric labels).
+    # Step 3 — fuzzy merge with semantic gate (per label, skip numeric).
+    # Pipeline per label:
+    #   a) fuzz.ratio pre-filter at FUZZ_MERGE_CUTOFF (75) — fast,
+    #      kills the obviously-different pairs.
+    #   b) NIM BGE-M3 embedding cosine gate at EMBED_COSINE_CUTOFF
+    #      (0.85) — catches false-positive fuzz matches like
+    #      `Astronomia`↔`Gastronomia` (85.7% fuzz but cos 0.597).
+    #      Embeddings are batched once per label so we make at most
+    #      one NIM call per label even if it has 100 candidates.
+    #   c) Cypher mergeNodes on the survivors.
+    # If (b) fails (NIM outage), the label silently falls back to
+    # fuzz-only behavior — `_embed_ids_for_resolution` returns `{}`
+    # and `cosine_similarity` against empty vectors returns 0.0,
+    # which fails the gate → all merges in that label are skipped.
+    # Conservative-by-default: prefer losing legitimate merges over
+    # introducing semantic confusions.
     try:
         entities = neo4j_graph.query(
             "MATCH (n:__Entity__) "
@@ -285,6 +341,11 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
             ids = [str(i) for i in row["ids"] if isinstance(i, str)]
             if len(ids) < 2:
                 continue
+            # (b) — embed all ids for this label in ONE batch up
+            # front. Cached per-label so the inner cosine check is
+            # zero-network. `{}` on NIM failure → gate always fails →
+            # no merges in this label (safe fallback).
+            embeddings = _embed_ids_for_resolution(ids)
             already_merged: set[str] = set()
             for i, id1 in enumerate(ids):
                 if id1 in already_merged:
@@ -292,9 +353,20 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
                 for id2 in ids[i + 1:]:
                     if id2 in already_merged:
                         continue
+                    # (a) fuzz pre-filter
                     score = fuzz.ratio(id1, id2)
-                    # 100 = exact, already handled by Step 2.
                     if not (FUZZ_MERGE_CUTOFF <= score < 100):
+                        continue
+                    # (b) semantic gate
+                    vec_a = embeddings.get(id1, [])
+                    vec_b = embeddings.get(id2, [])
+                    cosine = domain.cosine_similarity(vec_a, vec_b)
+                    if not domain.should_merge_by_cosine(cosine):
+                        logger.info(
+                            f"[ycs:graph:resolve] semantic-skip "
+                            f"'{id1}' ↔ '{id2}' fuzz={score}% "
+                            f"cos={cosine:.3f}<{EMBED_COSINE_CUTOFF}"
+                        )
                         continue
                     canonical, duplicate = domain.pick_canonical(id1, id2)
                     try:
@@ -314,7 +386,7 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
                         merged_count += 1
                         logger.info(
                             f"[ycs:graph:resolve] fuzzy '{duplicate}' → "
-                            f"'{canonical}' ({score}%)"
+                            f"'{canonical}' (fuzz={score}% cos={cosine:.3f})"
                         )
                     except Exception:
                         pass

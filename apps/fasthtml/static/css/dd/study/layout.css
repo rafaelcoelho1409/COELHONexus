@@ -1,5 +1,4 @@
 @layer features {
-@scope (.fw-study-grid) {
 .fw-study-grid {
   display: block;          /* single column — chapter list is now an overlay */
   margin-top: 0;
@@ -11,5 +10,4 @@
    Scoped to DD pages via the `.fw-picker` root so other features keep
    their default top padding. */
 .page:has(.fw-picker) { padding-top: 10px; }
-}
 }
