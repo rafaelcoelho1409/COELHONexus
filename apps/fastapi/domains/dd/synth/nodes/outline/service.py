@@ -1,5 +1,10 @@
 from __future__ import annotations
-from .keys import latest_blob_key, versioned_blob_key
+from .keys import (
+    latest_blob_key,
+    latest_blob_key as _latest_blob_key,
+    versioned_blob_key,
+    versioned_blob_key as _versioned_blob_key,
+)
 from .params import (
     BANNED_HEADINGS_LC,
     BANNED_LIST_HUMAN,
@@ -30,9 +35,29 @@ from .schemas import (
 )
 from .versions import OUTLINE_PROMPT_VERSION, OUTLINE_SCHEMA_VERSION
 
+import asyncio
+import json
+import logging
+import os
+import re
+import time
 from collections import defaultdict, deque
 from difflib import SequenceMatcher
+from hashlib import sha256
 from typing import Optional
+
+from pydantic import ValidationError
+
+from domains.llm.rotator.chain import chat_judge_bandit_async
+from domains.llm.rotator.chain.service import embed_via_router_async
+
+from ....ingestion.storage import get_storage
+from ...runtime.progress import emit_progress
+from ...state import SynthState
+from ..render.keys import planner_latest_key as _planner_latest_key
+
+
+logger = logging.getLogger(__name__)
 
 
 # DAG primitives (pure)
@@ -571,6 +596,544 @@ def count_vault_sentinels(md_text: str) -> int:
     return md_text.count("<code-ref hash = ")
 
 
+
+# === RESTORED FROM OLD COMMIT (lost in refactor) ===
+
+# ---- _N_SAMPLES ----
+_N_SAMPLES               = 3
+
+# ---- _TEMPERATURE_DRAFT ----
+_TEMPERATURE_DRAFT       = 0.4
+
+# ---- _TEMPERATURE_VOTE ----
+_TEMPERATURE_VOTE        = 0.0
+
+# ---- _TEMPERATURE_REPAIR ----
+_TEMPERATURE_REPAIR      = 0.2
+
+# ---- _MAX_REPAIR_RETRIES ----
+_MAX_REPAIR_RETRIES      = 2
+
+# ---- _MAX_TOKENS_DRAFT ----
+_MAX_TOKENS_DRAFT        = 8000
+
+# ---- _MAX_TOKENS_VOTE ----
+_MAX_TOKENS_VOTE         = 200
+
+# ---- _MAX_TOKENS_REPAIR ----
+_MAX_TOKENS_REPAIR       = 8000
+
+# ---- _MAX_SOURCE_CHARS ----
+_MAX_SOURCE_CHARS        = 180_000
+
+# ---- _SOURCE_CONCAT_SEPARATOR ----
+_SOURCE_CONCAT_SEPARATOR = "\n\n---\n\n"
+
+# ---- _OUTLINE_RESPONSE_FORMAT ----
+_OUTLINE_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name":   "chapter_outline",
+        "schema": ChapterOutline.model_json_schema(),
+        "strict": False,
+    },
+}
+
+# ---- _USC_VOTE_RESPONSE_FORMAT ----
+_USC_VOTE_RESPONSE_FORMAT = {"type": "json_object"}
+
+# ---- _OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR ----
+_OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR = 5
+
+# ---- _OUTLINE_OPTIMAL_STOPPING_RATIO_OF_CAP ----
+_OUTLINE_OPTIMAL_STOPPING_RATIO_OF_CAP = 0.7
+
+# ---- _outline_optimal_stopping_min ----
+def _outline_optimal_stopping_min(n_sources: int | None) -> int:
+    """Minimum section count for Optimal-Stopping early-exit. Couples
+    to the adaptive cap so small corpora keep the cheap floor while
+    large corpora demand sample 1 use most of the available budget
+    before short-circuiting."""
+    if n_sources is None:
+        return _OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR
+    # max_h2_for_n_sources already imported at module top from .params
+    cap = max_h2_for_n_sources(n_sources)
+    return max(
+        _OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR,
+        int(cap * _OUTLINE_OPTIMAL_STOPPING_RATIO_OF_CAP),
+    )
+
+# ---- _OUTLINE_OPTIMAL_STOPPING_ENABLED ----
+_OUTLINE_OPTIMAL_STOPPING_ENABLED = os.environ.get(
+    "KD_OUTLINE_OPTIMAL_STOPPING", "true",
+).lower() in ("true", "1", "yes", "on")
+
+# ---- _BLOB_PREFIX ----
+_BLOB_PREFIX = "synth"
+
+# ---- _JSON_RE ----
+_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+# ---- _parse_json_response ----
+def _parse_json_response(text: str) -> Optional[dict]:
+    """Best-effort JSON extraction. Tolerates ```json fences + leading
+    prose. Same approach as planner/reduce/service.py."""
+    if not text:
+        return None
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+    m = _JSON_RE.search(text)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(0))
+    except Exception:
+        return None
+
+# ---- _try_parse_outline ----
+def _try_parse_outline(
+    raw: dict,
+) -> tuple[Optional[ChapterOutline], Optional[str]]:
+    """Pydantic-validate raw dict → ChapterOutline. Returns (outline, error)."""
+    try:
+        outline = ChapterOutline.model_validate(raw)
+        return outline, None
+    except ValidationError as e:
+        return None, _shorten_pydantic_error(e)
+    except Exception as e:
+        return None, f"{type(e).__name__}: {str(e)[:200]}"
+
+# ---- _shorten_pydantic_error ----
+def _shorten_pydantic_error(e: ValidationError) -> str:
+    """Compact a Pydantic ValidationError into a 200-char summary that's
+    still actionable in repair-prompt feedback."""
+    errs = e.errors()
+    if not errs:
+        return "Pydantic validation failed (no detail)"
+    lines = []
+    for err in errs[:4]:
+        loc = ".".join(str(x) for x in err.get("loc", []))
+        msg = err.get("msg", "")
+        lines.append(f"{loc}: {msg}")
+    suffix = f" (+{len(errs) - 4} more)" if len(errs) > 4 else ""
+    return "; ".join(lines) + suffix
+
+# ---- _concat_sources ----
+def _concat_sources(bodies: list[str]) -> tuple[str, bool]:
+    """Concatenate source markdown bodies with separators, capped at
+    `_MAX_SOURCE_CHARS`. Returns (concat_text, truncated_flag)."""
+    parts: list[str] = []
+    total = 0
+    truncated = False
+    for body in bodies:
+        if not body:
+            continue
+        if total + len(body) > _MAX_SOURCE_CHARS:
+            remaining = _MAX_SOURCE_CHARS - total
+            if remaining > 200:
+                parts.append(body[:remaining])
+                total = _MAX_SOURCE_CHARS
+            truncated = True
+            break
+        parts.append(body)
+        total += len(body) + len(_SOURCE_CONCAT_SEPARATOR)
+    return _SOURCE_CONCAT_SEPARATOR.join(parts), truncated
+
+# ---- _SCOPE_LEXICAL_JACCARD ----
+_SCOPE_LEXICAL_JACCARD = 0.40
+
+# ---- _SCOPE_STOPWORDS ----
+_SCOPE_STOPWORDS = frozenset({
+    "the", "and", "for", "this", "with", "that", "from", "section", "show",
+    "how", "use", "using", "via", "your", "each", "into", "onto", "claude",
+    "code", "example", "demonstrate", "learn", "cover", "when", "what",
+    "where", "which", "while", "they", "them", "then", "here", "run",
+    "creat", "make", "field", "valu", "option", "config", "setup", "set",
+})
+# Threshold for _detect_semantic_h2_duplicates — must be defined BEFORE
+# that function (used as a default arg, evaluated at module-init).
+_SEMANTIC_H2_DEDUP_THRESHOLD = 0.74
+
+# ---- _scope_words ----
+def _scope_words(text: str) -> set[str]:
+    """Lightly-stemmed content words (≥4 chars) of a heading+description,
+    for lexical scope-overlap detection. Stopword-filtered."""
+    out: set[str] = set()
+    for t in re.findall(r"[a-z][a-z0-9_]{3,}", (text or "").lower()):
+        for suf in ("ing", "tions", "tion", "ment", "ions", "ers", "es",
+                    "ed", "ity", "al", "s"):
+            if t.endswith(suf) and len(t) - len(suf) >= 3:
+                t = t[: -len(suf)]
+                break
+        out.add(t)
+    return out - _SCOPE_STOPWORDS
+
+# ---- _detect_semantic_h2_duplicates ----
+async def _detect_semantic_h2_duplicates(
+    outline: ChapterOutline,
+    *,
+    threshold: float = _SEMANTIC_H2_DEDUP_THRESHOLD,
+) -> list[str]:
+    """Return issue strings naming pairs of SCOPE-duplicate H2 sections —
+    flagged by embedding cosine (semantic) OR lexical content-word overlap.
+    Empty list if none. Fail-soft: the lexical pass still runs when the
+    embedder is unavailable, so detection never depends solely on the LLM
+    embedding service."""
+    sections = outline.sections
+    if len(sections) <= 1:
+        return []
+    n = len(sections)
+    words = [_scope_words(f"{s.heading} {s.description}") for s in sections]
+
+    # Embedding cosine (semantic signal) — best-effort.
+    sim = None
+    try:
+        embeddings = await embed_via_router_async(
+            [f"{s.heading}\n{s.description}" for s in sections],
+            input_type="query",
+        )
+        import numpy as np
+        embs = np.array(embeddings, dtype=np.float32)
+        norms = np.linalg.norm(embs, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        normed = embs / norms
+        sim = normed @ normed.T
+    except Exception as e:
+        logger.warning(
+            f"[outline_sdp] semantic H2 dedup embed/cosine failed: "
+            f"{type(e).__name__}: {e} — falling back to lexical scope check"
+        )
+        sim = None
+
+    flagged: list[tuple[str, str, float, str]] = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            cos = float(sim[i, j]) if sim is not None else 0.0
+            wi, wj = words[i], words[j]
+            jac = (len(wi & wj) / len(wi | wj)) if (wi or wj) else 0.0
+            if cos >= threshold or jac >= _SCOPE_LEXICAL_JACCARD:
+                flagged.append((
+                    sections[i].heading, sections[j].heading,
+                    max(cos, jac),
+                    "cosine" if cos >= threshold else "lexical",
+                ))
+    if not flagged:
+        return []
+    pair_strs = [
+        f"{a!r} ↔ {b!r} ({s:.0%} {w})" for a, b, s, w in flagged[:3]
+    ]
+    suffix = (
+        f", +{len(flagged) - 3} more pairs" if len(flagged) > 3 else ""
+    )
+    return [
+        f"Scope-duplicate H2 section pairs detected ({len(flagged)} "
+        f"pair(s); embedding cosine ≥ {threshold:.0%} OR content-word "
+        f"overlap ≥ {_SCOPE_LEXICAL_JACCARD:.0%}): "
+        f"{', '.join(pair_strs)}{suffix}. These sections cover the SAME "
+        f"scope (same APIs / examples) with different wording — MERGE each "
+        f"pair into ONE section under a unified heading, OR re-scope one to "
+        f"a genuinely distinct capability. Overlapping sections make the "
+        f"writer recycle code; the renderer then strips the duplicates, "
+        f"leaving hollow 'see other section' sections."
+    ]
+
+# ---- _heuristic_fallback_outline ----
+def _heuristic_fallback_outline(md_text: str) -> ChapterOutline:
+    """Last-resort: derive sections from H1/H2 in the source. Emitted
+    when all N samples fail to parse. Downstream mgsr_replan will
+    inevitably rewrite this, but having SOMETHING valid keeps the
+    chapter graph runnable instead of poisoning the whole pipeline."""
+    headings = re.findall(r"(?m)^#{1,3}\s+(.+)$", md_text or "")
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for h in headings:
+        h = h.strip().rstrip("#").strip()
+        if not h:
+            continue
+        key = h.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        # Trim to 8 words
+        words = h.split()
+        if len(words) > 8:
+            h = " ".join(words[:8])
+        # Skip banned content-types
+        if key in {"introduction", "overview", "summary", "conclusion"}:
+            continue
+        cleaned.append(h)
+        if len(cleaned) >= 8:
+            break
+
+    while len(cleaned) < 4:
+        cleaned.append(f"Topic {len(cleaned) + 1}")
+
+    sections = [
+        OutlineSection(
+            section_id=f"s{i + 1}",
+            heading=h if len(h.split()) >= 2 else f"{h} Concepts",
+            description=(
+                f"Auto-derived section from source heading {h!r}; "
+                "synthesized as fallback after LLM outline generation "
+                "failed. Refine in MGSR."
+            ),
+            prerequisites=[f"s{i}"] if i > 0 else [],
+            needs_code=True,
+        )
+        for i, h in enumerate(cleaned)
+    ]
+    return ChapterOutline(
+        sections=sections,
+        challenges=[
+            "What is the primary concept introduced in this chapter?",
+            "Explain how the framework handles its main task.",
+            "Walk through one example end-to-end.",
+            "What is the most common error mode and how do you debug it?",
+            "How would you extend this for a new use case?",
+        ],
+        flashcards=[
+            {"q": "What is the chapter's core abstraction?",
+             "a": "See source documentation — outline generation fell back."},
+            {"q": "Where do you start when using this framework?",
+             "a": "See source documentation — outline generation fell back."},
+            {"q": "What is the most-used API surface?",
+             "a": "See source documentation — outline generation fell back."},
+            {"q": "What configuration options matter most in production?",
+             "a": "See source documentation — outline generation fell back."},
+        ],
+    )
+
+# ---- _serialize_outline_with_dag ----
+def _serialize_outline_with_dag(
+    outline: ChapterOutline, dag: OutlineDAG,
+) -> dict:
+    """Combine outline + dag for MinIO persistence. Schema:
+        {schema_version, prompt_version, outline: <ChapterOutline>,
+         dag: <OutlineDAG>}
+    Edges and stages are JSON-friendly already (tuples → lists, dict
+    keys → str)."""
+    return {
+        "schema_version": OUTLINE_SCHEMA_VERSION,
+        "prompt_version": OUTLINE_PROMPT_VERSION,
+        "outline":        outline.model_dump(),
+        "dag": {
+            "edges":         [list(e) for e in dag.edges],
+            "stage_index":   dag.stage_index,
+            "stages":        {str(k): v for k, v in dag.stages.items()},
+            "max_stage":     dag.max_stage,
+            "removed_edges": [list(e) for e in dag.removed_edges],
+        },
+    }
+
+# ---- _generate_samples ----
+async def _generate_samples(
+    prompt: str, n: int, thread_id: str,
+    *,
+    n_sources: int | None = None,
+) -> list[tuple[dict, dict]]:
+    """Fire N drafts (sequential w/ early-exit OR concurrent fan-out).
+
+    DD-SYNTH-SPEED-SOTA #B2 (2026-05-26) — Optimal-Stopping: fire sample 1
+    first; if it parses cleanly, passes structure validation with zero
+    issues, AND has >= _outline_optimal_stopping_min(n_sources) sections,
+    ship it alone and skip the remaining N-1 samples. T1 (2026-05-27)
+    raised the floor from fixed-5 to ~70% of the adaptive cap so small
+    outlines don't short-circuit. Else fan out remaining concurrently
+    and let USC vote decide. arXiv 2510.01394 (Oct 2025): 15-35% sample
+    reduction at equal Best-of-N quality. Disabled via
+    `KD_OUTLINE_OPTIMAL_STOPPING=false`.
+
+    Failures (parse fail, None payload) are logged but don't block the rest.
+    Each sample emits a `sample_done` SSE event on completion so the UI
+    sees steady progress through the long-running LLM phase.
+    """
+    if _OUTLINE_OPTIMAL_STOPPING_ENABLED and n >= 2:
+        r0 = await _draft_one_outline(
+            prompt, sample_idx=0, n_total=n, thread_id=thread_id,
+        )
+        results: list = [r0]
+        parsed0, _meta0 = r0
+        if parsed0 is not None:
+            outline0, _err = _try_parse_outline(parsed0)
+            if outline0 is not None:
+                dag0 = derive_dag(outline0.sections)
+                _, issues0 = validate_outline_structure(
+                    outline0, dag0, n_sources=n_sources,
+                )
+                if (
+                    not issues0
+                    and len(outline0.sections)
+                        >= _outline_optimal_stopping_min(n_sources)
+                ):
+                    logger.info(
+                        f"[outline_sdp] Optimal-Stopping fired — sample 0 "
+                        f"clean ({len(outline0.sections)} sections, 0 issues); "
+                        f"skipping remaining {n - 1} samples"
+                    )
+                    successful: list[tuple[dict, dict]] = []
+                    if parsed0 is not None:
+                        successful.append(r0)
+                    return successful
+        remaining = await asyncio.gather(*[
+            _draft_one_outline(
+                prompt, sample_idx=i, n_total=n, thread_id=thread_id,
+            )
+            for i in range(1, n)
+        ])
+        results.extend(remaining)
+    else:
+        results = await asyncio.gather(*[
+            _draft_one_outline(
+                prompt, sample_idx=i, n_total=n, thread_id=thread_id,
+            )
+            for i in range(n)
+        ])
+    successful: list[tuple[dict, dict]] = []
+    for parsed, meta in results:
+        if parsed is not None:
+            successful.append((parsed, meta))
+        else:
+            logger.info(
+                f"[outline_sdp] draft failed: {meta.get('error', 'unknown')}"
+            )
+    return successful
+
+# ---- _usc_pick ----
+async def _usc_pick(
+    candidates: list[tuple[ChapterOutline, OutlineDAG, list[str]]],
+    chapter_id: str,
+    chapter_title: str,
+    adaptive_cap: int,
+) -> int:
+    """Run the USC picker over `candidates` (outline, dag, issues).
+    Returns the chosen index. Falls back to 0 (first valid) on any
+    picker failure.
+
+    `adaptive_cap` is the per-chapter section-count ceiling
+    (max_h2_for_n_sources); the picker rewards candidates AT or just
+    under it and penalizes over-decomposed ones (v4, 2026-05-29 PM)."""
+    if len(candidates) <= 1:
+        return 0
+    summaries = [
+        summarize_candidate(o, d, issues)
+        for (o, d, issues) in candidates
+    ]
+    prompt = build_usc_vote_prompt(
+        candidates_summary=summaries,
+        chapter_id=chapter_id,
+        chapter_title=chapter_title,
+        adaptive_cap=adaptive_cap,
+    )
+    try:
+        response, _ = await chat_judge_bandit_async(
+            prompt,
+            max_tokens=_MAX_TOKENS_VOTE,
+            temperature=_TEMPERATURE_VOTE,
+            response_format=_USC_VOTE_RESPONSE_FORMAT,
+        )
+        parsed = _parse_json_response(response)
+        if parsed and "chosen_index" in parsed:
+            idx = int(parsed["chosen_index"])
+            if 0 <= idx < len(candidates):
+                return idx
+    except Exception as e:
+        logger.warning(
+            f"[outline_sdp] USC picker failed: "
+            f"{type(e).__name__}: {e} — falling back to first candidate"
+        )
+    return 0
+
+# ---- _compute_manifest_hash ----
+def _compute_manifest_hash(
+    *,
+    sources: list[str],
+    sources_bytes: int,
+    chapter_title: str,
+    chapter_description: str,
+) -> str:
+    payload = (
+        f"sources={','.join(sorted(sources))}|"
+        f"n_sources={len(sources)}|"
+        f"bytes={sources_bytes}|"
+        f"title={chapter_title}|"
+        f"goal={chapter_description}|"
+        f"prompt={OUTLINE_PROMPT_VERSION}|"
+        f"schema={OUTLINE_SCHEMA_VERSION}"
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+# ---- _find_chapter ----
+def _find_chapter(plan: dict, chapter_id: str) -> Optional[dict]:
+    """Look up a chapter by id in plan-latest.json. Returns None if
+    not found."""
+    chapters = (plan or {}).get("chapters") or []
+    for ch in chapters:
+        if isinstance(ch, dict) and ch.get("id") == chapter_id:
+            return ch
+    return None
+
+
+# === Outline-helpers restored from old commit (2026-06-07) ===
+
+async def _draft_one_outline(
+    prompt: str,
+    *,
+    sample_idx: int,
+    n_total: int,
+    thread_id: str,
+) -> tuple[Optional[dict], dict]:
+    """One LLM call via the dd-grader bandit rotator. Returns (parsed_dict
+    or None, meta dict with deployment/latency/attempts/reward/error).
+
+    Emits a `sample_done` SSE event when this individual sample completes
+    so the UI shows per-sample progress instead of going silent for 30s
+    while asyncio.gather awaits all 3 samples in parallel."""
+    t0 = time.monotonic()
+    try:
+        response, meta = await chat_judge_bandit_async(
+            prompt,
+            max_tokens=_MAX_TOKENS_DRAFT,
+            temperature=_TEMPERATURE_DRAFT,
+            response_format=_OUTLINE_RESPONSE_FORMAT,
+        )
+    except Exception as e:
+        await emit_progress(
+            thread_id, "outline_sdp", "sample_done",
+            sample_idx=sample_idx, n_total=n_total,
+            ok=False, error=f"{type(e).__name__}: {str(e)[:120]}",
+            wall_ms=int((time.monotonic() - t0) * 1000),
+        )
+        return None, {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+    parsed = _parse_json_response(response)
+    if not parsed:
+        await emit_progress(
+            thread_id, "outline_sdp", "sample_done",
+            sample_idx=sample_idx, n_total=n_total,
+            ok=False, error="parse_failed",
+            wall_ms=int((time.monotonic() - t0) * 1000),
+            deployment=meta.get("deployment"),
+        )
+        return None, {
+            **meta,
+            "error": "parse_failed",
+            "raw":   (response or "")[:200],
+        }
+    await emit_progress(
+        thread_id, "outline_sdp", "sample_done",
+        sample_idx=sample_idx, n_total=n_total,
+        ok=True,
+        wall_ms=int((time.monotonic() - t0) * 1000),
+        deployment=meta.get("deployment"),
+        n_sections=len(parsed.get("sections") or []),
+    )
+    return parsed, meta
+
 async def outline_sdp_run(state: SynthState) -> dict:
     """Run the Structure-Driven Planner for one chapter."""
     slug = state.get("framework_slug")
@@ -737,7 +1300,7 @@ async def outline_sdp_run(state: SynthState) -> dict:
     # hard-trimmed (or, pre-v4, deadlocked). Asking for the right count up
     # front means the winning candidate rarely needs trimming and the
     # sections are scoped for that count from the start.
-        adaptive_target = max_h2_for_n_sources(len(sources))
+    adaptive_target = max_h2_for_n_sources(len(sources))
     prompt = build_outline_prompt(
         framework = slug,
         chapter_id = chapter_id,
@@ -895,7 +1458,7 @@ async def outline_sdp_run(state: SynthState) -> dict:
     # redundant section with a permanent unresolved violation. The adaptive
     # floor is now 2 (= SECTIONS_MIN), so trimming to the cap is always
     # schema-valid.
-        adaptive_cap = max_h2_for_n_sources(len(sources))
+    adaptive_cap = max_h2_for_n_sources(len(sources))
     if len(outline.sections) > adaptive_cap:
         n_before = len(outline.sections)
         # Topological order: lower stage_index first.

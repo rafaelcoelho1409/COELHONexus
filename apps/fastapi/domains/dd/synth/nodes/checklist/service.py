@@ -1,7 +1,16 @@
 """checklist_eval service — deterministic pre-gates, aggregation, rendering,
 prompt builders, and LLM verdict coercion."""
 from __future__ import annotations
-from .keys import digest_latest_key, latest_blob_key, sawc_latest_key, versioned_blob_key
+from .keys import (
+    digest_latest_key,
+    digest_latest_key as _digest_latest_key,
+    latest_blob_key,
+    latest_blob_key as _latest_blob_key,
+    sawc_latest_key,
+    sawc_latest_key as _sawc_latest_key,
+    versioned_blob_key,
+    versioned_blob_key as _versioned_blob_key,
+)
 from .params import (
     DENSITY_MAX_AVG_EXPLANATION_WORDS,
     DENSITY_MAX_CHARS_PER_PARA,
@@ -10,6 +19,7 @@ from .params import (
     FEEDBACK_MAX_CHARS,
     FEEDBACK_MIN_CHARS,
     LLM_CRITERIA,
+    LLM_CRITERIA as _LLM_CRITERIA,
     MAX_RENDERED_CHAPTER_CHARS,
     MIN_AVG_CODE_REFS_PER_SECTION,
     MIN_CITATIONS_PER_SECTION,
@@ -22,12 +32,34 @@ from .schemas import (
     ChecklistEvaluation,
     CriterionResult,
     LLMJudgePayload,
+    LLMJudgePayload as _LLMJudgePayload,
     LLMVerdict,
 )
 from .versions import CHECKLIST_PROMPT_VERSION, CHECKLIST_SCHEMA_VERSION
 
+import asyncio
 import hashlib
+import json
+import logging
 import random
+import re
+import time
+from collections import Counter
+from hashlib import sha256
+from typing import Optional
+
+from pydantic import ValidationError
+
+from domains.llm.rotator.chain import chat_judge_bandit_async
+
+from ....ingestion.storage import get_storage
+from ...runtime.progress import emit_progress
+from ...state import SynthState
+from .cocoa import cocoa_alignment_check
+from .faithfulness import atomic_claim_grounding
+
+
+logger = logging.getLogger(__name__)
 
 
 # Deterministic pre-gates (7 — pure Python, zero LLM cost)
@@ -694,6 +726,260 @@ def llm_payload_to_criteria(
         for name in LLM_CRITERIA
     ]
 
+
+
+# === checklist-helpers restored from old commit (2026-06-07) ===
+_CRITERION_BLOCKS: dict[str, str] = {
+    "chapter_reads_coherently": (
+        "[c8] chapter_reads_coherently\n"
+        "  Reading sections in order, does the chapter flow as a single "
+        "document with smooth transitions, OR as disjoint reference "
+        "cards with abrupt scope shifts? PASS if it reads as one "
+        "document; FAIL if multiple sections feel like standalone "
+        "definitions with no connective tissue."
+    ),
+    "claims_grounded_in_sources": (
+        "[c9] claims_grounded_in_sources\n"
+        "  Spot-check 3-5 citations against the per-section grounding "
+        "above. Does each cited source actually back the specific claim "
+        "the section makes in prose nearby? PASS if claims align with "
+        "the digest's key_facts; FAIL if any cited source is being "
+        "stretched beyond what it supports."
+    ),
+    "terminology_consistent": (
+        "[c10] terminology_consistent\n"
+        "  Does the chapter use the SAME name for the SAME concept "
+        "across sections (e.g., not switching between 'field' and "
+        "'attribute' for the same Pydantic concept, or 'method' and "
+        "'function' interchangeably for the same API)? PASS if "
+        "terminology is stable; FAIL if you can point to ≥2 sections "
+        "using different names for the same thing."
+    ),
+    "prose_code_first_not_meta_framing": (
+        "[c11] prose_code_first_not_meta_framing\n"
+        "  Is each section's prose dense + production-focused (concrete "
+        "APIs, types, parameters, error modes), OR padded with meta-"
+        "framing ('In this chapter we will...', 'In summary...', 'It "
+        "is important to note that...')? PASS if prose is dense; FAIL "
+        "if meta-framing eats >20% of any section's `intro` or any "
+        "H3 subtopic's `explanation`."
+    ),
+    "code_refs_introduced_in_prose": (
+        "[c12] code_refs_introduced_in_prose\n"
+        "  In the v2 cookbook structure, each H3 subtopic emits "
+        "`{subheading} → {explanation} → [code-block]`. Does each "
+        "subtopic's explanation (1-2 sentences BEFORE the code) "
+        "actually introduce that specific code block — naming the "
+        "decorator/type/parameter the reader is about to see — OR is "
+        "it generic prose that could precede ANY code block? PASS if "
+        "explanations are tied to their specific code; FAIL if any "
+        "explanation reads as filler.\n"
+        "  NOTE: If a section has 0 subtopics (rare — usually a "
+        "placeholder), this criterion FAILS for that section. The "
+        "cookbook contract requires ≥3 subtopics per section."
+    ),
+}
+
+async def _run_llm_judge(
+    *,
+    thread_id: str,
+    chapter_id: str,
+    chapter_title: str,
+    framework: str,
+    rendered_chapter: str,
+    rendered_digest: str,
+    truncated: bool,
+) -> tuple[list[CriterionResult], Optional[str], bool, int]:
+    """Fire the batched LLM-judge call → parse → validate → repair-if-needed.
+
+    Returns (criteria_results, deployment, was_repaired, wall_ms).
+    On hard failure, returns a fallback set of FAILED verdicts so the
+    chapter conservatively fails the LLM layer.
+    """
+    t0 = time.monotonic()
+    prompt = build_judge_prompt(
+        chapter_id=chapter_id,
+        chapter_title=chapter_title,
+        framework=framework,
+        rendered_chapter=rendered_chapter,
+        rendered_digest=rendered_digest,
+        truncated=truncated,
+    )
+
+    deployment: Optional[str] = None
+    try:
+        response, meta = await chat_judge_bandit_async(
+            prompt,
+            max_tokens=_MAX_TOKENS_JUDGE,
+            temperature=_TEMPERATURE_JUDGE,
+            response_format=_JUDGE_RESPONSE_FORMAT,
+        )
+        deployment = (meta or {}).get("deployment")
+    except Exception as e:
+        wall_ms = int((time.monotonic() - t0) * 1000)
+        logger.warning(
+            f"[checklist_eval] LLM judge call failed: "
+            f"{type(e).__name__}: {e}"
+        )
+        return (
+            _fallback_llm_verdicts(f"{type(e).__name__}"),
+            None, False, wall_ms,
+        )
+
+    parsed = _parse_json_response(response)
+    payload: Optional[_LLMJudgePayload] = None
+    err: Optional[str] = None
+    repaired = False
+
+    if parsed is not None:
+        payload, err = _try_parse_judge(parsed)
+
+    # One repair attempt if parse OR Pydantic failed
+    if payload is None and _MAX_REPAIR_ATTEMPTS > 0:
+        repair_issues = [
+            err if err else "previous response was not parseable JSON"
+        ]
+        current_json = json.dumps(parsed or {"_raw": (response or "")[:400]})
+        repair_prompt = build_repair_prompt(
+            chapter_id=chapter_id,
+            chapter_title=chapter_title,
+            framework=framework,
+            rendered_chapter=rendered_chapter,
+            rendered_digest=rendered_digest,
+            truncated=truncated,
+            current_json=current_json,
+            issues=repair_issues,
+        )
+        try:
+            rr, rm = await chat_judge_bandit_async(
+                repair_prompt,
+                max_tokens=_MAX_TOKENS_REPAIR,
+                temperature=_TEMPERATURE_REPAIR,
+                response_format=_JUDGE_RESPONSE_FORMAT,
+            )
+            deployment = (rm or {}).get("deployment") or deployment
+            rp = _parse_json_response(rr)
+            if rp is not None:
+                payload, err = _try_parse_judge(rp)
+                if payload is not None:
+                    repaired = True
+        except Exception as e:
+            logger.warning(
+                f"[checklist_eval] LLM judge repair failed: "
+                f"{type(e).__name__}: {e}"
+            )
+
+    wall_ms = int((time.monotonic() - t0) * 1000)
+
+    if payload is None:
+        logger.warning(
+            f"[checklist_eval] LLM judge unparseable after repair "
+            f"({err}); using fallback FAIL verdicts"
+        )
+        return (
+            _fallback_llm_verdicts(f"judge_parse_failed: {err}"),
+            deployment, False, wall_ms,
+        )
+
+    return llm_payload_to_criteria(payload), deployment, repaired, wall_ms
+
+def _compute_manifest_hash(
+    *,
+    sawc_manifest_hash: str,
+    digest_manifest_hash: str,
+) -> str:
+    payload = (
+        f"sawc={sawc_manifest_hash}|"
+        f"digest={digest_manifest_hash}|"
+        f"prompt={CHECKLIST_PROMPT_VERSION}|"
+        f"schema={CHECKLIST_SCHEMA_VERSION}"
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+# === checklist round 2 helpers from old commit ===
+_TEMPERATURE_JUDGE      = 0.0
+
+_TEMPERATURE_REPAIR     = 0.0
+
+_MAX_TOKENS_JUDGE       = 3000
+
+_MAX_TOKENS_REPAIR      = 3000
+
+_MAX_REPAIR_ATTEMPTS    = 1
+
+_JUDGE_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name":   "checklist_judge",
+        "schema": _LLMJudgePayload.model_json_schema(),
+        "strict": False,
+    },
+}
+
+def _parse_json_response(text: str) -> Optional[dict]:
+    if not text:
+        return None
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+    m = _JSON_RE.search(text)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(0))
+    except Exception:
+        return None
+
+def _try_parse_judge(
+    raw: dict,
+) -> tuple[Optional[_LLMJudgePayload], Optional[str]]:
+    try:
+        return _LLMJudgePayload.model_validate(raw), None
+    except ValidationError as e:
+        return None, _shorten_pydantic_error(e)
+    except Exception as e:
+        return None, f"{type(e).__name__}: {str(e)[:200]}"
+
+def _fallback_llm_verdicts(reason: str) -> list[CriterionResult]:
+    """When the judge LLM is unreachable / malformed beyond repair,
+    conservatively mark all 5 LLM criteria as failed with the reason
+    as feedback. This drops chapter pass_rate to at most 7/12 = 58%
+    (below the 80% threshold), so mgsr_replan will be invoked — which
+    is the correct behavior when we can't verify the chapter."""
+    out: list[CriterionResult] = []
+    for name in _LLM_CRITERIA:
+        out.append(CriterionResult(
+            name=name,
+            passed=False,
+            kind="llm_judge",
+            feedback=(
+                f"judge_unavailable: {reason}. Conservatively marked "
+                f"FAIL so mgsr_replan re-evaluates next iteration."
+            ),
+        ))
+    return out
+
+
+# === checklist round 3 helpers ===
+_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+def _shorten_pydantic_error(e: ValidationError) -> str:
+    errs = e.errors()
+    if not errs:
+        return "Pydantic validation failed (no detail)"
+    lines = []
+    for err in errs[:6]:
+        loc = ".".join(str(x) for x in err.get("loc", []))
+        msg = err.get("msg", "")
+        lines.append(f"{loc}: {msg}")
+    suffix = f" (+{len(errs) - 6} more)" if len(errs) > 6 else ""
+    return "; ".join(lines) + suffix
 
 async def checklist_eval_run(state: SynthState) -> dict:
     """Run the binary checklist evaluator for one chapter."""

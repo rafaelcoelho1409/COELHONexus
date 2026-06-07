@@ -7,6 +7,11 @@
 import * as Sy from '@dd/shared/state/synth.js';
 import { escapeHtml } from '../shared/utils.js';
 import { _synthFieldPresent } from './shared.js';
+// _updateCoRefineChip lives in canvas.js; canvas.js imports
+// _buildSynthNodeCtx from this file (graph.js → canvas.js → graph.js
+// cycle). The cycle is safe because the function is called inside a
+// runtime function body (_renderSynthGraph), not at module init.
+import { _updateCoRefineChip } from './canvas.js';
 
 // instead of restarting at 0 when reconnecting. 0 = no known run.
 
@@ -201,15 +206,31 @@ export function _renderSynthGraph(values, nextNodes) {
   const explicitStatus = (values && values.status) || null;
   const implCount = Sy.SYNTH_NODE_ORDER.filter(n => Sy.synthImplemented.has(n)).length;
   const progress = implCount ? doneCount + '/' + implCount : null;
+  // During study mode, the study-level chapter_running handler owns the
+  // pill text as `Working · X/N` (chapter ordinal); skip the per-node
+  // overwrite here (2026-06-07). Single-chapter runs still get the
+  // per-node `Working · doneCount/7` view.
+  const _inStudy = Sy.studyThreadId !== null;
+  // EXPLICIT done/failed/cancelled win over any other heuristic — when
+  // the LangGraph state carries `status: 'done'` (or 'failed' /
+  // 'cancelled'), the pill must reflect THAT regardless of whether
+  // `synthThreadId` is still set (which it always is right after a
+  // chstrip click on a done chapter). Without the `done` branch the
+  // logic fell through to the "working" branch (synthThreadId truthy)
+  // and the in-study guard suppressed the update, leaving the
+  // server-rendered "Idle" stuck on the pill.
   if (explicitStatus === 'failed')        _setSynthStagePill('failed');
   else if (explicitStatus === 'cancelled') _setSynthStagePill('cancelled');
+  else if (explicitStatus === 'done')      _setSynthStagePill('done');
   else if (anyRunning || Sy.synthThreadId !== null) {
-    _setSynthStagePill('working',
-      progress ? 'Working · ' + progress : null);
+    if (!_inStudy) {
+      _setSynthStagePill('working',
+        progress ? 'Working · ' + progress : null);
+    }
   } else if (doneCount > 0 && doneCount === implCount) {
-    _setSynthStagePill('done');
+    if (!_inStudy) _setSynthStagePill('done');
   } else if (doneCount === 0) {
-    _setSynthStagePill('idle');
+    if (!_inStudy) _setSynthStagePill('idle');
   }
 }
 

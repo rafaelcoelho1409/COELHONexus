@@ -1,12 +1,20 @@
 @layer features {
-@scope (.fw-synth-split) {
 /* ============================================================
    Chapter progress strip — shown only during STUDY-mode synth
-   runs (Start Synth without picking a chapter). Sits above the
-   Cytoscape canvas and below the synth header. Hidden by
-   default; .visible flips display flex on. Each cell is one
-   chapter with data-status in {pending, running, done, failed,
-   cancelled}.
+   runs (Start Synth without picking a chapter). Sits to the
+   RIGHT of the Cytoscape canvas in a 70/30 split (matching the
+   old commit's layout). Hidden by default; .visible flips
+   display flex on. Each cell is one chapter with data-status in
+   {pending, running, done, failed, cancelled}.
+
+   The earlier `@scope (.fw-synth-split) { ... }` wrapper that
+   used to sit here was wrong — scoping the block to
+   `.fw-synth-split` meant the inner `.fw-synth-split` selector
+   only matched descendants of itself (i.e. nothing), so the
+   70/30 flex split never applied and the chapter panel
+   collapsed below the canvas at full width instead of sitting
+   beside it. Removed 2026-06-07 to restore the old commit's
+   right-side panel.
    ============================================================ */
 /* DD-SYNTH-SPLIT 2026-05-28 — 70/30 split: DAG canvas (left) | chapter
    checklist (right). Flex so a hidden chapter panel (#fw-chstrip is
@@ -160,6 +168,5 @@
 }
 @keyframes fw-chstrip-spin {
   to { transform: rotate(360deg); }
-}
 }
 }

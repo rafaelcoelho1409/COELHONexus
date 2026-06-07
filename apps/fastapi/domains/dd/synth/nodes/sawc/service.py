@@ -5,7 +5,16 @@ code_ref_hash}], citations}. Each subtopic renders as H3 + 1-2 sentence
 prose + ONE code block. Best-of-N drafts + critic-picker (MAMM-Refine);
 2-attempt repair loop fixes alignment violations."""
 from __future__ import annotations
-from .keys import digest_latest_key, latest_blob_key, outline_latest_key, versioned_blob_key
+from .keys import (
+    digest_latest_key,
+    digest_latest_key as _digest_latest_key,
+    latest_blob_key,
+    latest_blob_key as _latest_blob_key,
+    outline_latest_key,
+    outline_latest_key as _outline_latest_key,
+    versioned_blob_key,
+    versioned_blob_key as _versioned_blob_key,
+)
 from .params import (
     CITATION_CLAIM_CHARS_MAX,
     CITATION_CLAIM_CHARS_MIN,
@@ -26,6 +35,7 @@ from .params import (
     MEMORY_TERMS_MAX,
     MEMORY_TERMS_MIN,
     N_DRAFTS,
+    N_DRAFTS as _N_DRAFTS,
     PARAGRAPH_CHARS_MAX,
     PARAGRAPH_CHARS_MIN,
     PARAGRAPHS_MAX,
@@ -42,6 +52,7 @@ from .schemas import (
     ChapterDraft,
     Citation,
     LLMSectionDraft,
+    LLMSectionDraft as _LLMSectionDraft,
     MemoryEntry,
     SAWCStats,
     Section,
@@ -50,7 +61,30 @@ from .schemas import (
 from .versions import SAWC_PROMPT_VERSION, SAWC_SCHEMA_VERSION
 
 import ast
+import asyncio
+import json
+import logging
+import os
 import re
+import time
+from hashlib import sha256
+from typing import Optional
+
+from pydantic import ValidationError
+
+from domains.llm.rotator.chain import chat_judge_bandit_async
+from domains.llm.rotator.chain.domain import is_heavyweight as _sawc_writer_filter
+
+from ....ingestion.storage import get_storage
+from ...runtime.progress import emit_progress
+from ...state import SynthState
+from ..render.keys import source_key_to_vault_key as _source_key_to_vault_key
+from ..vault.domain import format_entry_for_prompt
+from ..vault.domain import rank_hashes_by_pedagogy as _rank_hashes_by_pedagogy
+from ..vault.schemas import VaultEntry
+
+
+logger = logging.getLogger(__name__)
 
 
 # Code-body identifier extraction (Ship B + E)
@@ -1104,6 +1138,869 @@ def summarize_candidate(
         "structural_score": structural_score,
         "violations":       issues,
     }
+
+
+
+# === SAWC-helpers restored from old commit (2026-06-07) ===
+_CONCURRENCY           = 8
+
+async def _load_chapter_vault_rich(
+    minio,
+    slug: str,
+    source_keys: list[str],
+) -> tuple[dict[str, VaultEntry], int, int]:
+    """Returns (vault, n_loaded, n_skipped). Each value in `vault` is a
+    VaultEntry — not just the fence text — so writer prompts can render
+    full visible envelopes with lang + line_count metadata.
+
+    Resolution per source (mirrors digest's read-time fallback so both
+    nodes have identical vault visibility):
+      1. Pre-built per-source vault file at `synth-vault/{slug}/pages/...`
+      2. Runtime sentinelization of the raw ingestion page (preferred
+         fallback when the consolidated llms-full crawl built only one
+         mega-vault and individual per-page vaults are missing)
+    """
+    from ..vault.service import sentinelize_doc as _sentinelize_doc
+
+    rich_vault: dict[str, VaultEntry] = {}
+    n_loaded = 0
+    n_skipped = 0
+    for source_key in source_keys:
+        # Try the pre-built per-source vault first.
+        vault_key = _source_key_to_vault_key(source_key, slug)
+        used_runtime = False
+        if await minio.exists(vault_key):
+            try:
+                text = await minio.read_text(vault_key)
+                manifest = json.loads(text)
+                entries = (manifest or {}).get("entries") or {}
+                for h, entry_dict in entries.items():
+                    if not isinstance(entry_dict, dict):
+                        continue
+                    try:
+                        rich_vault[h] = VaultEntry(**entry_dict)
+                    except Exception:
+                        if entry_dict.get("fence_text"):
+                            rich_vault[h] = VaultEntry(
+                                hash=h,
+                                fence_text=entry_dict.get("fence_text", ""),
+                                info_string=entry_dict.get("info_string", ""),
+                                lang=entry_dict.get("lang", ""),
+                                line_count=int(entry_dict.get("line_count") or 0),
+                                char_count=int(entry_dict.get("char_count") or 0),
+                                sentinel_kind=entry_dict.get(
+                                    "sentinel_kind", "fence_backtick",
+                                ),
+                            )
+                n_loaded += 1
+                continue
+            except Exception as e:
+                logger.warning(
+                    f"[sawc_write] vault {vault_key!r} unreadable: "
+                    f"{type(e).__name__}: {e} — falling back to runtime"
+                )
+                used_runtime = True
+        else:
+            used_runtime = True
+
+        # Runtime fallback: read raw ingestion page + sentinelize on-the-fly.
+        # This is the path the fastmcp/etc corpora use today because
+        # ingestion only built one consolidated vault for llms-full.
+        if used_runtime:
+            try:
+                raw = await minio.read_text(source_key)
+                if not raw or "<code-ref hash=" in raw:
+                    n_skipped += 1
+                    continue
+                _, entries = _sentinelize_doc(raw)
+                if entries:
+                    for h, e in entries.items():
+                        if h not in rich_vault:
+                            rich_vault[h] = e
+                    n_loaded += 1
+                else:
+                    n_skipped += 1
+            except Exception as e:
+                n_skipped += 1
+                logger.warning(
+                    f"[sawc_write] runtime-sentinelize failed for "
+                    f"{source_key!r}: {type(e).__name__}: {e}"
+                )
+    return rich_vault, n_loaded, n_skipped
+
+def _dedupe_vault_hashes_across_sections(
+    per_section_index: dict[str, list[dict]],
+) -> tuple[int, int]:
+    """Modify `per_section_index` in-place so each vault hash appears in
+    at most one section. Returns (n_hashes_deduped, n_refs_removed).
+
+    `n_hashes_deduped` = how many distinct hashes had ≥2 section claims
+    `n_refs_removed`   = total code_ref entries removed (one hash can be
+                         removed from multiple losing sections; this is the
+                         sum over all losing sections)
+    """
+    from collections import defaultdict
+
+    # Pass 1: for each (hash, section), find the BEST relevance any
+    # contribution in that section asserts for the hash.
+    hash_section_best_rel: dict[tuple[str, str], str] = {}
+    for sid, contribs in per_section_index.items():
+        for c in contribs:
+            rel = c.get("relevance") or "tangential"
+            for h in (c.get("code_refs") or []):
+                key = (h, sid)
+                cur = hash_section_best_rel.get(key)
+                if cur is None or _RELEVANCE_RANK.get(rel, 9) < _RELEVANCE_RANK.get(cur, 9):
+                    hash_section_best_rel[key] = rel
+
+    # Pass 2: group by hash; only hashes claimed by ≥2 distinct sections
+    # need deduplication.
+    hash_section_options: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for (h, sid), rel in hash_section_best_rel.items():
+        hash_section_options[h].append((sid, rel))
+
+    # Snapshot pool sizes for tie-breaking (use original sizes; don't
+    # update during the loop — order-dependent tie-break would make
+    # behavior non-deterministic across iterations).
+    section_pool_sizes: dict[str, int] = {
+        sid: sum(len(c.get("code_refs") or []) for c in contribs)
+        for sid, contribs in per_section_index.items()
+    }
+
+    n_hashes_deduped = 0
+    n_refs_removed = 0
+    for h, options in hash_section_options.items():
+        if len(options) <= 1:
+            continue
+        n_hashes_deduped += 1
+        # Pick: strongest relevance, then smallest pool, then sorted sid
+        # (final tiebreak deterministic).
+        best_sid = min(options, key=lambda x: (
+            _RELEVANCE_RANK.get(x[1], 9),
+            section_pool_sizes.get(x[0], 0),
+            x[0],
+        ))[0]
+        # Strip h from every OTHER section's contributions.
+        for sid, _rel in options:
+            if sid == best_sid:
+                continue
+            for c in per_section_index[sid]:
+                refs = c.get("code_refs") or []
+                if h in refs:
+                    c["code_refs"] = [r for r in refs if r != h]
+                    n_refs_removed += 1
+    return n_hashes_deduped, n_refs_removed
+
+def _placeholder_section(
+    *,
+    section_id: str,
+    heading: str,
+    n_repairs: int,
+    deployment_writer: Optional[str],
+) -> Section:
+    """Returned when every writer draft + every repair attempt fails.
+    Keeps the chapter assemblable and surfaces the failure to
+    mgsr_replan via `issues`.
+
+    v2 cookbook schema: empty subtopics list signals "no code emitted";
+    the checklist density gate flags this for the mgsr→sawc loop.
+    """
+    return Section(
+        section_id=section_id,
+        heading=heading,
+        intro=(
+            f"This section ({heading}) is awaiting content. The synth "
+            f"writer was unable to produce a valid draft on its initial "
+            f"pass; mgsr_replan should retarget this section or merge "
+            f"it into an adjacent section in the next iteration."
+        ),
+        subtopics=[],
+        citations=[],
+        n_drafts_tried=_N_DRAFTS,
+        n_repairs=n_repairs,
+        deployment_writer=deployment_writer,
+        issues=["placeholder"],
+    )
+
+async def _write_section_best_of_n(
+    *,
+    sem: asyncio.Semaphore,
+    section_id: str,
+    section_heading: str,
+    section_description: str,
+    section_prerequisites: list[str],
+    contributions: list[dict],
+    allowed_hashes: list[str],
+    vault_rich: dict | None = None,
+    valid_source_keys: list[str],
+    memory: list[dict],
+    n_primary_contribs: int,
+    framework: str,
+    chapter_id: str,
+    chapter_title: str,
+    thread_id: str,
+    prose_mode: bool = False,
+    already_shown_hashes: set[str] | None = None,
+) -> Section:
+    """Full per-section pipeline: N drafts → critic-pick → Section.
+
+    DD-SYNTH-SPEED-SOTA #4 (2026-05-26) — Optimal-Stopping BoN: fire draft 1
+    sequentially; if it passes the deterministic "good enough" gate (zero
+    violations + >=N_min subtopics + >=N_min citations), ship it directly
+    and skip the remaining N-1 drafts. Otherwise fall through to the
+    original parallel fan-out + pairwise tournament. arXiv 2510.01394
+    (Oct 2025): 15-35% sample reduction at equal Best-of-N quality.
+    Disabled via `KD_SAWC_OPTIMAL_STOPPING=false`.
+    """
+    async with sem:
+        t0 = time.monotonic()
+
+        def _make_draft_coro(idx: int):
+            return _draft_one_section(
+                draft_idx=idx,
+                n_total=_N_DRAFTS,
+                thread_id=thread_id,
+                framework=framework,
+                chapter_id=chapter_id,
+                chapter_title=chapter_title,
+                section_id=section_id,
+                section_heading=section_heading,
+                section_description=section_description,
+                section_prerequisites=section_prerequisites,
+                contributions=contributions,
+                allowed_hashes=allowed_hashes,
+                valid_source_keys=valid_source_keys,
+                memory=memory,
+                n_primary_contribs=n_primary_contribs,
+                vault_rich=vault_rich,
+                prose_mode=prose_mode,
+                already_shown_hashes=already_shown_hashes,
+            )
+
+        if _OPTIMAL_STOPPING_ENABLED and _N_DRAFTS >= 2:
+            # Fire draft 1 first, decide whether to fire the rest
+            r0 = await _make_draft_coro(0)
+            results = [r0]
+            draft1, _dep1, _wall1, _repairs1 = r0
+            good_enough = False
+            if draft1 is not None:
+                issues_1 = validate_section_against_inputs(
+                    draft1,
+                    expected_heading=section_heading,
+                    allowed_hashes=set(allowed_hashes),
+                    valid_source_keys=set(valid_source_keys),
+                    vault_rich=vault_rich,
+                )
+                if (
+                    len(issues_1) == 0
+                    and len(draft1.subtopics) >= _OPTIMAL_STOPPING_MIN_SUBTOPICS
+                    and len(draft1.citations) >= _OPTIMAL_STOPPING_MIN_CITATIONS
+                ):
+                    good_enough = True
+            if not good_enough:
+                # Fan out remaining drafts in parallel
+                remaining = await asyncio.gather(*[
+                    _make_draft_coro(i) for i in range(1, _N_DRAFTS)
+                ])
+                results.extend(remaining)
+        else:
+            # Original parallel fan-out (kill switch or N=1)
+            results = await asyncio.gather(*[
+                _make_draft_coro(i) for i in range(_N_DRAFTS)
+            ])
+
+        # Filter to drafts that parsed + validated
+        valid: list[tuple[int, _LLMSectionDraft, str, int, int]] = []
+        for i, (draft, dep, wall, repairs) in enumerate(results):
+            if draft is not None:
+                valid.append((i, draft, dep or "", wall, repairs))
+
+        if not valid:
+            # ALL drafts failed → placeholder
+            await emit_progress(
+                thread_id, "sawc_write", "section_picked",
+                section_id=section_id, chosen_idx=-1,
+                n_violations=0, fallback="all_drafts_failed",
+                structural_score=0.0,
+            )
+            await emit_progress(
+                thread_id, "sawc_write", "section_done",
+                section_id=section_id, n_subtopics=0,
+                n_citations=0, total_explanation_chars=0,
+                n_repairs=sum(r[3] for r in results),
+                wall_ms=int((time.monotonic() - t0) * 1000),
+                fallback="placeholder",
+            )
+            return _placeholder_section(
+                section_id=section_id,
+                heading=section_heading,
+                n_repairs=sum(r[3] for r in results),
+                deployment_writer=(
+                    next((d for _, _, d, _, _ in valid), None)
+                    if valid else None
+                ),
+            )
+
+        # Critic picker over valid drafts (rerank, not regenerate)
+        chosen_idx, dep_critic, fallback, structural_score = (
+            await _critic_pick_best(
+                section_id=section_id,
+                section_heading=section_heading,
+                n_primary_contribs=n_primary_contribs,
+                candidates=[d for _, d, _, _, _ in valid],
+                expected_heading=section_heading,
+                allowed_hashes=set(allowed_hashes),
+                valid_source_keys=set(valid_source_keys),
+                thread_id=thread_id,
+                vault_rich=vault_rich,
+            )
+        )
+
+        # Map picker index → original draft index (for transparency)
+        original_draft_idx = valid[chosen_idx][0]
+        chosen_draft = valid[chosen_idx][1]
+        dep_writer = valid[chosen_idx][2]
+        chosen_repairs = valid[chosen_idx][4]
+
+        # Re-validate the chosen draft so `issues` is accurate (in case
+        # the picker chose one with remaining violations after repair
+        # exhaustion)
+        chosen_issues = validate_section_against_inputs(
+            chosen_draft,
+            expected_heading=section_heading,
+            allowed_hashes=set(allowed_hashes),
+            valid_source_keys=set(valid_source_keys),
+            vault_rich=vault_rich,
+        )
+
+        await emit_progress(
+            thread_id, "sawc_write", "section_picked",
+            section_id=section_id,
+            chosen_idx=original_draft_idx,
+            n_violations=len(chosen_issues),
+            fallback=fallback,
+            structural_score=structural_score,
+            deployment_critic=dep_critic,
+        )
+
+        section = Section(
+            section_id=section_id,
+            heading=chosen_draft.heading,
+            intro=chosen_draft.intro,
+            subtopics=chosen_draft.subtopics,
+            citations=chosen_draft.citations,
+            wall_ms=int((time.monotonic() - t0) * 1000),
+            deployment_writer=dep_writer,
+            deployment_critic=dep_critic,
+            n_drafts_tried=_N_DRAFTS,
+            n_repairs=chosen_repairs,
+            chosen_draft_idx=original_draft_idx,
+            structural_score=structural_score,
+            fallback_picker=fallback,
+            issues=chosen_issues,
+        )
+
+        total_expl_chars = sum(
+            len(st.explanation) for st in section.subtopics
+        )
+        await emit_progress(
+            thread_id, "sawc_write", "section_done",
+            section_id=section_id,
+            n_subtopics=len(section.subtopics),
+            n_citations=len(section.citations),
+            total_explanation_chars=total_expl_chars,
+            n_repairs=chosen_repairs,
+            wall_ms=section.wall_ms,
+        )
+        return section
+
+def _compute_manifest_hash(
+    *,
+    outline_manifest_hash: str,
+    digest_manifest_hash: str,
+    refine_iter: int = 0,
+) -> str:
+    """Content-addressed manifest hash for sawc cache key. Includes
+    refine_iter (2026-05-24, CoRefine loop closure) so each mgsr→sawc loop
+    iteration produces fresh drafts via bandit-routed exploration — without
+    this, the cache would short-circuit the loop with stale results."""
+    payload = (
+        f"outline={outline_manifest_hash}|"
+        f"digest={digest_manifest_hash}|"
+        f"prompt={SAWC_PROMPT_VERSION}|"
+        f"schema={SAWC_SCHEMA_VERSION}|"
+        f"iter={refine_iter}"
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+# === sawc round 2 helpers from old commit ===
+_OPTIMAL_STOPPING_MIN_SUBTOPICS = 4
+
+_OPTIMAL_STOPPING_MIN_CITATIONS = 2
+
+_OPTIMAL_STOPPING_ENABLED = os.environ.get(
+    "KD_SAWC_OPTIMAL_STOPPING", "true",
+).lower() in ("true", "1", "yes", "on")
+
+_RELEVANCE_RANK = {"primary": 0, "supporting": 1, "tangential": 2}
+
+async def _draft_one_section(
+    *,
+    draft_idx: int,
+    n_total: int,
+    thread_id: str,
+    framework: str,
+    chapter_id: str,
+    chapter_title: str,
+    section_id: str,
+    section_heading: str,
+    section_description: str,
+    section_prerequisites: list[str],
+    contributions: list[dict],
+    allowed_hashes: list[str],
+    valid_source_keys: list[str],
+    memory: list[dict],
+    n_primary_contribs: int,
+    vault_rich: dict | None = None,
+    prose_mode: bool = False,
+    already_shown_hashes: set[str] | None = None,
+) -> tuple[Optional[_LLMSectionDraft], Optional[str], int, int]:
+    """One writer call → parse → Pydantic → cross-ref → repair.
+
+    Returns (draft, deployment, wall_ms, n_repairs). draft is None
+    on irrecoverable failure.
+
+    Emits ONE `section_draft_done` event so the UI shows progress
+    through the N=3 fan-out (real-time mechanism we established for
+    outline_sdp + digest_construct)."""
+    t0 = time.monotonic()
+    allowed_hash_set = set(allowed_hashes)
+    valid_source_set = set(valid_source_keys)
+
+    prompt = build_writer_prompt(
+        framework=framework,
+        chapter_id=chapter_id,
+        chapter_title=chapter_title,
+        section_id=section_id,
+        section_heading=section_heading,
+        section_description=section_description,
+        section_prerequisites=section_prerequisites,
+        contributions=contributions,
+        allowed_hashes=allowed_hashes,
+        valid_source_keys=valid_source_keys,
+        memory=memory,
+        n_primary_contribs=n_primary_contribs,
+        vault_rich=vault_rich,
+        prose_mode=prose_mode,
+        already_shown_hashes=already_shown_hashes,
+    )
+
+    deployment: Optional[str] = None
+    try:
+        # Option B (2026-05-24): writer drafts use the dd-synth-write
+        # bandit pool restricted to heavyweight reasoning models.
+        # Workhorse arms (mistral-small, magistral-small, devstral-medium
+        # under medium budget) stay reserved for dd-grader filter tasks.
+        # DD-SYNTH-SPEED-SOTA #1 (2026-05-26): response_format=json_schema
+        # is attached server-side for NIM/Mistral arms — repair loop below
+        # still handles Gemini and any provider slip-through.
+        response, meta = await chat_judge_bandit_async(
+            prompt,
+            max_tokens=_MAX_TOKENS_DRAFT,
+            temperature=_TEMPERATURE_DRAFT,
+            dd_process="dd-synth-write",
+            candidate_filter=_sawc_writer_filter,
+            response_format=_SAWC_DRAFT_RESPONSE_FORMAT,
+        )
+        deployment = (meta or {}).get("deployment")
+    except Exception as e:
+        wall_ms = int((time.monotonic() - t0) * 1000)
+        await emit_progress(
+            thread_id, "sawc_write", "section_draft_done",
+            section_id=section_id, draft_idx=draft_idx, n_total=n_total,
+            ok=False, error=f"{type(e).__name__}: {str(e)[:120]}",
+            wall_ms=wall_ms,
+        )
+        return None, None, wall_ms, 0
+
+    parsed = _parse_json_response(response)
+    if not parsed:
+        wall_ms = int((time.monotonic() - t0) * 1000)
+        await emit_progress(
+            thread_id, "sawc_write", "section_draft_done",
+            section_id=section_id, draft_idx=draft_idx, n_total=n_total,
+            ok=False, error="parse_failed", wall_ms=wall_ms,
+            deployment=deployment,
+        )
+        return None, deployment, wall_ms, 0
+
+    draft, err = _try_parse_draft(parsed)
+    n_repairs = 0
+    current = parsed
+
+    # Pydantic-fail repair loop
+    while draft is None and n_repairs < _MAX_REPAIR_ATTEMPTS:
+        n_repairs += 1
+        issues = [f"Pydantic schema rejected the previous output: {err}"]
+        repair_prompt = build_repair_prompt(
+            framework=framework,
+            chapter_id=chapter_id,
+            chapter_title=chapter_title,
+            section_id=section_id,
+            section_heading=section_heading,
+            section_description=section_description,
+            section_prerequisites=section_prerequisites,
+            contributions=contributions,
+            allowed_hashes=allowed_hashes,
+            valid_source_keys=valid_source_keys,
+            memory=memory,
+            current_json=json.dumps(current, indent=2),
+            issues=issues,
+            prose_mode=prose_mode,
+        )
+        try:
+            rr, rm = await chat_judge_bandit_async(
+                repair_prompt,
+                max_tokens=_MAX_TOKENS_REPAIR,
+                temperature=_TEMPERATURE_REPAIR,
+            )
+            deployment = (rm or {}).get("deployment") or deployment
+            rp = _parse_json_response(rr)
+            if rp:
+                current = rp
+                draft, err = _try_parse_draft(rp)
+        except Exception as e:
+            logger.warning(
+                f"[sawc_write] {section_id} draft {draft_idx}: repair "
+                f"attempt {n_repairs} failed: {type(e).__name__}: {e}"
+            )
+            break
+
+    if draft is None:
+        wall_ms = int((time.monotonic() - t0) * 1000)
+        await emit_progress(
+            thread_id, "sawc_write", "section_draft_done",
+            section_id=section_id, draft_idx=draft_idx, n_total=n_total,
+            ok=False, error=f"pydantic_fail: {err}",
+            wall_ms=wall_ms, deployment=deployment,
+        )
+        return None, deployment, wall_ms, n_repairs
+
+    # Cross-ref validation (heading/hashes/citations + Ship B/E alignment)
+    issues = validate_section_against_inputs(
+        draft,
+        expected_heading=section_heading,
+        allowed_hashes=allowed_hash_set,
+        valid_source_keys=valid_source_set,
+        vault_rich=vault_rich,
+    )
+    # S3 (2026-05-26 late evening) — repair only on HARD issues. Soft
+    # quality-nudge issues (subheading/explanation↔code mismatch,
+    # subtopic-shy-of-bank) still ship in .issues for downstream but
+    # don't burn the repair budget — the LLM can't reliably close them.
+    while hard_issues(issues) and n_repairs < _MAX_REPAIR_ATTEMPTS:
+        n_repairs += 1
+        repair_prompt = build_repair_prompt(
+            framework=framework,
+            chapter_id=chapter_id,
+            chapter_title=chapter_title,
+            section_id=section_id,
+            section_heading=section_heading,
+            section_description=section_description,
+            section_prerequisites=section_prerequisites,
+            contributions=contributions,
+            allowed_hashes=allowed_hashes,
+            valid_source_keys=valid_source_keys,
+            memory=memory,
+            current_json=json.dumps(draft.model_dump(), indent=2),
+            issues=issues,
+            prose_mode=prose_mode,
+        )
+        try:
+            rr, rm = await chat_judge_bandit_async(
+                repair_prompt,
+                max_tokens=_MAX_TOKENS_REPAIR,
+                temperature=_TEMPERATURE_REPAIR,
+            )
+            deployment = (rm or {}).get("deployment") or deployment
+            rp = _parse_json_response(rr)
+            if not rp:
+                break
+            new_draft, new_err = _try_parse_draft(rp)
+            if new_draft is None:
+                break
+            new_issues = validate_section_against_inputs(
+                new_draft,
+                expected_heading=section_heading,
+                allowed_hashes=allowed_hash_set,
+                valid_source_keys=valid_source_set,
+                vault_rich=vault_rich,
+            )
+            # Accept ONLY if it strictly reduces violation count
+            # S3 — accept only when HARD issues strictly decreased.
+            if len(hard_issues(new_issues)) < len(hard_issues(issues)):
+                draft = new_draft
+                issues = new_issues
+            else:
+                break
+        except Exception as e:
+            logger.warning(
+                f"[sawc_write] {section_id} draft {draft_idx}: cross-ref "
+                f"repair attempt {n_repairs} failed: "
+                f"{type(e).__name__}: {e}"
+            )
+            break
+
+    wall_ms = int((time.monotonic() - t0) * 1000)
+    await emit_progress(
+        thread_id, "sawc_write", "section_draft_done",
+        section_id=section_id, draft_idx=draft_idx, n_total=n_total,
+        ok=True, wall_ms=wall_ms, deployment=deployment,
+        n_subtopics=len(draft.subtopics),
+        n_citations=len(draft.citations),
+        n_violations=len(issues),
+    )
+    return draft, deployment, wall_ms, n_repairs
+
+async def _critic_pick_best(
+    *,
+    section_id: str,
+    section_heading: str,
+    n_primary_contribs: int,
+    candidates: list[_LLMSectionDraft],
+    expected_heading: str,
+    allowed_hashes: set[str],
+    valid_source_keys: set[str],
+    thread_id: str,
+    vault_rich: dict | None = None,
+) -> tuple[int, Optional[str], Optional[str], float]:
+    """Pairwise tournament picker. Returns
+    (chosen_idx, deployment_critic, fallback_used, structural_score).
+
+    fallback_used ∈ {None, "structural_score"} — None means at least one
+    pairwise match got a clean LLM verdict; "structural_score" means every
+    match fell back to deterministic tiebreak.
+
+    For N=3: 2 matches (knockout). For N=2: 1 match. For N=1: trivial.
+    """
+    summaries = [
+        summarize_candidate(
+            c,
+            expected_heading=expected_heading,
+            allowed_hashes=allowed_hashes,
+            valid_source_keys=valid_source_keys,
+            n_primary_contribs=n_primary_contribs,
+            vault_rich=vault_rich,
+        )
+        for c in candidates
+    ]
+
+    if len(candidates) <= 1:
+        score = summaries[0]["structural_score"] if summaries else 0.0
+        return 0, None, None, score
+
+    # Knockout: indices represent positions in `candidates`. Each match
+    # picks between two positions; the winner advances.
+    n = len(candidates)
+    advancing = list(range(n))
+    deployment_critic: Optional[str] = None
+    n_llm_picks = 0
+
+    # Pairwise knockout — log_2(N) rounds, but for N=3 it's just 2 matches:
+    # round 1: cand[0] vs cand[1]; round 2: winner vs cand[2].
+    while len(advancing) > 1:
+        next_round: list[int] = []
+        # Pair the front: idx_a vs idx_b → winner. Carry odd survivor forward.
+        i = 0
+        while i + 1 < len(advancing):
+            idx_a, idx_b = advancing[i], advancing[i + 1]
+            winner_letter, dep = await _pairwise_judge_match(
+                section_id=section_id,
+                section_heading=section_heading,
+                n_primary_contribs=n_primary_contribs,
+                summary_a=summaries[idx_a],
+                summary_b=summaries[idx_b],
+            )
+            if dep is not None:
+                deployment_critic = dep
+                n_llm_picks += 1
+            next_round.append(idx_a if winner_letter == "A" else idx_b)
+            i += 2
+        if i < len(advancing):
+            next_round.append(advancing[i])  # bye for odd survivor
+        advancing = next_round
+
+    winner_idx = advancing[0]
+    fallback_used = None if n_llm_picks > 0 else "structural_score"
+    return (
+        winner_idx,
+        deployment_critic,
+        fallback_used,
+        summaries[winner_idx]["structural_score"],
+    )
+
+
+# === sawc round 3 helpers ===
+_TEMPERATURE_DRAFT     = 0.5
+
+_TEMPERATURE_REPAIR    = 0.2
+
+_MAX_TOKENS_DRAFT      = 8000
+
+_MAX_TOKENS_REPAIR     = 8000
+
+_MAX_REPAIR_ATTEMPTS   = 2
+
+_SAWC_DRAFT_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name":   "section_draft",
+        "schema": _LLMSectionDraft.model_json_schema(),
+        "strict": False,
+    },
+}
+
+def _parse_json_response(text: str) -> Optional[dict]:
+    if not text:
+        return None
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+    m = _JSON_RE.search(text)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(0))
+    except Exception:
+        return None
+
+def _try_parse_draft(
+    raw: dict,
+) -> tuple[Optional[_LLMSectionDraft], Optional[str]]:
+    try:
+        return _LLMSectionDraft.model_validate(raw), None
+    except ValidationError as e:
+        return None, _shorten_pydantic_error(e)
+    except Exception as e:
+        return None, f"{type(e).__name__}: {str(e)[:200]}"
+
+async def _pairwise_judge_match(
+    *,
+    section_id: str,
+    section_heading: str,
+    n_primary_contribs: int,
+    summary_a: dict,
+    summary_b: dict,
+) -> tuple[str, Optional[str]]:
+    """Run ONE pairwise match. Returns (winner_letter, deployment_critic).
+
+    winner_letter ∈ {"A", "B"}. On any parse / call failure, returns the
+    structural-score winner via deterministic tiebreak — the tournament
+    never aborts.
+    """
+    # Compact JSON-stringified summary keeps the prompt token-light.
+    def _fmt_summary(s: dict) -> str:
+        return json.dumps(
+            {
+                "structural_score": s.get("structural_score"),
+                "n_paragraphs":     s.get("n_paragraphs"),
+                "total_chars":      s.get("total_chars"),
+                "n_code_refs":      s.get("n_code_refs"),
+                "n_citations":      s.get("n_citations"),
+                "heading_matches":  s.get("heading_matches"),
+                "n_unknown_hashes": s.get("n_unknown_hashes"),
+                "n_unknown_keys":   s.get("n_unknown_keys"),
+            },
+            indent=2,
+        )
+
+    prompt = _PAIRWISE_PICKER_PROMPT.format(
+        section_heading=section_heading,
+        n_primary_contribs=n_primary_contribs,
+        summary_a=_fmt_summary(summary_a),
+        summary_b=_fmt_summary(summary_b),
+    )
+
+    try:
+        # DD-SYNTH-SPEED-SOTA #A7 (2026-05-26): json_object forces the
+        # pairwise critic to emit valid JSON {"winner": "A"|"B", "reason": ...}
+        # without prose preamble, eliminating ~most parse-failed tiebreaks.
+        response, meta = await chat_judge_bandit_async(
+            prompt,
+            max_tokens=_MAX_TOKENS_CRITIC,
+            temperature=_TEMPERATURE_CRITIC,
+            response_format={"type": "json_object"},
+        )
+        deployment_critic = (meta or {}).get("deployment")
+        parsed = _parse_json_response(response)
+        if parsed and "winner" in parsed:
+            w = str(parsed["winner"]).strip().upper()[:1]
+            if w in ("A", "B"):
+                return w, deployment_critic
+    except Exception as e:
+        logger.warning(
+            f"[sawc_write] {section_id}: pairwise match failed: "
+            f"{type(e).__name__}: {e} — structural tiebreak"
+        )
+
+    # Structural tiebreak — never abort the tournament.
+    s_a = summary_a.get("structural_score", 0.0)
+    s_b = summary_b.get("structural_score", 0.0)
+    return ("A" if s_a >= s_b else "B"), None
+
+
+# === sawc round 4 helpers ===
+# --- _JSON_RE ---
+_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+# --- _MAX_TOKENS_CRITIC ---
+_MAX_TOKENS_CRITIC     = 300
+
+# --- _PAIRWISE_PICKER_PROMPT ---
+_PAIRWISE_PICKER_PROMPT = """You are picking the BETTER of two technical-documentation
+drafts for the same section. The section is part of a larger distilled book.
+
+Choose by these criteria in order:
+1. Checklist coverage (does the draft address every outline point named?)
+2. Citation density (does it cite/reference the source documentation it claims?)
+3. Structural completeness (no truncations, no orphan code-refs, no placeholder text)
+4. Clarity and concision (well-organized, no rambling)
+
+You MUST choose A or B. Ties are NOT allowed.
+
+=== SECTION ===
+heading: {section_heading}
+expected primary source contributions: {n_primary_contribs}
+
+=== DRAFT A — structural summary ===
+{summary_a}
+
+=== DRAFT B — structural summary ===
+{summary_b}
+
+Answer in JSON: {{"winner": "A" | "B", "reason": "one short sentence"}}"""
+
+# --- _TEMPERATURE_CRITIC ---
+_TEMPERATURE_CRITIC    = 0.0
+
+# --- _shorten_pydantic_error ---
+def _shorten_pydantic_error(e: ValidationError) -> str:
+    errs = e.errors()
+    if not errs:
+        return "Pydantic validation failed (no detail)"
+    lines = []
+    for err in errs[:4]:
+        loc = ".".join(str(x) for x in err.get("loc", []))
+        msg = err.get("msg", "")
+        lines.append(f"{loc}: {msg}")
+    suffix = f" (+{len(errs) - 4} more)" if len(errs) > 4 else ""
+    return "; ".join(lines) + suffix
 
 
 async def sawc_write_run(state: SynthState) -> dict:

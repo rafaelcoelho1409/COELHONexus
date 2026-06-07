@@ -58,6 +58,14 @@ dependencies = [
     # 1.x — required for langchain-core 1.x compat; pre-1.0 releases pin
     # langchain-core<1.0 which conflicts with our >=1.2.21 floor.
     "langchain-qdrant>=1.1,<2.0",
+    # `fastembed` runs the local BM25 sparse encoder behind FastEmbedSparse.
+    # langchain-qdrant 1.x does NOT pull it in transitively (it's an
+    # optional extra), so the FastAPI image was 5xx-ing on retriever init
+    # with `ValueError: The 'fastembed' package is not installed.` Pin
+    # the CPU build explicitly. Phase B Qdrant ingest + /agents/search
+    # both need this. fastembed-gpu is the CUDA variant we do NOT want
+    # (no GPU in COELHO Cloud per the no-inference rule).
+    "fastembed>=0.4,<1.0",
     "langchain-experimental>=0.3,<1.0", # LLMGraphTransformer for YCS graph_builder
     # ChatOpenAI client used as the 13-model `with_fallbacks` chain that powers
     # the YCS agents router + neo4j ingestion task (Groq+NIM behind OpenAI-

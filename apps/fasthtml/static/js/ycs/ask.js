@@ -113,6 +113,56 @@ const askStatus = document.getElementById("ycs-ask-status");
 const answerEl = document.getElementById("ycs-ask-answer");
 const citationsEl = document.getElementById("ycs-ask-citations");
 const stagesEl = document.getElementById("ycs-ask-stages");
+const historyEl = document.getElementById("ycs-ask-history");
+const threadIdEl = document.getElementById("ycs-ask-thread-id");
+const newThreadBtn = document.getElementById("ycs-ask-new-thread");
+
+// ---- thread management -----------------------------------------------------
+/* One thread_id per browser session per page-load. Same id → same
+ * Postgres `conversation_history` row group, so back-and-forth turns
+ * carry context. `New thread` regenerates the id and wipes the DOM
+ * history (the Postgres rows stay, but the new id won't reach them).
+ */
+function shortId() {
+    const u = (crypto.randomUUID?.() ?? `t-${Date.now()}-${Math.floor(Math.random() * 1e6)}`);
+    return u.replace(/-/g, "").slice(0, 12);
+}
+let threadId = shortId();
+if (threadIdEl) threadIdEl.textContent = threadId;
+
+newThreadBtn?.addEventListener("click", () => {
+    threadId = shortId();
+    if (threadIdEl) threadIdEl.textContent = threadId;
+    historyEl.replaceChildren();
+    answerEl.textContent = "";
+    citationsEl.replaceChildren();
+    stagesEl.style.display = "none";
+    setStatus(askStatus, "", "");
+});
+
+/* Snapshot the freshly-completed Q+A into the history strip so the
+ * next ask doesn't clobber it. Called from `consumeSSE` on the `end`
+ * event when the answer is non-empty. */
+function archiveCurrentTurn(question) {
+    const answer = (answerEl.textContent || "").trim();
+    if (!answer) return;
+    const turn = document.createElement("div");
+    turn.className = "ycs-ask-turn";
+    const citationsHTML = citationsEl.innerHTML;
+    turn.innerHTML = `
+        <div class="ycs-ask-turn-user">
+            <span class="ycs-ask-turn-role">You</span>
+            <div class="ycs-ask-turn-body">${htmlEscape(question)}</div>
+        </div>
+        <div class="ycs-ask-turn-assistant">
+            <span class="ycs-ask-turn-role">Answer</span>
+            <div class="ycs-ask-turn-body">${htmlEscape(answer)}</div>
+            ${citationsHTML ? `<div class="ycs-ask-turn-citations">${citationsHTML}</div>` : ""}
+        </div>
+    `;
+    historyEl.appendChild(turn);
+    historyEl.scrollTop = historyEl.scrollHeight;
+}
 
 const STAGE_MAP = {
     contextualize:   "retrieve",
@@ -236,6 +286,7 @@ async function consumeSSE(payload) {
                 markStage("verify", "done");
                 askStatus.textContent = "Done.";
                 askStatus.className = "ycs-search-status";
+                archiveCurrentTurn(payload.question);
                 return;
             }
             if (node === "error") {
@@ -252,11 +303,12 @@ askForm?.addEventListener("submit", async (ev) => {
     if (!question) return;
     resetConversation();
     setStatus(askStatus, "running", "Thinking…");
+    askInput.value = "";
     // Read selected channel scope (multi-select).
     const select = document.getElementById("ycs-ask-channels");
     const channel_ids = [...(select?.selectedOptions ?? [])]
         .map((o) => o.value).filter(Boolean);
-    const payload = { question, thread_id: "default" };
+    const payload = { question, thread_id: threadId };
     if (channel_ids.length) payload.channel_ids = channel_ids;
     if (activeMode) payload.force_mode = activeMode;
     try {

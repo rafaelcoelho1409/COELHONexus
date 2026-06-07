@@ -5,7 +5,7 @@
  * line/CSV token is parsed into a chip with a status glyph. Live count
  * header above chips. Drag-drop .txt/.csv onto the textarea. Submit
  * gated on `valid ≥ 1`. */
-import { dispatchToIngest, parseLangs, setStatus } from "./shared.js";
+import { dispatchPipelineToIngest, parseLangs, setStatus } from "./shared.js";
 import { parseVideo } from "./parsers.js";
 
 const form    = document.getElementById("ycs-videos-form");
@@ -176,5 +176,5 @@ form?.addEventListener("submit", (ev) => {
     // On successful dispatch, clear the persisted buffer so the user
     // doesn't see stale chips after redirecting back from Ingest.
     try { localStorage.removeItem(_BUFFER_KEY); } catch (_) {}
-    dispatchToIngest("/content/videos", body, status);
+    dispatchPipelineToIngest("/content/videos/pipeline", body, status);
 });

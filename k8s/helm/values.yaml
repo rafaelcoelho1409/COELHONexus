@@ -450,7 +450,11 @@ celery:
   # graph + study orchestrator + book_harmonize now run on Celery too.
   # Same worker pod consumes both queues; Q_SYNTH soft_time_limit=6h so the
   # long-running study orchestrator (~100-120 min for 6-8 chapters) fits.
-  queues: "crawler,embedding,llm,planner,synth,default"
+  # 2026-06-07 — `ycs` queue added (Wave 4 YCS port): hosts
+  # extract_{videos,channel,playlist}, ingest_to_qdrant, ingest_to_neo4j,
+  # full_channel_pipeline, invalidate_cache. Without this the YCS Source
+  # forms 200-OK but tasks sit PENDING forever (no consumer for ycs-{env}).
+  queues: "crawler,embedding,llm,planner,synth,default,ycs"
   resources:
     requests:
       memory: "2Gi"

@@ -46,7 +46,11 @@ from ...keys import (
 from ...params import REDIS_CONNECT_TIMEOUT_S, REDIS_OP_TIMEOUT_S, STUDY_SEM
 from ..progress import emit_progress
 from .domain import missing_implemented_nodes
-from .params import BOOK_HARMONIZE_MIN_CHAPTERS, CHAPTER_THREAD_PREFIX
+from .params import (
+    BOOK_HARMONIZE_MIN_CHAPTERS,
+    CHAPTER_THREAD_PREFIX,
+    STUDY_THREAD_PREFIX,
+)
 
 
 logger = logging.getLogger(__name__)

@@ -145,7 +145,16 @@ export function resetSynthCards() {
   });
   // Day 5: also reset the Cytoscape canvas + stage pill on Start.
   if (Sy.synthGraph) Sy.synthGraph.reset();
-  _setSynthStagePill('idle');
+  // Only reset the pill to 'idle' when NO run is in flight. When this is
+  // called from `_onStripCellClick` (user pinning a running chapter) or
+  // `_maybeAttachCurrentChapterSSE` (auto-attaching to the orchestrator's
+  // current chapter), the synth/study thread IDs are already set — pill
+  // should stay 'working'. The OLD-commit version reset unconditionally,
+  // relying on the async fetch's `renderSynthCards → _renderSynthGraph`
+  // to flip it back to 'working' within ~100ms — but on a cold cache /
+  // empty state, that update never lands and the pill sticks at 'Idle'
+  // mid-run, which is what the user saw on browser-use's chapter 2.
+  if (!Sy.synthThreadId && !Sy.studyThreadId) _setSynthStagePill('idle');
 }
 
 export function refreshSynthStartState() {
@@ -237,10 +246,27 @@ export function refreshSynthStartState() {
   // Framework chip + stage-pill aggregate state.
   setSynthFramework(Si.activeSlug);
   if (!running) {
-    // When idle, pill reflects "have any synth output for this slug?"
-    // — but since no nodes are implemented yet, default to 'idle'.
-    // _renderSynthGraph overrides this on the next state refresh.
-    _setSynthStagePill('idle');
+    // Pill reflects "have any synth output for this slug?".
+    // Read the chstrip the durable hydrate (_hydrateChStripFromChapters)
+    // just painted: count cells with data-status='done'. All N/N done →
+    // green 'Done'. Some K/N done → blue 'Working · K/N' (resumable
+    // partial). Zero → genuinely idle.
+    // Without this read, refreshSynthStartState would always force
+    // 'idle' here AFTER _hydrateChStripFromChapters set 'done', and
+    // the pill would flip to Idle on every page refresh of a
+    // completed study.
+    const _cells = Sy.chstripCellsEl
+      ? Sy.chstripCellsEl.querySelectorAll('.fw-chstrip-cell') : [];
+    let _nDone = 0;
+    _cells.forEach((c) => { if (c.dataset.status === 'done') _nDone++; });
+    if (_cells.length > 0 && _nDone === _cells.length) {
+      _setSynthStagePill('done');
+    } else if (_cells.length > 0 && _nDone > 0) {
+      _setSynthStagePill('working',
+        'Working · ' + _nDone + '/' + _cells.length);
+    } else {
+      _setSynthStagePill('idle');
+    }
   }
   // Empty-state placeholder — hide the cards/canvas when no slug
   // is active so the panel doesn't show an inert pipeline UI.
@@ -512,7 +538,7 @@ export async function startSynth() {
     _applyChStripTitles(Si.activeSlug);   // upgrade ids → real titles
     _showChStrip(true);
     _setSynthStagePill('working',
-      'Study running (0 / ' + chapterIds.length + ')');
+      'Working · 0/' + chapterIds.length);
     refreshSynthStartState();
     pollStudyState(sid);
   } catch (e) {

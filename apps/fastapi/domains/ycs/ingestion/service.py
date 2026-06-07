@@ -10,7 +10,7 @@ at a time."""
 from __future__ import annotations
 
 import logging
-from typing import AsyncIterator
+from typing import Any, AsyncIterator, Callable
 
 from elasticsearch import AsyncElasticsearch
 from qdrant_client import AsyncQdrantClient
@@ -53,11 +53,40 @@ async def ensure_collection(
     qdrant: AsyncQdrantClient, dense_dimensions: int,
 ) -> bool:
     """Idempotent collection create. Returns True only on first
-    creation (False on a no-op)."""
+    creation (False on a no-op).
+
+    Hybrid schema = named dense `"dense"` slot + named sparse
+    `"sparse"` slot. If a same-named collection exists but lacks
+    either slot (e.g. a deprecated single-unnamed-vector collection
+    from before the hybrid migration), we drop and recreate it.
+    Without this guard, the legacy collection survives and every
+    upsert fails with `Wrong input: Not existing vector name error:
+    sparse` (HTTP 400)."""
     collections = await qdrant.get_collections()
     existing = {c.name for c in collections.collections}
     if QDRANT_COLLECTION in existing:
-        return False
+        info = await qdrant.get_collection(QDRANT_COLLECTION)
+        vectors_cfg = info.config.params.vectors
+        sparse_cfg  = info.config.params.sparse_vectors
+        has_dense_slot = (
+            isinstance(vectors_cfg, dict) and "dense" in vectors_cfg
+        )
+        has_sparse_slot = (
+            isinstance(sparse_cfg, dict) and "sparse" in sparse_cfg
+        )
+        if has_dense_slot and has_sparse_slot:
+            return False
+        # Wrong-schema collection found. Drop + recreate. The points
+        # inside were built against the legacy schema and can't be
+        # rewritten in place; downstream Phase A → ES indexing is the
+        # source of truth, so a Rerun will rebuild this from scratch.
+        logger.warning(
+            f"[ycs:ingestion] dropping collection {QDRANT_COLLECTION!r} "
+            f"— schema mismatch (dense_slot={has_dense_slot}, "
+            f"sparse_slot={has_sparse_slot}); recreating with hybrid "
+            f"schema."
+        )
+        await qdrant.delete_collection(QDRANT_COLLECTION)
     await qdrant.create_collection(
         collection_name = QDRANT_COLLECTION,
         vectors_config = {
@@ -158,12 +187,15 @@ async def ingest_to_qdrant(
     video_ids: list[str] | None = None,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict:
     """Streaming pipeline — for each transcript: chunk → embed (dense
     NIM + sparse BM25) → upsert. Memory stays flat regardless of
     corpus size.
 
-    Mirror of deprecated `services/youtube/ingestion.py:L148-264`."""
+    Mirror of deprecated `services/youtube/ingestion.py:L148-264`.
+    `progress_cb` (Wave 5 polish) receives per-transcript dicts so the
+    Celery task wrapper can pipe them into `self.update_state(meta=)`."""
     dense_embeddings = create_dense_embeddings()
     sparse_embeddings = create_sparse_embeddings()
     dimensions = get_embedding_dimensions()
@@ -174,9 +206,20 @@ async def ingest_to_qdrant(
     # for 359 transcripts), THEN embed one-at-a-time (slow — CPU-bound
     # API calls). Separating phases keeps the ES scroll context from
     # expiring during the long embedding phase.
+    if progress_cb:
+        progress_cb({"phase": "scroll", "current": 0, "total": 0})
     all_transcripts: list[dict] = []
     async for transcript in _scroll_transcripts(es, video_ids):
         all_transcripts.append(transcript)
+
+    if progress_cb:
+        progress_cb({
+            "phase":   "embedding",
+            "current": 0,
+            "total":   len(all_transcripts),
+            "chunks":  0,
+            "points":  0,
+        })
 
     chunker = create_chunker(chunk_size, chunk_overlap)
     total_transcripts = 0
@@ -235,6 +278,21 @@ async def ingest_to_qdrant(
             collection_name = QDRANT_COLLECTION, points = points,
         )
         total_upserted += len(points)
+
+        if progress_cb:
+            progress_cb({
+                "phase":   "embedding",
+                "current": total_transcripts,
+                "total":   len(all_transcripts),
+                "chunks":  total_chunks,
+                "points":  total_upserted,
+                "current_item": {
+                    "id":         vid,
+                    "title":      meta.get("title", ""),
+                    "channel":    meta.get("channel", ""),
+                    "channel_id": meta.get("channel_id", ""),
+                },
+            })
 
         if total_transcripts % LOG_EVERY_N_TRANSCRIPTS == 0:
             logger.info(

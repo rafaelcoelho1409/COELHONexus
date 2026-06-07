@@ -277,7 +277,11 @@ async def render_audit_write_run(state: SynthState) -> dict:
         )
         for s in sections
     ]
-    n_paragraphs_total = sum(len(s.get("paragraphs") or []) for s in sections)
+    # v2 cookbook (matches RenderResult schema): subtopics replaced
+    # legacy paragraphs. RenderResult declares `n_subtopics_total`;
+    # passing the legacy `n_paragraphs_total` name to it raises
+    # `pydantic.ValidationError: n_subtopics_total field required`.
+    n_subtopics_total = sum(len(s.get("subtopics") or []) for s in sections)
     n_citations_total = sum(len(s.get("citations") or []) for s in sections)
 
     chapter_md     = render_chapter_md(chapter_title, sections_ctx)
@@ -356,12 +360,19 @@ async def render_audit_write_run(state: SynthState) -> dict:
         audit = audit,
         rendered_chars = len(chapter_md),
         n_sections = len(sections),
-        n_paragraphs_total = n_paragraphs_total,
+        n_subtopics_total = n_subtopics_total,
         n_citations_total = n_citations_total,
         sawc_manifest_hash = sawc_manifest_hash,
         mgsr_manifest_hash = mgsr_manifest_hash,
         render_manifest_hash = manifest_hash,
         wall_ms = elapsed,
+        # Persist the per-chapter synth thread so the Study chapter strip
+        # can re-open the chapter's LangGraph canvas after a page refresh.
+        # The schema declares this field with a `""` default; without
+        # passing it explicitly, the chapters API returns thread_id=None
+        # and clicking a (done) chapter cell falls into the "no thread"
+        # branch — graph nodes never repaint.
+        thread_id = thread_id,
     )
     payload = result.model_dump()
     blob_bytes = json.dumps(payload, indent = 2, ensure_ascii = False)
@@ -383,7 +394,7 @@ async def render_audit_write_run(state: SynthState) -> dict:
         "sentinels_in_output":   audit.sentinels_in_output,
         "rendered_chars":        len(chapter_md),
         "n_sections":            len(sections),
-        "n_paragraphs_total":    n_paragraphs_total,
+        "n_subtopics_total":    n_subtopics_total,
         "n_citations_total":     n_citations_total,
         "n_vault_files_loaded":  n_loaded,
         "n_vault_files_skipped": n_skipped,

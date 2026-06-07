@@ -28,6 +28,12 @@ CDP_HEADED = os.environ.get(
 # =============================================================================
 # PlaywrightTranscriptService defaults
 # =============================================================================
+# Requires the terraform-managed `playwright-headed` Chromium pod to
+# have at least ~4Gi memory; with the legacy 2Gi limit, 5 concurrent
+# YouTube pages OOMKilled mid-eval (Exit Code 137 → `Target page,
+# context or browser has been closed` cascade + ECONNREFUSED window
+# during restart). The 2026-06-07 Helm/terraform bump is the
+# precondition for keeping this at 5.
 MAX_CONCURRENT = 5
 CONTEXT_POOL_SIZE = 5  # match max_concurrent → no creation storms
 TIMEOUT_MS = 30000

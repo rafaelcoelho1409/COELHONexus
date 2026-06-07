@@ -217,50 +217,14 @@ async function renderPlaylists() {
     }
 }
 
-// ---- (3) pipeline buttons --------------------------------------------------
-function bindPipelineButtons() {
-    const status = document.getElementById("ycs-pipe-status");
-    const qBtn = document.getElementById("ycs-pipe-qdrant");
-    const nBtn = document.getElementById("ycs-pipe-neo4j");
-
-    qBtn?.addEventListener("click", async () => {
-        qBtn.disabled = true;
-        setStatus(status, "running", "Queuing Qdrant ingest…");
-        try {
-            const r = await api("/agents/ingest/qdrant", {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({}),
-            });
-            setStatus(status, "running", `Qdrant queued: ${r.task_id?.slice(0, 8)}…`);
-        } catch (e) {
-            setStatus(status, "error", `Qdrant queue failed: ${e.message}`);
-        } finally {
-            qBtn.disabled = false;
-        }
-    });
-
-    nBtn?.addEventListener("click", async () => {
-        nBtn.disabled = true;
-        setStatus(status, "running", "Queuing Neo4j extraction…");
-        try {
-            const r = await api("/agents/ingest/neo4j", {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({ batch_size: 3 }),
-            });
-            setStatus(status, "running", `Neo4j queued: ${r.task_id?.slice(0, 8)}…`);
-        } catch (e) {
-            setStatus(status, "error", `Neo4j queue failed: ${e.message}`);
-        } finally {
-            nBtn.disabled = false;
-        }
-    });
-}
-
 // ---- entry ----------------------------------------------------------------
+/* The 3-bar pipeline panel is handled by `pipeline_panel.js`, which
+ * is loaded UNCONDITIONALLY by `main.js` so the panel persists across
+ * Source / Ingest / Ask navigation + page refreshes. This file now
+ * only handles the legacy single-task tracker (channel + playlist
+ * dispatches still POST to `/content/channel|playlist`) and the
+ * library aggregations. */
 (async function init() {
-    bindPipelineButtons();
     const params = new URLSearchParams(window.location.search);
     const taskId = params.get("task");
     if (taskId) trackTask(taskId);

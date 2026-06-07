@@ -19,10 +19,15 @@ def SynthPill():
 
 
 def SynthActions():
+    # Start button NOT server-rendered as disabled (same reasoning as
+    # Planner's PlannerActions). A disabled button drops click events
+    # entirely; gating happens in the inline body.py handler + the
+    # module-side `startSynth` (both early-exit silently when the slug
+    # isn't picked / no plan / a run is in flight).
     return Div(
         Button("Wipe synth", id = "fw-synth-wipe",
                cls = "btn-outline", disabled = True),
         Button("Start Synth", id = "fw-synth-start",
-               cls = "btn-primary", disabled = True),
+               cls = "btn-primary"),
         cls = "fw-planner-head-actions",
     )

@@ -9,7 +9,19 @@ import { sleep, escapeHtml, formatFieldValue } from '../shared/utils.js';
 import { showToast } from '../shared/ui.js';
 import { startElapsed, stopElapsed, showElapsed, fmtMs } from '../shared/timing.js';
 import { _setSynthStagePill, _renderSynthGraph } from './graph.js';
-import { _refreshOpenSynthDrawer, _bufferSynthEvent } from './canvas.js';
+import {
+  _refreshOpenSynthDrawer,
+  _bufferSynthEvent,
+  _resetSynthEventBuffer,
+  _getNodeDrawerRef,
+} from './canvas.js';
+import {
+  _showChStrip,
+  _renderChStrip,
+  _applyChStripTitles,
+  _resetStudyState,
+  _hydrateChStripFromChapters,
+} from './chstrip.js';
 import { _synthFieldPresent, setSynthRunStartMs } from './shared.js';
 import { deps } from './polling_deps.js';
 
@@ -54,13 +66,18 @@ export function _synthLiveProgressEl(stepName, idx) {
 }
 
 export function _markSynthCardRunning(stepName) {
-  const idx = _synthStepIdx(stepName);
-  if (idx < 0) return;
+  // CRITICAL: the early-return-on-`idx < 0` that used to live here was a
+  // killer bug — `_synthStepIdx` queries `synthCardEl(i)?.dataset.substep`,
+  // and `synthCardsEl` has been `null` since cards DOM was removed
+  // 2026-05-19, so `idx` is ALWAYS -1, which made this function a complete
+  // no-op for the Cytoscape graph update path (the entire user-facing
+  // "graph nodes light up live" behavior). The comment below already
+  // documents the intent ("Must run BEFORE the legacy card guard") but the
+  // guard was at the top, so it never did. Moved 2026-06-07.
+  //
   // Graph-only UI (cards DOM removed): flip the Cytoscape node to
   // 'running' FIRST, unconditionally — it's the sole live "Working"
-  // indicator now. Must run BEFORE the legacy card guard below, which
-  // early-returns when no card element exists (always) and previously
-  // suppressed this update. Mirrors planner._markCardRunning.
+  // indicator now.
   if (Sy.synthGraph) {
     // Don't downgrade an already-finished node (SSE snapshot replay on
     // refresh re-delivers old `start` events for done steps).
@@ -69,15 +86,27 @@ export function _markSynthCardRunning(stepName) {
     catch (_) {}
     if (cur !== 'done' && cur !== 'failed') {
       Sy.synthGraph.setStatus(stepName, 'running');
-      const stepIdx = Sy.SYNTH_NODE_ORDER.indexOf(stepName);
-      const implCount = Sy.SYNTH_NODE_ORDER.filter(n => Sy.synthImplemented.has(n)).length;
-      const progress = (stepIdx >= 0 && implCount)
-        ? (stepIdx + '/' + implCount) : null;
-      _setSynthStagePill('working',
-        progress ? 'Working · ' + progress : null);
+      // Per-node pill text suppressed during study mode (2026-06-07) —
+      // the study-level `chapter_running` handler owns the pill text
+      // as `Working · X/N` (X = chapter ordinal, N = total chapters);
+      // letting per-node `Working · stepIdx/7` overwrite it every time
+      // a node fires would clobber the chapter-level view the user
+      // asked for. Single-chapter runs (no studyThreadId) still get
+      // the per-node ordinal so the pill stays informative there.
+      if (!Sy.studyThreadId) {
+        const stepIdx = Sy.SYNTH_NODE_ORDER.indexOf(stepName);
+        const implCount = Sy.SYNTH_NODE_ORDER.filter(n => Sy.synthImplemented.has(n)).length;
+        const progress = (stepIdx >= 0 && implCount)
+          ? (stepIdx + '/' + implCount) : null;
+        _setSynthStagePill('working',
+          progress ? 'Working · ' + progress : null);
+      }
     }
   }
   // Legacy card path — no-op in the graph-only UI (synthCardEl is null).
+  // The `idx < 0` short-circuit lives here now, AFTER the graph update.
+  const idx = _synthStepIdx(stepName);
+  if (idx < 0) return;
   const c = synthCardEl(idx);
   if (!c) return;
   if (c.classList.contains('done')) return;
@@ -429,8 +458,9 @@ export async function pollStudyState(sid) {
     if (Sy.synthThreadId === chTid) return;
     deps.resetSynthCards?.();
     _resetSynthEventBuffer();
-    if (_nodeDrawerRef && _nodeDrawerRef.reset) {
-      _nodeDrawerRef.reset();
+    const _ndr = _getNodeDrawerRef();
+    if (_ndr && _ndr.reset) {
+      _ndr.reset();
     }
     Sy.setSynthThreadId(chTid);
     Sy.set_synthLiveEventReceived(false);
@@ -473,7 +503,7 @@ export async function pollStudyState(sid) {
       _renderChStrip(ids);
       _applyChStripTitles(Si.activeSlug);   // upgrade ids → real titles
       _showChStrip(true);
-      _setSynthStagePill('working', 'Study running (0 / ' + ids.length + ')');
+      _setSynthStagePill('working', 'Working · 0/' + ids.length);
       return;
     }
     if (ev.step === 'study' && ev.kind === 'chapter_running') {
@@ -490,9 +520,15 @@ export async function pollStudyState(sid) {
         if (cell) cell.dataset.chapterThreadId = chTid;
       }
       deps._markChStripCell?.(cid, 'running');
-      _setSynthStagePill('working',
-        'Chapter ' + (ev.position || '?') + ' / ' +
-        (ev.n_total || Sy.studyChapterIds.length) + ' — ' + cid);
+      // Chapter-level progress only (per 2026-06-07 user request):
+      // `Working · X/N` where X = chapter ordinal currently being
+      // synthesized, N = total chapters in this study. Per-node ordinal
+      // (which the old commit's per-chapter `_markSynthCardRunning`
+      // would briefly overwrite this with) is suppressed during study
+      // mode — see `_markSynthCardRunning` / `_renderSynthGraph` guards.
+      const _pos   = ev.position || '?';
+      const _total = ev.n_total || Sy.studyChapterIds.length || '?';
+      _setSynthStagePill('working', 'Working · ' + _pos + '/' + _total);
       _scheduleAttachCurrent();
       return;
     }
@@ -533,12 +569,9 @@ export async function pollStudyState(sid) {
           import('@dd/study/study.js').then(m => m.loadStudyChapters(Si.activeSlug)).catch(() => {});
         }
       } catch (_) {}
-      // Friendly notification so the user knows they can start reading.
-      try {
-        const pos = ev.position || '?';
-        const total = ev.n_total || Sy.studyChapterIds.length;
-        showToast('Chapter ' + cid + ' ready to read (' + pos + ' / ' + total + ')');
-      } catch (_) {}
+      // "Chapter X ready to read (Y/N)" toast removed 2026-06-07 per
+      // user request — the chstrip cell flipping to ✓ + the pill
+      // updating already convey readiness.
       return;
     }
     // Ship #7 (2026-05-24): book_harmonize study-level events
@@ -599,7 +632,7 @@ export async function pollStudyState(sid) {
       // the artifacts/checkpoints are wiped. The durable strip state is
       // rebuilt from MinIO render status on reload (_hydrateChStripFrom-
       // Chapters), not from this ephemeral replay, so dropping it is safe.
-      if (Si.activeSlug) { try { _forgetActiveStudy(Si.activeSlug); } catch (_) {} }
+      if (Si.activeSlug) { try { deps._forgetActiveStudy?.(Si.activeSlug); } catch (_) {} }
       Sy.setStudyThreadId(null);
       // Re-sync strip + Start/Resume button from authoritative server render
       // status now the run ended: a cancelled/partial run → "Resume Synth"
@@ -609,7 +642,7 @@ export async function pollStudyState(sid) {
     }
     if (ev.step === 'synth' && ev.kind === 'terminal') {
       try { es.close(); } catch (_) {}
-      if (Si.activeSlug) _forgetActiveStudy(Si.activeSlug);
+      if (Si.activeSlug) deps._forgetActiveStudy?.(Si.activeSlug);
       Sy.setStudyThreadId(null);
       deps.refreshSynthStartState?.();
       return;
@@ -640,10 +673,31 @@ export async function pollSynthState(threadId) {
     }
     let ev;
     try { ev = JSON.parse(msg.data); } catch (_) { return; }
-    if (ev.ts && (Date.now() / 1000 - ev.ts) < 20) {
+    // SSE replay window (last 200 events from Redis snapshot) fires on
+    // every connect — for a DONE chapter this re-delivers ~14 historical
+    // start/done pairs in rapid succession, and each used to trigger
+    // `_refreshSynthCardsFromState` → /state fetch → renderSynthCards
+    // → setStatus on every node, causing the visible KPI flicker the
+    // user reported (2026-06-07). Live events stay (<20s old); replays
+    // (older than 20s OR no ts) are processed for buffering + drawer
+    // but skip the state-refresh fetches.
+    const _isLive = ev.ts && (Date.now() / 1000 - ev.ts) < 20;
+    if (_isLive) {
       Sy.set_synthLiveEventReceived(true);
     }
     if (ev.step === 'synth' && ev.kind === 'terminal') {
+      // REPLAY-SAFE: when the SSE snapshot replays a `terminal` event
+      // for a chapter the user is just VIEWING (clicked a done cell),
+      // this used to fire the live-run cleanup path —
+      // `setSynthThreadId(null)` + `refreshSynthStartState()` →
+      // pill resets to 'Idle' ~1s after the user clicked, which is
+      // exactly the "Completed then flips to Idle" symptom the user
+      // reported. Live terminal events still get the cleanup; replays
+      // (old ts) just close the stream and leave the painted state.
+      if (!_isLive) {
+        try { es.close(); } catch (_) {}
+        return;
+      }
       await _refreshSynthCardsFromState(threadId, 'status');
       const status = ev.status || 'done';
       if (status === 'failed') {
@@ -669,6 +723,11 @@ export async function pollSynthState(threadId) {
       _bufferSynthEvent(ev);
       if (ev.kind === 'start') {
         _markSynthCardRunning(ev.step);
+        // Replay events skip the state refresh — the inline /state
+        // fetch on click already painted the chapter's authoritative
+        // final state, and re-fetching for every replayed start/done
+        // pair produced visible KPI flicker on done-chapter clicks.
+        if (!_isLive) return;
         const stepIdx = Sy.SYNTH_NODE_ORDER.indexOf(ev.step);
         if (stepIdx > 0) {
           const prevStep = Sy.SYNTH_NODE_ORDER[stepIdx - 1];
@@ -677,14 +736,15 @@ export async function pollSynthState(threadId) {
           _markSynthCardRunning(ev.step);
         }
       }
-      if (ev.kind === 'done') {
+      if (ev.kind === 'done' && _isLive) {
         const field = Sy.SYNTH_STEP_TO_FIELD[ev.step];
         await _refreshSynthCardsFromState(threadId, field);
       }
       _renderSynthLiveProgress(ev.step, ev);
       // Day 5: route to NodeDrawer if open for this synth node.
-      if (_nodeDrawerRef && _nodeDrawerRef.isOpenFor('synth', ev.step)) {
-        _nodeDrawerRef.appendEvent(ev);
+      const _ndrLive = _getNodeDrawerRef();
+      if (_ndrLive && _ndrLive.isOpenFor('synth', ev.step)) {
+        _ndrLive.appendEvent(ev);
       }
     }
   };

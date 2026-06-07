@@ -68,6 +68,65 @@ def _get_cdp_websocket_url(cdp_endpoint: str) -> str:
         return cdp_endpoint
 
 
+def _close_stale_cdp_targets(cdp_endpoint: str) -> int:
+    """Close any non-page targets (service_worker, dedicated_worker,
+    shared_worker, background_page) lingering on the Chromium CDP
+    sidecar before `connect_over_cdp` runs.
+
+    Why this exists: YouTube registers a service worker for every
+    `www.youtube.com` page Playwright touches. Across runs, those
+    workers persist on the long-lived sidecar Chromium. The next
+    `connect_over_cdp` call enumerates ALL existing targets and asserts
+    inside `_CRBrowser._onAttachedToTarget` (coreBundle.js:36978) when
+    a target shape doesn't match — the Playwright driver process
+    crashes and the Python client gets
+    `BrowserType.connect_over_cdp: Connection closed while reading
+    from the driver`. Empirically reproduced 2026-06-07.
+
+    Idempotent + best-effort: any HTTP / parse error logs a warning and
+    returns 0, letting `connect_over_cdp` proceed (which may itself
+    succeed if the failing target was already closed). Returns the
+    number of targets actually closed."""
+    list_url = f"{cdp_endpoint}/json/list"
+    closed = 0
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with urlopen(list_url, timeout = 10, context = ctx) as response:
+            targets = json.loads(response.read().decode())
+    except Exception as e:
+        logger.warning(f"[cdp] Failed to list targets at {list_url}: {e}")
+        return 0
+    stale_types = {
+        "service_worker",
+        "dedicated_worker",
+        "shared_worker",
+        "background_page",
+    }
+    for target in targets:
+        ttype = target.get("type", "")
+        tid = target.get("id", "")
+        if ttype not in stale_types or not tid:
+            continue
+        close_url = f"{cdp_endpoint}/json/close/{tid}"
+        try:
+            with urlopen(close_url, timeout = 5, context = ctx) as r:
+                _ = r.read()
+            closed += 1
+            logger.info(
+                f"[cdp] Closed stale {ttype} target {tid[:8]}… "
+                f"({target.get('title', '')[:60]})"
+            )
+        except Exception as e:
+            logger.warning(
+                f"[cdp] Failed to close {ttype} target {tid[:8]}…: {e}"
+            )
+    if closed:
+        logger.info(f"[cdp] Closed {closed} stale target(s) before attach")
+    return closed
+
+
 def _select_best_track(
     tracks:        list[CaptionTrack],
     prefer_manual: bool = True,

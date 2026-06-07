@@ -160,7 +160,25 @@ def _Composer():
 
 
 def _Conversation():
+    """Conversation panel — historical Q+A turns above, live-stream
+    target below.
+
+    `#ycs-ask-history` accumulates past turns; `#ycs-ask-output` is the
+    landing zone for the currently-streaming generation. On each Send,
+    `ask.js` first snapshots the prior turn into history, then resets
+    the output region for the next answer."""
     return Div(
+        Div(
+            Span("Thread", cls = "ycs-ask-thread-label"),
+            Span("", id = "ycs-ask-thread-id", cls = "ycs-ask-thread-id",
+                 title = "Conversation memory key (Postgres)"),
+            Button("New thread", type = "button",
+                   id = "ycs-ask-new-thread",
+                   cls = "ycs-ask-newthread-btn",
+                   title = "Clear history and start a fresh conversation"),
+            cls = "ycs-ask-threadbar",
+        ),
+        Div("", id = "ycs-ask-history", cls = "ycs-ask-history"),
         Div(
             Div("Retrieve",   cls = "ycs-step-circle", data_stage = "retrieve"),
             Div("Grade",      cls = "ycs-step-circle", data_stage = "grade"),

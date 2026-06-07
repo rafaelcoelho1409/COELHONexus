@@ -52,3 +52,43 @@ export async function dispatchToIngest(endpoint, body, statusEl) {
         setStatus(statusEl, "error", `Network error: ${e.message ?? e}`);
     }
 }
+
+/* Variant for the Videos tab — POSTs to the 3-phase pipeline endpoint
+ * (`/content/videos/pipeline`), receives `{phases: {extract, qdrant,
+ * neo4j}}`, and redirects to /ingest with all 3 task_ids in the URL
+ * so the Ingest page can render 3 live progress bars + a sticky
+ * video metadata card. */
+export async function dispatchPipelineToIngest(endpoint, body, statusEl) {
+    setStatus(statusEl, "running", "Queuing 3-phase pipeline…");
+    try {
+        const r = await fetch(API + endpoint, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        let data = null;
+        try { data = await r.json(); } catch (_) { /* */ }
+        if (!r.ok) {
+            const msg = (data && (data.detail ?? data.message)) || r.statusText;
+            setStatus(statusEl, "error", `Dispatch failed (${r.status}): ${msg}`);
+            return;
+        }
+        const p = data.phases ?? {};
+        if (!p.extract || !p.qdrant || !p.neo4j) {
+            setStatus(statusEl, "error", "Backend returned no phase IDs.");
+            return;
+        }
+        const q = new URLSearchParams({
+            extract: p.extract,
+            qdrant:  p.qdrant,
+            neo4j:   p.neo4j,
+        });
+        setStatus(
+            statusEl, "running",
+            `Queued: ${p.extract.slice(0, 8)}…/${p.qdrant.slice(0, 8)}…/${p.neo4j.slice(0, 8)}… — redirecting.`,
+        );
+        window.location.href = `/youtube-content-search/ingest?${q.toString()}`;
+    } catch (e) {
+        setStatus(statusEl, "error", `Network error: ${e.message ?? e}`);
+    }
+}

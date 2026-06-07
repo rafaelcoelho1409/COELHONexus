@@ -46,19 +46,18 @@ def VideosTab():
                 data_state = "empty",
             ),
             _OptionsCollapse(
-                _TranscriptOptions("videos"),
-                prefix = "videos",
-            ),
-            Div(
-                Div("", id = "ycs-videos-status", cls = "ycs-search-status"),
-                Button(
-                    "Start ingest",
-                    type = "submit",
-                    cls  = "btn-primary",
-                    disabled = True,
-                    id = "ycs-videos-submit",
+                _TranscriptOptions(
+                    "videos",
+                    Button(
+                        "Start ingest",
+                        type = "submit",
+                        cls  = "btn-primary",
+                        disabled = True,
+                        id = "ycs-videos-submit",
+                    ),
                 ),
-                cls = "ycs-form-actions",
+                Div("", id = "ycs-videos-status", cls = "ycs-search-status"),
+                prefix = "videos",
             ),
             id = "ycs-videos-form",
         ),

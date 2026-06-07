@@ -51,6 +51,18 @@ from .schemas import DeriveAttempt, DeriveStats
 
 logger = logging.getLogger(__name__)
 
+
+def _env_enabled() -> bool:
+    """Default ON; explicit 'false' / '0' / 'no' / 'off' disables.
+
+    Restored 2026-06-07 — lost in the per-node refactor split (was a
+    module-local helper in the old monolithic `sawc_derive/node.py`).
+    Pairs with the `ENV_ENABLED` env-var name constant in `params.py`."""
+    raw = (os.environ.get(ENV_ENABLED) or "").strip().lower()
+    if raw in ("", "1", "true", "yes", "on"):
+        return True
+    return False
+
 from .params import (
     DERIVED_MAX_CHARS,
     DERIVED_MAX_LINES,

@@ -48,7 +48,10 @@ def ingest_to_qdrant(
         f"[ingest_to_qdrant] Starting: video_ids={video_ids}, "
         f"chunk_size={chunk_size}",
     )
-    self.update_state(state = "PROGRESS", meta = {"status": "initializing"})
+    self.update_state(state = "PROGRESS", meta = {"phase": "init"})
+
+    def _progress(payload: dict[str, Any]) -> None:
+        self.update_state(state = "PROGRESS", meta = payload)
 
     async def _run() -> dict[str, Any]:
         es = AsyncElasticsearch(
@@ -74,6 +77,7 @@ def ingest_to_qdrant(
                 video_ids     = video_ids,
                 chunk_size    = chunk_size,
                 chunk_overlap = chunk_overlap,
+                progress_cb   = _progress,
             )
             return result
         finally:

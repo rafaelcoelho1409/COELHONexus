@@ -17,10 +17,13 @@ Fresh code — deprecated had no FastHTML; the deprecated `tasks` router
 returned task IDs but had no surfaced UI."""
 from __future__ import annotations
 
-from fasthtml.common import Button, Div, H2, Option, P, Select, Span
+from fasthtml.common import Button, Div, H2, Option, Select, Span
 
 
 def _JobPanel():
+    """Legacy single-task panel — used by the bare `/videos` extract
+    path (channel + playlist forms still POST there). The Videos tab
+    now POSTs to `/videos/pipeline` and uses `_PipelinePanel` below."""
     return Div(
         Div(
             Span("Idle",   id = "ycs-job-status",  cls = "ycs-job-status"),
@@ -56,39 +59,6 @@ def _JobPanel():
     )
 
 
-def _IngestPipelinePanel():
-    """Trigger Qdrant / Neo4j ingestion explicitly. Useful for the user
-    who already extracted videos via the Source step and wants to
-    re-run the embedding stage (e.g. after changing chunk parameters)."""
-    return Div(
-        H2("Pipeline", style = "margin: 0 0 8px 0; font-weight: 500;"),
-        P(
-            "Re-run individual stages over the videos already in "
-            "Elasticsearch. Each click dispatches a Celery task.",
-            cls = "ycs-intro",
-        ),
-        Div(
-            Div(
-                Button(
-                    "Ingest all into Qdrant",
-                    id   = "ycs-pipe-qdrant",
-                    cls  = "btn-outline",
-                    type = "button",
-                ),
-                Button(
-                    "Extract graph (Neo4j)",
-                    id   = "ycs-pipe-neo4j",
-                    cls  = "btn-outline",
-                    type = "button",
-                ),
-                Span("", id = "ycs-pipe-status", cls = "ycs-search-status"),
-                cls = "ycs-form-actions",
-            ),
-            cls = "ycs-pipe-actions",
-        ),
-    )
-
-
 def _LibrarySection(title: str, container_id: str, empty: str):
     return Div(
         H2(title, style = "margin: 18px 0 8px 0; font-weight: 500;"),
@@ -115,15 +85,11 @@ def _ChannelPicker():
 
 
 def IngestBody(slug: str | None):
+    # Pipeline panel now lives in YCSPage chrome (rendered on every
+    # YCS stage page) so it persists across Source/Ingest/Ask
+    # navigation. See `shared/pipeline_panel.py`.
     return Div(
-        H2("Ingest", style = "margin: 0 0 8px 0; font-weight: 500;"),
-        P(
-            "Watch in-flight ingestion jobs, browse what's already in "
-            "your library, and re-run individual pipeline stages.",
-            cls = "ycs-intro",
-        ),
         _JobPanel(),
-        _IngestPipelinePanel(),
         _LibrarySection(
             "Channels",
             "ycs-channels-grid",

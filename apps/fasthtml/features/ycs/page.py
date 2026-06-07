@@ -15,13 +15,45 @@ from __future__ import annotations
 
 from fasthtml.common import Div, Script
 
+from features.dd.shared.overlays import ConfirmModal
+
+from .shared.pipeline_panel import PipelinePanel
+
 
 def YCSPage(active_stage: str, slug: str | None, body):
+    """Shared YCS page chrome.
+
+    The pipeline panel is rendered ONLY on the Ingest page (the stage
+    where it conceptually belongs — Source is for picking videos, Ask
+    is for querying, Ingest is for watching the pipeline). Source and
+    Ask never include the panel DOM at all, so there's nothing to
+    leak. `pipeline_panel.js` is still loaded shell-wide by `main.js`
+    so the boot's `document.getElementById("ycs-pipe-panel")` returns
+    null on non-Ingest pages and the tracker no-ops.
+
+    Persistence behavior on Ingest:
+      - URL `?extract=&qdrant=&neo4j=` (Videos tab redirect) →
+        persists to localStorage + starts tracking.
+      - localStorage `ycs:pipeline:active` (24h TTL) → restores on
+        page reload / navigation back to Ingest.
+      - Stop click clears localStorage so a subsequent visit to
+        Ingest doesn't resurface a cancelled run.
+
+    `ConfirmModal()` is reused from DD's shared overlays — it's a
+    framework-level confirm dialog driven by `showConfirm()` in
+    `@dd/shared/ui/overlays.js`. CSS lives in `components/overlays.css`
+    (shell-wide, not DD-scoped), so styling works anywhere. YCS's
+    `pipeline_panel.js` calls `showConfirm()` for Stop confirmation in
+    place of `window.confirm()`."""
+    body_children = [body]
+    if active_stage == "ingest":
+        body_children.insert(0, PipelinePanel())
     return Div(
         Div(
-            body,
+            *body_children,
             cls = "ycs-root",
         ),
+        ConfirmModal(),
         Script(src = "/static/js/ycs/main.js", type = "module"),
         cls = "ycs-page",
         data_ycs_stage = active_stage,

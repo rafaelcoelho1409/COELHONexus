@@ -1,18 +1,25 @@
 """ycs/embeddings — NIM embedding-API config + retry/batch tunables.
 
-Direct port of deprecated `services/youtube/embeddings.py:L36-56`. The
-env var name `NVIDIA_API_KEY` is read here (not via the new BYOK
-rotator) per deprecated convention — the YCS port spec is explicit
-that this module does NOT route through the rotator."""
+Originally a direct port of deprecated `services/youtube/embeddings.py:L36-56`
+which read `NVIDIA_API_KEY` from env at module load. The BYOK rotator
+migration (2026-05-31) moved provider keys into the user-managed
+MinIO store (`domains/llm/credentials/`); the deprecated env-read
+path stopped getting populated and Phase B Qdrant ingest started
+5xx'ing with `Illegal header value b'Bearer '`. The key is now
+resolved at *call* time via `domains.llm.credentials.resolve_key()`
+in `service.py`. We expose only the env-var NAME here so the resolver
+can be invoked uniformly."""
 from __future__ import annotations
 
 import os
 
 
-# NIM embedding API endpoint + auth. Same key the rotator uses
-# (`NVIDIA_API_KEY` env). Deprecated also read this env directly.
+# NIM embedding API endpoint. Same provider the rotator uses.
 NIM_URL = "https://integrate.api.nvidia.com/v1"
-NIM_KEY = os.environ.get("NVIDIA_API_KEY", "")
+# Sentinel for the credential resolver — the actual key value gets
+# resolved per-call inside `service.NVIDIAEmbeddings._call_api`. Reading
+# `os.environ[NIM_KEY_ENV]` at module load was the original bug.
+NIM_KEY_ENV = "NVIDIA_API_KEY"
 
 # Default + overridable model id. Override via Helm
 # (`NVIDIA_EMBEDDING_MODEL` env) for A/B; remember to re-ingest the

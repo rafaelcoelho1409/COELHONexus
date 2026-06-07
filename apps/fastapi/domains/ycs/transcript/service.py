@@ -19,7 +19,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from elasticsearch import AsyncElasticsearch
 from playwright.async_api import async_playwright
@@ -28,6 +28,7 @@ from domains.ycs.es_index import index_transcriptions_to_elasticsearch
 from infra.elasticsearch import INDEX_TRANSCRIPTIONS
 
 from .domain import (
+    _close_stale_cdp_targets,
     CaptionTrack,
     _get_cdp_websocket_url,
     _parse_transcript,
@@ -376,6 +377,11 @@ class PlaywrightTranscriptService:
             return
         # YouTube blocks headless for captions extraction → always HEADED
         cdp_endpoint = self._cdp_endpoint or CDP_HEADED
+        # Sweep stale service-worker / dedicated-worker targets left
+        # over from a previous run BEFORE attaching — otherwise the
+        # Playwright driver crashes in `_onAttachedToTarget`. See
+        # `domain._close_stale_cdp_targets` for the full story.
+        await asyncio.to_thread(_close_stale_cdp_targets, cdp_endpoint)
         self._cdp_url = await asyncio.to_thread(
             _get_cdp_websocket_url, cdp_endpoint,
         )
@@ -468,6 +474,13 @@ class PlaywrightTranscriptService:
                 log.info(
                     f"[transcript-service] CDP reconnect attempt "
                     f"{attempt + 1}/{max_retries}...",
+                )
+                # Sweep stale workers between every reconnect attempt
+                # — `refresh_interval=10` means this fires roughly every
+                # 10 videos and is exactly where the assertion crash
+                # would otherwise resurface.
+                await asyncio.to_thread(
+                    _close_stale_cdp_targets, cdp_endpoint,
                 )
                 self._cdp_url = await asyncio.wait_for(
                     asyncio.to_thread(_get_cdp_websocket_url, cdp_endpoint),
@@ -976,6 +989,8 @@ async def fetch_transcriptions_batch(
     languages:          list[str] | None                  = None,
     chunk_size:         int                               = DEFAULT_CHUNK_SIZE,
     video_metadata:     dict[str, dict[str, Any]] | None  = None,
+    progress_cb:        Callable[[int, int, str | None], None] | None = None,
+    stats:              dict[str, int] | None             = None,
 ) -> list[dict[str, Any]]:
     """Fetch transcriptions for videos with ES caching + chunked processing.
 
@@ -985,8 +1000,22 @@ async def fetch_transcriptions_batch(
          crash resilience (each chunk is indexed immediately)
       3. Playwright CDP via the supplied / global `transcript_service`
 
-    Returns list of transcription docs ready for ES bulk indexing."""
+    Returns list of transcription docs ready for ES bulk indexing.
+    `stats` (optional out-dict) gets populated with
+    `{cached, fetched_ok, fetched_failed}` so the caller can surface
+    the per-run breakdown in its result envelope (Phase A hint on the
+    Ingest page distinguishes "cached" from "newly indexed" from
+    "fetch failed" — important when a Rerun hits the cache for some
+    videos and the DOM scrape fails for others)."""
+    def _set_stats(cached: int, ok: int, failed: int) -> None:
+        if stats is None:
+            return
+        stats["cached"] = cached
+        stats["fetched_ok"] = ok
+        stats["fetched_failed"] = failed
+
     if not video_ids:
+        _set_stats(0, 0, 0)
         return []
     existing_transcriptions = await _check_existing_transcriptions(
         es_client, video_ids, languages,
@@ -1011,12 +1040,14 @@ async def fetch_transcriptions_batch(
         log.info(
             "[fetch_transcriptions_batch] All videos cached, no fetch needed",
         )
+        _set_stats(cached_count, 0, 0)
         return []
     service = transcript_service or _transcript_service
     if not service or not service._initialized:
         log.error(
             "[fetch_transcriptions_batch] Playwright service not available",
         )
+        _set_stats(cached_count, 0, len(ids_to_fetch))
         return []
     total_to_fetch = len(ids_to_fetch)
     num_chunks = (total_to_fetch + chunk_size - 1) // chunk_size
@@ -1072,6 +1103,17 @@ async def fetch_transcriptions_batch(
                     f"[fetch_transcriptions_batch] FAIL {vid}: "
                     f"{result.get('error', '')[:100]}",
                 )
+            # Per-video progress emission. Fires for both OK and FAIL
+            # so the bar advances even when scrape errors out — caller
+            # decides whether to surface "fetched" vs "attempted".
+            if progress_cb:
+                try:
+                    progress_cb(total_success + total_failed, total_to_fetch, vid)
+                except Exception as cb_err:
+                    log.warning(
+                        f"[fetch_transcriptions_batch] progress_cb raised: "
+                        f"{type(cb_err).__name__}: {cb_err}"
+                    )
         # Index chunk results immediately (crash resilience)
         if chunk_docs and es_client:
             try:
@@ -1091,6 +1133,7 @@ async def fetch_transcriptions_batch(
             f"[fetch_transcriptions_batch] Chunk {chunk_num + 1}/{num_chunks} "
             f"complete: {total_success} OK, {total_failed} failed so far",
         )
+    _set_stats(cached_count, total_success, total_failed)
     log.info(
         f"[fetch_transcriptions_batch] Complete: "
         f"{total_success}/{total_to_fetch} fetched, "

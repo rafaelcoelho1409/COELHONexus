@@ -18,7 +18,11 @@ def StageToolbar(active_stage: str, slug: str | None,
     elif active_stage == "planner":
         left = [PlannerPill(), PlannerActions()]
     elif active_stage == "synth":
-        left = [SynthPill(), SynthActions()]
+        # Pill on the RIGHT of Wipe/Stop buttons (changed 2026-06-07).
+        # Old-commit order was [Pill, Actions]; the new layout puts the
+        # pill after the actions so the running-chapter status reads
+        # next to where the user's eye lands after clicking Start.
+        left = [SynthActions(), SynthPill()]
     elif active_stage == "study":
         left = [StudyTabs()]
     else:

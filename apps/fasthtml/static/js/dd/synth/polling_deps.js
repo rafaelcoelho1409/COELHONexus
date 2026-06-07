@@ -8,6 +8,10 @@ export const deps = {
   _markChStripCell:         null,
   _markChStripCellTime:     null,
   _highlightStripCell:      null,
+  // _forgetActiveStudy lives in lifecycle.js; polling.js → lifecycle.js
+  // would cycle (lifecycle.js already imports from polling.js for
+  // pollSynthState / pollStudyState). DI breaks the cycle.
+  _forgetActiveStudy:       null,
 };
 
 export function registerSynthPollingDeps(obj) {

@@ -14,7 +14,10 @@ import * as Sy from '@dd/shared/state/synth.js';
 import { escapeHtml } from '../shared/utils.js';
 import { fmtMs, showElapsed } from '../shared/timing.js';
 import { showToast } from '../shared/ui.js';
+import { _setSynthStagePill } from './graph.js';
 import { deps } from './chstrip_deps.js';
+
+
 
 export function _showChStrip(visible) {
   if (!Sy.chstripEl) return;
@@ -196,6 +199,18 @@ export async function _hydrateChStripFromChapters(slug) {
       }
     });
     _showChStrip(true);
+    // Pill reflects the persisted study state on refresh (no active
+    // run → no pollStudyState → no live update would land otherwise).
+    // All chapters rendered → green 'Done'. Some rendered → blue
+    // 'Working · X/N' to indicate a partial / resumable state. None
+    // rendered → leave the default 'Idle'.
+    const _nDone = chapters.filter(c => c && c.rendered).length;
+    const _nTot  = chapters.length;
+    if (_nDone > 0 && _nDone === _nTot) {
+      _setSynthStagePill('done');
+    } else if (_nDone > 0) {
+      _setSynthStagePill('working', 'Working · ' + _nDone + '/' + _nTot);
+    }
     // Strip now reflects server render status → update Start/Resume label
     // (partial render → "Resume Synth", all/none → "Start Synth").
     deps.refreshSynthStartState?.();
@@ -245,14 +260,14 @@ export function _onStripCellClick(cellEl) {
   Sy.setStudyPinnedChapterId(cid);
   _highlightStripCell(cid);
 
-  // No thread for this chapter.
+  // No thread for this chapter — rendered before thread_id persistence
+  // landed, OR never started. Clear the canvas and tell the user.
   if (!chTid) {
     Sy.setSynthThreadId(null);
     deps.resetSynthCards?.();
     deps._resetSynthEventBuffer?.();
-    if ((deps._getNodeDrawerRef?.()) && (deps._getNodeDrawerRef?.()).reset) {
-      (deps._getNodeDrawerRef?.()).reset();
-    }
+    const _ndr = deps._getNodeDrawerRef?.();
+    if (_ndr && _ndr.reset) _ndr.reset();
     try { deps.renderSynthCards?.({}); } catch (_) {}
     if (status === 'done') {
       showToast('This chapter was rendered before graph-history tracking ' +
@@ -265,9 +280,14 @@ export function _onStripCellClick(cellEl) {
   Sy.setSynthThreadId(chTid);
   deps.resetSynthCards?.();
   deps._resetSynthEventBuffer?.();
-  if ((deps._getNodeDrawerRef?.()) && (deps._getNodeDrawerRef?.()).reset) {
-    (deps._getNodeDrawerRef?.()).reset();
-  }
+  const _ndr = deps._getNodeDrawerRef?.();
+  if (_ndr && _ndr.reset) _ndr.reset();
+  // Explicit pill — done chapters get the green Done badge straight
+  // away; running/pending get the blue Working badge. Default labels
+  // ("Done" / "Working") render via the label map in _setSynthStagePill.
+  const isDone = (status === 'done');
+  _setSynthStagePill(isDone ? 'done' : 'working', null);
+
   // Initial paint from checkpoint state.
   (async () => {
     try {
@@ -279,7 +299,7 @@ export function _onStripCellClick(cellEl) {
           Array.isArray(data.next) ? data.next : null,
         );
       }
-    } catch (_) {}
+    } catch (_) { /* fall back to live events */ }
     Sy.set_synthLiveEventReceived(false);
     deps.pollSynthState?.(chTid);
   })();

@@ -16,6 +16,8 @@ import httpx
 from langchain_core.embeddings import Embeddings
 from langchain_qdrant import FastEmbedSparse
 
+from domains.llm.credentials import resolve_key
+
 from . import domain
 from .errors import EmbeddingAPIError, EmbeddingEmptyQueryError
 from .params import (
@@ -25,7 +27,7 @@ from .params import (
     HTTP_TIMEOUT_S,
     MAX_RETRIES,
     MODEL_DIMENSIONS,
-    NIM_KEY,
+    NIM_KEY_ENV,
     NIM_URL,
     SPARSE_MODEL_NAME,
 )
@@ -59,12 +61,27 @@ class NVIDIAEmbeddings(Embeddings):
     ) -> list[list[float]]:
         if domain.is_empty_input(texts):
             return []
+        # Resolve the NIM API key at call time (not at module load) so
+        # the BYOK /settings flow can hot-update it without restarting
+        # the worker. `resolve_key` reads the MinIO-backed Fernet store
+        # first, falls back to the named env var, returns "" if both
+        # miss. We fail fast with a user-actionable message rather than
+        # letting httpx 502 with "Illegal header value b'Bearer '".
+        nim_key = resolve_key(NIM_KEY_ENV)
+        if not nim_key:
+            raise EmbeddingAPIError(
+                0,
+                "No NVIDIA_API_KEY configured. Open the /settings page "
+                "(LLM rotator) and paste your NIM key, OR set "
+                "NVIDIA_API_KEY in the worker pod env. Embeddings + "
+                "Phase B Qdrant ingest can't proceed without it.",
+            )
         for attempt in range(MAX_RETRIES + 1):
             try:
                 response = self._client.post(
                     f"{NIM_URL}/embeddings",
                     headers = {
-                        "Authorization": f"Bearer {NIM_KEY}",
+                        "Authorization": f"Bearer {nim_key}",
                         "Content-Type":  "application/json",
                     },
                     json = {

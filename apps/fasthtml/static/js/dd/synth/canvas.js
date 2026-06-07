@@ -77,6 +77,11 @@ export function _refreshOpenSynthDrawer(values) {
 
 let _nodeDrawerRef = null;
 export function _setNodeDrawerRef(nd) { _nodeDrawerRef = nd; }
+// Public getter so other modules (synth.js → chstrip_deps DI) can pass
+// a stable reference to the latest `_nodeDrawerRef` without trying to
+// close over a module-local variable that lives in this file.
+// chstrip.js's `(deps._getNodeDrawerRef?.())` calls this.
+export function _getNodeDrawerRef() { return _nodeDrawerRef; }
 
 export function _resizeSynthCanvas() {
   if (!Sy.synthGraph || !Sy.synthGraph.cy) return;

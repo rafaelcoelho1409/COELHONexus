@@ -18,10 +18,16 @@ def _FilterField(name: str, label: str, *children):
     )
 
 
-def _TranscriptOptions(prefix: str):
+def _TranscriptOptions(prefix: str, *extra):
     """Reusable `include_transcription` + `transcription_languages` row.
     `prefix` namespaces the field IDs so the same fragment can mount on
-    Videos / Channel / Playlist tabs without ID collisions."""
+    Videos / Channel / Playlist tabs without ID collisions.
+
+    `*extra` trailing children get appended as additional grid cells —
+    used by Videos to place the `Start ingest` submit button as the
+    third column. When present, the grid switches to 3-column layout
+    via the `.ycs-trans-opts-with-action` modifier class."""
+    modifier = " ycs-trans-opts-with-action" if extra else ""
     return Div(
         Div(
             Input(
@@ -47,7 +53,8 @@ def _TranscriptOptions(prefix: str):
                 cls  = "ycs-filter-input",
             ),
         ),
-        cls = "ycs-trans-opts",
+        *extra,
+        cls = f"ycs-trans-opts{modifier}",
     )
 
 

@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any
+from typing import Any, Callable
 
 from celery.utils.log import get_task_logger
 from elasticsearch import AsyncElasticsearch
@@ -28,6 +28,7 @@ from domains.ycs.es_index import (
     index_videos_to_elasticsearch,
 )
 from domains.ycs.transcript import (
+    MAX_CONCURRENT,
     close_transcript_service,
     fetch_transcriptions_batch,
     init_transcript_service,
@@ -35,6 +36,32 @@ from domains.ycs.transcript import (
 from infra.celery import app
 
 from .service import get_extractor
+
+
+# Callback signature for live progress emission. The task wrapper
+# supplies a closure that pipes payloads into `self.update_state(meta=)`;
+# the async impl passes per-stage dicts so the FastHTML poller can show
+# the current video metadata + phase counters.
+ProgressCb = Callable[[dict[str, Any]], None]
+
+
+def _project_video_meta(v: dict[str, Any]) -> dict[str, Any]:
+    """Pluck the subset of yt-dlp metadata shown on the FastHTML
+    progress card — same shape as the Search-page result row (minus
+    the thumbnail). Centralized so the 3 extract paths emit identical
+    payloads."""
+    return {
+        "id":              v.get("id"),
+        "title":           v.get("title"),
+        "channel":         v.get("channel"),
+        "channel_id":      v.get("channel_id"),
+        "duration":        v.get("duration"),
+        "duration_string": v.get("duration_string"),
+        "view_count":      v.get("view_count"),
+        "like_count":      v.get("like_count"),
+        "upload_date":     v.get("upload_date"),
+        "webpage_url":     v.get("webpage_url"),
+    }
 
 
 logger = get_task_logger(__name__)
@@ -65,17 +92,37 @@ async def _extract_videos_async(
     video_ids:             list[str],
     include_transcription: bool,
     languages:             list[str] | None,
+    progress_cb:           ProgressCb | None = None,
 ) -> dict[str, Any]:
-    """Port of deprecated `_extract_videos_async` (crawler.py:L41-95)."""
+    """Port of deprecated `_extract_videos_async` (crawler.py:L41-95).
+
+    `progress_cb` (Wave 5 polish) receives stage dicts so the Celery
+    task wrapper can pipe them into `self.update_state(meta=...)`. The
+    FastHTML Ingest page polls Celery `meta` and renders a live progress
+    bar + current-video metadata card. When `progress_cb is None` the
+    behavior is identical to the pre-polish code."""
     es = _get_es_client()
     extractor = get_extractor()
     try:
+        if progress_cb:
+            progress_cb({
+                "phase":   "metadata",
+                "current": 0,
+                "total":   len(video_ids),
+            })
         videos = await extractor.extract_batch(video_ids)
         videos_dicts = [
             v.model_dump(exclude_none = False) if hasattr(v, "model_dump") else v
             for v in videos
         ]
         es_metadata = await index_videos_to_elasticsearch(es, videos_dicts)
+        # Build the {video_id → projected metadata} map once; the
+        # transcript progress callback uses it to surface the most
+        # recently completed video to the UI.
+        videos_meta_map: dict[str, dict[str, Any]] = {
+            v["id"]: _project_video_meta(v)
+            for v in videos_dicts if v.get("id")
+        }
         es_transcriptions = {"indexed": 0, "failed": 0}
         if include_transcription:
             valid_ids = [
@@ -89,23 +136,50 @@ async def _extract_videos_async(
                 }
                 for v in videos_dicts if v.get("id")
             }
+            if progress_cb:
+                progress_cb({
+                    "phase":   "transcription",
+                    "current": 0,
+                    "total":   len(valid_ids),
+                })
+
+            def _per_video_cb(done: int, total: int, video_id: str | None) -> None:
+                if not progress_cb:
+                    return
+                payload: dict[str, Any] = {
+                    "phase":   "transcription",
+                    "current": done,
+                    "total":   total,
+                }
+                if video_id and video_id in videos_meta_map:
+                    payload["current_item"] = videos_meta_map[video_id]
+                progress_cb(payload)
+
             transcript_service = await init_transcript_service(
-                max_concurrent           = 5,
+                max_concurrent           = MAX_CONCURRENT,
                 browser_refresh_interval = 10,
                 max_retries              = 3,
             )
             try:
+                trans_stats: dict[str, int] = {}
                 transcription_docs = await fetch_transcriptions_batch(
                     valid_ids,
                     transcript_service = transcript_service,
                     es_client          = es,
                     languages          = languages,
                     video_metadata     = video_metadata,
+                    progress_cb        = _per_video_cb if progress_cb else None,
+                    stats              = trans_stats,
                 )
                 if transcription_docs:
                     es_transcriptions = await index_transcriptions_to_elasticsearch(
                         es, transcription_docs,
                     )
+                # Augment ES indexing counters with cache + fetch
+                # breakdown so the Ingest hint can show
+                # "N cached · M new · K failed".
+                es_transcriptions["cached"]       = trans_stats.get("cached", 0)
+                es_transcriptions["fetch_failed"] = trans_stats.get("fetched_failed", 0)
             finally:
                 await close_transcript_service()
         return {
@@ -155,22 +229,26 @@ async def _extract_channel_async(
                 for v in videos_dicts if v.get("id")
             }
             transcript_service = await init_transcript_service(
-                max_concurrent           = 5,
+                max_concurrent           = MAX_CONCURRENT,
                 browser_refresh_interval = 10,
                 max_retries              = 3,
             )
             try:
+                trans_stats: dict[str, int] = {}
                 transcription_docs = await fetch_transcriptions_batch(
                     valid_ids,
                     transcript_service = transcript_service,
                     es_client          = es,
                     languages          = languages,
                     video_metadata     = video_metadata,
+                    stats              = trans_stats,
                 )
                 if transcription_docs:
                     es_transcriptions = await index_transcriptions_to_elasticsearch(
                         es, transcription_docs,
                     )
+                es_transcriptions["cached"]       = trans_stats.get("cached", 0)
+                es_transcriptions["fetch_failed"] = trans_stats.get("fetched_failed", 0)
             finally:
                 await close_transcript_service()
         return {
@@ -221,22 +299,26 @@ async def _extract_playlist_async(
                 for v in videos_dicts if v.get("id")
             }
             transcript_service = await init_transcript_service(
-                max_concurrent           = 5,
+                max_concurrent           = MAX_CONCURRENT,
                 browser_refresh_interval = 10,
                 max_retries              = 3,
             )
             try:
+                trans_stats: dict[str, int] = {}
                 transcription_docs = await fetch_transcriptions_batch(
                     valid_ids,
                     transcript_service = transcript_service,
                     es_client          = es,
                     languages          = languages,
                     video_metadata     = video_metadata,
+                    stats              = trans_stats,
                 )
                 if transcription_docs:
                     es_transcriptions = await index_transcriptions_to_elasticsearch(
                         es, transcription_docs,
                     )
+                es_transcriptions["cached"]       = trans_stats.get("cached", 0)
+                es_transcriptions["fetch_failed"] = trans_stats.get("fetched_failed", 0)
             finally:
                 await close_transcript_service()
         return {
@@ -267,10 +349,17 @@ def extract_videos(
     logger.info(f"[extract_videos] Starting: {len(video_ids)} videos")
     self.update_state(
         state = "PROGRESS",
-        meta  = {"status": "extracting", "total": len(video_ids)},
+        meta  = {"phase": "init", "total": len(video_ids)},
     )
+
+    def _progress(payload: dict[str, Any]) -> None:
+        self.update_state(state = "PROGRESS", meta = payload)
+
     result = asyncio.run(
-        _extract_videos_async(video_ids, include_transcription, languages),
+        _extract_videos_async(
+            video_ids, include_transcription, languages,
+            progress_cb = _progress,
+        ),
     )
     logger.info(f"[extract_videos] Done: {result}")
     return result

@@ -334,6 +334,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  margin-bottom: 10px;
 }
 .ycs-paste-preview[data-state="empty"] { display: none; }
 .ycs-paste-count {
@@ -421,7 +422,7 @@
    same .page need their own top padding (Source / Videos / Playlist /
    Channel are siblings under .ycs-source-panels; only Search has the
    sticky wrapper that provides its own). */
-.ycs-tab-body.active:not(#ycs-tab-search) { padding-top: 28px; }
+.ycs-tab-body.active:not(#ycs-tab-search) { padding-top: 0; }
 .ycs-search-row {
   display: flex;
   gap: 10px;
@@ -1308,6 +1309,11 @@
   border-radius: 3px;
   align-items: end;
 }
+/* Videos tab variant — the Start ingest button is appended as the 3rd
+   grid cell on the same row as the checkbox + Languages field. */
+.ycs-trans-opts-with-action {
+  grid-template-columns: auto 1fr auto;
+}
 .ycs-form-actions {
   display: flex;
   align-items: center;
@@ -1343,7 +1349,6 @@
   margin-right: 8px;
 }
 .ycs-fail { color: var(--error-text); font-weight: 500; }
-.ycs-pipe-actions { margin: 6px 0 12px 0; }
 
 /* ---- Ask · mode pill row ---- */
 .ycs-mode-label {
@@ -1401,3 +1406,286 @@
 #ycs-llm-form .ycs-form-actions { display: none; }
 
 }
+
+/* ---- Ask · conversation history + thread bar ---- */
+.ycs-ask-threadbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 10px;
+  font-size: 0.74rem;
+}
+.ycs-ask-thread-label {
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.ycs-ask-thread-id {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.04);
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.04em;
+}
+.ycs-ask-newthread-btn {
+  margin-left: auto;
+  padding: 4px 10px;
+  font-size: 0.74rem;
+  font-weight: 500;
+  font-family: inherit;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.ycs-ask-newthread-btn:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+.ycs-ask-history {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 8px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.ycs-ask-history:empty { display: none; }
+.ycs-ask-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.015);
+}
+.ycs-ask-turn-user,
+.ycs-ask-turn-assistant {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ycs-ask-turn-role {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.ycs-ask-turn-user .ycs-ask-turn-role { color: var(--primary); }
+.ycs-ask-turn-body {
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+.ycs-ask-turn-citations {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+/* ============================================================
+ * Ingest · 3-phase pipeline panel (Wave 5 polish)
+ * Three vertical progress bars (Phase A transcripts via
+ * Playwright, Phase B Qdrant hybrid, Phase C Neo4j entity
+ * graph) + a "current video" metadata card showing the row
+ * being worked on. Driven by ingest.js::trackPipeline.
+ * ============================================================ */
+.ycs-pipe-panel {
+  display: none;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card, rgba(0, 0, 0, 0.015));
+}
+.ycs-pipe-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 2px;
+}
+.ycs-pipe-panel-title {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.ycs-pipe-panel-elapsed {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  flex: 1;
+}
+.ycs-pipe-rerun-btn,
+.ycs-pipe-stop-btn {
+  padding: 4px 10px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  font-family: inherit;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.ycs-pipe-rerun-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--primary);
+  background: rgba(196, 18, 48, 0.04);
+}
+.ycs-pipe-stop-btn:hover:not(:disabled) {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: rgba(196, 18, 48, 0.08);
+}
+.ycs-pipe-rerun-btn:disabled,
+.ycs-pipe-stop-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Cancelled-state bar — same neutral grey as pending so it reads as
+ * "this phase didn't run / didn't finish" without the success-green
+ * or failure-red implications. */
+.ycs-bar-row[data-state="cancelled"] .ycs-bar-fill {
+  background: rgba(0, 0, 0, 0.25);
+}
+.ycs-bar-row[data-state="cancelled"] .ycs-bar-hint {
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+.ycs-bar-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ycs-bar-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ycs-bar-title {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+}
+.ycs-bar-state {
+  font-size: 0.74rem;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.ycs-bar-pct {
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--text);
+  min-width: 3.2em;
+  text-align: right;
+}
+.ycs-bar-track {
+  height: 8px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.ycs-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--primary);
+  border-radius: inherit;
+  transition: width 0.4s ease;
+}
+.ycs-bar-row[data-state="pending"] .ycs-bar-fill {
+  background: rgba(0, 0, 0, 0.12);
+}
+.ycs-bar-row[data-state="success"] .ycs-bar-fill {
+  background: #2c8a3e;
+}
+.ycs-bar-row[data-state="failure"] .ycs-bar-fill,
+.ycs-bar-row[data-state="error"] .ycs-bar-fill {
+  background: var(--error-text, #c41230);
+}
+.ycs-bar-meta {
+  display: flex;
+  align-items: center;
+}
+.ycs-bar-hint {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.ycs-bar-row[data-state="success"] .ycs-bar-hint {
+  font-style: normal;
+  color: var(--text);
+}
+
+/* "Now processing" card — slim row of video metadata, same
+ * field set as the Search-page result row (minus thumbnail). */
+.ycs-vid-card {
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--primary);
+  background: rgba(196, 18, 48, 0.04);
+  border-radius: 4px;
+}
+.ycs-vid-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.ycs-vid-card-label {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+.ycs-vid-card-phase {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.ycs-vid-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ycs-vid-card-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.35;
+}
+.ycs-vid-card-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.ycs-vid-card-channel { font-weight: 500; color: var(--text); }
+.ycs-vid-card-meta { white-space: nowrap; }
+.ycs-vid-card-sep { color: var(--text-muted); opacity: 0.6; }
+.ycs-vid-card-row :empty { display: none; }
+.ycs-vid-card-row :empty + .ycs-vid-card-sep { display: none; }

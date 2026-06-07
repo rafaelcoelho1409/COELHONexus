@@ -124,7 +124,13 @@ registerChstripDeps({
   _resetSynthEventBuffer,
   renderSynthCards,
   pollSynthState,
-  _getNodeDrawerRef: () => _nodeDrawerRef,
+  // 2026-06-07 — pass the canvas.js getter directly. The previous inline
+  // `() => _nodeDrawerRef` referenced a `_nodeDrawerRef` that lives in
+  // canvas.js's lexical scope, NOT synth.js's — silently threw
+  // `ReferenceError: _nodeDrawerRef is not defined` on every chstrip
+  // click, aborting the click handler BEFORE the per-chapter SSE
+  // attached, so graph nodes never lit up.
+  _getNodeDrawerRef,
 });
 
 // SSE consumer — symmetric with pollPlannerState.
@@ -171,6 +177,11 @@ if (Sy.synthStartBtn) {
     else startSynth();
   });
 }
+// Tell the server-rendered fallback handler (SynthBody) to stand down —
+// the full ES-module handler above is wired. When this flag is set, the
+// fallback's `if (window.__synthWired) return;` early-exits, so the user
+// never sees double-dispatch.
+window.__synthWired = true;
 // ────────────────────────────────────────────────────────────────────
 // Force-reset escape hatch (2026-05-24)
 //
@@ -277,6 +288,7 @@ export {
 import {
   _resizeSynthCanvas,
   _resetSynthEventBuffer,
+  _getNodeDrawerRef,
 } from './canvas.js';
 
 // _synthRunStartMs run-start timestamp moved to ./shared.js (2026-06-05
@@ -341,6 +353,7 @@ registerSynthPollingDeps({
   _markChStripCell,
   _markChStripCellTime,
   _highlightStripCell,
+  _forgetActiveStudy,
 });
 
 // Lifecycle extracted to ./lifecycle.js (Step 8).

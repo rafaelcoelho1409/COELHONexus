@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import Any, Callable
 
 from langchain_core.documents import Document
 from langchain_experimental.graph_transformers import LLMGraphTransformer
@@ -63,6 +63,7 @@ async def extract_and_store_graph(
     llm: Any,
     neo4j_graph: Neo4jGraph,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict:
     """One LLM call PER TRANSCRIPT (not per chunk). Deprecated rationale:
     full context → +30% entity quality vs chunked, and 352 calls instead
@@ -121,6 +122,18 @@ async def extract_and_store_graph(
         f"(skipped {total_skipped})"
     )
 
+    total_batches = (len(documents) + batch_size - 1) // batch_size
+    if progress_cb:
+        progress_cb({
+            "phase":         "extracting",
+            "current":       0,
+            "total":         len(documents),
+            "current_batch": 0,
+            "total_batches": total_batches,
+            "nodes":         0,
+            "rels":          0,
+        })
+
     # Batch loop with rate-limit pacing.
     for batch_start in range(0, len(documents), batch_size):
         batch = documents[batch_start:batch_start + batch_size]
@@ -163,11 +176,40 @@ async def extract_and_store_graph(
                 f"{type(e).__name__}: {str(e)[:200]}. Continuing."
             )
             total_processed += len(batch)
+        # Per-batch progress emission so the FastHTML Neo4j bar advances
+        # in real time. `current` counts attempted (not just succeeded)
+        # transcripts so the bar fills monotonically even when an
+        # individual batch raises (e.g. transient LLM 5xx).
+        if progress_cb:
+            last_vid = batch[-1].metadata.get("video_id", "") if batch else ""
+            last_meta = metadata_map.get(last_vid, {}) if last_vid else {}
+            progress_cb({
+                "phase":         "extracting",
+                "current":       total_processed,
+                "total":         len(documents),
+                "current_batch": batch_start // batch_size + 1,
+                "total_batches": total_batches,
+                "nodes":         total_nodes,
+                "rels":          total_relationships,
+                "current_item": {
+                    "id":      last_vid,
+                    "title":   last_meta.get("title", ""),
+                    "channel": last_meta.get("channel", ""),
+                } if last_vid else None,
+            })
         # Inter-batch pacing. Deprecated used `time.sleep` (sync) here
         # despite the function being `async def` — preserved verbatim.
         if batch_start + batch_size < len(documents):
             time.sleep(INTER_BATCH_SLEEP_S)
 
+    if progress_cb:
+        progress_cb({
+            "phase":   "resolving",
+            "current": len(documents),
+            "total":   len(documents),
+            "nodes":   total_nodes,
+            "rels":    total_relationships,
+        })
     logger.info("[ycs:graph] entity resolution starting")
     resolved = resolve_entities(neo4j_graph)
     logger.info(f"[ycs:graph] entity resolution: {resolved} nodes merged")
