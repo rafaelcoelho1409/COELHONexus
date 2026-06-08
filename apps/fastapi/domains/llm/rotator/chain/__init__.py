@@ -14,6 +14,7 @@ from .service import (
     build_synth_fallback_chain,
     build_synth_pinned_chain,
     build_synth_pool_chain,
+    build_ycs_neo4j_pinned_chain,
     chat_judge_async,
     chat_judge_bandit_async,
     embed_via_router_async,
@@ -25,6 +26,8 @@ from .service import (
     init_dynamic_catalog_sync,
     pick_synth_deployment,
     pick_synth_deployment_bandit,
+    pick_ycs_neo4j_deployment_bandit,
+    record_ycs_neo4j_reward,
     rerank_via_router_async,
     reset_rotator,
 )
@@ -41,6 +44,7 @@ __all__ = [
     "build_synth_fallback_chain",
     "build_synth_pinned_chain",
     "build_synth_pool_chain",
+    "build_ycs_neo4j_pinned_chain",
     "chat_judge_async",
     "chat_judge_bandit_async",
     "embed_via_router_async",
@@ -53,6 +57,8 @@ __all__ = [
     "is_heavyweight",
     "pick_synth_deployment",
     "pick_synth_deployment_bandit",
+    "pick_ycs_neo4j_deployment_bandit",
+    "record_ycs_neo4j_reward",
     "rerank_via_router_async",
     "reset_rotator",
 ]

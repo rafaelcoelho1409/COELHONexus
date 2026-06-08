@@ -16,6 +16,10 @@ from elasticsearch import AsyncElasticsearch
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http.models import (
     Distance,
+    FieldCondition,
+    Filter,
+    FilterSelector,
+    MatchAny,
     PointStruct,
     SparseIndexParams,
     SparseVector,
@@ -226,6 +230,10 @@ async def ingest_to_qdrant(
     total_chunks = 0
     total_upserted = 0
     metadata_cache: dict[str, dict] = {}
+    # Per-video status tracking for the Ingest-page right-column
+    # list — Qdrant upserts don't fail per-video (the whole task
+    # either succeeds or raises), so `failed_ids` stays empty here.
+    completed_ids: list[str] = []
 
     for transcript in all_transcripts:
         vid = transcript["video_id"]
@@ -278,14 +286,18 @@ async def ingest_to_qdrant(
             collection_name = QDRANT_COLLECTION, points = points,
         )
         total_upserted += len(points)
+        if vid not in completed_ids:
+            completed_ids.append(vid)
 
         if progress_cb:
             progress_cb({
-                "phase":   "embedding",
-                "current": total_transcripts,
-                "total":   len(all_transcripts),
-                "chunks":  total_chunks,
-                "points":  total_upserted,
+                "phase":         "embedding",
+                "current":       total_transcripts,
+                "total":         len(all_transcripts),
+                "chunks":        total_chunks,
+                "points":        total_upserted,
+                "completed_ids": list(completed_ids),
+                "failed_ids":    [],
                 "current_item": {
                     "id":         vid,
                     "title":      meta.get("title", ""),
@@ -309,3 +321,54 @@ async def ingest_to_qdrant(
         "embedding":           "nvidia-nim-api",
         "collection":          QDRANT_COLLECTION,
     }
+
+
+async def delete_points_for_videos(
+    qdrant:    AsyncQdrantClient,
+    video_ids: list[str],
+) -> dict[str, Any]:
+    """Best-effort delete of every Qdrant point whose payload
+    `video_id` is in `video_ids`. Used by the Pipeline panel's
+    `Wipe cache` button.
+
+    Uses a payload-filter selector (NOT point-id lookups) because
+    point ids are `md5(video_id_chunk_index)` — we would need to know
+    the chunk_index for every chunk, which we don't. The filter
+    selector tells Qdrant "delete every point matching this filter,"
+    which sweeps all chunks per video in one call.
+
+    Best-effort: collection-missing or Qdrant-down errors are logged
+    + counted, never raised — the wipe of other stores still happens."""
+    if not video_ids:
+        return {"qdrant_deleted": 0}
+    try:
+        result = await qdrant.delete(
+            collection_name = QDRANT_COLLECTION,
+            points_selector = FilterSelector(
+                filter = Filter(
+                    must = [
+                        FieldCondition(
+                            key = "video_id",
+                            match = MatchAny(any = list(video_ids)),
+                        ),
+                    ],
+                ),
+            ),
+            wait = True,
+        )
+        status_str = str(getattr(result, "status", "unknown"))
+        logger.info(
+            f"[ycs:qdrant:wipe] collection={QDRANT_COLLECTION} "
+            f"status={status_str} video_ids={len(video_ids)}"
+        )
+        return {
+            "qdrant_deleted": len(video_ids),
+            "qdrant_status":  status_str,
+        }
+    except Exception as e:
+        logger.warning(
+            f"[ycs:qdrant:wipe] failed for {len(video_ids)} videos: "
+            f"{type(e).__name__}: {str(e)[:200]}"
+        )
+        return {"qdrant_deleted": 0, "qdrant_error": str(e)[:200]}
+

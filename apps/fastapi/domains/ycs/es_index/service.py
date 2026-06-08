@@ -147,3 +147,58 @@ async def index_transcriptions_to_elasticsearch(
             "failed":  len(transcriptions),
             "error":   str(e),
         }
+
+
+async def delete_videos_from_es(
+    es:        AsyncElasticsearch,
+    video_ids: list[str],
+) -> dict[str, Any]:
+    """Best-effort delete of the supplied video_ids from BOTH
+    `INDEX_METADATA` and `INDEX_TRANSCRIPTIONS`. Used by the Pipeline
+    panel's `Wipe cache` button so the next Retry re-fetches from yt-dlp
+    + re-scrapes via Playwright instead of hitting the cache.
+
+    Per-index query SHAPE differs by indexing convention:
+      - `INDEX_METADATA`: video_id is the document `_id` (see
+        `fetch_metadata_from_es` which uses `{ids: {values}}`). So
+        deleting by `terms.video_id` matches nothing — the field
+        doesn't exist in this index — and earlier this returned
+        `metadata_deleted: 0` even when 5 metadata docs were present.
+        Use `ids` query to target the `_id` field directly.
+      - `INDEX_TRANSCRIPTIONS`: video_id is a regular field (one
+        transcript doc per `{video_id}_{lang}` pair), so `terms`
+        works.
+
+    `delete_by_query` (vs. doc-by-doc DELETE) lets a single request
+    drop every match — small/large batches behave the same. `conflicts:
+    proceed` so a concurrent ingestion writer doesn't sink the wipe.
+    Each index failure is logged + counted separately; the wipe
+    proceeds across both even if one index errors."""
+    if not video_ids:
+        return {"metadata_deleted": 0, "transcripts_deleted": 0}
+    out: dict[str, Any] = {}
+    queries: tuple[tuple[str, str, dict], ...] = (
+        ("metadata",    INDEX_METADATA,        {"ids":   {"values": list(video_ids)}}),
+        ("transcripts", INDEX_TRANSCRIPTIONS,  {"terms": {"video_id": list(video_ids)}}),
+    )
+    for index_label, index_name, query in queries:
+        try:
+            resp = await es.delete_by_query(
+                index = index_name,
+                query = query,
+                refresh = True,
+                conflicts = "proceed",
+            )
+            n = int(resp.get("deleted", 0) or 0)
+            out[f"{index_label}_deleted"] = n
+            logger.info(
+                f"[elasticsearch:wipe] {index_name}: deleted {n} doc(s)"
+            )
+        except Exception as e:
+            logger.warning(
+                f"[elasticsearch:wipe] {index_name} failed: "
+                f"{type(e).__name__}: {str(e)[:200]}"
+            )
+            out[f"{index_label}_deleted"] = 0
+            out[f"{index_label}_error"] = str(e)[:200]
+    return out

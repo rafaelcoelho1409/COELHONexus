@@ -288,6 +288,12 @@ export async function wipePlanner(slug) {
     Sp.setPlannerThreadId(null);
     resetPlannerCards();
     refreshPlannerStartState();
+    // Clear the navbar row-3 total. Backend deletes the
+    // planner-timing-latest.json blob via the planner/{slug}/ MinIO prefix
+    // sweep, but the navbar text was painted from a prior live ticker or
+    // a /planner/{slug}/timing response — neither auto-clears on wipe.
+    stopElapsed('planner');
+    showElapsed('planner', 0);
   }
   console.log('[ddWipePlanner]', slug, result);
   return result;
@@ -566,6 +572,32 @@ export async function cancelPlanner() {
   Sp.plannerStartBtn.innerHTML =
     '<div class="fw-spinner" style="display:inline-block;' +
     'vertical-align:middle;margin-right:8px"></div>Cancelling…';
+
+  // Safety-net timer (mirrors Synth's pattern). The intended path is:
+  // cancel watcher (1s poll) fires → graph.ainvoke raises CancelledError
+  // → startPlanner's POST returns with status='cancelled' → its finally
+  // block flips the button back. If anything in that chain stalls (pod
+  // restart, network drop, ainvoke stuck inside a non-cancellable
+  // await), the button used to spin forever. 5s gives the happy path
+  // room; after that we force-reset the UI so the user isn't stuck.
+  // Backend cancel flag stays set (TTL=1h) so the worker still drains
+  // on its own — the state we're clearing here is purely browser-side.
+  const PLANNER_CANCEL_TIMEOUT_MS = 5000;
+  const safetyTimer = setTimeout(() => {
+    if (Sp.plannerStartBtn
+        && Sp.plannerStartBtn.innerHTML.includes('Cancelling')) {
+      Sp.setPlannerThreadId(null);
+      if (Si.activeSlug) {
+        try { _forgetActivePlanner(Si.activeSlug); } catch (_) {}
+      }
+      refreshPlannerStartState();
+      showToast(
+        'Cancel sent. Cleanup is still finishing in the background; '
+        + 'Start Planner / Wipe Planner are usable now.'
+      );
+    }
+  }, PLANNER_CANCEL_TIMEOUT_MS);
+
   try {
     // Fire-and-forget — the cancel watcher on the server detects the
     // Redis flag within ~1s, raises CancelledError inside graph.ainvoke,
@@ -581,6 +613,7 @@ export async function cancelPlanner() {
   } catch (e) {
     // If the cancel POST itself fails, restore the button so the user
     // can retry. The startPlanner POST is still in flight either way.
+    clearTimeout(safetyTimer);
     Sp.plannerStartBtn.removeAttribute('disabled');
     Sp.plannerStartBtn.innerHTML = 'Cancel Planner';
     showToast('Cancel request failed: ' + String(e));

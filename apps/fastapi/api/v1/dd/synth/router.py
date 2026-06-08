@@ -595,6 +595,31 @@ async def cancel_synth(thread_id: str) -> dict:
         parts = thread_id.split("/")
         if len(parts) >= 4 and parts[1] == "study":
             slug = parts[2]
+            seen: set[str] = set()
+            # PRIMARY — authoritative active-chapter set (study orchestrator
+            # SADDs each chapter_thread_id before spawn, SREMs in finally).
+            # Catches chapters that just started and haven't emitted their
+            # first progress event yet — those are invisible to the
+            # snapshot scan below.
+            try:
+                members = await r.smembers(
+                    f"dd:study:{thread_id}:active_chapters",
+                )
+                for raw in members or []:
+                    ch_tid = raw.decode() if isinstance(raw, bytes) else raw
+                    if ch_tid and ch_tid not in seen:
+                        await request_cancel(r, ch_tid)
+                        propagated_to.append(ch_tid)
+                        seen.add(ch_tid)
+            except Exception as e:
+                logger.warning(
+                    f"[cancel_synth] active_chapters read failed for "
+                    f"{thread_id!r}: {type(e).__name__}: {e}"
+                )
+            # BELT-AND-SUSPENDERS — scan progress snapshots. Covers any
+            # chapter that emitted progress but never landed in the set
+            # (e.g., upgraded mid-run from an older dispatch that didn't
+            # SADD). Idempotent: we de-dupe via `seen`.
             chapter_prefix = f"docs-distiller/synth/{slug}/"
             scan_pattern = (
                 f"dd:synth:{chapter_prefix}*:events:snapshot"
@@ -604,8 +629,11 @@ async def cancel_synth(thread_id: str) -> dict:
                     if isinstance(key, bytes):
                         key = key.decode()
                     ch_tid = key[len("dd:synth:"):-len(":events:snapshot")]
+                    if ch_tid in seen:
+                        continue
                     await request_cancel(r, ch_tid)
                     propagated_to.append(ch_tid)
+                    seen.add(ch_tid)
             except Exception as e:
                 logger.warning(
                     f"[cancel_synth] scan/propagate failed for {thread_id!r}: "

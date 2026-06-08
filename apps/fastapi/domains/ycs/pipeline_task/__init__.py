@@ -10,6 +10,7 @@ from .service import (
     load_pipeline_state,
     persist_pipeline_state,
     revoke_pipeline_phases,
+    wipe_videos_data,
 )
 from .task import full_channel_pipeline
 
@@ -21,4 +22,5 @@ __all__ = [
     "load_pipeline_state",
     "persist_pipeline_state",
     "revoke_pipeline_phases",
+    "wipe_videos_data",
 ]

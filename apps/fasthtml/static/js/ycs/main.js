@@ -18,6 +18,7 @@ switch (stage) {
         break;
     case "ingest":
         await import("@ycs/ingest.js");
+        await import("@ycs/ingest/library.js");
         break;
     case "ask":
         await import("@ycs/ask.js");

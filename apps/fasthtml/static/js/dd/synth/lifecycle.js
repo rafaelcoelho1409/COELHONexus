@@ -546,6 +546,17 @@ export async function startSynth() {
   }
 }
 
+// Safety-net timeout (ms) — if no SSE `terminal` arrives within this
+// window the button auto-resets so the user is never stuck waiting.
+// Cancel watchers poll every ~1s; 5s = one watcher tick + a couple
+// seconds for the in-flight await to unwind. Backend keeps draining on
+// its own after we reset the UI (cancel flag has TTL=1h), so it's safe
+// to release the user from the spinner sooner. (Moved from synth.js
+// 2026-06-07 — was a module-private const there, so cancelSynth here
+// hit ReferenceError on every click and never reached the cancel POST.)
+const CANCEL_TIMEOUT_MS = 5000;
+
+
 export async function cancelSynth() {
   // Phase 3: clear the atom immediately so the cross-stage Start gate
   // releases on click, not when the cancel watcher lands on the server.

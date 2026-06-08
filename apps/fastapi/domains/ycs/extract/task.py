@@ -123,6 +123,26 @@ async def _extract_videos_async(
             v["id"]: _project_video_meta(v)
             for v in videos_dicts if v.get("id")
         }
+        # Emit `all_items` now so the FastHTML Ingest panel's right-
+        # column video list can render with titles + channels
+        # immediately — before any transcript fetch finishes. Otherwise
+        # the user would stare at video_ids until Phase 1 completes,
+        # then suddenly see full metadata. We also stash `all_items`
+        # in a closure variable + replay it on every subsequent
+        # transcription progress payload (Celery `update_state(meta=)`
+        # REPLACES the dict each call — a one-shot emit would be
+        # overwritten before the JS poll lands on it).
+        all_items = [
+            videos_meta_map[vid] for vid in video_ids
+            if vid in videos_meta_map
+        ]
+        if progress_cb:
+            progress_cb({
+                "phase":     "metadata_done",
+                "current":   0,
+                "total":     len(video_ids),
+                "all_items": all_items,
+            })
         es_transcriptions = {"indexed": 0, "failed": 0}
         if include_transcription:
             valid_ids = [
@@ -136,20 +156,42 @@ async def _extract_videos_async(
                 }
                 for v in videos_dicts if v.get("id")
             }
+            # Per-video status tracking for the Ingest-page video list.
+            # The right-column status pill is derived from these lists:
+            #   id in failed_ids                → Failed
+            #   id == current_item.id (active)  → Processing
+            #   id in completed_ids             → Done
+            #   else                            → Queued
+            completed_ids: list[str] = []
+            failed_ids:    list[str] = []
             if progress_cb:
                 progress_cb({
-                    "phase":   "transcription",
-                    "current": 0,
-                    "total":   len(valid_ids),
+                    "phase":         "transcription",
+                    "current":       0,
+                    "total":         len(valid_ids),
+                    "completed_ids": list(completed_ids),
+                    "failed_ids":    list(failed_ids),
+                    "all_items":     all_items,
                 })
 
-            def _per_video_cb(done: int, total: int, video_id: str | None) -> None:
+            def _per_video_cb(
+                done: int, total: int, video_id: str | None,
+                success: bool = True,
+            ) -> None:
                 if not progress_cb:
                     return
+                if video_id:
+                    if success and video_id not in completed_ids:
+                        completed_ids.append(video_id)
+                    elif (not success) and video_id not in failed_ids:
+                        failed_ids.append(video_id)
                 payload: dict[str, Any] = {
-                    "phase":   "transcription",
-                    "current": done,
-                    "total":   total,
+                    "phase":         "transcription",
+                    "current":       done,
+                    "total":         total,
+                    "completed_ids": list(completed_ids),
+                    "failed_ids":    list(failed_ids),
+                    "all_items":     all_items,
                 }
                 if video_id and video_id in videos_meta_map:
                     payload["current_item"] = videos_meta_map[video_id]
@@ -186,6 +228,11 @@ async def _extract_videos_async(
             "total_videos":   len(videos_dicts),
             "metadata":       es_metadata,
             "transcriptions": es_transcriptions,
+            # Surface in the final result too, so a JS poll that lands
+            # only AFTER Phase 1 reaches SUCCESS (page reload mid-Phase-2/3,
+            # late-tab visit) still gets titles to render the right
+            # column with names instead of bare video_ids.
+            "all_items":      all_items,
         }
     finally:
         await es.close()

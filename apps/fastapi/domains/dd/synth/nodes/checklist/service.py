@@ -728,58 +728,6 @@ def llm_payload_to_criteria(
 
 
 
-# === checklist-helpers restored from old commit (2026-06-07) ===
-_CRITERION_BLOCKS: dict[str, str] = {
-    "chapter_reads_coherently": (
-        "[c8] chapter_reads_coherently\n"
-        "  Reading sections in order, does the chapter flow as a single "
-        "document with smooth transitions, OR as disjoint reference "
-        "cards with abrupt scope shifts? PASS if it reads as one "
-        "document; FAIL if multiple sections feel like standalone "
-        "definitions with no connective tissue."
-    ),
-    "claims_grounded_in_sources": (
-        "[c9] claims_grounded_in_sources\n"
-        "  Spot-check 3-5 citations against the per-section grounding "
-        "above. Does each cited source actually back the specific claim "
-        "the section makes in prose nearby? PASS if claims align with "
-        "the digest's key_facts; FAIL if any cited source is being "
-        "stretched beyond what it supports."
-    ),
-    "terminology_consistent": (
-        "[c10] terminology_consistent\n"
-        "  Does the chapter use the SAME name for the SAME concept "
-        "across sections (e.g., not switching between 'field' and "
-        "'attribute' for the same Pydantic concept, or 'method' and "
-        "'function' interchangeably for the same API)? PASS if "
-        "terminology is stable; FAIL if you can point to ≥2 sections "
-        "using different names for the same thing."
-    ),
-    "prose_code_first_not_meta_framing": (
-        "[c11] prose_code_first_not_meta_framing\n"
-        "  Is each section's prose dense + production-focused (concrete "
-        "APIs, types, parameters, error modes), OR padded with meta-"
-        "framing ('In this chapter we will...', 'In summary...', 'It "
-        "is important to note that...')? PASS if prose is dense; FAIL "
-        "if meta-framing eats >20% of any section's `intro` or any "
-        "H3 subtopic's `explanation`."
-    ),
-    "code_refs_introduced_in_prose": (
-        "[c12] code_refs_introduced_in_prose\n"
-        "  In the v2 cookbook structure, each H3 subtopic emits "
-        "`{subheading} → {explanation} → [code-block]`. Does each "
-        "subtopic's explanation (1-2 sentences BEFORE the code) "
-        "actually introduce that specific code block — naming the "
-        "decorator/type/parameter the reader is about to see — OR is "
-        "it generic prose that could precede ANY code block? PASS if "
-        "explanations are tied to their specific code; FAIL if any "
-        "explanation reads as filler.\n"
-        "  NOTE: If a section has 0 subtopics (rare — usually a "
-        "placeholder), this criterion FAILS for that section. The "
-        "cookbook contract requires ≥3 subtopics per section."
-    ),
-}
-
 async def _run_llm_judge(
     *,
     thread_id: str,

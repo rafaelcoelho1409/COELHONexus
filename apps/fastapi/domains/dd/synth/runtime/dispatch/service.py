@@ -576,6 +576,26 @@ async def run_study_async(
             )
             try:
                 await clear_cancel(r, chapter_thread_id)
+                # Register THIS chapter as active so the study-level cancel
+                # endpoint can propagate to it BEFORE the chapter graph has
+                # had a chance to emit its first progress event. The
+                # snapshot-scan path misses chapters in this just-spawned
+                # window, leaving the spinner stuck while the chapter runs
+                # to completion.
+                try:
+                    await r.sadd(
+                        f"dd:study:{study_thread_id}:active_chapters",
+                        chapter_thread_id,
+                    )
+                    await r.expire(
+                        f"dd:study:{study_thread_id}:active_chapters",
+                        86400,
+                    )
+                except Exception as _e:
+                    logger.warning(
+                        f"[study-orchestrator] active_chapters SADD "
+                        f"failed for {chapter_thread_id!r}: {_e}"
+                    )
             finally:
                 await r.aclose()
 
@@ -614,6 +634,24 @@ async def run_study_async(
                     await watcher_task
                 except (asyncio.CancelledError, Exception):
                     pass
+                # Drop this chapter from the active-chapter set so a
+                # later cancel doesn't try to set a flag on a completed
+                # chapter (harmless but noisy).
+                _rc = redis_aio.from_url(
+                    redis_url(),
+                    socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,
+                    socket_timeout = REDIS_OP_TIMEOUT_S,
+                )
+                try:
+                    await _rc.srem(
+                        f"dd:study:{study_thread_id}:active_chapters",
+                        chapter_thread_id,
+                    )
+                except Exception:
+                    pass
+                finally:
+                    try: await _rc.aclose()
+                    except Exception: pass
 
             try:
                 await graph.aupdate_state(

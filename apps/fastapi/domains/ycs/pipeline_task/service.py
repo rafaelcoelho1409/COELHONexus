@@ -123,6 +123,81 @@ async def persist_pipeline_state(
         )
 
 
+async def wipe_videos_data(
+    video_ids:   list[str],
+    neo4j_graph: Any | None = None,
+) -> dict[str, Any]:
+    """Best-effort 3-store wipe of every artifact tied to the supplied
+    `video_ids` — ES metadata + transcripts, Qdrant hybrid points, and
+    Neo4j Document + Video nodes. Used by the Pipeline panel's `Wipe
+    cache` button so the next Retry re-runs the whole chain from
+    scratch (no Phase 1 cache hits, no Phase 3 skip-on-video_id).
+
+    Spawns fresh ES + Qdrant clients (FastAPI request context, not a
+    long-lived pool) and closes them at exit. `neo4j_graph` is reused
+    from `app.state.neo4j_graph` to avoid a fresh bolt handshake per
+    wipe.
+
+    Best-effort across all 3 stores — a failure in one store is logged
+    and counted, the others still run. Returns a summary dict the
+    Wipe button surfaces in the panel status text."""
+    import os
+    from elasticsearch import AsyncElasticsearch
+    from qdrant_client import AsyncQdrantClient
+
+    from domains.ycs.es_index import delete_videos_from_es
+    from domains.ycs.graph_builder import delete_documents_for_videos
+    from domains.ycs.ingestion import delete_points_for_videos
+
+    if not video_ids:
+        return {"status": "noop", "reason": "no video_ids"}
+
+    summary: dict[str, Any] = {"video_ids": list(video_ids)}
+
+    # --- ES + Qdrant clients (FastAPI-side, short-lived) ---
+    es = AsyncElasticsearch(
+        hosts      = [os.environ["ELASTICSEARCH_HOST"]],
+        basic_auth = (
+            os.environ["ELASTICSEARCH_USERNAME"],
+            os.environ.get("ELASTICSEARCH_PASSWORD", ""),
+        ),
+        verify_certs = False,
+    )
+    qdrant_api_key = os.environ.get("QDRANT_API_KEY")
+    qdrant = AsyncQdrantClient(
+        url     = os.environ.get("QDRANT_URL", "http://localhost:6333"),
+        port    = int(os.environ.get("QDRANT_PORT", "6333")),
+        api_key = qdrant_api_key if qdrant_api_key else None,
+    )
+    try:
+        # 1. Elasticsearch — metadata + transcripts indexes
+        summary["es"] = await delete_videos_from_es(es, video_ids)
+        # 2. Qdrant — hybrid collection (dense + sparse)
+        summary["qdrant"] = await delete_points_for_videos(qdrant, video_ids)
+        # 3. Neo4j — Document + Video nodes (entities left intact;
+        #    may be referenced by other videos' graphs)
+        if neo4j_graph is not None:
+            summary["neo4j"] = delete_documents_for_videos(
+                neo4j_graph, video_ids,
+            )
+        else:
+            summary["neo4j"] = {"skipped": "neo4j_graph not available"}
+    finally:
+        try:
+            await qdrant.close()
+        except Exception:
+            pass
+        try:
+            await es.close()
+        except Exception:
+            pass
+
+    logger.info(
+        f"[ycs:pipeline:wipe] {len(video_ids)} video(s): {summary}"
+    )
+    return summary
+
+
 def revoke_pipeline_phases(phase_ids: list[str]) -> dict[str, str]:
     """Send Celery revoke to every supplied task_id. `terminate=True`
     sends SIGTERM to the worker process running the task (or queues

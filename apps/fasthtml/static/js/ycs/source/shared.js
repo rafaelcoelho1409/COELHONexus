@@ -78,6 +78,20 @@ export async function dispatchPipelineToIngest(endpoint, body, statusEl) {
             setStatus(statusEl, "error", "Backend returned no phase IDs.");
             return;
         }
+        // Pre-seed the pipeline-panel localStorage entry with the
+        // ordered video_ids so the Ingest-page right-column list
+        // renders rows immediately — no flash of "Waiting for
+        // metadata…" while Phase 1's yt-dlp + ES round-trip completes.
+        try {
+            const ids = {
+                extract:   p.extract,
+                qdrant:    p.qdrant,
+                neo4j:     p.neo4j,
+                video_ids: Array.isArray(data.video_ids) ? data.video_ids : [],
+                startedAt: Date.now(),
+            };
+            localStorage.setItem("ycs:pipeline:active", JSON.stringify(ids));
+        } catch (_) { /* */ }
         const q = new URLSearchParams({
             extract: p.extract,
             qdrant:  p.qdrant,

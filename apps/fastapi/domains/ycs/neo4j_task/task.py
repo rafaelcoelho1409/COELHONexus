@@ -1,31 +1,44 @@
 """ycs/neo4j_task — Celery: extract entities from FULL transcripts → Neo4j.
 
-Direct port of deprecated `tasks/youtube/neo4j.py:L1-133`.
-
-ONE task: `ingest_to_neo4j(video_ids?, batch_size=3)`.
+ONE task: `ingest_to_neo4j(video_ids?, batch_size=1)`.
 
 Internally:
   1. Fresh AsyncElasticsearch (worker process)
   2. Fresh `Neo4jGraph` — deprecated did NOT pass `refresh_schema=False`
      here (only in app.py). Preserve that omission per port-fidelity.
-  3. Build a 13-model `with_fallbacks` chain: Groq (speed) → NVIDIA NIM
-     (capacity). Exact deprecated model list.
+  3. Pick a deployment from the unified LLM rotator via FGTS-VA bandit
+     under `dd_process="ycs-neo4j"` (separate cell state from DD so
+     DD prose variance doesn't drag down JSON-strong arms for entity
+     extraction, and vice-versa). Bandit picks one model per Celery
+     task (= one ingest run); all transcripts in this run share the
+     pinned model. The 11-model ad-hoc `with_fallbacks` chain that
+     previously lived here is GONE — it duplicated rotator policy
+     (cooldown, BYOK selection, per-error retry) and bypassed the
+     bandit entirely.
   4. Fetch transcripts + metadata from ES.
   5. `build_video_metadata_graph` — Video/Channel nodes (no LLM cost).
-  6. `extract_and_store_graph` — LLM entity extraction with batching."""
+  6. `extract_and_store_graph` — LLM entity extraction with batching.
+  7. Emit one bandit reward observation after the run completes (or
+     bails). Aggregated per task — partial failure = failure reward."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
+import time
 from typing import Any
 
 from celery.utils.log import get_task_logger
 from elasticsearch import AsyncElasticsearch
 from langchain_neo4j import Neo4jGraph
-from langchain_openai import ChatOpenAI
 
 from domains.llm.credentials import resolve_key
+from domains.llm.rotator.chain import (
+    build_ycs_neo4j_pinned_chain,
+    pick_ycs_neo4j_deployment_bandit,
+    record_ycs_neo4j_reward,
+)
+from domains.llm.rotator.chain.domain import classify_error
 from domains.ycs.graph_builder import (
     build_video_metadata_graph,
     extract_and_store_graph,
@@ -47,12 +60,13 @@ logger = get_task_logger(__name__)
 def ingest_to_neo4j(
     self,
     video_ids:  list[str] | None = None,
-    batch_size: int              = 3,
+    batch_size: int              = 1,
 ) -> dict[str, Any]:
-    """Extract entities from FULL transcripts via LLM → Neo4j.
+    """Extract entities from FULL transcripts via the rotator-bandit-pinned
+    LLM → Neo4j. With `pipeline_task.NEO4J_BATCH_SIZE=1` each batch is one
+    video, so per-video progress matches Phase 1 / Phase 2 granularity.
 
-    352 transcripts → 352 LLM calls (was 2911 with chunks). Includes
-    entity resolution post-processing via rapidfuzz."""
+    Includes entity resolution post-processing via rapidfuzz."""
     logger.info(
         f"[ingest_to_neo4j] Starting: video_ids={video_ids}, "
         f"batch_size={batch_size}",
@@ -77,84 +91,23 @@ def ingest_to_neo4j(
             username = os.environ.get("NEO4J_USERNAME", "neo4j"),
             password = os.environ.get("NEO4J_PASSWORD", ""),
         )
-        # LLM fallback chain: Groq (speed) → NVIDIA NIM (capacity).
-        # Graph extraction uses 600s timeout (full transcripts are slow).
-        # Keys come from the BYOK Fernet store via `resolve_key()` (not
-        # `os.environ` directly — Helm secretEnv mappings for provider
-        # keys were removed in the 2026-05-31 BYOK migration; reading
-        # env returns "" and the OpenAI client raises
-        # `AuthenticationError: Header of type 'authorization' was
-        # missing`, killing the whole batch). Resolution happens at
-        # chain-build time so a /settings update lands on the next
-        # task invocation without a worker restart.
-        groq_url   = "https://api.groq.com/openai/v1"
-        groq_key   = resolve_key("GROQ_API_KEY")
-        nvidia_url = "https://integrate.api.nvidia.com/v1"
-        nvidia_key = resolve_key("NVIDIA_API_KEY")
-
-        if not groq_key and not nvidia_key:
+        # BYOK preflight — the rotator's SYNTH_GROUP needs at least one
+        # provider key resolvable to be useful for YCS. The factory itself
+        # tolerates partial keying (LiteLLM Router cooldowns the rest),
+        # but if NOTHING is set we want a clean, actionable error before
+        # spending compute on the ES fetch.
+        if not any(resolve_key(env_var) for env_var in (
+            "NVIDIA_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY",
+            "MISTRAL_API_KEY", "GOOGLE_API_KEY", "DEEPSEEK_API_KEY",
+        )):
             return {
                 "error": (
-                    "No GROQ_API_KEY or NVIDIA_API_KEY configured in "
-                    "the BYOK credential store. Open /settings (LLM "
-                    "rotator) and paste at least one provider key. "
-                    "Phase 3 entity extraction can't proceed without it."
+                    "No provider keys configured in the BYOK credential "
+                    "store. Open /settings (LLM rotator) and paste at "
+                    "least one provider key. Phase 3 entity extraction "
+                    "can't proceed without it."
                 ),
             }
-
-        def _groq(model: str) -> ChatOpenAI:
-            return ChatOpenAI(
-                model       = model,
-                temperature = 0.0,
-                base_url    = groq_url,
-                api_key     = groq_key,
-                max_retries = 0,
-                timeout     = 120,
-            )
-
-        def _nim(model: str) -> ChatOpenAI:
-            return ChatOpenAI(
-                model       = model,
-                temperature = 0.0,
-                base_url    = nvidia_url,
-                api_key     = nvidia_key,
-                max_retries = 0,
-                timeout     = 600,
-            )
-
-        all_models: list[ChatOpenAI] = []
-        if groq_key:
-            all_models.extend([
-                _groq("llama-3.3-70b-versatile"),
-                _groq("qwen/qwen3-32b"),
-                _groq("llama-3.1-8b-instant"),
-            ])
-        # NIM (capacity) — 2026-06-07 refresh to match the canonical
-        # rotator pool (`apps/fastapi/domains/llm/rotator/chain/service.py`
-        # `_synth_entries` + `_all_entries`). Previously 5 of 7 model
-        # ids were EOL or otherwise dropped from NIM (glm5 returned
-        # HTTP 410 directly, the rest of the chain wasn't iterated by
-        # `with_fallbacks` so Phase 3 silently produced 0 entities).
-        # Order is Tier 1 frontier reasoning → Tier 2 non-reasoning →
-        # Tier 3 cooldown — same ladder as the rotator's synth pool,
-        # which the LLMGraphTransformer's structured-output workload
-        # mirrors closely.
-        if nvidia_key:
-            all_models.extend([
-                # Tier 1 — frontier reasoning, structured-output strong
-                _nim("z-ai/glm-5.1"),                                 # was z-ai/glm5 (EOL 2026-05-18)
-                _nim("moonshotai/kimi-k2.6"),                         # was kimi-k2.5 + kimi-k2-instruct
-                _nim("minimaxai/minimax-m2.7"),                       # new (rotator SOTA)
-                _nim("deepseek-ai/deepseek-v4-flash"),                # was deepseek-v3.2
-                # Tier 2 — frontier non-reasoning fallback
-                _nim("nvidia/nemotron-3-super-120b-a12b"),            # was llama-3.3-nemotron-super-49b-v1.5
-                _nim("openai/gpt-oss-120b"),                          # new (rotator SOTA)
-                _nim("mistralai/mistral-large-3-675b-instruct-2512"), # new (rotator SOTA)
-                # Tier 3 — cooldown absorber
-                _nim("meta/llama-4-maverick-17b-128e-instruct"),      # was llama-3.3-70b + llama-3.1-8b
-            ])
-        primary = all_models[0]
-        llm = primary.with_fallbacks(all_models[1:])
         try:
             _progress({"phase": "fetching"})
             transcripts = await fetch_transcripts_from_es(es, video_ids)
@@ -172,17 +125,65 @@ def ingest_to_neo4j(
                 for vid in all_video_ids
             ]
             build_video_metadata_graph(neo4j_graph, video_metadata)
-            # Extract entities from FULL transcripts (not chunks)
-            extraction_stats = await extract_and_store_graph(
-                transcripts  = transcripts,
-                metadata_map = metadata_map,
-                llm          = llm,
-                neo4j_graph  = neo4j_graph,
-                batch_size   = batch_size,
-                progress_cb  = _progress,
+            # Rotator/bandit pick — one deployment for this entire task.
+            # `seed=hash(task_id)` so retries of the same task drift to
+            # the bandit's current best (not a fixed seed) but two
+            # different tasks land deterministically on their own picks.
+            seed = abs(hash(self.request.id or "")) & 0xFFFFFFFF
+            pinned_model = await pick_ycs_neo4j_deployment_bandit(
+                seed        = seed,
+                video_count = len(all_video_ids),
             )
+            llm = build_ycs_neo4j_pinned_chain(pinned_model)
+            logger.info(
+                f"[ingest_to_neo4j] pinned model: {pinned_model} "
+                f"(seed={seed}, videos={len(all_video_ids)})"
+            )
+            # Run extraction + reward update. We track wall-clock and
+            # outcome so the bandit can score this arm for ycs-neo4j.
+            t0 = time.monotonic()
+            success = False
+            error_class: str | None = None
+            extraction_stats: dict[str, Any] = {}
+            try:
+                extraction_stats = await extract_and_store_graph(
+                    transcripts  = transcripts,
+                    metadata_map = metadata_map,
+                    llm          = llm,
+                    neo4j_graph  = neo4j_graph,
+                    batch_size   = batch_size,
+                    progress_cb  = _progress,
+                )
+                success = True
+            except Exception as e:
+                error_class = classify_error(e)
+                logger.warning(
+                    f"[ingest_to_neo4j] extraction failed for "
+                    f"{pinned_model}: {type(e).__name__}: {e}"
+                )
+                raise
+            finally:
+                latency_s = float(time.monotonic() - t0)
+                # Best-effort reward emit. Swallowed errors don't fail
+                # the Celery task — the entity-extract work already
+                # succeeded (or failed) by this point; reward update
+                # is pure telemetry-for-the-bandit.
+                try:
+                    await record_ycs_neo4j_reward(
+                        deployment_id = pinned_model,
+                        success       = success,
+                        latency_s     = latency_s,
+                        error_class   = error_class,
+                        video_count   = len(all_video_ids),
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[ingest_to_neo4j] reward update failed: "
+                        f"{type(e).__name__}: {e}"
+                    )
             return {
                 "videos_processed": len(all_video_ids),
+                "deployment":       pinned_model,
                 **extraction_stats,
             }
         finally:

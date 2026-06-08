@@ -1,23 +1,31 @@
-"""Step 2 · Ingest — task polling + library view.
+"""Step 2 · Ingest — pipeline status (in YCSPage chrome) + library view.
 
-Two server-rendered regions, populated by `ingest.js`:
+Layout (June 2026 SOTA — see Lollypop stepper guide + Linear /
+YouTube Studio listing patterns):
 
-(a) Active job panel — shown when the URL has `?task=<id>` (set by
-    a redirect from the Source step's dispatch endpoints). JS polls
-    `/api/v1/ycs/admin/task/{id}` and renders status / progress /
-    final result. After a SUCCESS, it offers an "Ingest into Qdrant"
-    follow-on action (queues `/api/v1/ycs/agents/ingest/qdrant`).
+(a) Pipeline panel — horizontal 3-bar stepper rendered in `YCSPage`
+    chrome (so it persists across Source / Ingest / Ask). Drives
+    Stop / Retry / Wipe / now-processing card.
 
-(b) Library view — two grids fed by ES aggregations
-    (`/api/v1/ycs/admin/ingested-channels` + `/ingested-playlists`).
-    Cards show channel/playlist name + video count and let the user
-    queue Qdrant or Neo4j ingestion for a subset.
+(b) Library — sidebar facets (Status / Channels / Languages with
+    counts) + row-card list of every ingested video + per-row trash
+    + bulk-action floating bar. Replaces the legacy
+    Channels + Playlists grids — those were aggregated views; the
+    library is the underlying flat list of work units.
 
-Fresh code — deprecated had no FastHTML; the deprecated `tasks` router
-returned task IDs but had no surfaced UI."""
+(c) Legacy single-task panel (`_JobPanel`) — kept for the bare
+    `/content/channel` and `/content/playlist` redirect paths the
+    Channel + Playlist Source tabs still use.
+
+The legacy Channel + Playlist facets aren't shown on this page
+anymore — they're replaced by the Library's filter sidebar — but
+remain reachable via `/admin/ingested-channels` for the Ask page's
+channel-scope multi-select."""
 from __future__ import annotations
 
-from fasthtml.common import Button, Div, H2, Option, Select, Span
+from fasthtml.common import Button, Div, Span
+
+from .library import LibraryPanel
 
 
 def _JobPanel():
@@ -59,45 +67,17 @@ def _JobPanel():
     )
 
 
-def _LibrarySection(title: str, container_id: str, empty: str):
-    return Div(
-        H2(title, style = "margin: 18px 0 8px 0; font-weight: 500;"),
-        Div(
-            Div(empty, cls = "ycs-empty-card"),
-            id    = container_id,
-            cls   = "ycs-lib-grid",
-        ),
-    )
-
-
-def _ChannelPicker():
-    """Lets the user kick off Qdrant ingestion for a specific channel
-    rather than the whole index. Populated from
-    `/api/v1/ycs/admin/ingested-channels` on first load."""
-    return Div(
-        Select(
-            Option("— All channels —", value = ""),
-            id   = "ycs-channel-filter",
-            cls  = "ycs-filter-select",
-        ),
-        cls = "ycs-filter-field",
-    )
-
-
 def IngestBody(slug: str | None):
-    # Pipeline panel now lives in YCSPage chrome (rendered on every
-    # YCS stage page) so it persists across Source/Ingest/Ask
+    # Pipeline panel lives in YCSPage chrome (rendered on every YCS
+    # stage page) so it persists across Source / Ingest / Ask
     # navigation. See `shared/pipeline_panel.py`.
+    #
+    # Channels + Playlists aggregations were replaced 2026-06-08 by
+    # the Library's filter sidebar + flat row list. The Ask page
+    # still hits `/admin/ingested-channels` for its scope multi-
+    # select, so the legacy endpoint isn't going away — just the
+    # surface on THIS page.
     return Div(
         _JobPanel(),
-        _LibrarySection(
-            "Channels",
-            "ycs-channels-grid",
-            "No channels ingested yet. Start from the Source step.",
-        ),
-        _LibrarySection(
-            "Playlists",
-            "ycs-playlists-grid",
-            "No playlists ingested yet.",
-        ),
+        LibraryPanel(),
     )

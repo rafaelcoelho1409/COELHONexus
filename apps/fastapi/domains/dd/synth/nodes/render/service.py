@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 
 from ....ingestion.storage import get_storage
@@ -19,6 +20,7 @@ from .domain import (
     build_section_context,
     compute_audit,
     compute_manifest_hash,
+    dedupe_and_align_sections,
     merge_vault_entries,
     render_challenges_md,
     render_chapter_md,
@@ -47,24 +49,67 @@ async def _load_per_source_vaults(
     source_keys: list[str],
 ) -> tuple[dict[str, str], int, int]:
     """Load + merge per-source vault manifests.
-    Returns (merged_vault, n_loaded, n_skipped_missing)."""
+    Returns (merged_vault, n_loaded, n_skipped_missing).
+
+    CRITICAL FIX 2026-05-24 (lost in the 2026-06-05 cosmic-python refactor
+    bd98674, restored 2026-06-08): when a per-source vault file doesn't
+    exist on MinIO (common when ingestion built only one consolidated
+    `llms-full` vault for the whole corpus), fall back to runtime
+    sentinelization of the raw ingestion page. Without this fallback,
+    render's audit reports `n_resolved=0, n_missing=N` for every
+    code_ref the LLM cited and the final chapter has ZERO code blocks
+    despite the SAWC output containing valid hashes."""
+    from ..vault.domain import sentinelize_doc as _sentinelize_doc
+
     manifests: list[dict] = []
     n_skipped = 0
+    n_runtime = 0
     for source_key in source_keys:
         vault_key = source_key_to_vault_key(source_key, slug)
-        if not await minio.exists(vault_key):
-            n_skipped += 1
-            continue
+        if await minio.exists(vault_key):
+            try:
+                text = await minio.read_text(vault_key)
+                manifests.append(json.loads(text))
+                continue
+            except Exception as e:
+                logger.warning(
+                    f"[render_audit_write] vault {vault_key!r} unreadable: "
+                    f"{type(e).__name__}: {e} — falling back to runtime"
+                )
+
+        # Runtime fallback: read raw ingestion page + sentinelize on-the-fly.
         try:
-            text = await minio.read_text(vault_key)
-            manifests.append(json.loads(text))
+            raw = await minio.read_text(source_key)
+            if not raw or "<code-ref hash=" in raw:
+                n_skipped += 1
+                continue
+            _, entries = _sentinelize_doc(raw)
+            if entries:
+                # Convert VaultEntry objects → manifest dict shape that
+                # merge_vault_entries expects (entries dict keyed by hash).
+                manifests.append({
+                    "entries": {
+                        h: (e.model_dump() if hasattr(e, "model_dump") else dict(e))
+                        for h, e in entries.items()
+                    },
+                })
+                n_runtime += 1
+            else:
+                n_skipped += 1
         except Exception as e:
             n_skipped += 1
             logger.warning(
-                f"[render_audit_write] vault {vault_key!r} unreadable: "
-                f"{type(e).__name__}: {e} — skipping"
+                f"[render_audit_write] runtime-sentinelize failed for "
+                f"{source_key!r}: {type(e).__name__}: {e}"
             )
+
     merged = merge_vault_entries(manifests)
+    if n_runtime:
+        logger.info(
+            f"[render_audit_write] {slug}: runtime-sentinelized "
+            f"{n_runtime} sources at vault-load time (no pre-built "
+            f"vaults found); merged vault has {len(merged)} entries total"
+        )
     return merged, len(manifests), n_skipped
 
 
@@ -277,6 +322,24 @@ async def render_audit_write_run(state: SynthState) -> dict:
         )
         for s in sections
     ]
+    # Write-path quality pass (DD-SYNTH-SECTION-RECYCLING-2026-05-29
+    # fixes #1 + #4): cross-reference within-chapter recycled code
+    # blocks + omit misrouted ones. Audit-safe — only rewrites
+    # code_block strings, so resolution_log/sentinel counts stay
+    # consistent.
+    dedup_stats = dedupe_and_align_sections(
+        sections_ctx,
+        drop_mismatch = os.environ.get(
+            "KD_RENDER_DROP_MISMATCH", "true",
+        ).lower() not in ("0", "false", "no"),
+    )
+    if dedup_stats["n_dedup"] or dedup_stats["n_mismatch"]:
+        logger.info(
+            f"[render_audit_write] {slug}/{chapter_id}: write-path pass — "
+            f"{dedup_stats['n_dedup']} recycled code block(s) cross-referenced, "
+            f"{dedup_stats['n_mismatch']} misrouted block(s) omitted"
+        )
+
     # v2 cookbook (matches RenderResult schema): subtopics replaced
     # legacy paragraphs. RenderResult declares `n_subtopics_total`;
     # passing the legacy `n_paragraphs_total` name to it raises
@@ -295,15 +358,38 @@ async def render_audit_write_run(state: SynthState) -> dict:
         rendered_chapter_md = chapter_md,
     )
 
+    # CONTENT-PRESENT GATE (DD-SYNTH-PROSE-PATH-2026-05-30 fix #2). A
+    # section the SAWC writer couldn't draft renders as an empty
+    # placeholder (0 subtopics). The byte-exact vault audit can't see
+    # this — a placeholder has no code refs, so it PASSES audit while
+    # being empty (this masked LangFuse ch-07/ch-08). Count placeholder
+    # sections and FAIL the audit when any exist, so the chapter
+    # surfaces as not-ready (Study sidebar reads audit_passed) instead
+    # of silently shipping blank.
+    n_placeholder_sections = sum(
+        1 for s in sections_ctx if not (s.get("subtopics"))
+    )
+    if n_placeholder_sections:
+        audit = audit.model_copy(update = {"audit_passed": False})
+        logger.warning(
+            f"[render_audit_write] {slug}/{chapter_id}: "
+            f"{n_placeholder_sections}/{len(sections_ctx)} section(s) are EMPTY "
+            f"placeholders (writer produced 0 subtopics) — failing audit. The "
+            f"prose path should prevent this; investigate the section's sources."
+        )
+
     await emit_progress(
         thread_id, "render_audit_write", "rendered",
         chapter_chars = len(chapter_md),
         n_sections_rendered = len(sections_ctx),
+        n_placeholder_sections = n_placeholder_sections,
         n_code_refs_resolved = audit.n_resolved,
         n_code_refs_missing = len(audit.n_missing),
         n_code_refs_drift = len(audit.n_byte_drift),
         sentinels_in_output = audit.sentinels_in_output,
         audit_passed = audit.audit_passed,
+        n_code_deduped = dedup_stats["n_dedup"],
+        n_code_mismatch_omitted = dedup_stats["n_mismatch"],
     )
 
     readme_key      = artifact_key(slug, chapter_id, "README.md")

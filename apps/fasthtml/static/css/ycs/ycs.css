@@ -1528,7 +1528,8 @@
   flex: 1;
 }
 .ycs-pipe-rerun-btn,
-.ycs-pipe-stop-btn {
+.ycs-pipe-stop-btn,
+.ycs-pipe-wipe-btn {
   padding: 4px 10px;
   font-size: 0.74rem;
   font-weight: 600;
@@ -1539,6 +1540,15 @@
   color: var(--text-muted);
   cursor: pointer;
   transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.ycs-pipe-wipe-btn:hover:not(:disabled) {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: rgba(196, 18, 48, 0.08);
+}
+.ycs-pipe-wipe-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .ycs-pipe-rerun-btn:hover:not(:disabled) {
   color: var(--text);
@@ -1608,7 +1618,13 @@
 .ycs-bar-fill {
   height: 100%;
   width: 0%;
-  background: var(--primary);
+  /* In-progress bar fill = blue (#1f75cb). Was `var(--primary)` =
+   * #c41230 (project brand red), but red on an in-progress indicator
+   * reads as ERROR even though the work is healthy — common SOTA
+   * pipeline UIs (GitLab CI, Linear, GitHub Actions, JetBrains run
+   * widgets) all use blue for "in progress / informational". Matches
+   * the existing skipped-cell-pill blue in the palette. */
+  background: #1f75cb;
   border-radius: inherit;
   transition: width 0.4s ease;
 }
@@ -1689,3 +1705,584 @@
 .ycs-vid-card-sep { color: var(--text-muted); opacity: 0.6; }
 .ycs-vid-card-row :empty { display: none; }
 .ycs-vid-card-row :empty + .ycs-vid-card-sep { display: none; }
+
+/* ============================================================
+ * Ingest · pipeline panel — horizontal bars + drawer
+ * 2026-06-08 redesign (replaces the 38/62 split):
+ *   Panel head:  title · elapsed · Stop · Retry · Wipe · [Videos · N →]
+ *   Panel body:  3 horizontal phase bars side-by-side (1fr 1fr 1fr)
+ *   Drawer:      right-side slide-in carrying the per-video ×
+ *                per-store status table (5 cols: Video / ES /
+ *                Qdrant / Neo4j / Time).
+ * Pattern: PatternFly progress stepper + MUI horizontal stepper for
+ * the bar row; Linear / Vercel / GitHub Actions slide-out drawer for
+ * the table. Centered modal explicitly avoided per Userpilot 2026
+ * modal-UX guidance — drawer is non-blocking, dismissible, doesn't
+ * dim the page.
+ * ============================================================ */
+
+/* 3-column horizontal bar row. Single line — wraps gracefully to 2
+ * + 1 below 760px (covered by media query at the bottom). */
+.ycs-pipe-bars-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 16px;
+  margin: 6px 0;
+}
+.ycs-pipe-bars-row > .ycs-bar-row { min-width: 0; }
+
+/* "Videos · N →" button in the panel head — opens the drawer. */
+.ycs-pipe-videos-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--card, rgba(0, 0, 0, 0.02));
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.ycs-pipe-videos-btn:hover {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.18);
+}
+.ycs-pipe-videos-btn-label { letter-spacing: 0.06em; }
+.ycs-pipe-videos-btn-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  padding: 0 5px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.07);
+  color: var(--text);
+}
+.ycs-pipe-videos-btn-arrow {
+  font-size: 0.9em;
+  color: var(--text-muted);
+  line-height: 1;
+}
+
+/* ---- Drawer (right slide-in) ------------------------------------- */
+.ycs-pipe-drawer-root {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1000;
+}
+.ycs-pipe-drawer-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.20);
+  opacity: 0;
+  transition: opacity 0.16s ease-out;
+  pointer-events: none;
+}
+.ycs-pipe-drawer-root.is-open .ycs-pipe-drawer-scrim {
+  opacity: 1;
+  pointer-events: auto;
+}
+.ycs-pipe-drawer {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: min(560px, 92vw);
+  background: var(--bg, #fff);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.10);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.18s ease-out;
+  pointer-events: none;
+}
+.ycs-pipe-drawer-root.is-open .ycs-pipe-drawer {
+  transform: translateX(0);
+  pointer-events: auto;
+}
+.ycs-pipe-drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.ycs-pipe-drawer-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--text);
+  flex: 1;
+}
+.ycs-pipe-drawer-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  padding: 1px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.07);
+  color: var(--text);
+}
+.ycs-pipe-drawer-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px; height: 24px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.12s, color 0.12s;
+}
+.ycs-pipe-drawer-close:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text);
+}
+.ycs-pipe-drawer-empty {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ---- 5-column status table inside the drawer --------------------- */
+.ycs-pipe-table {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.ycs-pipe-table-headrow {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) 80px 80px 80px 64px;
+  gap: 8px;
+  padding: 8px 14px;
+  background: rgba(0, 0, 0, 0.025);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.ycs-pipe-table-h {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  text-align: center;
+}
+.ycs-pipe-table-h-video { text-align: left; }
+.ycs-pipe-table-h-time { text-align: right; }
+.ycs-pipe-table-body {
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.ycs-pipe-table-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) 80px 80px 80px 64px;
+  gap: 8px;
+  padding: 8px 14px;
+  align-items: center;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  transition: background 0.12s;
+}
+.ycs-pipe-table-row:hover { background: rgba(0, 0, 0, 0.02); }
+.ycs-pipe-table-row-failed { background: rgba(196, 18, 48, 0.04); }
+.ycs-pipe-table-row-done   { background: rgba(44, 138, 62, 0.03); }
+.ycs-pipe-table-row-running { background: rgba(255, 159, 64, 0.04); }
+.ycs-pipe-table-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+.ycs-pipe-table-cell-video {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1px;
+}
+.ycs-pipe-table-cell-time {
+  justify-content: flex-end;
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+.ycs-pipe-cell-title {
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.ycs-pipe-cell-channel {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* Per-store status pill — INDEPENDENT per cell so ES / Qdrant /
+ * Neo4j cells advance separately. Replaces the conflated row-level
+ * pill that only updated when Neo4j finished (misleading). */
+.ycs-pipe-cell-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 8px;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  min-width: 58px;
+}
+.ycs-pipe-cell-pill-queued  { background: rgba(0, 0, 0, 0.05);      color: var(--text-muted); border-color: rgba(0, 0, 0, 0.10); }
+.ycs-pipe-cell-pill-running { background: rgba(255, 159, 64, 0.20); color: #8a4a14;           border-color: rgba(255, 159, 64, 0.40); }
+.ycs-pipe-cell-pill-done    { background: rgba(44, 138, 62, 0.16);  color: #1f6635;           border-color: rgba(44, 138, 62, 0.32); }
+.ycs-pipe-cell-pill-failed  { background: rgba(196, 18, 48, 0.14);  color: #8a142a;           border-color: rgba(196, 18, 48, 0.36); }
+.ycs-pipe-cell-pill-skipped { background: rgba(0, 102, 204, 0.12);  color: #0b4a8a;           border-color: rgba(0, 102, 204, 0.30); }
+
+@media (max-width: 760px) {
+  /* Drop to 1 column at narrow widths; bars stack vertically. */
+  .ycs-pipe-bars-row { grid-template-columns: 1fr; }
+  .ycs-pipe-drawer { width: 100vw; }
+  /* Tighten the table — collapse Time column to free room */
+  .ycs-pipe-table-headrow,
+  .ycs-pipe-table-row {
+    grid-template-columns: minmax(120px, 1fr) 70px 70px 70px;
+  }
+  .ycs-pipe-table-h-time,
+  .ycs-pipe-table-cell-time { display: none; }
+}
+
+/* ============================================================
+ * Ingest · Library — sidebar facets + row-card list
+ *  +-------+-----------------------------------+
+ *  | side  | toolbar (count + search)          |
+ *  | bar   | rows (cards stacked)              |
+ *  +-------+-----------------------------------+
+ *  Floating bulk action bar bottom-center.
+ * ============================================================ */
+.ycs-lib-panel {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 18px;
+  margin-top: 18px;
+}
+@media (max-width: 760px) {
+  .ycs-lib-panel { grid-template-columns: 1fr; }
+}
+
+/* --- sidebar -------------------------------------------------- */
+.ycs-lib-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 14px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card, rgba(0, 0, 0, 0.015));
+  align-self: start;
+  position: sticky;
+  top: 16px;
+}
+.ycs-lib-sidebar-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.ycs-lib-sidebar-title {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.ycs-lib-clear-btn {
+  background: transparent;
+  border: 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+}
+.ycs-lib-clear-btn:hover { color: var(--primary); }
+.ycs-lib-facet-group { display: flex; flex-direction: column; gap: 4px; }
+.ycs-lib-facet-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+.ycs-lib-facet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.ycs-lib-facet-row {
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 3px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: none;
+}
+.ycs-lib-facet-row:hover { background: rgba(0, 0, 0, 0.04); }
+.ycs-lib-facet-label {
+  font-size: 0.82rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ycs-lib-facet-count {
+  font-size: 0.7rem;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--text-muted);
+}
+
+/* --- main column --------------------------------------------- */
+.ycs-lib-main { display: flex; flex-direction: column; gap: 12px; }
+.ycs-lib-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ycs-lib-toolbar-head {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.ycs-lib-toolbar-label {
+  font-size: 0.84rem;
+  color: var(--text-muted);
+}
+.ycs-lib-count {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.ycs-lib-search-form { flex: 1; max-width: 360px; }
+.ycs-lib-search {
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 0.86rem;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.12s;
+}
+.ycs-lib-search:focus { border-color: var(--primary); }
+
+/* --- row list ------------------------------------------------ */
+.ycs-lib-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 64px; /* avoid floating bar overlap */
+}
+.ycs-lib-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-muted);
+  font-style: italic;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+}
+
+/* --- per-row card -------------------------------------------- */
+.ycs-lib-card {
+  display: grid;
+  grid-template-columns: 22px 96px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+  transition: border-color 0.12s, background 0.12s;
+}
+.ycs-lib-card:hover {
+  border-color: var(--text-muted);
+  background: rgba(0, 0, 0, 0.02);
+}
+.ycs-lib-card.selected {
+  border-color: var(--primary);
+  background: rgba(196, 18, 48, 0.04);
+}
+.ycs-lib-card-check {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+.ycs-lib-card-thumb {
+  width: 96px;
+  height: 54px;
+  object-fit: cover;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.06);
+}
+.ycs-lib-card-thumb-empty {
+  width: 96px;
+  height: 54px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 3px;
+}
+.ycs-lib-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.ycs-lib-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ycs-lib-card-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.ycs-lib-card-title:hover { color: var(--primary); }
+.ycs-lib-card-meta,
+.ycs-lib-card-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  align-items: baseline;
+}
+.ycs-lib-card-channel { color: var(--text); font-weight: 500; }
+.ycs-lib-card-sep { opacity: 0.5; }
+
+/* --- status pill --------------------------------------------- */
+.ycs-lib-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.ycs-lib-status-done    { background: rgba(44, 138, 62, 0.14); color: #1f6635; border-color: rgba(44, 138, 62, 0.30); }
+.ycs-lib-status-partial { background: rgba(255, 159, 64, 0.16); color: #8a4a14; border-color: rgba(255, 159, 64, 0.32); }
+.ycs-lib-status-failed  { background: rgba(196, 18, 48, 0.12); color: #8a142a; border-color: rgba(196, 18, 48, 0.32); }
+
+/* --- per-row trash ------------------------------------------- */
+.ycs-lib-card-trash {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  font-size: 0.95rem;
+  padding: 4px 8px;
+  cursor: pointer;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s, border-color 0.12s, background 0.12s;
+}
+.ycs-lib-card:hover .ycs-lib-card-trash,
+.ycs-lib-card.selected .ycs-lib-card-trash {
+  opacity: 0.7;
+}
+.ycs-lib-card-trash:hover {
+  opacity: 1;
+  color: var(--primary);
+  border-color: var(--primary);
+  background: rgba(196, 18, 48, 0.06);
+}
+
+/* --- floating bulk action bar (June 2026 SOTA Gmail/Linear) --- */
+.ycs-lib-bulk-bar {
+  display: none;
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--text);
+  color: #fff;
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  z-index: 100;
+  animation: ycs-bulk-in 0.15s ease-out;
+}
+.ycs-lib-bulk-bar.visible { display: inline-flex; }
+@keyframes ycs-bulk-in {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+.ycs-lib-bulk-count { font-weight: 700; }
+.ycs-lib-bulk-sep { opacity: 0.7; }
+.ycs-lib-bulk-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #fff;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.ycs-lib-bulk-btn:hover { background: rgba(255, 255, 255, 0.12); }
+.ycs-lib-bulk-btn-danger:hover {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.ycs-lib-bulk-cancel {
+  background: transparent;
+  border: 0;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.ycs-lib-bulk-cancel:hover { color: #fff; }

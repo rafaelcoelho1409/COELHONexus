@@ -144,11 +144,13 @@ registerChstripDeps({
 // Page-load auto-recovery — mirrors recoverActivePlanner.
 
 
-// Safety-net timeout (ms) — if no SSE `terminal` arrives within this
-// window the button auto-resets so the user is never stuck waiting.
-// Cancel watchers poll every ~1s; a 15s ceiling gives the slowest LLM
-// call enough time to land + the watcher to detect + emit terminal.
-const CANCEL_TIMEOUT_MS = 15000;
+// CANCEL_TIMEOUT_MS moved to ./lifecycle.js (2026-06-07) — when
+// cancelSynth was extracted there during the cosmic-python split, this
+// const stayed here as a module-private `const`, so cancelSynth threw
+// `ReferenceError: CANCEL_TIMEOUT_MS is not defined` on every click,
+// aborting BEFORE the cancel POST fired (silent — only visible in JS
+// console). Moving the const to lifecycle.js keeps the reference in
+// the same module as its caller; nothing else reads it.
 
 // Cancel semantics (2026-05-24):
 //   • The in-flight Synth node aborts; nodes that already wrote a final

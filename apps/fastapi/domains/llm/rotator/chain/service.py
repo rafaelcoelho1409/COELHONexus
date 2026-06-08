@@ -993,6 +993,225 @@ async def pick_synth_deployment_bandit(
 
 
 # --------------------------------------------------------------------------- #
+# YCS Neo4j entity-extraction pick — separate bandit task key
+# --------------------------------------------------------------------------- #
+# Phase 3 of the YCS ingest pipeline (LLMGraphTransformer entity+relationship
+# extraction over full transcripts). Shares the dd-synth POOL (those models are
+# the JSON-strong / structured-output cohort the graph transformer needs) but
+# the bandit cells live under `dd_process="ycs-neo4j"` so per-arm σ²_ewma
+# evolves on YCS feedback only — DD's mixed-task variance never drags down
+# a JSON-strong arm here, and vice-versa.
+_YCS_NEO4J_PROCESS = "ycs-neo4j"
+
+
+async def pick_ycs_neo4j_deployment_bandit(
+    seed: int,
+    *,
+    video_count: int = 0,
+) -> str:
+    """Bandit-driven deployment pick for YCS Phase 3 (Neo4j entity extraction).
+    One pick per Celery task (= one ingest run). All transcripts in this run
+    share the pinned model. Per-task reward is recorded by the caller after
+    `extract_and_store_graph` returns.
+
+    Drops back to `pick_synth_deployment(seed)` (deterministic round-robin)
+    when the bandit/Redis path errors. Same fallback shape as the synth picker
+    so a bad Redis day never kills Phase 3."""
+    await ensure_dynamic_catalog()
+    entries = _synth_entries_current()
+    if not entries:
+        raise RuntimeError("SYNTH_GROUP is empty — cannot pin a YCS deployment")
+    try:
+        if "REDIS_HOST" not in os.environ:
+            raise RuntimeError("REDIS_HOST unset")
+        host = os.environ["REDIS_HOST"].strip()
+        port = os.environ["REDIS_PORT"].strip() if "REDIS_PORT" in os.environ else "6379"
+        password = os.environ["REDIS_PASSWORD"].strip() if "REDIS_PASSWORD" in os.environ else ""
+        url = f"redis://:{password}@{host}:{port}" if password else f"redis://{host}:{port}"
+        rds = redis_aio.from_url(url)
+        try:
+            candidates = [e["litellm_params"]["model"] for e in entries]
+            # `vault_size` is the closest analogue to the YCS workload —
+            # the bandit's vault-size buckets (v[4-6]) inform exploration
+            # bias for big-input runs, matching how many transcripts will
+            # be processed. chapter_number/expected_hash_count stay 0
+            # (no DD-style structure here).
+            ctx = bandit.make_context_vector(
+                _YCS_NEO4J_PROCESS,
+                vault_size = video_count,
+            )
+            ranked = await bandit.predict_top_k(
+                _YCS_NEO4J_PROCESS,
+                ctx,
+                candidates,
+                redis = rds,
+                k = 5,
+            )
+            for deployment_id, score, n_obs in ranked:
+                provider = (deployment_id.split("/", 1)[0]
+                            if "/" in deployment_id else deployment_id)
+                provider_cap = _PROVIDER_CHAPTER_CAPS.get(provider, 2)
+                slot = await bandit.try_reserve_provider_slot(
+                    provider,
+                    redis = rds,
+                    max_slots = provider_cap,
+                    ttl_s = 1800,
+                )
+                if slot is None:
+                    logger.info(
+                        f"[ycs-bandit-pin] skipping {deployment_id} (provider "
+                        f"{provider!r} full at {provider_cap}); trying next"
+                    )
+                    continue
+                reserved = await bandit.try_reserve(
+                    deployment_id,
+                    _YCS_NEO4J_PROCESS,
+                    redis = rds,
+                    ttl_s = 1800,
+                )
+                if not reserved:
+                    await bandit.release_provider_slot(
+                        provider, slot, redis = rds,
+                    )
+                    logger.info(
+                        f"[ycs-bandit-pin] skipping {deployment_id} "
+                        f"(deployment reserved); trying next"
+                    )
+                    continue
+                logger.info(
+                    f"[ycs-bandit-pin] picked {deployment_id} "
+                    f"(score={score:.4f}, n_obs={n_obs}, "
+                    f"provider_slot={provider}:{slot}, videos={video_count})"
+                )
+                return deployment_id
+            logger.warning(
+                f"[ycs-bandit-pin] all top-{len(ranked)} slots saturated; "
+                "falling through to round-robin"
+            )
+        finally:
+            try:
+                await rds.aclose()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(
+            f"[ycs-bandit-pin] bandit pick failed ({type(e).__name__}: {e}); "
+            "falling back to round-robin"
+        )
+    return pick_synth_deployment(seed)
+
+
+async def record_ycs_neo4j_reward(
+    deployment_id: str,
+    *,
+    success: bool,
+    latency_s: float | None,
+    error_class: str | None = None,
+    video_count: int = 0,
+    schema_valid: bool = True,
+) -> bool:
+    """Post-task reward update for the YCS Neo4j bandit cell.
+
+    Called once per Phase 3 Celery task after `extract_and_store_graph`
+    returns. Aggregates the run's outcome into a single observation:
+      - success = True only if all transcripts processed without exception
+      - schema_valid encodes "the LLMGraphTransformer JSON parsed cleanly
+        across the run" (default True; flip to False if the caller detects
+        a structural break)
+      - latency_s = wall-clock of the entire extract pass; the bandit's
+        latency expectation is configured per-task (see below).
+
+    Failure dominates: a single SIGTERM/timeout kills the reward regardless
+    of how many videos preceded the break. That's intentional — partial
+    success doesn't mean the model is reliable for this task.
+
+    Best-effort: Redis/bandit errors are logged + swallowed; the task
+    succeeds even when reward emission fails (cold-start scenarios)."""
+    try:
+        if "REDIS_HOST" not in os.environ:
+            return False
+        host = os.environ["REDIS_HOST"].strip()
+        port = os.environ["REDIS_PORT"].strip() if "REDIS_PORT" in os.environ else "6379"
+        password = os.environ["REDIS_PASSWORD"].strip() if "REDIS_PASSWORD" in os.environ else ""
+        url = f"redis://:{password}@{host}:{port}" if password else f"redis://{host}:{port}"
+        rds = redis_aio.from_url(url)
+        try:
+            ctx = bandit.make_context_vector(
+                _YCS_NEO4J_PROCESS,
+                vault_size = video_count,
+            )
+            # YCS Phase 3 wall-clock expectation: ~4 min per video on
+            # full transcripts (LLMGraphTransformer over 14-18K chars).
+            expected_latency_s = max(60.0, 240.0 * max(1, video_count))
+            reward = bandit.compose_reward(
+                success = success,
+                schema_valid = schema_valid,
+                latency_s = latency_s,
+                expected_latency_s = expected_latency_s,
+                error_class = error_class,
+            )
+            ok = await bandit.update(
+                deployment_id,
+                _YCS_NEO4J_PROCESS,
+                ctx,
+                reward,
+                redis = rds,
+            )
+            logger.info(
+                f"[ycs-bandit-pin] reward update {deployment_id}: "
+                f"reward={reward:+.3f} (success={success}, "
+                f"latency={latency_s}s, err={error_class})"
+            )
+            return ok
+        finally:
+            # Best-effort release of provider+deployment slot reservations.
+            try:
+                provider = (deployment_id.split("/", 1)[0]
+                            if "/" in deployment_id else deployment_id)
+                # The slot index isn't tracked across pick/record (we'd
+                # need a separate Redis indirection). The 1800s TTL on
+                # `try_reserve_provider_slot` lets it self-clear; the
+                # deployment reservation we release explicitly below.
+                await bandit.release_reservation(
+                    deployment_id,
+                    _YCS_NEO4J_PROCESS,
+                    redis = rds,
+                )
+            except Exception:
+                pass
+            try:
+                await rds.aclose()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(
+            f"[ycs-bandit-pin] reward update failed for {deployment_id}: "
+            f"{type(e).__name__}: {e}"
+        )
+        return False
+
+
+def build_ycs_neo4j_pinned_chain(pinned_model: str):
+    """ChatLiteLLMRouter pinned to one YCS Phase 3 deployment. Shares the
+    `_pinned_chain_cache` with synth pins — same SYNTH_GROUP entries, same
+    LiteLLM Router shape. Falls back to the full synth pool when `pinned_model`
+    isn't in SYNTH_GROUP (e.g. user disabled it via /settings between pick
+    and chain build).
+
+    Distinct from `build_synth_pinned_chain` in name only; the implementation
+    delegates to `build_pinned_chain_any(group=SYNTH_GROUP)`. Kept as a
+    separate symbol so a future YCS-specific pool can replace it without
+    touching call sites."""
+    chain = build_pinned_chain_any(pinned_model, group = SYNTH_GROUP)
+    if chain is not None:
+        return chain
+    logger.warning(
+        f"[ycs-pin] {pinned_model!r} not in SYNTH_GROUP; falling back to full pool"
+    )
+    return build_synth_pool_chain()
+
+
+# --------------------------------------------------------------------------- #
 # Pinned-chain helpers
 # --------------------------------------------------------------------------- #
 def get_parent_group(pinned_or_parent: str | None) -> str | None:

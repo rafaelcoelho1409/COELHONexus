@@ -44,44 +44,76 @@ def _Bar(prefix: str, title: str, hint: str):
     )
 
 
-def _CurrentVideoCard():
-    """Slim metadata card surfaced live by `pipeline_panel.js` — title +
-    channel + duration + views + likes + upload date. Mirrors the
-    Search-page result row minus the thumbnail (per the user spec).
-    Hidden while the pipeline is queued; revealed on first progress
-    event carrying `current_item`."""
+def _VideoDrawer():
+    """Right-side slide-out drawer carrying the per-video × per-store
+    status table. 5 columns: Video (title + channel) · ES · Qdrant ·
+    Neo4j · Duration. Each store cell holds its own status pill
+    (Queued / Running / Done / Failed / Skipped) derived per-phase
+    from `completed_ids` / `failed_ids` / `current_item` meta —
+    replaces the single conflated row-level pill that was misleading
+    (it only updated when Neo4j finished, never showed ES/Qdrant
+    progress).
+
+    Drawer DOM is rendered server-side as an empty shell; JS
+    (`pipeline_panel.js::_renderVideoTable`) injects table rows once
+    Phase 1's `all_items` payload arrives, then re-renders on each
+    poll. Hidden by default; opened by the "Videos · N" button in the
+    panel head. Click outside / Escape / close button dismisses.
+
+    Pattern: Linear issue detail, Vercel deployment panel, GitHub
+    Actions job log — non-blocking, dismissible, doesn't dim the
+    page (unlike a centered modal — see Userpilot 2026 modal-UX
+    survey on why centered modals are wrong for ongoing progress).
+    """
     return Div(
+        # Scrim — light overlay that intercepts outside-clicks. NOT
+        # opaque (drawer isn't blocking work, just exposing detail).
         Div(
-            Span("Now processing", cls = "ycs-vid-card-label"),
-            Span("", id = "ycs-vid-card-phase",
-                 cls = "ycs-vid-card-phase"),
-            cls = "ycs-vid-card-head",
+            id  = "ycs-pipe-drawer-scrim",
+            cls = "ycs-pipe-drawer-scrim",
         ),
+        # The drawer panel itself.
         Div(
-            Span("", id = "ycs-vid-card-title",
-                 cls = "ycs-vid-card-title"),
             Div(
-                Span("", id = "ycs-vid-card-channel",
-                     cls = "ycs-vid-card-channel"),
-                Span("·", cls = "ycs-vid-card-sep"),
-                Span("", id = "ycs-vid-card-views",
-                     cls = "ycs-vid-card-meta"),
-                Span("·", cls = "ycs-vid-card-sep"),
-                Span("", id = "ycs-vid-card-duration",
-                     cls = "ycs-vid-card-meta"),
-                Span("·", cls = "ycs-vid-card-sep"),
-                Span("", id = "ycs-vid-card-likes",
-                     cls = "ycs-vid-card-meta"),
-                Span("·", cls = "ycs-vid-card-sep"),
-                Span("", id = "ycs-vid-card-date",
-                     cls = "ycs-vid-card-meta"),
-                cls = "ycs-vid-card-row",
+                Span("Videos in this pipeline", cls = "ycs-pipe-drawer-title"),
+                Span(
+                    "0", id = "ycs-pipe-drawer-count",
+                    cls = "ycs-pipe-drawer-count",
+                ),
+                Button(
+                    "✕",
+                    type       = "button",
+                    id         = "ycs-pipe-drawer-close",
+                    cls        = "ycs-pipe-drawer-close",
+                    title      = "Close",
+                    aria_label = "Close drawer",
+                ),
+                cls = "ycs-pipe-drawer-head",
             ),
-            cls = "ycs-vid-card-body",
+            Div(
+                Div(
+                    Span("Video",   cls = "ycs-pipe-table-h ycs-pipe-table-h-video"),
+                    Span("ES",      cls = "ycs-pipe-table-h"),
+                    Span("Qdrant",  cls = "ycs-pipe-table-h"),
+                    Span("Neo4j",   cls = "ycs-pipe-table-h"),
+                    Span("Time",    cls = "ycs-pipe-table-h ycs-pipe-table-h-time"),
+                    cls = "ycs-pipe-table-headrow",
+                ),
+                Div(
+                    Div(
+                        "Waiting for metadata…",
+                        cls = "ycs-pipe-drawer-empty",
+                    ),
+                    id  = "ycs-pipe-table-body",
+                    cls = "ycs-pipe-table-body",
+                ),
+                cls = "ycs-pipe-table",
+            ),
+            id  = "ycs-pipe-drawer",
+            cls = "ycs-pipe-drawer",
         ),
-        id    = "ycs-vid-card",
-        cls   = "ycs-vid-card",
-        style = "display:none;",
+        id  = "ycs-pipe-drawer-root",
+        cls = "ycs-pipe-drawer-root",
     )
 
 
@@ -136,24 +168,77 @@ def PipelinePanel():
                     "re-picking videos from Search."
                 ),
             ),
+            Button(
+                "Wipe cache",
+                type     = "button",
+                id       = "ycs-pipe-wipe",
+                cls      = "ycs-pipe-wipe-btn",
+                disabled = True,
+                title    = (
+                    "Delete every cached artifact for these videos — "
+                    "ES metadata + transcripts, Qdrant points, Neo4j "
+                    "Document/Video nodes — AND revoke any in-flight "
+                    "chain phases so a mid-LLM Phase 3 doesn't write "
+                    "orphans after the wipe. The next Retry re-runs "
+                    "the chain from scratch (no Phase 1 cache hits, "
+                    "no Phase 3 skip-on-video_id). Use after fixing a "
+                    "source-side issue (DOM selector drift, model "
+                    "swap, etc.) where Retry's cache-hit behavior "
+                    "would otherwise skip the videos. Entity nodes "
+                    "are left intact (they may be referenced by "
+                    "other videos)."
+                ),
+            ),
+            # "Videos · N" trigger button — opens the per-video × per-
+            # store status drawer. The N count is updated by JS each
+            # poll. Always enabled (the drawer renders empty until
+            # Phase 1's all_items lands, then refreshes per poll).
+            Button(
+                Span("Videos", cls = "ycs-pipe-videos-btn-label"),
+                Span(
+                    "0",
+                    id  = "ycs-pipe-videos-btn-count",
+                    cls = "ycs-pipe-videos-btn-count",
+                ),
+                Span("→", cls = "ycs-pipe-videos-btn-arrow"),
+                type  = "button",
+                id    = "ycs-pipe-videos-btn",
+                cls   = "ycs-pipe-videos-btn",
+                title = (
+                    "Show per-video × per-store status table "
+                    "(ES / Qdrant / Neo4j independent cells)."
+                ),
+            ),
             cls = "ycs-pipe-panel-head",
         ),
-        _Bar(
-            "transcripts",
-            "Phase 1 · Transcripts (Playwright)",
-            "Pulling captions via DOM scrape.",
+        # Horizontal bar row — 3 stepper-style stage bars side by
+        # side. Pattern: PatternFly progress stepper / MUI horizontal
+        # stepper for short (3–7 step) sequential flows. The detailed
+        # per-video × per-store status table moved out to a right-side
+        # drawer (`_VideoDrawer()`) so the panel stays compact.
+        Div(
+            _Bar(
+                "transcripts",
+                "Phase 1 · ElasticSearch",
+                "yt-dlp metadata + Playwright transcript scrape.",
+            ),
+            _Bar(
+                "qdrant",
+                "Phase 2 · Qdrant",
+                "Hybrid dense + BM25 upsert.",
+            ),
+            _Bar(
+                "neo4j",
+                "Phase 3 · Neo4j",
+                "Full-transcript LLM entity extraction.",
+            ),
+            cls = "ycs-pipe-bars-row",
         ),
-        _Bar(
-            "qdrant",
-            "Phase 2 · Qdrant hybrid index",
-            "Chunk → NIM dense + BM25 sparse → upsert.",
-        ),
-        _Bar(
-            "neo4j",
-            "Phase 3 · Neo4j entity graph",
-            "Full-transcript LLM extraction.",
-        ),
-        _CurrentVideoCard(),
+        # Drawer is a sibling of the panel content but inside the
+        # same root so the JS toggle logic finds it via the panel's
+        # subtree. Hidden by default; CSS slides it in from the right
+        # when `.is-open` is applied.
+        _VideoDrawer(),
         id    = "ycs-pipe-panel",
         cls   = "ycs-pipe-panel",
         style = "display:none;",

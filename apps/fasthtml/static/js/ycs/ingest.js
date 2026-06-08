@@ -218,15 +218,13 @@ async function renderPlaylists() {
 }
 
 // ---- entry ----------------------------------------------------------------
-/* The 3-bar pipeline panel is handled by `pipeline_panel.js`, which
- * is loaded UNCONDITIONALLY by `main.js` so the panel persists across
- * Source / Ingest / Ask navigation + page refreshes. This file now
- * only handles the legacy single-task tracker (channel + playlist
- * dispatches still POST to `/content/channel|playlist`) and the
- * library aggregations. */
+/* The 3-bar pipeline panel is handled by `pipeline_panel.js`, the
+ * library is handled by `ingest/library.js` — both shell-loaded by
+ * `main.js`. This file now only handles the legacy single-task
+ * tracker (channel + playlist Source-tab dispatches still POST to
+ * `/content/channel|playlist`). */
 (async function init() {
     const params = new URLSearchParams(window.location.search);
     const taskId = params.get("task");
     if (taskId) trackTask(taskId);
-    await Promise.allSettled([renderChannels(), renderPlaylists()]);
 })();

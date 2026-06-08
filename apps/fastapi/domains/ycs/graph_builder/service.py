@@ -164,6 +164,12 @@ async def extract_and_store_graph(
     )
 
     total_batches = (len(documents) + batch_size - 1) // batch_size
+    # Per-video status tracking for the Ingest-page right-column list.
+    # With `pipeline_task.NEO4J_BATCH_SIZE=1` each batch is one video,
+    # so completed_ids / failed_ids advance per video, matching Phase 1
+    # and Phase 2's granularity.
+    completed_ids: list[str] = []
+    failed_ids:    list[str] = []
     if progress_cb:
         progress_cb({
             "phase":         "extracting",
@@ -173,6 +179,8 @@ async def extract_and_store_graph(
             "total_batches": total_batches,
             "nodes":         0,
             "rels":          0,
+            "completed_ids": list(completed_ids),
+            "failed_ids":    list(failed_ids),
         })
 
     # Batch loop with rate-limit pacing.
@@ -180,6 +188,24 @@ async def extract_and_store_graph(
         batch = documents[batch_start:batch_start + batch_size]
         try:
             graph_documents = await transformer.aconvert_to_graph_documents(batch)
+            # Tier-2 fix `B` (2026-06-07) — coerce node ids at the
+            # source. `LLMGraphTransformer` occasionally emits an `id`
+            # as a `StringArray` (Python list of alternate-name
+            # strings the LLM saw across the transcript) instead of a
+            # single string. Once that lands in Neo4j it breaks
+            # Step 1's Cypher `trim()` (`Expected a string value for
+            # trim, but got: StringArray[Gastronomia, Astronomia]`),
+            # which kills the entire normalize pass. Fixing it here
+            # at the source means Step 1 always sees clean string
+            # ids. Dropping nodes whose id coerces to "" so we don't
+            # write graph rubbish.
+            for gdoc in graph_documents:
+                clean_nodes = []
+                for node in gdoc.nodes:
+                    node.id = domain.coerce_entity_id(node.id)
+                    if node.id:
+                        clean_nodes.append(node)
+                gdoc.nodes = clean_nodes
             neo4j_graph.add_graph_documents(
                 graph_documents,
                 include_source = True,
@@ -206,6 +232,13 @@ async def extract_and_store_graph(
                 total_nodes += len(gdoc.nodes)
                 total_relationships += len(gdoc.relationships)
             total_processed += len(batch)
+            # Per-video bookkeeping for the Ingest-page video list.
+            # With batch_size=1 this advances one id per iteration; with
+            # the legacy batch_size=3 path it bulk-adds the whole batch.
+            for doc in batch:
+                vid = doc.metadata.get("video_id", "")
+                if vid and vid not in completed_ids:
+                    completed_ids.append(vid)
             logger.info(
                 f"[ycs:graph] batch {batch_start // batch_size + 1}: "
                 f"{total_processed}/{len(documents)} transcripts, "
@@ -217,6 +250,10 @@ async def extract_and_store_graph(
                 f"{type(e).__name__}: {str(e)[:200]}. Continuing."
             )
             total_processed += len(batch)
+            for doc in batch:
+                vid = doc.metadata.get("video_id", "")
+                if vid and vid not in failed_ids:
+                    failed_ids.append(vid)
         # Per-batch progress emission so the FastHTML Neo4j bar advances
         # in real time. `current` counts attempted (not just succeeded)
         # transcripts so the bar fills monotonically even when an
@@ -232,6 +269,8 @@ async def extract_and_store_graph(
                 "total_batches": total_batches,
                 "nodes":         total_nodes,
                 "rels":          total_relationships,
+                "completed_ids": list(completed_ids),
+                "failed_ids":    list(failed_ids),
                 "current_item": {
                     "id":      last_vid,
                     "title":   last_meta.get("title", ""),
@@ -279,16 +318,46 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     installed."""
     merged_count = 0
 
-    # Step 1 — normalize ids to lowercase.
+    # Step 1 — normalize ids to canonical form (Tier-2 fix `F`,
+    # 2026-06-07). Was a single Cypher statement using `trim()` +
+    # `toLower()`, but `trim()` blows up the moment ANY node has a
+    # non-string id (e.g., `StringArray[Gastronomia, Astronomia]`
+    # emitted by LLMGraphTransformer) and the whole pass bails. We
+    # do the normalization in Python now:
+    #   1. Pull every entity's elementId + raw id.
+    #   2. Compute `normalize_entity_id` (handles non-string types
+    #      via `coerce_entity_id`, plus lowercase + NFKD-strip-accents
+    #      + whitespace-collapse).
+    #   3. UNWIND-batched UPDATE for only the ids that actually
+    #      changed.
+    # No more Cypher type errors; accent-stripping also catches
+    # `Petróleo` ↔ `Petroleo` here so Step 2's exact MERGE collapses
+    # them without Step 3 ever needing to think about it.
     try:
-        result = neo4j_graph.query(
-            "MATCH (n:__Entity__) "
-            "WHERE n.id IS NOT NULL AND n.id <> toLower(trim(n.id)) "
-            "SET n.id = toLower(trim(n.id)) "
-            "RETURN count(n) AS normalized"
+        rows = neo4j_graph.query(
+            "MATCH (n:__Entity__) WHERE n.id IS NOT NULL "
+            "RETURN elementId(n) AS nid, n.id AS raw_id"
         )
-        normalized = result[0]["normalized"] if result else 0
-        logger.info(f"[ycs:graph:resolve] normalized {normalized} ids")
+        updates = []
+        for row in rows:
+            nid = row.get("nid")
+            raw = row.get("raw_id")
+            canonical = domain.normalize_entity_id(raw)
+            if not canonical:
+                continue
+            if canonical != raw:
+                updates.append({"nid": nid, "new_id": canonical})
+        if updates:
+            neo4j_graph.query(
+                "UNWIND $updates AS u "
+                "MATCH (n) WHERE elementId(n) = u.nid "
+                "SET n.id = u.new_id",
+                params = {"updates": updates},
+            )
+        logger.info(
+            f"[ycs:graph:resolve] normalized {len(updates)} ids "
+            f"(scanned {len(rows)})"
+        )
     except Exception as e:
         logger.warning(f"[ycs:graph:resolve] normalize failed: {e}")
 
@@ -352,6 +421,41 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
                     continue
                 for id2 in ids[i + 1:]:
                     if id2 in already_merged:
+                        continue
+                    # Tier-2 fix `E` (2026-06-07) — obvious-merge
+                    # shortcut. If two ids have IDENTICAL canonical
+                    # forms (case+accent+whitespace-only diff), merge
+                    # them unconditionally — skip the fuzz + cosine
+                    # gates entirely. Handles `Donald Trump` ↔
+                    # `donald trump` and `Petróleo` ↔ `Petroleo` even
+                    # if Step 1 + Step 2 missed them. BGE-M3's
+                    # short-string cosine is unreliable here (`Donald
+                    # Trump` gets 0.81, below the 0.85 cutoff), so we
+                    # rely on the deterministic Python check instead.
+                    if domain.is_obvious_merge(id1, id2):
+                        canonical, duplicate = domain.pick_canonical(id1, id2)
+                        try:
+                            neo4j_graph.query(
+                                f"MATCH (n1:`{label}` {{id: $canonical}}), "
+                                f"      (n2:`{label}` {{id: $duplicate}}) "
+                                "CALL apoc.refactor.mergeNodes([n1, n2], "
+                                "  {properties: 'combine', mergeRels: true}) "
+                                "YIELD node "
+                                "RETURN node",
+                                params = {
+                                    "canonical": canonical,
+                                    "duplicate": duplicate,
+                                },
+                            )
+                            already_merged.add(duplicate)
+                            merged_count += 1
+                            logger.info(
+                                f"[ycs:graph:resolve] obvious-merge "
+                                f"'{duplicate}' → '{canonical}' "
+                                f"(case/accent/whitespace-only)"
+                            )
+                        except Exception:
+                            pass
                         continue
                     # (a) fuzz pre-filter
                     score = fuzz.ratio(id1, id2)
@@ -481,3 +585,66 @@ def build_video_metadata_graph(
                     "video_id":     video.get("video_id", ""),
                 },
             )
+
+
+def delete_documents_for_videos(
+    neo4j_graph: Neo4jGraph,
+    video_ids:   list[str],
+) -> dict[str, int]:
+    """Best-effort delete of Phase-3 Document nodes (per-video transcript
+    holders) + the Video metadata nodes for the supplied `video_ids`.
+    Used by the Pipeline panel's `Wipe cache` button so the next Phase
+    3 doesn't see the `[ycs:graph] N videos already in Neo4j; skip`
+    short-circuit on these videos.
+
+    Scoped deletes ONLY:
+      - `Document` nodes whose `video_id` is in the list (DETACH DELETE
+        drops their MENTIONS edges to entities cleanly).
+      - `Video` metadata nodes whose `id` is in the list.
+
+    Entity nodes (`__Entity__`) are LEFT INTACT — they may be referenced
+    by other videos' transcripts; deleting them would cascade into
+    other videos' graphs. Orphaned entities (no incoming MENTIONS) are
+    harmless; a future orphan-sweep pass can clean them if needed.
+
+    Best-effort: Neo4j hiccup is logged + counted, never raised — the
+    wipe of other stores still proceeds."""
+    if not video_ids:
+        return {"documents_deleted": 0, "videos_deleted": 0}
+    out: dict[str, int] = {}
+    try:
+        doc_result = neo4j_graph.query(
+            "MATCH (d:Document) WHERE d.video_id IN $vids "
+            "WITH d, count(d) AS _ "
+            "DETACH DELETE d "
+            "RETURN count(*) AS deleted",
+            params = {"vids": list(video_ids)},
+        )
+        n_docs = int(doc_result[0]["deleted"]) if doc_result else 0
+        out["documents_deleted"] = n_docs
+        logger.info(f"[ycs:graph:wipe] deleted {n_docs} Document node(s)")
+    except Exception as e:
+        out["documents_deleted"] = 0
+        out["documents_error"]   = str(e)[:200]
+        logger.warning(
+            f"[ycs:graph:wipe] Document delete failed: "
+            f"{type(e).__name__}: {str(e)[:200]}"
+        )
+    try:
+        vid_result = neo4j_graph.query(
+            "MATCH (v:Video) WHERE v.id IN $vids "
+            "DETACH DELETE v "
+            "RETURN count(*) AS deleted",
+            params = {"vids": list(video_ids)},
+        )
+        n_vids = int(vid_result[0]["deleted"]) if vid_result else 0
+        out["videos_deleted"] = n_vids
+        logger.info(f"[ycs:graph:wipe] deleted {n_vids} Video node(s)")
+    except Exception as e:
+        out["videos_deleted"] = 0
+        out["videos_error"]   = str(e)[:200]
+        logger.warning(
+            f"[ycs:graph:wipe] Video delete failed: "
+            f"{type(e).__name__}: {str(e)[:200]}"
+        )
+    return out

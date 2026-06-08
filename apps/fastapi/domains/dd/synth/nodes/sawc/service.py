@@ -1160,7 +1160,7 @@ async def _load_chapter_vault_rich(
          fallback when the consolidated llms-full crawl built only one
          mega-vault and individual per-page vaults are missing)
     """
-    from ..vault.service import sentinelize_doc as _sentinelize_doc
+    from ..vault.domain import sentinelize_doc as _sentinelize_doc
 
     rich_vault: dict[str, VaultEntry] = {}
     n_loaded = 0

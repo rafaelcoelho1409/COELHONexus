@@ -9,6 +9,7 @@ from .params import (
     SCROLL_BATCH_SIZE,
 )
 from .service import (
+    delete_points_for_videos,
     ensure_collection,
     fetch_metadata_from_es,
     fetch_transcripts_from_es,
@@ -19,6 +20,7 @@ from .service import (
 __all__ = [
     "QDRANT_COLLECTION",
     "SCROLL_BATCH_SIZE",
+    "delete_points_for_videos",
     "ensure_collection",
     "fetch_metadata_from_es",
     "fetch_transcripts_from_es",

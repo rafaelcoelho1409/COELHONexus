@@ -21,6 +21,7 @@ from .schemas import SchemaDiscovery
 from .service import (
     build_video_metadata_graph,
     create_graph_transformer,
+    delete_documents_for_videos,
     discover_schema,
     extract_and_store_graph,
     get_graph_stats,
@@ -40,6 +41,7 @@ __all__ = [
     "SchemaDiscovery",
     "build_video_metadata_graph",
     "create_graph_transformer",
+    "delete_documents_for_videos",
     "discover_schema",
     "extract_and_store_graph",
     "get_graph_stats",

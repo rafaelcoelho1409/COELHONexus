@@ -588,7 +588,7 @@ async def digest_construct_run(state: SynthState) -> dict:
             if isinstance(raw_body, (bytes, bytearray))
             else raw_body
         )
-        if "<code-ref hash = " in body_text:
+        if "<code-ref hash=" in body_text:
             # Already sentinelized at the source (the pre-built path
             # would have produced this).
             sentinelized_bodies.append(body_text)
@@ -612,7 +612,7 @@ async def digest_construct_run(state: SynthState) -> dict:
     if runtime_vault_entries:
         logger.info(
             f"[digest_construct] {slug}/{chapter_id}: runtime-sentinelized "
-            f"{sum(1 for b in bodies if b and '<code-ref hash = ' in str(b))} "
+            f"{sum(1 for b in bodies if b and '<code-ref hash=' in str(b))} "
             f"sources, accumulated {len(runtime_vault_entries)} vault entries"
         )
 

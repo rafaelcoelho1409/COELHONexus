@@ -119,9 +119,10 @@ async def get_videos_pipeline(
         phases                = phases,
     )
     return {
-        "status": "queued",
-        "phases": phases,
-        "endpoint": "/api/v1/ycs/admin/pipeline",
+        "status":     "queued",
+        "phases":     phases,
+        "video_ids":  payload.video_ids,
+        "endpoint":   "/api/v1/ycs/admin/pipeline",
     }
 
 
@@ -170,9 +171,111 @@ async def rerun_videos_pipeline(extract_id: str, request: Request) -> dict:
         phases                = phases,
     )
     return {
-        "status": "queued",
-        "phases": phases,
-        "rerun_of": extract_id,
+        "status":    "queued",
+        "phases":    phases,
+        "video_ids": state["video_ids"],
+        "rerun_of":  extract_id,
+    }
+
+
+@router.get("/videos/pipeline/{extract_id}/state")
+async def get_videos_pipeline_state(
+    extract_id: str, request: Request,
+) -> dict:
+    """Return the saved dispatch state for a pipeline by its
+    extract task id. Used by the Ingest panel's video-list to
+    rehydrate `video_ids` + `phases` after a page refresh /
+    cross-tab navigation when the client's localStorage entry is
+    stale or missing. Best-effort: returns 404 once the 24h Redis
+    TTL expires.
+
+    Mirrors what `dispatch_videos_pipeline` snapshotted — never
+    triggers a new dispatch."""
+    from domains.ycs.pipeline_task import load_pipeline_state
+    state = await load_pipeline_state(
+        getattr(request.app.state, "redis_aio", None),
+        extract_id,
+    )
+    if not state:
+        raise HTTPException(
+            status_code = 404,
+            detail = (
+                f"No saved state for {extract_id} — already expired "
+                "(24h TTL) or unknown."
+            ),
+        )
+    return state
+
+
+@router.post("/videos/pipeline/{extract_id}/wipe")
+async def wipe_videos_pipeline(extract_id: str, request: Request) -> dict:
+    """Wipe every artifact tied to the videos in pipeline `extract_id`,
+    then revoke any in-flight phases so the chain can't write orphans
+    after the wipe returns. After wipe + revoke, the user can click
+    `Retry` to re-fire the chain from scratch with no Phase 1 cache
+    hits and no Phase 3 skip-on-video_id short-circuit.
+
+    Order: wipe FIRST (the primary user intent — get the data gone),
+    then revoke (secondary — kill any zombie writers). A failure in
+    revoke doesn't unwipe the data; a failure in wipe still tries
+    revoke. This matches the button's "Wipe cache" name semantics —
+    the user expects data gone; the revoke is implementation-detail
+    cleanup.
+
+    Why both: without revoke, an in-flight Phase 3 mid-LLM-call
+    finishes its batch AFTER the wipe and writes new Document nodes
+    pointing at the deleted Video nodes — orphans. The next Retry's
+    Phase-3 skip check (`MATCH (d:Document) WHERE d.video_id IS NOT
+    NULL`) finds those orphans and skips the videos, defeating the
+    point of the wipe.
+
+    Entity nodes (`__Entity__`) in Neo4j are LEFT INTACT because they
+    may be referenced by other videos' transcripts; deleting them
+    would cascade into other videos' graphs. Orphaned entities are
+    harmless and can be swept lazily later.
+
+    Best-effort across all 3 stores + the revoke — a failure in one
+    is logged + counted, the others still run. Looks up the
+    video_ids + phase task_ids from the same Redis blob used by
+    Stop / Rerun (24h TTL, persisted on dispatch + rerun)."""
+    from domains.ycs.pipeline_task import (
+        load_pipeline_state,
+        revoke_pipeline_phases,
+        wipe_videos_data,
+    )
+    state = await load_pipeline_state(
+        getattr(request.app.state, "redis_aio", None),
+        extract_id,
+    )
+    if not state or not state.get("video_ids"):
+        raise HTTPException(
+            status_code = 404,
+            detail      = (
+                f"No saved pipeline state for {extract_id} — already "
+                f"expired (24h TTL) or unknown."
+            ),
+        )
+    # 1. Wipe (the user-visible primary action)
+    summary = await wipe_videos_data(
+        video_ids   = state["video_ids"],
+        neo4j_graph = getattr(request.app.state, "neo4j_graph", None),
+    )
+    # 2. Revoke any in-flight chain phases so a mid-LLM-call Phase 3
+    #    doesn't finish + write orphans after we've wiped. Best-effort:
+    #    if there's no chain to revoke, revoke_pipeline_phases is a
+    #    no-op per-id.
+    phases: dict[str, str] = state.get("phases", {})
+    phase_ids = [
+        phases.get("extract",    ""),
+        phases.get("qdrant",     ""),
+        phases.get("neo4j",      ""),
+        phases.get("invalidate", ""),
+    ]
+    revoke_outcomes = revoke_pipeline_phases(phase_ids)
+    return {
+        "status":          "wiped",
+        "summary":         summary,
+        "revoke_outcomes": revoke_outcomes,
     }
 
 

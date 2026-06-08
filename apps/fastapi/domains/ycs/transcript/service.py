@@ -989,7 +989,7 @@ async def fetch_transcriptions_batch(
     languages:          list[str] | None                  = None,
     chunk_size:         int                               = DEFAULT_CHUNK_SIZE,
     video_metadata:     dict[str, dict[str, Any]] | None  = None,
-    progress_cb:        Callable[[int, int, str | None], None] | None = None,
+    progress_cb:        Callable[[int, int, str | None, bool], None] | None = None,
     stats:              dict[str, int] | None             = None,
 ) -> list[dict[str, Any]]:
     """Fetch transcriptions for videos with ES caching + chunked processing.
@@ -1021,21 +1021,42 @@ async def fetch_transcriptions_batch(
         es_client, video_ids, languages,
     )
     ids_to_fetch: list[str] = []
-    cached_count = 0
+    cached_ids:   list[str] = []
     for vid in video_ids:
         existing_langs = existing_transcriptions.get(vid, set())
         if _needs_transcription(existing_langs, languages):
             ids_to_fetch.append(vid)
         else:
-            cached_count += 1
+            cached_ids.append(vid)
             log.info(
                 f"[transcription-cache] HIT {vid} langs={existing_langs}",
             )
+    cached_count = len(cached_ids)
+    total_videos = len(video_ids)
     if cached_count > 0:
         log.info(
             f"[fetch_transcriptions_batch] Cache: {cached_count} hits, "
             f"{len(ids_to_fetch)} to fetch",
         )
+    # Emit one per-video progress callback for EACH cached id, in order,
+    # using `total_videos` as the denominator. Before this change the
+    # transcripts bar jumped 2% → 100% in cached-only runs because the
+    # function returned early without ever firing progress_cb. The bar
+    # advance is genuinely instant for cached entries (no LLM call), but
+    # this gives the JS poller at least one payload per cached id with
+    # the right (current/total) shape + completed_ids[] entry, so the
+    # per-store cell in the drawer flips Queued→Done as expected.
+    n_progressed = 0
+    if progress_cb:
+        for vid in cached_ids:
+            n_progressed += 1
+            try:
+                progress_cb(n_progressed, total_videos, vid, True)
+            except Exception as cb_err:
+                log.warning(
+                    f"[fetch_transcriptions_batch] cached progress_cb raised: "
+                    f"{type(cb_err).__name__}: {cb_err}"
+                )
     if not ids_to_fetch:
         log.info(
             "[fetch_transcriptions_batch] All videos cached, no fetch needed",
@@ -1106,9 +1127,26 @@ async def fetch_transcriptions_batch(
             # Per-video progress emission. Fires for both OK and FAIL
             # so the bar advances even when scrape errors out — caller
             # decides whether to surface "fetched" vs "attempted".
+            # `success` is True iff this video's transcript was
+            # captured + ready for ES indexing; False on Playwright
+            # DOM scrape failure / missing track / yt-dlp ie_key edge
+            # cases. Lets the caller bucket per-video into
+            # completed_ids vs failed_ids without re-deriving it.
+            # Cumulative counter spans BOTH cached + fetched phases:
+            # `n_progressed` (number of cached entries already emitted)
+            # + `total_success + total_failed` (newly-fetched this run)
+            # divided by `total_videos` (full input set). Keeps the bar
+            # monotonic across mixed cached/fresh runs (was using
+            # `total_to_fetch` as the denominator, which restarted the
+            # bar's domain mid-run when both kinds of videos coexisted).
             if progress_cb:
                 try:
-                    progress_cb(total_success + total_failed, total_to_fetch, vid)
+                    progress_cb(
+                        n_progressed + total_success + total_failed,
+                        total_videos,
+                        vid,
+                        "error" not in result and bool(result.get("page_content")),
+                    )
                 except Exception as cb_err:
                     log.warning(
                         f"[fetch_transcriptions_batch] progress_cb raised: "
