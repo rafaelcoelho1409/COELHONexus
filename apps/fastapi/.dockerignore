@@ -1,20 +1,40 @@
-# Build artifacts that would clobber the freshly-built /app/.venv
-.venv/
-*.egg-info/
-build/
-dist/
+# .dockerignore syntax = Docker's filepath.Match (NOT gitignore!). Patterns
+# WITHOUT a leading `**/` only match at the build-context ROOT. To match
+# files at any depth, the `**/` prefix is required — without it,
+# `__pycache__/` matches `/__pycache__/` but NOT `domains/ycs/__pycache__/`,
+# which meant nested .pyc writes from any `import` of our modules were
+# leaking through to Skaffold's file watcher and triggering rebuilds even
+# though we thought they were ignored.
+#
+# Test in-place: `docker buildx build --no-cache --progress=plain .` shows
+# the actual file set sent to the daemon — `**/*.pyc` should yield 0 matches.
 
-# Python caches
-__pycache__/
-*.pyc
-*.pyo
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+# Build artifacts that would clobber the freshly-built /app/.venv
+**/.venv/
+**/*.egg-info/
+**/build/
+**/dist/
+
+# Python caches — the load-bearing entries for sync-vs-rebuild stability.
+# Anything that imports an apps/fastapi/* module regenerates a sibling
+# __pycache__/<name>.cpython-XX.pyc. Without `**/` these rules silently
+# fail to match anything below the root.
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+
+# Editor swapfiles / OS metadata — same recursive-match reasoning.
+**/*.swp
+**/*.swo
+**/*~
+**/.DS_Store
 
 # Local runtime + logs
-logs/
-*.log
+**/logs/
+**/*.log
 
 # Git + IDE
 .git/
@@ -27,4 +47,4 @@ logs/
 .env.*
 
 # Docs not needed at runtime
-*.md
+**/*.md

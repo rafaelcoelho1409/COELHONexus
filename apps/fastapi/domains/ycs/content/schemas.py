@@ -114,6 +114,12 @@ class VideoSnippet(BaseModel):
     release_timestamp: int | None = None
     live_status:     str | None = None
     availability:    str | None = None
+    # For `kind` ∈ {"channel", "playlist"}: total number of videos
+    # belonging to that channel/playlist. None for plain video rows
+    # (their count would be 1, trivially) and on probe failure /
+    # timeout. Populated post-search via a lightweight per-result
+    # `yt-dlp --playlist-items 1` fetch (fans out in parallel).
+    video_count:     int | None = None
 
 
 class SearchResponse(BaseModel):

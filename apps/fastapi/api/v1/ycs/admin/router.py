@@ -242,26 +242,25 @@ async def list_videos(
     total_from_es = response.get("hits", {}).get("total", {}).get("value", 0)
     video_ids = [h["_id"] for h in hits]
 
-    # "True" library total = distinct video_ids that have at least one
-    # transcript doc. Metadata-only entries (no transcript) are the
-    # output of a Stop-mid-Phase-1 or a Playwright scrape failure —
-    # they're operational debris, NOT something the user can query.
-    # Reporting `total_from_es` would lie: the page would show
-    # "5 videos" when the listing only renders 2 done + 1 partial.
+    # "True" library total = distinct video_ids with a Neo4j Document
+    # node (= status "done"). "partial" and "failed" rows are hidden
+    # from the listing (operational debris), so reporting
+    # `total_from_es` or even the transcript-cardinality count would
+    # lie about how many rows the user can actually see.
     n_processed_total = 0
-    try:
-        t_count = await es.search(
-            index = INDEX_TRANSCRIPTIONS,
-            size  = 0,
-            aggs  = {"vids": {"cardinality": {"field": "video_id"}}},
-        )
-        n_processed_total = int(
-            t_count.get("aggregations", {}).get("vids", {}).get("value", 0),
-        )
-    except Exception:
-        # If the agg fails, fall back to total_from_es so the count
-        # is at least non-zero — the row filter below still hides the
-        # failed entries from the listing.
+    g = getattr(request.app.state, "neo4j_graph", None)
+    if g is not None:
+        try:
+            rows = g.query(
+                "MATCH (d:Document) WHERE d.video_id IS NOT NULL "
+                "RETURN count(DISTINCT d.video_id) AS n",
+            )
+            n_processed_total = int(rows[0]["n"]) if rows else 0
+        except Exception:
+            # Neo4j hiccup → fall back to total_from_es so the count
+            # is non-zero. The row filter still hides non-done rows.
+            n_processed_total = total_from_es
+    else:
         n_processed_total = total_from_es
 
     # 2. Transcript presence + dominant language (one terms agg).
@@ -341,13 +340,16 @@ async def list_videos(
         row_status = _status_for(has_transcript, has_neo4j_doc)
         row_langs  = tmeta.get("transcript_langs", [])
 
-        # ALWAYS drop "failed" entries — these are metadata-only rows
-        # left behind by a mid-Phase-1 Stop or a transcript-fetch error.
-        # They can't be queried (no transcript, no entities), so they
-        # don't belong in the library listing. Wipe-by-channel would
-        # be the path to clean them up; the per-row delete still works
-        # via DELETE /admin/videos/{video_id}.
-        if row_status == "failed":
+        # ALWAYS drop non-"done" entries — only fully-processed videos
+        # (ES metadata + transcript + Neo4j Document) belong in the
+        # library listing. "failed" = metadata-only orphans from a
+        # Stop-mid-Phase-1 or scrape error; "partial" = transcript
+        # but no Neo4j (Phase 3 didn't finish — typically a Stop
+        # during Phase 3 or an LLM-cascade exhaustion). Both are
+        # operational debris, not queryable units. Cleanup paths:
+        # per-row DELETE /admin/videos/{video_id} or Pipeline panel's
+        # Wipe button.
+        if row_status != "done":
             continue
         if status and row_status != status:
             continue
@@ -392,29 +394,104 @@ async def list_videos(
 
 @router.get("/videos/facets")
 async def videos_facets(request: Request) -> dict:
-    """Filter sidebar counts: channels, languages, statuses. One pass
-    over ES metadata + transcriptions + Neo4j Documents. Returns the
-    sidebar payload as `{channels: [...], languages: [...], statuses:
-    [...]}` with `{key, label, count}` entries."""
+    """Filter sidebar counts SCOPED TO READY VIDEOS ONLY (status="done"
+    = ES metadata + transcript + Neo4j Document all present).
+
+    Before this scoping: Channels showed every channel that had EVER
+    been ingested, even if its only videos were partial/failed and thus
+    hidden from the listing — clicking the channel chip filtered to 0
+    rows, which read as a broken filter. Languages had the same drift
+    (aggregated over all transcripts including partial-status ones).
+
+    Pipeline:
+      1. Pull the set of done video_ids from Neo4j (`Document.video_id`).
+      2. Channels  — terms agg over ES metadata WHERE _id IN done_ids.
+      3. Languages — terms agg over ES transcripts WHERE video_id IN done_ids.
+      4. Statuses  — single `Done` chip with count = len(done_ids).
+
+    All three facets now share one source of truth — the ready set —
+    so a chip with `count = N` always corresponds to exactly N visible
+    rows when clicked."""
     es = _es()
     out: dict[str, list[dict[str, Any]]] = {
         "channels":  [],
         "languages": [],
         "statuses":  [],
     }
-    # Channels — `_terms_facet` already does what we want.
+
+    # 1. Pull the done set from Neo4j. Empty when Neo4j is down or no
+    #    document yet — every facet then renders empty, which is the
+    #    honest state (no ready videos → no facets to filter by).
+    done_ids: list[str] = []
+    g = getattr(request.app.state, "neo4j_graph", None)
+    if g is not None:
+        try:
+            rows = g.query(
+                "MATCH (d:Document) WHERE d.video_id IS NOT NULL "
+                "RETURN collect(DISTINCT d.video_id) AS ids",
+            )
+            if rows and rows[0].get("ids"):
+                done_ids = [str(x) for x in rows[0]["ids"] if x]
+        except Exception:
+            pass
+
+    if not done_ids:
+        # No ready videos → empty facets + zero Done chip. Skip the
+        # ES aggs to avoid issuing a `terms:{values:[]}` filter (some
+        # ES versions error on empty terms).
+        out["statuses"] = [{"key": "done", "label": "Done", "count": 0}]
+        return out
+
+    # 2. Channels — agg over ES metadata RESTRICTED to done_ids. ES
+    #    `_id` is the video id (set at index time).
     try:
-        out["channels"] = await _terms_facet(
-            es, facet_field = "channel_id", label_field = "channel",
+        c_resp = await es.search(
+            index = INDEX_METADATA,
+            size  = 0,
+            query = {"ids": {"values": done_ids}},
+            aggs  = {
+                "by_channel": {
+                    "terms": {"field": "channel_id", "size": 1000},
+                    "aggs": {
+                        "first_doc": {
+                            "top_hits": {
+                                "size": 1, "_source": ["channel"],
+                            },
+                        },
+                    },
+                },
+            },
+        )
+        buckets = (
+            c_resp.get("aggregations", {})
+            .get("by_channel", {}).get("buckets", [])
+        )
+        for b in buckets:
+            key = b.get("key")
+            if not key:
+                continue
+            hits = b.get("first_doc", {}).get("hits", {}).get("hits", [])
+            label = (
+                hits[0].get("_source", {}).get("channel")
+                if hits else None
+            ) or key
+            out["channels"].append({
+                "channel_id":  key,
+                "channel":     label,
+                "video_count": int(b.get("doc_count", 0)),
+            })
+        out["channels"].sort(
+            key = lambda x: (-int(x.get("video_count") or 0), x.get("channel") or ""),
         )
     except Exception:
         pass
 
-    # Languages — agg over transcripts index.
+    # 3. Languages — agg over ES transcripts RESTRICTED to done_ids.
     try:
         t_resp = await es.search(
             index = INDEX_TRANSCRIPTIONS,
             size  = 0,
+            query = {"terms": {"video_id": done_ids}},
             aggs  = {
                 "by_lang": {"terms": {"field": "lang", "size": 50}},
             },
@@ -428,50 +505,14 @@ async def videos_facets(request: Request) -> dict:
     except Exception:
         pass
 
-    # Statuses — derived. Count metadata docs that DO and DON'T have a
-    # transcript twin; further split done/partial via Neo4j presence.
-    try:
-        total_meta = (await es.count(index = INDEX_METADATA)).get("count", 0)
-        # Distinct video_ids with at least one transcript doc.
-        t_resp = await es.search(
-            index = INDEX_TRANSCRIPTIONS,
-            size  = 0,
-            aggs  = {
-                "video_ids": {
-                    "cardinality": {"field": "video_id"},
-                },
-            },
-        )
-        n_with_t = (
-            t_resp.get("aggregations", {})
-            .get("video_ids", {}).get("value", 0)
-        )
-        n_failed = max(0, int(total_meta) - int(n_with_t))
-        # Documents in Neo4j.
-        n_in_neo4j = 0
-        g = getattr(request.app.state, "neo4j_graph", None)
-        if g is not None:
-            try:
-                rows = g.query(
-                    "MATCH (d:Document) WHERE d.video_id IS NOT NULL "
-                    "RETURN count(DISTINCT d.video_id) AS n",
-                )
-                n_in_neo4j = int(rows[0]["n"]) if rows else 0
-            except Exception:
-                pass
-        n_done    = min(int(n_with_t), int(n_in_neo4j))
-        n_partial = max(0, int(n_with_t) - n_done)
-        # `failed` chip intentionally dropped — list_videos hides those
-        # rows unconditionally, so the filter would yield zero results
-        # and read as a UI bug. `n_failed` is still computed above for
-        # operational awareness (could surface as a banner) but isn't
-        # exposed as a filter facet.
-        out["statuses"] = [
-            {"key": "done",    "label": "Done",    "count": n_done},
-            {"key": "partial", "label": "Partial", "count": n_partial},
-        ]
-    except Exception:
-        pass
+    # 4. Statuses — single `Done` chip. `partial` + `failed` chips
+    #    were dropped in the prior ship (list_videos hides those rows
+    #    unconditionally → filtering for them would yield zero results).
+    #    Kept as one read-only chip so the user sees "Done: N" alongside
+    #    Channels / Languages.
+    out["statuses"] = [
+        {"key": "done", "label": "Done", "count": len(done_ids)},
+    ]
 
     return out
 

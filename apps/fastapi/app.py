@@ -71,17 +71,27 @@ logger = logging.getLogger(__name__)
 
 
 def _redis_url_from_env() -> str:
+    # Same URL-encoding posture as `_postgres_url_from_env` — passwords
+    # with `%`, `@`, `&`, etc. otherwise break DSN parsing in the
+    # redis-py client.
+    from urllib.parse import quote
     host = os.environ.get("REDIS_HOST", "localhost")
     port = os.environ.get("REDIS_PORT", "6379")
     password = os.environ.get("REDIS_PASSWORD", "")
     if password:
-        return f"redis://:{password}@{host}:{port}"
+        return f"redis://:{quote(password, safe = '')}@{host}:{port}"
     return f"redis://{host}:{port}"
 
 
 def _postgres_url_from_env() -> str:
-    user = os.environ.get("POSTGRES_USER", "postgres")
-    password = os.environ.get("POSTGRES_PASSWORD", "")
+    # `quote(..., safe="")` URL-encodes user + password so DSNs survive
+    # passwords with `%`, `&`, `!`, `#`, `^`, `@`, etc. psycopg / asyncpg
+    # parse the DSN as a URL, and a raw `%%` reads as an invalid
+    # percent-encoded token ("invalid percent-encoded token: ..."),
+    # which kills lifespan and 5xx's every YCS thread-memory call.
+    from urllib.parse import quote
+    user = quote(os.environ.get("POSTGRES_USER", "postgres"), safe = "")
+    password = quote(os.environ.get("POSTGRES_PASSWORD", ""), safe = "")
     host = os.environ.get("POSTGRES_HOST", "postgres")
     port = os.environ.get("POSTGRES_PORT", "5432")
     db = os.environ.get("POSTGRES_DB", "postgres")

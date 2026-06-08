@@ -164,6 +164,30 @@ def ingest_to_neo4j(
                 raise
             finally:
                 latency_s = float(time.monotonic() - t0)
+                # ---- Silent-zero guard ----
+                # `extract_and_store_graph` swallows per-batch LLM
+                # exceptions (BadRequest schema rejections, 5xx, etc.)
+                # so a model that fails EVERY batch still returns
+                # cleanly with nodes_created=0. Without this check the
+                # bandit would record reward=+0.6 for a 0-output run
+                # and then prefer the broken arm next time. We treat
+                # "processed N docs but produced 0 nodes" as a
+                # schema-invalid failure for reward purposes.
+                docs_processed   = int(extraction_stats.get("documents_processed", 0) or 0)
+                nodes_created    = int(extraction_stats.get("nodes_created", 0) or 0)
+                silent_zero      = success and docs_processed > 0 and nodes_created == 0
+                effective_success = success and not silent_zero
+                effective_err     = error_class
+                if silent_zero:
+                    effective_err = "schema_invalid"
+                    logger.warning(
+                        f"[ingest_to_neo4j] silent-zero detected for "
+                        f"{pinned_model}: {docs_processed} docs processed "
+                        f"but 0 nodes created — recording NEGATIVE reward "
+                        f"so the bandit stops re-picking this arm. Common "
+                        f"cause: provider rejects LLMGraphTransformer's "
+                        f"DynamicGraph schema (e.g. Groq + gpt-oss-120b)."
+                    )
                 # Best-effort reward emit. Swallowed errors don't fail
                 # the Celery task — the entity-extract work already
                 # succeeded (or failed) by this point; reward update
@@ -171,9 +195,9 @@ def ingest_to_neo4j(
                 try:
                     await record_ycs_neo4j_reward(
                         deployment_id = pinned_model,
-                        success       = success,
+                        success       = effective_success,
                         latency_s     = latency_s,
-                        error_class   = error_class,
+                        error_class   = effective_err,
                         video_count   = len(all_video_ids),
                     )
                 except Exception as e:

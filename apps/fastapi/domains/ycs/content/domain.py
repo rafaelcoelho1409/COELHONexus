@@ -94,6 +94,23 @@ def effective_fetch_count(max_results: int, conditions: list[str]) -> int:
     )
 
 
+# YouTube search-URL `sp` filter codes — proto-encoded, base64-formatted
+# Type filter (community-documented; e.g., SerpAPI sp-filter guide). Field
+# 2 of the proto = type:
+#   1 = video, 2 = channel, 3 = playlist, 4 = movie.
+# `ytsearch:` is video-only (the YouTube backend ignores `sp` from that
+# entry point), so channel/playlist searches MUST use the regular
+# `youtube.com/results?search_query=...&sp=...` URL — yt-dlp routes
+# those through `YoutubeSearchURLIE` and honors --flat-playlist /
+# --playlist-end the same way.
+_SP_KIND_FILTER: dict[str, str] = {
+    "channel":  "EgIQAg%3D%3D",
+    "playlist": "EgIQAw%3D%3D",
+    # Video filter is the default behavior of `ytsearch:` — no override
+    # needed when kind_filter is None or "video".
+}
+
+
 def build_search_args(
     query: str,
     fetch_count: int,
@@ -102,6 +119,7 @@ def build_search_args(
     date_after: str | None,
     date_before: str | None,
     age_limit: int | None,
+    kind_filter: str | None = None,
 ) -> list[str]:
     """Compose the full yt-dlp argv for a flat-playlist search. Returns a
     fresh list (BASE_ARGS is a tuple to keep it immutable at module scope).
@@ -111,33 +129,118 @@ def build_search_args(
     `Unable to handle request` in this stack (yt-dlp 2026.3.17 + the
     current PoT/extractor combo). Service does a Python-side sort by
     `upload_date` instead; results may have fewer dates than `ytsearchdate`
-    would have given but never 502s."""
-    search_url = f"ytsearch{fetch_count}:{query}"
+    would have given but never 502s.
+
+    `kind_filter` (June 2026 fix) switches the search target. The bare
+    `ytsearch:` prefix returns videos exclusively — a query like
+    "Raiam Santos McArn" with `kind_filter="channel"` would yield zero
+    results because the channel never appears in the video-search response.
+    For channel/playlist we instead hit `youtube.com/results?search_query=`
+    with YouTube's own `sp=` type-filter (proto-encoded base64). yt-dlp's
+    `YoutubeSearchURLIE` extracts that page the same way."""
+    sp_code = _SP_KIND_FILTER.get(kind_filter or "")
+    if sp_code:
+        # Search-URL path — channel or playlist.
+        from urllib.parse import quote_plus
+        search_url = (
+            f"https://www.youtube.com/results"
+            f"?search_query={quote_plus(query)}&sp={sp_code}"
+        )
+    else:
+        # Default video-search prefix.
+        search_url = f"ytsearch{fetch_count}:{query}"
+
     args: list[str] = [
         *BASE_ARGS,
         "--flat-playlist",
         "--dump-single-json",
+    ]
+    if sp_code:
+        # Search-URL extractor doesn't honor the `ytsearch{N}:` count in
+        # the URL — cap via --playlist-end. Date hints don't apply to
+        # channel/playlist entry rows either (no upload_date field),
+        # so skip the approximate_date extractor-args here.
+        args.extend(["--playlist-end", str(fetch_count)])
+    else:
         # Approximate-date attaches a `upload_date` hint to flat entries,
         # enabling date filters on the lighter `--flat-playlist` path.
-        "--extractor-args", "youtube:approximate_date",
-    ]
-    if conditions:
-        args.extend(["--match-filter", " & ".join(conditions)])
-    if date_after:
-        args.extend(["--dateafter", date_after])
-    if date_before:
-        args.extend(["--datebefore", date_before])
-    if age_limit is not None:
-        # Overrides the BASE_ARGS `--age-limit 0` on the same argv (last
-        # wins in yt-dlp arg parsing).
-        args.extend(["--age-limit", str(age_limit)])
+        args.extend(["--extractor-args", "youtube:approximate_date"])
+        if conditions:
+            args.extend(["--match-filter", " & ".join(conditions)])
+        if date_after:
+            args.extend(["--dateafter", date_after])
+        if date_before:
+            args.extend(["--datebefore", date_before])
+        if age_limit is not None:
+            # Overrides the BASE_ARGS `--age-limit 0` on the same argv
+            # (last wins in yt-dlp arg parsing).
+            args.extend(["--age-limit", str(age_limit)])
     args.append(search_url)
     return args
 
 
+def count_probe_url(snippet: dict) -> str | None:
+    """Return the URL yt-dlp should hit to get a cheap `playlist_count`
+    for a channel or playlist snippet.
+
+    For PLAYLISTS we just use the playlist URL directly — yt-dlp returns
+    `playlist_count` immediately with `--playlist-items 1`.
+
+    For CHANNELS we rewrite the channel id `UC...` → uploads playlist
+    `UU...` (same suffix, different prefix — YouTube's convention since
+    2016 has been that every channel's "All uploads" playlist is the
+    channel id with `UC` swapped for `UU`). That path is ~10× faster
+    than `https://youtube.com/channel/<id>/videos` because yt-dlp
+    short-circuits on the playlist metadata and never iterates the
+    full entries list. Trade-off: `UU` counts ALL uploads (videos +
+    shorts + live) where `/videos` is just main videos — 2s vs 19s
+    elapsed on a 1545-video channel. We surface the upload count;
+    the user can refine later if shorts-vs-videos matters.
+
+    Returns None when no probe is meaningful (kind == video, or
+    missing identifiers)."""
+    kind = snippet.get("kind")
+    if kind == "playlist":
+        url = snippet.get("url") or snippet.get("webpage_url")
+        if url:
+            return url
+        pid = snippet.get("id")
+        if pid:
+            return f"https://www.youtube.com/playlist?list={pid}"
+        return None
+    if kind == "channel":
+        # Prefer `channel_id` (always a UC...) over the snippet's `id`
+        # which may itself be UC... or @handle-derived. Both paths
+        # converge on the UU uploads-playlist transformation.
+        cid = snippet.get("channel_id") or snippet.get("id") or ""
+        if cid.startswith("UC") and len(cid) > 2:
+            uploads_id = "UU" + cid[2:]
+            return f"https://www.youtube.com/playlist?list={uploads_id}"
+        return None
+    return None
+
+
+def _absolutize_thumbnail_url(url: str) -> str:
+    """Upgrade scheme-relative URLs (`//host/path`) to `https://host/path`.
+    yt-dlp's channel/playlist search-URL extractor returns scheme-relative
+    thumbnails like `//yt3.ggpht.com/...=s176-c-k-c0x00ffffff-no-rj-mo`
+    — without this, the browser resolves them against the FastHTML host
+    instead of yt3.ggpht.com and every channel logo 404s as a broken
+    image. Video search results already come back with absolute URLs,
+    so this is a no-op there."""
+    if not url:
+        return ""
+    if url.startswith("//"):
+        return "https:" + url
+    return url
+
+
 def pick_best_thumbnail(thumbnails: list[dict] | None) -> str:
     """Return the URL of the highest-resolution thumbnail in the list,
-    or "" if none. Resolution = width × height."""
+    or "" if none. Resolution = width × height. Scheme-relative URLs
+    (yt-dlp returns these for channel/playlist results) are upgraded
+    to `https://` so the browser doesn't resolve them against the
+    FastHTML host."""
     if not thumbnails:
         return ""
     best = max(
@@ -145,7 +248,7 @@ def pick_best_thumbnail(thumbnails: list[dict] | None) -> str:
         key = lambda t: (t.get("height") or 0) * (t.get("width") or 0),
         default = None,
     )
-    return (best or {}).get("url", "") or ""
+    return _absolutize_thumbnail_url((best or {}).get("url", "") or "")
 
 
 import re
@@ -223,7 +326,7 @@ def normalize_search_entry(entry: dict) -> dict:
         "channel":         entry.get("channel"),
         "channel_id":      entry.get("channel_id"),
         "channel_url":     entry.get("channel_url"),
-        "thumbnail":       entry.get("thumbnail") or pick_best_thumbnail(entry.get("thumbnails")),
+        "thumbnail":       _absolutize_thumbnail_url(entry.get("thumbnail") or "") or pick_best_thumbnail(entry.get("thumbnails")),
         "description":     entry.get("description"),
         "upload_date":     entry.get("upload_date"),
         "timestamp":         entry.get("timestamp"),

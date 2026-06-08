@@ -1,0 +1,45 @@
+# .dockerignore syntax = Docker's filepath.Match (NOT gitignore!). Patterns
+# WITHOUT a leading `**/` only match at the build-context ROOT. To match
+# files at any depth, the `**/` prefix is required — see the same comment
+# in apps/fastapi/.dockerignore for the failure mode (nested .pyc writes
+# leaking into Skaffold's file watcher and triggering rebuilds).
+
+# Build artifacts that would clobber the freshly-built /app/.venv
+**/.venv/
+**/*.egg-info/
+**/build/
+**/dist/
+
+# Python caches — load-bearing for sync-vs-rebuild stability. Anything
+# that imports an apps/fasthtml/* module regenerates a sibling
+# __pycache__/<name>.cpython-XX.pyc. Without `**/` these silently fail
+# to match below the root.
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+
+# Editor swapfiles / OS metadata
+**/*.swp
+**/*.swo
+**/*~
+**/.DS_Store
+
+# Local runtime + logs
+**/logs/
+**/*.log
+
+# Git + IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+
+# Secrets / env (defense-in-depth — never bake into image)
+.env
+.env.*
+
+# Docs not needed at runtime
+**/*.md

@@ -30,10 +30,25 @@ build:
       sync:
         # Hot-reload: sync Python files directly to container (no rebuild)
         # Requires: skaffold dev (not skaffold run)
+        #
+        # Skaffold's manual sync is ALL-OR-NOTHING: if any changed file in
+        # a debounce batch doesn't match a `src` glob, the whole batch
+        # falls back to rebuild. So we list everything a normal edit pass
+        # might touch — .py, .yaml, .json, .toml — and let .dockerignore
+        # filter the noise (__pycache__/*.pyc et al) BEFORE Skaffold's
+        # watcher even sees it. Without this combination, the .pyc files
+        # Python generates as a side effect of any `import` would race
+        # into the batch and trigger a 2-3 minute rebuild on every save.
         manual:
           - src: "**/*.py"
             dest: /app
           - src: "**/*.yaml"
+            dest: /app
+          - src: "**/*.yml"
+            dest: /app
+          - src: "**/*.json"
+            dest: /app
+          - src: "**/*.toml"
             dest: /app
     # FastHTML frontend (Python + python-fasthtml + HTMX + PWA).
     # Replaced the legacy Go web frontend on 2026-05-09 — see
@@ -45,12 +60,25 @@ build:
         dockerfile: Dockerfile.fasthtml
         noCache: false
       sync:
+        # Same all-or-nothing reasoning as fastapi above — list every
+        # source file type so the watcher never falls back to rebuild on
+        # an edit-pass batch. apps/fasthtml/.dockerignore (added in the
+        # same commit) excludes __pycache__/*.pyc + editor swapfiles so
+        # they don't even enter the build context.
         manual:
           - src: "**/*.py"
             dest: /app
           - src: "static/**"
             dest: /app/static
             strip: "static/"
+          - src: "**/*.yaml"
+            dest: /app
+          - src: "**/*.yml"
+            dest: /app
+          - src: "**/*.json"
+            dest: /app
+          - src: "**/*.toml"
+            dest: /app
   local:
     # Push to COELHO Cloud k3d registry at localhost:5001 (k3d host port).
     # The cluster resolves the SAME address via a containerd mirror

@@ -48,19 +48,18 @@ def ChannelTab():
                 data_state = "empty",
             ),
             _OptionsCollapse(
-                _TranscriptOptions("channel"),
-                prefix = "channel",
-            ),
-            Div(
-                Div("", id = "ycs-channel-status", cls = "ycs-search-status"),
-                Button(
-                    "Start ingest",
-                    type = "submit",
-                    cls  = "btn-primary",
-                    disabled = True,
-                    id = "ycs-channel-submit",
+                _TranscriptOptions(
+                    "channel",
+                    Button(
+                        "Start ingest",
+                        type = "submit",
+                        cls  = "btn-primary",
+                        disabled = True,
+                        id = "ycs-channel-submit",
+                    ),
                 ),
-                cls = "ycs-form-actions",
+                Div("", id = "ycs-channel-status", cls = "ycs-search-status"),
+                prefix = "channel",
             ),
             id = "ycs-channel-form",
         ),

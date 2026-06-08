@@ -101,6 +101,11 @@ class YtDlpSearchService:
             date_after = req.date_after,
             date_before = req.date_before,
             age_limit = req.age_limit,
+            # Routes channel/playlist filters to the search-URL extractor
+            # (`youtube.com/results?...&sp=<type>`). `ytsearch:` is
+            # video-only, so a channel-name query like "Raiam Santos
+            # McArn" would otherwise return 0 channel hits.
+            kind_filter = req.kind_filter,
         )
 
         logger.info(
@@ -128,11 +133,13 @@ class YtDlpSearchService:
             if len(snippets) >= req.max_results:
                 break
 
-        # Python-side filter: show-only-one-kind. Each snippet's `kind`
-        # was set by `detect_entry_kind` during normalization, which is
-        # more reliable than yt-dlp's sparse `_type` in --flat-playlist
-        # mode. ytsearch: is video-focused so non-video kind_filters
-        # often yield 0 results — intentional, see schemas.py.
+        # Python-side filter belt-and-suspenders. The PRIMARY filter is
+        # now upstream in `build_search_args` — channel/playlist queries
+        # route to the search-URL extractor with `sp=` Type filter, so
+        # the response is mostly homogeneous. This pass still strips any
+        # straggler whose classifier-derived `kind` disagrees (rare:
+        # yt-dlp's sparse `_type` in --flat-playlist mode occasionally
+        # misclassifies; `detect_entry_kind` is stricter).
         if req.kind_filter:
             snippets = [s for s in snippets if s.kind == req.kind_filter]
 
@@ -147,6 +154,17 @@ class YtDlpSearchService:
                 reverse = True,
             )
 
+        # Channel/playlist video-count fan-out. Each channel/playlist
+        # snippet gets its `video_count` filled from a cheap
+        # `--playlist-items 1` probe (UU-prefixed uploads playlist for
+        # channels, the playlist URL directly for playlists). Runs in
+        # parallel — slowest probe gates total latency, not the sum.
+        # Best-effort: a probe that times out or errors leaves
+        # `video_count` as None and renders as "Channel" / "Playlist"
+        # without a count, never as a failure.
+        if any(s.kind in ("channel", "playlist") for s in snippets):
+            await self._populate_video_counts(snippets)
+
         logger.info(
             f"[ycs:search] OK q={req.query!r} hits={len(snippets)} "
             f"elapsed={elapsed:.2f}s"
@@ -157,6 +175,68 @@ class YtDlpSearchService:
             results = snippets,
             fetched_for = fetch_count,
             elapsed_s = round(elapsed, 3),
+        )
+
+
+    async def _probe_video_count(self, probe_url: str) -> int | None:
+        """Cheap fetch — `--flat-playlist --playlist-items 1` returns the
+        playlist metadata (including `playlist_count`) in ~2s instead of
+        the ~20s a full channel enumeration takes. Returns None on any
+        failure so the caller renders gracefully without the count."""
+        args = [
+            "yt-dlp",
+            "--flat-playlist",
+            "--dump-single-json",
+            "--playlist-items", "1",
+            "--no-warnings",
+            probe_url,
+        ]
+        try:
+            stdout = await self._run(args, timeout_s = 15.0)
+        except Exception as e:
+            logger.info(f"[ycs:search] count-probe FAIL {probe_url}: {e}")
+            return None
+        try:
+            data = json.loads(stdout) if stdout.strip() else {}
+        except json.JSONDecodeError:
+            return None
+        n = data.get("playlist_count")
+        try:
+            return int(n) if n is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    async def _populate_video_counts(
+        self, snippets: list[VideoSnippet],
+    ) -> None:
+        """In-place fill of `video_count` for every channel/playlist
+        snippet. Probes run in parallel under the same semaphore that
+        gates the main search, so a burst of channel hits in one query
+        can't blow the cluster's egress budget."""
+        probe_targets: list[tuple[VideoSnippet, str]] = []
+        for s in snippets:
+            if s.kind not in ("channel", "playlist"):
+                continue
+            url = domain.count_probe_url(s.model_dump())
+            if url:
+                probe_targets.append((s, url))
+        if not probe_targets:
+            return
+
+        async def _one(s: VideoSnippet, url: str) -> None:
+            async with self._semaphore:
+                n = await self._probe_video_count(url)
+            if n is not None:
+                # Pydantic v2 — re-validate would reject extras; use
+                # __dict__ since `extra="forbid"` blocks setattr through
+                # the normal path on some model configs. video_count is
+                # declared on the model, so direct attribute set works.
+                s.video_count = n
+
+        import asyncio as _asyncio
+        await _asyncio.gather(
+            *[_one(s, u) for s, u in probe_targets],
+            return_exceptions = False,
         )
 
 

@@ -40,19 +40,18 @@ def PlaylistTab():
                 data_state = "empty",
             ),
             _OptionsCollapse(
-                _TranscriptOptions("playlist"),
-                prefix = "playlist",
-            ),
-            Div(
-                Div("", id = "ycs-playlist-status", cls = "ycs-search-status"),
-                Button(
-                    "Start ingest",
-                    type = "submit",
-                    cls  = "btn-primary",
-                    disabled = True,
-                    id = "ycs-playlist-submit",
+                _TranscriptOptions(
+                    "playlist",
+                    Button(
+                        "Start ingest",
+                        type = "submit",
+                        cls  = "btn-primary",
+                        disabled = True,
+                        id = "ycs-playlist-submit",
+                    ),
                 ),
-                cls = "ycs-form-actions",
+                Div("", id = "ycs-playlist-status", cls = "ycs-search-status"),
+                prefix = "playlist",
             ),
             id = "ycs-playlist-form",
         ),

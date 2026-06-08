@@ -475,19 +475,25 @@ function renderResult(v) {
     const card = document.createElement("div");
     card.className = "ycs-result";
     card.dataset.kind = kind;
-    // Per-kind meta line — videos show views/duration/channel/date,
-    // channels and playlists carry sparse data in flat-playlist mode
-    // so we only show what's reliably present.
-    const meta = kind === "video"
-        ? [
+    // Per-kind meta line — videos show views/duration/channel/date.
+    // For channel/playlist rows, the backend probes a cheap
+    // `--playlist-items 1` per result and surfaces `video_count`
+    // (None on probe failure → falls back to bare "Channel"/"Playlist").
+    let meta;
+    if (kind === "video") {
+        meta = [
             v.view_count != null ? `${fmtCount(v.view_count)} views` : null,
             _durationStr(v),
             v.channel,
             _dateStr(v),
-          ].filter(Boolean).join(" · ")
-        : (kind === "channel"
-            ? "YouTube channel"
-            : "YouTube playlist");
+        ].filter(Boolean).join(" · ");
+    } else {
+        const countPart = v.video_count != null
+            ? `${fmtCount(v.video_count)} video${v.video_count === 1 ? "" : "s"}`
+            : null;
+        const labelPart = kind === "channel" ? "Channel" : "Playlist";
+        meta = [labelPart, countPart].filter(Boolean).join(" · ");
+    }
     const thumb = v.thumbnail
         ? `<img src="${v.thumbnail}" alt="" loading="lazy">` : "";
     const checked = _isSelected(v.id) ? "checked" : "";
