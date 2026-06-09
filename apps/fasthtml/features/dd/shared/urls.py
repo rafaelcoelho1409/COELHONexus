@@ -9,8 +9,7 @@ a slug; every other stage carries the active one when present)."""
 _STAGES = [
     ("catalog",   "Catalog",   "/docs-distiller"),
     ("ingestion", "Ingestion", "/docs-distiller/ingestion"),
-    ("planner",   "Planner",   "/docs-distiller/planner"),
-    ("synth",     "Synth",     "/docs-distiller/synth"),
+    ("pipeline",  "Pipeline",  "/docs-distiller/pipeline"),
     ("study",     "Study",     "/docs-distiller/study"),
 ]
 

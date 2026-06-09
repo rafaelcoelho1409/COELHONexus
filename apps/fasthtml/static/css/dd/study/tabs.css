@@ -54,6 +54,23 @@
   margin: 0 0 14px 0;
   font-size: 0.83rem;
   line-height: 1.55;
+  /* SOTA-2026 indentation fix: preserve tabs + line breaks
+     (`white-space: pre` is the prerequisite for `tab-size` to be
+     honored — without it browsers collapse \\t to a single space).
+     `tab-size: 4` matches the source corpora's PEP-8-style 4-char
+     tab; the browser default of 8 makes Python code look
+     "over-indented". See MDN tab-size, white-space, CommonMark
+     #1165. */
+  white-space: pre;
+  -moz-tab-size: 4;
+  tab-size: 4;
+  /* Explicit monospace stack — `.fw-study-prose` sets Raleway
+     sans-serif on the prose; without an override here the inherited
+     proportional font makes column-aligned ASCII art / table
+     comments drift. */
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular,
+               Menlo, Monaco, Consolas, 'Liberation Mono',
+               'Courier New', monospace;
 }
 .fw-study-prose pre code {
   background: transparent;
@@ -61,6 +78,13 @@
   padding: 0;
   border-radius: 0;
   font-size: inherit;
+  /* Inherit the pre-level whitespace/tab/font handling — declared
+     here defensively so any future `code`-specific overrides don't
+     accidentally strip them. */
+  white-space: inherit;
+  -moz-tab-size: inherit;
+  tab-size: inherit;
+  font-family: inherit;
 }
 .fw-study-prose ul, .fw-study-prose ol {
   margin: 0 0 14px 0;
@@ -84,67 +108,6 @@
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
 }
-
-/* Challenges pane — collapsible details for active recall */
-.fw-study-challenge {
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: rgba(0, 0, 0, 0.015);
-  margin-bottom: 10px;
-  cursor: pointer;
-}
-.fw-study-challenge summary {
-  list-style: none;
-  font-weight: 500;
-  cursor: pointer;
-  display: flex;
-  gap: 12px;
-  align-items: baseline;
-  outline: none;
-}
-.fw-study-challenge summary::-webkit-details-marker { display: none; }
-.fw-study-challenge summary::before {
-  content: '▸';
-  color: var(--primary);
-  font-size: 0.85rem;
-  transition: transform 0.15s;
-  flex-shrink: 0;
-}
-.fw-study-challenge[open] summary::before { transform: rotate(90deg); }
-.fw-study-challenge-num {
-  color: var(--primary);
-  font-weight: 700;
-  flex-shrink: 0;
-  min-width: 1.5em;
-}
-.fw-study-challenge-text { flex: 1; }
-.fw-study-challenge-hint {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--border);
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  font-style: italic;
-}
-
-/* Flashcards pane — flip-card study mode */
-.fw-study-cards {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;       /* vertically centre the card block */
-  gap: 22px;
-  min-height: 66vh;              /* fill the reader so centring is visible */
-  padding: 24px 0;               /* full-bleed width — page padding handles L/R */
-  box-sizing: border-box;
-}
-/* The flashcards pane must be a centred flex column, but .fw-study-pane.active
-   (display:block) outranks .fw-study-cards. Re-assert flex with equal-or-higher
-   specificity so the card actually centres. */
-.fw-study-pane.fw-study-cards.active { display: flex; }
-/* (Old 3D flip-card rules removed 2026-05-28 — replaced by the FSRS
-   reviewer's .fw-fc-* styles below.) */
 
 /* ============================================================
    DD-STUDY-SOTA 2026-05-28 — Study tab upgrades.
@@ -180,15 +143,6 @@
 .fw-study-prose > .fw-empty:only-child {
   max-width: 460px;
 }
-/* Recall block — the active-recall questions, welded to the end of the
-   reading flow (read → then self-test) instead of a separate tab. */
-.fw-study-recall {
-  margin-top: 28px;
-  padding-top: 18px;
-  border-top: 2px solid var(--border);
-  scroll-margin-top: 16px;
-}
-.fw-study-recall:empty { display: none; }
 /* Citation blocks ("Sources for this section:") folded into a collapsed
    <details> by study.js — keeps the prose scannable; sources on demand. */
 .fw-study-prose .fw-study-sources {
@@ -460,134 +414,6 @@
   margin: 0 0 14px 0;
 }
 
-/* ---- flashcard reviewer (FSRS) ---- */
-.fw-fc-head {
-  display: flex;
-  gap: 14px;
-  align-items: center;
-  font-size: 0.74rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-muted);
-}
-.fw-fc-due {
-  color: var(--running-text);
-  background: var(--running-bg);
-  border: 1px solid var(--running-border);
-  border-radius: 999px;
-  padding: 2px 10px;
-  font-weight: 700;
-}
-.fw-fc-card {
-  width: 100%;
-  max-width: none;               /* fill the full reader width */
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--card);
-  box-shadow: 0 1px 10px rgba(0,0,0,0.05);
-  overflow: hidden;
-}
-.fw-fc-face { padding: 22px 24px; }
-.fw-fc-answer { border-top: 1px dashed var(--border); background: rgba(0,0,0,0.015); }
-.fw-fc-facelabel {
-  font-size: 0.64rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-}
-.fw-fc-body {
-  margin-top: 8px;
-  font-size: 1.02rem;
-  line-height: 1.55;
-  color: var(--text);
-}
-.fw-fc-body code {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 0.9em;
-  background: rgba(0,0,0,0.05);
-  padding: 1px 5px;
-  border-radius: 3px;
-}
-.fw-fc-reveal-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.fw-fc-grades {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-  width: 100%;
-  max-width: none;               /* match the full-width card */
-}
-.fw-fc-grade {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 10px 6px;
-  border: 1px solid var(--border);
-  border-top: 3px solid var(--border);   /* grade-hue accent (set per grade) */
-  border-radius: 6px;
-  background: var(--card);
-  font-family: inherit;
-  cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, transform 0.06s;
-}
-.fw-fc-grade:hover { transform: translateY(-1px); }
-.fw-fc-grade-label { font-size: 0.85rem; font-weight: 600; color: var(--text); }
-.fw-fc-grade-ivl { font-size: 0.7rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-/* Wong color-blind-safe grade scale — hue accent always visible (top
-   border), full outline + faint tint on hover. Label + order stay the
-   primary signal. */
-.fw-fc-grade.again { border-top-color: var(--grade-again); }
-.fw-fc-grade.hard  { border-top-color: var(--grade-hard); }
-.fw-fc-grade.good  { border-top-color: var(--grade-good); }
-.fw-fc-grade.easy  { border-top-color: var(--grade-easy); }
-.fw-fc-grade.again:hover { border-color: var(--grade-again); background: color-mix(in srgb, var(--grade-again) 12%, var(--card)); }
-.fw-fc-grade.hard:hover  { border-color: var(--grade-hard);  background: color-mix(in srgb, var(--grade-hard)  12%, var(--card)); }
-.fw-fc-grade.good:hover  { border-color: var(--grade-good);  background: color-mix(in srgb, var(--grade-good)  12%, var(--card)); }
-.fw-fc-grade.easy:hover  { border-color: var(--grade-easy);  background: color-mix(in srgb, var(--grade-easy)  12%, var(--card)); }
-.fw-fc-hint { font-size: 0.76rem; color: var(--text-muted); font-style: italic; }
-.fw-fc-done { display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--text-muted); }
-.fw-fc-done-check {
-  width: 44px; height: 44px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 1.3rem; color: var(--ingested-text);
-  background: var(--ingested-bg); border: 1px solid var(--ingested-border);
-}
-
-/* ---- challenges self-grade ---- */
-.fw-study-challenge {
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--border);
-  border-radius: 4px;
-  margin-bottom: 8px;
-  padding: 4px 4px 8px 4px;
-  transition: border-color 0.12s, background 0.12s;
-}
-.fw-study-challenge[data-grade="got"]    { border-left-color: var(--ingested-border); }
-.fw-study-challenge[data-grade="review"] { border-left-color: var(--notice-border); background: rgba(245,197,96,0.05); }
-.fw-study-challenge-grade {
-  display: flex;
-  gap: 8px;
-  padding: 0 12px;
-}
-.fw-cg-btn {
-  font-size: 0.74rem;
-  font-family: inherit;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--card);
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: all 0.12s;
-}
-.fw-study-challenge[data-grade="got"] .fw-cg-btn.got {
-  color: var(--ingested-text); border-color: var(--ingested-border); background: var(--ingested-bg); font-weight: 600;
-}
-.fw-study-challenge[data-grade="review"] .fw-cg-btn.review {
-  color: var(--notice-text); border-color: var(--notice-border); background: var(--notice-bg); font-weight: 600;
-}
-
 /* ---- sidebar: overall progress + per-chapter studied/due ---- */
 .fw-study-progress {
   display: flex;
@@ -601,19 +427,6 @@
   color: var(--text-muted);
   font-weight: 600;
 }
-.fw-study-chapter-due {
-  flex-shrink: 0;
-  min-width: 18px;
-  text-align: center;
-  font-size: 0.66rem;
-  font-weight: 700;
-  color: var(--running-text);
-  background: var(--running-bg);
-  border: 1px solid var(--running-border);
-  border-radius: 999px;
-  padding: 0 5px;
-}
-
 /* Per-chapter synth wall-clock (sidebar row) + total (sidebar header). */
 .fw-study-chapter-time {
   flex-shrink: 0;
@@ -624,38 +437,10 @@
   color: var(--text-muted);
   opacity: 0.9;
 }
-/* Keep the due badge tight to the time when both are present. */
-.fw-study-chapter-time + .fw-study-chapter-due { margin-left: 6px; }
 .fw-study-total-time {
   font-variant-numeric: tabular-nums;
   font-weight: 700;
   color: var(--text);
-}
-
-/* Cross-chapter "Review due" launcher (sidebar progress header). */
-.fw-study-review-due {
-  font-family: inherit;
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--running-text);
-  background: var(--running-bg);
-  border: 1px solid var(--running-border);
-  border-radius: 999px;
-  padding: 2px 10px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: filter 0.12s;
-}
-.fw-study-review-due:hover { filter: brightness(0.96); }
-/* Current chapter context shown in the flashcard head during global review. */
-.fw-fc-ctx {
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  max-width: 40ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 }

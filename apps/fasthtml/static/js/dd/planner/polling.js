@@ -316,6 +316,14 @@ export async function pollPlannerState(threadId) {
       // clears on explicit Wipe Planner or on the next Start Planner
       // on this slug (which overwrites it).
       refreshPlannerStartState();
+      // Broadcast for the unified Pipeline page's optional auto-chain
+      // handler. Pure DOM event — no coupling to synth code from here.
+      // Listener reads the active slug from the .fw-picker dataset.
+      try {
+        document.dispatchEvent(new CustomEvent('dd:planner:terminal', {
+          detail: { status: status },
+        }));
+      } catch (_) {}
       return;
     }
 

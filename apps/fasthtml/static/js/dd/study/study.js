@@ -1,18 +1,11 @@
-// Study viewer — chapter sidebar, tabs, flashcards, artifact loading.
+// Study viewer — chapter sidebar + README reader (single-mode).
+// 2026-06-08: Active Recall + FSRS Flashcards subsystems removed
+// (`challenges.js`, `flashcards.js`, `flashcards_deps.js`, `../shared/srs.js`
+// deleted). The Learn/Flashcards tab switch is gone; the only reader
+// mode is the README + right-rail TOC pane already in body.py.
+
 import * as Si from '@dd/shared/state/ingestion.js';
 import * as Ss from '@dd/shared/state/study.js';
-
-// _studyTotalWallMs ms-state moved to ./shared.js (Step 1 follow-up,
-// 2026-06-05): chapters.js writes via setStudyTotalWallMs and
-// sidebar.js reads via getStudyTotalWallMs. Used to live as a
-// module-local `let` here but chapters.js + sidebar.js referenced it
-// without an import — latent ReferenceError that surfaced during this
-// pass.
-
-// Flashcard session state (_fcSession / _fcPos / _fcRevealed / _fcCards /
-// _fcGlobal) moved into flashcards.js (Step 1 follow-up, 2026-06-05) —
-// flashcards.js is the sole consumer; the prior declarations here were
-// dead and broke flashcards.js at runtime (ReferenceError).
 
 export function _setStudySideOpen(open) {
   if (Ss.studySideEl) Ss.studySideEl.classList.toggle('open', open);
@@ -57,9 +50,6 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Per-framework state — lives in state/study.js, accessed via per-domain
-// Ss namespace imports (Phase H complete, 2026-06-05).
-
 export function _setStudyStagePill(status, label) {
   if (!Ss.studyPill || !Ss.studyPillText) return;
   const map = {
@@ -96,73 +86,14 @@ export function setStudyFramework(slug) {
   }
 }
 
-
-
-
-// README rendering helpers (_slugifyHeading, _buildReadmeToc,
-// _entryBasename, _postProcessReadme, _loadStudyReadme) extracted to
-// ./readme.js (Step 8, 2026-06-05). _loadStudyArtifact moved to
-// ./shared.js. Re-exported here so consumers using
-// `import { _loadStudyReadme } from './study/study.js'` keep working.
-export {
-  _loadStudyReadme,
-} from './readme.js';
-// 2026-06-06 — re-export-without-local-import bug. `_loadStudyReadme`
-// is referenced at line ~191 inside `registerFlashcardsDeps({...})`
-// (bare identifier passed to the DI registry). Without this local
-// import, study.js throws ReferenceError at module init → study page
-// JS aborts → sidebar empty, chapter open broken.
-import { _loadStudyReadme } from './readme.js';
-// _loadStudyChallenges (challenges-tab renderer + self-grade click
-// delegation) extracted to ./challenges.js (Step 1, 2026-06-05
-// follow-up). The source-file click handler that lives in readme.js
-// (it calls readme.js-private _openSourceFile) was moved with it —
-// it was a latent ReferenceError waiting to fire when invoked from
-// here. Re-exported below to preserve `import { ... }
-// from './study/study.js'` callers.
-export { _loadStudyChallenges } from './challenges.js';
-import { _loadStudyChallenges } from './challenges.js';
-
-// Build the due-card queue for the current chapter. `reviewAll` ignores
-// the FSRS schedule and queues every card (used by the "review all" CTA
-// when nothing is due yet).
-// Flashcards subsystem (_buildFlashcardSession, startGlobalReview,
-// _renderFlashcard, _gradeFlashcard, _mdInline, _loadStudyFlashcards)
-// extracted to ./flashcards.js (Step 5, 2026-06-05 follow-up) using the
-// DI registration pattern. Cross-refs wired via registerFlashcardsDeps
-// after function definitions land in study.js. Re-exports keep main.js
-// + sibling callers resolving without churn.
-export {
-  startGlobalReview,
-  _renderFlashcard,
-  _mdInline,
-  _loadStudyFlashcards,
-} from './flashcards.js';
-import { registerFlashcardsDeps } from './flashcards_deps.js';
-// `startGlobalReview` used at line ~153 (event handler), same re-export
-// bug. Aliased import below would also work but a plain local import
-// reads cleaner here.
-import { startGlobalReview } from './flashcards.js';
-
-
-
-// Tab buttons: simple click delegation
-Ss.studyTabBtns.forEach(btn => {
-  btn.addEventListener('click', () => {
-    _switchStudyTab(btn.dataset.tab || 'learn');
-  });
-});
+// README rendering helpers extracted to ./readme.js.
+export { _loadStudyReadme } from './readme.js';
 
 // Chapter sidebar: event delegation for chapter clicks. Picking a
 // chapter closes the side window so the materials get the full width.
+import { openStudyChapter } from './chapters.js';
 if (Ss.studyChapterListEl) {
   Ss.studyChapterListEl.addEventListener('click', ev => {
-    // Cross-chapter "Review due" — walks every chapter's due cards.
-    if (ev.target.closest('.fw-study-review-due')) {
-      closeStudySide();
-      startGlobalReview();
-      return;
-    }
     const btn = ev.target.closest('.fw-study-chapter');
     if (!btn) return;
     const cid = btn.dataset.chapterId;
@@ -172,45 +103,14 @@ if (Ss.studyChapterListEl) {
   });
 }
 
-// Visibility toggle — show empty-state when no slug active. Also
-// exposed as a function so other code paths (slug click, step nav)
-// can re-trigger after Si.activeSlug changes.
-// (The JS viewport-fit hack was removed 2026-05-28 — the app-shell grid
-// in base.css makes `.page` the scroll region, so the reader fits the
-// viewport via CSS with no measuring.)
-
-// Study-page load is driven by main.js initStudy (per-stage route) —
-// the wizard-era stepFn.showStep(5) hook was removed 2026-05-28.
-
-// Cmd-K cross-chapter search subsystem (overlay + index + Cmd-K/Ctrl-K
-// shortcut + 🔍 button wiring) extracted to ./search.js (Step 2,
-// 2026-06-05 follow-up). Pure side-effect module — no consumers
-// outside the study tree, so it's just imported for its install-time
-// listeners (no re-export needed).
+// Cmd-K cross-chapter search subsystem — pure side-effect module
+// (overlay + index + Cmd-K/Ctrl-K shortcut + 🔍 button wiring).
 import './search.js';
 
-
-// DI registration for flashcards.js (Step 5, 2026-06-05 follow-up). Must
-// run AFTER the 10 dependent functions are defined above. Module-eval
-// semantics guarantee this happens before any user-driven action.
-registerFlashcardsDeps({
-  _setStudyStagePill,
-  _renderStudySidebar,
-  _renderStudyChapterHead,
-  _switchStudyTab,
-  _loadStudyReadme,
-  _loadStudyChallenges,
-  openStudyChapter,
-  loadStudyChapters,
-  refreshStudyVisibility,
-  _scrollReaderTop,
-});
-
-// Re-exports for backward compat (Step 2 follow-up extractions).
+// Sidebar + chapter re-exports for backward compat.
 export {
   _renderStudySidebar,
   _renderStudyChapterHead,
-  _switchStudyTab,
 } from './sidebar.js';
 export {
   _scrollReaderTop,
@@ -218,41 +118,26 @@ export {
   loadStudyChapters,
   refreshStudyVisibility,
 } from './chapters.js';
-// Local-scope imports — same re-export-without-import bug pattern.
-// These are referenced as bare identifiers at:
-//   line ~142: _switchStudyTab(...)          — tab-button click handler
-//   line ~160: openStudyChapter(...)         — chapter-button click handler
-//   lines ~188-196: inside registerFlashcardsDeps({...}) — module init
-// Without these imports, study.js throws ReferenceError at module init,
-// killing the whole study page (sidebar empty, chapters not loadable).
 import {
   _renderStudySidebar,
   _renderStudyChapterHead,
-  _switchStudyTab,
 } from './sidebar.js';
 import {
   _scrollReaderTop,
-  openStudyChapter,
   loadStudyChapters,
   refreshStudyVisibility,
 } from './chapters.js';
 
-// DI registration for sidebar.js + chapters.js — must run AFTER the
-// 12 dependent functions are defined above. The aliased-as-shortname
-// imports that used to live here (_rss / _rsch / _sst / _osc / _sgr)
-// were removed 2026-06-06 — those same symbols are now imported with
-// their canonical names at the local-scope import block above, so the
-// aliases were redundant (and obscured the call sites).
+// DI registration for sibling modules — runs after the dependent
+// functions are defined above. Module-eval ordering guarantees this
+// happens before any user-driven action.
 import { registerStudyDeps } from './study_deps.js';
 registerStudyDeps({
   closeStudySide,
   openStudyChapter,
-  startGlobalReview,
   _setStudyStagePill,
   _renderStudySidebar,
   _renderStudyChapterHead,
-  _switchStudyTab,
   setStudyFramework,
-  _loadStudyChallenges,
   _setStudySideOpen,
 });

@@ -241,11 +241,15 @@ export function renderSidebar(items) {
         if (Si.activeSlug === slug) {
           Si.setActiveSlug(null);
           // Step 2 (Ingestion) — the file grid the user is most likely
-          // looking at when they delete.
+          // looking at when they delete. Summary line + the explorer
+          // split-pane (left tree + right preview) both reset.
           if (Si.step2Summary) Si.step2Summary.innerHTML = '';
-          if (Si.step2Grid) Si.step2Grid.innerHTML =
-            '<div class="fw-empty">Pick a framework in the catalog or ' +
-            'the sidebar to see its downloaded files.</div>';
+          try {
+            const { resetExplorer } = await import(
+              '@dd/ingestion/explorer.js',
+            );
+            resetExplorer();
+          } catch (_) { /* explorer module absent on non-DD pages */ }
           // Hide the live progress box if a previous run left it open.
           if (Si.progressBox) Si.progressBox.style.display = 'none';
           // Legacy Step 3 page-grid (element may be absent post 2026-05-19

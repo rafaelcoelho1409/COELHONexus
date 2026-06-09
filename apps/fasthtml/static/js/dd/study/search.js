@@ -12,7 +12,8 @@ import { escapeHtml } from '../shared/utils.js';
 import { _loadStudyArtifact } from './shared.js';
 import { _slugifyHeading } from './readme.js';
 import { openStudyChapter } from './chapters.js';
-import { _switchStudyTab } from './sidebar.js';
+// _switchStudyTab was removed with the Active Recall + Flashcards
+// subsystems (2026-06-08) — there's only one pane now.
 
 let _searchIndex = null;
 let _searchBuilt = false;
@@ -103,7 +104,7 @@ function _ensureSearchOverlay() {
     const hit = _searchHits[i];
     if (!hit) return;
     closeSearch();
-    _switchStudyTab('learn');   // results live in the reading pane
+    // Single-pane reader now — no tab switch needed.
     await openStudyChapter(hit.cid);
     if (hit.hid) {
       const el = document.getElementById(hit.hid);
@@ -131,17 +132,60 @@ function _ensureSearchOverlay() {
 }
 
 export async function openSearch() {
-  if (!Si.activeSlug || !Ss.studyChapters.length) return;
+  // 2026-06-08: always open the overlay so the button click has
+  // visible feedback even before chapters are loaded. The previous
+  // silent early-return on `!Ss.studyChapters.length` made the button
+  // look broken when clicked during the initial chapter fetch (or
+  // when navigating between frameworks). Empty-state messages inside
+  // the overlay now carry the "not ready" signal; the index builds
+  // (or rebuilds) on demand once chapters arrive.
   const ov = _ensureSearchOverlay();
   ov.classList.add('open');
   const input = ov.querySelector('.fw-study-search-input');
   input.value = '';
   _searchHits = []; _searchSel = 0;
-  ov.querySelector('.fw-study-search-results').innerHTML =
-    '<div class="fw-study-search-empty">Indexing chapters…</div>';
+  const resultsEl = ov.querySelector('.fw-study-search-results');
   input.focus();
+  // Branch by readiness — surface the actual gate to the user.
+  if (!Si.activeSlug) {
+    resultsEl.innerHTML =
+      '<div class="fw-study-search-empty">Pick a framework first ' +
+      '(the Library picker, top of the page).</div>';
+    return;
+  }
+  if (!Ss.studyChapters.length) {
+    resultsEl.innerHTML =
+      '<div class="fw-study-search-empty">Chapters still loading — ' +
+      'try again in a second.</div>';
+    // Best-effort retry: re-open once chapters land. Caps at 2 retries
+    // so a slug with no rendered chapters doesn't spin forever.
+    let tries = 0;
+    const tick = () => {
+      if (tries++ > 6) return;
+      if (!Ss.studyChapters.length) {
+        setTimeout(tick, 500);
+        return;
+      }
+      // Chapters arrived — kick off indexing if the overlay is still open.
+      if (ov.classList.contains('open')) {
+        resultsEl.innerHTML =
+          '<div class="fw-study-search-empty">Indexing chapters…</div>';
+        _buildSearchIndex().then(() => {
+          if (ov.classList.contains('open') && !_searchHits.length) {
+            resultsEl.innerHTML =
+              '<div class="fw-study-search-empty">' +
+              'Type to search every chapter.</div>';
+          }
+        }).catch(() => {});
+      }
+    };
+    setTimeout(tick, 500);
+    return;
+  }
+  resultsEl.innerHTML =
+    '<div class="fw-study-search-empty">Indexing chapters…</div>';
   await _buildSearchIndex();
-  ov.querySelector('.fw-study-search-results').innerHTML =
+  resultsEl.innerHTML =
     '<div class="fw-study-search-empty">Type to search every chapter.</div>';
 }
 export function closeSearch() {

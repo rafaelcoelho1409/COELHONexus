@@ -1,65 +1,97 @@
-"""Source · Channel mode — paste channel @handles/URLs/IDs, dispatch
-one Celery extract per channel. POST `/api/v1/ycs/content/channel`.
+"""Source · Channel mode — paste ONE channel, browse + pick a subset of
+its videos, dispatch the SELECTED video_ids to `/content/videos/pipeline`.
 
-Sequential batch shape (June 2026 refactor) — mirrors the Videos tab:
-  - Textarea for bulk paste, one per line (or CSV/whitespace-separated).
-  - Each line parses → chip with status glyph (✓ valid channel /
-    × unrecognized) and live count above.
-  - Drag-drop .txt/.csv onto the textarea.
-  - Submit fires N POSTs in parallel — one Celery task per channel —
-    and redirects to the Ingest step on the first returned task id.
-  - max_results + transcripts collapsed under `Options ▸`.
+Replaces the paste-many textarea (June 2026 redesign): the smallest unit
+of work is a video, and queuing thousands of videos across multiple
+channels at once was easy to do by accident. Now one channel at a time,
+with an explicit table picker (master checkbox + per-row + title filter
++ Load more) so the user always sees exactly what they're queuing.
 
-The Search tab's bulk action bar pushes selected channels here via
-`ycs:route` (only items whose `kind === "channel"` are routed)."""
+SOTA shape per the parallel WebSearches: PatternFly / Helios / Carbon
+converge on master+row checkbox + indeterminate state for partial
+selection; NN/g + UXdivers recommend pagination over infinite scroll
+for selection (which is a TASK, not browsing); Wipelist confirms the
+single-source view + total count + search idiom for YouTube playlist
+management at scale."""
 from __future__ import annotations
 
-from fasthtml.common import Button, Div, Form, P, Textarea
+from fasthtml.common import Button, Div, Form, Input
 
-from .widgets import _OptionsCollapse, _TranscriptOptions
+from .widgets import _InfoPopover, _StickyOptionsBar
 
 
 def ChannelTab():
     return Div(
-        P(
-            "Paste channel @handles, URLs, or IDs — one per line, or "
-            "comma-separated. Drop a .txt or .csv too. Each channel is "
-            "queued as its own background task.",
-            cls = "ycs-tab-hint",
-        ),
         Form(
-            Textarea(
-                name        = "channel_ids",
-                id          = "ycs-channel-input",
-                placeholder = (
-                    "@anthropicai\n"
-                    "https://www.youtube.com/@openai\n"
-                    "UC_x5XG1OV2P6uZZ5FSM9Ttw"
-                ),
-                rows        = "6",
-                cls         = "ycs-input ycs-textarea",
-                required    = True,
-            ),
+            # Sticky URL row — pins input + Fetch button to the top
+            # while the picker scrolls. Mirrors the Search tab's
+            # `.ycs-search-sticky` pattern.
             Div(
-                Div("", cls = "ycs-paste-count", id = "ycs-channel-count"),
-                Div("", cls = "ycs-paste-chips", id = "ycs-channel-chips"),
-                cls = "ycs-paste-preview",
-                id  = "ycs-channel-preview",
+                Div(
+                    Input(
+                        type        = "text",
+                        name        = "channel_id",
+                        id          = "ycs-channel-input",
+                        placeholder = "@anthropicai · https://www.youtube.com/@openai · UC_x5XG1OV2P6uZZ5FSM9Ttw",
+                        cls         = "ycs-input",
+                        required    = True,
+                        autocomplete = "off",
+                    ),
+                    Div(
+                        _InfoPopover(
+                            "Paste ONE channel — `@handle`, channel URL, or "
+                            "`UC…` ID. Click Fetch videos to load its uploads "
+                            "playlist, then select which videos to ingest.",
+                        ),
+                        Button(
+                            "Fetch videos",
+                            type = "submit",
+                            cls  = "btn-primary",
+                            id   = "ycs-channel-fetch",
+                        ),
+                        cls = "ycs-source-row-actions",
+                    ),
+                    cls = "ycs-source-row",
+                ),
+                cls = "ycs-source-sticky",
+            ),
+            # The picker container — JS (picker.js) renders the table,
+            # filter, Load-more, and bottom action bar into this DOM
+            # once the fetch succeeds. Empty + hidden by default.
+            Div(
+                id  = "ycs-channel-picker",
+                cls = "ycs-picker",
                 data_state = "empty",
             ),
-            _OptionsCollapse(
-                _TranscriptOptions(
-                    "channel",
+            # Sticky action bar — transcript options + Start Ingestion
+            # docked to the viewport bottom while the picker scrolls.
+            # Status div lives INSIDE the sticky bar so dispatch errors
+            # surface right next to the button that triggered them.
+            # Button is enabled by picker.js only when selection ≥ 1.
+            _StickyOptionsBar(
+                "channel",
+                Button(
+                    "Start Ingestion",
+                    type = "submit",
+                    cls  = "btn-primary",
+                    disabled = True,
+                    id = "ycs-channel-submit",
+                    formnovalidate = True,  # picker submit, not fetch
+                ),
+                status_id = "ycs-channel-status",
+                extra_actions = (
                     Button(
-                        "Start ingest",
-                        type = "submit",
-                        cls  = "btn-primary",
+                        "Ingest all",
+                        type = "button",
+                        cls  = "ycs-sticky-bar-ingest-all",
                         disabled = True,
-                        id = "ycs-channel-submit",
+                        id = "ycs-channel-ingest-all",
+                        title = (
+                            "Queue every video in the channel, bypassing the "
+                            "100-per-page picker cap."
+                        ),
                     ),
                 ),
-                Div("", id = "ycs-channel-status", cls = "ycs-search-status"),
-                prefix = "channel",
             ),
             id = "ycs-channel-form",
         ),

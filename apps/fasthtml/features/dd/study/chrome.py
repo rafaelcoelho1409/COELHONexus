@@ -1,26 +1,16 @@
-"""Study toolbar pieces — mode switch + search/focus utilities.
+"""Study toolbar pieces — chapter-drawer toggle + search/focus utilities.
 
-Reader-mode switch (Learn / Flashcards) + the mobile chapter-drawer
-toggle, relocated to the row-3 toolbar (2026-05-28). IDs/classes are
-preserved so study.js bindings (S.studyTabBtns, #fw-study-toc-toggle)
-keep working unchanged. ☰ Chapters is hidden on desktop via CSS; the
-Learn/Flashcards pair renders as a segmented control."""
-from fasthtml.common import Button, Div
+The Learn/Flashcards mode switch was removed 2026-06-08 along with the
+Active Recall + FSRS Flashcards subsystems. ☰ Chapters is hidden on
+desktop via CSS — the chapter rail is in-flow there."""
+from fasthtml.common import Button
 
 
 def StudyTabs():
-    return Div(
-        Button("☰ Chapters", id = "fw-study-toc-toggle",
-               cls = "fw-study-toc-toggle", type = "button",
-               title = "Show chapters"),
-        Div(
-            Button("Learn", cls = "fw-study-tab active",
-                   data_tab = "learn", type = "button"),
-            Button("Flashcards", cls = "fw-study-tab",
-                   data_tab = "flashcards", type = "button"),
-            cls = "fw-study-modes", role = "tablist",
-        ),
-        cls = "fw-study-toolgroup",
+    return Button(
+        "☰ Chapters", id = "fw-study-toc-toggle",
+        cls = "fw-study-toc-toggle", type = "button",
+        title = "Show chapters",
     )
 
 

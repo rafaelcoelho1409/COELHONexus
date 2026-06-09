@@ -1,17 +1,13 @@
 // study/chapters.js — open / load / scroll-to-top / visibility-refresh
-// for chapter content. Extracted from study.js Step 2 (2026-06-05
-// follow-up). DI deps for cross-refs back to study.js.
+// for chapter content. 2026-06-08: stripped of all Active Recall +
+// Flashcards loading paths. README is the sole artifact loaded per
+// chapter; the right-rail TOC builds from its headings.
 import * as Sa from '@dd/shared/state/api.js';
 import * as Si from '@dd/shared/state/ingestion.js';
 import * as Ss from '@dd/shared/state/study.js';
-import { fmtMs, showElapsed } from '../shared/timing.js';
-import * as srs from '../shared/srs.js';
-import {
-  _loadStudyArtifact,
-  setStudyTotalWallMs,
-} from './shared.js';
+import { showElapsed } from '../shared/timing.js';
+import { setStudyTotalWallMs } from './shared.js';
 import { _loadStudyReadme, _buildReadmeToc } from './readme.js';
-import { _loadStudyFlashcards } from './flashcards.js';
 import { deps as studyDeps } from './study_deps.js';
 
 export function _scrollReaderTop() {
@@ -28,10 +24,6 @@ export async function openStudyChapter(cid) {
     Ss.studyReadmeEl.innerHTML =
       '<div class="fw-empty">This chapter has not been synthesized yet. ' +
       'Run Synth on this chapter first.</div>';
-    Ss.studyChallengesEl.innerHTML =
-      '<div class="fw-empty">No challenges available — chapter not synthesized.</div>';
-    Ss.studyFlashcardsEl.innerHTML =
-      '<div class="fw-empty">No flashcards available — chapter not synthesized.</div>';
     _scrollReaderTop();
     return;
   }
@@ -40,18 +32,8 @@ export async function openStudyChapter(cid) {
   studyDeps._renderStudySidebar?.();   // re-render to update active highlight
   studyDeps._renderStudyChapterHead?.(ch);
   studyDeps._setStudyStagePill?.('working', 'Loading…');
-  // Fire all three loads in parallel
-  await Promise.all([
-    _loadStudyReadme(Si.activeSlug, cid),
-    studyDeps._loadStudyChallenges?.(Si.activeSlug, cid),
-    _loadStudyFlashcards(Si.activeSlug, cid),
-  ]);
-  // Both prose + recall are now in the DOM — rebuild the TOC so it
-  // includes the "↻ Recall questions" jump link.
+  await _loadStudyReadme(Si.activeSlug, cid);
   _buildReadmeToc();
-  // Opening + loading a rendered chapter counts as "studied" — mark it
-  // and re-render the sidebar so the ✓ + progress update immediately.
-  srs.markChapterStudied(Si.activeSlug, cid, true);
   studyDeps._renderStudySidebar?.();
   studyDeps._setStudyStagePill?.('done', 'Reading · ' + (ch.title || cid));
   _scrollReaderTop();   // new chapter always starts at the top
@@ -84,9 +66,20 @@ export async function loadStudyChapters(slug) {
     showElapsed('synth', data.study_total_wall_ms || 0);
     Ss.setStudyLoadedSlug(slug);
     studyDeps._renderStudySidebar?.();
-    // Auto-open the first rendered chapter (if any) so the user
-    // immediately sees content instead of an empty pane.
-    const firstReady = Ss.studyChapters.find(c => c.rendered);
+    // Deep-link support (2026-06-08): if `?chapter=cid` is in the URL
+    // AND that chapter is rendered, open it instead of the auto-first.
+    // Used by the Pipeline page's per-chapter "Open in Study" button.
+    let target = null;
+    try {
+      const wantCid = new URLSearchParams(window.location.search).get('chapter');
+      if (wantCid) {
+        const match = Ss.studyChapters.find(c => c.id === wantCid && c.rendered);
+        if (match) target = match;
+      }
+    } catch (_) {}
+    // Fall back to the first rendered chapter so the user always sees
+    // content instead of an empty pane.
+    const firstReady = target || Ss.studyChapters.find(c => c.rendered);
     if (firstReady) {
       await openStudyChapter(firstReady.id);
     } else {
@@ -109,9 +102,8 @@ export function refreshStudyVisibility() {
   if (!Si.activeSlug) {
     Ss.studyEmptyEl.style.display = '';
     Ss.studyGridEl.style.display = 'none';
-    return;
+  } else {
+    Ss.studyEmptyEl.style.display = 'none';
+    Ss.studyGridEl.style.display = '';
   }
-  Ss.studyEmptyEl.style.display = 'none';
-  Ss.studyGridEl.style.display = '';
 }
-

@@ -42,6 +42,29 @@ class PlaylistRequest(BaseModel):
     transcription_languages: list[NonEmptyStr] | None = None
 
 
+class ChannelPipelineRequest(BaseModel):
+    """`POST /content/channel/pipeline` — enumerate ALL videos in the
+    channel server-side, then dispatch the 3-phase pipeline against
+    every video_id. Bypasses the 100-per-page picker cap on the
+    Source · Channel tab."""
+    model_config = ConfigDict(extra = "forbid")
+
+    channel_id:              NonEmptyStr
+    include_transcription:   bool = True
+    transcription_languages: list[NonEmptyStr] | None = None
+
+
+class PlaylistPipelineRequest(BaseModel):
+    """`POST /content/playlist/pipeline` — enumerate ALL videos in the
+    playlist server-side, then dispatch the 3-phase pipeline. Same
+    shape as ChannelPipelineRequest."""
+    model_config = ConfigDict(extra = "forbid")
+
+    playlist_id:             NonEmptyStr
+    include_transcription:   bool = True
+    transcription_languages: list[NonEmptyStr] | None = None
+
+
 class VideoMetadata(BaseModel):
     """Per-video record returned by the extractor. Mirror of deprecated
     `helpers.py:L441-531` (`YtDlpExtractor._normalize_video`)."""

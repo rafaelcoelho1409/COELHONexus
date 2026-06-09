@@ -140,7 +140,11 @@ HEAD = (
     Link(rel = "stylesheet", href = "/static/css/dd/ingestion/layout.css"),
     Link(rel = "stylesheet", href = "/static/css/dd/ingestion/library.css"),
     Link(rel = "stylesheet", href = "/static/css/dd/ingestion/progress.css"),
-    Link(rel = "stylesheet", href = "/static/css/dd/ingestion/pages.css"),
+    # explorer.css replaces the legacy pages.css flat-grid styles
+    # (2026-06-08) — the Ingestion page is now a split-pane docs
+    # explorer with search/filter/tree on the left and live markdown
+    # preview on the right.
+    Link(rel = "stylesheet", href = "/static/css/dd/ingestion/explorer.css"),
     # planner.css split per-section (Phase B+1, 2026-06-05): drawer +
     # cards + canvas.
     Link(rel = "stylesheet", href = "/static/css/dd/planner/drawer.css"),
@@ -151,6 +155,11 @@ HEAD = (
     # needs its own @scope. Leaving it under `.fw-study-pane` would have
     # silently broken the chapter-strip styles.
     Link(rel = "stylesheet", href = "/static/css/dd/synth/chstrip.css"),
+    # pipeline.css — unified Planner + Synth page layout (2026-06-08).
+    # Stacks the two Cytoscape canvases vertically on the left, chstrip
+    # on the right. Each zone is tinted (primary for planner, ingested-
+    # green for synth) so the user can tell at a glance which is which.
+    Link(rel = "stylesheet", href = "/static/css/dd/pipeline/pipeline.css"),
     # study.css split per-section (Phase 1, 2026-06-05): layout +
     # sidebar + rail + reader + tabs.
     Link(rel = "stylesheet", href = "/static/css/dd/study/layout.css"),

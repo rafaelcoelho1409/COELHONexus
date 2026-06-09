@@ -15,6 +15,11 @@ MAX_CONCURRENT = 10
 # fetch_count entries, --flat-playlist).
 TIMEOUT_S = 60.0
 SEARCH_TIMEOUT_S = 90.0
+# Enumerate-all (Ingest-all on Channel/Playlist tabs): walks the full
+# source for IDs only. Typical 1-2k-video channels finish in 10-30s;
+# 300s gives headroom for ~30k-video channels without leaking blocked
+# request workers when a user pastes a truly huge channel.
+ENUMERATE_ALL_TIMEOUT_S = 300.0
 # stdout buffer for `asyncio.create_subprocess_exec(limit=...)` — yt-dlp
 # `--dump-single-json` on a 50-result search can emit ~5-10 MB. 32 MB
 # leaves plenty of headroom for full-playlist extractions.

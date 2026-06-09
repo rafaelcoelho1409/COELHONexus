@@ -3,9 +3,7 @@ from __future__ import annotations
 
 
 VALID_ARTIFACTS = {
-    "README.md":       "text/markdown; charset=utf-8",
-    "challenges.md":   "text/markdown; charset=utf-8",
-    "flashcards.json": "application/json",
+    "README.md": "text/markdown; charset=utf-8",
 }
 
 

@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from .versions import RENDER_SCHEMA_VERSION, RENDER_TEMPLATE_VERSION
 
 
-ArtifactName = Literal["README.md", "challenges.md", "flashcards.json"]
+ArtifactName = Literal["README.md"]
 
 
 class RenderedArtifact(BaseModel):
@@ -64,15 +64,14 @@ class AuditResult(BaseModel):
 class RenderResult(BaseModel):
     """Full render result — what gets persisted as render-latest.json.
 
-    The three CONTENT artifacts (README.md / challenges.md /
-    flashcards.json) live alongside this metadata blob in the same
-    chapter prefix."""
+    The README.md content artifact lives alongside this metadata blob in
+    the same chapter prefix."""
     schema_version:        str = RENDER_SCHEMA_VERSION
     template_version:      str = RENDER_TEMPLATE_VERSION
     chapter_id:            str
     chapter_title:         str
     framework_slug:        str
-    artifacts:             list[RenderedArtifact]   # 3 entries
+    artifacts:             list[RenderedArtifact]   # 1 entry (README.md)
     audit:                 AuditResult
     rendered_chars:        int                       # README.md size
     n_sections:            int

@@ -17,54 +17,52 @@ import {
 } from '../shared/ui.js';
 import { setProgressFramework } from '../catalog/picker.js';
 import { navigateToStage } from '../shared/nav.js';
+import { buildExplorer } from './explorer.js';
 
 // ============================================================
-// Step 3: render manifest entries into the page grid
+// Manifest render — populates the summary line + drives the split-pane
+// explorer (left rail tree + right pane preview). The 2026-06-08
+// redesign replaced the flat `#fw-step2-grid` list with the explorer;
+// callers can keep using `renderManifest(m)` unchanged.
 // ============================================================
 
-export function renderManifestTo(summaryEl, gridEl, m) {
-  // gridEl may be null — Step 3 became the Planner (page grid removed
-  // 2026-05-19), so `#fw-page-grid` no longer exists. Guard both targets
-  // so a missing element silently no-ops instead of throwing (which would
-  // abort the Step 2 render that follows in renderManifest).
+function _renderSummary(summaryEl, m) {
+  if (!summaryEl) return;
+  if (!m || !m.entries) { summaryEl.innerHTML = ''; return; }
+  summaryEl.innerHTML =
+    '<span><strong>' + (m.framework_name || Si.activeSlug) +
+    '</strong> · ' + (m.entries.length) + ' pages · ' +
+    fmtBytes(m.total_bytes || 0) + '</span>' +
+    '<span>' + (m.tier_kind || '') + ' · ' +
+    fmtAge(m.ingested_at) + '</span>';
+}
+
+// Back-compat shim. The legacy signature was
+// `renderManifestTo(summaryEl, gridEl, m)`; the grid is now driven by
+// the explorer, so we only honour the summary half. Callers like
+// `planner/lifecycle.js` that imported this no-op on Planner/Synth
+// pages (no summary element rendered) and that's intentional.
+export function renderManifestTo(summaryEl, _gridElIgnored, m) {
   if (!m || !m.entries) {
-    if (gridEl) gridEl.innerHTML =
-      '<div class="fw-empty">Manifest unavailable.</div>';
     if (summaryEl) summaryEl.innerHTML = '';
     return;
   }
-  // Track the current entry list so the drawer's prev/next + click
-  // delegation walk the same list the user is looking at.
   So.setCurrentManifestEntries(m.entries);
-  if (summaryEl) {
-    summaryEl.innerHTML =
-      '<span><strong>' + (m.framework_name || Si.activeSlug) + '</strong> · ' +
-      (m.entries.length) + ' pages · ' + fmtBytes(m.total_bytes || 0) + '</span>' +
-      '<span>' + (m.tier_kind || '') + ' · ' + fmtAge(m.ingested_at) + '</span>';
-  }
-  // `data-idx` MUST be the ARRAY POSITION in `m.entries`, NOT the
-  // entry's stored `e.idx` field. The two diverged once `reorder_by_
-  // url_list` shipped (Tier 2/3/4 fetch in completion order but the
-  // manifest is sorted by URL post-fetch — entries.array_position !=
-  // entry.idx). The drawer's openDrawer(idx) + drawerStep(±1) +
-  // currentManifestEntries[idx] semantics all assume array position;
-  // study.js's source-index map (study.js:_ensureSourceIndex) also
-  // stores array positions — using `i` keeps every caller aligned.
-  // The entry's storage idx is still available as `e.idx` inside the
-  // drawer (renderDrawerContent reads it for the `/pages/{e.idx}`
-  // fetch URL), so backend addressing is unaffected.
-  if (gridEl) gridEl.innerHTML = m.entries.map((e, i) =>
-    '<div class="fw-page-card" data-idx="' + i + '">' +
-    '<div class="fw-page-title">' + (e.title || e.slug) + '</div>' +
-    '<div class="fw-page-meta">' + (e.tier || '') + ' · ' + fmtBytes(e.bytes) + '</div>' +
-    '</div>'
-  ).join('');
+  _renderSummary(summaryEl, m);
 }
 
-// Backward-compat wrapper — historical callers target Step 3.
 export function renderManifest(m) {
-  renderManifestTo(Si.pagesSummary, Si.pageGrid, m);
-  renderManifestTo(Si.step2Summary, Si.step2Grid, m);
+  // Summary line (legacy ID kept for library/sidebar.js reset code).
+  _renderSummary(Si.step2Summary, m);
+  // Explorer split-pane: only present on the Ingestion route, so the
+  // build is a no-op everywhere else.
+  if (document.getElementById('fw-explorer-tree')) {
+    buildExplorer(m);
+  } else if (m && m.entries) {
+    // Non-explorer pages still want the drawer's source-index map for
+    // citation pop-ups (Study) — keep currentManifestEntries in sync.
+    So.setCurrentManifestEntries(m.entries);
+  }
 }
 
 export async function loadManifestForSlug(slug, opts = {}) {

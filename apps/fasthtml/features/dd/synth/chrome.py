@@ -27,7 +27,7 @@ def SynthActions():
     return Div(
         Button("Wipe synth", id = "fw-synth-wipe",
                cls = "btn-outline", disabled = True),
-        Button("Start Synth", id = "fw-synth-start",
+        Button("Start", id = "fw-synth-start",
                cls = "btn-primary"),
         cls = "fw-planner-head-actions",
     )

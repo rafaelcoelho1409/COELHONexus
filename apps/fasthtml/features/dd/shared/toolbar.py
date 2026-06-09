@@ -5,6 +5,7 @@ grid IS the framework list; ingested ones are green-badged inline)."""
 from fasthtml.common import Div
 
 from ..catalog.chrome import CatalogSearch, CategoryFilter
+from ..pipeline.chrome import PipelineActions
 from ..planner.chrome import PlannerActions, PlannerPill
 from ..study.chrome import StudyTabs, StudyViewButtons
 from ..synth.chrome import SynthActions, SynthPill
@@ -15,6 +16,14 @@ def StageToolbar(active_stage: str, slug: str | None,
                  catalog: list[dict] | None = None):
     if active_stage == "catalog":
         left = [CatalogSearch(catalog), CategoryFilter(catalog)]
+    elif active_stage == "ingestion":
+        # Row 3 summary line for Ingestion (2026-06-08): the manifest
+        # render writes `#fw-step2-summary` (same element ID as before
+        # — the body version is removed), so JS in
+        # `manifest.js:_renderSummary` keeps targeting the same selector.
+        # Empty by default; populated once `loadManifestForSlug` resolves.
+        left = [Div("", id = "fw-step2-summary",
+                    cls = "fw-explorer-summary")]
     elif active_stage == "planner":
         left = [PlannerActions(), PlannerPill()]
     elif active_stage == "synth":
@@ -23,6 +32,11 @@ def StageToolbar(active_stage: str, slug: str | None,
         # pill after the actions so the running-chapter status reads
         # next to where the user's eye lands after clicking Start.
         left = [SynthActions(), SynthPill()]
+    elif active_stage == "pipeline":
+        # Unified Planner + Synth page (2026-06-08). Per-stage controls
+        # stay separate; PipelineActions packs both clusters side-by-side
+        # with a → arrow indicating Planner-then-Synth flow.
+        left = [PipelineActions()]
     elif active_stage == "study":
         left = [StudyTabs()]
     else:

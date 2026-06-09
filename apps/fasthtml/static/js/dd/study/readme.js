@@ -31,22 +31,13 @@ export function _buildReadmeToc() {
   if (heads.length < 2) { toc.innerHTML = ''; toc.style.display = 'none'; return; }
   toc.style.display = '';
   heads.forEach((h, i) => { if (!h.id) h.id = _slugifyHeading(h.textContent, i); });
-  // Welded recall block lives in the same scroll — give the TOC a jump
-  // link to it when it has questions (it uses an <h1>, so it isn't in the
-  // h2/h3 scan above).
-  const recallEl = document.querySelector('#fw-study-challenges');
-  const hasRecall = recallEl && recallEl.querySelector('.fw-study-challenge');
-  const recallLink = hasRecall
-    ? '<a href="#fw-study-challenges" class="fw-study-toc-link recall" ' +
-      'data-target="fw-study-challenges">↻ Recall questions</a>'
-    : '';
   toc.innerHTML =
     '<div class="fw-study-toc-title">On this page</div>' +
     heads.map(h =>
       '<a href="#' + h.id + '" class="fw-study-toc-link ' +
       h.tagName.toLowerCase() + '" data-target="' + h.id + '">' +
       escapeHtml(h.textContent || '') + '</a>'
-    ).join('') + recallLink;
+    ).join('');
   // App-shell: the scroll container is `.page` (the 1fr grid row), so the
   // observer root must be `.page` (else scroll-spy never fires). rootMargin
   // shrinks the active band to the top slice of that scroll region.

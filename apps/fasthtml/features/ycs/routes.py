@@ -1,8 +1,8 @@
 """YCS — three stage routes for the wizard.
 
-  GET /youtube-content-search          → Step 1 · Source
-  GET /youtube-content-search/ingest   → Step 2 · Ingest
-  GET /youtube-content-search/ask      → Step 3 · Ask
+  GET /youtube-content-search             → Step 1 · Source
+  GET /youtube-content-search/ingestion   → Step 2 · Ingestion
+  GET /youtube-content-search/ask         → Step 3 · Ask
 
 Each stage has its own URL so users can bookmark + browser
 back/forward. The shell renders the row-2 stage tab strip via
@@ -43,14 +43,19 @@ def register(rt) -> None:
             body = YCSPage("source", slug, SourceBody(slug)),
         )
 
-    @rt("/youtube-content-search/ingest")
-    def ycs_ingest(req: Request):
+    @rt("/youtube-content-search/ingestion")
+    def ycs_ingestion(req: Request):
+        # Stage key "ingestion" matches DD's stage key + URL exactly
+        # (was "ingest" / "/ingest" pre-2026-06-08 rename). The
+        # underlying Python module path `features/ycs/ingest/` is
+        # unchanged — internal-only and renaming would touch dozens
+        # of imports with no user-visible benefit.
         slug = _slug_from_request(req)
         return _Shell(
             "youtube-content-search",
-            subnav_row = StageSubNav("ingest", slug),
-            toolbar_row = StageToolbar("ingest", slug),
-            body = YCSPage("ingest", slug, IngestBody(slug)),
+            subnav_row = StageSubNav("ingestion", slug),
+            toolbar_row = StageToolbar("ingestion", slug),
+            body = YCSPage("ingestion", slug, IngestBody(slug)),
         )
 
     @rt("/youtube-content-search/ask")

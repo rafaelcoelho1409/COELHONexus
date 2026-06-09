@@ -16,7 +16,7 @@ switch (stage) {
     case "source":
         await import("@ycs/source.js");
         break;
-    case "ingest":
+    case "ingestion":
         await import("@ycs/ingest.js");
         await import("@ycs/ingest/library.js");
         break;

@@ -174,7 +174,7 @@ export function refreshSynthStartState() {
     Sy.synthStartBtn.removeAttribute('disabled');
     Sy.synthStartBtn.classList.add('btn-outline');
     Sy.synthStartBtn.classList.remove('btn-primary');
-    Sy.synthStartBtn.innerHTML = 'Stop Synth';
+    Sy.synthStartBtn.innerHTML = 'Stop';
   } else {
     const hasNodes = Sy.synthImplemented && Sy.synthImplemented.size > 0;
     // Synth REQUIRES a planner plan — block Start until one exists for
@@ -221,7 +221,7 @@ export function refreshSynthStartState() {
     _cells.forEach((c) => { if (c.dataset.status === 'done') _rendered++; });
     const _partial = _cells.length > 0 && _rendered > 0
                      && _rendered < _cells.length;
-    Sy.synthStartBtn.innerHTML = _partial ? 'Resume Synth' : 'Start Synth';
+    Sy.synthStartBtn.innerHTML = _partial ? 'Resume' : 'Start';
     if (ready && _partial) {
       Sy.synthStartBtn.setAttribute('title',
         'Resume — keeps completed chapters; re-runs only the unfinished '
@@ -624,13 +624,13 @@ export async function cancelSynth() {
     } else {
       clearTimeout(safetyTimer);
       Sy.synthStartBtn.removeAttribute('disabled');
-      Sy.synthStartBtn.innerHTML = 'Stop Synth';
+      Sy.synthStartBtn.innerHTML = 'Stop';
       showToast('Stop request failed: HTTP ' + r.status);
     }
   } catch (e) {
     clearTimeout(safetyTimer);
     Sy.synthStartBtn.removeAttribute('disabled');
-    Sy.synthStartBtn.innerHTML = 'Stop Synth';
+    Sy.synthStartBtn.innerHTML = 'Stop';
     showToast('Stop request failed: ' + String(e));
   }
 }
@@ -647,11 +647,6 @@ export async function wipeSynth(slug) {
   _forgetActiveStudy(slug);  // study-orchestrator resume key — else a wiped
                              // slug re-opens the finished study's SSE on
                              // reload and replays its snapshot (see study_done)
-  // Wipe the framework's LOCAL study state too (FSRS decks + studied
-  // flags + challenge grades in dd:srs:v1 / dd:study:progress:v1). These
-  // aren't gated by the server, so without this the Study sidebar keeps
-  // showing phantom "N studied" / due-card badges for a wiped framework.
-  try { (await import('@dd/shared/srs.js')).forgetFramework(slug); } catch (_) {}
   if (Si.activeSlug === slug) {
     Sy.setSynthThreadId(null);
     _resetStudyState();      // clears study-level state + HIDES the chapter strip

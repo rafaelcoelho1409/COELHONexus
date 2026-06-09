@@ -381,7 +381,7 @@ function bindBulkBar() {
                 qdrant:  p.qdrant,
                 neo4j:   p.neo4j,
             });
-            window.location.href = `/youtube-content-search/ingest?${q.toString()}`;
+            window.location.href = `/youtube-content-search/ingestion?${q.toString()}`;
         } catch (e) {
             alert(`Re-ingest failed: ${e.message ?? e}`);
         }

@@ -34,8 +34,10 @@ from .errors import (
     InvalidVideoIdError,
 )
 from .schemas import (
+    ChannelPipelineRequest,
     ChannelRequest,
     ChannelResult,
+    PlaylistPipelineRequest,
     PlaylistRequest,
     PlaylistResult,
     VideoMetadata,
@@ -45,12 +47,14 @@ from .service import YtDlpExtractor, get_extractor
 
 
 __all__ = [
+    "ChannelPipelineRequest",
     "ChannelRequest",
     "ChannelResult",
     "ExtractError",
     "InvalidChannelIdError",
     "InvalidPlaylistIdError",
     "InvalidVideoIdError",
+    "PlaylistPipelineRequest",
     "PlaylistRequest",
     "PlaylistResult",
     "VideoMetadata",

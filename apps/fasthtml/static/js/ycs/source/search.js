@@ -675,9 +675,36 @@ let _bulkBarEl = null;
 
 function _isSelected(id) { return _selected.has(id); }
 
+/* Kinds that are MUTUALLY EXCLUSIVE within their own kind — selecting
+ * a second channel deselects the first; same for playlists. The
+ * Channel and Playlist tabs each take ONE source at a time (the picker
+ * UI on those tabs is built around a single channel/playlist's video
+ * list), so allowing the user to "select 3 channels" on Search would
+ * just mislead them — only the first would route through. Videos are
+ * unaffected (multi-video selection is genuine multi-batch dispatch). */
+const _SINGLETON_KINDS = new Set(["channel", "playlist"]);
+
 function _select(id, snippet, on) {
-    if (on) _selected.set(id, snippet);
-    else    _selected.delete(id);
+    if (on) {
+        const k = snippet?.kind || "video";
+        if (_SINGLETON_KINDS.has(k)) {
+            // Deselect any other already-selected entry of the SAME
+            // kind. Iterate over a snapshot so the in-place delete +
+            // DOM uncheck don't fight the iterator.
+            for (const [otherId, otherSnip] of Array.from(_selected.entries())) {
+                if (otherId === id) continue;
+                if ((otherSnip?.kind || "video") !== k) continue;
+                _selected.delete(otherId);
+                const cb = resultsEl.querySelector(
+                    `.ycs-result-check[data-id="${otherId}"]`,
+                );
+                if (cb) cb.checked = false;
+            }
+        }
+        _selected.set(id, snippet);
+    } else {
+        _selected.delete(id);
+    }
     resultsEl.classList.toggle("has-selection", _selected.size > 0);
     _renderBulkBar();
 }
@@ -752,11 +779,16 @@ function _renderBulkBar() {
     if (!_bulkBarEl) {
         _bulkBarEl = document.createElement("div");
         _bulkBarEl.className = "ycs-bulk-bar";
+        // Channel + Playlist render in the SINGULAR ("→ 1 Channel")
+        // because the Channel/Playlist tabs each accept exactly one
+        // source — selecting a second of the same kind on this list
+        // deselects the first (see `_SINGLETON_KINDS` + `_select`).
+        // Videos stay pluralized — multi-video dispatch is genuine.
         _bulkBarEl.innerHTML = `
             <span class="ycs-bulk-count"></span>
             <button type="button" class="ycs-bulk-btn" data-route="videos">→ <span data-count="videos">0</span> Videos</button>
-            <button type="button" class="ycs-bulk-btn" data-route="channel">→ <span data-count="channel">0</span> Channels</button>
-            <button type="button" class="ycs-bulk-btn" data-route="playlist">→ <span data-count="playlist">0</span> Playlists</button>
+            <button type="button" class="ycs-bulk-btn" data-route="channel">→ <span data-count="channel">0</span> Channel</button>
+            <button type="button" class="ycs-bulk-btn" data-route="playlist">→ <span data-count="playlist">0</span> Playlist</button>
             <button type="button" class="ycs-bulk-btn ycs-bulk-clear" data-route="clear" title="Clear selection">×</button>
         `;
         _bulkBarEl.querySelectorAll("[data-route]").forEach((btn) => {

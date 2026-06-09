@@ -8,12 +8,8 @@ from .keys import (
 from .params import (
     BANNED_HEADINGS_LC,
     BANNED_LIST_HUMAN,
-    CHALLENGES_MAX,
-    CHALLENGES_MIN,
     DESCRIPTION_MAX_CHARS,
     DESCRIPTION_MIN_CHARS,
-    FLASHCARDS_MAX,
-    FLASHCARDS_MIN,
     HEADING_MAX_WORDS,
     HEADING_MIN_WORDS,
     MAX_PREREQS_PER_NODE,
@@ -29,7 +25,6 @@ from .params import (
 from .patterns import SECTION_ID_RE
 from .schemas import (
     ChapterOutline,
-    Flashcard,
     OutlineDAG,
     OutlineSection,
 )
@@ -360,12 +355,6 @@ def build_outline_prompt(
         f'      "needs_code":    true            /* false for design narratives */\n'
         f'    }},\n'
         f'    ... ~{target_sections_hint} entries (hard range 2-40) ...\n'
-        f'  ],\n'
-        f'  "challenges": [\n'
-        f'    "5-10 active-recall questions; mix conceptual + applied; one string per item"\n'
-        f'  ],\n'
-        f'  "flashcards": [\n'
-        f'    {{"q": "...", "a": "..."}}, ... 4-15 entries ...\n'
         f'  ]\n'
         f"}}\n\n"
 
@@ -424,14 +413,6 @@ def build_outline_prompt(
         f"routes each source artifact to exactly ONE section; overlapping "
         f"headings force an arbitrary pick.\n\n"
 
-        f"== CHALLENGES + FLASHCARDS ==\n"
-        f"- challenges: 5-10 active-recall questions covering the WHOLE "
-        f"chapter (not any single section). Mix conceptual ('Why does X "
-        f"block on Y?') and applied ('Write a function that uses Z').\n"
-        f"- flashcards: 4-15 Anki Q/A pairs. Each pair stand-alone (no "
-        f"references to 'see section X'). q: question; a: answer with "
-        f"a concrete example where applicable.\n\n"
-
         f"Respond ONLY with valid JSON matching the schema above. NO "
         f"prose commentary, NO markdown wrapping, NO explanation — the "
         f"JSON is parsed directly by the next graph node."
@@ -474,8 +455,6 @@ def build_usc_vote_prompt(
             f"n_stages = {c.get('n_stages')}, "
             f"avg_prereqs = {c.get('avg_prereqs', 0.0):.2f}, "
             f"n_removed_edges = {c.get('n_removed_edges', 0)}, "
-            f"n_challenges = {c.get('n_challenges')}, "
-            f"n_flashcards = {c.get('n_flashcards')}, "
             f"avg_desc_chars = {c.get('avg_desc_chars', 0):.0f}"
             f"{viol_str}\n"
             f"     headings: {headings_short}"
@@ -541,7 +520,7 @@ def build_repair_prompt(
     issues_block = "\n".join(f"- {x}" for x in issues)
     return (
         f"Fix structural issues in this chapter outline. Keep the SAME "
-        f"JSON schema (sections + challenges + flashcards). Preserve "
+        f"JSON schema (sections only). Preserve "
         f"section_ids and headings that are already good; only change "
         f"what's needed to clear the issues below. NEVER renumber "
         f"section_ids unless you're adding a new section — downstream "
@@ -581,8 +560,6 @@ def summarize_candidate(
         "n_stages":        len(dag.stages),
         "avg_prereqs":     (sum(n_prereqs) / len(n_prereqs)) if n_prereqs else 0.0,
         "n_removed_edges": len(dag.removed_edges),
-        "n_challenges":    len(outline.challenges),
-        "n_flashcards":    len(outline.flashcards),
         "avg_desc_chars":  (sum(desc_chars) / len(desc_chars)) if desc_chars else 0.0,
         "headings":        headings,
         "violations":      issues,
@@ -888,26 +865,7 @@ def _heuristic_fallback_outline(md_text: str) -> ChapterOutline:
         )
         for i, h in enumerate(cleaned)
     ]
-    return ChapterOutline(
-        sections=sections,
-        challenges=[
-            "What is the primary concept introduced in this chapter?",
-            "Explain how the framework handles its main task.",
-            "Walk through one example end-to-end.",
-            "What is the most common error mode and how do you debug it?",
-            "How would you extend this for a new use case?",
-        ],
-        flashcards=[
-            {"q": "What is the chapter's core abstraction?",
-             "a": "See source documentation — outline generation fell back."},
-            {"q": "Where do you start when using this framework?",
-             "a": "See source documentation — outline generation fell back."},
-            {"q": "What is the most-used API surface?",
-             "a": "See source documentation — outline generation fell back."},
-            {"q": "What configuration options matter most in production?",
-             "a": "See source documentation — outline generation fell back."},
-        ],
-    )
+    return ChapterOutline(sections=sections)
 
 # ---- _serialize_outline_with_dag ----
 def _serialize_outline_with_dag(
@@ -1262,8 +1220,6 @@ async def outline_sdp_run(state: SynthState) -> dict:
             elapsed = int((time.monotonic() - t0) * 1000)
             stats = {
                 "n_sections":   len(outline_dict.get("sections") or []),
-                "n_challenges": len(outline_dict.get("challenges") or []),
-                "n_flashcards": len(outline_dict.get("flashcards") or []),
                 "max_stage":    int(dag_dict.get("max_stage", 0)),
                 "n_stages":     len(dag_dict.get("stages") or {}),
                 "n_removed_edges": len(dag_dict.get("removed_edges") or []),
@@ -1530,8 +1486,6 @@ async def outline_sdp_run(state: SynthState) -> dict:
     elapsed = int((time.monotonic() - t0) * 1000)
     stats = {
         "n_sections":     len(outline.sections),
-        "n_challenges":   len(outline.challenges),
-        "n_flashcards":   len(outline.flashcards),
         "max_stage":      dag.max_stage,
         "n_stages":       len(dag.stages),
         "n_removed_edges": len(dag.removed_edges),

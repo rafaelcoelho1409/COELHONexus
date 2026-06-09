@@ -83,14 +83,51 @@ logger = logging.getLogger(__name__)
 # ---------- factory ------------------------------------------------------
 
 def create_graph_transformer(llm: Any) -> LLMGraphTransformer:
-    """No `allowed_nodes` / `allowed_relationships` — the LLM captures
-    everything it finds. `additional_instructions` enforce FORMATTING
-    only (TitleCase nodes, UPPER_SNAKE_CASE relationships); entity
-    resolution cleans up after the fact."""
+    """Build the LLMGraphTransformer with `ignore_tool_usage=True`
+    (June 2026 SOTA for cross-provider compatibility).
+
+    Why this matters operationally — observed across 4+ providers
+    during 2026-06-08 runs, all silently producing `0 nodes` from
+    valid transcripts:
+
+      groq/openai/gpt-oss-120b      BadRequestError: 'DynamicGraph':
+                                    /properties/nodes/anyOf/0/items/
+                                    required: `required` is required
+      gemini/gemini-2.5-pro         GeminiException BadRequestError on
+                                    nested anyOf in DynamicGraph
+      nvidia_nim/qwen/qwen3.5-397b  HTTP 200 with `{nodes:[], rels:[]}`
+      nvidia_nim/stepfun/step-3.5   HTTP 200 with `{nodes:[], rels:[]}`
+
+    Same fundamental cause: LangChain's default path is
+    `with_structured_output(method="function_calling")`, which fights
+    each provider's function-calling schema validator. Groq + Gemini
+    reject `anyOf` arms without `required`; NIM-hosted weaker models
+    accept the schema but interpret the function-call wrapper as
+    "respond with empty arrays".
+
+    The maintainer-mentioned workaround (LangChain issues #26624,
+    #27100): `ignore_tool_usage=True` switches to a plain-text
+    prompt + `json_repair.loads()` parsing path. Works on any model
+    that emits JSON in response to a prompt.
+
+    Trade-offs:
+      - Requires `json-repair` dep (added to pyproject.toml)
+      - Drops `node_properties=True` / `relationship_properties=True`
+        (incompatible with the unstructured path; we don't read those
+        downstream anyway — graph_builder + resolver only use
+        node.id + node.type + relationship.type)
+      - Keeps `additional_instructions` (our EXTRACTION_INSTRUCTIONS)
+        — the unstructured prompt still honors it via the system
+        message append.
+
+    With this change the YCS Neo4j bandit can fairly explore the full
+    SYNTH_GROUP pool — `_YCS_NEO4J_ARM_BLOCKLIST` is no longer needed
+    (kept as an empty frozenset for env-override emergencies)."""
     return LLMGraphTransformer(
         llm = llm,
-        node_properties = True,
-        relationship_properties = True,
+        # `ignore_tool_usage=True` — switches to the unstructured
+        # plain-text-prompt path. See docstring above for rationale.
+        ignore_tool_usage = True,
         strict_mode = False,
         additional_instructions = EXTRACTION_INSTRUCTIONS,
     )
@@ -183,6 +220,10 @@ async def extract_and_store_graph(
             "failed_ids":    list(failed_ids),
         })
 
+    # Track the LAST per-batch exception so the silent-zero guard
+    # downstream can surface the actual LLM error body in the log
+    # (otherwise the user only sees "0 nodes" with no diagnostic).
+    last_batch_error: str | None = None
     # Batch loop with rate-limit pacing.
     for batch_start in range(0, len(documents), batch_size):
         batch = documents[batch_start:batch_start + batch_size]
@@ -245,9 +286,10 @@ async def extract_and_store_graph(
                 f"{total_nodes} nodes, {total_relationships} rels"
             )
         except Exception as e:
+            last_batch_error = f"{type(e).__name__}: {str(e)[:400]}"
             logger.warning(
                 f"[ycs:graph] batch {batch_start // batch_size + 1} failed: "
-                f"{type(e).__name__}: {str(e)[:200]}. Continuing."
+                f"{last_batch_error}. Continuing."
             )
             total_processed += len(batch)
             for doc in batch:
@@ -299,6 +341,11 @@ async def extract_and_store_graph(
         "nodes_created":         total_nodes,
         "relationships_created": total_relationships,
         "entities_merged":       resolved,
+        # Surface the most-recent per-batch LLM exception so the
+        # neo4j_task's silent-zero guard can log the body (otherwise
+        # the user only sees "0 nodes" with no diagnostic). None when
+        # every batch succeeded.
+        "last_batch_error":      last_batch_error,
     }
 
 

@@ -123,6 +123,23 @@ def SynthBody(slug: str | None):
                     cls = "fw-chstrip-head",
                 ),
                 Div(id = "fw-chstrip-cells", cls = "fw-chstrip-cells"),
+                # Post-study book_harmonize indicator (2026-06-08).
+                # Surfaces the cross-chapter coherence pass that runs
+                # after every chapter completes. Hidden until the
+                # book_harmonize_start SSE arrives; states map to
+                # data-status: running / skipped / done.
+                Div(
+                    Span(cls = "fw-bh-icon"),
+                    Span("Harmonize", cls = "fw-bh-label"),
+                    Span("—", cls = "fw-bh-status",
+                         id = "fw-bh-status-text"),
+                    id = "fw-book-harmonize",
+                    cls = "fw-book-harmonize",
+                    data_status = "idle",
+                    title = ("Cross-chapter terminology + claim "
+                             "consistency pass that runs after all "
+                             "chapters complete"),
+                ),
                 id = "fw-chstrip", cls = "fw-chstrip",
             ),
             cls = "fw-synth-split",

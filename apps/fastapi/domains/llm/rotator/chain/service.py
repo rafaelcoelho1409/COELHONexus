@@ -1004,6 +1004,77 @@ async def pick_synth_deployment_bandit(
 _YCS_NEO4J_PROCESS = "ycs-neo4j"
 
 
+# Hard-blocklist of arms that have been observed to reject LangChain's
+# `LLMGraphTransformer` `DynamicGraph` Pydantic schema (the structured-
+# output `response_format` they emit contains an `anyOf` arm without
+# the inner `required` keyword that some providers strict-validate).
+# When the bandit picks one of these the run produces 0 nodes — the
+# silent-zero guard catches it and emits a `-0.40` penalty, but a) the
+# user still loses the run, b) the bandit takes 3-5 cycles to fully
+# demote it. Hard-filtering BEFORE `predict_top_k` skips both costs.
+#
+# Each entry's failure mode is observed and reproducible:
+#
+#   groq/openai/gpt-oss-120b
+#       BadRequestError: 'DynamicGraph': /properties/nodes/anyOf/0/items/
+#       required: `required` is required to be supplied
+#       (2026-06-08 evening, 2 runs)
+#
+#   nvidia_nim/stepfun-ai/step-3.5-flash
+#       HTTP 200 OK but returns {nodes: [], relationships: []} — the
+#       model passes the schema validator but doesn't perform the
+#       extraction task (~8 min wall-clock for one empty response)
+#       (2026-06-08 evening)
+#
+#   gemini/gemini-2.5-pro
+#       GeminiException BadRequestError on the DynamicGraph schema —
+#       Gemini's structured-output enforcement is even stricter than
+#       Groq's (rejects on `additionalProperties` too).
+#       (2026-06-08 evening)
+#
+# Override via env `YCS_NEO4J_ARM_ALLOWLIST=…` (comma-separated) if a
+# specific blocked arm needs to be re-tested after an upstream fix.
+# Static blocklist EMPTIED 2026-06-08 evening after the
+# `LLMGraphTransformer(ignore_tool_usage=True)` shipment fixed the
+# cross-provider compatibility root cause. The 4 arms previously
+# listed here (gpt-oss-120b, step-3.5-flash, gemini-2.5-pro,
+# qwen3.5-397b) were all failing because LangChain's default
+# `with_structured_output(method="function_calling")` path fights
+# each provider's function-calling schema validator. Switching to
+# the unstructured plain-text-prompt path makes all of them work.
+#
+# Helper kept so env override (YCS_NEO4J_ARM_ALLOWLIST is now a
+# misnomer in absence of a blocklist; treat it as a HOTFIX channel
+# if a NEW model regresses) still functions without code changes.
+# The silent-zero guard stays armed as defensive backstop in case a
+# specific arm STILL produces 0 nodes for an extraction-amenable
+# transcript — bandit will demote it organically.
+_YCS_NEO4J_ARM_BLOCKLIST: frozenset[str] = frozenset()
+
+
+def _ycs_neo4j_filter_candidates(candidates: list[str]) -> list[str]:
+    """Drop blocked arms unless the user has explicitly re-allowed
+    them via env. Empty result falls back to the unfiltered list so
+    the picker can't lock itself out (better to retry a broken arm
+    than to 503 the whole pipeline)."""
+    allow_env = os.environ.get("YCS_NEO4J_ARM_ALLOWLIST", "").strip()
+    allow = {m.strip() for m in allow_env.split(",") if m.strip()}
+    filtered = [c for c in candidates if c not in _YCS_NEO4J_ARM_BLOCKLIST or c in allow]
+    if not filtered:
+        logger.warning(
+            "[ycs-bandit-pin] blocklist would empty the pool — "
+            "falling back to unfiltered candidates"
+        )
+        return candidates
+    n_dropped = len(candidates) - len(filtered)
+    if n_dropped:
+        logger.info(
+            f"[ycs-bandit-pin] blocklist filtered {n_dropped} known-broken "
+            f"arm(s) ({len(filtered)} remain)"
+        )
+    return filtered
+
+
 async def pick_ycs_neo4j_deployment_bandit(
     seed: int,
     *,
@@ -1031,6 +1102,9 @@ async def pick_ycs_neo4j_deployment_bandit(
         rds = redis_aio.from_url(url)
         try:
             candidates = [e["litellm_params"]["model"] for e in entries]
+            # Filter blocklisted arms BEFORE predict_top_k so the bandit
+            # never burns a real observation on a known-broken arm.
+            candidates = _ycs_neo4j_filter_candidates(candidates)
             # `vault_size` is the closest analogue to the YCS workload —
             # the bandit's vault-size buckets (v[4-6]) inform exploration
             # bias for big-input runs, matching how many transcripts will

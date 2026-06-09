@@ -1,57 +1,77 @@
-"""Source · Playlist mode — paste playlist URLs/IDs, dispatch one
-Celery extract per playlist. POST `/api/v1/ycs/content/playlist`.
+"""Source · Playlist mode — paste ONE playlist, browse + pick a subset
+of its videos, dispatch the SELECTED video_ids to the videos pipeline.
 
-Same sequential batch shape as the Channel tab — textarea + paste-
-to-chips + N parallel POSTs. The Search tab routes only `kind ===
-"playlist"` items here via `ycs:route`."""
+Same shape as the Channel tab — see channel.py for the design rationale
+(SOTA from PatternFly / Helios / Carbon + NN/g pagination guidance)."""
 from __future__ import annotations
 
-from fasthtml.common import Button, Div, Form, P, Textarea
+from fasthtml.common import Button, Div, Form, Input
 
-from .widgets import _OptionsCollapse, _TranscriptOptions
+from .widgets import _InfoPopover, _StickyOptionsBar
 
 
 def PlaylistTab():
     return Div(
-        P(
-            "Paste playlist URLs or IDs — one per line, or comma-"
-            "separated. Drop a .txt or .csv too. Each playlist is "
-            "queued as its own background task.",
-            cls = "ycs-tab-hint",
-        ),
         Form(
-            Textarea(
-                name        = "playlist_ids",
-                id          = "ycs-playlist-input",
-                placeholder = (
-                    "https://www.youtube.com/playlist?list=PLrAXtmRdnEQy…\n"
-                    "PLrAXtmRdnEQyzZ-bX5C5zV0p2lKb-V0wD\n"
-                    "UU_x5XG1OV2P6uZZ5FSM9Ttw"
+            # Sticky URL row — same pattern as Search tab.
+            Div(
+                Div(
+                    Input(
+                        type        = "text",
+                        name        = "playlist_id",
+                        id          = "ycs-playlist-input",
+                        placeholder = "https://www.youtube.com/playlist?list=PLrAXtmRdnEQy… · PLrAXtmRdnEQy…",
+                        cls         = "ycs-input",
+                        required    = True,
+                        autocomplete = "off",
+                    ),
+                    Div(
+                        _InfoPopover(
+                            "Paste ONE playlist — full URL or `PL…` / `UU…` / "
+                            "`OL…` ID. Click Fetch videos to load it, then "
+                            "select which videos to ingest.",
+                        ),
+                        Button(
+                            "Fetch videos",
+                            type = "submit",
+                            cls  = "btn-primary",
+                            id   = "ycs-playlist-fetch",
+                        ),
+                        cls = "ycs-source-row-actions",
+                    ),
+                    cls = "ycs-source-row",
                 ),
-                rows        = "6",
-                cls         = "ycs-input ycs-textarea",
-                required    = True,
+                cls = "ycs-source-sticky",
             ),
             Div(
-                Div("", cls = "ycs-paste-count", id = "ycs-playlist-count"),
-                Div("", cls = "ycs-paste-chips", id = "ycs-playlist-chips"),
-                cls = "ycs-paste-preview",
-                id  = "ycs-playlist-preview",
+                id  = "ycs-playlist-picker",
+                cls = "ycs-picker",
                 data_state = "empty",
             ),
-            _OptionsCollapse(
-                _TranscriptOptions(
-                    "playlist",
+            _StickyOptionsBar(
+                "playlist",
+                Button(
+                    "Start Ingestion",
+                    type = "submit",
+                    cls  = "btn-primary",
+                    disabled = True,
+                    id = "ycs-playlist-submit",
+                    formnovalidate = True,
+                ),
+                status_id = "ycs-playlist-status",
+                extra_actions = (
                     Button(
-                        "Start ingest",
-                        type = "submit",
-                        cls  = "btn-primary",
+                        "Ingest all",
+                        type = "button",
+                        cls  = "ycs-sticky-bar-ingest-all",
                         disabled = True,
-                        id = "ycs-playlist-submit",
+                        id = "ycs-playlist-ingest-all",
+                        title = (
+                            "Queue every video in the playlist, bypassing the "
+                            "100-per-page picker cap."
+                        ),
                     ),
                 ),
-                Div("", id = "ycs-playlist-status", cls = "ycs-search-status"),
-                prefix = "playlist",
             ),
             id = "ycs-playlist-form",
         ),

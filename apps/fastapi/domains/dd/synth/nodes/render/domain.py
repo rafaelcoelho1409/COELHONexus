@@ -3,7 +3,6 @@ templates, vault merger, audit computation, SHA hashing)."""
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 
 from .params import (
@@ -15,7 +14,6 @@ from .params import (
 )
 from .patterns import IDENT_RE, SENTINEL_RE
 from .prompts import (
-    CHALLENGES_MD_TEMPLATE,
     CHAPTER_MD_TEMPLATE,
     JINJA_ENV,
 )
@@ -41,6 +39,7 @@ def build_section_context(
     *,
     vault: dict[str, str],
     resolution_log: list[CodeRefResolution],
+    normalized_hashes: set[str] | None = None,
 ) -> dict:
     """Pre-process one sawc Section (v2 cookbook schema) into the Jinja
     template context.
@@ -55,6 +54,14 @@ def build_section_context(
       - code_source == "derived" with derived_code: wrap derived body
         in a fenced block; emit a Markdown caption above. AST-parse the
         body → tier='derived', or 'hallucinated' on AST failure.
+
+    `normalized_hashes` (added 2026-06-08) is the set of vault hashes
+    whose bodies were INTENTIONALLY rewritten by the upstream LLM
+    code-block normalizer. Those entries will re-hash to a different
+    value than the SAWC-cited hash — that's an expected mutation, not
+    drift — so for those hashes we set `byte_drift=False` and tier
+    `verbatim`. Without this carve-out every normalize trips a false-
+    positive drift and fails audit_passed.
     """
     # Lazy import to avoid a render→sawc_derive cycle.
     from ..sawc_derive.domain import python_ast_valid as _ast_valid
@@ -103,9 +110,16 @@ def build_section_context(
             if h in vault:
                 fence_text = vault[h]
                 code_block = fence_text
-                rehashed = hash_block(fence_text)
-                byte_drift = (rehashed != h)
-                tier = "hallucinated" if byte_drift else "verbatim"
+                if normalized_hashes and h in normalized_hashes:
+                    # Body was intentionally rewritten by the LLM
+                    # code-block normalizer — rehash WILL differ, but
+                    # that's the desired mutation, not drift.
+                    byte_drift = False
+                    tier = "verbatim"
+                else:
+                    rehashed = hash_block(fence_text)
+                    byte_drift = (rehashed != h)
+                    tier = "hallucinated" if byte_drift else "verbatim"
                 resolution_log.append(CodeRefResolution(
                     hash = h,
                     found_in_vault = True,
@@ -283,32 +297,6 @@ def render_chapter_md(
     )
     md = re.sub(r"\n{4,}", "\n\n\n", md)
     return md.rstrip() + "\n"
-
-
-def render_challenges_md(
-    chapter_title: str,
-    challenges: list[str],
-) -> str:
-    """Render challenges.md — H1 title + numbered list."""
-    tpl = JINJA_ENV.from_string(CHALLENGES_MD_TEMPLATE)
-    md = tpl.render(
-        chapter_title = chapter_title,
-        challenges = challenges or [],
-    )
-    return md.rstrip() + "\n"
-
-
-def render_flashcards_json(flashcards: list[dict]) -> str:
-    """Render flashcards.json — a JSON array of {q, a} objects."""
-    normalized = []
-    for fc in flashcards or []:
-        if not isinstance(fc, dict):
-            continue
-        q = (fc.get("q") or "").strip()
-        a = (fc.get("a") or "").strip()
-        if q and a:
-            normalized.append({"q": q, "a": a})
-    return json.dumps(normalized, indent = 2, ensure_ascii = False) + "\n"
 
 
 # Vault loading + merging

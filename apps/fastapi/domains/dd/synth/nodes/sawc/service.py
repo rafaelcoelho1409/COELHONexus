@@ -2064,8 +2064,6 @@ async def sawc_write_run(state: SynthState) -> dict:
 
     outline_data = outline_payload.get("outline") or {}
     outline_sections = outline_data.get("sections") or []
-    challenges = outline_data.get("challenges") or []
-    flashcards = outline_data.get("flashcards") or []
     dag = outline_payload.get("dag") or {}
     stages_raw = dag.get("stages") or {}
     chapter_title = outline_payload.get("chapter_title") or chapter_id
@@ -2456,8 +2454,6 @@ async def sawc_write_run(state: SynthState) -> dict:
         framework_slug = slug,
         sections = final_sections,
         memory_final = memory_ledger,
-        challenges = challenges,
-        flashcards = flashcards,
         coverage_stats = coverage,
     )
 

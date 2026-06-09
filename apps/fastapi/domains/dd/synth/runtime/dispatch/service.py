@@ -36,8 +36,6 @@ from ...keys import (
     active_study_key,
     book_harmonize_latest_key,
     book_harmonize_versioned_key,
-    chapter_challenges_key,
-    chapter_flashcards_key,
     chapter_readme_key,
     chapter_render_latest_key,
     redis_url,
@@ -358,8 +356,17 @@ async def _run_book_harmonize(
             "error": str(e)[:240],
         }
 
+    # `harmonize_book` returns the key as "patches" (not the old
+    # "patched_chapters") with each entry shaped {chapter_id, patched:
+    # bool, new_prose: str | None, n_violations, ...}. The previous
+    # iteration looked up the wrong key, so the writeback loop ran zero
+    # iterations every time — `n_overwritten` was stuck at 0 even when
+    # the LLM successfully produced patched prose (browser-use run
+    # 2026-06-08: 3 issues, 2 patched, 0 overwritten visible to the UI).
     n_overwritten = 0
-    for patched in (result.get("patched_chapters") or []):
+    for patched in (result.get("patches") or []):
+        if not patched.get("patched"):
+            continue
         cid = patched.get("chapter_id")
         new_prose = patched.get("new_prose")
         if not cid or not new_prose:
@@ -528,8 +535,6 @@ async def run_study_async(
                     study_thread_id, "study", "chapter_ready",
                     chapter_id = chapter_id, position = position, n_total = n_total,
                     render_path = chapter_readme_key(slug, chapter_id),
-                    challenges_path = chapter_challenges_key(slug, chapter_id),
-                    flashcards_path = chapter_flashcards_key(slug, chapter_id),
                 )
                 logger.info(
                     f"[study-orchestrator] {slug}/{chapter_id}: "
@@ -694,8 +699,6 @@ async def run_study_async(
                     n_total = n_total,
                     wall_ms = ch_wall_ms,
                     render_path = chapter_readme_key(slug, chapter_id),
-                    challenges_path = chapter_challenges_key(slug, chapter_id),
-                    flashcards_path = chapter_flashcards_key(slug, chapter_id),
                 )
             logger.info(
                 f"[study-orchestrator] {slug}/{chapter_id}: "

@@ -158,16 +158,24 @@
    Renders as a row of `.topbar-wrap`. Padding matches `.topbar`;
    horizontal divider above. */
 /* Row 2 — feature title (red bar) on the left + stage tabs on the right.
-   Compact: tighter vertical padding than row 1. */
+   Compact: tighter vertical padding than row 1. The shared --topbar-row-h
+   custom property (2026-06-08) anchors row 2 and row 3 to the SAME height
+   so a DD/YCS page never has a step-shaped header — feature-row and
+   .dd-toolbar set `min-height: var(--topbar-row-h)` for the lockstep. */
+.topbar-wrap {
+  --topbar-row-h: 38px;
+}
 .topbar-wrap .feature-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
   padding: 6px 40px;
+  min-height: var(--topbar-row-h);
   border-top: 1px solid var(--border);
   margin: 0;
   flex-wrap: nowrap;
+  box-sizing: border-box;
 }
 
 /* `.topbar-collapsible` (the title row / contextual toolbar) — the old

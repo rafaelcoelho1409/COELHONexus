@@ -179,6 +179,66 @@ def build_search_args(
     return args
 
 
+def resolve_channel_input(channel_input: str) -> str:
+    """Coerce any channel input (raw `UC...`, `@handle`, channel URL,
+    `youtube.com/c/...` custom URL) into a yt-dlp-extractable URL.
+
+    Preference order:
+      1. Bare `UC...` ID → rewrite to UU uploads playlist (10× faster
+         enumeration than the channel `/videos` tab).
+      2. URL containing `/channel/UC...` → same UU rewrite.
+      3. URL containing `/@handle` → pass through (yt-dlp resolves the
+         handle → UC internally; we accept the higher one-time cost).
+      4. `@handle` (no scheme/host) → prepend `https://www.youtube.com/`.
+      5. `youtube.com/c/<custom>` or `youtube.com/user/<legacy>` → pass
+         through (yt-dlp handles legacy URL shapes).
+      6. Anything else → pass through verbatim.
+
+    The result of (1) and (2) gives us `playlist_count` cheaply (~2s).
+    The other shapes work but may return `playlist_count=None` for the
+    channel's `/videos` tab; the frontend renders "?" totals gracefully.
+    """
+    s = (channel_input or "").strip()
+    if not s:
+        return s
+    import re as _re
+    # 1. Bare UC ID
+    if _re.match(r"^UC[A-Za-z0-9_-]{22}$", s):
+        return f"https://www.youtube.com/playlist?list=UU{s[2:]}"
+    # 2. URL with /channel/UC...
+    m = _re.search(r"channel/(UC[A-Za-z0-9_-]{22})", s)
+    if m:
+        return f"https://www.youtube.com/playlist?list=UU{m.group(1)[2:]}"
+    # 3-5. URL containing @handle / /c/ / /user/ — pass through
+    if any(t in s.lower() for t in ("youtube.com/@", "/c/", "/user/")):
+        return s
+    # 4. Bare @handle
+    if s.startswith("@"):
+        return f"https://www.youtube.com/{s}"
+    return s
+
+
+def resolve_playlist_input(playlist_input: str) -> str:
+    """Coerce any playlist input (raw `PL...`/`UU...`/etc. ID, full
+    playlist URL, channel URL with `?list=` query) into a yt-dlp
+    playlist URL."""
+    s = (playlist_input or "").strip()
+    if not s:
+        return s
+    import re as _re
+    # Common playlist ID prefixes — see _PLAYLIST_ID_RE above.
+    if _PLAYLIST_ID_RE.match(s):
+        return f"https://www.youtube.com/playlist?list={s}"
+    # Already a playlist URL
+    if "playlist?list=" in s or "/playlist/" in s:
+        return s
+    # `watch?v=X&list=Y` URL — extract the list= param and rebuild
+    m = _re.search(r"[?&]list=([A-Za-z0-9_-]+)", s)
+    if m:
+        return f"https://www.youtube.com/playlist?list={m.group(1)}"
+    return s
+
+
 def count_probe_url(snippet: dict) -> str | None:
     """Return the URL yt-dlp should hit to get a cheap `playlist_count`
     for a channel or playlist snippet.

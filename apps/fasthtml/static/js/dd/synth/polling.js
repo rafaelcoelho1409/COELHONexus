@@ -25,6 +25,19 @@ import {
 import { _synthFieldPresent, setSynthRunStartMs } from './shared.js';
 import { deps } from './polling_deps.js';
 
+// Book-harmonize indicator (2026-06-08) — single source of truth for
+// the post-study cross-chapter coherence pass UI row that sits under
+// the chapter strip. Called by the SSE handlers in pollStudyState.
+// Status: 'idle' / 'running' / 'skipped' / 'done'. Sets data-status so
+// CSS can drive the icon + color.
+function _updateBookHarmonize(status, label) {
+  const row = document.getElementById('fw-book-harmonize');
+  if (!row) return;
+  row.dataset.status = status || 'idle';
+  const txt = document.getElementById('fw-bh-status-text');
+  if (txt) txt.textContent = label || '—';
+}
+
 export function synthCardEl(idx) {
   if (!Sy.synthCardsEl) return null;
   return Sy.synthCardsEl.querySelector(
@@ -320,15 +333,12 @@ export function _renderSynthLiveProgress(stepName, ev) {
              ' (' + (ev.wall_ms || 0) + ' ms)';
     }
   }
-  // render_audit_write — Final node. Zero LLM calls. Renders 3
-  // artifacts (README.md, challenges.md, flashcards.json) via Jinja2
-  // + runs SHA-256 round-trip audit on code refs. 5 event kinds.
+  // render_audit_write — Final node. Zero LLM calls. Renders README.md
+  // via Jinja2 + runs SHA-256 round-trip audit on code refs. 5 event kinds.
   if (stepName === 'render_audit_write') {
     if (ev.kind === 'start') {
       text = '· starting render for ' + (ev.chapter_title || ev.chapter_id || 'chapter') +
-             ' (' + (ev.n_sections || 0) + ' sections, ' +
-             (ev.n_challenges || 0) + ' challenges, ' +
-             (ev.n_flashcards || 0) + ' flashcards · mgsr ' +
+             ' (' + (ev.n_sections || 0) + ' sections · mgsr ' +
              (ev.mgsr_halt_reason || '?') + ')';
     } else if (ev.kind === 'inputs_loaded') {
       text = '· vaults loaded: ' + (ev.n_vault_files_loaded || 0) + '/' +
@@ -574,14 +584,24 @@ export async function pollStudyState(sid) {
       // updating already convey readiness.
       return;
     }
-    // Ship #7 (2026-05-24): book_harmonize study-level events
+    // Ship #7 (2026-05-24): book_harmonize study-level events.
+    // 2026-06-08: also updates the persistent #fw-book-harmonize row in
+    // the chapter strip (toasts are transient; the row sticks so the
+    // user sees the final outcome after the toast fades).
     if (ev.step === 'study' && ev.kind === 'book_harmonize_start') {
       _setSynthStagePill('working', 'Harmonizing chapters…');
+      _updateBookHarmonize('running',
+        (ev.n_chapters || '?') + ' chapters');
       showToast(`Cross-chapter harmonization started (${ev.n_chapters || '?'} chapters)`);
       return;
     }
     if (ev.step === 'study' && ev.kind === 'book_harmonize_skipped') {
       console.log('[book-harmonize] skipped:', ev.reason);
+      _updateBookHarmonize('skipped',
+        ev.reason === 'fewer_than_2_rendered_chapters'
+          ? 'Skipped — needs ≥2 chapters'
+          : 'Skipped'
+      );
       return;
     }
     if (ev.step === 'study' && ev.kind === 'book_harmonize_done') {
@@ -589,13 +609,19 @@ export async function pollStudyState(sid) {
       const overwritten = ev.n_chapters_overwritten || 0;
       const issues = ev.n_chapters_with_issues || 0;
       const cache = ev.cache_hit ? ' (cache)' : '';
+      let label;
       if (overwritten > 0) {
+        label = `${overwritten}/${issues} patched${cache}`;
         showToast(
           `Harmonized ${overwritten}/${issues} chapter(s) for cross-chapter consistency${cache}`
         );
       } else if (issues === 0) {
+        label = `Verified, no patches${cache}`;
         showToast(`Cross-chapter coherence verified, no patches needed${cache}`);
+      } else {
+        label = `${issues} issues, 0 patched${cache}`;
       }
+      _updateBookHarmonize('done', label);
       return;
     }
     if (ev.step === 'study' && ev.kind === 'study_done') {

@@ -4,12 +4,8 @@ from __future__ import annotations
 from pydantic import BaseModel, Field, field_validator
 
 from .params import (
-    CHALLENGES_MAX,
-    CHALLENGES_MIN,
     DESCRIPTION_MAX_CHARS,
     DESCRIPTION_MIN_CHARS,
-    FLASHCARDS_MAX,
-    FLASHCARDS_MIN,
     HEADING_MAX_WORDS,
     HEADING_MIN_WORDS,
     MAX_PREREQS_PER_NODE,
@@ -17,18 +13,6 @@ from .params import (
     SECTIONS_MIN,
 )
 from .patterns import SECTION_ID_RE
-
-
-class Flashcard(BaseModel):
-    """Anki-style stand-alone Q/A pair."""
-    q: str = Field(
-        min_length = 4, max_length = 500,
-        description = "Question. Concrete, code-focused where possible.",
-    )
-    a: str = Field(
-        min_length = 2, max_length = 1500,
-        description = "Answer. 1-3 short paragraphs or a snippet.",
-    )
 
 
 class OutlineSection(BaseModel):
@@ -122,17 +106,6 @@ class ChapterOutline(BaseModel):
     sections: list[OutlineSection] = Field(
         min_length = SECTIONS_MIN,
         max_length = SECTIONS_MAX,
-    )
-    challenges: list[str] = Field(
-        min_length = CHALLENGES_MIN,
-        max_length = CHALLENGES_MAX,
-        description = (
-            "5-10 active-recall questions. Mix conceptual and applied."
-        ),
-    )
-    flashcards: list[Flashcard] = Field(
-        min_length = FLASHCARDS_MIN,
-        max_length = FLASHCARDS_MAX,
     )
 
 

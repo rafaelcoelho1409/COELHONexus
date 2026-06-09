@@ -7,7 +7,7 @@ the shell's row 3 (`StageToolbar`, wired in routes.py).
 
 Tab modules:
   search.py    — Search (sync yt-dlp metadata, in-page results)
-  videos.py    — Videos (Celery dispatch → /ingest?task=…)
+  videos.py    — Videos (Celery dispatch → /ingestion?task=…)
   channel.py   — Channel (Celery dispatch)
   playlist.py  — Playlist (Celery dispatch)
 

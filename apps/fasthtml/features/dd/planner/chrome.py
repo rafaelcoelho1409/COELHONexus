@@ -31,7 +31,7 @@ def PlannerActions():
                title = ("Delete this framework's planner cache "
                         "(MinIO embeddings + Postgres checkpoints "
                         "+ browser state)")),
-        Button("Start Planner", id = "fw-planner-start",
+        Button("Start", id = "fw-planner-start",
                cls = "btn-primary"),
         cls = "fw-planner-head-actions",
     )

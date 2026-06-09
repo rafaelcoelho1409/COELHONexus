@@ -1,8 +1,7 @@
-"""Study body — 2-mode reader (Learn / Flashcards).
+"""Study body — single-mode reader (README only, 2026-06-08).
 
-Status pill moved to the row-3 toolbar. The reader's own README /
-Challenges / Flashcards tabs stay in the body — they're content
-navigation within a chapter, not stage-level chrome."""
+Active Recall + Flashcards subsystems removed. Reader is now a single
+column: chapter README on the left, sticky TOC on the right."""
 from fasthtml.common import Button, Div, Span
 
 
@@ -29,19 +28,9 @@ def StudyBody(slug: str | None):
                 id = "fw-study-side",
             ),
             Div(
-                # 2-mode reader (2026-05-28): LEARN = prose + recall in
-                # one scroll; FLASHCARDS = the FSRS reviewer as a separate
-                # drill mode. The mode switch + Search + Focus live in
-                # the row-3 toolbar (StudyTabs/StudyViewButtons); only
-                # the chapter-head + panes remain in the body.
                 Div(id = "fw-study-chapter-head",
                     cls = "fw-study-chapter-head"),
                 Div(
-                    # LEARN pane = scrolling column (prose + recall) +
-                    # the right-rail TOC. Article keeps id
-                    # `fw-study-readme`; recall block keeps id
-                    # `fw-study-challenges` so study.js writes to both
-                    # unchanged — they just share one scroll now.
                     Div(
                         Div(
                             Div(
@@ -53,24 +42,11 @@ def StudyBody(slug: str | None):
                                 id = "fw-study-readme",
                                 cls = "fw-study-prose",
                             ),
-                            Div(
-                                id = "fw-study-challenges",
-                                cls = "fw-study-recall fw-study-prose",
-                            ),
                             cls = "fw-study-learn-col",
                         ),
                         Div(id = "fw-study-toc", cls = "fw-study-toc"),
                         cls = "fw-study-pane fw-study-readme-pane active",
                         data_tab = "learn",
-                    ),
-                    Div(
-                        Div(
-                            "Pick a chapter to study its flashcards.",
-                            cls = "fw-empty",
-                        ),
-                        id = "fw-study-flashcards",
-                        cls = "fw-study-pane fw-study-cards",
-                        data_tab = "flashcards",
                     ),
                     cls = "fw-study-content",
                 ),

@@ -73,6 +73,13 @@ export function _renderChStrip(items) {
       '  <span class="num">' + (i + 1) + '</span>' +
       '  <span class="label">' + escapeHtml(title) + '</span>' +
       '  <span class="time"></span>' +
+      // "Open in Study" button — disabled until the chapter renders.
+      // Enabled by `_markChStripCell(id, "done")`. Click navigates to
+      // the Study page with the chapter pre-selected.
+      '  <button type="button" class="fw-chstrip-open" ' +
+      '          data-chapter-id="' + c.id.replace(/"/g, '&quot;') + '" ' +
+      '          disabled ' +
+      '          title="Synthesize this chapter first">📖</button>' +
       '</div>'
     );
   }).join('');
@@ -107,7 +114,22 @@ export function _markChStripCell(chapterId, status) {
   const cell = Sy.chstripCellsEl.querySelector(
     '.fw-chstrip-cell[data-chapter-id="' + chapterId.replace(/"/g, '\\"') + '"]'
   );
-  if (cell) cell.dataset.status = status;
+  if (cell) {
+    cell.dataset.status = status;
+    // Sync the "Open in Study" button: enable on done, disable on
+    // any non-done transition (failed/cancelled/back-to-pending so a
+    // re-Synth doesn't leave a dead-link enabled).
+    const openBtn = cell.querySelector('.fw-chstrip-open');
+    if (openBtn) {
+      if (status === 'done') {
+        openBtn.removeAttribute('disabled');
+        openBtn.title = 'Open this chapter in the Study page';
+      } else {
+        openBtn.setAttribute('disabled', 'disabled');
+        openBtn.title = 'Synthesize this chapter first';
+      }
+    }
+  }
   _updateChStripCounter();
 }
 // Per-chapter synth wall-clock, shown on the chstrip cell. `ms` from the
@@ -143,7 +165,12 @@ export function _resetStudyState() {
   Sy.setStudyPinnedChapterId(null);
   if (Sy.chstripCellsEl) Sy.chstripCellsEl.innerHTML = '';
   if (Sy.chstripCounterEl) Sy.chstripCounterEl.textContent = '';
-  _showChStrip(false);
+  // 2026-06-08: don't hide the strip on wipe — leaving it visible but
+  // empty matches the "sidebar stays in the layout" UX on the Pipeline
+  // page. The Pipeline body server-renders it with `.visible` so it
+  // never vanishes from the column; the standalone synth page's
+  // `_hydrateChStripFromChapters` still hides it for single-chapter
+  // (non-study) runs via its own `_showChStrip(false)` guard.
 }
 
 // Plan-existence gate for the Start Synth button. Synth REQUIRES a
@@ -307,6 +334,25 @@ export function _onStripCellClick(cellEl) {
 
 if (Sy.chstripCellsEl) {
   Sy.chstripCellsEl.addEventListener('click', ev => {
+    // "Open in Study" button — intercept FIRST so the cell's
+    // click-to-focus-subgraph handler doesn't also fire. Navigates
+    // to the Study page with `?chapter=cid` so it deep-links to that
+    // chapter (study/chapters.js loadStudyChapters reads the param
+    // and opens that one instead of the auto-first-rendered default).
+    const openBtn = ev.target.closest('.fw-chstrip-open');
+    if (openBtn) {
+      ev.stopPropagation();
+      if (openBtn.hasAttribute('disabled')) return;
+      const cid = openBtn.dataset.chapterId;
+      const picker = document.querySelector('.fw-picker');
+      const slug = (picker && picker.dataset.ddSlug)
+                   || new URLSearchParams(window.location.search).get('slug');
+      if (!slug || !cid) return;
+      window.location.href = '/docs-distiller/study?slug=' +
+                             encodeURIComponent(slug) +
+                             '&chapter=' + encodeURIComponent(cid);
+      return;
+    }
     const cell = ev.target.closest('.fw-chstrip-cell');
     if (cell) _onStripCellClick(cell);
   });

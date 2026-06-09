@@ -23,7 +23,6 @@ from .params import VAULT_HASH_LEN
 from .patterns import SENTINEL_RE
 from .prompts import (
     CHAPTER_MD_TEMPLATE,
-    CHALLENGES_MD_TEMPLATE,
     JINJA_ENV,
 )
 from .schemas import (
@@ -45,7 +44,6 @@ __all__ = [
     "ArtifactName",
     "AuditResult",
     "CHAPTER_MD_TEMPLATE",
-    "CHALLENGES_MD_TEMPLATE",
     "CodeRefResolution",
     "HASH_ALGO",
     "JINJA_ENV",

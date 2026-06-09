@@ -11,8 +11,32 @@
   justify-content: space-between;
   gap: 10px 24px;
   flex-wrap: wrap;
-  padding: 7px 40px;
+  /* Vertical padding + min-height matched to .feature-row so the title
+     row (row 2) and the toolbar row (row 3) render at the SAME height
+     on both Docs Distiller and YCS. The --topbar-row-h custom property
+     is declared on .topbar-wrap (base/topbar.css) so a single token
+     drives both rows. Buttons + the framework picker inside the
+     toolbar are scoped-shrunk below so their natural height fits the
+     row instead of pushing past it. */
+  padding: 6px 40px;
+  min-height: var(--topbar-row-h);
+  box-sizing: border-box;
   border-top: 1px solid var(--border);
+}
+/* Row-3-scoped chrome shrink: the global .btn-primary / .btn-outline /
+   picker trigger sizes target page content where 28-30 px height is
+   correct; inside the toolbar they push row 3 past row 2's height. The
+   overrides below match the title's natural height (~20 px) so the row
+   stays tight without changing the buttons anywhere else in the app. */
+.dd-toolbar .btn-primary,
+.dd-toolbar .btn-outline {
+  padding: 4px 14px;
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+.dd-toolbar .dd-fw-picker-trigger,
+.dd-toolbar .dd-catfilter-trigger {
+  padding: 4px 12px;
 }
 .dd-toolbar-left {
   display: flex;

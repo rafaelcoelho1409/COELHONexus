@@ -13,6 +13,7 @@ from .errors import (
 from .schemas import (
     Availability,
     DurationPreset,
+    EnumerationResponse,
     LiveStatus,
     NonEmptyStr,
     SearchRequest,
@@ -25,6 +26,7 @@ from .service import YtDlpSearchService, get_search_service
 __all__ = [
     "Availability",
     "DurationPreset",
+    "EnumerationResponse",
     "LiveStatus",
     "NonEmptyStr",
     "SearchRequest",

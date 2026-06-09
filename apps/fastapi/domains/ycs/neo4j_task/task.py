@@ -175,11 +175,24 @@ def ingest_to_neo4j(
                 # schema-invalid failure for reward purposes.
                 docs_processed   = int(extraction_stats.get("documents_processed", 0) or 0)
                 nodes_created    = int(extraction_stats.get("nodes_created", 0) or 0)
+                last_batch_error = extraction_stats.get("last_batch_error")
                 silent_zero      = success and docs_processed > 0 and nodes_created == 0
                 effective_success = success and not silent_zero
                 effective_err     = error_class
                 if silent_zero:
                     effective_err = "schema_invalid"
+                    # Surface the actual last-batch LLM error body when
+                    # available — without it the user only saw "0 nodes"
+                    # with no provider-side diagnostic, making blocklist
+                    # decisions blind.
+                    error_tail = (
+                        f" Last LLM error: {last_batch_error}"
+                        if last_batch_error
+                        else " (no per-batch error recorded — LLM returned"
+                             " 0 entities cleanly; model likely passed"
+                             " schema validation but doesn't perform the"
+                             " extraction task)"
+                    )
                     logger.warning(
                         f"[ingest_to_neo4j] silent-zero detected for "
                         f"{pinned_model}: {docs_processed} docs processed "
@@ -187,6 +200,7 @@ def ingest_to_neo4j(
                         f"so the bandit stops re-picking this arm. Common "
                         f"cause: provider rejects LLMGraphTransformer's "
                         f"DynamicGraph schema (e.g. Groq + gpt-oss-120b)."
+                        f"{error_tail}"
                     )
                 # Best-effort reward emit. Swallowed errors don't fail
                 # the Celery task — the entity-extract work already

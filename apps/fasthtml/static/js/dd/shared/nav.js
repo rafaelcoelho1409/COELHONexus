@@ -5,7 +5,7 @@
 //   URL stays the source of truth for "which stage am I on?".
 // ============================================================
 
-export const STAGES = ['catalog', 'ingestion', 'planner', 'synth', 'study'];
+export const STAGES = ['catalog', 'ingestion', 'pipeline', 'planner', 'synth', 'study'];
 
 // Read the active stage from the server-rendered .fw-picker wrapper.
 // _DDPage stamps `data-dd-stage` on that div for every route.

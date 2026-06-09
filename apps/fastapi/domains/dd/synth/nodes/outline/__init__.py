@@ -9,7 +9,6 @@ See docs/SYNTH-ARCHITECTURE-SOTA-2026-05-18.md.
 from .node import outline_sdp
 from .schemas import (
     ChapterOutline,
-    Flashcard,
     OutlineDAG,
     OutlineSection,
 )
@@ -30,7 +29,6 @@ from .versions import OUTLINE_PROMPT_VERSION, OUTLINE_SCHEMA_VERSION
 
 __all__ = [
     "ChapterOutline",
-    "Flashcard",
     "OUTLINE_PROMPT_VERSION",
     "OUTLINE_SCHEMA_VERSION",
     "OutlineDAG",

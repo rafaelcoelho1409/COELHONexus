@@ -191,11 +191,12 @@ if (catFilter) {
 }
 
 Sc.tiles.forEach(t => t.addEventListener('click', () => {
-  // Already-ingested tiles jump straight to their Planner — the corpus
-  // is downloaded, so the next step is planning (user's choice). Non-
+  // Already-ingested tiles jump straight to the Pipeline page — the
+  // corpus is downloaded, and Pipeline is the unified Planner+Synth
+  // surface where the user picks which stage to drive next. Non-
   // ingested tiles select for ingestion (sticky bar → Start Ingestion).
   if (t.classList.contains('fw-tile-ingested')) {
-    navigateToStage('planner', t.dataset.slug);
+    navigateToStage('pipeline', t.dataset.slug);
     return;
   }
   Sc.tiles.forEach(x => x.classList.remove('selected'));

@@ -1,63 +1,80 @@
-"""Source · Videos mode — paste IDs/URLs, dispatch Celery extract.
+"""Source · Videos mode — paste video IDs/URLs, click Fetch videos,
+pick a subset, dispatch the SELECTED video_ids to the ingest pipeline.
 
-POST `/api/v1/ycs/content/videos`. The Celery task redirects to
-`/youtube-content-search/ingest?task=<id>` after dispatch.
+Same shape as Channel/Playlist (June 2026 redesign):
+  - Textarea + (ⓘ) info popover + Fetch videos button in one row
+  - Picker container fills with thumbnails + titles after Fetch
+  - Sticky bottom bar carries transcript options + Start Ingestion
 
-UI shape (June 2026 SOTA, Linear paste-many-issues idiom):
-  - Textarea is the input affordance.
-  - On input/blur, videos.js parses each line/CSV token into a chip
-    below with a status glyph (✓ valid / ⚠ recovered from URL /
-    × unrecognized). Drag-drop .txt/.csv onto the textarea.
-  - Live count header above chips: `24 valid · 1 invalid · 0 duplicate`.
-  - Submit gated on `valid ≥ 1`."""
+Instructions previously lived in a `<P>` at the top of every tab;
+they moved into the info-popover icon so the URL/Fetch row breathes
+(2026-06-08 polish)."""
 from __future__ import annotations
 
-from fasthtml.common import Button, Div, Form, P, Textarea
+from fasthtml.common import Button, Div, Form, Textarea
 
-from .widgets import _OptionsCollapse, _TranscriptOptions
+from .widgets import _InfoPopover, _StickyOptionsBar
 
 
 def VideosTab():
     return Div(
-        P(
-            "Paste YouTube video IDs or URLs — one per line, or comma-"
-            "separated. Drop a .txt or .csv file too. We'll parse and "
-            "validate each before dispatching the background task.",
-            cls = "ycs-tab-hint",
-        ),
         Form(
-            Textarea(
-                name        = "video_ids",
-                id          = "ycs-videos-input",
-                placeholder = (
-                    "dQw4w9WgXcQ\n"
-                    "https://www.youtube.com/watch?v=…\n"
-                    "VIDEO_ID, VIDEO_ID, …"
-                ),
-                rows        = "6",
-                cls         = "ycs-input ycs-textarea",
-                required    = True,
-            ),
+            # Sticky URL row — same posture as the Search tab's
+            # `.ycs-search-sticky` wrapper. Pins the input + Fetch
+            # button to the top while the picker scrolls so the user
+            # can re-paste / re-fetch without scrolling back up.
             Div(
-                Div("", cls = "ycs-paste-count", id = "ycs-videos-count"),
-                Div("", cls = "ycs-paste-chips", id = "ycs-videos-chips"),
-                cls = "ycs-paste-preview",
-                id  = "ycs-videos-preview",
+                Div(
+                    Textarea(
+                        name        = "video_ids",
+                        id          = "ycs-videos-input",
+                        placeholder = (
+                            "dQw4w9WgXcQ\n"
+                            "https://www.youtube.com/watch?v=…\n"
+                            "VIDEO_ID, VIDEO_ID, …"
+                        ),
+                        rows        = "4",
+                        cls         = "ycs-input ycs-textarea",
+                        required    = True,
+                    ),
+                    Div(
+                        _InfoPopover(
+                            "Paste YouTube video IDs or URLs — one per line, "
+                            "or comma-separated. Drop a .txt or .csv file too. "
+                            "Click Fetch videos to preview metadata, then "
+                            "select which ones to ingest.",
+                        ),
+                        Button(
+                            "Fetch videos",
+                            type = "submit",
+                            cls  = "btn-primary",
+                            id   = "ycs-videos-fetch",
+                        ),
+                        cls = "ycs-source-row-actions",
+                    ),
+                    cls = "ycs-source-row",
+                ),
+                cls = "ycs-source-sticky",
+            ),
+            # The picker container — wirePickerTab fills it once the
+            # preview endpoint returns. Master+row checkbox + filter +
+            # Load-more all handled by the shared picker.js.
+            Div(
+                id  = "ycs-videos-picker",
+                cls = "ycs-picker",
                 data_state = "empty",
             ),
-            _OptionsCollapse(
-                _TranscriptOptions(
-                    "videos",
-                    Button(
-                        "Start ingest",
-                        type = "submit",
-                        cls  = "btn-primary",
-                        disabled = True,
-                        id = "ycs-videos-submit",
-                    ),
+            _StickyOptionsBar(
+                "videos",
+                Button(
+                    "Start Ingestion",
+                    type = "submit",
+                    cls  = "btn-primary",
+                    disabled = True,
+                    id = "ycs-videos-submit",
+                    formnovalidate = True,
                 ),
-                Div("", id = "ycs-videos-status", cls = "ycs-search-status"),
-                prefix = "videos",
+                status_id = "ycs-videos-status",
             ),
             id = "ycs-videos-form",
         ),

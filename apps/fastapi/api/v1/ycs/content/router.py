@@ -16,6 +16,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 
 from domains.ycs.content import (
+    EnumerationResponse,
     SearchRequest,
     SearchResponse,
     YtDlpJsonParseError,
@@ -24,7 +25,9 @@ from domains.ycs.content import (
     get_search_service,
 )
 from domains.ycs.extract import (
+    ChannelPipelineRequest,
     ChannelRequest,
+    PlaylistPipelineRequest,
     PlaylistRequest,
     VideosRequest,
 )
@@ -323,6 +326,224 @@ async def stop_videos_pipeline(extract_id: str, request: Request) -> dict:
         "status":   "revoked",
         "phases":   phases,
         "outcomes": outcomes,
+    }
+
+
+@router.get("/videos/preview", response_model = EnumerationResponse)
+async def preview_videos(
+    ids:    str,
+    limit:  int = 100,
+    offset: int = 0,
+) -> EnumerationResponse:
+    """Per-id yt-dlp metadata fetch for the Source page's Videos-tab
+    Fetch flow. Accepts a comma-separated `ids=` parameter and returns
+    the same EnumerationResponse shape Channel + Playlist endpoints
+    use, so picker.js renders all three tabs with one shared module.
+
+    URL encoding caps: typical paste of 200 11-char YouTube IDs ≈ 2200
+    chars in the URL — well within the ~8K browser/proxy limits.
+    Server-side pagination via offset/limit (slices the input list)
+    keeps wirePickerTab's Load-more behavior identical to channel/
+    playlist."""
+    video_ids = [v.strip() for v in (ids or "").split(",") if v.strip()]
+    if not video_ids:
+        raise HTTPException(
+            status_code = 400, detail = "ids is required (comma-separated)",
+        )
+    svc = get_search_service()
+    try:
+        return await svc.preview_videos(
+            video_ids = video_ids, limit = limit, offset = offset,
+        )
+    except YtDlpTimeoutError as e:
+        raise HTTPException(status_code = 504, detail = str(e))
+    except YtDlpSubprocessError as e:
+        raise HTTPException(
+            status_code = 502,
+            detail = f"yt-dlp returncode={e.returncode}: {e.stderr[:400]}",
+        )
+    except YtDlpJsonParseError as e:
+        raise HTTPException(
+            status_code = 502, detail = f"yt-dlp output not JSON: {e}",
+        )
+
+
+@router.get("/channel/videos", response_model = EnumerationResponse)
+async def enumerate_channel_videos(
+    id:     str,
+    limit:  int = 100,
+    offset: int = 0,
+) -> EnumerationResponse:
+    """Paginated listing of ONE channel's videos. The Channel tab on
+    the Source page calls this on form submit, renders the items in a
+    master+row checkbox table, and dispatches the SELECTED video_ids
+    to `/content/videos/pipeline` (same chain the Videos tab uses).
+
+    Resolves any channel input shape — bare `UC...`, `@handle`,
+    channel URL, custom `/c/<name>` URL — into the channel's UU
+    uploads playlist (where possible) for the cheapest pagination
+    path. Returns `total=None` when yt-dlp can't surface
+    `playlist_count` for the resolved URL; the frontend renders "?" in
+    that case."""
+    svc = get_search_service()
+    try:
+        return await svc.enumerate_videos(
+            source = "channel", raw_input = id,
+            limit  = limit, offset = offset,
+        )
+    except YtDlpTimeoutError as e:
+        raise HTTPException(status_code = 504, detail = str(e))
+    except YtDlpSubprocessError as e:
+        raise HTTPException(
+            status_code = 502,
+            detail = f"yt-dlp returncode={e.returncode}: {e.stderr[:400]}",
+        )
+    except YtDlpJsonParseError as e:
+        raise HTTPException(
+            status_code = 502, detail = f"yt-dlp output not JSON: {e}",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code = 400, detail = str(e))
+
+
+@router.get("/playlist/videos", response_model = EnumerationResponse)
+async def enumerate_playlist_videos(
+    id:     str,
+    limit:  int = 100,
+    offset: int = 0,
+) -> EnumerationResponse:
+    """Paginated listing of ONE playlist's videos. Same shape as
+    `/channel/videos` — used by the Playlist tab to render a master+row
+    checkbox picker and dispatch the selection to the videos pipeline.
+
+    Accepts any playlist input — raw `PL...` / `UU...` etc. ID, full
+    `playlist?list=...` URL, or a `watch?v=…&list=…` URL with a list=
+    query."""
+    svc = get_search_service()
+    try:
+        return await svc.enumerate_videos(
+            source = "playlist", raw_input = id,
+            limit  = limit, offset = offset,
+        )
+    except YtDlpTimeoutError as e:
+        raise HTTPException(status_code = 504, detail = str(e))
+    except YtDlpSubprocessError as e:
+        raise HTTPException(
+            status_code = 502,
+            detail = f"yt-dlp returncode={e.returncode}: {e.stderr[:400]}",
+        )
+    except YtDlpJsonParseError as e:
+        raise HTTPException(
+            status_code = 502, detail = f"yt-dlp output not JSON: {e}",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code = 400, detail = str(e))
+
+
+@router.post("/channel/pipeline")
+async def channel_pipeline(
+    payload: ChannelPipelineRequest, request: Request,
+) -> dict:
+    """Enumerate ALL videos in a channel server-side, then dispatch the
+    3-phase pipeline (extract → Qdrant → Neo4j → invalidate) against
+    every video_id. Bypasses the 100-per-page picker cap so the user
+    can queue a whole channel with one click.
+
+    Returns the same shape `/videos/pipeline` returns — `{phases,
+    video_ids, status, endpoint}` — so the FastHTML dispatch helper
+    works unchanged."""
+    svc = get_search_service()
+    try:
+        video_ids = await svc.enumerate_all_video_ids(
+            source = "channel", raw_input = payload.channel_id,
+        )
+    except YtDlpTimeoutError as e:
+        raise HTTPException(status_code = 504, detail = str(e))
+    except YtDlpSubprocessError as e:
+        raise HTTPException(
+            status_code = 502,
+            detail = f"yt-dlp returncode={e.returncode}: {e.stderr[:400]}",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code = 400, detail = str(e))
+    if not video_ids:
+        raise HTTPException(
+            status_code = 404,
+            detail = f"No videos found in channel {payload.channel_id!r}",
+        )
+    from domains.ycs.pipeline_task import (
+        dispatch_videos_pipeline,
+        persist_pipeline_state,
+    )
+    phases = dispatch_videos_pipeline(
+        video_ids             = video_ids,
+        include_transcription = payload.include_transcription,
+        languages             = payload.transcription_languages,
+    )
+    await persist_pipeline_state(
+        getattr(request.app.state, "redis_aio", None),
+        extract_id            = phases.get("extract", ""),
+        video_ids             = video_ids,
+        include_transcription = payload.include_transcription,
+        languages             = payload.transcription_languages,
+        phases                = phases,
+    )
+    return {
+        "status":    "queued",
+        "phases":    phases,
+        "video_ids": video_ids,
+        "endpoint":  "/api/v1/ycs/admin/pipeline",
+    }
+
+
+@router.post("/playlist/pipeline")
+async def playlist_pipeline(
+    payload: PlaylistPipelineRequest, request: Request,
+) -> dict:
+    """Enumerate ALL videos in a playlist server-side, then dispatch
+    the 3-phase pipeline. Mirror of `/channel/pipeline` — see that
+    handler for the design notes."""
+    svc = get_search_service()
+    try:
+        video_ids = await svc.enumerate_all_video_ids(
+            source = "playlist", raw_input = payload.playlist_id,
+        )
+    except YtDlpTimeoutError as e:
+        raise HTTPException(status_code = 504, detail = str(e))
+    except YtDlpSubprocessError as e:
+        raise HTTPException(
+            status_code = 502,
+            detail = f"yt-dlp returncode={e.returncode}: {e.stderr[:400]}",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code = 400, detail = str(e))
+    if not video_ids:
+        raise HTTPException(
+            status_code = 404,
+            detail = f"No videos found in playlist {payload.playlist_id!r}",
+        )
+    from domains.ycs.pipeline_task import (
+        dispatch_videos_pipeline,
+        persist_pipeline_state,
+    )
+    phases = dispatch_videos_pipeline(
+        video_ids             = video_ids,
+        include_transcription = payload.include_transcription,
+        languages             = payload.transcription_languages,
+    )
+    await persist_pipeline_state(
+        getattr(request.app.state, "redis_aio", None),
+        extract_id            = phases.get("extract", ""),
+        video_ids             = video_ids,
+        include_transcription = payload.include_transcription,
+        languages             = payload.transcription_languages,
+        phases                = phases,
+    )
+    return {
+        "status":    "queued",
+        "phases":    phases,
+        "video_ids": video_ids,
+        "endpoint":  "/api/v1/ycs/admin/pipeline",
     }
 
 

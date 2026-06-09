@@ -138,6 +138,36 @@
   opacity: 0.85;
 }
 .fw-chstrip-cell .time:empty { display: none; }
+
+/* Per-cell "Open in Study" button — disabled until the chapter renders.
+   Compact icon-button on the right of the cell; tooltip explains state. */
+.fw-chstrip-cell .fw-chstrip-open {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  padding: 3px 7px;
+  font-size: 0.85rem;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s,
+              opacity 0.12s;
+}
+.fw-chstrip-cell .fw-chstrip-open:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.fw-chstrip-cell .fw-chstrip-open:not(:disabled):hover {
+  background: var(--ingested-bg);
+  border-color: var(--ingested-border);
+  color: var(--ingested-text);
+}
+.fw-chstrip-cell[data-status="done"] .fw-chstrip-open {
+  border-color: var(--ingested-border);
+  color: var(--ingested-text);
+}
 .fw-chstrip-cell[data-status="pending"] .icon::before  { content: '○'; }
 .fw-chstrip-cell[data-status="running"] .icon::before  { content: '◐'; }
 .fw-chstrip-cell[data-status="done"]    .icon::before  { content: '✔'; }
@@ -168,5 +198,83 @@
 }
 @keyframes fw-chstrip-spin {
   to { transform: rotate(360deg); }
+}
+
+/* ============================================================
+   Book-harmonize indicator — post-study cross-chapter coherence
+   row that sits below the chapter cells in the chstrip column.
+   Hidden in 'idle' (default) so a study that hasn't started yet
+   doesn't show a confusing dead row; flips visible the moment
+   the first book_harmonize_start SSE arrives.
+   ============================================================ */
+.fw-book-harmonize {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-muted);
+  border-radius: 2px;
+  background: var(--card);
+  font-size: 0.78rem;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.fw-book-harmonize[data-status="running"],
+.fw-book-harmonize[data-status="skipped"],
+.fw-book-harmonize[data-status="done"] {
+  display: flex;
+}
+.fw-book-harmonize .fw-bh-icon {
+  flex: 0 0 auto;
+  width: 14px;
+  text-align: center;
+  opacity: 0.9;
+}
+.fw-book-harmonize[data-status="idle"]    .fw-bh-icon::before { content: '○'; }
+.fw-book-harmonize[data-status="running"] .fw-bh-icon::before { content: '◐'; }
+.fw-book-harmonize[data-status="skipped"] .fw-bh-icon::before { content: '⊘'; }
+.fw-book-harmonize[data-status="done"]    .fw-bh-icon::before { content: '✔'; }
+.fw-book-harmonize .fw-bh-label {
+  flex: 0 0 auto;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.fw-book-harmonize .fw-bh-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+/* Running — sky-blue (matches the rest of "in-flight" affordances). */
+.fw-book-harmonize[data-status="running"] {
+  border-left-color: var(--running-border);
+  background: var(--running-bg);
+}
+.fw-book-harmonize[data-status="running"] .fw-bh-icon {
+  color: var(--running-border);
+  animation: fw-chstrip-spin 1.6s linear infinite;
+  display: inline-block;
+}
+.fw-book-harmonize[data-status="running"] .fw-bh-label {
+  color: var(--running-text);
+}
+/* Done — green (matches the "rendered" chstrip rows). */
+.fw-book-harmonize[data-status="done"] {
+  border-left-color: var(--ingested-border);
+}
+.fw-book-harmonize[data-status="done"] .fw-bh-icon { color: var(--ingested-border); }
+.fw-book-harmonize[data-status="done"] .fw-bh-label { color: var(--ingested-text); }
+/* Skipped — muted gray (matches cancelled chstrip rows). */
+.fw-book-harmonize[data-status="skipped"] {
+  border-left-color: var(--text-muted);
+  opacity: 0.85;
 }
 }

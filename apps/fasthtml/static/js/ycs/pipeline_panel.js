@@ -7,7 +7,7 @@
  * Source-of-truth precedence for what to track:
  *   1. URL params `?extract=&qdrant=&neo4j=` (set by the Videos tab
  *      redirect right after dispatch). Wins because it's the freshest
- *      signal — user just clicked Start ingest.
+ *      signal — user just clicked Start Ingestion.
  *   2. localStorage `ycs:pipeline:active` (24h TTL mirrors the backend
  *      Redis snapshot). Restores state across tab navigation +
  *      page reloads.
@@ -504,7 +504,7 @@ function bindRerun(btn, extractId) {
                 qdrant:  p.qdrant,
                 neo4j:   p.neo4j,
             });
-            window.location.href = `/youtube-content-search/ingest?${q.toString()}`;
+            window.location.href = `/youtube-content-search/ingestion?${q.toString()}`;
         } catch (e) {
             btn.disabled = false;
             btn.textContent = origLabel;

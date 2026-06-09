@@ -28,9 +28,10 @@ export function parseLangs(raw) {
     return v.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
 }
 
-/* Queue work on the backend → redirect to /ingest?task=<id> so the
- * Ingest page can poll Celery status. Shared by videos / channel /
- * playlist. */
+/* Queue work on the backend → redirect to /ingestion?task=<id> so the
+ * Ingestion page can poll Celery status. Shared by videos / channel /
+ * playlist. (Stage renamed `ingest` → `ingestion` 2026-06-08 for DD
+ * parity; the URL slug + nav label changed in lockstep.) */
 export async function dispatchToIngest(endpoint, body, statusEl) {
     setStatus(statusEl, "running", "Queuing…");
     try {
@@ -47,7 +48,7 @@ export async function dispatchToIngest(endpoint, body, statusEl) {
             return;
         }
         setStatus(statusEl, "running", `Queued: ${data.task_id?.slice(0, 8)}… — redirecting.`);
-        window.location.href = `/youtube-content-search/ingest?task=${encodeURIComponent(data.task_id)}`;
+        window.location.href = `/youtube-content-search/ingestion?task=${encodeURIComponent(data.task_id)}`;
     } catch (e) {
         setStatus(statusEl, "error", `Network error: ${e.message ?? e}`);
     }
@@ -101,7 +102,7 @@ export async function dispatchPipelineToIngest(endpoint, body, statusEl) {
             statusEl, "running",
             `Queued: ${p.extract.slice(0, 8)}…/${p.qdrant.slice(0, 8)}…/${p.neo4j.slice(0, 8)}… — redirecting.`,
         );
-        window.location.href = `/youtube-content-search/ingest?${q.toString()}`;
+        window.location.href = `/youtube-content-search/ingestion?${q.toString()}`;
     } catch (e) {
         setStatus(statusEl, "error", `Network error: ${e.message ?? e}`);
     }

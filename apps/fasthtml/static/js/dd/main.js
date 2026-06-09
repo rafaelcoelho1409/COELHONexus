@@ -184,11 +184,23 @@ async function initStudy() {
   } catch (e) { console.warn('[init] study-load failed:', e); }
 }
 
+// Unified Planner + Synth page (2026-06-08). Runs both stage inits
+// sequentially — each one mounts onto its own Cytoscape container
+// (`#fw-planner-canvas` vs `#fw-synth-canvas`), so they coexist on
+// the same page without conflict.
+async function initPipeline() {
+  try { await initPlanner(); }
+  catch (e) { console.warn('[init] pipeline planner init failed:', e); }
+  try { await initSynth(); }
+  catch (e) { console.warn('[init] pipeline synth init failed:', e); }
+}
+
 const STAGE_INITS = {
   catalog:   initCatalog,
   ingestion: initIngestion,
   planner:   initPlanner,
   synth:     initSynth,
+  pipeline:  initPipeline,
   study:     initStudy,
 };
 

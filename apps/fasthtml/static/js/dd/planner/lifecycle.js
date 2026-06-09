@@ -60,7 +60,7 @@ export function refreshPlannerStartState() {
     Sp.plannerStartBtn.removeAttribute('disabled');
     Sp.plannerStartBtn.classList.add('btn-outline');
     Sp.plannerStartBtn.classList.remove('btn-primary');
-    Sp.plannerStartBtn.innerHTML = 'Cancel Planner';
+    Sp.plannerStartBtn.innerHTML = 'Stop';
   } else {
     // CORPUS-FIRST GATE — the planner needs an ingested corpus. Mirrors
     // the server-side read_framework_manifest 404 so the disabled button
@@ -92,7 +92,7 @@ export function refreshPlannerStartState() {
     }
     Sp.plannerStartBtn.classList.add('btn-primary');
     Sp.plannerStartBtn.classList.remove('btn-outline');
-    Sp.plannerStartBtn.innerHTML = 'Start Planner';
+    Sp.plannerStartBtn.innerHTML = 'Start';
   }
   // Wipe button — enabled whenever a slug is active and no run is
   // currently in flight (wiping mid-run would corrupt LangGraph state).
@@ -377,9 +377,44 @@ export async function _tryResumeActivePlanner(slug) {
       .catch(() => {});
   }
 
+  // Source-of-truth lookup: ask the server for the authoritative latest
+  // thread_id for this slug BEFORE trusting localStorage. The previous
+  // implementation read localStorage first, which broke two real cases:
+  //
+  //   (1) Fresh browser / tab / private window: localStorage is empty,
+  //       so we'd return false and the planner graph stayed at the
+  //       initial all-pending visual even though /planner/recent had a
+  //       fully-completed thread for this slug.
+  //
+  //   (2) Stale localStorage: an older partial run wrote a thread_id
+  //       that's no longer the most-recent. /state for that stale tid
+  //       returns a values dict with only the fields the partial run
+  //       got to — so SOME nodes paint green and the rest stay pending,
+  //       which is exactly the bug reported for the Pipeline page on
+  //       2026-06-08 ("not all graph nodes showing green").
+  //
+  // /planner/recent is keyed by slug at the server (latest checkpoint
+  // per thread per framework), so its answer overrides localStorage on
+  // a mismatch. We also write it back to localStorage so subsequent
+  // page-load fast paths (no network) stay accurate.
   let tid = null;
-  try { tid = localStorage.getItem(_plannerStorageKey(slug)); }
-  catch (e) { return false; }
+  try {
+    const rr = await fetch(Sa.API + '/planner/recent');
+    if (rr.ok) {
+      const rd = await rr.json();
+      const recent = (rd && rd.recent) || [];
+      const hit = recent.find(it => it.slug === slug);
+      if (hit && hit.thread_id) {
+        tid = hit.thread_id;
+        try { localStorage.setItem(_plannerStorageKey(slug), tid); }
+        catch (_) {}
+      }
+    }
+  } catch (_) { /* network down — fall through to localStorage */ }
+  if (!tid) {
+    try { tid = localStorage.getItem(_plannerStorageKey(slug)); }
+    catch (e) { return false; }
+  }
   if (!tid) return false;
   try {
     const r = await fetch(Sa.API + '/planner/debug/graph/' + tid + '/state');
@@ -615,7 +650,7 @@ export async function cancelPlanner() {
     // can retry. The startPlanner POST is still in flight either way.
     clearTimeout(safetyTimer);
     Sp.plannerStartBtn.removeAttribute('disabled');
-    Sp.plannerStartBtn.innerHTML = 'Cancel Planner';
+    Sp.plannerStartBtn.innerHTML = 'Stop';
     showToast('Cancel request failed: ' + String(e));
   }
 }

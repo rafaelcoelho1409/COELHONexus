@@ -1,0 +1,204 @@
+@layer features {
+
+/* Pipeline page — unified Planner + Synth layout (2026-06-08).
+   Stacked Planner + Synth canvases on the left, chapter strip on the right
+   spanning both zones. Mirrors the synth-only `.fw-synth-split` 70/30
+   pattern but with TWO vertically-stacked canvases on the left side. */
+
+.fw-pipeline-grid {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 12px;
+  min-height: calc(100dvh - 220px);
+}
+
+/* Two canvases side-by-side in a row (2026-06-08): Planner LEFT, Synth
+   RIGHT, equal width. Fits both DAGs at a glance without scrolling. */
+.fw-pipeline-canvases {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Each stage zone — subtle tint + label header so the user can tell at
+   a glance which DAG is Planner vs Synth. */
+.fw-pipeline-zone {
+  display: flex;
+  flex-direction: column;
+  background: rgba(0, 0, 0, 0.012);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+.fw-pipeline-zone-planner {
+  border-left: 3px solid var(--primary);
+}
+.fw-pipeline-zone-synth {
+  border-left: 3px solid var(--ingested-border);
+}
+
+.fw-pipeline-zone-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  color: var(--text-muted);
+  padding: 0 4px 6px 4px;
+  border-bottom: 1px dashed var(--border);
+  margin-bottom: 8px;
+}
+.fw-pipeline-zone-planner .fw-pipeline-zone-label { color: var(--primary); }
+.fw-pipeline-zone-synth   .fw-pipeline-zone-label { color: var(--ingested-text); }
+
+/* Reuse the per-stage canvas styles (.fw-stage-canvas, .fw-planner-graph)
+   — they're already loaded via planner/canvas.css. Side-by-side row
+   layout means each canvas takes the full available height of the
+   pipeline grid; the canvas container itself stretches via flex:1. */
+.fw-pipeline-zone .fw-planner-graph,
+.fw-pipeline-zone .fw-stage-canvas {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.fw-pipeline-zone .fw-stage-canvas {
+  height: 100%;
+  min-height: 420px;
+}
+
+/* Mobile / narrow viewport — stack zones vertically (planner top, synth
+   bottom) so each DAG still gets full width to render. */
+@media (max-width: 1100px) {
+  .fw-pipeline-canvases {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Toolbar — Planner cluster | → arrow | Synth cluster | checkbox.
+   Designed to fit alongside the framework picker on row 3 of the
+   sticky header without overflow on a 1366-wide laptop. */
+.fw-pipeline-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.fw-pipeline-stage-cluster {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+  flex-wrap: nowrap;
+}
+.fw-pipeline-stage-cluster[data-stage="planner"] {
+  border-left: 3px solid var(--primary);
+}
+.fw-pipeline-stage-cluster[data-stage="synth"] {
+  border-left: 3px solid var(--ingested-border);
+}
+/* Stage label — bold tag at the head of each cluster ("Planner" /
+   "Synth"). Matches the cluster's accent color so the row reads as
+   "Planner [actions]  →  Synth [actions]". */
+.fw-pipeline-stage-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 0 4px 0 2px;
+  white-space: nowrap;
+}
+.fw-pipeline-stage-cluster[data-stage="planner"] .fw-pipeline-stage-label {
+  color: var(--primary);
+}
+.fw-pipeline-stage-cluster[data-stage="synth"] .fw-pipeline-stage-label {
+  color: var(--ingested-text);
+}
+/* Tighter buttons inside the toolbar so two clusters + checkbox + the
+   framework picker fit on one row at 1366. */
+.fw-pipeline-stage-cluster .btn-primary,
+.fw-pipeline-stage-cluster .btn-outline {
+  padding: 3px 9px;
+  font-size: 0.78rem;
+}
+/* Pills already render their own padding via .fw-stage-pill — shrink
+   the elapsed-time span so it doesn't push the row over. */
+.fw-pipeline-stage-cluster .fw-stage-pill {
+  padding: 2px 7px;
+  font-size: 0.75rem;
+}
+.fw-pipeline-stage-cluster .fw-stage-elapsed {
+  font-size: 0.7rem;
+}
+.fw-pipeline-arrow {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  user-select: none;
+  flex: 0 0 auto;
+}
+
+/* Auto-chain opt-in — small checkbox to the right of the Synth cluster.
+   Compact "Auto-chain" label so the whole row fits next to the framework
+   picker; full meaning surfaces via tooltip. */
+.fw-pipeline-autochain {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.015);
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.fw-pipeline-autochain:hover {
+  border-color: var(--primary);
+  color: var(--text);
+}
+.fw-pipeline-autochain-cb {
+  margin: 0;
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+  accent-color: var(--primary);
+}
+.fw-pipeline-autochain-label {
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+/* Narrow viewports — allow wrap; the framework picker drops to the next
+   line if the toolbar overflows. */
+@media (max-width: 1100px) {
+  .fw-pipeline-toolbar {
+    flex-wrap: wrap;
+  }
+}
+.fw-pipeline-autochain:has(.fw-pipeline-autochain-cb:checked) {
+  background: rgba(196, 18, 48, 0.04);
+  border-style: solid;
+  border-color: var(--primary);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+/* Very-narrow viewport — collapse the right-side chapter strip below
+   the canvases too. */
+@media (max-width: 720px) {
+  .fw-pipeline-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+}

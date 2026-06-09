@@ -42,12 +42,5 @@
   --ingested-bg: #e8f6ee;
   --ingested-border: #2a8b46;
   --ingested-text: #1f7a3d;
-  /* FSRS flashcard grade scale — Wong color-blind-safe palette (Nature
-     std; safe across deutan/protan/tritan). Hue + button order/label carry
-     the signal, never hue alone — avoids the red→amber→green CVD trap. */
-  --grade-again: #d55e00;
-  --grade-hard:  #e69f00;
-  --grade-good:  #0072b2;
-  --grade-easy:  #009e73;
 }
 }

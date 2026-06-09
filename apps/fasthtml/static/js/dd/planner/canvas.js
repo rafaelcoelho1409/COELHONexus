@@ -28,15 +28,28 @@ export function _runPlannerLayoutAndCenter(passLabel) {
     const cy = Sp.plannerGraph.cy;
     cy.resize();
     const hasDagre = !!cytoscape._dagreRegistered;
+    // Compact spacing when the planner canvas sits inside a Pipeline
+    // zone — 9 nodes in a narrow side-by-side column compress too
+    // hard with the default loose spacing (the Synth canvas, with 7
+    // nodes, doesn't hit the same issue). Standalone /planner keeps
+    // the looser layout.
+    const container = document.getElementById('fw-planner-canvas');
+    const inPipeline = !!(container &&
+        container.closest('.fw-pipeline-zone-planner'));
+    const nodeSep  = inPipeline ? 24 : 36;
+    const rankSep  = inPipeline ? 38 : 56;
+    const padding  = inPipeline ? 18 : 32;
+    const fitPad   = inPipeline ? 18 : 32;
     const layout = cy.layout(hasDagre
-      ? { name: 'dagre', rankDir: 'LR', nodeSep: 36, rankSep: 56,
-          padding: 32, animate: false, fit: false }
-      : { name: 'breadthfirst', directed: true, padding: 32,
-          spacingFactor: 1.4, animate: false, fit: false }
+      ? { name: 'dagre', rankDir: 'TB', nodeSep, rankSep, padding,
+          animate: false, fit: false }
+      : { name: 'breadthfirst', directed: true, padding,
+          spacingFactor: inPipeline ? 1.05 : 1.4,
+          animate: false, fit: false }
     );
     layout.one('layoutstop', () => {
       try {
-        cy.fit(cy.elements(), 32);
+        cy.fit(cy.elements(), fitPad);
         cy.center(cy.elements());
         _forceCenterHorizontal(cy, '[plannerGraph ' + passLabel + ']');
       } catch (e) {

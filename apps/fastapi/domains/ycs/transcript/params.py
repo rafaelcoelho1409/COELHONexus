@@ -57,28 +57,72 @@ DEFAULT_CHUNK_SIZE = 10       # ES checkpoint frequency
 
 
 # =============================================================================
-# Resource blocking (helpers.py:L758-777)
+# Resource blocking — 1:1 with the 2026-03-27 gold-standard optimized
+# transcript script (scripts/optimized_transcript_extraction.py at commit
+# f5bff8e). The deprecated helpers.py we originally ported FROM had been
+# trimmed down at some point; the gold script's full block list is what
+# actually got the "100% success rate" on a 1545-video Capital-Global-
+# class corpus, including the videos that fail under partial blocking.
+#
+# Why these specific extra patterns matter:
+#   - HLS manifests/segments (*.m3u8, *.ts, manifest*): even when video
+#     playback is aborted, YouTube fires manifest probes that hold
+#     `wait_until="load"` open and delay the engagement-panel render.
+#   - recommendations (browse/feed/youtubei/v1/{browse,next,search}):
+#     the YouTube UI lazy-loads these AFTER the transcript panel button
+#     is clicked, competing for render frames. Blocking them lets the
+#     transcript-segment-view-model elements paint immediately.
+#   - images (*.jpg/png/gif/webp, ytimg, ggpht): not needed for
+#     transcripts; the GET stalls were the second-largest source of
+#     "panel not loaded after 15 attempts" failures.
+#   - log_interaction / youtubei/v1/log*: same stall pattern as stats.
 # =============================================================================
 BLOCK_PATTERNS = (
     # VIDEO/AUDIO STREAMING (biggest speedup: 2-5s)
     "**/videoplayback*",
     "**/googlevideo.com/*",
     "**/*.googlevideo.com/*",
-    # ADS
+    "**/*.m3u8",              # HLS manifests
+    "**/*.ts",                # HLS segments
+    "**/manifest*",           # DASH manifests
+    # ADS (safe to block completely)
     "**/doubleclick.net/*",
     "**/googleadservices.com/*",
     "**/googlesyndication.com/*",
     "**/googleads.g.doubleclick.net/*",
     "**/youtube.com/pagead/*",
-    # ANALYTICS/TRACKING
+    "**/adservice.google.com/*",
+    "**/ads?*",
+    "**/pagead*",
+    # ANALYTICS / TRACKING / LOGGING (no transcript dependency)
     "**/google-analytics.com/*",
     "**/googletagmanager.com/*",
     "**/youtube.com/api/stats/*",
     "**/youtube.com/ptracking*",
     "**/s.youtube.com/*",
+    "**/youtubei/v1/log*",
+    "**/log_interaction*",
+    # RECOMMENDATIONS / BROWSE (not needed — and they compete with the
+    # transcript-panel render under YouTube's lazy-paint scheduler)
+    "**/browse_ajax*",
+    "**/guide_ajax*",
+    "**/feed/*",
+    # IMAGES (not needed for transcripts; 200-500ms cumulative speedup
+    # and prevents the heavy-DOM "panel not loaded" failure mode)
+    "**/*.jpg",
+    "**/*.jpeg",
+    "**/*.png",
+    "**/*.gif",
+    "**/*.webp",
+    "**/yt3.ggpht.com/*",
+    "**/i.ytimg.com/*",
 )
 
-BLOCK_RESOURCE_TYPES: frozenset[str] = frozenset({"media"})
+# Expanded from the originally-ported `{"media"}` per the gold-standard
+# script — image + font abort reduces background paint pressure that
+# previously delayed the transcript-segment-view-model render past the
+# 15s polling budget on slow-channel videos.
+BLOCK_RESOURCE_TYPES: frozenset[str] = frozenset({"media", "image", "font"})
 
 
 # =============================================================================

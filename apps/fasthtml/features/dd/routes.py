@@ -19,6 +19,7 @@ from .cache import fetch_catalog
 from .catalog.body import CatalogBody
 from .ingestion.body import IngestionBody
 from .page import DDPage
+from .pipeline.body import PipelineBody
 from .planner.body import PlannerBody
 from .shared.nav import StageSubNav
 from .shared.toolbar import StageToolbar
@@ -75,6 +76,16 @@ def register(rt) -> None:
             subnav_row = StageSubNav("synth", slug),
             toolbar_row = StageToolbar("synth", slug),
             body = DDPage("synth", slug, SynthBody(slug)),
+        )
+
+    @rt("/docs-distiller/pipeline")
+    def dd_pipeline(req: Request):
+        slug = _slug_from_request(req)
+        return _Shell(
+            "docs-distiller",
+            subnav_row = StageSubNav("pipeline", slug),
+            toolbar_row = StageToolbar("pipeline", slug),
+            body = DDPage("pipeline", slug, PipelineBody(slug)),
         )
 
     @rt("/docs-distiller/study")

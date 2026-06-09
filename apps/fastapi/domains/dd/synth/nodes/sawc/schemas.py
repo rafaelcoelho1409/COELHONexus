@@ -361,6 +361,4 @@ class ChapterDraft(BaseModel):
     framework_slug: str
     sections:       list[Section]
     memory_final:   list[MemoryEntry]
-    challenges:     list[str]
-    flashcards:     list[dict]
     coverage_stats: SAWCStats

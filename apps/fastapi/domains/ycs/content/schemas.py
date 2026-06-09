@@ -122,6 +122,29 @@ class VideoSnippet(BaseModel):
     video_count:     int | None = None
 
 
+class EnumerationResponse(BaseModel):
+    """Paginated video listing inside ONE channel or playlist. Frontend
+    uses this to render a master+row checkbox picker so the user can
+    submit a subset (or all) of the source's videos to the existing
+    `/content/videos/pipeline` chain. yt-dlp pagination via
+    `--playlist-items <offset+1>:<offset+limit>` is range-honest (walks
+    the playlist from the start internally; the limit just bounds the
+    JSON output). For massive channels (10k+ videos) batches of 100 are
+    a reasonable trade between latency per page (~3–6s) and number of
+    pages."""
+    model_config = ConfigDict(extra = "forbid")
+
+    source:    str             # "channel" | "playlist"
+    source_id: str             # canonical input echo (UC..., PL..., @handle, etc.)
+    title:     str | None = None     # channel name or playlist title
+    channel:   str | None = None     # owning channel name (playlists only; mirrors title for channels)
+    total:     int | None = None     # `playlist_count`; None on extractor edge cases
+    offset:    int
+    limit:     int
+    has_more:  bool
+    items:     list[VideoSnippet]
+
+
 class SearchResponse(BaseModel):
     """Envelope for /content/search."""
     model_config = ConfigDict(extra = "forbid")

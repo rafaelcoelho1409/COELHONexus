@@ -46,7 +46,7 @@ def YCSPage(active_stage: str, slug: str | None, body):
     `pipeline_panel.js` calls `showConfirm()` for Stop confirmation in
     place of `window.confirm()`."""
     body_children = [body]
-    if active_stage == "ingest":
+    if active_stage == "ingestion":
         body_children.insert(0, PipelinePanel())
     return Div(
         Div(

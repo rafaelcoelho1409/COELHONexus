@@ -93,6 +93,13 @@ dependencies = [
     "numpy>=1.26,<2.2",                # LinUCB sufficient-statistics matrix algebra
     # Rotator deps — now hard deps (were optional/try-except-guarded):
     "rapidfuzz>=3.0,<4.0",             # benchmarks L2 model-name canonicalization (token_set_ratio)
+    # `json-repair` is the parser LangChain's LLMGraphTransformer uses
+    # on its `ignore_tool_usage=True` path (the cross-provider
+    # compatibility shipment). The unstructured path emits JSON in
+    # plain-text responses; weaker models leak trailing commas / unclosed
+    # quotes / etc., and json_repair.loads() tolerates them. Without
+    # this dep, LLMGraphTransformer raises ImportError at first call.
+    "json-repair>=0.30,<1.0",
     "river>=0.21,<1.0",                # ParetoBandit drift detection (ADWIN) in pareto_drift
     # OpenTelemetry — emits LLM call spans to Alloy (gRPC) and LangFuse (HTTP/OTLP).
     # Stable APIs capped before 2.0; instrumentation packs pre-1.0 capped before 1.0.

@@ -73,22 +73,70 @@ async def _setup_routes(page) -> None:
 
 
 async def _kill_youtube_background(page) -> None:
-    """Kill YouTube's resource-hungry background processes."""
-    await page.evaluate('''
+    """Comprehensive DOM cleanup — kills the video, removes the heavy
+    sidebars / comments / recommendation renderers, clears timers, and
+    disables analytics. 1:1 with the gold-standard `CLEANUP_DOM_JS`
+    block from commit f5bff8e's `scripts/optimized_transcript_extraction.py`
+    (the "100% success rate" baseline).
+
+    Why this matters operationally: the originally-ported short version
+    only paused the video + cleared timers. YouTube would still render
+    the secondary recommendations panel + comments section in the
+    background after the user clicked "Show transcript", competing
+    with the engagement-panel render. On videos like `zHvdMrSTeEQ`
+    (Capital-Global-class channels with heavy recommendation graphs),
+    the transcript-segment-view-model elements would never paint within
+    the 15s polling budget. Removing the competing DOM trees first
+    lets the panel render reliably."""
+    await page.evaluate("""
         () => {
+            const stats = {
+                video: 0, secondary: 0, comments: 0, renderers: 0, timers: 0,
+            };
+
+            // Stop + remove the video player (+ everything it pulls)
             const video = document.querySelector("video");
             if (video) {
                 video.pause();
                 video.removeAttribute("src");
-                video.load();
+                try { video.load(); } catch (_) {}
+                const player = document.querySelector("ytd-player, #movie_player");
+                if (player) { player.remove(); stats.video = 1; }
             }
+
+            // Remove the right-rail sidebar (recommendations)
+            const secondary = document.querySelector("#secondary");
+            if (secondary) { secondary.remove(); stats.secondary = 1; }
+
+            // Remove the comments tree
+            const comments = document.querySelector("#comments");
+            if (comments) { comments.remove(); stats.comments = 1; }
+
+            // Remove all video-card renderers (recommendation grids)
+            document.querySelectorAll(
+                "ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer"
+            ).forEach((el) => { el.remove(); stats.renderers++; });
+
+            // Kill every active setTimeout / setInterval — stops the
+            // background recommendation-load + analytics-flush cycles
+            // that compete for render frames with the transcript panel.
             const highestId = window.setTimeout(() => {}, 0);
             for (let i = 0; i < highestId; i++) {
                 window.clearTimeout(i);
                 window.clearInterval(i);
+                stats.timers++;
             }
+
+            // Stub analytics globals — best-effort, ignore if absent.
+            try {
+                if (window.ytplayer) window.ytplayer.bootstrapPlayer = null;
+                if (window.ytcfg && window.ytcfg.set) window.ytcfg.set = () => {};
+                if (window._yt_player) window._yt_player = null;
+            } catch (_) {}
+
+            return stats;
         }
-    ''')
+    """)
 
 
 async def _get_caption_tracks(page) -> list[CaptionTrack]:
@@ -114,6 +162,73 @@ async def _get_caption_tracks(page) -> list[CaptionTrack]:
         )
         for t in tracks_data
     ]
+
+
+async def _fetch_transcript_direct(page, base_url: str) -> list[dict]:
+    """In-page direct fetch of YouTube's caption URL — fallback for
+    videos where the DOM hides Show-transcript controls (age-restricted
+    / sensitive-topic / unauthenticated-session UI variants).
+
+    Calls `{base_url}&fmt=json3` from inside the page context so the
+    request inherits the session's cookies + the bgutil-PoT token
+    YouTube requires. Returns `[{timestamp, text}, ...]` segments.
+
+    1:1 port of deprecated `helpers.py::_fetch_transcript_direct`. The
+    deprecated comment "direct API removed - always fails without PO
+    token" was correct in 2026-03 but the cluster now runs the
+    bgutil-PoT sidecar (Dockerfile.fastapi + COELHO Cloud's playwright
+    module), so the session DOES carry a valid PO token now. Use as a
+    fallback when `_extract_via_dom` raises (button not found / panel
+    not loaded). On both-fail the original DOM error wins so log
+    fingerprints stay diagnostic.
+
+    Raises `ValueError(reason)` on HTTP / JSON / empty-response."""
+    json_url = base_url + ("&" if "?" in base_url else "?") + "fmt=json3"
+    result = await page.evaluate(f"""
+        async () => {{
+            try {{
+                const resp = await fetch("{json_url}", {{
+                    credentials: "include",
+                    headers: {{ "Accept": "application/json" }}
+                }});
+                if (!resp.ok) {{
+                    return {{ error: "HTTP " + resp.status }};
+                }}
+                const text = await resp.text();
+                if (!text || text.length === 0) {{
+                    return {{ error: "empty response" }};
+                }}
+                if (text.startsWith('<')) {{
+                    return {{ error: "blocked (HTML response)" }};
+                }}
+                if (text.length < 10) {{
+                    return {{ error: "truncated response: " + text.length + " bytes" }};
+                }}
+                try {{
+                    return JSON.parse(text);
+                }} catch (parseErr) {{
+                    return {{ error: "JSON parse failed: " + parseErr.message + " (len=" + text.length + ")" }};
+                }}
+            }} catch (e) {{
+                return {{ error: e.message }};
+            }}
+        }}
+    """)
+    if isinstance(result, dict) and "error" in result:
+        raise ValueError(result["error"])
+    segments: list[dict] = []
+    for event in (result or {}).get("events", []) or []:
+        if "segs" in event:
+            text = "".join(s.get("utf8", "") for s in event["segs"]).strip()
+            if text:
+                start_ms = event.get("tStartMs", 0)
+                minutes  = start_ms // 60000
+                seconds  = (start_ms // 1000) % 60
+                segments.append({
+                    "timestamp": f"{minutes}:{seconds:02d}",
+                    "text":      text,
+                })
+    return segments
 
 
 async def _extract_via_dom(page, timeout_ms: int) -> str:
@@ -208,40 +323,45 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
         })''')
         log.warning(f"[dom] Transcript button not found. Debug: {debug_info}")
         raise ValueError("Transcript button not found")
-    # Step 4: Poll for transcript panel to load (up to 15 attempts, 1s apart)
-    panel_loaded = False
-    segment_count = 0
-    for attempt in range(15):
-        panel_state = await page.evaluate('''() => {
-            const segments = document.querySelectorAll(
-                'ytd-transcript-segment-renderer, transcript-segment-view-model'
-            );
-            if (segments.length > 0) {
-                return { loaded: true, segmentCount: segments.length };
-            }
-            const panel = document.querySelector(
-                'ytd-engagement-panel-section-list-renderer[visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]'
-            );
-            if (panel && /\\d+:\\d{2}/.test(panel.innerText)) {
-                return { loaded: true, segmentCount: 0 };
-            }
-            const newPanel = document.querySelector(
-                'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"]'
-            );
-            if (newPanel && /\\d+:\\d{2}/.test(newPanel.innerText)) {
-                return { loaded: true, segmentCount: 0 };
-            }
-            return { loaded: false, segmentCount: 0 };
-        }''')
-        if panel_state.get("loaded"):
-            panel_loaded = True
-            segment_count = panel_state.get("segmentCount", 0)
-            log.info(f"[dom] Panel loaded (attempt {attempt + 1}) segments={segment_count}")
-            break
-        if attempt < 14:
-            await page.wait_for_timeout(1000)
-    if not panel_loaded:
-        log.warning("[dom] Panel not loaded after 15 attempts")
+    # Step 4: Event-driven wait for transcript panel to render.
+    # 1:1 with the gold-standard `wait_for_segments(page, timeout_ms=10000)`
+    # from commit f5bff8e (`scripts/optimized_transcript_extraction.py`).
+    # Replaces the prior 15-attempt × 1s polling loop — the polling
+    # version was BLIND to the actual segment-render event and ate the
+    # full 14s of `wait_for_timeout` sleep even when segments arrived
+    # in 200ms. `wait_for_function` returns the moment the predicate
+    # becomes true, OR raises on timeout (10s budget — predicate fires
+    # within <2s on healthy renders).
+    try:
+        await page.wait_for_function(
+            """() => {
+                const segments = document.querySelectorAll(
+                    'transcript-segment-view-model, ytd-transcript-segment-renderer, .segment-text'
+                );
+                if (segments.length > 0) return true;
+                const panel = document.querySelector(
+                    'ytd-engagement-panel-section-list-renderer[visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]'
+                );
+                if (panel && /\\d+:\\d{2}/.test(panel.innerText)) return true;
+                const newPanel = document.querySelector(
+                    'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"]'
+                );
+                return newPanel && /\\d+:\\d{2}/.test(newPanel.innerText);
+            }""",
+            timeout = 10000,
+        )
+        # Best-effort segment count for telemetry — fire-and-forget.
+        try:
+            segment_count = await page.evaluate(
+                """() => document.querySelectorAll(
+                    'transcript-segment-view-model, ytd-transcript-segment-renderer'
+                ).length""",
+            )
+        except Exception:
+            segment_count = 0
+        log.info(f"[dom] Panel loaded segments={segment_count}")
+    except Exception:
+        log.warning("[dom] Panel not loaded within 10s budget")
         raise ValueError("Transcript panel not loaded")
     return await _extract_transcript_text(page)
 
@@ -725,9 +845,15 @@ class PlaywrightTranscriptService:
                 page = await context.new_page()
                 await _setup_routes(page)
                 url = f"https://www.youtube.com/watch?v={video_id}"
+                # `wait_until="domcontentloaded"` per the gold-standard
+                # script — was `"load"`, which waited on the very
+                # analytics/manifest requests we abort via BLOCK_PATTERNS,
+                # eating navigation budget for nothing. DCL fires as
+                # soon as the HTML is parsed; the captions detection
+                # below + _kill_youtube_background do the rest.
                 await page.goto(
                     url,
-                    wait_until = "load",
+                    wait_until = "domcontentloaded",
                     timeout    = self.navigation_timeout_ms,
                 )
                 await _kill_youtube_background(page)
@@ -741,6 +867,7 @@ class PlaywrightTranscriptService:
                 tracks = await _get_caption_tracks(page)
                 language = "auto"
                 is_auto_generated = True
+                selected = None
                 if tracks:
                     manual_count = sum(
                         1 for t in tracks if not t.is_auto_generated
@@ -752,7 +879,50 @@ class PlaywrightTranscriptService:
                     selected = _select_best_track(tracks, prefer_manual)
                     language = selected.language_code
                     is_auto_generated = selected.is_auto_generated
-                raw_text = await _extract_via_dom(page, self.timeout_ms)
+                # Primary path — DOM scrape of the engagement panel. Falls
+                # back to direct in-page fetch of the caption URL when
+                # the DOM scrape fails AND we have a selected track with
+                # a baseUrl. Direct path uses the bgutil-PoT session
+                # token so it works in cases where the DOM hides the
+                # Show-transcript button (age-restricted / sensitive-
+                # topic / unauthenticated-session UI variants).
+                try:
+                    raw_text = await _extract_via_dom(page, self.timeout_ms)
+                except Exception as dom_err:
+                    direct_segments: list[dict] | None = None
+                    if selected and selected.base_url:
+                        try:
+                            direct_segments = await _fetch_transcript_direct(
+                                page, selected.base_url,
+                            )
+                        except Exception as direct_err:
+                            log.info(
+                                f"[transcript-service] {video_id} direct-API "
+                                f"fallback failed: {type(direct_err).__name__}: "
+                                f"{str(direct_err)[:120]}"
+                            )
+                    if not direct_segments:
+                        # Both paths failed — surface the ORIGINAL DOM
+                        # error so the existing telemetry/log
+                        # fingerprints stay diagnostic.
+                        raise dom_err
+                    page_content = " ".join(
+                        s["text"] for s in direct_segments
+                    )
+                    elapsed = time.time() - start_time
+                    log.info(
+                        f"[transcript-service] OK {video_id} method=direct_api "
+                        f"segments={len(direct_segments)} time={elapsed:.2f}s"
+                        f" (DOM fell back after: {str(dom_err)[:80]})"
+                    )
+                    return {
+                        "video_id":          video_id,
+                        "language":          language,
+                        "is_auto_generated": is_auto_generated,
+                        "page_content":      page_content,
+                        "segments":          direct_segments,
+                        "method":            "direct_api",
+                    }
                 if not raw_text:
                     raise ValueError(f"No transcript for: {video_id}")
                 segments = _parse_transcript(raw_text)

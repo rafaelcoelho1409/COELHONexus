@@ -11,8 +11,6 @@ MinIO keys:
   synth/{slug}/study-timing-latest.json
   synth/{slug}/{chapter_id}/README.md
   synth/{slug}/{chapter_id}/render-latest.json
-  synth/{slug}/{chapter_id}/challenges.md
-  synth/{slug}/{chapter_id}/flashcards.json
   synth/{slug}/book_harmonize/{manifest_hash}.json
   synth/{slug}/book_harmonize-latest.json
 """
@@ -64,14 +62,6 @@ def chapter_readme_key(slug: str, chapter_id: str) -> str:
 
 def chapter_render_latest_key(slug: str, chapter_id: str) -> str:
     return f"synth/{slug}/{chapter_id}/render-latest.json"
-
-
-def chapter_challenges_key(slug: str, chapter_id: str) -> str:
-    return f"synth/{slug}/{chapter_id}/challenges.md"
-
-
-def chapter_flashcards_key(slug: str, chapter_id: str) -> str:
-    return f"synth/{slug}/{chapter_id}/flashcards.json"
 
 
 def book_harmonize_versioned_key(slug: str, manifest_hash: str) -> str:

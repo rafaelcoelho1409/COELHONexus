@@ -410,14 +410,19 @@
 /* Form is a plain block — sticky behavior is on the wrapper above.
    Reset any inherited sticky/margin from earlier iterations. */
 #ycs-search-form { margin: 0; padding: 0; }
-/* `.page` reserves 28px padding-top above its content. On the Search
-   panel that creates a visible gap between row 3 and the sticky
-   wrapper (results scroll through it). When Search is the active
-   tab — and ONLY then — zero out the padding so the wrapper sits
-   flush. Other tabs (Videos / Channel / Playlist / Ingest / Ask)
-   keep the default breathing room since the `:has()` selector won't
-   match. */
-.shell:has(.ycs-tab-body#ycs-tab-search.active) > .page { padding-top: 0; }
+/* `.page` reserves 28px padding-top above its content. The Source
+   page's 4 sub-tabs (Search / Videos / Channel / Playlist) ALL have
+   a sticky URL row that supplies its own padding-block: 12px — when
+   any of them is active we zero out the `.page` padding-top so the
+   sticky row docks flush against the third navbar row. Without
+   this, Videos/Channel/Playlist showed a visible 28px gap above
+   their pinned URL row (Search alone was correct before — extending
+   the rule keeps the four sub-tabs visually identical).
+   Other stages (Ingestion / Ask) keep the default breathing room. */
+.shell:has(.ycs-tab-body#ycs-tab-search.active)   > .page,
+.shell:has(.ycs-tab-body#ycs-tab-videos.active)   > .page,
+.shell:has(.ycs-tab-body#ycs-tab-channel.active)  > .page,
+.shell:has(.ycs-tab-body#ycs-tab-playlist.active) > .page { padding-top: 0; }
 /* When .page padding-top is gone, the non-Search tabs that share the
    same .page need their own top padding (Source / Videos / Playlist /
    Channel are siblings under .ycs-source-panels; only Search has the
@@ -1974,6 +1979,486 @@
   }
   .ycs-pipe-table-h-time,
   .ycs-pipe-table-cell-time { display: none; }
+}
+
+/* ============================================================
+ * Source · Channel/Playlist picker (2026-06-08 redesign)
+ *
+ * One channel or one playlist at a time → master+row checkbox table
+ * → submit the SELECTED video_ids to the existing videos pipeline.
+ * SOTA shape per parallel WebSearches: PatternFly / Helios / Carbon
+ * for the bulk-selection table, NN/g + UXdivers for pagination over
+ * infinite-scroll on TASK-style selection, Wipelist for the single-
+ * source view + total + filter idiom.
+ *
+ *  +-----------------------------------------------------+
+ *  | Channel name                       2.7K videos      |
+ *  | Channel sub                        100 of 2.7K      |
+ *  |-----------------------------------------------------|
+ *  | ☐ Select all loaded   [Filter title…]               |
+ *  |-----------------------------------------------------|
+ *  | ☐ [thumb] Title…                    Meta…    19:40  |
+ *  | ☑ [thumb] Title…                    Meta…    20:34  |
+ *  | ...                                                 |
+ *  |-----------------------------------------------------|
+ *  | [Load more]                          12 selected    |
+ *  +-----------------------------------------------------+
+ * ============================================================ */
+/* Sticky wrapper for the URL row — mirrors `.ycs-search-sticky` so
+ * all four Source sub-tabs (Search, Videos, Channel, Playlist) share
+ * the same "input pinned at top while results scroll" pattern. The
+ * wrapper sits inside the tab body; switching to a different sub-tab
+ * hides it automatically via the parent's display:none. */
+.ycs-source-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg);
+  padding-block: 12px;
+  box-shadow: 0 1px 0 var(--border);
+}
+
+.ycs-source-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  margin-bottom: 6px;
+}
+.ycs-source-row > .ycs-input { flex: 1; min-width: 0; }
+.ycs-source-row > button     { flex: 0 0 auto; }
+.ycs-source-row > .ycs-textarea { flex: 1; min-width: 0; resize: vertical; }
+
+/* Right-cluster: info button + Fetch button. Sticks together as one
+ * unit at the right edge of the URL row. */
+.ycs-source-row-actions {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  flex: 0 0 auto;
+}
+
+/* ---- Info popover (ⓘ) -----------------------------------------
+ * Native <details> disclosure. Keyboard-accessible via Space/Enter
+ * on the summary; Esc + focus-out close via :not(:focus-within) (CSS
+ * only — no JS). Popover floats ABOVE the row to avoid pushing
+ * neighboring controls when opened. */
+.ycs-info-popover {
+  position: relative;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: stretch;
+}
+.ycs-info-btn {
+  /* Native <summary> — strip the disclosure triangle, render as a
+   * round button. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  list-style: none;
+  cursor: pointer;
+  font-size: 1rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg, #fff);
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.ycs-info-btn::-webkit-details-marker { display: none; }
+.ycs-info-btn::marker { content: ""; }
+.ycs-info-btn:hover,
+.ycs-info-popover[open] .ycs-info-btn {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.18);
+  color: var(--text);
+}
+.ycs-info-content {
+  position: absolute;
+  /* Opens DOWNWARD (top: calc(100% + 6px)) instead of upward — the
+   * upward variant was being occluded by the third navbar row (the
+   * stage subnav at z-index 50 sits above the form area). Downward
+   * keeps the popover near the icon that opened it and doesn't fight
+   * the navbar for stacking order. */
+  top: calc(100% + 6px);
+  right: 0;
+  width: min(420px, 80vw);
+  padding: 12px 14px;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--card, #fff);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.10);
+  z-index: 40;
+}
+/* Closing on focus-out without JS: the <details> stays open via the
+ * `open` attribute toggle, but we visually hide the popover when
+ * neither the summary nor the content has focus AND the cursor isn't
+ * over them. The summary handles its own focus styles. */
+.ycs-info-popover:not([open]) .ycs-info-content {
+  display: none;
+}
+
+.ycs-picker {
+  display: none;
+  flex-direction: column;
+  gap: 0;
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card, rgba(0, 0, 0, 0.015));
+  overflow: hidden;
+}
+.ycs-picker[data-state="ready"] { display: flex; }
+.ycs-picker-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.ycs-picker-source { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ycs-picker-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 480px;
+}
+.ycs-picker-sub {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ycs-picker-counts {
+  display: flex; flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  white-space: nowrap;
+}
+.ycs-picker-total {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.ycs-picker-loaded {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.ycs-picker-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.02);
+}
+.ycs-picker-master {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.ycs-picker-master-cb { cursor: pointer; }
+.ycs-picker-filter {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 0.84rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg, #fff);
+  color: var(--text);
+}
+.ycs-picker-filter:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+
+.ycs-picker-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 480px;
+  overflow-y: auto;
+}
+.ycs-picker-empty {
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+/* Picker rows match Search-tab COMPACT-density rows 1:1 — same grid
+ * columns (22/64/1fr/auto), thumb size (64x36), font sizes, paddings,
+ * border treatment. The Source tabs now read as one consistent list
+ * surface regardless of which tab the user is on. */
+.ycs-picker-row {
+  display: grid;
+  grid-template-columns: 22px 64px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.12s;
+}
+.ycs-picker-row:last-child { border-bottom: 0; }
+.ycs-picker-row:hover { background: rgba(196, 18, 48, 0.025); }
+.ycs-picker-cb { justify-self: center; cursor: pointer; }
+.ycs-picker-thumb {
+  width: 64px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 3px;
+  background: #000;
+  display: block;
+  flex-shrink: 0;
+}
+.ycs-picker-thumb-empty { display: block; }
+.ycs-picker-row-body {
+  display: flex; flex-direction: column; gap: 2px;
+  min-width: 0;
+}
+.ycs-picker-row-title {
+  font-size: 0.86rem;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ycs-picker-row-meta {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ycs-picker-row-dur {
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Ingest-all button — docks in the sticky bottom bar (Channel + Playlist
+ * tabs), to the LEFT of the primary `Start Ingestion` CTA. Styled as a
+ * secondary outline action so it doesn't compete with the primary
+ * button visually, but stays a single click away.
+ *
+ * State transitions (driven by picker.js _syncIngestAllBtn):
+ *   - Empty picker      → disabled, text "Ingest all"
+ *   - First page loaded → enabled,  text "Ingest all 1.2K" (count from total)
+ *   - Dispatch in flight → disabled, text "Queuing all…" */
+.ycs-sticky-bar-ingest-all {
+  appearance: none;
+  padding: 8px 18px;
+  font-size: 0.86rem;
+  font-weight: 600;
+  border: 1px solid var(--primary);
+  border-radius: 4px;
+  background: rgba(196, 18, 48, 0.06);
+  color: var(--primary);
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  /* Right-align the CTA pair. Only Ingest all takes `margin-left: auto`
+   * — it absorbs all free space. Start Ingestion sits adjacent (only
+   * the `.ycs-sticky-bar-inner` `gap: 16px` separates them) because its
+   * own `margin-left: auto` is overridden below to 0 when paired. */
+  margin-left: auto;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+/* When Ingest all sits immediately before Start Ingestion, drop the
+ * primary's own `margin-left: auto` so it stays glued to its sibling
+ * instead of stealing half of the free space (which would split the
+ * pair apart with a wide gap in the middle). */
+.ycs-sticky-bar .ycs-sticky-bar-ingest-all + .btn-primary {
+  margin-left: 0;
+}
+.ycs-sticky-bar-ingest-all:hover:not(:disabled) {
+  background: var(--primary);
+  color: #fff;
+}
+.ycs-sticky-bar-ingest-all:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ycs-picker-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.02);
+}
+.ycs-picker-loadmore {
+  padding: 5px 14px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg, #fff);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.ycs-picker-loadmore:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.18);
+}
+.ycs-picker-loadmore:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.ycs-picker-selection {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text);
+}
+.ycs-picker-sel-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  padding: 1px 7px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  border-radius: 999px;
+  background: rgba(31, 117, 203, 0.16);
+  color: #0b4a8a;
+}
+.ycs-picker-sel-label {
+  color: var(--text-muted);
+}
+
+@media (max-width: 760px) {
+  .ycs-picker-row { grid-template-columns: 22px 56px 1fr auto; gap: 10px; padding: 6px 10px; }
+  .ycs-picker-thumb { width: 56px; height: 32px; }
+  .ycs-picker-list { max-height: 360px; }
+}
+
+/* ============================================================
+ * Source · Sticky options bar (2026-06-08 redesign, v2)
+ *
+ * 1:1 port of DD's `.fw-sticky-bar` (the Catalog page Start Ingestion
+ * row at `static/css/dd/catalog/catalog.css:125`). Same `position:
+ * fixed; bottom:0; left:0; right:0;` viewport-pinned bar, same
+ * background/border/shadow treatment, same right-aligned button via
+ * `margin-left: auto`. Difference: YCS bar's controls (transcripts
+ * checkbox + langs input + Start Ingestion) are always relevant once
+ * the user opens a source tab, so we omit DD's slide-in animation
+ * (DD reveals on framework-select; YCS shows persistently).
+ *
+ * Why this trumps the prior `position: sticky` shape:
+ *   - sticky requires no `overflow:hidden` ancestor — fragile when
+ *     someone adds a wrapper somewhere up the tree
+ *   - fixed always floats at viewport bottom regardless of scroll
+ *     context — same behavior the user already knows from DD
+ *   - the tab body padding-bottom rule pushes the picker's last row
+ *     above the bar so nothing gets occluded
+ * ============================================================ */
+.ycs-sticky-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.05);
+}
+.ycs-sticky-bar-inner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 40px;
+  /* iOS / mobile safe-area inset on devices with home indicator */
+  padding-bottom: max(14px, env(safe-area-inset-bottom, 14px));
+}
+.ycs-sticky-bar-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: 0.88rem;
+  color: var(--text);
+}
+.ycs-sticky-bar-check input[type="checkbox"] { cursor: pointer; }
+.ycs-sticky-bar-langs {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 320px;
+  min-width: 0;
+}
+.ycs-sticky-bar-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.ycs-sticky-bar-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 9px;
+  font-size: 0.84rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg, #fff);
+  color: var(--text);
+}
+.ycs-sticky-bar-input:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: -1px;
+}
+.ycs-sticky-bar-status {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Right-align the Start Ingestion button — identical idiom to
+ * `.fw-sticky-bar > #fw-generate { margin-left: auto; }` in DD. */
+.ycs-sticky-bar .btn-primary {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+/* Push the last row of the form (chips for Videos; picker for Channel/
+ * Playlist) above the fixed bar so its content isn't occluded. The
+ * 96px is the bar's content padding (14+14) + double-line height
+ * fudge for the wrap-to-two-rows case at narrow widths. */
+.ycs-tab-body .ycs-tab-videos > form,
+.ycs-tab-body .ycs-tab-channel > form,
+.ycs-tab-body .ycs-tab-playlist > form,
+#ycs-tab-videos > form,
+#ycs-tab-channel > form,
+#ycs-tab-playlist > form {
+  padding-bottom: 96px;
+}
+
+@media (max-width: 760px) {
+  .ycs-sticky-bar-inner {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 12px 16px;
+  }
+  .ycs-sticky-bar-check { width: 100%; }
+  .ycs-sticky-bar-langs { width: 100%; flex-basis: auto; }
+  /* On mobile the two CTAs share a row: each takes ~half width. */
+  .ycs-sticky-bar .btn-primary { flex: 1 1 50%; margin-left: 0; }
+  .ycs-sticky-bar-ingest-all   { flex: 1 1 50%; margin-left: 0; }
+  /* More padding on mobile — the two-row wrapped bar is taller. */
+  #ycs-tab-videos > form,
+  #ycs-tab-channel > form,
+  #ycs-tab-playlist > form {
+    padding-bottom: 180px;
+  }
 }
 
 /* ============================================================

@@ -1,4 +1,4 @@
-"""render — Jinja2 environment + inline chapter/challenges templates."""
+"""render — Jinja2 environment + inline chapter template."""
 from __future__ import annotations
 
 from jinja2 import Environment, StrictUndefined
@@ -62,10 +62,3 @@ CHAPTER_MD_TEMPLATE = """\
 """
 
 
-CHALLENGES_MD_TEMPLATE = """\
-# Active Recall Questions — {{ chapter_title }}
-
-{% for q in challenges %}
-{{ loop.index }}. {{ q }}
-{% endfor %}
-"""
