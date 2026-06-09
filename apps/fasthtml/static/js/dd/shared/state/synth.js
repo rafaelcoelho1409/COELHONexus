@@ -77,8 +77,14 @@ export const SYNTH_STEP_TO_FIELD = {
 };
 
 // Per-substep custom body renderers, keyed by idx (matches
-// SYNTH_SUBSTEP_FIELDS). Empty until nodes ship.
-export const SYNTH_SUBSTEP_RENDERERS = {};
+// SYNTH_SUBSTEP_FIELDS). Populated 2026-06-08 — rich KPI cards +
+// per-node tables/lists/decisions/coverage rows for all 7 synth
+// nodes. Same shape as planner.SUBSTEP_RENDERERS so the NodeDrawer's
+// Overview tab gets the rich content for both stages automatically.
+// Side-imported here (not a barrel re-export) so consumers that read
+// `Sy.SYNTH_SUBSTEP_RENDERERS` keep working unchanged.
+import { SYNTH_RENDERERS } from '@dd/synth/renderers.js';
+export const SYNTH_SUBSTEP_RENDERERS = SYNTH_RENDERERS;
 
 // In-memory event buffer keyed by step name.
 export const _synthEventBuffer            = new Map();

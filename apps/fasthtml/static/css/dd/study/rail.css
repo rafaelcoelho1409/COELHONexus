@@ -22,6 +22,7 @@
     box-shadow: none;
     z-index: auto;
     padding: 16px 16px 0 2px;
+    overflow-y: auto;            /* inherit from mobile sidebar but explicit */
   }
   /* Small breathing gutter so the prose isn't glued to the rail. */
   .fw-study-main { padding-left: 18px; }

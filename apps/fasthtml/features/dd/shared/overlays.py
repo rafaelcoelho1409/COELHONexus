@@ -46,7 +46,22 @@ def FileDrawer():
 
 def NodeDrawer():
     """Right-anchored slide-out for planner/synth node inspection.
-    See docs/UI-ARCHITECTURE-SOTA-2026-05-18.md Day 3 (3-zone layout)."""
+
+    SOTA layout (2026-06-08 redesign per LangSmith / Dagster / Vercel /
+    Langfuse step-detail panes): sticky header (icon + title + meta +
+    close) → sticky KPI strip → tab strip → tab content area.
+
+    Tabs:
+      Overview  — rich SUBSTEP_RENDERERS output (KPI cards, tables,
+                  outline, metadata footer). Default.
+      Activity  — live SSE event stream with severity + "new since
+                  last viewed" highlights. Badge shows new-event count.
+      Raw       — inputs + outputs JSON accordions (advanced).
+
+    All three tab containers always exist in the DOM so the JS only
+    flips `display:none` instead of innerHTML-thrashing on every
+    selection — cheaper and lets users alternate tabs without
+    re-rendering."""
     return Div(
         Div(
             Div(
@@ -69,9 +84,46 @@ def NodeDrawer():
             cls = "fw-drawer-header",
         ),
         Div("", id = "fw-node-drawer-kpis", cls = "fw-node-drawer-kpis"),
+        # Tab strip — three named tabs. The active class is toggled
+        # by drawer.js; CSS handles the underline + color.
         Div(
+            Button(
+                "Overview",
+                id = "fw-node-drawer-tab-overview",
+                cls = "fw-node-drawer-tab active",
+                data_tab = "overview",
+                type = "button",
+            ),
+            Button(
+                Span("Activity"),
+                Span("", id = "fw-node-drawer-tab-activity-badge",
+                     cls = "fw-node-drawer-tab-badge"),
+                id = "fw-node-drawer-tab-activity",
+                cls = "fw-node-drawer-tab",
+                data_tab = "activity",
+                type = "button",
+            ),
+            Button(
+                "Raw I/O",
+                id = "fw-node-drawer-tab-raw",
+                cls = "fw-node-drawer-tab",
+                data_tab = "raw",
+                type = "button",
+            ),
+            cls = "fw-node-drawer-tabs",
+            id = "fw-node-drawer-tabs",
+        ),
+        Div(
+            # Overview tab — rich renderer output.
             Div(
-                Div("Activity", cls = "fw-node-drawer-section-title"),
+                Div("", id = "fw-node-drawer-details",
+                    cls = "fw-node-drawer-details"),
+                cls = "fw-node-drawer-tab-panel active",
+                data_tab = "overview",
+                id = "fw-node-drawer-tab-overview-panel",
+            ),
+            # Activity tab — live event log.
+            Div(
                 Div(
                     Div("Open a node to stream its events here.",
                         cls = "fw-empty",
@@ -80,10 +132,18 @@ def NodeDrawer():
                         cls = "fw-node-drawer-log"),
                     cls = "fw-node-drawer-log-wrap",
                 ),
-                cls = "fw-node-drawer-section",
+                cls = "fw-node-drawer-tab-panel",
+                data_tab = "activity",
+                id = "fw-node-drawer-tab-activity-panel",
             ),
-            Div("", id = "fw-node-drawer-details",
-                cls = "fw-node-drawer-details"),
+            # Raw I/O tab — inputs + outputs accordions.
+            Div(
+                Div("", id = "fw-node-drawer-raw",
+                    cls = "fw-node-drawer-raw"),
+                cls = "fw-node-drawer-tab-panel",
+                data_tab = "raw",
+                id = "fw-node-drawer-tab-raw-panel",
+            ),
             id = "fw-node-drawer-body", cls = "fw-drawer-body",
         ),
         id = "fw-node-drawer", cls = "fw-drawer",

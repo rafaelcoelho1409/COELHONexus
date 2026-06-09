@@ -1,12 +1,12 @@
 // planner/drawer.js — NodeDrawer IIFE.
 //
-// Self-contained right-side drawer that surfaces a single planner/synth
-// graph node's live activity: status icon + KPI strip + Results panel
-// + a sticky-bottom log fed by SSE events. Extracted from planner.js
-// (Phase D, 2026-06-05) — was lines 358-630 of the monolith, IIFE
-// boundary made the extraction clean. The reset() escape hatch lets the
-// study orchestrator clear stale events when advancing to the next
-// chapter without forcing the user to close the drawer.
+// SOTA tabbed step-detail pane (2026-06-08): three-tab structure
+// (Overview / Activity / Raw I/O) matching LangSmith + Dagster +
+// Vercel Workflows + Langfuse June 2026 step-detail panes. Overview
+// houses the rich SUBSTEP_RENDERERS output (KPI cards + tables +
+// outline + metadata footer). Activity carries the live SSE event
+// stream with a count badge for new events since last viewed. Raw
+// I/O exposes inputs/outputs JSON for power-user inspection.
 //
 // Public API (consumed by planner.js and synth.js):
 //   NodeDrawer.open(stage, nodeId, ctx)
@@ -29,6 +29,16 @@ export const NodeDrawer = (function() {
   const elLog       = document.getElementById('fw-node-drawer-log');
   const elLogEmpty  = document.getElementById('fw-node-drawer-log-empty');
   const elDetails   = document.getElementById('fw-node-drawer-details');
+  const elRaw       = document.getElementById('fw-node-drawer-raw');
+  const elTabs      = document.getElementById('fw-node-drawer-tabs');
+  const elActBadge  = document.getElementById(
+    'fw-node-drawer-tab-activity-badge');
+  const elTabOverviewPanel = document.getElementById(
+    'fw-node-drawer-tab-overview-panel');
+  const elTabActivityPanel = document.getElementById(
+    'fw-node-drawer-tab-activity-panel');
+  const elTabRawPanel      = document.getElementById(
+    'fw-node-drawer-tab-raw-panel');
   const elClose     = document.getElementById('fw-node-drawer-close');
 
   const MAX_LOG_LINES = 200;
@@ -36,9 +46,12 @@ export const NodeDrawer = (function() {
     future: '⏳', pending: '○', running: '◐',
     done: '●', failed: '✕', cancelled: '∅',
   };
+  const TABS = ['overview', 'activity', 'raw'];
 
   let _openStage = null;        // 'planner' | 'synth' | null
   let _openNodeId = null;
+  let _activeTab = 'overview';
+  let _newEventCount = 0;       // resets on tab-activate
   let _pendingEvents = [];
   let _flushScheduled = false;
   let _userPinnedScroll = true; // true = auto-scroll to bottom; false = user scrolled up
@@ -134,19 +147,38 @@ export const NodeDrawer = (function() {
     elKpis.style.display = '';
   }
 
-  function _renderDetails(ctx) {
+  // Render the Overview tab — the rich SUBSTEP_RENDERERS output OR a
+  // status-aware empty/waiting state when the node hasn't produced
+  // output yet.
+  function _renderOverview(ctx) {
     if (!elDetails) return;
-    const resultsBlock = ctx.resultsHtml
-      ? '<div class="fw-node-drawer-results">' + ctx.resultsHtml + '</div>'
-      : '<div class="fw-empty fw-node-drawer-waiting">' +
-        (ctx.status === 'running'
-          ? 'Running — results will appear once this node commits its checkpoint.'
-          : ctx.status === 'failed'
-          ? 'This node failed before producing output. See the activity log for details.'
-          : ctx.status === 'future'
-          ? 'Not yet implemented — substep will activate when its node code ships.'
-          : 'Waiting for this node to run.') +
-        '</div>';
+    if (ctx.resultsHtml) {
+      elDetails.innerHTML =
+        '<div class="fw-node-drawer-results">' + ctx.resultsHtml + '</div>';
+      return;
+    }
+    const status = ctx.status || 'pending';
+    const msg =
+      status === 'running'
+        ? 'Running — results will appear once this node commits its checkpoint.'
+      : status === 'failed'
+        ? 'This node failed before producing output. See the Activity tab for the error trace.'
+      : status === 'cancelled'
+        ? 'Cancelled before producing output. Re-run to retry.'
+      : status === 'future'
+        ? 'Not yet implemented — substep will activate when its node code ships.'
+      : status === 'done'
+        ? 'Completed without a rich renderer for this node yet. Inspect Raw I/O for the raw checkpoint, or check Activity for the event trace.'
+      : 'Waiting for this node to run.';
+    elDetails.innerHTML =
+      '<div class="fw-empty fw-node-drawer-waiting">' + escapeHtml(msg) +
+      '</div>';
+  }
+
+  // Render the Raw I/O tab — inputs + outputs accordions, or a single
+  // "nothing to show yet" empty when both are absent.
+  function _renderRaw(ctx) {
+    if (!elRaw) return;
     const debug = [];
     if (ctx.inputs) debug.push({
       id: 'inputs',  title: 'Inputs (upstream state, raw)',
@@ -156,15 +188,65 @@ export const NodeDrawer = (function() {
       id: 'outputs', title: 'Outputs (this node, raw)',
       content: '<pre>' + escapeHtml(ctx.outputs) + '</pre>',
     });
-    const debugBlock = debug.length
-      ? debug.map(s =>
-          '<details class="fw-node-drawer-detail" data-section="' + s.id + '">' +
-            '<summary>' + escapeHtml(s.title) + '</summary>' +
-            '<div class="fw-node-drawer-detail-body">' + s.content + '</div>' +
-          '</details>'
-        ).join('')
-      : '';
-    elDetails.innerHTML = resultsBlock + debugBlock;
+    if (!debug.length) {
+      elRaw.innerHTML =
+        '<div class="fw-empty fw-node-drawer-waiting">' +
+          'Raw inputs/outputs appear here once the upstream nodes have ' +
+          'checkpointed and this node has committed.' +
+        '</div>';
+      return;
+    }
+    elRaw.innerHTML = debug.map(s =>
+      '<details class="fw-node-drawer-detail" data-section="' + s.id +
+        '" open>' +
+        '<summary>' + escapeHtml(s.title) + '</summary>' +
+        '<div class="fw-node-drawer-detail-body">' + s.content + '</div>' +
+      '</details>'
+    ).join('');
+  }
+
+  function _updateActivityBadge() {
+    if (!elActBadge) return;
+    if (_activeTab === 'activity' || _newEventCount === 0) {
+      elActBadge.textContent = '';
+      elActBadge.style.display = 'none';
+      return;
+    }
+    elActBadge.textContent = String(_newEventCount);
+    elActBadge.style.display = '';
+  }
+
+  function _switchTab(name) {
+    if (!TABS.includes(name)) return;
+    _activeTab = name;
+    if (elTabs) {
+      elTabs.querySelectorAll('.fw-node-drawer-tab').forEach(btn => {
+        const isActive = btn.dataset.tab === name;
+        btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      });
+    }
+    const panels = {
+      overview: elTabOverviewPanel,
+      activity: elTabActivityPanel,
+      raw:      elTabRawPanel,
+    };
+    Object.entries(panels).forEach(([k, panel]) => {
+      if (!panel) return;
+      panel.classList.toggle('active', k === name);
+      panel.style.display = (k === name) ? '' : 'none';
+    });
+    if (name === 'activity') {
+      _newEventCount = 0;
+      _updateActivityBadge();
+      // Scroll log to bottom when the user opens the tab — the moment
+      // they want activity, they want the latest.
+      if (elLog && _userPinnedScroll) {
+        elLog.scrollTop = elLog.scrollHeight;
+      }
+    } else {
+      _updateActivityBadge();
+    }
   }
 
   function _populate(stage, nodeId, ctx) {
@@ -174,14 +256,19 @@ export const NodeDrawer = (function() {
     _openStage  = stage;
     _openNodeId = nodeId;
     _pendingEvents = [];
+    _newEventCount = 0;
     _userPinnedScroll = true;
     if (elTitle) elTitle.textContent = ctx.label || nodeId;
     if (elMeta)  elMeta.textContent  = stage + ' · ' + nodeId;
     _updateStatusIcon(ctx.status || 'pending');
     _renderKpis(ctx.kpis);
-    _renderDetails(ctx);
+    _renderOverview(ctx);
+    _renderRaw(ctx);
     if (elLog) elLog.innerHTML = '';
     if (elLogEmpty) elLogEmpty.style.display = '';
+    // Always restore the Overview tab on (re)open — the primary
+    // content. Users who specifically want logs/raw click the tab.
+    _switchTab('overview');
   }
 
   function open(stage, nodeId, ctx) {
@@ -221,6 +308,10 @@ export const NodeDrawer = (function() {
     if (ev.kind === 'start')   _updateStatusIcon('running');
     else if (ev.kind === 'done') _updateStatusIcon('done');
     else if (ev.kind === 'error') _updateStatusIcon('failed');
+    if (_activeTab !== 'activity') {
+      _newEventCount += 1;
+      _updateActivityBadge();
+    }
   }
 
   function updateContext(ctx) {
@@ -228,7 +319,8 @@ export const NodeDrawer = (function() {
     ctx = ctx || {};
     if (ctx.status !== undefined) _updateStatusIcon(ctx.status);
     if (ctx.kpis   !== undefined) _renderKpis(ctx.kpis);
-    _renderDetails(ctx);
+    _renderOverview(ctx);
+    _renderRaw(ctx);
   }
 
   // User scroll-away detection — locks auto-scroll until they return to
@@ -239,11 +331,28 @@ export const NodeDrawer = (function() {
       _userPinnedScroll = atBottom;
     });
   }
+  // Tab click delegation — single listener on the strip.
+  if (elTabs) {
+    elTabs.addEventListener('click', (e) => {
+      const btn = e.target.closest('.fw-node-drawer-tab');
+      if (!btn) return;
+      const tab = btn.dataset.tab;
+      if (tab) _switchTab(tab);
+    });
+  }
   if (elClose) elClose.addEventListener('click', close);
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && elDrawer && elDrawer.classList.contains('visible')) {
-      close();
-    }
+    if (!elDrawer || !elDrawer.classList.contains('visible')) return;
+    if (e.key === 'Escape') { close(); return; }
+    // Number-key tab shortcut (1=overview, 2=activity, 3=raw). Ignore
+    // when the user is typing inside an input/textarea, and skip when
+    // any modifier is held so this never clashes with browser hotkeys.
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const tag = (document.activeElement?.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea') return;
+    if (e.key === '1') _switchTab('overview');
+    else if (e.key === '2') _switchTab('activity');
+    else if (e.key === '3') _switchTab('raw');
   });
 
   // reset() — clear in-flight events + DOM log without closing. Used
@@ -252,12 +361,14 @@ export const NodeDrawer = (function() {
   // chapter's run of the same node.
   function reset() {
     _pendingEvents = [];
+    _newEventCount = 0;
     if (elLog) {
       while (elLog.firstChild) elLog.removeChild(elLog.firstChild);
     }
     if (elLogEmpty) elLogEmpty.style.display = '';
     _lastSeenAt.clear();
     _prevSeenForOpen = 0;
+    _updateActivityBadge();
   }
 
   return { open, close, reset, isOpenFor, appendEvent, updateContext,

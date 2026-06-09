@@ -534,6 +534,108 @@ export const SUBSTEP_RENDERERS = {
     return '<div class="fw-stat-grid">' + cards + '</div>' + list + foot;
   },
 
+  // order_chapters — N=2 LLM rank-sample + Borda aggregation. Picks
+  // foundational chapters first, then orders the rest. KPI cards show
+  // input chapter count + sample count + foundational pick + wall.
+  // Below: side-by-side "before vs after" ordering list.
+  7: function renderOrderChapters(values) {
+    const s = values.order_chapters_stats || {};
+    if (!s.n_chapters && !s.cache_hit) {
+      return '<div class="fw-empty">no order_chapters stats reported</div>';
+    }
+    const kpi = (label, value, sub) =>
+      '<div class="fw-stat-card">' +
+        '<div class="fw-stat-card-label">' + escapeHtml(label) + '</div>' +
+        '<div class="fw-stat-card-value">' + escapeHtml(value) + '</div>' +
+        (sub ? '<div class="fw-stat-card-sub">' + escapeHtml(sub) + '</div>' : '') +
+      '</div>';
+
+    const order = Array.isArray(s.order) ? s.order : [];
+    const foundational = Array.isArray(s.foundational) ? s.foundational : [];
+    const proposalTitles =
+      ((values.propose_stats || {}).titles) ||
+      ((values.chapter_proposals_ref && Array.isArray(s.proposal_titles))
+        ? s.proposal_titles
+        : []);
+
+    const cards =
+      kpi('Chapters', String(s.n_chapters || order.length),
+          'ranked by panel') +
+      kpi('Samples',  String(s.n_samples || 0),
+          'independent rank votes') +
+      kpi('Foundational', String(foundational.length),
+          foundational.length
+            ? 'pinned to the front'
+            : 'no pin (panel chose flat)') +
+      kpi('Wall', (s.wall_ms || 0) + ' ms',
+          s.cache_hit ? 'cache HIT' : 'Borda aggregate');
+
+    // Before-vs-after ordering. Without proposal titles we still show
+    // the position swap; with them it reads as a real chapter rename.
+    let orderTbl = '';
+    if (order.length) {
+      const rows = order.map((origIdx, newPos) => {
+        const title = proposalTitles[origIdx]
+          ? proposalTitles[origIdx]
+          : 'proposal #' + origIdx;
+        const moved = origIdx !== newPos;
+        return (
+          '<tr style="border-bottom:1px solid var(--border)">' +
+            '<td style="padding:6px 10px;font-family:JetBrains Mono,' +
+              'monospace;font-size:0.72rem;color:var(--text-muted);' +
+              'width:60px;text-align:right">' +
+              'pos ' + (newPos + 1) + '</td>' +
+            '<td style="padding:6px 10px;font-size:0.85rem;' +
+              'font-weight:' + (moved ? '600' : '500') + ';' +
+              'color:' + (moved ? 'var(--primary)' : 'var(--text)') + '">' +
+              escapeHtml(title) + '</td>' +
+            '<td style="padding:6px 10px;font-family:JetBrains Mono,' +
+              'monospace;font-size:0.72rem;color:var(--text-muted);' +
+              'text-align:right;width:80px">' +
+              'was #' + origIdx + (moved ? ' ↑↓' : '') + '</td>' +
+          '</tr>'
+        );
+      }).join('');
+      orderTbl =
+        '<div class="fw-stat-dist" style="margin-top:14px">' +
+          '<div class="fw-stat-dist-title">Final ordering ' +
+            '(' + order.length + ' chapters)</div>' +
+          '<div style="max-height:340px;overflow-y:auto;' +
+            'border:1px solid var(--border);border-radius:4px">' +
+            '<table style="width:100%;border-collapse:collapse;' +
+              'font-family:Raleway"><tbody>' + rows + '</tbody></table>' +
+          '</div>' +
+        '</div>';
+    }
+
+    // Deployment usage — which rotator deployments answered.
+    let depRow = '';
+    const depUsage = Array.isArray(s.deployment_usage) ? s.deployment_usage : [];
+    if (depUsage.length) {
+      const drows = depUsage.slice(0, 8).map(d =>
+        '<tr><td style="padding:3px 12px 3px 0;font-size:0.78rem">' +
+          escapeHtml((d.deployment || '?').split('/').pop()) + '</td>' +
+        '<td style="padding:3px 0;font-family:JetBrains Mono,monospace;' +
+          'font-size:0.78rem;color:var(--text-muted)">' +
+          d.calls + ' calls</td></tr>',
+      ).join('');
+      depRow =
+        '<div class="fw-stat-dist" style="margin-top:14px">' +
+          '<div class="fw-stat-dist-title">Bandit deployment usage</div>' +
+          '<table style="width:100%;border-collapse:collapse;font-family:Raleway">' +
+            '<tbody>' + drows + '</tbody>' +
+          '</table>' +
+        '</div>';
+    }
+
+    const foot =
+      '<div class="fw-stat-foot">' +
+        'prompt <strong>' + escapeHtml(s.prompt_version || '?') + '</strong>' +
+        ' · panel <strong>N=' + (s.n_samples || 0) + ' + Borda</strong>' +
+      '</div>';
+    return '<div class="fw-stat-grid">' + cards + '</div>' + orderTbl + depRow + foot;
+  },
+
   // plan_write — consumer-facing final plan with hydrated `sources`.
   // KPI cards: chapters / sources / unassigned / wall_ms.
   // Below: the final outline with title, description, per-chapter

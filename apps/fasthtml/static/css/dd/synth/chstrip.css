@@ -57,8 +57,23 @@
   border: 1px solid var(--border);
   border-radius: 2px;
   background: var(--bg);
+  /* Allow the chstrip to absorb its grid/flex parent's height so the
+     cells area (`flex: 1 1 0` below) actually has leftover room to
+     fill. Without `min-height: 0` the flex column would refuse to
+     shrink below its content's intrinsic height and the cells'
+     `flex: 1` would deadlock against the parent. */
+  min-height: 0;
 }
 .fw-chstrip.visible { display: flex; }
+/* On the Pipeline page the chstrip lives in the second column of
+   `.fw-pipeline-grid` and should stretch to that grid row's height so
+   the cells can absorb the leftover space. Default grid item
+   alignment is `stretch` — explicit declaration documents the intent
+   and survives any later `align-self` override. */
+.fw-pipeline-grid > .fw-chstrip {
+  align-self: stretch;
+  height: 100%;
+}
 .fw-chstrip-head {
   display: flex;
   align-items: center;
@@ -84,7 +99,16 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 320px;
+  /* `flex: 1 1 0` + `min-height: 0` makes the cells absorb the
+     leftover height in the parent `.fw-chstrip` (which itself stretches
+     to its grid/flex row height). The previous `max-height: 320px`
+     cap left a large empty gap below the last cell when the chstrip
+     column was tall (Pipeline page: ~860px column - 320px cap = ~540px
+     gap). The synth-only `.fw-synth-split` override below keeps the
+     historical 660px cap for that two-pane layout where the canvas
+     drives the row height. */
+  flex: 1 1 0;
+  min-height: 0;
   overflow-y: auto;
 }
 .fw-chstrip-cell {

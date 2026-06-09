@@ -50,6 +50,72 @@
   gap: 18px;
   background: rgba(0, 0, 0, 0.015);
 }
+
+/* ============================================================
+   Tab strip (2026-06-08) — SOTA Overview / Activity / Raw split.
+   Sticky under the KPI strip; underline-style active indicator
+   matches Linear / Vercel / Langfuse step-detail panes. The badge
+   on Activity shows new-event count since the user last opened
+   that tab (capped at 99+ to stay narrow).
+   ============================================================ */
+.fw-node-drawer-tabs {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+.fw-node-drawer-tab {
+  position: relative;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  padding: 11px 14px 10px 14px;
+  margin-bottom: -1px;     /* overlap the strip's bottom border */
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  letter-spacing: 0.02em;
+  transition: color 0.12s;
+  border-bottom: 2px solid transparent;
+}
+.fw-node-drawer-tab:hover {
+  color: var(--text);
+}
+.fw-node-drawer-tab.active {
+  color: var(--primary);
+  font-weight: 600;
+  border-bottom-color: var(--primary);
+}
+.fw-node-drawer-tab-badge {
+  display: none;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--primary);
+  color: #fff;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  letter-spacing: 0;
+}
+.fw-node-drawer-tab-panel {
+  display: none;
+  padding: 22px 20px;
+}
+.fw-node-drawer-tab-panel.active {
+  display: block;
+}
 .fw-node-drawer-kpi {
   display: inline-flex;
   align-items: baseline;
