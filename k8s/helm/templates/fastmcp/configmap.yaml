@@ -1,0 +1,6 @@
+apiVersion: v1
+{{- include "coelhonexus.ConfigMapSettings" (dict "appName" "fastmcp" "root" .) | nindent 0}}
+data:
+  {{- include "coelhonexus.commonEnvVars" . | nindent 2 }}
+  # FastMCP server configuration
+  PORT: "8000"

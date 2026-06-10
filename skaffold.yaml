@@ -79,6 +79,26 @@ build:
             dest: /app
           - src: "**/*.toml"
             dest: /app
+    # FastMCP server (Model Context Protocol tool surface — apps/fastmcp).
+    # Internal/ClusterIP MCP gateway consumed by the fastapi Research Radar
+    # agent. Same fully-qualified-image + all-or-nothing sync pattern as above.
+    - image: localhost:5001/coelhonexus-fastmcp
+      context: apps/fastmcp
+      docker:
+        dockerfile: Dockerfile.fastmcp
+        noCache: false
+      sync:
+        manual:
+          - src: "**/*.py"
+            dest: /app
+          - src: "**/*.yaml"
+            dest: /app
+          - src: "**/*.yml"
+            dest: /app
+          - src: "**/*.json"
+            dest: /app
+          - src: "**/*.toml"
+            dest: /app
   local:
     # Push to COELHO Cloud k3d registry at localhost:5001 (k3d host port).
     # The cluster resolves the SAME address via a containerd mirror
@@ -119,6 +139,7 @@ manifests:
         setValueTemplates:
           fastapi.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_fastapi}}"
           fasthtml.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_fasthtml}}"
+          fastmcp.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5001_coelhonexus_fastmcp}}"
           environment: local  # Enables --reload in uvicorn for hot-reload
 
 deploy:
@@ -153,15 +174,32 @@ portForward:
     port: 3000
     localPort: 23023
     address: 0.0.0.0
+  # FastMCP server (internal MCP gateway — dev port-forward to inspect /mcp + /health)
+  - resourceType: service
+    resourceName: coelhonexus-fastmcp
+    namespace: coelhonexus-dev
+    port: 8000
+    localPort: 23024
+    address: 0.0.0.0
 
 
 # NOTE: Ensure docker-buildx is installed when useBuildkit is true
+#
+# Port-forward pairing (last digit aligns dev ↔ prod):
+#   2302X (Skaffold / dev)  ↔  2300X (ArgoCD / prod)
+#   23020 ↔ 23000  fastapi
+#   23022 ↔ 23002  flower
+#   23023 ↔ 23003  fasthtml
+#   23024 ↔ 23004  fastmcp
+#
 # Development (Skaffold): ports 23020-23039
-# sh mirror_localhost_tailscale.sh $(for i in {23020..23023}; do echo $i; done)
+# sh mirror_localhost_tailscale.sh $(for i in {23020..23024}; do echo $i; done)
 # skaffold dev --cache-artifacts=false --no-prune=false --auto-sync=false --auto-build=false
-# # press b (build) or s (sync) 
+# # press b (build) or s (sync)
 
 #
 # Production (ArgoCD): ports 23000-23019
-# kubectl port-forward -n coelhonexus svc/coelhonexus-fastapi 23000:8000 &
-# kubectl port-forward -n coelhonexus svc/coelhonexus-fasthtml 23001:3000 &
+# kubectl port-forward -n coelhonexus svc/coelhonexus-fastapi  23000:8000 &
+# kubectl port-forward -n coelhonexus svc/coelhonexus-flower   23002:5555 &
+# kubectl port-forward -n coelhonexus svc/coelhonexus-fasthtml 23003:3000 &
+# kubectl port-forward -n coelhonexus svc/coelhonexus-fastmcp  23004:8000 &

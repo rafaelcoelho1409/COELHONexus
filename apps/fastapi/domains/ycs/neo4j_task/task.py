@@ -37,11 +37,13 @@ from domains.llm.rotator.chain import (
     build_ycs_neo4j_pinned_chain,
     pick_ycs_neo4j_deployment_bandit,
     record_ycs_neo4j_reward,
+    release_ycs_provider_slot,
 )
 from domains.llm.rotator.chain.domain import classify_error
 from domains.ycs.graph_builder import (
     build_video_metadata_graph,
     extract_and_store_graph,
+    resolve_entities,
 )
 from domains.ycs.graph_builder.params import MAX_CONSECUTIVE_NONPRODUCTIVE
 from domains.ycs.ingestion import (
@@ -159,10 +161,12 @@ def ingest_to_neo4j(
             pinned_model = ""
             extraction_stats: dict[str, Any] = {}
             for segment in range(MAX_ARM_SWAPS + 1):
-                pinned_model = await pick_ycs_neo4j_deployment_bandit(
-                    seed        = seed + segment,
-                    video_count = len(all_video_ids),
-                    exclude     = frozenset(tried),
+                pinned_model, seg_provider, seg_slot = (
+                    await pick_ycs_neo4j_deployment_bandit(
+                        seed        = seed + segment,
+                        video_count = len(all_video_ids),
+                        exclude     = frozenset(tried),
+                    )
                 )
                 tried.add(pinned_model)
                 arms_tried.append(pinned_model)
@@ -188,6 +192,9 @@ def ingest_to_neo4j(
                         batch_size   = batch_size,
                         progress_cb  = _progress,
                         abort_after_consecutive = MAX_CONSECUTIVE_NONPRODUCTIVE,
+                        # Resolution is a global Neo4j pass — run it ONCE
+                        # after the segment loop, not per segment.
+                        run_resolution = False,
                     )
                     success = True
                 except Exception as e:
@@ -217,14 +224,22 @@ def ingest_to_neo4j(
                     effective_success = success and not silent_zero and not aborted
                     effective_err     = error_class
                     if aborted:
-                        # Timeout-storm arms break with a Timeout as the
-                        # last batch error; 200-OK-empty arms break with
-                        # none — map to the bandit's taxonomy accordingly.
-                        effective_err = (
-                            "timeout"
-                            if "timeout" in (last_batch_error or "").lower()
-                            else "schema_invalid"
-                        )
+                        # Map the breaker trip to the bandit's taxonomy by
+                        # the LAST per-video error: timeout-storm arms
+                        # break with a Timeout; quota-exhausted arms with
+                        # a RateLimitError (observed 2026-06-10:
+                        # gemini-2.5-pro free-tier 429×3 was mislabeled
+                        # schema_invalid, distorting FGTS-VA's per-class
+                        # penalties); 200-OK-empty arms with the
+                        # silent-zero marker (or nothing).
+                        lbe = (last_batch_error or "").lower()
+                        if "timeout" in lbe:
+                            effective_err = "timeout"
+                        elif ("ratelimit" in lbe or "rate limit" in lbe
+                                or "429" in lbe):
+                            effective_err = "rate_limit"
+                        else:
+                            effective_err = "schema_invalid"
                     elif silent_zero:
                         effective_err = "schema_invalid"
                         # Surface the actual last-batch LLM error body when
@@ -265,33 +280,68 @@ def ingest_to_neo4j(
                             f"[ingest_to_neo4j] reward update failed: "
                             f"{type(e).__name__}: {e}"
                         )
+                    # Release THIS segment's provider slot so the next
+                    # segment's pick (and DD synth, which shares the
+                    # per-provider slot keys) can reuse it immediately.
+                    # Without this the slot lingered for its 1800s TTL,
+                    # saturating the pool mid-run and forcing the
+                    # round-robin fallthrough (observed 2026-06-10: 3
+                    # leaked slots → swaps landed on rate-limited dregs).
+                    try:
+                        await release_ycs_provider_slot(seg_provider, seg_slot)
+                    except Exception as e:
+                        logger.warning(
+                            f"[ingest_to_neo4j] slot release failed: "
+                            f"{type(e).__name__}: {e}"
+                        )
                 agg_nodes     += int(extraction_stats.get("nodes_created", 0) or 0)
                 agg_rels      += int(extraction_stats.get("relationships_created", 0) or 0)
                 agg_attempted += int(extraction_stats.get("documents_processed", 0) or 0)
-                agg_merged    += int(extraction_stats.get("entities_merged", 0) or 0)
-                # Swap on circuit-break OR a fully-silent-zero segment.
-                # The breaker needs MAX_CONSECUTIVE_NONPRODUCTIVE batches
-                # to trip, so a run with FEWER transcripts than that
-                # (e.g. 2 videos, both timing out) ends without ever
-                # aborting — the silent-zero condition catches exactly
-                # that and gives the small run its retry on a fresh arm
-                # (idempotent: nothing got tagged, so all docs re-run).
-                if not (extraction_stats.get("aborted_nonproductive") or silent_zero):
+                # Swap on circuit-break OR a fully-silent-zero segment OR
+                # a PARTIAL segment (some videos failed/zeroed while
+                # others landed — e.g. Groq TPM exhaustion, per-video
+                # silent zeros). Failed videos are untagged in Neo4j, so
+                # the next segment re-runs exactly them on a fresh arm.
+                # The silent-zero condition also covers runs SMALLER than
+                # the breaker threshold (e.g. 2 videos, both timing out).
+                videos_failed = int(extraction_stats.get("videos_failed", 0) or 0)
+                if not (extraction_stats.get("aborted_nonproductive")
+                        or silent_zero
+                        or videos_failed > 0):
                     break
                 if segment < MAX_ARM_SWAPS:
+                    failed_ids_log = extraction_stats.get("failed_video_ids") or []
                     logger.warning(
-                        f"[ingest_to_neo4j] arm {pinned_model} produced "
-                        f"nothing (circuit-break/silent-zero) — swapping "
+                        f"[ingest_to_neo4j] arm {pinned_model}: "
+                        f"{'circuit-break/silent-zero' if not videos_failed else f'{videos_failed} video(s) unprocessed'}"
+                        f" — swapping arm for the remainder "
                         f"({segment + 1}/{MAX_ARM_SWAPS} swaps used, "
-                        f"excluded: {sorted(tried)})"
+                        f"excluded: {sorted(tried)}, "
+                        f"residual: {failed_ids_log[:10]})"
                     )
                 else:
                     logger.error(
-                        f"[ingest_to_neo4j] all {MAX_ARM_SWAPS + 1} arms "
-                        f"produced nothing ({sorted(tried)}) — provider "
-                        f"side likely degraded; giving up with partial "
-                        f"results"
+                        f"[ingest_to_neo4j] swap budget exhausted after "
+                        f"{MAX_ARM_SWAPS + 1} arms ({sorted(tried)}) — "
+                        f"giving up with partial results"
                     )
+            # Entity resolution — ONCE, over everything all segments
+            # wrote. Previously ran inside every non-aborted segment;
+            # with the residual-retry loop that would repeat the global
+            # pass (minutes of per-pair Cypher + NIM embedding calls)
+            # up to 4 times per run.
+            if agg_nodes > 0:
+                _progress({
+                    "phase": "resolving",
+                    "nodes": agg_nodes,
+                    "rels":  agg_rels,
+                })
+                logger.info("[ingest_to_neo4j] entity resolution starting")
+                agg_merged = resolve_entities(neo4j_graph)
+                logger.info(
+                    f"[ingest_to_neo4j] entity resolution: "
+                    f"{agg_merged} nodes merged"
+                )
             return {
                 "videos_processed": len(all_video_ids),
                 "deployment":       pinned_model,

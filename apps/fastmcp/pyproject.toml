@@ -1,0 +1,25 @@
+[project]
+name = "coelhonexus-fastmcp"
+version = "1.0.0"
+description = "COELHO Nexus - FastMCP server (Model Context Protocol tool surface)"
+requires-python = ">=3.13"
+dependencies = [
+    # FastMCP — the MCP-protocol server framework. Pulls the MCP Python SDK +
+    # Starlette + Pydantic transitively; its Streamable-HTTP transport is a
+    # Starlette ASGI app (`mcp.http_app()`) served by uvicorn — exactly like
+    # apps/fastapi (`app:app`) and apps/fasthtml (`main:app`). 3.x is the
+    # current line (3.0 shipped Jan 2026); cap before 4.0 (next major).
+    "fastmcp>=3.2,<4.0",
+    # uvicorn[standard] — ASGI server for the Streamable-HTTP app. [standard]
+    # adds uvloop/httptools/watchfiles; watchfiles powers the
+    # --reload-include/--reload-exclude flags in entrypoint.sh (uvicorn falls
+    # back to StatReload otherwise). Cap matches apps/fastapi + apps/fasthtml.
+    "uvicorn[standard]>=0.32,<1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = []

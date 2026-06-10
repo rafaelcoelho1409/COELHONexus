@@ -368,7 +368,15 @@ function _successHint(prefix, result) {
         return parts.join(" · ");
     }
     if (prefix === "qdrant") {
-        return `${result.total_transcripts ?? 0} transcripts · ${result.total_chunks ?? 0} chunks · ${result.points_upserted ?? 0} points`;
+        const parts = [
+            `${result.total_transcripts ?? 0} transcripts`,
+            `${result.total_chunks ?? 0} chunks`,
+            `${result.points_upserted ?? 0} points`,
+        ];
+        // Videos whose content_hash matched — skipped without re-embedding.
+        const unchanged = result.videos_unchanged ?? 0;
+        if (unchanged) parts.push(`${unchanged} unchanged`);
+        return parts.join(" · ");
     }
     if (prefix === "neo4j") {
         return `${result.nodes_created ?? 0} nodes · ${result.relationships_created ?? 0} rels · ${result.entities_merged ?? 0} merged`;

@@ -4,7 +4,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: coelhonexus-celery-worker
+  name: coelhonexus-celery
   namespace: {{ .Release.Namespace }}
   labels:
     app.kubernetes.io/name: {{ .Chart.Name }}
@@ -16,11 +16,11 @@ spec:
   replicas: {{ .Values.celery.replicas }}
   selector:
     matchLabels:
-      app: coelhonexus-celery-worker
+      app: coelhonexus-celery
   template:
     metadata:
       labels:
-        app: coelhonexus-celery-worker
+        app: coelhonexus-celery
     spec:
       {{- if and (eq .Values.environment "production") (.Values.registry.imagePullSecret) }}
       imagePullSecrets:
@@ -28,7 +28,7 @@ spec:
       {{- end }}
       containers:
         # Celery worker — same image as FastAPI, different entrypoint
-        - name: coelhonexus-celery-worker
+        - name: coelhonexus-celery
           image: {{ $fastapi.image }}
           imagePullPolicy: {{ $fastapi.imagePullPolicy }}
           # SYS_PTRACE lets py-spy attach to the worker's Python processes to

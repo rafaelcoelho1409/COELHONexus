@@ -585,3 +585,49 @@ fasthtml:
       initialDelaySeconds: 0
       periodSeconds: 5
       failureThreshold: 3
+
+# FastMCP server (Model Context Protocol tool surface — apps/fastmcp).
+# INTERNAL/ClusterIP: consumed by the apps/fastapi Research Radar agent as an
+# MCP client (Streamable-HTTP at /mcp/). Not browser-exposed; no NodePort.
+# Lightweight uvicorn ASGI app — same resource envelope as fasthtml.
+fastmcp:
+  image: localhost:5001/coelhonexus-fastmcp:latest
+  imagePullPolicy: Always
+  replicas: 1
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  portsSettings:
+    ports:
+      - name: http
+        port: 8000
+        targetPort: 8000
+        protocol: TCP
+    type: ClusterIP        # internal-only; no LoadBalancer/NodePort
+  startupProbeSettings:
+    startupProbe:
+      httpGet:
+        path: /health
+        port: 8000
+      failureThreshold: 12     # 12 x 5s = 60s — uvicorn cold start + reload watcher
+      periodSeconds: 5
+  livenessProbeSettings:
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 8000
+      initialDelaySeconds: 0
+      periodSeconds: 10
+      failureThreshold: 3
+  readinessProbeSettings:
+    readinessProbe:
+      httpGet:
+        path: /health
+        port: 8000
+      initialDelaySeconds: 0
+      periodSeconds: 5
+      failureThreshold: 3

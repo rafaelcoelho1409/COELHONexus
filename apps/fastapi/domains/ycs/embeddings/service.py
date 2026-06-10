@@ -168,7 +168,18 @@ def get_embedding_dimensions() -> int:
     return MODEL_DIMENSIONS.get(EMBEDDING_MODEL, 2048)
 
 
+_sparse: Optional[FastEmbedSparse] = None
+
+
 def create_sparse_embeddings() -> FastEmbedSparse:
     """BM25 sparse — local, deterministic, tiny CPU cost. Mirror of
-    deprecated `services/youtube/embeddings.py:L189-194`."""
-    return FastEmbedSparse(model_name = SPARSE_MODEL_NAME)
+    deprecated `services/youtube/embeddings.py:L189-194`.
+
+    Lazy singleton (2026-06-10): FastEmbedSparse init loads (and on a
+    fresh pod, downloads) the fastembed model — ~1 s warm, tens of
+    seconds cold. One instance per worker process is enough; it's
+    stateless across calls."""
+    global _sparse
+    if _sparse is None:
+        _sparse = FastEmbedSparse(model_name = SPARSE_MODEL_NAME)
+    return _sparse

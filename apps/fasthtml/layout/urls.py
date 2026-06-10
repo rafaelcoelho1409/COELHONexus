@@ -9,5 +9,5 @@ FEATURES = [
     ("home", "Home", "/"),
     ("docs-distiller", "Docs Distiller", "/docs-distiller"),
     ("youtube-content-search", "YouTube Content Search", "/youtube-content-search"),
-    ("coming-soon", "Coming Soon", "/coming-soon"),
+    ("research-radar", "Research Radar", "/research-radar"),
 ]

@@ -41,6 +41,7 @@ from .params import (
     DEFAULT_CHUNK_OVERLAP,
     DEFAULT_CHUNK_SIZE,
     FETCH_BATCH_SIZE,
+    FLUSH_CHUNKS,
     LOG_EVERY_N_TRANSCRIPTS,
     QDRANT_COLLECTION,
     SCROLL_BATCH_SIZE,
@@ -68,6 +69,7 @@ async def ensure_collection(
     sparse` (HTTP 400)."""
     collections = await qdrant.get_collections()
     existing = {c.name for c in collections.collections}
+    created = False
     if QDRANT_COLLECTION in existing:
         info = await qdrant.get_collection(QDRANT_COLLECTION)
         vectors_cfg = info.config.params.vectors
@@ -78,38 +80,62 @@ async def ensure_collection(
         has_sparse_slot = (
             isinstance(sparse_cfg, dict) and "sparse" in sparse_cfg
         )
-        if has_dense_slot and has_sparse_slot:
-            return False
-        # Wrong-schema collection found. Drop + recreate. The points
-        # inside were built against the legacy schema and can't be
-        # rewritten in place; downstream Phase A → ES indexing is the
-        # source of truth, so a Rerun will rebuild this from scratch.
-        logger.warning(
-            f"[ycs:ingestion] dropping collection {QDRANT_COLLECTION!r} "
-            f"— schema mismatch (dense_slot={has_dense_slot}, "
-            f"sparse_slot={has_sparse_slot}); recreating with hybrid "
-            f"schema."
+        # Dimension check (2026-06-10): an embedder-model change (env
+        # `NVIDIA_EMBEDDING_MODEL`) silently passes the slot-name check
+        # but every upsert then 400s with a vector-size mismatch.
+        # Vectors aren't comparable across models anyway — recreate.
+        dims_match = (
+            has_dense_slot
+            and getattr(vectors_cfg["dense"], "size", None) == dense_dimensions
         )
-        await qdrant.delete_collection(QDRANT_COLLECTION)
-    await qdrant.create_collection(
-        collection_name = QDRANT_COLLECTION,
-        vectors_config = {
-            "dense": VectorParams(
-                size = dense_dimensions,
-                distance = Distance.COSINE,
-            ),
-        },
-        sparse_vectors_config = {
-            "sparse": SparseVectorParams(
-                index = SparseIndexParams(on_disk = False),
-            ),
-        },
-    )
-    logger.info(
-        f"[ycs:ingestion] created collection {QDRANT_COLLECTION!r} "
-        f"dim={dense_dimensions}"
-    )
-    return True
+        if not (has_dense_slot and has_sparse_slot and dims_match):
+            # Wrong-schema collection found. Drop + recreate. The points
+            # inside were built against the legacy schema and can't be
+            # rewritten in place; downstream Phase A → ES indexing is the
+            # source of truth, so a Rerun will rebuild this from scratch.
+            logger.warning(
+                f"[ycs:ingestion] dropping collection {QDRANT_COLLECTION!r} "
+                f"— schema mismatch (dense_slot={has_dense_slot}, "
+                f"sparse_slot={has_sparse_slot}, dims_match={dims_match}); "
+                f"recreating with hybrid schema."
+            )
+            await qdrant.delete_collection(QDRANT_COLLECTION)
+            existing.discard(QDRANT_COLLECTION)
+    if QDRANT_COLLECTION not in existing:
+        await qdrant.create_collection(
+            collection_name = QDRANT_COLLECTION,
+            vectors_config = {
+                "dense": VectorParams(
+                    size = dense_dimensions,
+                    distance = Distance.COSINE,
+                ),
+            },
+            sparse_vectors_config = {
+                "sparse": SparseVectorParams(
+                    index = SparseIndexParams(on_disk = False),
+                ),
+            },
+        )
+        created = True
+        logger.info(
+            f"[ycs:ingestion] created collection {QDRANT_COLLECTION!r} "
+            f"dim={dense_dimensions}"
+        )
+    # Payload keyword indexes (2026-06-10) — `video_id` backs the
+    # per-video delete/skip filters, `channel_id` backs the Ask page's
+    # channel pre-filter. Without them Qdrant falls back to full scans
+    # once the corpus grows. Idempotent: re-creating an existing index
+    # raises, which we swallow.
+    for field in ("video_id", "channel_id"):
+        try:
+            await qdrant.create_payload_index(
+                collection_name = QDRANT_COLLECTION,
+                field_name      = field,
+                field_schema    = "keyword",
+            )
+        except Exception:
+            pass
+    return created
 
 
 # ---------- ES scroll iterators -----------------------------------------
@@ -193,9 +219,29 @@ async def ingest_to_qdrant(
     chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict:
-    """Streaming pipeline — for each transcript: chunk → embed (dense
-    NIM + sparse BM25) → upsert. Memory stays flat regardless of
-    corpus size.
+    """Streaming pipeline: chunk → embed (dense NIM + sparse BM25) →
+    upsert. Memory stays flat regardless of corpus size.
+
+    2026-06-10 REWORK (measured on the live cluster):
+
+      - CROSS-VIDEO CHUNK PACKING. NIM embedding latency is per-CALL
+        dominated (~11-15 s/call whether it carries 5 or 50 texts;
+        measured 60.7 s per-video vs 11.2 s packed for the same 48
+        chunks). Chunks now accumulate across videos and flush in
+        FLUSH_CHUNKS groups — one NIM call per flush instead of one
+        per video (5.4× on the embed stage).
+      - CONTENT-HASH SKIP. Every point carries `content_hash` (md5 of
+        the full transcript). A pre-pass compares the stored hash per
+        video; unchanged videos skip chunk+embed+upsert entirely, so a
+        Rerun over a mostly-ingested corpus costs seconds, not a full
+        re-embed (point ids are deterministic, so the old behavior was
+        a correct but wasteful full overwrite).
+      - STALE-CHUNK SWEEP. When content DID change, the video's old
+        points are deleted by filter before re-upsert — previously a
+        shrunken transcript left orphan chunks (old chunk_index beyond
+        the new total) in the collection forever.
+      - Bulk metadata prefetch (one ES query for all ids, was one per
+        video).
 
     Mirror of deprecated `services/youtube/ingestion.py:L148-264`.
     `progress_cb` (Wave 5 polish) receives per-transcript dicts so the
@@ -207,14 +253,52 @@ async def ingest_to_qdrant(
     collection_created = await ensure_collection(qdrant, dimensions)
 
     # Two-phase: enumerate transcripts first (fast — text only, ~5s
-    # for 359 transcripts), THEN embed one-at-a-time (slow — CPU-bound
-    # API calls). Separating phases keeps the ES scroll context from
-    # expiring during the long embedding phase.
+    # for 359 transcripts), THEN embed (slow — API calls). Separating
+    # phases keeps the ES scroll context from expiring during the
+    # long embedding phase.
     if progress_cb:
         progress_cb({"phase": "scroll", "current": 0, "total": 0})
     all_transcripts: list[dict] = []
     async for transcript in _scroll_transcripts(es, video_ids):
         all_transcripts.append(transcript)
+
+    # Bulk metadata prefetch — one ES query for every video in the run.
+    all_ids = list({t["video_id"] for t in all_transcripts})
+    metadata_cache = await fetch_metadata_from_es(es, all_ids)
+
+    # Hash pre-pass — fetch ONE stored point per video (payload-only,
+    # indexed filter) and compare content hashes. `not collection_
+    # created` guard skips the N lookups on a fresh collection.
+    skip_vids: set[str] = set()
+    hashes = {
+        t["video_id"]: domain.content_hash(t.get("content") or "")
+        for t in all_transcripts
+    }
+    if not collection_created:
+        for vid in all_ids:
+            try:
+                points, _ = await qdrant.scroll(
+                    collection_name = QDRANT_COLLECTION,
+                    scroll_filter = Filter(must = [
+                        FieldCondition(
+                            key = "video_id", match = MatchAny(any = [vid]),
+                        ),
+                    ]),
+                    limit = 1,
+                    with_payload = ["content_hash"],
+                    with_vectors = False,
+                )
+            except Exception:
+                break  # collection-level trouble — fall back to full ingest
+            if points and (points[0].payload or {}).get(
+                "content_hash",
+            ) == hashes[vid]:
+                skip_vids.add(vid)
+    if skip_vids:
+        logger.info(
+            f"[ycs:ingestion] {len(skip_vids)}/{len(all_ids)} videos "
+            f"unchanged (content_hash match) — skipping re-embed"
+        )
 
     if progress_cb:
         progress_cb({
@@ -229,42 +313,45 @@ async def ingest_to_qdrant(
     total_transcripts = 0
     total_chunks = 0
     total_upserted = 0
-    metadata_cache: dict[str, dict] = {}
     # Per-video status tracking for the Ingest-page right-column
     # list — Qdrant upserts don't fail per-video (the whole task
     # either succeeds or raises), so `failed_ids` stays empty here.
     completed_ids: list[str] = []
 
-    for transcript in all_transcripts:
-        vid = transcript["video_id"]
-        total_transcripts += 1
+    def _emit_progress(vid: str) -> None:
+        if not progress_cb:
+            return
+        meta = metadata_cache.get(vid, {})
+        progress_cb({
+            "phase":         "embedding",
+            "current":       total_transcripts,
+            "total":         len(all_transcripts),
+            "chunks":        total_chunks,
+            "points":        total_upserted,
+            "completed_ids": list(completed_ids),
+            "failed_ids":    [],
+            "current_item": {
+                "id":         vid,
+                "title":      meta.get("title", ""),
+                "channel":    meta.get("channel", ""),
+                "channel_id": meta.get("channel_id", ""),
+            },
+        })
 
-        if vid not in metadata_cache:
-            meta_map = await fetch_metadata_from_es(es, [vid])
-            metadata_cache[vid] = meta_map.get(vid, {})
-        meta = metadata_cache[vid]
+    # Pack buffer — flushed every FLUSH_CHUNKS chunks. `pending_vids`
+    # tracks which videos' chunks are inside the un-flushed buffer so
+    # completed_ids only advances once a video's points are actually
+    # in Qdrant.
+    buffer: list = []          # Documents awaiting embed+upsert
+    pending_vids: list[str] = []
 
-        chunks = chunk_transcript(
-            video_id = vid,
-            content = transcript.get("content") or "",
-            metadata = domain.build_chunk_metadata(
-                lang =         transcript.get("lang", "en"),
-                channel_id =   transcript.get("channel_id", ""),
-                title =        meta.get("title", ""),
-                channel =      meta.get("channel", ""),
-                upload_date =  meta.get("upload_date", ""),
-                webpage_url =  meta.get("webpage_url", ""),
-            ),
-            chunker = chunker,
-        )
-        if not chunks:
-            continue
-        total_chunks += len(chunks)
-
-        texts = [doc.page_content for doc in chunks]
+    async def _flush() -> None:
+        nonlocal total_upserted
+        if not buffer:
+            return
+        texts = [doc.page_content for doc in buffer]
         dense_vectors = dense_embeddings.embed_documents(texts)
         sparse_vectors = list(sparse_embeddings.embed_documents(texts))
-
         points = [
             PointStruct(
                 id = point_id(
@@ -280,31 +367,71 @@ async def ingest_to_qdrant(
                 },
                 payload = domain.build_payload(doc),
             )
-            for i, doc in enumerate(chunks)
+            for i, doc in enumerate(buffer)
         ]
         await qdrant.upsert(
             collection_name = QDRANT_COLLECTION, points = points,
         )
         total_upserted += len(points)
-        if vid not in completed_ids:
-            completed_ids.append(vid)
+        buffer.clear()
+        for vid in pending_vids:
+            if vid not in completed_ids:
+                completed_ids.append(vid)
+        last_vid = pending_vids[-1] if pending_vids else ""
+        pending_vids.clear()
+        if last_vid:
+            _emit_progress(last_vid)
 
-        if progress_cb:
-            progress_cb({
-                "phase":         "embedding",
-                "current":       total_transcripts,
-                "total":         len(all_transcripts),
-                "chunks":        total_chunks,
-                "points":        total_upserted,
-                "completed_ids": list(completed_ids),
-                "failed_ids":    [],
-                "current_item": {
-                    "id":         vid,
-                    "title":      meta.get("title", ""),
-                    "channel":    meta.get("channel", ""),
-                    "channel_id": meta.get("channel_id", ""),
-                },
-            })
+    for transcript in all_transcripts:
+        vid = transcript["video_id"]
+        total_transcripts += 1
+        if vid in skip_vids:
+            # Unchanged — count as completed without touching it.
+            if vid not in completed_ids:
+                completed_ids.append(vid)
+            _emit_progress(vid)
+            continue
+        meta = metadata_cache.get(vid, {})
+
+        chunks = chunk_transcript(
+            video_id = vid,
+            content = transcript.get("content") or "",
+            metadata = domain.build_chunk_metadata(
+                lang =         transcript.get("lang", "en"),
+                channel_id =   transcript.get("channel_id", ""),
+                title =        meta.get("title", ""),
+                channel =      meta.get("channel", ""),
+                upload_date =  meta.get("upload_date", ""),
+                webpage_url =  meta.get("webpage_url", ""),
+                content_hash = hashes[vid],
+            ),
+            chunker = chunker,
+        )
+        if not chunks:
+            continue
+        total_chunks += len(chunks)
+        # Stale-chunk sweep — the video changed (or was never hashed):
+        # drop its old points so a shorter re-chunk can't leave
+        # orphans at high chunk_index values.
+        if not collection_created:
+            try:
+                await qdrant.delete(
+                    collection_name = QDRANT_COLLECTION,
+                    points_selector = FilterSelector(
+                        filter = Filter(must = [
+                            FieldCondition(
+                                key = "video_id",
+                                match = MatchAny(any = [vid]),
+                            ),
+                        ]),
+                    ),
+                )
+            except Exception:
+                pass
+        buffer.extend(chunks)
+        pending_vids.append(vid)
+        if len(buffer) >= FLUSH_CHUNKS:
+            await _flush()
 
         if total_transcripts % LOG_EVERY_N_TRANSCRIPTS == 0:
             logger.info(
@@ -313,10 +440,13 @@ async def ingest_to_qdrant(
                 f"{total_upserted} points"
             )
 
+    await _flush()
+
     return {
         "total_transcripts":   total_transcripts,
         "total_chunks":        total_chunks,
         "points_upserted":     total_upserted,
+        "videos_unchanged":    len(skip_vids),
         "collection_created":  collection_created,
         "embedding":           "nvidia-nim-api",
         "collection":          QDRANT_COLLECTION,

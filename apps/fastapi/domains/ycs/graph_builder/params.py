@@ -5,14 +5,25 @@ Direct port of deprecated `services/youtube/graph_builder.py` defaults
 from __future__ import annotations
 
 
-# Concurrent LLM calls per batch — deprecated default. Tuned for free-
-# tier NIM (40 RPM) with INTER_BATCH_SLEEP_S pacing between batches.
+# Concurrent LLM calls — deprecated default, now the streaming-pool
+# width (2026-06-10 rework; see EXTRACT_CONCURRENCY).
 DEFAULT_BATCH_SIZE = 3
 
-# Pacing between batches to stay under 40 RPM (deprecated `L150`).
-# NOTE: deprecated used `time.sleep` inside an `async def`; preserved
-# verbatim per the port-fidelity mandate.
-INTER_BATCH_SLEEP_S = 2.0
+# Streaming-pool concurrency for `extract_and_store_graph` (2026-06-10).
+# Replaces the barrier-batch loop (batch of N → wait for ALL → sleep 2s
+# → next batch): a semaphore keeps this many single-transcript LLM
+# calls in flight and results are consumed in completion order, so one
+# slow video never stalls the others and per-video progress/failure
+# attribution is preserved at ANY width. Empirical motivation: NIM
+# reasoning arms (glm-5.1 etc.) run ~180 s/transcript — sequential
+# batch_size=1 made a 4-video run ~12 min and a 500-video run ~25 h.
+# 3 concurrent ≈ 3× throughput while staying far under the 40 RPM
+# free-tier ceiling (3 in-flight × ~1-3 min/call ≈ 1-3 RPM).
+import os as _os
+
+EXTRACT_CONCURRENCY = max(
+    1, int(_os.environ.get("YCS_NEO4J_CONCURRENCY", "3") or "3"),
+)
 
 # Per-batch wall-clock watchdog (2026-06-09). Hard ceiling on ONE
 # `aconvert_to_graph_documents` call so a hanging arm can never burn
@@ -24,7 +35,14 @@ INTER_BATCH_SLEEP_S = 2.0
 # the run-level reward then lands within minutes and the bandit demotes
 # the arm — instead of the pre-watchdog behavior where step-3.5-flash
 # burned 36 min/transcript in nested timeout-retries.
-GRAPH_BATCH_TIMEOUT_S = 600.0
+#
+# MUST stay above the per-call LLM timeout (YCS_NEO4J_EXTRACT_TIMEOUT_S,
+# default 300s) or it fires before the call's own deadline. Env-tunable
+# so it can rise with the per-call timeout: if you push extraction to
+# 600s, set this to ~900s.
+GRAPH_BATCH_TIMEOUT_S = max(
+    300.0, float(_os.environ.get("YCS_NEO4J_BATCH_WATCHDOG_S", "600") or "600"),
+)
 
 # Circuit breaker: consecutive NON-PRODUCTIVE batches (raised OR wrote
 # 0 nodes + 0 rels) before `extract_and_store_graph` aborts so the

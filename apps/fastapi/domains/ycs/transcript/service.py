@@ -1245,10 +1245,21 @@ class PlaywrightTranscriptService:
         self,
         video_ids:     list[str],
         prefer_manual: bool = True,
+        on_video_done: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> list[dict[str, Any]]:
         """Fetch transcripts for multiple videos with batch retry strategy.
 
-        Direct port of helpers.py:L1618-1723."""
+        Direct port of helpers.py:L1618-1723.
+
+        `on_video_done(video_id, result)` (2026-06-10) fires the instant a
+        video reaches a TERMINAL state — success, or a failure that won't be
+        retried — in COMPLETION order, not after the whole pass. This is what
+        makes the caller's progress bar advance 1/N → 2/N live: the old
+        `asyncio.gather` returned every result of a pass at once, so a ≤chunk-
+        size run (e.g. 4 videos in one chunk) reported 0→100 in a single
+        burst. Retryable failures do NOT fire (the video isn't done yet); it
+        fires on the retry pass that resolves it. Each video fires exactly
+        once."""
         if not self._initialized:
             raise RuntimeError(
                 "PlaywrightTranscriptService not initialized. "
@@ -1282,26 +1293,43 @@ class PlaywrightTranscriptService:
                 f"[transcript-service] {pass_label}: "
                 f"{len(pending_ids)} videos",
             )
+            # Stream completions in finish order (was: gather → process all
+            # at once). Each wrapped coroutine returns (vid, result) so
+            # `as_completed` can attribute it; terminal videos fire
+            # `on_video_done` immediately for a live progress bar.
+            async def _attempt(vid: str) -> tuple[str, dict[str, Any]]:
+                try:
+                    res = await self._fetch_single_attempt(
+                        vid, prefer_manual, pass_num,
+                    )
+                except Exception as e:  # noqa: BLE001 — normalize to error dict
+                    res = {"video_id": vid, "error": str(e)}
+                return vid, res
+
             tasks = [
-                self._fetch_single_attempt(vid, prefer_manual, pass_num)
-                for vid in pending_ids
+                asyncio.ensure_future(_attempt(vid)) for vid in pending_ids
             ]
-            pass_results = await asyncio.gather(
-                *tasks, return_exceptions = True,
-            )
             next_pending: list[str] = []
-            for vid, result in zip(pending_ids, pass_results):
-                if isinstance(result, Exception):
-                    error_str = str(result)
-                    result = {"video_id": vid, "error": error_str}
+            for fut in asyncio.as_completed(tasks):
+                vid, result = await fut
+                terminal = True
                 if "error" not in result:
                     results_map[vid] = result
                 else:
                     error_msg = result.get("error", "")
                     if is_retryable(error_msg) and pass_num < self.max_retries:
                         next_pending.append(vid)
+                        terminal = False
                     else:
                         results_map[vid] = result
+                if terminal and on_video_done is not None:
+                    try:
+                        on_video_done(vid, result)
+                    except Exception as cb_err:  # noqa: BLE001
+                        log.warning(
+                            f"[transcript-service] on_video_done raised: "
+                            f"{type(cb_err).__name__}: {cb_err}"
+                        )
             pending_ids = next_pending
             if pending_ids and pass_num < self.max_retries:
                 cooldown = 3 + pass_num * 2
@@ -1526,6 +1554,29 @@ async def fetch_transcriptions_batch(
     total_success = 0
     total_failed = 0
     total_no_transcript = 0
+    # Live per-video progress: fired by `fetch_batch` the instant each
+    # video reaches a terminal state (completion order), so the bar
+    # advances 1/N → 2/N as transcripts land instead of jumping 0→100
+    # when the chunk's gather returns. `fetched_emitted` persists across
+    # chunks and continues from the cached-id count (`n_progressed`).
+    fetched_emitted = 0
+
+    def _on_video_done(vid: str, result: dict[str, Any]) -> None:
+        nonlocal fetched_emitted
+        fetched_emitted += 1
+        if not progress_cb:
+            return
+        ok = "error" not in result and bool(result.get("page_content"))
+        try:
+            progress_cb(
+                n_progressed + fetched_emitted, total_videos, vid, ok,
+            )
+        except Exception as cb_err:
+            log.warning(
+                f"[fetch_transcriptions_batch] live progress_cb raised: "
+                f"{type(cb_err).__name__}: {cb_err}"
+            )
+
     for chunk_num in range(num_chunks):
         start_idx = chunk_num * chunk_size
         end_idx = min(start_idx + chunk_size, total_to_fetch)
@@ -1535,7 +1586,7 @@ async def fetch_transcriptions_batch(
             f"{len(chunk_ids)} videos",
         )
         chunk_results = await service.fetch_batch(
-            chunk_ids, prefer_manual = True,
+            chunk_ids, prefer_manual = True, on_video_done = _on_video_done,
         )
         chunk_docs: list[dict[str, Any]] = []
         for result in chunk_results:
@@ -1579,35 +1630,12 @@ async def fetch_transcriptions_batch(
                     f"[fetch_transcriptions_batch] FAIL {vid}: "
                     f"{result.get('error', '')[:100]}",
                 )
-            # Per-video progress emission. Fires for both OK and FAIL
-            # so the bar advances even when scrape errors out — caller
-            # decides whether to surface "fetched" vs "attempted".
-            # `success` is True iff this video's transcript was
-            # captured + ready for ES indexing; False on Playwright
-            # DOM scrape failure / missing track / yt-dlp ie_key edge
-            # cases. Lets the caller bucket per-video into
-            # completed_ids vs failed_ids without re-deriving it.
-            # Cumulative counter spans BOTH cached + fetched phases:
-            # `n_progressed` (number of cached entries already emitted)
-            # + `total_success + total_failed` (newly-fetched this run)
-            # divided by `total_videos` (full input set). Keeps the bar
-            # monotonic across mixed cached/fresh runs (was using
-            # `total_to_fetch` as the denominator, which restarted the
-            # bar's domain mid-run when both kinds of videos coexisted).
-            if progress_cb:
-                try:
-                    progress_cb(
-                        n_progressed + total_success + total_failed
-                        + total_no_transcript,
-                        total_videos,
-                        vid,
-                        "error" not in result and bool(result.get("page_content")),
-                    )
-                except Exception as cb_err:
-                    log.warning(
-                        f"[fetch_transcriptions_batch] progress_cb raised: "
-                        f"{type(cb_err).__name__}: {cb_err}"
-                    )
+            # NOTE: per-video progress is now emitted LIVE by
+            # `_on_video_done` (passed into `fetch_batch`) the instant
+            # each video finishes — NOT here, where the whole chunk's
+            # results are already in hand and would fire in one burst
+            # (the 0→100 jump). This loop only builds docs + tallies
+            # stats for the result envelope.
         # Index chunk results immediately (crash resilience)
         if chunk_docs and es_client:
             try:

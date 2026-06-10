@@ -10,7 +10,7 @@ router, then serve. Everything else lives in dedicated packages:
     dd/                  — /docs-distiller wizard (5 stage pages)
     settings/            — /settings BYOK + model selection
     ycs/                 — /youtube-content-search 3-step wizard
-    common/              — /coming-soon, /health
+    common/              — /research-radar, /health
   static/css/            — split stylesheets (base, components, dd/*, …)
   static/js/dd/          — ES module wizard client-side logic
 """

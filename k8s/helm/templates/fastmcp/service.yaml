@@ -1,0 +1,5 @@
+{{- $appName := "fastmcp" -}}
+
+apiVersion: v1
+{{- include "coelhonexus.ServiceSettings" (dict "appName" $appName "root" .) | nindent 0 }}
+{{- include "coelhonexus.ServicePortsSettings" (dict "appName" $appName "root" .) }}

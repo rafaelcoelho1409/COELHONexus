@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import Any, Callable
 
 from langchain_core.documents import Document
@@ -31,9 +30,9 @@ from . import domain
 from .params import (
     DEFAULT_BATCH_SIZE,
     EMBED_COSINE_CUTOFF,
+    EXTRACT_CONCURRENCY,
     FUZZ_MERGE_CUTOFF,
     GRAPH_BATCH_TIMEOUT_S,
-    INTER_BATCH_SLEEP_S,
     RESOLVE_EMBED_MODEL,
     SCHEMA_DISCOVERY_SAMPLE_CHAR_CAP,
     SCHEMA_DISCOVERY_SAMPLE_COUNT,
@@ -145,23 +144,47 @@ async def extract_and_store_graph(
     batch_size: int = DEFAULT_BATCH_SIZE,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
     abort_after_consecutive: int = 0,
+    run_resolution: bool = True,
 ) -> dict:
     """One LLM call PER TRANSCRIPT (not per chunk). Deprecated rationale:
     full context → +30% entity quality vs chunked, and 352 calls instead
     of 2911 for a 352-video corpus.
 
+    2026-06-10 REWORK — streaming concurrency + per-video silent-zero
+    gate (replaces the barrier-batch loop):
+
+      - `batch_size` > 1 is the pool width (back-compat: the agents
+        endpoint documents it as "concurrent LLM calls"); `<= 1` means
+        "use EXTRACT_CONCURRENCY" — the old `=1` callers wanted
+        per-video PROGRESS granularity, which the streaming pool now
+        provides at any width, so sequential execution is no longer the
+        price of a granular progress bar.
+      - A semaphore keeps N single-transcript extractions in flight;
+        results are consumed in COMPLETION order (one ~180 s reasoning
+        arm response doesn't stall the other in-flight videos, and the
+        2 s/batch `time.sleep` barrier is gone).
+      - PER-VIDEO silent-zero gate: an extraction that returns 0 nodes
+        AND 0 rels does NOT get its source Document written to Neo4j.
+        Before, `include_source=True` stamped the video_id tag even for
+        empty extractions, so an intermittently-zeroing arm PERMANENTLY
+        marked those videos done — the re-run skip check then hid the
+        loss forever. Now they land in `failed_ids`, stay untagged, and
+        get retried on the next segment/run.
+
     Idempotent — skips any video whose `video_id` is already tagged on
-    a Document node in Neo4j.
+    a Document node in Neo4j (and only PRODUCTIVE videos get tagged).
 
     `abort_after_consecutive` > 0 arms the circuit breaker: after that
-    many consecutive non-productive batches (raised OR 0 nodes + 0 rels)
-    the loop stops and the stats carry `aborted_nonproductive=True` so
-    the caller (neo4j_task) can re-pick a different arm and call again —
-    idempotency means completed videos are skipped and failed ones are
-    retried on the new arm. 0 disables (full-run behavior).
+    many consecutive non-productive completions (raised OR 0 nodes +
+    0 rels) the pool is cancelled and the stats carry
+    `aborted_nonproductive=True` so the caller (neo4j_task) can re-pick
+    a different arm and call again. 0 disables (full-run behavior).
 
     Returns counters dict suitable for the API response envelope."""
     transformer = create_graph_transformer(llm)
+    concurrency = (
+        batch_size if batch_size and batch_size > 1 else EXTRACT_CONCURRENCY
+    )
     total_nodes = 0
     total_relationships = 0
     total_processed = 0
@@ -207,14 +230,14 @@ async def extract_and_store_graph(
 
     logger.info(
         f"[ycs:graph] processing {len(documents)} transcripts "
-        f"(skipped {total_skipped})"
+        f"(skipped {total_skipped}, concurrency={concurrency})"
     )
 
-    total_batches = (len(documents) + batch_size - 1) // batch_size
     # Per-video status tracking for the Ingest-page right-column list.
-    # With `pipeline_task.NEO4J_BATCH_SIZE=1` each batch is one video,
-    # so completed_ids / failed_ids advance per video, matching Phase 1
-    # and Phase 2's granularity.
+    # The streaming pool completes one video at a time, so
+    # completed_ids / failed_ids advance per video, matching Phase 1
+    # and Phase 2's granularity. `current_batch`/`total_batches` keep
+    # their keys for JS compat — batch ≡ video now.
     completed_ids: list[str] = []
     failed_ids:    list[str] = []
     if progress_cb:
@@ -223,159 +246,173 @@ async def extract_and_store_graph(
             "current":       0,
             "total":         len(documents),
             "current_batch": 0,
-            "total_batches": total_batches,
+            "total_batches": len(documents),
             "nodes":         0,
             "rels":          0,
             "completed_ids": list(completed_ids),
             "failed_ids":    list(failed_ids),
         })
 
-    # Track the LAST per-batch exception so the silent-zero guard
-    # downstream can surface the actual LLM error body in the log
-    # (otherwise the user only sees "0 nodes" with no diagnostic).
+    # Track the LAST per-video error so the silent-zero guard downstream
+    # can surface the actual LLM error body in the log (otherwise the
+    # user only sees "0 nodes" with no diagnostic).
     last_batch_error: str | None = None
     # Circuit-breaker state — see `abort_after_consecutive` docstring.
     consecutive_nonproductive = 0
     aborted_nonproductive = False
-    # Batch loop with rate-limit pacing.
-    for batch_start in range(0, len(documents), batch_size):
-        batch = documents[batch_start:batch_start + batch_size]
-        batch_nodes_before = total_nodes
-        batch_rels_before = total_relationships
-        batch_raised = False
+
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _extract_one(doc: Document) -> tuple[str, Any, str | None]:
+        """One transcript → (video_id, GraphDocument|None, error|None).
+        Exceptions are mapped to the error string here so the consumer
+        loop keeps video attribution in completion order."""
+        vid = doc.metadata.get("video_id", "")
         try:
-            # Watchdog: hard wall-clock ceiling per batch. The inner
-            # request stack already has per-deployment timeouts + a
-            # zero-timeout-retry policy (see _build_pinned_chain), so
-            # this only fires when that stack wedges — and guarantees
-            # one slow arm can't burn the whole run before the bandit
-            # gets its negative reward.
-            graph_documents = await asyncio.wait_for(
-                transformer.aconvert_to_graph_documents(batch),
-                timeout = GRAPH_BATCH_TIMEOUT_S,
-            )
-            # Tier-2 fix `B` (2026-06-07) — coerce node ids at the
-            # source. `LLMGraphTransformer` occasionally emits an `id`
-            # as a `StringArray` (Python list of alternate-name
-            # strings the LLM saw across the transcript) instead of a
-            # single string. Once that lands in Neo4j it breaks
-            # Step 1's Cypher `trim()` (`Expected a string value for
-            # trim, but got: StringArray[Gastronomia, Astronomia]`),
-            # which kills the entire normalize pass. Fixing it here
-            # at the source means Step 1 always sees clean string
-            # ids. Dropping nodes whose id coerces to "" so we don't
-            # write graph rubbish.
-            for gdoc in graph_documents:
+            async with sem:
+                # Watchdog: hard wall-clock ceiling per transcript. The
+                # inner request stack already has per-deployment
+                # timeouts + a zero-timeout-retry policy (see
+                # _build_pinned_chain), so this only fires when that
+                # stack wedges — and guarantees one slow arm can't burn
+                # the whole run before the bandit gets its negative
+                # reward.
+                gdocs = await asyncio.wait_for(
+                    transformer.aconvert_to_graph_documents([doc]),
+                    timeout = GRAPH_BATCH_TIMEOUT_S,
+                )
+            return vid, (gdocs[0] if gdocs else None), None
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            if isinstance(e, TimeoutError) and not str(e):
+                # asyncio.wait_for raises a bare TimeoutError — stamp it
+                # so the silent-zero guard's diagnostic isn't empty.
+                err = (
+                    f"TimeoutError: extraction exceeded the "
+                    f"{GRAPH_BATCH_TIMEOUT_S:.0f}s watchdog"
+                )
+            else:
+                err = f"{type(e).__name__}: {str(e)[:400]}"
+            return vid, None, err
+
+    pool = [asyncio.create_task(_extract_one(doc)) for doc in documents]
+    try:
+        for fut in asyncio.as_completed(pool):
+            vid, gdoc, err = await fut
+            total_processed += 1
+            productive = False
+            if err is not None:
+                last_batch_error = err
+                logger.warning(
+                    f"[ycs:graph] {vid} failed: {err}. Continuing."
+                )
+                if vid and vid not in failed_ids:
+                    failed_ids.append(vid)
+            elif gdoc is None or (not gdoc.nodes and not gdoc.relationships):
+                # PER-VIDEO silent zero — clean LLM response with no
+                # entities. Do NOT write the source Document: tagging it
+                # would permanently mark this video done and the re-run
+                # skip would hide the loss forever. Real transcripts are
+                # entity-dense; an empty result is a model failure, not
+                # a property of the video.
+                last_batch_error = (
+                    f"silent-zero: model returned no entities for {vid}"
+                )
+                logger.warning(
+                    f"[ycs:graph] {vid}: clean response but 0 entities — "
+                    f"left untagged for retry on a different arm"
+                )
+                if vid and vid not in failed_ids:
+                    failed_ids.append(vid)
+            else:
+                # Tier-2 fix `B` (2026-06-07) — coerce node ids at the
+                # source. `LLMGraphTransformer` occasionally emits an
+                # `id` as a `StringArray` (Python list of alternate-name
+                # strings the LLM saw across the transcript) instead of
+                # a single string. Once that lands in Neo4j it breaks
+                # Step 1's Cypher `trim()`, which kills the entire
+                # normalize pass. Dropping nodes whose id coerces to ""
+                # so we don't write graph rubbish.
                 clean_nodes = []
                 for node in gdoc.nodes:
                     node.id = domain.coerce_entity_id(node.id)
                     if node.id:
                         clean_nodes.append(node)
                 gdoc.nodes = clean_nodes
-            neo4j_graph.add_graph_documents(
-                graph_documents,
-                include_source = True,
-                baseEntityLabel = True,
-            )
-            # video_id tagging happens NATIVELY inside
-            # add_graph_documents: langchain-neo4j's include_source
-            # path runs `SET d += $document.metadata`, and our source
-            # Documents carry {video_id, title, channel}. The previous
-            # explicit `WHERE d.text CONTAINS $title` tag pass was
-            # removed 2026-06-10 — it was redundant for productive
-            # batches AND harmful for empty ones: a 0-node batch would
-            # stamp its video_id onto OTHER videos' pre-existing
-            # Documents (CONTAINS false-positive), overwriting their
-            # tags and falsely marking unextracted videos as done,
-            # which broke the arm-swap resume's skip check.
-            for gdoc in graph_documents:
+                # video_id tagging happens NATIVELY inside
+                # add_graph_documents: langchain-neo4j's include_source
+                # path runs `SET d += $document.metadata`, and our
+                # source Documents carry {video_id, title, channel}.
+                neo4j_graph.add_graph_documents(
+                    [gdoc],
+                    include_source = True,
+                    baseEntityLabel = True,
+                )
                 total_nodes += len(gdoc.nodes)
                 total_relationships += len(gdoc.relationships)
-            total_processed += len(batch)
-            # Per-video bookkeeping for the Ingest-page video list.
-            # With batch_size=1 this advances one id per iteration; with
-            # the legacy batch_size=3 path it bulk-adds the whole batch.
-            for doc in batch:
-                vid = doc.metadata.get("video_id", "")
+                productive = bool(gdoc.nodes or gdoc.relationships)
                 if vid and vid not in completed_ids:
                     completed_ids.append(vid)
-            logger.info(
-                f"[ycs:graph] batch {batch_start // batch_size + 1}: "
-                f"{total_processed}/{len(documents)} transcripts, "
-                f"{total_nodes} nodes, {total_relationships} rels"
-            )
-        except Exception as e:
-            batch_raised = True
-            if isinstance(e, TimeoutError) and not str(e):
-                # asyncio.wait_for raises a bare TimeoutError — stamp it
-                # so the silent-zero guard's diagnostic isn't empty.
-                last_batch_error = (
-                    f"TimeoutError: batch exceeded the "
-                    f"{GRAPH_BATCH_TIMEOUT_S:.0f}s watchdog"
+                logger.info(
+                    f"[ycs:graph] {vid}: "
+                    f"{total_processed}/{len(documents)} transcripts, "
+                    f"{total_nodes} nodes, {total_relationships} rels"
                 )
+            # Circuit breaker: raised OR wrote nothing → non-productive.
+            if productive:
+                consecutive_nonproductive = 0
             else:
-                last_batch_error = f"{type(e).__name__}: {str(e)[:400]}"
-            logger.warning(
-                f"[ycs:graph] batch {batch_start // batch_size + 1} failed: "
-                f"{last_batch_error}. Continuing."
-            )
-            total_processed += len(batch)
-            for doc in batch:
-                vid = doc.metadata.get("video_id", "")
-                if vid and vid not in failed_ids:
-                    failed_ids.append(vid)
-        # Circuit breaker: raised OR wrote nothing → non-productive.
-        produced = (total_nodes > batch_nodes_before
-                    or total_relationships > batch_rels_before)
-        if batch_raised or not produced:
-            consecutive_nonproductive += 1
-        else:
-            consecutive_nonproductive = 0
-        if (abort_after_consecutive > 0
-                and consecutive_nonproductive >= abort_after_consecutive):
-            aborted_nonproductive = True
-            logger.warning(
-                f"[ycs:graph] circuit breaker: {consecutive_nonproductive} "
-                f"consecutive non-productive batches — aborting this arm "
-                f"so the caller can swap. "
-                f"({total_processed}/{len(documents)} attempted, "
-                f"{total_nodes} nodes so far)"
-            )
-            break
-        # Per-batch progress emission so the FastHTML Neo4j bar advances
-        # in real time. `current` counts attempted (not just succeeded)
-        # transcripts so the bar fills monotonically even when an
-        # individual batch raises (e.g. transient LLM 5xx).
-        if progress_cb:
-            last_vid = batch[-1].metadata.get("video_id", "") if batch else ""
-            last_meta = metadata_map.get(last_vid, {}) if last_vid else {}
-            progress_cb({
-                "phase":         "extracting",
-                "current":       total_processed,
-                "total":         len(documents),
-                "current_batch": batch_start // batch_size + 1,
-                "total_batches": total_batches,
-                "nodes":         total_nodes,
-                "rels":          total_relationships,
-                "completed_ids": list(completed_ids),
-                "failed_ids":    list(failed_ids),
-                "current_item": {
-                    "id":      last_vid,
-                    "title":   last_meta.get("title", ""),
-                    "channel": last_meta.get("channel", ""),
-                } if last_vid else None,
-            })
-        # Inter-batch pacing. Deprecated used `time.sleep` (sync) here
-        # despite the function being `async def` — preserved verbatim.
-        if batch_start + batch_size < len(documents):
-            time.sleep(INTER_BATCH_SLEEP_S)
+                consecutive_nonproductive += 1
+            if (abort_after_consecutive > 0
+                    and consecutive_nonproductive >= abort_after_consecutive):
+                aborted_nonproductive = True
+                logger.warning(
+                    f"[ycs:graph] circuit breaker: "
+                    f"{consecutive_nonproductive} consecutive "
+                    f"non-productive extractions — aborting this arm "
+                    f"so the caller can swap. "
+                    f"({total_processed}/{len(documents)} attempted, "
+                    f"{total_nodes} nodes so far)"
+                )
+                break
+            # Per-completion progress emission so the FastHTML Neo4j bar
+            # advances in real time. `current` counts attempted (not
+            # just succeeded) transcripts so the bar fills monotonically
+            # even when an individual extraction raises.
+            if progress_cb:
+                meta = metadata_map.get(vid, {}) if vid else {}
+                progress_cb({
+                    "phase":         "extracting",
+                    "current":       total_processed,
+                    "total":         len(documents),
+                    "current_batch": total_processed,
+                    "total_batches": len(documents),
+                    "nodes":         total_nodes,
+                    "rels":          total_relationships,
+                    "completed_ids": list(completed_ids),
+                    "failed_ids":    list(failed_ids),
+                    "current_item": {
+                        "id":      vid,
+                        "title":   meta.get("title", ""),
+                        "channel": meta.get("channel", ""),
+                    } if vid else None,
+                })
+    finally:
+        # Cancel anything still in flight (breaker trip or hard error) —
+        # in-flight videos stay untagged and retry on the next segment.
+        for t in pool:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*pool, return_exceptions = True)
 
-    # Entity resolution is skipped on a circuit-breaker abort — the
-    # caller is about to re-run on a fresh arm, and resolution is a
-    # global pass over Neo4j; the final (non-aborted) segment runs it
-    # once for everything written so far.
+    # Entity resolution is a GLOBAL pass over Neo4j — callers that loop
+    # segments (neo4j_task's arm-swap / residual-retry) pass
+    # `run_resolution=False` and run it ONCE after the last segment;
+    # standalone callers keep the default. Also skipped on a circuit-
+    # breaker abort (the caller is about to re-run on a fresh arm).
     resolved = 0
-    if not aborted_nonproductive:
+    if run_resolution and not aborted_nonproductive:
         if progress_cb:
             progress_cb({
                 "phase":   "resolving",
@@ -393,10 +430,17 @@ async def extract_and_store_graph(
         "nodes_created":         total_nodes,
         "relationships_created": total_relationships,
         "entities_merged":       resolved,
-        # Surface the most-recent per-batch LLM exception so the
+        # Per-video outcome counts (2026-06-10) — `videos_failed > 0`
+        # drives neo4j_task's residual-retry loop: failed videos are
+        # untagged, so calling this function again (same transcripts,
+        # different arm) retries exactly them.
+        "videos_completed":      len(completed_ids),
+        "videos_failed":         len(failed_ids),
+        "failed_video_ids":      list(failed_ids),
+        # Surface the most-recent per-video LLM exception so the
         # neo4j_task's silent-zero guard can log the body (otherwise
         # the user only sees "0 nodes" with no diagnostic). None when
-        # every batch succeeded.
+        # every extraction succeeded.
         "last_batch_error":      last_batch_error,
         # Circuit-breaker verdict for the arm-swap loop in neo4j_task.
         "aborted_nonproductive": aborted_nonproductive,

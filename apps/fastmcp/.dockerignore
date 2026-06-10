@@ -1,0 +1,12 @@
+# Keep __pycache__/*.pyc + editor swapfiles out of the build context so
+# Skaffold's all-or-nothing sync batch never falls back to a full rebuild
+# on a normal edit pass. Mirrors apps/fasthtml/.dockerignore.
+__pycache__/
+*.py[cod]
+*.swp
+*.swo
+*~
+.venv/
+.git/
+.DS_Store
+logs/

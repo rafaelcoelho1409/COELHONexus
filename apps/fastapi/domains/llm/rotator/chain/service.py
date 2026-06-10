@@ -1097,10 +1097,22 @@ def _ycs_neo4j_filter_candidates(candidates: list[str]) -> list[str]:
     """Drop blocked arms unless the user has explicitly re-allowed
     them via env. Empty result falls back to the unfiltered list so
     the picker can't lock itself out (better to retry a broken arm
-    than to 503 the whole pipeline)."""
+    than to 503 the whole pipeline).
+
+    Groq arms are dropped PROVIDER-WIDE for this process: Groq's free
+    tier caps the SYNTH-class models at 8 000 tokens/min while one YCS
+    Phase 3 request is a FULL transcript (5-10K tokens by design —
+    chunking was rejected at -30% entity quality). Observed 2026-06-10
+    (groq/openai/gpt-oss-120b): single requests of 8 335 and 9 398
+    tokens rejected with deterministic 'Request too large … TPM Limit
+    8000' — the arm can never process most real transcripts, it just
+    burns a swap segment every time the bandit explores it.
+    `YCS_NEO4J_ARM_ALLOWLIST` re-enables specific arms (e.g. after a
+    Groq Dev-Tier upgrade)."""
     allow_env = os.environ.get("YCS_NEO4J_ARM_ALLOWLIST", "").strip()
     allow = {m.strip() for m in allow_env.split(",") if m.strip()}
     filtered = [c for c in candidates if c not in _YCS_NEO4J_ARM_BLOCKLIST or c in allow]
+    filtered = [c for c in filtered if not c.startswith("groq/") or c in allow]
     if not filtered:
         logger.warning(
             "[ycs-bandit-pin] blocklist would empty the pool — "
@@ -1110,10 +1122,57 @@ def _ycs_neo4j_filter_candidates(candidates: list[str]) -> list[str]:
     n_dropped = len(candidates) - len(filtered)
     if n_dropped:
         logger.info(
-            f"[ycs-bandit-pin] blocklist filtered {n_dropped} known-broken "
-            f"arm(s) ({len(filtered)} remain)"
+            f"[ycs-bandit-pin] filtered {n_dropped} unfit arm(s) "
+            f"(blocklist + groq TPM floor; {len(filtered)} remain)"
         )
     return filtered
+
+
+def _pick_synth_deployment_excluding(
+    seed: int, exclude: frozenset[str] | set[str],
+) -> str:
+    """Round-robin over dd-synth, skipping already-tried arms. The plain
+    `pick_synth_deployment` ignores `exclude`, so a saturated-pool fallthrough
+    re-handed the swap loop an arm it had just circuit-broken (observed
+    2026-06-10: kimi-k2.6 re-picked for segment 3 after being excluded in
+    segment 2). Falls back to the unfiltered pool only if exclusion empties
+    it (better a repeat than a crash)."""
+    entries = _synth_entries_current()
+    if not entries:
+        raise RuntimeError("SYNTH_GROUP is empty — cannot pin a deployment")
+    models = [e["litellm_params"]["model"] for e in entries]
+    pool = [m for m in models if m not in exclude] or models
+    return pool[seed % len(pool)]
+
+
+async def release_ycs_provider_slot(
+    provider: str | None, slot: int | None,
+) -> None:
+    """Release a provider concurrency slot reserved by
+    `pick_ycs_neo4j_deployment_bandit`. The swap loop calls this after each
+    segment so a multi-segment run doesn't hold every tried arm's slot for
+    the full 1800s TTL — which previously saturated the (DD-shared) provider
+    pool mid-run and forced the round-robin fallthrough. No-ops on a fallback
+    pick (provider/slot None) or when Redis is absent."""
+    if not provider or slot is None or "REDIS_HOST" not in os.environ:
+        return
+    host = os.environ["REDIS_HOST"].strip()
+    port = os.environ["REDIS_PORT"].strip() if "REDIS_PORT" in os.environ else "6379"
+    password = os.environ["REDIS_PASSWORD"].strip() if "REDIS_PASSWORD" in os.environ else ""
+    url = f"redis://:{password}@{host}:{port}" if password else f"redis://{host}:{port}"
+    rds = redis_aio.from_url(url)
+    try:
+        await bandit.release_provider_slot(provider, slot, redis = rds)
+    except Exception as e:
+        logger.warning(
+            f"[ycs-bandit-pin] provider-slot release failed "
+            f"({provider}:{slot}): {type(e).__name__}: {e}"
+        )
+    finally:
+        try:
+            await rds.aclose()
+        except Exception:
+            pass
 
 
 async def pick_ycs_neo4j_deployment_bandit(
@@ -1121,7 +1180,7 @@ async def pick_ycs_neo4j_deployment_bandit(
     *,
     video_count: int = 0,
     exclude: frozenset[str] | set[str] = frozenset(),
-) -> str:
+) -> tuple[str, str | None, int | None]:
     """Bandit-driven deployment pick for YCS Phase 3 (Neo4j entity extraction).
     One pick per arm-segment of a Celery task. All transcripts in a segment
     share the pinned model. Per-segment reward is recorded by the caller after
@@ -1134,8 +1193,12 @@ async def pick_ycs_neo4j_deployment_bandit(
     pool, the unfiltered list is kept (better a repeat than a 503).
 
     Drops back to `pick_synth_deployment(seed)` (deterministic round-robin)
-    when the bandit/Redis path errors. Same fallback shape as the synth picker
-    so a bad Redis day never kills Phase 3."""
+    when the bandit/Redis path errors — but exclude-aware (see
+    `_pick_synth_deployment_excluding`) so the fallthrough never re-hands a
+    just-failed arm. Returns `(deployment_id, provider, slot)`; provider/slot
+    are None on the fallback path. The caller MUST `release_ycs_provider_slot`
+    the returned slot when the segment ends (swap or finish) — otherwise the
+    reserved slot lingers for its 1800s TTL and saturates the shared pool."""
     await ensure_dynamic_catalog()
     entries = _synth_entries_current()
     if not entries:
@@ -1214,7 +1277,7 @@ async def pick_ycs_neo4j_deployment_bandit(
                     f"(score={score:.4f}, n_obs={n_obs}, "
                     f"provider_slot={provider}:{slot}, videos={video_count})"
                 )
-                return deployment_id
+                return deployment_id, provider, slot
             logger.warning(
                 f"[ycs-bandit-pin] all top-{len(ranked)} slots saturated; "
                 "falling through to round-robin"
@@ -1229,7 +1292,7 @@ async def pick_ycs_neo4j_deployment_bandit(
             f"[ycs-bandit-pin] bandit pick failed ({type(e).__name__}: {e}); "
             "falling back to round-robin"
         )
-    return pick_synth_deployment(seed)
+    return _pick_synth_deployment_excluding(seed, exclude), None, None
 
 
 async def record_ycs_neo4j_reward(
@@ -1322,18 +1385,39 @@ async def record_ycs_neo4j_reward(
         return False
 
 
-def build_ycs_neo4j_pinned_chain(pinned_model: str):
-    """ChatLiteLLMRouter pinned to one YCS Phase 3 deployment. Shares the
-    `_pinned_chain_cache` with synth pins — same SYNTH_GROUP entries, same
-    LiteLLM Router shape. Falls back to the full synth pool when `pinned_model`
-    isn't in SYNTH_GROUP (e.g. user disabled it via /settings between pick
-    and chain build).
+# YCS Phase 3 entity extraction needs a longer per-call ceiling than
+# synth's 180s: with `ignore_tool_usage=True` each arm emits the ENTIRE
+# entity graph as one plain-text JSON, so an entity-dense transcript
+# (e.g. a tax/economics explainer naming a dozen specific taxes + laws)
+# generates 10-15K OUTPUT tokens — on a loaded free-tier NIM at ~30-80
+# tok/s that crosses 180s and the client deadline kills a still-
+# generating call (observed 2026-06-10: 5 arms all cut off at exactly
+# 180.0s on one dense Capital Global video). 300s default clears that
+# while staying under the 600s batch watchdog (GRAPH_BATCH_TIMEOUT_S).
+# Env-tunable; if pushed past ~480 the watchdog must rise too or it
+# fires first. Does NOT touch synth's entries (separate cache key).
+YCS_NEO4J_EXTRACT_TIMEOUT_S = max(
+    60, int(os.environ.get("YCS_NEO4J_EXTRACT_TIMEOUT_S", "300") or "300"),
+)
 
-    Distinct from `build_synth_pinned_chain` in name only; the implementation
-    delegates to `build_pinned_chain_any(group=SYNTH_GROUP)`. Kept as a
-    separate symbol so a future YCS-specific pool can replace it without
-    touching call sites."""
-    chain = build_pinned_chain_any(pinned_model, group = SYNTH_GROUP)
+
+def build_ycs_neo4j_pinned_chain(pinned_model: str):
+    """ChatLiteLLMRouter pinned to one YCS Phase 3 deployment. Reuses the
+    SYNTH_GROUP catalog entries + LiteLLM Router shape, but with a LONGER
+    per-call timeout (`YCS_NEO4J_EXTRACT_TIMEOUT_S`, default 300s vs synth's
+    180s) — dense-transcript entity extraction generates a large JSON that
+    routinely exceeds 180s of output generation under free-tier load. The
+    override participates in the pinned-chain cache key, so the same model
+    keeps independent 180s-synth and 300s-YCS chains.
+
+    Falls back to the full synth pool when `pinned_model` isn't in
+    SYNTH_GROUP (e.g. user disabled it via /settings between pick and
+    chain build)."""
+    chain = build_pinned_chain_any(
+        pinned_model,
+        group = SYNTH_GROUP,
+        timeout_override = YCS_NEO4J_EXTRACT_TIMEOUT_S,
+    )
     if chain is not None:
         return chain
     logger.warning(
@@ -1411,13 +1495,28 @@ def _build_pinned_chain(pinned_group: str, fresh_entry: dict):
         temperature = 0.0)
 
 
-def build_pinned_chain_any(pinned_model: str, group: str | None = None):
+def build_pinned_chain_any(
+    pinned_model: str,
+    group: str | None = None,
+    timeout_override: int | None = None,
+):
     """Generalized per-call pinning. Build a single-deployment ChatLiteLLMRouter
     for any litellm_params.model string. Searches dd-synth → dd-reduce-label →
     dd-all unless `group` is specified. None when pinned_model isn't found
-    (caller falls back)."""
-    if pinned_model in _pinned_chain_cache:
-        return _pinned_chain_cache[pinned_model]
+    (caller falls back).
+
+    `timeout_override` (seconds) replaces the per-deployment `timeout` baked
+    into the catalog entry — used by YCS Phase 3, whose dense-transcript
+    entity extraction needs a longer ceiling than synth's 180s (see
+    `build_ycs_neo4j_pinned_chain`). It participates in the cache key so the
+    same model can hold BOTH a 180s synth chain and a 300s YCS chain without
+    one clobbering the other."""
+    cache_key = (
+        pinned_model if timeout_override is None
+        else f"{pinned_model}@to{timeout_override}"
+    )
+    if cache_key in _pinned_chain_cache:
+        return _pinned_chain_cache[cache_key]
     search_groups: list[tuple[str, list[dict]]] = []
     if group is None or group == SYNTH_GROUP:
         search_groups.append((SYNTH_GROUP, _synth_entries_current()))
@@ -1437,13 +1536,16 @@ def build_pinned_chain_any(pinned_model: str, group: str | None = None):
             break
     if matching_entry is None:
         return None
-    pinned_group = f"dd-pinned-{abs(hash(pinned_model)) & 0xFFFFFF:06x}"
+    pinned_group = f"dd-pinned-{abs(hash(cache_key)) & 0xFFFFFF:06x}"
+    litellm_params = dict(matching_entry["litellm_params"])
+    if timeout_override is not None:
+        litellm_params["timeout"] = timeout_override
     fresh_entry = {
         "model_name":    pinned_group,
-        "litellm_params": dict(matching_entry["litellm_params"]),
+        "litellm_params": litellm_params,
     }
     chain = _build_pinned_chain(pinned_group, fresh_entry)
-    _pinned_chain_cache[pinned_model] = chain
+    _pinned_chain_cache[cache_key] = chain
     _pinned_to_parent[pinned_group] = matched_group or GROUP
     return chain
 

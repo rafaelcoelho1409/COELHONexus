@@ -5,9 +5,9 @@ from layout.shell import _Shell
 
 
 def register(rt) -> None:
-    @rt("/coming-soon")
-    def coming_soon():
-        return _Shell("coming-soon", "Coming Soon")
+    @rt("/research-radar")
+    def research_radar():
+        return _Shell("research-radar", "Research Radar")
 
     @rt("/health")
     def health():
