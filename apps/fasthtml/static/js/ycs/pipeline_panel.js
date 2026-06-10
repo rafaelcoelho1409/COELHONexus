@@ -354,11 +354,15 @@ function _successHint(prefix, result) {
         const cached = t.cached ?? 0;
         const fetchFailed = t.fetch_failed ?? 0;
         const indexFailed = t.failed ?? 0;
+        const noTranscript = t.no_transcript ?? 0;
         const available = newIdx + cached;
         const parts = [
             `${m.indexed ?? 0} metadata`,
             `${available} transcripts in ES (${newIdx} new · ${cached} cached)`,
         ];
+        // Permanent "video has no captions" — expected outcome, kept
+        // separate from infra fetch failures.
+        if (noTranscript) parts.push(`${noTranscript} no transcript`);
         if (fetchFailed) parts.push(`${fetchFailed} fetch failed`);
         if (indexFailed) parts.push(`${indexFailed} index failed`);
         return parts.join(" · ");

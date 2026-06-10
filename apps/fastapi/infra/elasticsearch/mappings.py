@@ -85,7 +85,7 @@ TRANSCRIPTIONS_MAPPING: dict = {
             "lang":          {"type": "keyword"},
             "content":       {"type": "text", "analyzer": "standard"},
             "is_auto":       {"type": "boolean"},
-            "method":        {"type": "keyword"},  # "dom_scrape" / "direct_api"
+            "method":        {"type": "keyword"},  # "get_panel" / "get_transcript" / "dom_scrape" / "direct_api"
             # Denormalized for filter-by-channel / filter-by-playlist
             "channel_id":    {"type": "keyword"},
             "playlist_id":   {"type": "keyword"},

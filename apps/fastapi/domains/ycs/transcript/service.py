@@ -1,6 +1,30 @@
 """ycs/transcript — Playwright CDP transcript-extraction service.
 
-Direct port of deprecated `routers/v1/youtube/helpers.py:L1179-1773`.
+Direct port of deprecated `routers/v1/youtube/helpers.py:L1179-1773`,
+reworked 2026-06-10 after a live-cluster failure autopsy (3/5 missing
+Capital Global videos reproduced; all HAD captions per yt-dlp metadata).
+
+Extraction is now a 4-path cascade per video, behind an authoritative
+availability gate:
+
+  GATE   `ytInitialPlayerResponse` — unplayable status or 0 caption
+         tracks → PERMANENT failure (`no_transcript`/unavailable), no
+         retries, surfaced separately from infra failures in stats.
+  PATH 1 `/youtubei/v1/get_panel` (panelId=PAmodern_transcript_view) —
+         the data API behind YouTube's Jun-2026 modern transcript
+         panel. In-page fetch, ~250 ms, no DOM interaction, immune to
+         renderer experiments. Works even on unhydrated (blank) pages.
+  PATH 2 `/youtubei/v1/get_transcript` (legacy) — for sessions NOT in
+         the modern-panel experiment (where get_panel may not serve);
+         under the experiment it answers 400 'Precondition check
+         failed' and the cascade just moves on.
+  PATH 3 DOM click-scrape (deprecated v4) — hydration-gated; the
+         f5bff8e clear-all-timers massacre is GONE (it froze Polymer
+         hydration on fast-DCL navigations → permanent blank page →
+         'Transcript button not found' with bodyChars=0).
+  PATH 4 timedtext `baseUrl&fmt=json3` + bgutil-PoT — last resort
+         (YouTube answers empty 200 for most datacenter sessions even
+         with a pot; kept because it costs one request).
 
 Public:
   PlaywrightTranscriptService     — class with init / fetch / close
@@ -21,6 +45,7 @@ import time
 from datetime import datetime
 from typing import Any, Callable
 
+import httpx
 from elasticsearch import AsyncElasticsearch
 from playwright.async_api import async_playwright
 
@@ -33,6 +58,9 @@ from .domain import (
     _get_cdp_websocket_url,
     _parse_transcript,
     _select_best_track,
+    build_get_panel_params,
+    parse_get_panel_segments,
+    parse_get_transcript_segments,
 )
 from .params import (
     BLOCK_PATTERNS,
@@ -47,6 +75,9 @@ from .params import (
     MAX_RETRIES,
     NAVIGATION_TIMEOUT_MS,
     PERMANENT_ERRORS,
+    POT_CACHE_SLACK_S,
+    POT_PROVIDER_URL,
+    POT_REQUEST_TIMEOUT_S,
     RETRY_LIMIT,
     RETRYABLE_ERRORS,
     TIMEOUT_MS,
@@ -73,35 +104,31 @@ async def _setup_routes(page) -> None:
 
 
 async def _kill_youtube_background(page) -> None:
-    """Comprehensive DOM cleanup — kills the video, removes the heavy
-    sidebars / comments / recommendation renderers, clears timers, and
-    disables analytics. 1:1 with the gold-standard `CLEANUP_DOM_JS`
-    block from commit f5bff8e's `scripts/optimized_transcript_extraction.py`
-    (the "100% success rate" baseline).
+    """DOM lightening before the click-scrape path — pauses the video and
+    removes the heavy sidebar / comments / recommendation trees so the
+    transcript panel wins the render-frame race.
 
-    Why this matters operationally: the originally-ported short version
-    only paused the video + cleared timers. YouTube would still render
-    the secondary recommendations panel + comments section in the
-    background after the user clicked "Show transcript", competing
-    with the engagement-panel render. On videos like `zHvdMrSTeEQ`
-    (Capital-Global-class channels with heavy recommendation graphs),
-    the transcript-segment-view-model elements would never paint within
-    the 15s polling budget. Removing the competing DOM trees first
-    lets the panel render reliably."""
+    2026-06-10 REWORK — the f5bff8e clear-all-timers massacre is GONE.
+    Clearing every `setTimeout`/`setInterval` id right after
+    `domcontentloaded` also killed Polymer's hydration scheduler on
+    fast-DCL navigations: the watch page froze at `bodyChars=0` (no
+    expand button, no transcript button, no panels — empirically 3/5
+    Capital Global videos, with hydration confirmed healthy at ~15 s
+    once the massacre was skipped). The DOM removals below only touch
+    trees that exist AFTER hydration, so this is now called from the
+    DOM path (which hydration-gates first), not right after goto."""
     await page.evaluate("""
         () => {
-            const stats = {
-                video: 0, secondary: 0, comments: 0, renderers: 0, timers: 0,
-            };
+            const stats = { video: 0, secondary: 0, comments: 0, renderers: 0 };
 
-            // Stop + remove the video player (+ everything it pulls)
+            // Stop the video; keep the player node (removing it can
+            // wedge the engagement-panel layout reflow mid-hydration).
             const video = document.querySelector("video");
             if (video) {
                 video.pause();
                 video.removeAttribute("src");
                 try { video.load(); } catch (_) {}
-                const player = document.querySelector("ytd-player, #movie_player");
-                if (player) { player.remove(); stats.video = 1; }
+                stats.video = 1;
             }
 
             // Remove the right-rail sidebar (recommendations)
@@ -116,23 +143,6 @@ async def _kill_youtube_background(page) -> None:
             document.querySelectorAll(
                 "ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer"
             ).forEach((el) => { el.remove(); stats.renderers++; });
-
-            // Kill every active setTimeout / setInterval — stops the
-            // background recommendation-load + analytics-flush cycles
-            // that compete for render frames with the transcript panel.
-            const highestId = window.setTimeout(() => {}, 0);
-            for (let i = 0; i < highestId; i++) {
-                window.clearTimeout(i);
-                window.clearInterval(i);
-                stats.timers++;
-            }
-
-            // Stub analytics globals — best-effort, ignore if absent.
-            try {
-                if (window.ytplayer) window.ytplayer.bootstrapPlayer = null;
-                if (window.ytcfg && window.ytcfg.set) window.ytcfg.set = () => {};
-                if (window._yt_player) window._yt_player = null;
-            } catch (_) {}
 
             return stats;
         }
@@ -164,26 +174,234 @@ async def _get_caption_tracks(page) -> list[CaptionTrack]:
     ]
 
 
-async def _fetch_transcript_direct(page, base_url: str) -> list[dict]:
+async def _get_player_state(page) -> dict[str, Any]:
+    """Authoritative availability gate from `ytInitialPlayerResponse`
+    (present in the initial HTML — readable even on unhydrated pages).
+
+    Returns `{hasPlayerResponse, playability, playabilityReason,
+    nTracks}`. `nTracks == 0` with `playability == "OK"` means the
+    video genuinely has no captions — the ONLY case the batch should
+    report as "no transcript available" (cross-checked against yt-dlp
+    `automatic_captions`/`subtitles` metadata, which agreed on all
+    sampled corpus videos)."""
+    try:
+        await page.wait_for_function(
+            "() => !!window.ytInitialPlayerResponse",
+            timeout = 8000,
+        )
+    except Exception:
+        pass
+    return await page.evaluate("""() => {
+        const pr = window.ytInitialPlayerResponse || null;
+        const tracks = pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+        return {
+            hasPlayerResponse: !!pr,
+            playability:       pr?.playabilityStatus?.status || null,
+            playabilityReason: pr?.playabilityStatus?.reason || null,
+            nTracks:           tracks.length,
+        };
+    }""")
+
+
+# Playability statuses that can never yield a transcript for this
+# (anonymous, datacenter) session — permanent, no retry.
+_UNPLAYABLE_STATUSES = frozenset({
+    "ERROR",                 # deleted / bad id
+    "UNPLAYABLE",            # region-block / embed-only / members-only
+    "LOGIN_REQUIRED",        # private / age-gated sign-in wall
+    "AGE_CHECK_REQUIRED",
+    "CONTENT_CHECK_REQUIRED",
+    "LIVE_STREAM_OFFLINE",
+})
+
+
+async def _fetch_via_get_panel(page, video_id: str) -> list[dict]:
+    """PATH 1 — in-page POST to `/youtubei/v1/get_panel` for the modern
+    transcript panel's data (`PAmodern_transcript_view`).
+
+    This is the same request the panel's own click handler issues
+    (captured + replayed 2026-06-10), so it carries the session's
+    INNERTUBE_CONTEXT, cookies and origin. ~250 ms; no DOM interaction;
+    works on blank/unhydrated pages. Raises ValueError on HTTP error,
+    error payload, or empty segment list."""
+    params = build_get_panel_params(video_id)
+    result = await page.evaluate(
+        """async (params) => {
+            try {
+                const g = (k) => (window.ytcfg && window.ytcfg.get)
+                    ? window.ytcfg.get(k) : null;
+                const ctx = g('INNERTUBE_CONTEXT');
+                if (!ctx) return { __err: 'no INNERTUBE_CONTEXT' };
+                const resp = await fetch('/youtubei/v1/get_panel?prettyPrint=false', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        context: ctx,
+                        panelId: 'PAmodern_transcript_view',
+                        params:  params,
+                    }),
+                });
+                if (!resp.ok) return { __err: 'HTTP ' + resp.status };
+                return await resp.json();
+            } catch (e) {
+                return { __err: String((e && e.message) || e) };
+            }
+        }""",
+        params,
+    )
+    if isinstance(result, dict) and result.get("__err"):
+        raise ValueError(f"get_panel: {result['__err']}")
+    segments = parse_get_panel_segments(result)
+    if not segments:
+        raise ValueError("get_panel: no segments in response")
+    return segments
+
+
+async def _fetch_via_get_transcript(page) -> list[dict]:
+    """PATH 2 — in-page POST to legacy `/youtubei/v1/get_transcript`,
+    with `params` deep-searched from `ytInitialData`'s
+    `getTranscriptEndpoint` (the pre-experiment panel wiring).
+
+    Sessions bucketed into the modern-panel experiment get HTTP 400
+    'Precondition check failed' here — that's expected; the caller
+    falls through. Raises ValueError on any failure."""
+    result = await page.evaluate(
+        """async () => {
+            try {
+                const g = (k) => (window.ytcfg && window.ytcfg.get)
+                    ? window.ytcfg.get(k) : null;
+                const ctx = g('INNERTUBE_CONTEXT');
+                if (!ctx) return { __err: 'no INNERTUBE_CONTEXT' };
+                const found = [];
+                const seen = new Set();
+                const walk = (o, depth) => {
+                    if (!o || typeof o !== 'object' || depth > 40 || seen.has(o)) return;
+                    seen.add(o);
+                    if (o.getTranscriptEndpoint && o.getTranscriptEndpoint.params) {
+                        found.push(o.getTranscriptEndpoint.params);
+                    }
+                    for (const k in o) walk(o[k], depth + 1);
+                };
+                walk(window.ytInitialData, 0);
+                if (!found.length) return { __err: 'no getTranscriptEndpoint in ytInitialData' };
+                const resp = await fetch('/youtubei/v1/get_transcript?prettyPrint=false', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ context: ctx, params: found[0] }),
+                });
+                if (!resp.ok) return { __err: 'HTTP ' + resp.status };
+                return await resp.json();
+            } catch (e) {
+                return { __err: String((e && e.message) || e) };
+            }
+        }""",
+    )
+    if isinstance(result, dict) and result.get("__err"):
+        raise ValueError(f"get_transcript: {result['__err']}")
+    segments = parse_get_transcript_segments(result)
+    if not segments:
+        raise ValueError("get_transcript: no segments in response")
+    return segments
+
+
+# PoT token cache — one entry per visitorData (the WEB-client content
+# binding for caption/timedtext requests). Tokens live ~6h; we re-mint
+# POT_CACHE_SLACK_S early. Module-level on purpose: the Celery worker
+# processes share one event loop per task, and the binding is stable
+# across videos within a browser session.
+_pot_cache: dict[str, tuple[str, float]] = {}
+
+
+async def _get_caption_po_token(page) -> str | None:
+    """Mint (or reuse) a `pot` token for the page's visitorData via the
+    bgutil-PoT sidecar — the SAME provider yt-dlp uses for formats.
+
+    YouTube's timedtext endpoint silently returns HTTP 200 with an
+    empty body when the caption URL has no `pot` param (the
+    'direct-API fallback failed: ValueError: empty response' log
+    pattern). The in-page fetch inherits session cookies but cookies
+    alone don't satisfy the proof-of-origin check on datacenter IPs.
+
+    Best-effort: returns None on any failure (missing visitorData,
+    sidecar down, timeout) — the caller then fetches without a pot,
+    which is the pre-2026-06-10 behavior."""
+    try:
+        visitor_data = await page.evaluate(
+            """() => {
+                try {
+                    return (window.ytcfg && window.ytcfg.get
+                                && window.ytcfg.get('VISITOR_DATA'))
+                        || (window.ytInitialPlayerResponse
+                                && window.ytInitialPlayerResponse
+                                    .responseContext
+                                && window.ytInitialPlayerResponse
+                                    .responseContext.visitorData)
+                        || '';
+                } catch (_) { return ''; }
+            }"""
+        )
+        if not visitor_data:
+            log.info("[transcript-service] no visitorData on page; pot skipped")
+            return None
+        cached = _pot_cache.get(visitor_data)
+        if cached and cached[1] - POT_CACHE_SLACK_S > time.time():
+            return cached[0]
+        async with httpx.AsyncClient(timeout = POT_REQUEST_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{POT_PROVIDER_URL}/get_pot",
+                json = {"content_binding": visitor_data},
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        token = payload.get("poToken") or ""
+        if not token:
+            log.info("[transcript-service] pot sidecar returned no poToken")
+            return None
+        expires_at = payload.get("expiresAt") or ""
+        try:
+            expires_ts = datetime.fromisoformat(
+                expires_at.replace("Z", "+00:00"),
+            ).timestamp()
+        except (TypeError, ValueError):
+            expires_ts = time.time() + 1800.0  # conservative 30 min
+        _pot_cache[visitor_data] = (token, expires_ts)
+        return token
+    except Exception as e:
+        log.info(
+            f"[transcript-service] pot mint failed "
+            f"({type(e).__name__}: {str(e)[:80]}); fetching without pot"
+        )
+        return None
+
+
+async def _fetch_transcript_direct(
+    page, base_url: str, po_token: str | None = None,
+) -> list[dict]:
     """In-page direct fetch of YouTube's caption URL — fallback for
     videos where the DOM hides Show-transcript controls (age-restricted
     / sensitive-topic / unauthenticated-session UI variants).
 
-    Calls `{base_url}&fmt=json3` from inside the page context so the
-    request inherits the session's cookies + the bgutil-PoT token
-    YouTube requires. Returns `[{timestamp, text}, ...]` segments.
+    Calls `{base_url}&fmt=json3[&pot=…&c=WEB]` from inside the page
+    context so the request inherits the session's cookies. Returns
+    `[{timestamp, text}, ...]` segments.
 
-    1:1 port of deprecated `helpers.py::_fetch_transcript_direct`. The
-    deprecated comment "direct API removed - always fails without PO
-    token" was correct in 2026-03 but the cluster now runs the
-    bgutil-PoT sidecar (Dockerfile.fastapi + COELHO Cloud's playwright
-    module), so the session DOES carry a valid PO token now. Use as a
-    fallback when `_extract_via_dom` raises (button not found / panel
-    not loaded). On both-fail the original DOM error wins so log
-    fingerprints stay diagnostic.
+    2026-06-10: `po_token` added. The original port assumed the session
+    cookies carried the bgutil-PoT — they don't (the sidecar feeds
+    yt-dlp's requests, not in-page fetches), which is why every
+    fallback died with `empty response` (timedtext's silent rejection
+    for pot-less callers). The token is appended only when the baseUrl
+    doesn't already carry one.
 
     Raises `ValueError(reason)` on HTTP / JSON / empty-response."""
     json_url = base_url + ("&" if "?" in base_url else "?") + "fmt=json3"
+    pot_applied = False
+    if po_token and "pot=" not in base_url:
+        json_url += "&pot=" + po_token
+        if "?c=" not in base_url and "&c=" not in base_url:
+            json_url += "&c=WEB"
+        pot_applied = True
     result = await page.evaluate(f"""
         async () => {{
             try {{
@@ -215,7 +433,10 @@ async def _fetch_transcript_direct(page, base_url: str) -> list[dict]:
         }}
     """)
     if isinstance(result, dict) and "error" in result:
-        raise ValueError(result["error"])
+        # Tag pot presence in the error so the log fingerprint tells
+        # "pot didn't help" apart from "no pot was available".
+        suffix = " (with pot)" if pot_applied else " (no pot)"
+        raise ValueError(str(result["error"]) + suffix)
     segments: list[dict] = []
     for event in (result or {}).get("events", []) or []:
         if "segs" in event:
@@ -255,6 +476,20 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
     except Exception:
         await page.wait_for_timeout(3000)
         log.info("[dom] Fallback wait completed")
+    # Hydration gate — selectors above can be ATTACHED while Polymer is
+    # still painting skeleton placeholders (observed: bodyChars 12 → 783
+    # → 2612 over 15 s on CPU-starved renders; the expand / transcript
+    # buttons only become clickable near the end of that ramp). Without
+    # this gate the selector budget below burns out BEFORE the buttons
+    # exist and the video is misreported as 'Transcript button not
+    # found'.
+    try:
+        await page.wait_for_function(
+            "() => (document.body?.innerText?.length || 0) > 500",
+            timeout = 20000,
+        )
+    except Exception:
+        log.warning("[dom] Hydration gate not reached in 20s, proceeding")
     # Check if transcript panel is already visible
     already_visible = await page.evaluate('''() => {
         const segments = document.querySelectorAll('transcript-segment-view-model, ytd-transcript-segment-renderer');
@@ -849,22 +1084,46 @@ class PlaywrightTranscriptService:
                 # script — was `"load"`, which waited on the very
                 # analytics/manifest requests we abort via BLOCK_PATTERNS,
                 # eating navigation budget for nothing. DCL fires as
-                # soon as the HTML is parsed; the captions detection
-                # below + _kill_youtube_background do the rest.
+                # soon as the HTML is parsed; the availability gate +
+                # data-path fetches below read window globals that are
+                # already in the initial HTML.
                 await page.goto(
                     url,
                     wait_until = "domcontentloaded",
                     timeout    = self.navigation_timeout_ms,
                 )
-                await _kill_youtube_background(page)
-                try:
-                    await page.wait_for_function(
-                        '() => !!window.ytInitialPlayerResponse?.captions',
-                        timeout = 5000,
+                # ---- Availability gate (permanent classifications) ----
+                state = await _get_player_state(page)
+                playability = state.get("playability")
+                if playability and playability in _UNPLAYABLE_STATUSES:
+                    reason = state.get("playabilityReason") or ""
+                    log.info(
+                        f"[transcript-service] {video_id} unplayable: "
+                        f"{playability} {reason[:80]}",
                     )
-                except Exception:
-                    pass
+                    return {
+                        "video_id":      video_id,
+                        "error":         (
+                            f"video unavailable: {playability}"
+                            + (f" ({reason})" if reason else "")
+                        ),
+                        "no_transcript": True,
+                    }
                 tracks = await _get_caption_tracks(page)
+                if state.get("hasPlayerResponse") and not tracks:
+                    # Authoritative: playable video, zero caption tracks
+                    # → there IS no transcript. Permanent; never retried;
+                    # batch stats bucket this separately from infra
+                    # failures.
+                    log.info(
+                        f"[transcript-service] {video_id}: no caption "
+                        f"tracks (playability={playability})",
+                    )
+                    return {
+                        "video_id":      video_id,
+                        "error":         "no transcript available (video has no caption tracks)",
+                        "no_transcript": True,
+                    }
                 language = "auto"
                 is_auto_generated = True
                 selected = None
@@ -879,21 +1138,69 @@ class PlaywrightTranscriptService:
                     selected = _select_best_track(tracks, prefer_manual)
                     language = selected.language_code
                     is_auto_generated = selected.is_auto_generated
-                # Primary path — DOM scrape of the engagement panel. Falls
-                # back to direct in-page fetch of the caption URL when
-                # the DOM scrape fails AND we have a selected track with
-                # a baseUrl. Direct path uses the bgutil-PoT session
-                # token so it works in cases where the DOM hides the
-                # Show-transcript button (age-restricted / sensitive-
-                # topic / unauthenticated-session UI variants).
+
+                def _ok(segments: list[dict], method: str, note: str = "") -> dict[str, Any]:
+                    elapsed = time.time() - start_time
+                    log.info(
+                        f"[transcript-service] OK {video_id} method={method} "
+                        f"segments={len(segments)} time={elapsed:.2f}s{note}",
+                    )
+                    return {
+                        "video_id":          video_id,
+                        "language":          language,
+                        "is_auto_generated": is_auto_generated,
+                        "page_content":      " ".join(s["text"] for s in segments),
+                        "segments":          segments,
+                        "method":            method,
+                    }
+
+                # ---- PATH 1: modern get_panel data API ----
                 try:
+                    return _ok(
+                        await _fetch_via_get_panel(page, video_id),
+                        "get_panel",
+                    )
+                except Exception as e:
+                    log.info(
+                        f"[transcript-service] {video_id} get_panel path: "
+                        f"{str(e)[:100]}",
+                    )
+                # ---- PATH 2: legacy get_transcript data API ----
+                try:
+                    return _ok(
+                        await _fetch_via_get_transcript(page),
+                        "get_transcript",
+                    )
+                except Exception as e:
+                    log.info(
+                        f"[transcript-service] {video_id} get_transcript path: "
+                        f"{str(e)[:100]}",
+                    )
+                # ---- PATH 3: DOM click-scrape ----
+                try:
+                    await _kill_youtube_background(page)
                     raw_text = await _extract_via_dom(page, self.timeout_ms)
+                    if not raw_text:
+                        raise ValueError(f"No transcript for: {video_id}")
+                    parsed = _parse_transcript(raw_text)
+                    if "auto-generated" in raw_text.lower():
+                        is_auto_generated = True
+                    return _ok(
+                        [
+                            {"timestamp": s.timestamp, "text": s.text}
+                            for s in parsed
+                        ],
+                        "dom_scrape",
+                    )
                 except Exception as dom_err:
+                    # ---- PATH 4: timedtext baseUrl + bgutil-PoT ----
                     direct_segments: list[dict] | None = None
                     if selected and selected.base_url:
                         try:
+                            po_token = await _get_caption_po_token(page)
                             direct_segments = await _fetch_transcript_direct(
                                 page, selected.base_url,
+                                po_token = po_token,
                             )
                         except Exception as direct_err:
                             log.info(
@@ -902,49 +1209,15 @@ class PlaywrightTranscriptService:
                                 f"{str(direct_err)[:120]}"
                             )
                     if not direct_segments:
-                        # Both paths failed — surface the ORIGINAL DOM
-                        # error so the existing telemetry/log
-                        # fingerprints stay diagnostic.
+                        # All paths failed — surface the DOM error so
+                        # the existing telemetry/log fingerprints stay
+                        # diagnostic.
                         raise dom_err
-                    page_content = " ".join(
-                        s["text"] for s in direct_segments
+                    return _ok(
+                        direct_segments,
+                        "direct_api",
+                        note = f" (DOM fell back after: {str(dom_err)[:80]})",
                     )
-                    elapsed = time.time() - start_time
-                    log.info(
-                        f"[transcript-service] OK {video_id} method=direct_api "
-                        f"segments={len(direct_segments)} time={elapsed:.2f}s"
-                        f" (DOM fell back after: {str(dom_err)[:80]})"
-                    )
-                    return {
-                        "video_id":          video_id,
-                        "language":          language,
-                        "is_auto_generated": is_auto_generated,
-                        "page_content":      page_content,
-                        "segments":          direct_segments,
-                        "method":            "direct_api",
-                    }
-                if not raw_text:
-                    raise ValueError(f"No transcript for: {video_id}")
-                segments = _parse_transcript(raw_text)
-                page_content = " ".join([seg.text for seg in segments])
-                if "auto-generated" in raw_text.lower():
-                    is_auto_generated = True
-                elapsed = time.time() - start_time
-                log.info(
-                    f"[transcript-service] OK {video_id} method=dom_scrape "
-                    f"segments={len(segments)} time={elapsed:.2f}s",
-                )
-                return {
-                    "video_id":          video_id,
-                    "language":          language,
-                    "is_auto_generated": is_auto_generated,
-                    "page_content":      page_content,
-                    "segments": [
-                        {"timestamp": s.timestamp, "text": s.text}
-                        for s in segments
-                    ],
-                    "method":            "dom_scrape",
-                }
             except Exception as e:
                 reuse_context = False
                 self._total_errors += 1
@@ -1172,17 +1445,20 @@ async def fetch_transcriptions_batch(
 
     Returns list of transcription docs ready for ES bulk indexing.
     `stats` (optional out-dict) gets populated with
-    `{cached, fetched_ok, fetched_failed}` so the caller can surface
-    the per-run breakdown in its result envelope (Phase A hint on the
-    Ingest page distinguishes "cached" from "newly indexed" from
-    "fetch failed" — important when a Rerun hits the cache for some
-    videos and the DOM scrape fails for others)."""
-    def _set_stats(cached: int, ok: int, failed: int) -> None:
+    `{cached, fetched_ok, fetched_failed, no_transcript}` so the caller
+    can surface the per-run breakdown in its result envelope (Phase A
+    hint on the Ingest page distinguishes "cached" from "newly indexed"
+    from "fetch failed" from "no transcript" — the last one is the
+    video-has-no-captions permanent case, NOT an infra failure)."""
+    def _set_stats(
+        cached: int, ok: int, failed: int, no_transcript: int = 0,
+    ) -> None:
         if stats is None:
             return
         stats["cached"] = cached
         stats["fetched_ok"] = ok
         stats["fetched_failed"] = failed
+        stats["no_transcript"] = no_transcript
 
     if not video_ids:
         _set_stats(0, 0, 0)
@@ -1249,6 +1525,7 @@ async def fetch_transcriptions_batch(
     transcription_docs: list[dict[str, Any]] = []
     total_success = 0
     total_failed = 0
+    total_no_transcript = 0
     for chunk_num in range(num_chunks):
         start_idx = chunk_num * chunk_size
         end_idx = min(start_idx + chunk_size, total_to_fetch)
@@ -1276,7 +1553,7 @@ async def fetch_transcriptions_batch(
                     "lang":          lang,
                     "content":       content,
                     "is_auto":       is_auto,
-                    "method":        "dom_scrape",
+                    "method":        result.get("method", "dom_scrape"),
                     "channel_id":    meta.get("channel_id"),
                     "playlist_id":   meta.get("playlist_id"),
                     "_extracted_at": datetime.utcnow().isoformat(),
@@ -1287,6 +1564,14 @@ async def fetch_transcriptions_batch(
                 log.info(
                     f"[fetch_transcriptions_batch] OK {vid} lang={lang} "
                     f"auto={is_auto} len={len(content)}",
+                )
+            elif result.get("no_transcript"):
+                # Permanent: video has no captions (or is unplayable for
+                # this session). Expected outcome, not an infra failure.
+                total_no_transcript += 1
+                log.info(
+                    f"[fetch_transcriptions_batch] NO-TRANSCRIPT {vid}: "
+                    f"{result.get('error', '')[:100]}",
                 )
             else:
                 total_failed += 1
@@ -1312,7 +1597,8 @@ async def fetch_transcriptions_batch(
             if progress_cb:
                 try:
                     progress_cb(
-                        n_progressed + total_success + total_failed,
+                        n_progressed + total_success + total_failed
+                        + total_no_transcript,
                         total_videos,
                         vid,
                         "error" not in result and bool(result.get("page_content")),
@@ -1339,12 +1625,16 @@ async def fetch_transcriptions_batch(
                 )
         log.info(
             f"[fetch_transcriptions_batch] Chunk {chunk_num + 1}/{num_chunks} "
-            f"complete: {total_success} OK, {total_failed} failed so far",
+            f"complete: {total_success} OK, {total_failed} failed, "
+            f"{total_no_transcript} no-transcript so far",
         )
-    _set_stats(cached_count, total_success, total_failed)
+    _set_stats(
+        cached_count, total_success, total_failed, total_no_transcript,
+    )
     log.info(
         f"[fetch_transcriptions_batch] Complete: "
         f"{total_success}/{total_to_fetch} fetched, "
-        f"{total_failed} failed, {cached_count} cached",
+        f"{total_failed} failed, {total_no_transcript} no-transcript, "
+        f"{cached_count} cached",
     )
     return transcription_docs

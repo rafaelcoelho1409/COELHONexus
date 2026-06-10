@@ -14,12 +14,13 @@ import { dispatchPipelineToIngest, parseLangs, setStatus } from "./shared.js";
 import { parseVideo } from "./parsers.js";
 import { wirePickerTab } from "./picker.js";
 
-const form     = document.getElementById("ycs-videos-form");
-const status   = document.getElementById("ycs-videos-status");
-const submit   = document.getElementById("ycs-videos-submit");
-const fetchBtn = document.getElementById("ycs-videos-fetch");
-const input    = document.getElementById("ycs-videos-input");
-const picker   = document.getElementById("ycs-videos-picker");
+const form         = document.getElementById("ycs-videos-form");
+const status       = document.getElementById("ycs-videos-status");
+const submit       = document.getElementById("ycs-videos-submit");
+const fetchBtn     = document.getElementById("ycs-videos-fetch");
+const input        = document.getElementById("ycs-videos-input");
+const picker       = document.getElementById("ycs-videos-picker");
+const ingestAllBtn = document.getElementById("ycs-videos-ingest-all");
 
 /* Parse the textarea into a deduped list of YouTube video IDs.
  * Accepts: bare 11-char IDs, watch URLs, youtu.be URLs, mixed CSV+
@@ -128,6 +129,26 @@ if (form && input && picker) {
             if (langs) body.transcription_languages = langs;
             // Clear the buffered paste so a refresh after redirect
             // shows an empty textarea, not the just-submitted IDs.
+            try { localStorage.removeItem(_BUFFER_KEY); } catch (_) { /* */ }
+            await dispatchPipelineToIngest(
+                "/content/videos/pipeline", body, status,
+            );
+        },
+        ingestAllBtn,
+        /* Ingest-all: unlike Channel/Playlist (server enumerates the
+         * whole container), the pasted textarea IS the full set — so
+         * just dispatch every parsed id, skipping the picker's
+         * 100-per-page preview/selection entirely. */
+        async dispatchIngestAll() {
+            const ids = _parseTextareaToIds(input.value);
+            if (!ids.length) {
+                setStatus(status, "error", "Paste at least one valid YouTube video ID or URL.");
+                return;
+            }
+            const incl = document.getElementById("ycs-videos-incl-trans")?.checked ?? true;
+            const langs = parseLangs(document.getElementById("ycs-videos-langs")?.value);
+            const body = { video_ids: ids, include_transcription: incl };
+            if (langs) body.transcription_languages = langs;
             try { localStorage.removeItem(_BUFFER_KEY); } catch (_) { /* */ }
             await dispatchPipelineToIngest(
                 "/content/videos/pipeline", body, status,

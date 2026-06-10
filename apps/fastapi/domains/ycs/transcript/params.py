@@ -57,6 +57,24 @@ DEFAULT_CHUNK_SIZE = 10       # ES checkpoint frequency
 
 
 # =============================================================================
+# bgutil-PoT sidecar — direct-API caption fetch (2026-06-10)
+# =============================================================================
+# Same sidecar yt-dlp uses (see content/params.py `_POT_PROVIDER_URL`;
+# keep both in sync with the Helm `bgutil-pot` sidecar port). YouTube's
+# timedtext endpoint answers HTTP 200 with an EMPTY BODY when the
+# caption URL lacks a `pot` (proof-of-origin) token — observed as the
+# `direct-API fallback failed: ValueError: empty response` pattern on
+# every datacenter session. The in-page fetch inherits cookies but NOT
+# a pot, so we mint one explicitly: POST /get_pot
+# {"content_binding": <visitorData>} → {"poToken", "expiresAt"}.
+POT_PROVIDER_URL = os.environ.get(
+    "YCS_POT_PROVIDER_URL", "http://127.0.0.1:4416",
+)
+POT_REQUEST_TIMEOUT_S = 30.0  # BotGuard eval can take seconds on cold start
+POT_CACHE_SLACK_S = 300.0     # re-mint 5 min before expiresAt
+
+
+# =============================================================================
 # Resource blocking — 1:1 with the 2026-03-27 gold-standard optimized
 # transcript script (scripts/optimized_transcript_extraction.py at commit
 # f5bff8e). The deprecated helpers.py we originally ported FROM had been

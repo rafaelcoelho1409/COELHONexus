@@ -2337,6 +2337,10 @@
   .ycs-picker-row { grid-template-columns: 22px 56px 1fr auto; gap: 10px; padding: 6px 10px; }
   .ycs-picker-thumb { width: 56px; height: 32px; }
   .ycs-picker-list { max-height: 360px; }
+  /* Library rows track the picker's compact breakpoint 1:1. */
+  .ycs-lib-row { grid-template-columns: 22px 56px 1fr auto; gap: 10px; padding: 6px 10px; }
+  .ycs-lib-row-thumb,
+  .ycs-lib-row-thumb-empty { width: 56px; height: 32px; }
 }
 
 /* ============================================================
@@ -2592,129 +2596,123 @@
 .ycs-lib-search:focus { border-color: var(--primary); }
 
 /* --- row list ------------------------------------------------ */
+/* Library list = one flat surface, identical density to the Source
+ * picker (Videos | Playlist | Channel). Rows are dividers, not bordered
+ * cards — see `.ycs-lib-row` (renamed from the old `.ycs-lib-card` grid
+ * to stop colliding with the ask.js/ingest.js citation `.ycs-lib-card`
+ * flex layout, which now keeps that class to itself). */
 .ycs-lib-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding-bottom: 64px; /* avoid floating bar overlap */
+  gap: 0;
+  margin-bottom: 64px; /* clear the floating bulk bar */
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
 }
 .ycs-lib-empty {
   padding: 24px;
   text-align: center;
   color: var(--text-muted);
   font-style: italic;
-  border: 1px dashed var(--border);
-  border-radius: 4px;
 }
 
-/* --- per-row card -------------------------------------------- */
-.ycs-lib-card {
+/* --- per-row (mirrors .ycs-picker-row 1:1) ------------------- */
+.ycs-lib-row {
   display: grid;
-  grid-template-columns: 22px 96px 1fr auto;
+  grid-template-columns: 22px 64px 1fr auto;
   gap: 12px;
   align-items: center;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
   background: var(--card);
-  transition: border-color 0.12s, background 0.12s;
+  transition: background 0.12s;
 }
-.ycs-lib-card:hover {
-  border-color: var(--text-muted);
-  background: rgba(0, 0, 0, 0.02);
-}
-.ycs-lib-card.selected {
-  border-color: var(--primary);
-  background: rgba(196, 18, 48, 0.04);
-}
-.ycs-lib-card-check {
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
-}
-.ycs-lib-card-thumb {
-  width: 96px;
-  height: 54px;
+.ycs-lib-row:last-child { border-bottom: 0; }
+.ycs-lib-row:hover { background: rgba(196, 18, 48, 0.025); }
+.ycs-lib-row.selected { background: rgba(196, 18, 48, 0.05); }
+.ycs-lib-row-check { justify-self: center; cursor: pointer; }
+.ycs-lib-row-thumb,
+.ycs-lib-row-thumb-empty {
+  width: 64px;
+  height: 36px;
   object-fit: cover;
   border-radius: 3px;
-  background: rgba(0, 0, 0, 0.06);
+  background: #000;
+  display: block;
+  flex-shrink: 0;
 }
-.ycs-lib-card-thumb-empty {
-  width: 96px;
-  height: 54px;
-  background: rgba(0, 0, 0, 0.06);
-  border-radius: 3px;
-}
-.ycs-lib-card-body {
+.ycs-lib-row-thumb-empty { background: rgba(0, 0, 0, 0.10); }
+.ycs-lib-row-body {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   min-width: 0;
 }
-.ycs-lib-card-title-row {
+.ycs-lib-row-title-row {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
-.ycs-lib-card-title {
-  font-size: 0.92rem;
-  font-weight: 600;
+.ycs-lib-row-title {
+  font-size: 0.86rem;
+  font-weight: 500;
   color: var(--text);
   text-decoration: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
   min-width: 0;
 }
-.ycs-lib-card-title:hover { color: var(--primary); }
-.ycs-lib-card-meta,
-.ycs-lib-card-stats {
+.ycs-lib-row-title:hover { color: var(--primary); }
+.ycs-lib-row-meta,
+.ycs-lib-row-stats {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  font-size: 0.76rem;
+  font-size: 0.74rem;
   color: var(--text-muted);
   align-items: baseline;
 }
-.ycs-lib-card-channel { color: var(--text); font-weight: 500; }
-.ycs-lib-card-sep { opacity: 0.5; }
+.ycs-lib-row-channel { color: var(--text); font-weight: 500; }
+.ycs-lib-row-sep { opacity: 0.5; }
 
 /* --- status pill --------------------------------------------- */
 .ycs-lib-status {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
-  font-size: 0.66rem;
+  padding: 1px 7px;
+  font-size: 0.62rem;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   border-radius: 4px;
   border: 1px solid transparent;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .ycs-lib-status-done    { background: rgba(44, 138, 62, 0.14); color: #1f6635; border-color: rgba(44, 138, 62, 0.30); }
 .ycs-lib-status-partial { background: rgba(255, 159, 64, 0.16); color: #8a4a14; border-color: rgba(255, 159, 64, 0.32); }
 .ycs-lib-status-failed  { background: rgba(196, 18, 48, 0.12); color: #8a142a; border-color: rgba(196, 18, 48, 0.32); }
 
 /* --- per-row trash ------------------------------------------- */
-.ycs-lib-card-trash {
+.ycs-lib-row-trash {
   background: transparent;
   border: 1px solid transparent;
   border-radius: 3px;
-  font-size: 0.95rem;
-  padding: 4px 8px;
+  font-size: 0.9rem;
+  padding: 3px 7px;
   cursor: pointer;
   color: var(--text-muted);
   opacity: 0;
   transition: opacity 0.12s, color 0.12s, border-color 0.12s, background 0.12s;
 }
-.ycs-lib-card:hover .ycs-lib-card-trash,
-.ycs-lib-card.selected .ycs-lib-card-trash {
+.ycs-lib-row:hover .ycs-lib-row-trash,
+.ycs-lib-row.selected .ycs-lib-row-trash {
   opacity: 0.7;
 }
-.ycs-lib-card-trash:hover {
+.ycs-lib-row-trash:hover {
   opacity: 1;
   color: var(--primary);
   border-color: var(--primary);

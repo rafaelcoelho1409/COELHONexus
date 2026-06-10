@@ -74,6 +74,47 @@ from .params import (
 logger = logging.getLogger(__name__)
 
 
+# Kill the OpenAI SDK's hidden retries at the source (2026-06-10).
+# Retry policy in this codebase is owned by the LiteLLM Router layer
+# (RetryPolicy per error class + bandit arm selection across runs) —
+# but litellm 1.83.13 constructs every OpenAI-compatible client with
+# `data.pop("max_retries", 2)`, and the per-call/`litellm_params`
+# `max_retries` is STRIPPED by the param mapper for openai-compatible
+# providers (verified in-container: per-call 0 AND 1 both arrived as
+# max_retries=2). Net effect: every router attempt was silently 3 SDK
+# attempts, each burning the full per-deployment timeout (observed:
+# step-3.5-flash 36-min batches = 4 router x 3 SDK x 180s). There is
+# no litellm-level knob that reaches this path, so we pin it at the
+# SDK boundary: every (Async)OpenAI client in this process is built
+# with max_retries=0. Safe scope: no other code here constructs
+# OpenAI SDK clients (YCS embeddings use raw httpx), and connection-
+# class errors still retry once via the Router's num_retries fallback.
+try:
+    import openai as _openai_sdk
+
+    if not getattr(_openai_sdk, "_kd_no_sdk_retries", False):
+        _orig_async_openai_init = _openai_sdk.AsyncOpenAI.__init__
+        _orig_sync_openai_init = _openai_sdk.OpenAI.__init__
+
+        def _async_openai_init_no_retries(self, *args, **kwargs):
+            kwargs["max_retries"] = 0
+            return _orig_async_openai_init(self, *args, **kwargs)
+
+        def _sync_openai_init_no_retries(self, *args, **kwargs):
+            kwargs["max_retries"] = 0
+            return _orig_sync_openai_init(self, *args, **kwargs)
+
+        _openai_sdk.AsyncOpenAI.__init__ = _async_openai_init_no_retries
+        _openai_sdk.OpenAI.__init__ = _sync_openai_init_no_retries
+        _openai_sdk._kd_no_sdk_retries = True
+        logger.info("[llm-chain] OpenAI SDK hidden retries disabled (max_retries=0)")
+except Exception as _sdk_patch_err:
+    logger.warning(
+        f"[llm-chain] failed to disable OpenAI SDK retries "
+        f"({type(_sdk_patch_err).__name__}: {_sdk_patch_err})"
+    )
+
+
 # When OTEL_EXPORTER_OTLP_ENDPOINT is set, LiteLLM emits a span per LLM call
 # (model, deployment_id, provider, token counts, latency, error type) through
 # the TracerProvider configured in infra.otel. dd_process metadata propagates
@@ -1079,11 +1120,18 @@ async def pick_ycs_neo4j_deployment_bandit(
     seed: int,
     *,
     video_count: int = 0,
+    exclude: frozenset[str] | set[str] = frozenset(),
 ) -> str:
     """Bandit-driven deployment pick for YCS Phase 3 (Neo4j entity extraction).
-    One pick per Celery task (= one ingest run). All transcripts in this run
-    share the pinned model. Per-task reward is recorded by the caller after
+    One pick per arm-segment of a Celery task. All transcripts in a segment
+    share the pinned model. Per-segment reward is recorded by the caller after
     `extract_and_store_graph` returns.
+
+    `exclude` carries the arms already tried (and circuit-broken) within
+    THIS run, so a mid-run swap never re-picks the arm that just burned —
+    the bandit's demotion only lands after the reward, which is exactly
+    when the swap happens. No-empty guard: if exclusion would empty the
+    pool, the unfiltered list is kept (better a repeat than a 503).
 
     Drops back to `pick_synth_deployment(seed)` (deterministic round-robin)
     when the bandit/Redis path errors. Same fallback shape as the synth picker
@@ -1105,6 +1153,15 @@ async def pick_ycs_neo4j_deployment_bandit(
             # Filter blocklisted arms BEFORE predict_top_k so the bandit
             # never burns a real observation on a known-broken arm.
             candidates = _ycs_neo4j_filter_candidates(candidates)
+            if exclude:
+                kept = [c for c in candidates if c not in exclude]
+                if kept:
+                    candidates = kept
+                else:
+                    logger.warning(
+                        "[ycs-bandit-pin] exclusion would empty the pool — "
+                        "keeping unfiltered candidates"
+                    )
             # `vault_size` is the closest analogue to the YCS workload —
             # the bandit's vault-size buckets (v[4-6]) inform exploration
             # bias for big-input runs, matching how many transcripts will
@@ -1308,6 +1365,52 @@ def get_entries_for_group(group: str) -> list:
     return []
 
 
+def _build_pinned_chain(pinned_group: str, fresh_entry: dict):
+    """Single-deployment Router + ChatLiteLLMRouter with retry discipline
+    tuned for a PINNED arm (2026-06-09, after a YCS step-3.5-flash hang
+    burned 3-min timeouts in a 12x retry storm — 3 hidden OpenAI-SDK
+    attempts inside each of 4 router attempts):
+
+      - TimeoutErrorRetries=0 — a model that just spent the full
+        `timeout_s` budget will not get faster on the next attempt; with
+        one deployment there is no other arm to rotate to, so a timeout
+        retry is guaranteed-futile wall-clock burn. Cross-run arm
+        selection (the bandit) is the real retry mechanism.
+      - RateLimitErrorRetries=2 — 429s ARE transient here (NIM shares
+        one key across DD + YCS; bursts pass in seconds).
+      - BadRequestErrorRetries=0 — deterministic schema rejections
+        don't fix themselves.
+      - num_retries=1 stays as the fallback for error classes the
+        policy doesn't enumerate (connection resets etc.).
+
+    The OpenAI SDK's own hidden retries (max_retries=2 hardcoded in
+    litellm's client construction; per-call AND litellm_params values
+    are stripped by the param mapper — verified in-container) are
+    disabled process-wide by the SDK-boundary patch at the top of this
+    module, NOT here. Each router attempt is therefore exactly one
+    HTTP request."""
+    pinned_router = Router(
+        model_list = [fresh_entry],
+        routing_strategy = "simple-shuffle",
+        enable_pre_call_checks = True,
+        num_retries = 1,
+        retry_policy = RetryPolicy(
+            TimeoutErrorRetries                = 0,
+            RateLimitErrorRetries              = 2,
+            InternalServerErrorRetries         = 1,
+            BadRequestErrorRetries             = 0,
+            AuthenticationErrorRetries         = 0,
+            ContentPolicyViolationErrorRetries = 0,
+        ),
+        cooldown_time = 30,
+        set_verbose = False,
+    )
+    return ChatLiteLLMRouter(
+        router = pinned_router,
+        model = pinned_group,
+        temperature = 0.0)
+
+
 def build_pinned_chain_any(pinned_model: str, group: str | None = None):
     """Generalized per-call pinning. Build a single-deployment ChatLiteLLMRouter
     for any litellm_params.model string. Searches dd-synth → dd-reduce-label →
@@ -1339,18 +1442,7 @@ def build_pinned_chain_any(pinned_model: str, group: str | None = None):
         "model_name":    pinned_group,
         "litellm_params": dict(matching_entry["litellm_params"]),
     }
-    pinned_router = Router(
-        model_list = [fresh_entry],
-        routing_strategy = "simple-shuffle",
-        enable_pre_call_checks = True,
-        num_retries = 3,
-        cooldown_time = 30,
-        set_verbose = False,
-    )
-    chain = ChatLiteLLMRouter(
-        router = pinned_router, 
-        model = pinned_group, 
-        temperature = 0.0)
+    chain = _build_pinned_chain(pinned_group, fresh_entry)
     _pinned_chain_cache[pinned_model] = chain
     _pinned_to_parent[pinned_group] = matched_group or GROUP
     return chain
@@ -1374,18 +1466,7 @@ def build_synth_pinned_chain(pinned_model: str):
         "model_name":    pinned_group,
         "litellm_params": dict(matching[0]["litellm_params"]),
     }
-    pinned_router = Router(
-        model_list = [fresh_entry],
-        routing_strategy = "simple-shuffle",
-        enable_pre_call_checks = True,
-        num_retries = 3,
-        cooldown_time = 30,
-        set_verbose = False,
-    )
-    chain = ChatLiteLLMRouter(
-        router = pinned_router, 
-        model = pinned_group, 
-        temperature = 0.0)
+    chain = _build_pinned_chain(pinned_group, fresh_entry)
     _pinned_chain_cache[pinned_model] = chain
     _pinned_to_parent[pinned_group] = SYNTH_GROUP
     return chain

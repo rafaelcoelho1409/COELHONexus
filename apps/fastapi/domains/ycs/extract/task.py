@@ -222,6 +222,7 @@ async def _extract_videos_async(
                 # "N cached · M new · K failed".
                 es_transcriptions["cached"]       = trans_stats.get("cached", 0)
                 es_transcriptions["fetch_failed"] = trans_stats.get("fetched_failed", 0)
+                es_transcriptions["no_transcript"] = trans_stats.get("no_transcript", 0)
             finally:
                 await close_transcript_service()
         return {
@@ -296,6 +297,7 @@ async def _extract_channel_async(
                     )
                 es_transcriptions["cached"]       = trans_stats.get("cached", 0)
                 es_transcriptions["fetch_failed"] = trans_stats.get("fetched_failed", 0)
+                es_transcriptions["no_transcript"] = trans_stats.get("no_transcript", 0)
             finally:
                 await close_transcript_service()
         return {
@@ -366,6 +368,7 @@ async def _extract_playlist_async(
                     )
                 es_transcriptions["cached"]       = trans_stats.get("cached", 0)
                 es_transcriptions["fetch_failed"] = trans_stats.get("fetched_failed", 0)
+                es_transcriptions["no_transcript"] = trans_stats.get("no_transcript", 0)
             finally:
                 await close_transcript_service()
         return {

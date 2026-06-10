@@ -143,26 +143,26 @@ function renderRows(items) {
     const frag = document.createDocumentFragment();
     for (const v of items) {
         const card = document.createElement("div");
-        card.className = "ycs-lib-card";
+        card.className = "ycs-lib-row";
         card.dataset.videoId = v.video_id;
         const checked = STATE.selected.has(v.video_id);
         if (checked) card.classList.add("selected");
         const statusPill = `<span class="ycs-lib-status ycs-lib-status-${v.status}">${htmlEscape(v.status)}</span>`;
         const thumb = v.thumbnail
-            ? `<img class="ycs-lib-card-thumb" src="${htmlEscape(v.thumbnail)}" alt="" loading="lazy">`
-            : `<div class="ycs-lib-card-thumb-empty"></div>`;
+            ? `<img class="ycs-lib-row-thumb" src="${htmlEscape(v.thumbnail)}" alt="" loading="lazy">`
+            : `<div class="ycs-lib-row-thumb-empty"></div>`;
         const url = v.webpage_url || `https://www.youtube.com/watch?v=${v.video_id}`;
         card.innerHTML = `
             <input type="checkbox"
-                   class="ycs-lib-card-check"
+                   class="ycs-lib-row-check"
                    ${checked ? "checked" : ""}
                    data-video-id="${htmlEscape(v.video_id)}"
                    aria-label="Select ${htmlEscape(v.title || v.video_id)}">
             ${thumb}
-            <div class="ycs-lib-card-body">
-                <div class="ycs-lib-card-title-row">
+            <div class="ycs-lib-row-body">
+                <div class="ycs-lib-row-title-row">
                     ${statusPill}
-                    <a class="ycs-lib-card-title"
+                    <a class="ycs-lib-row-title"
                        href="${htmlEscape(url)}"
                        target="_blank"
                        rel="noopener"
@@ -170,21 +170,21 @@ function renderRows(items) {
                         ${htmlEscape(v.title || "(no title)")}
                     </a>
                 </div>
-                <div class="ycs-lib-card-meta">
-                    <span class="ycs-lib-card-channel">${htmlEscape(v.channel || "")}</span>
-                    ${v.view_count != null ? `<span class="ycs-lib-card-sep">·</span><span>${fmtCount(v.view_count)} views</span>` : ""}
-                    ${v.duration ? `<span class="ycs-lib-card-sep">·</span><span>${htmlEscape(fmtDuration(v.duration_string || v.duration))}</span>` : ""}
-                    ${v.like_count != null ? `<span class="ycs-lib-card-sep">·</span><span>${fmtCount(v.like_count)} likes</span>` : ""}
-                    ${v.upload_date ? `<span class="ycs-lib-card-sep">·</span><span>${htmlEscape(fmtDate(v.upload_date))}</span>` : ""}
+                <div class="ycs-lib-row-meta">
+                    <span class="ycs-lib-row-channel">${htmlEscape(v.channel || "")}</span>
+                    ${v.view_count != null ? `<span class="ycs-lib-row-sep">·</span><span>${fmtCount(v.view_count)} views</span>` : ""}
+                    ${v.duration ? `<span class="ycs-lib-row-sep">·</span><span>${htmlEscape(fmtDuration(v.duration_string || v.duration))}</span>` : ""}
+                    ${v.like_count != null ? `<span class="ycs-lib-row-sep">·</span><span>${fmtCount(v.like_count)} likes</span>` : ""}
+                    ${v.upload_date ? `<span class="ycs-lib-row-sep">·</span><span>${htmlEscape(fmtDate(v.upload_date))}</span>` : ""}
                 </div>
-                <div class="ycs-lib-card-stats">
+                <div class="ycs-lib-row-stats">
                     ${v.transcript_length ? `<span>${fmtCount(v.transcript_length)} chars</span>` : ""}
-                    ${(v.transcript_langs || []).length ? `<span class="ycs-lib-card-sep">·</span><span>${(v.transcript_langs || []).join(", ")}</span>` : ""}
-                    ${v.entity_count ? `<span class="ycs-lib-card-sep">·</span><span>${fmtCount(v.entity_count)} entities</span>` : ""}
+                    ${(v.transcript_langs || []).length ? `<span class="ycs-lib-row-sep">·</span><span>${(v.transcript_langs || []).join(", ")}</span>` : ""}
+                    ${v.entity_count ? `<span class="ycs-lib-row-sep">·</span><span>${fmtCount(v.entity_count)} entities</span>` : ""}
                 </div>
             </div>
             <button type="button"
-                    class="ycs-lib-card-trash"
+                    class="ycs-lib-row-trash"
                     data-video-id="${htmlEscape(v.video_id)}"
                     title="Delete this video from ES + Qdrant + Neo4j"
                     aria-label="Delete this video">🗑</button>
@@ -292,15 +292,15 @@ function bindRowClicks() {
     if (!list) return;
     list.addEventListener("change", (ev) => {
         const cb = ev.target;
-        if (!cb.matches?.(".ycs-lib-card-check")) return;
+        if (!cb.matches?.(".ycs-lib-row-check")) return;
         const vid = cb.dataset.videoId;
         if (cb.checked) STATE.selected.add(vid);
         else            STATE.selected.delete(vid);
-        cb.closest(".ycs-lib-card")?.classList.toggle("selected", cb.checked);
+        cb.closest(".ycs-lib-row")?.classList.toggle("selected", cb.checked);
         renderBulkBar();
     });
     list.addEventListener("click", async (ev) => {
-        const trash = ev.target.closest?.(".ycs-lib-card-trash");
+        const trash = ev.target.closest?.(".ycs-lib-row-trash");
         if (!trash) return;
         ev.stopPropagation();
         const vid = trash.dataset.videoId;

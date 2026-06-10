@@ -23,6 +23,7 @@ from elasticsearch import AsyncElasticsearch
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from domains.ycs.content.domain import _absolutize_thumbnail_url
 from infra.celery import app as celery_app
 from infra.elasticsearch import (
     INDEX_METADATA,
@@ -39,6 +40,13 @@ router = APIRouter()
 # =============================================================================
 def _es() -> AsyncElasticsearch:
     return get_es()
+
+
+def _absolutize_thumb(url: str | None) -> str:
+    """ES `thumbnail_url` → browser-safe absolute URL (or "" when
+    absent). Thin wrapper over the content-domain helper so the
+    library listing shares the Source preview's exact behavior."""
+    return _absolutize_thumbnail_url(url or "")
 
 
 async def _terms_facet(
@@ -230,7 +238,7 @@ async def list_videos(
             _source = [
                 "id", "title", "channel", "channel_id", "duration",
                 "duration_string", "view_count", "like_count",
-                "upload_date", "webpage_url", "thumbnail",
+                "upload_date", "webpage_url", "thumbnail_url",
                 "playlist_id", "playlist_title", "description",
             ],
         )
@@ -367,7 +375,12 @@ async def list_videos(
             "like_count":        src.get("like_count"),
             "upload_date":       src.get("upload_date"),
             "webpage_url":       src.get("webpage_url"),
-            "thumbnail":         src.get("thumbnail"),
+            # ES stores the field as `thumbnail_url` (yt-dlp's native
+            # key), NOT `thumbnail` — asking for the latter returned
+            # None and rendered empty rectangles. Mirror the Source
+            # preview path (content/service.py), which also reads
+            # `thumbnail_url` and absolutizes protocol-relative URLs.
+            "thumbnail":         _absolutize_thumb(src.get("thumbnail_url")),
             "playlist_id":       src.get("playlist_id"),
             "playlist_title":    src.get("playlist_title"),
             "status":            row_status,

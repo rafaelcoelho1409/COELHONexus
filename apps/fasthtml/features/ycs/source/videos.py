@@ -75,6 +75,20 @@ def VideosTab():
                     formnovalidate = True,
                 ),
                 status_id = "ycs-videos-status",
+                extra_actions = (
+                    Button(
+                        "Ingest all",
+                        type = "button",
+                        cls  = "ycs-sticky-bar-ingest-all",
+                        disabled = True,
+                        id = "ycs-videos-ingest-all",
+                        title = (
+                            "Queue every pasted video, bypassing the "
+                            "100-per-page picker preview — no need to "
+                            "Load-more + select."
+                        ),
+                    ),
+                ),
             ),
             id = "ycs-videos-form",
         ),

@@ -27,8 +27,11 @@ metadata:
 spec:
   project: default
   source:
-    # GitLab repository URL
-    repoURL: https://gitlab.YOUR_TAILNET_DOMAIN.ts.net/root/COELHONexus.git
+    # GitLab repository URL — MUST be the in-cluster service URL so it
+    # prefix-matches the `argocd-gitlab-repo-creds` repo-creds Secret (the PAT is
+    # registered under this URL). Using the Tailscale HTTPS URL clones anonymously
+    # → "HTTP Basic: Access denied" on the private repo. Also avoids the TLS hop.
+    repoURL: http://gitlab-webservice-default.gitlab.svc.cluster.local:8181/root/COELHONexus.git
     targetRevision: master
     path: k8s/helm
     # Helm configuration

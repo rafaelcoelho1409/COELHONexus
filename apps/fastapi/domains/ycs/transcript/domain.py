@@ -1,17 +1,24 @@
 """ycs/transcript — pure helpers (CDP URL resolver + transcript parser +
-caption-track selection).
+caption-track selection + innertube payload builders/parsers).
 
-Direct port of deprecated `routers/v1/youtube/helpers.py:L780-892, L1148-1173`.
+Direct port of deprecated `routers/v1/youtube/helpers.py:L780-892, L1148-1173`,
+extended 2026-06-10 with the innertube data-path helpers
+(`build_get_panel_params` / `parse_get_panel_segments` /
+`parse_get_transcript_segments`) for the engine rework — see
+`service.py` module docstring for the 4-path cascade.
+
 Pure side: no Playwright handle, no async I/O. The HTTP probe for CDP URL
 resolution stays sync (`urllib.request.urlopen`) — `service.py` wraps it
 in `asyncio.to_thread`."""
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import re
 import ssl
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
@@ -179,6 +186,103 @@ def _parse_transcript(raw_text: str) -> list[TranscriptSegment]:
                 )
         else:
             i += 1
+    return segments
+
+
+def build_get_panel_params(video_id: str) -> str:
+    """Protobuf `params` for `/youtubei/v1/get_panel` with
+    `panelId="PAmodern_transcript_view"` — the endpoint YouTube's
+    modern transcript panel (Jun 2026 `PAmodern_transcript_view`
+    experiment) loads its segments from.
+
+    Layout (captured 2026-06-10 from the panel's own gzip POST body on
+    a live watch page; empirically replayed 200 across videos):
+
+        field 149 (length-delimited) {
+            field 1 (string): video_id
+            field 3 (varint): 1
+        }
+
+    `\\xaa\\x09` is the varint tag for (field=149, wire=2)."""
+    inner = (
+        b"\x0a" + bytes([len(video_id)]) + video_id.encode("ascii")
+        + b"\x18\x01"
+    )
+    return base64.b64encode(
+        b"\xaa\x09" + bytes([len(inner)]) + inner,
+    ).decode("ascii")
+
+
+def parse_get_panel_segments(data: Any) -> list[dict]:
+    """Extract `[{timestamp, text}, ...]` from a `get_panel` response.
+
+    The modern panel nests segments as
+    `...macroMarkersPanelItemViewModel.item.timelineItemViewModel
+    .contentItems[].transcriptSegmentViewModel{timestamp, simpleText}`.
+    A recursive walk keeps this robust to the wrapper layers shifting
+    (they already differ between videos with/without chapters). JSON
+    document order == transcript order."""
+    segments: list[dict] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            seg = node.get("transcriptSegmentViewModel")
+            if isinstance(seg, dict):
+                text = (seg.get("simpleText") or "").strip()
+                if text:
+                    segments.append({
+                        "timestamp": seg.get("timestamp") or "",
+                        "text":      text,
+                    })
+                return
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(data)
+    return segments
+
+
+def parse_get_transcript_segments(data: Any) -> list[dict]:
+    """Extract `[{timestamp, text}, ...]` from a legacy
+    `/youtubei/v1/get_transcript` response
+    (`transcriptSegmentRenderer{startMs, snippet.runs[].text}`).
+
+    Kept for sessions NOT bucketed into the modern-panel experiment,
+    where `get_transcript` still answers 200 (under the experiment it
+    is server-disabled with HTTP 400 'Precondition check failed')."""
+    segments: list[dict] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            seg = node.get("transcriptSegmentRenderer")
+            if isinstance(seg, dict):
+                snippet = seg.get("snippet") or {}
+                runs = snippet.get("runs") or []
+                text = "".join(r.get("text", "") for r in runs).strip()
+                if not text:
+                    text = (snippet.get("simpleText") or "").strip()
+                if text:
+                    try:
+                        start_ms = int(seg.get("startMs") or 0)
+                    except (TypeError, ValueError):
+                        start_ms = 0
+                    minutes = start_ms // 60000
+                    seconds = (start_ms // 1000) % 60
+                    segments.append({
+                        "timestamp": f"{minutes}:{seconds:02d}",
+                        "text":      text,
+                    })
+                return
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(data)
     return segments
 
 

@@ -15,6 +15,7 @@ Public API:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any, Callable
@@ -31,6 +32,7 @@ from .params import (
     DEFAULT_BATCH_SIZE,
     EMBED_COSINE_CUTOFF,
     FUZZ_MERGE_CUTOFF,
+    GRAPH_BATCH_TIMEOUT_S,
     INTER_BATCH_SLEEP_S,
     RESOLVE_EMBED_MODEL,
     SCHEMA_DISCOVERY_SAMPLE_CHAR_CAP,
@@ -142,6 +144,7 @@ async def extract_and_store_graph(
     neo4j_graph: Neo4jGraph,
     batch_size: int = DEFAULT_BATCH_SIZE,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    abort_after_consecutive: int = 0,
 ) -> dict:
     """One LLM call PER TRANSCRIPT (not per chunk). Deprecated rationale:
     full context → +30% entity quality vs chunked, and 352 calls instead
@@ -149,6 +152,13 @@ async def extract_and_store_graph(
 
     Idempotent — skips any video whose `video_id` is already tagged on
     a Document node in Neo4j.
+
+    `abort_after_consecutive` > 0 arms the circuit breaker: after that
+    many consecutive non-productive batches (raised OR 0 nodes + 0 rels)
+    the loop stops and the stats carry `aborted_nonproductive=True` so
+    the caller (neo4j_task) can re-pick a different arm and call again —
+    idempotency means completed videos are skipped and failed ones are
+    retried on the new arm. 0 disables (full-run behavior).
 
     Returns counters dict suitable for the API response envelope."""
     transformer = create_graph_transformer(llm)
@@ -224,11 +234,26 @@ async def extract_and_store_graph(
     # downstream can surface the actual LLM error body in the log
     # (otherwise the user only sees "0 nodes" with no diagnostic).
     last_batch_error: str | None = None
+    # Circuit-breaker state — see `abort_after_consecutive` docstring.
+    consecutive_nonproductive = 0
+    aborted_nonproductive = False
     # Batch loop with rate-limit pacing.
     for batch_start in range(0, len(documents), batch_size):
         batch = documents[batch_start:batch_start + batch_size]
+        batch_nodes_before = total_nodes
+        batch_rels_before = total_relationships
+        batch_raised = False
         try:
-            graph_documents = await transformer.aconvert_to_graph_documents(batch)
+            # Watchdog: hard wall-clock ceiling per batch. The inner
+            # request stack already has per-deployment timeouts + a
+            # zero-timeout-retry policy (see _build_pinned_chain), so
+            # this only fires when that stack wedges — and guarantees
+            # one slow arm can't burn the whole run before the bandit
+            # gets its negative reward.
+            graph_documents = await asyncio.wait_for(
+                transformer.aconvert_to_graph_documents(batch),
+                timeout = GRAPH_BATCH_TIMEOUT_S,
+            )
             # Tier-2 fix `B` (2026-06-07) — coerce node ids at the
             # source. `LLMGraphTransformer` occasionally emits an `id`
             # as a `StringArray` (Python list of alternate-name
@@ -252,23 +277,17 @@ async def extract_and_store_graph(
                 include_source = True,
                 baseEntityLabel = True,
             )
-            # Tag Document nodes with their video_id (used by the
-            # skip-on-re-run check above on a future call).
-            for doc in batch:
-                vid = doc.metadata.get("video_id", "")
-                if not vid:
-                    continue
-                try:
-                    neo4j_graph.query(
-                        "MATCH (d:Document) WHERE d.text CONTAINS $title "
-                        "SET d.video_id = $video_id",
-                        params = {
-                            "title":    (doc.metadata.get("title") or "")[:50],
-                            "video_id": vid,
-                        },
-                    )
-                except Exception:
-                    pass
+            # video_id tagging happens NATIVELY inside
+            # add_graph_documents: langchain-neo4j's include_source
+            # path runs `SET d += $document.metadata`, and our source
+            # Documents carry {video_id, title, channel}. The previous
+            # explicit `WHERE d.text CONTAINS $title` tag pass was
+            # removed 2026-06-10 — it was redundant for productive
+            # batches AND harmful for empty ones: a 0-node batch would
+            # stamp its video_id onto OTHER videos' pre-existing
+            # Documents (CONTAINS false-positive), overwriting their
+            # tags and falsely marking unextracted videos as done,
+            # which broke the arm-swap resume's skip check.
             for gdoc in graph_documents:
                 total_nodes += len(gdoc.nodes)
                 total_relationships += len(gdoc.relationships)
@@ -286,7 +305,16 @@ async def extract_and_store_graph(
                 f"{total_nodes} nodes, {total_relationships} rels"
             )
         except Exception as e:
-            last_batch_error = f"{type(e).__name__}: {str(e)[:400]}"
+            batch_raised = True
+            if isinstance(e, TimeoutError) and not str(e):
+                # asyncio.wait_for raises a bare TimeoutError — stamp it
+                # so the silent-zero guard's diagnostic isn't empty.
+                last_batch_error = (
+                    f"TimeoutError: batch exceeded the "
+                    f"{GRAPH_BATCH_TIMEOUT_S:.0f}s watchdog"
+                )
+            else:
+                last_batch_error = f"{type(e).__name__}: {str(e)[:400]}"
             logger.warning(
                 f"[ycs:graph] batch {batch_start // batch_size + 1} failed: "
                 f"{last_batch_error}. Continuing."
@@ -296,6 +324,24 @@ async def extract_and_store_graph(
                 vid = doc.metadata.get("video_id", "")
                 if vid and vid not in failed_ids:
                     failed_ids.append(vid)
+        # Circuit breaker: raised OR wrote nothing → non-productive.
+        produced = (total_nodes > batch_nodes_before
+                    or total_relationships > batch_rels_before)
+        if batch_raised or not produced:
+            consecutive_nonproductive += 1
+        else:
+            consecutive_nonproductive = 0
+        if (abort_after_consecutive > 0
+                and consecutive_nonproductive >= abort_after_consecutive):
+            aborted_nonproductive = True
+            logger.warning(
+                f"[ycs:graph] circuit breaker: {consecutive_nonproductive} "
+                f"consecutive non-productive batches — aborting this arm "
+                f"so the caller can swap. "
+                f"({total_processed}/{len(documents)} attempted, "
+                f"{total_nodes} nodes so far)"
+            )
+            break
         # Per-batch progress emission so the FastHTML Neo4j bar advances
         # in real time. `current` counts attempted (not just succeeded)
         # transcripts so the bar fills monotonically even when an
@@ -324,17 +370,23 @@ async def extract_and_store_graph(
         if batch_start + batch_size < len(documents):
             time.sleep(INTER_BATCH_SLEEP_S)
 
-    if progress_cb:
-        progress_cb({
-            "phase":   "resolving",
-            "current": len(documents),
-            "total":   len(documents),
-            "nodes":   total_nodes,
-            "rels":    total_relationships,
-        })
-    logger.info("[ycs:graph] entity resolution starting")
-    resolved = resolve_entities(neo4j_graph)
-    logger.info(f"[ycs:graph] entity resolution: {resolved} nodes merged")
+    # Entity resolution is skipped on a circuit-breaker abort — the
+    # caller is about to re-run on a fresh arm, and resolution is a
+    # global pass over Neo4j; the final (non-aborted) segment runs it
+    # once for everything written so far.
+    resolved = 0
+    if not aborted_nonproductive:
+        if progress_cb:
+            progress_cb({
+                "phase":   "resolving",
+                "current": len(documents),
+                "total":   len(documents),
+                "nodes":   total_nodes,
+                "rels":    total_relationships,
+            })
+        logger.info("[ycs:graph] entity resolution starting")
+        resolved = resolve_entities(neo4j_graph)
+        logger.info(f"[ycs:graph] entity resolution: {resolved} nodes merged")
 
     return {
         "documents_processed":   total_processed,
@@ -346,6 +398,8 @@ async def extract_and_store_graph(
         # the user only sees "0 nodes" with no diagnostic). None when
         # every batch succeeded.
         "last_batch_error":      last_batch_error,
+        # Circuit-breaker verdict for the arm-swap loop in neo4j_task.
+        "aborted_nonproductive": aborted_nonproductive,
     }
 
 
