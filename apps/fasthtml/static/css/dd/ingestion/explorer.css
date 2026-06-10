@@ -44,10 +44,11 @@
 .page:has(#fw-step-2-panel) {
   display: flex;
   flex-direction: column;
-  /* Match Study: the row-3 toolbar already gives the summary line, so
-     the page itself doesn't need a top air gap. */
-  padding-top: 0;
-  padding-bottom: 0;
+  /* Small top/bottom air gap so the explorer doesn't bleed flush
+     into the row-3 toolbar above and the viewport edge below. Keep
+     it narrow — this is incidental breathing room, not page padding. */
+  padding-top: 8px;
+  padding-bottom: 8px;
   /* The page is the scroll region; explorer fills it, so suppress the
      outer scroll. Panels handle their own scroll internally. */
   overflow: hidden;

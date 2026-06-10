@@ -15,6 +15,27 @@ dependencies = [
     # --reload-include/--reload-exclude flags in entrypoint.sh (uvicorn falls
     # back to StatReload otherwise). Cap matches apps/fastapi + apps/fasthtml.
     "uvicorn[standard]>=0.32,<1.0",
+    # httpx — async HTTP client used by every Research Radar source tool
+    # (domains/rr/tools/<source>/service.py). FastMCP pulls httpx transitively
+    # too, but pinning explicitly so tool code doesn't depend on an indirect
+    # transitive. Cap matches apps/fastapi + apps/fasthtml.
+    "httpx>=0.28,<1.0",
+    # pydantic — boundary validation for MCP tool inputs/outputs
+    # (domains/rr/tools/<source>/schemas.py). FastMCP pulls Pydantic v2
+    # transitively, but pinning explicitly per CODE-CONVENTIONS.md §2.
+    "pydantic>=2.9,<3.0",
+    # OpenTelemetry — emits one span per MCP tool call from
+    # middleware/telemetry.py to BOTH Alloy (gRPC → Tempo) AND LangFuse v3
+    # (HTTP → /api/public/otel). Same family + versions as apps/fastapi.
+    # Stable APIs capped before 2.0; instrumentation packs pre-1.0 capped
+    # before 1.0. instrumentation-fastapi/redis/celery deliberately omitted
+    # (this peer app has none of those).
+    "opentelemetry-api>=1.30,<2.0",
+    "opentelemetry-sdk>=1.30,<2.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.30,<2.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.30,<2.0",
+    "opentelemetry-instrumentation-httpx>=0.50b0,<1.0",
+    "opentelemetry-instrumentation-logging>=0.50b0,<1.0",
 ]
 
 [build-system]

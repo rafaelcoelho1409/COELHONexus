@@ -43,7 +43,12 @@ def _ResultsControls():
     """Right cluster of the filter row. Contains the inline pagination
     (Prev | range/status | Next), the page-size selector, and the
     Compact/Comfortable density toggle. Same DOM IDs as before so
-    search.js wires up unchanged."""
+    search.js wires up unchanged.
+
+    (Select-all moved into the results list itself as a master-row
+    checkbox above the rows — see `renderResults` in search.js — so
+    it sits next to the per-row checkboxes where the eye expects it,
+    instead of as a remote button in this cluster.)"""
     return Div(
         # Inline pagination — `data-state` is empty | visible | error,
         # driven by search.js. The middle slot doubles as a status line

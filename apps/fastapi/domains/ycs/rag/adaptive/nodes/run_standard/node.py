@@ -7,10 +7,13 @@ fields back to the parent `AdaptiveRAGState`.
 Direct port of deprecated `graphs/youtube/adaptive.py:L152-182`."""
 from __future__ import annotations
 
+from domains.ycs.runtime.observability import traced
+
 from ...params import SUBGRAPH_RECURSION_LIMIT
 from ...state import AdaptiveRAGState
 
 
+@traced("rag.run_standard")
 async def run_standard_pipeline(
     state: AdaptiveRAGState, standard_graph,
 ) -> dict:

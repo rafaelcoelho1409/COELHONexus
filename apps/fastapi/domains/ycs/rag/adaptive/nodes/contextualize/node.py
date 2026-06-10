@@ -7,12 +7,15 @@ AGI"). Short-circuits with zero LLM cost when history is empty.
 Direct port of deprecated `graphs/youtube/adaptive.py:L64-92`."""
 from __future__ import annotations
 
+from domains.ycs.runtime.observability import traced
+
 from ....domain import strip_think_tags
 from ...params import MAX_HISTORY_ANSWER_CHARS, MAX_HISTORY_TURNS
 from ...state import AdaptiveRAGState
 from .prompts import CONTEXTUALIZE_PROMPT
 
 
+@traced("rag.contextualize")
 async def contextualize_question(state: AdaptiveRAGState, llm) -> dict:
     """Rewrite the question when prior history exists."""
     history = state.get("conversation_history") or []

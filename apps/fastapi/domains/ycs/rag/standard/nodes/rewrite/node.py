@@ -7,11 +7,14 @@ Expands or rephrases the previous search query for a retry retrieval.
 Direct port of deprecated `graphs/youtube/rag.py:L170-187`."""
 from __future__ import annotations
 
+from domains.ycs.runtime.observability import traced
+
 from ....domain import strip_think_tags
 from ...state import YouTubeRAGState
 from .prompts import REWRITE_PROMPT
 
 
+@traced("rag.rewrite")
 async def rewrite_query(state: YouTubeRAGState, llm) -> dict:
     """Expand/rephrase the query for better retrieval."""
     chain = REWRITE_PROMPT | llm

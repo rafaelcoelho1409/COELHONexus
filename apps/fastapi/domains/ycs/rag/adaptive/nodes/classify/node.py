@@ -13,6 +13,8 @@ this node and ~15 LOC of Cypher.
 Direct port of deprecated `graphs/youtube/adaptive.py:L94-133`."""
 from __future__ import annotations
 
+from domains.ycs.runtime.observability import traced
+
 from ...state import AdaptiveRAGState
 from .prompts import CLASSIFY_PROMPT
 from .schemas import QueryClassification
@@ -38,6 +40,7 @@ def _resolve_channel_ids(neo4j_graph, channel_names: list[str]) -> list[str]:
         return []
 
 
+@traced("rag.classify")
 async def classify_query(
     state: AdaptiveRAGState, llm, neo4j_graph = None,
 ) -> dict:

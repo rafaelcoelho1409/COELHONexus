@@ -9,12 +9,15 @@ on a transient LLM hiccup; the graph still bails after MAX_RETRIES).
 Direct port of deprecated `graphs/youtube/rag.py:L104-139`."""
 from __future__ import annotations
 
+from domains.ycs.runtime.observability import traced
+
 from ...state import YouTubeRAGState
 from .params import MAX_DOC_CHARS
 from .prompts import HALLUCINATION_PROMPT
 from .schemas import HallucinationCheck
 
 
+@traced("rag.hallucination")
 async def check_hallucination(state: YouTubeRAGState, llm) -> dict:
     """Verify the generation is grounded in documents."""
     doc_texts = [

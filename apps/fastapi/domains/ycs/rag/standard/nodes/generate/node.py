@@ -7,11 +7,14 @@ from reasoning models are stripped before returning.
 Direct port of deprecated `graphs/youtube/rag.py:L80-101`."""
 from __future__ import annotations
 
+from domains.ycs.runtime.observability import traced
+
 from ....domain import strip_think_tags
 from ...state import YouTubeRAGState
 from .prompts import GENERATE_PROMPT
 
 
+@traced("rag.generate")
 async def generate(state: YouTubeRAGState, llm) -> dict:
     """Produce an answer using the relevant documents."""
     context_parts: list[str] = []

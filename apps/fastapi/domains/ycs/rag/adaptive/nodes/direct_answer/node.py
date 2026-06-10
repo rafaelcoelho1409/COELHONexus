@@ -7,11 +7,14 @@ with STANDARD / DEEP.
 Direct port of deprecated `graphs/youtube/adaptive.py:L135-150`."""
 from __future__ import annotations
 
+from domains.ycs.runtime.observability import traced
+
 from ....domain import strip_think_tags
 from ...state import AdaptiveRAGState
 from .prompts import DIRECT_ANSWER_PROMPT
 
 
+@traced("rag.direct_answer")
 async def direct_answer(state: AdaptiveRAGState, llm) -> dict:
     """FAST path: direct LLM answer without retrieval."""
     chain = DIRECT_ANSWER_PROMPT | llm

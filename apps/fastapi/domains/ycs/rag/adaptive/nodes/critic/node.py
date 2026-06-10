@@ -8,12 +8,15 @@ graceful degradation over total failure for DEEP mode).
 Direct port of deprecated `graphs/youtube/adaptive.py:L313-340`."""
 from __future__ import annotations
 
+from domains.ycs.runtime.observability import traced
+
 from ...params import CRITIC_FALLBACK_CONFIDENCE
 from ...state import AdaptiveRAGState
 from .prompts import CRITIC_PROMPT
 from .schemas import CriticAssessment
 
 
+@traced("rag.critic")
 async def critic(state: AdaptiveRAGState, llm) -> dict:
     """LLM-as-critic over the synthesis. Returns
     (confidence_score, grounded) for the response envelope."""

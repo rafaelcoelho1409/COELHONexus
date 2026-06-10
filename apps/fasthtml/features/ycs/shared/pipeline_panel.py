@@ -129,11 +129,11 @@ def PipelinePanel():
     `localStorage["ycs:pipeline:active"]` (24h TTL mirroring the
     backend Redis snapshot), otherwise hidden.
 
-    Header carries `Stop` (live-only) + `Retry` (terminal-only). NO
-    dismiss affordance — the box is intentionally persistent until
-    either the localStorage TTL expires (24h) or a new dispatch
-    overwrites the entry, so users can't accidentally lose visibility
-    on a long-running ingest."""
+    Header carries `Stop` (live-only) + `Retry` (terminal-only) +
+    `Wipe cache` (deletes data) + `Dismiss` (forgets local tracking
+    only, no data touched). Dismiss exists so the user can clear a
+    completed-and-irrelevant panel from view without going through
+    the data-destructive Wipe path."""
     return Div(
         Div(
             Span("Pipeline", cls = "ycs-pipe-panel-title"),
@@ -177,16 +177,28 @@ def PipelinePanel():
                 title    = (
                     "Delete every cached artifact for these videos — "
                     "ES metadata + transcripts, Qdrant points, Neo4j "
-                    "Document/Video nodes — AND revoke any in-flight "
-                    "chain phases so a mid-LLM Phase 3 doesn't write "
-                    "orphans after the wipe. The next Retry re-runs "
+                    "Document/Video nodes + their orphaned __Entity__ "
+                    "nodes — AND revoke any in-flight chain phases so "
+                    "a mid-LLM Phase 3 doesn't write orphans after the "
+                    "wipe. Wiped videos disappear from the Library "
+                    "automatically, but this panel STAYS so you can "
+                    "re-dispatch via Retry. The next Retry re-runs "
                     "the chain from scratch (no Phase 1 cache hits, "
-                    "no Phase 3 skip-on-video_id). Use after fixing a "
-                    "source-side issue (DOM selector drift, model "
-                    "swap, etc.) where Retry's cache-hit behavior "
-                    "would otherwise skip the videos. Entity nodes "
-                    "are left intact (they may be referenced by "
-                    "other videos)."
+                    "no Phase 3 skip-on-video_id). Entity nodes shared "
+                    "with other videos are left intact."
+                ),
+            ),
+            Button(
+                "Dismiss",
+                type  = "button",
+                id    = "ycs-pipe-dismiss",
+                cls   = "ycs-pipe-dismiss-btn",
+                title = (
+                    "Remove this pipeline panel from view. Forgets the "
+                    "local tracking entry only — does NOT delete any "
+                    "data from ES, Qdrant or Neo4j (use Wipe cache for "
+                    "that). After dismiss, the next dispatch from "
+                    "Source starts a fresh panel."
                 ),
             ),
             # "Videos · N" trigger button — opens the per-video × per-

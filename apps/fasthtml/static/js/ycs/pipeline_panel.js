@@ -479,9 +479,22 @@ function bindWipe(btn, extractId) {
                     `${es.transcripts_deleted ?? 0}t · ` +
                     `Qdrant ${qd.qdrant_deleted ?? 0} · ` +
                     `Neo4j ${nj.documents_deleted ?? 0}d + ` +
-                    `${nj.videos_deleted ?? 0}v`;
+                    `${nj.videos_deleted ?? 0}v + ` +
+                    `${nj.entities_swept ?? 0}e`;
             }
             btn.textContent = "Wiped";
+            // The Library widget refreshes on `ycs:pipeline:done`
+            // (and per-phase events) but those only fire when the
+            // Celery chain reaches SUCCESS — never on a wipe. Without
+            // this dispatch, the user would see the panel say "Wiped"
+            // while the Library still listed the deleted rows until
+            // a manual page refresh.
+            try {
+                document.dispatchEvent(new CustomEvent(
+                    "ycs:pipeline:done",
+                    { detail: { extract_id: extractId, wiped: true } },
+                ));
+            } catch (_) { /* CustomEvent unsupported — ignore */ }
         } catch (e) {
             btn.disabled = false;
             btn.textContent = orig;
@@ -489,6 +502,44 @@ function bindWipe(btn, extractId) {
         }
     });
 }
+
+/* Dismiss — forgets the localStorage tracking entry and hides the
+ * panel. Does NOT touch ES/Qdrant/Neo4j (use Wipe cache for that).
+ * Stops the active poll loop via the shared `_stopRequested` flag so
+ * a stale poll doesn't re-show the panel after dismiss. Confirmation
+ * is intentional: the panel was previously non-dismissible by design
+ * (so users can't accidentally lose visibility on a long-running
+ * ingest), so an explicit confirm respects that posture. */
+function bindDismiss(btn) {
+    if (!btn) return;
+    if (btn.dataset.bound === "1") return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", async () => {
+        const ok = await showConfirm(
+            "Dismiss this pipeline panel?",
+            "Removes the panel from view. ES, Qdrant and Neo4j are " +
+            "UNAFFECTED — use Wipe cache for that. Useful to clear a " +
+            "completed or stale tracking entry from the page chrome.",
+            "Dismiss",
+        );
+        if (!ok) return;
+        _stopRequested = true;
+        try { localStorage.removeItem(STORAGE_KEY); } catch (_) { /* */ }
+        const panel = document.getElementById("ycs-pipe-panel");
+        if (panel) panel.style.display = "none";
+        // Library refresh — usually unnecessary (Dismiss doesn't
+        // change underlying data) but a wiped-then-dismissed pipeline
+        // benefits from one final sweep so any racy Library row that
+        // missed the wipe's earlier `pipeline:done` lands now.
+        try {
+            document.dispatchEvent(new CustomEvent(
+                "ycs:pipeline:done",
+                { detail: { dismissed: true } },
+            ));
+        } catch (_) { /* */ }
+    });
+}
+
 
 function bindRerun(btn, extractId) {
     if (!btn || !extractId) return;
@@ -535,9 +586,11 @@ async function trackPipeline({ extract, qdrant, neo4j, video_ids, startedAt }) {
     const rerunBtn = document.getElementById("ycs-pipe-rerun");
     const stopBtn = document.getElementById("ycs-pipe-stop");
     const wipeBtn = document.getElementById("ycs-pipe-wipe");
+    const dismissBtn = document.getElementById("ycs-pipe-dismiss");
     bindRerun(rerunBtn, extract);
     bindStop(stopBtn, extract);
     bindWipe(wipeBtn, extract);
+    bindDismiss(dismissBtn);
     _bindDrawer();
     if (stopBtn) stopBtn.disabled = false;
     // Wipe is always enabled — the backend wipe endpoint now revokes

@@ -8,9 +8,12 @@ clickable cards.
 Direct port of deprecated `graphs/youtube/rag.py:L142-167`."""
 from __future__ import annotations
 
+from domains.ycs.runtime.observability import traced
+
 from ...state import YouTubeRAGState
 
 
+@traced("rag.cite")
 async def format_citations(state: YouTubeRAGState) -> dict:
     """Extract structured citations from documents (deduped by video_id)."""
     seen_videos: set[str] = set()

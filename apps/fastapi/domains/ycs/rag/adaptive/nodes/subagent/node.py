@@ -8,9 +8,12 @@ via the `operator.add` reducer declared in `state.py`.
 Direct port of deprecated `graphs/youtube/adaptive.py:L226-265`."""
 from __future__ import annotations
 
+from domains.ycs.runtime.observability import traced
+
 from ...params import SUBGRAPH_RECURSION_LIMIT
 
 
+@traced("rag.subagent")
 async def run_subagent(payload: dict, standard_graph) -> dict:
     """Run the STANDARD pipeline for one sub-question, then project the
     result into a `sub_results` entry."""

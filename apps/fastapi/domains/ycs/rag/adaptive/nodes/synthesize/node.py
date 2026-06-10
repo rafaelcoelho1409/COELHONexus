@@ -7,11 +7,14 @@ union'd.
 Direct port of deprecated `graphs/youtube/adaptive.py:L267-311`."""
 from __future__ import annotations
 
+from domains.ycs.runtime.observability import traced
+
 from ....domain import strip_think_tags
 from ...state import AdaptiveRAGState
 from .prompts import SYNTHESIZE_PROMPT
 
 
+@traced("rag.synthesize")
 async def synthesize(state: AdaptiveRAGState, llm) -> dict:
     """Merge sub-results into one report + deduped citations."""
     parts: list[str] = []

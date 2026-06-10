@@ -33,8 +33,11 @@ def _FilterGroup(group_id: str, title: str):
 
 
 def _Sidebar():
-    """Left rail — facet groups + a clear-filters reset button. Width
-    fixed via CSS so the row list stays a predictable width."""
+    """Left rail — fixed header + scrollable facets body. Width fixed
+    via CSS so the row list stays a predictable width. The body
+    wraps the 3 facet groups so they share ONE scroll region (mirrors
+    DD's `.fw-explorer-tree`), instead of each facet maxing out at
+    its own 260px and the rail itself stretching."""
     return Div(
         Div(
             Span("Filters", cls = "ycs-lib-sidebar-title"),
@@ -47,9 +50,12 @@ def _Sidebar():
             ),
             cls = "ycs-lib-sidebar-head",
         ),
-        _FilterGroup("status",    "Status"),
-        _FilterGroup("channels",  "Channels"),
-        _FilterGroup("languages", "Languages"),
+        Div(
+            _FilterGroup("status",    "Status"),
+            _FilterGroup("channels",  "Channels"),
+            _FilterGroup("languages", "Languages"),
+            cls = "ycs-lib-sidebar-body",
+        ),
         id  = "ycs-lib-sidebar",
         cls = "ycs-lib-sidebar",
     )

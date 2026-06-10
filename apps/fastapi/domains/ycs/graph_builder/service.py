@@ -463,6 +463,103 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     installed."""
     merged_count = 0
 
+    # Step 0 — heal historical list-typed ids (2026-06-10).
+    # `apoc.refactor.mergeNodes(... properties: 'combine')` USED to
+    # concatenate conflicting property values into lists, corrupting
+    # `e.id` into `['brasil', 'brazil']` shapes that broke every
+    # downstream Cypher touching it AND hid cross-channel bridges
+    # (the two singletons that should have unified were instead
+    # trapped inside the list — `['Brasil','Brazil']` was a single
+    # broken node mentioned by 5 videos across 2 channels rather than
+    # a Brasil-Brazil bridge). Step 2/3 now use `properties: 'discard'`
+    # so NEW merges keep `n1`'s canonical scalar; this step heals any
+    # EXISTING list-typed id by:
+    #   (a) trying each element of the list as a potential scalar
+    #       merge target with a same-labeled scalar twin — if found,
+    #       merge the broken node INTO the twin (preserves all
+    #       MENTIONS that landed on the list-node);
+    #   (b) if no twin exists, fall back to SET id = first element.
+    # A naive SET would have failed the uniqueness constraint (every
+    # broken list had a scalar twin sitting alongside it — that's how
+    # the corruption was created in the first place). Safe to re-run.
+    try:
+        rows = neo4j_graph.query(
+            "MATCH (n:__Entity__) "
+            "WHERE valueType(n.id) CONTAINS 'LIST' "
+            "RETURN elementId(n) AS nid, n.id AS raw, "
+            "       [l IN labels(n) WHERE l <> '__Entity__'] AS lbls"
+        )
+        n_merged = 0
+        n_set = 0
+        n_skip = 0
+        for row in rows:
+            nid = row["nid"]
+            raw = row.get("raw")
+            lbls = row.get("lbls") or []
+            candidates = (
+                [str(x) for x in raw if isinstance(x, str) and x.strip()]
+                if isinstance(raw, (list, tuple)) else []
+            )
+            if not candidates:
+                n_skip += 1
+                continue
+            # (a) try each candidate as a merge target
+            merged_into = None
+            for cand in candidates:
+                try:
+                    res = neo4j_graph.query(
+                        "MATCH (broken:__Entity__) "
+                        "WHERE elementId(broken) = $nid "
+                        "MATCH (twin:__Entity__) "
+                        "WHERE twin <> broken AND twin.id = $cand "
+                        "AND any(L IN labels(twin) "
+                        "        WHERE L IN $lbls AND L <> '__Entity__') "
+                        "AND NOT valueType(twin.id) CONTAINS 'LIST' "
+                        "WITH broken, twin LIMIT 1 "
+                        "CALL apoc.refactor.mergeNodes([twin, broken], "
+                        "  {properties: 'discard', mergeRels: true}) "
+                        "YIELD node RETURN node.id AS kept",
+                        params = {"nid": nid, "cand": cand, "lbls": lbls},
+                    )
+                    if res:
+                        merged_into = cand
+                        break
+                except Exception:
+                    continue
+            if merged_into is not None:
+                n_merged += 1
+                logger.info(
+                    f"[ycs:graph:resolve] heal-merge {raw} → "
+                    f"{merged_into!r} (twin found)"
+                )
+                continue
+            # (b) no twin — SET to first candidate (becomes a fresh scalar)
+            try:
+                neo4j_graph.query(
+                    "MATCH (n) WHERE elementId(n) = $nid SET n.id = $s",
+                    params = {"nid": nid, "s": candidates[0]},
+                )
+                n_set += 1
+                logger.info(
+                    f"[ycs:graph:resolve] heal-set {raw} → "
+                    f"{candidates[0]!r} (no twin)"
+                )
+            except Exception as e:
+                n_skip += 1
+                logger.warning(
+                    f"[ycs:graph:resolve] heal-set failed for "
+                    f"elementId={nid}: {type(e).__name__}: {e}"
+                )
+        if n_merged or n_set or n_skip:
+            logger.info(
+                f"[ycs:graph:resolve] list-typed id heal: "
+                f"merged={n_merged} set={n_set} skipped={n_skip}"
+            )
+    except Exception as e:
+        logger.warning(
+            f"[ycs:graph:resolve] list-typed id heal failed: {e}"
+        )
+
     # Step 1 — normalize ids to canonical form (Tier-2 fix `F`,
     # 2026-06-07). Was a single Cypher statement using `trim()` +
     # `toLower()`, but `trim()` blows up the moment ANY node has a
@@ -515,7 +612,7 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
             "WITH n1, collect(DISTINCT n2) AS duplicates "
             "WHERE size(duplicates) > 0 "
             "CALL apoc.refactor.mergeNodes([n1] + duplicates, "
-            "  {properties: 'combine', mergeRels: true}) YIELD node "
+            "  {properties: 'discard', mergeRels: true}) YIELD node "
             "RETURN count(node) AS merged"
         )
         merged_count = result[0]["merged"] if result else 0
@@ -584,7 +681,7 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
                                 f"MATCH (n1:`{label}` {{id: $canonical}}), "
                                 f"      (n2:`{label}` {{id: $duplicate}}) "
                                 "CALL apoc.refactor.mergeNodes([n1, n2], "
-                                "  {properties: 'combine', mergeRels: true}) "
+                                "  {properties: 'discard', mergeRels: true}) "
                                 "YIELD node "
                                 "RETURN node",
                                 params = {
@@ -623,7 +720,7 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
                             f"MATCH (n1:`{label}` {{id: $canonical}}), "
                             f"      (n2:`{label}` {{id: $duplicate}}) "
                             "CALL apoc.refactor.mergeNodes([n1, n2], "
-                            "  {properties: 'combine', mergeRels: true}) "
+                            "  {properties: 'discard', mergeRels: true}) "
                             "YIELD node "
                             "RETURN node",
                             params = {
@@ -737,26 +834,55 @@ def delete_documents_for_videos(
     video_ids:   list[str],
 ) -> dict[str, int]:
     """Best-effort delete of Phase-3 Document nodes (per-video transcript
-    holders) + the Video metadata nodes for the supplied `video_ids`.
-    Used by the Pipeline panel's `Wipe cache` button so the next Phase
-    3 doesn't see the `[ycs:graph] N videos already in Neo4j; skip`
-    short-circuit on these videos.
+    holders) + the Video metadata nodes for the supplied `video_ids`,
+    followed by a SCOPED orphan-entity sweep.
 
-    Scoped deletes ONLY:
+    Used by the Pipeline panel's `Wipe cache` button + the Library's
+    per-row trash + bulk-delete buttons so the wiped videos disappear
+    from every store WITHOUT leaving dangling entity nodes around or
+    affecting any video still present.
+
+    Scoped deletes:
       - `Document` nodes whose `video_id` is in the list (DETACH DELETE
         drops their MENTIONS edges to entities cleanly).
       - `Video` metadata nodes whose `id` is in the list.
-
-    Entity nodes (`__Entity__`) are LEFT INTACT — they may be referenced
-    by other videos' transcripts; deleting them would cascade into
-    other videos' graphs. Orphaned entities (no incoming MENTIONS) are
-    harmless; a future orphan-sweep pass can clean them if needed.
+      - `__Entity__` nodes that were mentioned by the deleted Documents
+        AND have ZERO remaining MENTIONS edges from any other Document.
+        Pre-collected before the Document delete so we never sweep an
+        entity that was already orphaned by an earlier wipe — keeps the
+        operation idempotent for the requested scope. Entity-to-entity
+        edges (HAS_CHARACTERISTIC, LOCATED_IN, etc.) cascade via DETACH
+        DELETE; shared entities (still mentioned by surviving Documents)
+        are untouched.
 
     Best-effort: Neo4j hiccup is logged + counted, never raised — the
     wipe of other stores still proceeds."""
     if not video_ids:
-        return {"documents_deleted": 0, "videos_deleted": 0}
-    out: dict[str, int] = {}
+        return {
+            "documents_deleted": 0,
+            "videos_deleted":    0,
+            "entities_swept":    0,
+        }
+    out: dict[str, Any] = {}
+
+    # Pre-collect: which entities were mentioned by the about-to-be-
+    # wiped Documents? Captured BEFORE the delete so we know exactly
+    # which entities to revisit for orphan-status after the delete.
+    candidate_ids: list[str] = []
+    try:
+        cand = neo4j_graph.query(
+            "MATCH (d:Document)-[:MENTIONS]->(e:__Entity__) "
+            "WHERE d.video_id IN $vids "
+            "RETURN collect(DISTINCT elementId(e)) AS ids",
+            params = {"vids": list(video_ids)},
+        )
+        candidate_ids = list(cand[0]["ids"]) if cand and cand[0].get("ids") else []
+    except Exception as e:
+        logger.warning(
+            f"[ycs:graph:wipe] orphan-candidate collection failed: "
+            f"{type(e).__name__}: {str(e)[:200]}"
+        )
+
     try:
         doc_result = neo4j_graph.query(
             "MATCH (d:Document) WHERE d.video_id IN $vids "
@@ -792,4 +918,33 @@ def delete_documents_for_videos(
             f"[ycs:graph:wipe] Video delete failed: "
             f"{type(e).__name__}: {str(e)[:200]}"
         )
+
+    # Scoped orphan sweep: only the candidates collected above that
+    # now have ZERO :MENTIONS incoming. Skips when there were no
+    # candidates (no Documents existed) so we never accidentally
+    # sweep entities from unrelated runs.
+    n_swept = 0
+    if candidate_ids:
+        try:
+            sweep = neo4j_graph.query(
+                "MATCH (e:__Entity__) "
+                "WHERE elementId(e) IN $ids "
+                "AND NOT EXISTS { MATCH (:Document)-[:MENTIONS]->(e) } "
+                "DETACH DELETE e "
+                "RETURN count(*) AS swept",
+                params = {"ids": candidate_ids},
+            )
+            n_swept = int(sweep[0]["swept"]) if sweep else 0
+            logger.info(
+                f"[ycs:graph:wipe] swept {n_swept}/{len(candidate_ids)} "
+                f"orphan __Entity__ node(s) (mentioned only by deleted "
+                f"Documents)"
+            )
+        except Exception as e:
+            out["entities_error"] = str(e)[:200]
+            logger.warning(
+                f"[ycs:graph:wipe] orphan sweep failed: "
+                f"{type(e).__name__}: {str(e)[:200]}"
+            )
+    out["entities_swept"] = n_swept
     return out

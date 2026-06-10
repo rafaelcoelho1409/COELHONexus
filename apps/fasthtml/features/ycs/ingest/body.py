@@ -80,4 +80,5 @@ def IngestBody(slug: str | None):
     return Div(
         _JobPanel(),
         LibraryPanel(),
+        cls = "ycs-ingest-body",
     )

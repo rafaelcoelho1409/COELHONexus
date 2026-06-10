@@ -4,3 +4,8 @@ data:
   {{- include "coelhonexus.commonEnvVars" . | nindent 2 }}
   # FastMCP server configuration
   PORT: "8000"
+  # Override the shared commonEnvVars's OTEL_SERVICE_NAME (which is pinned
+  # to "coelhonexus-fastapi") so this peer app's spans land under their own
+  # service name in Tempo + LangFuse. infra/otel/exporters.py prefers the
+  # FASTMCP-specific var, falling back to the shared one.
+  OTEL_FASTMCP_SERVICE_NAME: "coelhonexus-fastmcp"

@@ -8,9 +8,12 @@ elasticsearch). The `retrieval_sources` field feeds the SSE stream
 Direct port of deprecated `graphs/youtube/rag.py:L48-67`."""
 from __future__ import annotations
 
+from domains.ycs.runtime.observability import traced
+
 from ...state import YouTubeRAGState
 
 
+@traced("rag.retrieve")
 async def retrieve(
     state: YouTubeRAGState,
     retriever,

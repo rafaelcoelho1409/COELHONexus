@@ -69,6 +69,16 @@ from .params import (
     _NIM_REQUIRED_MSG,
     _PROVIDER_CHAPTER_CAPS,
 )
+from ..observability import (
+    genai_bandit_attempt_span,
+    genai_bandit_cascade_span,
+    genai_completion_span,
+    genai_embedding_span,
+    genai_embedding_span_sync,
+    genai_rerank_span,
+    update_bandit_outcome,
+)
+from ..observability.domain import system_for_deployment
 
 
 logger = logging.getLogger(__name__)
@@ -113,21 +123,6 @@ except Exception as _sdk_patch_err:
         f"[llm-chain] failed to disable OpenAI SDK retries "
         f"({type(_sdk_patch_err).__name__}: {_sdk_patch_err})"
     )
-
-
-# When OTEL_EXPORTER_OTLP_ENDPOINT is set, LiteLLM emits a span per LLM call
-# (model, deployment_id, provider, token counts, latency, error type) through
-# the TracerProvider configured in infra.otel. dd_process metadata propagates
-# via config={"metadata": {"dd_process": "..."}} on ainvoke.
-if "OTEL_EXPORTER_OTLP_ENDPOINT" in os.environ:
-    try:
-        litellm.callbacks = ["otel"]
-        logger.info("[llm-chain] LiteLLM OTel callback enabled")
-    except Exception as _ote:
-        logger.warning(
-            f"[llm-chain] failed to enable LiteLLM OTel callback "
-            f"({type(_ote).__name__}: {_ote})"
-        )
 
 
 # --------------------------------------------------------------------------- #
@@ -341,13 +336,19 @@ def embed_via_router_sync(
     out: list[list[float]] = []
     for start in range(0, len(clean), DD_EMBED_BATCH_SIZE):
         batch = clean[start:start + DD_EMBED_BATCH_SIZE]
-        response = router.embedding(
-            model = DD_EMBED_GROUP,
-            input = batch,
-            encoding_format = "float",
-            input_type = input_type,
-            truncate = "END",
-        )
+        with genai_embedding_span_sync(
+            request_model = DD_EMBED_GROUP,
+            texts         = batch,
+            input_type    = input_type,
+        ) as span:
+            response = router.embedding(
+                model = DD_EMBED_GROUP,
+                input = batch,
+                encoding_format = "float",
+                input_type = input_type,
+                truncate = "END",
+            )
+            span.attach_embedding_response(response)
         out.extend(item["embedding"] for item in response["data"])
     if len(out) != len(texts):
         raise RuntimeError(
@@ -373,19 +374,25 @@ async def embed_via_router_async(
     out: list[list[float]] = []
     for start in range(0, total, DD_EMBED_BATCH_SIZE):
         batch = clean[start:start + DD_EMBED_BATCH_SIZE]
-        response = await router.aembedding(
-            model = DD_EMBED_GROUP,
-            input = batch,
-            encoding_format = "float",
-            input_type = input_type,
-            truncate = "END",
-        )
+        async with genai_embedding_span(
+            request_model = DD_EMBED_GROUP,
+            texts         = batch,
+            input_type    = input_type,
+        ) as span:
+            response = await router.aembedding(
+                model = DD_EMBED_GROUP,
+                input = batch,
+                encoding_format = "float",
+                input_type = input_type,
+                truncate = "END",
+            )
+            span.attach_embedding_response(response)
         out.extend(item["embedding"] for item in response["data"])
         if on_batch is not None:
             try:
                 await on_batch(
-                    n_done = len(out), 
-                    n_total = total, 
+                    n_done = len(out),
+                    n_total = total,
                     batch_size = len(batch))
             except Exception:
                 pass
@@ -405,12 +412,20 @@ async def chat_judge_async(
     Prefer `chat_judge_bandit_async` for repeated calls so the bandit can
     learn which deployments are reliable."""
     router = _get_router()
-    response = await router.acompletion(
-        model = GROUP,
-        messages = [{"role": "user", "content": prompt}],
-        temperature = temperature,
-        max_tokens = max_tokens,
-    )
+    messages = [{"role": "user", "content": prompt}]
+    async with genai_completion_span(
+        request_model = GROUP,
+        messages      = messages,
+        temperature   = temperature,
+        max_tokens    = max_tokens,
+    ) as span:
+        response = await router.acompletion(
+            model = GROUP,
+            messages = messages,
+            temperature = temperature,
+            max_tokens = max_tokens,
+        )
+        span.attach_chat_response(response)
     return (response.choices[0].message.content or "").strip()
 
 
@@ -531,93 +546,112 @@ async def chat_judge_bandit_async(
         }
     last_error: str | None = None
     attempts = 0
-    try:
-        for deployment_id, _ucb, _n_obs in ranked:
-            attempts += 1
-            provider = deployment_id.split("/", 1)[0] if "/" in deployment_id else ""
-            api_key = resolve_key(provider_key_env(provider)) or resolve_key("NVIDIA_API_KEY") or ""
-            t0 = time.monotonic()
-            error_class: str | None = None
-            success = False
-            schema_valid = False
-            response_text = ""
-            try:
-                acompletion_kwargs = dict(
-                    model = deployment_id,
-                    api_key = api_key,
-                    messages = [{"role": "user", "content": prompt}],
-                    temperature = temperature,
-                    max_tokens = max_tokens,
-                    timeout = timeout_s,
-                )
-                # Attach response_format only for providers that translate it
-                # cleanly. Caller's Pydantic repair loop covers slip-through.
-                if response_format is not None and any(
-                    deployment_id.startswith(p) for p in _RESPONSE_FORMAT_SAFE_PROVIDERS
-                ):
-                    acompletion_kwargs["response_format"] = response_format
-                response = await litellm.acompletion(**acompletion_kwargs)
-                response_text = (response.choices[0].message.content or "").strip()
-                success = True
-                if pattern is not None:
-                    head = (response_text.upper().split()[0].strip(".,;:!\"'`)")
-                            if response_text else "")
-                    schema_valid = bool(pattern.match(head))
-                else:
-                    schema_valid = bool(response_text)
-            except Exception as e:
-                error_class = classify_error(e)
-                last_error = f"{type(e).__name__}: {str(e)[:120]}"
-                # 429 → blacklist for the rest of the burst window. Subsequent
-                # cascades skip this arm regardless of dd_process.
-                if error_class == "rate_limit":
-                    _arm_cooldown[deployment_id] = time.monotonic() + _ARM_COOLDOWN_S
-            latency_s = float(time.monotonic() - t0)
-            reward = bandit.compose_reward(
-                success = success,
-                schema_valid = schema_valid,
-                latency_s = latency_s,
-                expected_latency_s = JUDGE.expected_latency_s,
-                error_class = error_class,
+    messages = [{"role": "user", "content": prompt}]
+    async with genai_bandit_cascade_span(dd_process = effective_process) as cascade:
+        try:
+            for deployment_id, _ucb, _n_obs in ranked:
+                attempts += 1
+                provider = deployment_id.split("/", 1)[0] if "/" in deployment_id else ""
+                api_key = resolve_key(provider_key_env(provider)) or resolve_key("NVIDIA_API_KEY") or ""
+                t0 = time.monotonic()
+                error_class: str | None = None
+                success = False
+                schema_valid = False
+                response_text = ""
+                async with genai_bandit_attempt_span(
+                    deployment_id = deployment_id,
+                    attempt       = attempts,
+                    dd_process    = effective_process,
+                    messages      = messages,
+                    temperature   = temperature,
+                    max_tokens    = max_tokens,
+                ) as attempt_span:
+                    try:
+                        acompletion_kwargs = dict(
+                            model = deployment_id,
+                            api_key = api_key,
+                            messages = messages,
+                            temperature = temperature,
+                            max_tokens = max_tokens,
+                            timeout = timeout_s,
+                        )
+                        # Attach response_format only for providers that translate it
+                        # cleanly. Caller's Pydantic repair loop covers slip-through.
+                        if response_format is not None and any(
+                            deployment_id.startswith(p) for p in _RESPONSE_FORMAT_SAFE_PROVIDERS
+                        ):
+                            acompletion_kwargs["response_format"] = response_format
+                        response = await litellm.acompletion(**acompletion_kwargs)
+                        attempt_span.attach_chat_response(response)
+                        response_text = (response.choices[0].message.content or "").strip()
+                        success = True
+                        if pattern is not None:
+                            head = (response_text.upper().split()[0].strip(".,;:!\"'`)")
+                                    if response_text else "")
+                            schema_valid = bool(pattern.match(head))
+                        else:
+                            schema_valid = bool(response_text)
+                    except Exception as e:
+                        error_class = classify_error(e)
+                        last_error = f"{type(e).__name__}: {str(e)[:120]}"
+                        # 429 → blacklist for the rest of the burst window. Subsequent
+                        # cascades skip this arm regardless of dd_process.
+                        if error_class == "rate_limit":
+                            _arm_cooldown[deployment_id] = time.monotonic() + _ARM_COOLDOWN_S
+                    latency_s = float(time.monotonic() - t0)
+                    reward = bandit.compose_reward(
+                        success = success,
+                        schema_valid = schema_valid,
+                        latency_s = latency_s,
+                        expected_latency_s = JUDGE.expected_latency_s,
+                        error_class = error_class,
+                    )
+                    update_bandit_outcome(
+                        attempt_span,
+                        latency_s    = latency_s,
+                        reward       = reward,
+                        error_class  = error_class,
+                        schema_valid = schema_valid,
+                    )
+                try:
+                    await bandit.update(
+                        deployment_id,
+                        effective_process,
+                        ctx,
+                        reward,
+                        redis = rds)
+                except Exception:
+                    pass
+                if success and schema_valid:
+                    return response_text, {
+                        "deployment": deployment_id,
+                        "attempts":   attempts,
+                        "latency_s":  latency_s,
+                        "reward":     reward,
+                        "dd_process": effective_process,
+                    }
+                # Success but bad schema: return — caller handles unparseable.
+                # More model swaps won't fix a schema quirk.
+                if success:
+                    return response_text, {
+                        "deployment":     deployment_id,
+                        "attempts":       attempts,
+                        "latency_s":      latency_s,
+                        "reward":         reward,
+                        "schema_invalid": True,
+                        "dd_process":     effective_process,
+                    }
+                # On failure: cascade to next ranked deployment.
+            raise RuntimeError(
+                f"dd-judge-bandit: all {attempts} ranked deployments failed; "
+                f"last error: {last_error}"
             )
+        finally:
+            cascade.set_total_attempts(attempts)
             try:
-                await bandit.update(
-                    deployment_id, 
-                    effective_process, 
-                    ctx, 
-                    reward, 
-                    redis = rds)
+                await rds.aclose()
             except Exception:
                 pass
-            if success and schema_valid:
-                return response_text, {
-                    "deployment": deployment_id,
-                    "attempts":   attempts,
-                    "latency_s":  latency_s,
-                    "reward":     reward,
-                    "dd_process": effective_process,
-                }
-            # Success but bad schema: return — caller handles unparseable.
-            # More model swaps won't fix a schema quirk.
-            if success:
-                return response_text, {
-                    "deployment":     deployment_id,
-                    "attempts":       attempts,
-                    "latency_s":      latency_s,
-                    "reward":         reward,
-                    "schema_invalid": True,
-                    "dd_process":     effective_process,
-                }
-            # On failure: cascade to next ranked deployment.
-        raise RuntimeError(
-            f"dd-judge-bandit: all {attempts} ranked deployments failed; "
-            f"last error: {last_error}"
-        )
-    finally:
-        try:
-            await rds.aclose()
-        except Exception:
-            pass
 
 
 async def rerank_via_router_async(
@@ -641,14 +675,21 @@ async def rerank_via_router_async(
         "Accept":        "application/json",
         "Content-Type":  "application/json",
     }
-    async with httpx.AsyncClient(timeout = 60.0) as client:
-        resp = await client.post(url, json = payload, headers = headers)
-        resp.raise_for_status()
-        data = resp.json()
-    rankings = data.get("rankings") or []
-    pairs = [(int(r["index"]), float(r["logit"])) for r in rankings]
-    if top_n is not None:
-        pairs = pairs[:top_n]
+    async with genai_rerank_span(
+        request_model = DD_RERANK_MODEL_NAME,
+        query         = query,
+        documents     = documents,
+        system        = system_for_deployment(DD_RERANK_MODEL_NAME),
+    ) as span:
+        async with httpx.AsyncClient(timeout = 60.0) as client:
+            resp = await client.post(url, json = payload, headers = headers)
+            resp.raise_for_status()
+            data = resp.json()
+        rankings = data.get("rankings") or []
+        pairs = [(int(r["index"]), float(r["logit"])) for r in rankings]
+        if top_n is not None:
+            pairs = pairs[:top_n]
+        span.attach_rerank_response(pairs)
     return pairs
 
 

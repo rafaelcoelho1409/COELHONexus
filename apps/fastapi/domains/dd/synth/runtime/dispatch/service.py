@@ -24,6 +24,8 @@ from typing import Optional
 
 import redis.asyncio as redis_aio
 
+from infra.otel import get_tracer
+
 from ....ingestion.storage import get_storage
 from ....resolver import index_by_slug
 from ...nodes.book_harmonize import (
@@ -267,6 +269,32 @@ async def _run_book_harmonize(
     """Post-study cross-chapter coherence pass. Loads each README.md,
     runs harmonize_book(), overwrites validated patches. Content-addressed
     cache skips work on identical inputs. Returns telemetry dict."""
+    tracer = get_tracer()
+    span_attrs = {
+        "synth.node":           "book_harmonize",
+        "synth.framework_slug": slug,
+        "synth.thread_id":      study_thread_id,
+        "synth.chapter_count":  len(chapter_ids),
+    }
+    with tracer.start_as_current_span(
+        "synth/book_harmonize", attributes = span_attrs,
+    ):
+        return await _run_book_harmonize_impl(
+            slug = slug,
+            study_thread_id = study_thread_id,
+            chapter_ids = chapter_ids,
+        )
+
+
+async def _run_book_harmonize_impl(
+    *,
+    slug: str,
+    study_thread_id: str,
+    chapter_ids: list[str],
+) -> dict:
+    """Inner implementation of book_harmonize — wrapped by _run_book_harmonize
+    so the whole dispatch path is one OTel span. Splitting keeps the span
+    open across all return paths without indenting the entire body."""
     minio = get_storage()
     entry = index_by_slug().get(slug, {})
     framework_name = entry.get("name") or entry.get("slug") or slug

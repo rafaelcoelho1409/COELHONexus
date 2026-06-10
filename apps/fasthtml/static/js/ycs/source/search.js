@@ -527,12 +527,40 @@ function renderResult(v) {
     return card;
 }
 
+/* Master-checkbox row — Gmail/Linear/GitHub Issues idiom. Sits at the
+ * top of the result list (sticky) so its checkbox lines up with the
+ * per-row checkboxes below it. State is tri-modal:
+ *   unchecked      — no visible row is selected
+ *   indeterminate  — some but not all visible rows are selected
+ *   checked        — every visible row is selected
+ * Click semantics match Gmail: when partial OR none, click selects
+ * all visible; when fully selected, click clears all visible. */
+function _buildMasterRow() {
+    const row = document.createElement("div");
+    row.className = "ycs-search-masterrow";
+    row.innerHTML = `
+        <input type="checkbox" class="ycs-search-master-cb"
+               aria-label="Select all visible results">
+        <span class="ycs-search-master-label">Select all</span>
+    `;
+    row.addEventListener("click", (ev) => {
+        // Whole-row clicks toggle too — but ignore the click that
+        // bubbled from the checkbox itself so we don't double-fire.
+        if (ev.target.classList.contains("ycs-search-master-cb")) return;
+        _toggleSelectAll();
+    });
+    row.querySelector(".ycs-search-master-cb")
+        .addEventListener("change", () => _toggleSelectAll());
+    return row;
+}
+
 function renderResults(results) {
     if (!results?.length) {
         resultsEl.innerHTML = `<div class="ycs-search-empty">No matches. Loosen the filters and try again.</div>`;
         return;
     }
     const frag = document.createDocumentFragment();
+    frag.appendChild(_buildMasterRow());
     for (const v of results) frag.appendChild(renderResult(v));
     resultsEl.replaceChildren(frag);
 }
@@ -564,6 +592,10 @@ function _currentSlice() {
 function _renderPage() {
     const slice = _currentSlice();
     renderResults(slice);
+    // Keep the Select-all toggle's enabled/label state in sync with
+    // the page slice. Runs even on the empty path so the button
+    // returns to "Select all" + disabled when results clear.
+    _syncSelectAllBtn();
     const total = _state.cache.length;
     if (total === 0) {
         _setStatus("empty", "No results.");
@@ -814,6 +846,57 @@ function _renderBulkBar() {
         if (btn) btn.disabled = c === 0;
     }
     _bulkBarEl.classList.toggle("visible", n > 0);
+    // Selection state changed → update Select-all label (e.g., a
+    // per-row click that brings the slice to "all selected" should
+    // flip the button to "Deselect all").
+    _syncSelectAllBtn();
+}
+
+/* Select-all behavior — checks/unchecks every result currently
+ * visible (the page slice, not the full server-side cache). Lives
+ * inside the master-row at the top of the result list (built by
+ * `_buildMasterRow`). Tri-state per Gmail/Linear:
+ *   checked        — every visible row in the selection
+ *   indeterminate  — some but not all visible rows selected
+ *   unchecked      — no visible row selected
+ * Click on the checkbox OR the whole row toggles. Singleton kinds
+ * (Channel / Playlist) obey `_SINGLETON_KINDS` inside `_select` so
+ * only the last channel/playlist survives after the iteration;
+ * videos all stay selected. */
+function _syncSelectAllBtn() {
+    const row = resultsEl.querySelector(".ycs-search-masterrow");
+    if (!row) return;
+    const cb = row.querySelector(".ycs-search-master-cb");
+    const slice = _currentSlice();
+    const selectedCount = slice.reduce(
+        (n, s) => n + (_isSelected(s.id) ? 1 : 0), 0,
+    );
+    if (selectedCount === 0) {
+        cb.checked = false;
+        cb.indeterminate = false;
+    } else if (selectedCount === slice.length) {
+        cb.checked = true;
+        cb.indeterminate = false;
+    } else {
+        cb.checked = false;
+        cb.indeterminate = true;
+    }
+    row.classList.toggle("has-selection", selectedCount > 0);
+}
+
+function _toggleSelectAll() {
+    const slice = _currentSlice();
+    if (!slice.length) return;
+    const shouldSelect = !slice.every((s) => _isSelected(s.id));
+    for (const s of slice) {
+        _select(s.id, s, shouldSelect);
+        const cb = resultsEl.querySelector(
+            `.ycs-result-check[data-id="${s.id}"]`,
+        );
+        if (cb) cb.checked = shouldSelect && _isSelected(s.id);
+    }
+    _lastChecked = null;
+    _syncSelectAllBtn();
 }
 
 function _onCheckClick(ev, snippet) {

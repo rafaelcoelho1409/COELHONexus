@@ -6,11 +6,14 @@ research-plan summary. Otherwise run the fallback planner LLM.
 Direct port of deprecated `graphs/youtube/adaptive.py:L184-224`."""
 from __future__ import annotations
 
+from domains.ycs.runtime.observability import traced
+
 from ...state import AdaptiveRAGState
 from .prompts import PLAN_FALLBACK_PROMPT
 from .schemas import ResearchPlan
 
 
+@traced("rag.plan")
 async def plan_research(state: AdaptiveRAGState, llm) -> dict:
     """If `sub_questions` exist already, no LLM call. Otherwise fall
     back to the planner prompt."""
