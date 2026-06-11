@@ -1,11 +1,15 @@
-"""Ingest · Library — sidebar facets + row-card list of ingested videos.
+"""Ingest · Library — full-width video list, filters hoisted to row 3.
 
 Replaces the legacy `_LibrarySection` Channels + Playlists grids with a
 single source-of-truth flat list driven by `/api/v1/ycs/admin/videos`.
-Inspired by the 2026 SOTA patterns surveyed (Linear, Notion, Vercel
-deploy lists, YouTube Studio): a 240px sidebar with checkable filter
-facets on the left, a card-row list on the right, a bulk-action
-floating bar that appears on multi-select.
+
+2026-06-10 redesign: the 240px sidebar (3 facet groups) and the inline
+panel toolbar (count + search field) were lifted up to the shell's
+row-3 toolbar (see `shared/toolbar.py::_LibraryFilters`). The panel
+itself is now a pure list surface — a single bordered scroll region
+hosting the rows + the floating bulk-action bar. Pattern: GitHub
+Issues / Linear — context controls in the header, content takes the
+full body width.
 
 The DOM here is structural only — `static/js/ycs/ingest/library.js`
 fetches data, renders rows, and binds the per-row trash button + bulk
@@ -13,77 +17,7 @@ floating bar. Server-side rendering of rows would mean a round-trip
 on every checkbox click; the SPA-ish split keeps it snappy."""
 from __future__ import annotations
 
-from fasthtml.common import Button, Div, Form, H2, Input, Span
-
-
-def _FilterGroup(group_id: str, title: str):
-    """One sidebar facet group — title + list container. Items get
-    pushed in by JS once `/admin/videos/facets` returns. Each item
-    becomes a labeled checkbox with a trailing count chip."""
-    return Div(
-        Div(title, cls = "ycs-lib-facet-title"),
-        Div(
-            "",  # JS populates
-            id  = f"ycs-lib-facet-{group_id}",
-            cls = "ycs-lib-facet-list",
-            data_group = group_id,
-        ),
-        cls = "ycs-lib-facet-group",
-    )
-
-
-def _Sidebar():
-    """Left rail — fixed header + scrollable facets body. Width fixed
-    via CSS so the row list stays a predictable width. The body
-    wraps the 3 facet groups so they share ONE scroll region (mirrors
-    DD's `.fw-explorer-tree`), instead of each facet maxing out at
-    its own 260px and the rail itself stretching."""
-    return Div(
-        Div(
-            Span("Filters", cls = "ycs-lib-sidebar-title"),
-            Button(
-                "Clear",
-                type  = "button",
-                id    = "ycs-lib-clear-filters",
-                cls   = "ycs-lib-clear-btn",
-                title = "Reset all selected facets",
-            ),
-            cls = "ycs-lib-sidebar-head",
-        ),
-        Div(
-            _FilterGroup("status",    "Status"),
-            _FilterGroup("channels",  "Channels"),
-            _FilterGroup("languages", "Languages"),
-            cls = "ycs-lib-sidebar-body",
-        ),
-        id  = "ycs-lib-sidebar",
-        cls = "ycs-lib-sidebar",
-    )
-
-
-def _Toolbar():
-    """Top toolbar — count + search input + pagination control."""
-    return Div(
-        Div(
-            Span("Library · ", cls = "ycs-lib-toolbar-label"),
-            Span("0", id = "ycs-lib-count", cls = "ycs-lib-count"),
-            Span(" videos", cls = "ycs-lib-toolbar-label"),
-            cls = "ycs-lib-toolbar-head",
-        ),
-        Form(
-            Input(
-                type        = "search",
-                name        = "q",
-                id          = "ycs-lib-search",
-                placeholder = "Search title / channel / description…",
-                cls         = "ycs-lib-search",
-                autocomplete = "off",
-            ),
-            cls = "ycs-lib-search-form",
-            onsubmit = "return false;",
-        ),
-        cls = "ycs-lib-toolbar",
-    )
+from fasthtml.common import Button, Div, Span
 
 
 def _BulkBar():
@@ -133,26 +67,20 @@ def _BulkBar():
 
 
 def LibraryPanel():
-    """Top-level Library component: sidebar + main column + floating
-    bulk bar. The main column hosts the toolbar and the list of
-    library rows (server-rendered placeholder, JS replaces).
+    """Full-width video list + floating bulk-action bar. Filters live
+    in the row-3 toolbar (`shared/toolbar.py::_LibraryFilters`).
 
     `id="ycs-lib-panel"` is the boot guard `library.js` looks for —
     without it, the library JS no-ops and the list stays stuck on
     "Loading library…"."""
     return Div(
-        _Sidebar(),
         Div(
-            _Toolbar(),
             Div(
-                Div(
-                    "Loading library…",
-                    cls = "ycs-lib-empty",
-                ),
-                id  = "ycs-lib-list",
-                cls = "ycs-lib-list",
+                "Loading library…",
+                cls = "ycs-lib-empty",
             ),
-            cls = "ycs-lib-main",
+            id  = "ycs-lib-list",
+            cls = "ycs-lib-list",
         ),
         _BulkBar(),
         id  = "ycs-lib-panel",

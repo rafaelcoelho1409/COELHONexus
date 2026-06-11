@@ -38,7 +38,10 @@ class RAGSearchRequest(BaseModel):
       - standard: factual → full RAG with citations (15-60s)
       - deep: analytical → multi-agent research synthesis (30-120s)"""
     question:    NonEmptyStr
-    thread_id:   NonEmptyStr                              = "default"
+    # `thread_id` accepts the soft-empty sentinels ("" or "default") the
+    # handler treats as "no thread, no cache, no history" — Pydantic's
+    # NonEmptyStr would 422 on "" and the frontend has to special-case it.
+    thread_id:   str                                      = "default"
     max_retries: int                                      = 3
     force_mode:  Literal["fast", "standard", "deep"] | None = None
     # Scope to specific channels (auto-detected from question if not provided)

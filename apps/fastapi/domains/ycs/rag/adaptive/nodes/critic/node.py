@@ -25,8 +25,10 @@ async def critic(state: AdaptiveRAGState, llm) -> dict:
         parts.append(f"Q: {sr['sub_question']}\nA: {sr['answer']}")
     sub_results_text = "\n---\n".join(parts)
 
+    # 2026-06-11: default `method="json_schema"` — see
+    # `standard/nodes/hallucination/node.py` for the rationale.
     chain = CRITIC_PROMPT | llm.with_structured_output(
-        CriticAssessment, method = "function_calling",
+        CriticAssessment,
     )
     try:
         result = await chain.ainvoke({

@@ -23,9 +23,16 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from domains.rr import server as rr
+from infra.credentials import inject_user_keys_into_env
 from infra.otel import init_otel
 from middleware.ratelimit import RateLimitMiddleware
 from middleware.telemetry import TelemetryMiddleware
+
+# Inject user-supplied tool API keys (Settings UI → MinIO+Fernet store) into
+# os.environ BEFORE the tools import — they read `os.environ.get(...)` at
+# module-import time to pick the rate-limit interval. Tuple of env-var names
+# this peer app may consume; safe to extend as new tools land.
+inject_user_keys_into_env(("SEMANTIC_SCHOLAR_API_KEY",))
 
 # Bootstrap OTel SDK BEFORE any tool import resolves — sets up the dual
 # exporter pipeline (Alloy + LangFuse) so the very first span emitted by

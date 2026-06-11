@@ -86,11 +86,22 @@ function fmtDuration(s) {
 }
 
 // ---- rendering -------------------------------------------------------------
+/* The /admin/videos/facets response keys don't 1:1 match the
+ * STATE filter names (status_filter is singular, but the API
+ * returns the plural `statuses`). Map UI group → API key so the
+ * lookup is explicit and Status never silently empties again. */
+const _FACET_API_KEY = {
+    status:    "statuses",
+    channels:  "channels",
+    languages: "languages",
+};
+
 function renderFacets(facets) {
-    /* Sidebar facets — each group is exclusive (radio-like via checkboxes).
+    /* Facets — each group is exclusive (radio-like via checkboxes).
      * Click toggles; second click on the same chip clears that facet. */
     for (const group of ["status", "channels", "languages"]) {
-        const items = facets[group] || [];
+        const apiKey = _FACET_API_KEY[group];
+        const items = facets[apiKey] || facets[group] || [];
         const container = document.getElementById(`ycs-lib-facet-${group}`);
         if (!container) continue;
         const frag = document.createDocumentFragment();
@@ -130,6 +141,38 @@ function syncFacetChecks() {
         container.querySelectorAll(".ycs-lib-facet-check").forEach((cb) => {
             cb.checked = (cb.dataset.key === value);
         });
+    }
+    syncFacetTriggerLabels();
+}
+
+/* Update each row-3 facet trigger's label to reflect the current
+ * selection. "All" when nothing is picked, the facet's display label
+ * otherwise — falls back to the raw key if the facet list hasn't
+ * loaded yet (preserves user intent across pre-render state). */
+function syncFacetTriggerLabels() {
+    const selection = {
+        status:    STATE.status,
+        channels:  STATE.channel,
+        languages: STATE.lang,
+    };
+    for (const [group, value] of Object.entries(selection)) {
+        const labelEl = document.getElementById(`ycs-lib-filter-${group}-label`);
+        const triggerWrapper = labelEl?.closest(".ycs-lib-filter");
+        if (!labelEl) continue;
+        if (!value) {
+            labelEl.textContent = "All";
+            triggerWrapper?.classList.remove("has-selection");
+            continue;
+        }
+        const facetRow = document
+            .getElementById(`ycs-lib-facet-${group}`)
+            ?.querySelector(`.ycs-lib-facet-check[data-key="${value}"]`)
+            ?.closest(".ycs-lib-facet-row");
+        const display = facetRow
+            ?.querySelector(".ycs-lib-facet-label")
+            ?.textContent?.trim();
+        labelEl.textContent = display || value;
+        triggerWrapper?.classList.add("has-selection");
     }
 }
 
@@ -246,7 +289,11 @@ async function refresh() {
 
 // ---- event wiring ----------------------------------------------------------
 function bindFacetClicks() {
-    document.getElementById("ycs-lib-sidebar")?.addEventListener("change", (ev) => {
+    /* Facets + clear button now live in the row-3 toolbar (see
+     * `shared/toolbar.py::_LibraryFilters`). Delegation root moved
+     * from the (now-removed) sidebar to the row-3 container. */
+    const filtersRoot = document.getElementById("ycs-lib-filters");
+    filtersRoot?.addEventListener("change", (ev) => {
         const cb = ev.target;
         if (!cb.matches?.(".ycs-lib-facet-check")) return;
         const group = cb.dataset.group;
@@ -260,6 +307,10 @@ function bindFacetClicks() {
         if (group === "channels")  STATE.channel = value;
         if (group === "languages") STATE.lang    = value;
         STATE.offset = 0;
+        syncFacetTriggerLabels();
+        // Close the popover after a pick — Gmail/Linear idiom: the
+        // selection commits, the chrome gets out of the way.
+        cb.closest(".ycs-lib-filter")?.classList.remove("open");
         loadRows();
     });
 
@@ -272,6 +323,33 @@ function bindFacetClicks() {
         if (s) s.value = "";
         syncFacetChecks();
         loadRows();
+    });
+
+    /* Popover open/close — clone of DD's `.dd-catfilter` pattern. */
+    filtersRoot?.addEventListener("click", (ev) => {
+        const trigger = ev.target.closest?.(".dd-catfilter-trigger");
+        if (!trigger) return;
+        const wrapper = trigger.closest(".ycs-lib-filter");
+        if (!wrapper) return;
+        const wasOpen = wrapper.classList.contains("open");
+        // Close every other popover before opening this one — at most
+        // one popover open at a time keeps the row chrome tidy.
+        filtersRoot.querySelectorAll(".ycs-lib-filter.open")
+            .forEach((w) => { if (w !== wrapper) w.classList.remove("open"); });
+        wrapper.classList.toggle("open", !wasOpen);
+    });
+    // Click-outside close.
+    document.addEventListener("click", (ev) => {
+        if (!filtersRoot) return;
+        if (ev.target.closest?.("#ycs-lib-filters")) return;
+        filtersRoot.querySelectorAll(".ycs-lib-filter.open")
+            .forEach((w) => w.classList.remove("open"));
+    });
+    // Escape close.
+    document.addEventListener("keydown", (ev) => {
+        if (ev.key !== "Escape") return;
+        filtersRoot?.querySelectorAll(".ycs-lib-filter.open")
+            .forEach((w) => w.classList.remove("open"));
     });
 }
 

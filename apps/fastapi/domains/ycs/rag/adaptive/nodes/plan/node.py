@@ -24,8 +24,10 @@ async def plan_research(state: AdaptiveRAGState, llm) -> dict:
                 f"Investigating {n} aspects of: {state['question']}"
             ),
         }
+    # 2026-06-11: default `method="json_schema"` — see
+    # `standard/nodes/hallucination/node.py` for the rationale.
     chain = PLAN_FALLBACK_PROMPT | llm.with_structured_output(
-        ResearchPlan, method = "function_calling",
+        ResearchPlan,
     )
     try:
         result = await chain.ainvoke({"question": state["question"]})

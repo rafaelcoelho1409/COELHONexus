@@ -61,8 +61,10 @@ async def classify_query(
             "sub_questions": [],
             "channel_ids":   channel_ids,
         }
+    # 2026-06-11: default `method="json_schema"` — see
+    # `standard/nodes/hallucination/node.py` for the rationale.
     chain = CLASSIFY_PROMPT | llm.with_structured_output(
-        QueryClassification, method = "function_calling",
+        QueryClassification,
     )
     try:
         result = await chain.ainvoke({"question": state["question"]})

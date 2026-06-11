@@ -26,13 +26,17 @@ logger = logging.getLogger(__name__)
 class DocumentGrader:
     """Grades document relevance using LLM structured output.
 
-    `llm` is a `RunnableWithFallbacks` (or any Runnable). `method=
-    "function_calling"` ensures compatibility with all NIM models that
-    expose the tool-use protocol."""
+    `llm` is a `RunnableWithFallbacks` (or any Runnable). The default
+    `method="json_schema"` (2026-06-11) is the cross-provider portable
+    path — sends the schema via `response_format` so providers like
+    Groq don't apply their server-side tool-call validator, which
+    previously rejected responses whenever a model emitted `"true"`
+    instead of boolean `true`. See `rag/standard/nodes/hallucination/
+    node.py` for the full rationale."""
 
     def __init__(self, llm: Any) -> None:
         self.grader = GRADING_PROMPT | llm.with_structured_output(
-            GradeResult, method = "function_calling",
+            GradeResult,
         )
 
     async def grade_documents(

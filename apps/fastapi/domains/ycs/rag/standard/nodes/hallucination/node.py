@@ -25,8 +25,15 @@ async def check_hallucination(state: YouTubeRAGState, llm) -> dict:
     ]
     documents_str = "\n---\n".join(doc_texts)
 
+    # 2026-06-11: use the default `method="json_schema"` (cross-
+    # provider portable: sends `response_format={"type":"json_schema",
+    # ...}` via the API instead of `tools` + `tool_choice`). Bypasses
+    # Groq's server-side tool-call validator that previously rejected
+    # responses with string `"true"` instead of boolean true, which
+    # made the graph cycle through every model in the pool before the
+    # `except Exception → grounded=True` fallback finally fired.
     chain = HALLUCINATION_PROMPT | llm.with_structured_output(
-        HallucinationCheck, method = "function_calling",
+        HallucinationCheck,
     )
     try:
         result: HallucinationCheck = await chain.ainvoke({

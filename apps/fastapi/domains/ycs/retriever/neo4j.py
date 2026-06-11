@@ -75,8 +75,10 @@ class Neo4jRetriever:
     async def _extract_entities(self, query: str) -> list[str]:
         """Structured-output LLM call. Failures degrade to `[]` so the
         SmartRetriever's other arms still produce results."""
+        # 2026-06-11: default `method="json_schema"` — see
+        # `rag/standard/nodes/hallucination/node.py` for the rationale.
         chain = ENTITY_EXTRACTION_PROMPT | self.llm.with_structured_output(
-            ExtractedEntities, method = "function_calling",
+            ExtractedEntities,
         )
         try:
             result = await chain.ainvoke({"query": query})

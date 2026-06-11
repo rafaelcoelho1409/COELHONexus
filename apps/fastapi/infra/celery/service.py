@@ -57,6 +57,20 @@ app.conf.include = TASK_INCLUDE
 
 @worker_process_init.connect
 def _worker_process_init(**_kwargs) -> None:
+    # OTel SDK — TracerProvider + dual-export (Alloy gRPC → Tempo, LangFuse
+    # HTTP → LLM observations) + Celery auto-instrumentation. MUST run before
+    # any other init step so subsequent setup spans (catalog build, etc.)
+    # are captured, and so every fork has its own provider (the parent's SDK
+    # state doesn't survive fork()).
+    try:
+        from infra.otel import init_otel_for_celery_worker
+        init_otel_for_celery_worker()
+    except Exception as e:
+        logger.warning(
+            f"[worker-init] OTel init failed "
+            f"({type(e).__name__}: {e}); spans will be no-ops, no LangFuse/"
+            f"Tempo data from this worker"
+        )
     # MinIO bucket — so the first ingest task can put_object without 404.
     try:
         from domains.dd.ingestion.storage import get_storage

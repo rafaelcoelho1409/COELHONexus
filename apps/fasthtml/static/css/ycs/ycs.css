@@ -15,6 +15,14 @@
    content tree above the topbar's shadow so the sticky form glues
    flush to the topbar row 3. */
 .ycs-page { position: relative; z-index: 51; }
+/* On the Ingestion stage the row-3 toolbar hosts the Library filter
+ * popovers, which need to render ABOVE the page content. The lift
+ * above (51 vs the topbar's 50) was added for the Source sticky
+ * form — Ingestion has no such constraint and instead needs the
+ * opposite: drop back to auto so the topbar's 50 stacking context
+ * wins, letting the popovers escape the page. The Source stage
+ * keeps the 51 lift via the unscoped rule above. */
+.ycs-page[data-ycs-stage="ingestion"] { z-index: auto; }
 .ycs-root { display: flex; flex-direction: column; gap: 24px; }
 
 /* Base chip used ONLY by `.ycs-ask-stages` (Slice 9 Ask live stages).
@@ -2520,6 +2528,82 @@
  *  Floating bulk action bar bottom-center.
  * ============================================================ */
 /* ============================================================
+   Row-3 Library filters (2026-06-10) — search + 3 facet popovers
+   live in the shell's row-3 toolbar (see `shared/toolbar.py`). Each
+   filter reuses DD's `.dd-catfilter` trigger + popover chrome
+   (toolbar.css) — overrides below tune the popover for YCS's
+   checkable facet rows (vs DD's single-select option list).
+   ============================================================ */
+.ycs-lib-filters {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.ycs-lib-filters .ycs-lib-toolbar-head {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.ycs-lib-filters .ycs-lib-toolbar-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.ycs-lib-filters .ycs-lib-count {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.ycs-lib-filters .ycs-lib-search-form {
+  flex: 1;
+  min-width: 220px;
+  max-width: 360px;
+}
+.ycs-lib-filters .ycs-lib-search {
+  width: 100%;
+  padding: 5px 10px;
+  font-size: 0.82rem;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.12s;
+}
+.ycs-lib-filters .ycs-lib-search:focus { border-color: var(--primary); }
+.ycs-lib-filters .ycs-lib-clear-btn {
+  background: transparent;
+  border: 0;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 2px 4px;
+}
+.ycs-lib-filters .ycs-lib-clear-btn:hover { color: var(--primary); }
+
+/* The popover hosts the same `.ycs-lib-facet-list` markup the
+   previous sidebar did — restyle here so the rows look right inside
+   the dropdown chrome (the old `.ycs-lib-facet-list` styling
+   targeted a sidebar context). */
+.ycs-lib-filter .dd-catfilter-popover {
+  min-width: 240px;
+  padding: 8px;
+  gap: 0;
+}
+.ycs-lib-filter .ycs-lib-facet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: min(60vh, 380px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+/* ============================================================
    Page-fill cascade (2026-06-10) — mirrors DD's Ingestion explorer
    so the YCS Library uses the SAME bounded-viewport scroll pattern:
    sidebar + list each scroll independently, the outer page doesn't
@@ -2567,20 +2651,18 @@
 .page:has(#ycs-lib-panel) .ycs-ingest-body { gap: 0; }
 
 .ycs-lib-panel {
-  display: grid;
-  grid-template-columns: 240px 1fr;
-  /* `minmax(0, 1fr)` on the implicit ROW is what lets the grid
-     children shrink below their min-content height so each column's
-     internal `overflow: auto` kicks in — same fix as DD's
-     `.fw-explorer`. */
-  grid-template-rows: minmax(0, 1fr);
-  gap: 0;
+  /* 2026-06-10: sidebar + toolbar lifted to row 3. Panel becomes a
+     single bordered scroll region for the list (full body width).
+     Floating bulk-bar still pins to the bottom on selection. */
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--card);
   overflow: hidden;
   flex: 1;
   min-height: 0;
+  position: relative;     /* anchor for floating .ycs-lib-bulk-bar */
 }
 @media (max-width: 760px) {
   .page:has(#ycs-lib-panel) {
@@ -2588,14 +2670,8 @@
     padding-top: 10px;
   }
   .ycs-lib-panel {
-    grid-template-columns: 1fr;
     flex: 0 0 auto;
     min-height: 520px;
-  }
-  .ycs-lib-sidebar {
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-    max-height: 360px;
   }
 }
 

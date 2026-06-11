@@ -1,10 +1,15 @@
-"""Settings body — BYOK provider keys + free-model selection.
+"""Settings body — BYOK provider keys + free-model selection + optional
+FastMCP source tool keys.
 
-Server renders only the skeleton; `static/js/settings.js` populates it
-from `/api/v1/llm/settings/*` (proxied to FastAPI). Raw keys go
-browser → FastAPI on save and are NEVER returned — responses carry
-masked status only."""
-from fasthtml.common import Button, Div, P, Script, Span
+Server renders only the skeletons; the JS modules populate them:
+  - settings.js            ← /api/v1/llm/settings/*   (LLM provider BYOK)
+  - settings_tool_keys.js  ← /api/v1/rr/tool-credentials/*
+                            (optional API keys for Research Radar source tools,
+                             e.g. Semantic Scholar — unlocks higher rate limits)
+
+Raw keys go browser → FastAPI on save and are NEVER returned. Responses
+carry masked status only (has_key + source + last4)."""
+from fasthtml.common import Button, Div, H3, P, Script, Span
 
 
 def SettingsBody():
@@ -41,9 +46,29 @@ def SettingsBody():
                 id = "settings-providers",
                 cls = "settings-providers",
             ),
+            # FastMCP source tool keys (Research Radar) — separate skeleton +
+            # JS module. Hidden by default until JS populates; if the catalog
+            # is empty the section quietly stays collapsed.
+            Div(
+                H3("Source Tool Keys", cls = "set-section-title"),
+                P(
+                    "Optional API keys for Research Radar source tools. These "
+                    "unlock higher rate limits or extra features on third-party "
+                    "data sources. Tools work without keys, just slower.",
+                    cls = "settings-intro",
+                ),
+                Div(
+                    Div("Loading tool keys…", cls = "set-loading"),
+                    id = "settings-tool-keys-list",
+                    cls = "settings-tool-keys-list",
+                ),
+                cls = "settings-tool-keys",
+                id = "settings-tool-keys",
+            ),
             cls = "settings-root",
             id = "settings-root",
         ),
         Div("", id = "set-toast", cls = "set-toast", aria_live = "polite"),
         Script(src = "/static/js/settings.js", type = "module"),
+        Script(src = "/static/js/settings_tool_keys.js", type = "module"),
     )
