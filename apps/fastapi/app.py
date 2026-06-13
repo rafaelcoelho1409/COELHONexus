@@ -41,6 +41,7 @@ from domains.dd.planner.runtime.checkpoint import (
 )
 from domains.llm.credentials import warm as warm_credentials
 from domains.llm.rotator.chain import init_dynamic_catalog
+from domains.rr.service import bootstrap_stores as bootstrap_rr_stores
 from domains.ycs.conversation import ensure_conversation_table
 from domains.ycs.embeddings import (
     create_dense_embeddings,
@@ -146,6 +147,19 @@ async def lifespan(app: FastAPI):
             f"[lifespan] AsyncPostgresSaver init failed: "
             f"{type(e).__name__}: {e}. Planner endpoints will 503 until "
             f"Postgres is reachable + POSTGRES_* env vars are correct."
+        )
+
+    # Research Radar stores — Postgres tables + Qdrant collection + Neo4j
+    # constraints + MinIO bucket prefix. Idempotent (IF NOT EXISTS); safe
+    # to re-run. Best-effort: failure here degrades the radar feature but
+    # doesn't block DD/YCS lifespan steps below.
+    try:
+        await bootstrap_rr_stores()
+    except Exception as e:
+        logger.warning(
+            f"[lifespan] RR bootstrap_stores failed: "
+            f"{type(e).__name__}: {e}. Radar /v1/rr/scan endpoints will 5xx "
+            f"until the missing store is reachable."
         )
 
     # Elasticsearch — YCS metadata + transcripts indexes. Best-effort:

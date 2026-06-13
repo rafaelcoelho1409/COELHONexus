@@ -1,0 +1,229 @@
+/* Research Radar — scan page styles (step 5b, 2026-06-12).
+ *
+ * Single file: small surface area. Tokens (--brand, --text, --bg, --border)
+ * come from tokens.css. Layout follows the .card / .grid conventions used by
+ * dd/ + ycs/ but doesn't try to share their stylesheet.
+ */
+
+@layer features {
+
+  .rr-page {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 16px;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  .rr-card {
+    background: var(--bg-panel, #fff);
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 8px;
+    padding: 16px 20px;
+  }
+
+  .rr-section-title {
+    margin: 0 0 12px 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-muted, #555);
+    letter-spacing: 0.01em;
+  }
+
+  /* ----- Scan form ----- */
+  .rr-form {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto auto;
+    gap: 12px;
+    align-items: end;
+  }
+  @media (max-width: 720px) {
+    .rr-form { grid-template-columns: 1fr; }
+  }
+  .rr-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .rr-label {
+    font-size: 12px;
+    color: var(--text-muted, #666);
+    font-weight: 500;
+  }
+  .rr-input {
+    padding: 8px 10px;
+    border: 1px solid var(--border, #ccc);
+    border-radius: 6px;
+    background: var(--bg-input, #fafafa);
+    color: var(--text, #111);
+    font: inherit;
+  }
+  .rr-input:focus {
+    outline: 2px solid var(--brand, #c00);
+    outline-offset: 1px;
+  }
+  .rr-input-narrow { width: 80px; }
+  .rr-actions { display: flex; gap: 8px; }
+  .rr-submit {
+    padding: 9px 16px;
+    background: var(--brand, #c00);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .rr-submit:hover { filter: brightness(1.08); }
+  .rr-submit:active { transform: translateY(1px); }
+
+  /* ----- Status strip ----- */
+  .rr-status-strip {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .rr-status-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 500;
+  }
+  .rr-status-dot {
+    color: #888;
+    font-size: 12px;
+    line-height: 1;
+  }
+  .rr-status-dot[data-phase="running"],
+  .rr-status-dot[data-phase="discovery"],
+  .rr-status-dot[data-phase="triage"],
+  .rr-status-dot[data-phase="deep_read"],
+  .rr-status-dot[data-phase="graph_build"],
+  .rr-status-dot[data-phase="synthesis"],
+  .rr-status-dot[data-phase="report"],
+  .rr-status-dot[data-phase="persisting"] {
+    color: #f0a000;
+    animation: rr-pulse 1.2s ease-in-out infinite;
+  }
+  .rr-status-dot[data-phase="done"]      { color: #0a8a3e; }
+  .rr-status-dot[data-phase="error"]     { color: #c00; }
+  .rr-status-dot[data-phase="cancelled"] { color: #888; }
+  @keyframes rr-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+  }
+  .rr-status-detail {
+    font-size: 13px;
+    color: var(--text-muted, #666);
+    min-height: 1.2em;
+  }
+
+  /* ----- Digest ----- */
+  .rr-digest-title {
+    margin: 0 0 12px 0;
+    font-size: 18px;
+    font-weight: 600;
+  }
+  .rr-digest-empty {
+    color: var(--text-muted, #888);
+    font-style: italic;
+  }
+  .rr-digest-items {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .rr-finding {
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 8px;
+    padding: 14px 16px;
+    background: var(--bg-panel-soft, #fafafa);
+  }
+  .rr-finding-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--text-muted, #666);
+    margin-bottom: 4px;
+  }
+  .rr-rank {
+    background: var(--brand, #c00);
+    color: white;
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-weight: 700;
+  }
+  .rr-signal {
+    background: var(--bg-input, #f0f0f0);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-family: ui-monospace, "SF Mono", monospace;
+  }
+  .rr-new {
+    background: #0a8a3e;
+    color: white;
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-weight: 600;
+  }
+  .rr-arxiv {
+    color: var(--text-muted, #888);
+    font-family: ui-monospace, "SF Mono", monospace;
+  }
+  .rr-title {
+    margin: 4px 0 4px 0;
+    font-size: 16px;
+    font-weight: 600;
+  }
+  .rr-authors {
+    margin: 0 0 6px 0;
+    font-size: 13px;
+    color: var(--text-muted, #666);
+  }
+  .rr-summary {
+    margin: 6px 0;
+    font-size: 14px;
+  }
+  .rr-extraction {
+    border-left: 3px solid var(--border, #ddd);
+    padding-left: 10px;
+    margin: 8px 0;
+  }
+  .rr-extraction p {
+    margin: 4px 0;
+    font-size: 13px;
+  }
+  .rr-extraction code {
+    font-family: ui-monospace, "SF Mono", monospace;
+    background: var(--bg-input, #f3f3f3);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+  .rr-themes {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .rr-theme {
+    background: var(--bg-input, #eef);
+    color: #226;
+    border-radius: 999px;
+    padding: 2px 10px;
+    font-size: 12px;
+  }
+  .rr-sources {
+    margin-top: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .rr-source {
+    background: var(--bg-input, #f0f0f0);
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-size: 11px;
+    color: var(--text-muted, #555);
+  }
+}

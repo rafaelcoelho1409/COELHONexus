@@ -26,6 +26,9 @@ Q_CRAWLER = f"crawler-{ENVIRONMENT}"
 Q_PLANNER = f"planner-{ENVIRONMENT}"
 Q_SYNTH = f"synth-{ENVIRONMENT}"
 Q_YCS = f"ycs-{ENVIRONMENT}"
+# Research Radar (3rd feature) — own queue so its long agent runs don't
+# contend with DD planner/synth or YCS crawler/embed bursts.
+Q_RR = f"rr-{ENVIRONMENT}"
 
 
 # Task modules loaded at worker startup. YCS task modules are the Wave 4
@@ -41,16 +44,21 @@ TASK_INCLUDE = [
     "domains.ycs.qdrant_task.task",
     "domains.ycs.neo4j_task.task",
     "domains.ycs.pipeline_task.task",
+    # Research Radar (3rd feature)
+    "domains.rr.task",
 ]
 
 
 # Routing — queue per task module. Isolation prevents the planner's
 # CPU-heavy clustering from contending with HTTP-fetch ingestion, and
 # the synth's LLM+CoCoA bursts from contending with planner. YCS gets its
-# own queue so transcript/embed bursts don't contend with DD.
+# own queue so transcript/embed bursts don't contend with DD. RR's
+# DeepAgents runs are LLM-bound + long — kept on its own queue so a
+# slow agent doesn't block DD/YCS short-running tasks.
 TASK_ROUTES = {
     "domains.dd.ingestion.task.*": {"queue": Q_CRAWLER},
     "domains.dd.planner.task.*":   {"queue": Q_PLANNER},
     "domains.dd.synth.task.*":     {"queue": Q_SYNTH},
     "domains.ycs.*":               {"queue": Q_YCS},
+    "domains.rr.task.*":           {"queue": Q_RR},
 }

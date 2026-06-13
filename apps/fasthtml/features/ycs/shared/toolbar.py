@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from fasthtml.common import Button, Div, Form, Input, Span
 
+from ..ask.chrome    import AskLLMTrigger, AskModeTabs, AskThreadBar
 from ..source.chrome import SourceModeTabs
 
 
@@ -100,14 +101,24 @@ def _LibraryFilters():
 
 
 def StageToolbar(active_stage: str, slug: str | None):
+    right: list = []
     if active_stage == "source":
         left = [SourceModeTabs("search")]
     elif active_stage == "ingestion":
         left = [_LibraryFilters()]
+    elif active_stage == "ask":
+        # Mode pills on the left (what mode you're asking in);
+        # conversation thread badge + LLM-configuration dropdown on
+        # the right (session + agent settings, grouped together).
+        left  = [AskModeTabs()]
+        right = [AskThreadBar(), AskLLMTrigger()]
     else:
         return None
+    children = [Div(*left, cls = "dd-toolbar-left")]
+    if right:
+        children.append(Div(*right, cls = "dd-toolbar-right"))
     return Div(
-        Div(*left, cls = "dd-toolbar-left"),
+        *children,
         cls = "dd-toolbar topbar-collapsible",
         id = "ycs-toolbar",
     )

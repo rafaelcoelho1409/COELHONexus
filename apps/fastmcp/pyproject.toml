@@ -43,6 +43,12 @@ dependencies = [
     # CVE-2026-39892 / CVE-2026-26007 fixes).
     "botocore>=1.34,<2.0",
     "cryptography>=46.0.7,<49",
+    # Step-7 (2026-06-12) — Resources backing stores:
+    # `radar://latest_digest` reads Postgres + MinIO; `radar://concept/{name}`
+    # reads Neo4j. Same pins as apps/fastapi to keep the two images in lockstep.
+    "psycopg[binary]>=3.2,<4.0",
+    "aioboto3>=13.0,<15.0",
+    "neo4j>=5,<6",
 ]
 
 [build-system]

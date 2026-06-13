@@ -18,10 +18,17 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from domains.ycs.cache import cache_response, get_cached_response
-from domains.ycs.conversation import get_history, save_turn
+from domains.ycs.conversation import (
+    DEFAULT_THREAD_ID,
+    get_history,
+    list_thread_messages,
+    list_threads,
+    save_turn,
+)
 from domains.ycs.graph_builder import get_graph_stats
 
 from .build import _serialize_update, build_graph_from_request
+from .byok import CONFIG_REDIS_KEY, get_byok_config, ping_byok
 from .schemas import (
     GraphIngestRequest,
     IngestRequest,
@@ -37,19 +44,32 @@ router = APIRouter()
 # =============================================================================
 # LLM Configuration
 # =============================================================================
+@router.get("/config")
+async def get_agents_config(request: Request) -> dict:
+    """Return the persisted BYOK config (api_key redacted) so the UI
+    can populate the form on page load. Empty dict if nothing is set."""
+    config = await get_byok_config(request.app.state.redis_aio)
+    if not config:
+        return {"config": {}, "has_api_key": False}
+    safe = {k: v for k, v in config.items() if k != "api_key"}
+    return {"config": safe, "has_api_key": bool(config.get("api_key"))}
+
+
 @router.put("/config")
 async def update_agents_config(
     config:  LLMConfig,
     request: Request,
 ) -> dict:
     """Persist user-supplied LLM config to Redis JSON
-    `coelhonexus:youtube:agents:config`. Strict port — does NOT route
-    through the rotator's BYOK store (deprecated didn't).
+    `coelhonexus:youtube:agents:config`. The Adaptive RAG graph reads
+    this back per request via `build.build_graph_from_request()` →
+    `byok.get_byok_config()`. If unset or missing `api_key`, the graph
+    falls back to `app.state.llm` (the rotator chain).
 
     Source: deprecated `routers/v1/youtube/agents.py:L42-55`."""
     redis_aio = request.app.state.redis_aio
     await redis_aio.json().set(
-        "coelhonexus:youtube:agents:config",
+        CONFIG_REDIS_KEY,
         "$",
         config.model_dump(exclude_none = True),
     )
@@ -57,6 +77,41 @@ async def update_agents_config(
         "status": "saved",
         "config": config.model_dump(exclude = {"api_key"}),
     }
+
+
+@router.post("/config/test")
+async def test_agents_config(config: LLMConfig) -> dict:
+    """Fire one `ainvoke("ping")` round-trip against the supplied config
+    so the user can validate credentials BEFORE saving. Returns
+    `{"status": "ok", "model": "...", "ms": int, "reply": "..."}` on
+    success, `{"status": "error", "error": "..."}` otherwise."""
+    return await ping_byok(config.model_dump(exclude_none = True))
+
+
+# =============================================================================
+# Conversation history (for UI rehydration on page refresh)
+# =============================================================================
+@router.get("/history/{thread_id}")
+async def get_thread_history(thread_id: str, request: Request) -> dict:
+    """Return the full Q+A history for `thread_id` so the UI can re-render
+    prior turns when the user refreshes the Ask page. Returns an empty
+    list for the `default` sentinel or any unknown thread."""
+    if not thread_id or thread_id == DEFAULT_THREAD_ID:
+        return {"thread_id": thread_id, "items": [], "total": 0}
+    items = await list_thread_messages(
+        request.app.state.pg_url, thread_id,
+    )
+    return {"thread_id": thread_id, "items": items, "total": len(items)}
+
+
+@router.get("/threads")
+async def get_threads(request: Request) -> dict:
+    """List existing conversation threads (most-recent first) so the UI
+    can render a picker. Each item carries `{thread_id, turn_count,
+    last_seen, first_question}` — enough for the picker to show a
+    sensible per-thread row."""
+    items = await list_threads(request.app.state.pg_url)
+    return {"items": items, "total": len(items)}
 
 
 # =============================================================================
@@ -89,7 +144,7 @@ async def rag_search(
     history = await get_history(
         request.app.state.pg_url, payload.thread_id,
     )
-    graph = build_graph_from_request(request)
+    graph = await build_graph_from_request(request)
     initial_state = {
         "question":             payload.question,
         "mode":                 "",
@@ -171,7 +226,7 @@ async def rag_search_stream(
     history = await get_history(
         request.app.state.pg_url, payload.thread_id,
     )
-    graph = build_graph_from_request(request)
+    graph = await build_graph_from_request(request)
     initial_state = {
         "question":             payload.question,
         "mode":                 "",

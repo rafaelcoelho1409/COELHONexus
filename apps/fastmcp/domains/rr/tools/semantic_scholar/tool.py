@@ -44,8 +44,14 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(name="semantic_scholar_search")
     async def semantic_scholar_search(
-        input: SearchInput,
-        ctx: Context,
+        ctx:                Context,
+        query:              str,
+        n_max:              int             = 20,
+        year_min:           int      | None = None,
+        year_max:           int      | None = None,
+        fields_of_study:    list[str] | None = None,
+        min_citation_count: int      | None = None,
+        venue_filter:       list[str] | None = None,
     ) -> list[Paper]:
         """Search Semantic Scholar for papers matching a free-text query.
 
@@ -70,8 +76,17 @@ def register(mcp: FastMCP) -> None:
         Query syntax: free text (AND), `"phrase"` exact, `+must`, `-exclude`,
         `a|b` OR.
         """
+        req = SearchInput(
+            query              = query,
+            n_max              = n_max,
+            year_min           = year_min,
+            year_max           = year_max,
+            fields_of_study    = fields_of_study,
+            min_citation_count = min_citation_count,
+            venue_filter       = venue_filter,
+        )
         try:
-            return await search_s2(input, ctx)
+            return await search_s2(req, ctx)
         except httpx.HTTPStatusError as e:
             raise ToolError(
                 f"Semantic Scholar API returned {e.response.status_code}: "

@@ -117,10 +117,20 @@ dependencies = [
     # our code doesn't import (it's a transitive dep only). Same for the
     # checkpoint package, which jumped to 3.x alongside the langgraph 1.x
     # core. See https://changelog.langchain.com/announcements/langgraph-1-0-...
-    "langgraph>=1.0,<2.0",
-    "langgraph-checkpoint-postgres>=3.0,<4.0",
+    "langgraph>=1.2,<2.0",             # floor bumped: 1.2.x needs langgraph-checkpoint>=4.1 + langchain-core>=1.4
+    "langgraph-checkpoint-postgres>=3.1,<4.0",   # 3.1.0 is the version that requires (and supplies) langgraph-checkpoint>=4.1 compat;
+                                                  # earlier 3.0.x still pulls 3.x checkpoint serde → AIMessage msgpack TypeError when paired with langgraph 1.2
     "psycopg[binary]>=3.2,<4.0",       # async driver for AsyncPostgresSaver — binary wheel, no libpq needed
-    "langchain-core>=1.2.21,<2.0",   # langchain-litellm 0.6.4 floor
+    "langchain-core>=1.4,<2.0",        # floor bumped: deepagents 0.6 + langgraph 1.2 require >=1.4; langchain-litellm 0.6.4 floor (>=1.2.21) is satisfied by 1.4.x
+    # Research Radar agent stack (domains/rr/agent/) — DeepAgents orchestrator
+    # + LangChain-compatible MCP tool adapter.
+    # • deepagents 0.6.x ships the async-subagent + virtual-FS features
+    #   the architecture doc relies on; needs langchain-core>=1.4 (above).
+    # • langchain-mcp-adapters 0.3.x is the latest stable, wraps remote
+    #   MCP tools as LangChain BaseTool for DeepAgents subagent tool lists.
+    #   Pulls `mcp>=1.9` transitively as the MCP client.
+    "deepagents>=0.6,<1.0",
+    "langchain-mcp-adapters>=0.3,<1.0",
     # Tokenizer — Rust-backed BPE for byte-exact NIM parity in embed_corpus
     # chunk-boundary math. 3.3 MB wheel vs ~50-60 MB for `transformers`; pure
     # CPU, no torch, no inference, just tokenizer encode/decode.

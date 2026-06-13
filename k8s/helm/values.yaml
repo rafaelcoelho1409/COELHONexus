@@ -454,7 +454,10 @@ celery:
   # extract_{videos,channel,playlist}, ingest_to_qdrant, ingest_to_neo4j,
   # full_channel_pipeline, invalidate_cache. Without this the YCS Source
   # forms 200-OK but tasks sit PENDING forever (no consumer for ycs-{env}).
-  queues: "crawler,embedding,llm,planner,synth,default,ycs"
+  # 2026-06-12 — `rr` queue added (Research Radar step 5): hosts the
+  # DeepAgents `run_radar_scan` task. Long-running (soft=1800s) so kept
+  # on its own queue to avoid contention with DD planner / YCS bursts.
+  queues: "crawler,embedding,llm,planner,synth,default,ycs,rr"
   resources:
     requests:
       memory: "2Gi"

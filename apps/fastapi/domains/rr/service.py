@@ -1,0 +1,180 @@
+"""I/O orchestration for the RR domain — Imperative Shell.
+
+Per docs/CODE-CONVENTIONS.md §service: thin orchestrator. Pure math
+lives in domain.py; per-store ops live under stores/. This module
+composes them into the operations the agent (graph_build, report) and
+the FastAPI router will call.
+
+Public surface:
+
+  bootstrap_stores()       — startup: ensure all 4 stores' schemas exist
+  persist_paper(...)       — graph + vector together (one paper)
+  persist_scan_result(...) — final write at scan end: findings + digest
+                             + seen set
+  begin_scan / complete_scan / fail_scan
+                           — Postgres lifecycle re-exports for the API +
+                             Celery task layer to call without reaching
+                             into stores/postgres directly
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from datetime import datetime, timezone
+from typing import Any
+from uuid import UUID
+
+from .entities import Finding, NormalizedPaper
+from .keys import SCAN_STATUS_CANCELLED, SCAN_STATUS_ERROR
+from .stores import minio as minio_store
+from .stores import neo4j as neo4j_store
+from .stores import postgres as postgres_store
+from .stores import qdrant as qdrant_store
+
+
+logger = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------- #
+# Bootstrap — fan out to all 4 stores in parallel. Each is idempotent.
+# Call once at FastAPI lifespan startup (or before the first scan dispatches).
+# --------------------------------------------------------------------------- #
+async def bootstrap_stores() -> None:
+    """Initialize all 4 RR stores. Idempotent + safe to re-run.
+
+    Runs the 4 bootstraps concurrently — they touch different services so
+    there's no contention. On any failure, the others may still complete;
+    the exception propagates with `asyncio.gather(return_exceptions=False)`.
+    """
+    results = await asyncio.gather(
+        postgres_store.bootstrap_postgres(),
+        neo4j_store.bootstrap_neo4j(),
+        qdrant_store.bootstrap_qdrant(),
+        minio_store.bootstrap_minio(),
+    )
+    logger.info(f"[rr-service] bootstrap_stores: 4/4 complete ({len(results)})")
+
+
+# --------------------------------------------------------------------------- #
+# Per-paper persistence — graph + vector together. The orchestrator's
+# graph_build subagent calls this once per paper (parallel fan-out).
+# --------------------------------------------------------------------------- #
+async def persist_paper(
+    paper: NormalizedPaper,
+    *,
+    embedding: list[float] | tuple[float, ...] | None,
+    signal: float | None = None,
+) -> None:
+    """Write a paper to Neo4j (always) + Qdrant (only when embedding given).
+
+    Skip rule: if `paper.arxiv_id is None`, the paper has no stable identity
+    for cross-source dedup; both stores are bypassed and a warning logged.
+    The orchestrator's report subagent still persists it via radar_findings
+    (Postgres uses (scan_id, arxiv_id) as PK; a no-id paper is dropped at
+    Postgres write time).
+    """
+    if not paper.arxiv_id:
+        logger.warning(
+            f"[rr-service] persist_paper skipped — no arxiv_id "
+            f"(title={paper.title[:40]!r})"
+        )
+        return
+    # Run graph + vector in parallel — they touch unrelated services.
+    coros: list[Any] = [neo4j_store.upsert_paper(paper, signal=signal)]
+    if embedding is not None:
+        coros.append(
+            qdrant_store.upsert_paper_vector(paper, embedding=embedding, signal=signal)
+        )
+    await asyncio.gather(*coros)
+
+
+# --------------------------------------------------------------------------- #
+# Scan lifecycle — re-exports the Postgres ops for the API/Celery layer.
+# Centralizing them here lets callers import from one place + lets us
+# evolve the schema without touching every callsite.
+# --------------------------------------------------------------------------- #
+async def begin_scan(scan_id: UUID, profile_id: str) -> None:
+    """Create the radar_scans row (status=pending) then immediately flip
+    to running. Idempotent — the running flip is a no-op if already past."""
+    await postgres_store.create_scan(scan_id, profile_id)
+    await postgres_store.mark_scan_running(scan_id)
+
+
+async def complete_scan(
+    scan_id: UUID,
+    *,
+    total_candidates: int,
+    total_in_digest: int,
+) -> None:
+    """Mark the scan done. Called by the Celery task after persist_scan_result."""
+    await postgres_store.mark_scan_done(
+        scan_id,
+        total_candidates = total_candidates,
+        total_in_digest  = total_in_digest,
+    )
+
+
+async def fail_scan(scan_id: UUID, error: str, *, cancelled: bool = False) -> None:
+    """Mark the scan terminated with a short error string. `cancelled=True`
+    uses SCAN_STATUS_CANCELLED instead of SCAN_STATUS_ERROR."""
+    status = SCAN_STATUS_CANCELLED if cancelled else SCAN_STATUS_ERROR
+    await postgres_store.mark_scan_error(scan_id, status=status, error=error)
+
+
+# --------------------------------------------------------------------------- #
+# Final scan write — findings + digest + seen set, in that order so a
+# partial failure leaves the relational store as the source of truth.
+# --------------------------------------------------------------------------- #
+async def persist_scan_result(
+    scan_id: UUID,
+    profile_id: str,
+    *,
+    findings: list[Finding],
+    digest_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist the scan's ranked digest:
+      1. INSERT findings into Postgres (radar_findings)
+      2. PUT digest.json to MinIO
+      3. UPSERT arxiv_ids into radar_seen (so the next scan can diff_vs_seen)
+
+    Returns a summary dict suitable for SSE emission + Celery task return.
+    """
+    n_findings = await postgres_store.record_findings(scan_id, findings)
+    digest_key = await minio_store.put_digest_json(str(scan_id), digest_payload)
+    arxiv_ids = [f.arxiv_id for f in findings if f.arxiv_id]
+    n_seen = await postgres_store.mark_seen_batch(profile_id, arxiv_ids)
+    summary = {
+        "scan_id":           str(scan_id),
+        "profile_id":        profile_id,
+        "n_findings":        n_findings,
+        "n_marked_seen":     n_seen,
+        "digest_minio_key":  digest_key,
+        "persisted_at":      datetime.now(timezone.utc).isoformat(),
+    }
+    logger.info(
+        f"[rr-service] persist_scan_result {scan_id} "
+        f"findings={n_findings} seen={n_seen} key={digest_key}"
+    )
+    return summary
+
+
+# --------------------------------------------------------------------------- #
+# Read paths used by the API + the agent (re-exports for one-stop import)
+# --------------------------------------------------------------------------- #
+async def get_seen_ids(profile_id: str) -> frozenset[str]:
+    """Re-export: all arxiv_ids the profile has seen. Used by domain.diff_vs_seen."""
+    return await postgres_store.get_seen_ids(profile_id)
+
+
+async def get_profile(profile_id: str) -> dict[str, Any] | None:
+    """Re-export: profile blob (interests + weights)."""
+    return await postgres_store.get_profile(profile_id)
+
+
+async def upsert_profile(
+    profile_id: str, *, interests: dict[str, Any], weights: dict[str, Any],
+) -> None:
+    """Re-export: create or update a profile."""
+    await postgres_store.upsert_profile(
+        profile_id, interests=interests, weights=weights,
+    )

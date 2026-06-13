@@ -9,7 +9,13 @@ from .params import (
     INDEX_NAME,
     TABLE_NAME,
 )
-from .service import ensure_conversation_table, get_history, save_turn
+from .service import (
+    ensure_conversation_table,
+    get_history,
+    list_thread_messages,
+    list_threads,
+    save_turn,
+)
 
 
 __all__ = [
@@ -19,5 +25,7 @@ __all__ = [
     "TABLE_NAME",
     "ensure_conversation_table",
     "get_history",
+    "list_thread_messages",
+    "list_threads",
     "save_turn",
 ]

@@ -168,6 +168,8 @@ HEAD = (
     Link(rel = "stylesheet", href = "/static/css/dd/study/reader.css"),
     Link(rel = "stylesheet", href = "/static/css/dd/study/tabs.css"),
     Link(rel = "stylesheet", href = "/static/css/ycs/ycs.css"),
+    # Research Radar (step 5b, 2026-06-12) — scan form + status strip + digest cards
+    Link(rel = "stylesheet", href = "/static/css/rr/rr.css"),
     Link(rel = "stylesheet", href = "/static/css/settings/settings.css"),
     # Polls /api/v1/docs-distiller/runs/active every 30s; toggles
     # .has-running on the matching nav-item. defer = doesn't block paint.

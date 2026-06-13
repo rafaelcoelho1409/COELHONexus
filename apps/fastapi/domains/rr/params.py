@@ -1,0 +1,65 @@
+"""Cross-cutting tunables for the RR domain (PURE-side, not agent).
+
+Per docs/CODE-CONVENTIONS.md §3: frozen-dataclass groups of related
+tunables. `SignalWeights` defines the radar's ranking-function shape;
+per-profile overrides land in `radar_profiles.weights` (step 3+).
+
+`DomainParams` carries the non-weight tunables that the scoring math
+needs (recency half-life, etc.).
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class SignalWeights:
+    """Weights for the composite `signal_score`. Sum need not equal 1 —
+    the score is a sortable scalar, not a probability.
+
+    Defaults tuned for LLMOps / agents / quantitative finance / applied
+    math verticals. Per-profile overrides override these individually
+    (the radar_profiles.weights JSONB is decoded into a SignalWeights
+    with this dataclass's defaults as fallbacks for unspecified fields).
+    """
+    relevance:           float = 0.30   # cosine(profile_emb, paper_emb)
+    recency:             float = 0.15   # half-life decay vs `now`
+    citation_velocity:   float = 0.15   # citations / day_since_published
+    influential_ratio:   float = 0.10   # S2 influential / total citations
+    vertical_fit:        float = 0.15   # paper.categories ∩ profile.verticals
+    cross_tier_buzz:     float = 0.10   # log1p(hn_points) + log1p(hf_upvotes)
+    has_code:            float = 0.05   # PapersWithCode presence (v2 signal)
+
+
+@dataclass(frozen=True, slots=True)
+class DomainParams:
+    """Non-weight constants used by the scoring helpers."""
+    recency_half_life_days: int = 30      # 2^(-age/half_life) decay
+    velocity_min_age_days:  int = 1       # floor for div-by-zero on same-day papers
+
+
+@dataclass(frozen=True, slots=True)
+class StoresParams:
+    """Tunables for the 4 stores (Postgres, Qdrant, Neo4j, MinIO).
+
+    Per docs/CODE-CONVENTIONS.md §3: groups loose I/O tunables so a
+    callsite passes ONE object instead of a fan-in of imports.
+    """
+    # Qdrant — must match the embedding model's output dim. The RR uses
+    # the existing NIM `nvidia/llama-nemotron-embed-1b-v2` (2048d) via the
+    # LLM rotator's embed_via_router_async — see architecture-doc §2.4.2.
+    qdrant_vector_dim:       int = 2048
+    qdrant_segment_count:    int = 2     # OptimizersConfigDiff.default_segment_number
+    qdrant_upsert_batch:     int = 64    # chunk per upsert call
+
+    # Postgres — connection-level timeouts (per-operation; no shared pool yet).
+    pg_statement_timeout_ms: int = 30_000
+
+    # MinIO — content type for JSON artifacts. Bytes go directly via aioboto3.
+    minio_json_content_type: str = "application/json"
+
+
+# Module-level singletons — callers prefer these over re-instantiating.
+WEIGHTS       = SignalWeights()
+DOMAIN_PARAMS = DomainParams()
+STORES_PARAMS = StoresParams()

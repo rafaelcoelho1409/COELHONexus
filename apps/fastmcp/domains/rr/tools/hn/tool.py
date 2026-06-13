@@ -22,8 +22,10 @@ from fastmcp.exceptions import ToolError
 
 from middleware import ratelimit
 
+from datetime import date
+
 from .config import HN
-from .schemas import Hit, SearchInput
+from .schemas import Hit, SearchInput, SortBy
 from .service import search_hn
 
 
@@ -37,7 +39,16 @@ def register(mcp: FastMCP) -> None:
     ratelimit.register("hn_search", HN.min_request_interval_s)
 
     @mcp.tool(name="hn_search")
-    async def hn_search(input: SearchInput, ctx: Context) -> list[Hit]:
+    async def hn_search(
+        ctx:              Context,
+        query:            str,
+        n_max:            int             = 20,
+        tags:             list[str] | None = None,
+        min_points:       int       | None = None,
+        min_num_comments: int       | None = None,
+        since:            date      | None = None,
+        sort_by:          SortBy           = "relevance",
+    ) -> list[Hit]:
         """Search Hacker News via Algolia for stories matching a query.
 
         The news / community-traction tier of Research Radar — complements
@@ -70,8 +81,19 @@ def register(mcp: FastMCP) -> None:
         Rate limit: 0.5 s polite default. Algolia gives 10k req/hr/IP — no
         auth required.
         """
+        # Flat params on the boundary so any LLM tool-call shape works;
+        # internal service still consumes the SearchInput value object.
+        req = SearchInput(
+            query            = query,
+            n_max            = n_max,
+            tags             = tags,
+            min_points       = min_points,
+            min_num_comments = min_num_comments,
+            since            = since,
+            sort_by          = sort_by,
+        )
         try:
-            return await search_hn(input, ctx)
+            return await search_hn(req, ctx)
         except httpx.HTTPStatusError as e:
             raise ToolError(
                 f"HN Algolia returned {e.response.status_code}: "

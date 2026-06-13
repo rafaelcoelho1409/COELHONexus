@@ -23,7 +23,7 @@ from fastmcp.exceptions import ToolError
 from middleware import ratelimit
 
 from .config import ARXIV
-from .schemas import Paper, SearchInput
+from .schemas import Paper, SearchInput, SortBy
 from .service import search_arxiv
 
 
@@ -40,8 +40,11 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(name="arxiv_search")
     async def arxiv_search(
-        input: SearchInput,
-        ctx: Context,
+        ctx:        Context,
+        query:      str,
+        n_max:      int             = 20,
+        sort_by:    SortBy          = "submittedDate",
+        categories: list[str] | None = None,
     ) -> list[Paper]:
         """Search arXiv for recent papers matching a free-text query.
 
@@ -58,8 +61,14 @@ def register(mcp: FastMCP) -> None:
         Respects arXiv's 1-request-per-3-seconds polite rate (enforced
         per-process).
         """
+        req = SearchInput(
+            query      = query,
+            n_max      = n_max,
+            sort_by    = sort_by,
+            categories = categories,
+        )
         try:
-            return await search_arxiv(input, ctx)
+            return await search_arxiv(req, ctx)
         except httpx.HTTPStatusError as e:
             raise ToolError(
                 f"arXiv API returned {e.response.status_code}: {e.response.text[:200]}"

@@ -20,6 +20,8 @@ from fastmcp.exceptions import ToolError
 
 from middleware import ratelimit
 
+from datetime import date
+
 from .config import HF_DAILY
 from .schemas import Paper, SearchInput
 from .service import fetch_daily_papers
@@ -36,8 +38,10 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(name="huggingface_daily_papers")
     async def huggingface_daily_papers(
-        input: SearchInput,
-        ctx: Context,
+        ctx:         Context,
+        target_date: date | None = None,
+        n_max:       int        = 20,
+        min_upvotes: int | None = None,
     ) -> list[Paper]:
         """Fetch HuggingFace's CURATED daily papers feed for a given date.
 
@@ -61,8 +65,13 @@ def register(mcp: FastMCP) -> None:
 
         Rate limit: 1 req/s polite default. No API key required, no auth.
         """
+        req = SearchInput(
+            target_date = target_date,
+            n_max       = n_max,
+            min_upvotes = min_upvotes,
+        )
         try:
-            return await fetch_daily_papers(input, ctx)
+            return await fetch_daily_papers(req, ctx)
         except httpx.HTTPStatusError as e:
             raise ToolError(
                 f"HuggingFace API returned {e.response.status_code}: "

@@ -19,7 +19,7 @@ from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
 
 import proxy
-from features import common, dd, home, settings, ycs
+from features import common, dd, home, rr, settings, ycs
 from layout.head import HEAD
 
 
@@ -70,6 +70,7 @@ proxy.register(rt)
 home.register(rt)
 dd.register(rt)
 ycs.register(rt)
+rr.register(rt)
 settings.register(rt)
 common.register(rt)
 

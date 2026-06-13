@@ -75,6 +75,80 @@ async def get_history(
     return [{"question": r[0], "answer": r[1]} for r in reversed(rows)]
 
 
+async def list_threads(
+    pg_url: str,
+    limit: int = 50,
+) -> list[dict]:
+    """Distinct threads with summary metadata for the UI picker.
+
+    Returns most-recent-first. Each row:
+      `{thread_id, turn_count, last_seen, first_question}`
+
+    The `default` sentinel is excluded — stateless single-turn queries
+    never land in the picker."""
+    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        result = await conn.execute(
+            f"""
+            SELECT
+                thread_id,
+                COUNT(*) AS turn_count,
+                MAX(created_at) AS last_seen,
+                (ARRAY_AGG(question ORDER BY created_at ASC))[1]
+                    AS first_question
+            FROM {TABLE_NAME}
+            WHERE thread_id <> %s
+            GROUP BY thread_id
+            ORDER BY MAX(created_at) DESC
+            LIMIT %s
+            """,
+            (DEFAULT_THREAD_ID, limit),
+        )
+        rows = await result.fetchall()
+    return [
+        {
+            "thread_id":      r[0],
+            "turn_count":     int(r[1]),
+            "last_seen":      r[2].isoformat() if r[2] is not None else None,
+            "first_question": r[3] or "",
+        }
+        for r in rows
+    ]
+
+
+async def list_thread_messages(
+    pg_url: str,
+    thread_id: str,
+    limit: int = 100,
+) -> list[dict]:
+    """Full-detail history for the UI. Unlike `get_history` (which
+    returns only Q+A pairs for the LLM contextualize node), this
+    includes `mode` + `created_at` so the conversation panel can
+    re-render thread state on page refresh.
+
+    Returns [] for the `default` sentinel."""
+    if not thread_id or thread_id == DEFAULT_THREAD_ID:
+        return []
+    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        result = await conn.execute(
+            f"""
+            SELECT question, answer, mode, created_at FROM {TABLE_NAME}
+            WHERE thread_id = %s
+            ORDER BY created_at ASC LIMIT %s
+            """,
+            (thread_id, limit),
+        )
+        rows = await result.fetchall()
+    return [
+        {
+            "question":   r[0],
+            "answer":     r[1],
+            "mode":       r[2] or "",
+            "created_at": r[3].isoformat() if r[3] is not None else None,
+        }
+        for r in rows
+    ]
+
+
 async def save_turn(
     pg_url: str,
     thread_id: str,

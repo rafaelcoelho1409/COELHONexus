@@ -34,6 +34,44 @@ from litellm import Router
 from litellm.types.router import AllowedFailsPolicy, RetryPolicy
 from langchain_litellm.chat_models import ChatLiteLLMRouter
 
+
+# --------------------------------------------------------------------------- #
+# Cross-provider request sanitization — module-level LiteLLM toggles.
+#
+# 2026-06-12: enables LiteLLM's automatic per-request message + param
+# sanitization so the Router can freely cascade across mixed-capability
+# providers without 400s.
+#
+# Why we need this:
+#   The dd-all pool mixes reasoning models (qwen3.5-397b-a17b w/ thinking,
+#   deepseek-v4-flash) with non-reasoning chat-only providers (Groq Llama,
+#   Mistral, Gemini Flash). When a reasoning arm emits an AIMessage with
+#   content=[{type:thinking, ...}] and the Router's simple-shuffle then
+#   routes the NEXT turn to a non-reasoning arm, the new provider's API
+#   declares `content: str` and rejects the list with a Pydantic 400. The
+#   cascade exhausts → ChatLiteLLMRouter returns empty generations →
+#   langchain_core/chat_models.py:508 IndexError: list index out of range
+#   (observed end-to-end on the RR agent's first scan smoke test).
+#
+# `modify_params` walks the message list before every request and DROPS
+# thinking_blocks / reasoning_content from assistant messages when the
+# target provider's schema can't accept them (and preserves them when it
+# can, e.g. Anthropic, DeepSeek V4 Pro). Also handles orphaned tool_calls.
+#
+# `drop_params` strips per-call parameters the target provider doesn't
+# support — eliminates the `nvidia/nemotron-4-340b-instruct does not
+# support parameters: ['tools']` UnsupportedParamsError class.
+#
+# Both flags are idempotent + module-level so they take effect for every
+# litellm.acompletion call in this process (router-mediated AND direct).
+# Pinned LiteLLM 1.83.13 has both since the 1.7x line.
+# See docs.litellm.ai/docs/completion/message_sanitization +
+# docs.litellm.ai/docs/completion/drop_params.
+# --------------------------------------------------------------------------- #
+litellm.modify_params = True
+litellm.drop_params   = True
+
+
 from domains.llm.credentials import resolve_key
 from domains.llm.rotator import bandit, benchmarks, discovery
 
@@ -54,6 +92,7 @@ from .keys import (
     GROUP,
     KEYLM_GROUP,
     REDUCE_LABEL_GROUP,
+    RR_STRONG_GROUP,
     SYNTH_GROUP,
     _JUDGE_KD_PROCESS,
     _NIM_RERANK_BASE,
@@ -696,6 +735,38 @@ async def rerank_via_router_async(
 # --------------------------------------------------------------------------- #
 # Static catalog assembly (dd-all)
 # --------------------------------------------------------------------------- #
+def _rr_strong_entries() -> list:
+    """Curated strong-tier pool for the RR DeepAgents orchestrator
+    (step 5b 2026-06-12). Hand-picked from the dd-all catalog after the
+    smoke runs showed the dd-all simple-shuffle was landing on:
+      - reasoning/thinking models that emit list-content (handled by
+        _flatten_thinking_content, but adds 2-3 retry cycles per call)
+      - small models (17B-49B) that struggle to follow the 6-phase plan
+      - Groq Llama 3.3 that emits XML-style tool calls Groq rejects
+    These 6 arms returned 200 OK on RR smokes + are >=70B + are proven
+    tool-callers. Order is best-first; LiteLLM Router shuffles within
+    the pool. Cerebras pair gives speed; NIM trio gives capacity headroom;
+    Mistral large is the deep-tail.
+    """
+    return [
+        # 4 large arms only — 120B+ frontier models that reliably follow
+        # multi-phase orchestration prompts with parallel tool_calls.
+        # SMALLER arms removed 2026-06-12 evening after observing 4.4s
+        # phantom completions:
+        #   - llama-4-maverick-17b (17B): returned prose without tool_calls,
+        #     orchestrator loop ended without dispatching subagents
+        #   - llama-3.3-nemotron-super-49b (49B): borderline — could swing
+        #     either way; pulled to be conservative
+        # Cerebras entries also removed (free-tier 404). Re-add a tier
+        # below this pool when we want a `medium` orchestrator for fast
+        # iteration.
+        _nim_entry(RR_STRONG_GROUP,     "nvidia/nemotron-3-super-120b-a12b", timeout_s = 120),
+        _nim_entry(RR_STRONG_GROUP,     "openai/gpt-oss-120b",               timeout_s = 120),
+        _nim_entry(RR_STRONG_GROUP,     "moonshotai/kimi-k2.6",              timeout_s = 120),
+        _mistral_entry(RR_STRONG_GROUP, "mistral-large-latest",              timeout_s = 120),
+    ]
+
+
 def _all_entries() -> list:
     """Static dd-all catalog — fallback when DD_DYNAMIC_CATALOG=0 or discovery
     fails. Strict benchmark order (2026-04-24 refresh). Disabled entries kept
@@ -753,6 +824,340 @@ def _apply_selection_filter(entries: list[dict]) -> list[dict]:
         )
         return entries
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Account-inaccessibility hard blocklist — drop arms known to return NIM 404
+# ("Function not found for account ...") on every call. LiteLLM 1.83's
+# RetryPolicy has no NotFoundErrorRetries field, so a Router pick on these
+# arms TERMINATES the cascade rather than falling through. Hard-filtering
+# them BEFORE the Router sees model_list (and before predict_top_k builds
+# candidates) eliminates the failure mode.
+#
+# Add entries here when logs show a model's `litellm.NotFoundError - 404 -
+# Function '...': Not found for account '...'`. The model is in the dynamic
+# catalog (NIM's listing API exposes it) but our free-tier key can't invoke
+# it. Strip from EVERY pool — no model is account-accessible for one
+# workload class only.
+#
+# TODO: retire this list when we bump LiteLLM past 1.85 (the version that
+# ships `NotFoundErrorRetries` in RetryPolicy) — at that point the Router
+# can cascade past 404 on its own.
+# --------------------------------------------------------------------------- #
+_ACCOUNT_INACCESSIBLE_BLOCKLIST: frozenset[str] = frozenset({
+    # 2026-06-12: observed during RR scan smoke test. NIM returned 404 with
+    # function-not-found-for-account on these arms. Dynamic catalog discovers
+    # them (NIM listing API exposes them) but our free-tier key can't invoke
+    # them. Hard-block here so the Router's model_list never includes them.
+    "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+    "nvidia/nemotron-4-340b-instruct",
+})
+
+
+# Runtime-learned inaccessibility — augments the static blocklist with
+# models observed to 404 during this process's lifetime. Persists for the
+# worker's lifetime; resets on process restart. The retry wrapper below
+# adds entries on the fly when it catches `litellm.NotFoundError`.
+_RUNTIME_INACCESSIBLE_MODELS: set[str] = set()
+
+
+def mark_inaccessible(model_id: str) -> None:
+    """Add a model to the runtime blocklist + reset the Router so the
+    next call rebuilds model_list without the bad arm. Idempotent."""
+    if not model_id or model_id in _RUNTIME_INACCESSIBLE_MODELS:
+        return
+    _RUNTIME_INACCESSIBLE_MODELS.add(model_id)
+    logger.warning(
+        f"[llm-chain] runtime auto-blocklist: {model_id!r} (NIM 404 observed)"
+    )
+    # Drop the Router cache so the next acompletion rebuilds model_list
+    # without this arm. bump_gen=False — this is a per-process learning,
+    # not a user-driven settings change to propagate cluster-wide.
+    reset_rotator(bump_gen=False)
+
+
+def _apply_inaccessibility_filter(entries: list[dict]) -> list[dict]:
+    """Drop arms in `_ACCOUNT_INACCESSIBLE_BLOCKLIST` ∪
+    `_RUNTIME_INACCESSIBLE_MODELS`. Substring match on the
+    `litellm_params.model` string so provider-prefixed entries
+    (e.g. `nvidia_nim/<id>`) match correctly. No-empty guard."""
+    blocklist = _ACCOUNT_INACCESSIBLE_BLOCKLIST | frozenset(_RUNTIME_INACCESSIBLE_MODELS)
+    if not blocklist:
+        return entries
+    out = [
+        e for e in entries
+        if not any(bad in e["litellm_params"]["model"] for bad in blocklist)
+    ]
+    if not out:
+        logger.warning(
+            "[llm-chain] inaccessibility blocklist would empty the pool — "
+            "ignoring filter (no-empty guard)"
+        )
+        return entries
+    n_dropped = len(entries) - len(out)
+    if n_dropped:
+        logger.info(
+            f"[llm-chain] inaccessibility blocklist dropped {n_dropped} "
+            f"arm(s) (account-404 risk; static={len(_ACCOUNT_INACCESSIBLE_BLOCKLIST)}, "
+            f"runtime={len(_RUNTIME_INACCESSIBLE_MODELS)})"
+        )
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Auto-retry router subclass — catches `litellm.NotFoundError`, parses the
+# failing model out of the error message, calls mark_inaccessible() to
+# auto-learn, refreshes `self.router` against the rebuilt model_list, and
+# retries the same input. After at most N inaccessible arms in the catalog
+# the call succeeds (assuming any accessible arm remains).
+#
+# Inheritance choice — subclassing ChatLiteLLMRouter (which IS a langchain
+# BaseChatModel) rather than wrapping it. DeepAgents v0.6's `resolve_model`
+# does `isinstance(model, BaseChatModel)` and returns the object unchanged on
+# True; a non-BaseChatModel wrapper falls through to the string-path which
+# calls `.count(":")` on it → AttributeError. The subclass passes the check.
+#
+# WHY this lives in our code (not at the Router): LiteLLM 1.83.13's
+# RetryPolicy has NO NotFoundErrorRetries field, so a Router pick on a
+# 404 arm terminates the cascade. Future LiteLLM (1.85+) ships the field;
+# when we bump the pin, this subclass can shed back to a simpler Router
+# config.
+# --------------------------------------------------------------------------- #
+import re as _re
+_MODEL_RE = _re.compile(r"litellm\.acompletion\(model=([^)\s]+)\)")
+# Backup: NIM error embeds the model differently — match `nvidia_nim/<...>`
+_NIM_PREFIX_RE = _re.compile(r"nvidia_nim/([\w./-]+)")
+# Cerebras + some other providers report inaccessible models as
+# "Model <name> does not exist or you do not have access to it" rather
+# than the LiteLLM log-line format. Catch that prose too.
+_DOES_NOT_EXIST_RE = _re.compile(
+    r"Model\s+([\w./-]+)\s+does\s+not\s+exist",
+    _re.IGNORECASE,
+)
+
+
+_GROUP_NAMES: frozenset[str] = frozenset({
+    "dd-all", "rr-strong", "dd-synth", "dd-reduce-label",
+    "dd-keylm", "dd-embed",
+})
+
+
+def _extract_model_from_error(err_text: str, exc: BaseException | None = None) -> str | None:
+    """Pull the failing model id from a litellm exception text. Returns
+    bare model (e.g. `nvidia/nemotron-4-340b-instruct` or `llama3.1-70b`)
+    so it round-trips through `_apply_inaccessibility_filter`'s substring
+    match.
+
+    Strategy (best → worst):
+      1. Exception attributes (`.model`, `.llm_provider`) — most reliable
+         when LiteLLM populates them, BUT for Router calls the .model attr
+         often holds the model-GROUP name (`dd-all`) which we must reject.
+      2. `litellm.acompletion(model=<provider/id>)` log-line format
+      3. `Model <name> does not exist` prose (Cerebras + similar)
+      4. Bare `nvidia_nim/<id>` substring match
+    """
+    if exc is not None:
+        for attr in ("model", "llm_provider"):
+            val = getattr(exc, attr, None)
+            if isinstance(val, str) and val and val not in _GROUP_NAMES:
+                # Strip provider prefix if present so it matches catalog form
+                if val.startswith("nvidia_nim/"):
+                    return val.split("nvidia_nim/", 1)[1]
+                return val
+    m = _MODEL_RE.search(err_text)
+    if m:
+        raw = m.group(1).strip().strip("'\"")
+        if raw.startswith("nvidia_nim/"):
+            return raw.split("nvidia_nim/", 1)[1]
+        return raw
+    m = _DOES_NOT_EXIST_RE.search(err_text)
+    if m:
+        return m.group(1).strip().strip("'\".,")
+    m2 = _NIM_PREFIX_RE.search(err_text)
+    return m2.group(1) if m2 else None
+
+
+_MAX_NOTFOUND_RETRIES = 6   # 6 dead arms before we give up
+
+
+def _flatten_thinking_content(messages):
+    """Flatten list-shaped content on AIMessage, ToolMessage, and
+    HumanMessage so non-list-tolerant providers don't reject the request.
+
+    Background: multiple message classes can carry structured content
+    blocks that some provider APIs reject:
+
+      - AIMessage with `[{type:thinking,...}, {type:text,...}]`
+        (qwen-thinking, deepseek-v4, claude-extended-thinking, …)
+      - ToolMessage with `[{type:text, text:...}, ...]` returned by an
+        MCP tool — observed 2026-06-12 with `messages.5.tool.content.str:
+        Input should be a valid string` from cerebras/gpt-oss-120b
+      - HumanMessage with multimodal content (rare in RR)
+
+    On the next-turn request, providers like Cerebras / Mistral / Groq
+    declare `content: str` per message and reject the list with a 400.
+    Across the cascade every non-list-tolerant arm fails → empty
+    generations → IndexError at langchain_core/chat_models.py:508.
+
+    Fix: walk messages, convert list-content to a flat string:
+      - keep `{type: text}` block text (concatenated)
+      - drop `{type: thinking}` / `{type: reasoning}` / `{type:
+        redacted_thinking}` blocks
+      - tool_calls / tool_call_id / non-content attrs survive on the
+        rebuilt message — the model's action / linkage is preserved
+
+    LiteLLM's own `modify_params=True` handles orphaned tool_calls +
+    empty content; it does NOT strip list-content. This helper bridges
+    the gap until langchain-litellm picks up the responsibility.
+    """
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+    out = []
+    for m in messages:
+        if not isinstance(m.content, list):
+            out.append(m)
+            continue
+        texts: list[str] = []
+        for block in m.content:
+            if isinstance(block, dict):
+                btype = block.get("type")
+                if btype == "text":
+                    t = block.get("text") or ""
+                    if t:
+                        texts.append(t)
+                # thinking / reasoning / redacted_thinking / image / tool_use:
+                # drop. (Image content in RR's tool results is exceedingly
+                # rare; if we ever surface vision, flag here.)
+            elif isinstance(block, str):
+                if block:
+                    texts.append(block)
+        new_content = "\n".join(texts).strip()
+
+        if isinstance(m, AIMessage):
+            kept = {
+                k: getattr(m, k)
+                for k in ("tool_calls", "tool_call_chunks", "response_metadata",
+                          "additional_kwargs", "id", "name", "usage_metadata",
+                          "invalid_tool_calls")
+                if hasattr(m, k)
+            }
+            out.append(AIMessage(content=new_content, **kept))
+        elif isinstance(m, ToolMessage):
+            # tool_call_id is REQUIRED — it links the tool result back to
+            # the AIMessage's tool_calls entry. Other fields are best-effort.
+            kept = {
+                k: getattr(m, k)
+                for k in ("tool_call_id", "name", "id", "status",
+                          "artifact", "additional_kwargs")
+                if hasattr(m, k)
+            }
+            out.append(ToolMessage(content=new_content, **kept))
+        elif isinstance(m, HumanMessage):
+            kept = {
+                k: getattr(m, k)
+                for k in ("id", "name", "additional_kwargs")
+                if hasattr(m, k)
+            }
+            out.append(HumanMessage(content=new_content, **kept))
+        else:
+            # Unknown subclass — pass through unchanged rather than risk
+            # constructing it wrong. Add a branch when a new case arises.
+            out.append(m)
+    return out
+
+
+class _RotatorAutoRetryRouter(ChatLiteLLMRouter):
+    """ChatLiteLLMRouter subclass with two cross-provider survival fixes:
+
+    1. **Thinking-block flatten** (every call) — `_flatten_thinking_content`
+       strips reasoning-model list-content from message history so the next
+       cascade arm doesn't 400 on `content: str` validation.
+
+    2. **NotFoundError auto-learn** — catches `litellm.NotFoundError`,
+       parses the failing model from the error, calls `mark_inaccessible()`
+       (runtime blocklist + Router reset), refreshes `self.router`, retries.
+       Up to `_MAX_NOTFOUND_RETRIES` consecutive dead arms.
+    """
+
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        messages = _flatten_thinking_content(messages)
+        last_err: Exception | None = None
+        for attempt in range(_MAX_NOTFOUND_RETRIES):
+            try:
+                result = await super()._agenerate(
+                    messages, stop=stop, run_manager=run_manager, **kwargs,
+                )
+            except litellm.NotFoundError as e:
+                last_err = e
+                model = _extract_model_from_error(str(e), exc=e)
+                if model:
+                    mark_inaccessible(model)
+                else:
+                    # Can't identify the specific deployment (NIM hides the
+                    # model name behind a function UUID in `str(e)`). Force
+                    # a Router reshuffle so the next attempt's simple-shuffle
+                    # likely picks a different deployment. LiteLLM Router's
+                    # `allowed_fails=3` per-deployment cooldown will take the
+                    # bad arm offline after a few cycles.
+                    logger.warning(
+                        f"[rotator-retry] 404 from unidentified deployment "
+                        f"on attempt {attempt+1}; forcing Router reshuffle"
+                    )
+                self.router = _get_router()
+                continue
+            # Empty generations recovery — provider returned 200 OK but content
+            # was empty / unparseable. langchain_core/chat_models.py:508 indexes
+            # `generations[0][0]` and crashes; we treat it as a soft failure and
+            # retry against a different deployment. Common causes:
+            # (a) Gemini content-policy filter returns empty,
+            # (b) langchain-litellm parse glitch on tool-call response,
+            # (c) provider returned `{"choices":[]}` silently.
+            if not result.generations or not result.generations[0]:
+                logger.warning(
+                    f"[rotator-retry] empty generations on attempt {attempt+1}; "
+                    f"forcing deployment reshuffle"
+                )
+                last_err = RuntimeError("empty generations from rotator")
+                # Reset Router so simple-shuffle re-picks; the bandit's
+                # cool-down counter will demote the empty-returning arm.
+                self.router = _get_router()
+                continue
+            return result
+        raise last_err if last_err else RuntimeError(
+            "[rotator-retry] exhausted without specific error"
+        )
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        messages = _flatten_thinking_content(messages)
+        last_err: Exception | None = None
+        for attempt in range(_MAX_NOTFOUND_RETRIES):
+            try:
+                result = super()._generate(
+                    messages, stop=stop, run_manager=run_manager, **kwargs,
+                )
+            except litellm.NotFoundError as e:
+                last_err = e
+                model = _extract_model_from_error(str(e), exc=e)
+                if model:
+                    mark_inaccessible(model)
+                else:
+                    logger.warning(
+                        f"[rotator-retry] 404 from unidentified deployment "
+                        f"on attempt {attempt+1}; forcing Router reshuffle"
+                    )
+                self.router = _get_router()
+                continue
+            if not result.generations or not result.generations[0]:
+                logger.warning(
+                    f"[rotator-retry] empty generations on attempt {attempt+1}; "
+                    f"forcing deployment reshuffle"
+                )
+                last_err = RuntimeError("empty generations from rotator")
+                self.router = _get_router()
+                continue
+            return result
+        raise last_err if last_err else RuntimeError(
+            "[rotator-retry] exhausted without specific error"
+        )
 
 
 def _redis_sync_conn():
@@ -886,13 +1291,14 @@ def _get_router() -> Router:
                     redis_kwargs["redis_password"] = pw
     _router_instance = Router(
         # Combined model_list — dd-all / dd-keylm / dd-reduce-label / dd-embed
-        # share the cooldown circuit-breaker + Redis state. Chat pools honor
-        # the user's BYOK selection via *_current(); infra pools (dd-keylm,
-        # dd-embed) are unconditional — embeddings are mandatory.
+        # / rr-strong share the cooldown circuit-breaker + Redis state. Chat
+        # pools honor the user's BYOK selection via *_current(); infra pools
+        # (dd-keylm, dd-embed) are unconditional — embeddings are mandatory.
         model_list=(
             _all_entries_current()
             + _reduce_label_entries_current()
             + _synth_entries_current()
+            + _rr_strong_entries_current()
             + _keylm_entries()
             + _embed_entries()
         ),
@@ -921,8 +1327,37 @@ def _get_router() -> Router:
 # provider characteristics; the factory-level timeout args are kept for API
 # compatibility only.
 def build_llm_fallback_chain(groq_timeout_s: int = 120, nim_timeout_s: int = 300):
-    """General-purpose chain. Unified dd-all at T=0.0."""
-    return ChatLiteLLMRouter(router = _get_router(), model = GROUP, temperature = 0.0)
+    """General-purpose chain. Unified dd-all at T=0.0.
+
+    Returns a `_RotatorAutoRetryRouter` (a ChatLiteLLMRouter subclass) so a
+    NIM 404 on any single arm (account-inaccessible model in the dynamic
+    catalog) is auto-learned via mark_inaccessible() + retried against the
+    rebuilt model_list instead of propagating to the caller. Transparent
+    to DeepAgents (passes isinstance(BaseChatModel) since ChatLiteLLMRouter
+    inherits from BaseChatModel).
+    """
+    return _RotatorAutoRetryRouter(
+        router = _get_router(), model = GROUP, temperature = 0.0,
+    )
+
+
+def build_rr_strong_chain():
+    """Strong-tier chain for the Research Radar DeepAgents orchestrator.
+
+    Returns a `_RotatorAutoRetryRouter` pointed at the curated `rr-strong`
+    pool (6 hand-picked Cerebras + NIM + Mistral arms, all proven
+    tool-callers on RR smokes). Used in `apps/fastapi/domains/rr/agent/
+    graph.py::_orchestrator_model`.
+
+    Why a separate pool: the dd-all simple-shuffle routinely landed RR's
+    orchestrator on small models (17B-49B) that couldn't follow the
+    6-phase plan, or on reasoning models that emitted XML-style tool
+    calls Groq rejects, or on models the bandit hadn't cooled down. The
+    rr-strong pool eliminates all 3 failure classes at the routing layer.
+    """
+    return _RotatorAutoRetryRouter(
+        router = _get_router(), model = RR_STRONG_GROUP, temperature = 0.0,
+    )
 
 
 def build_resolver_llm_chain(groq_timeout_s: int = 30, nim_timeout_s: int = 60):
@@ -1675,26 +2110,49 @@ def _record_to_entry(group: str, record, timeout_s: int) -> dict | None:
 # deselected model. No-empty guard inside the filter keeps each pool alive.
 def _all_entries_current() -> list:
     """Active dd-all catalog — dynamic if available, else static fallback;
-    trimmed to enabled∩selected."""
+    trimmed to enabled∩selected, then to account-accessible."""
     if _dynamic_catalog_initialized and _dynamic_entries.get("dd-all"):
-        return _apply_selection_filter(_dynamic_entries["dd-all"])
-    return _apply_selection_filter(_all_entries())
+        return _apply_inaccessibility_filter(
+            _apply_selection_filter(_dynamic_entries["dd-all"])
+        )
+    return _apply_inaccessibility_filter(
+        _apply_selection_filter(_all_entries())
+    )
 
 
 def _synth_entries_current() -> list:
     """Active dd-synth catalog — dynamic if available, else static fallback;
-    trimmed to enabled∩selected."""
+    trimmed to enabled∩selected, then to account-accessible."""
     if _dynamic_catalog_initialized and _dynamic_entries.get("dd-synth"):
-        return _apply_selection_filter(_dynamic_entries["dd-synth"])
-    return _apply_selection_filter(_synth_entries())
+        return _apply_inaccessibility_filter(
+            _apply_selection_filter(_dynamic_entries["dd-synth"])
+        )
+    return _apply_inaccessibility_filter(
+        _apply_selection_filter(_synth_entries())
+    )
 
 
 def _reduce_label_entries_current() -> list:
     """Active dd-reduce-label catalog — dynamic if available, else static;
-    trimmed to enabled∩selected."""
+    trimmed to enabled∩selected, then to account-accessible."""
     if _dynamic_catalog_initialized and _dynamic_entries.get("dd-reduce-label"):
-        return _apply_selection_filter(_dynamic_entries["dd-reduce-label"])
-    return _apply_selection_filter(_reduce_label_entries())
+        return _apply_inaccessibility_filter(
+            _apply_selection_filter(_dynamic_entries["dd-reduce-label"])
+        )
+    return _apply_inaccessibility_filter(
+        _apply_selection_filter(_reduce_label_entries())
+    )
+
+
+def _rr_strong_entries_current() -> list:
+    """Active rr-strong catalog. Static only — the curated 6-arm pool is
+    intentionally NOT discovered live (we WANT determinism here so the
+    orchestrator never gets routed to an unproven model). Inaccessibility
+    + selection filters still apply so a user-disabled provider drops
+    out cleanly."""
+    return _apply_inaccessibility_filter(
+        _apply_selection_filter(_rr_strong_entries())
+    )
 
 
 def _build_redis_url_for_bench() -> str | None:

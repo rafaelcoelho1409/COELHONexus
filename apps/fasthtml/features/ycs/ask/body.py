@@ -1,17 +1,17 @@
 """Step 3 · Ask — Adaptive RAG chat over the indexed transcripts.
 
-Three regions, populated by `ask.js`:
+Two regions, populated by `ask.js`:
 
-(a) LLM config form (collapsible) — POSTs to `/api/v1/ycs/agents/config`.
-    Persists provider/model/temperature/base_url/api_key as JSON in Redis
-    so the agentic-RAG nodes pick up user-supplied overrides.
+(a) Composer — channel multi-select + textarea + Send / Stop. Submit
+    kicks off an SSE request to `/api/v1/ycs/agents/search/stream`.
+    The mode pill (Auto / Fast / Standard / Deep) and the LLM-config
+    dropdown both live in row 3 of the topbar (see `ask/chrome.py`
+    + `shared/toolbar.py`) — the form IDs there match what
+    `ask.js` already binds.
 
-(b) Composer — mode pill (Auto / Fast / Standard / Deep) + channel
-    multi-select + textarea + Send. Submit kicks off an SSE request to
-    `/api/v1/ycs/agents/search/stream`.
-
-(c) Conversation — server-rendered shell; ask.js fills it as SSE events
-    arrive: node-by-node progress, streaming generation, citations panel.
+(b) Conversation — server-rendered shell; ask.js fills it as SSE events
+    arrive: node-by-node progress (stage pills + DEEP cards), streaming
+    generation, citations panel.
 
 Fresh code — the deprecated repo had no FastHTML, so this UI is
 modeled after `features/dd/`'s pattern + the deprecated agent endpoints'
@@ -19,113 +19,12 @@ JSON shapes."""
 from __future__ import annotations
 
 from fasthtml.common import (
-    Button, Div, Form, H2, Input, Label, Option, P, Select, Span, Textarea,
+    Button, Div, Form, H2, Label, Option, P, Select, Span, Textarea,
 )
-
-
-_MODES: list[tuple[str, str]] = [
-    ("",         "Auto"),
-    ("fast",     "Fast"),
-    ("standard", "Standard"),
-    ("deep",     "Deep"),
-]
-
-
-def _ModePill():
-    pills = [
-        Button(
-            label,
-            type   = "button",
-            cls    = "ycs-mode-pill active" if key == "" else "ycs-mode-pill",
-            data_mode = key,
-        )
-        for key, label in _MODES
-    ]
-    return Div(
-        Span("Mode", cls = "ycs-mode-label"),
-        Div(*pills, cls = "ycs-mode-row", role = "tablist"),
-    )
-
-
-def _LLMConfigForm():
-    """Override the YCS LLM at runtime. Mirror of deprecated `LLMConfig`
-    schema (`schemas/youtube/inputs.py:L16-22`). Persisted to Redis JSON
-    so it survives FastAPI restarts."""
-    return Div(
-        Button(
-            Span("LLM configuration", cls = "ycs-filters-toggle-label"),
-            Span("▾", cls = "ycs-filters-toggle-chevron"),
-            type = "button",
-            cls = "ycs-filters-toggle",
-            data_target = "ycs-llm-body",
-            aria_expanded = "false",
-        ),
-        Form(
-            Div(
-                Div(
-                    Label("Provider", cls = "ycs-filter-label",
-                          for_ = "ycs-llm-provider"),
-                    Input(type = "text", name = "provider",
-                          id = "ycs-llm-provider", value = "NVIDIA",
-                          cls = "ycs-filter-input"),
-                    cls = "ycs-filter-field",
-                ),
-                Div(
-                    Label("Model", cls = "ycs-filter-label",
-                          for_ = "ycs-llm-model"),
-                    Input(type = "text", name = "model",
-                          id = "ycs-llm-model",
-                          placeholder = "meta/llama-3.3-70b-instruct",
-                          cls = "ycs-filter-input"),
-                    cls = "ycs-filter-field",
-                ),
-                Div(
-                    Label("Temperature", cls = "ycs-filter-label",
-                          for_ = "ycs-llm-temp"),
-                    Input(type = "number", min = "0", max = "2",
-                          step = "0.05", name = "temperature",
-                          id = "ycs-llm-temp", placeholder = "0.0",
-                          cls = "ycs-filter-input"),
-                    cls = "ycs-filter-field",
-                ),
-                Div(
-                    Label("Base URL", cls = "ycs-filter-label",
-                          for_ = "ycs-llm-base"),
-                    Input(type = "text", name = "base_url",
-                          id = "ycs-llm-base",
-                          placeholder = "https://integrate.api.nvidia.com/v1",
-                          cls = "ycs-filter-input"),
-                    cls = "ycs-filter-field",
-                ),
-                Div(
-                    Label("API key (write-only)", cls = "ycs-filter-label",
-                          for_ = "ycs-llm-key"),
-                    Input(type = "password", name = "api_key",
-                          id = "ycs-llm-key", autocomplete = "off",
-                          placeholder = "nvapi-…",
-                          cls = "ycs-filter-input"),
-                    cls = "ycs-filter-field",
-                ),
-                cls = "ycs-llm-fields",
-                style = ("grid-template-columns: repeat(2, 1fr); "
-                         "gap: 14px 18px;"),
-            ),
-            Div(
-                Span("", id = "ycs-llm-status", cls = "ycs-search-status"),
-                Button("Save configuration", type = "submit",
-                       cls = "btn-primary"),
-                cls = "ycs-form-actions",
-            ),
-            id = "ycs-llm-form",
-        ),
-        cls = "ycs-filters",
-        id  = "ycs-llm-panel",
-    )
 
 
 def _Composer():
     return Form(
-        _ModePill(),
         Div(
             Label("Scope (optional)", cls = "ycs-filter-label",
                   for_ = "ycs-ask-channels"),
@@ -152,10 +51,43 @@ def _Composer():
         ),
         Div(
             Span("", id = "ycs-ask-status", cls = "ycs-search-status"),
+            Button("Stop", type = "button",
+                   id = "ycs-ask-stop",
+                   cls = "btn-secondary",
+                   style = "display:none;",
+                   title = "Abort the current request"),
             Button("Send", type = "submit", cls = "btn-primary"),
             cls = "ycs-form-actions",
         ),
         id = "ycs-ask-form",
+    )
+
+
+_EXAMPLE_QUESTIONS: list[str] = [
+    "What are the main themes across all videos?",
+    "Compare the recommendations made by each channel.",
+    "What contradictions appear between sources?",
+]
+
+
+def _EmptyState():
+    """First-load welcome hint with example questions. ask.js hides
+    this `<div>` the moment the conversation panel gets any content
+    (a history rehydrate, a streamed answer, or an error)."""
+    chips = [
+        Button(
+            q,
+            type = "button",
+            cls  = "ycs-ask-example-chip",
+            data_question = q,
+        )
+        for q in _EXAMPLE_QUESTIONS
+    ]
+    return Div(
+        Span("Try asking", cls = "ycs-ask-empty-label"),
+        Div(*chips, cls = "ycs-ask-empty-chips"),
+        cls = "ycs-ask-empty",
+        id  = "ycs-ask-empty",
     )
 
 
@@ -166,18 +98,12 @@ def _Conversation():
     `#ycs-ask-history` accumulates past turns; `#ycs-ask-output` is the
     landing zone for the currently-streaming generation. On each Send,
     `ask.js` first snapshots the prior turn into history, then resets
-    the output region for the next answer."""
+    the output region for the next answer.
+
+    The thread id + New thread button now live in the row-3 toolbar
+    (`ask/chrome.py::AskThreadBar`)."""
     return Div(
-        Div(
-            Span("Thread", cls = "ycs-ask-thread-label"),
-            Span("", id = "ycs-ask-thread-id", cls = "ycs-ask-thread-id",
-                 title = "Conversation memory key (Postgres)"),
-            Button("New thread", type = "button",
-                   id = "ycs-ask-new-thread",
-                   cls = "ycs-ask-newthread-btn",
-                   title = "Clear history and start a fresh conversation"),
-            cls = "ycs-ask-threadbar",
-        ),
+        _EmptyState(),
         Div("", id = "ycs-ask-history", cls = "ycs-ask-history"),
         Div(
             Div("Retrieve",   cls = "ycs-step-circle", data_stage = "retrieve"),
@@ -188,8 +114,19 @@ def _Conversation():
             id  = "ycs-ask-stages",
             style = "display:none;",
         ),
+        # DEEP-mode research panel. Hidden by default; ask.js shows it
+        # on `plan_research` and fills in one card per sub-question.
+        # `#ycs-ask-deep-banner` carries the synthesize/critic status.
+        Div(
+            Div("", id = "ycs-ask-deep-banner", cls = "ycs-ask-deep-banner"),
+            Div("", id = "ycs-ask-deep-cards",  cls = "ycs-ask-deep-cards"),
+            cls   = "ycs-ask-deep",
+            id    = "ycs-ask-deep",
+            style = "display:none;",
+        ),
         Div(
             Div("", id = "ycs-ask-answer", cls = "ycs-ask-answer"),
+            Div("", id = "ycs-ask-followups", cls = "ycs-ask-followups"),
             Div("", id = "ycs-ask-citations", cls = "ycs-ask-citations"),
             cls = "ycs-ask-output",
             id  = "ycs-ask-output",
@@ -207,7 +144,6 @@ def AskBody(slug: str | None):
             "questions through multi-agent research.",
             cls = "ycs-intro",
         ),
-        _LLMConfigForm(),
         _Composer(),
         _Conversation(),
     )

@@ -46,5 +46,10 @@
 .env
 .env.*
 
-# Docs not needed at runtime
+# Docs not needed at runtime — but agent skills + memory are LOAD-BEARING
+# .md files (read at import time by `domains/rr/agent/skills/loader.py`
+# and substituted into prompts). Whitelist them back in. Order matters in
+# Docker .dockerignore: a later `!negation` overrides an earlier ignore.
 **/*.md
+!domains/rr/agent/skills/*.md
+!domains/rr/agent/memory/*.md

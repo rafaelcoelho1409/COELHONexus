@@ -9,6 +9,12 @@ KEYLM_GROUP        = "dd-keylm"
 REDUCE_LABEL_GROUP = "dd-reduce-label"
 SYNTH_GROUP        = "dd-synth"
 DD_EMBED_GROUP     = "dd-embed"
+# Research Radar (step 5b — 2026-06-12): strong-tier curated pool for the
+# RR orchestrator. The dd-all pool contains thinking/reasoning models +
+# small models that struggle with the 6-phase orchestration prompt. This
+# pool is hand-curated to models proven to handle tool_calls reliably
+# (Cerebras Llama 70B + NIM 70B+ that returned 200 OK on RR smoke runs).
+RR_STRONG_GROUP    = "rr-strong"
 
 
 # --------------------------------------------------------------------------- #
