@@ -40,7 +40,11 @@ from domains.dd.planner.runtime.checkpoint import (
     init_checkpointer,
 )
 from domains.llm.credentials import warm as warm_credentials
-from domains.llm.rotator.chain import init_dynamic_catalog
+from domains.llm.rotator.chain import (
+    init_dynamic_catalog,
+    start_catalog_refresh_loop,
+    stop_catalog_refresh_loop,
+)
 from domains.rr.service import bootstrap_stores as bootstrap_rr_stores
 from domains.ycs.conversation import ensure_conversation_table
 from domains.ycs.embeddings import (
@@ -138,6 +142,22 @@ async def lifespan(app: FastAPI):
         logger.warning(
             f"[lifespan] dynamic catalog init failed: "
             f"{type(e).__name__}: {e}. Rotator will use the static catalog."
+        )
+
+    # Periodic catalog refresh — re-runs discovery on every provider every
+    # `DD_CATALOG_REFRESH_INTERVAL_S` seconds (default 900s = 15 min) so the
+    # catalog drops models that NIM/Groq/etc. cycle out of /v1/models without
+    # waiting for a redeploy. Same intent as `~/.config/litellm/gen-config.sh`
+    # (ExecStartPre re-fetch) but recurring + multi-provider. Pair with the
+    # EOL-broadened `_RotatorAutoRetryRouter` which handles 410 / "end of life"
+    # / "decommissioned" prose at call-time (immediate fallover; the loop
+    # cleans up at the cadence).
+    try:
+        start_catalog_refresh_loop()
+    except Exception as e:
+        logger.warning(
+            f"[lifespan] catalog refresh loop start failed: "
+            f"{type(e).__name__}: {e}. EOL'd models will only drop on redeploy."
         )
 
     try:
@@ -268,6 +288,11 @@ async def lifespan(app: FastAPI):
         )
 
     yield
+
+    try:
+        await stop_catalog_refresh_loop()
+    except Exception as e:
+        logger.warning(f"[lifespan] catalog refresh loop stop failed: {e}")
 
     try:
         await close_checkpointer()

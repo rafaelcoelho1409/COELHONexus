@@ -22,8 +22,14 @@ class SignalWeights:
     (the radar_profiles.weights JSONB is decoded into a SignalWeights
     with this dataclass's defaults as fallbacks for unspecified fields).
     """
+    # Recency weight raised 0.15 → 0.20 (2026-06-14) to fix the
+    # arxiv-only ranking degeneracy. When profile_embedding + citations +
+    # HN/HF/S2 buzz all collapse to 0 (the common arxiv-only-source path),
+    # the only differentiator left between an April-2025 paper and a 2018
+    # paper was `vertical_fit`. Recency now carries enough weight to break
+    # that tie cleanly.
     relevance:           float = 0.30   # cosine(profile_emb, paper_emb)
-    recency:             float = 0.15   # half-life decay vs `now`
+    recency:             float = 0.20   # half-life decay vs `now`
     citation_velocity:   float = 0.15   # citations / day_since_published
     influential_ratio:   float = 0.10   # S2 influential / total citations
     vertical_fit:        float = 0.15   # paper.categories ∩ profile.verticals
@@ -34,7 +40,14 @@ class SignalWeights:
 @dataclass(frozen=True, slots=True)
 class DomainParams:
     """Non-weight constants used by the scoring helpers."""
-    recency_half_life_days: int = 30      # 2^(-age/half_life) decay
+    # Half-life raised 30 → 180 (2026-06-14) — 30 days was tuned for the
+    # cross-tier buzz lifecycle (HN posts go stale fast), but the arxiv
+    # corpus operates on a months-to-years timescale. With 30-day half-
+    # life, a 6-month-old paper got recency ≈ 0.015 (essentially zero),
+    # so 2025 papers and 2018 papers tied. 180-day half-life gives a
+    # 6-month paper recency = 0.5, and an 18-month paper = 0.125 — a
+    # meaningful spread that matches "what feels recent" in research.
+    recency_half_life_days: int = 180     # 2^(-age/half_life) decay
     velocity_min_age_days:  int = 1       # floor for div-by-zero on same-day papers
 
 

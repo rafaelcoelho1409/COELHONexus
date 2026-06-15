@@ -121,6 +121,60 @@ async def fail_scan(scan_id: UUID, error: str, *, cancelled: bool = False) -> No
     await postgres_store.mark_scan_error(scan_id, status=status, error=error)
 
 
+async def cancel_scan(scan_id: UUID, *, reason: str = "cancelled by user") -> bool:
+    """Revoke the Celery task driving `scan_id`, mark Postgres + emit a
+    terminal phase event so any SSE subscriber unwinds cleanly.
+
+    Returns True if a live task was found and revoked, False if no task_id
+    was registered (already finished, never started, or TTL'd out).
+
+    Order matters:
+      1. Revoke first — frees the Celery worker slot ASAP.
+      2. Mark Postgres cancelled — any subsequent GET /scan/{id} reads
+         the terminal status, not 'running'.
+      3. Emit phase=cancelled — SSE subscribers see the terminal frame
+         and close their stream.
+      4. Drop the task_id key — a second cancel becomes a clean 404.
+
+    A failure in step 2/3/4 doesn't roll back step 1; the worker is
+    already dead, so the user expectation (scan stopped) is met. The
+    inconsistency would clear up on the next reload via the GET.
+    """
+    from infra.celery.service import app as celery_app
+    from .runtime.events import clear_task_id, emit_event, get_task_id
+
+    task_id = await get_task_id(str(scan_id))
+    if not task_id:
+        logger.info(f"[rr-service] cancel_scan {scan_id}: no task_id found")
+        return False
+
+    try:
+        celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+        logger.info(f"[rr-service] cancel_scan {scan_id} revoked task_id={task_id}")
+    except Exception as e:
+        logger.warning(
+            f"[rr-service] cancel_scan {scan_id} revoke failed "
+            f"task_id={task_id}: {type(e).__name__}: {e}"
+        )
+
+    try:
+        await fail_scan(scan_id, reason, cancelled=True)
+    except Exception as e:
+        logger.warning(f"[rr-service] cancel_scan {scan_id} fail_scan failed: {e}")
+
+    try:
+        await emit_event(str(scan_id), "cancelled", message=reason)
+    except Exception as e:
+        logger.warning(f"[rr-service] cancel_scan {scan_id} emit_event failed: {e}")
+
+    try:
+        await clear_task_id(str(scan_id))
+    except Exception:
+        pass
+
+    return True
+
+
 # --------------------------------------------------------------------------- #
 # Final scan write — findings + digest + seen set, in that order so a
 # partial failure leaves the relational store as the source of truth.

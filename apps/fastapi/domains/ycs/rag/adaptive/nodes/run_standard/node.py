@@ -19,14 +19,17 @@ async def run_standard_pipeline(
 ) -> dict:
     """Invoke the STANDARD pipeline as a sub-graph."""
     initial = {
-        "question":          state["question"],
-        "documents":         [],
-        "generation":        "",
-        "retry_count":       0,
-        "search_query":      state.get("search_query") or state["question"],
-        "grounded":          False,
-        "citations":         [],
-        "retrieval_sources": [],
+        "question":             state["question"],
+        "documents":            [],
+        "generation":           "",
+        "retry_count":          0,
+        "search_query":         state.get("search_query") or state["question"],
+        "grounded":             False,
+        "citations":            [],
+        "retrieval_sources":    [],
+        # Thread the parent's history into the sub-graph so STANDARD's
+        # generate node can ground a follow-up against prior turns.
+        "conversation_history": state.get("conversation_history", []),
     }
     config = {"recursion_limit": SUBGRAPH_RECURSION_LIMIT}
     try:

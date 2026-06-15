@@ -7,11 +7,20 @@ union'd.
 Direct port of deprecated `graphs/youtube/adaptive.py:L267-311`."""
 from __future__ import annotations
 
+import asyncio
+
 from domains.ycs.runtime.observability import traced
 
-from ....domain import strip_think_tags
+from ....domain import history_to_messages, strip_think_tags
 from ...state import AdaptiveRAGState
 from .prompts import SYNTHESIZE_PROMPT
+
+
+# DEEP synthesis takes a long-context input (every sub-question's
+# answer concatenated) so it's the slowest single LLM call in the
+# graph. 240 s ceiling leaves headroom over a real long-context
+# completion while still capping the dead-arm wait.
+_SYNTHESIZE_TIMEOUT_S = 240.0
 
 
 @traced("rag.synthesize")
@@ -29,12 +38,24 @@ async def synthesize(state: AdaptiveRAGState, llm) -> dict:
 
     chain = SYNTHESIZE_PROMPT | llm
     try:
-        response = await chain.ainvoke({
-            "question":       state["question"],
-            "research_plan":  state.get("research_plan", ""),
-            "sub_results":    sub_results_text,
-        })
+        response = await asyncio.wait_for(
+            chain.ainvoke({
+                "question":       state["question"],
+                "research_plan":  state.get("research_plan", ""),
+                "sub_results":    sub_results_text,
+                "history":        history_to_messages(
+                    state.get("conversation_history"),
+                ),
+            }),
+            timeout = _SYNTHESIZE_TIMEOUT_S,
+        )
         generation = strip_think_tags(response.content)
+    except asyncio.TimeoutError:
+        generation = (
+            f"Synthesis didn't complete within {int(_SYNTHESIZE_TIMEOUT_S)}s — "
+            f"the long-context model on the rotator pool is hung. "
+            f"Please retry."
+        )
     except Exception as e:
         generation = f"Synthesis error: {e}"
 

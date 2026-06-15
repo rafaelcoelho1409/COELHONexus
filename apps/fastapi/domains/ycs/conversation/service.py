@@ -149,6 +149,68 @@ async def list_thread_messages(
     ]
 
 
+async def branch_thread(
+    pg_url: str,
+    source_thread_id: str,
+    up_to_created_at: str | None,
+    new_thread_id: str,
+) -> int:
+    """Fork `source_thread_id` into `new_thread_id` by copying every row
+    whose `created_at <= up_to_created_at`. `None` copies everything.
+
+    Returns the number of rows actually copied. The new thread becomes
+    its own independent conversation — further turns are appended to
+    `new_thread_id`, leaving the source untouched.
+
+    Used by the per-turn "Branch" action chip in `ask.js` so the user
+    can rewind to a specific point and explore an alternative path
+    without losing the original conversation."""
+    if not source_thread_id or source_thread_id == DEFAULT_THREAD_ID:
+        return 0
+    if not new_thread_id:
+        return 0
+    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        params: tuple = (new_thread_id, source_thread_id)
+        cutoff_sql = ""
+        if up_to_created_at:
+            cutoff_sql = "AND created_at <= %s"
+            params = (new_thread_id, source_thread_id, up_to_created_at)
+        result = await conn.execute(
+            f"""
+            INSERT INTO {TABLE_NAME} (thread_id, question, answer, mode, created_at)
+            SELECT %s, question, answer, mode, created_at
+            FROM {TABLE_NAME}
+            WHERE thread_id = %s
+            {cutoff_sql}
+            ORDER BY created_at ASC
+            """,
+            params,
+        )
+        await conn.commit()
+        return int(result.rowcount or 0)
+
+
+async def delete_thread(
+    pg_url: str,
+    thread_id: str,
+) -> int:
+    """Delete every turn belonging to `thread_id`. Returns the row count
+    actually deleted (0 if the thread did not exist).
+
+    The `default` sentinel is silently no-op'd — stateless single-turn
+    queries never land in the table to begin with, but a misguided
+    delete on `default` would otherwise be a no-op anyway."""
+    if not thread_id or thread_id == DEFAULT_THREAD_ID:
+        return 0
+    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        result = await conn.execute(
+            f"DELETE FROM {TABLE_NAME} WHERE thread_id = %s",
+            (thread_id,),
+        )
+        await conn.commit()
+        return int(result.rowcount or 0)
+
+
 async def save_turn(
     pg_url: str,
     thread_id: str,
@@ -170,5 +232,70 @@ async def save_turn(
             VALUES (%s, %s, %s, %s)
             """,
             (thread_id, question, answer, mode),
+        )
+        await conn.commit()
+
+
+async def insert_turn(
+    pg_url: str,
+    thread_id: str,
+    question: str,
+    mode: str = "",
+) -> int | None:
+    """Insert a placeholder turn at stream START (empty answer) so the
+    conversation survives mid-stream refresh / hang. Returns the new
+    row's `id` so subsequent `update_turn_answer()` calls can target
+    it. Returns `None` for the `default` sentinel."""
+    if not thread_id or thread_id == DEFAULT_THREAD_ID:
+        return None
+    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        result = await conn.execute(
+            f"""
+            INSERT INTO {TABLE_NAME} (thread_id, question, answer, mode)
+            VALUES (%s, %s, '', %s)
+            RETURNING id
+            """,
+            (thread_id, question, mode),
+        )
+        row = await result.fetchone()
+        await conn.commit()
+    return int(row[0]) if row else None
+
+
+async def update_turn_answer(
+    pg_url: str,
+    turn_id: int,
+    answer: str,
+    mode: str = "",
+) -> None:
+    """Patch an in-progress turn's answer + mode. Used by the streaming
+    endpoint to persist partial generation incrementally (refresh-mid-
+    stream still shows the latest snapshot) AND on the final
+    successful-stream commit."""
+    if turn_id is None:
+        return
+    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        await conn.execute(
+            f"""
+            UPDATE {TABLE_NAME}
+            SET answer = %s,
+                mode   = COALESCE(NULLIF(%s, ''), mode)
+            WHERE id = %s
+            """,
+            (answer, mode, turn_id),
+        )
+        await conn.commit()
+
+
+async def delete_turn(pg_url: str, turn_id: int | None) -> None:
+    """Drop the placeholder row (called when the stream errors out
+    before any generation arrived — we don't want a question with an
+    empty answer haunting the picker forever)."""
+    if turn_id is None:
+        return
+    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        await conn.execute(
+            f"DELETE FROM {TABLE_NAME} WHERE id = %s",
+            (turn_id,),
         )
         await conn.commit()

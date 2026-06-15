@@ -258,6 +258,22 @@ async def get_seen_ids(profile_id: str) -> frozenset[str]:
     return frozenset(r[0] for r in rows)
 
 
+async def reset_seen(profile_id: str) -> int:
+    """Truncate the profile's `radar_seen` rows so every paper in the next
+    scan reads as `is_new = True` again. Returns the row count that was
+    deleted. Operator-triggered (POST /profile/{id}/reset-seen) — never
+    called from the scan pipeline."""
+    async with await psycopg.AsyncConnection.connect(postgres_url()) as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                f"DELETE FROM {PG_TABLE_SEEN} WHERE profile_id = %s",
+                (profile_id,),
+            )
+            n = cur.rowcount
+        await conn.commit()
+    return int(n or 0)
+
+
 # --------------------------------------------------------------------------- #
 # Profiles — interest verticals + per-profile SignalWeights overrides
 # --------------------------------------------------------------------------- #

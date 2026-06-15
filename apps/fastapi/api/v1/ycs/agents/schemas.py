@@ -17,13 +17,20 @@ from domains.ycs.content.schemas import NonEmptyStr
 # =============================================================================
 class LLMConfig(BaseModel):
     """User-provided LLM config persisted to Redis JSON
-    `coelhonexus:youtube:agents:config`. Strict port — even though YCS's
-    NIM key is now BYOK in the rotator, deprecated did this verbatim."""
-    provider:    NonEmptyStr        = "NVIDIA"
+    `coelhonexus:youtube:agents:config`.
+
+    2026-06-14: `api_key` + `base_url` were removed from the Ask form
+    — keys are owned by the global Settings page (rotator credential
+    store), so the BYOK form just picks provider + model + temperature
+    for this request. The fields are kept on the schema as optional
+    so older clients that still send them don't 422; the build path
+    in `byok/domain.py::build_byok_llm` ignores them and resolves the
+    real key via `resolve_key(provider.key_env)`."""
+    provider:    NonEmptyStr        = "nim"
     model:       NonEmptyStr | None = None
     temperature: float | None       = None
-    base_url:    NonEmptyStr | None = None
-    api_key:     NonEmptyStr | None = None
+    base_url:    NonEmptyStr | None = None   # ignored at build time
+    api_key:     NonEmptyStr | None = None   # ignored at build time
     model_config = ConfigDict(extra = "allow")
 
 
@@ -46,6 +53,17 @@ class RAGSearchRequest(BaseModel):
     force_mode:  Literal["fast", "standard", "deep"] | None = None
     # Scope to specific channels (auto-detected from question if not provided)
     channel_ids: list[NonEmptyStr] | None                 = None
+    # DEEP plan-preview workflow (P6 / 2026-06-14):
+    #   - `preview_plan = True` + DEEP mode → backend emits the plan
+    #     (`plan_research` SSE event) and ENDS the stream early, before
+    #     the parallel sub-agent fan-out begins. Frontend renders the
+    #     sub-questions as a checkbox list so the user can prune them.
+    #   - `sub_questions = [...]` → caller supplies the plan EXPLICITLY;
+    #     the `plan_research` node uses them as-is and skips the LLM
+    #     call. Used by the frontend's second pass after the user
+    #     confirms / prunes the previewed plan.
+    preview_plan:  bool                            = False
+    sub_questions: list[NonEmptyStr] | None        = None
 
 
 # =============================================================================

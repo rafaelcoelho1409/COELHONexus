@@ -21,3 +21,10 @@ SNAPSHOT_TTL_S:      int = 6 * 60 * 60     # 6 hours
 # SSE subscriber poll cadence — short enough that live events feel
 # instant, long enough to let asyncio breathe.
 SSE_POLL_INTERVAL_S: float = 0.5
+
+
+# Task-id store — Celery task UUID held under `rr:{scan_id}:task_id` so
+# `POST /scan/{id}/cancel` can resolve scan_id → task_id and revoke. TTL
+# matches the snapshot retention so cancel is reachable for the same
+# window the SSE replay covers.
+TASK_ID_TTL_S: int = SNAPSHOT_TTL_S

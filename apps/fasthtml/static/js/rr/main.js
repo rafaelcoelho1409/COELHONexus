@@ -24,29 +24,453 @@ const $ = (id) => document.getElementById(id);
 
 const form        = $('rr-scan-form');
 const statusText  = $('rr-status-text');
-const statusDot   = document.querySelector('#rr-status .rr-status-dot');
+// Pill root carries `data-status` — `setStatus()` writes the lifecycle
+// value (idle / working / done / failed / cancelled / cancelling) here
+// and the CSS does the rest (border + glyph + bg).
+const statusDot   = $('rr-status');
 const statusInfo  = $('rr-status-detail');
 const digestArea  = $('rr-digest-items');
 const digestEmpty = $('rr-digest-empty');
 
+// Short phase labels — the graph below is the verbose "what's running"
+// surface; the pill is a one-liner lifecycle badge. Long descriptive
+// labels were dropped after the Pipeline page split.
 const PHASE_LABELS = {
   pending:     'Pending',
-  running:     'Running — orchestrator starting',
-  discovery:   'Discovery — fetching from arxiv · s2 · hf · hn',
-  triage:      'Triage — scoring + cross-source dedup',
-  deep_read:   'Deep read — extracting fields per paper',
-  graph_build: 'Graph build — Neo4j + Qdrant',
-  synthesis:   'Synthesis — finding themes',
-  report:      'Report — assembling digest',
-  persisting:  'Persisting findings + digest.json',
+  running:     'Running',
+  discovery:   'Discovery',
+  triage:      'Triage',
+  deep_read:   'Deep read',
+  graph_build: 'Graph build',
+  synthesis:   'Synthesis',
+  report:      'Report',
+  persisting:  'Persisting',
   done:        'Done',
-  error:       'Error',
+  error:       'Failed',
   cancelled:   'Cancelled',
+  cancelling:  'Cancelling',
+};
+
+// SSE phase → pill `data-status` — collapses the 13-phase ladder onto the
+// 5 status values the CSS knows how to render (mirrors DD Planner/Synth).
+const PHASE_TO_STATUS = {
+  pending:     'working',
+  running:     'working',
+  discovery:   'working',
+  triage:      'working',
+  deep_read:   'working',
+  graph_build: 'working',
+  synthesis:   'working',
+  report:      'working',
+  persisting:  'working',
+  done:        'done',
+  error:       'failed',
+  cancelled:   'cancelled',
+  cancelling:  'cancelling',
 };
 
 let activeScanId = null;
 let evtSrc       = null;
 let pollTimer    = null;
+
+/* ────────────────────────────────────────────────────────────────────────── *
+ * Button state machine — keeps Start / Stop in sync with the scan lifecycle.
+ *
+ *   idle        Start enabled · Stop hidden
+ *   running     Start disabled · Stop visible+enabled
+ *   cancelling  Start disabled · Stop visible+disabled (busy spinner)
+ *
+ * Pre-terminal phases (pending, running, discovery, …, persisting) map to
+ * `running`. Terminal phases (done, error, cancelled) map to `idle` so the
+ * operator can immediately fire another scan.
+ * ────────────────────────────────────────────────────────────────────────── */
+const startBtn = document.getElementById('rr-start-btn');
+const stopBtn  = document.getElementById('rr-stop-btn');
+
+const PHASES_TERMINAL    = new Set(['done', 'error', 'cancelled']);
+const PHASES_PRE_TERMINAL = new Set([
+  'pending', 'running', 'discovery', 'triage', 'deep_read',
+  'graph_build', 'synthesis', 'report', 'persisting',
+]);
+
+function setButtonsForPhase(phase) {
+  if (PHASES_TERMINAL.has(phase) || !phase || phase === 'idle') {
+    setButtonsState('idle');
+  } else if (PHASES_PRE_TERMINAL.has(phase)) {
+    setButtonsState('running');
+  }
+  // Any other phase (custom) — leave state untouched.
+}
+
+function setButtonsState(state) {
+  if (!startBtn || !stopBtn) return;
+  switch (state) {
+    case 'idle':
+      startBtn.disabled = false;
+      stopBtn.hidden    = true;
+      stopBtn.disabled  = true;
+      stopBtn.dataset.busy = 'false';
+      break;
+    case 'running':
+      startBtn.disabled = true;
+      stopBtn.hidden    = false;
+      stopBtn.disabled  = false;
+      stopBtn.dataset.busy = 'false';
+      break;
+    case 'cancelling':
+      startBtn.disabled = true;
+      stopBtn.hidden    = false;
+      stopBtn.disabled  = true;
+      stopBtn.dataset.busy = 'true';
+      break;
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────────────── *
+ * Verticals multi-select — checkbox panel + custom-add field.
+ *
+ *   checkbox change → rebuild #verticals from checked rows
+ *   custom add      → validate against the inlined arXiv taxonomy:
+ *                       valid + new   → inject a checked row, sync
+ *                       valid + dup   → just check the existing row, sync
+ *                       invalid       → inline error + shake
+ *
+ * #verticals is a hidden input — the comma-separated string the API expects.
+ * Server-side `domains/rr/schemas.py` re-validates every code (defense-in-depth).
+ * ────────────────────────────────────────────────────────────────────────── */
+const verticalsInput     = form?.querySelector('#verticals');
+const verticalMultiselect = $('rr-multiselect');
+const verticalSummary    = $('rr-vertical-summary');
+const verticalOptions    = $('rr-vertical-options');
+const verticalCustom     = $('rr-vertical-custom');
+const verticalAddBtn     = $('rr-vertical-add-btn');
+const verticalError      = $('rr-vertical-error');
+const verticalTaxonomyEl = $('rr-vertical-taxonomy');
+
+const VERTICAL_TAXONOMY = (() => {
+  try { return new Set(JSON.parse(verticalTaxonomyEl?.textContent || '[]')); }
+  catch { return new Set(); }
+})();
+
+function _parseCodes(text) {
+  return (text || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function _syncVerticals() {
+  if (!verticalsInput || !verticalOptions) return;
+  const codes = [...verticalOptions.querySelectorAll('input.rr-multiselect-checkbox')]
+    .filter(cb => cb.checked)
+    .map(cb => cb.value);
+  verticalsInput.value     = codes.join(', ');
+  if (verticalSummary) {
+    verticalSummary.textContent = codes.length ? codes.join(', ') : 'Pick verticals…';
+  }
+}
+
+function _showVerticalError(msg) {
+  if (!verticalError) return;
+  verticalError.textContent = msg;
+  verticalError.hidden = false;
+  if (verticalCustom) {
+    verticalCustom.classList.remove('rr-shake');
+    // Reflow so the animation re-runs even if the class was already set
+    void verticalCustom.offsetWidth;
+    verticalCustom.classList.add('rr-shake');
+  }
+}
+
+function _clearVerticalError() {
+  if (verticalError) verticalError.hidden = true;
+}
+
+function _findRowByCode(code) {
+  if (!verticalOptions) return null;
+  const cb = verticalOptions.querySelector(
+    `input.rr-multiselect-checkbox[data-vertical-code="${CSS.escape(code)}"]`,
+  );
+  return cb ? cb.closest('.rr-multiselect-row') : null;
+}
+
+function _addCustomRow(code) {
+  if (!verticalOptions) return;
+  const row = document.createElement('label');
+  row.className = 'rr-multiselect-row rr-multiselect-row-custom';
+  row.dataset.curated = 'false';
+  row.innerHTML = `
+    <input type="checkbox"
+           class="rr-multiselect-checkbox"
+           data-vertical-code="${code}"
+           value="${code}"
+           checked>
+    <span class="rr-multiselect-code">${code}</span>
+    <span class="rr-multiselect-dash">—</span>
+    <span class="rr-multiselect-label">custom</span>
+  `;
+  verticalOptions.appendChild(row);
+}
+
+function _handleAddCustom() {
+  if (!verticalCustom) return;
+  const code = verticalCustom.value.trim();
+  if (!code) {
+    _showVerticalError('Type an arXiv subject code (e.g. eess.SP).');
+    return;
+  }
+  if (!VERTICAL_TAXONOMY.has(code)) {
+    _showVerticalError(
+      `${code} is not a valid arXiv subject code. ` +
+      'See arxiv.org/category_taxonomy for the full list.',
+    );
+    return;
+  }
+  const existing = _findRowByCode(code);
+  if (existing) {
+    const cb = existing.querySelector('input.rr-multiselect-checkbox');
+    if (cb) cb.checked = true;
+  } else {
+    _addCustomRow(code);
+  }
+  verticalCustom.value = '';
+  _clearVerticalError();
+  _syncVerticals();
+}
+
+if (verticalOptions) {
+  verticalOptions.addEventListener('change', (e) => {
+    if (e.target.classList?.contains('rr-multiselect-checkbox')) _syncVerticals();
+  });
+}
+if (verticalAddBtn) verticalAddBtn.addEventListener('click', _handleAddCustom);
+if (verticalCustom) {
+  verticalCustom.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); _handleAddCustom(); }
+  });
+  verticalCustom.addEventListener('input', _clearVerticalError);
+}
+// Close panel on outside click — native <details> doesn't do this for free.
+document.addEventListener('click', (e) => {
+  if (!verticalMultiselect?.open) return;
+  if (!verticalMultiselect.contains(e.target)) verticalMultiselect.open = false;
+});
+
+/* Wipe seen-set — Pipeline-page button that empties radar_seen for the
+ * default profile so the NEXT scan flips every paper to is_new=true again.
+ * Backend: POST /api/v1/rr/profile/default/reset-seen. Confirms via the
+ * in-page <dialog> (#rr-wipe-seen-dialog) so the modal matches the rest
+ * of the RR chrome instead of falling back to the browser's confirm().
+ * The trigger button flips to a green "Wiped N" pill for 3s on success. */
+const wipeSeenBtn      = document.getElementById('rr-wipe-seen-btn');
+const wipeSeenDialog   = document.getElementById('rr-wipe-seen-dialog');
+const wipeConfirmBtn   = document.getElementById('rr-wipe-dialog-confirm-btn');
+const wipeCancelBtn    = document.getElementById('rr-wipe-dialog-cancel-btn');
+
+function _openWipeDialog() {
+  if (!wipeSeenDialog) return;
+  if (typeof wipeSeenDialog.showModal === 'function') {
+    wipeSeenDialog.showModal();
+  } else {
+    wipeSeenDialog.setAttribute('open', '');
+  }
+}
+
+function _closeWipeDialog() {
+  if (!wipeSeenDialog) return;
+  if (typeof wipeSeenDialog.close === 'function') {
+    wipeSeenDialog.close();
+  } else {
+    wipeSeenDialog.removeAttribute('open');
+  }
+}
+
+async function _performWipeSeen() {
+  if (!wipeSeenBtn) return;
+  // Disable the confirm button so a double-click can't fire the POST twice.
+  if (wipeConfirmBtn) {
+    wipeConfirmBtn.disabled    = true;
+    wipeConfirmBtn.textContent = 'Wiping…';
+  }
+  const originalBtnText = wipeSeenBtn.textContent;
+  wipeSeenBtn.disabled    = true;
+  wipeSeenBtn.textContent = 'Wiping…';
+  try {
+    const r = await fetch('/api/v1/rr/profile/default/reset-seen',
+                          { method: 'POST' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    wipeSeenBtn.dataset.state = 'done';
+    wipeSeenBtn.textContent   = `Wiped ${data.deleted}`;
+    setTimeout(() => {
+      wipeSeenBtn.dataset.state = '';
+      wipeSeenBtn.textContent   = originalBtnText;
+      wipeSeenBtn.disabled      = false;
+    }, 3000);
+  } catch (err) {
+    wipeSeenBtn.textContent = `Failed: ${err.message || err}`;
+    setTimeout(() => {
+      wipeSeenBtn.textContent = originalBtnText;
+      wipeSeenBtn.disabled    = false;
+    }, 4000);
+  } finally {
+    if (wipeConfirmBtn) {
+      wipeConfirmBtn.disabled    = false;
+      wipeConfirmBtn.textContent = 'Wipe seen-set';
+    }
+    _closeWipeDialog();
+  }
+}
+
+/* Recent-scans picker — lazy-load on first open so the row 2 paint stays
+ * fast (no hit to Postgres unless the operator clicks the dropdown). The
+ * panel is the standard `<details>` body so toggling is native. */
+const scansPicker = document.getElementById('rr-scans-picker');
+const scansList   = document.getElementById('rr-scans-list');
+let _scansLoaded  = false;
+
+function _fmtScanTime(iso) {
+  if (!iso) return '—';
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return iso;
+  const s = (Date.now() - t) / 1000;
+  if (s < 60)      return `${Math.floor(s)}s ago`;
+  if (s < 3600)    return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400)   return `${Math.floor(s / 3600)}h ago`;
+  if (s < 2592000) return `${Math.floor(s / 86400)}d ago`;
+  return new Date(t).toISOString().slice(0, 16).replace('T', ' ');
+}
+
+async function _loadRecentScans() {
+  if (!scansList) return;
+  scansList.innerHTML = '<div class="rr-scans-empty">Loading…</div>';
+  try {
+    const r = await fetch('/api/v1/rr/scans/recent?profile_id=default&limit=20');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data  = await r.json();
+    const items = data.items || [];
+    if (!items.length) {
+      scansList.innerHTML =
+        '<div class="rr-scans-empty">No scans yet — fire one from the toolbar.</div>';
+      return;
+    }
+    scansList.innerHTML = items.map(s => {
+      const href = `/research-radar/digest?scan=${encodeURIComponent(s.scan_id)}`;
+      const startedShort = _fmtScanTime(s.started_at);
+      const findings = (s.total_in_digest > 0)
+        ? `${s.total_in_digest} finding${s.total_in_digest === 1 ? '' : 's'}`
+        : (s.status === 'done' ? '0 findings' : s.status);
+      return (
+        `<a class="rr-scans-row" data-status="${s.status}" href="${href}">` +
+        `<span class="rr-scans-row-status">${s.status}</span>` +
+        `<span class="rr-scans-row-time">${startedShort}</span>` +
+        `<span class="rr-scans-row-count">${findings}</span>` +
+        `</a>`
+      );
+    }).join('');
+  } catch (err) {
+    scansList.innerHTML =
+      `<div class="rr-scans-empty">Failed: ${err.message || err}</div>`;
+  }
+}
+
+if (scansPicker) {
+  scansPicker.addEventListener('toggle', () => {
+    if (scansPicker.open && !_scansLoaded) {
+      _scansLoaded = true;
+      _loadRecentScans();
+    }
+  });
+}
+
+if (wipeSeenBtn)    wipeSeenBtn.addEventListener('click', _openWipeDialog);
+if (wipeConfirmBtn) wipeConfirmBtn.addEventListener('click', _performWipeSeen);
+if (wipeCancelBtn)  wipeCancelBtn.addEventListener('click', _closeWipeDialog);
+if (wipeSeenDialog) {
+  // Header `×` + backdrop click close. Both keyed off data-attr / target check.
+  wipeSeenDialog.addEventListener('click', (e) => {
+    if (e.target?.dataset?.rrWipeClose === 'true') _closeWipeDialog();
+    if (e.target === wipeSeenDialog) _closeWipeDialog();
+  });
+}
+
+/* Browse-all dialog — click any code to add + close. Codes already selected
+ * are highlighted (red fill) when the dialog opens so the operator sees
+ * what's in their list at a glance. */
+const verticalBrowseBtn    = $('rr-vertical-browse-btn');
+const verticalBrowseDialog = $('rr-vertical-browse-dialog');
+
+function _markBrowseSelected() {
+  if (!verticalBrowseDialog || !verticalsInput) return;
+  const selected = new Set(_parseCodes(verticalsInput.value));
+  verticalBrowseDialog.querySelectorAll('.rr-browse-code').forEach(btn => {
+    btn.dataset.alreadySelected = selected.has(btn.dataset.verticalCode) ? 'true' : 'false';
+  });
+}
+
+function _openBrowseDialog() {
+  if (!verticalBrowseDialog) return;
+  _markBrowseSelected();
+  if (typeof verticalBrowseDialog.showModal === 'function') {
+    verticalBrowseDialog.showModal();
+  } else {
+    verticalBrowseDialog.setAttribute('open', '');  // pre-2022 fallback
+  }
+}
+
+function _closeBrowseDialog() {
+  if (!verticalBrowseDialog) return;
+  if (typeof verticalBrowseDialog.close === 'function') {
+    verticalBrowseDialog.close();
+  } else {
+    verticalBrowseDialog.removeAttribute('open');
+  }
+}
+
+if (verticalBrowseBtn) verticalBrowseBtn.addEventListener('click', _openBrowseDialog);
+if (verticalBrowseDialog) {
+  verticalBrowseDialog.addEventListener('click', (e) => {
+    if (e.target.dataset?.rrCloseDialog === 'true') {
+      _closeBrowseDialog();
+      return;
+    }
+    const codeBtn = e.target.closest('.rr-browse-code');
+    if (!codeBtn) return;
+    // Toggle: re-clicking an already-selected code removes it.
+    const code     = codeBtn.dataset.verticalCode || '';
+    const existing = _findRowByCode(code);
+    if (existing) {
+      const cb = existing.querySelector('input.rr-multiselect-checkbox');
+      if (cb) cb.checked = !cb.checked;
+    } else {
+      _addCustomRow(code);
+    }
+    _syncVerticals();
+    _markBrowseSelected();
+  });
+  // Native backdrop-click → close.
+  verticalBrowseDialog.addEventListener('click', (e) => {
+    if (e.target === verticalBrowseDialog) _closeBrowseDialog();
+  });
+}
+
+_syncVerticals();
+
+/* ────────────────────────────────────────────────────────────────────────── *
+ * Top N slider — live count readout next to the label.
+ * ────────────────────────────────────────────────────────────────────────── */
+const topNSlider = form?.querySelector('#top_n');
+const topNValue  = $('rr-top-n-value');
+
+function _syncTopNReadout() {
+  if (topNSlider && topNValue) topNValue.textContent = topNSlider.value;
+}
+
+if (topNSlider) {
+  topNSlider.addEventListener('input',  _syncTopNReadout);
+  topNSlider.addEventListener('change', _syncTopNReadout);
+  _syncTopNReadout();
+}
 
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"]/g, c => ({
@@ -55,18 +479,151 @@ function escapeHtml(s) {
 }
 
 function setStatus(phase, message) {
-  statusText.textContent = PHASE_LABELS[phase] || phase || 'Idle';
-  statusDot.dataset.phase = phase || '';
-  if (message) statusInfo.textContent = message;
-  else statusInfo.textContent = '';
+  if (statusText) statusText.textContent = PHASE_LABELS[phase] || (phase ? phase : 'Idle');
+  // Drive the DD-style stage pill's visual state via data-status. Empty
+  // phase resets to idle. statusDot is the pill root element itself
+  // (carries the `.rr-stage-pill` class).
+  const pill = statusDot;
+  if (pill) {
+    const st = phase ? (PHASE_TO_STATUS[phase] || 'working') : 'idle';
+    pill.dataset.status = st;
+  }
+  // Error / network / resume strings land in the detail slot; counts are
+  // surfaced on the graph nodes, so we don't echo them in the pill.
+  if (statusInfo) statusInfo.textContent = _pillDetail(phase, message);
+  syncElapsedTimer(phase);
+  setButtonsForPhase(phase);
+  if (typeof window._rrSetPipelineState === 'function') {
+    window._rrSetPipelineState(phase, message);
+  }
+  maybeAutoNavigateToDigest(phase);
 }
 
+// Only show the detail message when it carries information the graph
+// can't (error reasons, queueing tokens, resume notes). Per-phase progress
+// counts (`3/4 sources stashed`, `6/8 extractions written`) are already
+// rendered as KPIs inside the active node — re-rendering them in the pill
+// is the noise the redesign aims to remove.
+function _pillDetail(phase, message) {
+  if (!message) return '';
+  if (phase === 'error' || phase === 'cancelled' || phase === 'cancelling') {
+    return message;
+  }
+  // Drop pure "N/M …" updates — they show up on the graph.
+  if (/^\s*\d+\s*\/\s*\d+/.test(message)) return '';
+  return message;
+}
+
+// ───── Elapsed timer — ticks while the scan is in any working state ─────
+//
+// Persistence across refreshes:
+//   _elapsedStartMs   = absolute epoch-ms of the scan's started_at, seeded
+//                       from `GET /scan/{id}.started_at` in resumeScan().
+//                       Falls back to Date.now() only when a brand-new scan
+//                       is fired client-side (POST /scan response handler).
+//   _elapsedFrozenMs  = absolute epoch-ms duration for terminal scans
+//                       (finished_at - started_at). When non-null, the
+//                       timer renders this value directly instead of
+//                       ticking against Date.now(), so a refresh on a
+//                       completed scan shows the FINAL wall time, not
+//                       "time since I reloaded".
+let _elapsedStartMs  = null;
+let _elapsedFrozenMs = null;
+let _elapsedTick     = null;
+const statusElapsed  = document.getElementById('rr-status-elapsed');
+
+function _fmtElapsed(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60)    return `${s}s`;
+  const m = Math.floor(s / 60);
+  const sr = s - m * 60;
+  if (m < 60)    return sr ? `${m}m ${sr}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const mr = m - h * 60;
+  return mr ? `${h}h ${mr}m` : `${h}h`;
+}
+
+function _renderElapsed() {
+  if (!statusElapsed) return;
+  if (_elapsedFrozenMs != null) {
+    statusElapsed.textContent = _fmtElapsed(_elapsedFrozenMs);
+    return;
+  }
+  if (_elapsedStartMs == null) return;
+  statusElapsed.textContent = _fmtElapsed(Date.now() - _elapsedStartMs);
+}
+
+// Hydrate the elapsed timer from a ScanResult shape (POST /scan response
+// OR GET /scan/{id}). started_at + finished_at are ISO 8601 UTC strings.
+function _seedElapsedFromScan(d) {
+  if (!d) return;
+  const t0 = d.started_at  ? Date.parse(d.started_at)  : NaN;
+  const t1 = d.finished_at ? Date.parse(d.finished_at) : NaN;
+  if (Number.isFinite(t0)) _elapsedStartMs = t0;
+  if (Number.isFinite(t0) && Number.isFinite(t1)) {
+    _elapsedFrozenMs = Math.max(0, t1 - t0);
+  } else {
+    _elapsedFrozenMs = null;
+  }
+}
+
+function syncElapsedTimer(phase) {
+  const isWorking = phase && PHASE_TO_STATUS[phase] &&
+    (PHASE_TO_STATUS[phase] === 'working' || PHASE_TO_STATUS[phase] === 'cancelling');
+  const isTerminal = phase && (phase === 'done' || phase === 'error' || phase === 'cancelled');
+  if (isWorking) {
+    // Live tick. Keep any pre-seeded _elapsedStartMs (recovered from the
+    // server on resume); only fall back to Date.now() for a brand-new
+    // scan whose POST response hasn't landed yet.
+    if (_elapsedStartMs == null) _elapsedStartMs = Date.now();
+    _elapsedFrozenMs = null;
+    if (!_elapsedTick) _elapsedTick = setInterval(_renderElapsed, 1000);
+    _renderElapsed();
+  } else if (isTerminal) {
+    // Freeze whatever the timer reads at this moment (live → frozen).
+    // If a frozen value was seeded from the server it wins; otherwise
+    // we snapshot `Date.now() - _elapsedStartMs` as the final.
+    if (_elapsedFrozenMs == null && _elapsedStartMs != null) {
+      _elapsedFrozenMs = Date.now() - _elapsedStartMs;
+    }
+    if (_elapsedTick) { clearInterval(_elapsedTick); _elapsedTick = null; }
+    _renderElapsed();
+  } else {
+    if (_elapsedTick) { clearInterval(_elapsedTick); _elapsedTick = null; }
+    _elapsedStartMs  = null;
+    _elapsedFrozenMs = null;
+    if (statusElapsed) statusElapsed.textContent = '';
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────────────── *
+ * Auto-navigate to Digest the moment the scan finishes successfully.
+ * Only triggers on the Pipeline page (presence of .rr-pipeline-graph),
+ * keeps the active scan_id in the query string so the digest page hydrates.
+ * ────────────────────────────────────────────────────────────────────────── */
+let _autoNavigated = false;
+function maybeAutoNavigateToDigest(phase) {
+  if (_autoNavigated || phase !== 'done') return;
+  if (!document.getElementById('rr-pipeline-graph')) return;  // already on digest
+  if (!activeScanId) return;
+  _autoNavigated = true;
+  const url = `/research-radar/digest?scan=${encodeURIComponent(activeScanId)}`;
+  // Small delay so the operator sees the final "Done" state for a beat
+  // before the navigation.
+  setTimeout(() => { window.location.href = url; }, 600);
+}
+
+// Both helpers are no-ops on the Pipeline page (digest DOM only exists on
+// the Digest page after the row-2 stage split). Null-guarded so calls
+// from startScan / resumeScan / SSE done branches don't blow up the
+// scan trigger when the operator is staring at the Pipeline canvas.
 function clearDigest() {
-  digestArea.innerHTML = '';
-  digestEmpty.style.display = '';
+  if (digestArea)  digestArea.innerHTML = '';
+  if (digestEmpty) digestEmpty.style.display = '';
 }
 
 function renderDigest(findings) {
+  if (!digestArea || !digestEmpty) return;
   digestEmpty.style.display = 'none';
   digestArea.innerHTML = '';
   if (!findings || !findings.length) {
@@ -170,6 +727,20 @@ function setScanIdInUrl(scanId) {
   else        url.searchParams.delete('scan');
   // `replaceState` (not pushState): a fresh scan shouldn't bloat the back-stack.
   history.replaceState(null, '', url);
+  // Stage tabs in row 2 (`Pipeline` / `Digest`) are server-rendered with
+  // whatever scan_id was in the URL when the page loaded. Without this
+  // rewrite, clicking Digest after starting a NEW scan would navigate to
+  // the PREVIOUS scan's digest (stale href). Walk every `[data-substage]`
+  // anchor and patch its `?scan=` param to match the live activeScanId.
+  document.querySelectorAll('[data-substage]').forEach(link => {
+    if (!link.href) return;
+    try {
+      const lu = new URL(link.href);
+      if (scanId) lu.searchParams.set('scan', scanId);
+      else        lu.searchParams.delete('scan');
+      link.href = lu.toString();
+    } catch { /* malformed href — skip */ }
+  });
 }
 
 // --------------------------------------------------------------------------- //
@@ -200,6 +771,12 @@ async function resumeScan(scanId) {
   const d = await r.json();
   activeScanId = scanId;
 
+  // Recover the original scan start (and, for finished scans, the end)
+  // from the server so the elapsed timer in the pill shows true wall
+  // time — not "time since this tab loaded". Without this, every page
+  // refresh resets the counter to 0s.
+  _seedElapsedFromScan(d);
+
   if (['done', 'error', 'cancelled'].includes(d.status)) {
     // Terminal — render the snapshot, no live attachments.
     if (d.status === 'done') {
@@ -219,46 +796,152 @@ async function resumeScan(scanId) {
   startPoll(scanId);
 }
 
-form.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  teardown();
-  clearDigest();
-  setStatus('pending', 'submitting...');
-
-  const verticals = (form.verticals.value || '')
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean);
-
-  const body = {
-    profile_id: 'default',
-    topic:      form.topic.value || '',
-    verticals,
-    top_n:      parseInt(form.top_n.value || '12', 10),
-  };
-
+/* ────────────────────────────────────────────────────────────────────────── *
+ * Stop button — revokes the running scan. While the POST is in flight we
+ * stay in `cancelling` (Start disabled, Stop disabled with spinner). The
+ * server emits a final phase=cancelled SSE event which setStatus() then
+ * resolves back to `idle`. As a belt-and-suspenders we also flip to idle
+ * after a 12s timeout if the SSE event never arrives.
+ * ────────────────────────────────────────────────────────────────────────── */
+async function handleStop() {
+  if (!activeScanId) { setButtonsState('idle'); return; }
+  // `cancelling` is not in PHASES_TERMINAL nor PHASES_PRE_TERMINAL, so
+  // setStatus' built-in button sync leaves whatever we set here untouched.
+  setStatus('cancelling', 'revoking task…');
+  setButtonsState('cancelling');
   let resp;
   try {
-    resp = await fetch('/api/v1/rr/scan', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(body),
-    });
+    resp = await fetch(`/api/v1/rr/scan/${activeScanId}/cancel`, { method: 'POST' });
   } catch (err) {
-    setStatus('error', `network: ${err}`);
+    setButtonsState('idle');
+    setStatus('error', `cancel failed: ${err}`);
+    return;
+  }
+  if (resp.status === 404) {
+    // The task already finished — pull the latest snapshot to render.
+    setButtonsState('idle');
+    setStatus('done', 'scan had already finished');
     return;
   }
   if (!resp.ok) {
-    setStatus('error', `POST /scan returned ${resp.status}`);
+    setButtonsState('idle');
+    setStatus('error', `cancel returned ${resp.status}`);
     return;
   }
-  const data = await resp.json();
-  activeScanId = data.scan_id;
-  setScanIdInUrl(activeScanId);
-  setStatus('pending', `scan ${activeScanId} queued (task ${data.task_id})`);
-  startSSE(activeScanId);
-  startPoll(activeScanId);
-});
+  // Backstop timer in case the SSE phase=cancelled event never lands
+  // (e.g. SSE dropped while waiting for the cancel to ripple through).
+  setTimeout(() => {
+    if (stopBtn?.dataset.busy === 'true') {
+      setButtonsState('idle');
+      setStatus('cancelled', '');
+    }
+  }, 12000);
+}
+
+if (stopBtn) stopBtn.addEventListener('click', handleStop);
+
+/* Scan trigger — wired to BOTH the Start button click and the form submit
+ * event so it fires regardless of which path the browser dispatches first
+ * (Enter in an input → submit only; pointer click on the button → click
+ * + submit). The `_inflight` guard prevents a double-fire when both
+ * events bubble through. Form-element lookups go via `form.elements.…`
+ * for the most defensive shape — `form.verticals` worked but failed
+ * silently when a sibling control had a colliding name; .elements is
+ * the spec-blessed accessor. */
+let _scanInflight = false;
+
+async function startScan() {
+  if (_scanInflight) return;
+  _scanInflight = true;
+  try {
+    if (!form) {
+      console.error('[rr-main] startScan aborted: form #rr-scan-form not found');
+      return;
+    }
+    teardown();
+    clearDigest();
+    setStatus('pending', 'submitting...');
+    setButtonsState('running');
+
+    const verticalsRaw = form.elements?.verticals?.value || '';
+    const topicRaw     = form.elements?.topic?.value     || '';
+    const topNRaw      = form.elements?.top_n?.value     || '12';
+
+    const verticals = verticalsRaw
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    const body = {
+      profile_id: 'default',
+      topic:      topicRaw,
+      verticals,
+      top_n:      parseInt(topNRaw, 10),
+    };
+
+    let resp;
+    try {
+      resp = await fetch('/api/v1/rr/scan', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      });
+    } catch (err) {
+      console.error('[rr-main] POST /scan threw', err);
+      setStatus('error', `network: ${err}`);
+      return;
+    }
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => '');
+      console.error('[rr-main] POST /scan returned', resp.status, txt);
+      setStatus('error', `POST /scan returned ${resp.status}`);
+      return;
+    }
+    const data = await resp.json();
+    activeScanId = data.scan_id;
+    setScanIdInUrl(activeScanId);
+    // Seed the elapsed timer from the server-emitted started_at so the
+    // pill reads true wall-clock time (the 200-300ms POST latency would
+    // otherwise show up as drift on every fresh scan).
+    _seedElapsedFromScan(data);
+    setStatus('pending', `scan ${activeScanId} queued (task ${data.task_id})`);
+    startSSE(activeScanId);
+    startPoll(activeScanId);
+  } finally {
+    _scanInflight = false;
+  }
+}
+
+if (startBtn) {
+  startBtn.addEventListener('click', (e) => {
+    e.preventDefault();   // type="submit" inside a form — block default
+    // Surface immediate proof-of-life to the pill detail BEFORE anything
+    // async runs. If startScan() throws before its own setStatus call,
+    // this still tells the operator the click was received (browser
+    // DevTools may not be available on mobile).
+    if (statusInfo) statusInfo.textContent = '[click heard]';
+    Promise.resolve().then(() => startScan()).catch(err => {
+      const msg = `startScan threw: ${err && err.message || err}`;
+      console.error('[rr-main]', msg, err);
+      setStatus('error', msg);
+    });
+  });
+}
+if (form) {
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    Promise.resolve().then(() => startScan()).catch(err => {
+      setStatus('error', `submit threw: ${err && err.message || err}`);
+    });
+  });
+}
+
+// Visible boot marker — proves main.js executed end-to-end. Lands in the
+// pill detail so a mobile operator (no DevTools) can confirm load. Overwritten
+// by the first real setStatus() call.
+if (statusInfo && !statusInfo.textContent) {
+  statusInfo.textContent = `(ready ${new Date().toISOString().slice(11,19)})`;
+}
 
 
 // --------------------------------------------------------------------------- //
@@ -267,4 +950,5 @@ form.addEventListener('submit', async (e) => {
 {
   const urlScan = getScanIdFromUrl();
   if (urlScan) resumeScan(urlScan);
+  // Pipeline graph paints itself on mount (pipeline.js); no work needed here.
 }

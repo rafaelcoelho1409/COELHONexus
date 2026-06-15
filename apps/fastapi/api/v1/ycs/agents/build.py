@@ -1,108 +1,60 @@
 """ycs/agents — graph factory + streaming-update serializer.
 
-Direct port of deprecated `routers/v1/youtube/helpers.py:L2014-L2108`,
-extended 2026-06-11 with BYOK override:
+Direct port of deprecated `routers/v1/youtube/helpers.py:L2014-L2108`.
 
-`build_graph_from_request(request)` reads the user's persisted LLM
-config from Redis (`coelhonexus:youtube:agents:config`). If a valid
-`api_key + model` pair is present, the graph + grader + Neo4j retriever
-are rebuilt with that single-model `ChatLiteLLM`; otherwise the request
-falls through to the rotator chain shared with DD/synth (`app.state.llm`).
+2026-06-15 — BYOK exclusive-override path REMOVED. Every Ask request
+runs through the rotator's full failover chain (`app.state.llm`) so it
+gets FGTS-VA bandit + 7-provider failover + EOL detection + cooldowns,
+same as Planner and Synth. See `build_graph_from_request`'s docstring
+for the rationale.
+
+`build_graph_from_request(request)` returns a freshly-compiled adaptive
+RAG graph wired to the rotator chain.
 
 `_serialize_update(node, update)` projects a LangGraph `astream` update
 into a JSON-safe dict for SSE delivery."""
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from fastapi import Request
 
-from domains.ycs.grader.service           import DocumentGrader
-from domains.ycs.rag.adaptive             import build_adaptive_rag_graph
-from domains.ycs.retriever.neo4j          import Neo4jRetriever
-from domains.ycs.retriever.smart          import SmartRetriever
-
-from .byok import build_byok_llm, get_byok_config
-
-
-logger = logging.getLogger(__name__)
+from domains.ycs.rag.adaptive import build_adaptive_rag_graph
 
 
 async def build_graph_from_request(request: Request):
-    """Build the adaptive RAG graph from FastAPI `app.state`, optionally
-    overriding the LLM with the per-user BYOK config.
+    """Build the adaptive RAG graph from FastAPI `app.state` against
+    the rotator's full failover chain. **Always** uses
+    `app.state.llm` — the FGTS-VA bandit over 7 providers with EOL
+    detection, periodic catalog refresh, and runtime cooldowns.
+
+    2026-06-15 — dropped the BYOK exclusive-override path. The earlier
+    design let `LLMConfig` substitute a single-model `ChatLiteLLM`
+    that bypassed the rotator entirely. That created a single point of
+    failure (any 429 / timeout / EOL on the picked model = the whole
+    request fails) and threw away every reliability mechanism Planner
+    and Synth already prove out. Same workload shape as Ask; same
+    rotator path is the right call.
+
+    The BYOK Redis config + `POST /agents/config/test` endpoint are
+    kept for a future "preferred arm" feature (user's pick boosted to
+    the top of the rotator pool rather than replacing it). Until that
+    lands, BYOK is effectively advisory and has no runtime effect.
 
     Provisioned deps (lifespan):
       - `smart_retriever` — ES + Qdrant + Neo4j fan-out + FlashRank
       - `grader`          — DocumentGrader bound to `app.state.llm`
       - `llm`             — rotator's `with_fallbacks` chain
       - `neo4j_graph`     — LangChain Neo4jGraph wrapper
-      - `redis_aio`       — async Redis for the BYOK config
-
-    BYOK rebuild scope: only the components that actually call the LLM
-    are rebuilt — `DocumentGrader` and `Neo4jRetriever`. ES + Qdrant
-    retrievers are LLM-free, so they're reused as-is. SmartRetriever is
-    rebuilt because it composes the (now overridden) Neo4j arm.
 
     `checkpointer=None` matches deprecated."""
     app = request.app
-    byok_llm = await _resolve_byok_llm(app)
-    llm = byok_llm or app.state.llm
-    grader = (
-        DocumentGrader(byok_llm)
-        if byok_llm is not None and app.state.grader is not None
-        else app.state.grader
-    )
-    smart_retriever = (
-        _rebuild_smart_with_llm(app.state.smart_retriever, byok_llm, app.state.neo4j_graph)
-        if byok_llm is not None and app.state.smart_retriever is not None
-        else app.state.smart_retriever
-    )
     return build_adaptive_rag_graph(
-        retriever    = smart_retriever,
-        grader       = grader,
-        llm          = llm,
+        retriever    = app.state.smart_retriever,
+        grader       = app.state.grader,
+        llm          = app.state.llm,
         checkpointer = None,
         neo4j_graph  = app.state.neo4j_graph,
-    )
-
-
-async def _resolve_byok_llm(app):
-    """Read Redis BYOK config and build the single-model LLM. Any failure
-    (Redis miss, missing api_key, ChatLiteLLM construction error) returns
-    `None` so the caller falls back to the rotator chain silently."""
-    redis_aio = getattr(app.state, "redis_aio", None)
-    if redis_aio is None:
-        return None
-    config = await get_byok_config(redis_aio)
-    if not config:
-        return None
-    try:
-        return build_byok_llm(config)
-    except Exception as e:
-        logger.warning(
-            f"[ycs:byok] ChatLiteLLM build failed: {type(e).__name__}: {e}"
-        )
-        return None
-
-
-def _rebuild_smart_with_llm(
-    base: SmartRetriever, llm, neo4j_graph,
-) -> SmartRetriever:
-    """Clone `SmartRetriever` with a new `Neo4jRetriever` bound to the
-    BYOK LLM. ES + Qdrant arms are reused — they don't take an LLM."""
-    neo4j_retriever = (
-        Neo4jRetriever(neo4j_graph = neo4j_graph, llm = llm)
-        if neo4j_graph is not None
-        else None
-    )
-    return SmartRetriever(
-        es_retriever     = base.es_retriever,
-        qdrant_retriever = base.qdrant_retriever,
-        neo4j_retriever  = neo4j_retriever,
-        use_reranker     = base.use_reranker,
-        top_k            = base.top_k,
     )
 
 

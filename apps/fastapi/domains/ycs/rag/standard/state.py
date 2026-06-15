@@ -20,3 +20,8 @@ class YouTubeRAGState(TypedDict):
     grounded:           bool              # Is generation grounded in documents?
     citations:          list[dict]        # Formatted citations with video title + URL
     retrieval_sources:  list[str]         # Which retrievers found documents
+    # Prior Q+A pairs (oldest-first). Threaded down from `AdaptiveRAGState`
+    # by `run_standard` so the `generate` node sees the multi-turn context
+    # — sub-agents (DEEP fan-out) receive [] because their sub-question is
+    # already self-contained.
+    conversation_history: list[dict]

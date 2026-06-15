@@ -8,8 +8,45 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+
 
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>\s*")
+
+# Cap on the prior turns we materialize into the prompt. Each turn = 2
+# messages (Human + AI), so 8 turns = 16 messages. Big enough to keep
+# multi-turn coherence; small enough that a 5-turn back-and-forth
+# doesn't eat the LLM context budget.
+_HISTORY_MESSAGES_CAP = 8
+
+
+def history_to_messages(history: list[dict] | None) -> list[BaseMessage]:
+    """Project `conversation_history` rows into the LangChain message
+    shape `MessagesPlaceholder("history")` expects.
+
+    Each row is `{"question": str, "answer": str, ...}` — the canonical
+    Postgres shape `domains/ycs/conversation/service.py::get_history`
+    returns. Empty `answer` rows are skipped (turns where the assistant
+    crashed mid-stream and no row was persisted in the AI direction).
+
+    Only the last `_HISTORY_MESSAGES_CAP` rows are kept; the older ones
+    are dropped so the prompt budget stays predictable for long
+    conversations. Older context is preserved indirectly via the
+    `contextualize` node's question-rewrite (it sees all rows).
+
+    Used by: generate / direct_answer / synthesize nodes."""
+    if not history:
+        return []
+    rows = history[-_HISTORY_MESSAGES_CAP:]
+    out: list[BaseMessage] = []
+    for row in rows:
+        q = (row.get("question") or "").strip()
+        a = (row.get("answer")   or "").strip()
+        if q:
+            out.append(HumanMessage(content = q))
+        if a:
+            out.append(AIMessage(content = a))
+    return out
 
 
 def strip_think_tags(text: Any) -> str:

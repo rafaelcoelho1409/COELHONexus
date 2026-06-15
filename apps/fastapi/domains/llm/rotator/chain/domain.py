@@ -34,6 +34,47 @@ def classify_error(exc: Exception) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# EOL / decommissioned model detection
+# --------------------------------------------------------------------------- #
+# Phrases that indicate the model is gone for good (not a transient outage).
+# Any match triggers the runtime blocklist + Router reshuffle path — the bandit
+# cooldown alone (60s) would have us re-trying a permanently-dead arm forever.
+# Sources of the wording:
+#   - NIM HTTP 410: "The model '<id>' has reached its end of life"
+#   - NIM HTTP 404 transient: "Function '<uuid>' not found for account"
+#   - OpenAI / Anthropic: "model_not_found"
+#   - Generic: "deprecated", "no longer available", "decommissioned"
+_EOL_PHRASES: tuple[str, ...] = (
+    "reached its end of life",
+    "end of life",
+    "has been deprecated",
+    "is deprecated",
+    "no longer available",
+    "no longer supported",
+    "model_not_found",
+    "not found for account",
+    "model decommissioned",
+    "decommissioned",
+)
+
+
+def is_eol_error(exc: Exception) -> bool:
+    """True when the exception text indicates the model is EOL / deprecated
+    / decommissioned. Distinct from rate-limit, timeout, server-error: an
+    EOL model is permanently dead and the catalog must drop it now, not
+    after a cooldown."""
+    msg  = str(exc).lower()
+    name = type(exc).__name__.lower()
+    if "notfound" in name:
+        return True
+    if "410" in msg or " gone" in msg:
+        return True
+    if "404" in msg and ("model" in msg or "function" in msg):
+        return True
+    return any(p in msg for p in _EOL_PHRASES)
+
+
+# --------------------------------------------------------------------------- #
 # Model classification
 # --------------------------------------------------------------------------- #
 def is_heavyweight(deployment_id: str) -> bool:

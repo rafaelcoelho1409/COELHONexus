@@ -20,7 +20,13 @@ from __future__ import annotations
 
 from fasthtml.common import Button, Div, Form, Input, Span
 
-from ..ask.chrome    import AskLLMTrigger, AskModeTabs, AskThreadBar
+from ..ask.chrome    import (
+    AskLLMTrigger,
+    AskModeTabs,
+    AskNewThreadButton,
+    AskScopeTrigger,
+    AskThreadBar,
+)
 from ..source.chrome import SourceModeTabs
 
 
@@ -107,11 +113,13 @@ def StageToolbar(active_stage: str, slug: str | None):
     elif active_stage == "ingestion":
         left = [_LibraryFilters()]
     elif active_stage == "ask":
-        # Mode pills on the left (what mode you're asking in);
-        # conversation thread badge + LLM-configuration dropdown on
-        # the right (session + agent settings, grouped together).
-        left  = [AskModeTabs()]
-        right = [AskThreadBar(), AskLLMTrigger()]
+        # Per-request request-shaping on the left (mode + channel
+        # scope); session + agent settings on the right (New thread
+        # action + Thread picker + LLM info). `+ New thread` is
+        # promoted out of the Thread dropdown so it's a one-click
+        # primary action, not a hidden secondary one.
+        left  = [AskModeTabs(), AskScopeTrigger()]
+        right = [AskNewThreadButton(), AskThreadBar(), AskLLMTrigger()]
     else:
         return None
     children = [Div(*left, cls = "dd-toolbar-left")]

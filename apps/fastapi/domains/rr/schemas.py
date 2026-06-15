@@ -14,7 +14,9 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from .taxonomy import is_valid_vertical
 
 
 # --------------------------------------------------------------------------- #
@@ -49,9 +51,28 @@ class ScanRequest(BaseModel):
         description = (
             "Vertical categories used by signal_score.vertical_fit, e.g. "
             "['cs.LG', 'cs.AI'] for ML, ['q-fin.PR', 'q-fin.ST'] for "
-            "quant finance. Empty = no vertical filter."
+            "quant finance. Empty = no vertical filter. Every entry must be "
+            "a valid arXiv subject code; the picker UI's client-side check "
+            "and this server-side validator share the same taxonomy "
+            "(domains/rr/taxonomy.py)."
         ),
     )
+
+    @field_validator("verticals")
+    @classmethod
+    def _validate_verticals(cls, v: list[str]) -> list[str]:
+        """Strip + drop empties + reject unknown codes. Defense-in-depth
+        against a stale/forged client payload reaching the agent with junk
+        categories that would silently zero `vertical_fit` for every paper."""
+        cleaned = [s.strip() for s in v if s and s.strip()]
+        bad = [c for c in cleaned if not is_valid_vertical(c)]
+        if bad:
+            raise ValueError(
+                f"Invalid arXiv subject codes: {bad!r}. "
+                "See https://arxiv.org/category_taxonomy for the full list."
+            )
+        return cleaned
+
     top_n: int = Field(
         default = 12,
         ge = 4,

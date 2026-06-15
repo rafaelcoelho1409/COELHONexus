@@ -31,6 +31,8 @@ from .service import (
     release_ycs_provider_slot,
     rerank_via_router_async,
     reset_rotator,
+    start_catalog_refresh_loop,
+    stop_catalog_refresh_loop,
 )
 
 __all__ = [
@@ -63,4 +65,6 @@ __all__ = [
     "release_ycs_provider_slot",
     "rerank_via_router_async",
     "reset_rotator",
+    "start_catalog_refresh_loop",
+    "stop_catalog_refresh_loop",
 ]

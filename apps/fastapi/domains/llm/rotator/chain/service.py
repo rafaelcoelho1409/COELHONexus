@@ -79,6 +79,7 @@ from .config import DYNAMIC_STEPS, JUDGE
 from .domain import (
     classify_error,
     entry_provider_and_model,
+    is_eol_error,
     is_non_chat_model,
     passes_capability_floor,
     provider_key_env,
@@ -1086,7 +1087,13 @@ class _RotatorAutoRetryRouter(ChatLiteLLMRouter):
                 result = await super()._agenerate(
                     messages, stop=stop, run_manager=run_manager, **kwargs,
                 )
-            except litellm.NotFoundError as e:
+            except Exception as e:
+                # Broadened 2026-06-12: `is_eol_error` covers `NotFoundError`
+                # (404) AND the 410 / "end of life" / "deprecated" paths the
+                # original NotFoundError-only catch missed. Same recovery
+                # shape — extract, mark inaccessible, reshuffle, retry.
+                if not (isinstance(e, litellm.NotFoundError) or is_eol_error(e)):
+                    raise
                 last_err = e
                 model = _extract_model_from_error(str(e), exc=e)
                 if model:
@@ -1099,8 +1106,9 @@ class _RotatorAutoRetryRouter(ChatLiteLLMRouter):
                     # `allowed_fails=3` per-deployment cooldown will take the
                     # bad arm offline after a few cycles.
                     logger.warning(
-                        f"[rotator-retry] 404 from unidentified deployment "
-                        f"on attempt {attempt+1}; forcing Router reshuffle"
+                        f"[rotator-retry] EOL-class error on attempt "
+                        f"{attempt+1} from unidentified deployment; forcing "
+                        f"Router reshuffle"
                     )
                 self.router = _get_router()
                 continue
@@ -1134,15 +1142,19 @@ class _RotatorAutoRetryRouter(ChatLiteLLMRouter):
                 result = super()._generate(
                     messages, stop=stop, run_manager=run_manager, **kwargs,
                 )
-            except litellm.NotFoundError as e:
+            except Exception as e:
+                # Mirror of `_agenerate`'s broadened EOL catch.
+                if not (isinstance(e, litellm.NotFoundError) or is_eol_error(e)):
+                    raise
                 last_err = e
                 model = _extract_model_from_error(str(e), exc=e)
                 if model:
                     mark_inaccessible(model)
                 else:
                     logger.warning(
-                        f"[rotator-retry] 404 from unidentified deployment "
-                        f"on attempt {attempt+1}; forcing Router reshuffle"
+                        f"[rotator-retry] EOL-class error on attempt "
+                        f"{attempt+1} from unidentified deployment; forcing "
+                        f"Router reshuffle"
                     )
                 self.router = _get_router()
                 continue
@@ -2361,3 +2373,103 @@ def init_dynamic_catalog_sync() -> bool:
             f"[llm-chain] init_dynamic_catalog_sync failed: {type(e).__name__}: {e}"
         )
         return False
+
+
+# --------------------------------------------------------------------------- #
+# Periodic catalog refresh — EOL resilience for every provider in the registry
+# --------------------------------------------------------------------------- #
+# The litellm gen-config.sh app (`~/.config/litellm/gen-config.sh`) re-fetches
+# NIM's /v1/models on every service (re)start so the catalog tracks NIM's live
+# model list automatically. We do the same — but recurring, and across EVERY
+# provider — so EOL events (`z-ai/glm5` cycled out 2026-05-18, NIM nemotron
+# function IDs decommissioned) don't wedge running workers until next
+# redeploy. Combined with the EOL-broadened `_RotatorAutoRetryRouter`, the
+# rotator now:
+#
+#   1. Catches EOL/410/deprecated/404 errors at call time and adds the
+#      offending model to `_RUNTIME_INACCESSIBLE_MODELS` (immediate fallover).
+#   2. Periodically re-runs discovery so the dynamic catalog drops models
+#      that providers have cycled out of /v1/models entirely.
+#
+# Interval default 900s (15 min) — fast enough to catch same-day EOLs, slow
+# enough to be invisible to provider rate limits. Override via env
+# `DD_CATALOG_REFRESH_INTERVAL_S` (set 0 to disable).
+_CATALOG_REFRESH_INTERVAL_S: int = 900
+
+_catalog_refresh_task: asyncio.Task | None = None
+
+
+def _catalog_refresh_interval() -> int:
+    interval = _CATALOG_REFRESH_INTERVAL_S
+    if "DD_CATALOG_REFRESH_INTERVAL_S" in os.environ:
+        try:
+            interval = int(os.environ["DD_CATALOG_REFRESH_INTERVAL_S"])
+        except (TypeError, ValueError):
+            pass
+    return interval
+
+
+async def _catalog_refresh_loop() -> None:
+    """Background loop: every `interval` seconds, force a fresh discovery
+    fan-out + dynamic-catalog rebuild. Errors are logged + swallowed so a
+    transient provider outage doesn't kill the loop."""
+    interval = _catalog_refresh_interval()
+    if interval <= 0:
+        logger.info("[llm-chain] catalog refresh loop disabled (interval<=0)")
+        return
+    logger.info(
+        f"[llm-chain] catalog refresh loop started (every {interval}s)"
+    )
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            ok = await init_dynamic_catalog(force = True)
+            n_runtime = len(_RUNTIME_INACCESSIBLE_MODELS)
+            logger.info(
+                f"[llm-chain] periodic refresh complete: "
+                f"dynamic_active={ok}, runtime_blocklist={n_runtime}"
+            )
+        except asyncio.CancelledError:
+            logger.info("[llm-chain] catalog refresh loop cancelled")
+            return
+        except Exception as e:
+            logger.warning(
+                f"[llm-chain] catalog refresh loop iteration failed: "
+                f"{type(e).__name__}: {e}"
+            )
+
+
+def start_catalog_refresh_loop() -> asyncio.Task | None:
+    """Spawn the periodic refresh task on the running event loop. Idempotent
+    — second call returns the existing task. Returns `None` if there is no
+    running loop (caller is expected to be inside FastAPI lifespan)."""
+    global _catalog_refresh_task
+    if _catalog_refresh_task is not None and not _catalog_refresh_task.done():
+        return _catalog_refresh_task
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.warning(
+            "[llm-chain] start_catalog_refresh_loop called outside event loop"
+        )
+        return None
+    _catalog_refresh_task = loop.create_task(
+        _catalog_refresh_loop(),
+        name = "llm-rotator-catalog-refresh",
+    )
+    return _catalog_refresh_task
+
+
+async def stop_catalog_refresh_loop() -> None:
+    """Cancel the refresh task on FastAPI shutdown. Awaits the cancellation
+    so the loop's `finally` blocks (if any) run before the event loop
+    closes."""
+    global _catalog_refresh_task
+    if _catalog_refresh_task is None:
+        return
+    _catalog_refresh_task.cancel()
+    try:
+        await _catalog_refresh_task
+    except (asyncio.CancelledError, Exception):
+        pass
+    _catalog_refresh_task = None

@@ -31,3 +31,10 @@ def snapshot_key(scan_id: str) -> str:
     """Redis LIST key for the TTL'd event replay buffer. A late SSE
     subscriber replays history before live events to catch up."""
     return f"rr:{scan_id}:snapshot"
+
+
+def task_id_key(scan_id: str) -> str:
+    """Redis STRING key holding the Celery task UUID for an active scan,
+    written by `POST /scan` and read by `POST /scan/{id}/cancel` to
+    issue `AsyncResult.revoke(terminate=True)` against the right task."""
+    return f"rr:{scan_id}:task_id"

@@ -19,14 +19,18 @@ async def run_subagent(payload: dict, standard_graph) -> dict:
     result into a `sub_results` entry."""
     sub_q = payload["sub_question"]
     initial = {
-        "question":          sub_q,
-        "documents":         [],
-        "generation":        "",
-        "retry_count":       0,
-        "search_query":      sub_q,
-        "grounded":          False,
-        "citations":         [],
-        "retrieval_sources": [],
+        "question":             sub_q,
+        "documents":            [],
+        "generation":           "",
+        "retry_count":          0,
+        "search_query":         sub_q,
+        "grounded":             False,
+        "citations":            [],
+        "retrieval_sources":    [],
+        # Sub-agents intentionally see NO history — their sub-question is
+        # self-contained by construction. Conversation context is only
+        # injected at the user-facing synthesize step (one level up).
+        "conversation_history": [],
     }
     config = {"recursion_limit": SUBGRAPH_RECURSION_LIMIT}
     try:

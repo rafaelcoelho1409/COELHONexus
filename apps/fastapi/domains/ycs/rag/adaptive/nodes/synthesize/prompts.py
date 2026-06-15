@@ -1,12 +1,18 @@
 """ycs/rag/adaptive/nodes/synthesize — DEEP-path merger prompt.
 
-Direct port of deprecated `schemas/youtube/prompts.py:L113-132`."""
+Direct port of deprecated `schemas/youtube/prompts.py:L113-132`,
+extended 2026-06-14 with a `MessagesPlaceholder("history")` slot so the
+synthesizer can continue a multi-turn DEEP-mode investigation — e.g.
+the user follows "What patterns emerge?" with "Now compare them by
+cost" and the synthesizer references its prior framing instead of
+restarting from zero. See `standard/nodes/generate/prompts.py` for
+the broader rationale."""
 from __future__ import annotations
 
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 
-SYNTHESIZE_PROMPT_VERSION = "deprecated-1:1-2026-06-06"
+SYNTHESIZE_PROMPT_VERSION = "history-2026-06-14"
 
 
 SYNTHESIZE_PROMPT = ChatPromptTemplate.from_messages([
@@ -22,8 +28,13 @@ SYNTHESIZE_PROMPT = ChatPromptTemplate.from_messages([
         "4. Structure the output clearly with sections\n"
         "5. Cite sources using [Video: title] format\n"
         "Do NOT fabricate information. Only synthesize what the "
-        "sub-research found.",
+        "sub-research found.\n\n"
+        "Prior conversation turns (if any) are provided below as "
+        "context for follow-up DEEP queries — reference them to stay "
+        "coherent across turns, but ground every new factual claim in "
+        "the sub-research findings attached to THIS turn.",
     ),
+    MessagesPlaceholder("history"),
     (
         "human",
         "Original question: {question}\n\n"

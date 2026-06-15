@@ -10,11 +10,16 @@ from .params import (
     TABLE_NAME,
 )
 from .service import (
+    branch_thread,
+    delete_thread,
+    delete_turn,
     ensure_conversation_table,
     get_history,
+    insert_turn,
     list_thread_messages,
     list_threads,
     save_turn,
+    update_turn_answer,
 )
 
 
@@ -23,9 +28,14 @@ __all__ = [
     "DEFAULT_THREAD_ID",
     "INDEX_NAME",
     "TABLE_NAME",
+    "branch_thread",
+    "delete_thread",
+    "delete_turn",
     "ensure_conversation_table",
     "get_history",
+    "insert_turn",
     "list_thread_messages",
     "list_threads",
     "save_turn",
+    "update_turn_answer",
 ]

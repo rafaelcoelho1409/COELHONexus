@@ -40,6 +40,7 @@ from ...keys import (
 )
 from ...params import WEIGHTS, DOMAIN_PARAMS
 from .state import fs_list, fs_read, fs_write
+from ...runtime.fs_mirror import mirror_write_sync
 
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,8 @@ def triage_candidates(
         msg = f"[triage] no candidates from any source ({per_source_counts})"
         logger.warning(msg)
         fs_write(scan_id, FS_FILE_TRIAGE_TOPN, [])
+        try: mirror_write_sync(scan_id, FS_FILE_TRIAGE_TOPN, [])
+        except Exception: pass
         return msg
 
     # Cross-source dedup — the architectural payoff (architecture doc §4).
@@ -137,6 +140,8 @@ def triage_candidates(
     # Serialize top-N as a list of dicts for downstream subagents to read.
     payload = [_paper_as_dict(p, score=s) for p, s in top]
     fs_write(scan_id, FS_FILE_TRIAGE_TOPN, payload)
+    try: mirror_write_sync(scan_id, FS_FILE_TRIAGE_TOPN, payload)
+    except Exception: pass
 
     # Surface the top arxiv_ids in the return string so the orchestrator's
     # LLM knows which IDs to dispatch deep_read for in Phase 3 without

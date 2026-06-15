@@ -182,16 +182,28 @@ ORCHESTRATOR_MEMORY_TEMPLATE = """
 # --------------------------------------------------------------------------- #
 _DISCOVERY_TAIL = """
 
-WORKFLOW (DO NOT SKIP STEPS):
-  1. Extract `scan_id` from your task description.
-  2. Call the source-specific MCP tool with the right arguments.
-  3. Call `stash_discovery_result(scan_id=<id>, source='<source>')` — you
-     do NOT pass the result; the tool reads it from your conversation
-     history automatically via InjectedState. This eliminates the old
-     5KB-JSON-truncation failure mode.
-  4. Return ONE sentence summarizing what you stashed.
+WORKFLOW — TWO MANDATORY STEPS. SKIPPING STEP 2 IS A SEVERE BUG.
 
-Do NOT add prose summaries of the papers; that's downstream's job.
+  STEP 1: Call the source-specific MCP tool with the right arguments.
+
+  STEP 2 (MANDATORY — NEVER SKIP):
+      Call `stash_discovery_result(scan_id=<id>, source='<source>')`.
+
+      The orchestrator BLOCKS on your stash. If you skip STEP 2:
+        - The papers you fetched in STEP 1 ARE LOST (the tool result
+          vanishes from state at the end of your turn).
+        - The orchestrator sees `discovery/<source>.json` missing and
+          either retries your subagent OR ends the scan early with NO
+          findings.
+        - In either case the entire scan is degraded.
+
+      Call STEP 2 even when STEP 1 returned ZERO papers. Stashing with
+      count=0 is the correct empty-result signal to downstream phases.
+      Calling STEP 2 with NO PAPERS is BETTER than not calling STEP 2.
+
+After STEP 2 returns, write ONE sentence acknowledging what you stashed
+("stashed 11 arxiv papers" or "stashed 0 arxiv papers — quota throttle").
+Do NOT summarize the paper contents; downstream phases handle that.
 """
 
 

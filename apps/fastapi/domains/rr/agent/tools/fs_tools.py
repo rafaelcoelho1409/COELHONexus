@@ -38,9 +38,34 @@ from ..keys import (
     fs_extraction_path,
 )
 from .state import fs_list, fs_read, fs_write
+from ...runtime.events import emit_event_sync
+from ...runtime.fs_mirror import mirror_write_sync
 
 
 logger = logging.getLogger(__name__)
+
+
+def _mirror(scan_id: str, path: str, value: Any) -> None:
+    """Mirror a successful fs_write to Redis so FastAPI can introspect
+    per-node state via `GET /scan/{id}/fs/{path}`. Best-effort — the
+    underlying fs_write already happened; this is a parallel read-side
+    affordance for the drawer."""
+    try:
+        mirror_write_sync(scan_id, path, value)
+    except Exception as e:
+        logger.warning(f"[fs-tool] mirror failed for {path}: {e}")
+
+
+def _safe_emit(scan_id: str, phase: str, message: str) -> None:
+    """Best-effort SSE emit. The fs-write tools call this so progress
+    flows even while the orchestrator is blocked waiting on a subagent
+    (PhaseEventsMiddleware only fires on orchestrator after_model, so
+    in-subagent ticks would otherwise vanish). Wrapped in a try so a
+    Redis hiccup never sinks the underlying write."""
+    try:
+        emit_event_sync(scan_id, phase, message=message)
+    except Exception as e:
+        logger.warning(f"[fs-tool] emit {phase!r} failed: {e}")
 
 
 # --------------------------------------------------------------------------- #
@@ -128,6 +153,7 @@ def stash_discovery_result(
     papers = _parse_tool_message_content(last_tool_content)
     path = fs_discovery_path(source)
     fs_write(scan_id, path, papers)
+    _mirror(scan_id, path, papers)
     logger.info(
         f"[fs-tool] stash_discovery_result scan_id={scan_id} "
         f"source={source!r} count={len(papers)} path={path} "
@@ -178,10 +204,19 @@ def write_extraction(
     }
     path = fs_extraction_path(arxiv_id)
     fs_write(scan_id, path, payload)
+    _mirror(scan_id, path, payload)
     logger.info(
         f"[fs-tool] write_extraction scan_id={scan_id} arxiv_id={arxiv_id} "
         f"confidence={payload['confidence']:.2f} path={path}"
     )
+    # Surface per-paper progress directly so the UI ticks 1/N → N/N even
+    # while the orchestrator is blocked waiting for the deep_read subagent
+    # to finish. `top_n.json` carries the denominator.
+    n_done = len(fs_list(scan_id, prefix=FS_DIR_EXTRACTIONS + "/"))
+    top_n  = fs_read(scan_id, FS_FILE_TRIAGE_TOPN) or []
+    n_total = len(top_n) if isinstance(top_n, list) else n_done
+    _safe_emit(scan_id, "deep_read",
+               f"{n_done}/{n_total} extractions written")
     return f"wrote extraction for {arxiv_id} to {path}"
 
 
@@ -239,10 +274,12 @@ def write_synthesis_report(
         "summary":                 summary,
     }
     fs_write(scan_id, FS_FILE_SYNTHESIS_REPORT, payload)
+    _mirror(scan_id, FS_FILE_SYNTHESIS_REPORT, payload)
     logger.info(
         f"[fs-tool] write_synthesis_report scan_id={scan_id} "
         f"themes={len(themes)} path={FS_FILE_SYNTHESIS_REPORT}"
     )
+    _safe_emit(scan_id, "synthesis", f"{len(themes)} themes clustered")
     return f"wrote synthesis report to {FS_FILE_SYNTHESIS_REPORT}"
 
 
@@ -258,6 +295,23 @@ def read_synthesis_report(scan_id: str) -> str:
 # --------------------------------------------------------------------------- #
 # Report → write final digest
 # --------------------------------------------------------------------------- #
+def _repair_json_escapes(text: str) -> str:
+    r"""Replace stray single backslashes that don't form a valid JSON
+    escape with a doubled backslash so json.loads accepts the payload.
+
+    The report subagent frequently emits malformed `\escape` sequences
+    when copying LaTeX math from the deep_read extractions ('\beta',
+    '\hat{x}'). Each one bounces the agent for a retry (3-6 min per
+    scan). This repair handles the common case without re-prompting.
+
+    Valid JSON string escapes per RFC 8259: `\"`, `\\`, `\/`, `\b`,
+    `\f`, `\n`, `\r`, `\t`, `\uXXXX`. Anything else (`\b` where b is
+    NOT a valid escape char) is malformed — escape it.
+    """
+    import re
+    return re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', text)
+
+
 @tool
 def write_digest(scan_id: str, digest_json: str) -> str:
     """Persist the final ranked digest as JSON.
@@ -272,10 +326,21 @@ def write_digest(scan_id: str, digest_json: str) -> str:
     try:
         payload = json.loads(digest_json)
     except json.JSONDecodeError as e:
-        msg = f"ERROR: invalid JSON: {e}"
-        logger.warning(f"[fs-tool] write_digest scan_id={scan_id}: {msg}")
-        return msg
+        # One repair attempt for the common stray-backslash case before
+        # bouncing the agent. If the repair still fails to parse, fall
+        # through to the original error path (PhaseEnforcer retries).
+        try:
+            payload = json.loads(_repair_json_escapes(digest_json))
+            logger.info(
+                f"[fs-tool] write_digest scan_id={scan_id}: parsed after "
+                f"backslash-escape repair"
+            )
+        except json.JSONDecodeError:
+            msg = f"ERROR: invalid JSON: {e}"
+            logger.warning(f"[fs-tool] write_digest scan_id={scan_id}: {msg}")
+            return msg
     fs_write(scan_id, FS_FILE_DIGEST, payload)
+    _mirror(scan_id, FS_FILE_DIGEST, payload)
     n_items = (
         len(payload.get("items", []) or []) if isinstance(payload, dict) else 0
     )
@@ -283,4 +348,5 @@ def write_digest(scan_id: str, digest_json: str) -> str:
         f"[fs-tool] write_digest scan_id={scan_id} items={n_items} "
         f"path={FS_FILE_DIGEST}"
     )
+    _safe_emit(scan_id, "report", f"{n_items} items in digest")
     return f"wrote final digest to {FS_FILE_DIGEST}"

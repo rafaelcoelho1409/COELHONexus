@@ -15,14 +15,17 @@
    content tree above the topbar's shadow so the sticky form glues
    flush to the topbar row 3. */
 .ycs-page { position: relative; z-index: 51; }
-/* On the Ingestion stage the row-3 toolbar hosts the Library filter
- * popovers, which need to render ABOVE the page content. The lift
- * above (51 vs the topbar's 50) was added for the Source sticky
- * form — Ingestion has no such constraint and instead needs the
- * opposite: drop back to auto so the topbar's 50 stacking context
- * wins, letting the popovers escape the page. The Source stage
- * keeps the 51 lift via the unscoped rule above. */
-.ycs-page[data-ycs-stage="ingestion"] { z-index: auto; }
+/* On the Ingestion and Ask stages the row-3 toolbar hosts popovers
+ * (Library facet filters / Thread picker / LLM configuration) which
+ * need to render ABOVE the page content. The lift above (51 vs the
+ * topbar's 50) was added for the Source sticky form — these stages
+ * have no such constraint and instead need the opposite: drop back
+ * to auto so the topbar's 50 stacking context wins, letting the
+ * popovers escape down over the page (over the Scope `<select>` in
+ * Ask's case). The Source stage keeps the 51 lift via the unscoped
+ * rule above. */
+.ycs-page[data-ycs-stage="ingestion"],
+.ycs-page[data-ycs-stage="ask"] { z-index: auto; }
 .ycs-root { display: flex; flex-direction: column; gap: 24px; }
 
 /* Base chip used ONLY by `.ycs-ask-stages` (Slice 9 Ask live stages).
@@ -1320,13 +1323,34 @@
 .ycs-ask-stages .ycs-step-circle {
   width: auto;
   height: auto;
-  padding: 4px 10px;
+  padding: 4px 12px;
   border-radius: 999px;
   font-size: 0.72rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   opacity: 0.4;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
   transition: opacity 0.2s, border-color 0.2s, color 0.2s;
+}
+/* Per-step live action subtitle (e.g. "Searching transcripts"). Set by
+ * `setStageAction()` when the matching SSE node arrives; cleared when
+ * the next stage activates. SOTA Claude/ChatGPT/Cursor pattern as of
+ * mid-2026. */
+.ycs-step-circle-action {
+  font-style: italic;
+  font-weight: 400;
+  font-size: 0.66rem;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.18s;
+}
+.ycs-step-circle-action:not(:empty) { opacity: 1; }
+.ycs-ask-stages .ycs-step-circle.active .ycs-step-circle-action {
+  color: var(--primary);
 }
 .ycs-ask-stages .ycs-step-circle.active {
   opacity: 1;
@@ -1344,29 +1368,53 @@
   border-color: var(--primary);
 }
 .ycs-ask-output { margin-top: 8px; display: flex; flex-direction: column; gap: 16px; }
+/* 2026-06-15 — `white-space: pre-wrap` removed. It was a holdover from
+ * the pre-markdown era (when the answer body held raw `textContent`).
+ * Now that `body.innerHTML = renderMarkdownWithCitations(...)` writes
+ * real HTML, pre-wrap was rendering the inline whitespace BETWEEN
+ * `<p>` tags as visible blank lines, producing ~2× paragraph spacing. */
 .ycs-ask-answer {
   font-size: 0.96rem;
   line-height: 1.55;
-  white-space: pre-wrap;
 }
 .ycs-ask-citations { display: flex; flex-direction: column; gap: 8px; }
 
-/* ----- Ask · empty-state hint ----- */
+/* ----- Ask · empty-state hint -----
+ * Absorbs the page title + intro paragraph (SOTA chat shape — no
+ * persistent title above the messages). Visible only when the
+ * conversation column is empty. */
 .ycs-ask-empty {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 14px 16px;
-  margin: 8px 0;
+  gap: 12px;
+  padding: 28px 18px;
+  margin: 16px 0;
   border: 1px dashed var(--border);
   border-radius: 4px;
+  color: var(--text);
+  text-align: center;
+  align-items: center;
+}
+.ycs-ask-empty-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 500;
+  color: var(--text);
+}
+.ycs-ask-empty-intro {
+  margin: 0;
+  max-width: 560px;
   color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
 }
 .ycs-ask-empty-label {
+  margin-top: 6px;
   font-size: 0.7rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   font-weight: 600;
+  color: var(--text-muted);
 }
 .ycs-ask-empty-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .ycs-ask-example-chip {
@@ -1582,6 +1630,45 @@
   display: none;
 }
 
+/* P6 plan-preview state — checkbox + "Run research" button below the
+ * cards. Once user confirms, the second pass replaces this with the
+ * normal execution rendering. */
+.ycs-ask-deep-check {
+  margin-right: 8px;
+  width: 14px;
+  height: 14px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+.ycs-ask-deep-card[data-state="preview"] {
+  border-color: var(--border);
+  opacity: 1;
+}
+.ycs-ask-deep-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  margin-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+.ycs-ask-deep-run {
+  padding: 6px 14px;
+  background: var(--primary);
+  color: #fff;
+  border: 0;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ycs-ask-deep-run:hover { filter: brightness(1.05); }
+.ycs-ask-deep-actions-hint {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
 /* ===== Wave 5 additions ===== */
 
 /* ---- Source · transcript options + form actions ---- */
@@ -1652,6 +1739,78 @@
   min-width: 460px;
   padding: 14px;
 }
+/* Info card replacing the old LLM form (2026-06-15) — explains that
+ * the rotator is always active and why single-model BYOK was removed. */
+.ycs-ask-llm-info {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ycs-ask-llm-info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.ycs-ask-llm-info-head {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.ycs-ask-llm-info-badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(46, 160, 67, 0.14);
+  color: #2da455;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.ycs-ask-llm-info-body {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text);
+}
+.ycs-ask-llm-info-muted {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+#ycs-ask-llm .ycs-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+#ycs-ask-llm .ycs-form-actions .ycs-search-status { flex: 1; }
+
+/* All three fields stack vertically (`grid-template-columns: 1fr` set
+ * inline in chrome.py) — model names get full width, no truncation. */
+#ycs-ask-llm .ycs-llm-temp-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+#ycs-ask-llm .ycs-llm-temp-value {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.78rem;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.04);
+  padding: 1px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.02em;
+  tabular-nums: true;
+}
+#ycs-ask-llm .ycs-llm-temp-slider {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+  padding: 0;
+}
+
 #ycs-ask-llm .ycs-llm-fields {
   display: grid;
   padding: 0;
@@ -1706,6 +1865,80 @@
   border-color: var(--text-muted);
 }
 
+/* ---- Ask · scope picker (row-3 toolbar) ----
+ * `.dd-catfilter` dropdown — current scope label in the trigger,
+ * popover with one checkbox row per indexed channel. State lives in a
+ * JS Set, not the DOM. */
+#ycs-ask-scope .dd-catfilter-popover {
+  min-width: 280px;
+  max-width: 360px;
+  padding: 6px;
+}
+.ycs-ask-scope-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.ycs-ask-scope-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.84rem;
+  color: var(--text);
+  transition: background 0.15s;
+}
+.ycs-ask-scope-row:hover { background: rgba(0, 0, 0, 0.03); }
+.ycs-ask-scope-row-all { font-weight: 500; }
+.ycs-ask-scope-row-all strong {
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+.ycs-ask-scope-row-disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.ycs-ask-scope-row-disabled:hover {
+  background: transparent;
+}
+.ycs-ask-scope-row-disabled .ycs-ask-scope-check-all {
+  cursor: not-allowed;
+}
+.ycs-ask-scope-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 6px;
+}
+.ycs-ask-scope-check {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+.ycs-ask-scope-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ycs-ask-scope-row-count {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.ycs-ask-scope-empty {
+  padding: 12px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-style: italic;
+  text-align: center;
+}
+
 /* ---- Ask · thread picker (row-3 toolbar) ----
  * `.dd-catfilter` dropdown — current id in the trigger label, popover
  * with a `+ New thread` row + a scrollable list of prior threads. */
@@ -1747,23 +1980,14 @@
   max-height: 340px;
   overflow-y: auto;
 }
+/* Row = flex wrapper around a clickable `Pick` area (1fr × 2-row grid:
+ * id+meta over title) and a small `Delete` button. Nested `<button>`
+ * elements is the reason the wrapper itself is a non-button `<div>`. */
 .ycs-ask-thread-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  grid-template-areas:
-      "id   meta"
-      "title title";
-  column-gap: 12px;
-  row-gap: 2px;
-  padding: 8px 10px;
-  background: transparent;
+  display: flex;
+  align-items: stretch;
   border: 1px solid transparent;
   border-radius: 4px;
-  color: var(--text);
-  font-family: inherit;
-  font-size: 0.82rem;
-  text-align: left;
-  cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
 }
 .ycs-ask-thread-row:hover {
@@ -1773,6 +1997,25 @@
 .ycs-ask-thread-row.active {
   border-color: var(--primary);
   background: rgba(0, 130, 200, 0.04);
+}
+.ycs-ask-thread-row-pick {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+      "id   meta"
+      "title title";
+  column-gap: 12px;
+  row-gap: 2px;
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
 }
 .ycs-ask-thread-row-id {
   grid-area: id;
@@ -1801,6 +2044,33 @@
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
+/* Match DD's `.fw-lib-delete` exactly (static/css/dd/ingestion/library.css
+ * :92-127): 26×26 bordered square, always visible, white-on-primary on
+ * hover. Same visual language across pickers. */
+.ycs-ask-thread-row-delete {
+  align-self: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  margin: 0 6px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.85rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ycs-ask-thread-row-delete:hover {
+  color: #fff;
+  background: var(--primary);
+  border-color: var(--primary);
+}
 .ycs-ask-thread-empty {
   padding: 12px;
   color: var(--text-muted);
@@ -1808,29 +2078,247 @@
   font-style: italic;
   text-align: center;
 }
-.ycs-ask-history {
+/* ----- Ask · 2-column layout (conversation + sticky sources rail) -----
+ * Perplexity / Claude shape: left column is the continuous chat feed,
+ * right column is a sticky 280px rail showing the latest turn's
+ * citations as numbered cards. Inline `[N]` pills in the assistant
+ * text point into the rail. */
+.ycs-ask-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 24px;
+  align-items: start;
+  margin-top: 8px;
+}
+@media (max-width: 960px) {
+  .ycs-ask-layout { grid-template-columns: minmax(0, 1fr); }
+  .ycs-ask-rail { position: static !important; }
+}
+
+/* Left column = scrolling conversation + ChatGPT-style sticky-bottom
+ * composer. `min-height` makes the column fill the viewport so the
+ * composer has space to dock at the bottom on a fresh page (no
+ * messages yet). `flex: 1` on the conversation pushes the composer
+ * down; `position: sticky` then keeps it pinned as the user scrolls
+ * up through past turns. */
+.ycs-ask-main {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  margin-bottom: 8px;
-  max-height: 60vh;
-  overflow-y: auto;
+  min-height: calc(100vh - 180px);
 }
-.ycs-ask-history:empty { display: none; }
-.ycs-ask-turn {
+.ycs-ask-main > .ycs-ask-conversation { flex: 1 1 auto; }
+
+/* COMPOSER DOCK — pinned to the VIEWPORT bottom (not the scroll
+ * container's content bottom — the shell's `.page` has padding-bottom: 40px
+ * and a sticky `bottom: 0` would leave that 40px gap visible through to
+ * the scrolling conversation, which was the leak bug). `position: fixed`
+ * anchors against the viewport directly.
+ *
+ * Horizontal extents match the `.page` left padding (40px) + the
+ * `.ycs-ask-layout`'s sources rail (300px) + grid gap (24px) on the
+ * right. Below the 960px collapse breakpoint the rail stacks under the
+ * conversation, so the dock spans the full inner width. */
+.ycs-ask-composer-dock {
+  position: fixed;
+  left: 40px;
+  right: 364px;     /* 40 page pad-right + 300 rail + 24 grid gap */
+  bottom: 0;
+  padding: 12px 0 14px;
+  background: var(--bg, #fff);
+  z-index: 30;
+}
+@media (max-width: 960px) {
+  .ycs-ask-composer-dock { right: 40px; }
+}
+.ycs-ask-composer-dock::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -28px;
+  height: 28px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--bg, #fff)
+  );
+  pointer-events: none;
+}
+/* Reserve room in the conversation column for the fixed dock — the
+ * column scrolls behind it, but we never want the LAST message to
+ * end up hidden when the user stops scrolling. ~120px = dock card
+ * height + fade strip + margin. */
+.ycs-ask-main > .ycs-ask-conversation { padding-bottom: 120px; }
+#ycs-ask-form {
+  background: var(--card, #fff);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.10);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* Auto-grow textarea (ChatGPT / Claude pattern, mid-2026 SOTA). Starts
+ * at 1 line; grows up to ~10 lines via JS `scrollHeight` measurement
+ * in `adjustTextareaHeight()`; scrolls beyond. `field-sizing: content`
+ * is the modern progressive enhancement that lets the browser size the
+ * field by its content directly — supported in Chrome 123+ / Firefox
+ * 130+ / Safari 18.2+ (mid-2026: ~78% global; not yet Baseline, so JS
+ * fallback still ships in every major chat UI). */
+#ycs-ask-form .ycs-input.ycs-textarea {
+  resize: none;
+  border: 0;
+  background: transparent;
+  padding: 8px 4px;
+  font-size: 0.96rem;
+  line-height: 1.45;
+  outline: none;
+  min-height: calc(1lh + 16px);
+  max-height: calc(10 * 1.45rem + 16px);
+  overflow-y: auto;
+  field-sizing: content;
+}
+#ycs-ask-form .ycs-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 0;
+}
+#ycs-ask-form .ycs-form-actions .ycs-search-status { flex: 1; }
+.ycs-ask-rail {
+  position: sticky;
+  top: 80px;
+  max-height: calc(100vh - 110px);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 12px 14px;
+  padding: 12px;
   border: 1px solid var(--border);
   border-radius: 4px;
-  background: rgba(0, 0, 0, 0.015);
+  background: rgba(0, 0, 0, 0.01);
 }
-.ycs-ask-turn-user,
+.ycs-ask-rail-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.ycs-ask-rail-label {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.ycs-ask-rail-count {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+.ycs-ask-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ycs-ask-rail-list:empty::before {
+  content: "Citations will appear here as the assistant responds.";
+  display: block;
+  padding: 10px 4px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-style: italic;
+  line-height: 1.45;
+}
+.ycs-ask-rail-card { position: relative; }
+.ycs-ask-rail-card-n {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  background: var(--primary);
+  color: #fff;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.66rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.04em;
+}
+.ycs-ask-rail-card.highlighted {
+  border-color: var(--primary);
+  background: rgba(0, 130, 200, 0.08);
+}
+
+/* Inline `[N]` citation pill — small superscript that links back to
+ * the corresponding card in the right rail. Hover highlights the card. */
+.ycs-ask-cite-pill {
+  display: inline-block;
+  margin: 0 2px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.45;
+  background: rgba(0, 130, 200, 0.10);
+  color: var(--primary);
+  cursor: pointer;
+  vertical-align: super;
+  text-decoration: none;
+}
+.ycs-ask-cite-pill:hover {
+  background: var(--primary);
+  color: #fff;
+}
+
+/* ----- Ask · continuous conversation feed (2026-06-14) -----
+ * Flat-prose chat layout (no bubbles per SOTA: Claude / ChatGPT
+ * shape). User prompts read as right-aligned compact pills; assistant
+ * responses as full-width prose with a role + mode-badge header.
+ * Stages strip + DEEP panel + citations sit INSIDE each turn. */
+.ycs-ask-conversation {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  margin: 8px 0;
+}
+.ycs-ask-conversation:empty { display: none; }
+.ycs-ask-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ycs-ask-turn-user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.ycs-ask-turn-user-body {
+  max-width: 80%;
+  padding: 10px 14px;
+  background: rgba(0, 130, 200, 0.06);
+  border: 1px solid rgba(0, 130, 200, 0.18);
+  border-radius: 12px 12px 4px 12px;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+}
 .ycs-ask-turn-assistant {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 10px;
+}
+.ycs-ask-turn-assistant-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .ycs-ask-turn-role {
   font-size: 0.66rem;
@@ -1840,9 +2328,8 @@
   color: var(--text-muted);
 }
 .ycs-ask-turn-user .ycs-ask-turn-role { color: var(--primary); }
-.ycs-ask-turn-mode {
+.ycs-ask-turn-mode-badge {
   display: inline-block;
-  margin-left: 6px;
   padding: 1px 6px;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -1852,17 +2339,169 @@
   color: var(--text-muted);
   background: rgba(0, 0, 0, 0.03);
 }
+.ycs-ask-turn-mode-badge:empty { display: none; }
 .ycs-ask-turn-body {
-  font-size: 0.9rem;
-  line-height: 1.5;
+  font-size: 0.94rem;
+  line-height: 1.55;
   color: var(--text);
-  white-space: pre-wrap;
 }
-.ycs-ask-turn-citations {
+.ycs-ask-turn-body:empty { display: none; }
+/* Markdown-rendered output is real HTML — drop the `white-space: pre-wrap`
+ * default and tighten the per-element rhythm. Default browser `<p>` and
+ * heading margins are ~1em (~15px) top and bottom which reads as a
+ * double-newline gap. */
+.ycs-ask-turn-body p {
+  margin: 0.2em 0;
+}
+.ycs-ask-turn-body > :first-child { margin-top: 0; }
+.ycs-ask-turn-body > :last-child  { margin-bottom: 0; }
+.ycs-ask-turn-body h1,
+.ycs-ask-turn-body h2,
+.ycs-ask-turn-body h3,
+.ycs-ask-turn-body h4 {
+  margin: 0.6em 0 0.2em;
+  line-height: 1.3;
+  font-weight: 600;
+}
+.ycs-ask-turn-body h1 { font-size: 1.18rem; }
+.ycs-ask-turn-body h2 { font-size: 1.06rem; }
+.ycs-ask-turn-body h3 { font-size: 0.98rem; }
+.ycs-ask-turn-body ul,
+.ycs-ask-turn-body ol {
+  margin: 0.25em 0;
+  padding-left: 1.4em;
+}
+.ycs-ask-turn-body li { margin: 0.05em 0; }
+.ycs-ask-turn-body li > p { margin: 0; }
+.ycs-ask-turn-body pre {
+  margin: 0.5em 0;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+.ycs-ask-turn-body code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.86em;
+}
+.ycs-ask-turn-body :not(pre) > code {
+  padding: 1px 5px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 3px;
+}
+.ycs-ask-turn-body blockquote {
+  margin: 0.5em 0;
+  padding: 4px 12px;
+  border-left: 3px solid var(--border);
+  color: var(--text-muted);
+}
+.ycs-ask-turn-body table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.88rem;
+}
+.ycs-ask-turn-body th,
+.ycs-ask-turn-body td {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  text-align: left;
+}
+.ycs-ask-turn-body th { background: rgba(0, 0, 0, 0.03); }
+
+/* Per-turn action chips (Copy / Regenerate / Branch). Hover-revealed
+ * on each turn (hidden by default to keep the conversation clean).
+ * Hidden entirely on streaming turns — actions apply to completed
+ * turns only. */
+.ycs-ask-turn-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity 0.18s;
+}
+.ycs-ask-turn:hover .ycs-ask-turn-actions { opacity: 1; }
+.ycs-ask-turn-streaming .ycs-ask-turn-actions { display: none; }
+.ycs-ask-turn-action {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface, #fff);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.74rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.ycs-ask-turn-action:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+  background: rgba(0, 0, 0, 0.03);
+}
+
+/* Stages + DEEP accordion. Open while streaming; auto-collapses on
+ * `end` so the answer is the headline. Click the head to re-expand. */
+.ycs-ask-turn-process {
   display: flex;
   flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.015);
+  padding: 6px 10px;
+}
+.ycs-ask-turn-process-head {
+  display: flex;
+  align-items: center;
   gap: 6px;
-  margin-top: 2px;
+  background: transparent;
+  border: 0;
+  padding: 2px 0;
+  font-family: inherit;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-align: left;
+}
+.ycs-ask-turn-process-head:hover { color: var(--text); }
+.ycs-ask-turn-process-chevron {
+  transition: transform 0.18s;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.ycs-ask-turn-process.collapsed .ycs-ask-turn-process-chevron {
+  transform: rotate(-90deg);
+}
+.ycs-ask-turn-process-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ycs-ask-turn-process.collapsed .ycs-ask-turn-process-body {
+  display: none;
+}
+/* Streaming spinner — replaces the "streaming…" text pill (2026-06-15).
+ * SOTA per mid-2026 survey: Claude uses a minimalist pulsing dot,
+ * Gemini a pulsing orb, ChatGPT a blinking caret. A small spinning
+ * circle reads as "process running" in every chat product and needs no
+ * accompanying text. Cleared by `freezeCurrentTurn()` on `end`. */
+.ycs-ask-turn-streaming .ycs-ask-turn-assistant-head::after {
+  content: "";
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: ycs-ask-spinner 0.8s linear infinite;
+  vertical-align: middle;
+}
+@keyframes ycs-ask-spinner {
+  to { transform: rotate(360deg); }
 }
 
 /* ============================================================
