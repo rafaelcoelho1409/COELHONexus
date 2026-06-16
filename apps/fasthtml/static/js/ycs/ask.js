@@ -325,10 +325,57 @@ const emptyEl        = document.getElementById("ycs-ask-empty");
 /* Send ↔ Stop swap (ChatGPT shape): exactly one of the two is visible
  * at any time. While a stream is in flight, the Stop button takes the
  * Send position; once the `end` SSE event lands (or the stream errors
- * out / is aborted), the Send button is restored. */
+ * out / is aborted), the Send button is restored.
+ *
+ * 2026-06-16 — also gates the "New thread" + thread-picker rows so the
+ * user can't fork off a fresh run while the current one is still
+ * consuming rotator slots. See `_isRunning()` / `_guardRunning()` for
+ * the read-side helpers. */
 function setStreamingUI(streaming) {
     if (sendBtn) sendBtn.style.display = streaming ? "none"       : "inline-flex";
     if (stopBtn) stopBtn.style.display = streaming ? "inline-flex" : "none";
+    if (newThreadBtn) {
+        newThreadBtn.disabled = !!streaming;
+        newThreadBtn.title    = streaming
+            ? "Stop the current run first — starting a new thread "
+              + "while one is in-flight wastes rotator slots and can "
+              + "leave the running stream orphaned."
+            : "";
+        newThreadBtn.classList.toggle("ycs-disabled-busy", !!streaming);
+    }
+}
+
+/* True when SOMETHING is currently consuming an SSE / poll slot for
+ * THIS tab. Three independent signals collapse here:
+ *   - `currentAbortController` — the live `POST /search/stream` fetch
+ *     in this JS context owns a Stop-able SSE.
+ *   - `_inProgressPollHandle` — `hydrateThreadHistory()` found the
+ *     last persisted turn was still mid-pipeline (refresh-during-run)
+ *     and spun up the `/history` poll loop to track its progress.
+ *   - A DOM turn with `data-streaming="true"` — belt-and-suspenders
+ *     in case the closure-scoped controller leaked away (e.g. an
+ *     uncaught fetch reject in the SSE consumer).
+ *
+ * Any one of these means "don't start new work". */
+function _isRunning() {
+    if (currentAbortController != null) return true;
+    if (_inProgressPollHandle  != null) return true;
+    if (conversationEl?.querySelector('.ycs-ask-turn[data-streaming="true"]')) return true;
+    return false;
+}
+
+/* Block whatever the user was about to do and surface a toast. Returns
+ * `true` if the caller should bail (i.e. the user was blocked); `false`
+ * if it's safe to proceed. Centralises the message so every callsite
+ * shows the same wording. */
+function _guardRunning(actionLabel = "start a new thread") {
+    if (!_isRunning()) return false;
+    showToast(
+        `Wait for the current run to finish (or click Stop) before `
+        + `trying to ${actionLabel}. Running two streams at once `
+        + `wastes free-tier rotator slots and orphans the first one.`
+    );
+    return true;
 }
 
 /* Active AbortController for the in-flight SSE fetch. Click on Stop
@@ -876,6 +923,7 @@ if (!threadId) {
 setThreadLabel(threadId);
 
 newThreadBtn?.addEventListener("click", () => {
+    if (_guardRunning("start a new thread")) return;
     threadId = shortId();
     try { localStorage.setItem(LS_THREAD_KEY, threadId); } catch (_) { /* */ }
     setThreadLabel("");
@@ -888,6 +936,16 @@ newThreadBtn?.addEventListener("click", () => {
  * picker rows. */
 async function switchThread(id) {
     if (!id || id === threadId) {
+        _closeAllCatfilters();
+        return;
+    }
+    // 2026-06-16 — same guard as the New thread button. Switching
+    // threads mid-stream would orphan the SSE: clearConversation()
+    // removes `currentTurnEl` but the still-open POST /search/stream
+    // keeps writing into the now-disconnected DOM reference, and the
+    // backend keeps consuming rotator slots for an answer no one
+    // will see.
+    if (_guardRunning("switch threads")) {
         _closeAllCatfilters();
         return;
     }
@@ -1789,9 +1847,48 @@ async function copyTurnAnswer(turn) {
     }
 }
 
+/* Regenerate: DELETE the original turn's row + DOM, then re-fire the
+ * question fresh. The deletion step is what changed 2026-06-16 — the
+ * old behaviour appended a NEW turn alongside the original, leaving
+ * the LLM to load BOTH the old answer and the new one as conversation
+ * history on subsequent turns. That doubled the context (a 4 KB
+ * sub-research answer × 2 = 8 KB the next generate prompt has to chew
+ * through), wasted rotator slots on every later turn in the thread,
+ * and made the LLM "read the same things twice" which the user
+ * correctly flagged as a quality + latency problem.
+ *
+ * After this change: regenerating B in A → B → C produces A → B' → C.
+ * The original B is GONE both from the Postgres `conversation_history`
+ * row AND from the DOM. There's no recovery — if you want the safety
+ * of keeping the old answer alongside, use the **Branch** action
+ * instead (forks the thread at this turn). */
 async function regenerateTurn(turn) {
     const q = turn.dataset.question || "";
     if (!q) return;
+    if (_guardRunning("regenerate this turn")) return;
+    const turnId = turn.dataset.turnId;
+    // Step 1 — delete the original row server-side. Reuses the
+    // `/turns/{id}/cancel` endpoint: for an already-completed turn the
+    // cancellation-set add is a no-op (no SSE generator is reading
+    // it), and `delete_turn` removes the row. Best-effort: if the
+    // delete fails (network blip, row already gone), we still
+    // regenerate — worst case the old turn stays in PG but the DOM
+    // shows just the new one, and a refresh would resurface it.
+    if (turnId) {
+        try {
+            await api(`/agents/turns/${encodeURIComponent(turnId)}/cancel`, {
+                method: "POST",
+            });
+        } catch (_) { /* best-effort */ }
+    }
+    // Step 2 — remove the original turn's DOM. After this, sendQuestion
+    // will append the regenerated turn at the bottom of the (now
+    // shorter) conversation column.
+    turn.remove();
+    if (conversationEl && !conversationEl.children.length) {
+        showEmptyState();
+    }
+    // Step 3 — fire the question fresh.
     await sendQuestion(q);
 }
 

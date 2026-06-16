@@ -901,6 +901,13 @@ async def ai_generate_stream(
     final = _post_clean(acc, backend = backend)
     ok, err = _check_with_safety(final, backend = backend)
     if not ok:
+        # Log the rejection so the next Generate error in the pod is
+        # diagnosable from `kubectl logs` without a transcript-replay.
+        # Capped at 1500 chars to bound log volume.
+        logger.warning(
+            "[ycs:query:ai] first-pass rejected (%s): %s — body[:1500]=%r",
+            backend, err, final[:1500],
+        )
         # Self-repair — one retry.
         yield {"data": _json.dumps({
             "event": "repair",
@@ -935,6 +942,11 @@ async def ai_generate_stream(
             return
         final = _post_clean(acc2, backend = backend)
         ok, err = _check_with_safety(final, backend = backend)
+        if not ok:
+            logger.warning(
+                "[ycs:query:ai] self-repair ALSO rejected (%s): %s — body[:1500]=%r",
+                backend, err, final[:1500],
+            )
 
     yield {"data": _json.dumps({
         "event": "done",
@@ -976,18 +988,86 @@ def _post_clean(text: str, *, backend: str) -> str:
         try:
             obj = json.loads(extracted)
         except json.JSONDecodeError:
-            # Malformed — return whatever we extracted so the safety
-            # guard surfaces a precise error message + the self-repair
-            # loop gets a chance.
-            return extracted
+            # Common LLM mistake: trailing commas before `}` / `]`.
+            # Standard JSON forbids them; one permissive sweep recovers
+            # the most frequent failure mode without pulling in json5.
+            relaxed = re.sub(r",(\s*[}\]])", r"\1", extracted)
+            try:
+                obj = json.loads(relaxed)
+            except json.JSONDecodeError:
+                # Truly malformed — return raw so the safety guard
+                # surfaces a precise error and self-repair fires.
+                return extracted
         # ensure_ascii=False so unicode survives the round-trip;
         # indent=2 matches the scaffold templates in editor.js so the
         # editor renders cleanly after replacement.
         return json.dumps(obj, indent = 2, ensure_ascii = False)
 
     if backend == BACKEND_NEO4J:
-        return _format_cypher(s)
+        return _format_cypher(_extract_cypher(s))
 
+    return s
+
+
+def _extract_cypher(s: str) -> str:
+    """Pull just the Cypher out of a response that may also contain
+    prose, fenced blocks, or other commentary.
+
+    Real-world failure mode (2026-06-16, "best graph about Brasil"):
+    the LLM wrote prose around the Cypher — e.g. "I'll create a query
+    that…" / "this will delete duplicates from the result". The prose
+    contained `create` / `delete`, which the safety regex flagged as
+    write ops, rejecting an otherwise-valid READ-only query.
+
+    Extraction strategy (each step strictly stronger than the last):
+      1. Fenced block ANYWHERE — triple-backtick blocks, optionally
+         tagged ``cypher`` / ``cql``. Strong signal; almost never
+         matches inside natural prose.
+      2. Per-LINE scan for a line that STARTS with a Cypher clause
+         pattern (MATCH `(`, OPTIONAL MATCH `(`, CALL foo.bar`(`, or
+         WITH/UNWIND/RETURN + identifier). The next-token requirement
+         filters out prose words like "match the entity then …".
+      3. Last-resort: substring search for `MATCH (` or `OPTIONAL
+         MATCH (` with the opening paren mandatory — that's about as
+         strong a Cypher signal as you can get in a single token.
+      4. Failing all three, return the input verbatim and let the
+         safety regex deliver a precise rejection message."""
+    if not s:
+        return s
+    # 1. Fenced extraction.
+    fence = re.search(
+        r"```(?:cypher|cql)?\s*\n?(.*?)```",
+        s, flags = re.DOTALL | re.IGNORECASE,
+    )
+    if fence:
+        return fence.group(1).strip()
+    # 2. Per-line scan for the FIRST line that opens a Cypher clause.
+    #    The next-token after the keyword (`(` or `\S`) is what
+    #    distinguishes "MATCH (x)" from a prose word like "match".
+    _CYPHER_LINE_START = re.compile(
+        r"^\s*(?:"
+        r"MATCH\s*\("                       # MATCH (
+        r"|OPTIONAL\s+MATCH\s*\("           # OPTIONAL MATCH (
+        r"|CALL\s+[A-Za-z_][\w.]*\s*\("     # CALL apoc.foo(
+        r"|WITH\s+\S"                       # WITH x
+        r"|UNWIND\s+\S"                     # UNWIND list
+        r"|RETURN\s+\S"                     # RETURN x
+        r")",
+        flags = re.IGNORECASE,
+    )
+    lines = s.split("\n")
+    for i, line in enumerate(lines):
+        if _CYPHER_LINE_START.match(line):
+            return "\n".join(lines[i:]).strip()
+    # 3. Substring fallback — only the strongest signals (`KEYWORD (`)
+    #    to avoid grabbing prose words.
+    m = re.search(
+        r"\b(?:MATCH|OPTIONAL\s+MATCH)\s*\(",
+        s, flags = re.IGNORECASE,
+    )
+    if m:
+        return s[m.start():].strip()
+    # 4. Give up — let safety speak.
     return s
 
 
@@ -1024,17 +1104,81 @@ def _extract_balanced_json(s: str) -> str:
 
 
 def _format_cypher(s: str) -> str:
-    """Light Cypher polish — rstrip per line, normalize line endings,
-    collapse blank-line runs of 3+, trim leading/trailing whitespace.
+    """Cypher polish — inject newlines before major clause keywords so
+    a single-line model response renders multi-line + legible.
 
-    No tokenization (the StreamLanguage in editor.js handles
-    highlighting). For deeper reformatting we'd need a real Cypher
-    parser; the few-shot exemplars already steer the LLM toward the
-    clause-per-line style we want."""
-    lines = [line.rstrip() for line in s.replace("\r\n", "\n").split("\n")]
-    out = "\n".join(lines).strip()
+    Pipeline:
+      1. Normalize line endings + strip.
+      2. PROTECT string literals + `//` + `/* */` comments by swapping
+         them out for placeholders — so we never insert newlines inside
+         a quoted token (e.g. `RETURN \"what to RETURN\"` shouldn't
+         break in the middle of the string).
+      3. Inject a newline before each major Cypher keyword that's
+         preceded by inline whitespace. Compound keywords first
+         (`OPTIONAL MATCH`, `UNION ALL`, `ORDER BY`) so they win over
+         the bare single-word variants.
+      4. Restore the protected literals.
+      5. rstrip per line + collapse blank-line runs of 3+.
+
+    Case-preserving: the matched keyword text is reused verbatim in the
+    replacement (the LLM might output lowercase Cypher; we don't
+    silently upper-case it)."""
+    if not s.strip():
+        return ""
+    src = s.replace("\r\n", "\n").strip()
+
+    # 1. Protect strings + comments.
+    placeholders: list[str] = []
+    def _protect(match: "re.Match[str]") -> str:
+        placeholders.append(match.group(0))
+        return f"\x00P{len(placeholders) - 1}\x00"
+
+    _protect_re = re.compile(
+        r"//[^\n]*"                       # line comment
+        r"|/\*.*?\*/"                     # block comment (non-greedy)
+        r"|'(?:\\.|[^'\\])*'"             # single-quoted string
+        r"|\"(?:\\.|[^\"\\])*\""          # double-quoted string
+        r"|`(?:\\.|[^`\\])*`",            # back-tick identifier
+        flags = re.DOTALL,
+    )
+    protected = _protect_re.sub(_protect, src)
+
+    # 2. Inject newlines before major clauses. SINGLE alternation regex
+    #    with longest-first ordering so `OPTIONAL MATCH` wins over the
+    #    bare `MATCH` rule and doesn't get split in half (the two-pass
+    #    version produced `OPTIONAL\nMATCH`). `re.sub` does left-to-
+    #    right non-overlapping matching, so once "OPTIONAL MATCH" is
+    #    consumed at position N the next search resumes past the
+    #    compound keyword.
+    _KEYWORDS = (
+        "OPTIONAL MATCH", "UNION ALL", "ORDER BY",
+        "MATCH", "WHERE", "WITH", "RETURN", "LIMIT", "SKIP",
+        "UNION", "UNWIND", "CALL", "YIELD",
+    )
+    _alts = sorted(
+        # Spaces in keywords become `\s+` so `OPTIONAL\nMATCH` or
+        # `OPTIONAL  MATCH` (multiple spaces) still match as one
+        # compound clause.
+        (kw.replace(" ", r"\s+") for kw in _KEYWORDS),
+        key = len, reverse = True,
+    )
+    _all_kw_re = re.compile(
+        r"(?<!\n)[ \t]+(" + "|".join(_alts) + r")\b",
+        flags = re.IGNORECASE,
+    )
+    protected = _all_kw_re.sub(lambda m: "\n" + m.group(1), protected)
+
+    # 3. Restore protected spans.
+    out = re.sub(
+        r"\x00P(\d+)\x00",
+        lambda m: placeholders[int(m.group(1))],
+        protected,
+    )
+
+    # 4. Final normalization.
+    out = "\n".join(line.rstrip() for line in out.split("\n"))
     out = re.sub(r"\n{3,}", "\n\n", out)
-    return out
+    return out.strip()
 
 
 def _check_with_safety(text: str, *, backend: str) -> tuple[bool, str | None]:

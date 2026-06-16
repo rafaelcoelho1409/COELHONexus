@@ -2418,6 +2418,22 @@
 .ycs-ask-turn-partial[data-confidence] .ycs-ask-turn-assistant-head::after {
   content: "Partial ⚠ " attr(data-confidence) "%";
 }
+/* 2026-06-16 — disabled-while-running state. `setStreamingUI(true)`
+ * sets the New thread button's `disabled` attribute AND the
+ * `.ycs-disabled-busy` class. The class is the addressable hook for
+ * future non-`<button>` triggers (picker rows, link-style controls)
+ * that don't accept the native `disabled` attribute. Hover state is
+ * neutralised so the button reads as inert. */
+.ycs-disabled-busy,
+.dd-catfilter-trigger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.dd-catfilter-trigger:disabled:hover {
+  border-color: var(--border);
+  background: var(--card);
+}
 .ycs-ask-turn-body {
   font-size: 0.94rem;
   line-height: 1.55;
@@ -4188,6 +4204,8 @@
   align-items: center;
   gap: 10px;
   justify-content: flex-end;
+  /* Wrap when the model chip is long enough to crowd the buttons. */
+  flex-wrap: wrap;
 }
 .ycs-query-ai-status { margin-right: auto; font-size: 0.78rem; color: var(--text-muted); }
 .ycs-query-ai-status-running { color: var(--primary); }
@@ -4206,7 +4224,11 @@
 /* Model chip — FGTS-VA-selected arm, populated by the SSE `model`
    frame the server emits right after the bandit pick lands. `hidden`
    attribute collapses the chip when empty so the row layout matches
-   the pre-Generate state. */
+   the pre-Generate state.
+   2026-06-16: removed max-width + ellipsis — display the FULL arm
+   name (e.g. `nvidia_nim/openai/gpt-oss-120b`). The actions row has
+   `flex-wrap: wrap` so a long chip pushes the buttons to a new line
+   rather than truncating. */
 .ycs-query-ai-model {
   display: inline-flex;
   align-items: baseline;
@@ -4216,8 +4238,6 @@
   border-radius: 999px;
   background: rgba(196, 18, 48, 0.04);
   font-size: 0.76rem;
-  max-width: 280px;
-  min-width: 0;
 }
 .ycs-query-ai-model[hidden] { display: none; }
 .ycs-query-ai-model-label {
@@ -4231,10 +4251,10 @@
   font-size: 0.76rem;
   color: var(--text);
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* No ellipsis / overflow clamp — show the whole arm name. The chip
+     stays on one line; if the row gets cramped it wraps via the
+     parent flex-wrap rule above. */
   white-space: nowrap;
-  min-width: 0;
 }
 
 /* ----- Right column — results ------------------------------------------- */
