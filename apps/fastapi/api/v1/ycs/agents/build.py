@@ -94,8 +94,18 @@ def _serialize_update(node_name: str, update: dict[str, Any]) -> dict[str, Any]:
     if "sub_results" in update and update["sub_results"]:
         result["sub_results_count"] = len(update["sub_results"])
         latest = update["sub_results"][-1]
-        result["latest_sub_question"]      = latest.get("sub_question", "")
-        result["latest_sub_answer_preview"] = latest.get("answer", "")[:200]
+        result["latest_sub_question"] = latest.get("sub_question", "")
+        # 2026-06-15 — drop the 200-char cap. The frontend renders the
+        # done sub-question card as a collapsed expander with the FULL
+        # markdown-rendered answer inside, so a preview slice would lose
+        # the bulk of each sub-agent's output. JSONB / SSE payloads
+        # tolerate the size (typical sub-answer ≈ 1–3 KB).
+        result["latest_sub_answer"] = latest.get("answer", "")
+        # 2026-06-16 — propagate the structured failure-mode tag
+        # (`""` / `"timeout"` / `"recursion_limit"` / `"no_docs"` /
+        # `"hard_error"`) so the frontend can style placeholder cards
+        # differently from genuine answers.
+        result["latest_sub_error_kind"] = latest.get("error_kind", "")
     if "confidence_score" in update and update["confidence_score"]:
         result["confidence_score"] = update["confidence_score"]
     return result

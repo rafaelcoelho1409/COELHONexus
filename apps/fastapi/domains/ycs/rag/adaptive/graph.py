@@ -13,8 +13,17 @@ Topology (deprecated `graphs/youtube/adaptive.py:L15-29`):
 
 The STANDARD path is the deprecated `YouTubeContentGraph`; both the
 `run_standard` and `run_subagent` nodes invoke a channel-scoped
-sub-graph built from the parent state's `channel_ids`."""
+sub-graph built from the parent state's `channel_ids`.
+
+2026-06-15 — `run_subagent` fan-out is gated by a process-wide
+`asyncio.Semaphore` to prevent OOM crashes during DEEP-mode plans
+with many sub-questions. See `params.py::SUBAGENT_CONCURRENCY` for
+the sizing rationale."""
 from __future__ import annotations
+
+import asyncio
+import logging
+import os
 
 from langgraph.graph import END, StateGraph
 from langgraph.types import Send
@@ -30,7 +39,46 @@ from .nodes.plan import plan_research
 from .nodes.run_standard import run_standard_pipeline
 from .nodes.subagent import run_subagent
 from .nodes.synthesize import synthesize
+from .params import SUBAGENT_CONCURRENCY
 from .state import AdaptiveRAGState
+
+
+logger = logging.getLogger(__name__)
+
+
+def _resolve_subagent_concurrency() -> int:
+    """Env override `KD_SUBAGENT_CONCURRENCY` wins over the default,
+    floored at 1 so a misconfigured `0` never deadlocks the fan-out."""
+    if "KD_SUBAGENT_CONCURRENCY" in os.environ:
+        try:
+            return max(1, int(os.environ["KD_SUBAGENT_CONCURRENCY"]))
+        except (TypeError, ValueError):
+            pass
+    return max(1, SUBAGENT_CONCURRENCY)
+
+
+# Process-wide semaphore shared across ALL in-flight Ask requests. Two
+# concurrent DEEP runs (e.g. two users / two tabs) together can hold at
+# most `SUBAGENT_CONCURRENCY` sub-agents, so the OOM guarantee survives
+# request concurrency. Lazily constructed on first acquire because
+# `asyncio.Semaphore()` at import time would bind to the wrong / no
+# event loop on Python < 3.10. `_subagent` checks/initialises under the
+# same module import, single-threaded → no race.
+_subagent_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_subagent_semaphore() -> asyncio.Semaphore:
+    global _subagent_semaphore
+    if _subagent_semaphore is None:
+        n = _resolve_subagent_concurrency()
+        _subagent_semaphore = asyncio.Semaphore(n)
+        logger.info(
+            f"[ycs:adaptive] sub-agent concurrency cap = {n} "
+            f"(KD_SUBAGENT_CONCURRENCY override active)"
+            if "KD_SUBAGENT_CONCURRENCY" in os.environ
+            else f"[ycs:adaptive] sub-agent concurrency cap = {n}"
+        )
+    return _subagent_semaphore
 
 
 def _route_by_mode(state: AdaptiveRAGState) -> str:
@@ -46,12 +94,19 @@ def _route_by_mode(state: AdaptiveRAGState) -> str:
 def _fan_out_subagents(state: AdaptiveRAGState) -> list[Send]:
     """After planning, fan out sub-questions to parallel subagents via
     `Send`. Each Send carries one sub-question + the inherited channel
-    scope."""
+    scope + the parent question (2026-06-16: used by the sub-agent's
+    `no_docs` rephrase retry to anchor the rewrite to the original
+    intent — see `nodes/subagent/node.py::_rephrase_subquestion`)."""
     channel_ids = state.get("channel_ids") or []
+    parent_q    = state.get("question", "") or ""
     return [
         Send(
             "run_subagent",
-            {"sub_question": q, "channel_ids": channel_ids},
+            {
+                "sub_question":    q,
+                "parent_question": parent_q,
+                "channel_ids":     channel_ids,
+            },
         )
         for q in state.get("sub_questions", [])
     ]
@@ -105,9 +160,23 @@ def build_adaptive_rag_graph(
 
     async def _subagent(payload):
         # Sub-agents inherit the channel scope from the parent state.
-        channel_ids = payload.get("channel_ids")
-        scoped_graph = _build_standard_graph(channel_ids)
-        return await run_subagent(payload, scoped_graph)
+        # Concurrency is gated by a process-wide semaphore so a 7-
+        # sub-question DEEP plan executes in ceil(N/cap) waves instead
+        # of starting all sub-pipelines at once. Build the scoped graph
+        # INSIDE the gate too — the StateGraph compilation isn't free
+        # and we don't want to materialise N sub-graphs for waiting
+        # sub-agents that haven't acquired yet.
+        #
+        # 2026-06-16 — also forward the parent rotator `llm` so the
+        # sub-agent can run a single rephrased-question retry when its
+        # first STANDARD invocation returns `no_docs`. The retry path
+        # lives inside `run_subagent` (see its docstring + the
+        # subagent/prompts.py rephrase rationale).
+        sem = _get_subagent_semaphore()
+        async with sem:
+            channel_ids = payload.get("channel_ids")
+            scoped_graph = _build_standard_graph(channel_ids)
+            return await run_subagent(payload, scoped_graph, llm = llm)
 
     async def _synthesize(state):
         return await synthesize(state, llm)

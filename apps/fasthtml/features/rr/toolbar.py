@@ -1,14 +1,20 @@
-"""Row 3 — contextual chrome for Research Radar.
+"""Row 3 — per-stage contextual chrome for Research Radar.
 
-Mirrors `features/dd/shared/toolbar.py` and `features/ycs/shared/toolbar.py`:
-returns a `.dd-toolbar topbar-collapsible` `<div>` that the layout shell
-mounts as the third sticky row above the page body.
+Two builders, each scoped to one stage:
 
-For RR the chrome is the scan form itself — Topic / Verticals / Deep reads
-on the left, Start Scan submit and the Recent-scans picker on the right.
-Lifting the form out of the body reclaims ~200 px of vertical space for
-the digest and matches the per-feature stage-tools idiom DD and YCS
-already established."""
+  PipelineToolbar()  — scan form (Topic · Verticals · Deep reads · Start · Stop).
+                       Lives ONLY on /research-radar so submitting a scan from
+                       the digest reader can't accidentally happen.
+
+  DigestToolbar()    — Recent scans dropdown. Lives ONLY on /research-radar/digest
+                       so the picker shows up where you actually pick a scan
+                       to read.
+
+The split matches the page semantics: Pipeline is the "live operations"
+surface (you start/stop runs here), Digest is the "read mode" surface
+(you pick which past scan to read here). Mixing both controls across
+both pages was a leftover from when there was a single toolbar shared
+across stages."""
 from __future__ import annotations
 
 from fasthtml.common import Div
@@ -17,16 +23,22 @@ from .body import ScanForm
 from .shared.scans_picker import RRRecentScansPicker
 
 
-def ScanToolbar():
-    """Return the row-3 toolbar div. `.dd-toolbar` styles + the per-row
-    `topbar-collapsible` class let topbar.js auto-hide on scroll-down
-    exactly like DD's and YCS's row-3 chrome.
-
-    Recent-scans picker is passed into `ScanForm` as `extra_actions` so it
-    lands inside the same `.rr-actions` cluster as Start/Stop — they read
-    as one right-side action group."""
+def PipelineToolbar():
+    """Row-3 chrome for `/research-radar`. Scan form only — no picker
+    here; the operator picks a scan to read on the Digest page."""
     return Div(
-        ScanForm(extra_actions=RRRecentScansPicker()),
-        cls = "dd-toolbar topbar-collapsible rr-toolbar",
+        ScanForm(),
+        cls = "dd-toolbar topbar-collapsible rr-toolbar rr-toolbar-pipeline",
+        id  = "rr-toolbar",
+    )
+
+
+def DigestToolbar():
+    """Row-3 chrome for `/research-radar/digest`. Just the Recent-scans
+    dropdown — no form here; new scans are launched from the Pipeline
+    page where the operator can watch them run."""
+    return Div(
+        RRRecentScansPicker(),
+        cls = "dd-toolbar topbar-collapsible rr-toolbar rr-toolbar-digest",
         id  = "rr-toolbar",
     )

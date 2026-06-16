@@ -57,11 +57,12 @@ export const StageGraph = (function() {
       {
         selector: "node[status = 'running']",
         style: {
-          // Sky-blue fill — visually distinct from burgundy (primary)
-          // AND from red (failed). SOTA convention for "actively
-          // processing" across Linear/GitHub Actions/Dagster/LangSmith.
-          // Matches CSS var --running-bg.
-          'background-color': '#e0f2fe',
+          // Sky fill — bumped 2026-06-15 from #e0f2fe (sky-100) to
+          // #bae6fd (sky-200) so the fill reads alongside saturated
+          // borders without washing out. Text bumped to sky-900 for
+          // contrast. Convention still the same across Linear / GitHub
+          // Actions / Dagster / LangSmith ("actively processing").
+          'background-color': '#bae6fd',
           'border-color':     '#0369a1',
           'border-width':     2,
           'color':            '#0c4a6e',
@@ -70,25 +71,26 @@ export const StageGraph = (function() {
       {
         selector: "node[status = 'done']",
         style: {
-          // Pastel green fill — same shade family as the done icon
-          // color (#2a8b46). Dark text + green border keep the
-          // "completed" read clean.
-          'background-color': '#e5f4e9',
+          // Green fill — bumped 2026-06-15 from #e5f4e9 to #bbf7d0
+          // (green-200). Same hue family as the done border + icon
+          // (#2a8b46); the bump just removes the wash-out at small
+          // sizes. Text moves to green-900.
+          'background-color': '#bbf7d0',
           'border-color':     '#2a8b46',
           'border-width':     2,
-          'color':            '#1a3a23',
+          'color':            '#14532d',
         },
       },
       {
         selector: "node[status = 'failed']",
         style: {
-          // Matches --error-bg / --error-border / --error-text from
-          // the app's CSS vars — single source of truth for "this
-          // failed" across cards and canvas.
-          'background-color': '#fde7e9',
+          // Red fill — bumped 2026-06-15 from #fde7e9 to #fecaca
+          // (red-200). Same hue family as --error-border / --error-text;
+          // just removes wash-out at small sizes. Text moves to red-900.
+          'background-color': '#fecaca',
           'border-color':     '#e8a3aa',
           'border-width':     3,
-          'color':            '#7a2228',
+          'color':            '#7f1d1d',
         },
       },
       {

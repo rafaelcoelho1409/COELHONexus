@@ -20,6 +20,8 @@
  *
  * This makes scans bookmarkable, refresh-safe, and shareable.
  */
+import { showConfirm } from '/static/js/dd/shared/ui/overlays.js';
+
 const $ = (id) => document.getElementById(id);
 
 const form        = $('rr-scan-form');
@@ -341,6 +343,40 @@ function _fmtScanTime(iso) {
   return new Date(t).toISOString().slice(0, 16).replace('T', ' ');
 }
 
+function _fmtAbsoluteTime(iso) {
+  if (!iso) return '—';
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return iso;
+  const d = new Date(t);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  if (sameDay) return `today ${hh}:${mm}`;
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return `yesterday ${hh}:${mm}`;
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${months[d.getMonth()]} ${d.getDate()}, ${hh}:${mm}`;
+}
+
+function _fmtDuration(startedIso, finishedIso) {
+  if (!startedIso || !finishedIso) return '';
+  const t0 = Date.parse(startedIso), t1 = Date.parse(finishedIso);
+  if (!Number.isFinite(t0) || !Number.isFinite(t1)) return '';
+  const s = Math.floor((t1 - t0) / 1000);
+  if (s < 60)  return `${s}s`;
+  const m = Math.floor(s / 60), sr = s - m * 60;
+  if (m < 60)  return sr ? `${m}m ${sr}s` : `${m}m`;
+  const h = Math.floor(m / 60), mr = m - h * 60;
+  return mr ? `${h}h ${mr}m` : `${h}h`;
+}
+
+function _esc(s) {
+  return String(s ?? '').replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
 async function _loadRecentScans() {
   if (!scansList) return;
   scansList.innerHTML = '<div class="rr-scans-empty">Loading…</div>';
@@ -355,17 +391,33 @@ async function _loadRecentScans() {
       return;
     }
     scansList.innerHTML = items.map(s => {
-      const href = `/research-radar/digest?scan=${encodeURIComponent(s.scan_id)}`;
-      const startedShort = _fmtScanTime(s.started_at);
-      const findings = (s.total_in_digest > 0)
-        ? `${s.total_in_digest} finding${s.total_in_digest === 1 ? '' : 's'}`
-        : (s.status === 'done' ? '0 findings' : s.status);
+      const href      = `/research-radar/digest?scan=${encodeURIComponent(s.scan_id)}`;
+      const topic     = s.topic || '(no topic)';
+      const startedAt = _fmtAbsoluteTime(s.started_at);
+      const duration  = _fmtDuration(s.started_at, s.finished_at);
+      // Secondary line: verticals · findings · duration · themes preview
+      const meta = [];
+      if (s.verticals && s.verticals.length) meta.push(s.verticals.slice(0, 3).join(' · '));
+      if (s.status === 'done') meta.push(`${s.total_in_digest} finding${s.total_in_digest === 1 ? '' : 's'}`);
+      else                     meta.push(s.status);
+      if (duration) meta.push(duration);
+      if (s.themes && s.themes.length) meta.push(s.themes.slice(0, 2).join(', '));
+      const topicShort = topic.length > 40 ? `${topic.slice(0, 40)}…` : topic;
       return (
-        `<a class="rr-scans-row" data-status="${s.status}" href="${href}">` +
-        `<span class="rr-scans-row-status">${s.status}</span>` +
-        `<span class="rr-scans-row-time">${startedShort}</span>` +
-        `<span class="rr-scans-row-count">${findings}</span>` +
-        `</a>`
+        `<div class="rr-scans-row-wrap" data-scan-id="${_esc(s.scan_id)}">` +
+          `<a class="rr-scans-row" data-status="${s.status}" href="${href}">` +
+            `<div class="rr-scans-row-main">` +
+              `<div class="rr-scans-row-topic">${_esc(topic)}</div>` +
+              `<div class="rr-scans-row-meta">${_esc(meta.join(' · '))}</div>` +
+            `</div>` +
+            `<div class="rr-scans-row-time">${_esc(startedAt)}</div>` +
+          `</a>` +
+          `<button type="button" class="rr-scans-row-trash" ` +
+                  `data-scan-id="${_esc(s.scan_id)}" ` +
+                  `data-scan-topic="${_esc(topicShort)}" ` +
+                  `title="Delete this scan (digest + findings; Neo4j graph stays)" ` +
+                  `aria-label="Delete scan">🗑</button>` +
+        `</div>`
       );
     }).join('');
   } catch (err) {
@@ -379,6 +431,41 @@ if (scansPicker) {
     if (scansPicker.open && !_scansLoaded) {
       _scansLoaded = true;
       _loadRecentScans();
+    }
+  });
+}
+
+/* Per-row trash — click → DD's shared `showConfirm()` modal → DELETE →
+ * refetch list. Same modal family DD's framework picker and YCS's library
+ * trash use, so the chrome reads as one feature family across the app.
+ * Button is a sibling of the row's `<a>` so the click never bubbles to
+ * the link. */
+if (scansList) {
+  scansList.addEventListener('click', async (e) => {
+    const trash = e.target?.closest?.('.rr-scans-row-trash');
+    if (!trash) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const scanId = trash.dataset.scanId;
+    const topic  = trash.dataset.scanTopic || '(no topic)';
+    if (!scanId) return;
+    const ok = await showConfirm(
+      'Delete this scan?',
+      `“${topic}” — the digest and findings will be removed permanently. ` +
+      `Past scans of other topics and the accumulated Neo4j paper graph are not touched.`,
+      'Delete',
+    );
+    if (!ok) return;
+    trash.disabled = true;
+    try {
+      const r = await fetch(`/api/v1/rr/scan/${encodeURIComponent(scanId)}`, {
+        method: 'DELETE',
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await _loadRecentScans();
+    } catch (err) {
+      trash.disabled = false;
+      await showConfirm('Delete failed', err.message || String(err), 'OK');
     }
   });
 }
@@ -945,10 +1032,36 @@ if (statusInfo && !statusInfo.textContent) {
 
 
 // --------------------------------------------------------------------------- //
-// On page load — if ?scan=<id> is in the URL, resume it. Otherwise, idle.
+// On page load:
+//   - If `?scan=<id>` is in the URL → resume it (covers refresh / share /
+//     deep-link).
+//   - Else, on the DIGEST page specifically → load the MOST RECENT scan
+//     for the current profile so the user lands on something useful
+//     instead of the empty "fill the form…" hint. If there are no scans
+//     yet, the empty-state copy stays visible.
+//   - Else (Pipeline page, no URL scan_id) → idle, fill-the-form state.
 // --------------------------------------------------------------------------- //
+async function _bootDigestLatest() {
+  if (!window.location.pathname.endsWith('/digest')) return;
+  try {
+    const r = await fetch(
+      '/api/v1/rr/scans/recent?profile_id=default&limit=1',
+    );
+    if (!r.ok) return;
+    const data   = await r.json();
+    const latest = (data?.items || [])[0];
+    if (!latest?.scan_id) return;
+    setScanIdInUrl(latest.scan_id);
+    await resumeScan(latest.scan_id);
+  } catch { /* non-fatal — leave empty state alone */ }
+}
+
 {
   const urlScan = getScanIdFromUrl();
-  if (urlScan) resumeScan(urlScan);
+  if (urlScan) {
+    resumeScan(urlScan);
+  } else {
+    _bootDigestLatest();  // fire-and-forget; only acts on /digest
+  }
   // Pipeline graph paints itself on mount (pipeline.js); no work needed here.
 }

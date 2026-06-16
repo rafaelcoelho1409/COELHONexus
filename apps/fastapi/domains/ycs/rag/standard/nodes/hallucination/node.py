@@ -6,8 +6,13 @@ acceptable. On structured-output error we DEFAULT to grounded=True
 (deprecated rationale: assume grounded to avoid blocking the user
 on a transient LLM hiccup; the graph still bails after MAX_RETRIES).
 
-Direct port of deprecated `graphs/youtube/rag.py:L104-139`."""
+Direct port of deprecated `graphs/youtube/rag.py:L104-139` +
+2026-06-16 per-call timeout (one of the previously uncapped LLM
+calls — the parent SSE generator had no way to bail on a silent
+hang here)."""
 from __future__ import annotations
+
+import asyncio
 
 from domains.ycs.runtime.observability import traced
 
@@ -15,6 +20,15 @@ from ...state import YouTubeRAGState
 from .params import MAX_DOC_CHARS
 from .prompts import HALLUCINATION_PROMPT
 from .schemas import HallucinationCheck
+
+
+# 60 s ceiling on the hallucination judge LLM. Single structured-
+# output call with at most ~10 short doc excerpts and the generation
+# itself; healthy models return in 5–15 s. 60 s leaves room for one
+# rotator fallback inside the call. Matches the sizing of the other
+# adaptive-graph node timeouts (`_CLASSIFY_TIMEOUT_S`,
+# `_PLAN_TIMEOUT_S`).
+_HALLUCINATION_TIMEOUT_S = 60.0
 
 
 @traced("rag.hallucination")
@@ -36,14 +50,17 @@ async def check_hallucination(state: YouTubeRAGState, llm) -> dict:
         HallucinationCheck,
     )
     try:
-        result: HallucinationCheck = await chain.ainvoke({
-            "question":   state["question"],
-            "generation": state["generation"],
-            "documents":  documents_str,
-        })
+        result: HallucinationCheck = await asyncio.wait_for(
+            chain.ainvoke({
+                "question":   state["question"],
+                "generation": state["generation"],
+                "documents":  documents_str,
+            }),
+            timeout = _HALLUCINATION_TIMEOUT_S,
+        )
         # AND the two booleans — both must hold for "good enough".
         return {"grounded": result.grounded and result.addresses_question}
-    except Exception:
-        # Don't block on a transient judge failure. The MAX_RETRIES
-        # ceiling stops infinite loops elsewhere.
+    except (asyncio.TimeoutError, Exception):
+        # Don't block on a transient judge failure or hang. The
+        # MAX_RETRIES ceiling stops infinite loops elsewhere.
         return {"grounded": True}

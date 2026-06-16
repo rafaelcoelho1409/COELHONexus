@@ -12,6 +12,7 @@ Direct port of deprecated `routers/v1/youtube/agents.py:L42-298`.
   POST /pipeline       — Celery chain (extract → Qdrant → Neo4j → cache)"""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -80,6 +81,42 @@ logger = logging.getLogger(__name__)
 # real-time partial answers; larger = fewer round-trips to PG when the
 # LLM is bursting tokens.
 _STREAM_PERSIST_INTERVAL_S = 2.5
+
+# 2026-06-15 — watchdog ceiling on the time between two consecutive
+# `graph.astream()` events. Several adaptive-graph nodes
+# (`check_hallucination`, `critic`, `contextualize`, `rewrite_query`,
+# plus the per-call grader path) currently lack inner timeouts. If one
+# silently hangs (an LLM that neither 429s nor errors but just stops
+# responding — seen in the 2026-06-15 free-tier rate-pressure storm),
+# the whole `event_generator` await blocks forever and the cancellation
+# checks never run. 15 minutes is generous: a wave-1 DEEP sub-agent
+# (cap=3, max_retries=1, recursion_limit=12) takes ~5–13 min worst
+# case, so 15 min is ~3× margin over the slowest legitimate event
+# gap. When the watchdog trips we persist a sentinel answer + emit
+# `end status=stalled` so the user sees a real failure instead of a
+# spinner that never advances.
+_LANGGRAPH_WATCHDOG_S = 15 * 60.0
+
+# 2026-06-15 — hard ceiling on every Postgres write the SSE loop
+# performs (incremental persists + heartbeats + finalize). Without this
+# a hung PG connection wedges the WHOLE consumer task: the heartbeat
+# stops bumping `_seq`, the frontend sees a flatlined snapshot, and
+# the user gets the false-positive "Stalled" label even though the
+# producer task is still happily streaming graph events. 3 s is
+# generous for a single-row UPDATE on a healthy database; any slower
+# than that is a real backend issue and we'd rather skip the persist
+# than block the entire generator.
+_PERSIST_TIMEOUT_S = 3.0
+
+# 2026-06-15 — turn IDs currently marked for cancellation by the
+# `POST /turns/{turn_id}/cancel` endpoint. The SSE `event_generator`
+# checks this set between events and breaks early when its turn_id
+# lands in it, freeing the LangGraph pipeline + LLM calls instead of
+# letting the orphaned graph run to completion. In-memory only (one
+# FastAPI worker assumption — single-pod dev setup); upgrade to
+# Redis if we ever scale to >1 worker. Always cleaned up in the
+# generator's `finally` so it can't grow unboundedly.
+_CANCELLED_TURN_IDS: set[int] = set()
 
 
 # =============================================================================
@@ -323,6 +360,36 @@ async def delete_thread_endpoint(
     return {"deleted": n}
 
 
+@router.post("/turns/{turn_id}/cancel")
+async def cancel_turn_endpoint(
+    turn_id: int,
+    request: Request,
+) -> dict:
+    """Cancel an in-flight turn (frontend Stop button).
+
+    Two things happen here, in this order:
+      1. The turn_id is added to `_CANCELLED_TURN_IDS` so the matching
+         SSE `event_generator` (which checks this set between LangGraph
+         updates) breaks out of its loop ASAP and frees the rotator +
+         LLM resources.
+      2. The Postgres placeholder row is deleted so the conversation
+         picker stops showing the cancelled question.
+
+    Idempotent — a second click (or a stale browser tab) just returns
+    `{"deleted": 0}`. Always returns 200 even if the SSE was already
+    finished by the time this lands."""
+    _CANCELLED_TURN_IDS.add(turn_id)
+    try:
+        n = await delete_turn(request.app.state.pg_url, turn_id)
+    except Exception as e:
+        logger.warning(
+            f"[ycs:cancel] delete_turn({turn_id}) failed: "
+            f"{type(e).__name__}: {e}"
+        )
+        n = 0
+    return {"cancelled": True, "deleted": n}
+
+
 # =============================================================================
 # Agentic RAG search (full-invoke)
 # =============================================================================
@@ -486,94 +553,574 @@ async def rag_search_stream(
                 f"{type(e).__name__}: {e}"
             )
 
+    # 2026-06-15 — `thinking_state` accumulator. Mirrors the frontend's
+    # NODE_ACTION_TEXT map + STAGE_ORDER so a refresh anywhere during
+    # the stream restores the Thinking expander to its exact state.
+    _STAGE_ORDER = ["retrieve", "grade", "generate", "verify"]
+    _NODE_STAGE_ACTION: dict[str, tuple[str, str]] = {
+        "contextualize":       ("retrieve", "Resolving prior context"),
+        "classify_query":      ("retrieve", "Classifying intent"),
+        "retrieve":            ("retrieve", "Searching transcripts"),
+        "rewrite_query":       ("retrieve", "Refining query"),
+        "plan_research":       ("retrieve", "Planning sub-questions"),
+        "run_subagent":        ("retrieve", "Researching sub-question"),
+        "grade_documents":     ("grade",    "Grading documents"),
+        "direct_answer":       ("generate", "Composing answer"),
+        "run_standard":        ("generate", "Running standard pipeline"),
+        "generate":            ("generate", "Writing answer"),
+        "synthesize":          ("generate", "Synthesizing findings"),
+        "check_hallucination": ("verify",   "Verifying grounding"),
+        "format_citations":    ("verify",   "Formatting citations"),
+        "critic":              ("verify",   "Assessing confidence"),
+    }
+
+    def _thinking_apply(state: dict, node_name: str, update: dict) -> dict:
+        sa = _NODE_STAGE_ACTION.get(node_name)
+        if sa:
+            stage, action = sa
+            stage_idx = _STAGE_ORDER.index(stage)
+            stages = state.setdefault("stages", {})
+            for i, s in enumerate(_STAGE_ORDER):
+                cur = stages.setdefault(s, {"status": "queued", "action": ""})
+                if i < stage_idx:
+                    cur["status"] = "done"
+                    cur["action"] = ""
+                elif i == stage_idx:
+                    cur["status"] = "active"
+                    cur["action"] = action
+        if update.get("mode"):
+            state["mode"] = update["mode"]
+        if update.get("sub_questions"):
+            # Defensive: `setdefault` won't replace an EXISTING `None`
+            # value, only an absent key. Initialise explicitly when
+            # `deep` is missing OR `None` (legacy / partial state).
+            deep = state.get("deep")
+            if not isinstance(deep, dict):
+                deep = {
+                    "research_plan": "",
+                    "sub_questions": [],
+                    "confidence_score": None,
+                }
+                state["deep"] = deep
+            deep["research_plan"] = (
+                update.get("research_plan")
+                or deep.get("research_plan", "")
+            )
+            deep["sub_questions"] = [
+                {"question": q, "status": "queued", "answer_preview": ""}
+                for q in update["sub_questions"]
+            ]
+        # `run_subagent` returns `{"sub_results": [{"sub_question": ...,
+        # "answer": ..., ...}]}` via the `operator.add` reducer. The
+        # SSE-facing `_serialize_update` flattens that to
+        # `latest_sub_question` / `latest_sub_answer_preview` for the
+        # frontend's convenience — but THIS code path runs on the RAW
+        # graph update, where only `sub_results` is present. Read from
+        # the last appended sub-result so each completion flips the
+        # matching card from queued → done with the preview attached.
+        if update.get("sub_results"):
+            deep = state.get("deep")
+            if isinstance(deep, dict) and isinstance(deep.get("sub_questions"), list):
+                latest = update["sub_results"][-1] if update["sub_results"] else None
+                if isinstance(latest, dict):
+                    target = latest.get("sub_question", "") or ""
+                    # 2026-06-15 — store the FULL sub-answer (was a
+                    # 200-char preview). The UI renders done sub-question
+                    # cards as collapsed expanders with the full
+                    # markdown answer inside, so the preview slice
+                    # truncated the bulk of each sub-agent's output.
+                    full_answer = latest.get("answer", "") or ""
+                    # 2026-06-16 — sub-agents now emit `error_kind` so
+                    # the UI placeholder can be specific. The actual
+                    # placeholder text is composed inside `run_subagent`
+                    # (`subagent/node.py::_classify_subagent_outcome`)
+                    # so the failure-mode prose lives next to the code
+                    # that detects it. This branch just propagates it
+                    # forward + sets a generic fallback for any
+                    # belt-and-suspenders empty-answer edge case the
+                    # subagent didn't cover.
+                    if not full_answer.strip():
+                        full_answer = (
+                            "_(this sub-question completed but "
+                            "produced no answer.)_"
+                        )
+                    error_kind = latest.get("error_kind") or ""
+                    for sq in deep["sub_questions"]:
+                        if sq.get("question") == target:
+                            sq["status"] = "done"
+                            sq["answer"] = full_answer
+                            sq["error_kind"] = error_kind
+                            # Keep `answer_preview` for back-compat with
+                            # any old persisted state from before this
+                            # commit so refreshes don't see "" mid-flight.
+                            sq["answer_preview"] = full_answer[:200]
+                            break
+                # 2026-06-15 — advance the visible retrieve label so the
+                # UI doesn't sit on "Classifying intent" / "Planning sub-
+                # questions" for the entire ~30 min DEEP fan-out. The
+                # LangGraph `stream_mode="updates"` only emits on node
+                # completion, so without this nudge the user has no
+                # signal that work is progressing besides the sub-
+                # question cards (which flip in waves, not continuously).
+                # We piggy-back on every `sub_results` event to refresh a
+                # "Researching sub-questions (N/M done)" subtitle.
+                stages = state.setdefault("stages", {})
+                rs = stages.setdefault(
+                    "retrieve", {"status": "active", "action": ""},
+                )
+                done = sum(
+                    1 for sq in deep["sub_questions"]
+                    if sq.get("status") == "done"
+                )
+                total = len(deep["sub_questions"])
+                rs["status"] = "active"
+                rs["action"] = (
+                    f"Researching sub-questions ({done}/{total} done)"
+                )
+        if update.get("confidence_score") is not None:
+            deep = state.get("deep")
+            if isinstance(deep, dict):
+                deep["confidence_score"] = update["confidence_score"]
+        return state
+
+    def _thinking_finalize(state: dict) -> dict:
+        """End-of-stream: all four stages → done, no active stage."""
+        stages = state.setdefault("stages", {})
+        for s in _STAGE_ORDER:
+            cur = stages.setdefault(s, {"status": "done", "action": ""})
+            cur["status"] = "done"
+            cur["action"] = ""
+        return state
+
     async def event_generator():
         last_generation = ""
         last_mode       = ""
         last_persisted  = ""
         last_persist_t  = time.monotonic()
+        first_persist_done = False
+        thinking_state: dict = {"stages": {}, "mode": ""}
+        cancelled = False
+        stalled   = False
+        # 2026-06-15 — backend "I'm alive" heartbeat folded into the
+        # main loop. The frontend's stalled-detection (6 identical poll
+        # snapshots in a row → ~15 s flatline) was firing false
+        # positives during DEEP-mode sub-agent fan-out: `_subagent`
+        # invokes the STANDARD sub-graph via `ainvoke`, which yields
+        # ZERO events to the parent's `astream` until the sub-agent
+        # fully completes. With one sub-agent legitimately running for
+        # 5–15 min, the parent's `thinking_state` stayed byte-identical
+        # for the whole window and the frontend marked it stalled.
+        #
+        # Earlier this was a separate `asyncio.Task`; that task died
+        # silently (likely a CancelledError propagating from somewhere
+        # in the LangGraph internals that wasn't caught by
+        # `except Exception` — `CancelledError` derives from
+        # `BaseException` in Py 3.8+). Folding the heartbeat into the
+        # main loop via `asyncio.wait_for(__anext__(), timeout=2.5)`
+        # means every tick is either a graph event (reset the watchdog
+        # counter, process normally) or a `TimeoutError` (bump `_seq`,
+        # persist, advance the watchdog counter). No background task to
+        # race or die.
+        hb_seq                  = 0
+        heartbeats_since_event  = 0
+        _MAX_HEARTBEATS_BEFORE_WATCHDOG = int(
+            _LANGGRAPH_WATCHDOG_S / _STREAM_PERSIST_INTERVAL_S
+        )
         try:
-            async for event in graph.astream(
-                initial_state,
-                config      = config,
-                stream_mode = "updates",
-            ):
-                for node_name, update in event.items():
-                    if not isinstance(update, dict):
-                        yield f"data: {json.dumps({'node': node_name})}\n\n"
+            # 2026-06-15 — emit the turn_id to the client as the very
+            # first SSE frame. The frontend stashes it on
+            # `currentTurnEl.dataset.turnId` so the Stop button can fire
+            # `POST /turns/{turn_id}/cancel` even after a page refresh
+            # (where the original `AbortController` is gone with the
+            # previous JS context). `_meta` is namespaced so the regular
+            # `applyUpdate` switch on `node` never confuses it for a
+            # graph node update.
+            if turn_id is not None:
+                yield (
+                    "data: "
+                    + json.dumps({"node": "_meta", "turn_id": turn_id})
+                    + "\n\n"
+                )
+            # 2026-06-15 — producer/consumer over `graph.astream(...)`.
+            # An earlier design wrapped each `__anext__()` directly in
+            # `asyncio.wait_for(timeout=2.5)` to combine the heartbeat
+            # tick and the graph-event wait into a single await. That
+            # was a SUBTLE BUG: `wait_for` cancels the inner coroutine
+            # on timeout, which closes the underlying async generator.
+            # The next `__anext__` then returned `StopAsyncIteration`
+            # immediately and the SSE generator exited via the natural
+            # "no-generation finalize" branch — turns landed in PG with
+            # the sentinel answer + all four stages marked done but
+            # 0 sub-questions actually completed. The producer task
+            # below drives the LangGraph stream WITHOUT being cancelled
+            # by timeouts; we only cancel it in `finally`, after the
+            # consumer has decided to bail. Backpressure is provided by
+            # `maxsize=1` on the queue (LangGraph never gets more than
+            # one event ahead of the consumer).
+            event_queue: asyncio.Queue = asyncio.Queue(maxsize=1)
+            async def _producer():
+                try:
+                    async for ev in graph.astream(
+                        initial_state,
+                        config      = config,
+                        stream_mode = "updates",
+                    ):
+                        await event_queue.put(("event", ev))
+                    await event_queue.put(("done", None))
+                except asyncio.CancelledError:
+                    # Consumer cancelled us in `finally` — silent
+                    # shutdown. The graph's own cleanup (HTTP
+                    # connection closing, etc.) propagates upward via
+                    # the `async for`'s teardown.
+                    raise
+                except Exception as e:
+                    # Any LangGraph-side exception surfaces here.
+                    # Forward it to the consumer so it can be
+                    # propagated into the outer `except` and trigger
+                    # the normal error-finalize / error SSE frame.
+                    try:
+                        await event_queue.put(("error", e))
+                    except Exception:
+                        pass
+            producer_task = asyncio.create_task(_producer())
+            try:
+                while True:
+                    # ── Cancellation check ───────────────────────────
+                    # Two signals collapse here: the explicit
+                    # `/turns/{turn_id}/cancel` set (set by the Stop
+                    # button, works across page refreshes) AND the
+                    # native client disconnect detected by Starlette
+                    # (browser tab closed / page refreshed / Stop
+                    # clicked so the fetch aborts).
+                    if turn_id is not None and turn_id in _CANCELLED_TURN_IDS:
+                        cancelled = True
+                        break
+                    if await request.is_disconnected():
+                        cancelled = True
+                        break
+                    try:
+                        kind, payload = await asyncio.wait_for(
+                            event_queue.get(),
+                            timeout = _STREAM_PERSIST_INTERVAL_S,
+                        )
+                    except asyncio.TimeoutError:
+                        # ── Heartbeat tick ───────────────────────────
+                        # 2.5 s passed with no graph event. Bump
+                        # `_seq` on the persisted snapshot so the
+                        # frontend's stalled detection sees forward
+                        # motion, then check if we blew the long-
+                        # running-node watchdog.
+                        heartbeats_since_event += 1
+                        if heartbeats_since_event >= _MAX_HEARTBEATS_BEFORE_WATCHDOG:
+                            logger.warning(
+                                f"[ycs:stream] watchdog: no LangGraph "
+                                f"event for {int(_LANGGRAPH_WATCHDOG_S)}s "
+                                f"on turn_id={turn_id} — assuming a "
+                                f"node hung silently inside the graph. "
+                                f"Bailing."
+                            )
+                            stalled = True
+                            break
+                        if turn_id is not None:
+                            hb_seq += 1
+                            try:
+                                snap = dict(thinking_state)
+                                snap["_seq"] = hb_seq
+                                await asyncio.wait_for(
+                                    update_turn_answer(
+                                        request.app.state.pg_url,
+                                        turn_id, last_generation, last_mode,
+                                        thinking_state = snap,
+                                    ),
+                                    timeout = _PERSIST_TIMEOUT_S,
+                                )
+                            except (asyncio.TimeoutError, Exception) as e:
+                                logger.warning(
+                                    f"[ycs:stream] heartbeat persist "
+                                    f"failed: {type(e).__name__}: {e}"
+                                )
+                        # 2026-06-16 — KEEP-ALIVE SSE frame. The
+                        # browser's `fetch()` reader drops the
+                        # connection after ~60–120 s of TCP silence
+                        # (network stacks, proxies, browser idle
+                        # timeouts). Long-running DEEP runs sit silent
+                        # for 5–10+ min while a sub-agent grinds
+                        # through its sub-graph — the parent `astream`
+                        # yields ZERO events during that window. The
+                        # backend heartbeat above writes to Postgres
+                        # but nothing flows over the SSE wire, so the
+                        # client got disconnected and we lost the
+                        # whole run.
+                        #
+                        # SSE comment frames (`: text\n\n`) keep the
+                        # connection alive at the TCP layer — the
+                        # client's parser explicitly ignores them, but
+                        # they count as activity for every timeout
+                        # mechanism in the stack.
+                        yield f": heartbeat {hb_seq}\n\n"
                         continue
-                    if "generation" in update and update["generation"]:
-                        last_generation = update["generation"]
-                    if "mode" in update and update["mode"]:
-                        last_mode = update["mode"]
-                    serializable_update = _serialize_update(
-                        node_name, update,
+                    if kind == "done":
+                        break
+                    if kind == "error":
+                        raise payload  # propagate to outer except
+                    # kind == "event"
+                    event = payload
+                    # Got a real graph event — reset the watchdog counter.
+                    heartbeats_since_event = 0
+                    for node_name, update in event.items():
+                        if not isinstance(update, dict):
+                            yield f"data: {json.dumps({'node': node_name})}\n\n"
+                            continue
+                        if "generation" in update and update["generation"]:
+                            last_generation = update["generation"]
+                        if "mode" in update and update["mode"]:
+                            last_mode = update["mode"]
+                        # Accumulate the Thinking expander state so a
+                        # refresh mid-stream restores it exactly.
+                        thinking_state = _thinking_apply(
+                            thinking_state, node_name, update,
+                        )
+                        serializable_update = _serialize_update(
+                            node_name, update,
+                        )
+                        yield (
+                            f"data: {json.dumps(serializable_update)}\n\n"
+                        )
+                        # 2026-06-15 — persist thinking_state
+                        # INDEPENDENTLY of generation. Earlier version
+                        # gated this on `last_generation`, but
+                        # generation only lands at the 4th stage (or
+                        # never if the rotator fails) — so a refresh
+                        # during Retrieve / Grade would show null
+                        # state. Fire ASAP on the first event so the
+                        # placeholder gets its stage status quickly,
+                        # then throttle subsequent persists at
+                        # `_STREAM_PERSIST_INTERVAL_S`. The first-fire
+                        # guarantees that even a Retrieve-only stream
+                        # restores its progress on refresh.
+                        now_t = time.monotonic()
+                        should_persist = turn_id is not None and (
+                            not first_persist_done
+                            or now_t - last_persist_t >= _STREAM_PERSIST_INTERVAL_S
+                        )
+                        if should_persist:
+                            try:
+                                await asyncio.wait_for(
+                                    update_turn_answer(
+                                        request.app.state.pg_url,
+                                        turn_id, last_generation, last_mode,
+                                        thinking_state = thinking_state,
+                                    ),
+                                    timeout = _PERSIST_TIMEOUT_S,
+                                )
+                                last_persisted = last_generation
+                                last_persist_t = now_t
+                                first_persist_done = True
+                            except (asyncio.TimeoutError, Exception) as e:
+                                logger.warning(
+                                    f"[ycs:stream] incremental persist "
+                                    f"failed: {type(e).__name__}: {e}"
+                                )
+                        # P6 preview-plan halt: once `plan_research`
+                        # emits the sub-questions, end the stream
+                        # BEFORE the conditional edge fires the
+                        # parallel sub-agent fan-out. The frontend
+                        # will re-fire with the user's chosen
+                        # (possibly pruned) sub_questions.
+                        if preview_plan and node_name == "plan_research":
+                            yield (
+                                "data: "
+                                + json.dumps({
+                                    "node":   "end",
+                                    "status": "preview",
+                                })
+                                + "\n\n"
+                            )
+                            return
+                if cancelled:
+                    # Cancellation path: the `/turns/{turn_id}/cancel`
+                    # endpoint already DELETE'd the placeholder row,
+                    # so any final persist here would either
+                    # UPDATE-no-row (best case) or recreate stale state
+                    # (worst case). Skip both the success-finalize and
+                    # the no-generation-sentinel blocks; just emit a
+                    # terminal frame for any consumer that hasn't
+                    # dropped yet.
+                    logger.info(
+                        f"[ycs:stream] cancelled mid-flight turn_id={turn_id}"
                     )
                     yield (
-                        f"data: {json.dumps(serializable_update)}\n\n"
+                        "data: "
+                        + json.dumps({"node": "end", "status": "cancelled"})
+                        + "\n\n"
                     )
-                    # Throttled incremental persist — every N seconds
-                    # while a stream is in flight. Refresh between
-                    # writes shows the most recently committed
-                    # snapshot, not nothing.
-                    if (
-                        turn_id is not None
-                        and last_generation
-                        and last_generation != last_persisted
-                        and time.monotonic() - last_persist_t
-                            >= _STREAM_PERSIST_INTERVAL_S
-                    ):
+                elif stalled:
+                    # Watchdog tripped — some node hung silently and
+                    # never yielded an event for 15 minutes. Persist a
+                    # clear sentinel so the user sees a real failure
+                    # on refresh instead of an "in progress" spinner.
+                    if turn_id is not None:
                         try:
-                            await update_turn_answer(
-                                request.app.state.pg_url,
-                                turn_id, last_generation, last_mode,
+                            thinking_state = _thinking_finalize(thinking_state)
+                            sentinel = (
+                                "(no response — pipeline stalled after "
+                                f"{int(_LANGGRAPH_WATCHDOG_S / 60)} min "
+                                "of silence. A node hung without a "
+                                "timeout; expand Thinking to see the "
+                                "last reachable step.)"
                             )
-                            last_persisted = last_generation
-                            last_persist_t = time.monotonic()
-                        except Exception as e:
+                            await asyncio.wait_for(
+                                update_turn_answer(
+                                    request.app.state.pg_url,
+                                    turn_id, sentinel, last_mode,
+                                    thinking_state = thinking_state,
+                                ),
+                                timeout = _PERSIST_TIMEOUT_S,
+                            )
+                        except (asyncio.TimeoutError, Exception) as e:
                             logger.warning(
-                                f"[ycs:stream] incremental persist "
+                                f"[ycs:stream] watchdog finalize "
                                 f"failed: {type(e).__name__}: {e}"
                             )
-                    # P6 preview-plan halt: once `plan_research` emits
-                    # the sub-questions, end the stream BEFORE the
-                    # conditional edge fires the parallel sub-agent
-                    # fan-out. The frontend will re-fire with the
-                    # user's chosen (possibly pruned) sub_questions.
-                    if preview_plan and node_name == "plan_research":
-                        yield (
-                            "data: "
-                            + json.dumps({
-                                "node":   "end",
-                                "status": "preview",
-                            })
-                            + "\n\n"
-                        )
-                        return
-            # Final commit on successful completion.
-            if turn_id is not None and last_generation:
-                try:
-                    await update_turn_answer(
-                        request.app.state.pg_url,
-                        turn_id, last_generation, last_mode,
+                    yield (
+                        "data: "
+                        + json.dumps({"node": "end", "status": "stalled"})
+                        + "\n\n"
                     )
-                except Exception as e:
-                    logger.warning(
-                        f"[ycs:stream] final persist failed: "
-                        f"{type(e).__name__}: {e}"
+                else:
+                    # Final commit on successful completion.
+                    if turn_id is not None and last_generation:
+                        try:
+                            thinking_state = _thinking_finalize(thinking_state)
+                            await asyncio.wait_for(
+                                update_turn_answer(
+                                    request.app.state.pg_url,
+                                    turn_id, last_generation, last_mode,
+                                    thinking_state = thinking_state,
+                                ),
+                                timeout = _PERSIST_TIMEOUT_S,
+                            )
+                        except (asyncio.TimeoutError, Exception) as e:
+                            logger.warning(
+                                f"[ycs:stream] final persist failed: "
+                                f"{type(e).__name__}: {e}"
+                            )
+                    elif turn_id is not None and not last_generation:
+                        # 2026-06-15 — graph finished without ever
+                        # producing a generation (rotator exhausted,
+                        # retries blown, etc.). Preserve the
+                        # placeholder with the FINAL thinking_state +
+                        # a clear "no response" sentinel in `answer`.
+                        try:
+                            thinking_state = _thinking_finalize(thinking_state)
+                            await asyncio.wait_for(
+                                update_turn_answer(
+                                    request.app.state.pg_url,
+                                    turn_id,
+                                    "(no response — see Thinking for pipeline status)",
+                                    last_mode,
+                                    thinking_state = thinking_state,
+                                ),
+                                timeout = _PERSIST_TIMEOUT_S,
+                            )
+                        except (asyncio.TimeoutError, Exception) as e:
+                            logger.warning(
+                                f"[ycs:stream] no-generation finalize "
+                                f"failed: {type(e).__name__}: {e}"
+                            )
+                    yield (
+                        "data: "
+                        + json.dumps({"node": "end", "status": "complete"})
+                        + "\n\n"
                     )
-            elif turn_id is not None and not last_generation:
-                # Graph finished without ever producing a generation —
-                # nothing to save; drop the placeholder so the picker
-                # stays clean.
+            finally:
+                # Cancel the producer task on EVERY exit path —
+                # natural completion, cancellation, watchdog, exception.
+                # Without this, an aborted SSE could leave the LangGraph
+                # stream running in the background until it timed out
+                # naturally, wasting LLM credits.
+                producer_task.cancel()
                 try:
-                    await delete_turn(request.app.state.pg_url, turn_id)
-                except Exception:
+                    await producer_task
+                except BaseException:
                     pass
-            yield (
-                "data: "
-                + json.dumps({"node": "end", "status": "complete"})
-                + "\n\n"
+        except asyncio.CancelledError:
+            # 2026-06-16 — DEDICATED cancellation handler. Earlier this
+            # path fell through to the unhandled-BaseException case,
+            # which meant: the SSE generator silently terminated, the
+            # placeholder row in PG stayed frozen at its last heartbeat
+            # snapshot, the `_seq` counter stopped advancing, and the
+            # frontend's stalled-detection (correctly) flagged the
+            # backend as dead — but the user had no way to tell whether
+            # the run was truly stalled or just disconnected. We now
+            # write a clear "interrupted" sentinel + finalize the
+            # `thinking_state` stages so a refresh renders a real
+            # failure UI instead of an "in progress" spinner.
+            #
+            # Triggered by: Starlette closing the response when the
+            # browser disconnects (refresh, tab close, network drop)
+            # OR an outer asyncio task cancellation. Either way the
+            # client is gone — there's no point yielding more SSE
+            # frames; just persist the sentinel and re-raise so
+            # asyncio teardown propagates upward cleanly.
+            #
+            # CRITICAL: an `await` INSIDE this handler re-raises
+            # CancelledError immediately (asyncio cancellation
+            # semantics), which silently aborted the persist on the
+            # first attempt at this fix. To actually complete the
+            # write we spawn it as a DETACHED `asyncio.create_task()`
+            # — the event loop keeps the task alive after the
+            # generator returns, so the PG UPDATE runs to completion
+            # in the background regardless of our own cancellation.
+            logger.info(
+                f"[ycs:stream] cancelled (client disconnect) "
+                f"turn_id={turn_id} — scheduling sentinel persist and re-raising"
             )
+            if turn_id is not None:
+                thinking_state_snapshot = _thinking_finalize(thinking_state)
+                answer_text = (
+                    last_generation
+                    or "(stream interrupted — the SSE connection "
+                       "dropped before the answer landed (browser "
+                       "refresh, network blip, or backend restart). "
+                       "Re-ask the question to start fresh.)"
+                )
+                async def _persist_cancellation_sentinel(
+                    pg_url:        str,
+                    tid:           int,
+                    answer:        str,
+                    mode:          str,
+                    state_snapshot: dict,
+                ):
+                    try:
+                        await asyncio.wait_for(
+                            update_turn_answer(
+                                pg_url, tid, answer, mode,
+                                thinking_state = state_snapshot,
+                            ),
+                            timeout = 5.0,
+                        )
+                    except BaseException as exc:
+                        # We're in a detached task — log so we can
+                        # diagnose if the cancellation sentinel ever
+                        # fails to land.
+                        logger.warning(
+                            f"[ycs:stream] cancellation sentinel "
+                            f"persist failed for turn_id={tid}: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+                # Detached task — survives our own cancellation
+                # propagation. asyncio keeps a strong reference via
+                # the loop's pending-tasks set, so it won't be GC'd
+                # before it runs.
+                asyncio.create_task(
+                    _persist_cancellation_sentinel(
+                        request.app.state.pg_url,
+                        turn_id, answer_text, last_mode,
+                        thinking_state_snapshot,
+                    )
+                )
+            raise
         except Exception as e:
             # On error: persist whatever generation arrived (if any)
             # rather than losing it — the user can refresh and at
@@ -584,6 +1131,7 @@ async def rag_search_stream(
                         await update_turn_answer(
                             request.app.state.pg_url,
                             turn_id, last_generation, last_mode,
+                            thinking_state = thinking_state,
                         )
                     else:
                         await delete_turn(
@@ -596,6 +1144,15 @@ async def rag_search_stream(
                 + json.dumps({"node": "error", "error": str(e)})
                 + "\n\n"
             )
+        finally:
+            # 2026-06-15 — always drop this turn from the cancel set
+            # so it can't grow unboundedly. `discard` is the no-raise
+            # variant — handles both the cancelled and the natural-
+            # completion paths uniformly. (No background heartbeat
+            # task to cancel — the heartbeat is folded into the main
+            # event loop above via `asyncio.wait_for(timeout=2.5)`.)
+            if turn_id is not None:
+                _CANCELLED_TURN_IDS.discard(turn_id)
 
     return StreamingResponse(
         event_generator(),

@@ -10,6 +10,15 @@ In tools mode, this subagent is bypassed — the Celery task's
 
 Augmented with the `digest_rendering` Markdown skill at build time
 (architecture-doc §9.2). See agent/skills/digest_rendering.md.
+
+2026-06-15: Bound to `DigestSchema` via SubAgent.response_format. The
+DeepAgents ToolStrategy injects a `respond_in_format` tool the LLM must
+call to terminate, with Pydantic-validated args. This eliminates the
+malformed-JSON failure class (the `Invalid \\uXXXX escape` + `missing
+comma` write_digest bounce that burned ~10min/scan). write_digest stays
+in the tool list as the side-effect persistence channel; on failure it
+no longer bounces the subagent (it returns success-with-warning so the
+LLM moves on to respond_in_format).
 """
 from __future__ import annotations
 
@@ -19,6 +28,7 @@ from langchain_core.language_models import BaseChatModel
 
 from ..keys import SUBAGENT_REPORT
 from ..prompts import REPORT_SYSTEM_PROMPT
+from ..schemas import DigestSchema
 from ..skills import SKILL_DIGEST_RENDERING
 from ..tools.fs_tools import (
     list_extractions,
@@ -35,16 +45,24 @@ def build_report(model: BaseChatModel) -> dict[str, Any]:
         f"=== SKILL: digest_rendering ===\n\n"
         f"{SKILL_DIGEST_RENDERING}\n\n"
         f"=== ROLE ===\n\n"
-        f"{REPORT_SYSTEM_PROMPT}"
+        f"{REPORT_SYSTEM_PROMPT}\n\n"
+        f"=== TERMINATION ===\n\n"
+        f"After write_digest persists the digest, call `respond_in_format` "
+        f"ONCE with the same payload (Pydantic DigestSchema). The framework "
+        f"validates fields on your behalf — emit prose ONLY inside the "
+        f"`summary` field, never as your terminal message. write_digest is "
+        f"tolerant of partial JSON now; treat any non-ERROR return as "
+        f"success and proceed to respond_in_format immediately."
     )
     return {
         "name":          SUBAGENT_REPORT,
         "description": (
             "Assemble the final ranked digest from this scan's triage, "
             "synthesis, and extractions. Outputs a structured JSON "
-            "digest with per-paper cards. Persists via write_digest. "
-            "Dispatch LAST, after synthesis. (Active in subagents mode "
-            "only; tools mode uses Python assembly in task.py.)"
+            "digest with per-paper cards. Persists via write_digest + "
+            "terminates via respond_in_format(DigestSchema). Dispatch "
+            "LAST, after synthesis. (Active in subagents mode only; "
+            "tools mode uses Python assembly in task.py.)"
         ),
         "system_prompt": full_prompt,
         "tools": [
@@ -54,5 +72,6 @@ def build_report(model: BaseChatModel) -> dict[str, Any]:
             read_extraction,
             write_digest,
         ],
-        "model":         model,
+        "model":           model,
+        "response_format": DigestSchema,
     }

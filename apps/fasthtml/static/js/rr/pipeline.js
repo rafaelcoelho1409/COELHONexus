@@ -251,8 +251,25 @@ function _applyKindShapes(cy) {
       'border-width':     1.5,
       'color':            '#666666',
     })
+    // Bump status fill colors from StageGraph's 100-shades to 200-shades
+    // (2026-06-15) so the fill reads alongside the bold 700-shade kind
+    // borders without washing out. Hierarchy: border (700) > fill (200)
+    // > white. Same hues as the 700-shade family so the visual identity
+    // of running/done/failed stays consistent.
+    .selector("node[status = 'running']")
+    .style({
+      'background-color': '#bae6fd',   // sky-200 (was sky-100 #e0f2fe)
+      'color':            '#0c4a6e',
+    })
+    .selector("node[status = 'done']")
+    .style({
+      'background-color': '#bbf7d0',   // green-200 (was green-100 #e5f4e9)
+      'color':            '#14532d',
+    })
     .selector("node[status = 'failed']")
     .style({
+      'background-color': '#fecaca',   // red-200 (was red-100 #fde7e9)
+      'color':            '#7f1d1d',
       'border-width':     4,
     })
     .update();
@@ -320,10 +337,23 @@ export function openNodeDrawer(nodeId) {
         `Loading…</div></div>`
       );
     }
+    // Prepend an LLM-activity placeholder section (Path A 2026-06-16).
+    // Filled by _fetchLlmCounters below when the node has an llm_phase
+    // assignment AND a scan_id is in scope. Goes at the very top of the
+    // body so the operator sees rotator call/token KPIs immediately.
+    if (d.llm_phase) {
+      sections.unshift(
+        `<div class="rr-drawer-section" data-llm-section="true">` +
+        `<h4 class="rr-drawer-section-title">LLM activity (this scan)</h4>` +
+        `<div class="rr-drawer-section-body" id="rr-drawer-llm-body">` +
+        `Loading…</div></div>`
+      );
+    }
     bodyEl.innerHTML = sections.join('');
   }
   drawer.hidden = false;
   if (d.live_fs_path) _fetchLiveState(d.live_fs_path);
+  if (d.llm_phase)    _fetchLlmCounters(d.llm_phase);
 }
 
 function _getActiveScanId() {
@@ -368,6 +398,127 @@ async function _fetchLiveState(path) {
     }
     const data = await r.json();
     target.textContent = _summarizeLiveValue(data.value);
+  } catch (err) {
+    target.textContent = `Fetch failed: ${err.message || err}`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// LLM counters — Path A (2026-06-16). One fetch per drawer-open; renders
+// total calls + tokens + per-model breakdown for the node's phase bucket.
+// ---------------------------------------------------------------------------
+function _fmtNumber(n) {
+  // Compact thousands separators: 1234567 → "1,234,567".
+  if (n == null) return '—';
+  try { return Number(n).toLocaleString('en-US'); }
+  catch { return String(n); }
+}
+
+function _renderLlmCounters(phase, payload) {
+  // Payload shape comes from GET /scan/{id}/llm-counters; see backend doc.
+  // Returns an HTML string suitable for the rr-drawer-llm-body container.
+  if (!payload || !payload.by_phase) {
+    return '(no LLM activity recorded for this phase yet)';
+  }
+  const ph = payload.by_phase[phase];
+  if (!ph || !ph.calls) {
+    return '(no LLM activity recorded for this phase yet)';
+  }
+  const total = payload.total || {};
+  const totalShare = total.calls
+    ? Math.round((ph.calls / total.calls) * 100) + '%'
+    : '—';
+  const lines = [
+    `<div class="rr-llm-counters">` +
+      `<div class="rr-llm-row"><span class="rr-llm-k">calls</span>` +
+      `<span class="rr-llm-v">${_fmtNumber(ph.calls)} ` +
+      `<span class="rr-llm-share">(${totalShare} of scan)</span></span></div>` +
+      `<div class="rr-llm-row"><span class="rr-llm-k">tokens in</span>` +
+      `<span class="rr-llm-v">${_fmtNumber(ph.tokens_in)}</span></div>` +
+      `<div class="rr-llm-row"><span class="rr-llm-k">tokens out</span>` +
+      `<span class="rr-llm-v">${_fmtNumber(ph.tokens_out)}</span></div>` +
+    `</div>`,
+  ];
+  // Per-model breakdown for this phase. Group rows by total calls desc.
+  const byModel = ph.by_model || {};
+  const modelRows = Object.entries(byModel)
+    .map(([model, stats]) => {
+      const { provider, name } = _splitProviderModel(model);
+      return {
+        raw:        model,
+        provider,
+        name,
+        calls:      stats.calls      || 0,
+        tokens_in:  stats.tokens_in  || 0,
+        tokens_out: stats.tokens_out || 0,
+      };
+    })
+    .sort((a, b) => b.calls - a.calls);
+  if (modelRows.length) {
+    lines.push(
+      `<div class="rr-llm-models-title">Per model</div>` +
+      `<table class="rr-llm-models">` +
+        `<thead><tr><th>provider</th><th>model</th><th>calls</th><th>in</th><th>out</th></tr></thead>` +
+        `<tbody>` +
+          modelRows.map(r =>
+            `<tr>` +
+            `<td title="${_esc(r.raw)}">${_esc(r.provider)}</td>` +
+            `<td title="${_esc(r.raw)}">${_esc(r.name)}</td>` +
+            `<td>${_fmtNumber(r.calls)}</td>` +
+            `<td>${_fmtNumber(r.tokens_in)}</td>` +
+            `<td>${_fmtNumber(r.tokens_out)}</td></tr>`
+          ).join('') +
+        `</tbody>` +
+      `</table>`
+    );
+  }
+  // Scan-wide footer so the operator can compare phase-share vs total.
+  lines.push(
+    `<div class="rr-llm-footer">Scan total: ` +
+    `${_fmtNumber(total.calls)} calls · ` +
+    `${_fmtNumber(total.tokens_in)} in / ${_fmtNumber(total.tokens_out)} out` +
+    `</div>`
+  );
+  return lines.join('');
+}
+
+function _splitProviderModel(model) {
+  // Split a LiteLLM deployment id into (provider, name):
+  //   nvidia_nim/openai/gpt-oss-120b  → nvidia_nim · openai/gpt-oss-120b
+  //   mistral/mistral-large-latest    → mistral    · mistral-large-latest
+  //   groq/llama-3.3-70b-versatile    → groq       · llama-3.3-70b-versatile
+  //   gemini/gemini-2.5-flash         → gemini     · gemini-2.5-flash
+  //   rr-strong (fallback group)      → (rotator)  · rr-strong
+  //   ""                              → (unknown)  · (unknown)
+  if (!model) return { provider: '(unknown)', name: '(unknown)' };
+  const s = String(model);
+  const idx = s.indexOf('/');
+  if (idx < 0) {
+    // No prefix → this is the rotator group alias (`rr-strong` etc.),
+    // not a real deployment. Mark it so the user knows it's a fallback.
+    return { provider: '(rotator)', name: s };
+  }
+  const provider = s.slice(0, idx);
+  const name     = s.slice(idx + 1);
+  return { provider, name };
+}
+
+async function _fetchLlmCounters(phase) {
+  const scanId = _getActiveScanId();
+  const target = document.getElementById('rr-drawer-llm-body');
+  if (!target) return;
+  if (!scanId) {
+    target.textContent = '(no scan in URL — open a past scan via ?scan=<id> or run a new one)';
+    return;
+  }
+  try {
+    const r = await fetch(`/api/v1/rr/scan/${scanId}/llm-counters`);
+    if (!r.ok) {
+      target.textContent = `Fetch failed: HTTP ${r.status}`;
+      return;
+    }
+    const data = await r.json();
+    target.innerHTML = _renderLlmCounters(phase, data);
   } catch (err) {
     target.textContent = `Fetch failed: ${err.message || err}`;
   }
@@ -431,18 +582,18 @@ async function initPipelineGraph() {
   });
   _applyKindShapes(graph.cy);
 
-  // StageGraph defaults to rankDir='LR' (Planner/Synth read left-to-right).
-  // RR's pipeline is conceptually a top-down flow (discovery → triage →
-  // deep_read → … → persist), so re-run the layout in vertical orientation
-  // without touching the shared helper. Falls back gracefully when Dagre
-  // isn't registered (StageGraph then used the breadthfirst layout, which
-  // is already top-down — nothing to do).
+  // 2026-06-16: switched to horizontal `LR` per UX request. The pipeline
+  // is a linear flow (orchestrator → discovery → triage → deep_read →
+  // graph_build → synthesis → persist), so a left-to-right Sugiyama
+  // layout reads more naturally than vertical at typical canvas widths.
+  // Matches Planner / Synth graphs (StageGraph LR default). Larger
+  // rankSep so the 6-rank flow fits the canvas comfortably.
   if (typeof cytoscape !== 'undefined' && cytoscape._dagreRegistered) {
     graph.cy.layout({
       name:    'dagre',
-      rankDir: 'TB',
-      nodeSep: 28,
-      rankSep: 44,
+      rankDir: 'LR',
+      nodeSep: 30,
+      rankSep: 64,
       padding: 24,
       animate: false,
       fit:     true,
@@ -454,11 +605,218 @@ async function initPipelineGraph() {
     _lastPhase   = phase;
     _lastMessage = message;
     _applyPhase(graph, phase, message);
+    // Refresh scan-wide LLM totals strip on every phase event. Cheap
+    // (one Redis HGETALL × a few keys) and tracks the scan in flight.
+    _refreshScanTotals();
   };
 
   // Flush any pre-init state that landed during the cytoscape load.
   if (_lastPhase) _applyPhase(graph, _lastPhase, _lastMessage);
+  // Initial hydrate — if a scan_id is in the URL the totals strip
+  // shows historical counters even before any SSE event fires.
+  _refreshScanTotals();
 }
+
+
+// ---------------------------------------------------------------------------
+// Scan-wide totals strip — fetches /llm-counters and fills the DOM under the
+// graph. Called on page load (if ?scan=<id>) + every SSE phase event + on a
+// short polling interval while the scan is in flight (so the numbers tick
+// within a phase, not just at phase transitions).
+// ---------------------------------------------------------------------------
+let _totalsInFlight = false;
+let _totalsPollTimer = null;
+
+// Poll cadence — short enough to feel live, long enough to be invisible
+// in the Redis logs. 2.5s is the same cadence Planner/Synth use for their
+// state polls.
+const _TOTALS_POLL_MS = 2500;
+
+// Phases that mean "scan stopped — don't keep polling". Any other phase
+// (including 'pending' before a scan starts) keeps the timer alive so
+// the strip stays live across the full run.
+const _TERMINAL_PHASES = new Set(['done', 'error', 'cancelled', 'failed']);
+
+async function _refreshScanTotals() {
+  const stripEl = document.getElementById('rr-totals');
+  if (!stripEl) return;
+  const scanId = _getActiveScanId();
+  if (!scanId) {
+    _renderScanTotals(null);
+    return;
+  }
+  // Dedupe overlapping calls — a burst of SSE events shouldn't trigger
+  // parallel fetches.
+  if (_totalsInFlight) return;
+  _totalsInFlight = true;
+  try {
+    const r = await fetch(`/api/v1/rr/scan/${scanId}/llm-counters`);
+    if (!r.ok) {
+      _renderScanTotals(null);
+      return;
+    }
+    const data = await r.json();
+    _renderScanTotals(data);
+  } catch {
+    _renderScanTotals(null);
+  } finally {
+    _totalsInFlight = false;
+  }
+}
+
+function _startTotalsPolling() {
+  if (_totalsPollTimer) return;  // already polling
+  _totalsPollTimer = setInterval(() => {
+    // Pause polling when the tab is hidden — no point burning Redis ops
+    // for a page nobody is looking at.
+    if (document.visibilityState !== 'visible') return;
+    // Stop when the scan is terminal.
+    if (_TERMINAL_PHASES.has(_lastPhase)) {
+      _stopTotalsPolling();
+      return;
+    }
+    _refreshScanTotals();
+  }, _TOTALS_POLL_MS);
+}
+
+function _stopTotalsPolling() {
+  if (!_totalsPollTimer) return;
+  clearInterval(_totalsPollTimer);
+  _totalsPollTimer = null;
+}
+
+// Watch tab-visibility changes — resume polling when the tab comes back
+// into focus, do an immediate refresh so the user sees current state.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    _refreshScanTotals();
+    if (!_TERMINAL_PHASES.has(_lastPhase)) _startTotalsPolling();
+  }
+});
+
+const _PHASE_DISPLAY_ORDER = [
+  'orchestrator', 'discovery', 'triage', 'deep_read',
+  'graph_build', 'synthesis',
+];
+
+function _aggregateByModel(byPhase) {
+  // Roll up per-phase per-model data into one scan-wide
+  //   { "<deployment>": {calls, tokens_in, tokens_out} } map.
+  // Same key shape as the drawer's by_model so we can reuse
+  // `_splitProviderModel()` for rendering.
+  const merged = {};
+  for (const phase of Object.values(byPhase || {})) {
+    const bm = phase.by_model || {};
+    for (const [model, stats] of Object.entries(bm)) {
+      const e = merged[model] || { calls: 0, tokens_in: 0, tokens_out: 0 };
+      e.calls      += stats.calls      || 0;
+      e.tokens_in  += stats.tokens_in  || 0;
+      e.tokens_out += stats.tokens_out || 0;
+      merged[model] = e;
+    }
+  }
+  return merged;
+}
+
+function _renderScanTotals(payload) {
+  const callsEl  = document.getElementById('rr-totals-calls');
+  const inEl     = document.getElementById('rr-totals-in');
+  const outEl    = document.getElementById('rr-totals-out');
+  const chipsEl  = document.getElementById('rr-totals-phases');
+  const tableEl  = document.getElementById('rr-totals-models');
+  if (!callsEl || !inEl || !outEl || !chipsEl || !tableEl) return;
+
+  // No scan in scope OR fetch failed → reset to placeholders.
+  if (!payload || !payload.total) {
+    callsEl.textContent = '—';
+    inEl.textContent    = '—';
+    outEl.textContent   = '—';
+    chipsEl.innerHTML   = '';
+    tableEl.innerHTML   = '';
+    return;
+  }
+
+  const total   = payload.total   || {};
+  const byPhase = payload.by_phase || {};
+
+  // KPI cards.
+  callsEl.textContent = _fmtNumber(total.calls      || 0);
+  inEl.textContent    = _fmtNumber(total.tokens_in  || 0);
+  outEl.textContent   = _fmtNumber(total.tokens_out || 0);
+
+  // Per-phase chips — ordered left-to-right matching the pipeline flow.
+  // Skip phases with zero calls so the row stays compact.
+  const chips = _PHASE_DISPLAY_ORDER
+    .filter(p => byPhase[p] && byPhase[p].calls)
+    .map(p => {
+      const ph = byPhase[p];
+      const share = total.calls
+        ? Math.round((ph.calls / total.calls) * 100) + '%'
+        : '—';
+      return (
+        `<span class="rr-totals-chip" title="` +
+          `${_esc(p)}: ${_fmtNumber(ph.calls)} calls · ` +
+          `${_fmtNumber(ph.tokens_in)} in / ${_fmtNumber(ph.tokens_out)} out` +
+        `">` +
+        `<span class="rr-totals-chip-name">${_esc(p)}</span>` +
+        `<span class="rr-totals-chip-count">${_fmtNumber(ph.calls)}</span>` +
+        `<span class="rr-totals-chip-share">${share}</span>` +
+        `</span>`
+      );
+    })
+    .join('');
+  chipsEl.innerHTML = chips;
+
+  // Scan-wide per-(provider, model) table — same shape as the drawer's
+  // per-model breakdown, but aggregated across all phases. Sorted by
+  // total calls descending so the heaviest-used arms are at the top.
+  const merged = _aggregateByModel(byPhase);
+  const rows = Object.entries(merged)
+    .map(([model, stats]) => {
+      const { provider, name } = _splitProviderModel(model);
+      return {
+        raw:        model,
+        provider,
+        name,
+        calls:      stats.calls      || 0,
+        tokens_in:  stats.tokens_in  || 0,
+        tokens_out: stats.tokens_out || 0,
+      };
+    })
+    .sort((a, b) => b.calls - a.calls);
+
+  if (!rows.length) {
+    tableEl.innerHTML = '';
+  } else {
+    tableEl.innerHTML =
+      `<div class="rr-totals-models-title">Per provider · model</div>` +
+      `<table class="rr-totals-models-table">` +
+        `<thead><tr>` +
+          `<th>provider</th><th>model</th>` +
+          `<th>calls</th><th>in</th><th>out</th>` +
+        `</tr></thead>` +
+        `<tbody>` +
+          rows.map(r =>
+            `<tr>` +
+            `<td title="${_esc(r.raw)}">${_esc(r.provider)}</td>` +
+            `<td title="${_esc(r.raw)}">${_esc(r.name)}</td>` +
+            `<td>${_fmtNumber(r.calls)}</td>` +
+            `<td>${_fmtNumber(r.tokens_in)}</td>` +
+            `<td>${_fmtNumber(r.tokens_out)}</td>` +
+            `</tr>`
+          ).join('') +
+        `</tbody>` +
+      `</table>`;
+  }
+
+  // Manage the polling lifecycle based on current scan state. The phase
+  // contextvar driving _lastPhase is set from the SSE updater; if the
+  // scan is terminal, we stop polling but keep the strip filled so the
+  // user can see the final numbers as long as the page is open.
+  if (_TERMINAL_PHASES.has(_lastPhase)) _stopTotalsPolling();
+  else                                  _startTotalsPolling();
+}
+
 
 // Kick off as soon as the DOM is ready. document.readyState already says
 // "interactive" by the time a deferred module script runs in practice;

@@ -1,8 +1,9 @@
-"""YCS — three stage routes for the wizard.
+"""YCS — four stage routes for the wizard.
 
   GET /youtube-content-search             → Step 1 · Source
   GET /youtube-content-search/ingestion   → Step 2 · Ingestion
   GET /youtube-content-search/ask         → Step 3 · Ask
+  GET /youtube-content-search/query       → Step 4 · Query
 
 Each stage has its own URL so users can bookmark + browser
 back/forward. The shell renders the row-2 stage tab strip via
@@ -22,6 +23,7 @@ from layout.shell import _Shell
 from .ask.body import AskBody
 from .ingest.body import IngestBody
 from .page import YCSPage
+from .query.body import QueryBody
 from .shared.nav import StageSubNav
 from .shared.toolbar import StageToolbar
 from .source.body import SourceBody
@@ -66,4 +68,17 @@ def register(rt) -> None:
             subnav_row = StageSubNav("ask", slug),
             toolbar_row = StageToolbar("ask", slug),
             body = YCSPage("ask", slug, AskBody(slug)),
+        )
+
+    @rt("/youtube-content-search/query")
+    def ycs_query(req: Request):
+        # Library-agnostic — Query browses the indexes wholesale, so
+        # `slug` is ignored at URL build time (see shared/urls.py).
+        # Still resolved + threaded through for symmetry.
+        slug = _slug_from_request(req)
+        return _Shell(
+            "youtube-content-search",
+            subnav_row = StageSubNav("query", slug),
+            toolbar_row = StageToolbar("query", slug),
+            body = YCSPage("query", slug, QueryBody(slug)),
         )

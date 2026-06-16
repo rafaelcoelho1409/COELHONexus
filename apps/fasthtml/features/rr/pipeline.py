@@ -228,6 +228,48 @@ def _WipeSeenDialog():
     )
 
 
+def _LlmTotalsStrip():
+    """Scan-wide LLM totals — persistent across node clicks, live-updates
+    as phase events fire (2026-06-16 Path-A v2).
+
+    Hydrated by `pipeline.js::_renderScanTotals()`. Empty placeholder
+    until a scan_id lands in the URL (?scan=<id>); then the JS fetches
+    `/api/v1/rr/scan/{id}/llm-counters` and fills the cards + chips."""
+    return Div(
+        Div(
+            Div(
+                Div("Total LLM calls",  cls = "rr-totals-kpi-label"),
+                Div("—",                cls = "rr-totals-kpi-value",
+                    id  = "rr-totals-calls"),
+                cls = "rr-totals-kpi",
+            ),
+            Div(
+                Div("Tokens in",        cls = "rr-totals-kpi-label"),
+                Div("—",                cls = "rr-totals-kpi-value",
+                    id  = "rr-totals-in"),
+                cls = "rr-totals-kpi",
+            ),
+            Div(
+                Div("Tokens out",       cls = "rr-totals-kpi-label"),
+                Div("—",                cls = "rr-totals-kpi-value",
+                    id  = "rr-totals-out"),
+                cls = "rr-totals-kpi",
+            ),
+            cls = "rr-totals-kpis",
+        ),
+        # Per-phase mini-breakdown — one chip per phase that has any
+        # activity. JS fills this row dynamically.
+        Div(id = "rr-totals-phases", cls = "rr-totals-phases"),
+        # Scan-wide per-(provider, model) table — same shape as the
+        # per-node drawer's per-model table but rolled up across phases.
+        # Hidden when no rows; JS fills the inner HTML.
+        Div(id = "rr-totals-models", cls = "rr-totals-models"),
+        id  = "rr-totals",
+        cls = "rr-totals",
+        **{"aria-label": "Scan-wide LLM activity totals"},
+    )
+
+
 def _TopologyJson() -> str:
     """Single inline JSON payload pipeline.js consumes at canvas-init time.
     Carries both nodes (with phase + kind + label + sub) and edges, so the
@@ -308,7 +350,26 @@ def PipelineBody():
                 ),
                 Div(
                     _KindLegend(),
-                    _WipeSeenButton(),
+                    Div(
+                        Button(
+                            "i",
+                            type = "button",
+                            # `rr-info-down` flips the tooltip below the
+                            # button so it doesn't clip behind row-2 chrome.
+                            cls  = "rr-info rr-info-down",
+                            **{
+                                "aria-label":   "About Wipe seen-set",
+                                "data-tooltip": (
+                                    "Clears the `is_new` tracking only — next "
+                                    "scan marks every paper as new again. Past "
+                                    "scans, digests, and the Neo4j graph stay "
+                                    "intact."
+                                ),
+                            },
+                        ),
+                        _WipeSeenButton(),
+                        cls = "rr-wipe-seen-cluster",
+                    ),
                     cls = "rr-pipeline-header-tail",
                 ),
                 _WipeSeenDialog(),
@@ -320,6 +381,7 @@ def PipelineBody():
                 # Inline JSON read by pipeline.js to seed the StageGraph.
                 **{"data-topology": _TopologyJson()},
             ),
+            _LlmTotalsStrip(),
             _NodeDrawer(),
             cls = "rr-card rr-card-pipeline",
         ),

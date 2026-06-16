@@ -25,21 +25,36 @@ logger = logging.getLogger(__name__)
 
 
 async def ensure_conversation_table(pg_url: str) -> None:
-    """Idempotent table + index create. Called from `app.py` lifespan
-    so the first request never pays the DDL cost."""
+    """Idempotent table + index create + `thinking_state` column
+    migration. Called from `app.py` lifespan so the first request
+    never pays the DDL cost.
+
+    2026-06-15: `thinking_state` JSONB column persists the per-turn
+    progress state (stage status + per-step action + DEEP sub-question
+    progress + research plan + confidence) so a hard refresh restores
+    the Thinking expander to its exact state — both mid-stream and
+    after completion. `ADD COLUMN IF NOT EXISTS` is the safe migration
+    path for existing deployments."""
     async with await psycopg.AsyncConnection.connect(
         pg_url, autocommit = True,
     ) as conn:
         await conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
-                id          SERIAL PRIMARY KEY,
-                thread_id   TEXT NOT NULL,
-                question    TEXT NOT NULL,
-                answer      TEXT NOT NULL,
-                mode        TEXT,
-                created_at  TIMESTAMPTZ DEFAULT NOW()
+                id              SERIAL PRIMARY KEY,
+                thread_id       TEXT NOT NULL,
+                question        TEXT NOT NULL,
+                answer          TEXT NOT NULL,
+                mode            TEXT,
+                thinking_state  JSONB,
+                created_at      TIMESTAMPTZ DEFAULT NOW()
             )
+            """,
+        )
+        await conn.execute(
+            f"""
+            ALTER TABLE {TABLE_NAME}
+            ADD COLUMN IF NOT EXISTS thinking_state JSONB
             """,
         )
         await conn.execute(
@@ -122,8 +137,10 @@ async def list_thread_messages(
 ) -> list[dict]:
     """Full-detail history for the UI. Unlike `get_history` (which
     returns only Q+A pairs for the LLM contextualize node), this
-    includes `mode` + `created_at` so the conversation panel can
-    re-render thread state on page refresh.
+    includes `mode` + `thinking_state` + `created_at` so the
+    conversation panel can re-render thread state — including the
+    Thinking expander's stage status + DEEP sub-questions — on page
+    refresh.
 
     Returns [] for the `default` sentinel."""
     if not thread_id or thread_id == DEFAULT_THREAD_ID:
@@ -131,7 +148,8 @@ async def list_thread_messages(
     async with await psycopg.AsyncConnection.connect(pg_url) as conn:
         result = await conn.execute(
             f"""
-            SELECT question, answer, mode, created_at FROM {TABLE_NAME}
+            SELECT id, question, answer, mode, thinking_state, created_at
+            FROM {TABLE_NAME}
             WHERE thread_id = %s
             ORDER BY created_at ASC LIMIT %s
             """,
@@ -140,10 +158,17 @@ async def list_thread_messages(
         rows = await result.fetchall()
     return [
         {
-            "question":   r[0],
-            "answer":     r[1],
-            "mode":       r[2] or "",
-            "created_at": r[3].isoformat() if r[3] is not None else None,
+            # 2026-06-15 — `id` exposed so the frontend can issue
+            # per-turn cancellation against `POST /turns/{id}/cancel`
+            # when the user clicks Stop after a page refresh (the
+            # original SSE fetch's abort controller died with the
+            # previous page).
+            "id":             int(r[0]),
+            "question":       r[1],
+            "answer":         r[2],
+            "mode":           r[3] or "",
+            "thinking_state": r[4],  # JSONB → dict | None
+            "created_at":     r[5].isoformat() if r[5] is not None else None,
         }
         for r in rows
     ]
@@ -267,23 +292,38 @@ async def update_turn_answer(
     turn_id: int,
     answer: str,
     mode: str = "",
+    thinking_state: dict | None = None,
 ) -> None:
-    """Patch an in-progress turn's answer + mode. Used by the streaming
-    endpoint to persist partial generation incrementally (refresh-mid-
-    stream still shows the latest snapshot) AND on the final
-    successful-stream commit."""
+    """Patch an in-progress turn's answer + mode + thinking_state. Used
+    by the streaming endpoint to persist partial generation
+    incrementally (refresh-mid-stream still shows the latest snapshot)
+    AND on the final successful-stream commit. `thinking_state=None`
+    leaves the column untouched; pass `{}` to clear it explicitly."""
     if turn_id is None:
         return
+    import json as _json
     async with await psycopg.AsyncConnection.connect(pg_url) as conn:
-        await conn.execute(
-            f"""
-            UPDATE {TABLE_NAME}
-            SET answer = %s,
-                mode   = COALESCE(NULLIF(%s, ''), mode)
-            WHERE id = %s
-            """,
-            (answer, mode, turn_id),
-        )
+        if thinking_state is None:
+            await conn.execute(
+                f"""
+                UPDATE {TABLE_NAME}
+                SET answer = %s,
+                    mode   = COALESCE(NULLIF(%s, ''), mode)
+                WHERE id = %s
+                """,
+                (answer, mode, turn_id),
+            )
+        else:
+            await conn.execute(
+                f"""
+                UPDATE {TABLE_NAME}
+                SET answer         = %s,
+                    mode           = COALESCE(NULLIF(%s, ''), mode),
+                    thinking_state = %s::jsonb
+                WHERE id = %s
+                """,
+                (answer, mode, _json.dumps(thinking_state), turn_id),
+            )
         await conn.commit()
 
 

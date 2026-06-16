@@ -23,4 +23,7 @@ switch (stage) {
     case "ask":
         await import("@ycs/ask.js");
         break;
+    case "query":
+        await import("@ycs/query.js");
+        break;
 }

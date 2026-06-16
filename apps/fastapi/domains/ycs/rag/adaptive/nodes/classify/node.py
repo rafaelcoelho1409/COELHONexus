@@ -10,14 +10,25 @@ deprecated `graphs/youtube/helpers.py:_resolve_channel_ids` (`L4-21`).
 Kept inline here per CODE-CONVENTIONS pragmatism: it's used only by
 this node and ~15 LOC of Cypher.
 
-Direct port of deprecated `graphs/youtube/adaptive.py:L94-133`."""
+Direct port of deprecated `graphs/youtube/adaptive.py:L94-133` +
+2026-06-15 per-call timeout (the LLM was observed hanging for 2+ min
+on `deepseek-v4-pro` mid-classify, blocking the whole graph entry)."""
 from __future__ import annotations
+
+import asyncio
 
 from domains.ycs.runtime.observability import traced
 
 from ...state import AdaptiveRAGState
 from .prompts import CLASSIFY_PROMPT
 from .schemas import QueryClassification
+
+
+# Single LLM call, output cap is small (mode + a handful of sub-
+# questions). 90 s is 3× the 30 s median classify latency observed
+# under load — gives the rotator room to fall back through a couple
+# of arms while still bounding the worst case.
+_CLASSIFY_TIMEOUT_S = 90.0
 
 
 def _resolve_channel_ids(neo4j_graph, channel_names: list[str]) -> list[str]:
@@ -67,7 +78,10 @@ async def classify_query(
         QueryClassification,
     )
     try:
-        result = await chain.ainvoke({"question": state["question"]})
+        result = await asyncio.wait_for(
+            chain.ainvoke({"question": state["question"]}),
+            timeout = _CLASSIFY_TIMEOUT_S,
+        )
         mode = force or result.mode
         sub_questions = result.sub_questions if mode == "deep" else []
         if not channel_ids and result.channel_names and neo4j_graph:
@@ -79,7 +93,9 @@ async def classify_query(
             "sub_questions": sub_questions,
             "channel_ids":   channel_ids,
         }
-    except Exception:
+    except (asyncio.TimeoutError, Exception):
+        # Both timeouts and rotator-exhaustion errors collapse to a safe
+        # default — the user still gets an answer via the STANDARD path.
         return {
             "mode":          force or "standard",
             "sub_questions": [],

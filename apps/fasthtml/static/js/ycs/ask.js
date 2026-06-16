@@ -625,15 +625,177 @@ conversationEl?.addEventListener("click", (ev) => {
     head.setAttribute("aria-expanded", open ? "false" : "true");
 });
 
+/* Delegated toggle for done sub-question cards in the DEEP panel.
+ * Each card starts collapsed (CSS hides `.ycs-ask-deep-card-body`
+ * until the card carries `.expanded`). Click the head to flip. We
+ * intentionally only react to DONE-state cards — queued cards have
+ * no body to reveal and a click on them would feel unresponsive. */
+conversationEl?.addEventListener("click", (ev) => {
+    const head = ev.target.closest?.(".ycs-ask-deep-card-head");
+    if (!head) return;
+    // Don't swallow checkbox / Run-research clicks (preview mode).
+    if (ev.target.closest(".ycs-ask-deep-check, .ycs-ask-deep-run")) return;
+    const card = head.closest(".ycs-ask-deep-card");
+    if (!card || card.dataset.state !== "done") return;
+    card.classList.toggle("expanded");
+});
+
 /* Build a static historical-turn DOM (no stages / DEEP panel — those
  * are streaming artifacts not persisted in Postgres). Used by
  * `hydrateThreadHistory` to repaint past turns on page load. */
-function renderHistoryTurn({ question, answer, mode = "", created_at = "" }) {
+/* Build the Thinking expander for a HISTORICAL turn from its
+ * persisted `thinking_state` (Postgres `conversation_history.
+ * thinking_state` JSONB column). Falls back to "all stages done" when
+ * the column is null (legacy rows persisted before the 2026-06-15
+ * migration). Mirrors the live `_streamingTurnSkeleton` markup so
+ * the rendered expander is visually identical to what was on screen
+ * when the turn finished — including DEEP sub-question cards, the
+ * research-plan banner, confidence pill, and per-step action
+ * subtitles caught at their final state.
+ *
+ * Auto-collapsed by default; click to expand. Streaming turns that
+ * got persisted mid-stream restore with the active stage still
+ * marked active (no `done` class) so a refresh shows the live
+ * snapshot precisely. */
+const _STAGE_DEF = [
+    { id: "retrieve", label: "Retrieve" },
+    { id: "grade",    label: "Grade"    },
+    { id: "generate", label: "Generate" },
+    { id: "verify",   label: "Verify"   },
+];
+
+function _stageCircleHTML(stageId, label, statusClass, action) {
+    return `
+        <div class="ycs-step-circle ${statusClass}" data-stage="${stageId}">
+            <span class="ycs-step-circle-label">${label}</span>
+            <span class="ycs-step-circle-action">${action ? htmlEscape(action) : ""}</span>
+        </div>
+    `;
+}
+
+/* True iff this persisted turn snapshot represents a mid-stream
+ * pipeline (no final answer yet, at least one stage marked `active`).
+ * Drives the refresh-survives-the-stream UX: open the expander, show
+ * the streaming spinner, and start the `/history` poll loop so the
+ * stages keep advancing live. */
+function _isTurnInProgress(thinkingState, answer) {
+    if (answer) return false;
+    if (!thinkingState) return false;
+    const stages = thinkingState.stages || {};
+    return Object.values(stages).some((s) => s?.status === "active");
+}
+
+function _historyThinkingHTML(thinkingState, hasAnswer, inProgress = false) {
+    // Empty state — no answer landed and no recorded state. Skip
+    // rendering the expander entirely so the turn doesn't look like
+    // it ran a pipeline.
+    if (!hasAnswer && !thinkingState) return "";
+
+    const stages = thinkingState?.stages || {};
+    const stagesHTML = _STAGE_DEF.map((s) => {
+        const entry  = stages[s.id] || {};
+        // Default: done — matches the legacy / no-state case where
+        // we assume the pipeline completed.
+        let cls    = "done";
+        if (entry.status === "active") cls = "active";
+        else if (entry.status === "queued") cls = "";
+        else if (entry.status === "done") cls = "done";
+        else if (!thinkingState) cls = "done";
+        else if (!hasAnswer) cls = "";  // mid-stream stalled
+        return _stageCircleHTML(s.id, s.label, cls, entry.action || "");
+    }).join("");
+
+    let deepHTML = "";
+    const deep = thinkingState?.deep;
+    if (deep && Array.isArray(deep.sub_questions) && deep.sub_questions.length) {
+        const banner = (() => {
+            const cs = deep.confidence_score;
+            if (cs != null) {
+                const pct = (Number(cs) * 100).toFixed(0);
+                return `<strong>Critic</strong> confidence ${pct}%`;
+            }
+            const planTxt = deep.research_plan
+                ? `<div class="ycs-ask-deep-banner-plan">${htmlEscape(String(deep.research_plan))}</div>`
+                : "";
+            return `<div class="ycs-ask-deep-banner-head"><strong>Research plan</strong> - ${deep.sub_questions.length} sub-questions</div>${planTxt}`;
+        })();
+        const cards = deep.sub_questions.map((sq) => {
+            const status     = sq.status === "done" ? "done" : "queued";
+            const stateLabel = sq.status === "done" ? "done" : "queued";
+            // 2026-06-15 — done cards become COLLAPSED expanders; the
+            // full markdown-rendered sub-answer lives in the body.
+            // Prefer the new `answer` field; fall back to legacy
+            // `answer_preview` for state persisted before this commit.
+            const fullAnswer = sq.answer || sq.answer_preview || "";
+            const chevron = status === "done"
+                ? `<span class="ycs-ask-deep-card-chevron">▾</span>`
+                : "";
+            const bodyHTML = (status === "done" && fullAnswer)
+                ? renderMarkdown(fullAnswer)
+                : "";
+            return `
+                <div class="ycs-ask-deep-card" data-state="${status}">
+                    <div class="ycs-ask-deep-card-head">
+                        ${chevron}
+                        <span class="ycs-ask-deep-card-state">${stateLabel}</span>
+                        <span class="ycs-ask-deep-card-q">${htmlEscape(sq.question || "")}</span>
+                    </div>
+                    <div class="ycs-ask-deep-card-body">${bodyHTML}</div>
+                </div>
+            `;
+        }).join("");
+        deepHTML = `
+            <div class="ycs-ask-deep" style="display:block;">
+                <div class="ycs-ask-deep-banner">${banner}</div>
+                <div class="ycs-ask-deep-cards">${cards}</div>
+            </div>
+        `;
+    }
+
+    // Mid-stream: render the expander OPEN so the persisted snapshot
+    // (active stage, queued stages, sub-question cards) is visible on
+    // refresh. Completed turns stay collapsed — the answer is the
+    // headline; the trace is optional detail.
+    const wrapCls = inProgress ? "" : "collapsed";
+    const ariaExp = inProgress ? "true" : "false";
+    return `
+        <div class="ycs-ask-turn-process ${wrapCls}">
+            <button type="button"
+                    class="ycs-ask-turn-process-head"
+                    aria-expanded="${ariaExp}">
+                <span class="ycs-ask-turn-process-chevron">▾</span>
+                <span class="ycs-ask-turn-process-label">Thinking</span>
+            </button>
+            <div class="ycs-ask-turn-process-body">
+                <div class="ycs-ask-stages">${stagesHTML}</div>
+                ${deepHTML}
+            </div>
+        </div>
+    `;
+}
+
+function renderHistoryTurn({
+    question, answer, mode = "", created_at = "", thinking_state = null,
+    id = null,
+}) {
     if (!conversationEl) return;
     const turn = document.createElement("div");
-    turn.className = "ycs-ask-turn ycs-ask-turn-history";
+    const inProgress = _isTurnInProgress(thinking_state, answer);
+    // Persisted-but-still-streaming turns reuse the same wrapper class
+    // as live SSE turns so the CSS spinner pseudo-element appears.
+    // `data-streaming="false"` distinguishes them from the SSE-driven
+    // turn in this tab: the in-progress poll loop bails the moment a
+    // `data-streaming="true"` turn appears, so the live stream owns the
+    // DOM once the user submits a new question.
+    turn.className = "ycs-ask-turn ycs-ask-turn-history"
+                   + (inProgress ? " ycs-ask-turn-streaming" : "");
+    turn.dataset.streaming = "false";
     turn.dataset.question = question || "";
     if (created_at) turn.dataset.createdAt = created_at;
+    // 2026-06-15 — `turnId` lets the Stop button issue
+    // `/turns/{id}/cancel` after a page refresh (when the original
+    // AbortController is gone with the prior JS context).
+    if (id != null) turn.dataset.turnId = String(id);
     const modeBadge = mode
         ? `<span class="ycs-ask-turn-mode-badge" data-mode="${htmlEscape(mode)}">${htmlEscape(mode)}</span>`
         : "";
@@ -647,6 +809,7 @@ function renderHistoryTurn({ question, answer, mode = "", created_at = "" }) {
                 <span class="ycs-ask-turn-role">Assistant</span>
                 ${modeBadge}
             </div>
+            ${_historyThinkingHTML(thinking_state, !!answer, inProgress)}
             <div class="ycs-ask-turn-body ycs-ask-answer">${renderMarkdown(answer)}</div>
             ${_actionChipsHTML()}
         </div>
@@ -862,15 +1025,215 @@ async function hydrateThreadHistory() {
         }
         for (const item of items) {
             renderHistoryTurn({
-                question:   item.question   ?? "",
-                answer:     item.answer     ?? "",
-                mode:       item.mode       ?? "",
-                created_at: item.created_at ?? "",
+                question:       item.question       ?? "",
+                answer:         item.answer         ?? "",
+                mode:           item.mode           ?? "",
+                created_at:     item.created_at     ?? "",
+                thinking_state: item.thinking_state ?? null,
+                id:             item.id             ?? null,
             });
+        }
+        // Mid-stream restoration: if the last persisted turn was still
+        // pipeline-active when this page loaded (a refresh during
+        // streaming), spin up the `/history` poll loop so the stages
+        // keep advancing live, AND flip the composer to Stop. The
+        // backend's SSE generator from the prior page-load is still
+        // running and persisting; the Stop button now lets the user
+        // cancel it via `/turns/{id}/cancel` even though the original
+        // AbortController died with the prior JS context.
+        const last = items[items.length - 1];
+        if (last && _isTurnInProgress(last.thinking_state, last.answer)) {
+            _startInProgressPolling();
+            setStreamingUI(true);
         }
     } catch (_) { /* non-fatal */ }
 }
 hydrateThreadHistory();
+
+/* ─────────────────────────────────────────────────────────────────
+ * Refresh-during-stream poll loop
+ * ─────────────────────────────────────────────────────────────────
+ * When the user refreshes (or FastHTML auto-reloads during dev) mid-
+ * stream, the SSE connection is lost — but the backend's graph keeps
+ * running and persists `thinking_state` snapshots into Postgres every
+ * ~2.5s. This loop re-fetches `/history`, swaps the last (in-progress)
+ * turn's DOM with a fresh render, and stops as soon as either:
+ *   1. the turn's final answer lands, or
+ *   2. the user submits a new question in this tab (a `data-streaming=
+ *      "true"` turn appears — the live SSE owns the DOM from then on).
+ * User-toggled expander state is preserved across re-renders so a poll
+ * tick can't slam a collapsed expander back open. */
+const _IN_PROGRESS_POLL_MS = 2500;
+// 2026-06-15 — after this many consecutive identical snapshots the
+// poll loop marks the turn STALLED: drops the streaming spinner and
+// renders a "Pipeline lost — likely pod restart" subtitle under the
+// active stage. 6 ticks × 2.5 s = 15 s of zero backend progress, which
+// in practice only happens on a real backend death (OOM-kill, deploy
+// restart). Healthy DEEP runs always advance the persisted snapshot
+// at least every ~3 s via the `_STREAM_PERSIST_INTERVAL_S` cadence on
+// the SSE side, so a 15 s flatline is a strong signal.
+const _STALL_TICKS_THRESHOLD = 6;
+let _inProgressPollHandle    = null;
+let _lastSnapshotKey         = "";
+let _stallTickCount          = 0;
+
+function _startInProgressPolling() {
+    if (_inProgressPollHandle) return;
+    _lastSnapshotKey = "";
+    _stallTickCount  = 0;
+    _inProgressPollHandle = setInterval(_pollInProgressTurn, _IN_PROGRESS_POLL_MS);
+}
+
+function _stopInProgressPolling() {
+    if (_inProgressPollHandle) {
+        clearInterval(_inProgressPollHandle);
+        _inProgressPollHandle = null;
+    }
+    _lastSnapshotKey = "";
+    _stallTickCount  = 0;
+}
+
+/* Cheap fingerprint of the in-progress snapshot — used to detect a
+ * stalled backend. We hash on:
+ *   - the bits the user actually cares about (stage statuses + per-
+ *     stage action subtitle + per-sub-question status + answer length)
+ *   - the backend's `_seq` heartbeat counter (2026-06-15). The backend
+ *     ticks `_seq` every `_STREAM_PERSIST_INTERVAL_S` regardless of
+ *     whether new graph events arrived, so a healthy backend produces
+ *     a fresh fingerprint every poll even while a DEEP sub-agent
+ *     grinds for 5–15 min without emitting parent-stream events. A
+ *     truly dead backend stops bumping `_seq`, and the rest of the
+ *     fingerprint stays identical too → stalled trips after 15 s,
+ *     same as before for the failure case it was meant to catch. */
+function _snapshotKey(item) {
+    if (!item) return "";
+    const ts     = item.thinking_state || {};
+    const stages = ts.stages || {};
+    const stageK = ["retrieve","grade","generate","verify"].map((s) => {
+        const e = stages[s] || {};
+        return `${s}:${e.status||""}:${e.action||""}`;
+    }).join("|");
+    const deep   = ts.deep || {};
+    const sqK    = (deep.sub_questions || []).map((q) => q.status || "").join(",");
+    const seq    = ts._seq ?? "";
+    return `seq:${seq}|${(item.answer || "").length}|${stageK}|${sqK}`;
+}
+
+/* Apply the "stalled" presentation in-place on the rendered turn.
+ * Drops the streaming wrapper class so the spinner vanishes; injects
+ * an italic "Stalled" subtitle into the currently-active stage circle
+ * (or the first one if nothing is active). */
+function _markStalled(turnEl) {
+    if (!turnEl) return;
+    turnEl.classList.remove("ycs-ask-turn-streaming");
+    turnEl.dataset.stalled = "true";
+    const activeStage = turnEl.querySelector(".ycs-step-circle.active")
+        || turnEl.querySelector(".ycs-step-circle");
+    const actionEl = activeStage?.querySelector(".ycs-step-circle-action");
+    if (actionEl) {
+        actionEl.textContent =
+            "Stalled — pipeline lost (likely backend restart)";
+        actionEl.classList.add("ycs-step-circle-stalled");
+    }
+}
+
+async function _pollInProgressTurn() {
+    if (!threadId || !conversationEl) { _stopInProgressPolling(); return; }
+    // A live SSE turn in this tab owns the DOM — bail so we don't race.
+    if (conversationEl.querySelector('.ycs-ask-turn[data-streaming="true"]')) {
+        _stopInProgressPolling();
+        return;
+    }
+    try {
+        const r     = await api(`/agents/history/${encodeURIComponent(threadId)}`);
+        const items = r.items ?? [];
+        const last  = items[items.length - 1];
+        if (!last) { _stopInProgressPolling(); return; }
+
+        // ── Stall detection ─────────────────────────────────────────
+        const key = _snapshotKey(last);
+        if (key && key === _lastSnapshotKey) {
+            _stallTickCount += 1;
+        } else {
+            _stallTickCount = 0;
+        }
+        _lastSnapshotKey = key;
+
+        // Surgical swap: remove the trailing history turn and re-render
+        // from the fresh snapshot. Capture every piece of user-toggled
+        // UI state BEFORE we nuke the DOM so polling can't fight the
+        // user. Two state buckets today:
+        //   (a) Thinking-expander open/closed
+        //   (b) The set of EXPANDED done sub-question cards (keyed by
+        //       the sub-question text — same identity the poll uses
+        //       when matching incoming sub_results to existing cards)
+        const histTurns    = conversationEl.querySelectorAll(".ycs-ask-turn-history");
+        const lastTurnEl   = histTurns[histTurns.length - 1];
+        const proc         = lastTurnEl?.querySelector(".ycs-ask-turn-process");
+        const userCollapsed = proc?.classList.contains("collapsed") ?? false;
+        const expandedQs = new Set();
+        if (lastTurnEl) {
+            for (const card of lastTurnEl.querySelectorAll(
+                ".ycs-ask-deep-card.expanded"
+            )) {
+                const q = card.querySelector(".ycs-ask-deep-card-q")?.textContent;
+                if (q) expandedQs.add(q);
+            }
+        }
+        if (lastTurnEl) lastTurnEl.remove();
+        renderHistoryTurn({
+            question:       last.question       ?? "",
+            answer:         last.answer         ?? "",
+            mode:           last.mode           ?? "",
+            created_at:     last.created_at     ?? "",
+            thinking_state: last.thinking_state ?? null,
+            id:             last.id             ?? null,
+        });
+        if (userCollapsed) {
+            const newProc = conversationEl
+                .querySelector(".ycs-ask-turn-history:last-child .ycs-ask-turn-process");
+            if (newProc) {
+                newProc.classList.add("collapsed");
+                newProc.querySelector(".ycs-ask-turn-process-head")
+                    ?.setAttribute("aria-expanded", "false");
+            }
+        }
+        // Restore the user's expanded sub-question cards. Match by the
+        // question text (the same key the poll uses to merge incoming
+        // sub_results), and only on cards that are now in the `done`
+        // state — restoring `expanded` on a queued card would be
+        // ignored anyway since the CSS rule is gated on `[data-state=
+        // "done"]`, but skipping it keeps the DOM honest.
+        if (expandedQs.size) {
+            const newLast = conversationEl
+                .querySelector(".ycs-ask-turn-history:last-child");
+            for (const card of newLast?.querySelectorAll(
+                '.ycs-ask-deep-card[data-state="done"]'
+            ) ?? []) {
+                const q = card.querySelector(".ycs-ask-deep-card-q")?.textContent;
+                if (q && expandedQs.has(q)) card.classList.add("expanded");
+            }
+        }
+        // Apply stalled presentation if we've crossed the threshold.
+        if (_stallTickCount >= _STALL_TICKS_THRESHOLD) {
+            const newLast = conversationEl
+                .querySelector(".ycs-ask-turn-history:last-child");
+            _markStalled(newLast);
+            _stopInProgressPolling();
+            // The pipeline is dead — nothing to Stop, so revert to Send.
+            setStreamingUI(false);
+            return;
+        }
+        // Terminate when the snapshot is no longer mid-stream (answer
+        // landed). Restore the Send button — the streamingUI we set
+        // during `hydrateThreadHistory` was only valid while the
+        // backend was working.
+        if (!_isTurnInProgress(last.thinking_state, last.answer)) {
+            _stopInProgressPolling();
+            setStreamingUI(false);
+        }
+    } catch (_) { /* transient — keep polling */ }
+}
 
 // Example-question chips fill the composer + scroll into view.
 document.querySelectorAll(".ycs-ask-example-chip").forEach((chip) => {
@@ -971,11 +1334,11 @@ function renderDeepCards(subQuestions, researchPlan) {
         && currentTurnEl.classList.contains("ycs-ask-turn-preview");
     if (banner) {
         const planTxt = researchPlan
-            ? ` · ${htmlEscape(String(researchPlan).slice(0, 200))}`
+            ? `<div class="ycs-ask-deep-banner-plan">${htmlEscape(String(researchPlan))}</div>`
             : "";
         const prefix = isPreview ? "Plan preview" : "Research plan";
         banner.innerHTML =
-            `<strong>${prefix}</strong> ${subQuestions.length} sub-questions${planTxt}`;
+            `<div class="ycs-ask-deep-banner-head"><strong>${prefix}</strong> - ${subQuestions.length} sub-questions</div>${planTxt}`;
     }
     for (const q of subQuestions) {
         const card = document.createElement("div");
@@ -986,9 +1349,13 @@ function renderDeepCards(subQuestions, researchPlan) {
             ? `<input type="checkbox" class="ycs-ask-deep-check"
                       value="${htmlEscape(q)}" checked>`
             : "";
+        // Chevron rendered inline; visible only when card hits the
+        // `done` state (CSS-gated on `[data-state="done"]`). Click on
+        // the head toggles `.expanded` via the delegated handler below.
         card.innerHTML = `
             <div class="ycs-ask-deep-card-head">
                 ${checkbox}
+                <span class="ycs-ask-deep-card-chevron">▾</span>
                 <span class="ycs-ask-deep-card-state">${stateLabel}</span>
                 <span class="ycs-ask-deep-card-q">${htmlEscape(q)}</span>
             </div>
@@ -1034,7 +1401,7 @@ conversationEl?.addEventListener("click", async (ev) => {
     });
 });
 
-function advanceDeepCard(question, answerPreview) {
+function advanceDeepCard(question, fullAnswer) {
     if (!question || !deepCardIndex.size) return;
     const card = deepCardIndex.get(question);
     if (!card) return;
@@ -1042,8 +1409,13 @@ function advanceDeepCard(question, answerPreview) {
     const stateEl = card.querySelector(".ycs-ask-deep-card-state");
     if (stateEl) stateEl.textContent = "done";
     const bodyEl = card.querySelector(".ycs-ask-deep-card-body");
-    if (bodyEl && answerPreview) {
-        bodyEl.textContent = answerPreview;
+    if (bodyEl && fullAnswer) {
+        // 2026-06-15 — render the FULL sub-agent answer as markdown.
+        // The card stays COLLAPSED by default (CSS hides the body
+        // until `.expanded` lands on the card via the delegated click
+        // handler), so the conversation view doesn't get visually
+        // dominated by a wall of N expanded sub-answers.
+        bodyEl.innerHTML = renderMarkdown(fullAnswer);
     }
 }
 
@@ -1194,6 +1566,22 @@ function applyUpdate(node, update) {
             banner.innerHTML =
                 `<strong>Critic</strong> confidence ${pct}%`;
         }
+        // 2026-06-16 — partial-answer badge. When the critic's
+        // confidence drops below 80%, flag the turn as `partial` so
+        // the CSS can surface a "Partial answer" pill next to the
+        // mode badge. The threshold matches Anthropic's commonly-used
+        // human review cutoff and is what we use for the critic's
+        // "good enough" floor elsewhere. We attach the score itself
+        // so a hover/title can show the exact percentage.
+        if (currentTurnEl) {
+            const isPartial = Number(update.confidence_score) < 0.80;
+            currentTurnEl.dataset.confidence = String(pct);
+            if (isPartial) {
+                currentTurnEl.classList.add("ycs-ask-turn-partial");
+            } else {
+                currentTurnEl.classList.remove("ycs-ask-turn-partial");
+            }
+        }
     }
     if (Array.isArray(update.citations) && update.citations.length) {
         const data = getTurnData(currentTurnEl);
@@ -1216,9 +1604,14 @@ function applyUpdate(node, update) {
         renderDeepCards(update.sub_questions, update.research_plan || "");
     }
     if (update.latest_sub_question) {
+        // 2026-06-15 — prefer the full `latest_sub_answer`; fall back
+        // to `latest_sub_answer_preview` for the brief window where a
+        // server pod with the pre-fix code is still emitting events.
         advanceDeepCard(
             update.latest_sub_question,
-            update.latest_sub_answer_preview || "",
+            update.latest_sub_answer
+                ?? update.latest_sub_answer_preview
+                ?? "",
         );
     }
     if (node === "synthesize") {
@@ -1263,6 +1656,16 @@ async function consumeSSE(payload, signal) {
             let evt;
             try { evt = JSON.parse(json); } catch (_) { continue; }
             const node = evt.node ?? "unknown";
+            if (node === "_meta") {
+                // 2026-06-15 — backend emits {node:"_meta", turn_id:N}
+                // as the first SSE frame so Stop / refresh-and-Stop can
+                // POST /turns/{N}/cancel even when the AbortController
+                // is gone (e.g. after a page refresh).
+                if (currentTurnEl && evt.turn_id != null) {
+                    currentTurnEl.dataset.turnId = String(evt.turn_id);
+                }
+                continue;
+            }
             if (node === "end") {
                 // Preview-mode end ("status":"preview") — the user must
                 // confirm the plan before fan-out runs. Stay on the
@@ -1279,6 +1682,20 @@ async function consumeSSE(payload, signal) {
                 askStatus.textContent = "Done.";
                 askStatus.className = "ycs-search-status";
                 renderFollowups(currentSubQuestions);
+                // 2026-06-16 — auto-expand every DONE sub-question card
+                // on stream completion. Without this, the user has to
+                // click each card individually to see its sub-answer.
+                // Now that the synthesis is chat-style + intentionally
+                // short, the sub-research is the long-form supporting
+                // evidence; making it visible by default matches how
+                // the user actually consumes the result.
+                if (currentTurnEl) {
+                    for (const card of currentTurnEl.querySelectorAll(
+                        '.ycs-ask-deep-card[data-state="done"]'
+                    )) {
+                        card.classList.add("expanded");
+                    }
+                }
                 freezeCurrentTurn();
                 // The candidate threadId now has a real Postgres row —
                 // promote the trigger from "New" to the live id.
@@ -1327,13 +1744,16 @@ async function sendQuestion(question, opts = {}) {
         await consumeSSE(payload, currentAbortController.signal);
     } catch (e) {
         if (e.name === "AbortError") {
-            renderError("Stopped by user.");
-            setStatus(askStatus, "error", "Stopped.");
+            // The Stop handler (`_cancelInFlightTurn`) has already
+            // removed the in-progress turn, posted /cancel, stopped
+            // the poll loop, and cleared the status bar. Don't render
+            // a "Stopped" pill — the user asked for the turn to vanish,
+            // not to be replaced with a tombstone.
         } else {
             renderError(e.message || "request failed");
             setStatus(askStatus, "error", `Failed: ${e.message}`);
+            freezeCurrentTurn();
         }
-        freezeCurrentTurn();
     } finally {
         setStreamingUI(false);
         currentAbortController = null;
@@ -1422,6 +1842,69 @@ conversationEl?.addEventListener("click", (ev) => {
     }
 });
 
-stopBtn?.addEventListener("click", () => {
-    currentAbortController?.abort();
-});
+/* Stop button — works in two scenarios:
+ *
+ *   A. SAME TAB: the user clicked Send a few seconds ago, the SSE
+ *      fetch is still active, and now they click Stop. We abort the
+ *      fetch (which trips Starlette's `is_disconnected()` server-side
+ *      and breaks the LangGraph stream loop on the very next event)
+ *      AND post to `/turns/{id}/cancel` so the Postgres placeholder
+ *      gets DELETE'd. Either signal alone is enough to halt the
+ *      backend; doing both makes the path robust to network flakiness.
+ *
+ *   B. AFTER A REFRESH: the previous JS context (and its
+ *      AbortController) died with the tab. `hydrateThreadHistory`
+ *      detected the placeholder row was in-progress and flipped the
+ *      UI to Stop. Clicking Stop now has no fetch to abort — it just
+ *      posts the cancel. The backend's still-running SSE generator
+ *      checks `_CANCELLED_TURN_IDS` between graph events and breaks.
+ *
+ * In both scenarios we then surgically delete ONLY the in-progress
+ * turn from the DOM (preserving every prior successful turn), stop
+ * the poll loop, and flip the composer back to Send. */
+function _findInProgressTurn() {
+    return currentTurnEl
+        || conversationEl?.querySelector(
+            '.ycs-ask-turn.ycs-ask-turn-streaming'
+        )
+        || null;
+}
+
+async function _cancelInFlightTurn() {
+    const turn   = _findInProgressTurn();
+    const turnId = turn?.dataset?.turnId;
+    // Abort first so the backend's `is_disconnected()` fires before
+    // the cancel POST lands — minimises the window in which the
+    // graph might still execute one more node.
+    try { currentAbortController?.abort(); } catch (_) { /* */ }
+    if (turnId) {
+        try {
+            await api(`/agents/turns/${encodeURIComponent(turnId)}/cancel`, {
+                method: "POST",
+            });
+        } catch (_) {
+            // Network error / 404 / already-cancelled — fine, the
+            // DOM cleanup below still proceeds.
+        }
+    }
+    // Surgical DOM removal: only the in-progress turn. All earlier
+    // history turns (and their persisted Thinking states) stay
+    // intact. If the conversation is now empty, restore the empty
+    // state so the layout doesn't collapse.
+    if (turn) turn.remove();
+    if (currentTurnEl && currentTurnEl.isConnected === false) {
+        currentTurnEl = null;
+    } else if (currentTurnEl === turn) {
+        currentTurnEl = null;
+    }
+    if (conversationEl && !conversationEl.children.length) {
+        showEmptyState();
+    }
+    _stopInProgressPolling();
+    setStreamingUI(false);
+    setStatus(askStatus, "", "");
+    deepCardIndex.clear();
+    currentSubQuestions = [];
+}
+
+stopBtn?.addEventListener("click", _cancelInFlightTurn);

@@ -72,6 +72,11 @@ async def graph_build_papers(
         f"(total={len(top_n)})"
     )
     logger.info(msg)
+    # Phase contextvar for LLM-counter attribution (Path A 2026-06-16).
+    try:
+        from ...runtime.llm_counter import set_phase as _set_llm_phase
+        _set_llm_phase("graph_build")
+    except Exception: pass
     if errors:
         # Log the first error so it's debuggable from logs without exploding
         # the tool's return string.

@@ -34,7 +34,12 @@ SUBAGENT_DEEP_READ  = "deep_read"
 SUBAGENT_SYNTHESIS  = "synthesis"
 SUBAGENT_REPORT     = "report"
 
-# Active subagent registry (per mode, set at agent-build time)
+# Active subagent registry (per mode, set at agent-build time).
+# 2026-06-16: SUBAGENT_REPORT removed from "subagents" mode after the
+# report subagent emitted `{` 6 times for write_digest. Synthesis now
+# owns per-paper themes; digest assembly is Python in task.py for both
+# modes. SUBAGENT_REPORT constant retained for reference (the report.py
+# scaffolding stays on disk).
 SUBAGENT_NAMES_TOOLS_MODE: tuple[str, ...] = (
     SUBAGENT_DEEP_READ,
     SUBAGENT_SYNTHESIS,
@@ -46,7 +51,6 @@ SUBAGENT_NAMES_SUBAGENTS_MODE: tuple[str, ...] = (
     SUBAGENT_DISCOVERY_HN,
     SUBAGENT_DEEP_READ,
     SUBAGENT_SYNTHESIS,
-    SUBAGENT_REPORT,
 )
 
 # --------------------------------------------------------------------------- #

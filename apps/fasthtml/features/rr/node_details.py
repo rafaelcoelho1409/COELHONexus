@@ -62,6 +62,28 @@ NODE_LIVE_FS_PATH: dict[str, str] = {
 }
 
 
+# Per-node "Phase counter" mapping — which phase bucket inside the
+# `GET /scan/{id}/llm-counters` payload powers the per-node LLM activity
+# section. Multiple nodes can map to the same phase (e.g. all 4 discovery
+# subagents share the "discovery" bucket because they fan out in parallel
+# and we attribute their LLM calls to one rollup). Nodes with no LLM
+# activity (triage_candidates / graph_build are deterministic tools) get
+# an empty value → drawer hides the section.
+NODE_LLM_PHASE: dict[str, str] = {
+    "orchestrator":                          "orchestrator",
+    "discovery_arxiv":                       "discovery",
+    "discovery_semantic_scholar":            "discovery",
+    "discovery_huggingface_daily_papers":    "discovery",
+    "discovery_hn":                          "discovery",
+    "deep_read":                             "deep_read",
+    "synthesis":                             "synthesis",
+    # triage + graph_build + persist + report do no LLM work (triage runs
+    # the NIM rerank but it's a one-shot embedding call, not the chat
+    # rotator). Omitting means the drawer hides the "LLM activity" block
+    # for these nodes.
+}
+
+
 def _load_skill(name: str) -> str:
     """Load a skill .md as a string. Empty string on missing — the drawer
     just hides the skill block in that case."""
@@ -81,8 +103,11 @@ def build_node_details() -> dict[str, dict]:
     # Attach the live-state fs path per node so the drawer JS can fetch
     # `GET /scan/{id}/fs/{path}` on click. Nodes without a path get an
     # empty value — main.js then skips the live section.
+    # Also attach the LLM-counter phase bucket so the drawer can render
+    # per-node LLM activity (Path A 2026-06-16).
     for key, entry in out.items():
         entry["live_fs_path"] = NODE_LIVE_FS_PATH.get(key, "")
+        entry["llm_phase"]    = NODE_LLM_PHASE.get(key, "")
     return out
 
 

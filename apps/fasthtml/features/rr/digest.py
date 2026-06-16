@@ -9,6 +9,11 @@ from fasthtml.common import (
     H3, Div, P, Script,
 )
 
+# Reuse DD's shared modal — same pattern as `features/ycs/page.py`. Mounts
+# the `#fw-modal` element backed by `showConfirm()` in
+# `static/js/dd/shared/ui/overlays.js`.
+from features.dd.shared.overlays import ConfirmModal
+
 
 def _DigestArea():
     return Div(
@@ -28,12 +33,17 @@ def DigestBody():
     """Page body for `/research-radar/digest`. The Pipeline page's status
     strip is omitted here — the operator already saw the run, this is the
     reading surface. main.js hydrates the digest items from `?scan=<id>`
-    on load and intercepts SSE `phase=done` to swap in the live result."""
+    on load and intercepts SSE `phase=done` to swap in the live result.
+
+    Includes DD's `ConfirmModal()` so main.js's `showConfirm(...)` from
+    `@dd/shared/ui/overlays.js` finds its `#fw-modal` DOM target. The
+    Recent-scans dropdown's per-row delete uses it."""
     return Div(
         Div(
             _DigestArea(),
             cls = "rr-card rr-card-digest",
         ),
+        ConfirmModal(),
         Script(src = "/static/js/rr/main.js", type = "module"),
         cls = "rr-page rr-page-digest",
     )

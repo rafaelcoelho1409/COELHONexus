@@ -7,5 +7,6 @@ from pydantic import BaseModel, Field
 
 
 class ResearchPlan(BaseModel):
-    sub_questions: list[str] = Field(description = "3-8 focused sub-questions")
+    # 2026-06-15 — capped 3-8 → 3-5 (see `classify/schemas.py` header).
+    sub_questions: list[str] = Field(description = "3-5 focused sub-questions")
     strategy:      str = Field(description = "Brief research strategy")

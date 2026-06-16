@@ -56,7 +56,7 @@ CLASSIFY_PROMPT = ChatPromptTemplate.from_messages([
         "- 'What psychological traits does this creator show?' → DEEP\n"
         "- 'What contradictions exist across all videos?' → DEEP\n"
         "- 'Quais padrões aparecem em todos os vídeos sobre X?' → DEEP\n\n"
-        "For DEEP mode, also generate 3-8 focused sub-questions that "
+        "For DEEP mode, also generate 3-5 focused sub-questions that "
         "break down the analysis.\n\n"
         "SCOPE DETECTION: Identify any specific channel or person names "
         "mentioned in the query. Return them in channel_names so "

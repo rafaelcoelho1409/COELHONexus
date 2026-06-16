@@ -27,8 +27,9 @@ from domains.rr.keys import (
 )
 from domains.rr.runtime.events import store_task_id, subscribe_events
 from domains.rr.runtime.fs_mirror import mirror_index, mirror_read
+from domains.rr.runtime.llm_counter import read_counters as read_llm_counters
 from domains.rr.schemas import ScanCreated, ScanRequest, ScanResult
-from domains.rr.service import cancel_scan
+from domains.rr.service import cancel_scan, delete_scan
 from domains.rr.task import run_radar_scan
 
 
@@ -43,31 +44,50 @@ router = APIRouter()
 # --------------------------------------------------------------------------- #
 @router.get("/scans/recent")
 async def list_recent_scans(profile_id: str = "default", limit: int = 20) -> dict:
-    """Most-recent scans for a profile. Cheap query — radar_scans is
-    indexed on `started_at desc`. Drives the row-2 scan picker so the
-    operator can revisit any scan from the past 24-48h without bookmarks."""
+    """Most-recent scans for a profile. Drives the Recent-scans dropdown
+    on the Digest page. The query pulls the per-scan request shape
+    (topic / verticals / top_n) + outcome (status / counts / duration) +
+    a 1-3 theme preview pulled from the rank-1 finding's digest_json.
+
+    Themes preview implementation: we LEFT JOIN the rank-1 finding row
+    and read `digest_json->'themes'`. Single-row join per scan keeps the
+    query bounded; absent for in-flight or failed scans."""
     limit = max(1, min(int(limit), 100))
     async with await psycopg.AsyncConnection.connect(postgres_url()) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                f"SELECT id, status, started_at, finished_at, "
-                f"       total_in_digest "
-                f"FROM {PG_TABLE_SCANS} "
-                f"WHERE profile_id = %s "
-                f"ORDER BY started_at DESC LIMIT %s",
+                f"""
+                SELECT s.id, s.status, s.started_at, s.finished_at,
+                       s.total_in_digest, s.topic, s.verticals, s.top_n,
+                       f.digest_json -> 'themes' AS themes_preview
+                FROM {PG_TABLE_SCANS} s
+                LEFT JOIN {PG_TABLE_FINDINGS} f
+                  ON f.scan_id = s.id AND f.rank = 1
+                WHERE s.profile_id = %s
+                ORDER BY s.started_at DESC
+                LIMIT %s
+                """,
                 (profile_id, limit),
             )
             rows = await cur.fetchall()
-    items = [
-        {
+    items = []
+    for row in rows:
+        themes_raw = row[8]
+        # digest_json->'themes' is a JSONB array or null. psycopg returns it
+        # as a Python list already (with the JSONB adapter); fall back to []
+        # if it's something else.
+        themes = themes_raw if isinstance(themes_raw, list) else []
+        items.append({
             "scan_id":         str(row[0]),
             "status":          row[1],
             "started_at":      row[2].isoformat() if row[2] else None,
             "finished_at":     row[3].isoformat() if row[3] else None,
             "total_in_digest": int(row[4] or 0),
-        }
-        for row in rows
-    ]
+            "topic":           row[5] or "",
+            "verticals":       list(row[6] or []),
+            "top_n":           int(row[7]) if row[7] is not None else None,
+            "themes":          [str(t) for t in themes[:3]],
+        })
     return {"profile_id": profile_id, "items": items}
 
 
@@ -108,6 +128,19 @@ async def create_scan(body: ScanRequest) -> ScanCreated:
         status     = "pending",
         started_at = now,
     )
+
+
+# --------------------------------------------------------------------------- #
+# DELETE /scan/{id} — per-row delete from the Recent-scans dropdown
+# --------------------------------------------------------------------------- #
+@router.delete("/scan/{scan_id}", status_code=200)
+async def delete_scan_endpoint(scan_id: UUID) -> dict:
+    """Drop one scan's presentation artifacts: Postgres row + findings +
+    MinIO digest object. Accumulated knowledge (Neo4j graph + Qdrant
+    embeddings + radar_seen markers) is intentionally preserved. Returns
+    a per-layer success summary so the UI can confirm what was removed."""
+    result = await delete_scan(scan_id)
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -201,6 +234,31 @@ async def read_fs(scan_id: UUID, path: str) -> dict:
             detail = f"fs entry {path!r} not found for scan_id {scan_id}",
         )
     return {"scan_id": str(scan_id), "path": path, "value": value}
+
+
+# --------------------------------------------------------------------------- #
+# GET /scan/{id}/llm-counters — per-phase LLM activity (Path A 2026-06-16)
+# --------------------------------------------------------------------------- #
+@router.get("/scan/{scan_id}/llm-counters")
+async def scan_llm_counters(scan_id: UUID) -> dict:
+    """Per-scan LLM activity counters: total + by_phase + per-model.
+
+    Shape:
+        {
+          "scan_id":  "...",
+          "total":    {"calls": N, "tokens_in": X, "tokens_out": Y},
+          "by_phase": {
+            "discovery": {"calls": ..., "tokens_in": ..., "tokens_out": ...,
+                          "by_model": {"<model>": {...}, ...}},
+            ...
+          }
+        }
+
+    Empty totals (all zeros, empty by_phase) if the scan never ran OR
+    its counters TTL expired (6h). Drives the Pipeline-page drawer's
+    per-node KPI cards.
+    """
+    return await read_llm_counters(str(scan_id))
 
 
 # --------------------------------------------------------------------------- #

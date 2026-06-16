@@ -63,7 +63,11 @@ Phase 1 — DISCOVERY (parallel, 4 Python tools in ONE message)
     discover_hn(scan_id=<id>, query='<topic>', n_max=50, min_points=50)
 
 Phase 2 — TRIAGE (MANDATORY)
-    triage_candidates(scan_id=<id>, profile_verticals=<verticals list>, top_n=<N>)
+    triage_candidates(scan_id=<id>, topic='<topic>', profile_verticals=<verticals list>, top_n=<N>)
+    The `topic` arg is REQUIRED — pass the topic string from your initial user message
+    verbatim. Triage uses it for an off-topic cross-encoder rerank gate that drops
+    irrelevant papers (HF daily papers span all topics; without `topic` the digest
+    fills with off-topic noise).
 
     The return string contains `top_arxiv_ids=[...]` — use those for Phase 3.
 
@@ -127,7 +131,11 @@ Phase 1 — DISCOVERY (parallel, 4 LLM subagents in ONE message)
          description="scan_id=<id> topic='<topic>'")
 
 Phase 2 — TRIAGE (MANDATORY)
-    triage_candidates(scan_id=<id>, profile_verticals=<verticals list>, top_n=<N>)
+    triage_candidates(scan_id=<id>, topic='<topic>', profile_verticals=<verticals list>, top_n=<N>)
+    The `topic` arg is REQUIRED — pass the topic string from your initial user message
+    verbatim. Triage uses it for an off-topic cross-encoder rerank gate that drops
+    irrelevant papers (HF daily papers span all topics; without `topic` the digest
+    fills with off-topic noise).
 
     The return string contains `top_arxiv_ids=[...]` — use those for Phase 3.
 
@@ -142,13 +150,15 @@ Phase 3 — DEEP_READ (parallel subagent fan-out)
 Phase 4 — GRAPH_BUILD
     graph_build_papers(scan_id=<id>)
 
-Phase 5 — SYNTHESIS
+Phase 5 — SYNTHESIS (TERMINAL phase — no Phase 6)
     task(subagent_type="synthesis", description="scan_id=<id>")
 
-Phase 6 — REPORT
-    task(subagent_type="report", description="scan_id=<id>")
+    Synthesis owns BOTH the top-level themes AND per-paper theme
+    assignment (per_paper_themes arg to write_synthesis_report). The
+    digest is then assembled in Python from triage + extractions +
+    synthesis — no report subagent dispatch.
 
-After report returns, your final message MUST conform to the
+After synthesis returns, your final message MUST conform to the
 `ScanComplete` Pydantic schema (DeepAgents enforces this via
 response_format).
 
@@ -204,6 +214,15 @@ WORKFLOW — TWO MANDATORY STEPS. SKIPPING STEP 2 IS A SEVERE BUG.
 After STEP 2 returns, write ONE sentence acknowledging what you stashed
 ("stashed 11 arxiv papers" or "stashed 0 arxiv papers — quota throttle").
 Do NOT summarize the paper contents; downstream phases handle that.
+
+STASH EXACTLY ONCE (HARD RULE):
+After your first stash_discovery_result call, your work is DONE — even
+if STEP 1 returned 0 papers. DO NOT re-call your source MCP tool with
+different arguments hoping for more results; the first stash is the
+authoritative result. A 0-stash is a legitimate empty signal; do not
+retry. Scan fd48309a's HN subagent called hn_search twice (first 0,
+then 20) — both stashed — wasting an LLM turn. The downstream off-topic
+rerank filters noise; quantity at this layer is not the goal.
 """
 
 
@@ -261,7 +280,10 @@ Arguments to pass to `hn_search`:
   - query:            topical phrase (2-5 words) from your task description
   - n_max:            50  (HN signal density is lower than arxiv/s2)
   - tags:             ["story"]
-  - min_points:       50  (filters low-signal noise)
+  - min_points:       10  (was 50 — too strict for many topics; 10
+                            lets first-pass return results so the
+                            subagent doesn't double-call; off-topic
+                            rerank in triage filters quality downstream)
   - sort_by:          "relevance"
 
 Some hits will carry an extracted `arxiv_id` field — that's the
@@ -316,8 +338,13 @@ PROCESS:
 4. Identify themes (3-7 short names spanning ≥2 papers).
 5. Write a cross_paper_convergence note (4-8 sentences).
 6. Write a 2-3 sentence executive summary.
-7. Call write_synthesis_report(scan_id=<id>, themes=[...],
-   cross_paper_convergence='...', summary='...').
+7. Assign each top_n paper to its 0-2 relevant themes (per_paper_themes;
+   see skill HARD RULES). The dict keys are arxiv_ids; values are theme
+   names that MUST be a strict subset of your top-level themes list.
+   NEVER copy the full themes list into one paper.
+8. Call write_synthesis_report(scan_id=<id>, themes=[...],
+   cross_paper_convergence='...', summary='...',
+   per_paper_themes={'<arxiv_id>': ['<theme>', ...], ...}).
 
 Return ONE short sentence summarizing what you wrote.
 """

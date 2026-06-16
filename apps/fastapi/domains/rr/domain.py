@@ -189,22 +189,52 @@ def normalize_hn(d: dict[str, Any]) -> NormalizedPaper:
 # has it"). Papers without an arxiv_id can't dedup; they're kept as standalone
 # candidates.
 # --------------------------------------------------------------------------- #
-def dedup_by_arxiv_id(items: list[NormalizedPaper]) -> list[NormalizedPaper]:
-    """Merge papers sharing an arxiv_id; pass through those without one.
+_TITLE_NORM_RE = re.compile(r"[^a-z0-9]+")
 
-    Output ordering: dedup-groups first (insertion order of the first
-    occurrence of each arxiv_id), then standalone-no-id papers in original
-    order.
+
+def _normalized_title(title: str) -> str:
+    """Lower-case, strip punctuation/whitespace, collapse. Used as a
+    secondary dedup key for items without an arxiv_id. `Show HN: Almanac
+    MCP, turn Claude Code into a Deep Research agent` and a duplicate
+    crosspost with the same title collapse to one entry."""
+    if not title:
+        return ""
+    return _TITLE_NORM_RE.sub(" ", title.lower()).strip()
+
+
+def dedup_by_arxiv_id(items: list[NormalizedPaper]) -> list[NormalizedPaper]:
+    """Merge papers sharing an arxiv_id (primary key) or a normalized
+    title (secondary key, for items without arxiv_id).
+
+    Primary: same arxiv_id → max-merge per-source signals.
+
+    Secondary (2026-06-16, post-28094718): items WITHOUT arxiv_id are
+    deduped by normalized title (lower-cased, punctuation-stripped). This
+    catches HN crossposts and same-title items from different sources.
+    Scan 28094718 surfaced two literal duplicates of `Show HN: Almanac
+    MCP` at ranks 1 and 3, both with sig=0.1805 — caused by passing items
+    through `no_id` without any secondary key.
+
+    Output ordering: arxiv-id dedup groups first (insertion order of the
+    first occurrence of each arxiv_id), then title-deduped no-id items in
+    original order.
     """
     by_id: dict[str, NormalizedPaper] = {}
-    no_id: list[NormalizedPaper] = []
+    by_title: dict[str, NormalizedPaper] = {}
+    no_key: list[NormalizedPaper] = []
     for it in items:
-        if not it.arxiv_id:
-            no_id.append(it)
+        if it.arxiv_id:
+            existing = by_id.get(it.arxiv_id)
+            by_id[it.arxiv_id] = _merge(existing, it) if existing else it
             continue
-        existing = by_id.get(it.arxiv_id)
-        by_id[it.arxiv_id] = _merge(existing, it) if existing else it
-    return list(by_id.values()) + no_id
+        # No arxiv_id — fall back to title-based dedup.
+        nt = _normalized_title(it.title)
+        if not nt:
+            no_key.append(it)
+            continue
+        existing_t = by_title.get(nt)
+        by_title[nt] = _merge(existing_t, it) if existing_t else it
+    return list(by_id.values()) + list(by_title.values()) + no_key
 
 
 def _merge(a: NormalizedPaper, b: NormalizedPaper) -> NormalizedPaper:
@@ -260,6 +290,11 @@ def signal_score(
     buzz_raw = _log1p(p.hn_points) + _log1p(p.hf_upvotes)
     buzz = min(buzz_raw / 14.0, 1.0)
     code = 1.0 if p.has_code else 0.0
+    # 2026-06-16: arxiv_id presence is a binary research-paper signal.
+    # HN posts without an arxiv_id are usually product announcements;
+    # giving real papers a small lift prevents them from being displaced
+    # at the top when discovery returns a thin paper set.
+    has_aid = 1.0 if p.arxiv_id else 0.0
     return (
         weights.relevance         * rel
         + weights.recency         * rec
@@ -268,6 +303,7 @@ def signal_score(
         + weights.vertical_fit    * fit
         + weights.cross_tier_buzz * buzz
         + weights.has_code        * code
+        + weights.has_arxiv_id    * has_aid
     )
 
 

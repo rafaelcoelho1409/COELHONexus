@@ -1352,6 +1352,20 @@
 .ycs-ask-stages .ycs-step-circle.active .ycs-step-circle-action {
   color: var(--primary);
 }
+/* 2026-06-15 — `_pollInProgressTurn` flips this class on after the
+ * stall threshold (N identical snapshots in a row → likely backend
+ * died). Overrides the pulsing-primary look so the user doesn't
+ * keep waiting on a dead pipeline. */
+.ycs-step-circle-action.ycs-step-circle-stalled {
+  color: var(--danger, #c8553d) !important;
+  font-style: italic;
+  opacity: 1;
+}
+.ycs-ask-turn[data-stalled="true"] .ycs-step-circle.active {
+  animation: none;
+  border-color: var(--danger, #c8553d);
+  color: var(--danger, #c8553d);
+}
 .ycs-ask-stages .ycs-step-circle.active {
   opacity: 1;
   border-color: var(--primary);
@@ -1569,6 +1583,16 @@
   letter-spacing: 0.06em;
   color: var(--primary);
 }
+.ycs-ask-deep-banner-head {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+.ycs-ask-deep-banner-plan {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-style: italic;
+}
 .ycs-ask-deep-cards {
   display: flex;
   flex-direction: column;
@@ -1597,6 +1621,26 @@
   gap: 10px;
   align-items: baseline;
 }
+/* 2026-06-15 — chevron + click affordance ONLY when the card is
+ * done (queued cards have no body to reveal). The chevron is rendered
+ * inline for all states but hidden until done; rotates 90° when the
+ * card carries `.expanded`. */
+.ycs-ask-deep-card-chevron {
+  display: none;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  transition: transform 0.18s;
+}
+.ycs-ask-deep-card[data-state="done"] .ycs-ask-deep-card-chevron {
+  display: inline;
+}
+.ycs-ask-deep-card[data-state="done"]:not(.expanded) .ycs-ask-deep-card-chevron {
+  transform: rotate(-90deg);
+}
+.ycs-ask-deep-card[data-state="done"] .ycs-ask-deep-card-head {
+  cursor: pointer;
+  user-select: none;
+}
 .ycs-ask-deep-card-state {
   font-size: 0.66rem;
   font-weight: 700;
@@ -1623,12 +1667,23 @@
   border-top: 1px dashed var(--border);
   font-size: 0.78rem;
   line-height: 1.5;
-  color: var(--text-muted);
-  white-space: pre-wrap;
+  color: var(--text);
 }
 .ycs-ask-deep-card-body:empty {
   display: none;
 }
+/* 2026-06-15 — done cards start COLLAPSED; the full markdown sub-
+ * answer is in the body but hidden until the user clicks the head to
+ * expand. Queued/active cards never reach this rule (their body is
+ * `:empty` and hidden by the previous selector). */
+.ycs-ask-deep-card[data-state="done"]:not(.expanded) .ycs-ask-deep-card-body {
+  display: none;
+}
+/* Tighten markdown inside the sub-answer body so it doesn't tower
+ * over the surrounding Thinking expander when expanded. */
+.ycs-ask-deep-card-body p { margin: 0.3em 0; }
+.ycs-ask-deep-card-body pre { padding: 6px; font-size: 0.72rem; }
+.ycs-ask-deep-card-body code { font-size: 0.72rem; }
 
 /* P6 plan-preview state — checkbox + "Run research" button below the
  * cards. Once user confirms, the second pass replaces this with the
@@ -2340,6 +2395,29 @@
   background: rgba(0, 0, 0, 0.03);
 }
 .ycs-ask-turn-mode-badge:empty { display: none; }
+/* 2026-06-16 — partial-answer badge. The class lands on the turn
+ * wrapper when the critic's confidence drops below 80%; the badge
+ * pseudo-element rides next to the mode badge so the user sees the
+ * caveat at the same eye-line as the FAST/STANDARD/DEEP tag instead
+ * of having to dig into the Thinking expander. `dataset.confidence`
+ * surfaces the exact % on hover. */
+.ycs-ask-turn-partial .ycs-ask-turn-assistant-head::after {
+  content: "Partial ⚠";
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid var(--warning, #c98a1f);
+  border-radius: 999px;
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--warning, #c98a1f);
+  background: rgba(201, 138, 31, 0.08);
+  cursor: help;
+}
+.ycs-ask-turn-partial[data-confidence] .ycs-ask-turn-assistant-head::after {
+  content: "Partial ⚠ " attr(data-confidence) "%";
+}
 .ycs-ask-turn-body {
   font-size: 0.94rem;
   line-height: 1.55;
@@ -3946,3 +4024,579 @@
   padding: 2px 4px;
 }
 .ycs-lib-bulk-cancel:hover { color: #fff; }
+
+/* ===== Step 4 · Query =====================================================
+   SOTA workbench (2026-06-15 redesign): split-pane.
+     · LEFT  — CodeMirror 6 editor (top) + AI prompt panel (bottom)
+     · RIGHT — results pane with view-mode toggle (graph / table / json)
+   The backend pill strip (ES / Qdrant / Neo4j) lives in the shell's
+   row-3 toolbar; styles piggy-back on `.dd-substage-nav` + `.dd-substage`.
+   The `.is-disabled` modifier (added by query.js when a backend has
+   no data) is what the page-specific rule below targets. */
+.ycs-query-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  width: 100%;
+  /* The shell's body region is the only scroll container in the page.
+     We anchor the workbench to the viewport so editor + results panes
+     each get their own scroll context — matches the Hex / Databricks
+     SQL editor layout idiom. The 220px offset accounts for the topbar
+     (3 rows) + card padding. Tuned visually, not pixel-exact. */
+  height: calc(100vh - 220px);
+  min-height: 520px;
+}
+
+.dd-substage.is-disabled,
+.dd-substage[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ----- Left column — editor zone + AI panel ------------------------------ */
+.ycs-query-left,
+.ycs-query-right {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  overflow: hidden;
+  min-height: 0;     /* allow children to scroll inside grid cell */
+}
+.ycs-query-left { gap: 0; }
+
+.ycs-query-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.02);
+  font-size: 0.82rem;
+}
+.ycs-query-eh-meta    { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.ycs-query-eh-label   { color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.7rem; }
+.ycs-query-eh-backend { color: var(--text); font-weight: 700; }
+.ycs-query-eh-namespace { color: var(--text-muted); font-style: italic; }
+.ycs-query-eh-actions { display: flex; align-items: center; gap: 10px; }
+.ycs-query-eh-status  { font-size: 0.78rem; color: var(--text-muted); }
+.ycs-query-eh-status-running { color: var(--primary); }
+.ycs-query-eh-status-ok      { color: #1f7a3a; }
+.ycs-query-eh-status-error   { color: var(--primary); font-weight: 600; }
+.ycs-query-run-btn { padding: 6px 16px; font-size: 0.85rem; }
+
+.ycs-query-editor-mount {
+  flex: 1 1 auto;
+  min-height: 180px;
+  overflow: hidden;
+  position: relative;
+  background: #fff;
+}
+.ycs-query-editor-mount[data-cm-loading]::before {
+  content: "Loading editor…";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  pointer-events: none;
+}
+/* CM6 load-failure fallback (rare). Shows the error + a plain textarea
+   that the orchestrator's editor-handle shim wires to so Run/AI/History
+   keep working. */
+.ycs-query-editor-loaderr {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: auto;
+  background: rgba(196, 18, 48, 0.04);
+}
+.ycs-query-editor-loaderr strong { color: var(--primary); }
+.ycs-query-editor-loaderr pre {
+  margin: 0;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 4px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  max-height: 100px;
+  overflow: auto;
+}
+.ycs-query-editor-loaderr p { margin: 0; font-size: 0.82rem; color: var(--text-muted); }
+.ycs-query-fallback-input {
+  flex: 1;
+  min-height: 220px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  resize: vertical;
+}
+.ycs-query-editor-mount .cm-editor { height: 100%; }
+.ycs-query-editor-mount .cm-editor.cm-focused { outline: none; }
+
+/* ----- AI panel (bottom of left column) ------ */
+.ycs-query-ai-zone {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--border);
+  background: rgba(196, 18, 48, 0.025);
+}
+.ycs-query-ai-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.ycs-query-ai-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--primary);
+}
+.ycs-query-ai-sub { font-size: 0.78rem; color: var(--text-muted); }
+.ycs-query-ai-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 64px;
+  max-height: 200px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  font-family: inherit;
+  font-size: 0.88rem;
+  color: var(--text);
+}
+.ycs-query-ai-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(196, 18, 48, 0.12);
+}
+.ycs-query-ai-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+}
+.ycs-query-ai-status { margin-right: auto; font-size: 0.78rem; color: var(--text-muted); }
+.ycs-query-ai-status-running { color: var(--primary); }
+.ycs-query-ai-status-error   { color: var(--primary); font-weight: 600; }
+.ycs-query-ai-go   { padding: 6px 14px; font-size: 0.85rem; }
+.ycs-query-ai-stop {
+  padding: 6px 12px;
+  font-size: 0.82rem;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* Model chip — FGTS-VA-selected arm, populated by the SSE `model`
+   frame the server emits right after the bandit pick lands. `hidden`
+   attribute collapses the chip when empty so the row layout matches
+   the pre-Generate state. */
+.ycs-query-ai-model {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(196, 18, 48, 0.04);
+  font-size: 0.76rem;
+  max-width: 280px;
+  min-width: 0;
+}
+.ycs-query-ai-model[hidden] { display: none; }
+.ycs-query-ai-model-label {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.66rem;
+}
+.ycs-query-ai-model-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.76rem;
+  color: var(--text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* ----- Right column — results ------------------------------------------- */
+.ycs-query-results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.02);
+  font-size: 0.82rem;
+}
+.ycs-query-rh-title { font-weight: 700; color: var(--text); }
+.ycs-query-rh-stats { margin-left: 10px; color: var(--text-muted); }
+.ycs-query-view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.ycs-query-view-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 4px 12px;
+  font-family: inherit;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.ycs-query-view-btn.active {
+  background: var(--primary);
+  color: #fff;
+  font-weight: 600;
+}
+.ycs-query-view-btn:not(:last-child) { border-right: 1px solid var(--border); }
+.ycs-query-view-toggle-narrow [data-view-mode="graph"] { display: none; }
+.ycs-query-view-toggle-narrow [data-view-mode="json"]  { display: none; }
+
+.ycs-query-empty {
+  padding: 24px;
+  margin: 14px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ycs-query-empty-title { margin: 0; font-size: 1rem; color: var(--text); }
+.ycs-query-empty-intro { color: var(--text-muted); line-height: 1.55; font-size: 0.88rem; }
+
+.ycs-query-results {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 12px 14px 14px;
+}
+.ycs-query-notice:empty { display: none; }
+.ycs-query-notice { margin-bottom: 10px; }
+
+/* The 3 view-mode panels live as siblings; only the active one
+   renders. `data-view-mode` flips between graph / table / json. */
+#ycs-query-results[data-view-mode="graph"] #ycs-query-results-graph { display: block; }
+#ycs-query-results[data-view-mode="graph"] #ycs-query-results-table { display: none; }
+#ycs-query-results[data-view-mode="graph"] #ycs-query-results-json  { display: none; }
+#ycs-query-results[data-view-mode="table"] #ycs-query-results-graph { display: none; }
+#ycs-query-results[data-view-mode="table"] #ycs-query-results-table { display: block; }
+#ycs-query-results[data-view-mode="table"] #ycs-query-results-json  { display: none; }
+#ycs-query-results[data-view-mode="json"]  #ycs-query-results-graph { display: none; }
+#ycs-query-results[data-view-mode="json"]  #ycs-query-results-table { display: none; }
+#ycs-query-results[data-view-mode="json"]  #ycs-query-results-json  { display: block; }
+
+.ycs-query-error,
+.ycs-query-notes {
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--card);
+}
+.ycs-query-error {
+  border-color: rgba(196, 18, 48, 0.45);
+  background: rgba(196, 18, 48, 0.06);
+}
+.ycs-query-error strong,
+.ycs-query-notes strong { display: block; margin-bottom: 4px; color: var(--text); }
+.ycs-query-error pre {
+  margin: 0;
+  font-size: 0.82rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  color: var(--text-muted);
+}
+.ycs-query-error-notes,
+.ycs-query-notes ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.ycs-query-empty-results {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+.ycs-query-empty-results code {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+/* ----- ES table + Neo4j table — same skeleton ----- */
+.ycs-query-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+.ycs-query-table th,
+.ycs-query-table td {
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+.ycs-query-table th {
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: rgba(0, 0, 0, 0.02);
+  position: sticky; top: 0;
+  z-index: 1;
+}
+.ycs-q-th-idx { width: 38px; color: var(--text-muted); }
+.ycs-q-cell-title { font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.ycs-q-cell-sub   { color: var(--text-muted); font-size: 0.78rem; line-height: 1.45; }
+.ycs-q-cell-null  { color: var(--text-muted); font-style: italic; }
+
+/* ----- Qdrant card grid ----- */
+.ycs-query-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+.ycs-query-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+.ycs-query-card:hover { border-color: var(--primary); }
+.ycs-query-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ycs-query-card-title {
+  margin: 0;
+  font-size: 0.92rem;
+  color: var(--text);
+  line-height: 1.3;
+}
+.ycs-query-card-meta {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+.ycs-query-card-snippet {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--text);
+  line-height: 1.45;
+}
+.ycs-query-card-link {
+  font-size: 0.76rem;
+  color: var(--primary);
+  text-decoration: none;
+  flex-shrink: 0;
+}
+.ycs-query-card-link:hover { text-decoration: underline; }
+
+/* ----- JSON inspector (used in tables + cards + json view) ----- */
+.ycs-query-json-details summary {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.ycs-query-json,
+.ycs-query-json-details pre {
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 6px;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre;
+  max-height: 320px;
+}
+
+/* ----- Cytoscape canvas for the Neo4j graph view ----- */
+.ycs-query-cyto {
+  width: 100%;
+  height: 100%;
+  min-height: 420px;
+  background: #fff;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+/* ----- History panel (Phase 5) ----- */
+.ycs-query-history-toggle {
+  padding: 6px 12px;
+  font-size: 0.82rem;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.ycs-query-history-toggle:hover { border-color: var(--primary); }
+
+/* Anchors the panel inside .ycs-query-left so it overlays just the
+   editor zone (not the right column). Click on the X closes it. */
+.ycs-query-left { position: relative; }
+.ycs-query-history-panel {
+  position: absolute;
+  top: 48px;          /* below the editor header */
+  right: 12px;
+  width: min(440px, calc(100% - 24px));
+  max-height: calc(100% - 60px);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  z-index: 5;
+}
+.ycs-query-history-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.02);
+}
+.ycs-query-history-head strong { color: var(--text); }
+.ycs-query-history-sub  { font-size: 0.78rem; color: var(--text-muted); }
+.ycs-query-history-close {
+  margin-left: auto;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  font-size: 1.1rem;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 0 4px;
+}
+.ycs-query-history-close:hover { color: var(--text); }
+.ycs-query-history-list {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 8px;
+}
+.ycs-query-history-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  margin-bottom: 8px;
+}
+.ycs-query-history-row-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ycs-query-history-row-backend {
+  font-weight: 700;
+  color: var(--primary);
+}
+.ycs-query-history-row-prompt {
+  font-size: 0.82rem;
+  color: var(--text);
+  font-style: italic;
+}
+.ycs-query-history-row-body {
+  margin: 0;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.76rem;
+  white-space: pre;
+  overflow-x: auto;
+  max-height: 140px;
+  color: var(--text);
+}
+.ycs-query-history-row-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.ycs-query-history-restore,
+.ycs-query-history-delete {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-family: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  color: var(--text);
+}
+.ycs-query-history-restore:hover {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+.ycs-query-history-delete:hover { border-color: var(--primary); color: var(--primary); }
+.ycs-query-history-empty,
+.ycs-query-history-error {
+  padding: 18px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+}
+.ycs-query-history-error { color: var(--primary); }
+.ycs-query-history-error-msg { line-height: 1.5; max-width: 320px; }
+.ycs-query-history-retry {
+  appearance: none;
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: #fff;
+  border-radius: 6px;
+  padding: 4px 14px;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ycs-query-history-retry:hover { filter: brightness(1.05); }

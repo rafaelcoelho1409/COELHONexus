@@ -122,8 +122,21 @@ async def _run_radar_scan_async(
     scan_uuid = UUID(scan_id)
 
     # 1. Mark the scan running + init the per-scan virtual filesystem.
-    await begin_scan(scan_uuid, profile_id)
+    # Persist the request shape so the Recent-scans dropdown can show
+    # what each scan was looking for.
+    await begin_scan(
+        scan_uuid, profile_id,
+        topic     = topic,
+        verticals = verticals,
+        top_n     = top_n,
+    )
     init_scan_fs(scan_id)
+    # Bind scan_id into the contextvar that the LLM counter callback
+    # reads on every chat completion. Path-A 2026-06-16: per-phase
+    # rotator-call counters get bumped in Redis as the agent runs,
+    # then the drawer fetches them for KPI cards per pipeline node.
+    from .runtime.llm_counter import set_scan as _set_llm_counter_scan
+    _set_llm_counter_scan(scan_id)
     emit_event_sync(
         scan_id, "running",
         message = f"agent starting (topic={topic!r}, top_n={top_n})",
@@ -140,9 +153,18 @@ async def _run_radar_scan_async(
             f"top_n={top_n}"
         )
         agent = await build_radar_agent()
+        # Attach the LLM-counter callback via RunnableConfig so it
+        # propagates into every nested call (orchestrator + subagents)
+        # without needing model wrapping. The callback no-ops when no
+        # scan_id is in the context — safe for the shared rotator chain.
+        _llm_cb = getattr(agent, "_rr_llm_counter_cb", None)
+        callbacks = [_llm_cb] if _llm_cb is not None else []
         await agent.ainvoke(
             {"messages": [{"role": "user", "content": user_message}]},
-            config = {"configurable": {"thread_id": scan_id}},
+            config = {
+                "configurable": {"thread_id": scan_id},
+                "callbacks":     callbacks,
+            },
         )
 
         # 3. Build the digest from fs (step-6 refactor 2026-06-12):
@@ -203,13 +225,15 @@ async def _run_radar_scan_async(
         )
 
         summary = {
-            "n_findings": len(findings),
-            "themes":     digest.get("themes", []),
+            "n_findings":          len(findings),
+            "themes":              digest.get("themes", []),
+            "degraded":            bool(digest.get("degraded")),
+            "degradation_reasons": digest.get("degradation_reasons", []),
         }
         emit_event_sync(scan_id, "done", summary=summary)
         logger.info(
             f"[rr-task] run_radar_scan scan_id={scan_id} DONE "
-            f"n_findings={len(findings)}"
+            f"n_findings={len(findings)} degraded={summary['degraded']}"
         )
         return {
             "scan_id":    scan_id,
@@ -233,6 +257,12 @@ async def _run_radar_scan_async(
             "error":      err,
         }
     finally:
+        # Clear the LLM-counter contextvar so subsequent non-RR work
+        # in the worker doesn't attribute calls to this scan_id.
+        try:
+            _set_llm_counter_scan(None)
+        except Exception:
+            pass
         # Drop the scan's fs — module-level dict, so failing to clear
         # would leak memory across many scans.
         clear_scan_fs(scan_id)
@@ -289,13 +319,17 @@ def _extraction_from_dict(d: dict[str, Any]) -> Extraction:
 def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
     """Assemble the final digest from what the agent left in fs.
 
-    Step-6 refactor: this is the CANONICAL persistence path now that the
-    `report` LLM subagent is retired. Reads triage + extractions +
-    synthesis from fs, builds Finding-shaped items, and returns the
-    digest dict.
+    CANONICAL persistence path. Reads triage + extractions + synthesis
+    from fs, builds Finding-shaped items, returns the digest dict. The
+    LLM-written fs/digest.json (when present) is IGNORED — we always
+    rebuild from upstream artifacts. This makes the report subagent's
+    JSON-emission failures non-fatal (Fix 1+3 ship 2026-06-15).
 
-    Returns None if triage didn't run AND there's no way to recover —
-    upstream re-raises in that case (true phase-1 collapse).
+    Degraded mode (2026-06-15): if synthesis is missing OR no extractions
+    landed, builds the best digest possible and stamps `degraded=True` +
+    `degradation_reasons=[...]`. UI surfaces a "partial data" indicator.
+    Only returns None on TRUE phase-1 collapse: no top_n.json — meaning
+    triage never ran, so we have no ranked paper list to render at all.
     """
     top_n = fs_read(scan_id, FS_FILE_TRIAGE_TOPN)
     if not isinstance(top_n, list) or not top_n:
@@ -307,6 +341,58 @@ def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
         ex = fs_read(scan_id, p)
         if isinstance(ex, dict) and ex.get("arxiv_id"):
             extractions_by_id[ex["arxiv_id"]] = ex
+
+    # Two sources for per-paper theme assignment, in priority order:
+    #
+    # 1. **Synthesis subagent's `per_paper_themes`** (2026-06-16 fix). The
+    #    synthesis subagent now owns theme→paper assignment in a single
+    #    structured field, validated against skill HARD RULES at the tool
+    #    layer (strict subset of `themes`, max 2 per paper). This replaces
+    #    the report subagent's per-item `themes` field, which had to be
+    #    extracted from a JSON envelope the LLM repeatedly truncated to
+    #    `{` (scan f52fb84a).
+    #
+    # 2. **Report subagent's digest.json `items[].themes`** (legacy path,
+    #    kept as fallback). Still merged if synthesis didn't emit per-paper
+    #    themes — useful when the synthesis-side rollout lags the report-
+    #    side codebase, OR when running in "tools" mode (where the report
+    #    subagent isn't even instantiated).
+    #
+    # Either source's empty value falls through to `[]`, which is the
+    # correct answer per the skill (empty > the degenerate full-list copy).
+    top_themes = synth.get("themes") or []
+    top_themes_set = {t for t in top_themes if isinstance(t, str)}
+    synth_ppt = synth.get("per_paper_themes") or {}
+    if not isinstance(synth_ppt, dict):
+        synth_ppt = {}
+
+    llm_digest = fs_read(scan_id, FS_FILE_DIGEST) or {}
+    llm_items_by_id: dict[str, dict[str, Any]] = {}
+    if isinstance(llm_digest, dict):
+        for it in (llm_digest.get("items") or []):
+            if isinstance(it, dict) and it.get("arxiv_id"):
+                llm_items_by_id[it["arxiv_id"]] = it
+
+    def _per_item_themes(aid: str) -> list[str]:
+        """Lift this paper's themes from synthesis (preferred) or the
+        report subagent's digest (fallback). Both sources go through the
+        skill HARD RULES: subset of top-level themes; cap at 2."""
+        # Source 1: synthesis subagent's per_paper_themes (preferred).
+        synth_raw = synth_ppt.get(aid)
+        if isinstance(synth_raw, list) and synth_raw:
+            cleaned = [
+                t for t in synth_raw
+                if isinstance(t, str) and t in top_themes_set
+            ]
+            if cleaned:
+                return cleaned[:2]
+        # Source 2: report subagent's digest item themes (legacy / tools mode).
+        llm_item = llm_items_by_id.get(aid) or {}
+        raw = llm_item.get("themes") or []
+        if not isinstance(raw, list):
+            return []
+        cleaned = [t for t in raw if isinstance(t, str) and t in top_themes_set]
+        return cleaned[:2]
 
     items: list[dict[str, Any]] = []
     for i, paper in enumerate(top_n, start=1):
@@ -323,27 +409,70 @@ def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
             summary = paper.get("title") or "(untitled)"
 
         items.append({
-            "arxiv_id":   aid,
-            "rank":       i,
-            "signal":     paper.get("signal", 0.0),
-            "title":      paper.get("title") or "(untitled)",
-            "authors":    paper.get("authors") or [],
-            "summary":    summary,
-            "themes":     synth.get("themes") or [],
-            "sources":    paper.get("sources") or [],
-            "extraction": ex,
+            "arxiv_id":      aid,
+            "rank":          i,
+            "signal":        paper.get("signal", 0.0),
+            # 2026-06-15: propagate the rerank cross-encoder logit from
+            # triage's top_n.json. The field was added in agent/tools/triage.py
+            # but `_build_digest_from_fs` was dropping it on the rebuild,
+            # surfacing as `topical_logit: None` in every digest. Now
+            # carried through so the drawer can render the relevance score.
+            "topical_logit": paper.get("topical_logit"),
+            "title":         paper.get("title") or "(untitled)",
+            "authors":       paper.get("authors") or [],
+            "summary":       summary,
+            "themes":        _per_item_themes(aid),
+            "sources":       paper.get("sources") or [],
+            "extraction":    ex,
         })
 
+    # Degradation diagnostics — surfaced on the digest envelope so the
+    # UI can render a "partial data" badge and the operator knows which
+    # phase fell short. Pipeline still completes; it just produces less.
+    degradation_reasons: list[str] = []
+    if not synth:
+        degradation_reasons.append("synthesis_missing")
+    if not extractions_by_id:
+        degradation_reasons.append("no_extractions")
+    elif len(extractions_by_id) < len(items):
+        degradation_reasons.append(
+            f"partial_extractions_{len(extractions_by_id)}_of_{len(items)}"
+        )
+    # Per-paper themes degradation: fires only when BOTH sources are
+    # absent (synthesis didn't emit per_paper_themes AND the report
+    # digest didn't emit items). With either, the per-item themes can
+    # populate. When top_themes itself is empty (synthesis failed to
+    # cluster), this check doesn't fire — there's no top-level set to
+    # map paper to.
+    if not synth_ppt and not llm_items_by_id and top_themes:
+        degradation_reasons.append("no_llm_per_item_themes")
+
+    # Per-item themes telemetry — tells us at a glance how many items
+    # ended up with a non-empty themes list and which source supplied
+    # them (synthesis vs report-digest fallback). Empty across the board
+    # = a likely synthesis or report failure mode worth investigating.
+    items_with_themes = sum(
+        1 for it in items if it.get("themes")
+    )
+    themes_source_mix = {
+        "synthesis_per_paper_themes":  len(synth_ppt),
+        "llm_digest_items":            len(llm_items_by_id),
+    }
     logger.info(
         f"[rr-task] build_digest_from_fs scan_id={scan_id} "
         f"items={len(items)} extractions_recovered={len(extractions_by_id)} "
-        f"synthesis_themes={len(synth.get('themes') or [])}"
+        f"synthesis_themes={len(synth.get('themes') or [])} "
+        f"items_with_per_item_themes={items_with_themes}/{len(items)} "
+        f"theme_sources={themes_source_mix} "
+        f"degraded={bool(degradation_reasons)} reasons={degradation_reasons}"
     )
     return {
-        "scan_id":           scan_id,
-        "summary":           synth.get("summary")
-                             or f"Top {len(items)} papers from this radar scan",
-        "themes":            synth.get("themes") or [],
-        "items":             items,
-        "total_candidates":  len(items),
+        "scan_id":             scan_id,
+        "summary":             synth.get("summary")
+                               or f"Top {len(items)} papers from this radar scan",
+        "themes":              synth.get("themes") or [],
+        "items":               items,
+        "total_candidates":    len(items),
+        "degraded":            bool(degradation_reasons),
+        "degradation_reasons": degradation_reasons,
     }

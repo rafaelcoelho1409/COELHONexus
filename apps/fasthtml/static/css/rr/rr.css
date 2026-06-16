@@ -854,13 +854,27 @@
     border-color: #0a8a3e;
     color: #0a8a3e;
   }
+  /* Wipe-seen + info-button group — the info button sits inline on the
+   * right of the Wipe button with a small gap. */
+  .rr-wipe-seen-cluster {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
 
-  /* Recent-scans picker — mounted INSIDE `.rr-actions` next to Start/Stop
-   * (see `ScanForm(extra_actions=...)` in toolbar.py). It now reads as a
-   * member of the right-side action group instead of being separated by
-   * the toolbar's column gap. */
+  /* Recent-scans picker. Mounted in two places depending on stage:
+   *  - Pipeline page: INSIDE `.rr-actions` next to Start/Stop (right-clustered)
+   *  - Digest page:   only child of `.rr-toolbar-digest` — we explicitly
+   *                   push it to the right edge so the dropdown panel
+   *                   (right-anchored, grows leftward) doesn't escape
+   *                   the viewport's left edge. */
   .rr-actions .rr-scans-picker { flex: 0 0 auto; }
   .rr-scans-picker { position: relative; }
+  .rr-toolbar-digest {
+    /* Right-align the picker as the only child. */
+    justify-content: flex-end;
+  }
+  .rr-toolbar-digest .rr-scans-picker { margin-left: auto; }
   .rr-scans-picker-summary {
     display: inline-flex;
     align-items: center;
@@ -899,37 +913,86 @@
     padding: 4px 0;
   }
   .rr-scans-list { display: flex; flex-direction: column; }
+  /* Two-line scan-row layout — topic + time on line 1, metadata on line 2.
+   * Status is encoded via the left-border color (no more uppercase chip). */
   .rr-scans-row {
     display: grid;
-    grid-template-columns: auto 1fr auto;
-    gap: 10px;
-    align-items: center;
-    padding: 6px 12px;
+    grid-template-columns: 1fr auto;
+    gap: 4px 12px;
+    align-items: start;
+    padding: 8px 12px;
     text-decoration: none;
     color: inherit;
     border-left: 3px solid transparent;
+    border-bottom: 1px solid var(--border, #f4f4f4);
   }
-  .rr-scans-row:hover { background: rgba(204, 0, 0, 0.05); }
+  .rr-scans-row:last-child { border-bottom: none; }
+  .rr-scans-row:hover { background: rgba(204, 0, 0, 0.04); }
   .rr-scans-row[data-status="done"]      { border-left-color: #0a8a3e; }
   .rr-scans-row[data-status="error"]     { border-left-color: #c00; }
   .rr-scans-row[data-status="cancelled"] { border-left-color: #888; }
   .rr-scans-row[data-status="running"],
   .rr-scans-row[data-status="pending"]   { border-left-color: #f0a000; }
-  .rr-scans-row-status {
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
+  .rr-scans-row-main { min-width: 0; }   /* let the topic ellipsis */
+  .rr-scans-row-topic {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text, #111);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.35;
+  }
+  .rr-scans-row-meta {
+    font-size: 11px;
     color: var(--text-muted, #777);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .rr-scans-row-time {
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-    color: var(--text, #111);
-  }
-  .rr-scans-row-count {
     font-size: 11px;
-    color: var(--text-muted, #666);
+    color: var(--text-muted, #888);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    align-self: start;
+    margin-top: 1px;
   }
+  /* Per-row trash — same .ycs-lib-row-trash family as YCS, but RR keeps it
+   * permanently visible (not hover-revealed) per operator preference: the
+   * Recent-scans dropdown is short enough that a visible delete affordance
+   * doesn't clutter, and clicking the wrong row is gated by the confirm()
+   * dialog showing the topic before any destructive action. */
+  .rr-scans-row-trash {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    font-size: 0.9rem;
+    padding: 3px 7px;
+    cursor: pointer;
+    color: var(--text-muted, #777);
+    opacity: 0.7;
+    transition: color 0.12s, border-color 0.12s, background 0.12s, opacity 0.12s;
+    align-self: center;
+  }
+  .rr-scans-row-wrap { position: relative; }
+  .rr-scans-row-trash:hover {
+    opacity: 1;
+    color: var(--brand, #c00);
+    border-color: var(--brand, #c00);
+    background: rgba(196, 18, 48, 0.06);
+  }
+  .rr-scans-row-trash:disabled { opacity: 0.4; cursor: not-allowed; }
+  .rr-scans-row-wrap {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: stretch;
+    border-bottom: 1px solid var(--border, #f4f4f4);
+  }
+  .rr-scans-row-wrap:last-child { border-bottom: none; }
+  .rr-scans-row-wrap .rr-scans-row { border-bottom: none; }
+  .rr-scans-row-wrap .rr-scans-row-trash { margin-right: 8px; }
   .rr-scans-empty {
     padding: 12px;
     text-align: center;
@@ -1159,6 +1222,207 @@
     background: transparent;
     padding: 0;
     white-space: pre-wrap;
+  }
+
+  /* ----- Scan-wide totals strip (Path A v2 2026-06-16) ----- */
+  .rr-totals {
+    margin-top: 12px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--border, #e5e5e5);
+    background: rgba(0, 0, 0, 0.015);
+    border-radius: 0 0 6px 6px;
+  }
+  .rr-totals-kpis {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 8px;
+  }
+  .rr-totals-kpi {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .rr-totals-kpi-label {
+    font-size: 10px;
+    color: var(--text-muted, #666);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+  }
+  .rr-totals-kpi-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text, #111);
+    font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+  }
+  .rr-totals-phases {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+  .rr-totals-phases:empty {
+    display: none;
+  }
+  .rr-totals-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    background: var(--bg, #fff);
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 12px;
+    font-size: 11px;
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+  }
+  .rr-totals-chip-name {
+    color: var(--text-muted, #666);
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.03em;
+  }
+  .rr-totals-chip-count {
+    color: var(--text, #111);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .rr-totals-chip-share {
+    color: var(--text-muted, #888);
+    font-size: 10px;
+  }
+  .rr-totals-models {
+    margin-top: 10px;
+  }
+  .rr-totals-models:empty {
+    display: none;
+  }
+  .rr-totals-models-title {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted, #666);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 4px;
+  }
+  .rr-totals-models-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    font-size: 11px;
+  }
+  .rr-totals-models-table thead th {
+    text-align: left;
+    color: var(--text-muted, #666);
+    font-weight: 600;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border, #e5e5e5);
+  }
+  .rr-totals-models-table thead th:not(:nth-child(-n+2)) {
+    text-align: right;
+  }
+  .rr-totals-models-table tbody td {
+    padding: 3px 8px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  }
+  .rr-totals-models-table tbody td:not(:nth-child(-n+2)) {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .rr-totals-models-table tbody td:first-child,
+  .rr-totals-models-table tbody td:nth-child(2) {
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .rr-totals-models-table tbody td:first-child {
+    color: var(--text-muted, #666);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  /* ----- LLM activity counters (Path A 2026-06-16) ----- */
+  .rr-llm-counters {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 4px;
+    margin-bottom: 8px;
+  }
+  .rr-llm-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    font-size: 12px;
+  }
+  .rr-llm-k {
+    color: var(--text-muted, #666);
+  }
+  .rr-llm-v {
+    font-weight: 600;
+    color: var(--text, #111);
+  }
+  .rr-llm-share {
+    color: var(--text-muted, #888);
+    font-weight: 400;
+    font-size: 11px;
+    margin-left: 4px;
+  }
+  .rr-llm-models-title {
+    margin-top: 10px;
+    margin-bottom: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted, #666);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .rr-llm-models {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    font-size: 11px;
+  }
+  .rr-llm-models thead th {
+    text-align: left;
+    color: var(--text-muted, #666);
+    font-weight: 600;
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border, #e5e5e5);
+  }
+  .rr-llm-models thead th:not(:first-child) {
+    text-align: right;
+  }
+  .rr-llm-models tbody td {
+    padding: 3px 6px;
+    border-bottom: 1px solid rgba(0,0,0,0.04);
+  }
+  .rr-llm-models tbody td:not(:first-child) {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .rr-llm-models tbody td:first-child,
+  .rr-llm-models tbody td:nth-child(2) {
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .rr-llm-models tbody td:first-child {
+    color: var(--text-muted, #666);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .rr-llm-footer {
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--text-muted, #888);
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    text-align: right;
   }
 
   /* ----- Digest ----- */

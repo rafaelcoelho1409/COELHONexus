@@ -27,3 +27,13 @@ PER_DOC_CHAR_CAP = 2000
 # free-tier per-minute window; 3 if you're on a paid arm. Override via
 # `KD_GRADER_CONCURRENCY` if needed.
 GRADER_CONCURRENCY = 2
+
+# 2026-06-15 — per-call timeout on a single grading invocation. Caps
+# the cost of one rotator-picked slow model on one document at 30 s
+# (about 6× the median grade time). Without this, a hung LLM call
+# inside a sub-agent blocks one grader-semaphore slot for the entire
+# subgraph run — and the DEEP fan-out has 3 sub-agents × 2 slots = 6
+# global slots, so a single hang locks 1/6 of the grading throughput.
+# Timeouts surface as `asyncio.TimeoutError` exceptions and are
+# treated as "drop this document" by `grade_documents()`.
+GRADER_CALL_TIMEOUT_S = 30.0

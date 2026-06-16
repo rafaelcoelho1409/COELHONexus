@@ -27,6 +27,7 @@ from ..ask.chrome    import (
     AskScopeTrigger,
     AskThreadBar,
 )
+from ..query.chrome  import QueryBackendTabs
 from ..source.chrome import SourceModeTabs
 
 
@@ -120,6 +121,12 @@ def StageToolbar(active_stage: str, slug: str | None):
         # primary action, not a hidden secondary one.
         left  = [AskModeTabs(), AskScopeTrigger()]
         right = [AskNewThreadButton(), AskThreadBar(), AskLLMTrigger()]
+    elif active_stage == "query":
+        # Backend pill on the left only — Query is scoped to YCS while
+        # the cross-app surface is rebuilt. The right cluster (app
+        # pivot DD/YCS/RR) was removed 2026-06-15; can come back once
+        # DD + RR have something worth browsing here.
+        left = [QueryBackendTabs()]
     else:
         return None
     children = [Div(*left, cls = "dd-toolbar-left")]

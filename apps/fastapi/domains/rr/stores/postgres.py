@@ -54,8 +54,18 @@ CREATE TABLE IF NOT EXISTS {PG_TABLE_SCANS} (
     finished_at         TIMESTAMPTZ,
     total_candidates    INT          NOT NULL DEFAULT 0,
     total_in_digest     INT          NOT NULL DEFAULT 0,
-    error               TEXT
+    error               TEXT,
+    -- Per-scan request shape (2026-06-15) — what the operator asked for.
+    -- Surfaced in the Recent-scans dropdown so the operator can tell two
+    -- scans apart at a glance ("deep agents" vs "constrained decoding").
+    topic               TEXT,
+    verticals           TEXT[],
+    top_n               INT
 );
+-- Idempotent ADDs for already-deployed environments.
+ALTER TABLE {PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS topic     TEXT;
+ALTER TABLE {PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS verticals TEXT[];
+ALTER TABLE {PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS top_n     INT;
 
 CREATE TABLE IF NOT EXISTS {PG_TABLE_FINDINGS} (
     scan_id     UUID  NOT NULL REFERENCES {PG_TABLE_SCANS}(id) ON DELETE CASCADE,
@@ -101,15 +111,28 @@ async def bootstrap_postgres() -> None:
 # --------------------------------------------------------------------------- #
 # Scan lifecycle
 # --------------------------------------------------------------------------- #
-async def create_scan(scan_id: UUID, profile_id: str) -> None:
+async def create_scan(
+    scan_id:    UUID,
+    profile_id: str,
+    *,
+    topic:      str | None       = None,
+    verticals:  list[str] | None = None,
+    top_n:      int | None       = None,
+) -> None:
     """INSERT a fresh scan row in `pending` status. The Celery task moves
-    it to `running` when work starts and `done`/`error` at the end."""
+    it to `running` when work starts and `done`/`error` at the end. The
+    request shape (topic + verticals + top_n) is persisted alongside so
+    the Recent-scans dropdown can show what each scan was searching for."""
     async with await psycopg.AsyncConnection.connect(postgres_url()) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 f"INSERT INTO {PG_TABLE_SCANS} "
-                f"(id, profile_id, status) VALUES (%s, %s, %s)",
-                (str(scan_id), profile_id, SCAN_STATUS_PENDING),
+                f"(id, profile_id, status, topic, verticals, top_n) "
+                f"VALUES (%s, %s, %s, %s, %s, %s)",
+                (
+                    str(scan_id), profile_id, SCAN_STATUS_PENDING,
+                    topic, list(verticals or []) or None, top_n,
+                ),
             )
         await conn.commit()
 
@@ -256,6 +279,23 @@ async def get_seen_ids(profile_id: str) -> frozenset[str]:
             )
             rows = await cur.fetchall()
     return frozenset(r[0] for r in rows)
+
+
+async def delete_scan_record(scan_id: UUID) -> bool:
+    """Delete one scan + its findings (CASCADE) from Postgres. Returns
+    True if a row existed, False if the scan_id wasn't found. radar_seen
+    entries are NOT touched — the operator's "I've seen this paper before"
+    memory is profile-scoped, not scan-scoped. Neo4j and Qdrant are also
+    left untouched (accumulated cross-scan knowledge)."""
+    async with await psycopg.AsyncConnection.connect(postgres_url()) as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                f"DELETE FROM {PG_TABLE_SCANS} WHERE id = %s",
+                (str(scan_id),),
+            )
+            n = cur.rowcount
+        await conn.commit()
+    return bool(n)
 
 
 async def reset_seen(profile_id: str) -> int:

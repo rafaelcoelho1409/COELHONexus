@@ -93,10 +93,23 @@ async def persist_paper(
 # Centralizing them here lets callers import from one place + lets us
 # evolve the schema without touching every callsite.
 # --------------------------------------------------------------------------- #
-async def begin_scan(scan_id: UUID, profile_id: str) -> None:
-    """Create the radar_scans row (status=pending) then immediately flip
-    to running. Idempotent — the running flip is a no-op if already past."""
-    await postgres_store.create_scan(scan_id, profile_id)
+async def begin_scan(
+    scan_id:    UUID,
+    profile_id: str,
+    *,
+    topic:      str | None       = None,
+    verticals:  list[str] | None = None,
+    top_n:      int | None       = None,
+) -> None:
+    """Create the radar_scans row (status=pending, with the request shape
+    persisted alongside) then immediately flip to running. Idempotent —
+    the running flip is a no-op if already past."""
+    await postgres_store.create_scan(
+        scan_id, profile_id,
+        topic     = topic,
+        verticals = verticals,
+        top_n     = top_n,
+    )
     await postgres_store.mark_scan_running(scan_id)
 
 
@@ -119,6 +132,39 @@ async def fail_scan(scan_id: UUID, error: str, *, cancelled: bool = False) -> No
     uses SCAN_STATUS_CANCELLED instead of SCAN_STATUS_ERROR."""
     status = SCAN_STATUS_CANCELLED if cancelled else SCAN_STATUS_ERROR
     await postgres_store.mark_scan_error(scan_id, status=status, error=error)
+
+
+async def delete_scan(scan_id: UUID) -> dict:
+    """Per-row delete from the Recent-scans dropdown.
+
+    Tier-1 scope — clears the per-scan presentation artifacts only:
+      * Postgres `radar_scans` row (CASCADE → `radar_findings`)
+      * MinIO `rr/scans/{scan_id}/digest.json` object
+
+    INTENTIONALLY leaves the accumulated knowledge intact:
+      * Neo4j Paper / Author / Concept nodes (cross-scan graph)
+      * Qdrant abstract embeddings (cross-scan retrieval index)
+      * Postgres `radar_seen` markers (profile-scoped `is_new` memory)
+
+    Idempotent — returns a dict telling the caller what was actually
+    removed so the UI can confirm ("deleted scan: pg=True, minio=False"
+    means the scan was orphaned in Postgres only)."""
+    from .stores import minio as minio_store
+
+    pg_deleted    = False
+    minio_deleted = False
+    try:
+        pg_deleted = await postgres_store.delete_scan_record(scan_id)
+    except Exception as e:
+        logger.warning(f"[rr-service] delete_scan {scan_id} pg failed: {e}")
+    try:
+        minio_deleted = await minio_store.delete_digest_json(str(scan_id))
+    except Exception as e:
+        logger.warning(f"[rr-service] delete_scan {scan_id} minio failed: {e}")
+    logger.info(
+        f"[rr-service] delete_scan {scan_id} pg={pg_deleted} minio={minio_deleted}"
+    )
+    return {"scan_id": str(scan_id), "pg": pg_deleted, "minio": minio_deleted}
 
 
 async def cancel_scan(scan_id: UUID, *, reason: str = "cancelled by user") -> bool:

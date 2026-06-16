@@ -18,7 +18,7 @@ PLAN_FALLBACK_PROMPT = ChatPromptTemplate.from_messages([
     (
         "system",
         "You are a research planner. Decompose the user's analytical "
-        "question into 3-8 focused sub-questions that, when answered "
+        "question into 3-5 focused sub-questions that, when answered "
         "individually from video transcripts, will provide the evidence "
         "needed for a comprehensive analysis. Each sub-question should "
         "target a specific angle or pattern.",

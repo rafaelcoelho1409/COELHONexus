@@ -1067,7 +1067,7 @@ def _flatten_thinking_content(messages):
 
 
 class _RotatorAutoRetryRouter(ChatLiteLLMRouter):
-    """ChatLiteLLMRouter subclass with two cross-provider survival fixes:
+    """ChatLiteLLMRouter subclass with three cross-provider survival fixes:
 
     1. **Thinking-block flatten** (every call) — `_flatten_thinking_content`
        strips reasoning-model list-content from message history so the next
@@ -1077,7 +1077,60 @@ class _RotatorAutoRetryRouter(ChatLiteLLMRouter):
        parses the failing model from the error, calls `mark_inaccessible()`
        (runtime blocklist + Router reset), refreshes `self.router`, retries.
        Up to `_MAX_NOTFOUND_RETRIES` consecutive dead arms.
+
+    3. **Real-deployment surfacing** (2026-06-16) — overrides
+       `_create_chat_result` to store the LiteLLM Router's resolved
+       deployment id (e.g. `nvidia_nim/openai/gpt-oss-120b`) in
+       `AIMessage.response_metadata["model_name"]` + `llm_output["model_name"]`
+       instead of the request group alias (`rr-strong` / `dd-all` / …).
+       Upstream langchain-litellm's `_create_chat_result` builds these
+       fields from `self.model` (the group), losing the deployment that
+       actually answered. RR's per-model counter relies on knowing the
+       deployment; this surfacing is read-only (no global state mutation,
+       no callback registration → no msgpack regression).
     """
+
+    def _create_chat_result(self, response, **params):
+        """Augment the parent's ChatResult with the real deployment id.
+
+        Parent stores `self.model` (group alias) as `model_name`. We
+        prefer `response["model"]` — the LiteLLM Router populates this
+        with the deployment that actually answered. Falls back to the
+        parent's value when the response shape is unusual (e.g. local
+        mock, streaming first-chunk before model lands).
+        """
+        result = super()._create_chat_result(response, **params)
+        try:
+            real_model = None
+            if isinstance(response, dict):
+                real_model = response.get("model")
+            else:
+                real_model = getattr(response, "model", None)
+            if isinstance(real_model, str) and real_model:
+                # Update llm_output (the LLMResult-level field consumed
+                # by langchain on_llm_end).
+                if isinstance(result.llm_output, dict):
+                    result.llm_output["model_name"] = real_model
+                # Update each generation's AIMessage.response_metadata
+                # so per-message readers (drawer, traces) also see the
+                # deployment instead of the group alias.
+                for gen in result.generations or []:
+                    msg = getattr(gen, "message", None)
+                    if msg is None:
+                        continue
+                    rm = getattr(msg, "response_metadata", None)
+                    if isinstance(rm, dict):
+                        rm["model_name"] = real_model
+                    else:
+                        # Defensively replace with a fresh dict.
+                        try:
+                            msg.response_metadata = {"model_name": real_model}
+                        except Exception:
+                            pass
+        except Exception:
+            # Best-effort augmentation; never break the call path.
+            pass
+        return result
 
     async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
         messages = _flatten_thinking_content(messages)
@@ -1285,7 +1338,11 @@ def _get_router() -> Router:
         AuthenticationErrorAllowedFails = 0,
         BadRequestErrorAllowedFails = 1,
         ContentPolicyViolationErrorAllowedFails = 2,
-        RateLimitErrorAllowedFails = 1,
+        # 2026-06-15: tightened 1 → 0 after RR scan kimi-k2.6 429 storm
+        # observation. A 429 is unambiguous "I'm rate-limited right now";
+        # there is no value in burning a second request to confirm. First
+        # strike → cooldown. Multi-arm pool absorbs the loss.
+        RateLimitErrorAllowedFails = 0,
         TimeoutErrorAllowedFails = 2,
         InternalServerErrorAllowedFails = 2,
     )
@@ -1318,7 +1375,13 @@ def _get_router() -> Router:
         enable_pre_call_checks = True,           # fail-fast — skip cooled-down at 0ms
         allowed_fails = 3,
         allowed_fails_policy = allowed_fails_policy,
-        cooldown_time = 60,
+        # 2026-06-15: bumped 60 → 120. Free-tier provider rate-limit
+        # windows are usually 30-60s (NIM, Groq); 60s thaw was racing
+        # the actual reset, so a re-picked arm would 429 again on the
+        # next try. 120s gives the provider's real-world bucket time to
+        # refill before we let the Router probe it again. Pool has
+        # plenty of alternates to absorb the 60s extra cooldown.
+        cooldown_time = 120,
         retry_policy = retry_policy,
         num_retries = CASCADE_DEPTH,
         set_verbose = False,

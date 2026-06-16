@@ -35,6 +35,15 @@ class SignalWeights:
     vertical_fit:        float = 0.15   # paper.categories ∩ profile.verticals
     cross_tier_buzz:     float = 0.10   # log1p(hn_points) + log1p(hf_upvotes)
     has_code:            float = 0.05   # PapersWithCode presence (v2 signal)
+    # 2026-06-16: soft bias toward items with an arxiv_id when both
+    # research papers and HN product posts are in the candidate pool.
+    # Scan 28094718 had arxiv=0+hf=14+hn=5; with HF as the only paper
+    # source the top-4 filled with 1 paper + 3 HN product announcements
+    # (which can't be deep_read). This term gives arxiv-ID-bearing items
+    # a small but decisive lift over no-ID items at otherwise comparable
+    # signal levels. Weight intentionally small (0.08) so a strongly
+    # buzzy HN post can still cross-rank a weakly-relevant arxiv paper.
+    has_arxiv_id:        float = 0.08   # bias toward real papers vs HN posts
 
 
 @dataclass(frozen=True, slots=True)

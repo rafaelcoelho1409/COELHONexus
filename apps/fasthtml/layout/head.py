@@ -27,7 +27,14 @@ _IMPORTMAP = NotStr("""{
     "@dd/synth/":     "/static/js/dd/synth/",
     "@dd/study/":     "/static/js/dd/study/",
     "@ycs/":          "/static/js/ycs/",
-    "nanostores":     "https://esm.sh/nanostores@1"
+    "nanostores":     "https://esm.sh/nanostores@1",
+    "@codemirror/state":    "https://esm.sh/@codemirror/state@6.4.1",
+    "@codemirror/view":     "https://esm.sh/@codemirror/view@6.26.3?external=@codemirror/state",
+    "@codemirror/language": "https://esm.sh/@codemirror/language@6.10.1?external=@codemirror/state,@codemirror/view",
+    "@codemirror/commands": "https://esm.sh/@codemirror/commands@6.5.0?external=@codemirror/state,@codemirror/view,@codemirror/language",
+    "@codemirror/autocomplete":  "https://esm.sh/@codemirror/autocomplete@6.16.0?external=@codemirror/state,@codemirror/view,@codemirror/language",
+    "@codemirror/lang-json":     "https://esm.sh/@codemirror/lang-json@6.0.1?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/autocomplete",
+    "@codemirror/legacy-modes/mode/cypher": "https://esm.sh/@codemirror/legacy-modes@6.4.0/mode/cypher?external=@codemirror/language"
   }
 }""")
 

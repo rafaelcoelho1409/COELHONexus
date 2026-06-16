@@ -5,8 +5,13 @@ output failure we default to confidence=0.5 + grounded=True so the
 caller still receives a usable envelope (deprecated rationale: prefer
 graceful degradation over total failure for DEEP mode).
 
-Direct port of deprecated `graphs/youtube/adaptive.py:L313-340`."""
+Direct port of deprecated `graphs/youtube/adaptive.py:L313-340` +
+2026-06-16 per-call timeout (previously uncapped — the critic runs
+at the end of every DEEP turn and a silent hang here would prevent
+the final answer from landing)."""
 from __future__ import annotations
+
+import asyncio
 
 from domains.ycs.runtime.observability import traced
 
@@ -14,6 +19,13 @@ from ...params import CRITIC_FALLBACK_CONFIDENCE
 from ...state import AdaptiveRAGState
 from .prompts import CRITIC_PROMPT
 from .schemas import CriticAssessment
+
+
+# 90 s ceiling on the critic LLM. Larger context than the other
+# adaptive timeouts — the input is the synthesis + every sub-research
+# Q&A pair, which can run several thousand tokens on a 5-question
+# plan. 90 s leaves room for one rotator fallback inside the call.
+_CRITIC_TIMEOUT_S = 90.0
 
 
 @traced("rag.critic")
@@ -31,16 +43,19 @@ async def critic(state: AdaptiveRAGState, llm) -> dict:
         CriticAssessment,
     )
     try:
-        result = await chain.ainvoke({
-            "question":     state["question"],
-            "synthesis":    state.get("generation", ""),
-            "sub_results":  sub_results_text,
-        })
+        result = await asyncio.wait_for(
+            chain.ainvoke({
+                "question":     state["question"],
+                "synthesis":    state.get("generation", ""),
+                "sub_results":  sub_results_text,
+            }),
+            timeout = _CRITIC_TIMEOUT_S,
+        )
         return {
             "confidence_score": result.confidence_score,
             "grounded":         result.claims_supported,
         }
-    except Exception:
+    except (asyncio.TimeoutError, Exception):
         return {
             "confidence_score": CRITIC_FALLBACK_CONFIDENCE,
             "grounded":         True,

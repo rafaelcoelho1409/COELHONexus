@@ -2,13 +2,14 @@
 
 Pattern mirrors `features/dd/routes.py` and `features/ycs/routes.py`:
   - Row 2 carries the stage sub-nav (`RRStageSubNav`).
-  - Row 3 carries the shared `ScanToolbar` so the form is reachable on
-    both pages without re-mounting.
+  - Row 3 is STAGE-SCOPED:
+      * Pipeline page → `PipelineToolbar()` — the scan form
+      * Digest page   → `DigestToolbar()`   — the Recent-scans dropdown
   - Each page exposes its own `*Body()` for the main content surface.
 
-Active scan_id is read from `?scan=` and threaded into the stage tabs +
-the toolbar so a switch from Pipeline → Digest carries the live scan
-without re-resolving from local state."""
+Active scan_id is read from `?scan=` and threaded into the stage tabs so
+a switch from Pipeline → Digest carries the live scan without re-resolving
+from local state."""
 from typing import Optional
 
 from layout.shell import _Shell
@@ -16,7 +17,7 @@ from layout.shell import _Shell
 from .digest   import DigestBody
 from .pipeline import PipelineBody
 from .shared.nav import RRStageSubNav
-from .toolbar  import ScanToolbar
+from .toolbar  import DigestToolbar, PipelineToolbar
 
 
 def _scan_id(request) -> Optional[str]:
@@ -35,7 +36,7 @@ def register(rt) -> None:
             "Research Radar",
             body        = PipelineBody(),
             subnav_row  = RRStageSubNav("pipeline", sid),
-            toolbar_row = ScanToolbar(),
+            toolbar_row = PipelineToolbar(),
         )
 
     @rt("/research-radar/digest")
@@ -46,5 +47,5 @@ def register(rt) -> None:
             "Research Radar",
             body        = DigestBody(),
             subnav_row  = RRStageSubNav("digest", sid),
-            toolbar_row = ScanToolbar(),
+            toolbar_row = DigestToolbar(),
         )

@@ -1,24 +1,26 @@
-"""LLM-driven subagents — all 7 active again (step-7 refactor 2026-06-12).
+"""LLM-driven subagents.
 
-The 4 discovery subagents and the report subagent were retired in step-6
-in favor of pure-Python tools. Step-7 brought them back: per
-`feedback_rr_learning_purpose`, RR's primary purpose is being a working
-DeepAgents reference codebase. Both modes ship; `RR_DISCOVERY_MODE` env
-selects which the orchestrator drives:
+2026-06-12 step-7: 4 discovery subagents + report subagent re-activated.
+2026-06-16 (post-f52fb84a): report subagent RETIRED again — it kept
+emitting `{` for write_digest. Per-paper theme assignment moved to the
+synthesis subagent's `write_synthesis_report.per_paper_themes`. Digest
+assembly is now Python-canonical in `task._build_digest_from_fs`.
 
-  "subagents" (default)   — orchestrator dispatches `task(subagent_type=...)`
-                            for all 4 discoveries; full DeepAgents loop
-  "tools"                 — orchestrator calls discover_*() Python tools
-                            directly; faster, no LLM-driven JSON copying
+Active subagents:
+  "subagents" mode: discovery_arxiv · discovery_semantic_scholar ·
+                    discovery_huggingface_daily_papers · discovery_hn
+                    + deep_read + synthesis
+  "tools"     mode: deep_read + synthesis (discoveries become tools)
 
-The dormant code is gone. Both paths are first-class.
+The `report.py` file is kept as a reference + reusable scaffolding (the
+DigestSchema and prompt patterns remain useful), but the
+`build_report` factory is no longer wired into either topology.
 """
 from .deep_read import build_deep_read
 from .discovery_arxiv import build_discovery_arxiv
 from .discovery_hn import build_discovery_hn
 from .discovery_huggingface_daily_papers import build_discovery_huggingface_daily_papers
 from .discovery_semantic_scholar import build_discovery_semantic_scholar
-from .report import build_report
 from .synthesis import build_synthesis
 
 
@@ -29,5 +31,4 @@ __all__ = [
     "build_discovery_huggingface_daily_papers",
     "build_discovery_hn",
     "build_synthesis",
-    "build_report",
 ]

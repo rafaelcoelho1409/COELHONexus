@@ -60,9 +60,9 @@ from .subagents import (
     build_discovery_hn,
     build_discovery_huggingface_daily_papers,
     build_discovery_semantic_scholar,
-    build_report,
     build_synthesis,
 )
+from ..runtime.llm_counter import RRLlmCounterCallback
 from .tools.discovery import (
     discover_arxiv,
     discover_hn,
@@ -80,13 +80,29 @@ logger = logging.getLogger(__name__)
 # Model factories — both orchestrator and subagents use rr-strong (4-arm
 # pool of 120B+ models proven to handle parallel tool_calls reliably).
 # --------------------------------------------------------------------------- #
+# Module-level callback instance — one handler reused across all model
+# bindings. Path-A LLM-counter (2026-06-16): every chat completion bumps
+# the per-scan Redis counters. Skips silently when no scan_id is in the
+# contextvar (non-RR callers reuse the same rotator chain). Attached
+# globally via `agent.ainvoke(config={"callbacks":[...]})` in task.py so
+# we don't need to mutate the model (model wrapping breaks DeepAgents'
+# `isinstance(model, BaseChatModel)` check — see service.py comments).
+_LLM_COUNTER_CB = RRLlmCounterCallback()
+
+
 def _orchestrator_model() -> BaseChatModel:
     """Strong-tier model for the orchestrator (rr-strong: 4×120B+)."""
     return build_rr_strong_chain()
 
 
 def _subagent_model() -> BaseChatModel:
-    """Strong-tier model for the LLM subagents. Same pool as orchestrator."""
+    """Strong-tier model for the LLM subagents. Same pool as the
+    orchestrator — phase attribution happens in the counter callback
+    by reading the `_phase_var` contextvar that each fs-tool write
+    updates (`stash_discovery_result` → discovery, `write_extraction`
+    → deep_read, etc.). The first LLM call by a subagent before its
+    first fs-write attributes to the PRIOR phase; subsequent calls
+    are correct. Adequate for drawer KPI rollups."""
     return build_rr_strong_chain()
 
 
@@ -133,16 +149,24 @@ async def build_radar_agent() -> Any:
       - Tools: triage_candidates + graph_build_papers (both modes)
 
     Mode-specific:
-      "subagents": + 4 discovery subagents + report subagent
-      "tools":     + 4 discover_* tools (replaces discovery subagents);
-                   report subagent omitted (Python assembly in task.py)
+      "subagents": + 4 discovery subagents (report subagent retired
+                     2026-06-16 — synthesis now owns per-paper themes;
+                     digest assembly is Python in task.py for both modes)
+      "tools":     + 4 discover_* tools (replaces discovery subagents)
+
+    2026-06-16 (post-f52fb84a): report subagent removed from both modes.
+    It emitted `{` six times for write_digest across an 8-min window.
+    Per-paper theme assignment moved to synthesis subagent
+    (write_synthesis_report.per_paper_themes); `_build_digest_from_fs`
+    reads it directly. Digest assembly is now Python-canonical regardless
+    of mode.
     """
     mode = _discovery_mode()
     orchestrator_model = _orchestrator_model()
     subagent_model     = _subagent_model()
 
     # Subagents always include deep_read + synthesis. Mode adds discoveries
-    # + report when in "subagents" mode.
+    # when in "subagents" mode.
     subagents: list[dict[str, Any]] = [
         build_deep_read(subagent_model),
         build_synthesis(subagent_model),
@@ -158,7 +182,7 @@ async def build_radar_agent() -> Any:
             await build_discovery_semantic_scholar(subagent_model),
             await build_discovery_huggingface_daily_papers(subagent_model),
             await build_discovery_hn(subagent_model),
-        ] + subagents + [build_report(subagent_model)]
+        ] + subagents
     else:  # DISCOVERY_MODE_TOOLS
         tools = [
             discover_arxiv,
@@ -184,6 +208,11 @@ async def build_radar_agent() -> Any:
         response_format = ScanComplete,
         checkpointer  = checkpointer,
     )
+    # Expose the LLM-counter callback on the agent for task.py to attach
+    # via `ainvoke(config={"callbacks":[...]})` — propagates to every
+    # nested LangChain runnable (orchestrator + 6 subagents) without
+    # needing model wrapping (which breaks DeepAgents' isinstance check).
+    agent._rr_llm_counter_cb = _LLM_COUNTER_CB  # type: ignore[attr-defined]
 
     logger.info(
         f"[rr-agent] built mode={mode!r} "

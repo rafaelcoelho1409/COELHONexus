@@ -56,3 +56,39 @@ quantitative finance / applied math. Don't summarize every paper — pick the
   "many papers focus on agents."
 - **Cite specific arxiv_ids** in the convergence note when claiming
   multiple papers do X.
+
+## Per-paper theme assignment
+
+After you've named the themes, you also assign each top_n paper to which
+subset of those themes describes it. This goes in `write_synthesis_report`'s
+`per_paper_themes` argument: a dict `{arxiv_id: [theme_name, ...]}`.
+
+HARD RULES (the digest is unusable without these):
+
+- **STRICT SUBSET of `themes`.** Only theme names that appear in your
+  top-level `themes` list. No synonyms, no abbreviations, no new themes.
+- **Max 2 per paper.** A paper that genuinely spans 3+ themes is rare;
+  if you find yourself listing 3, drop the weakest. Listing 4+ is always
+  wrong.
+- **0 is OK.** Some papers don't fit any theme. Use an empty list `[]`,
+  not a forced fit.
+- **NEVER copy the full `themes` list into one paper.** That degenerate
+  case ("every paper covers every theme") is the #1 quality failure mode.
+- **Match by paper content.** Re-read the deep_read `problem` + `method`
+  fields and ask "which 1-2 themes describe what THIS paper actually does?"
+  — not "which theme names contain words from the title?".
+
+Worked example (4-paper scan, themes
+`["object-centric RL", "hierarchical task decomposition", "tool generation"]`):
+
+```
+{
+  "2401.12345": ["object-centric RL"],                              # paper A — single theme
+  "2402.06789": ["hierarchical task decomposition"],                # paper B — single theme
+  "2403.00111": ["tool generation"],                                # paper C — single theme
+  "2404.22222": ["hierarchical task decomposition", "tool generation"]  # paper D — 2 themes
+}
+```
+
+Every paper has 1-2 themes. NONE has the full 3-theme list. Paper D's
+two-theme assignment is the most a single paper should ever have.

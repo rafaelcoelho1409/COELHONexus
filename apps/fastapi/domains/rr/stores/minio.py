@@ -135,6 +135,24 @@ async def get_digest_json(scan_id: str) -> dict[str, Any] | None:
     return json.loads(body)
 
 
+async def delete_digest_json(scan_id: str) -> bool:
+    """Remove the digest object for one scan. Idempotent — returns True if
+    the object was present, False if it wasn't. Other errors raise.
+
+    Caller: `service.delete_scan` (the per-row delete affordance in the
+    Recent-scans dropdown)."""
+    key = digest_minio_key(scan_id)
+    async with _client() as s3:
+        try:
+            await s3.delete_object(Bucket=_bucket(), Key=key)
+            return True
+        except ClientError as e:
+            code = (e.response or {}).get("Error", {}).get("Code", "")
+            if code in ("404", "NoSuchKey"):
+                return False
+            raise
+
+
 # --------------------------------------------------------------------------- #
 # Extraction JSON — per-paper deep_read output (step 4)
 # --------------------------------------------------------------------------- #
