@@ -355,6 +355,19 @@ def ScanForm(extra_actions=None):
             cls = "rr-field rr-field-top-n",
         ),
         Div(
+            # 2026-06-17: scan topic pill — sits on the LEFT of the action
+            # cluster (just before Start Scan) so the operator sees WHICH
+            # scan is currently loaded right next to the controls. Empty
+            # via data-empty="true" until a scan loads/resumes; main.js's
+            # `_setPillTopic()` fills #rr-status-topic from the server-
+            # side scan record or the form's `topic` value on a new scan.
+            Span(
+                "",
+                id    = "rr-status-topic",
+                cls   = "rr-pipeline-topic",
+                title = "Scan topic",
+                **{"data-empty": "true"},
+            ),
             Button(
                 Span("Start Scan", cls = "rr-btn-text"),
                 type = "submit",

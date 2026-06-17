@@ -1,273 +1,38 @@
 /* Source · Search mode — sync yt-dlp metadata browse.
  *
- * Three SOTA-aligned subsystems live here:
- *   1. Filter chip bar (Linear / Vercel / Height idiom)
- *   2. Compact stacked results list (NN/g "list entry" pattern)
- *   3. Density toggle (Compact / Comfortable)
+ * Two subsystems live here:
+ *   1. Compact stacked results list (NN/g "list entry" pattern)
+ *   2. Density toggle (Compact / Comfortable)
  *
- * Hidden inputs (#ycs-fh-*) mirror chip state so the existing
- * FormData → SearchRequest serialization in `readSearchRequest()`
- * stays unchanged.
+ * Filters now live as native HTML form controls in the always-visible
+ * filter grid (see `features/ycs/source/search.py::_FilterGrid`).
+ * Their `name=` attributes match the backend `SearchRequest` schema
+ * verbatim, so the FormData → SearchRequest serialization in
+ * `readSearchRequest()` below picks them up with no extra wiring.
+ *
+ * 2026-06-17 — replaced the prior toggle-dropdown chip-bar pattern
+ * with the always-visible faceted grid. The dropdown's JS click
+ * handlers were unreliable under strict-shield browsers (Brave
+ * Shields, hardened Chromium derivatives) — making the filter button
+ * a single point of failure. Native form controls bypass every click-
+ * handler failure mode because the browser handles the interaction
+ * directly.
  */
 import { API, fmtCount, fmtDate } from "./shared.js";
 
 // ============================================================
-// Filter chip bar
+// Date format bridge
 // ============================================================
-
-/* Backend accepts YYYYMMDD (8 digits, no separators); native
- * <input type="date"> emits YYYY-MM-DD. Stash one of each direction
- * so the editor can round-trip between hidden store and the picker. */
-const _DATE_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-function _yyyymmddToIso(v) {
-    const m = (v || "").match(/^(\d{4})(\d{2})(\d{2})$/);
-    return m ? `${m[1]}-${m[2]}-${m[3]}` : "";
-}
+// Backend accepts YYYYMMDD (8 digits); native <input type="date">
+// emits YYYY-MM-DD. Normalised at submit time in readSearchRequest.
 function _isoToYyyymmdd(v) {
     return (v || "").replace(/-/g, "").slice(0, 8);
 }
-function _fmtDateChip(yyyymmdd) {
-    const m = (yyyymmdd || "").match(/^(\d{4})(\d{2})(\d{2})$/);
-    if (!m) return yyyymmdd || "";
-    return `${_DATE_MONTHS[parseInt(m[2], 10) - 1]} ${parseInt(m[3], 10)}, ${m[1]}`;
-}
 
-const FILTERS = {
-    duration: {
-        label: "Duration",
-        type:  "select",
-        options: [
-            { value: "Under 4 minutes", label: "Under 4 min" },
-            { value: "4 - 20 minutes",  label: "4–20 min" },
-            { value: "Over 20 minutes", label: "Over 20 min" },
-        ],
-        format: (v) => v.replace(" minutes", "m").replace("Under 4m", "<4m").replace("Over 20m", ">20m"),
-    },
-    date_after:     { label: "After",      type: "date",
-                      format: _fmtDateChip },
-    date_before:    { label: "Before",     type: "date",
-                      format: _fmtDateChip },
-    min_views:      { label: "≥ Views",    type: "number",
-                      placeholder: "10000",
-                      format: (v) => fmtCount(parseInt(v, 10)) },
-    max_views:      { label: "≤ Views",    type: "number",
-                      placeholder: "1000000",
-                      format: (v) => fmtCount(parseInt(v, 10)) },
-    min_likes:      { label: "≥ Likes",    type: "number",
-                      placeholder: "100",
-                      format: (v) => fmtCount(parseInt(v, 10)) },
-    title_contains: { label: "Title",      type: "text",
-                      placeholder: "text or *=op",
-                      format: (v) => v.length > 16 ? v.slice(0, 16) + "…" : v },
-    channel_name:   { label: "Channel",    type: "text",
-                      placeholder: "name",
-                      format: (v) => v.length > 16 ? v.slice(0, 16) + "…" : v },
-    sort_by_date:   { label: "Sort",       type: "toggle",
-                      onValue: "newest",
-                      format: () => "newest" },
-    /* Shorts exclusion — per the June 2026 yt-dlp research, no native
-     * `is_short` field exists; we approximate with `duration>?60` and
-     * `!url~='/shorts/'` on the backend. Toggle filter (no editor). */
-    exclude_shorts: { label: "No shorts",  type: "toggle",
-                      onValue: "yes",
-                      format: () => "≥ 1 min" },
-    /* Show-only-one-kind filter. Applied server-side after
-     * normalization (see domain.detect_entry_kind). */
-    kind_filter:    { label: "Kind",       type: "select",
-                      options: [
-                          { value: "video",    label: "Videos only" },
-                          { value: "channel",  label: "Channels only" },
-                          { value: "playlist", label: "Playlists only" },
-                      ],
-                      format: (v) => v === "video" ? "Videos"
-                                  : v === "channel" ? "Channels"
-                                  : "Playlists" },
-};
-
-const chipsEl  = document.getElementById("ycs-filter-chips");
-const addBtn   = document.getElementById("ycs-filter-add-btn");
-
-function _hiddenFor(name) {
-    return document.getElementById(`ycs-fh-${name}`);
-}
-
-function _hasValue(name) {
-    const v = _hiddenFor(name)?.value ?? "";
-    return v.trim() !== "" && v !== "false";
-}
-
-function _setValue(name, value) {
-    const h = _hiddenFor(name);
-    if (h) h.value = value ?? "";
-}
-
-function _renderChip(name) {
-    const spec = FILTERS[name];
-    const v = _hiddenFor(name)?.value ?? "";
-    if (!v) return null;
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "ycs-filter-chip";
-    chip.dataset.filter = name;
-    const display = spec.format ? spec.format(v) : v;
-    chip.innerHTML = `
-        <span class="ycs-filter-chip-key">${spec.label}</span>
-        <span class="ycs-filter-chip-val">${display}</span>
-        <span class="ycs-filter-chip-x" aria-label="Remove">×</span>
-    `;
-    chip.addEventListener("click", (ev) => {
-        if (ev.target.classList.contains("ycs-filter-chip-x")) {
-            _setValue(name, "");
-            _renderBar();
-            return;
-        }
-        _openEditor(name, chip);
-    });
-    return chip;
-}
-
-function _renderBar() {
-    // Wipe + rebuild every chip, leave the + Filter button at the end.
-    Array.from(chipsEl.querySelectorAll(".ycs-filter-chip")).forEach((el) => el.remove());
-    for (const name of Object.keys(FILTERS)) {
-        const chip = _renderChip(name);
-        if (chip) chipsEl.insertBefore(chip, addBtn);
-    }
-}
-
-// ---- Menu (+ Filter trigger) -----------------------------------------------
-
-let menuEl = null;
-
-function _closeMenu() {
-    menuEl?.remove();
-    menuEl = null;
-    addBtn?.setAttribute("aria-expanded", "false");
-    document.removeEventListener("click", _onDocClickMenu, true);
-}
-
-function _onDocClickMenu(ev) {
-    if (menuEl?.contains(ev.target) || addBtn?.contains(ev.target)) return;
-    _closeMenu();
-}
-
-function _openMenu() {
-    _closeMenu();
-    const remaining = Object.keys(FILTERS).filter((n) => !_hasValue(n));
-    if (!remaining.length) return;
-    menuEl = document.createElement("div");
-    menuEl.className = "ycs-filter-menu";
-    menuEl.innerHTML = remaining.map((name) => {
-        const spec = FILTERS[name];
-        return `<button type="button" class="ycs-filter-menu-item" data-filter="${name}">${spec.label}</button>`;
-    }).join("");
-    menuEl.addEventListener("click", (ev) => {
-        const item = ev.target.closest(".ycs-filter-menu-item");
-        if (!item) return;
-        const name = item.dataset.filter;
-        _closeMenu();
-        const spec = FILTERS[name];
-        if (spec.type === "toggle") {
-            _setValue(name, spec.onValue);
-            _renderBar();
-            return;
-        }
-        // Render the chip with a placeholder value so the editor anchors
-        // to a real chip element.
-        _setValue(name, " ");
-        _renderBar();
-        const chip = chipsEl.querySelector(`.ycs-filter-chip[data-filter="${name}"]`);
-        if (chip) _openEditor(name, chip, true);
-    });
-    addBtn.insertAdjacentElement("afterend", menuEl);
-    addBtn.setAttribute("aria-expanded", "true");
-    // Defer the document listener so the OPENING click doesn't immediately close.
-    setTimeout(() => document.addEventListener("click", _onDocClickMenu, true), 0);
-}
-
-addBtn?.addEventListener("click", () => {
-    if (menuEl) _closeMenu(); else _openMenu();
-});
-
-// ---- Inline editor (chip click) -------------------------------------------
-
-let editorEl = null;
-
-function _closeEditor(commit, name, value) {
-    editorEl?.remove();
-    editorEl = null;
-    document.removeEventListener("click", _onDocClickEditor, true);
-    if (commit) {
-        let v = (value ?? "").trim();
-        // Date pickers emit YYYY-MM-DD; backend wants YYYYMMDD.
-        if (FILTERS[name]?.type === "date") v = _isoToYyyymmdd(v);
-        _setValue(name, v);
-    } else if (name && _hiddenFor(name)?.value === " ") {
-        // Cancel of a freshly-added chip → drop it.
-        _setValue(name, "");
-    }
-    _renderBar();
-}
-
-function _onDocClickEditor(ev) {
-    if (editorEl?.contains(ev.target)) return;
-    // Click outside → commit current input value.
-    const input = editorEl?.querySelector("input, select");
-    _closeEditor(true, editorEl?.dataset.filter, input?.value);
-}
-
-function _openEditor(name, anchorChip, justAdded = false) {
-    if (editorEl) _closeEditor(false);
-    const spec = FILTERS[name];
-    if (spec.type === "toggle") return;   // toggle has no editor
-    editorEl = document.createElement("div");
-    editorEl.className = "ycs-filter-editor";
-    editorEl.dataset.filter = name;
-    const cur = _hiddenFor(name)?.value ?? "";
-    if (spec.type === "select") {
-        const opts = spec.options
-            .map((o) => `<option value="${o.value}" ${cur === o.value ? "selected" : ""}>${o.label}</option>`)
-            .join("");
-        editorEl.innerHTML = `
-            <label class="ycs-filter-editor-label">${spec.label}</label>
-            <select class="ycs-filter-editor-input">${opts}</select>
-        `;
-    } else {
-        const inputType = spec.type === "number" ? "number"
-                        : spec.type === "date"   ? "date"
-                        : "text";
-        const curTrim = cur.trim();
-        const editorVal = justAdded
-            ? ""
-            : (spec.type === "date" ? _yyyymmddToIso(curTrim) : curTrim);
-        editorEl.innerHTML = `
-            <label class="ycs-filter-editor-label">${spec.label}</label>
-            <input class="ycs-filter-editor-input"
-                   type="${inputType}"
-                   value="${editorVal}"
-                   placeholder="${spec.placeholder ?? ""}">
-        `;
-    }
-    anchorChip.insertAdjacentElement("afterend", editorEl);
-    const inp = editorEl.querySelector("input, select");
-    inp?.focus();
-    inp?.addEventListener("keydown", (ev) => {
-        if (ev.key === "Enter") {
-            ev.preventDefault();
-            _closeEditor(true, name, inp.value);
-        } else if (ev.key === "Escape") {
-            ev.preventDefault();
-            _closeEditor(false, name);
-        }
-    });
-    if (spec.type === "select" || spec.type === "date") {
-        // Selects + native date pickers auto-commit on change.
-        inp.addEventListener("change", () => _closeEditor(true, name, inp.value));
-    }
-    setTimeout(() => document.addEventListener("click", _onDocClickEditor, true), 0);
-}
-
-_renderBar();
+// Date-typed FormData entries (matches the input `name=` attributes
+// in `features/ycs/source/search.py::_FilterGrid`). Normalised by
+// `readSearchRequest()` below.
+const _DATE_FIELDS = new Set(["date_after", "date_before"]);
 
 // ============================================================
 // Density toggle
@@ -391,6 +156,16 @@ function readSearchRequest() {
         if (NUMERIC_FIELDS.has(k)) {
             const n = parseInt(v, 10);
             if (Number.isFinite(n)) req[k] = n;
+            continue;
+        }
+        if (_DATE_FIELDS.has(k)) {
+            // <input type="date"> emits YYYY-MM-DD; backend wants
+            // YYYYMMDD. Skip the field entirely when the user left
+            // it blank (the empty-string short-circuit above already
+            // handles "", but a partial like "2024" would fall
+            // through and 422 the backend — so we re-validate here).
+            const yyyymmdd = _isoToYyyymmdd(v);
+            if (yyyymmdd.length === 8) req[k] = yyyymmdd;
             continue;
         }
         req[k] = v;
@@ -643,6 +418,13 @@ async function _fetchAtLeast(needed) {
 
 searchForm?.addEventListener("submit", async (ev) => {
     ev.preventDefault();
+    /* 2026-06-17 — collapse the filter `<details>` panel on every
+     * submit so the user returns to a clean baseline after each
+     * search. Setting `open = false` is the native HTMLDetailsElement
+     * API — no animation, no JS click handler, browser handles the
+     * collapse directly. */
+    const filterDetails = document.getElementById("ycs-filter-details");
+    if (filterDetails) filterDetails.open = false;
     const req = readSearchRequest();
     const size = req.max_results || 25;
     // baseReq is the form payload minus the moving `max_results`; we

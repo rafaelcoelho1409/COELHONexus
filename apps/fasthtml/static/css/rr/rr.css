@@ -15,7 +15,7 @@
     margin: 0 auto;
     width: 100%;
     /* Take the full available vertical space below the 3-row chrome so
-     * .rr-card-pipeline can flex-fill its canvas — same idiom as DD's
+     * .rr-page-pipeline's canvas can flex-fill — same idiom as DD's
      * .fw-pipeline-grid. The 192 px allowance matches the topbar (3 rows
      * × ~60 px) minus the tight 4 px page padding. */
     min-height: calc(100dvh - 192px);
@@ -680,23 +680,11 @@
     vertical-align: middle;
   }
   /* 2026-06-17: scan topic on the LEFT of the pill. Order in HTML places
-     it first; flex layout keeps it leftmost. Reads in mixed case (not the
-     uppercase the rest of the pill uses) so the topic is recognizable
-     as a query string, not a status label. Hides via data-empty="true"
-     instead of :empty so spacing collapses cleanly. */
-  .rr-stage-pill-topic {
-    font-weight: 600;
-    letter-spacing: 0;
-    text-transform: none;
-    color: var(--text, #111);
-    opacity: 0.9;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 32ch;
-    padding-right: 4px;
-    border-right: 1px solid var(--border, #e5e5e5);
-  }
-  .rr-stage-pill-topic[data-empty="true"] { display: none; }
+     it first; flex layout keeps it leftmost. (2026-06-17: this slot was
+     moved out of the pill and into the pipeline title row — see
+     `.rr-pipeline-topic` below for the new live styling. The pill-scoped
+     rules below are kept as a no-op safety net in case a stale render
+     ever re-mounts the topic inside the pill DOM.) */
   .rr-stage-elapsed {
     font-variant-numeric: tabular-nums;
     font-weight: 600;
@@ -753,30 +741,48 @@
   /* ----- Pipeline page — DeepAgents + FastMCP topology canvas -----
    *
    * Container shell only; node + edge appearance lives in StageGraph's
-   * Cytoscape stylesheet (static/js/dd/shared/stagegraph.js). Title +
-   * status pill + kind legend stack above the canvas. */
+   * Cytoscape stylesheet (static/js/dd/shared/stagegraph.js).
+   *
+   * 2026-06-17 restructure: rr-card-pipeline container removed, H3
+   * title + ⓘ info button removed (subnav row 2 identifies the view),
+   * scan topic moved to the row-3 toolbar (inside `.rr-actions`).
+   * Slim header is now just: status pill (left) + kind legend (right). */
+  .rr-page-pipeline {
+    /* Anchor the absolutely-positioned drawer (used to anchor on
+       `.rr-card-pipeline`; the container's gone, so we anchor on
+       the page itself). */
+    position: relative;
+  }
   .rr-pipeline-header {
     margin-bottom: 4px;
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    flex-wrap: wrap;
+    flex: 0 0 auto;
   }
-  .rr-pipeline-title {
-    margin: 0;
-    font-size: 16px;
+  /* Scan topic — mounted in the row-3 toolbar's `.rr-actions` cluster,
+     just LEFT of the Start Scan button. Same pill-shape as the Digest
+     toolbar topic for visual consistency across stages. Hides via
+     data-empty="true" when no scan loaded so the cluster collapses to
+     just the buttons in the idle state. */
+  .rr-pipeline-topic {
+    font-size: 13px;
     font-weight: 600;
     color: var(--text, #111);
+    opacity: 0.85;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 40ch;
+    padding: 4px 12px;
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 999px;
+    background: var(--bg-panel-soft, #fafafa);
   }
-  /* Title row: H3 + ⓘ info button + status pill, inline. The descriptive
-   * "Live agent topology…" subtitle that used to sit below the title is
-   * now the info button's tooltip — see _StatusPill caller in pipeline.py. */
-  .rr-pipeline-title-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-  .rr-pipeline-title-row .rr-pipeline-title { margin: 0; }
+  .rr-pipeline-topic[data-empty="true"] { display: none; }
   .rr-legend {
     display: inline-flex;
     align-items: center;
@@ -806,16 +812,10 @@
   .rr-legend-chip-store    .rr-legend-shape { color: #b45309; }  /* amber-700  */
   .rr-legend-label { font-variant-numeric: tabular-nums; }
 
-  /* Header tail — legend lives here (was paired with Wipe Seen until
-   * 2026-06-17; legend is now the lone child but the flex layout is
-   * kept so future right-side controls drop in without restructure). */
-  .rr-pipeline-header-tail {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px 16px;
-    flex-wrap: wrap;
-  }
+  /* `.rr-pipeline-header-tail` removed 2026-06-17 along with the
+     header restructure — the legend now sits directly in the slim
+     `.rr-pipeline-header` row alongside the status pill. */
+
   /* Recent-scans picker. Mounted in two places depending on stage:
    *  - Pipeline page: INSIDE `.rr-actions` next to Start/Stop (right-clustered)
    *  - Digest page:   only child of `.rr-toolbar-digest` — we explicitly
@@ -954,16 +954,9 @@
     color: var(--text-muted, #888);
   }
 
-  /* Card containing the canvas — flexes to fill the .rr-page available
-   * height so the canvas inside can take 100% of what's left after the
-   * header. Same idiom as DD's `.fw-pipeline-zone`. */
-  .rr-card-pipeline {
-    display: flex;
-    flex-direction: column;
-    flex: 1 1 auto;
-    min-height: 0;
-  }
-  .rr-card-pipeline > .rr-pipeline-header { flex: 0 0 auto; }
+  /* 2026-06-17: rr-card-pipeline removed; the canvas flexes directly
+   * inside `.rr-page-pipeline` (which is itself a flex column via
+   * `.rr-page`). Same flex-fill behavior, one less wrapper. */
   .rr-pipeline-canvas {
     position: relative;
     width: 100%;
@@ -984,8 +977,8 @@
   /* Per-node drawer — slides in from the right when a node is clicked.
    * Driven by HTML `hidden` attribute + a CSS transform on `[hidden=false]`
    * for the slide animation. Content per node comes from inline JSON
-   * (`#rr-node-details`) at page render time. */
-  .rr-card-pipeline { position: relative; }
+   * (`#rr-node-details`) at page render time. The drawer anchors on
+   * `.rr-page-pipeline { position: relative; }` (defined above). */
   .rr-drawer {
     position: absolute;
     top: 0; right: 0; bottom: 0;
@@ -1326,76 +1319,210 @@
     grid-template-columns: 1fr;
     gap: 12px;
   }
+  /* ─── Synthesis strip (scan-wide context, sticky top of digest) ─── */
+  .rr-synthesis-strip {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--bg, #fff);
+    padding: 10px 8px 8px 8px;
+    margin: 4px 0 8px 0;
+    border-bottom: 1px solid var(--border, #eee);
+  }
+  .rr-synthesis-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .rr-synthesis-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted, #777);
+  }
+  .rr-synthesis-themes {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .rr-synthesis-chip {
+    padding: 3px 12px;
+    border: 1px solid var(--border, #d8d8d8);
+    border-radius: 999px;
+    background: var(--bg-panel-soft, #fafafa);
+    color: var(--text, #111);
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 100ms ease, border-color 100ms ease, color 100ms ease;
+  }
+  .rr-synthesis-chip:hover {
+    border-color: var(--brand, #c00);
+    color: var(--brand, #c00);
+  }
+  .rr-synthesis-chip.is-active {
+    background: var(--brand, #c00);
+    border-color: var(--brand, #c00);
+    color: white;
+  }
+  .rr-synthesis-summary {
+    margin: 4px 0 0 0;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text, #222);
+    cursor: pointer;
+    /* Collapsed to a single line; click toggles `.is-expanded`. */
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    max-width: 95ch;
+  }
+  .rr-synthesis-summary.is-expanded {
+    display: block;
+    -webkit-line-clamp: unset;
+    overflow: visible;
+  }
+
+  /* ─── Finding card (L0 — always visible) ─── */
   .rr-finding {
     border: 1px solid var(--border, #e5e5e5);
-    border-radius: 8px;
-    padding: 14px 16px;
-    background: var(--bg-panel-soft, #fafafa);
+    border-radius: 10px;
+    padding: 14px 18px 12px 18px;
+    background: var(--bg-panel, #fff);
+    cursor: pointer;
+    transition: border-color 120ms ease, box-shadow 120ms ease,
+                transform 120ms ease;
+    display: grid;
+    gap: 6px;
   }
-  .rr-finding-head {
+  .rr-finding:hover {
+    border-color: var(--brand, #c00);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    transform: translateY(-1px);
+  }
+
+  /* Meta row — rank, signal bar, NEW badge, arxiv_id, sources */
+  .rr-finding-meta {
     display: flex;
     align-items: center;
     gap: 10px;
     font-size: 12px;
     color: var(--text-muted, #666);
-    margin-bottom: 4px;
+    flex-wrap: wrap;
   }
   .rr-rank {
     background: var(--brand, #c00);
     color: white;
     border-radius: 4px;
-    padding: 1px 6px;
+    padding: 1px 7px;
     font-weight: 700;
-  }
-  .rr-signal {
-    background: var(--bg-input, #f0f0f0);
-    border-radius: 4px;
-    padding: 1px 6px;
     font-family: ui-monospace, "SF Mono", monospace;
+  }
+  .rr-signal-bar {
+    display: inline-block;
+    width: 80px;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--bg-input, #ececec);
+    overflow: hidden;
+    vertical-align: middle;
+  }
+  .rr-signal-bar-fill {
+    display: block;
+    height: 100%;
+    background: linear-gradient(90deg, #c00 0%, #f59e0b 65%, #15803d 100%);
   }
   .rr-new {
     background: #0a8a3e;
     color: white;
     border-radius: 4px;
-    padding: 1px 6px;
-    font-weight: 600;
+    padding: 1px 7px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
   }
   .rr-arxiv {
     color: var(--text-muted, #888);
     font-family: ui-monospace, "SF Mono", monospace;
   }
-  .rr-title {
-    margin: 4px 0 4px 0;
+  /* sources cluster pushes to right edge of meta row */
+  .rr-finding-meta .rr-sources {
+    margin-left: auto;
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .rr-source {
+    background: var(--bg-input, #f0f0f0);
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-size: 11px;
+    color: var(--text-muted, #555);
+    text-transform: lowercase;
+  }
+  .rr-source-arxiv                    { background: #fef3c7; color: #92400e; }
+  .rr-source-hn                       { background: #fed7aa; color: #9a3412; }
+  .rr-source-huggingface_daily_papers { background: #ddd6fe; color: #5b21b6; }
+  .rr-source-semantic_scholar         { background: #cffafe; color: #155e75; }
+
+  /* Title — primary identification */
+  .rr-finding .rr-title {
+    margin: 0;
     font-size: 16px;
     font-weight: 600;
+    line-height: 1.4;
+    color: var(--text, #111);
   }
-  .rr-authors {
-    margin: 0 0 6px 0;
-    font-size: 13px;
-    color: var(--text-muted, #666);
-  }
-  .rr-summary {
-    margin: 6px 0;
+
+  /* Money angle — THE headline structured field. Bold accent so the eye
+     pattern-matches `money_angle` down the list in 5 seconds. */
+  .rr-money-angle {
+    margin: 2px 0 0 0;
+    padding: 8px 12px;
+    background: linear-gradient(
+      90deg,
+      rgba(245, 158, 11, 0.08) 0%,
+      rgba(245, 158, 11, 0.02) 100%
+    );
+    border-left: 3px solid #f59e0b;
+    border-radius: 0 6px 6px 0;
     font-size: 14px;
+    line-height: 1.5;
+    color: var(--text, #111);
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
   }
-  .rr-extraction {
-    border-left: 3px solid var(--border, #ddd);
-    padding-left: 10px;
-    margin: 8px 0;
+  .rr-money-angle-icon {
+    flex-shrink: 0;
+    font-size: 16px;
+    line-height: 1.4;
   }
-  .rr-extraction p {
-    margin: 4px 0;
-    font-size: 13px;
+  .rr-money-angle-text {
+    font-weight: 500;
   }
-  .rr-extraction code {
-    font-family: ui-monospace, "SF Mono", monospace;
-    background: var(--bg-input, #f3f3f3);
-    padding: 1px 4px;
-    border-radius: 3px;
+  .rr-money-angle-empty {
+    background: transparent;
+    border-left-color: var(--border, #e5e5e5);
+    color: var(--text-muted, #888);
+    font-style: italic;
+  }
+  .rr-money-angle-empty .rr-money-angle-text { font-weight: 400; }
+
+  /* Footer — themes (left) + "Deep dive" CTA (right) */
+  .rr-finding-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 2px;
   }
   .rr-themes {
-    margin-top: 8px;
-    display: flex;
+    display: inline-flex;
     flex-wrap: wrap;
     gap: 6px;
   }
@@ -1405,18 +1532,255 @@
     border-radius: 999px;
     padding: 2px 10px;
     font-size: 12px;
+    font-weight: 500;
   }
-  .rr-sources {
-    margin-top: 6px;
+  .rr-finding-open {
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--brand, #c00);
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 4px 0;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .rr-finding-open:hover {
+    color: #f59e0b;
+  }
+
+  /* Inline empty-state when a theme filter matches no cards */
+  .rr-digest-empty-filtered { text-align: center; }
+  .rr-link {
+    border: none;
+    background: transparent;
+    color: var(--brand, #c00);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: underline;
+    padding: 0;
+  }
+
+  /* ─── L2: Side drawer with full extraction (slide in from right) ─── */
+  /* 2026-06-17: width = half the viewport ("up to the middle of the
+     screen") with a 360px floor so tab labels stay readable on smaller
+     windows and a 95vw cap so the panel never fully covers the page on
+     phones. Fields are rendered as tabs (money_angle / problem /
+     method / how_to_build / math), so the wider canvas pays off in
+     prose + math readability instead of more stacked sections. */
+  .rr-finding-drawer {
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: clamp(360px, 50vw, 95vw);
+    z-index: 60;
+    background: var(--bg-panel, #fff);
+    border-left: 1px solid var(--border, #e5e5e5);
+    box-shadow: -8px 0 24px rgba(0,0,0,0.10);
+    transform: translateX(100%);
+    transition: transform 200ms ease-out;
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
+    flex-direction: column;
+    overflow: hidden;
   }
-  .rr-source {
-    background: var(--bg-input, #f0f0f0);
-    border-radius: 999px;
-    padding: 1px 8px;
-    font-size: 11px;
+  .rr-finding-drawer.is-open { transform: translateX(0); }
+  .rr-finding-drawer-head {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border, #eee);
+  }
+  .rr-finding-drawer-rank {
+    font-family: ui-monospace, "SF Mono", monospace;
+    font-size: 13px;
+    color: var(--text, #111);
+    font-weight: 600;
+  }
+  .rr-finding-drawer-arxiv {
+    font-family: ui-monospace, "SF Mono", monospace;
+    font-size: 12px;
+    color: var(--text-muted, #888);
+    margin-left: auto;
+    margin-right: 8px;
+  }
+  .rr-finding-drawer-close {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-muted, #777);
+    font-size: 24px;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  .rr-finding-drawer-close:hover {
+    background: rgba(0,0,0,0.06);
+    color: var(--text, #111);
+  }
+  .rr-finding-drawer-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 16px 20px 24px 20px;
+  }
+  .rr-finding-drawer-title {
+    margin: 0 0 6px 0;
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 1.35;
+  }
+  .rr-finding-drawer-authors {
+    margin: 0 0 8px 0;
+    font-size: 13px;
+    color: var(--text-muted, #666);
+  }
+  .rr-finding-drawer-confidence {
+    margin: 0 0 16px 0;
+    padding: 6px 10px;
+    background: var(--bg-panel-soft, #fafafa);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--text-muted, #666);
+  }
+  /* 2026-06-17: tabbed field layout — one extraction field visible at a
+     time, switched via the tab bar. Replaced the old stacked-section
+     layout (.rr-finding-drawer-field / -label / -primary / -mono) so
+     the wider 50vw canvas gives each field full reading width instead
+     of forcing the operator to scroll a long column. Empty fields skip
+     their tab entirely (no greyed-out tabs). Money-angle keeps its
+     amber accent on the tab's active underline. */
+  .rr-finding-drawer-tabs {
+    display: flex;
+    gap: 2px;
+    margin: 16px 0 0 0;
+    border-bottom: 1px solid var(--border, #e5e5e5);
+    overflow-x: auto;
+    flex-shrink: 0;
+  }
+  .rr-finding-drawer-tab {
+    padding: 8px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    color: var(--text-muted, #888);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 120ms ease, border-bottom-color 120ms ease;
+  }
+  .rr-finding-drawer-tab:hover {
+    color: var(--text, #111);
+  }
+  .rr-finding-drawer-tab.is-active {
+    color: var(--text, #111);
+    border-bottom-color: var(--text, #111);
+  }
+  .rr-finding-drawer-tab-primary.is-active {
+    color: #92400e;
+    border-bottom-color: #f59e0b;
+  }
+  .rr-finding-drawer-panels {
+    padding-top: 16px;
+  }
+  .rr-finding-drawer-panel {
+    display: none;
+  }
+  .rr-finding-drawer-panel.is-active {
+    display: block;
+  }
+  .rr-finding-drawer-field-text {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text, #111);
+    white-space: pre-wrap;
+  }
+  .rr-finding-drawer-panel-primary .rr-finding-drawer-field-text {
+    font-weight: 500;
+  }
+  .rr-finding-drawer-panel-mono .rr-finding-drawer-field-text {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 13px;
+    background: var(--bg-input, #f5f5f5);
+    padding: 10px 12px;
+    border-radius: 4px;
+  }
+
+  /* ─── Markdown post-render normalization ───────────────────────────
+     `_enhanceMarkdownIn()` replaces .rr-md containers' innerHTML with
+     marked+KaTeX output. The renderer emits block-level <p>, <ul>,
+     <ol>, <pre>, <code>, <blockquote>, <h1..h6>, KaTeX <span>/<math>,
+     and code highlights. Default browser margins on these would
+     blow out the tight card / drawer layouts — strip first/last
+     child margins and tighten line-height. Math glyphs (.katex) are
+     inline by default; .katex-display centers and adds vertical
+     breathing room. ──────────────────────────────────────────────── */
+  .rr-md > *:first-child { margin-top: 0; }
+  .rr-md > *:last-child  { margin-bottom: 0; }
+  .rr-md p {
+    margin: 0.4em 0;
+    line-height: 1.55;
+  }
+  .rr-md ul, .rr-md ol {
+    margin: 0.4em 0;
+    padding-left: 1.4em;
+  }
+  .rr-md li { margin: 0.15em 0; }
+  .rr-md h1, .rr-md h2, .rr-md h3, .rr-md h4, .rr-md h5 {
+    margin: 0.6em 0 0.3em 0;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  .rr-md code {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.9em;
+    background: rgba(0, 0, 0, 0.05);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .rr-md pre {
+    margin: 0.5em 0;
+    padding: 10px 12px;
+    background: var(--bg-input, #f5f5f5);
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .rr-md pre code {
+    background: none;
+    padding: 0;
+    font-size: inherit;
+  }
+  .rr-md blockquote {
+    margin: 0.5em 0;
+    padding: 4px 12px;
+    border-left: 3px solid var(--border, #d8d8d8);
     color: var(--text-muted, #555);
+  }
+  .rr-md a {
+    color: var(--brand, #c00);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  /* KaTeX — display equations get centered breathing room. Inline math
+     uses the renderer's default spacing. Override the renderer's
+     default font-size only on the dense card surface to fit better. */
+  .rr-md .katex-display {
+    margin: 0.6em 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .rr-money-angle .rr-md .katex,
+  .rr-money-angle .rr-md .katex-display {
+    font-size: 1em;
   }
 }

@@ -1602,32 +1602,48 @@ function renderError(message) {
     }
 }
 
+/* 2026-06-17 (SOTA rebuild — Perplexity / Bing Copilot card idiom).
+ * Friendly labels for the SmartRetriever arms so the chip shows
+ * `vector` / `graph` / `full-text` instead of leaking internal
+ * subsystem names. Falls back to the raw value for any new arm. */
+const _SOURCE_ARM_LABEL = {
+    qdrant_hybrid: "vector",
+    neo4j_graph:   "graph",
+    elasticsearch: "full-text",
+};
+
 function renderCitation(c) {
     const card = document.createElement("a");
     card.className = "ycs-ask-citation";
     card.target = "_blank";
-    card.rel = "noopener";
+    card.rel = "noopener noreferrer";
     card.href = c.url ?? "#";
+    card.title = c.title ?? "(untitled)";
     const vid = c.video_id ?? "";
     // YouTube serves mqdefault.jpg for every public video. maxresdefault
     // is hit-or-miss; mq is the most reliable thumbnail.
     const thumb = vid
         ? `<img class="ycs-ask-citation-thumb" loading="lazy"
-                onerror="this.style.display='none'"
+                onerror="this.parentElement.classList.add('no-thumb')"
                 src="https://i.ytimg.com/vi/${encodeURIComponent(vid)}/mqdefault.jpg"
                 alt="">`
         : "";
+    const arm = c.source ?? "";
+    const armLabel = _SOURCE_ARM_LABEL[arm] || arm;
+    const armChip = armLabel
+        ? `<span class="ycs-ask-citation-source-chip"
+                  title="Retrieved via ${htmlEscape(arm)}">${htmlEscape(armLabel)}</span>`
+        : "";
     card.innerHTML = `
-        ${thumb}
+        <div class="ycs-ask-citation-thumb-wrap">
+            ${thumb}
+            <span class="ycs-ask-citation-arrow" aria-hidden="true">↗</span>
+        </div>
         <div class="ycs-ask-citation-body">
-            <div class="ycs-ask-citation-head">
-                <span class="ycs-ask-citation-channel">${htmlEscape(c.channel ?? "Citation")}</span>
-                <span class="ycs-ask-citation-source">${htmlEscape(c.source ?? "")}</span>
-            </div>
-            <div class="ycs-ask-citation-title" title="${htmlEscape(c.title ?? "")}">${htmlEscape(c.title ?? "(untitled)")}</div>
+            <div class="ycs-ask-citation-title">${htmlEscape(c.title ?? "(untitled)")}</div>
             <div class="ycs-ask-citation-meta">
-                <span>${htmlEscape(vid)}</span>
-                <span>${htmlEscape(c.timestamp ?? "")}</span>
+                <span class="ycs-ask-citation-channel">${htmlEscape(c.channel ?? "Unknown channel")}</span>
+                ${armChip}
             </div>
         </div>
     `;

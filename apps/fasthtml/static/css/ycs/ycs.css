@@ -459,196 +459,174 @@
 }
 .ycs-search-input:focus { border-color: var(--primary); }
 
-/* ----- Inline filter chip bar (SOTA Linear / Vercel / Height idiom).
-       Replaces the old `.ycs-filters-toggle` collapsible. `+ Filter`
-       opens a typeahead menu; each selection becomes an editable chip
-       with × to dismiss. Hidden inputs (#ycs-fh-*) mirror chip state
-       so FormData stays the source of truth at submit time. */
-/* Wide filter+controls row. Left: `+ Filter` button + active chips
-   (grows to fill). Right: inline pagination + page-size + density.
-   Wraps to two lines on narrow viewports so the controls don't clip. */
-.ycs-filters-bar {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 12px 16px;
-  flex-wrap: wrap;
-}
-.ycs-filter-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-  flex: 1 1 240px;   /* takes available room; controls cluster auto-sizes */
-  min-width: 0;
-}
-.ycs-filter-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 6px 3px 10px;
-  background: rgba(196, 18, 48, 0.07);
-  border: 1px solid rgba(196, 18, 48, 0.20);
-  border-radius: 999px;
-  color: var(--text);
-  font-family: inherit;
-  font-size: 0.78rem;
-  cursor: pointer;
-  appearance: none;
-  transition: background 0.12s, border-color 0.12s;
-  animation: ycs-chip-in 0.12s ease-out;
-}
-.ycs-filter-chip:hover {
-  background: rgba(196, 18, 48, 0.10);
-  border-color: rgba(196, 18, 48, 0.30);
-}
-.ycs-filter-chip-key {
-  color: var(--text-muted);
-  font-weight: 600;
-  font-size: 0.7rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-.ycs-filter-chip-val { font-weight: 500; }
-.ycs-filter-chip-x {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px; height: 16px;
-  border-radius: 50%;
-  color: var(--text-muted);
-  font-size: 0.9rem;
-  line-height: 1;
-  transition: color 0.12s, background 0.12s;
-}
-.ycs-filter-chip-x:hover {
-  background: var(--primary);
-  color: #fff;
-}
-.ycs-filter-add {
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 10px 3px 8px;
-  background: transparent;
-  border: 1px dashed var(--border);
-  border-radius: 999px;
-  color: var(--text-muted);
-  font-family: inherit;
-  font-size: 0.78rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: color 0.12s, border-color 0.12s, background 0.12s;
-}
-.ycs-filter-add:hover {
-  color: var(--primary);
-  border-color: var(--primary);
-  background: rgba(196, 18, 48, 0.04);
-}
-.ycs-filter-add-icon {
-  font-size: 0.95rem;
-  line-height: 1;
-}
-.ycs-filter-menu {
-  position: absolute;
-  z-index: 50;
-  top: calc(100% + 6px);
-  left: 0;
-  min-width: 180px;
-  background: var(--card);
+/* ===== Search filter <details> wrapper (2026-06-17) =====
+ *
+ * Native HTML5 `<details>`/`<summary>` element — the browser handles
+ * the open/close toggle directly. No JS click handler, no aria
+ * plumbing, no extension or shield can intercept. The `<summary>`
+ * is the click target; `<details open>` styles the chevron rotation
+ * and lets the grid show.
+ *
+ * `search.js`'s submit handler sets `open = false` after every
+ * Search click, returning the panel to its collapsed initial state.
+ */
+.ycs-filter-details {
+  margin-bottom: 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.10), 0 2px 4px rgba(0, 0, 0, 0.04);
-  padding: 4px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+  background: rgba(0, 0, 0, 0.015);
+  overflow: hidden;
 }
-.ycs-filter-menu-item {
-  appearance: none;
-  background: transparent;
-  border: 0;
-  padding: 7px 10px;
-  text-align: left;
-  font-family: inherit;
-  font-size: 0.84rem;
-  color: var(--text);
-  border-radius: 4px;
+.ycs-filter-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 14px;
   cursor: pointer;
+  user-select: none;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+  list-style: none;          /* Firefox + spec: hide default marker */
+  outline: none;
   transition: background 0.12s, color 0.12s;
 }
-.ycs-filter-menu-item:hover {
+.ycs-filter-summary::-webkit-details-marker { display: none; }
+.ycs-filter-summary::marker { display: none; }
+.ycs-filter-summary:hover {
+  background: rgba(196, 18, 48, 0.04);
+  color: var(--primary);
+}
+.ycs-filter-summary:focus-visible {
   background: rgba(196, 18, 48, 0.06);
   color: var(--primary);
 }
-.ycs-filter-editor {
-  position: absolute;
-  z-index: 50;
-  top: calc(100% + 6px);
-  left: 0;
-  display: flex;
+.ycs-filter-summary-label { line-height: 1; }
+.ycs-filter-summary-chevron {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.10), 0 2px 4px rgba(0, 0, 0, 0.04);
-  min-width: 220px;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  transition: transform 0.18s ease, color 0.12s;
 }
-.ycs-filter-editor-label {
+.ycs-filter-details[open] .ycs-filter-summary-chevron {
+  transform: rotate(-180deg);
+  color: var(--primary);
+}
+.ycs-filter-details[open] .ycs-filter-summary {
+  color: var(--primary);
+  border-bottom: 1px solid var(--border);
+}
+
+/* ===== Search filter grid (2026-06-17 SOTA rebuild) =====
+ *
+ * Replaces the prior toggle-dropdown chip-bar with a persistent
+ * always-visible faceted grid. Per the 2026 e-commerce/SaaS faceted-
+ * search research: keep frequently-used filters always visible,
+ * native form controls on desktop, no progressive-disclosure popup.
+ *
+ * Every cell is a native <input> / <select> / <input type="checkbox">
+ * directly in the form — no JS click handlers, no popovers, no
+ * portal/stacking-context concerns. Browser handles interaction; we
+ * just style the controls.
+ *
+ * Responsive grid: `auto-fit` + `minmax(220px, 1fr)` packs 1–4
+ * columns depending on viewport width without any media queries.
+ * Toggles share their own full-width row at the end (checkboxes are
+ * compact enough to live inline).
+ */
+.ycs-filter-grid {
+  /* Border / background / margin now live on the parent
+   * `.ycs-filter-details` so the chevron header sits flush with the
+   * grid. Keep just the inner padding + grid layout here. */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px 18px;
+  padding: 14px 16px;
+  background: transparent;
+}
+.ycs-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;       /* let the input shrink inside the grid column */
+}
+.ycs-filter-field-label {
   font-size: 0.7rem;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-muted);
-  flex-shrink: 0;
+  user-select: none;
 }
-.ycs-filter-editor-input {
-  flex: 1;
-  min-width: 0;
-  padding: 5px 8px;
+.ycs-filter-field-hint {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.ycs-filter-control {
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 0.85rem;
+  font-family: inherit;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--card);
   color: var(--text);
-  font-family: inherit;
-  font-size: 0.85rem;
   outline: none;
-  transition: border-color 0.12s;
+  transition: border-color 0.12s, box-shadow 0.12s;
+  box-sizing: border-box;
 }
-.ycs-filter-editor-input:focus { border-color: var(--primary); }
+.ycs-filter-control:hover { border-color: var(--text-muted); }
+.ycs-filter-control:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(196, 18, 48, 0.10);
+}
+/* Native date pickers — let the browser draw its calendar widget. */
+.ycs-filter-control[type="date"] { font-family: ui-monospace, monospace; }
+/* Numeric inputs — hide the spinner; the user can still type. */
+.ycs-filter-control[type="number"]::-webkit-outer-spin-button,
+.ycs-filter-control[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.ycs-filter-control[type="number"] { -moz-appearance: textfield; }
 
-.ycs-filter-field { display: flex; flex-direction: column; gap: 4px; }
-.ycs-filter-label {
-  color: var(--text-muted);
-  font-size: 0.7rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  font-weight: 600;
+/* Toggle row — spans the full grid width so checkboxes don't get
+ * stuck in narrow grid columns. */
+.ycs-filter-toggle-row {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px 24px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+  margin-top: 4px;
 }
-.ycs-filter-input,
-.ycs-filter-select {
-  padding: 8px 10px;
+.ycs-filter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
   font-size: 0.85rem;
-  font-family: inherit;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: var(--card);
   color: var(--text);
-  outline: none;
-  transition: border-color 0.15s;
 }
-.ycs-filter-input:focus,
-.ycs-filter-select:focus { border-color: var(--primary); }
-.ycs-filter-check-wrap {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 0;
+.ycs-filter-toggle:hover { color: var(--primary); }
+.ycs-filter-toggle-cb {
+  appearance: auto;            /* keep the native checkbox glyph */
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+  cursor: pointer;
+  margin: 0;
 }
-.ycs-filter-check-label {
-  font-size: 0.85rem; color: var(--text);
-}
+.ycs-filter-toggle-label { line-height: 1; }
 
 /* ----- Results list (NN/g compact stacked list, optional Comfortable).
        Cards are terrible for ranked content (hide ranking + waste
@@ -1487,63 +1465,131 @@
 }
 
 /* ----- Ask · citation cards (with thumbnail) ----- */
+/* 2026-06-17 — Perplexity/Bing-Copilot card idiom. Horizontal layout:
+ * thumbnail left + title/meta right. Hover lifts the card 1 px with
+ * a subtle shadow (150 ms — fast enough to feel responsive). Open-in-
+ * new-tab arrow appears on hover over the thumbnail. Source-arm
+ * rendered as a small chip in the meta row with friendly label
+ * ("vector" / "graph" / "full-text") instead of internal subsystem
+ * name. */
 .ycs-ask-citation {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   align-items: stretch;
-  padding: 8px 10px;
+  padding: 8px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 8px;
   text-decoration: none;
   color: inherit;
-  background: var(--surface, #fff);
-  transition: border-color 0.2s, background 0.2s;
+  background: var(--card, #fff);
+  transition: transform 0.15s ease,
+              border-color 0.15s ease,
+              box-shadow 0.15s ease,
+              background 0.15s ease;
+  position: relative;
 }
 .ycs-ask-citation:hover {
   border-color: var(--primary);
-  background: rgba(0, 130, 200, 0.03);
+  background: rgba(196, 18, 48, 0.025);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.07);
+}
+.ycs-ask-citation-thumb-wrap {
+  position: relative;
+  width: 104px;
+  height: 58px;
+  flex-shrink: 0;
+  border-radius: 5px;
+  overflow: hidden;
+  background: linear-gradient(135deg,
+    rgba(196, 18, 48, 0.10),
+    rgba(196, 18, 48, 0.04));
+}
+.ycs-ask-citation-thumb-wrap.no-thumb::before {
+  content: "▶";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(196, 18, 48, 0.40);
+  font-size: 1.5rem;
 }
 .ycs-ask-citation-thumb {
-  width: 120px;
-  height: 68px;
+  width: 100%;
+  height: 100%;
   object-fit: cover;
-  border-radius: 3px;
-  flex-shrink: 0;
-  background: rgba(0, 0, 0, 0.05);
+  display: block;
+}
+.ycs-ask-citation-arrow {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border-radius: 999px;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  pointer-events: none;
+}
+.ycs-ask-citation:hover .ycs-ask-citation-arrow {
+  opacity: 1;
+  transform: translateY(0);
 }
 .ycs-ask-citation-body {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 4px;
   min-width: 0;
-  flex: 1;
+  padding-right: 2px;
 }
-.ycs-ask-citation-head {
-  display: flex;
-  gap: 8px;
-  font-size: 0.68rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-}
-.ycs-ask-citation-channel { color: var(--primary); font-weight: 600; }
-.ycs-ask-citation-source  { font-style: italic; }
 .ycs-ask-citation-title {
-  font-size: 0.92rem;
-  font-weight: 500;
-  line-height: 1.35;
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1.32;
   color: var(--text);
-  overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .ycs-ask-citation-meta {
   display: flex;
-  justify-content: space-between;
-  color: var(--text-muted);
-  font-size: 0.74rem;
+  align-items: center;
+  gap: 6px;
   margin-top: auto;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  min-width: 0;
+}
+.ycs-ask-citation-channel {
+  color: var(--primary);
+  font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ycs-ask-citation-source-chip {
+  flex-shrink: 0;
+  padding: 1px 7px 2px;
+  background: rgba(0, 0, 0, 0.055);
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
 }
 .ycs-ask-error-pill {
   padding: 10px 14px;
@@ -2310,32 +2356,45 @@
   gap: 8px;
 }
 .ycs-ask-rail-list:empty::before {
-  content: "Citations will appear here as the assistant responds.";
+  content: "📚  Sources will appear here as the assistant answers.";
   display: block;
-  padding: 10px 4px;
+  padding: 14px 4px;
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   font-style: italic;
-  line-height: 1.45;
+  line-height: 1.5;
+  text-align: center;
 }
 .ycs-ask-rail-card { position: relative; }
+/* Numbered badge — overlays the thumbnail's top-left corner so it
+ * visually anchors the card and matches the inline `[N]` pill colour
+ * in the answer body. */
 .ycs-ask-rail-card-n {
   position: absolute;
-  top: 6px;
-  left: 6px;
-  z-index: 2;
+  top: 4px;
+  left: 4px;
+  z-index: 3;
+  min-width: 22px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: var(--primary);
   color: #fff;
   font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 0.66rem;
+  font-size: 0.65rem;
   font-weight: 700;
-  padding: 1px 5px;
-  border-radius: 3px;
+  padding: 0 5px;
+  border-radius: 4px;
   letter-spacing: 0.04em;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
 }
 .ycs-ask-rail-card.highlighted {
   border-color: var(--primary);
-  background: rgba(0, 130, 200, 0.08);
+  background: rgba(196, 18, 48, 0.04);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.07);
 }
 
 /* Inline `[N]` citation pill — small superscript that links back to

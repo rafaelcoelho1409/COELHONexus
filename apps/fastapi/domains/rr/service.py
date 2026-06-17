@@ -244,6 +244,21 @@ async def persist_scan_result(
     """
     n_findings = await postgres_store.record_findings(scan_id, findings)
     digest_key = await minio_store.put_digest_json(str(scan_id), digest_payload)
+    # 2026-06-17: surface scan-wide synthesis on the scan row so the
+    # Digest page's themes filter strip + executive summary can render
+    # without a second MinIO fetch. Best-effort — a failed UPDATE here
+    # only loses the convenience field, not the canonical MinIO blob.
+    try:
+        await postgres_store.write_synthesis_meta(
+            scan_id,
+            themes  = list(digest_payload.get("themes") or []),
+            summary = digest_payload.get("summary"),
+        )
+    except Exception as e:
+        logger.warning(
+            f"[rr-service] persist_scan_result synthesis meta failed: "
+            f"{type(e).__name__}: {e}"
+        )
     arxiv_ids = [f.arxiv_id for f in findings if f.arxiv_id]
     n_seen = await postgres_store.mark_seen_batch(profile_id, arxiv_ids)
     summary = {

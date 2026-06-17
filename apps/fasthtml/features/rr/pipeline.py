@@ -100,13 +100,6 @@ def _StatusPill():
     attribute that the CSS reads. Detail message ($error or stale-resume
     text) goes in `#rr-status-detail` and stays empty when not needed."""
     return Div(
-        # 2026-06-17: current scan's topic surfaces on the LEFT of the
-        # pill (hidden when empty). main.js's setStatus() / resumeScan()
-        # fill this with the topic from the POST response or the form's
-        # current value so the operator always sees what they're looking
-        # at without having to scroll up to the form.
-        Span("", cls = "rr-stage-pill-topic", id = "rr-status-topic",
-             title = "Scan topic"),
         Span("Idle", cls = "rr-stage-pill-text", id = "rr-status-text"),
         Span("",     cls = "rr-stage-elapsed",   id = "rr-status-elapsed",
              title  = "Total scan time"),
@@ -266,47 +259,30 @@ def PipelineBody():
     is what `static/js/rr/pipeline.js::initPipelineGraph()` resolves; the
     page module + main.js script tags load in that order so pipeline.js
     is the entry point that calls back into main.js's setStatus hook."""
+    # 2026-06-17 restructure:
+    #   - rr-card-pipeline container REMOVED (page surface displays
+    #     directly, no nested box)
+    #   - H3 "Pipeline" title + ⓘ info button REMOVED (the stage
+    #     subnav in row 2 already identifies this view)
+    #   - Scan topic pill MOVED to the row-3 toolbar (left of Start
+    #     Scan) via body.py's ScanForm; lives next to the controls
+    #     that operate on it, mirroring the Digest restructure
+    # Slim header now: status pill on the left, kind legend on the
+    # right. Canvas + totals strip + drawer hang directly off rr-page.
     return Div(
         Div(
-            Div(
-                Div(
-                    H3("Pipeline", cls = "rr-pipeline-title"),
-                    Button(
-                        "i",
-                        type = "button",
-                        # `rr-info-down` flips the tooltip BELOW the button
-                        # so it doesn't get clipped by the row-3 toolbar
-                        # above. (Default direction is upward.)
-                        cls  = "rr-info rr-info-down",
-                        **{
-                            "aria-label":   "About the Pipeline view",
-                            "data-tooltip": (
-                                "Live agent topology — DeepAgents orchestrator + "
-                                "4 discovery subagents (FastMCP-backed) + per-paper "
-                                "deep_read + synthesis + report. Nodes light up as "
-                                "their phase runs."
-                            ),
-                        },
-                    ),
-                    _StatusPill(),
-                    cls = "rr-pipeline-title-row",
-                ),
-                Div(
-                    _KindLegend(),
-                    cls = "rr-pipeline-header-tail",
-                ),
-                cls = "rr-pipeline-header",
-            ),
-            Div(
-                id  = "rr-pipeline-canvas",
-                cls = "rr-pipeline-canvas",
-                # Inline JSON read by pipeline.js to seed the StageGraph.
-                **{"data-topology": _TopologyJson()},
-            ),
-            _LlmTotalsStrip(),
-            _NodeDrawer(),
-            cls = "rr-card rr-card-pipeline",
+            _StatusPill(),
+            _KindLegend(),
+            cls = "rr-pipeline-header",
         ),
+        Div(
+            id  = "rr-pipeline-canvas",
+            cls = "rr-pipeline-canvas",
+            # Inline JSON read by pipeline.js to seed the StageGraph.
+            **{"data-topology": _TopologyJson()},
+        ),
+        _LlmTotalsStrip(),
+        _NodeDrawer(),
         # 2026-06-17: ConfirmModal target for showConfirm() — required by
         # the Recent-scans dropdown's per-row trash button. Same component
         # the Digest page mounts.
@@ -316,5 +292,5 @@ def PipelineBody():
         # setStatus(). Both are type=module so order is hoisted-safe.
         Script(src = "/static/js/rr/pipeline.js", type = "module"),
         Script(src = "/static/js/rr/main.js",     type = "module"),
-        cls = "rr-page",
+        cls = "rr-page rr-page-pipeline",
     )

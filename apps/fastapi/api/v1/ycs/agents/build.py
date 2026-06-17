@@ -80,6 +80,20 @@ def _serialize_update(node_name: str, update: dict[str, Any]) -> dict[str, Any]:
         result["document_count"] = len(documents)
     if "generation" in update:
         result["generation"] = update["generation"]
+    # 2026-06-17 — propagate citations to the SSE stream so the
+    # frontend's right-rail (`updateSourcesRail`) can populate LIVE
+    # the moment `format_citations` (STANDARD path) or
+    # `fallback_answer` (CRAG no-docs rescue) returns. Before this
+    # patch the field was dropped at serialisation time, so the rail
+    # only ever populated on page reload — citations were persisted
+    # to `thinking_state.citations` and re-read by `renderHistoryTurn`,
+    # but the live tab missed the update entirely. Pass-through is
+    # safe: `citations` is already a list of plain `{video_id, title,
+    # channel, url, source}` dicts (see `cite/node.py` +
+    # `fallback_answer/node.py::_related_citations`), no LangChain
+    # `Document` objects to JSON-flatten.
+    if "citations" in update and update["citations"]:
+        result["citations"] = update["citations"]
     if "search_query" in update:
         result["search_query"] = update["search_query"]
     if "retry_count" in update:

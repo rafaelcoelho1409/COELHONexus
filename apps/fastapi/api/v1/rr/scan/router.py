@@ -179,7 +179,8 @@ async def get_scan(scan_id: UUID) -> ScanResult:
         async with conn.cursor() as cur:
             await cur.execute(
                 f"SELECT id, profile_id, status, started_at, finished_at, "
-                f"       total_candidates, total_in_digest, error "
+                f"       total_candidates, total_in_digest, error, topic, "
+                f"       synthesis_themes, synthesis_summary "
                 f"FROM {PG_TABLE_SCANS} WHERE id = %s",
                 (str(scan_id),),
             )
@@ -188,7 +189,8 @@ async def get_scan(scan_id: UUID) -> ScanResult:
                 raise HTTPException(status_code=404, detail="scan not found")
             (
                 _id, profile_id, status, started_at, finished_at,
-                total_candidates, total_in_digest, error,
+                total_candidates, total_in_digest, error, topic,
+                synthesis_themes_raw, synthesis_summary,
             ) = row
             findings: list[dict] = []
             if status == "done":
@@ -198,17 +200,33 @@ async def get_scan(scan_id: UUID) -> ScanResult:
                     (str(scan_id),),
                 )
                 findings = [r[0] for r in await cur.fetchall()]
+    # JSONB → list[str]; psycopg3 returns dict/list directly, but defensive
+    # against legacy str rows.
+    synthesis_themes: list[str] = []
+    if isinstance(synthesis_themes_raw, list):
+        synthesis_themes = [str(t) for t in synthesis_themes_raw if t]
+    elif isinstance(synthesis_themes_raw, str):
+        try:
+            import json as _json
+            parsed = _json.loads(synthesis_themes_raw)
+            if isinstance(parsed, list):
+                synthesis_themes = [str(t) for t in parsed if t]
+        except Exception:
+            pass
     return ScanResult(
-        scan_id          = scan_id,
-        profile_id       = profile_id,
-        status           = status,
-        started_at       = started_at,
-        finished_at      = finished_at,
-        total_candidates = int(total_candidates or 0),
-        total_in_digest  = int(total_in_digest or 0),
-        error            = error,
-        findings         = findings,
-        digest_minio_key = f"rr/scans/{scan_id}/digest.json" if status == "done" else None,
+        scan_id           = scan_id,
+        profile_id        = profile_id,
+        status            = status,
+        started_at        = started_at,
+        finished_at       = finished_at,
+        total_candidates  = int(total_candidates or 0),
+        total_in_digest   = int(total_in_digest or 0),
+        error             = error,
+        topic             = topic,
+        synthesis_themes  = synthesis_themes,
+        synthesis_summary = synthesis_summary,
+        findings          = findings,
+        digest_minio_key  = f"rr/scans/{scan_id}/digest.json" if status == "done" else None,
     )
 
 

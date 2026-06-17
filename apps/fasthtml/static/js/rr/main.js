@@ -768,42 +768,355 @@ function clearDigest() {
   if (digestEmpty) digestEmpty.style.display = '';
 }
 
-function renderDigest(findings) {
-  if (!digestArea || !digestEmpty) return;
-  digestEmpty.style.display = 'none';
-  digestArea.innerHTML = '';
-  if (!findings || !findings.length) {
-    digestEmpty.style.display = '';
-    digestEmpty.textContent = 'Scan completed but no findings — the orchestrator returned an empty digest.';
+/* ────────────────────────────────────────────────────────────────────────── *
+ * Digest renderer — SOTA-pattern restructure (2026-06-17). Three intent-based
+ * tiers per finding:
+ *   L0 (always-visible card surface) — rank · signal bar · NEW badge · sources
+ *      · title · MONEY_ANGLE one-liner (bold accent) · theme chips
+ *   L1 (hover) — `problem` prose + confidence meter, via native title for
+ *      now (accessibility-safe; can swap for a hovercard later)
+ *   L2 (click)  — side drawer with full method · math · how_to_build · full
+ *      money_angle. Drawer (NOT modal) preserves list context.
+ *
+ * Above the list: sticky synthesis strip — scan-wide themes as clickable
+ * filter chips + executive summary (collapsed to one line; click expands).
+ *
+ * Accepts EITHER a flat findings array (back-compat) OR the full ScanResult
+ * with `findings` + `synthesis_themes` + `synthesis_summary` for the strip.
+ * ────────────────────────────────────────────────────────────────────────── */
+const _synthStrip      = $('rr-synthesis-strip');
+const _synthThemes     = $('rr-synthesis-themes');
+const _synthSummary    = $('rr-synthesis-summary');
+const _findingDrawer       = $('rr-finding-drawer');
+const _findingDrawerRank   = $('rr-finding-drawer-rank');
+const _findingDrawerArxiv  = $('rr-finding-drawer-arxiv');
+const _findingDrawerBody   = $('rr-finding-drawer-body');
+const _findingDrawerCloseBtn = $('rr-finding-drawer-close-btn');
+let   _findingsCache = null;
+let   _activeThemeFilter = null;
+
+// `_esc` is defined globally near the top of this file (line ~314).
+// Reused throughout — DO NOT redeclare here (ES module duplicate-binding
+// SyntaxError will break the entire main.js bundle, which silently
+// kills every UI handler including the Recent-scans dropdown).
+
+// Lazy-imported markdown + KaTeX renderer (DD's shared pipeline). The
+// initial card / drawer render writes _esc'd plain text into every
+// `.rr-md` container; this enhancer THEN replaces each container's
+// innerHTML with the marked+KaTeX+DOMPurify output. Progressive: if
+// the CDN-backed renderer fails to load, the escaped fallback stays —
+// the operator still sees the text, just without bold/italic/math.
+let _mdRendererPromise = null;
+function _getMdRenderer() {
+  if (!_mdRendererPromise) {
+    _mdRendererPromise = import('/static/js/dd/shared/content_renderer.js')
+      .catch(err => {
+        console.warn('[rr-digest] content_renderer load failed', err);
+        _mdRendererPromise = null;   // allow a future retry
+        throw err;
+      });
+  }
+  return _mdRendererPromise;
+}
+
+async function _enhanceMarkdownIn(rootEl, lookupRaw) {
+  if (!rootEl) return;
+  const targets = rootEl.querySelectorAll('.rr-md[data-md-field]');
+  if (!targets.length) return;
+  let mod;
+  try { mod = await _getMdRenderer(); }
+  catch { return; }  // escaped fallback already in place
+  for (const el of targets) {
+    const key = el.getAttribute('data-md-field');
+    const raw = lookupRaw(key);
+    if (!raw) continue;
+    try {
+      await mod.renderMarkdownInto(el, raw, { addCopyButtons: false });
+    } catch (err) {
+      console.warn(`[rr-digest] markdown render failed for ${key}:`, err);
+    }
+  }
+}
+
+function _renderSynthesisStrip(scanLike) {
+  if (!_synthStrip || !_synthThemes || !_synthSummary) return;
+  const themes  = Array.isArray(scanLike?.synthesis_themes)
+                  ? scanLike.synthesis_themes : [];
+  const summary = (scanLike?.synthesis_summary || '').trim();
+  if (!themes.length && !summary) {
+    _synthStrip.hidden = true;
     return;
   }
-  for (const f of findings) {
-    const card = document.createElement('div');
+  _synthStrip.hidden = false;
+  // Theme chips — clickable to filter, "all" chip resets.
+  const chips = [
+    `<button type="button" class="rr-synthesis-chip ` +
+      `${_activeThemeFilter ? '' : 'is-active'}" data-theme="">All</button>`,
+    ...themes.map(t =>
+      `<button type="button" class="rr-synthesis-chip ` +
+        `${_activeThemeFilter === t ? 'is-active' : ''}" ` +
+        `data-theme="${_esc(t)}">${_esc(t)}</button>`),
+  ].join('');
+  _synthThemes.innerHTML = chips;
+  // Executive summary — collapsed to one line by default.
+  if (summary) {
+    _synthSummary.textContent = summary;
+    _synthSummary.hidden = false;
+  } else {
+    _synthSummary.hidden = true;
+  }
+}
+
+function _renderFindingCards(findings) {
+  if (!digestArea) return;
+  digestArea.innerHTML = '';
+  const filtered = _activeThemeFilter
+    ? findings.filter(f => (f.themes || []).includes(_activeThemeFilter))
+    : findings;
+  if (!filtered.length) {
+    digestArea.innerHTML =
+      `<p class="rr-digest-empty rr-digest-empty-filtered">` +
+      `No findings match the "${_esc(_activeThemeFilter || '')}" theme filter. ` +
+      `<button type="button" class="rr-link" data-clear-theme>Clear filter</button></p>`;
+    return;
+  }
+  const arxivToFinding = new Map();
+  for (const f of filtered) {
+    if (f.arxiv_id) arxivToFinding.set(f.arxiv_id, f);
+    const ex   = f.extraction || {};
+    const card = document.createElement('article');
     card.className = 'rr-finding';
-    const ex = f.extraction || {};
+    card.setAttribute('data-arxiv-id', f.arxiv_id || '');
+    // L1 hover content — surfaced via native `title` for accessibility.
+    const hoverDetail = [
+      ex.problem ? `Problem: ${ex.problem}` : '',
+      ex.confidence != null
+        ? `Confidence: ${(Number(ex.confidence) * 100).toFixed(0)}%`
+        : '',
+    ].filter(Boolean).join('\n\n') || 'Click for full extraction';
+    card.title = hoverDetail;
+    const sigPct = Math.max(0, Math.min(1, Number(f.signal ?? 0))) * 100;
     card.innerHTML = `
-      <div class="rr-finding-head">
+      <div class="rr-finding-meta">
         <span class="rr-rank">#${f.rank ?? '?'}</span>
-        <span class="rr-signal">${Number(f.signal ?? 0).toFixed(3)}</span>
+        <span class="rr-signal-bar" title="Signal: ${Number(f.signal ?? 0).toFixed(3)}">
+          <span class="rr-signal-bar-fill" style="width: ${sigPct.toFixed(1)}%"></span>
+        </span>
         ${f.is_new ? '<span class="rr-new">NEW</span>' : ''}
-        <span class="rr-arxiv">${escapeHtml(f.arxiv_id || '')}</span>
+        <span class="rr-arxiv">${_esc(f.arxiv_id || '')}</span>
+        <span class="rr-sources">${
+          (f.sources || []).map(s =>
+            `<span class="rr-source rr-source-${_esc(s)}">${_esc(s)}</span>`
+          ).join('')
+        }</span>
       </div>
-      <h4 class="rr-title">${escapeHtml(f.title || '(untitled)')}</h4>
-      ${(f.authors || []).length ? `<p class="rr-authors">${escapeHtml((f.authors || []).join(', '))}</p>` : ''}
-      ${f.summary ? `<p class="rr-summary">${escapeHtml(f.summary)}</p>` : ''}
-      ${ex.problem || ex.method || ex.money_angle ? `
-        <div class="rr-extraction">
-          ${ex.problem      ? `<p><b>Problem:</b> ${escapeHtml(ex.problem)}</p>` : ''}
-          ${ex.method       ? `<p><b>Method:</b> ${escapeHtml(ex.method)}</p>`   : ''}
-          ${ex.how_to_build ? `<p><b>How to build:</b> ${escapeHtml(ex.how_to_build)}</p>` : ''}
-          ${ex.money_angle  ? `<p><b>Money angle:</b> ${escapeHtml(ex.money_angle)}</p>` : ''}
-          ${ex.math         ? `<p><b>Math:</b> <code>${escapeHtml(ex.math)}</code></p>` : ''}
-        </div>` : ''}
-      ${(f.themes || []).length ? `<div class="rr-themes">${(f.themes || []).map(t => `<span class="rr-theme">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
-      <div class="rr-sources">${(f.sources || []).map(s => `<span class="rr-source">${escapeHtml(s)}</span>`).join('')}</div>
+      <h3 class="rr-title">${_esc(f.title || '(untitled)')}</h3>
+      ${ex.money_angle ? `
+        <div class="rr-money-angle">
+          <span class="rr-money-angle-icon" aria-hidden="true">💡</span>
+          <div class="rr-money-angle-text rr-md" data-md-field="money_angle">${_esc(ex.money_angle)}</div>
+        </div>
+      ` : `
+        <div class="rr-money-angle rr-money-angle-empty">
+          <span class="rr-money-angle-icon" aria-hidden="true">·</span>
+          <div class="rr-money-angle-text">No commercial angle extracted for this paper.</div>
+        </div>
+      `}
+      <div class="rr-finding-foot">
+        ${(f.themes || []).length ? `
+          <div class="rr-themes">${
+            (f.themes || []).map(t =>
+              `<span class="rr-theme">${_esc(t)}</span>`
+            ).join('')
+          }</div>
+        ` : '<div class="rr-themes"></div>'}
+        <button type="button" class="rr-finding-open" data-open-drawer>
+          Deep dive →
+        </button>
+      </div>
     `;
     digestArea.appendChild(card);
   }
+  // Post-render: upgrade `.rr-md` containers from escaped text to
+  // marked+KaTeX HTML. Each card carries `data-arxiv-id`; we walk those
+  // and look up the finding via the map so we get the RAW markdown
+  // (not the already-escaped `_esc` fallback).
+  digestArea.querySelectorAll('.rr-finding[data-arxiv-id]').forEach(card => {
+    const aid = card.getAttribute('data-arxiv-id');
+    const f   = arxivToFinding.get(aid);
+    if (!f) return;
+    _enhanceMarkdownIn(card, (key) => f.extraction?.[key] || '');
+  });
+}
+
+function _openFindingDrawer(f) {
+  if (!_findingDrawer || !_findingDrawerBody) return;
+  const ex = f.extraction || {};
+  _findingDrawerRank.textContent  = `#${f.rank ?? '?'} · signal ${Number(f.signal ?? 0).toFixed(3)}`;
+  _findingDrawerArxiv.textContent = f.arxiv_id || '';
+  const authors = (f.authors || []).length
+    ? `<p class="rr-finding-drawer-authors">${_esc((f.authors || []).join(', '))}</p>`
+    : '';
+  const fields = [
+    { key: 'money_angle',  label: 'Money angle',  primary: true  },
+    { key: 'problem',      label: 'Problem'                       },
+    { key: 'method',       label: 'Method'                        },
+    { key: 'how_to_build', label: 'How to build'                  },
+    { key: 'math',         label: 'Math',         monospace: true },
+  ];
+  // Only render tabs for fields that have content — no greyed-out empty
+  // tabs. Default-active tab = first visible one (money_angle when
+  // present, otherwise whichever field exists first in declaration
+  // order).
+  const visible = fields.filter(({key}) => ex[key]);
+  const tabBar = visible.map((field, i) => {
+    const cls = [
+      'rr-finding-drawer-tab',
+      i === 0          ? 'is-active'                    : '',
+      field.primary    ? 'rr-finding-drawer-tab-primary' : '',
+    ].filter(Boolean).join(' ');
+    return `<button type="button" class="${cls}" data-tab-key="${field.key}">${field.label}</button>`;
+  }).join('');
+  const panels = visible.map((field, i) => {
+    const cls = [
+      'rr-finding-drawer-panel',
+      i === 0          ? 'is-active'                       : '',
+      field.primary    ? 'rr-finding-drawer-panel-primary' : '',
+      field.monospace  ? 'rr-finding-drawer-panel-mono'    : '',
+    ].filter(Boolean).join(' ');
+    return `
+      <section class="${cls}" data-tab-key="${field.key}">
+        <div class="rr-finding-drawer-field-text rr-md" data-md-field="${field.key}">${_esc(ex[field.key])}</div>
+      </section>
+    `;
+  }).join('');
+  const confidencePct = ex.confidence != null
+    ? (Number(ex.confidence) * 100).toFixed(0) + '%' : '—';
+  _findingDrawerBody.innerHTML = `
+    <h3 class="rr-finding-drawer-title">${_esc(f.title || '(untitled)')}</h3>
+    ${authors}
+    <p class="rr-finding-drawer-confidence">
+      Extraction confidence: <b>${confidencePct}</b>
+    </p>
+    <div class="rr-finding-drawer-tabs">${tabBar}</div>
+    <div class="rr-finding-drawer-panels">${panels}</div>
+  `;
+  _findingDrawer.hidden = false;
+  requestAnimationFrame(() => _findingDrawer.classList.add('is-open'));
+  // Upgrade `.rr-md` fields from escaped text to marked+KaTeX HTML.
+  // All panels (active + hidden) get enhanced upfront so tab switches
+  // are instant — hidden panels still render their markdown/math into
+  // the offscreen DOM, then `display:block` reveals them. Avoids
+  // re-running the renderer on every tab click.
+  _enhanceMarkdownIn(_findingDrawer, (key) => f.extraction?.[key] || '');
+}
+
+function _closeFindingDrawer() {
+  if (!_findingDrawer) return;
+  _findingDrawer.classList.remove('is-open');
+  // Hide after transition so the panel doesn't snap on next open.
+  setTimeout(() => { if (_findingDrawer) _findingDrawer.hidden = true; }, 250);
+}
+
+if (_findingDrawerCloseBtn) {
+  _findingDrawerCloseBtn.addEventListener('click', _closeFindingDrawer);
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && _findingDrawer && !_findingDrawer.hidden) {
+    _closeFindingDrawer();
+  }
+});
+
+// Tab switching — delegated once at module load so re-renders inside
+// _openFindingDrawer() don't need to re-bind. Toggles `.is-active` on
+// the matching tab + panel pair. Markdown/math is already rendered into
+// every panel (active and hidden alike) by _enhanceMarkdownIn, so the
+// switch is purely a CSS display flip — no re-render lag.
+if (_findingDrawerBody) {
+  _findingDrawerBody.addEventListener('click', (e) => {
+    const tab = e.target?.closest?.('.rr-finding-drawer-tab');
+    if (!tab) return;
+    const key = tab.getAttribute('data-tab-key');
+    if (!key) return;
+    _findingDrawerBody.querySelectorAll('.rr-finding-drawer-tab').forEach(t =>
+      t.classList.toggle('is-active', t === tab)
+    );
+    _findingDrawerBody.querySelectorAll('.rr-finding-drawer-panel').forEach(p =>
+      p.classList.toggle('is-active', p.getAttribute('data-tab-key') === key)
+    );
+  });
+}
+
+if (digestArea) {
+  digestArea.addEventListener('click', (e) => {
+    // Open the drawer on card-body click OR explicit "Deep dive →" button
+    const clearBtn = e.target?.closest?.('[data-clear-theme]');
+    if (clearBtn) {
+      _activeThemeFilter = null;
+      _renderSynthesisStrip({
+        synthesis_themes: _findingsCache?.synthesis_themes,
+        synthesis_summary: _findingsCache?.synthesis_summary,
+      });
+      _renderFindingCards(_findingsCache?.findings || []);
+      return;
+    }
+    const card = e.target?.closest?.('.rr-finding');
+    if (!card) return;
+    const arxivId = card.getAttribute('data-arxiv-id');
+    const finding = (_findingsCache?.findings || [])
+      .find(f => (f.arxiv_id || '') === arxivId);
+    if (finding) _openFindingDrawer(finding);
+  });
+}
+
+if (_synthThemes) {
+  _synthThemes.addEventListener('click', (e) => {
+    const chip = e.target?.closest?.('.rr-synthesis-chip');
+    if (!chip) return;
+    const theme = chip.getAttribute('data-theme') || '';
+    _activeThemeFilter = theme || null;
+    _renderSynthesisStrip({
+      synthesis_themes: _findingsCache?.synthesis_themes,
+      synthesis_summary: _findingsCache?.synthesis_summary,
+    });
+    _renderFindingCards(_findingsCache?.findings || []);
+  });
+}
+
+if (_synthSummary) {
+  // Click to toggle expanded multi-line vs single-line collapsed view.
+  _synthSummary.addEventListener('click', () => {
+    _synthSummary.classList.toggle('is-expanded');
+  });
+}
+
+function renderDigest(payloadOrFindings) {
+  if (!digestArea || !digestEmpty) return;
+  // Back-compat: accept either a bare findings array OR a ScanResult-shaped
+  // object. Normalize to a single shape we cache for re-render-on-filter.
+  let payload;
+  if (Array.isArray(payloadOrFindings)) {
+    payload = { findings: payloadOrFindings, synthesis_themes: [], synthesis_summary: null };
+  } else {
+    payload = {
+      findings:          payloadOrFindings?.findings || [],
+      synthesis_themes:  payloadOrFindings?.synthesis_themes || [],
+      synthesis_summary: payloadOrFindings?.synthesis_summary || null,
+    };
+  }
+  _findingsCache = payload;
+  _activeThemeFilter = null;
+  if (!payload.findings.length) {
+    digestEmpty.style.display = '';
+    digestEmpty.textContent =
+      'Scan completed but no findings — the orchestrator returned an empty digest.';
+    if (_synthStrip) _synthStrip.hidden = true;
+    digestArea.innerHTML = '';
+    return;
+  }
+  digestEmpty.style.display = 'none';
+  _renderSynthesisStrip(payload);
+  _renderFindingCards(payload.findings);
 }
 
 function teardown() {
@@ -850,7 +1163,7 @@ function startPoll(scanId) {
         if (evtSrc) { try { evtSrc.close(); } catch {} evtSrc = null; }
         if (d.status === 'done') {
           setStatus('done', `${(d.findings || []).length} finding(s) · digest at ${d.digest_minio_key || 'MinIO'}`);
-          renderDigest(d.findings || []);
+          renderDigest(d);
         } else if (d.status === 'error') {
           setStatus('error', d.error || '(no error message)');
         } else {
@@ -915,9 +1228,16 @@ async function resumeScan(scanId) {
     return;
   }
   if (r.status === 404) {
-    // Stale id (e.g. radar_scans was truncated). Forget it silently.
+    // Stale id (e.g. radar_scans was truncated OR the scan was deleted
+    // from the Recent-scans dropdown). Forget it silently and — on the
+    // Digest page — fall back to auto-loading the newest scan from the
+    // dropdown so the operator lands on something useful instead of the
+    // empty "fill the form…" hint. Without this fallback, deleting the
+    // currently-viewed scan and refreshing left the page blank even
+    // though other completed scans existed.
     setScanIdInUrl(null);
     setStatus('pending', 'fill the form and click Start Scan');
+    _bootDigestLatest();
     return;
   }
   if (!r.ok) {
@@ -933,17 +1253,20 @@ async function resumeScan(scanId) {
   // refresh resets the counter to 0s.
   _seedElapsedFromScan(d);
 
-  // 2026-06-17: pill topic mirrors the resumed scan's topic, NOT whatever
-  // the operator may have since typed into the form. Falls back to the
-  // form value if the server response omits topic (defensive — the field
-  // is present on every scan response since 2026-06-12).
-  _setPillTopic(d.topic || topicInput?.value || '');
+  // 2026-06-17: pill topic mirrors the resumed scan's topic exclusively.
+  // Falling back to the form's `topicInput.value` (an earlier bug) leaked
+  // "whatever the operator typed last" — including deleted scans' topics
+  // restored from localStorage — into the pill when the scan response
+  // didn't include a topic field. Now strictly the server response. If
+  // `d.topic` is missing/empty, we render empty rather than fabricating
+  // one from form state that has nothing to do with the resumed scan.
+  _setPillTopic(d.topic || '');
 
   if (['done', 'error', 'cancelled'].includes(d.status)) {
     // Terminal — render the snapshot, no live attachments.
     if (d.status === 'done') {
       setStatus('done', `${(d.findings || []).length} finding(s) · digest at ${d.digest_minio_key || 'MinIO'}`);
-      renderDigest(d.findings || []);
+      renderDigest(d);
     } else if (d.status === 'error') {
       setStatus('error', d.error || '(no error message)');
     } else {

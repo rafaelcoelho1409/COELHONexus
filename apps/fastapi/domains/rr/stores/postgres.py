@@ -72,6 +72,13 @@ ALTER TABLE {PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS top_n        INT;
 -- when Redis returns empty. NULL on old rows + scans with zero LLM
 -- activity (snapshot is skipped to keep the column sparse).
 ALTER TABLE {PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS llm_counters JSONB;
+-- 2026-06-17: scan-wide synthesis output — cross-paper themes (3-7
+-- names spanning ≥2 papers each) + executive summary (2-3 sentences).
+-- Written by `persist_scan_result` at scan completion; surfaced in
+-- ScanResult so the Digest page can render the themes filter strip
+-- + summary without a separate MinIO fetch.
+ALTER TABLE {PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS synthesis_themes  JSONB;
+ALTER TABLE {PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS synthesis_summary TEXT;
 
 CREATE TABLE IF NOT EXISTS {PG_TABLE_FINDINGS} (
     scan_id     UUID  NOT NULL REFERENCES {PG_TABLE_SCANS}(id) ON DELETE CASCADE,
@@ -285,6 +292,34 @@ async def get_seen_ids(profile_id: str) -> frozenset[str]:
             )
             rows = await cur.fetchall()
     return frozenset(r[0] for r in rows)
+
+
+async def write_synthesis_meta(
+    scan_id: UUID,
+    *,
+    themes: list[str],
+    summary: str | None,
+) -> bool:
+    """Write the scan-wide synthesis output to the radar_scans row.
+    Themes is the cross-paper theme list (3-7 names); summary is the
+    executive paragraph. Both can be empty/None (degraded scans).
+    Returns True if a row was updated."""
+    import json as _json
+    async with await psycopg.AsyncConnection.connect(postgres_url()) as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                f"UPDATE {PG_TABLE_SCANS} "
+                f"SET synthesis_themes = %s::jsonb, synthesis_summary = %s "
+                f"WHERE id = %s",
+                (
+                    _json.dumps(list(themes or []), default=str),
+                    summary or None,
+                    str(scan_id),
+                ),
+            )
+            n = cur.rowcount
+        await conn.commit()
+    return bool(n)
 
 
 async def write_llm_counters(scan_id: UUID, payload: dict) -> bool:

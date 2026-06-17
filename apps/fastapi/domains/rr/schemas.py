@@ -113,6 +113,35 @@ class ScanResult(BaseModel):
     total_candidates: int                   = 0
     total_in_digest:  int                   = 0
     error:            str | None            = None
+    # 2026-06-17: topic is required for the status-pill + Digest-title-row
+    # topic display on resume. Without it, the client's resumeScan() falls
+    # back to the form's localStorage value — which is "whatever was last
+    # typed", not the resumed scan's actual topic.
+    topic:            str | None            = Field(
+        default = None,
+        description = (
+            "The scan's topic string, surfaced by the UI on resume so the "
+            "pill / digest title accurately reflect WHICH scan is loaded "
+            "rather than what's currently in the form field."
+        ),
+    )
+    synthesis_themes:  list[str]   = Field(
+        default_factory = list,
+        description = (
+            "Cross-paper themes named by the synthesis subagent (3-7 names "
+            "spanning ≥2 papers each). Rendered as filter chips above the "
+            "findings list on the Digest page. Empty for degraded scans "
+            "where synthesis didn't run or produced no themes."
+        ),
+    )
+    synthesis_summary: str | None  = Field(
+        default = None,
+        description = (
+            "Executive summary (2-3 sentences) named by the synthesis "
+            "subagent. Rendered above the findings list, collapsed by "
+            "default. None for degraded scans without synthesis."
+        ),
+    )
     findings:         list[dict[str, Any]]  = Field(
         default_factory = list,
         description = (
