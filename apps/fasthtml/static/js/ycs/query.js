@@ -12,7 +12,7 @@
  * touching this entry file.
  */
 import { makeEditor }                       from "@ycs/query/editor.js";
-import { render, renderNeo4jGraphIfMissing } from "@ycs/query/renderers.js";
+import { render, renderNeo4jGraphIfMissing, refreshView } from "@ycs/query/renderers.js";
 import * as ai                              from "@ycs/query/ai.js";
 import { makePanel as makeHistoryPanel,
          recordRun as historyRecord }        from "@ycs/query/history.js";
@@ -223,6 +223,10 @@ function setViewMode(next) {
     if (next === "graph" && state.backend === "neo4j" && state.cachedGraph) {
         renderNeo4jGraphIfMissing(els.panels, state.cachedGraph);
     }
+    // Tabulator + Cytoscape both render at 0px height when their
+    // container is `display:none` at mount time — force a redraw now
+    // that the panel just became visible.
+    refreshView(els.panels, next);
 }
 
 

@@ -320,45 +320,37 @@ def ScanForm(extra_actions=None):
         ),
         Div(
             Div(
-                # Header row: label + info button on the left, live count on
-                # the right. main.js syncs #rr-top-n-value from the slider on
-                # every input event.
-                Div(
-                    Label("Deep reads", For="top_n", cls = "rr-label"),
-                    Button(
-                        "i",
-                        type = "button",
-                        cls  = "rr-info",
-                        **{
-                            "aria-label":   "More info about Deep reads",
-                            "data-tooltip": (
-                                "Papers to extract in detail. More = deeper "
-                                "digest, longer scan."
-                            ),
-                        },
-                    ),
-                    cls = "rr-label-row",
+                Label("Deep reads", For="top_n", cls = "rr-label"),
+                Button(
+                    "i",
+                    type = "button",
+                    cls  = "rr-info",
+                    **{
+                        "aria-label":   "More info about Deep reads",
+                        "data-tooltip": (
+                            "Papers to extract in detail. More = deeper "
+                            "digest, longer scan. Range 4–30, default 8."
+                        ),
+                    },
                 ),
-                Span(
-                    "4",
-                    id  = "rr-top-n-value",
-                    cls = "rr-top-n-value",
-                ),
-                cls = "rr-top-n-header",
+                cls = "rr-label-row",
             ),
-            # Default lowered to 4 (slider min) on 2026-06-15 for fast
-            # iteration cycles. Schema default in domains/rr/schemas.py
-            # stays at 12 (canonical sweet spot for API callers); bump
-            # the form back when development stabilizes.
+            # 2026-06-17: range slider replaced with number input — the
+            # operator types specific N values (8, 12, …) every time, so
+            # drag-to-precision was friction. Default value 8 reflects the
+            # validated steady-state from MVP stability runs; schema in
+            # domains/rr/schemas.py keeps API default at 12 for callers
+            # who don't specify. localStorage persistence (main.js) still
+            # applies — the typed value survives refreshes.
             Input(
                 id    = "top_n",
                 name  = "top_n",
-                type  = "range",
-                value = "4",
+                type  = "number",
+                value = "8",
                 min   = "4",
                 max   = "30",
                 step  = "1",
-                cls   = "rr-slider",
+                cls   = "rr-top-n-input",
             ),
             cls = "rr-field rr-field-top-n",
         ),

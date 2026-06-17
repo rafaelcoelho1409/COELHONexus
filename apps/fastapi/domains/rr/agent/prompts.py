@@ -73,11 +73,22 @@ Phase 2 — TRIAGE (MANDATORY)
 
     YOU MUST CALL TRIAGE EVEN IF SOME DISCOVERIES RETURNED 0 PAPERS.
 
-Phase 3 — DEEP_READ (parallel subagent fan-out)
-    For EACH arxiv_id in triage's `top_arxiv_ids`, dispatch ONE task call.
-    Emit ALL tasks in ONE message:
-        task(subagent_type="deep_read",
-             description="scan_id=<id> arxiv_id='<arxiv_id_i>'")
+Phase 3 — DEEP_READ (parallel subagent fan-out, CACHE-AWARE)
+    Triage's return string ALSO includes `cached_arxiv_ids=[...]` when
+    the cross-scan extraction cache prefilled extractions for repeat
+    papers. Those extractions ALREADY EXIST on disk at
+    `fs/extractions/<arxiv_id>.json` — they are valid, current, and
+    used by Phase 5 synthesis directly. DO NOT dispatch deep_read for
+    any arxiv_id in `cached_arxiv_ids`.
+
+    Compute `to_dispatch = top_arxiv_ids - cached_arxiv_ids`. Then:
+      - If `to_dispatch` is empty: SKIP Phase 3 entirely. Proceed to
+        Phase 4. Phase 3 is COMPLETE the moment every top_arxiv_id
+        has an extraction on disk, regardless of who wrote it.
+      - Else: emit ONE message containing one task() call per arxiv_id
+        in `to_dispatch`:
+            task(subagent_type="deep_read",
+                 description="scan_id=<id> arxiv_id='<arxiv_id_i>'")
 
 Phase 4 — GRAPH_BUILD
     graph_build_papers(scan_id=<id>)
@@ -90,9 +101,18 @@ After synthesis returns, your final message MUST conform to the
 response_format) — include scan_id, phases status list, summary, themes,
 and n_findings.
 
+  CRITICAL — phases[].completed semantics for cache-aware runs:
+    When emitting ScanComplete, mark `deep_read.completed=True` whenever
+    EVERY arxiv_id in triage's `top_arxiv_ids` has a corresponding file
+    at `fs/extractions/<arxiv_id>.json` — irrespective of whether your
+    own subagent dispatches produced them. Cache-prefilled extractions
+    are first-class proof of deep_read completion. Failing to mark this
+    will trigger response_format re-prompting and waste an LLM cascade.
+
 HARD RULES:
 - Phase 2 is unconditional. Always call triage.
-- Phases 1 and 3 must use parallel tool_calls in a single AIMessage.
+- Phases 1 and 3 must use parallel tool_calls in a single AIMessage,
+  UNLESS Phase 3 is skipped because every top_arxiv_id is cached.
 - Don't call MCP tools directly — use the discover_* tools.
 """
 
@@ -141,11 +161,22 @@ Phase 2 — TRIAGE (MANDATORY)
 
     YOU MUST CALL TRIAGE EVEN IF SOME DISCOVERIES RETURNED 0 PAPERS.
 
-Phase 3 — DEEP_READ (parallel subagent fan-out)
-    For EACH arxiv_id in triage's `top_arxiv_ids`, dispatch ONE task call.
-    Emit ALL tasks in ONE message:
-        task(subagent_type="deep_read",
-             description="scan_id=<id> arxiv_id='<arxiv_id_i>'")
+Phase 3 — DEEP_READ (parallel subagent fan-out, CACHE-AWARE)
+    Triage's return string ALSO includes `cached_arxiv_ids=[...]` when
+    the cross-scan extraction cache prefilled extractions for repeat
+    papers. Those extractions ALREADY EXIST on disk at
+    `fs/extractions/<arxiv_id>.json` — they are valid, current, and
+    used by Phase 5 synthesis directly. DO NOT dispatch deep_read for
+    any arxiv_id in `cached_arxiv_ids`.
+
+    Compute `to_dispatch = top_arxiv_ids - cached_arxiv_ids`. Then:
+      - If `to_dispatch` is empty: SKIP Phase 3 entirely. Proceed to
+        Phase 4. Phase 3 is COMPLETE the moment every top_arxiv_id
+        has an extraction on disk, regardless of who wrote it.
+      - Else: emit ONE message containing one task() call per arxiv_id
+        in `to_dispatch`:
+            task(subagent_type="deep_read",
+                 description="scan_id=<id> arxiv_id='<arxiv_id_i>'")
 
 Phase 4 — GRAPH_BUILD
     graph_build_papers(scan_id=<id>)
@@ -162,9 +193,18 @@ After synthesis returns, your final message MUST conform to the
 `ScanComplete` Pydantic schema (DeepAgents enforces this via
 response_format).
 
+  CRITICAL — phases[].completed semantics for cache-aware runs:
+    When emitting ScanComplete, mark `deep_read.completed=True` whenever
+    EVERY arxiv_id in triage's `top_arxiv_ids` has a corresponding file
+    at `fs/extractions/<arxiv_id>.json` — irrespective of whether your
+    own subagent dispatches produced them. Cache-prefilled extractions
+    are first-class proof of deep_read completion. Failing to mark this
+    will trigger response_format re-prompting and waste an LLM cascade.
+
 HARD RULES:
 - Phase 2 is unconditional. Always call triage.
-- Phases 1 and 3 must use parallel task_calls in a single AIMessage.
+- Phases 1 and 3 must use parallel task_calls in a single AIMessage,
+  UNLESS Phase 3 is skipped because every top_arxiv_id is cached.
 - Don't call MCP tools directly — that's the discovery subagents' job.
 """
 

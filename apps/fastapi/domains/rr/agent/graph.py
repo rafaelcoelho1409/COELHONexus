@@ -38,7 +38,10 @@ from deepagents import create_deep_agent
 from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.memory import InMemorySaver
 
-from domains.llm.rotator.chain.service import build_rr_strong_chain
+from domains.llm.rotator.chain.service import (
+    build_rr_strong_chain,
+    build_rr_strong_chain_bandit,
+)
 
 from .keys import (
     DISCOVERY_MODE_AGENTS,
@@ -77,8 +80,13 @@ logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------- #
-# Model factories — both orchestrator and subagents use rr-strong (4-arm
-# pool of 120B+ models proven to handle parallel tool_calls reliably).
+# Model factories — orchestrator + subagents use the rr-strong pool (Wave 1.3
+# expanded 4 → 10 arms 2026-06-16: 7 NIM frontier + 2 Mistral direct + 1
+# SambaNova free-tier 405B). With Wave 1.2 the rotator chain is bandit-
+# routed (FGTS-VA), not simple-shuffle — matching the Planner/Synth
+# routing brain. Net effect under parallel deep_read fan-out: 4 concurrent
+# task() calls pick 4 different bandit-top arms instead of all racing for
+# one simple-shuffle pick.
 # --------------------------------------------------------------------------- #
 # Module-level callback instance — one handler reused across all model
 # bindings. Path-A LLM-counter (2026-06-16): every chat completion bumps
@@ -90,20 +98,51 @@ logger = logging.getLogger(__name__)
 _LLM_COUNTER_CB = RRLlmCounterCallback()
 
 
-def _orchestrator_model() -> BaseChatModel:
-    """Strong-tier model for the orchestrator (rr-strong: 4×120B+)."""
+# Env flag — Wave 1.2 default ON. `KD_RR_BANDIT_CHAT=false` reverts to the
+# baseline LiteLLM Router simple-shuffle chain for instant rollback if the
+# bandit-routed chain misbehaves in production.
+_BANDIT_CHAT_ENV = "KD_RR_BANDIT_CHAT"
+
+
+def _use_bandit_chat() -> bool:
+    """Read KD_RR_BANDIT_CHAT — default True. Accepts 1/true/yes (case-insensitive)."""
+    val = os.environ.get(_BANDIT_CHAT_ENV, "").strip().lower()
+    if val in ("0", "false", "no", "off"):
+        return False
+    # Anything else (including unset) → bandit ON.
+    return True
+
+
+def _build_strong_chain() -> BaseChatModel:
+    """Pick the rr-strong chain variant based on the rollback flag."""
+    if _use_bandit_chat():
+        return build_rr_strong_chain_bandit()
     return build_rr_strong_chain()
+
+
+def _orchestrator_model() -> BaseChatModel:
+    """Strong-tier model for the orchestrator. Bandit-routed by default
+    (Wave 1.2 — FGTS-VA per-call selection, top-K cascade, 10-arm pool)."""
+    return _build_strong_chain()
 
 
 def _subagent_model() -> BaseChatModel:
-    """Strong-tier model for the LLM subagents. Same pool as the
-    orchestrator — phase attribution happens in the counter callback
-    by reading the `_phase_var` contextvar that each fs-tool write
-    updates (`stash_discovery_result` → discovery, `write_extraction`
-    → deep_read, etc.). The first LLM call by a subagent before its
-    first fs-write attributes to the PRIOR phase; subsequent calls
-    are correct. Adequate for drawer KPI rollups."""
-    return build_rr_strong_chain()
+    """Strong-tier model for the LLM subagents. Same pool + bandit brain
+    as the orchestrator — phase attribution happens in the counter callback
+    by reading the `_phase_var` contextvar that each fs-tool write updates
+    (`stash_discovery_result` → discovery, `write_extraction` → deep_read,
+    etc.). The first LLM call by a subagent before its first fs-write
+    attributes to the PRIOR phase; subsequent calls are correct.
+
+    Parallel-fan-out behavior (Wave 1 — deep_read): the orchestrator emits
+    multiple `task(subagent_type="deep_read", arxiv_id=…)` tool_calls in
+    ONE message. LangGraph 1.x's async ToolNode dispatches them via
+    `asyncio.gather`, so each subagent's `ainvoke` runs concurrently. Each
+    subagent in turn calls this chain → each LLM turn picks a bandit-top
+    deployment. With the 10-arm pool the chance of two subagents racing
+    on the same deployment is low; arm cooldown + bandit reward feedback
+    further spread the load."""
+    return _build_strong_chain()
 
 
 def _ensure_checkpointer() -> Any:
@@ -229,34 +268,40 @@ async def build_radar_agent() -> Any:
 
 
 # --------------------------------------------------------------------------- #
-# AsyncSubAgent stub — architecture-doc §2.3.6, deferred to v2.
+# Subagent parallelism model — Wave 1.4 (2026-06-16) findings
 # --------------------------------------------------------------------------- #
-# DeepAgents supports remote/distributed subagents via the AsyncSubAgent
-# class. The subagent runs as a SEPARATE langserve / agent-protocol endpoint
-# instead of in-process; the parent orchestrator dispatches via HTTP. This
-# unlocks horizontal scaling for the deep_read fan-out (8-20 papers per
-# scan = 8-20 LLM calls in parallel, today bound by the rotator's
-# concurrency cap).
+# DeepAgents 0.6.8 ships TWO subagent flavors:
 #
-# Wiring it requires:
-#   1. Build a separate langgraph app for the deep_read subagent
-#      (could be its own Celery task or a langserve endpoint).
-#   2. Register a graph_id for it in the langgraph deployment.
-#   3. Use AsyncSubAgent in subagents=[...] instead of the dict shape.
+#   1. **SubAgent dict** (what we use)   — in-process compiled langgraph,
+#      dispatched via SubAgentMiddleware.atask() which awaits
+#      `subagent.ainvoke(state, config)`. When the orchestrator emits N
+#      `task(...)` tool_calls in ONE assistant message, LangGraph's async
+#      ToolNode runs them concurrently via `asyncio.gather`. Result: 4
+#      `task()` calls → 4 concurrent subagent loops, all sharing this
+#      Celery worker's event loop.
 #
-# Reference (commented-out) wiring — uncomment + adapt when deploying
-# subagents to a separate runtime:
+#   2. **AsyncSubAgent**                  — remote LangGraph Platform /
+#      Agent Protocol server. The subagent runs on a SEPARATE service;
+#      DeepAgents talks to it via langgraph_sdk.get_client(). Requires a
+#      deployed LangGraph server endpoint (or self-hosted ASGI). Not
+#      applicable to our single-Celery-worker deployment.
 #
-#   from deepagents import AsyncSubAgent
+# We stay on flavor #1. The 10-20 min for 4 deep_reads observed pre-Wave-1
+# was NOT a DeepAgents dispatch problem — it was a ROTATOR problem:
+#   - 4-arm rr-strong pool + LiteLLM Router simple-shuffle
+#   - 4 concurrent ainvoke calls each randomly picked one of 4 arms
+#   - High collision probability → 429 → cascade serial cooldown waits
 #
-#   async_deep_read = AsyncSubAgent(
-#       name="deep_read",
-#       description="Per-paper field extraction over an isolated runtime.",
-#       graph_id="rr-deep-read",  # registered langserve endpoint id
-#       # url="https://rr-deep-read.langsmith.dev"  # optional remote URL
-#   )
+# Wave 1.2 (bandit-routed chain) + 1.3 (10-arm pool) eliminate this:
+#   - FGTS-VA Thompson sampling picks DIFFERENT top-K arms across the
+#     4 concurrent subagent calls (RNG-driven exploration)
+#   - 2.5× wider candidate pool absorbs cooldowns without cascade
 #
-#   subagents = [..., async_deep_read]
+# Wave 1.5 (asyncio.Semaphore at task.py entry) caps parallel LLM dispatch
+# so the orchestrator + 4 subagents + cascade retries don't burst past
+# what NIM's 40 RPM / Groq's 30 RPM windows can absorb.
 #
-# Until we have multi-pod horizontal scaling needs, the in-process
-# subagent dict shape (above) is the right call.
+# Hook for v2: when horizontal scaling beyond one worker is needed,
+# the AsyncSubAgent flavor is one option — but Celery-distributed
+# subagents (workers picking up `deep_read_one_paper` tasks from a queue)
+# is the cheaper path. Both deferred.

@@ -236,6 +236,46 @@ async def triage_candidates(
         A short summary including the count of candidates examined, the
         count after dedup + off-topic filter, and the path written.
     """
+    # ────────────────────────────────────────────────────────────────────────
+    # Idempotency guard (Fix #3 — 2026-06-16).
+    #
+    # If `fs/triage/top_n.json` already exists for this scan, REFUSE to
+    # overwrite. Return the existing top_arxiv_ids so the orchestrator's
+    # Phase 3 dispatch logic still works — but DON'T re-rank, DON'T change
+    # `top_n`, DON'T re-prefill from cache.
+    #
+    # Why: scan `20f4e4af` showed the orchestrator re-calling triage AFTER
+    # synthesis completed (with `top_n=12` and `topic='general'` — both
+    # values the LLM invented to try to "broaden the search" after a
+    # ScanComplete validation failure). The result was top_n.json was
+    # overwritten, 4 of 12 new deep_reads ran, synthesis was NOT re-run,
+    # and the final digest had 2/12 papers themed.
+    #
+    # The guard breaks the loop at the source: the second call returns a
+    # message saying "already done, use these arxiv_ids" → the orchestrator
+    # can't change the scan's identity mid-flight. Single-source-of-truth
+    # for top_n.json per scan.
+    # ────────────────────────────────────────────────────────────────────────
+    existing_top_n = fs_read(scan_id, FS_FILE_TRIAGE_TOPN)
+    if isinstance(existing_top_n, list) and existing_top_n:
+        existing_ids = [
+            p.get("arxiv_id") for p in existing_top_n
+            if isinstance(p, dict) and p.get("arxiv_id")
+        ]
+        msg = (
+            f"[triage] IDEMPOTENT — triage already ran for this scan_id. "
+            f"top_arxiv_ids={existing_ids} top_n={len(existing_ids)} "
+            f"(call args ignored: topic={topic!r}, top_n={top_n}, "
+            f"profile_verticals={profile_verticals}). Proceed to Phase 3 "
+            f"with these arxiv_ids — do NOT call triage_candidates again."
+        )
+        logger.warning(
+            f"[triage] idempotent return scan_id={scan_id} "
+            f"existing_top_n={len(existing_ids)} "
+            f"refused_args=(topic={topic!r}, top_n={top_n})"
+        )
+        return msg
+
     # Read each source's stashed discovery output. Missing → empty list
     # (one failed source shouldn't block triage).
     candidates: list[NormalizedPaper] = []
@@ -272,6 +312,23 @@ async def triage_candidates(
 
     # Cross-source dedup — the architectural payoff (architecture doc §4).
     deduped = dedup_by_arxiv_id(candidates)
+    # Fix #4 (2026-06-16): drop papers without arxiv_id BEFORE rerank +
+    # quota composition. Deep_read can only extract papers with an
+    # arxiv_id (its tool reads from triage's top_n.json keyed by arxiv_id);
+    # including arxiv-less papers (HN posts that didn't link to arxiv,
+    # S2 entries without external IDs) in top_n inflates the denominator
+    # → causes `partial_extractions_X_of_Y` degradation. Observed in scan
+    # d196a862 (N=12 → only 9 fetchable arxiv_ids, 3 phantom slots).
+    n_before_arxiv_filter = len(deduped)
+    deduped = [p for p in deduped if p.arxiv_id]
+    n_dropped_no_arxiv = n_before_arxiv_filter - len(deduped)
+    if n_dropped_no_arxiv:
+        logger.info(
+            f"[triage] dropped {n_dropped_no_arxiv} arxiv-less papers "
+            f"(HN posts without arxiv link, S2 without external_id); "
+            f"{len(deduped)} arxiv-linked candidates remain"
+        )
+
     n_before_rerank = len(deduped)
 
     # Off-topic rerank gate — drop the half whose topical relevance to
@@ -320,17 +377,83 @@ async def triage_candidates(
         _set_llm_phase("triage")
     except Exception: pass
 
+    # Wave 1.7 (2026-06-16): cross-scan extraction cache prefill.
+    #
+    # ────────────────────────────────────────────────────────────────────────
+    # DISABLED 2026-06-16 EOD — observed behavior across scans 96173afd,
+    # 157644c6, c6fe7b76 (cold / 1-repeat / 2-repeat) showed the cache
+    # prefill consistently DEGRADED end-to-end wall time + correctness:
+    #
+    #   - Cold run (no cache):        5:05  · 8 findings · 8 extractions
+    #   - Repeat 1  (8/8 cached):     7:30  · 8 findings · 16 extractions
+    #                                          (orchestrator re-extracted
+    #                                          all 8 anyway — same arxiv_ids,
+    #                                          fresh confidence values)
+    #   - Repeat 2  (3-6/8 cached):   9:47  · 12 findings (!) · 17 extractions
+    #                                          (orchestrator re-ran TRIAGE
+    #                                          with top_n=12, then re-ran
+    #                                          synthesis — completionist
+    #                                          loop in extremis)
+    #
+    # Root cause is the orchestrator's strict-phase emission: the LLM
+    # can't prove "I dispatched deep_read for these papers" when the cache
+    # prefilled them, so ScanComplete validation fails ("deep_read not
+    # completed") → framework re-prompts → LLM's recovery strategy is to
+    # re-dispatch (or worse, re-run triage with a higher top_n to "get
+    # more findings"). Net result: cache makes every repeat scan slower
+    # and more chaotic than a cold scan.
+    #
+    # Wave 1+2 (bandit + 9-arm pool + Semaphore + per-provider caps)
+    # already deliver the speedup target (5min vs 10-20min baseline);
+    # the cache layer was a speculative add-on that didn't pay off in
+    # practice for a RECENT-papers radar where natural cross-scan
+    # overlap is low and ScanComplete validation is strict.
+    #
+    # PRESERVED for future re-enable:
+    #   - The cache module itself (`runtime/extraction_cache.py`)
+    #   - `write_extraction` still calls `_cache_extraction(arxiv_id,
+    #     payload)` so the cache builds up as scans run — when we have
+    #     a non-disruptive way to surface cached extractions to the
+    #     orchestrator (e.g. via a separate context bundle to synthesis,
+    #     NOT a fs prefill), we can re-enable.
+    #   - The cache-aware orchestrator prompt branches (Phase 3
+    #     "to_dispatch = top_arxiv_ids - cached_arxiv_ids" + the
+    #     CRITICAL marker for ScanComplete's deep_read.completed=True
+    #     semantics). With cached_arxiv_ids=[] always, the conditional
+    #     branches are dead code — but they're defensive guidance the
+    #     orchestrator can use for any future "phantom extractions"
+    #     scenario, so we leave them in.
+    #
+    # TO RE-ENABLE: uncomment the prefill call below. Recommend pairing
+    # with the triage-idempotency guard (refuse a 2nd triage call per
+    # scan) to prevent the orchestrator's loop fallback.
+    # ────────────────────────────────────────────────────────────────────────
+    cached_arxiv_ids: list[str] = []
+    # try:
+    #     from ...runtime.extraction_cache import prefill_extractions_from_cache
+    #     cached_arxiv_ids = await prefill_extractions_from_cache(scan_id, payload)
+    # except Exception as e:
+    #     logger.warning(f"[triage] extraction-cache prefill failed: {e}")
+
     # Surface the top arxiv_ids in the return string so the orchestrator's
     # LLM knows which IDs to dispatch deep_read for in Phase 3 without
     # having to read fs separately. Subagents that need full paper data
     # still load it via read_top_n_papers.
     top_arxiv_ids = [p.arxiv_id for p, _ in top if p.arxiv_id]
+    # `cached_arxiv_ids` is the subset of top_arxiv_ids that already have
+    # extractions on disk (cache hits). Always empty while prefill is
+    # disabled — the orchestrator just dispatches deep_read for every
+    # top_arxiv_id, which is the predictable 5min-cold-scan baseline.
+    cache_note = (
+        f" cached_arxiv_ids={cached_arxiv_ids} cached_extractions={len(cached_arxiv_ids)}"
+        if cached_arxiv_ids else ""
+    )
     msg = (
         f"[triage] in={sum(per_source_counts.values())} "
         f"deduped={n_before_rerank} after_rerank={len(relevant)} "
         f"top_n={len(top)} per_source={per_source_counts} "
         f"top_score={top[0][1]:.4f} bottom_score={top[-1][1]:.4f} "
-        f"top_arxiv_ids={top_arxiv_ids}"
+        f"top_arxiv_ids={top_arxiv_ids}{cache_note}"
     )
     logger.info(msg)
     return msg

@@ -412,6 +412,37 @@ function _q(sel) {
     return currentTurnEl ? currentTurnEl.querySelector(sel) : null;
 }
 
+/* 2026-06-16 — humanize a millisecond duration for the per-turn
+ * "Answered in …" badge. Granularity buckets:
+ *   < 1 s    → "<1s"      (we never claim sub-second; less noisy)
+ *   < 60 s   → "12.4s"    (one decimal — useful for FAST mode)
+ *   < 60 m   → "2m 14s"   (DEEP-typical)
+ *   else     → "1h 03m"   (very rare; keep stable)
+ * Returns "" on invalid input so the badge stays hidden via CSS. */
+function _formatDuration(ms) {
+    if (ms == null || !Number.isFinite(ms) || ms < 0) return "";
+    if (ms < 1000) return "<1s";
+    const s = ms / 1000;
+    if (s < 60) return `${s.toFixed(1)}s`;
+    const m = Math.floor(s / 60);
+    const rs = Math.round(s - m * 60);
+    if (m < 60) return `${m}m ${String(rs).padStart(2, "0")}s`;
+    const h = Math.floor(m / 60);
+    const rm = m - h * 60;
+    return `${h}h ${String(rm).padStart(2, "0")}m`;
+}
+
+/* Stamp `"in X.Xs"` (or empty) into a turn's duration badge. Idempotent;
+ * safe when the turn has no badge (history shape from before this commit,
+ * or a defensive call after `freezeCurrentTurn` released the ref). */
+function _setTurnDuration(turnEl, ms) {
+    if (!turnEl) return;
+    const el = turnEl.querySelector(".ycs-ask-turn-duration");
+    if (!el) return;
+    const text = _formatDuration(ms);
+    el.textContent = text ? `in ${text}` : "";
+}
+
 /* Build the streaming-turn DOM skeleton. The same shape `renderHistoryTurn`
  * uses for past turns minus the stages strip + DEEP panel (those are
  * streaming-only — they get filled in by SSE events as the turn unfolds). */
@@ -437,6 +468,7 @@ function _streamingTurnSkeleton(question) {
             <div class="ycs-ask-turn-assistant-head">
                 <span class="ycs-ask-turn-role">Assistant</span>
                 <span class="ycs-ask-turn-mode-badge" data-mode=""></span>
+                <span class="ycs-ask-turn-duration" title="Total time from Send to final answer"></span>
             </div>
             <div class="ycs-ask-turn-process">
                 <button type="button"
@@ -846,6 +878,30 @@ function renderHistoryTurn({
     const modeBadge = mode
         ? `<span class="ycs-ask-turn-mode-badge" data-mode="${htmlEscape(mode)}">${htmlEscape(mode)}</span>`
         : "";
+    /* 2026-06-16 — "in X.Xs" duration chip. Stamped on the in-flight
+     * turn by the SSE `end` handler; rehydrated here for past turns
+     * from `thinking_state.duration_ms` so a page reload doesn't lose
+     * the badge. Hidden via CSS when its text is empty. */
+    const durationMs = (thinking_state && typeof thinking_state === "object")
+        ? thinking_state.duration_ms : null;
+    const durationText = (durationMs != null && Number.isFinite(durationMs))
+        ? _formatDuration(durationMs) : "";
+    const durationBadge =
+        `<span class="ycs-ask-turn-duration" title="Total time from Send to final answer">${
+            durationText ? `in ${htmlEscape(durationText)}` : ""
+        }</span>`;
+    /* 2026-06-16 — pull persisted citations off `thinking_state` so a
+     * page reload can: (1) re-render the answer body with `[N]` pills
+     * instead of raw `[Video: title]` markers, (2) feed the Sources
+     * right-rail with the latest turn's cards (see the post-hydrate
+     * walk in `hydrateThreadHistory`). Backend stamps this via
+     * `_stamp_citations` at every terminal persist path. */
+    const persistedCitations = (
+        thinking_state && Array.isArray(thinking_state.citations)
+    ) ? thinking_state.citations : [];
+    const answerBody = persistedCitations.length
+        ? renderMarkdownWithCitations(answer, persistedCitations)
+        : renderMarkdown(answer);
     turn.innerHTML = `
         <div class="ycs-ask-turn-user">
             <span class="ycs-ask-turn-role">You</span>
@@ -855,13 +911,25 @@ function renderHistoryTurn({
             <div class="ycs-ask-turn-assistant-head">
                 <span class="ycs-ask-turn-role">Assistant</span>
                 ${modeBadge}
+                ${durationBadge}
             </div>
             ${_historyThinkingHTML(thinking_state, !!answer, inProgress)}
-            <div class="ycs-ask-turn-body ycs-ask-answer">${renderMarkdown(answer)}</div>
+            <div class="ycs-ask-turn-body ycs-ask-answer">${answerBody}</div>
             ${_actionChipsHTML()}
         </div>
     `;
     conversationEl.appendChild(turn);
+    /* Stash citations + generation in the off-DOM WeakMap so inline
+     * `[N]` pill hover / highlight against the rail still works on
+     * past turns (the live-stream path does this via `applyUpdate`;
+     * for history we have to seed it manually). */
+    if (persistedCitations.length || answer) {
+        const data = getTurnData(turn);
+        if (data) {
+            data.generation = answer || "";
+            data.citations  = persistedCitations;
+        }
+    }
 }
 
 /* Wipe the whole conversation column + show the empty state. Used by
@@ -1090,6 +1158,21 @@ async function hydrateThreadHistory() {
                 thinking_state: item.thinking_state ?? null,
                 id:             item.id             ?? null,
             });
+        }
+        // 2026-06-16 — rehydrate the Sources right-rail from the most
+        // recent past turn that carries citations. Walk latest-first
+        // so a successful turn followed by a no-docs turn still shows
+        // the successful turn's sources (the no-docs turn's empty
+        // citations don't clobber what's visible). Backend persists
+        // citations into `thinking_state.citations` at every terminal
+        // path via `_stamp_citations`; before that fix this field
+        // simply doesn't exist and the rail stays empty.
+        for (let i = items.length - 1; i >= 0; i--) {
+            const ts = items[i].thinking_state;
+            if (ts && Array.isArray(ts.citations) && ts.citations.length) {
+                updateSourcesRail(ts.citations);
+                break;
+            }
         }
         // Mid-stream restoration: if the last persisted turn was still
         // pipeline-active when this page loaded (a refresh during
@@ -1754,6 +1837,14 @@ async function consumeSSE(payload, signal) {
                         card.classList.add("expanded");
                     }
                 }
+                // 2026-06-16 — "Answered in X.Xs" badge. Backend stamps
+                // wall-clock duration into `evt.duration_ms` on the SSE
+                // `end` frame. Set BEFORE `freezeCurrentTurn()` so the
+                // currentTurnEl ref is still live. History reload picks
+                // it up from `thinking_state.duration_ms` in
+                // `renderHistoryTurn` so refreshing the page doesn't
+                // lose the chip.
+                _setTurnDuration(currentTurnEl, evt.duration_ms);
                 freezeCurrentTurn();
                 // The candidate threadId now has a real Postgres row —
                 // promote the trigger from "New" to the live id.

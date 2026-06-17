@@ -190,6 +190,24 @@ async def _run_radar_scan_async(
                     "top_n": top_n,
                 })
 
+        # 2026-06-16: missing-extractions inline backfill. After the agent
+        # returns, check (top_n - extractions on disk). For each missing
+        # arxiv_id (up to BACKFILL_MAX, default 3), fire one bandit-routed
+        # LLM call inline to produce the extraction directly — bypassing
+        # the orchestrator and the deep_read subagent. This recovers most
+        # of what was previously a "partial_extractions_X_of_Y" degradation
+        # (scan fd9ad127 dropped 1/8 because the phase enforcer exhausted
+        # before the orchestrator finished the last deep_read). Skipping
+        # when ≥4 are missing — that's a deeper infra issue (rotator down,
+        # all arms cooled, etc.) and inline retry won't help.
+        try:
+            await _backfill_missing_extractions(scan_id)
+        except Exception as e:
+            logger.warning(
+                f"[rr-task] backfill_missing_extractions threw "
+                f"{type(e).__name__}: {e}"
+            )
+
         digest = _build_digest_from_fs(scan_id)
         if not digest:
             raise RuntimeError(
@@ -454,6 +472,23 @@ def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
     items_with_themes = sum(
         1 for it in items if it.get("themes")
     )
+    # Fix #5 (2026-06-16): sparse-themes degradation. Scan 5 had
+    # items_with_per_item_themes=2/12 (17%) but `degraded=False` — the
+    # checks above only fire when sources are completely missing, not
+    # when synthesis ran but the mapping is mostly empty. Catch the
+    # "right count, wrong quality" failure mode: if <50% of items got
+    # a non-empty themes list AND we have ≥4 items (avoid noise on
+    # tiny scans), flag it. Skip when top_themes is empty (already
+    # covered by the synthesis_missing / no_llm_per_item_themes flags
+    # above — would double-flag).
+    if (
+        top_themes
+        and len(items) >= 4
+        and items_with_themes < 0.5 * len(items)
+    ):
+        degradation_reasons.append(
+            f"sparse_per_item_themes_{items_with_themes}_of_{len(items)}"
+        )
     themes_source_mix = {
         "synthesis_per_paper_themes":  len(synth_ppt),
         "llm_digest_items":            len(llm_items_by_id),
@@ -476,3 +511,184 @@ def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
         "degraded":            bool(degradation_reasons),
         "degradation_reasons": degradation_reasons,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Missing-extractions inline backfill — Fix #2 (2026-06-16)
+# --------------------------------------------------------------------------- #
+# When the orchestrator drops a deep_read (phase enforcer exhausted, subagent
+# crashed, etc.), we don't want the scan to degrade silently. After the agent
+# returns, this helper checks `top_n.json - fs/extractions/*` and fires one
+# bandit-routed LLM call per missing arxiv_id (capped) to produce the
+# extraction directly — bypassing both the orchestrator and the deep_read
+# subagent. The extraction lands in the same fs path the deep_read subagent
+# would have written, so `_build_digest_from_fs` sees a complete set and
+# `degraded=False`.
+#
+# Quality notes:
+#   - Same model the deep_read subagent uses (`build_rr_strong_chain_bandit`)
+#     → same bandit pool, same FGTS-VA selection, same cascade behavior
+#   - Same system prompt (paper_extraction skill + DEEP_READ_SYSTEM_PROMPT)
+#     → no quality drift vs subagent path
+#   - Backfill calls go through the LLM-counter as `phase=deep_read` so
+#     they're visible in the drawer just like subagent-driven calls
+#   - Cap of 3 backfills per scan — beyond that, infra is likely wedged
+#     and inline retry just burns time + tokens without recovery
+BACKFILL_MAX = 3
+
+
+async def _backfill_missing_extractions(scan_id: str) -> None:
+    """Inline-recover any top_n arxiv_id whose extraction never landed.
+    No-op when extractions are complete OR more than BACKFILL_MAX are
+    missing. Best-effort — failures log and proceed (downstream digest
+    assembly will mark them as `partial_extractions_X_of_Y` degradation
+    just like before)."""
+    top_n_raw = fs_read(scan_id, FS_FILE_TRIAGE_TOPN)
+    if not isinstance(top_n_raw, list) or not top_n_raw:
+        return
+    expected_ids = {
+        p.get("arxiv_id") for p in top_n_raw
+        if isinstance(p, dict) and p.get("arxiv_id")
+    }
+    expected_ids.discard(None)
+    if not expected_ids:
+        return
+    # What's already on disk.
+    extracted_paths = fs_list(scan_id, prefix="extractions/")
+    extracted_ids: set[str] = set()
+    for p in extracted_paths:
+        rec = fs_read(scan_id, p)
+        if isinstance(rec, dict) and rec.get("arxiv_id"):
+            extracted_ids.add(rec["arxiv_id"])
+    missing_ids = expected_ids - extracted_ids
+    if not missing_ids:
+        return
+    if len(missing_ids) > BACKFILL_MAX:
+        logger.warning(
+            f"[rr-task] backfill skipped scan_id={scan_id} "
+            f"missing={len(missing_ids)} > BACKFILL_MAX={BACKFILL_MAX} "
+            f"(likely infra issue — letting digest degrade naturally)"
+        )
+        return
+    logger.info(
+        f"[rr-task] backfill firing scan_id={scan_id} "
+        f"missing={sorted(missing_ids)}"
+    )
+    # Index paper data by arxiv_id so the backfill prompt has title+abstract.
+    paper_by_id = {
+        p.get("arxiv_id"): p
+        for p in top_n_raw
+        if isinstance(p, dict) and p.get("arxiv_id")
+    }
+    # Lazy imports — only what this function uses; `_backfill_one` re-imports
+    # the deep_read-specific prompt + skill + tool itself.
+    from domains.llm.rotator.chain.service import build_rr_strong_chain_bandit
+    from .runtime.llm_counter import set_phase as _set_llm_phase
+
+    chain = build_rr_strong_chain_bandit()
+    # Phase attribution: backfill calls bucket under deep_read so the
+    # drawer KPIs show them as part of the deep_read activity.
+    try: _set_llm_phase("deep_read")
+    except Exception: pass
+
+    backfilled = 0
+    for arxiv_id in sorted(missing_ids):
+        paper = paper_by_id.get(arxiv_id)
+        if not isinstance(paper, dict):
+            continue
+        try:
+            await _backfill_one(scan_id, arxiv_id, paper, chain)
+            backfilled += 1
+        except Exception as e:
+            logger.warning(
+                f"[rr-task] backfill failed for {arxiv_id}: "
+                f"{type(e).__name__}: {e}"
+            )
+    logger.info(
+        f"[rr-task] backfill done scan_id={scan_id} "
+        f"recovered={backfilled}/{len(missing_ids)}"
+    )
+
+
+async def _backfill_one(
+    scan_id: str,
+    arxiv_id: str,
+    paper: dict[str, Any],
+    chain: Any,
+) -> None:
+    """Run one inline deep_read against the bandit chain + write the
+    extraction. Raises on any failure (caller catches)."""
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from .agent.skills import SKILL_PAPER_EXTRACTION
+    from .agent.tools.fs_tools import write_extraction
+
+    title    = (paper.get("title")    or "").strip()
+    abstract = (paper.get("abstract") or "").strip()
+    if not abstract:
+        raise RuntimeError(f"no abstract on disk for {arxiv_id}")
+
+    # Same composition the deep_read subagent uses for its system prompt:
+    # paper_extraction skill (the 5-field rubric + failure-mode warnings)
+    # + DEEP_READ_SYSTEM_PROMPT (the tool-flow glue). For inline we strip
+    # the "call read_top_n_papers / write_extraction" steps because we
+    # already have the paper + we'll persist via Python below — just keep
+    # the extraction guidance.
+    system_prompt = (
+        "=== SKILL: paper_extraction ===\n\n"
+        f"{SKILL_PAPER_EXTRACTION}\n\n"
+        "=== ROLE ===\n\n"
+        "You are extracting structured fields from ONE paper. Return your "
+        "answer as a SINGLE JSON object with exactly these keys: "
+        "`problem`, `method`, `math`, `how_to_build`, `money_angle`, "
+        "`confidence`. `confidence` is a float in [0, 1]. The other fields "
+        "are strings. Output ONLY the JSON object — no prose, no markdown "
+        "fences."
+    )
+    user_msg = (
+        f"arxiv_id: {arxiv_id}\n"
+        f"title: {title}\n\n"
+        f"abstract:\n{abstract}\n"
+    )
+    response = await chain.ainvoke([
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_msg),
+    ])
+    raw = (getattr(response, "content", None) or "").strip()
+    if not raw:
+        raise RuntimeError("empty content from rotator")
+    # Strip code fences defensively (some arms wrap JSON in ```json ... ```).
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        # Drop the opening fence (and optional language tag) + the closing fence
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        raw = "\n".join(lines).strip()
+    import json as _json
+    try:
+        data = _json.loads(raw)
+    except Exception as e:
+        raise RuntimeError(f"json parse failed: {e}; head={raw[:120]!r}")
+    if not isinstance(data, dict):
+        raise RuntimeError(f"non-dict json: type={type(data).__name__}")
+    # Defensive defaults — write_extraction tool will clamp / validate.
+    payload = {
+        "scan_id":      scan_id,
+        "arxiv_id":     arxiv_id,
+        "problem":      str(data.get("problem")      or "").strip(),
+        "method":       str(data.get("method")       or "").strip(),
+        "math":         str(data.get("math")         or "").strip(),
+        "how_to_build": str(data.get("how_to_build") or "").strip(),
+        "money_angle":  str(data.get("money_angle")  or "").strip(),
+        "confidence":   float(data.get("confidence") or 0.5),
+    }
+    # Reuse the @tool's persistence path so MinIO mirror + cache write +
+    # retry detection + SSE emit all fire exactly as for a subagent-driven
+    # deep_read. The retry counter will tick if a backfill overwrites an
+    # extraction that arrived after our read — harmless tiny race.
+    write_extraction.invoke(payload)
+    logger.info(
+        f"[rr-task] backfill wrote extraction arxiv_id={arxiv_id} "
+        f"confidence={payload['confidence']:.2f}"
+    )

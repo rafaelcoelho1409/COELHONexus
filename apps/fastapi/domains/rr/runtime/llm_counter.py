@@ -412,6 +412,53 @@ def _extract_usage(response: Any) -> tuple[str | None, int, int]:
 
 
 # --------------------------------------------------------------------------- #
+# Retry counter (2026-06-16) — piggy-backs on the LLM-counters HASH so the
+# drawer can read everything from one key. A "retry" here means: the orches-
+# trator looped back to a phase that was already done — typically detected by
+# (a) `write_extraction` overwriting an existing file or extracting an
+# arxiv_id not in `top_n`, or (b) PhaseEnforcer pointing back to an
+# upstream phase after a downstream phase emitted its terminal artifact.
+# --------------------------------------------------------------------------- #
+def bump_retry_sync(scan_id: str, phase: str) -> None:
+    """Sync-side retry bump. Increments `phase:X:retries` in the per-scan
+    counters HASH and `total:retries` for the scan-wide rollup. Best-effort —
+    failures only warn-log so callers in fs-tools can't break a write."""
+    if not scan_id or not phase:
+        return
+    import redis as redis_sync
+    try:
+        r = redis_sync.from_url(
+            redis_url(),
+            socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,
+            socket_timeout         = REDIS_OP_TIMEOUT_S,
+        )
+    except Exception as e:
+        logger.warning(f"[rr-retry] connect failed: {e}")
+        return
+    try:
+        counters_k = _counters_key(scan_id)
+        pp         = _phase_field_prefix(phase)
+        pipe       = r.pipeline(transaction=False)
+        pipe.hincrby(counters_k, f"{pp}:retries", 1)
+        pipe.hincrby(counters_k, "total:retries",  1)
+        pipe.expire(counters_k, _LLM_COUNTERS_TTL_S)
+        pipe.execute()
+        logger.info(
+            f"[rr-retry] bumped phase={phase!r} scan_id={scan_id}"
+        )
+    except Exception as e:
+        logger.warning(
+            f"[rr-retry] bump failed scan_id={scan_id} phase={phase}: "
+            f"{type(e).__name__}: {e}"
+        )
+    finally:
+        try:
+            r.close()
+        except Exception:
+            pass
+
+
+# --------------------------------------------------------------------------- #
 # Redis writer (sync — called from inside the callback)
 # --------------------------------------------------------------------------- #
 def _bump_sync(
@@ -529,6 +576,7 @@ async def read_counters(scan_id: str) -> dict[str, Any]:
                 "calls":      int(counters.get("total:calls",      0) or 0),
                 "tokens_in":  int(counters.get("total:tokens_in",  0) or 0),
                 "tokens_out": int(counters.get("total:tokens_out", 0) or 0),
+                "retries":    int(counters.get("total:retries",    0) or 0),
             },
             "by_phase": {},
         }
@@ -559,6 +607,7 @@ async def read_counters(scan_id: str) -> dict[str, Any]:
                 "calls":      int(fields.get("calls",      0)),
                 "tokens_in":  int(fields.get("tokens_in",  0)),
                 "tokens_out": int(fields.get("tokens_out", 0)),
+                "retries":    int(fields.get("retries",    0)),
                 "by_model":   by_model,
             }
         return out

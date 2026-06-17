@@ -32,7 +32,7 @@ import logging
 from domains.ycs.runtime.observability import traced
 
 from ....domain import strip_think_tags
-from ...params import SUBGRAPH_RECURSION_LIMIT
+from ...params import SUBAGENT_RECURSION_LIMIT
 from .params import REPHRASE_TIMEOUT_S, SUBAGENT_RUNTIME_TIMEOUT_S
 from .prompts import REPHRASE_PROMPT
 
@@ -118,11 +118,11 @@ def _build_initial_state(sub_q: str) -> dict:
 # already produced a focused sub-question — there's nothing to
 # "rewrite" the way a freeform user query needs. One retry covers
 # transient retrieve/grade noise; more attempts just eat the
-# recursion budget. Combined with `SUBGRAPH_RECURSION_LIMIT` (12 in
-# 2026-06-16) this caps the worst-case stuck sub-agent at ~2 minutes
-# instead of the ~10 minutes seen before this commit.
+# recursion budget. Combined with `SUBAGENT_RECURSION_LIMIT` (12) this
+# caps the worst-case stuck sub-agent at ~2 minutes instead of the
+# ~10 minutes seen before this commit.
 _STANDARD_GRAPH_CONFIG = {
-    "recursion_limit": SUBGRAPH_RECURSION_LIMIT,
+    "recursion_limit": SUBAGENT_RECURSION_LIMIT,
     "configurable":    {"max_retries": 1},
 }
 

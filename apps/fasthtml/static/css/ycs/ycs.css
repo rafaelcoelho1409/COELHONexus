@@ -1455,12 +1455,17 @@
 }
 .ycs-ask-followups:empty { display: none; }
 .ycs-ask-followups-label {
+  /* 2026-06-16 — `flex-basis: 100%` forces the label to take the full
+   * width of its flex row, so the first chip wraps onto a new line
+   * directly below it instead of sitting to the right of the label.
+   * Reads as a labelled list rather than "Followups: chip1 chip2…". */
+  flex-basis: 100%;
   font-size: 0.7rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   font-weight: 600;
   color: var(--text-muted);
-  margin-right: 4px;
+  margin-bottom: 2px;
 }
 .ycs-ask-followup-chip {
   padding: 4px 10px;
@@ -2395,6 +2400,19 @@
   background: rgba(0, 0, 0, 0.03);
 }
 .ycs-ask-turn-mode-badge:empty { display: none; }
+/* 2026-06-16 — per-turn duration chip. Sits next to the mode badge,
+ * muted + small so it reads as metadata not as competing emphasis.
+ * Backend stamps `evt.duration_ms` on SSE `end`; history reload pulls
+ * it from `thinking_state.duration_ms`. Hidden when the underlying
+ * value is missing (text stays empty → `:empty` collapses it). */
+.ycs-ask-turn-duration {
+  font-size: 0.66rem;
+  font-style: italic;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  cursor: help;
+}
+.ycs-ask-turn-duration:empty { display: none; }
 /* 2026-06-16 — partial-answer badge. The class lands on the turn
  * wrapper when the critic's confidence drops below 80%; the badge
  * pseudo-element rides next to the mode badge so the user sees the
@@ -4049,18 +4067,43 @@
    row-3 toolbar; styles piggy-back on `.dd-substage-nav` + `.dd-substage`.
    The `.is-disabled` modifier (added by query.js when a backend has
    no data) is what the page-specific rule below targets. */
+/* Workbench full-viewport fit (2026-06-16) — cascade `height: 100%`
+   from .page down to .ycs-query-layout so the editor + results panes
+   exactly fill the available area with no outer page scrollbar. Each
+   pane handles its own internal scroll (CodeMirror, Tabulator, JSON
+   editor, Cytoscape). Scoped to the Query stage so the other YCS
+   stages (Source, Ingest, Ask) keep their normal flow-scroll layout. */
+.shell:has(.ycs-page[data-ycs-stage="query"]) > .page {
+  overflow-y: hidden;
+  padding-bottom: 24px;
+}
+.shell:has(.ycs-page[data-ycs-stage="query"]) > .page > .card,
+.shell:has(.ycs-page[data-ycs-stage="query"]) > .page > .card > main.panel {
+  height: 100%;
+  min-height: 0;
+}
+.ycs-page[data-ycs-stage="query"],
+.ycs-page[data-ycs-stage="query"] > .ycs-root {
+  height: 100%;
+  min-height: 0;
+}
+.ycs-page[data-ycs-stage="query"] > .ycs-root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .ycs-query-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 12px;
   width: 100%;
-  /* The shell's body region is the only scroll container in the page.
-     We anchor the workbench to the viewport so editor + results panes
-     each get their own scroll context — matches the Hex / Databricks
-     SQL editor layout idiom. The 220px offset accounts for the topbar
-     (3 rows) + card padding. Tuned visually, not pixel-exact. */
-  height: calc(100vh - 220px);
-  min-height: 520px;
+  /* Fills the cascaded 100% chain above. min-height: 0 lets the
+     children shrink instead of forcing an outer scrollbar on short
+     viewports — internal panes scroll instead. */
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
 }
 
 .dd-substage.is-disabled,
@@ -4310,23 +4353,33 @@
 
 .ycs-query-results {
   flex: 1 1 auto;
-  overflow: auto;
+  /* Flex column so the active panel (table / graph / json) can grow to
+     fill the remaining height under the notice + header without an
+     outer scrollbar. Each panel handles its own internal scrolling
+     (Tabulator virtual-scrolls, JSONEditor tree scrolls, Cytoscape
+     pans). */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   padding: 12px 14px 14px;
 }
 .ycs-query-notice:empty { display: none; }
-.ycs-query-notice { margin-bottom: 10px; }
+.ycs-query-notice { margin-bottom: 10px; flex: 0 0 auto; }
 
 /* The 3 view-mode panels live as siblings; only the active one
-   renders. `data-view-mode` flips between graph / table / json. */
-#ycs-query-results[data-view-mode="graph"] #ycs-query-results-graph { display: block; }
+   renders. `data-view-mode` flips between graph / table / json. The
+   active panel uses `display: flex` so its inner toolbar + library
+   mount can stack and let the mount fill the remaining height. */
+#ycs-query-results[data-view-mode="graph"] #ycs-query-results-graph { display: flex; }
 #ycs-query-results[data-view-mode="graph"] #ycs-query-results-table { display: none; }
 #ycs-query-results[data-view-mode="graph"] #ycs-query-results-json  { display: none; }
 #ycs-query-results[data-view-mode="table"] #ycs-query-results-graph { display: none; }
-#ycs-query-results[data-view-mode="table"] #ycs-query-results-table { display: block; }
+#ycs-query-results[data-view-mode="table"] #ycs-query-results-table { display: flex; }
 #ycs-query-results[data-view-mode="table"] #ycs-query-results-json  { display: none; }
 #ycs-query-results[data-view-mode="json"]  #ycs-query-results-graph { display: none; }
 #ycs-query-results[data-view-mode="json"]  #ycs-query-results-table { display: none; }
-#ycs-query-results[data-view-mode="json"]  #ycs-query-results-json  { display: block; }
+#ycs-query-results[data-view-mode="json"]  #ycs-query-results-json  { display: flex; }
 
 .ycs-query-error,
 .ycs-query-notes {
@@ -4466,14 +4519,336 @@
   max-height: 320px;
 }
 
-/* ----- Cytoscape canvas for the Neo4j graph view ----- */
+/* ============================================================
+   SOTA result views (2026-06-16): Tabulator (Table), vanilla-jsoneditor
+   (JSON), Cytoscape + fcose (Graph). Each panel fills its parent and
+   resizes when its `data-view-mode` becomes active (see refreshView()
+   in renderers.js).
+   ============================================================ */
+
+/* The three panels live inside .ycs-query-results — each is a flex
+   item that fills the remaining height when its view-mode is active.
+   The data-view-mode rules earlier in this file flip `display: none`
+   on the inactive ones, so only one is ever taking flex space at a
+   time. */
+#ycs-query-results[data-view-mode="graph"] #ycs-query-results-graph,
+#ycs-query-results[data-view-mode="table"] #ycs-query-results-table,
+#ycs-query-results[data-view-mode="json"]  #ycs-query-results-json {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.ycs-query-results-table { display: flex; flex-direction: column; }
+.ycs-query-results-graph { display: flex; flex-direction: column; gap: 8px; }
+.ycs-query-results-json  { display: flex; flex-direction: column; }
+
+/* ----- Table view (Tabulator 6) -------------------------------------- */
+.ycs-query-table-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: 0 2px;
+}
+.ycs-query-table-count {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.ycs-query-table-spacer { flex: 1 1 auto; }
+.ycs-query-table-btn {
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+}
+.ycs-query-table-btn:hover { border-color: var(--primary); color: var(--primary); }
+.ycs-query-tabulator {
+  flex: 1 1 auto;
+  min-height: 0;       /* let the Tabulator virtual-scroll area shrink */
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;    /* clip rounded corners over the inner header */
+  background: var(--card);
+}
+.ycs-query-tabulator .tabulator {
+  border: 0;
+  background: transparent;
+  font-size: 0.84rem;
+  font-family: inherit;
+}
+.ycs-query-tabulator .tabulator-header {
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.025);
+}
+.ycs-query-tabulator .tabulator-col {
+  background: transparent;
+  border-right: 1px solid var(--border);
+}
+.ycs-query-tabulator .tabulator-col-title {
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+.ycs-query-tabulator .tabulator-header-filter input {
+  padding: 3px 6px;
+  font-size: 0.78rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+  color: var(--text);
+}
+.ycs-query-tabulator .tabulator-row {
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+}
+.ycs-query-tabulator .tabulator-row.tabulator-row-even { background: rgba(0, 0, 0, 0.015); }
+.ycs-query-tabulator .tabulator-row.tabulator-selected { background: rgba(196, 18, 48, 0.07); }
+.ycs-query-tabulator .tabulator-row:hover               { background: rgba(196, 18, 48, 0.035); }
+.ycs-query-tabulator .tabulator-cell {
+  border-right: 1px solid var(--border);
+  padding: 6px 10px;
+  vertical-align: top;
+  color: var(--text);
+}
+.ycs-query-tabulator .tabulator-cell.ycs-q-rownum {
+  background: rgba(0, 0, 0, 0.02);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+.ycs-query-tabulator .tabulator-footer {
+  background: rgba(0, 0, 0, 0.02);
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+/* Nested-value pill + null formatter (called by _cellFormatter). */
+.ycs-q-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  font-size: 0.74rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--primary);
+  background: rgba(196, 18, 48, 0.08);
+  border: 1px solid rgba(196, 18, 48, 0.25);
+  border-radius: 999px;
+  cursor: pointer;
+  vertical-align: middle;
+}
+.ycs-q-pill:hover { background: rgba(196, 18, 48, 0.15); }
+.ycs-q-null {
+  color: var(--text-muted);
+  font-style: italic;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  opacity: 0.7;
+}
+
+/* Cell-value popover (opened by clicking a pill). */
+.ycs-query-cell-popover {
+  position: fixed;
+  z-index: 1100;
+  width: 460px;
+  max-height: 360px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+.ycs-query-cell-popover header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.025);
+}
+.ycs-query-cell-popover-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.ycs-query-cell-popover-close {
+  border: 0;
+  background: transparent;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 0 4px;
+}
+.ycs-query-cell-popover-close:hover { color: var(--primary); }
+.ycs-query-cell-popover pre {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--card);
+}
+
+/* ----- JSON view (vanilla-jsoneditor) -------------------------------- */
+.ycs-query-jse {
+  height: 100%;
+  min-height: 460px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--card);
+  /* Editor's own CSS vars — keeps it on-theme with the COELHO design
+     system instead of its default light theme. */
+  --jse-theme-color:                  var(--primary);
+  --jse-theme-color-highlight:        var(--primary);
+  --jse-text-color:                   var(--text);
+  --jse-text-color-inverse:           #fff;
+  --jse-text-color-subtle:            var(--text-muted);
+  --jse-text-readonly:                var(--text-muted);
+  --jse-background-color:             var(--card);
+  --jse-panel-background:             var(--card);
+  --jse-panel-color:                  var(--text);
+  --jse-menu-color:                   var(--text);
+  --jse-button-background:            transparent;
+  --jse-button-background-highlight:  rgba(196, 18, 48, 0.08);
+  --jse-button-color:                 var(--text);
+  --jse-border-color:                 var(--border);
+  --jse-selection-background-color:   rgba(196, 18, 48, 0.18);
+  --jse-search-match-color:           rgba(255, 213, 0, 0.45);
+  --jse-key-color:                    var(--primary);
+  --jse-value-color-string:           #2d7a4a;
+  --jse-value-color-number:           #2965b9;
+  --jse-value-color-boolean:          #b07000;
+  --jse-value-color-null:             var(--text-muted);
+  --jse-tag-background:               rgba(0, 0, 0, 0.04);
+}
+
+/* ----- Graph view (Cytoscape + fcose) -------------------------------- */
+.ycs-query-graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  font-size: 0.78rem;
+}
+.ycs-query-graph-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 4px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.03);
+}
+.ycs-query-graph-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
+  flex-shrink: 0;
+}
+.ycs-query-graph-chip-label {
+  color: var(--text);
+  font-weight: 500;
+}
+.ycs-query-graph-meta {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+.ycs-query-graph-actions {
+  display: inline-flex;
+  gap: 4px;
+}
+.ycs-query-graph-btn {
+  padding: 2px 8px;
+  font-size: 0.74rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+}
+.ycs-query-graph-btn:hover { border-color: var(--primary); color: var(--primary); }
+
+.ycs-query-cyto-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
 .ycs-query-cyto {
   width: 100%;
   height: 100%;
-  min-height: 420px;
-  background: #fff;
+  min-height: 460px;
+  background:
+    /* Subtle grid backdrop — matches Neo4j Browser's canvas feel. */
+    linear-gradient(rgba(0, 0, 0, 0.025) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(90deg, rgba(0, 0, 0, 0.025) 1px, transparent 1px) 0 0 / 28px 28px,
+    #fafafa;
   border-radius: 6px;
   border: 1px solid var(--border);
+}
+
+/* Graph-hover tooltip (positioned via JS inside .ycs-query-cyto-wrap). */
+.ycs-query-graph-tooltip {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 8px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
+  font-size: 0.78rem;
+  color: var(--text);
+}
+.ycs-query-graph-tooltip[hidden] { display: none; }
+.ycs-q-tt-label {
+  font-weight: 700;
+  color: var(--primary);
+  margin-bottom: 4px;
+  font-size: 0.82rem;
+}
+.ycs-q-tt-empty {
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 0.76rem;
+}
+.ycs-q-tt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.76rem;
+}
+.ycs-q-tt-table th,
+.ycs-q-tt-table td {
+  padding: 2px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+.ycs-q-tt-table th {
+  color: var(--text-muted);
+  font-weight: 500;
+  white-space: nowrap;
+  padding-right: 10px;
+}
+.ycs-q-tt-table td {
+  color: var(--text);
+  word-break: break-word;
 }
 
 /* ----- History panel (Phase 5) ----- */

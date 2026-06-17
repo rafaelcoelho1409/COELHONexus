@@ -84,9 +84,18 @@ logger = logging.getLogger(__name__)
 # deep_read got the 6th and last, and synthesis never ran. 15 gives
 # every phase at least 2-3 nudges of headroom without being a runaway.
 # The safety net is still real: if the agent legitimately can't make
-# progress after 15 nudges, `_build_digest_from_fs` builds a degraded
-# digest from whatever fs has.
-MAX_CORRECTIONS = 15
+# progress after MAX nudges, `_build_digest_from_fs` builds a degraded
+# digest from whatever fs has — AND `task.py`'s post-agent missing-
+# extractions backfill (2026-06-16) fires inline deep_reads for any
+# top_n arxiv_id that the orchestrator dropped, recovering most
+# previously-degraded scans without re-running the agent.
+#
+# 2026-06-16: bumped 15 → 20 after scan fd9ad127 exhausted 15/15 with
+# 7/8 deep_reads done. The extra 5 nudges give the orchestrator more
+# room to recover one stuck subagent before synthesis fires; combined
+# with the backfill safety net, the degradation rate should drop to
+# near-zero for top_n ≤ 12 scans.
+MAX_CORRECTIONS = 20
 
 
 # Lift `scan_id=<uuid>` out of the orchestrator's message history so the

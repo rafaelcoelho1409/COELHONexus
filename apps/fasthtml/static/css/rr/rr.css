@@ -152,14 +152,14 @@
     box-sizing: border-box;
     height: 28px;
   }
-  /* Deep-reads slider — compact track + inline readout */
-  .rr-toolbar .rr-field-top-n { gap: 6px; }
-  .rr-toolbar .rr-top-n-header { gap: 4px; }
-  .rr-toolbar .rr-slider {
-    width: 130px;
-    margin: 0;
+  /* Deep-reads number input — narrow numeric entry */
+  .rr-toolbar .rr-field-top-n { gap: 4px; }
+  .rr-toolbar .rr-top-n-input {
+    width: 60px;
+    padding: 4px 6px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
   }
-  .rr-toolbar .rr-top-n-value { font-size: 13px; }
 
   @media (max-width: 720px) {
     .rr-toolbar > .rr-form { gap: 6px 10px; }
@@ -607,57 +607,22 @@
     border-bottom-color: var(--text, #111);
   }
 
-  /* Top N — slider + live readout (count · ETA) */
+  /* Deep-reads number input (2026-06-17 — replaced range slider). */
   .rr-field-top-n { gap: 6px; }
-  .rr-top-n-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 8px;
-  }
-  .rr-top-n-value {
-    font-size: 14px;
-    font-weight: 600;
+  .rr-top-n-input {
+    padding: 6px 8px;
+    width: 80px;
+    border: 1px solid var(--border, #ccc);
+    border-radius: 6px;
+    background: var(--bg-input, #fafafa);
     color: var(--text, #111);
+    font: inherit;
     font-variant-numeric: tabular-nums;
+    text-align: center;
   }
-
-  .rr-slider {
-    -webkit-appearance: none;
-    appearance: none;
-    height: 6px;
-    border-radius: 999px;
-    background: var(--border, #ddd);
-    cursor: pointer;
-    padding: 0;
-    margin: 6px 0 2px;
-  }
-  .rr-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background: var(--brand, #c00);
-    border: 2px solid white;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.25);
-    cursor: pointer;
-    transition: transform 80ms ease;
-  }
-  .rr-slider::-webkit-slider-thumb:hover { transform: scale(1.08); }
-  .rr-slider::-webkit-slider-thumb:active { transform: scale(0.95); }
-  .rr-slider::-moz-range-thumb {
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background: var(--brand, #c00);
-    border: 2px solid white;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.25);
-    cursor: pointer;
-  }
-  .rr-slider:focus-visible {
+  .rr-top-n-input:focus {
     outline: 2px solid var(--brand, #c00);
-    outline-offset: 4px;
+    outline-offset: 1px;
   }
   .rr-label {
     font-size: 12px;
@@ -714,6 +679,24 @@
     white-space: nowrap;
     vertical-align: middle;
   }
+  /* 2026-06-17: scan topic on the LEFT of the pill. Order in HTML places
+     it first; flex layout keeps it leftmost. Reads in mixed case (not the
+     uppercase the rest of the pill uses) so the topic is recognizable
+     as a query string, not a status label. Hides via data-empty="true"
+     instead of :empty so spacing collapses cleanly. */
+  .rr-stage-pill-topic {
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--text, #111);
+    opacity: 0.9;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 32ch;
+    padding-right: 4px;
+    border-right: 1px solid var(--border, #e5e5e5);
+  }
+  .rr-stage-pill-topic[data-empty="true"] { display: none; }
   .rr-stage-elapsed {
     font-variant-numeric: tabular-nums;
     font-weight: 600;
@@ -823,7 +806,9 @@
   .rr-legend-chip-store    .rr-legend-shape { color: #b45309; }  /* amber-700  */
   .rr-legend-label { font-variant-numeric: tabular-nums; }
 
-  /* Header tail — legend on the left, destructive Wipe Seen on the right. */
+  /* Header tail — legend lives here (was paired with Wipe Seen until
+   * 2026-06-17; legend is now the lone child but the flex layout is
+   * kept so future right-side controls drop in without restructure). */
   .rr-pipeline-header-tail {
     display: flex;
     align-items: center;
@@ -831,37 +816,6 @@
     gap: 8px 16px;
     flex-wrap: wrap;
   }
-  .rr-wipe-seen-btn {
-    padding: 3px 10px;
-    border: 1px solid var(--border, #d8d8d8);
-    border-radius: 999px;
-    background: transparent;
-    color: var(--text-muted, #777);
-    font: inherit;
-    font-size: 11px;
-    cursor: pointer;
-    transition: border-color 100ms ease, color 100ms ease, background-color 100ms ease;
-  }
-  .rr-wipe-seen-btn:hover {
-    border-color: var(--brand, #c00);
-    color: var(--brand, #c00);
-  }
-  .rr-wipe-seen-btn:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-  .rr-wipe-seen-btn[data-state="done"] {
-    border-color: #0a8a3e;
-    color: #0a8a3e;
-  }
-  /* Wipe-seen + info-button group — the info button sits inline on the
-   * right of the Wipe button with a small gap. */
-  .rr-wipe-seen-cluster {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-
   /* Recent-scans picker. Mounted in two places depending on stage:
    *  - Pipeline page: INSIDE `.rr-actions` next to Start/Stop (right-clustered)
    *  - Digest page:   only child of `.rr-toolbar-digest` — we explicitly
@@ -998,102 +952,6 @@
     text-align: center;
     font-size: 12px;
     color: var(--text-muted, #888);
-  }
-
-  /* Wipe-seen confirmation dialog — same `<dialog>` family as the
-   * Browse-all modal for verticals. */
-  .rr-wipe-dialog {
-    border: none;
-    border-radius: 8px;
-    padding: 0;
-    background: var(--bg, white);
-    color: var(--text, #111);
-    width: min(420px, 92vw);
-    box-shadow: 0 12px 40px rgba(0,0,0,0.22);
-  }
-  .rr-wipe-dialog::backdrop { background: rgba(0,0,0,0.45); }
-  .rr-wipe-dialog-content {
-    display: flex;
-    flex-direction: column;
-  }
-  .rr-wipe-dialog-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border, #eee);
-  }
-  .rr-wipe-dialog-title {
-    margin: 0;
-    font-size: 16px;
-    font-weight: 600;
-  }
-  .rr-wipe-dialog-close {
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    border: none;
-    background: transparent;
-    color: var(--text-muted, #888);
-    font-size: 22px;
-    line-height: 1;
-    cursor: pointer;
-    border-radius: 4px;
-  }
-  .rr-wipe-dialog-close:hover {
-    background: rgba(0,0,0,0.06);
-    color: var(--text, #111);
-  }
-  .rr-wipe-dialog-body {
-    padding: 14px 16px 6px;
-  }
-  .rr-wipe-dialog-lead {
-    margin: 0 0 6px;
-    font-size: 13px;
-    color: var(--text, #111);
-  }
-  .rr-wipe-dialog-note {
-    margin: 0;
-    font-size: 12px;
-    color: var(--text-muted, #777);
-  }
-  .rr-wipe-dialog-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    padding: 12px 16px 14px;
-    border-top: 1px solid var(--border, #f0f0f0);
-    margin-top: 8px;
-  }
-  .rr-wipe-dialog-cancel,
-  .rr-wipe-dialog-confirm {
-    padding: 6px 14px;
-    border-radius: 6px;
-    font: inherit;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-  }
-  .rr-wipe-dialog-cancel {
-    background: transparent;
-    color: var(--text-muted, #666);
-    border: 1px solid var(--border, #ccc);
-  }
-  .rr-wipe-dialog-cancel:hover {
-    background: rgba(0,0,0,0.04);
-    color: var(--text, #111);
-  }
-  .rr-wipe-dialog-confirm {
-    background: var(--brand, #c00);
-    color: white;
-    border: 1px solid var(--brand, #c00);
-  }
-  .rr-wipe-dialog-confirm:hover { filter: brightness(1.08); }
-  .rr-wipe-dialog-confirm:active { transform: translateY(1px); }
-  .rr-wipe-dialog-confirm:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
   }
 
   /* Card containing the canvas — flexes to fill the .rr-page available
@@ -1370,6 +1228,15 @@
     font-weight: 400;
     font-size: 11px;
     margin-left: 4px;
+  }
+  /* Retry row — amber to match the Cytoscape back-edge color so the
+     two surfaces read as the same signal at a glance. */
+  .rr-llm-row-retry .rr-llm-k,
+  .rr-llm-row-retry .rr-llm-v {
+    color: #b45309;          /* amber-700 — Tailwind 600/700 family */
+  }
+  .rr-llm-row-retry .rr-llm-v {
+    font-weight: 700;
   }
   .rr-llm-models-title {
     margin-top: 10px;

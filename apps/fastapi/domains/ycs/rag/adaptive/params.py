@@ -12,48 +12,81 @@ MAX_HISTORY_TURNS = 5
 # Answer-truncation in contextualize prompt formatting (deprecated `L79`).
 MAX_HISTORY_ANSWER_CHARS = 300
 
-# Recursion limit passed to sub-graph `ainvoke`s (deprecated `L170, L248`).
-# 2026-06-15 — lowered from 30 to 12 after a DEEP-mode run where 7/8
-# sub-agents looped retrieve → grade → rewrite → retrieve up to 15 times
-# each because the grader was rejecting partial JSON outputs. Even with
-# the lenient grader rescue in `grader/service.py`, capping the loop is
-# the right failsafe.
+# Recursion limit passed when SUB-AGENTS invoke the STANDARD sub-graph
+# (DEEP-mode fan-out). Sized for `max_retries=1` (the value sub-agents
+# pin in `subagent/node.py::_STANDARD_GRAPH_CONFIG`), NOT for the
+# STANDARD-mode top-level path which keeps `max_retries=3` and uses
+# `standard/params.py::DEFAULT_RECURSION_LIMIT=30` instead.
 #
-# The 12 is derived from the STANDARD sub-graph's worst-case path with
-# `max_retries=1` (which sub-agents pass via `subagent/node.py`):
+# 2026-06-16 — renamed from `SUBGRAPH_RECURSION_LIMIT` after a STANDARD
+# run blew the 12-limit. The previous name implied "use for every sub-
+# graph invocation" but the value was sized for the sub-agent's
+# `max_retries=1` budget. STANDARD with `max_retries=3` needs ~20
+# nodes worst-case — silent reuse of the 12 cap looked like a stuck
+# pipeline. `run_standard/node.py` now imports the STANDARD pipeline's
+# own `DEFAULT_RECURSION_LIMIT` directly; this constant stays scoped
+# to the sub-agent path.
+#
+# Sub-agent worst-case path derivation (max_retries=1):
 #   retrieve(1) → grade(2) → generate(3) → hallucination(4) [ungrounded]
 #   → rewrite(5) → retrieve(6) → grade(7) → generate(8) → hallucination(9)
 #   → format_citations(10) → END
-# = 10 nodes worst case, +2 nodes of safety margin = 12. The earlier
-# value of 8 was tight enough to fail BEFORE the second hallucination
-# check, surfacing as `Subagent error: Recursion limit of 8 reached
-# without hitting a stop condition`. 12 lets every grounded-on-retry
-# path finish while still bounding stuck sub-agents at ~3 minutes vs
-# the original 30-limit's ~10 minutes.
-SUBGRAPH_RECURSION_LIMIT = 12
+# = 10 nodes worst case, +2 nodes of safety margin = 12.
+SUBAGENT_RECURSION_LIMIT = 12
 
 # Critic fallback confidence on structured-output error (deprecated `L340`).
 CRITIC_FALLBACK_CONFIDENCE = 0.5
 
-# 2026-06-15 — DEEP-path sub-agent concurrency cap. `plan_research`
-# emits 3–5 sub-questions (capped 2026-06-15) which LangGraph `Send`s
-# out as fully independent STANDARD sub-pipelines (each runs
-# contextualize → retrieve → grade → generate). The original cap of 3
-# protected the 8 GiB Helm memory limit from OOM, but it forced the
-# rotator to interleave 3 concurrent sub-agents on the same free-tier
-# per-minute rate windows (Gemini, NIM kimi, NIM nemotron),
-# triggering 429 cascades and the empty-answer placeholders we saw
-# across the session.
+# 2026-06-16 (revised) — DEEP-path sub-agent concurrency cap.
+# `plan_research` emits 3–5 sub-questions (cap 5, see
+# `nodes/classify/schemas.py`) which LangGraph `Send`s out as fully
+# independent STANDARD sub-pipelines (each runs retrieve → grade →
+# generate → hallucination → cite). Only the DEEP path uses
+# `Send(run_subagent)`; FAST and STANDARD never fan out, so this knob
+# only affects DEEP runs by construction.
 #
-# 2026-06-16 — lowered to 1 (sequential). Trade-off:
-#   + Wall-clock: 3 sub-agents now run in 3 waves of 1 instead of 1
-#     wave of 3, so a 5-question plan runs in ~5 × T_sub_agent
-#     instead of ~⌈5/3⌉ × T_sub_agent = ~2-3× slower.
-#   + Quality: each sub-agent gets the full bandit's first-pick
-#     model. No contention on rate windows → no 429 cascades →
-#     empty-answer placeholders should drop to near-zero.
-#   + Memory: peak from ~3 GB to ~1 GB additional → wider OOM margin.
-#   + Debuggability: linear log trail; can tell which sub-agent
-#     is the culprit when something goes wrong.
-# Override via `KD_SUBAGENT_CONCURRENCY` if you want parallel back.
-SUBAGENT_CONCURRENCY = 1
+# Sized to match the max sub-question count so a typical DEEP plan
+# runs ALL sub-agents in ONE wave instead of N sequential waves.
+# Expected wall-time: ~T_sub_agent instead of N × T_sub_agent —
+# 3-5× speed-up over the previous sequential default (cap=1).
+#
+# Why this is safe under the free-tier rotator (the cap=1 docstring
+# called this out as risky; the analysis there was incomplete):
+#
+#   • Pool depth — `dd-all` ships ~21 arms across 7 providers (NIM /
+#     Gemini / Mistral / Groq / Cerebras / DeepSeek / SambaNova). The
+#     Router's `simple-shuffle` picks a random arm per call, so 5
+#     concurrent sub-agents land on 5 distinct arms with ~95% prob
+#     (1 - (1-1/21)^5 collision-free) and across at LEAST 3 distinct
+#     providers in the common case.
+#
+#   • Grader gate inside each sub-agent — `ycs/grader/params.py`
+#     caps grading-LLM calls at GRADER_CONCURRENCY=2 PER sub-agent.
+#     Peak DEEP-mode in-flight = 5 sub-agents × 2 grader slots = 10
+#     calls, sub-linear in the 21-arm pool depth.
+#
+#   • 429 self-healing — `chain/service.py::_arm_cooldown` puts a
+#     429-hitting arm in a 60 s in-process cool-down. The bandit's
+#     `predict_top_k` skips cooling arms; the LiteLLM Router's
+#     `allowed_fails=3` per-deployment cooldown takes the bad arm
+#     fully offline. A 429 storm is bounded to one burst-window per
+#     arm, not a cascade.
+#
+#   • Auto-retry — `_RotatorAutoRetryRouter` catches NotFoundError /
+#     EOL / empty-generations and forces a Router reshuffle. A
+#     dead-arm pick on one sub-agent doesn't poison the others.
+#
+# Quality posture (the user's explicit constraint — "speed without
+# sacrificing quality"): the bandit ranking, the per-arm 60s cool-
+# down, and the cross-provider distribution mean each sub-agent
+# still gets a HIGH-RANKED arm on its first pick. We are NOT
+# downgrading to a faster-but-weaker tier; we are PARALLELIZING the
+# existing pool. Per-sub-agent quality is unchanged.
+#
+# Failure-mode hedge — if a single user has only enabled 1-2
+# providers via BYOK (so the pool collapses to ~3-6 arms), 5
+# concurrent sub-agents will saturate the per-minute window of
+# those few arms. In that case set `KD_SUBAGENT_CONCURRENCY=2` (or
+# =1 to fully serialize). The env override wins over this default —
+# see `graph.py::_resolve_subagent_concurrency`.
+SUBAGENT_CONCURRENCY = 5

@@ -184,6 +184,88 @@ _arm_cooldown: dict[str, float] = {}
 
 
 # --------------------------------------------------------------------------- #
+# RR parallel-LLM cap (Wave 1.5 — 2026-06-16)
+# --------------------------------------------------------------------------- #
+# Caps in-flight bandit-routed LLM calls per asyncio event loop. Mirrors the
+# Planner/Synth pattern of `asyncio.Semaphore(_CONCURRENCY)` per node — but
+# applied at the rotator-chain layer because RR's subagents fan out via
+# DeepAgents (no node-level handle to gate). Per-loop because each Celery
+# task creates its own asyncio.run loop; one Semaphore per scan is what
+# we want.
+#
+# Default 8 = same cap Planner uses on doc_distill / chapter_assign. Env
+# `KD_RR_SEM` overrides. The cap protects against:
+#   - free-tier provider RPM bursts (NIM 40 RPM, Groq 30 RPM) when the
+#     orchestrator + N subagents + bandit cascades collide
+#   - bandit reward signal noise from arms timing out under contention
+#
+# WeakKeyDictionary so the semaphore is garbage-collected with the loop.
+import weakref as _weakref
+_RR_LLM_SEM_BY_LOOP: _weakref.WeakKeyDictionary = _weakref.WeakKeyDictionary()
+
+
+def _get_rr_llm_sem() -> asyncio.Semaphore:
+    """Per-loop semaphore capping concurrent bandit-routed RR LLM calls.
+    Lazy-creates one per event loop on first access; falls through to
+    int(KD_RR_SEM) env at creation (default 8)."""
+    loop = asyncio.get_running_loop()
+    sem = _RR_LLM_SEM_BY_LOOP.get(loop)
+    if sem is None:
+        try:
+            v = int(os.environ.get("KD_RR_SEM", "8"))
+        except (TypeError, ValueError):
+            v = 8
+        v = max(1, v)
+        sem = asyncio.Semaphore(v)
+        _RR_LLM_SEM_BY_LOOP[loop] = sem
+        logger.info(f"[rr-bandit] LLM semaphore initialized: {v} concurrent")
+    return sem
+
+
+# --------------------------------------------------------------------------- #
+# RR per-provider concurrency caps (Wave 1.6 — 2026-06-16)
+# --------------------------------------------------------------------------- #
+# Per-provider in-flight counter prevents the bandit cascade from over-
+# pressuring a single free-tier window (e.g. 4 subagents all picking 4
+# different NIM deployments → 4 simultaneous calls × 40 RPM ÷ ~20s each
+# = comfortable; but SambaNova at 20 RPM with 60s response times can't
+# tolerate even 2 simultaneous). When a provider is at cap, the bandit
+# cascade skips to the next ranked arm instead of queueing.
+#
+# Routing-strategy note: we DON'T change LiteLLM Router's `simple-shuffle`
+# to `least-busy` globally because that Router serves Planner/Synth too,
+# and their existing per-node semaphores + bandit pinning already control
+# concurrency the way that DD ecosystem expects. RR's bandit chain
+# BYPASSES Router (calls litellm.acompletion directly with the bandit-
+# picked deployment_id), so Router's routing_strategy doesn't apply to
+# RR LLM calls anyway. Provider caps below are the RR-specific knob.
+_RR_PROVIDER_CAPS: dict[str, int] = {
+    "nvidia_nim": 4,  # NIM 40 RPM ÷ ~20s = comfortably 4 in-flight
+    "groq":       2,  # Groq 30 RPM peak; tighter cap absorbs bursts
+    "cerebras":   2,
+    "mistral":    3,
+    "gemini":     2,
+    "deepseek":   2,
+    "sambanova":  2,  # SambaNova free 20 RPM — tightest cap
+}
+
+_RR_PROVIDER_INFLIGHT_BY_LOOP: _weakref.WeakKeyDictionary = _weakref.WeakKeyDictionary()
+
+
+def _get_rr_provider_inflight() -> dict[str, int]:
+    """Per-loop dict tracking in-flight RR LLM calls by provider. Each
+    bandit-routed call increments before litellm.acompletion + decrements
+    in finally, so cascades that skip an at-cap provider see accurate
+    state across the parallel subagent fan-out."""
+    loop = asyncio.get_running_loop()
+    state = _RR_PROVIDER_INFLIGHT_BY_LOOP.get(loop)
+    if state is None:
+        state = {}
+        _RR_PROVIDER_INFLIGHT_BY_LOOP[loop] = state
+    return state
+
+
+# --------------------------------------------------------------------------- #
 # Provider entry builders — each returns a LiteLLM model_list item
 # --------------------------------------------------------------------------- #
 def _groq_entry(group: str, model: str, timeout_s: int = 120) -> dict:
@@ -737,34 +819,48 @@ async def rerank_via_router_async(
 # Static catalog assembly (dd-all)
 # --------------------------------------------------------------------------- #
 def _rr_strong_entries() -> list:
-    """Curated strong-tier pool for the RR DeepAgents orchestrator
-    (step 5b 2026-06-12). Hand-picked from the dd-all catalog after the
-    smoke runs showed the dd-all simple-shuffle was landing on:
-      - reasoning/thinking models that emit list-content (handled by
-        _flatten_thinking_content, but adds 2-3 retry cycles per call)
-      - small models (17B-49B) that struggle to follow the 6-phase plan
-      - Groq Llama 3.3 that emits XML-style tool calls Groq rejects
-    These 6 arms returned 200 OK on RR smokes + are >=70B + are proven
-    tool-callers. Order is best-first; LiteLLM Router shuffles within
-    the pool. Cerebras pair gives speed; NIM trio gives capacity headroom;
-    Mistral large is the deep-tail.
+    """Curated strong-tier pool for the RR DeepAgents orchestrator.
+
+    Wave 1.3 (2026-06-16): expanded 4 → 9 arms to match dd-synth pool
+    diversity. With the new bandit-routed chain (`_BanditRoutedRotatorChain`)
+    the rotator no longer simple-shuffles — FGTS-VA picks the best arm per
+    call, so a wider candidate set means more exploration / lower per-arm
+    contention under parallel subagent dispatch. All arms are 120B+ frontier
+    tool-callers proven on dd-synth.
+
+    Order matters only for the predict_top_k tie-break (lowest n_obs first).
+    Categories:
+      - NIM frontier reasoning  (4): glm-5.1, minimax-m2.7, deepseek-v4-flash, kimi-k2.6
+      - NIM frontier non-reasoning (3): nemotron-3-super-120b, gpt-oss-120b, mistral-large-3-675b
+      - Mistral direct (2): mistral-large, mistral-medium
+
+    Excluded (per [[feedback_free_tier_only]] — strict 100% free, no paid
+    SaaS even with a free tier):
+      - SambaNova Meta-Llama-3.1-405B  — 2026-06-16: their "free" tier now
+        requires a payment method on file ("APIError: SambanovaException -
+        A payment method is required"). Effectively paid → dropped.
+      - Cerebras llama-3.3-70b         — 2026-06-16: free-tier 404 confirmed
+        for the second time (original rr-strong comment flagged it; the
+        Wave 2.2 retry attempt hit the same wall). Free tier appears to be
+        invite-only at the model slugs we tried; revisit when Cerebras
+        clarifies free-tier availability.
+
+    SMALLER arms (17B-49B) stay OUT — phantom-completion failure mode
+    observed 2026-06-12.
     """
     return [
-        # 4 large arms only — 120B+ frontier models that reliably follow
-        # multi-phase orchestration prompts with parallel tool_calls.
-        # SMALLER arms removed 2026-06-12 evening after observing 4.4s
-        # phantom completions:
-        #   - llama-4-maverick-17b (17B): returned prose without tool_calls,
-        #     orchestrator loop ended without dispatching subagents
-        #   - llama-3.3-nemotron-super-49b (49B): borderline — could swing
-        #     either way; pulled to be conservative
-        # Cerebras entries also removed (free-tier 404). Re-add a tier
-        # below this pool when we want a `medium` orchestrator for fast
-        # iteration.
-        _nim_entry(RR_STRONG_GROUP,     "nvidia/nemotron-3-super-120b-a12b", timeout_s = 120),
-        _nim_entry(RR_STRONG_GROUP,     "openai/gpt-oss-120b",               timeout_s = 120),
-        _nim_entry(RR_STRONG_GROUP,     "moonshotai/kimi-k2.6",              timeout_s = 120),
-        _mistral_entry(RR_STRONG_GROUP, "mistral-large-latest",              timeout_s = 120),
+        # Tier 1: NIM frontier reasoning (4)
+        _nim_entry(RR_STRONG_GROUP,     "moonshotai/kimi-k2.6",                          timeout_s = 120),
+        _nim_entry(RR_STRONG_GROUP,     "z-ai/glm-5.1",                                  timeout_s = 120),
+        _nim_entry(RR_STRONG_GROUP,     "minimaxai/minimax-m2.7",                        timeout_s = 120),
+        _nim_entry(RR_STRONG_GROUP,     "deepseek-ai/deepseek-v4-flash",                 timeout_s = 120),
+        # Tier 2: NIM frontier non-reasoning (3)
+        _nim_entry(RR_STRONG_GROUP,     "nvidia/nemotron-3-super-120b-a12b",             timeout_s = 120),
+        _nim_entry(RR_STRONG_GROUP,     "openai/gpt-oss-120b",                           timeout_s = 120),
+        _nim_entry(RR_STRONG_GROUP,     "mistralai/mistral-large-3-675b-instruct-2512",  timeout_s = 120),
+        # Tier 3: Mistral direct (2)
+        _mistral_entry(RR_STRONG_GROUP, "mistral-large-latest",                          timeout_s = 120),
+        _mistral_entry(RR_STRONG_GROUP, "mistral-medium-latest",                         timeout_s = 120),
     ]
 
 
@@ -1225,6 +1321,341 @@ class _RotatorAutoRetryRouter(ChatLiteLLMRouter):
         )
 
 
+class _BanditRoutedRotatorChain(_RotatorAutoRetryRouter):
+    """RR-only: replaces LiteLLM Router's simple-shuffle with FGTS-VA bandit
+    selection per LLM turn (Wave 1.2 — 2026-06-16).
+
+    Mirrors `chat_judge_bandit_async`'s cascade brain (the same one Planner
+    and Synth use for every node-level LLM call) but preserves tool_calls so
+    DeepAgents subagent loops work unchanged. Each `_agenerate` call:
+
+      1. `bandit.predict_top_k("rr-strong", ctx, candidates)` → ranked deployments
+      2. Drops arms in `_arm_cooldown` window (429 budget honored)
+      3. Cascades: `litellm.acompletion(model=deployment_id, tools=…)` direct
+      4. On success: builds ChatResult via parent's `_create_chat_result`
+         (already surfaces the real deployment id into `response_metadata`),
+         issues a positive `bandit.update` graded by latency, returns
+      5. On failure: classifies error, applies 429 cooldown, issues negative
+         `bandit.update`, advances cascade
+      6. On bandit-arm exhaustion OR Redis unavailable: falls back to parent's
+         simple-shuffle path so a Redis blip never kills the agent
+
+    Gated by env `KD_RR_BANDIT_CHAT` at construction time (the factory
+    `build_rr_strong_chain_bandit` instantiates this class; baseline
+    `build_rr_strong_chain` keeps the parent class for instant rollback).
+    """
+
+    # Separate bandit cell from dd-* processes so RR rewards/penalties don't
+    # leak into DD step scoring (and vice versa).
+    _RR_DD_PROCESS = RR_STRONG_GROUP   # "rr-strong"
+
+    # Latency floor used by compose_reward — calibrated against the rr-strong
+    # pool's 120B+ arms. A 30s call earns near-max reward; a 90s call (the
+    # provider timeout edge) earns near-zero. Tunable via env.
+    _RR_EXPECTED_LATENCY_S: float = 30.0
+
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        # Use the parent's thinking-content flatten + EOL-retry path as the
+        # safety net. Bandit selection wraps it: pick a deployment per call
+        # via FGTS-VA + tool_calls passthrough; fall back to simple-shuffle
+        # when bandit infra is unavailable or all ranked arms fail.
+        #
+        # Wave 1.5: per-loop semaphore caps concurrent bandit-routed calls
+        # to KD_RR_SEM (default 8). With 4 parallel deep_read subagents +
+        # 1 orchestrator + occasional synthesis = up to ~6 concurrent calls
+        # at peak, so 8 absorbs orchestrator-side bursts without queueing.
+        messages = _flatten_thinking_content(messages)
+        _prune_arm_cooldown()
+
+        async with _get_rr_llm_sem():
+            return await self._agenerate_inner(
+                messages, stop=stop, run_manager=run_manager, **kwargs,
+            )
+
+    async def _agenerate_inner(
+        self, messages, stop=None, run_manager=None, **kwargs,
+    ):
+        """Bandit cascade body — split out so `_agenerate` can wrap with
+        the per-loop concurrency semaphore."""
+        from langchain_core.messages.utils import convert_to_openai_messages
+
+        rds = await _redis_for_bandit()
+        if rds is None:
+            # No bandit state available; honor baseline behavior.
+            return await super()._agenerate(
+                messages, stop=stop, run_manager=run_manager, **kwargs,
+            )
+
+        try:
+            entries = _rr_strong_entries_current()
+            if not entries:
+                return await super()._agenerate(
+                    messages, stop=stop, run_manager=run_manager, **kwargs,
+                )
+            candidates = [e["litellm_params"]["model"] for e in entries]
+            ctx = bandit.make_context_vector(self._RR_DD_PROCESS)
+            try:
+                ranked = await bandit.predict_top_k(
+                    self._RR_DD_PROCESS,
+                    ctx,
+                    candidates,
+                    redis = rds,
+                    k     = len(candidates),
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[rr-bandit] predict_top_k failed: "
+                    f"{type(e).__name__}: {e}; falling back to simple-shuffle"
+                )
+                return await super()._agenerate(
+                    messages, stop=stop, run_manager=run_manager, **kwargs,
+                )
+
+            # Drop cooled-down arms — 429 budget is shared with chat_judge_bandit
+            if _arm_cooldown:
+                now = time.monotonic()
+                live = [
+                    (d, s, n) for d, s, n in ranked
+                    if _arm_cooldown.get(d, 0.0) <= now
+                ]
+                if live and len(live) < len(ranked):
+                    logger.info(
+                        f"[rr-bandit] cooldown dropped "
+                        f"{len(ranked) - len(live)} of {len(ranked)} arms"
+                    )
+                if live:
+                    ranked = live
+
+            if not ranked:
+                return await super()._agenerate(
+                    messages, stop=stop, run_manager=run_manager, **kwargs,
+                )
+
+            # Convert langchain messages → OpenAI dict once. The cascade reuses
+            # the same conversion across all ranked arms.
+            try:
+                oai_messages = convert_to_openai_messages(messages)
+            except Exception as e:
+                logger.warning(
+                    f"[rr-bandit] message conversion failed: "
+                    f"{type(e).__name__}: {e}; falling back to simple-shuffle"
+                )
+                return await super()._agenerate(
+                    messages, stop=stop, run_manager=run_manager, **kwargs,
+                )
+
+            # Tool binding flows via kwargs (BaseChatModel.bind_tools injects
+            # `tools` / `tool_choice` into _agenerate kwargs).
+            tools          = kwargs.get("tools")
+            tool_choice    = kwargs.get("tool_choice")
+            temperature    = kwargs.get("temperature", getattr(self, "temperature", 0.0))
+            max_tokens     = kwargs.get("max_tokens")
+            response_format = kwargs.get("response_format")
+            # Per-entry timeouts from the catalog — falls back to 120s.
+            timeout_by_id  = {
+                e["litellm_params"]["model"]: e["litellm_params"].get("timeout", 120)
+                for e in entries
+            }
+
+            last_err: Exception | None = None
+            attempts = 0
+            inflight = _get_rr_provider_inflight()
+            for deployment_id, _score, _n_obs in ranked:
+                provider = (
+                    deployment_id.split("/", 1)[0] if "/" in deployment_id else ""
+                )
+                # Wave 1.6: per-provider in-flight cap — skip this arm if its
+                # provider already has cap calls running. Bandit cascade
+                # advances to the next ranked deployment; provider load
+                # naturally spreads across the cap-1 alternatives.
+                provider_cap = _RR_PROVIDER_CAPS.get(provider, 8)
+                if inflight.get(provider, 0) >= provider_cap:
+                    logger.debug(
+                        f"[rr-bandit] {deployment_id} skipped — provider "
+                        f"{provider!r} at cap {provider_cap}"
+                    )
+                    continue
+                attempts += 1
+                api_key = (
+                    resolve_key(provider_key_env(provider))
+                    or resolve_key("NVIDIA_API_KEY")
+                    or ""
+                )
+                deployment_timeout = float(timeout_by_id.get(deployment_id, 120))
+                t0 = time.monotonic()
+                inflight[provider] = inflight.get(provider, 0) + 1
+                try:
+                    acompletion_kwargs: dict = dict(
+                        model       = deployment_id,
+                        api_key     = api_key,
+                        messages    = oai_messages,
+                        temperature = temperature,
+                        timeout     = deployment_timeout,
+                    )
+                    if max_tokens is not None:
+                        acompletion_kwargs["max_tokens"] = max_tokens
+                    if tools is not None:
+                        acompletion_kwargs["tools"] = tools
+                    if tool_choice is not None:
+                        acompletion_kwargs["tool_choice"] = tool_choice
+                    if stop is not None:
+                        acompletion_kwargs["stop"] = stop
+                    # response_format honored only on providers that translate
+                    # it cleanly — mirrors chat_judge_bandit_async's policy so
+                    # we don't 400 mid-cascade on a provider that ignores it.
+                    if response_format is not None and any(
+                        deployment_id.startswith(p)
+                        for p in _RESPONSE_FORMAT_SAFE_PROVIDERS
+                    ):
+                        acompletion_kwargs["response_format"] = response_format
+                        # Wave 2.1 (2026-06-16): on NIM, ALSO attach
+                        # nvext.guided_json so XGrammar enforces the
+                        # schema at decode time (eliminates malformed
+                        # JSON BEFORE it leaves the model). Gated by
+                        # KD_RR_GUIDED_JSON (default ON). The grammar
+                        # is the response_format's json_schema if shaped
+                        # like OpenAI's {type: json_schema, json_schema:
+                        # {schema: {...}}}; otherwise the raw payload.
+                        if (
+                            provider == "nvidia_nim"
+                            and os.environ.get(
+                                "KD_RR_GUIDED_JSON", "true"
+                            ).strip().lower() not in ("0", "false", "no", "off")
+                            and isinstance(response_format, dict)
+                        ):
+                            try:
+                                schema = response_format.get("json_schema", {})
+                                if isinstance(schema, dict):
+                                    schema = schema.get("schema", schema)
+                                if isinstance(schema, dict) and schema:
+                                    acompletion_kwargs["extra_body"] = {
+                                        "nvext": {"guided_json": schema}
+                                    }
+                            except Exception:
+                                # Best-effort — never fail the call over a
+                                # nvext annotation.
+                                pass
+                    response = await litellm.acompletion(**acompletion_kwargs)
+                    latency_s = float(time.monotonic() - t0)
+
+                    # Build the ChatResult via the parent's override — it
+                    # surfaces the real deployment id (response.model) into
+                    # AIMessage.response_metadata["model_name"] so the
+                    # per-model counter shows nvidia_nim/openai/gpt-oss-120b
+                    # instead of the group alias.
+                    #
+                    # langchain-litellm's `_create_chat_result` (line 35,
+                    # litellm_router.py) does `params["metadata"]` — KeyError
+                    # if absent. The Router's `_prepare_params_for_router`
+                    # injects that key on the normal path; since we bypass
+                    # Router and call `litellm.acompletion` direct, we have
+                    # to provide it ourselves. Empty dict is sufficient.
+                    result = self._create_chat_result(response, metadata={})
+
+                    # Empty-generations guard — Gemini policy-filter / parse
+                    # glitches return 200 OK with no content. Treat as failure.
+                    if not result.generations or not result.generations[0]:
+                        last_err = RuntimeError(
+                            f"empty generations from {deployment_id} "
+                            f"(latency_s={latency_s:.2f})"
+                        )
+                        try:
+                            await bandit.update(
+                                deployment_id, self._RR_DD_PROCESS,
+                                ctx, 0.0, redis = rds,
+                            )
+                        except Exception:
+                            pass
+                        logger.warning(
+                            f"[rr-bandit] {deployment_id} empty generations; "
+                            f"cascading"
+                        )
+                        continue
+
+                    reward = bandit.compose_reward(
+                        success            = True,
+                        schema_valid       = True,
+                        latency_s          = latency_s,
+                        expected_latency_s = self._RR_EXPECTED_LATENCY_S,
+                        error_class        = None,
+                    )
+                    try:
+                        await bandit.update(
+                            deployment_id, self._RR_DD_PROCESS,
+                            ctx, reward, redis = rds,
+                        )
+                    except Exception:
+                        pass
+                    logger.debug(
+                        f"[rr-bandit] {deployment_id} → ok "
+                        f"(latency_s={latency_s:.2f}, attempt={attempts}, "
+                        f"reward={reward:.3f})"
+                    )
+                    return result
+
+                except Exception as e:
+                    error_class = classify_error(e)
+                    last_err    = e
+                    latency_s   = float(time.monotonic() - t0)
+                    if error_class == "rate_limit":
+                        _arm_cooldown[deployment_id] = (
+                            time.monotonic() + _ARM_COOLDOWN_S
+                        )
+                    reward = bandit.compose_reward(
+                        success            = False,
+                        schema_valid       = False,
+                        latency_s          = latency_s,
+                        expected_latency_s = self._RR_EXPECTED_LATENCY_S,
+                        error_class        = error_class,
+                    )
+                    try:
+                        await bandit.update(
+                            deployment_id, self._RR_DD_PROCESS,
+                            ctx, reward, redis = rds,
+                        )
+                    except Exception:
+                        pass
+                    logger.info(
+                        f"[rr-bandit] {deployment_id} → {error_class}: "
+                        f"{type(e).__name__}; cascading"
+                    )
+                    continue
+                finally:
+                    # Wave 1.6: release this provider's in-flight slot
+                    # whether the call succeeded (return), failed
+                    # (continue), or skipped via empty-generations guard
+                    # (continue). Underflow guard is paranoia.
+                    inflight[provider] = max(
+                        0, inflight.get(provider, 0) - 1
+                    )
+
+            # All bandit-ranked arms failed — fall back to parent simple-shuffle
+            # (which still has its own EOL-retry + empty-gen guards).
+            logger.warning(
+                f"[rr-bandit] all {attempts} ranked arms failed (last: "
+                f"{type(last_err).__name__ if last_err else 'None'}); "
+                f"falling back to simple-shuffle Router"
+            )
+            return await super()._agenerate(
+                messages, stop=stop, run_manager=run_manager, **kwargs,
+            )
+
+        finally:
+            try:
+                await rds.aclose()
+            except Exception:
+                pass
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        """Sync path — DeepAgents always uses async, but BaseChatModel requires
+        this method. Defers to the parent's simple-shuffle which already has
+        retry + empty-generations guards. Bandit selection only applies to
+        async (the actual hot path)."""
+        return super()._generate(
+            messages, stop=stop, run_manager=run_manager, **kwargs,
+        )
+
+
 def _redis_sync_conn():
     """Sync Redis client for the settings-gen counter. None on env-misconfig."""
     if "REDIS_HOST" not in os.environ:
@@ -1429,8 +1860,40 @@ def build_rr_strong_chain():
     6-phase plan, or on reasoning models that emitted XML-style tool
     calls Groq rejects, or on models the bandit hadn't cooled down. The
     rr-strong pool eliminates all 3 failure classes at the routing layer.
+
+    Note: as of Wave 1 (2026-06-16) `build_rr_strong_chain_bandit()` is the
+    new RR default — same pool, but each turn picks a deployment via
+    FGTS-VA bandit (same routing brain Planner/Synth use) instead of
+    LiteLLM Router's simple-shuffle. This factory is kept as the rollback
+    target for env `KD_RR_BANDIT_CHAT=false`.
     """
     return _RotatorAutoRetryRouter(
+        router = _get_router(), model = RR_STRONG_GROUP, temperature = 0.0,
+    )
+
+
+def build_rr_strong_chain_bandit():
+    """Bandit-routed strong-tier chain for RR (Wave 1.2 — 2026-06-16).
+
+    Drop-in for `build_rr_strong_chain` that swaps LiteLLM Router's
+    simple-shuffle for FGTS-VA bandit selection per LLM turn. Same pool
+    (rr-strong), same tool_calls / response_format passthrough — only the
+    deployment-selection brain changes. The new brain matches the one
+    Planner (`chat_judge_bandit_async`) and Synth (`pick_synth_deployment_bandit`)
+    already use; per-arm rewards/penalties feed the same FGTS-VA cells so
+    routing quality improves with every RR scan AND every DD run.
+
+    Falls back to simple-shuffle when Redis is unavailable OR all bandit-
+    ranked arms fail, so a Redis blip never kills the agent. Surfaces the
+    real deployment id (not the `rr-strong` group alias) via the parent's
+    `_create_chat_result` override.
+
+    Gating: `apps/fastapi/domains/rr/agent/graph.py::_subagent_model`
+    chooses this factory when `KD_RR_BANDIT_CHAT` is unset OR truthy
+    (default ON); `KD_RR_BANDIT_CHAT=false` reverts to
+    `build_rr_strong_chain()` for instant rollback.
+    """
+    return _BanditRoutedRotatorChain(
         router = _get_router(), model = RR_STRONG_GROUP, temperature = 0.0,
     )
 

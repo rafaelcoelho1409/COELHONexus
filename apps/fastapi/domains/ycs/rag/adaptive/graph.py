@@ -15,16 +15,22 @@ The STANDARD path is the deprecated `YouTubeContentGraph`; both the
 `run_standard` and `run_subagent` nodes invoke a channel-scoped
 sub-graph built from the parent state's `channel_ids`.
 
-2026-06-15 — `run_subagent` fan-out is gated by a process-wide
-`asyncio.Semaphore` to prevent OOM crashes during DEEP-mode plans
-with many sub-questions. See `params.py::SUBAGENT_CONCURRENCY` for
-the sizing rationale."""
+2026-06-16 — `run_subagent` fan-out is gated by a process-wide
+`asyncio.Semaphore` sized at `SUBAGENT_CONCURRENCY=5` (the max
+sub-question count). DEEP plans now run ALL sub-agents in a single
+parallel wave instead of N sequential waves, cutting DEEP wall-time
+~3-5×. The semaphore is process-wide rather than per-request so two
+concurrent users on the same worker still respect the cap. See
+`params.py::SUBAGENT_CONCURRENCY` for the rotator-parallelism
+safety analysis (provider distribution + per-arm 60s cooldown +
+grader sub-agent gate)."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 from langgraph.types import Send
 
@@ -59,11 +65,12 @@ def _resolve_subagent_concurrency() -> int:
 
 # Process-wide semaphore shared across ALL in-flight Ask requests. Two
 # concurrent DEEP runs (e.g. two users / two tabs) together can hold at
-# most `SUBAGENT_CONCURRENCY` sub-agents, so the OOM guarantee survives
-# request concurrency. Lazily constructed on first acquire because
-# `asyncio.Semaphore()` at import time would bind to the wrong / no
-# event loop on Python < 3.10. `_subagent` checks/initialises under the
-# same module import, single-threaded → no race.
+# most `SUBAGENT_CONCURRENCY` sub-agents, so a single worker can never
+# blow past the rotator's per-minute rate-window budget — multi-user
+# bursts get queued, not multiplied. Lazily constructed on first acquire
+# because `asyncio.Semaphore()` at import time would bind to the wrong /
+# no event loop on Python < 3.10. `_subagent` checks/initialises under
+# the same module import, single-threaded → no race.
 _subagent_semaphore: asyncio.Semaphore | None = None
 
 
@@ -151,21 +158,27 @@ def build_adaptive_rag_graph(
     async def _direct(state):
         return await direct_answer(state, llm)
 
-    async def _run_standard(state):
+    async def _run_standard(state, config: RunnableConfig):
+        # 2026-06-16 — `config` arg is auto-injected by LangGraph so we
+        # can forward the user's `max_retries` down to the scoped
+        # STANDARD sub-graph (previously the override silently fell
+        # back to the sub-graph's default 3). See
+        # `run_standard/node.py` for the recursion-budget rationale.
         scoped_graph = _build_standard_graph(state.get("channel_ids"))
-        return await run_standard_pipeline(state, scoped_graph)
+        return await run_standard_pipeline(state, scoped_graph, config)
 
     async def _plan(state):
         return await plan_research(state, llm)
 
     async def _subagent(payload):
         # Sub-agents inherit the channel scope from the parent state.
-        # Concurrency is gated by a process-wide semaphore so a 7-
-        # sub-question DEEP plan executes in ceil(N/cap) waves instead
-        # of starting all sub-pipelines at once. Build the scoped graph
-        # INSIDE the gate too — the StateGraph compilation isn't free
-        # and we don't want to materialise N sub-graphs for waiting
-        # sub-agents that haven't acquired yet.
+        # Concurrency is gated by a process-wide semaphore (cap=5,
+        # matching the max sub-question count) so a typical DEEP plan
+        # runs all sub-agents in a single parallel wave. Build the
+        # scoped graph INSIDE the gate — the StateGraph compilation
+        # isn't free and we don't want to materialise N sub-graphs for
+        # waiting sub-agents that haven't acquired yet (only matters
+        # if the env override raises N above the cap).
         #
         # 2026-06-16 — also forward the parent rotator `llm` so the
         # sub-agent can run a single rephrased-question retry when its

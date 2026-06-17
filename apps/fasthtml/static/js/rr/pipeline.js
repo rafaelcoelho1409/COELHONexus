@@ -169,15 +169,75 @@ function _applyPhase(graph, phase, message) {
   // KPI lands on the designated node for this phase, if the message
   // carries a count. Other nodes' KPIs are cleared so stale counts from
   // previous phases don't linger.
+  //
+  // 2026-06-16: when refreshing a node's kpi we PRESERVE any trailing
+  // ↻N retry badge so a phase progress update doesn't erase the retry
+  // count that's been tracked separately via _rrHandleRetry. The badge
+  // sticks across the whole scan; only an explicit graph reset clears it.
   const kpiNode = _PHASE_PLAN[idx]._kpiNode;
   const kpiText = _kpiTextForPhase(phase, message);
   graph.cy.nodes().forEach(n => {
     if (kpiNode && n.id() === kpiNode) {
-      n.data('kpi', kpiText);
+      const retryMatch = (n.data('kpi') || '').match(/↻\d+$/);
+      const retrySuffix = retryMatch ? ` ${retryMatch[0]}` : '';
+      n.data('kpi', kpiText + retrySuffix);
     } else if (!seenActive.has(n.id())) {
-      n.data('kpi', '');
+      // Clear progress text but keep the retry badge if there is one.
+      const retryMatch = (n.data('kpi') || '').match(/↻\d+$/);
+      n.data('kpi', retryMatch ? retryMatch[0] : '');
     }
   });
+}
+
+
+// ---------------------------------------------------------------------------
+// Retry handler — called from main.js SSE onmessage when the backend emits
+// phase=retry with a {phase, kind, source, target} summary. Two visual
+// effects:
+//   1. Bump the target node's ↻N badge (sticky for the rest of the scan)
+//   2. Add a dashed amber back-edge from source → target (one per pair)
+//
+// Detection happens at the backend write_extraction tool today (and is
+// generalizable to other phases via the same bump_retry_sync helper).
+// Edge styling lives below in _applyKindShapes' style cascade so any
+// data.kind === 'retry' edge picks up the dashed-amber treatment.
+// ---------------------------------------------------------------------------
+const _retryEdgesAdded = new Set();
+
+function _handleRetry(graph, summary, message) {
+  if (!graph || !graph.cy || !summary) return;
+  const phase  = summary.phase  || 'deep_read';
+  const source = summary.source || 'synthesis';
+  const target = summary.target || phase;
+  // 1. Bump target node's retry badge.
+  const node = graph.cy.getElementById(target);
+  if (node && node.length) {
+    const cur = Number(node.data('retries') || 0) + 1;
+    node.data('retries', cur);
+    // Splice the new ↻N onto the existing kpi text without disturbing
+    // the progress portion (e.g. "12/12 extractions").
+    const kpi = (node.data('kpi') || '').replace(/\s*↻\d+\s*$/, '');
+    node.data('kpi', `${kpi}${kpi ? ' ' : ''}↻${cur}`);
+  }
+  // 2. Add a single retry edge per (source, target) pair.
+  const edgeId = `retry-${source}-${target}`;
+  if (
+    !_retryEdgesAdded.has(edgeId)
+    && graph.cy.getElementById(source).length
+    && graph.cy.getElementById(target).length
+  ) {
+    try {
+      graph.cy.add({
+        group: 'edges',
+        data: { id: edgeId, source, target, kind: 'retry' },
+      });
+      _retryEdgesAdded.add(edgeId);
+    } catch (err) {
+      console.warn(`[rr-pipeline] failed to add retry edge ${edgeId}`, err);
+    }
+  }
+  // 3. Refresh totals strip (the retry counter is part of it).
+  _refreshScanTotals();
 }
 
 
@@ -193,6 +253,27 @@ function _applyPhase(graph, phase, message) {
 // Width is bumped per shape so the inscribed text fits — hexagon and barrel
 // lose more interior area than round-rectangle.
 // ---------------------------------------------------------------------------
+// Style rule for retry back-edges — added at init by _applyKindShapes so
+// every edge with data.kind === 'retry' picks up the dashed-amber treatment
+// without needing per-edge inline styling.
+function _applyRetryEdgeStyle(cy) {
+  cy.style()
+    .selector("edge[kind = 'retry']")
+    .style({
+      'line-style':         'dashed',
+      'line-color':         '#d97706',   // amber-600
+      'target-arrow-color': '#d97706',
+      'target-arrow-shape': 'triangle',
+      'curve-style':        'bezier',
+      'control-point-step-size': 80,
+      'opacity':            0.75,
+      'width':              2,
+      'z-index':            5,
+    })
+    .update();
+}
+
+
 function _applyKindShapes(cy) {
   // Identity vs state encoding:
   //
@@ -428,6 +509,11 @@ function _renderLlmCounters(phase, payload) {
   const totalShare = total.calls
     ? Math.round((ph.calls / total.calls) * 100) + '%'
     : '—';
+  const retries = Number(ph.retries || 0);
+  const retryRow = retries > 0
+    ? `<div class="rr-llm-row rr-llm-row-retry"><span class="rr-llm-k">↻ retries</span>` +
+      `<span class="rr-llm-v">${_fmtNumber(retries)}</span></div>`
+    : '';
   const lines = [
     `<div class="rr-llm-counters">` +
       `<div class="rr-llm-row"><span class="rr-llm-k">calls</span>` +
@@ -437,6 +523,7 @@ function _renderLlmCounters(phase, payload) {
       `<span class="rr-llm-v">${_fmtNumber(ph.tokens_in)}</span></div>` +
       `<div class="rr-llm-row"><span class="rr-llm-k">tokens out</span>` +
       `<span class="rr-llm-v">${_fmtNumber(ph.tokens_out)}</span></div>` +
+      retryRow +
     `</div>`,
   ];
   // Per-model breakdown for this phase. Group rows by total calls desc.
@@ -581,6 +668,7 @@ async function initPipelineGraph() {
     if (el && el.length) el.data('kind', n.kind);
   });
   _applyKindShapes(graph.cy);
+  _applyRetryEdgeStyle(graph.cy);
 
   // 2026-06-16: switched to horizontal `LR` per UX request. The pipeline
   // is a linear flow (orchestrator → discovery → triage → deep_read →
@@ -604,10 +692,32 @@ async function initPipelineGraph() {
   window._rrSetPipelineState = function _rrApply(phase, message) {
     _lastPhase   = phase;
     _lastMessage = message;
+    // 2026-06-16: a brand-new scan ("pending") clears any retry-edge
+    // state that's been added across previous runs so the previous
+    // scan's amber back-edges don't bleed into the new canvas.
+    if (phase === 'pending') {
+      try {
+        for (const id of _retryEdgesAdded) {
+          const e = graph.cy.getElementById(id);
+          if (e && e.length) e.remove();
+        }
+        _retryEdgesAdded.clear();
+        graph.cy.nodes().forEach(n => {
+          if (Number(n.data('retries') || 0) > 0) n.data('retries', 0);
+        });
+      } catch (err) {
+        console.warn('[rr-pipeline] retry-state reset failed', err);
+      }
+    }
     _applyPhase(graph, phase, message);
     // Refresh scan-wide LLM totals strip on every phase event. Cheap
     // (one Redis HGETALL × a few keys) and tracks the scan in flight.
     _refreshScanTotals();
+  };
+  // Exposed for SSE onmessage to call directly on phase=retry events
+  // (we bypass setStatus there so the pill doesn't flicker mid-phase).
+  window._rrHandleRetry = function _rrApplyRetry(summary, message) {
+    _handleRetry(graph, summary, message);
   };
 
   // Flush any pre-init state that landed during the cytoscape load.

@@ -692,11 +692,56 @@ async def rag_search_stream(
             cur["action"] = ""
         return state
 
+    def _stamp_duration(state: dict, t_start: float) -> int:
+        """Stamp `state["duration_ms"]` with the wall-clock elapsed since
+        `t_start` (monotonic anchor) and return the value. Called at every
+        terminal persist path so the frontend's "Answered in X.Xs" badge
+        survives both the SSE _done frame AND the history-reload path
+        without needing a separate column.
+
+        Idempotent — overwriting on cancelled/error → success retry is the
+        right behavior (final stamp wins)."""
+        ms = int((time.monotonic() - t_start) * 1000)
+        state["duration_ms"] = ms
+        return ms
+
+    def _stamp_citations(state: dict, citations: list) -> None:
+        """Fold the latest citations into `state["citations"]` so they
+        ride the JSONB column to Postgres. Called from every terminal
+        persist path alongside `_stamp_duration` and `_thinking_finalize`.
+
+        The frontend's `renderHistoryTurn` reads this back to rehydrate
+        the right-rail Sources panel + restore inline `[N]` pills on past
+        turns. Without this, citations were lost the moment the SSE
+        connection closed (they were only held in the JS-side
+        `turnDataMap` WeakMap, GC'd on page navigation)."""
+        if isinstance(citations, list) and citations:
+            state["citations"] = citations
+
     async def event_generator():
         last_generation = ""
         last_mode       = ""
         last_persisted  = ""
-        last_persist_t  = time.monotonic()
+        # 2026-06-16 — track citations server-side so they get folded
+        # into the persisted `thinking_state` and survive page reload.
+        # `conversation_history` only stores answer/mode/thinking_state
+        # /created_at — no dedicated citations column — so we ride the
+        # JSONB. Frontend reads `thinking_state.citations` in
+        # `renderHistoryTurn` to rehydrate the right-rail + restore
+        # inline `[N]` pills on past turns.
+        last_citations: list = []
+        # 2026-06-16 — `t_run_start` is the wall-clock anchor for
+        # the per-turn "Answered in X.Xs" UI badge. Captured at SSE
+        # generator entry (the moment the user's Send fires) and
+        # stamped into `thinking_state["duration_ms"]` at every
+        # terminal persist path (success, watchdog/stalled,
+        # cancelled, error). Reused as the SSE `_done` frame's
+        # `duration_ms` field so the live tab can show the badge
+        # without waiting for the next history load. Distinct from
+        # `last_persist_t` (which is just the streaming-incremental
+        # PG-throttle clock).
+        t_run_start     = time.monotonic()
+        last_persist_t  = t_run_start
         first_persist_done = False
         thinking_state: dict = {"stages": {}, "mode": ""}
         cancelled = False
@@ -875,6 +920,14 @@ async def rag_search_stream(
                             last_generation = update["generation"]
                         if "mode" in update and update["mode"]:
                             last_mode = update["mode"]
+                        # 2026-06-16 — capture citations parallel to
+                        # `last_generation` so the terminal persists can
+                        # fold them into `thinking_state["citations"]`.
+                        # Both STANDARD's `format_citations`, the new
+                        # `fallback_answer`, and DEEP's `synthesize`
+                        # emit `citations` in their update payload.
+                        if isinstance(update.get("citations"), list):
+                            last_citations = update["citations"]
                         # Accumulate the Thinking expander state so a
                         # refresh mid-stream restores it exactly.
                         thinking_state = _thinking_apply(
@@ -962,6 +1015,8 @@ async def rag_search_stream(
                     if turn_id is not None:
                         try:
                             thinking_state = _thinking_finalize(thinking_state)
+                            _stamp_duration(thinking_state, t_run_start)
+                            _stamp_citations(thinking_state, last_citations)
                             sentinel = (
                                 "(no response — pipeline stalled after "
                                 f"{int(_LANGGRAPH_WATCHDOG_S / 60)} min "
@@ -984,7 +1039,11 @@ async def rag_search_stream(
                             )
                     yield (
                         "data: "
-                        + json.dumps({"node": "end", "status": "stalled"})
+                        + json.dumps({
+                            "node":        "end",
+                            "status":      "stalled",
+                            "duration_ms": thinking_state.get("duration_ms"),
+                        })
                         + "\n\n"
                     )
                 else:
@@ -992,6 +1051,8 @@ async def rag_search_stream(
                     if turn_id is not None and last_generation:
                         try:
                             thinking_state = _thinking_finalize(thinking_state)
+                            _stamp_duration(thinking_state, t_run_start)
+                            _stamp_citations(thinking_state, last_citations)
                             await asyncio.wait_for(
                                 update_turn_answer(
                                     request.app.state.pg_url,
@@ -1013,6 +1074,8 @@ async def rag_search_stream(
                         # a clear "no response" sentinel in `answer`.
                         try:
                             thinking_state = _thinking_finalize(thinking_state)
+                            _stamp_duration(thinking_state, t_run_start)
+                            _stamp_citations(thinking_state, last_citations)
                             await asyncio.wait_for(
                                 update_turn_answer(
                                     request.app.state.pg_url,
@@ -1030,7 +1093,11 @@ async def rag_search_stream(
                             )
                     yield (
                         "data: "
-                        + json.dumps({"node": "end", "status": "complete"})
+                        + json.dumps({
+                            "node":        "end",
+                            "status":      "complete",
+                            "duration_ms": thinking_state.get("duration_ms"),
+                        })
                         + "\n\n"
                     )
             finally:
@@ -1078,6 +1145,8 @@ async def rag_search_stream(
             )
             if turn_id is not None:
                 thinking_state_snapshot = _thinking_finalize(thinking_state)
+                _stamp_duration(thinking_state_snapshot, t_run_start)
+                _stamp_citations(thinking_state_snapshot, last_citations)
                 answer_text = (
                     last_generation
                     or "(stream interrupted — the SSE connection "
@@ -1128,6 +1197,8 @@ async def rag_search_stream(
             if turn_id is not None:
                 try:
                     if last_generation:
+                        _stamp_duration(thinking_state, t_run_start)
+                        _stamp_citations(thinking_state, last_citations)
                         await update_turn_answer(
                             request.app.state.pg_url,
                             turn_id, last_generation, last_mode,
@@ -1141,7 +1212,11 @@ async def rag_search_stream(
                     pass
             yield (
                 "data: "
-                + json.dumps({"node": "error", "error": str(e)})
+                + json.dumps({
+                    "node":        "error",
+                    "error":       str(e),
+                    "duration_ms": thinking_state.get("duration_ms"),
+                })
                 + "\n\n"
             )
         finally:

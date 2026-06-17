@@ -8,7 +8,7 @@ from .params import (
     CRITIC_FALLBACK_CONFIDENCE,
     MAX_HISTORY_ANSWER_CHARS,
     MAX_HISTORY_TURNS,
-    SUBGRAPH_RECURSION_LIMIT,
+    SUBAGENT_RECURSION_LIMIT,
 )
 from .state import AdaptiveRAGState
 
@@ -18,6 +18,6 @@ __all__ = [
     "CRITIC_FALLBACK_CONFIDENCE",
     "MAX_HISTORY_ANSWER_CHARS",
     "MAX_HISTORY_TURNS",
-    "SUBGRAPH_RECURSION_LIMIT",
+    "SUBAGENT_RECURSION_LIMIT",
     "build_adaptive_rag_graph",
 ]

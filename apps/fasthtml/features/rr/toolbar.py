@@ -24,10 +24,28 @@ from .shared.scans_picker import RRRecentScansPicker
 
 
 def PipelineToolbar():
-    """Row-3 chrome for `/research-radar`. Scan form only — no picker
-    here; the operator picks a scan to read on the Digest page."""
+    """Row-3 chrome for `/research-radar`. Scan form + Recent-scans picker
+    clustered in `.rr-actions` (2026-06-17 update).
+
+    Why the picker is also here now: execution telemetry (LLM counters,
+    per-node tokens, retry visualization, totals strip) all live on the
+    Pipeline graph + drawer surfaces, NOT on Digest. Operators reviewing
+    a past scan's cost / behavior need to load it INTO the Pipeline
+    view; making them detour through Digest just to pick the scan was
+    pointless friction.
+
+    Mount path: passed via `ScanForm(extra_actions=…)` so the picker lands
+    INSIDE the `.rr-actions` cluster next to Start/Stop — matches the CSS
+    rule `.rr-actions .rr-scans-picker { flex: 0 0 auto; }` (rr.css:871),
+    which was preserved from the historical shared-toolbar layout.
+
+    The picker's row clicks are intercepted on Pipeline page (main.js)
+    so clicking a past scan resumes it in-place via `resumeScan` instead
+    of navigating to `/digest?scan=...`. That keeps the operator on the
+    page they need to see the telemetry on.
+    """
     return Div(
-        ScanForm(),
+        ScanForm(extra_actions = RRRecentScansPicker()),
         cls = "dd-toolbar topbar-collapsible rr-toolbar rr-toolbar-pipeline",
         id  = "rr-toolbar",
     )

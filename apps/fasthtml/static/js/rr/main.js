@@ -31,6 +31,7 @@ const statusText  = $('rr-status-text');
 // and the CSS does the rest (border + glyph + bg).
 const statusDot   = $('rr-status');
 const statusInfo  = $('rr-status-detail');
+const statusTopic = $('rr-status-topic');
 const digestArea  = $('rr-digest-items');
 const digestEmpty = $('rr-digest-empty');
 
@@ -258,71 +259,8 @@ document.addEventListener('click', (e) => {
   if (!verticalMultiselect.contains(e.target)) verticalMultiselect.open = false;
 });
 
-/* Wipe seen-set — Pipeline-page button that empties radar_seen for the
- * default profile so the NEXT scan flips every paper to is_new=true again.
- * Backend: POST /api/v1/rr/profile/default/reset-seen. Confirms via the
- * in-page <dialog> (#rr-wipe-seen-dialog) so the modal matches the rest
- * of the RR chrome instead of falling back to the browser's confirm().
- * The trigger button flips to a green "Wiped N" pill for 3s on success. */
-const wipeSeenBtn      = document.getElementById('rr-wipe-seen-btn');
-const wipeSeenDialog   = document.getElementById('rr-wipe-seen-dialog');
-const wipeConfirmBtn   = document.getElementById('rr-wipe-dialog-confirm-btn');
-const wipeCancelBtn    = document.getElementById('rr-wipe-dialog-cancel-btn');
-
-function _openWipeDialog() {
-  if (!wipeSeenDialog) return;
-  if (typeof wipeSeenDialog.showModal === 'function') {
-    wipeSeenDialog.showModal();
-  } else {
-    wipeSeenDialog.setAttribute('open', '');
-  }
-}
-
-function _closeWipeDialog() {
-  if (!wipeSeenDialog) return;
-  if (typeof wipeSeenDialog.close === 'function') {
-    wipeSeenDialog.close();
-  } else {
-    wipeSeenDialog.removeAttribute('open');
-  }
-}
-
-async function _performWipeSeen() {
-  if (!wipeSeenBtn) return;
-  // Disable the confirm button so a double-click can't fire the POST twice.
-  if (wipeConfirmBtn) {
-    wipeConfirmBtn.disabled    = true;
-    wipeConfirmBtn.textContent = 'Wiping…';
-  }
-  const originalBtnText = wipeSeenBtn.textContent;
-  wipeSeenBtn.disabled    = true;
-  wipeSeenBtn.textContent = 'Wiping…';
-  try {
-    const r = await fetch('/api/v1/rr/profile/default/reset-seen',
-                          { method: 'POST' });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
-    wipeSeenBtn.dataset.state = 'done';
-    wipeSeenBtn.textContent   = `Wiped ${data.deleted}`;
-    setTimeout(() => {
-      wipeSeenBtn.dataset.state = '';
-      wipeSeenBtn.textContent   = originalBtnText;
-      wipeSeenBtn.disabled      = false;
-    }, 3000);
-  } catch (err) {
-    wipeSeenBtn.textContent = `Failed: ${err.message || err}`;
-    setTimeout(() => {
-      wipeSeenBtn.textContent = originalBtnText;
-      wipeSeenBtn.disabled    = false;
-    }, 4000);
-  } finally {
-    if (wipeConfirmBtn) {
-      wipeConfirmBtn.disabled    = false;
-      wipeConfirmBtn.textContent = 'Wipe seen-set';
-    }
-    _closeWipeDialog();
-  }
-}
+/* Wipe seen-set UI removed 2026-06-17. Backend endpoint
+ * POST /api/v1/rr/profile/{id}/reset-seen stays live for direct API use. */
 
 /* Recent-scans picker — lazy-load on first open so the row 2 paint stays
  * fast (no hit to Postgres unless the operator clicks the dropdown). The
@@ -427,11 +365,56 @@ async function _loadRecentScans() {
 }
 
 if (scansPicker) {
+  // 2026-06-17: refresh on EVERY open instead of just the first. Picks up
+  // new scans (just-completed runs, deletes from other tabs) without
+  // requiring a page reload. _scansLoaded stays as a one-shot flag for
+  // "we've fetched at least once" semantics elsewhere (kept for back-compat).
   scansPicker.addEventListener('toggle', () => {
-    if (scansPicker.open && !_scansLoaded) {
+    if (scansPicker.open) {
       _scansLoaded = true;
       _loadRecentScans();
     }
+  });
+}
+
+/* Pipeline-page in-place resume (2026-06-17). On the Pipeline page, the
+ * picker's row hrefs still point to `/research-radar/digest?scan=...`
+ * (server-side rendering doesn't know which page is mounting the picker).
+ * We intercept on Pipeline page only — call resumeScan in-place so the
+ * operator stays on the Pipeline graph + drawer to inspect execution
+ * telemetry (LLM counters, retry visualization, per-node tokens) without
+ * a page reload. On the Digest page, fall through to the regular
+ * navigation (Digest's own bootstrap reads ?scan=<id> on load).
+ *
+ * Registered BEFORE the trash handler so the trash button's
+ * `e.stopPropagation()` still wins for delete clicks. */
+const _IS_PIPELINE_PAGE = (
+  window.location.pathname === '/research-radar'
+  || window.location.pathname === '/research-radar/'
+);
+if (scansList && _IS_PIPELINE_PAGE) {
+  scansList.addEventListener('click', (e) => {
+    // Skip if it's a delete click — trash handler below owns those.
+    if (e.target?.closest?.('.rr-scans-row-trash')) return;
+    const row = e.target?.closest?.('.rr-scans-row');
+    if (!row) return;
+    const wrap   = row.closest('.rr-scans-row-wrap');
+    const scanId = wrap?.dataset?.scanId;
+    if (!scanId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // Update URL + load scan state into the Pipeline graph / drawer.
+    try {
+      if (typeof setScanIdInUrl === 'function') setScanIdInUrl(scanId);
+    } catch (_) { /* setScanIdInUrl is defined below in this file */ }
+    try {
+      if (typeof resumeScan === 'function') {
+        Promise.resolve().then(() => resumeScan(scanId)).catch(err =>
+          console.warn('resumeScan from picker threw', err));
+      }
+    } catch (_) { /* same */ }
+    // Close the picker dropdown — the operator just made their choice.
+    if (scansPicker && scansPicker.open) scansPicker.open = false;
   });
 }
 
@@ -467,17 +450,6 @@ if (scansList) {
       trash.disabled = false;
       await showConfirm('Delete failed', err.message || String(err), 'OK');
     }
-  });
-}
-
-if (wipeSeenBtn)    wipeSeenBtn.addEventListener('click', _openWipeDialog);
-if (wipeConfirmBtn) wipeConfirmBtn.addEventListener('click', _performWipeSeen);
-if (wipeCancelBtn)  wipeCancelBtn.addEventListener('click', _closeWipeDialog);
-if (wipeSeenDialog) {
-  // Header `×` + backdrop click close. Both keyed off data-attr / target check.
-  wipeSeenDialog.addEventListener('click', (e) => {
-    if (e.target?.dataset?.rrWipeClose === 'true') _closeWipeDialog();
-    if (e.target === wipeSeenDialog) _closeWipeDialog();
   });
 }
 
@@ -544,19 +516,94 @@ if (verticalBrowseDialog) {
 _syncVerticals();
 
 /* ────────────────────────────────────────────────────────────────────────── *
- * Top N slider — live count readout next to the label.
+ * Top N input — localStorage cache + min/max clamp.
+ *
+ * 2026-06-17: switched from range slider to number input. The redundant
+ * #rr-top-n-value readout span is gone (the input IS its own readout);
+ * localStorage persistence + HTML-attribute mirror stay so the typed
+ * value survives page refresh / re-render. Clamp restored values to
+ * the declared min/max so operator-edited localStorage can't bypass
+ * the form's guards.
  * ────────────────────────────────────────────────────────────────────────── */
-const topNSlider = form?.querySelector('#top_n');
-const topNValue  = $('rr-top-n-value');
+const topNInput     = form?.querySelector('#top_n');
+const _TOP_N_LS_KEY = 'rr.top_n';
 
-function _syncTopNReadout() {
-  if (topNSlider && topNValue) topNValue.textContent = topNSlider.value;
+function _syncTopN() {
+  if (!topNInput) return;
+  try { topNInput.setAttribute('value', topNInput.value); } catch {}
+  try { localStorage.setItem(_TOP_N_LS_KEY, topNInput.value); } catch {}
 }
 
-if (topNSlider) {
-  topNSlider.addEventListener('input',  _syncTopNReadout);
-  topNSlider.addEventListener('change', _syncTopNReadout);
-  _syncTopNReadout();
+if (topNInput) {
+  // Restore BEFORE wiring listeners so the initial state reflects the
+  // persisted value. Clamp to declared min/max — operator-edited LS
+  // shouldn't bypass server-side Pydantic ge/le guards.
+  try {
+    const saved = localStorage.getItem(_TOP_N_LS_KEY);
+    if (saved !== null && saved !== '') {
+      const min  = parseInt(topNInput.min  || '4',  10);
+      const max  = parseInt(topNInput.max  || '30', 10);
+      const n    = parseInt(saved, 10);
+      if (Number.isFinite(n)) {
+        topNInput.value = String(Math.min(Math.max(n, min), max));
+      }
+    }
+  } catch {}
+  topNInput.addEventListener('input',  _syncTopN);
+  topNInput.addEventListener('change', _syncTopN);
+  _syncTopN();
+}
+
+/* ────────────────────────────────────────────────────────────────────────── *
+ * Topic input — localStorage cache + status-pill mirror (2026-06-17).
+ *
+ * Same pattern as the top_n slider: persist the operator's typed topic so
+ * it survives page refresh / re-render. Additionally, mirror the live
+ * topic into the status pill's #rr-status-topic span so the operator
+ * always sees what they're scanning without scrolling up to the form.
+ *
+ * When a scan resumes from `?scan=<id>`, `resumeScan()` overrides the
+ * pill topic from the server-side scan record (it's the source of truth
+ * for that historical scan). When idle, the pill follows the form's
+ * current topic. _setPillTopic centralises the write so both paths share
+ * the same DOM contract.
+ * ────────────────────────────────────────────────────────────────────────── */
+const topicInput   = form?.querySelector('#topic');
+const _TOPIC_LS_KEY = 'rr.topic';
+
+function _setPillTopic(text) {
+  if (!statusTopic) return;
+  const t = (text || '').trim();
+  statusTopic.textContent = t;
+  // Hide the pill slot entirely when empty so the pill collapses to its
+  // idle shape (no empty bracket / dash). CSS can target the dataset
+  // for spacing too.
+  statusTopic.dataset.empty = t ? 'false' : 'true';
+  statusTopic.title = t ? `Scan topic: ${t}` : 'Scan topic';
+}
+
+function _syncTopicFromInput() {
+  if (!topicInput) return;
+  try { localStorage.setItem(_TOPIC_LS_KEY, topicInput.value); } catch {}
+  try { topicInput.setAttribute('value', topicInput.value); } catch {}
+  // Only update the pill from the input when there's no active scan_id —
+  // a live/recent scan owns the pill topic and shouldn't get clobbered
+  // by the operator typing a fresh topic.
+  if (!activeScanId) _setPillTopic(topicInput.value);
+}
+
+if (topicInput) {
+  try {
+    const saved = localStorage.getItem(_TOPIC_LS_KEY);
+    if (saved !== null && saved !== '') {
+      topicInput.value = saved;
+      topicInput.setAttribute('value', saved);
+    }
+  } catch {}
+  topicInput.addEventListener('input',  _syncTopicFromInput);
+  topicInput.addEventListener('change', _syncTopicFromInput);
+  // Initial pill hydrate from the (possibly restored) input value.
+  _syncTopicFromInput();
 }
 
 function escapeHtml(s) {
@@ -757,6 +804,16 @@ function startSSE(scanId) {
   evtSrc.onmessage = (e) => {
     let ev;
     try { ev = JSON.parse(e.data); } catch { return; }
+    // Retry events (2026-06-16) augment the pipeline graph (back-edge +
+    // per-node ↻N badge) without driving the lifecycle pill state — we
+    // don't want a retry to flicker the pill back to "deep_read working"
+    // mid-synthesis. Hand off to pipeline.js directly.
+    if (ev.phase === 'retry' && ev.summary
+        && typeof window._rrHandleRetry === 'function') {
+      try { window._rrHandleRetry(ev.summary, ev.message); }
+      catch (err) { console.warn('_rrHandleRetry threw', err); }
+      return;
+    }
     setStatus(ev.phase, ev.message || (ev.summary ? `summary: ${JSON.stringify(ev.summary)}` : ''));
     if (['done', 'error', 'cancelled'].includes(ev.phase)) {
       try { evtSrc.close(); } catch {}
@@ -863,6 +920,12 @@ async function resumeScan(scanId) {
   // time — not "time since this tab loaded". Without this, every page
   // refresh resets the counter to 0s.
   _seedElapsedFromScan(d);
+
+  // 2026-06-17: pill topic mirrors the resumed scan's topic, NOT whatever
+  // the operator may have since typed into the form. Falls back to the
+  // form value if the server response omits topic (defensive — the field
+  // is present on every scan response since 2026-06-12).
+  _setPillTopic(d.topic || topicInput?.value || '');
 
   if (['done', 'error', 'cancelled'].includes(d.status)) {
     // Terminal — render the snapshot, no live attachments.
@@ -991,6 +1054,9 @@ async function startScan() {
     // pill reads true wall-clock time (the 200-300ms POST latency would
     // otherwise show up as drift on every fresh scan).
     _seedElapsedFromScan(data);
+    // 2026-06-17: lock the pill topic to what the operator submitted —
+    // covers the case where they type a new topic while the scan runs.
+    _setPillTopic(topicRaw);
     setStatus('pending', `scan ${activeScanId} queued (task ${data.task_id})`);
     startSSE(activeScanId);
     startPoll(activeScanId);

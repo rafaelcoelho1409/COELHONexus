@@ -34,7 +34,9 @@ _IMPORTMAP = NotStr("""{
     "@codemirror/commands": "https://esm.sh/@codemirror/commands@6.5.0?external=@codemirror/state,@codemirror/view,@codemirror/language",
     "@codemirror/autocomplete":  "https://esm.sh/@codemirror/autocomplete@6.16.0?external=@codemirror/state,@codemirror/view,@codemirror/language",
     "@codemirror/lang-json":     "https://esm.sh/@codemirror/lang-json@6.0.1?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/autocomplete",
-    "@codemirror/legacy-modes/mode/cypher": "https://esm.sh/@codemirror/legacy-modes@6.4.0/mode/cypher?external=@codemirror/language"
+    "@codemirror/legacy-modes/mode/cypher": "https://esm.sh/@codemirror/legacy-modes@6.4.0/mode/cypher?external=@codemirror/language",
+    "tabulator-tables":   "https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.0/dist/js/tabulator_esm.min.mjs",
+    "vanilla-jsoneditor": "https://cdn.jsdelivr.net/npm/vanilla-jsoneditor@3.12.0/standalone.js"
   }
 }""")
 
@@ -106,6 +108,21 @@ HEAD = (
     Script(
         src = "https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js",
         defer = True,
+    ),
+    # cytoscape-fcose — force-directed layout for the YCS Query graph
+    # view (Neo4j-Browser look). UMD bundle exposes window.cytoscapeFcose;
+    # the renderer registers it once via cytoscape.use() before first use.
+    Script(
+        src = "https://unpkg.com/cytoscape-fcose@2.2.0/cytoscape-fcose.js",
+        defer = True,
+    ),
+    # Tabulator — SOTA vanilla-JS data grid (MIT). Drives the Table view
+    # mode on the YCS Query page (ES hits, Qdrant points, Neo4j rows).
+    # Loaded globally so the stylesheet is cached across page transitions;
+    # the ESM bundle is pulled in via the importmap from renderers.js.
+    Link(
+        rel = "stylesheet",
+        href = "https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.0/dist/css/tabulator.min.css",
     ),
     # Tokens (Phase B) — declares `@layer reset, base, components, layout,
     # features, overrides;` so all subsequent stylesheets land in the right

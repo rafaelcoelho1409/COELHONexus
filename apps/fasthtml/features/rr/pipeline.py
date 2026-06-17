@@ -25,6 +25,14 @@ from fasthtml.common import (
     H3, H4, Button, Div, NotStr, P, Script, Span,
 )
 
+# Reuse DD's shared modal — same pattern as `features/rr/digest.py`. Mounts
+# the `#fw-modal` element backed by `showConfirm()` in
+# `static/js/dd/shared/ui/overlays.js`. The Recent-scans dropdown is now
+# on Pipeline page too (2026-06-17), and its per-row trash button calls
+# `showConfirm()` to confirm the delete — without the modal here, the
+# button is a silent no-op (Promise.resolve(false) → "user cancelled").
+from features.dd.shared.overlays import ConfirmModal
+
 from .node_details import build_node_details
 
 
@@ -92,6 +100,13 @@ def _StatusPill():
     attribute that the CSS reads. Detail message ($error or stale-resume
     text) goes in `#rr-status-detail` and stays empty when not needed."""
     return Div(
+        # 2026-06-17: current scan's topic surfaces on the LEFT of the
+        # pill (hidden when empty). main.js's setStatus() / resumeScan()
+        # fill this with the topic from the POST response or the form's
+        # current value so the operator always sees what they're looking
+        # at without having to scroll up to the form.
+        Span("", cls = "rr-stage-pill-topic", id = "rr-status-topic",
+             title = "Scan topic"),
         Span("Idle", cls = "rr-stage-pill-text", id = "rr-status-text"),
         Span("",     cls = "rr-stage-elapsed",   id = "rr-status-elapsed",
              title  = "Total scan time"),
@@ -154,78 +169,6 @@ def _KindLegend():
             )
         )
     return Div(*chips, cls = "rr-legend", **{"aria-label": "Node-shape legend"})
-
-
-def _WipeSeenButton():
-    """Small destructive-but-recoverable action — empties the profile's
-    `radar_seen` membership table so the NEXT scan flips every paper to
-    `is_new=true` again. JS handler in main.js confirms via the modal
-    below (no browser `confirm()`) and posts to
-    `POST /api/v1/rr/profile/default/reset-seen`."""
-    return Button(
-        "Wipe seen-set",
-        type = "button",
-        id   = "rr-wipe-seen-btn",
-        cls  = "rr-wipe-seen-btn",
-        title = ("Clear the seen-set so the next scan marks every paper "
-                 "as new. Does not delete past scans, findings, or the "
-                 "Neo4j Paper graph."),
-        **{"aria-haspopup": "dialog", "aria-controls": "rr-wipe-seen-dialog"},
-    )
-
-
-def _WipeSeenDialog():
-    """Native `<dialog>` confirmation — replaces the browser `confirm()`
-    so the modal matches the rest of the RR chrome (Browse-all uses the
-    same pattern). Triggered by `#rr-wipe-seen-btn`; confirms via the
-    primary button or backdrop-click/Esc."""
-    from fasthtml.common import Dialog
-    return Dialog(
-        Div(
-            Div(
-                H3("Clear the seen-set?", cls = "rr-wipe-dialog-title",
-                   id  = "rr-wipe-dialog-title"),
-                Button(
-                    "×",
-                    type = "button",
-                    cls  = "rr-wipe-dialog-close",
-                    **{"aria-label": "Close", "data-rr-wipe-close": "true"},
-                ),
-                cls = "rr-wipe-dialog-header",
-            ),
-            Div(
-                P(
-                    "The next scan will mark every paper as new again.",
-                    cls = "rr-wipe-dialog-lead",
-                ),
-                P(
-                    "Past scans, findings, MinIO digests, and the Neo4j Paper "
-                    "graph are NOT touched.",
-                    cls = "rr-wipe-dialog-note",
-                ),
-                cls = "rr-wipe-dialog-body",
-            ),
-            Div(
-                Button(
-                    "Cancel",
-                    type = "button",
-                    cls  = "rr-wipe-dialog-cancel",
-                    id   = "rr-wipe-dialog-cancel-btn",
-                ),
-                Button(
-                    "Wipe seen-set",
-                    type = "button",
-                    cls  = "rr-wipe-dialog-confirm",
-                    id   = "rr-wipe-dialog-confirm-btn",
-                ),
-                cls = "rr-wipe-dialog-actions",
-            ),
-            cls = "rr-wipe-dialog-content",
-        ),
-        id   = "rr-wipe-seen-dialog",
-        cls  = "rr-wipe-dialog",
-        **{"aria-labelledby": "rr-wipe-dialog-title"},
-    )
 
 
 def _LlmTotalsStrip():
@@ -350,29 +293,8 @@ def PipelineBody():
                 ),
                 Div(
                     _KindLegend(),
-                    Div(
-                        Button(
-                            "i",
-                            type = "button",
-                            # `rr-info-down` flips the tooltip below the
-                            # button so it doesn't clip behind row-2 chrome.
-                            cls  = "rr-info rr-info-down",
-                            **{
-                                "aria-label":   "About Wipe seen-set",
-                                "data-tooltip": (
-                                    "Clears the `is_new` tracking only — next "
-                                    "scan marks every paper as new again. Past "
-                                    "scans, digests, and the Neo4j graph stay "
-                                    "intact."
-                                ),
-                            },
-                        ),
-                        _WipeSeenButton(),
-                        cls = "rr-wipe-seen-cluster",
-                    ),
                     cls = "rr-pipeline-header-tail",
                 ),
-                _WipeSeenDialog(),
                 cls = "rr-pipeline-header",
             ),
             Div(
@@ -385,6 +307,10 @@ def PipelineBody():
             _NodeDrawer(),
             cls = "rr-card rr-card-pipeline",
         ),
+        # 2026-06-17: ConfirmModal target for showConfirm() — required by
+        # the Recent-scans dropdown's per-row trash button. Same component
+        # the Digest page mounts.
+        ConfirmModal(),
         # pipeline.js (Cytoscape init) loads BEFORE main.js so the latter
         # can call `window._rrSetPipelineState(phase, message)` from inside
         # setStatus(). Both are type=module so order is hoisted-safe.

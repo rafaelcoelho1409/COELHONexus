@@ -25,3 +25,15 @@ class YouTubeRAGState(TypedDict):
     # — sub-agents (DEEP fan-out) receive [] because their sub-question is
     # already self-contained.
     conversation_history: list[dict]
+    # 2026-06-16 — pre-grade soft evidence. Accumulates docs the
+    # retriever (Neo4j graph + Qdrant hybrid) returned BEFORE the
+    # grader filtered them, deduped + capped across all rewrite
+    # rounds. Consumed only by `fallback_answer` when the grader
+    # rejected every candidate — those rejected docs are still the
+    # closest matches the corpus has, and CRAG-style graceful
+    # degradation should use them as soft hints + surface them as
+    # related-video citations rather than throw them away.
+    # The `documents` field above keeps its grader-filtered semantics
+    # for the strict-evidence `generate` path; this is the parallel
+    # channel for the rescue path.
+    pre_grade_documents: list[Document]

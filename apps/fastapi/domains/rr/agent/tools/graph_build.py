@@ -52,7 +52,22 @@ async def graph_build_papers(
     """
     top_n = fs_read(scan_id, FS_FILE_TRIAGE_TOPN)
     if not top_n or not isinstance(top_n, list):
-        msg = f"[graph_build] no top_n at {FS_FILE_TRIAGE_TOPN} — skipping"
+        # Fix #6 (2026-06-16): diagnostic detail in the warning. Scan
+        # d196a862 logged the bare "no top_n — skipping" 8s before a
+        # successful retry where total=12; the warning looked like a
+        # real failure but was actually the orchestrator's LLM calling
+        # graph_build with a malformed / stale scan_id mid-emission.
+        # Surface what we actually got so the next regression debug is
+        # one log line, not a forensic exercise.
+        observed = type(top_n).__name__ if top_n is not None else "None"
+        observed_repr = repr(top_n)[:80] if top_n is not None else "None"
+        msg = (
+            f"[graph_build] scan_id={scan_id} no usable top_n at "
+            f"{FS_FILE_TRIAGE_TOPN} (got type={observed} value={observed_repr}) "
+            f"— skipping. If the orchestrator immediately retries with the "
+            f"correct scan_id this warning is benign; otherwise check that "
+            f"triage_candidates wrote top_n.json before this call."
+        )
         logger.warning(msg)
         return msg
 

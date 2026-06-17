@@ -39,8 +39,12 @@ from ..keys import (
 )
 from .state import fs_list, fs_read, fs_write
 from ...runtime.events import emit_event_sync
+from ...runtime.extraction_cache import set_extraction_sync as _cache_extraction
 from ...runtime.fs_mirror import mirror_write_sync
-from ...runtime.llm_counter import set_phase as _set_llm_phase
+from ...runtime.llm_counter import (
+    bump_retry_sync as _bump_retry,
+    set_phase as _set_llm_phase,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -246,22 +250,77 @@ def write_extraction(
         "confidence":   max(0.0, min(1.0, float(confidence))),
     }
     path = fs_extraction_path(arxiv_id)
+    # Retry detection (2026-06-16): classify this call as a retry BEFORE
+    # the fs_write happens so we can distinguish "first write for this
+    # arxiv_id" from "overwriting an existing extraction" and from
+    # "extracting an arxiv_id that wasn't in top_n at all" (the orches-
+    # trator-hallucinated case observed in scan 157644c6 → 14/12).
+    top_n_before = fs_read(scan_id, FS_FILE_TRIAGE_TOPN) or []
+    top_n_ids    = (
+        {p.get("arxiv_id") for p in top_n_before if isinstance(p, dict)}
+        if isinstance(top_n_before, list) else set()
+    )
+    existing     = fs_read(scan_id, path) is not None
+    is_off_topn  = bool(top_n_ids) and (arxiv_id not in top_n_ids)
+    is_retry     = existing or is_off_topn
     fs_write(scan_id, path, payload)
     _mirror(scan_id, path, payload)
     try: _set_llm_phase("deep_read")
     except Exception: pass
+    if is_retry:
+        try:
+            _bump_retry(scan_id, "deep_read")
+        except Exception as e:
+            logger.warning(f"[fs-tool] retry bump failed for {arxiv_id}: {e}")
+        # Emit a structured retry event so the Pipeline graph can render
+        # a dashed back-edge from synthesis (or wherever we came from)
+        # back into deep_read. The frontend reads phase=retry and adds
+        # a Cytoscape edge dynamically; source/target are advisory.
+        try:
+            emit_event_sync(
+                scan_id, "retry",
+                message = (
+                    f"deep_read re-entered for {arxiv_id} "
+                    f"({'overwrite' if existing else 'off-top_n hallucination'})"
+                ),
+                summary = {
+                    "phase":  "deep_read",
+                    "kind":   "overwrite" if existing else "off_top_n",
+                    "source": "synthesis",
+                    "target": "deep_read",
+                },
+            )
+        except Exception as e:
+            logger.warning(f"[fs-tool] retry emit failed: {e}")
+    # Wave 1.7: persist to the cross-scan extraction cache so subsequent
+    # scans hitting the same arxiv_id skip the LLM call. Best-effort —
+    # the fs write already happened; Redis blips never block the agent.
+    try:
+        _cache_extraction(arxiv_id, payload)
+    except Exception as e:
+        logger.warning(f"[fs-tool] extraction cache set failed for {arxiv_id}: {e}")
     logger.info(
         f"[fs-tool] write_extraction scan_id={scan_id} arxiv_id={arxiv_id} "
         f"confidence={payload['confidence']:.2f} path={path}"
+        + (f" RETRY({'overwrite' if existing else 'off_top_n'})" if is_retry else "")
     )
     # Surface per-paper progress directly so the UI ticks 1/N → N/N even
     # while the orchestrator is blocked waiting for the deep_read subagent
     # to finish. `top_n.json` carries the denominator.
-    n_done = len(fs_list(scan_id, prefix=FS_DIR_EXTRACTIONS + "/"))
-    top_n  = fs_read(scan_id, FS_FILE_TRIAGE_TOPN) or []
-    n_total = len(top_n) if isinstance(top_n, list) else n_done
+    #
+    # Display semantics (2026-06-16):
+    #   - n_done: unique extractions actually on disk (clamped at n_total
+    #             so overwrites don't grow the numerator past the goal)
+    #   - n_total: triage's top_n length
+    # Retries are visualized separately via the retry counter / SSE event
+    # above — keeps the progress bar honest at 12/12 while exposing the
+    # `↻ K` cost on the drawer.
+    paths   = fs_list(scan_id, prefix=FS_DIR_EXTRACTIONS + "/")
+    n_done  = len(paths)
+    n_total = len(top_n_before) if isinstance(top_n_before, list) else n_done
+    n_done_display = min(n_done, n_total) if n_total else n_done
     _safe_emit(scan_id, "deep_read",
-               f"{n_done}/{n_total} extractions written")
+               f"{n_done_display}/{n_total} extractions written")
     return f"wrote extraction for {arxiv_id} to {path}"
 
 
