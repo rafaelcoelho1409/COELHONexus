@@ -139,6 +139,9 @@ async def delete_scan(scan_id: UUID) -> dict:
 
     Tier-1 scope — clears the per-scan presentation artifacts only:
       * Postgres `radar_scans` row (CASCADE → `radar_findings`)
+        — the `llm_counters` JSONB column on this row goes with it
+          atomically, so the per-scan telemetry archive (2026-06-17)
+          needs no separate delete call
       * MinIO `rr/scans/{scan_id}/digest.json` object
 
     INTENTIONALLY leaves the accumulated knowledge intact:

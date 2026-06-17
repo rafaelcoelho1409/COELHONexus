@@ -76,8 +76,15 @@ class ScanRequest(BaseModel):
     top_n: int = Field(
         default = 12,
         ge = 4,
-        le = 30,
-        description = "How many papers from triage to deep-read. 12 = sweet spot.",
+        le = 100,
+        description = (
+            "How many papers from triage to deep-read. 12 = sweet spot for "
+            "single-pass scans. 30-100 supported for bulk runs — note that "
+            "the phase-enforcer budget (MAX_CORRECTIONS=20) and inline "
+            "backfill cap (BACKFILL_MAX=3) were calibrated against the "
+            "8-12 envelope; at N>30 expect partial-extractions degradation "
+            "until those caps are tuned in a follow-up."
+        ),
     )
 
 

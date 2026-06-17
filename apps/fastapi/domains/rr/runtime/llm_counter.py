@@ -562,7 +562,12 @@ async def read_counters(scan_id: str) -> dict[str, Any]:
     try:
         counters_raw = await r.hgetall(_counters_key(scan_id))
         if not counters_raw:
-            return empty
+            # 2026-06-17: Redis TTL'd — fall through to Postgres archive
+            # (radar_scans.llm_counters JSONB column written at scan
+            # completion). Returns whatever was persisted or `empty` if
+            # the scan predates the persistence feature OR finished with
+            # zero LLM activity (snapshot is skipped then).
+            return await _read_from_postgres(scan_id) or empty
 
         counters = {
             (k.decode() if isinstance(k, bytes) else k):
@@ -619,6 +624,75 @@ async def read_counters(scan_id: str) -> dict[str, Any]:
             await r.aclose()
         except Exception:
             pass
+
+
+# --------------------------------------------------------------------------- #
+# Postgres archive — write at scan completion, read on Redis-TTL fallback.
+# Lives on `radar_scans.llm_counters JSONB`; DELETE on the scan row removes
+# the counters atomically (CASCADE-equivalent — same row, same column).
+# --------------------------------------------------------------------------- #
+async def _read_from_postgres(scan_id: str) -> dict[str, Any] | None:
+    """Best-effort read of the per-scan counter snapshot from Postgres.
+    Returns the parsed dict on hit, None when the row is missing OR
+    `llm_counters` is NULL (old row OR zero-LLM scan). Never raises —
+    counter telemetry is non-critical."""
+    try:
+        from uuid import UUID
+        from ..stores.postgres import read_llm_counters
+        return await read_llm_counters(UUID(scan_id))
+    except Exception as e:
+        logger.warning(
+            f"[rr-llm-counter] postgres fallback read failed "
+            f"scan_id={scan_id}: {type(e).__name__}: {e}"
+        )
+        return None
+
+
+async def snapshot_to_postgres(scan_id: str) -> bool:
+    """Persist the scan's current counter state from Redis to Postgres.
+    Called from `task.py` after the agent run completes (or fails / is
+    cancelled) so the telemetry survives Redis TTL expiry.
+
+    Skipped when there's no data to persist (total.calls == 0) — saves
+    a round-trip for pathological "scan died before any LLM call"
+    cases. Best-effort throughout; never raises so a Postgres blip
+    can't break the scan completion path."""
+    try:
+        payload = await read_counters(scan_id)
+    except Exception as e:
+        logger.warning(
+            f"[rr-llm-counter] snapshot read_counters failed "
+            f"scan_id={scan_id}: {type(e).__name__}: {e}"
+        )
+        return False
+    total = (payload or {}).get("total") or {}
+    if not int(total.get("calls") or 0):
+        logger.info(
+            f"[rr-llm-counter] snapshot skipped scan_id={scan_id} "
+            f"(zero calls — nothing to persist)"
+        )
+        return False
+    try:
+        from uuid import UUID
+        from ..stores.postgres import write_llm_counters
+        ok = await write_llm_counters(UUID(scan_id), payload)
+        if ok:
+            logger.info(
+                f"[rr-llm-counter] snapshot persisted scan_id={scan_id} "
+                f"calls={total.get('calls')} → radar_scans.llm_counters"
+            )
+        else:
+            logger.warning(
+                f"[rr-llm-counter] snapshot UPDATE matched 0 rows "
+                f"scan_id={scan_id} — scan row may have been deleted"
+            )
+        return ok
+    except Exception as e:
+        logger.warning(
+            f"[rr-llm-counter] snapshot write failed "
+            f"scan_id={scan_id}: {type(e).__name__}: {e}"
+        )
+        return False
 
 
 # --------------------------------------------------------------------------- #

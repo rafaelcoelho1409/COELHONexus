@@ -6,7 +6,7 @@ Server returns a static shell; main.js's existing `renderDigest()` + the
 operator at the toolbar form (which is still mounted on row 3 of the
 chrome — the form is global across both pages)."""
 from fasthtml.common import (
-    H3, Div, P, Script,
+    Div, P, Script,
 )
 
 # Reuse DD's shared modal — same pattern as `features/ycs/page.py`. Mounts
@@ -15,9 +15,21 @@ from fasthtml.common import (
 from features.dd.shared.overlays import ConfirmModal
 
 
-def _DigestArea():
+def DigestBody():
+    """Page body for `/research-radar/digest`.
+
+    2026-06-17 restructure:
+      - Container card (.rr-card-digest) removed — findings render
+        directly on the page surface for a cleaner reading view
+      - Title (H3 "Digest") + scan-topic display lifted into the row-3
+        toolbar (see DigestToolbar in toolbar.py). The toolbar is sticky,
+        so the topic stays visible as the operator scrolls the findings
+      - This page is now just: empty-state hint + findings list +
+        ConfirmModal target for the scans-picker delete flow
+
+    main.js hydrates the items from `?scan=<id>` on load and intercepts
+    SSE `phase=done` to swap in the live result."""
     return Div(
-        H3("Digest", cls = "rr-digest-title"),
         P(
             "Findings appear here once a scan completes. "
             "Start one from the form above; this page will auto-render the result.",
@@ -25,24 +37,6 @@ def _DigestArea():
             cls = "rr-digest-empty",
         ),
         Div(id = "rr-digest-items", cls = "rr-digest-items"),
-        cls = "rr-digest",
-    )
-
-
-def DigestBody():
-    """Page body for `/research-radar/digest`. The Pipeline page's status
-    strip is omitted here — the operator already saw the run, this is the
-    reading surface. main.js hydrates the digest items from `?scan=<id>`
-    on load and intercepts SSE `phase=done` to swap in the live result.
-
-    Includes DD's `ConfirmModal()` so main.js's `showConfirm(...)` from
-    `@dd/shared/ui/overlays.js` finds its `#fw-modal` DOM target. The
-    Recent-scans dropdown's per-row delete uses it."""
-    return Div(
-        Div(
-            _DigestArea(),
-            cls = "rr-card rr-card-digest",
-        ),
         ConfirmModal(),
         Script(src = "/static/js/rr/main.js", type = "module"),
         cls = "rr-page rr-page-digest",

@@ -1293,15 +1293,34 @@
   }
 
   /* ----- Digest ----- */
-  .rr-digest-title {
-    margin: 0 0 12px 0;
-    font-size: 18px;
-    font-weight: 600;
-  }
+  /* 2026-06-17 restructure: title H3 + container card removed; findings
+     render directly on the page. Scan-topic display lifted into the
+     row-3 toolbar (`.rr-toolbar-digest .rr-digest-topic`). The empty-
+     state hint stays as a top-level marker so the page isn't blank when
+     no scan is loaded. */
   .rr-digest-empty {
     color: var(--text-muted, #888);
     font-style: italic;
+    padding: 8px 4px;
   }
+  /* Scan topic pill — mounted in the Digest toolbar row, left of the
+     scans picker (which already has margin-left:auto to right-cluster).
+     Hides via data-empty="true" when no scan loaded. */
+  .rr-toolbar-digest .rr-digest-topic {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text, #111);
+    opacity: 0.85;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 48ch;
+    padding: 4px 12px;
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 999px;
+    background: var(--bg-panel-soft, #fafafa);
+  }
+  .rr-toolbar-digest .rr-digest-topic[data-empty="true"] { display: none; }
   .rr-digest-items {
     display: grid;
     grid-template-columns: 1fr;

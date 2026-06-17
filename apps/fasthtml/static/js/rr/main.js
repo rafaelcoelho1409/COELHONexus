@@ -31,7 +31,8 @@ const statusText  = $('rr-status-text');
 // and the CSS does the rest (border + glyph + bg).
 const statusDot   = $('rr-status');
 const statusInfo  = $('rr-status-detail');
-const statusTopic = $('rr-status-topic');
+const statusTopic = $('rr-status-topic');     // Pipeline page only
+const digestTopic = $('rr-digest-topic');     // Digest page only
 const digestArea  = $('rr-digest-items');
 const digestEmpty = $('rr-digest-empty');
 
@@ -377,22 +378,28 @@ if (scansPicker) {
   });
 }
 
-/* Pipeline-page in-place resume (2026-06-17). On the Pipeline page, the
- * picker's row hrefs still point to `/research-radar/digest?scan=...`
- * (server-side rendering doesn't know which page is mounting the picker).
- * We intercept on Pipeline page only — call resumeScan in-place so the
- * operator stays on the Pipeline graph + drawer to inspect execution
- * telemetry (LLM counters, retry visualization, per-node tokens) without
- * a page reload. On the Digest page, fall through to the regular
- * navigation (Digest's own bootstrap reads ?scan=<id> on load).
+/* In-place resume on EVERY RR page (2026-06-17). The picker's row hrefs
+ * are hardcoded to `/research-radar/digest?scan=...` (server-side
+ * rendering doesn't know which page is mounting the picker). Without
+ * intercept:
+ *   - Click on Pipeline → browser navigates to Digest (wrong page!)
+ *   - Click on Digest   → browser does a full page reload (wasteful)
+ *
+ * With intercept on both pages: URL updates via history.replaceState,
+ * resumeScan() reloads the scan state in-place — on Pipeline that
+ * repaints the graph + drawer + totals; on Digest that re-renders the
+ * findings via renderDigest(). Either way the operator stays on the
+ * page they're on.
  *
  * Registered BEFORE the trash handler so the trash button's
  * `e.stopPropagation()` still wins for delete clicks. */
-const _IS_PIPELINE_PAGE = (
+const _IS_RR_PAGE = (
   window.location.pathname === '/research-radar'
   || window.location.pathname === '/research-radar/'
+  || window.location.pathname === '/research-radar/digest'
+  || window.location.pathname === '/research-radar/digest/'
 );
-if (scansList && _IS_PIPELINE_PAGE) {
+if (scansList && _IS_RR_PAGE) {
   scansList.addEventListener('click', (e) => {
     // Skip if it's a delete click — trash handler below owns those.
     if (e.target?.closest?.('.rr-scans-row-trash')) return;
@@ -403,7 +410,8 @@ if (scansList && _IS_PIPELINE_PAGE) {
     if (!scanId) return;
     e.preventDefault();
     e.stopPropagation();
-    // Update URL + load scan state into the Pipeline graph / drawer.
+    // Update URL + load scan state into whichever surfaces this page
+    // hosts (Pipeline: graph/drawer/totals; Digest: findings list).
     try {
       if (typeof setScanIdInUrl === 'function') setScanIdInUrl(scanId);
     } catch (_) { /* setScanIdInUrl is defined below in this file */ }
@@ -541,8 +549,8 @@ if (topNInput) {
   try {
     const saved = localStorage.getItem(_TOP_N_LS_KEY);
     if (saved !== null && saved !== '') {
-      const min  = parseInt(topNInput.min  || '4',  10);
-      const max  = parseInt(topNInput.max  || '30', 10);
+      const min  = parseInt(topNInput.min  || '4',   10);
+      const max  = parseInt(topNInput.max  || '100', 10);
       const n    = parseInt(saved, 10);
       if (Number.isFinite(n)) {
         topNInput.value = String(Math.min(Math.max(n, min), max));
@@ -572,14 +580,18 @@ const topicInput   = form?.querySelector('#topic');
 const _TOPIC_LS_KEY = 'rr.topic';
 
 function _setPillTopic(text) {
-  if (!statusTopic) return;
+  // Updates BOTH topic surfaces — the Pipeline-page status-pill span and
+  // the Digest-page title-row span. Each is null on the other page; the
+  // null-guards mean callers don't need to know which page they're on.
   const t = (text || '').trim();
-  statusTopic.textContent = t;
-  // Hide the pill slot entirely when empty so the pill collapses to its
-  // idle shape (no empty bracket / dash). CSS can target the dataset
-  // for spacing too.
-  statusTopic.dataset.empty = t ? 'false' : 'true';
-  statusTopic.title = t ? `Scan topic: ${t}` : 'Scan topic';
+  for (const el of [statusTopic, digestTopic]) {
+    if (!el) continue;
+    el.textContent = t;
+    // data-empty="true" lets CSS collapse the element entirely so the
+    // layout doesn't reserve space for an empty bracket / dash.
+    el.dataset.empty = t ? 'false' : 'true';
+    el.title = t ? `Scan topic: ${t}` : 'Scan topic';
+  }
 }
 
 function _syncTopicFromInput() {

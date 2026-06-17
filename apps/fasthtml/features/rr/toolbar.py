@@ -17,7 +17,7 @@ both pages was a leftover from when there was a single toolbar shared
 across stages."""
 from __future__ import annotations
 
-from fasthtml.common import Div
+from fasthtml.common import Div, Span
 
 from .body import ScanForm
 from .shared.scans_picker import RRRecentScansPicker
@@ -52,10 +52,25 @@ def PipelineToolbar():
 
 
 def DigestToolbar():
-    """Row-3 chrome for `/research-radar/digest`. Just the Recent-scans
-    dropdown — no form here; new scans are launched from the Pipeline
-    page where the operator can watch them run."""
+    """Row-3 chrome for `/research-radar/digest`. Scan topic on the left,
+    Recent-scans dropdown on the right (2026-06-17 update).
+
+    Why topic is here: lifted out of the digest body — operators reading
+    findings need to know WHICH scan they're reading at a glance, and
+    the toolbar row is sticky / collapsible across both stages so the
+    context follows the reader as they scroll the findings list.
+
+    Empty when no scan is loaded (data-empty="true" hides via CSS).
+    main.js's resumeScan() fills `#rr-digest-topic` from the scan
+    record on load."""
     return Div(
+        Span(
+            "",
+            id    = "rr-digest-topic",
+            cls   = "rr-digest-topic",
+            title = "Scan topic",
+            **{"data-empty": "true"},
+        ),
         RRRecentScansPicker(),
         cls = "dd-toolbar topbar-collapsible rr-toolbar rr-toolbar-digest",
         id  = "rr-toolbar",

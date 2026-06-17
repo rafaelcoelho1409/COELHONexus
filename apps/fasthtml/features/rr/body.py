@@ -329,7 +329,7 @@ def ScanForm(extra_actions=None):
                         "aria-label":   "More info about Deep reads",
                         "data-tooltip": (
                             "Papers to extract in detail. More = deeper "
-                            "digest, longer scan. Range 4–30, default 8."
+                            "digest, longer scan. Range 4–100, default 8."
                         ),
                     },
                 ),
@@ -348,7 +348,7 @@ def ScanForm(extra_actions=None):
                 type  = "number",
                 value = "8",
                 min   = "4",
-                max   = "30",
+                max   = "100",
                 step  = "1",
                 cls   = "rr-top-n-input",
             ),

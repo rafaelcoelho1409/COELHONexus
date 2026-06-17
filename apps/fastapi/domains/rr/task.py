@@ -275,6 +275,20 @@ async def _run_radar_scan_async(
             "error":      err,
         }
     finally:
+        # 2026-06-17: snapshot LLM counters from Redis → Postgres
+        # (radar_scans.llm_counters JSONB) so the per-scan telemetry
+        # (drawer KPIs + totals strip) survives Redis TTL expiry. Runs
+        # on every exit path (success / failure / cancellation). DELETE
+        # on the scan row removes the counters atomically — no separate
+        # cleanup in the trash-button flow.
+        try:
+            from .runtime.llm_counter import snapshot_to_postgres
+            await snapshot_to_postgres(scan_id)
+        except Exception as e:
+            logger.warning(
+                f"[rr-task] llm-counter snapshot failed scan_id={scan_id}: "
+                f"{type(e).__name__}: {e}"
+            )
         # Clear the LLM-counter contextvar so subsequent non-RR work
         # in the worker doesn't attribute calls to this scan_id.
         try:

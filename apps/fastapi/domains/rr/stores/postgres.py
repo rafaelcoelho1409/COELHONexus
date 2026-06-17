@@ -63,9 +63,15 @@ CREATE TABLE IF NOT EXISTS {PG_TABLE_SCANS} (
     top_n               INT
 );
 -- Idempotent ADDs for already-deployed environments.
-ALTER TABLE {PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS topic     TEXT;
-ALTER TABLE {PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS verticals TEXT[];
-ALTER TABLE {PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS top_n     INT;
+ALTER TABLE {PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS topic        TEXT;
+ALTER TABLE {PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS verticals    TEXT[];
+ALTER TABLE {PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS top_n        INT;
+-- 2026-06-17: per-scan LLM telemetry snapshot. Redis is the in-flight
+-- cache (TTL-bound); this column is the durable archive written at
+-- scan completion. Read path: Redis-first, falls back to this JSONB
+-- when Redis returns empty. NULL on old rows + scans with zero LLM
+-- activity (snapshot is skipped to keep the column sparse).
+ALTER TABLE {PG_TABLE_SCANS} ADD COLUMN IF NOT EXISTS llm_counters JSONB;
 
 CREATE TABLE IF NOT EXISTS {PG_TABLE_FINDINGS} (
     scan_id     UUID  NOT NULL REFERENCES {PG_TABLE_SCANS}(id) ON DELETE CASCADE,
@@ -281,12 +287,65 @@ async def get_seen_ids(profile_id: str) -> frozenset[str]:
     return frozenset(r[0] for r in rows)
 
 
+async def write_llm_counters(scan_id: UUID, payload: dict) -> bool:
+    """UPDATE the scan row with its LLM-counter snapshot. Returns True if
+    a row was updated, False if the scan_id didn't match (rare — the
+    scan completion path always runs after the row exists).
+
+    Stored as JSONB, so the column can be queried directly:
+        SELECT id, llm_counters->'total'->>'calls' AS calls
+          FROM radar_scans WHERE finished_at > NOW() - INTERVAL '7 days';
+
+    DELETE on the scan row removes the counters atomically — no separate
+    cleanup needed in delete_scan_record."""
+    import json as _json
+    async with await psycopg.AsyncConnection.connect(postgres_url()) as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                f"UPDATE {PG_TABLE_SCANS} SET llm_counters = %s::jsonb "
+                f"WHERE id = %s",
+                (_json.dumps(payload, default=str), str(scan_id)),
+            )
+            n = cur.rowcount
+        await conn.commit()
+    return bool(n)
+
+
+async def read_llm_counters(scan_id: UUID) -> dict | None:
+    """Read the persisted LLM-counter snapshot for one scan. Returns the
+    parsed dict on hit, None when (a) the scan_id doesn't exist,
+    (b) the row exists but llm_counters is NULL (old row OR zero-LLM
+    scan whose snapshot was skipped). Called as the Redis-TTL fallback
+    from `runtime/llm_counter.read_counters`."""
+    async with await psycopg.AsyncConnection.connect(postgres_url()) as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                f"SELECT llm_counters FROM {PG_TABLE_SCANS} WHERE id = %s",
+                (str(scan_id),),
+            )
+            row = await cur.fetchone()
+    if row is None:
+        return None
+    payload = row[0]
+    # psycopg3 returns JSONB as dict; defensive parse for str variants.
+    if isinstance(payload, str):
+        import json as _json
+        try:
+            return _json.loads(payload)
+        except Exception:
+            return None
+    return payload if isinstance(payload, dict) else None
+
+
 async def delete_scan_record(scan_id: UUID) -> bool:
     """Delete one scan + its findings (CASCADE) from Postgres. Returns
     True if a row existed, False if the scan_id wasn't found. radar_seen
     entries are NOT touched — the operator's "I've seen this paper before"
     memory is profile-scoped, not scan-scoped. Neo4j and Qdrant are also
-    left untouched (accumulated cross-scan knowledge)."""
+    left untouched (accumulated cross-scan knowledge).
+
+    Per-scan LLM-counter snapshot (llm_counters JSONB column on the same
+    row) is removed atomically with the row — no separate cleanup."""
     async with await psycopg.AsyncConnection.connect(postgres_url()) as conn:
         async with conn.cursor() as cur:
             await cur.execute(

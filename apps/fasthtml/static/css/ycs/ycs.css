@@ -2248,9 +2248,33 @@
 }
 #ycs-ask-form .ycs-form-actions .ycs-search-status { flex: 1; }
 .ycs-ask-rail {
-  position: sticky;
-  top: 80px;
-  max-height: calc(100vh - 110px);
+  /* 2026-06-16 — pinned to the viewport, mirroring the composer dock's
+   * `position: fixed` pattern.
+   *
+   * Vertical:
+   *   `top: 168px` clears the 3-row topbar (row 1 ≈ 56 px, row 2 + row 3
+   *   = 2 × 38 px ≈ 132 px total chrome; `html { scroll-padding-top: 160px }`
+   *   in `base/reset.css` is the team's canonical "clear the topbar"
+   *   number) plus an 8 px breathing pad below row 3.
+   *   `bottom: 14px` aligns with the composer dock's inner padding-
+   *   bottom (`.ycs-ask-composer-dock { padding: 12px 0 14px }`), so
+   *   the rail's bottom edge sits on the same horizontal line as the
+   *   form card's bottom edge.
+   *
+   * Horizontal:
+   *   `right: 40px` + `width: 300px` matches the grid's reserved right
+   *   column (`grid-template-columns: minmax(0,1fr) 300px`). The
+   *   composer dock's `right: 364px` leaves a 24 px gap to the rail,
+   *   so they share the bottom band without overlapping.
+   *
+   * Internal `overflow-y: auto` scrolls the card list when citations
+   * exceed available height. Mobile override (< 960 px) below switches
+   * back to `static` so the rail stacks under the conversation. */
+  position: fixed;
+  top: 168px;
+  right: 40px;
+  bottom: 14px;
+  width: 300px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -2259,6 +2283,7 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   background: rgba(0, 0, 0, 0.01);
+  z-index: 20;
 }
 .ycs-ask-rail-head {
   display: flex;
