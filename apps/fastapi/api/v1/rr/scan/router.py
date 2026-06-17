@@ -280,6 +280,125 @@ async def scan_llm_counters(scan_id: UUID) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# GET /scan/{id}/finding/{arxiv_id}/code — Build-tab Python (lazy synth)
+# --------------------------------------------------------------------------- #
+@router.get("/scan/{scan_id}/finding/{arxiv_id}/code")
+async def scan_finding_code(
+    scan_id:    UUID,
+    arxiv_id:   str,
+    check_only: bool = False,
+) -> dict:
+    """Return a synthesized Python file built from the finding's 5
+    extraction fields (money_angle, problem, method, how_to_build, math).
+
+    Cache-first: MinIO `rr/scans/{scan_id}/code/{arxiv_id}_{version}.py`
+    is read on every call; only generates if missing. Generation runs
+    the `code_synth.synth_code` self-refine loop (generate → critique →
+    revise) against `build_rr_strong_chain_bandit`, which picks an arm
+    from the same `rr-strong` pool Planner/Synth use, brain = FGTS-VA.
+
+    Query params:
+      check_only (bool, default false): cache PROBE mode. Returns the
+        cached code if present, 404 if missing — NEVER triggers the
+        rotator. The frontend probes on Build-tab activation so a
+        post-refresh visit instantly displays previously-generated code
+        without forcing the operator to re-click the Generate button.
+        The explicit Generate button still uses check_only=false to
+        actually synthesize on miss.
+
+    Why lazy and not pre-computed during deep_read: most papers never
+    have their Build tab opened. Pre-computing would 2-3× the scan's
+    rotator budget for an unobserved artifact. Lazy + cache means the
+    operator pays only for what they read.
+
+    Returns 404 if the finding row doesn't exist (scan not done, or
+    arxiv_id never made it into the digest). With check_only=true a 404
+    also signals "no cache yet, click Generate to create one"."""
+    from domains.rr.agent.tools.code_synth import (
+        CODE_SYNTH_PROMPT_VERSION, synth_code,
+    )
+    from domains.rr.stores import minio as minio_store
+
+    # Cache check FIRST — avoids a Postgres round-trip on the hot path.
+    cached = await minio_store.get_code_py(
+        str(scan_id), arxiv_id, CODE_SYNTH_PROMPT_VERSION,
+    )
+    if cached is not None:
+        return {
+            "scan_id":        str(scan_id),
+            "arxiv_id":       arxiv_id,
+            "code":           cached,
+            "prompt_version": CODE_SYNTH_PROMPT_VERSION,
+            "cached":         True,
+            "model_id":       None,
+        }
+
+    # Probe mode — return 404 instead of synthesizing. Lets the UI
+    # distinguish "no cache" from "endpoint is broken" without paying
+    # the rotator cost.
+    if check_only:
+        raise HTTPException(
+            status_code = 404,
+            detail = "no cached code for this finding yet — click Generate to synthesize",
+        )
+
+    # Cache miss — load the finding's digest_json so we have the 5
+    # extraction fields. 404 if the finding doesn't exist (scan still
+    # running, scan failed before this paper made it into the digest,
+    # or arxiv_id typo).
+    async with await psycopg.AsyncConnection.connect(postgres_url()) as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                f"SELECT digest_json FROM {PG_TABLE_FINDINGS} "
+                f"WHERE scan_id = %s AND arxiv_id = %s",
+                (str(scan_id), arxiv_id),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                raise HTTPException(
+                    status_code = 404,
+                    detail = (
+                        f"finding {arxiv_id!r} not found for scan "
+                        f"{scan_id} (scan still running or paper not in digest)"
+                    ),
+                )
+            finding = row[0] or {}
+
+    try:
+        result = await synth_code(finding)
+    except Exception as e:
+        logger.exception(
+            f"[rr-api] code_synth failed scan_id={scan_id} arxiv_id={arxiv_id}"
+        )
+        raise HTTPException(
+            status_code = 502,
+            detail = f"code_synth failed: {type(e).__name__}: {e}",
+        )
+
+    # Persist for next call — best-effort; failure here doesn't fail the
+    # request (operator already has the code in the response). A retry
+    # next time would just regenerate.
+    try:
+        await minio_store.put_code_py(
+            str(scan_id), arxiv_id,
+            CODE_SYNTH_PROMPT_VERSION, result["code"],
+        )
+    except Exception as e:
+        logger.warning(
+            f"[rr-api] code_synth cache write failed for {arxiv_id}: {e}"
+        )
+
+    return {
+        "scan_id":        str(scan_id),
+        "arxiv_id":       arxiv_id,
+        "code":           result["code"],
+        "prompt_version": CODE_SYNTH_PROMPT_VERSION,
+        "cached":         False,
+        "model_id":       result.get("model_id"),
+    }
+
+
+# --------------------------------------------------------------------------- #
 # GET /scan/{id}/events — SSE phase stream
 # --------------------------------------------------------------------------- #
 @router.get("/scan/{scan_id}/events")

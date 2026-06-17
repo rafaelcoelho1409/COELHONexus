@@ -25,6 +25,9 @@ from botocore.exceptions import ClientError
 
 from ..keys import (
     MINIO_PREFIX_RR,
+    MINIO_PREFIX_SCANS,
+    MINIO_PYTHON_CONTENT_TYPE,
+    code_minio_key,
     digest_minio_key,
     extraction_minio_key,
 )
@@ -187,5 +190,73 @@ async def get_extraction_json(
             raise
         body = await obj["Body"].read()
     return json.loads(body)
+
+
+# --------------------------------------------------------------------------- #
+# Build-tab Python — per-paper synthesized code (lazy, on first tab click)
+# --------------------------------------------------------------------------- #
+async def put_code_py(
+    scan_id: str, arxiv_id: str, prompt_version: str, code: str,
+) -> str:
+    """Persist a synthesized Python file. Returns the MinIO key.
+    Content-Type is `text/x-python` so an operator browsing MinIO sees it
+    rendered as plain text instead of being treated as JSON."""
+    key  = code_minio_key(scan_id, arxiv_id, prompt_version)
+    body = code.encode("utf-8")
+    async with _client() as s3:
+        await s3.put_object(
+            Bucket      = _bucket(),
+            Key         = key,
+            Body        = body,
+            ContentType = MINIO_PYTHON_CONTENT_TYPE,
+        )
+    return key
+
+
+async def get_code_py(
+    scan_id: str, arxiv_id: str, prompt_version: str,
+) -> str | None:
+    """Read a synthesized Python file. Returns None on 404 (i.e. the Build
+    tab has never been opened for this paper at this prompt version, or
+    the cache was wiped)."""
+    key = code_minio_key(scan_id, arxiv_id, prompt_version)
+    async with _client() as s3:
+        try:
+            obj = await s3.get_object(Bucket=_bucket(), Key=key)
+        except ClientError as e:
+            code = (e.response or {}).get("Error", {}).get("Code", "")
+            if code in ("404", "NoSuchKey"):
+                return None
+            raise
+        body = await obj["Body"].read()
+    return body.decode("utf-8")
+
+
+async def delete_code_dir(scan_id: str) -> int:
+    """Drop every Build-tab artifact for one scan (all arxiv_ids, all
+    prompt versions). Idempotent — returns the count of objects deleted.
+    Called by service.delete_scan so the Recent-scans dropdown's delete
+    button doesn't leak code blobs."""
+    prefix = f"{MINIO_PREFIX_SCANS}/{scan_id}/code/"
+    deleted = 0
+    async with _client() as s3:
+        continuation: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {"Bucket": _bucket(), "Prefix": prefix}
+            if continuation:
+                kwargs["ContinuationToken"] = continuation
+            page = await s3.list_objects_v2(**kwargs)
+            objs = page.get("Contents") or []
+            if not objs:
+                break
+            await s3.delete_objects(
+                Bucket = _bucket(),
+                Delete = {"Objects": [{"Key": o["Key"]} for o in objs]},
+            )
+            deleted += len(objs)
+            if not page.get("IsTruncated"):
+                break
+            continuation = page.get("NextContinuationToken")
+    return deleted
 
 

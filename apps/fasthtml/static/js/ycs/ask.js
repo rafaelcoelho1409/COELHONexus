@@ -517,6 +517,12 @@ function _streamingTurnSkeleton(question) {
 function _actionChipsHTML() {
     return `
         <div class="ycs-ask-turn-actions">
+            <button type="button" class="ycs-ask-turn-action ycs-ask-turn-action-sources"
+                    data-action="sources"
+                    title="Show this turn's sources in the right rail">
+                <span>Sources</span>
+                <span class="ycs-ask-turn-action-count" data-sources-count>0</span>
+            </button>
             <button type="button" class="ycs-ask-turn-action"
                     data-action="copy"
                     title="Copy the answer to clipboard">Copy</button>
@@ -665,6 +671,11 @@ function startNewTurn(question) {
     deepCardIndex.clear();
     currentSubQuestions = [];
     clearSourcesRail();
+    // 2026-06-17 — drop any "sources-active" marker carried over from
+    // a prior turn since the rail is being wiped for the in-flight turn.
+    conversationEl.querySelectorAll(
+        ".ycs-ask-turn.ycs-ask-turn-sources-active",
+    ).forEach((t) => t.classList.remove("ycs-ask-turn-sources-active"));
     currentTurnEl = _streamingTurnSkeleton(question);
     conversationEl.appendChild(currentTurnEl);
     // On Send: snap the conversation to the very bottom so the user
@@ -930,6 +941,10 @@ function renderHistoryTurn({
             data.citations  = persistedCitations;
         }
     }
+    // Seed the per-turn "Sources (N)" chip count from the persisted
+    // citation list. Without this, history-loaded turns would show
+    // "Sources (0)" until the user clicked Regenerate.
+    _updateTurnSourcesCount(turn, persistedCitations.length);
 }
 
 /* Wipe the whole conversation column + show the empty state. Used by
@@ -1745,6 +1760,15 @@ function applyUpdate(node, update) {
         if (data) {
             data.citations = update.citations;
             updateSourcesRail(update.citations);
+            // The rail now belongs to the in-flight turn; mark it so
+            // the user sees the active-turn affordance and other
+            // turns' Sources buttons stay neutral.
+            conversationEl?.querySelectorAll(
+                ".ycs-ask-turn.ycs-ask-turn-sources-active",
+            ).forEach((t) => t.classList.remove("ycs-ask-turn-sources-active"));
+            currentTurnEl?.classList.add("ycs-ask-turn-sources-active");
+            // Per-turn "Sources (N)" chip count update.
+            _updateTurnSourcesCount(currentTurnEl, update.citations.length);
             // Re-render the body now that citations are known so the
             // inline `[Video: title]` markers swap for `[N]` pills.
             const body = _q(".ycs-ask-turn-body.ycs-ask-answer");
@@ -2043,8 +2067,53 @@ conversationEl?.addEventListener("click", (ev) => {
         case "copy":       copyTurnAnswer(turn); break;
         case "regenerate": regenerateTurn(turn); break;
         case "branch":     branchTurn(turn);     break;
+        case "sources":    showTurnSources(turn); break;
     }
 });
+
+/* 2026-06-17 — load a specific turn's citations into the right-rail.
+ * Each turn now has a per-response "Sources (N)" chip; clicking it
+ * pulls that turn's persisted citations out of `turnDataMap` and
+ * pipes them through `updateSourcesRail` (replacing whatever the
+ * rail was showing). Marks the active turn with a class so the user
+ * always knows which response the rail belongs to. */
+function showTurnSources(turn) {
+    if (!turn) return;
+    const data = getTurnData(turn);
+    const citations = data?.citations || [];
+    // Clear any previous "showing this turn" markers, then mark this one.
+    conversationEl?.querySelectorAll(
+        ".ycs-ask-turn.ycs-ask-turn-sources-active",
+    ).forEach((t) => t.classList.remove("ycs-ask-turn-sources-active"));
+    turn.classList.add("ycs-ask-turn-sources-active");
+    updateSourcesRail(citations);
+    // Bring the rail into view on mobile / narrow screens (no-op on
+    // wide screens where it's already on-screen via the fixed-rail CSS).
+    document.getElementById("ycs-ask-rail")?.scrollIntoView({
+        behavior: "smooth", block: "start",
+    });
+}
+
+/* Update the "Sources (N)" count chip on a turn whenever its citation
+ * list changes. Called from the SSE update path AND `renderHistoryTurn`
+ * after the turn's data is seeded. */
+function _updateTurnSourcesCount(turn, n) {
+    if (!turn) return;
+    const slot = turn.querySelector(
+        '.ycs-ask-turn-action[data-action="sources"] [data-sources-count]',
+    );
+    if (!slot) return;
+    slot.textContent = String(n || 0);
+    // Disable the chip when there are zero sources so the user gets
+    // the disabled affordance instead of a dead click.
+    const btn = slot.closest('.ycs-ask-turn-action[data-action="sources"]');
+    if (btn) {
+        btn.disabled = !n;
+        btn.title = n
+            ? `Show this turn's ${n} source${n === 1 ? "" : "s"} in the right rail`
+            : "This turn has no sources to show";
+    }
+}
 
 /* Stop button — works in two scenarios:
  *

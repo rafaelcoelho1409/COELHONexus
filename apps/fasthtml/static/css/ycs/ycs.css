@@ -2635,6 +2635,70 @@
   border-color: var(--text-muted);
   background: rgba(0, 0, 0, 0.03);
 }
+.ycs-ask-turn-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* "Sources (N)" chip — flex layout so the count badge sits inline
+ * with the label. Primary-tinted as the lead action because the
+ * user told us this is the action they care about most. */
+.ycs-ask-turn-action-sources {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--primary);
+  border-color: rgba(196, 18, 48, 0.30);
+  background: rgba(196, 18, 48, 0.04);
+  font-weight: 600;
+}
+.ycs-ask-turn-action-sources:hover {
+  color: #fff;
+  border-color: var(--primary);
+  background: var(--primary);
+}
+.ycs-ask-turn-action-sources:hover .ycs-ask-turn-action-count {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+.ycs-ask-turn-action-count {
+  min-width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  background: rgba(196, 18, 48, 0.14);
+  color: var(--primary);
+  border-radius: 999px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  transition: background 0.15s, color 0.15s;
+}
+/* Active state — this turn's sources are currently in the rail.
+ * Both the Sources chip and the whole turn get a subtle accent so the
+ * user can tell at a glance which response the rail belongs to. */
+.ycs-ask-turn-sources-active .ycs-ask-turn-action-sources {
+  color: #fff;
+  border-color: var(--primary);
+  background: var(--primary);
+}
+.ycs-ask-turn-sources-active .ycs-ask-turn-action-sources .ycs-ask-turn-action-count {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+.ycs-ask-turn-sources-active .ycs-ask-turn-actions { opacity: 1; }
+.ycs-ask-turn-sources-active .ycs-ask-turn-assistant {
+  /* Left primary-tinted hairline rail to mark the "active" turn. */
+  box-shadow: -3px 0 0 0 var(--primary);
+  border-radius: 4px;
+  padding-left: 6px;
+  margin-left: -9px;
+  transition: box-shadow 0.18s ease, padding-left 0.18s ease, margin-left 0.18s ease;
+}
 
 /* Stages + DEEP accordion. Open while streaming; auto-collapses on
  * `end` so the answer is the headline. Click the head to re-expand. */

@@ -270,6 +270,23 @@ def PipelineBody():
     # Slim header now: status pill on the left, kind legend on the
     # right. Canvas + totals strip + drawer hang directly off rr-page.
     return Div(
+        # 2026-06-17 v3: topic now renders as a page-title heading
+        # (red left-bar accent matching the navbar `.title`), not a
+        # pill. Reads as "this is what the page is about" instead of
+        # "this is a chip/tag". Element id `#rr-status-topic` is
+        # preserved so main.js's `_setPillTopic` write keeps working
+        # without code changes. `data-empty="true"` collapses the
+        # whole strip via CSS when no scan is loaded.
+        Div(
+            Span(
+                "",
+                id    = "rr-status-topic",
+                cls   = "rr-topic-title",
+                title = "Scan topic",
+                **{"data-empty": "true"},
+            ),
+            cls = "rr-topic-strip",
+        ),
         Div(
             _StatusPill(),
             _KindLegend(),

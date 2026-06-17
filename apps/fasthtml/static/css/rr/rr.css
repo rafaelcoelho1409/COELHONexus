@@ -763,26 +763,42 @@
     flex-wrap: wrap;
     flex: 0 0 auto;
   }
-  /* Scan topic — mounted in the row-3 toolbar's `.rr-actions` cluster,
-     just LEFT of the Start Scan button. Same pill-shape as the Digest
-     toolbar topic for visual consistency across stages. Hides via
-     data-empty="true" when no scan loaded so the cluster collapses to
-     just the buttons in the idle state. */
-  .rr-pipeline-topic {
-    font-size: 13px;
+  /* 2026-06-17 v3: scan-topic strip — page-body container holding the
+     topic as a page-title heading (NOT a pill). The red left-bar +
+     bold-text treatment matches the navbar `.title` rule (base/topbar
+     .css line 186) so the operator's eye groups this as "what the
+     page is about" rather than another chip. Strip collapses to zero
+     height when the heading is empty (data-empty="true") via the
+     `:has()` rule below. */
+  .rr-topic-strip {
+    display: flex;
+    align-items: center;
+    margin: 0;
+    padding: 0;
+  }
+  .rr-topic-strip:has(.rr-topic-title[data-empty="true"]) {
+    display: none;
+  }
+  .rr-topic-title {
+    /* Heading typography — sized between the navbar title (0.98rem) and
+       a full section H1 (1.4rem) so the eye reads "this is the page
+       subject" without dominating the layout. The 4px red left bar is
+       the brand's identity accent already used by `.title` in the
+       navbar; reusing it here ties the page title back to the chrome. */
+    display: inline-block;
+    font-size: 1.1rem;
     font-weight: 600;
+    line-height: 1.3;
     color: var(--text, #111);
-    opacity: 0.85;
+    padding: 2px 0 2px 12px;
+    border-left: 4px solid var(--primary, #c41230);
+    margin: 6px 0 8px 0;
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 40ch;
-    padding: 4px 12px;
-    border: 1px solid var(--border, #e5e5e5);
-    border-radius: 999px;
-    background: var(--bg-panel-soft, #fafafa);
   }
-  .rr-pipeline-topic[data-empty="true"] { display: none; }
+  .rr-topic-title[data-empty="true"] { display: none; }
   .rr-legend {
     display: inline-flex;
     align-items: center;
@@ -1296,38 +1312,43 @@
     font-style: italic;
     padding: 8px 4px;
   }
-  /* Scan topic pill — mounted in the Digest toolbar row, left of the
-     scans picker (which already has margin-left:auto to right-cluster).
-     Hides via data-empty="true" when no scan loaded. */
-  .rr-toolbar-digest .rr-digest-topic {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text, #111);
-    opacity: 0.85;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 48ch;
-    padding: 4px 12px;
-    border: 1px solid var(--border, #e5e5e5);
-    border-radius: 999px;
-    background: var(--bg-panel-soft, #fafafa);
-  }
-  .rr-toolbar-digest .rr-digest-topic[data-empty="true"] { display: none; }
+  /* 2026-06-17 v2: scan topic pill moved out of `.rr-toolbar-digest`
+     into the page-body `.rr-topic-strip` (shared with Pipeline). The
+     pill styling lives on the shared `.rr-topic-pill` rule above. */
   .rr-digest-items {
     display: grid;
     grid-template-columns: 1fr;
     gap: 12px;
   }
   /* ─── Synthesis strip (scan-wide context, sticky top of digest) ─── */
+  /* 2026-06-17: top margin zeroed so the strip butts directly against
+     the row-3 toolbar — the operator wanted no breathing room between
+     the chrome and the first content row. Bottom margin kept to space
+     the strip from the finding cards. The digest page's `.rr-page`
+     top padding is also zeroed below (`.rr-page-digest`) so the
+     combined gap is 0. */
   .rr-synthesis-strip {
     position: sticky;
     top: 0;
     z-index: 5;
     background: var(--bg, #fff);
     padding: 10px 8px 8px 8px;
-    margin: 4px 0 8px 0;
+    margin: 0 0 8px 0;
     border-bottom: 1px solid var(--border, #eee);
+  }
+  .rr-page-digest {
+    padding-top: 0;
+  }
+  /* The global `.page` scroll region (base/shell.css line 21) has
+     `padding: 28px 40px 40px 40px` — that 28px top padding is what was
+     still pushing the synthesis strip away from row 3 even after the
+     local `.rr-page` and `.rr-synthesis-strip` margins were zeroed.
+     Scope the override to the Digest page via `:has()` so DD / YCS /
+     RR-Pipeline keep their original chrome breathing room. The
+     `@layer features` rule beats `@layer base` per cascade order, so
+     this lands without an !important. */
+  .page:has(.rr-page-digest) {
+    padding-top: 0;
   }
   .rr-synthesis-row {
     display: flex;
@@ -1686,6 +1707,86 @@
   .rr-finding-drawer-tab-primary.is-active {
     color: #92400e;
     border-bottom-color: #f59e0b;
+  }
+  /* Build tab — synthesized Python from the paper extraction. Distinct
+     emerald accent so the operator visually clusters it as "derived
+     output" (a product of the other tabs) rather than "another
+     extraction field". Adds a small ⚡ glyph to telegraph that it's
+     generative and may take a moment on first click. */
+  .rr-finding-drawer-tab-codegen::before {
+    content: "\26A1\00A0";
+    font-size: 11px;
+    opacity: 0.8;
+  }
+  .rr-finding-drawer-tab-codegen.is-active {
+    color: #065f46;
+    border-bottom-color: #10b981;
+  }
+  /* Build-panel transient states (idle prose, pending spinner-line,
+     error message). The .is-active panel shows; the .rr-md inside
+     handles the actual content swap. Pending/error use accent strips
+     so the operator notices the change. */
+  .rr-finding-drawer-codegen-pending {
+    margin: 0;
+    padding: 12px 14px;
+    background: rgba(16, 185, 129, 0.08);
+    border-left: 3px solid #10b981;
+    border-radius: 0 6px 6px 0;
+    font-size: 13px;
+    color: #065f46;
+  }
+  .rr-finding-drawer-codegen-pending::before {
+    content: "\23F3\00A0";
+  }
+  .rr-finding-drawer-codegen-error {
+    margin: 0 0 12px 0;
+    padding: 12px 14px;
+    background: rgba(220, 38, 38, 0.08);
+    border-left: 3px solid #dc2626;
+    border-radius: 0 6px 6px 0;
+    font-size: 13px;
+    color: #991b1b;
+  }
+  /* Idle (or post-error retry) state for the Build panel — center the
+     primer + button so the operator's eye lands on the call-to-action.
+     Vertical padding gives the button breathing room inside the long
+     drawer; the panel stays scrollable if the prose wraps. */
+  .rr-finding-drawer-codegen-prompt {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 8px 0;
+  }
+  .rr-finding-drawer-codegen-prompt-retry {
+    padding-top: 0;
+  }
+  .rr-finding-drawer-codegen-pitch {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text-muted, #555);
+  }
+  .rr-finding-drawer-codegen-trigger {
+    padding: 10px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #fff;
+    background: #10b981;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 120ms ease, transform 80ms ease;
+  }
+  .rr-finding-drawer-codegen-trigger:hover {
+    background: #059669;
+  }
+  .rr-finding-drawer-codegen-trigger:active {
+    transform: translateY(1px);
+  }
+  .rr-finding-drawer-codegen-trigger:focus-visible {
+    outline: 2px solid #10b981;
+    outline-offset: 2px;
   }
   .rr-finding-drawer-panels {
     padding-top: 16px;

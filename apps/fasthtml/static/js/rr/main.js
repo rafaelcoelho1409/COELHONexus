@@ -794,6 +794,11 @@ const _findingDrawerBody   = $('rr-finding-drawer-body');
 const _findingDrawerCloseBtn = $('rr-finding-drawer-close-btn');
 let   _findingsCache = null;
 let   _activeThemeFilter = null;
+// 2026-06-17: tracks the finding the drawer is currently showing so the
+// delegated tab-click handler (module-scoped, not closed over the open
+// call) can resolve the right paper when firing the Build tab's lazy
+// /code fetch. Set in `_openFindingDrawer`, cleared in `_closeFindingDrawer`.
+let   _currentFinding   = null;
 
 // `_esc` is defined globally near the top of this file (line ~314).
 // Reused throughout — DO NOT redeclare here (ES module duplicate-binding
@@ -958,22 +963,25 @@ function _openFindingDrawer(f) {
     ? `<p class="rr-finding-drawer-authors">${_esc((f.authors || []).join(', '))}</p>`
     : '';
   const fields = [
-    { key: 'money_angle',  label: 'Money angle',  primary: true  },
-    { key: 'problem',      label: 'Problem'                       },
-    { key: 'method',       label: 'Method'                        },
-    { key: 'how_to_build', label: 'How to build'                  },
-    { key: 'math',         label: 'Math',         monospace: true },
+    { key: 'money_angle',  label: 'Money angle',  primary: true               },
+    { key: 'problem',      label: 'Problem'                                    },
+    { key: 'method',       label: 'Method'                                     },
+    { key: 'how_to_build', label: 'How to build'                               },
+    { key: 'math',         label: 'Math',         monospace: true              },
+    { key: 'code',         label: 'Build',        codegen:   true              },
   ];
-  // Only render tabs for fields that have content — no greyed-out empty
-  // tabs. Default-active tab = first visible one (money_angle when
-  // present, otherwise whichever field exists first in declaration
-  // order).
-  const visible = fields.filter(({key}) => ex[key]);
+  // Extraction-backed tabs only show if the field has content (no
+  // greyed-out empty tabs). The Build tab is ALWAYS visible — it's a
+  // lazy-fetched synthesis derived from the other tabs, not an
+  // extraction field, so it's rendered even when no extraction data
+  // exists for the others.
+  const visible = fields.filter(({key, codegen}) => codegen || ex[key]);
   const tabBar = visible.map((field, i) => {
     const cls = [
       'rr-finding-drawer-tab',
       i === 0          ? 'is-active'                    : '',
       field.primary    ? 'rr-finding-drawer-tab-primary' : '',
+      field.codegen    ? 'rr-finding-drawer-tab-codegen' : '',
     ].filter(Boolean).join(' ');
     return `<button type="button" class="${cls}" data-tab-key="${field.key}">${field.label}</button>`;
   }).join('');
@@ -983,7 +991,49 @@ function _openFindingDrawer(f) {
       i === 0          ? 'is-active'                       : '',
       field.primary    ? 'rr-finding-drawer-panel-primary' : '',
       field.monospace  ? 'rr-finding-drawer-panel-mono'    : '',
+      field.codegen    ? 'rr-finding-drawer-panel-codegen' : '',
     ].filter(Boolean).join(' ');
+    // The Build panel needs an EXPLICIT user click to fire the (paid,
+    // 20-60s) synthesis. Opening the tab alone must not trigger work.
+    //
+    // States:
+    //   idle    — no cached output; show a primer + a "Generate" button.
+    //             Clicking the button moves to `pending`.
+    //   pending — synthesis in flight; spinner UI; the button is gone
+    //             so the operator can't double-fire.
+    //   ready   — cached code rendered as a fenced python block. The
+    //             tab is now a free CSS flip on subsequent clicks.
+    //   error   — last attempt failed; the button reappears so the
+    //             operator can retry without closing the drawer.
+    //
+    // Only the `ready` state uses .rr-md (the markdown enhancer queries
+    // for that hook); idle/pending/error use plain HTML so the button
+    // isn't accidentally markdown-rendered into garbage.
+    if (field.codegen) {
+      const cached = f._codeCache;
+      if (cached) {
+        return `
+          <section class="${cls}" data-tab-key="${field.key}" data-codegen-state="ready">
+            <div class="rr-finding-drawer-field-text rr-md" data-md-field="${field.key}">${_esc('```python\n' + cached + '\n```')}</div>
+          </section>
+        `;
+      }
+      return `
+        <section class="${cls}" data-tab-key="${field.key}" data-codegen-state="idle">
+          <div class="rr-finding-drawer-codegen-prompt">
+            <p class="rr-finding-drawer-codegen-pitch">
+              Synthesize complete, runnable Python from this paper's extraction
+              (money_angle + problem + method + how_to_build + math) via a
+              generate&nbsp;→&nbsp;critique&nbsp;→&nbsp;revise loop on the rotator.
+              Synthesis takes 20–60s and runs on demand only.
+            </p>
+            <button type="button" class="rr-finding-drawer-codegen-trigger">
+              ⚡ Generate Python code
+            </button>
+          </div>
+        </section>
+      `;
+    }
     return `
       <section class="${cls}" data-tab-key="${field.key}">
         <div class="rr-finding-drawer-field-text rr-md" data-md-field="${field.key}">${_esc(ex[field.key])}</div>
@@ -1001,21 +1051,200 @@ function _openFindingDrawer(f) {
     <div class="rr-finding-drawer-tabs">${tabBar}</div>
     <div class="rr-finding-drawer-panels">${panels}</div>
   `;
+  _currentFinding = f;
   _findingDrawer.hidden = false;
   requestAnimationFrame(() => _findingDrawer.classList.add('is-open'));
   // Upgrade `.rr-md` fields from escaped text to marked+KaTeX HTML.
   // All panels (active + hidden) get enhanced upfront so tab switches
   // are instant — hidden panels still render their markdown/math into
   // the offscreen DOM, then `display:block` reveals them. Avoids
-  // re-running the renderer on every tab click.
-  _enhanceMarkdownIn(_findingDrawer, (key) => f.extraction?.[key] || '');
+  // re-running the renderer on every tab click. The Build tab's lookup
+  // returns the cached fenced-python block if synthesis already ran for
+  // this finding (`f._codeCache`); else the idle-state placeholder
+  // prose. The lazy fetch+swap happens later in the tab-click handler.
+  _enhanceMarkdownIn(_findingDrawer, (key) => {
+    if (key === 'code') {
+      const cached = f._codeCache;
+      return cached
+        ? '```python\n' + cached + '\n```'
+        : 'Click to generate complete Python from the paper extraction. Synthesis takes 20–60s.';
+    }
+    return f.extraction?.[key] || '';
+  });
 }
 
 function _closeFindingDrawer() {
   if (!_findingDrawer) return;
   _findingDrawer.classList.remove('is-open');
+  _currentFinding = null;
   // Hide after transition so the panel doesn't snap on next open.
   setTimeout(() => { if (_findingDrawer) _findingDrawer.hidden = true; }, 250);
+}
+
+// --------------------------------------------------------------------------- //
+// Build tab — lazy fetch of synthesized Python on first activation.
+// Server endpoint GET /v1/rr/scan/{id}/finding/{arxiv_id}/code returns
+// {code, cached, model_id, prompt_version}. Cache-first on the server
+// (MinIO) + cache on the finding object (`_codeCache`) so the second
+// click on the Build tab for the same paper is instant.
+// --------------------------------------------------------------------------- //
+// Render helpers for the four Build-tab states. Each takes the panel
+// and rewrites its innerHTML — they DON'T mutate state attributes, the
+// caller does. Plain text where possible; HTML is escaped through _esc.
+function _buildPanelIdle(panel) {
+  panel.innerHTML = `
+    <div class="rr-finding-drawer-codegen-prompt">
+      <p class="rr-finding-drawer-codegen-pitch">
+        Synthesize complete, runnable Python from this paper's extraction
+        (money_angle + problem + method + how_to_build + math) via a
+        generate&nbsp;→&nbsp;critique&nbsp;→&nbsp;revise loop on the rotator.
+        Synthesis takes 20–60s and runs on demand only.
+      </p>
+      <button type="button" class="rr-finding-drawer-codegen-trigger">
+        ⚡ Generate Python code
+      </button>
+    </div>
+  `;
+}
+function _buildPanelPending(panel) {
+  panel.innerHTML =
+    '<p class="rr-finding-drawer-codegen-pending">' +
+    'Synthesizing Python from the paper extraction… ' +
+    '(generate → critique → revise; ~20–60s)' +
+    '</p>';
+}
+function _buildPanelError(panel, message) {
+  panel.innerHTML = `
+    <p class="rr-finding-drawer-codegen-error">
+      ${_esc(message)}
+    </p>
+    <div class="rr-finding-drawer-codegen-prompt rr-finding-drawer-codegen-prompt-retry">
+      <button type="button" class="rr-finding-drawer-codegen-trigger">
+        ⚡ Retry generation
+      </button>
+    </div>
+  `;
+}
+function _buildPanelReady(panel, code) {
+  // The .rr-md container is required for the markdown enhancer to pick
+  // this panel up; data-md-field="code" keeps the same hook the cached
+  // path uses on first drawer open.
+  panel.innerHTML = `
+    <div class="rr-finding-drawer-field-text rr-md" data-md-field="code">${_esc('```python\n' + code + '\n```')}</div>
+  `;
+}
+
+// Cache PROBE — called on every Build-tab activation. Hits the same
+// endpoint with `check_only=1` so the server returns cached code if it
+// exists OR 404 without burning rotator tokens. Lets a post-refresh
+// visit auto-render previously-generated code (the in-memory client
+// cache resets on refresh; this restores it from MinIO).
+//
+// Semantics:
+//   hit  (200)         → swap the panel into ready state, cache on
+//                        finding so re-clicks are instant.
+//   miss (404)         → leave the panel as-is (idle button stays).
+//                        The operator must explicitly click Generate.
+//   other error / net  → silent (log to console) and leave idle. We
+//                        don't want a transient cache-probe error to
+//                        block the operator from clicking Generate.
+async function _probeBuildCode(finding, panel) {
+  if (!finding || !panel) return;
+  if (!activeScanId) return;
+  const arxivId = finding.arxiv_id;
+  if (!arxivId) return;
+  let resp;
+  try {
+    resp = await fetch(
+      `/api/v1/rr/scan/${encodeURIComponent(activeScanId)}` +
+      `/finding/${encodeURIComponent(arxivId)}/code?check_only=1`,
+    );
+  } catch (err) {
+    console.warn('[rr-build] cache probe network error:', err);
+    return;
+  }
+  if (resp.status === 404) return;  // expected miss path
+  if (!resp.ok) {
+    console.warn(`[rr-build] cache probe returned ${resp.status}`);
+    return;
+  }
+  let data;
+  try { data = await resp.json(); }
+  catch { return; }
+  const code = (data?.code || '').trim();
+  if (!code) return;
+  finding._codeCache = code;
+  panel.setAttribute('data-codegen-state', 'ready');
+  _buildPanelReady(panel, code);
+  _enhanceMarkdownIn(panel, (key) => {
+    if (key === 'code') return '```python\n' + code + '\n```';
+    return finding.extraction?.[key] || '';
+  });
+}
+
+
+async function _fetchBuildCode(finding, panel) {
+  if (!finding || !panel) return;
+  if (!activeScanId) {
+    panel.setAttribute('data-codegen-state', 'error');
+    _buildPanelError(panel, 'Cannot generate code — no active scan loaded.');
+    return;
+  }
+  const arxivId = finding.arxiv_id;
+  if (!arxivId) {
+    panel.setAttribute('data-codegen-state', 'error');
+    _buildPanelError(panel, 'Cannot generate code — finding has no arxiv_id.');
+    return;
+  }
+  panel.setAttribute('data-codegen-state', 'pending');
+  _buildPanelPending(panel);
+  let resp;
+  try {
+    resp = await fetch(
+      `/api/v1/rr/scan/${encodeURIComponent(activeScanId)}` +
+      `/finding/${encodeURIComponent(arxivId)}/code`,
+    );
+  } catch (err) {
+    panel.setAttribute('data-codegen-state', 'error');
+    _buildPanelError(panel, `Network error: ${err && err.message || err}.`);
+    return;
+  }
+  if (!resp.ok) {
+    let detail = `HTTP ${resp.status}`;
+    try {
+      const j = await resp.json();
+      if (j?.detail) detail = j.detail;
+    } catch { /* keep status code */ }
+    panel.setAttribute('data-codegen-state', 'error');
+    _buildPanelError(panel, `Generation failed: ${detail}`);
+    return;
+  }
+  let data;
+  try { data = await resp.json(); }
+  catch {
+    panel.setAttribute('data-codegen-state', 'error');
+    _buildPanelError(panel, 'Generation failed: malformed server response.');
+    return;
+  }
+  const code = (data?.code || '').trim();
+  if (!code) {
+    panel.setAttribute('data-codegen-state', 'error');
+    _buildPanelError(panel, 'Generation returned empty code.');
+    return;
+  }
+  // Persist on the finding so closing + reopening the drawer reuses
+  // the synthesized output without re-hitting the rotator.
+  finding._codeCache = code;
+  panel.setAttribute('data-codegen-state', 'ready');
+  _buildPanelReady(panel, code);
+  // Run the markdown enhancer scoped to just this panel so marked +
+  // hljs highlight the python block. The lookup returns the fresh
+  // code for the `code` field; other fields are unreachable here
+  // (the enhancer only walks this panel's .rr-md children).
+  _enhanceMarkdownIn(panel, (key) => {
+    if (key === 'code') return '```python\n' + code + '\n```';
+    return finding.extraction?.[key] || '';
+  });
 }
 
 if (_findingDrawerCloseBtn) {
@@ -1034,6 +1263,15 @@ document.addEventListener('keydown', (e) => {
 // switch is purely a CSS display flip — no re-render lag.
 if (_findingDrawerBody) {
   _findingDrawerBody.addEventListener('click', (e) => {
+    // The Build tab's "Generate" / "Retry" button takes priority over
+    // tab routing. Clicking it fires the (paid, ~20-60s) synth — no
+    // other action runs in the same event.
+    const trigger = e.target?.closest?.('.rr-finding-drawer-codegen-trigger');
+    if (trigger) {
+      const panel = trigger.closest('.rr-finding-drawer-panel');
+      if (panel) _fetchBuildCode(_currentFinding, panel);
+      return;
+    }
     const tab = e.target?.closest?.('.rr-finding-drawer-tab');
     if (!tab) return;
     const key = tab.getAttribute('data-tab-key');
@@ -1041,9 +1279,24 @@ if (_findingDrawerBody) {
     _findingDrawerBody.querySelectorAll('.rr-finding-drawer-tab').forEach(t =>
       t.classList.toggle('is-active', t === tab)
     );
-    _findingDrawerBody.querySelectorAll('.rr-finding-drawer-panel').forEach(p =>
-      p.classList.toggle('is-active', p.getAttribute('data-tab-key') === key)
-    );
+    let activatedPanel = null;
+    _findingDrawerBody.querySelectorAll('.rr-finding-drawer-panel').forEach(p => {
+      const isMatch = p.getAttribute('data-tab-key') === key;
+      p.classList.toggle('is-active', isMatch);
+      if (isMatch) activatedPanel = p;
+    });
+    // Build tab: probe the MinIO cache (cheap, no rotator cost) so a
+    // post-refresh visit auto-renders any previously-generated code
+    // without forcing the operator to re-click Generate. The probe
+    // only acts when the panel is idle (no client-side cache, no
+    // in-flight synth, not in error state) — `ready` panels need no
+    // probe, `pending` already has work running, and `error` waits
+    // for an explicit Retry click. Synthesis (the paid path) is still
+    // strictly button-gated.
+    if (key === 'code' && activatedPanel
+        && activatedPanel.getAttribute('data-codegen-state') === 'idle') {
+      _probeBuildCode(_currentFinding, activatedPanel);
+    }
   });
 }
 

@@ -31,6 +31,20 @@ def DigestBody():
 
     main.js hydrates from `?scan=<id>` on load + SSE `phase=done`."""
     return Div(
+        # 2026-06-17 v3: topic now renders as a page-title heading
+        # (red left-bar accent), not a pill. See pipeline.py for the
+        # full rationale. Element id `#rr-digest-topic` preserved so
+        # `_setPillTopic` still resolves it.
+        Div(
+            Span(
+                "",
+                id    = "rr-digest-topic",
+                cls   = "rr-topic-title",
+                title = "Scan topic",
+                **{"data-empty": "true"},
+            ),
+            cls = "rr-topic-strip",
+        ),
         # Empty-state hint (visible when no scan loaded; main.js hides
         # it when findings arrive).
         P(

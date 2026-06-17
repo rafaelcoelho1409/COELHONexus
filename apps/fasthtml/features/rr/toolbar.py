@@ -52,25 +52,16 @@ def PipelineToolbar():
 
 
 def DigestToolbar():
-    """Row-3 chrome for `/research-radar/digest`. Scan topic on the left,
-    Recent-scans dropdown on the right (2026-06-17 update).
+    """Row-3 chrome for `/research-radar/digest`. Recent-scans dropdown
+    only (2026-06-17 v2: topic pill moved out).
 
-    Why topic is here: lifted out of the digest body — operators reading
-    findings need to know WHICH scan they're reading at a glance, and
-    the toolbar row is sticky / collapsible across both stages so the
-    context follows the reader as they scroll the findings list.
-
-    Empty when no scan is loaded (data-empty="true" hides via CSS).
-    main.js's resumeScan() fills `#rr-digest-topic` from the scan
-    record on load."""
+    The scan topic pill previously rendered on the left of this row, but
+    long topics combined with the Recent-scans dropdown would spill over
+    other toolbar elements. The pill is now in a `.rr-topic-strip` at
+    the top of `DigestBody`, where it has its own row to expand into.
+    `#rr-digest-topic` still exists on the page (just at a different
+    mount point) so main.js's `_setPillTopic` works unchanged."""
     return Div(
-        Span(
-            "",
-            id    = "rr-digest-topic",
-            cls   = "rr-digest-topic",
-            title = "Scan topic",
-            **{"data-empty": "true"},
-        ),
         RRRecentScansPicker(),
         cls = "dd-toolbar topbar-collapsible rr-toolbar rr-toolbar-digest",
         id  = "rr-toolbar",

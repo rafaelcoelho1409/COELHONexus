@@ -355,19 +355,16 @@ def ScanForm(extra_actions=None):
             cls = "rr-field rr-field-top-n",
         ),
         Div(
-            # 2026-06-17: scan topic pill — sits on the LEFT of the action
-            # cluster (just before Start Scan) so the operator sees WHICH
-            # scan is currently loaded right next to the controls. Empty
-            # via data-empty="true" until a scan loads/resumes; main.js's
-            # `_setPillTopic()` fills #rr-status-topic from the server-
-            # side scan record or the form's `topic` value on a new scan.
-            Span(
-                "",
-                id    = "rr-status-topic",
-                cls   = "rr-pipeline-topic",
-                title = "Scan topic",
-                **{"data-empty": "true"},
-            ),
+            # 2026-06-17 (v2): the topic pill has MOVED out of the
+            # action cluster (and out of the row-3 toolbar entirely)
+            # into a dedicated `.rr-topic-strip` at the top of the
+            # PipelineBody / DigestBody. Reason: with the Recent-scans
+            # dropdown also in this cluster, a long topic was spilling
+            # over the other toolbar elements. The page-body location
+            # gives the pill its own row so it can run as wide as it
+            # needs without compromising the toolbar layout. The
+            # `#rr-status-topic` element id stays the same so main.js's
+            # `_setPillTopic()` works without changes.
             Button(
                 Span("Start Scan", cls = "rr-btn-text"),
                 type = "submit",

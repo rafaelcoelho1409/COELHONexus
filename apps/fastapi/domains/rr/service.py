@@ -156,6 +156,7 @@ async def delete_scan(scan_id: UUID) -> dict:
 
     pg_deleted    = False
     minio_deleted = False
+    code_deleted  = 0
     try:
         pg_deleted = await postgres_store.delete_scan_record(scan_id)
     except Exception as e:
@@ -164,10 +165,23 @@ async def delete_scan(scan_id: UUID) -> dict:
         minio_deleted = await minio_store.delete_digest_json(str(scan_id))
     except Exception as e:
         logger.warning(f"[rr-service] delete_scan {scan_id} minio failed: {e}")
+    # Build-tab synthesized .py artifacts share the scan's MinIO prefix
+    # but aren't covered by delete_digest_json. Wipe them so the
+    # Recent-scans dropdown's delete button doesn't leak code blobs.
+    try:
+        code_deleted = await minio_store.delete_code_dir(str(scan_id))
+    except Exception as e:
+        logger.warning(f"[rr-service] delete_scan {scan_id} code failed: {e}")
     logger.info(
-        f"[rr-service] delete_scan {scan_id} pg={pg_deleted} minio={minio_deleted}"
+        f"[rr-service] delete_scan {scan_id} pg={pg_deleted} "
+        f"minio={minio_deleted} code={code_deleted}"
     )
-    return {"scan_id": str(scan_id), "pg": pg_deleted, "minio": minio_deleted}
+    return {
+        "scan_id": str(scan_id),
+        "pg":      pg_deleted,
+        "minio":   minio_deleted,
+        "code":    code_deleted,
+    }
 
 
 async def cancel_scan(scan_id: UUID, *, reason: str = "cancelled by user") -> bool:
