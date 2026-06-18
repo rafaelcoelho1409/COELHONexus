@@ -41,6 +41,7 @@ from domains.dd.planner.runtime.checkpoint import (
 )
 from domains.llm.credentials import warm as warm_credentials
 from domains.llm.rotator.chain import (
+    build_reduce_label_chain,
     init_dynamic_catalog,
     start_catalog_refresh_loop,
     stop_catalog_refresh_loop,
@@ -245,6 +246,26 @@ async def lifespan(app: FastAPI):
         logger.warning(
             f"[lifespan] YCS LLM chain init failed: "
             f"{type(e).__name__}: {e}. /agents/search will 5xx."
+        )
+
+    # 2026-06-17 — speed-optimised chain for YCS Query's NL → DSL task.
+    # The default `app.state.llm` targets the `dd-all` pool whose top
+    # arms are reasoning models (kimi-k2.6, qwen3.5-397b, deepseek-v4,
+    # …) — they emit 1-15 s of `<think>` tokens BEFORE any output,
+    # which is pure waste for deterministic structural translation.
+    # `dd-reduce-label` is the existing engineered-for-speed pool:
+    # Groq Llama-3.3-70b (LPU, 1500+ tok/s, no reasoning), Gemini Flash
+    # Lite, NIM gpt-oss-120b, etc., 60-90 s tighter timeouts.
+    # Query AI prefers this chain; if init fails it falls back to
+    # `app.state.llm` at request time (see `domains/ycs/query/service.py`).
+    try:
+        app.state.query_ai_llm = build_reduce_label_chain()
+    except Exception as e:
+        app.state.query_ai_llm = None
+        logger.warning(
+            f"[lifespan] YCS Query AI fast-chain init failed: "
+            f"{type(e).__name__}: {e}. /ycs/query/ai/* will fall back to "
+            f"the slower dd-all chain."
         )
 
     try:

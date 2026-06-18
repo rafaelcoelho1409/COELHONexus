@@ -667,8 +667,12 @@ class _ModelCapture(AsyncCallbackHandler):
          only when it's NOT a group alias.
     """
     # Group aliases the rotator uses — NOT what we want to display.
+    # 2026-06-17 added `dd-reduce-label` (Query AI's new fast pool —
+    # see `app.py::app.state.query_ai_llm`) so the chip never falls
+    # back to the alias even if the deployment-id override fails.
     _GROUP_ALIASES = frozenset({
         "dd-all", "dd-grader", "dd-synth-write", "dd-planner",
+        "dd-reduce-label", "dd-synth", "dd-keylm", "dd-embed",
         "ycs-query-ai", "rr-strong",
     })
 
@@ -770,7 +774,21 @@ async def ai_generate_stream(
     from .examples import EXAMPLES_BY_BACKEND
     from .prompts  import build_generate_prompt, build_repair_prompt
 
-    llm = getattr(request.app.state, "llm", None)
+    # 2026-06-17 — prefer the speed-optimised `dd-reduce-label` chain
+    # built once at lifespan as `app.state.query_ai_llm`. It targets
+    # fast non-reasoning arms (Groq Llama-3.3-70b LPU, Gemini Flash
+    # Lite, NIM gpt-oss-120b, …) instead of `dd-all`'s reasoning-heavy
+    # default (kimi-k2.6 / qwen3.5-397b / deepseek-v4 — each emits
+    # 1-15 s of `<think>` tokens before any DSL). For NL → DSL, which
+    # is deterministic structural translation, reasoning is wasted
+    # compute that the user feels as latency.
+    # `app.state.llm` is the graceful fallback when the fast chain
+    # failed to init (BYOK with no Groq/Gemini/NIM key, lifespan race,
+    # etc.) — still functional, just slower.
+    llm = (
+        getattr(request.app.state, "query_ai_llm", None)
+        or getattr(request.app.state, "llm", None)
+    )
     if llm is None:
         yield {"data": _json.dumps({
             "event": "error",

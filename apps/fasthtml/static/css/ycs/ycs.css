@@ -1834,102 +1834,9 @@
  * stylesheet. `.ycs-mode-pill` is preserved purely as the JS hook
  * `ask.js` binds via `document.querySelectorAll(".ycs-mode-pill")`. */
 
-/* ---- Ask · LLM config dropdown (row-3 toolbar) ---- */
-/* Popover hosts the full LLMConfig form (5 fields + Test + Save) — the
- * default `.dd-catfilter-popover` min-width (220px) is too narrow for
- * the 2-column layout. Anchor to the right edge since the trigger
- * lives in `.dd-toolbar-right`. */
-#ycs-ask-llm .dd-catfilter-popover {
-  right: 0;
-  left: auto;
-  min-width: 460px;
-  padding: 14px;
-}
-/* Info card replacing the old LLM form (2026-06-15) — explains that
- * the rotator is always active and why single-model BYOK was removed. */
-.ycs-ask-llm-info {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.ycs-ask-llm-info-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.ycs-ask-llm-info-head {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--text);
-}
-.ycs-ask-llm-info-badge {
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: rgba(46, 160, 67, 0.14);
-  color: #2da455;
-  font-size: 0.66rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-.ycs-ask-llm-info-body {
-  margin: 0;
-  font-size: 0.82rem;
-  line-height: 1.5;
-  color: var(--text);
-}
-.ycs-ask-llm-info-muted {
-  color: var(--text-muted);
-  font-size: 0.78rem;
-}
-#ycs-ask-llm .ycs-form-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 4px;
-}
-#ycs-ask-llm .ycs-form-actions .ycs-search-status { flex: 1; }
-
-/* All three fields stack vertically (`grid-template-columns: 1fr` set
- * inline in chrome.py) — model names get full width, no truncation. */
-#ycs-ask-llm .ycs-llm-temp-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-#ycs-ask-llm .ycs-llm-temp-value {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 0.78rem;
-  color: var(--text);
-  background: rgba(0, 0, 0, 0.04);
-  padding: 1px 6px;
-  border-radius: 3px;
-  letter-spacing: 0.02em;
-  tabular-nums: true;
-}
-#ycs-ask-llm .ycs-llm-temp-slider {
-  width: 100%;
-  margin: 0;
-  accent-color: var(--primary);
-  cursor: pointer;
-  padding: 0;
-}
-
-#ycs-ask-llm .ycs-llm-fields {
-  display: grid;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  margin: 0 0 12px;
-}
-#ycs-ask-llm .ycs-form-actions {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  align-items: center;
-  gap: 10px;
-}
+/* (2026-06-17) Removed "Model: Auto" rotator-status dropdown + its
+ * popover styles. Routing is always the rotator; surfacing it as a
+ * picker implied user choice where none existed. */
 
 /* ---- Ask · conversation history + thread bar ---- */
 .ycs-ask-threadbar {
@@ -2527,6 +2434,27 @@
  * that don't accept the native `disabled` attribute. Hover state is
  * neutralised so the button reads as inert. */
 .ycs-disabled-busy,
+/* 2026-06-17 — scope-trigger "locked" state. Applied once the thread
+ * has at least one persisted turn. The popover never opens; the click
+ * handler surfaces a toast directing the user to start a new thread.
+ * Visually: a 🔒 prefix glyph, muted text, hover still tints to
+ * indicate the trigger is interactive (so the user discovers the
+ * toast on click). NOT `pointer-events: none` — we WANT clicks to
+ * reach the JS handler. */
+.ycs-ask-scope-trigger-locked,
+#ycs-ask-scope-trigger.ycs-ask-scope-trigger-locked {
+  opacity: 0.78;
+  cursor: not-allowed;
+}
+.ycs-ask-scope-trigger-locked::before {
+  content: "🔒";
+  font-size: 0.78em;
+  margin-right: 4px;
+  filter: grayscale(0.4);
+}
+.ycs-ask-scope-trigger-locked:hover {
+  opacity: 0.88;
+}
 .dd-catfilter-trigger:disabled {
   opacity: 0.55;
   cursor: not-allowed;

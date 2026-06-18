@@ -174,6 +174,51 @@ async def list_thread_messages(
     ]
 
 
+async def get_thread_locked_scope(
+    pg_url: str,
+    thread_id: str,
+) -> list[str] | None:
+    """Return the `channel_ids` snapshot persisted on the FIRST turn of
+    the thread, or `None` if the thread has no turns yet.
+
+    Used by `POST /agents/search/stream` to enforce the
+    "scope is locked once the thread has a message" UX rule server-side
+    (defense in depth — frontend disables the dropdown but a
+    hand-crafted POST could still try to change it). When this returns
+    a list, the SSE handler overrides `payload.channel_ids` with it.
+    `[]` is a valid lock value meaning "thread was started in All-
+    channels mode and must stay that way".
+
+    Returns `None` (no lock) when:
+      - the thread is the DEFAULT_THREAD_ID sentinel,
+      - the thread doesn't exist in `conversation_history` yet,
+      - the first turn's `thinking_state` is missing or doesn't
+        contain a `channel_ids` field (pre-2026-06-17 rows)."""
+    if not thread_id or thread_id == DEFAULT_THREAD_ID:
+        return None
+    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        result = await conn.execute(
+            f"""
+            SELECT thinking_state
+            FROM {TABLE_NAME}
+            WHERE thread_id = %s
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            (thread_id,),
+        )
+        row = await result.fetchone()
+    if not row or not row[0]:
+        return None
+    ts = row[0]  # JSONB → dict
+    val = ts.get("channel_ids") if isinstance(ts, dict) else None
+    if val is None:
+        return None
+    if not isinstance(val, list):
+        return None
+    return [str(v) for v in val]
+
+
 async def branch_thread(
     pg_url: str,
     source_thread_id: str,

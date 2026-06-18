@@ -2617,11 +2617,22 @@ def build_reduce_label_chain():
     """Non-reasoning rotator for REDUCE step's labeling + ordering. T=1.0 —
     Gemini-3 requires it (T<1.0 causes infinite loops). The factory's call-
     time T overrides per-deployment litellm_params.temperature in LiteLLM
-    Router. json_schema mode keeps output valid at T=1.0 for non-Gemini."""
-    return ChatLiteLLMRouter(
-        router = _get_router(), 
-        model = REDUCE_LABEL_GROUP, 
-        temperature = 1.0)
+    Router. json_schema mode keeps output valid at T=1.0 for non-Gemini.
+
+    2026-06-17 — returns `_RotatorAutoRetryRouter` instead of plain
+    `ChatLiteLLMRouter` so the real deployment id (e.g.
+    `groq/llama-3.3-70b-versatile`) is written into every chunk's
+    `response_metadata["model_name"]` via the override in
+    `_RotatorAutoRetryRouter._create_chat_result`. Without it,
+    consumers like YCS Query's `_ModelCapture` only saw the request
+    group alias (`dd-reduce-label`) and the UI's "Model" chip
+    rendered it verbatim. Auto-retry / empty-generation recovery /
+    NotFoundError auto-learn come for free."""
+    return _RotatorAutoRetryRouter(
+        router = _get_router(),
+        model = REDUCE_LABEL_GROUP,
+        temperature = 1.0,
+    )
 
 
 # --------------------------------------------------------------------------- #

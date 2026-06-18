@@ -108,32 +108,12 @@ document.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape") _closeAllCatfilters();
 });
 
-bindCatfilter("ycs-ask-llm-trigger", "ycs-ask-llm");
-
-const llmTestBtn = document.getElementById("ycs-llm-test");
-
-/* "Test rotator" button — fires `POST /agents/rotator/ping` which
- * does a single `app.state.llm.ainvoke("ping")` round-trip through
- * the full FGTS-VA chain. Verifies the rotator is responsive at all;
- * if this fails, every Ask request will fail too. */
-llmTestBtn?.addEventListener("click", async () => {
-    const status = document.getElementById("ycs-llm-status");
-    setStatus(status, "running", "Pinging rotator…");
-    try {
-        const r = await api("/agents/rotator/ping", {
-            method:  "POST",
-            headers: { "content-type": "application/json" },
-            body:    "{}",
-        });
-        if (r.status === "ok") {
-            setStatus(status, "", `OK · ${r.ms}ms`);
-        } else {
-            setStatus(status, "error", `Failed: ${r.error}`);
-        }
-    } catch (e) {
-        setStatus(status, "error", `Failed: ${e.message}`);
-    }
-});
+// 2026-06-17 — removed "Model: Auto" popover (ycs-ask-llm-trigger)
+// and its Test-rotator handler. Routing always goes through the
+// rotator; surfacing it as a clickable control implied user choice
+// where none existed. Killing the wiring also removes the dead
+// `bindCatfilter("ycs-ask-llm-trigger", ...)` and the
+// `POST /agents/rotator/ping` ping it fired.
 
 // ---- (2) Channel scope (row-3 `.dd-catfilter` popover) ---------------------
 /* Replaces the old body-resident multi-select. State lives in this
@@ -143,8 +123,111 @@ llmTestBtn?.addEventListener("click", async () => {
  * reason to pay the fetch cost at page load). */
 const scopeLabel    = document.getElementById("ycs-ask-scope-label");
 const scopeListEl   = document.getElementById("ycs-ask-scope-list");
+const scopeTriggerEl = document.getElementById("ycs-ask-scope-trigger");
+const scopeWrapEl    = document.getElementById("ycs-ask-scope");
 const selectedChannels = new Set();
 let allChannels = [];  // [{channel_id, channel, video_count}, ...]
+
+/* 2026-06-17 — thread scope lock.
+ *
+ * One thread = one channel scope, immutable once any message lands.
+ * Backed by an actual server-side check (see
+ * `domains/ycs/conversation/service.py::get_thread_locked_scope` +
+ * `agents/router.py` — the server reads the first turn's `channel_ids`
+ * and overrides any incoming value). The frontend mirrors the rule so
+ * the dropdown stops responding once the thread is established and a
+ * toast directs the user to start a new thread to change scopes.
+ *
+ * State:
+ *   null  = thread is fresh, scope is editable.
+ *   Set   = thread is established, scope is locked to these IDs (could
+ *           be an empty Set, meaning "All channels" was the lock).
+ *
+ * Populated in three places: (1) on submit, when the first turn fires;
+ * (2) on hydrate, when an existing thread is reloaded; (3) on switch-
+ * thread, when the user picks a different thread. Cleared by
+ * `clearConversation()` on new thread. */
+let lockedThreadScope = null;
+
+function _scopeIsLocked() {
+    return lockedThreadScope !== null;
+}
+
+function _applyScopeLockUI() {
+    if (!scopeTriggerEl) return;
+    const locked = _scopeIsLocked();
+    scopeTriggerEl.classList.toggle("ycs-ask-scope-trigger-locked", locked);
+    scopeTriggerEl.setAttribute(
+        "title",
+        locked
+            ? "Scope is locked for this thread. Start a new thread (+ New thread) to change channels."
+            : "Choose which channels to search",
+    );
+    /* When locked, close the popover if it happened to be open and
+     * mute the items inside so nothing reads as actionable. */
+    if (locked) {
+        scopeWrapEl?.classList.remove("open");
+        scopeTriggerEl.setAttribute("aria-expanded", "false");
+    }
+}
+
+/* Snapshot the current selection as the thread's permanent scope.
+ * Called on the first submit of a thread. Idempotent — calling again
+ * after lock is a no-op. */
+function _lockScopeToCurrent() {
+    if (lockedThreadScope !== null) return;
+    lockedThreadScope = new Set(selectedChannels);
+    _applyScopeLockUI();
+}
+
+/* Adopt a scope coming from the backend (history hydrate / thread
+ * switch) and mark it as locked. */
+function _adoptLockedScope(channelIds) {
+    selectedChannels.clear();
+    for (const id of channelIds || []) selectedChannels.add(id);
+    lockedThreadScope = new Set(selectedChannels);
+    updateScopeLabel();
+    _applyScopeLockUI();
+}
+
+/* Release the lock — thread is being reset (clearConversation /
+ * + New thread). Selection itself is cleared by the caller. */
+function _releaseScopeLock() {
+    lockedThreadScope = null;
+    _applyScopeLockUI();
+}
+
+/* 2026-06-17 — guarantees `allChannels` is populated before any label
+ * render uses it. The popover's lazy load (`loadScopeList`) used to
+ * be the only path that fetched the list, so a thread restored via
+ * `_adoptLockedScope` at page boot displayed the raw `UC…` channel id
+ * in the trigger label until the user clicked to open the popover.
+ *
+ * Single-flight promise — concurrent callers (e.g. label render +
+ * popover open at the same time) share one fetch. */
+let _channelsFetchPromise = null;
+async function _ensureChannelsLoaded() {
+    if (allChannels.length) return;
+    if (!_channelsFetchPromise) {
+        _channelsFetchPromise = (async () => {
+            try {
+                const r = await api("/admin/ingested-channels");
+                allChannels = r.items ?? [];
+            } catch (_) { /* leave allChannels empty on failure */ }
+        })();
+    }
+    await _channelsFetchPromise;
+    _channelsFetchPromise = null;
+}
+
+/* Lookup a channel-id's display name. Returns the name or a sensible
+ * fallback ("Unknown channel" when allChannels is loaded but the id
+ * isn't in it — e.g. the channel was de-ingested after the thread's
+ * first message). Never returns the raw `UC…` id. */
+function _channelNameFor(id) {
+    const ch = allChannels.find((c) => c.channel_id === id);
+    return ch?.channel || "Unknown channel";
+}
 
 function updateScopeLabel() {
     if (!scopeLabel) return;
@@ -153,13 +236,27 @@ function updateScopeLabel() {
         scopeLabel.textContent = "All channels";
         return;
     }
-    if (n === 1) {
-        const id = [...selectedChannels][0];
-        const ch = allChannels.find((c) => c.channel_id === id);
-        scopeLabel.textContent = ch?.channel || id;
+    /* If we don't have channel metadata yet, kick off the fetch in the
+     * background and show a "Loading…" placeholder. When the fetch
+     * lands, `updateScopeLabel()` runs again with the names available
+     * (safe re-entry — the second call doesn't trigger another fetch
+     * because allChannels is now non-empty). */
+    if (!allChannels.length) {
+        scopeLabel.textContent = n === 1 ? "Loading channel…"
+                                         : `${n} channels (loading…)`;
+        _ensureChannelsLoaded().then(updateScopeLabel);
         return;
     }
-    scopeLabel.textContent = `${n} channels`;
+    if (n === 1) {
+        const id = [...selectedChannels][0];
+        scopeLabel.textContent = _channelNameFor(id);
+        return;
+    }
+    // n >= 2 — show names, collapsing into "first +N more" beyond 2
+    // so the trigger doesn't overflow the topbar row.
+    const names = [...selectedChannels].map(_channelNameFor);
+    scopeLabel.textContent = n <= 2 ? names.join(", ")
+                                    : `${names[0]} +${n - 1} more`;
 }
 
 function renderScopeList() {
@@ -205,7 +302,7 @@ function renderScopeList() {
         row.innerHTML = `
             <input type="checkbox" class="ycs-ask-scope-check"
                    data-channel-id="${htmlEscape(id)}" ${checked}>
-            <span class="ycs-ask-scope-row-name">${htmlEscape(ch.channel ?? id)}</span>
+            <span class="ycs-ask-scope-row-name">${htmlEscape(ch.channel || "Unknown channel")}</span>
             <span class="ycs-ask-scope-row-count">${ch.video_count ?? 0}</span>
         `;
         frag.appendChild(row);
@@ -221,10 +318,8 @@ async function loadScopeList() {
     }
     scopeListEl.innerHTML =
         '<div class="ycs-ask-scope-empty">Loading…</div>';
-    try {
-        const r = await api("/admin/ingested-channels");
-        allChannels = r.items ?? [];
-    } catch (_) {
+    await _ensureChannelsLoaded();
+    if (!allChannels.length) {
         scopeListEl.innerHTML =
             '<div class="ycs-ask-scope-empty">Failed to load channels</div>';
         return;
@@ -268,6 +363,21 @@ scopeListEl?.addEventListener("change", (ev) => {
         updateScopeLabel();
     }
 });
+
+/* 2026-06-17 — guard the scope trigger BEFORE the popover-open handler
+ * so a click on a locked thread shows the toast instead of opening
+ * the picker. `capture: true` runs ahead of `bindCatfilter`'s bubble-
+ * phase listener; `stopImmediatePropagation` cancels every later
+ * handler on this click. */
+scopeTriggerEl?.addEventListener("click", (ev) => {
+    if (!_scopeIsLocked()) return;
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    showToast(
+        "Scope is locked for this thread. Click + New thread to use a "
+        + "different set of channels."
+    );
+}, true);
 
 bindCatfilter("ycs-ask-scope-trigger", "ycs-ask-scope", loadScopeList);
 
@@ -549,10 +659,19 @@ function getTurnData(turn) {
     return d;
 }
 
-/* `[Video: title]` → `__CITE_N__` token so the post-markdown step can
- * replace it with a `<sup>` pill (marked would HTML-escape an inline
- * tag we emitted in the markdown step). Matching is title-aware with
- * a substring fallback because LLMs sometimes paraphrase. */
+/* `[Video: title]` → `⟦CITE-N⟧` token so the post-markdown step can
+ * replace it with a `<sup>` pill matching the sidebar's `[N]` style.
+ * Matching is title-aware with a substring fallback because LLMs
+ * sometimes paraphrase.
+ *
+ * 2026-06-17 — switched the placeholder from `__CITE_N__` to
+ * `⟦CITE-N⟧`. The previous form was valid CommonMark bold
+ * (`__text__` → `<strong>text</strong>`), so marked.parse rewrote
+ * `__CITE_3__` to `<strong>CITE_3</strong>` and the user saw
+ * literal **CITE_3** instead of the intended superscript `[3]`
+ * pill. The mathematical-bracket Unicode (U+27E6 / U+27E7) is in
+ * the BMP, renders cleanly, and has no markdown semantics — marked
+ * passes it through verbatim. */
 function _citeTokens(text, citations) {
     if (!citations?.length) return text;
     const idx = new Map();
@@ -568,14 +687,17 @@ function _citeTokens(text, citations) {
                 if (k.includes(key) || key.includes(k)) { n = i; break; }
             }
         }
-        return n ? `__CITE_${n}__` : match;
+        return n ? `⟦CITE-${n}⟧` : match;
     });
 }
 
 function _citePills(html) {
-    return html.replace(/__CITE_(\d+)__/g, (_, n) =>
+    /* The token ⟦CITE-N⟧ is rendered as `[N]` to mirror the rail's
+     * numbered card badges. Same number, same brackets, same colour
+     * (CSS classes match) — hovering one highlights the other. */
+    return html.replace(/⟦CITE-(\d+)⟧/g, (_, n) =>
         `<sup class="ycs-ask-cite-pill" data-cite="${n}"
-               title="Citation ${n}">[${n}]</sup>`
+               title="Open source ${n} in the sidebar">[${n}]</sup>`
     );
 }
 
@@ -957,6 +1079,13 @@ function clearConversation() {
     deepCardIndex.clear();
     currentSubQuestions = [];
     setStatus(askStatus, "", "");
+    /* 2026-06-17 — the new thread (or switch-target) hasn't established
+     * a scope yet, so release the lock and clear the prior selection.
+     * `hydrateThreadHistory` will re-establish a lock if the
+     * destination thread already has turns. */
+    selectedChannels.clear();
+    _releaseScopeLock();
+    updateScopeLabel();
 }
 
 // ---- thread management -----------------------------------------------------
@@ -1173,6 +1302,17 @@ async function hydrateThreadHistory() {
                 thinking_state: item.thinking_state ?? null,
                 id:             item.id             ?? null,
             });
+        }
+        /* 2026-06-17 — adopt the thread's locked scope from its FIRST
+         * turn's persisted `channel_ids`. After this the dropdown
+         * trigger shows the lock state and clicks surface the "start a
+         * new thread" toast. `channel_ids` is always a list (possibly
+         * empty meaning "All channels"); only treat as a lock when it
+         * actually exists on the row (older rows without the field
+         * stay editable). */
+        const firstTs = items[0]?.thinking_state;
+        if (firstTs && Array.isArray(firstTs.channel_ids)) {
+            _adoptLockedScope(firstTs.channel_ids);
         }
         // 2026-06-16 — rehydrate the Sources right-rail from the most
         // recent past turn that carries citations. Walk latest-first
@@ -1919,6 +2059,11 @@ async function sendQuestion(question, opts = {}) {
         currentTurnEl.classList.remove("ycs-ask-turn-preview");
     }
     setStatus(askStatus, "running", "Thinking…");
+    /* 2026-06-17 — first submit of a thread snapshots the current
+     * `selectedChannels` as the thread's permanent scope. The server
+     * then enforces it on every subsequent message in this thread,
+     * regardless of what the frontend sends. */
+    _lockScopeToCurrent();
     const channel_ids = [...selectedChannels];
     const payload = { question, thread_id: threadId };
     if (channel_ids.length)         payload.channel_ids   = channel_ids;

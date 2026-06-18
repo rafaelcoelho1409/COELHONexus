@@ -28,6 +28,7 @@ from domains.ycs.conversation import (
     delete_thread,
     delete_turn,
     get_history,
+    get_thread_locked_scope,
     insert_turn,
     list_thread_messages,
     list_threads,
@@ -502,13 +503,34 @@ async def rag_search_stream(
     history = await get_history(
         request.app.state.pg_url, payload.thread_id,
     )
+    # 2026-06-17 — server-side thread-scope lock. Once the thread has
+    # any turns, the channel scope is FROZEN to whatever the FIRST turn
+    # used. The frontend disables the scope dropdown after the first
+    # message to communicate this; the server enforces it here so a
+    # hand-crafted POST can't bypass the rule. `None` = no lock yet
+    # (fresh thread or pre-2026-06-17 row without `channel_ids` in
+    # thinking_state) → fall back to the request's value.
+    locked_scope = await get_thread_locked_scope(
+        request.app.state.pg_url, payload.thread_id,
+    )
+    effective_channel_ids = (
+        locked_scope if locked_scope is not None
+        else (list(payload.channel_ids or []))
+    )
+    if (locked_scope is not None
+        and set(locked_scope) != set(payload.channel_ids or [])):
+        logger.info(
+            f"[ycs:stream] thread {payload.thread_id} scope is locked to "
+            f"{locked_scope!r}; ignoring caller-supplied "
+            f"channel_ids={payload.channel_ids!r}"
+        )
     graph = await build_graph_from_request(request)
     initial_state = {
         "question":             payload.question,
         "mode":                 "",
         "force_mode":           payload.force_mode or "",
         "conversation_history": history,
-        "channel_ids":          payload.channel_ids or [],
+        "channel_ids":          effective_channel_ids,
         "generation":           "",
         "citations":            [],
         "grounded":             False,
@@ -743,7 +765,19 @@ async def rag_search_stream(
         t_run_start     = time.monotonic()
         last_persist_t  = t_run_start
         first_persist_done = False
-        thinking_state: dict = {"stages": {}, "mode": ""}
+        # 2026-06-17 — persist the per-turn `channel_ids` snapshot in
+        # `thinking_state` so the frontend can rehydrate the thread's
+        # locked scope on page reload / thread switch. The first turn's
+        # value is treated as the thread-wide scope lock — the UI
+        # disables the scope dropdown after a thread has any turns and
+        # directs the user to "+ New thread" if they want to change.
+        # Storing on EVERY turn (not just the first) keeps the field
+        # available regardless of which row hydration reads.
+        thinking_state: dict = {
+            "stages":      {},
+            "mode":        "",
+            "channel_ids": list(effective_channel_ids),
+        }
         cancelled = False
         stalled   = False
         # 2026-06-15 — backend "I'm alive" heartbeat folded into the

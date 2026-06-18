@@ -13,15 +13,15 @@ Three pieces:
     DOM ids (`#ycs-ask-thread-id`, `#ycs-ask-new-thread`) match what
     `ask.js` already binds; only their position moved.
 
-  * `AskLLMTrigger()` — `.dd-catfilter` clone hosting the full
-    `LLMConfig` form in a popover. Form/field ids match the ones
-    `ask.js` already targets (`#ycs-llm-form`, `#ycs-llm-provider`, …)
-    so wiring is unchanged; only the open/close handler in `ask.js`
-    is rewritten to use the `.dd-catfilter` `.open` pattern."""
+  (2026-06-17) The `Model: Auto` rotator-status trigger was removed —
+  it advertised information the user couldn't act on. The rotator's
+  per-call arm is now surfaced in-line on the response itself; the
+  topbar real estate goes back to the more actionable +New thread /
+  Thread picker / Scope controls."""
 from __future__ import annotations
 
 from fasthtml.common import (
-    Button, Div, Nav, P, Span,
+    Button, Div, Nav, Span,
 )
 
 
@@ -154,84 +154,3 @@ def AskThreadBar():
     )
 
 
-def AskLLMTrigger():
-    """LLM picker — row-3 right cluster.
-
-    2026-06-15 SIMPLIFIED: Ask now ALWAYS routes through the rotator's
-    `with_fallbacks` chain (FGTS-VA bandit + 7-provider failover + EOL
-    detection + cooldowns). User-supplied single-model BYOK was a
-    single-point-of-failure trap — every 429 / timeout / EOL on the
-    pinned model crashed the whole request, even though six other
-    free-tier providers were healthy.
-
-    The trigger label is locked to `Model: Auto`. Opening the popover
-    reveals an info card explaining what the rotator is doing under
-    the hood + a Test button that pings the rotator's currently-
-    selected primary arm so users can verify connectivity. The
-    Provider / Model / Temperature form fields are gone — if "preferred
-    arm" support lands later (user's pick boosted to priority 0 inside
-    the rotator pool, fallback still active), they come back."""
-    return Div(
-        Button(
-            Span("Model:", cls = "dd-catfilter-prefix"),
-            Span("Auto",
-                 cls = "dd-catfilter-label ycs-ask-llm-label",
-                 id  = "ycs-ask-llm-label"),
-            Span("▾", cls = "dd-catfilter-chevron"),
-            type       = "button",
-            cls        = "dd-catfilter-trigger",
-            id         = "ycs-ask-llm-trigger",
-            aria_label = "LLM rotator status",
-            title      = (
-                "FGTS-VA rotator across 7 providers — "
-                "auto-fails over on 429 / timeout / EOL"
-            ),
-        ),
-        Div(
-            Div(
-                Div(
-                    Span("Auto rotator", cls = "ycs-ask-llm-info-head"),
-                    Span("active", cls = "ycs-ask-llm-info-badge"),
-                    cls = "ycs-ask-llm-info-row",
-                ),
-                P(
-                    "Every request routes through the rotator — same "
-                    "path Planner and Synth use. The FGTS-VA bandit "
-                    "picks the best free-tier arm per call across 7 "
-                    "providers (NVIDIA NIM, Groq, Cerebras, Gemini, "
-                    "Mistral, DeepSeek, OpenRouter); when one returns "
-                    "429 / times out / is EOL'd, the next arm picks "
-                    "up automatically.",
-                    cls = "ycs-ask-llm-info-body",
-                ),
-                P(
-                    "Single-model picking is intentionally removed — "
-                    "it disabled all the failover machinery and made "
-                    "rate-limited days unusable. A future revision "
-                    "will let you set a preferred arm that's still "
-                    "wrapped in the rotator's fallback chain.",
-                    cls = "ycs-ask-llm-info-body ycs-ask-llm-info-muted",
-                ),
-                Div(
-                    Span("",
-                         id  = "ycs-llm-status",
-                         cls = "ycs-search-status"),
-                    Button(
-                        "Test rotator",
-                        type = "button",
-                        id   = "ycs-llm-test",
-                        cls  = "btn-secondary",
-                        title = (
-                            "Fire one ping through the rotator to "
-                            "verify connectivity"
-                        ),
-                    ),
-                    cls = "ycs-form-actions",
-                ),
-                cls = "ycs-ask-llm-info",
-            ),
-            cls = "dd-catfilter-popover ycs-ask-llm-popover",
-        ),
-        cls = "dd-catfilter ycs-ask-llm",
-        id  = "ycs-ask-llm",
-    )
