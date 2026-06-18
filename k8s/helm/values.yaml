@@ -380,7 +380,7 @@ registry:
 # FastAPI unified ML backend (includes River incremental and Sklearn batch training)
 # Uses k3d COELHOCloud Registry (same as Skaffold)
 fastapi:
-  image: localhost:5001/coelhonexus-fastapi:latest
+  image: coelho-cloud-registry:5000/coelhonexus-fastapi:latest
   imagePullPolicy: Always  # Always pull latest from Skaffold builds
   replicas: 1
   resources:
@@ -547,7 +547,7 @@ flower:
 # /kd/inspect, same /api/test contract. NodePort 30023 retained to avoid
 # breaking any external callers that may still reference the old `web` URLs.
 fasthtml:
-  image: localhost:5001/coelhonexus-fasthtml:latest
+  image: coelho-cloud-registry:5000/coelhonexus-fasthtml:latest
   imagePullPolicy: Always
   replicas: 1
   resources:
@@ -594,7 +594,7 @@ fasthtml:
 # MCP client (Streamable-HTTP at /mcp/). Not browser-exposed; no NodePort.
 # Lightweight uvicorn ASGI app — same resource envelope as fasthtml.
 fastmcp:
-  image: localhost:5001/coelhonexus-fastmcp:latest
+  image: coelho-cloud-registry:5000/coelhonexus-fastmcp:latest
   imagePullPolicy: Always
   replicas: 1
   resources:
