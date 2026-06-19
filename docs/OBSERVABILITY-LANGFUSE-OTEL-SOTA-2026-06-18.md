@@ -60,7 +60,7 @@ Ranked by ROI for learning + practical project value.
 | 1 | **Prompt management** (versioning, label-deploy, cache) | All three; start with the highest-churn prompts | Migrate `domains/dd/planner/nodes/chapter_propose/prompts.py` (most-iterated prompt in repo) |
 | 2 | **Sessions + Users** | Group `study_id` (DD), Ask conversation (YCS), digest cycle (RR). `user_id` = tenant / channel_id / `default` | Single helper `infra/langfuse/sessions.py` — context-manager friendly |
 | 3 | **Scores** | Dual-write existing grader dims (`record_grader_dim_score`) — trace UI shows them inline | Thin wrapper `infra/langfuse/scores.py` — accepts `(trace_id, name, value, comment)` |
-| 4 | **Datasets** | Gold corpora per feature: small reference book (DD), 50 Q/A pairs (YCS), 20 known-good arxiv items (RR) | One uploader + one runner; fixtures under `fixtures/observability/` |
+| 4 | **Datasets** | Gold corpora per feature: small reference book (DD), 50 Q/A pairs (YCS), 20 known-good arxiv items (RR) | One uploader + one runner; fixtures under `observability/fixtures/` |
 | 5 | **LLM-as-judge evaluations** | DD: faithfulness, citation accuracy, code density. YCS: RAGAS faithfulness / answer-relevance / context-precision. RR: novelty (Jaccard vs last N digests), implementability score | Judge = pinned high-quality NIM model through the rotator → $0 |
 | 6 | **Annotation queues** (human review) | Route low-confidence planner `chapter_assign` items + refiner first-pass accepts | Showcases human-in-loop without inventing UI work |
 | 7 | **Playground** | Pin a trace → tweak prompt → rerun via labels | Free as soon as prompts live in LangFuse |
@@ -193,7 +193,7 @@ apps/fastmcp/
     telemetry.py                 # extend: emit both mcp.tool.* (current) AND gen_ai.tool.*
   infra/otel/                    # MCP-process mirror of FastAPI's OTel skeleton
 
-fixtures/observability/          # gold datasets, mirror the domain split
+observability/fixtures/          # gold datasets, mirror the domain split
   dd/reference_book/
   ycs/ask_qa_pairs.jsonl
   rr/known_good_arxiv.jsonl
@@ -207,7 +207,7 @@ fixtures/observability/          # gold datasets, mirror the domain split
 4. **`infra/langfuse/` owns SDK-only features.** Prompt management, sessions, scores helper, datasets, evals. No knowledge of specific domains.
 5. **`domains/<feature>/runtime/observability/` owns domain enrichment** — what a "video" / "chapter" / "subagent" is. Uniform three-file shape (`spans.py + metrics.py + scores.py`) across every feature so the layout is predictable.
 6. **One file per judge** under `infra/langfuse/evals/judges/` — individually unit-testable, trivially swappable.
-7. **Fixtures mirror the domain split** under `fixtures/observability/{dd,ycs,rr}/`.
+7. **Fixtures mirror the domain split** under `observability/fixtures/{dd,ycs,rr}/`.
 
 ---
 

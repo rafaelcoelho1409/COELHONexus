@@ -248,7 +248,7 @@ kubectl exec -i -n coelhonexus-dev <pod> -c coelhonexus-fastapi -- \
 ### 7a. Gold corpus
 
 ```
-fixtures/observability/foo/<dataset_name>/
+observability/fixtures/foo/<dataset_name>/
   inputs.json     # [{ "input": {...}, "expected_output": {...}, "metadata": {...} }]
   rubric.md      # human-readable rubric (the judge prompt embeds the criteria inline)
 ```
@@ -270,7 +270,7 @@ async def foo_quality(input_: dict, expected: dict, actual: dict) -> float:
 
 ```bash
 PYTHONPATH=/app python -m infra.langfuse.datasets.uploader \
-    fixtures/observability/foo/<dataset> foo.<dataset>.v1 "Foo gold corpus"
+    observability/fixtures/foo/<dataset> foo.<dataset>.v1 "Foo gold corpus"
 
 # Then in a script using run_dataset_eval(...)
 ```
@@ -350,7 +350,7 @@ Shipped in `domains/rr/task.py`. Returns `None` when LangFuse is unavailable —
 | `domains/<feature>/runtime/observability/` | per-domain enrichment (spans + metrics + scores) |
 | `scripts/observability/` | one-shot publish scripts for LangFuse-managed prompts + eval runners |
 | `observability/grafana-dashboards/` | importable JSONs |
-| `fixtures/observability/` | gold corpora |
+| `observability/fixtures/` | gold corpora |
 
 ---
 

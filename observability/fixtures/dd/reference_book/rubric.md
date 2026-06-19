@@ -36,4 +36,4 @@ Add new items to `inputs.json` following the same shape:
 }
 ```
 
-Then push: `python -m infra.langfuse.datasets.uploader fixtures/observability/dd/reference_book dd.reference_book.v1`.
+Then push: `python -m infra.langfuse.datasets.uploader observability/fixtures/dd/reference_book dd.reference_book.v1`.
