@@ -448,7 +448,16 @@ async def rag_search(
         "recursion_limit": 100,
     }
     try:
-        result = await graph.ainvoke(initial_state, config = config)
+        from infra.langfuse.sessions import session as _lf_session
+        _sess_id  = payload.thread_id or "default"
+        _user_id  = (payload.channel_ids or ["default"])[0]
+        with _lf_session(
+            "ycs",
+            session_id = _sess_id,
+            user_id    = _user_id,
+            channel_id = _user_id,
+        ):
+            result = await graph.ainvoke(initial_state, config = config)
     except Exception as e:
         raise HTTPException(
             status_code = 500,
@@ -838,14 +847,23 @@ async def rag_search_stream(
             # one event ahead of the consumer).
             event_queue: asyncio.Queue = asyncio.Queue(maxsize=1)
             async def _producer():
+                from infra.langfuse.sessions import session as _lf_session
+                _sess_id = payload.thread_id or "default"
+                _user_id = (effective_channel_ids or ["default"])[0]
                 try:
-                    async for ev in graph.astream(
-                        initial_state,
-                        config      = config,
-                        stream_mode = "updates",
+                    with _lf_session(
+                        "ycs",
+                        session_id = _sess_id,
+                        user_id    = _user_id,
+                        channel_id = _user_id,
                     ):
-                        await event_queue.put(("event", ev))
-                    await event_queue.put(("done", None))
+                        async for ev in graph.astream(
+                            initial_state,
+                            config      = config,
+                            stream_mode = "updates",
+                        ):
+                            await event_queue.put(("event", ev))
+                        await event_queue.put(("done", None))
                 except asyncio.CancelledError:
                     # Consumer cancelled us in `finally` — silent
                     # shutdown. The graph's own cleanup (HTTP

@@ -23,6 +23,7 @@ from qdrant_client.http.models import (
 )
 
 from domains.ycs.ingestion import QDRANT_COLLECTION
+from domains.ycs.runtime.observability import qdrant_search_span
 
 from .params import QDRANT_DEFAULT_TOP_K
 
@@ -88,13 +89,18 @@ class QdrantHybridRetriever:
                 ),
             )
 
-        results = await self.qdrant.query_points(
-            collection_name = QDRANT_COLLECTION,
-            prefetch = prefetch,
-            query = FusionQuery(fusion = Fusion.RRF),
-            limit = self.top_k,
-            with_payload = True,
-        )
+        with qdrant_search_span(
+            collection           = QDRANT_COLLECTION,
+            top_k                = self.top_k,
+            channel_filter_count = len(channel_ids) if channel_ids else 0,
+        ):
+            results = await self.qdrant.query_points(
+                collection_name = QDRANT_COLLECTION,
+                prefetch = prefetch,
+                query = FusionQuery(fusion = Fusion.RRF),
+                limit = self.top_k,
+                with_payload = True,
+            )
 
         documents: list[Document] = []
         for point in results.points:

@@ -24,7 +24,7 @@ _meter = None
 
 
 def _instrument_libraries() -> None:
-    """Auto-instrument httpx / redis / logging — once per process."""
+    """Auto-instrument httpx / redis / logging / litellm — once per process."""
     try:
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
         HTTPXClientInstrumentor().instrument()
@@ -42,6 +42,32 @@ def _instrument_libraries() -> None:
         LoggingInstrumentor().instrument(set_logging_format=False)
     except Exception as e:
         logger.debug(f"[otel] logging instrumentation skipped: {e}")
+    # LiteLLM `langfuse_otel` callback emits standardized gen_ai.* spans
+    # through whichever tracer provider is installed — lands in BOTH
+    # Alloy/Tempo AND LangFuse via this process's dual exporter. Module-level
+    # so every Router instance inherits. Idempotent — checks presence before
+    # appending so re-init never duplicates.
+    try:
+        import litellm
+        cb = "langfuse_otel"
+        succ = list(litellm.success_callback or [])
+        if cb not in succ:
+            litellm.success_callback = succ + [cb]
+        fail = list(litellm.failure_callback or [])
+        if cb not in fail:
+            litellm.failure_callback = fail + [cb]
+        # Per-call cost attaches as a LangFuse score on the trace.
+        # Function-callback shape — runs alongside the string-form
+        # `langfuse_otel` builtin (no-op under Router).
+        from .litellm_callbacks import cost_callback as _cost_cb
+        succ_now = list(litellm.success_callback or [])
+        if _cost_cb not in succ_now:
+            litellm.success_callback = succ_now + [_cost_cb]
+        logger.info(
+            f"[otel] litellm callbacks wired: {cb} (string), cost_callback (fn)"
+        )
+    except Exception as e:
+        logger.debug(f"[otel] litellm callback wiring skipped: {e}")
 
 
 def init_otel(also_instrument_fastapi_app=None) -> bool:
@@ -72,6 +98,15 @@ def init_otel(also_instrument_fastapi_app=None) -> bool:
 
         resource = build_resource()
         tracer_provider = TracerProvider(resource=resource)
+
+        # Mirror allow-listed baggage entries (study_id / channel_id /
+        # digest_id / framework / session_id / user_id …) onto every child
+        # span's attributes. Attach BEFORE exporters so the mirroring is in
+        # place by the time the first span is produced.
+        from .baggage import get_baggage_processor
+        if (bsp := get_baggage_processor()) is not None:
+            tracer_provider.add_span_processor(bsp)
+            logger.info("[otel] BaggageSpanProcessor attached")
 
         # At least one SHOULD attach; if neither does the provider still
         # installs (spans go nowhere but tracer.start_as_current_span works).

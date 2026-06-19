@@ -7,17 +7,14 @@ from .keys import (
     _PROVIDER_KEY_ENV,
 )
 from .patterns import (
-    MOE_RE, 
-    PARAM_SIZE_RE
+    MOE_RE,
+    PARAM_SIZE_RE,
+    _EOL_PHRASES,
 )
 
 
-# --------------------------------------------------------------------------- #
-# Error → bandit reward class
-# --------------------------------------------------------------------------- #
 def classify_error(exc: Exception) -> str:
-    """Map a litellm/httpx exception to ParetoBandit's error_class taxonomy
-    (see compose_reward in bandit.py for the reward magnitudes)."""
+    """Map a litellm/httpx exception to ParetoBandit's error_class taxonomy."""
     name = type(exc).__name__.lower()
     msg = str(exc).lower()
     if "ratelimit" in name or "429" in msg or "rate limit" in msg:
@@ -33,36 +30,9 @@ def classify_error(exc: Exception) -> str:
     return "unknown"
 
 
-# --------------------------------------------------------------------------- #
-# EOL / decommissioned model detection
-# --------------------------------------------------------------------------- #
-# Phrases that indicate the model is gone for good (not a transient outage).
-# Any match triggers the runtime blocklist + Router reshuffle path — the bandit
-# cooldown alone (60s) would have us re-trying a permanently-dead arm forever.
-# Sources of the wording:
-#   - NIM HTTP 410: "The model '<id>' has reached its end of life"
-#   - NIM HTTP 404 transient: "Function '<uuid>' not found for account"
-#   - OpenAI / Anthropic: "model_not_found"
-#   - Generic: "deprecated", "no longer available", "decommissioned"
-_EOL_PHRASES: tuple[str, ...] = (
-    "reached its end of life",
-    "end of life",
-    "has been deprecated",
-    "is deprecated",
-    "no longer available",
-    "no longer supported",
-    "model_not_found",
-    "not found for account",
-    "model decommissioned",
-    "decommissioned",
-)
-
-
 def is_eol_error(exc: Exception) -> bool:
-    """True when the exception text indicates the model is EOL / deprecated
-    / decommissioned. Distinct from rate-limit, timeout, server-error: an
-    EOL model is permanently dead and the catalog must drop it now, not
-    after a cooldown."""
+    """True if exception text indicates EOL/deprecated/decommissioned —
+    catalog must drop NOW, not after cooldown."""
     msg  = str(exc).lower()
     name = type(exc).__name__.lower()
     if "notfound" in name:
@@ -74,25 +44,20 @@ def is_eol_error(exc: Exception) -> bool:
     return any(p in msg for p in _EOL_PHRASES)
 
 
-# --------------------------------------------------------------------------- #
-# Model classification
-# --------------------------------------------------------------------------- #
 def is_heavyweight(deployment_id: str) -> bool:
     """True if `deployment_id` is on the SAWC-writer heavyweight whitelist."""
     return any(s in deployment_id for s in DD_SYNTH_WRITE_HEAVYWEIGHTS)
 
 
 def is_non_chat_model(model_id: str) -> bool:
-    """True for embedder/reranker/vision-encoder/ASR/TTS/classifier/reward
-    models — never valid in a chat pool. Provider-agnostic."""
+    """True for non-chat models (embedders, rerankers, vision, ASR, classifiers)."""
     name = (model_id or "").lower()
     return any(m in name for m in _NON_CHAT_MARKERS)
 
 
 def passes_capability_floor(model_id: str, min_b: float) -> bool:
-    """True if a discovered model is large enough for strict structured
-    generation. MoE → always True. Else True iff the largest '<N>b' token is
-    >= min_b. No parseable size → True (newer-named frontier model)."""
+    """True if model meets the param-size floor. MoE bypasses. No parseable
+    size → True (newer-named frontier)."""
     if min_b <= 0:
         return True
     name = (model_id or "").lower()
@@ -104,35 +69,26 @@ def passes_capability_floor(model_id: str, min_b: float) -> bool:
     return True
 
 
-# --------------------------------------------------------------------------- #
-# Provider id ↔ env var name
-# --------------------------------------------------------------------------- #
 def provider_key_env(provider: str) -> str:
-    """LiteLLM provider prefix → env-var name. Falls back to NVIDIA_API_KEY
-    so the cascade still attempts with the most-likely-set key."""
+    """LiteLLM prefix → env-var name. Falls back to NVIDIA_API_KEY."""
     return _PROVIDER_KEY_ENV.get(provider, "NVIDIA_API_KEY")
 
 
 def entry_provider_and_model(entry: dict) -> tuple[str, str]:
-    """Extract (registry_provider_id, model_id) from a LiteLLM entry dict.
-    Registry id matches what settings.json uses."""
+    """(registry_provider_id, model_id) from a LiteLLM entry."""
     m = (entry.get("litellm_params") or {}).get("model", "")
     prefix, _, model = m.partition("/")
     return _LITELLM_PREFIX_TO_PROVIDER.get(prefix, prefix), model
 
 
-# --------------------------------------------------------------------------- #
-# BYOK selection predicates
-# --------------------------------------------------------------------------- #
 def provider_mode(provider_id: str, sel: dict) -> str:
-    """'all' (use every free model, opt-in new) or 'custom' (only selected)."""
+    """'all' (every free model, opt-in new) or 'custom' (only selected)."""
     return (sel.get("mode") or {}).get(provider_id, "all")
 
 
 def selection_allows(provider_id: str, model_id: str, sel: dict) -> bool:
-    """Canonical BYOK predicate — shared by the entry filter (static/dynamic
-    catalog) AND the discovery-record path (dynamic catalog build). Provider
-    ids here are REGISTRY ids (groq/nim/...)."""
+    """Canonical BYOK predicate — shared by entry filter AND discovery path.
+    Provider ids are REGISTRY ids (groq/nim/...)."""
     enabled = sel.get("enabled")
     if enabled is not None and provider_id not in enabled:
         return False

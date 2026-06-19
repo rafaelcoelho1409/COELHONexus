@@ -21,9 +21,7 @@ from .patterns import (
 
 
 def normalize_model_name(name: str) -> str:
-    """L1 normalizer: drop provider prefix, dash-collapse whitespace, strip
-    tuning/version suffixes from PROVIDER_SUFFIXES. Preserves size identifiers
-    (-flash, -lite, -nano, -mini)."""
+    """L1 normalizer; preserves size identifiers (-flash, -lite, -nano, -mini)."""
     s = (name or "").strip().lower()
     s = PROVIDER_PREFIX_RE.sub("", s)
     s = WHITESPACE_RE.sub("-", s)
@@ -41,7 +39,6 @@ def normalize_model_name(name: str) -> str:
 
 
 def coerce_score(raw: str) -> float | None:
-    """Extract the first numeric value from a leaderboard cell."""
     if not raw or raw.strip() in ("—", "-", "—", "N/A", "TBD"):
         return None
     m = CELL_NUMBER_RE.search(raw.replace(",", ""))
@@ -54,14 +51,12 @@ def coerce_score(raw: str) -> float | None:
 
 
 def normalize_openevals_key(key: str) -> str | None:
-    """Map an OpenEvals benchmark column name → our metric key (or None)."""
     k = (key or "").strip().lower().replace("-", "_").replace(" ", "_")
     return _OPENEVALS_BENCHMARK_MAP.get(k)
 
 
 def parse_openlm_table(html: str) -> dict[str, dict[str, float]]:
-    """Parse OpenLM.ai Chatbot Arena+ HTML. Defensive against table-structure
-    drift — picks the table whose header row contains both 'Arena' and 'Model'."""
+    """OpenLM.ai Chatbot Arena+ HTML; picks the table whose headers contain both 'Arena' and 'Model'."""
     if not _BS4_AVAILABLE:
         return {}
     soup = BeautifulSoup(html, "html.parser")
@@ -114,7 +109,6 @@ def parse_openlm_table(html: str) -> dict[str, dict[str, float]]:
 
 
 def parse_openevals_payload(body: dict) -> dict[str, dict[str, float]]:
-    """Parse the OpenEvals leaderboard.json payload into {canonical: {metric: score}}."""
     out: dict[str, dict[str, float]] = {}
     models = body.get("models") or body.get("results") or []
     for item in models:
@@ -148,7 +142,6 @@ def parse_openevals_payload(body: dict) -> dict[str, dict[str, float]]:
 
 
 def parse_oolong_payload(body: dict) -> dict[str, dict[str, float]]:
-    """Parse the oolong-tea Arena code leaderboard payload."""
     out: dict[str, dict[str, float]] = {}
     for item in body.get("models") or []:
         if not isinstance(item, dict):
@@ -167,7 +160,6 @@ def parse_oolong_payload(body: dict) -> dict[str, dict[str, float]]:
 
 
 def normalize_metric(metric: str, raw: float) -> float:
-    """Linear scale to [0, 1] using SCORE_NORMS; clips out-of-range."""
     lo, hi = SCORE_NORMS.get(metric, (0.0, 1.0))
     if hi <= lo:
         return 0.0
@@ -178,8 +170,7 @@ def compute_composite_score(
     scores: dict[str, float],
     weights: dict[str, float],
 ) -> float:
-    """Weighted average of normalized scores. Denominator = sum of weights for
-    PRESENT metrics, so partial coverage is comparable to full coverage."""
+    """Denominator = sum of weights for PRESENT metrics — partial coverage comparable to full."""
     if not scores or not weights:
         return 0.0
     weighted_sum = 0.0
@@ -202,8 +193,7 @@ def compute_warm_start_score(
     *,
     alpha: float,
 ) -> float:
-    """alpha=1.0 → pure benchmark prior; alpha=0.0 → pure PILOT posterior.
-    Future PILOT integration plugs in here."""
+    """alpha=1.0 → pure benchmark prior; alpha=0.0 → pure PILOT posterior."""
     a = max(0.0, min(1.0, alpha))
     if pilot_score is None:
         return benchmark_score
@@ -214,7 +204,6 @@ def merge_leaderboards(
     canonical: str,
     boards: list[dict[str, dict[str, float]]],
 ) -> dict[str, float]:
-    """In-memory merge of per-source leaderboards for ONE canonical name."""
     merged: dict[str, float] = {}
     for board in boards:
         per_model = board.get(canonical, {})

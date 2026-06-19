@@ -1,13 +1,4 @@
-"""OTel gen_ai.* semconv span helpers for the rotator chokepoints.
-
-Spans emitted here flow through `infra.otel`'s TracerProvider, which dual-
-exports to Alloy (Tempo) AND LangFuse v3 (LLM observations). One wrap,
-two backends — no separate LangFuse SDK needed.
-
-Per-feature filtering (DD vs YCS vs Radar) is inherited from the parent
-`@traced(name)` span on the LangGraph node — no ContextVar plumbing
-required at this layer.
-"""
+"""OTel gen_ai.* semconv span helpers; dual-exports to Tempo (Alloy) and LangFuse v3 via infra.otel TracerProvider."""
 from .service import (
     BanditCascadeSpan,
     GenAISpan,

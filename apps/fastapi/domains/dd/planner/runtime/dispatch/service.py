@@ -167,6 +167,22 @@ async def run_planner_async(
 ) -> dict:
     """Fresh planner kickoff. Builds graph + initial state, spawns the
     LangGraph task + cancel watcher, awaits terminal."""
+    from infra.langfuse.sessions import session as _lf_session
+    with _lf_session(
+        "dd-planner",
+        session_id = thread_id,
+        user_id    = slug,
+        study_id   = thread_id,
+        framework  = slug,
+    ):
+        return await _run_planner_async_inner(thread_id, slug, mode)
+
+
+async def _run_planner_async_inner(
+    thread_id: str,
+    slug: str,
+    mode: str = "llm",
+) -> dict:
     graph = build_graph()
     config = {"configurable": {"thread_id": thread_id}}
 

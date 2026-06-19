@@ -1,0 +1,104 @@
+{
+  "title": "RR — Research Radar Digests",
+  "uid": "coelhonexus-rr-digests",
+  "tags": ["coelhonexus", "rr", "deepagents", "fastmcp"],
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "1m",
+  "time": {"from": "now-24h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "agent",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "mimir"},
+        "query": "label_values(gen_ai_client_operation_duration_seconds_count{gen_ai_agent_name!=\"\"}, gen_ai_agent_name)",
+        "includeAll": true,
+        "multi": true,
+        "current": {"text": "All", "value": "$__all"}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Subagent invocations per name (rate)",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "sum by (gen_ai_agent_name) (rate(gen_ai_client_operation_duration_seconds_count{gen_ai_agent_name=~\"$agent\"}[10m]))",
+          "legendFormat": "{{gen_ai_agent_name}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Subagent latency p95",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (gen_ai_agent_name, le) (rate(gen_ai_client_operation_duration_seconds_bucket{gen_ai_agent_name=~\"$agent\"}[10m])))",
+          "legendFormat": "{{gen_ai_agent_name}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "MCP tool calls (rate per tool)",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 7, "w": 24, "x": 0, "y": 7},
+      "targets": [
+        {
+          "expr": "sum by (gen_ai_tool_name) (rate(gen_ai_tool_calls_total[10m]))",
+          "legendFormat": "{{gen_ai_tool_name}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Digest scans last 24h",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 14},
+      "targets": [
+        {
+          "expr": "sum(increase(gen_ai_client_operation_duration_seconds_count{gen_ai_agent_name=\"orchestrator\"}[24h]))",
+          "legendFormat": "scans"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Error rate (last 1h)",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 14},
+      "targets": [
+        {
+          "expr": "sum(rate(gen_ai_client_operation_duration_seconds_count{gen_ai_agent_name=~\"$agent\", error_type!=\"\"}[1h])) / sum(rate(gen_ai_client_operation_duration_seconds_count{gen_ai_agent_name=~\"$agent\"}[1h]))",
+          "legendFormat": "error %"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "percentunit"}}
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Tokens used (24h)",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 14},
+      "targets": [
+        {
+          "expr": "sum(increase(gen_ai_client_token_usage_total[24h]))",
+          "legendFormat": "tokens"
+        }
+      ]
+    }
+  ]
+}

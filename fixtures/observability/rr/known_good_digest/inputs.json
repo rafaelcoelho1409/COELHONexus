@@ -1,0 +1,44 @@
+[
+  {
+    "input": {
+      "prior_arxiv_ids": ["2410.01234", "2410.05678", "2411.99999"],
+      "current_arxiv_ids": ["2410.01234", "2411.11111", "2411.22222", "2411.33333"]
+    },
+    "expected_output": {
+      "arxiv_ids": ["2410.01234", "2411.11111", "2411.22222", "2411.33333"]
+    },
+    "metadata": {
+      "fixture_version": "v1",
+      "description": "1 carry-over (2410.01234) + 3 net-new — expected novelty 0.75",
+      "expected_novelty": 0.75
+    }
+  },
+  {
+    "input": {
+      "prior_arxiv_ids": [],
+      "current_arxiv_ids": ["2411.aa", "2411.bb"]
+    },
+    "expected_output": {
+      "arxiv_ids": ["2411.aa", "2411.bb"]
+    },
+    "metadata": {
+      "fixture_version": "v1",
+      "description": "first-ever digest — all new — expected novelty 1.0",
+      "expected_novelty": 1.0
+    }
+  },
+  {
+    "input": {
+      "prior_arxiv_ids": ["A", "B", "C"],
+      "current_arxiv_ids": ["A", "B"]
+    },
+    "expected_output": {
+      "arxiv_ids": ["A", "B"]
+    },
+    "metadata": {
+      "fixture_version": "v1",
+      "description": "pure carry-over — expected novelty 0.0",
+      "expected_novelty": 0.0
+    }
+  }
+]

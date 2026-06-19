@@ -164,12 +164,29 @@ def _discovery_mode() -> str:
 
 
 def _build_orchestrator_prompt(mode: str) -> str:
-    """Pick the mode-appropriate prompt + substitute memory content."""
-    base = (
+    """Pick the mode-appropriate prompt + substitute memory content.
+
+    The base prompt is sourced from LangFuse (label `production`) when
+    available; otherwise from the local constant. Memory block is
+    always appended locally — it's per-build dynamic content."""
+    local_base = (
         ORCHESTRATOR_SYSTEM_PROMPT_SUBAGENTS
         if mode == DISCOVERY_MODE_AGENTS
         else ORCHESTRATOR_SYSTEM_PROMPT_TOOLS
     )
+    try:
+        from infra.langfuse.prompts import get_prompt as _lf_get_prompt
+        prompt_name = (
+            "rr.agent.orchestrator_subagents"
+            if mode == DISCOVERY_MODE_AGENTS
+            else "rr.agent.orchestrator_tools"
+        )
+        base = _lf_get_prompt(
+            prompt_name, label = "production", fallback = local_base,
+        ) or local_base
+    except Exception:
+        base = local_base
+
     memory_block = ORCHESTRATOR_MEMORY_TEMPLATE.format(
         operator_profile = MEMORY_OPERATOR_PROFILE or "(no operator profile yet)",
         themes_seen      = MEMORY_THEMES_SEEN      or "(no themes seen yet)",

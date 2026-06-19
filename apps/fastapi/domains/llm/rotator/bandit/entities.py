@@ -16,8 +16,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CellState:
-    """Bandit posterior state for one (deployment, dd_process) pair. JSON-
-    serializable; matrices serialize as nested float lists."""
+    """Bandit posterior state for one (deployment, dd_process) pair; JSON-serializable."""
     deployment: str
     dd_process: str
     A_a: np.ndarray
@@ -60,10 +59,7 @@ class CellState:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "CellState":
-        """Dim-drift recovery: a saved cell whose A_a/b_a shape doesn't match
-        current CONTEXT_DIM is re-initialized from benchmark_prior (observations
-        dropped) — prevents 100% matmul failure on context-layout changes
-        between deploys."""
+        """Re-inits from benchmark_prior on CONTEXT_DIM drift to prevent matmul failure across deploys."""
         A_a = np.asarray(d["A_a"], dtype=np.float64)
         b_a = np.asarray(d["b_a"], dtype=np.float64)
         expected = (CONTEXT_DIM, CONTEXT_DIM)
@@ -93,8 +89,7 @@ class CellState:
         gamma: float = FORGETTING_GAMMA,
         var_alpha: float = FGTS_VA.var_alpha,
     ) -> None:
-        """Order matters: σ² uses the PRE-update θ̂ (unbiased residual) before
-        the posterior is advanced."""
+        """Order matters: σ² uses PRE-update θ̂ (unbiased residual) before posterior advance."""
         try:
             theta_pre = np.linalg.solve(self.A_a, self.b_a)
             residual = float(reward) - float(context @ theta_pre)

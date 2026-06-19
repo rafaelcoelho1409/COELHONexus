@@ -48,6 +48,13 @@ class SmartRetriever:
     async def retrieve(
         self, query: str, channel_ids: list[str] | None = None,
     ) -> list[Document]:
+        from domains.ycs.runtime.observability import ycs_retriever_fanout_span
+        with ycs_retriever_fanout_span(top_k = self.top_k):
+            return await self._retrieve_inner(query, channel_ids)
+
+    async def _retrieve_inner(
+        self, query: str, channel_ids: list[str] | None = None,
+    ) -> list[Document]:
         # Fan out the two PRIMARY arms (Qdrant + Neo4j) in parallel.
         # ES is the fallback only — we don't pay its latency unless the
         # primaries return nothing usable.

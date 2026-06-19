@@ -1,18 +1,6 @@
-"""Imperative Shell — Redis I/O, mode resolution, predict/update orchestration,
-slot reservations, OTel.
+"""Imperative shell: Redis I/O, mode resolution, predict/update, slot reservations, OTel.
 
-Pure scoring + reward + context-vector logic lives in domain.py; CellState
-data + invariant mutations live in entities.py. Activated default since
-2026-05-23: FGTS-VA (NeurIPS 2025). Mode is per-call (predict()/predict_top_k()
-accept a `mode=` override) so a shadow-A/B harness can route real traffic
-under one mode while computing the counterfactual under another. See
-docs/KD-ROTATOR-BANDIT-SOTA-2026-05-23.md.
-
-Env vars (priority order):
-    KD_BANDIT_MODE = ucb | ts | fgts_va    explicit selection
-    KD_DISABLE_BANDIT_TS = 1                kill-switch → ucb (full revert)
-    KD_DISABLE_FGTS_VA   = 1                kill-switch → ts  (revert one step)
-    (none set)                              DEFAULT = fgts_va
+Env (priority): KD_BANDIT_MODE={ucb,ts,fgts_va} > KD_DISABLE_BANDIT_TS=1 (→ucb) > KD_DISABLE_FGTS_VA=1 (→ts) > default fgts_va.
 """
 from __future__ import annotations
 
@@ -47,7 +35,6 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_mode(override: Mode | None = None) -> Mode:
-    """Resolution priority: kwarg → KD_BANDIT_MODE env → kill-switches → fgts_va."""
     if override is not None:
         return override
     if "KD_BANDIT_MODE" in os.environ:
@@ -61,8 +48,7 @@ def _resolve_mode(override: Mode | None = None) -> Mode:
     return "fgts_va"
 
 
-# Shared module-level RNG. numpy.Generator draws are self-contained and safe
-# to call concurrently from asyncio coroutines.
+# numpy.Generator draws are safe to call concurrently from asyncio coroutines.
 _RNG = np.random.default_rng()
 
 
@@ -72,9 +58,6 @@ except Exception:
     pass
 
 
-# --------------------------------------------------------------------------- #
-# Redis persistence
-# --------------------------------------------------------------------------- #
 async def get_cell_state(
     deployment: str,
     dd_process: str,
@@ -145,7 +128,7 @@ async def init_bandit_warm_start(
     redis: "redis_aio.Redis | None",
     overwrite: bool = False,
 ) -> int:
-    """Initialize cells for all (deployment, dd_process) pairs from benchmark priors."""
+    """Init cells for all (deployment, dd_process) pairs from benchmark priors."""
     if redis is None or not deployments_by_step:
         return 0
     count = 0
@@ -170,9 +153,6 @@ async def init_bandit_warm_start(
     return count
 
 
-# --------------------------------------------------------------------------- #
-# Predict / update
-# --------------------------------------------------------------------------- #
 async def predict(
     dd_process: str,
     context: np.ndarray,
@@ -182,7 +162,6 @@ async def predict(
     alpha: float = UCB_ALPHA,
     mode: Mode | None = None,
 ) -> tuple[str | None, dict[str, Any]]:
-    """Pick deployment via the configured scoring mode."""
     if not candidate_deployments:
         return None, {"reason": "no_candidates"}
     resolved_mode = _resolve_mode(mode)
@@ -200,7 +179,7 @@ async def predict(
             rng = _RNG, 
             alpha = alpha)
         scored.append((deployment, total, exploit, explore, cell.n_obs))
-    # Tie-break by lowest n_obs → favors exploration of under-sampled arms.
+    # Tie-break by lowest n_obs to favor under-sampled arms.
     scored.sort(key = lambda x: (-x[1], x[4], x[0]))
     winner = scored[0]
     _record_predict(dd_process, resolved_mode)
@@ -212,7 +191,7 @@ async def predict(
         "winner_explore_bonus": winner[3],
         "winner_n_obs":         winner[4],
         "mode":                 resolved_mode,
-        # Retained for backward-compat with dashboards that key on `winner_ucb`.
+        # Back-compat with dashboards keyed on `winner_ucb`.
         "winner_ucb":           winner[1],
         "all_scores": [
             {"deployment": d, "score": t, "exploit": e, "explore": x, "n_obs": n}
@@ -230,8 +209,7 @@ async def update(
     *,
     redis: "redis_aio.Redis | None",
 ) -> bool:
-    """Apply one observation. Posterior advance is mode-agnostic — flipping
-    KD_BANDIT_MODE later picks up the same accumulated state."""
+    """Posterior advance is mode-agnostic; flipping KD_BANDIT_MODE later reuses accumulated state."""
     if redis is None:
         return False
     cell = await get_cell_state(deployment, dd_process, redis = redis)
@@ -256,7 +234,7 @@ async def predict_top_k(
     alpha: float = UCB_ALPHA,
     mode: Mode | None = None,
 ) -> list[tuple[str, float, int]]:
-    """Top-K ranking for cascade-aware routing (try #1 → #2 → #3 on failure)."""
+    """Top-K ranking for cascade-aware routing (#1 → #2 → #3 on failure)."""
     if not candidate_deployments:
         return []
     resolved_mode = _resolve_mode(mode)
@@ -281,9 +259,7 @@ async def predict_top_k(
     return scored[: max(1, k)]
 
 
-# --------------------------------------------------------------------------- #
-# Reservations — thundering-herd protection (cell-level + provider-level)
-# --------------------------------------------------------------------------- #
+# Thundering-herd protection (cell-level + provider-level)
 async def try_reserve(
     deployment: str,
     dd_process: str,
@@ -291,8 +267,7 @@ async def try_reserve(
     redis: "redis_aio.Redis | None",
     ttl_s: int = 60,
 ) -> bool:
-    """Atomic claim of (deployment, dd_process). False ⇒ another caller holds
-    it; pick a different arm. Fail-soft on Redis errors → True."""
+    """Atomic claim; False ⇒ another caller holds it. Fail-soft on Redis errors → True."""
     if redis is None:
         return True
     try:
@@ -327,8 +302,7 @@ async def try_reserve_provider_slot(
     max_slots: int,
     ttl_s: int = 1800,
 ) -> int | None:
-    """Claim one of `max_slots` numbered slots. Returns the slot index or
-    None when all are taken. Fail-soft on Redis None → returns 0."""
+    """Claim one of `max_slots` slots; returns idx or None when all taken. Fail-soft → 0."""
     if redis is None:
         return 0
     for slot_idx in range(max_slots):
@@ -359,9 +333,6 @@ async def release_provider_slot(
         pass
 
 
-# --------------------------------------------------------------------------- #
-# OTel instruments
-# --------------------------------------------------------------------------- #
 _metric_instruments: dict[str, Any] = {}
 
 

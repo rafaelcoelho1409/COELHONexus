@@ -1,16 +1,4 @@
-"""Async context-manager span helpers for the rotator chokepoints.
-
-Each helper opens an OTel span pre-populated with gen_ai.* request attributes,
-hands the caller a `GenAISpan` wrapper, and lets the caller attach response
-attributes on success or capture an error on failure. Spans nest under
-whatever LangGraph node span is currently active (set via the planner/synth
-`@traced(...)` decorator), so per-feature filtering in LangFuse and Tempo
-is inherited for free.
-
-When `infra.otel.init_otel()` hasn't run, `get_tracer()` returns a no-op
-tracer and all attribute writes are silently dropped — these helpers stay
-safe to import and call.
-"""
+"""Async context-manager span helpers; spans nest under the active `@traced(...)` LangGraph node. Safe to call when OTel is uninitialized (no-op tracer)."""
 from __future__ import annotations
 
 from contextlib import asynccontextmanager, contextmanager
@@ -42,16 +30,14 @@ from .keys import (
 
 
 class GenAISpan:
-    """Wrapper around the active OTel span. All methods are no-ops when the
-    underlying span is a no-op (tracer not initialized) — set_attribute on
-    the OTel no-op span is already a no-op, so we just forward."""
+    """Wrapper around the active OTel span; forwards to no-op span when tracer is uninitialized."""
     __slots__ = ("_span",)
 
     def __init__(self, span: Any) -> None:
         self._span = span
 
     def attach_attrs(self, attrs: dict[str, Any]) -> None:
-        """Set multiple attributes; None values dropped (OTel rejects them)."""
+        """None values dropped (OTel rejects them)."""
         for k, v in attrs.items():
             if v is None:
                 continue
@@ -70,9 +56,6 @@ class GenAISpan:
         self.attach_attrs(build_rerank_response_attrs(rankings))
 
 
-# --------------------------------------------------------------------------- #
-# Chat completion
-# --------------------------------------------------------------------------- #
 @asynccontextmanager
 async def genai_completion_span(
     *,
@@ -83,8 +66,7 @@ async def genai_completion_span(
     top_p: float | None = None,
     system: str = SYSTEM_LITELLM_ROTATOR,
 ) -> AsyncIterator[GenAISpan]:
-    """Wrap a chat-completion call. Caller calls `.attach_chat_response(r)`
-    on success; exceptions are auto-recorded on the span."""
+    """Caller calls `.attach_chat_response(r)` on success; exceptions auto-recorded."""
     tracer = get_tracer()
     attrs = build_chat_request_attrs(
         request_model = request_model,
@@ -103,9 +85,6 @@ async def genai_completion_span(
             raise
 
 
-# --------------------------------------------------------------------------- #
-# Embedding
-# --------------------------------------------------------------------------- #
 @asynccontextmanager
 async def genai_embedding_span(
     *,
@@ -114,8 +93,7 @@ async def genai_embedding_span(
     input_type: str | None = None,
     system: str = SYSTEM_LITELLM_ROTATOR,
 ) -> AsyncIterator[GenAISpan]:
-    """Wrap an embedding batch. Caller calls
-    `.attach_embedding_response(r)` on success."""
+    """Caller calls `.attach_embedding_response(r)` on success."""
     tracer = get_tracer()
     attrs = build_embedding_request_attrs(
         request_model = request_model,
@@ -140,8 +118,7 @@ def genai_embedding_span_sync(
     input_type: str | None = None,
     system: str = SYSTEM_LITELLM_ROTATOR,
 ) -> Iterator[GenAISpan]:
-    """Sync equivalent of `genai_embedding_span` — for `embed_via_router_sync`
-    which can't be awaited."""
+    """Sync variant for `embed_via_router_sync` which can't be awaited."""
     tracer = get_tracer()
     attrs = build_embedding_request_attrs(
         request_model = request_model,
@@ -158,9 +135,6 @@ def genai_embedding_span_sync(
             raise
 
 
-# --------------------------------------------------------------------------- #
-# Rerank
-# --------------------------------------------------------------------------- #
 @asynccontextmanager
 async def genai_rerank_span(
     *,
@@ -169,8 +143,7 @@ async def genai_rerank_span(
     documents: list[str],
     system: str = SYSTEM_LITELLM_ROTATOR,
 ) -> AsyncIterator[GenAISpan]:
-    """Wrap a rerank call. Caller calls `.attach_rerank_response(pairs)` on
-    success."""
+    """Caller calls `.attach_rerank_response(pairs)` on success."""
     tracer = get_tracer()
     attrs = build_rerank_request_attrs(
         request_model = request_model,
@@ -187,12 +160,8 @@ async def genai_rerank_span(
             raise
 
 
-# --------------------------------------------------------------------------- #
-# Bandit cascade — parent span + per-attempt children
-# --------------------------------------------------------------------------- #
 class BanditCascadeSpan:
-    """Lightweight handle on the parent cascade span — caller updates
-    total_attempts + fallback at the end of the cascade."""
+    """Parent cascade-span handle; caller updates total_attempts + fallback at the end."""
     __slots__ = ("_span",)
 
     def __init__(self, span: Any) -> None:
@@ -218,8 +187,7 @@ async def genai_bandit_cascade_span(
     *,
     dd_process: str,
 ) -> AsyncIterator[BanditCascadeSpan]:
-    """Parent span for the full bandit cascade. Per-attempt child spans are
-    opened via `genai_bandit_attempt_span` inside the cascade loop."""
+    """Per-attempt children are opened via `genai_bandit_attempt_span` inside the cascade loop."""
     tracer = get_tracer()
     attrs = build_bandit_cascade_attrs(dd_process = dd_process)
     with tracer.start_as_current_span(SPAN_NAME_BANDIT_CASCADE, attributes = attrs) as span:
@@ -241,11 +209,7 @@ async def genai_bandit_attempt_span(
     temperature: float | None = None,
     max_tokens: int | None = None,
 ) -> AsyncIterator[GenAISpan]:
-    """Per-attempt child generation span. Carries both gen_ai.* request
-    attrs (model = deployment_id, system = provider prefix) AND
-    bandit.* attempt metadata. Caller calls `.attach_chat_response(r)` on
-    success and `update_bandit_outcome(span, ...)` on every attempt
-    (success or fail) — see helpers below."""
+    """Carries gen_ai.* request attrs AND bandit.* attempt metadata. Caller must call `update_bandit_outcome` on every attempt (success OR failure)."""
     tracer = get_tracer()
     system = system_for_deployment(deployment_id)
     attrs: dict[str, Any] = build_chat_request_attrs(
@@ -277,10 +241,7 @@ def update_bandit_outcome(
     error_class: str | None = None,
     schema_valid: bool | None = None,
 ) -> None:
-    """Patch the bandit.* outcome attributes onto an open attempt span.
-    Called from inside the cascade attempt block after each attempt
-    completes (success OR failure) so we capture latency/reward/error_class
-    consistently."""
+    """Patch bandit.* outcome attrs onto an open attempt span (call on every attempt, success or fail)."""
     wrapper.attach_attrs({
         "bandit.latency_s":    latency_s,
         "bandit.reward":       reward,
@@ -289,11 +250,8 @@ def update_bandit_outcome(
     })
 
 
-# --------------------------------------------------------------------------- #
-# Internal — error capture
-# --------------------------------------------------------------------------- #
 def _record_error(span: Any, exc: Exception) -> None:
-    """Attach error.type / error.message + record_exception. No-op safe."""
+    """Attach error.type / error.message + record_exception (no-op safe)."""
     try:
         span.set_attribute("error.type", type(exc).__name__)
         span.set_attribute("error.message", str(exc)[:300])

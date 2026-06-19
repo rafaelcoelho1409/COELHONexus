@@ -10,6 +10,7 @@ from __future__ import annotations
 from elasticsearch import AsyncElasticsearch
 from langchain_core.documents import Document
 
+from domains.ycs.runtime.observability import es_search_span
 from infra.elasticsearch import INDEX_METADATA, INDEX_TRANSCRIPTIONS
 
 from .params import ES_DEFAULT_TOP_K
@@ -58,12 +59,17 @@ class ElasticsearchRetriever:
                 },
             }
 
-        results = await self.es.search(
-            index = INDEX_TRANSCRIPTIONS,
-            query = es_query,
-            size = self.top_k,
-            _source = ["video_id", "lang", "content", "channel_id"],
-        )
+        with es_search_span(
+            index                = INDEX_TRANSCRIPTIONS,
+            top_k                = self.top_k,
+            channel_filter_count = len(channel_ids) if channel_ids else 0,
+        ):
+            results = await self.es.search(
+                index = INDEX_TRANSCRIPTIONS,
+                query = es_query,
+                size = self.top_k,
+                _source = ["video_id", "lang", "content", "channel_id"],
+            )
         hits = results["hits"]["hits"]
         if not hits:
             return []
@@ -99,12 +105,17 @@ class ElasticsearchRetriever:
         the separate metadata index."""
         if not video_ids:
             return {}
-        results = await self.es.search(
-            index = INDEX_METADATA,
-            query = {"ids": {"values": video_ids}},
-            size = len(video_ids),
-            _source = ["title", "channel", "upload_date", "webpage_url"],
-        )
+        with es_search_span(
+            index                = INDEX_METADATA,
+            top_k                = len(video_ids),
+            operation            = "metadata_lookup",
+        ):
+            results = await self.es.search(
+                index = INDEX_METADATA,
+                query = {"ids": {"values": video_ids}},
+                size = len(video_ids),
+                _source = ["title", "channel", "upload_date", "webpage_url"],
+            )
         return {
             h["_id"]: h["_source"]
             for h in results["hits"]["hits"]

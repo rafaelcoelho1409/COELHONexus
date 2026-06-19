@@ -53,6 +53,18 @@ def build_resource() -> Resource:
         ),
         "service.namespace": SERVICE_NAMESPACE,
     }
+    # Deploy-identity attrs. Helm injects GIT_SHA + HELM_CHART_VERSION at
+    # template render time so Grafana annotations can diff "which deploy
+    # regressed" against the trace's recorded provenance.
+    git_sha = os.environ.get("GIT_SHA") or os.environ.get("OTEL_GIT_SHA")
+    if git_sha:
+        attrs["service.git_sha"] = git_sha
+    chart_ver = (
+        os.environ.get("HELM_CHART_VERSION")
+        or os.environ.get("OTEL_HELM_CHART_VERSION")
+    )
+    if chart_ver:
+        attrs["service.helm_chart_version"] = chart_ver
     extra = os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "")
     if extra:
         for pair in extra.split(","):

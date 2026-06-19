@@ -36,6 +36,10 @@ otel:
   langfuse_otlp_endpoint: "http://langfuse-web.langfuse.svc.cluster.local:3000/api/public/otel"
   service_name: "coelhonexus-fastapi"
   service_version: "1.0.0"
+  # Optional — short git SHA, injected as GIT_SHA env var and read by
+  # infra/otel/exporters.py:build_resource() as `service.git_sha`. Leave
+  # empty in dev (skaffold rebuilds frequently); set in CI/CD pipelines.
+  git_sha: ""
 
 # External services — all in-cluster ClusterIP services in the same K3s cluster.
 # Credentials are loaded from coelhonexus-secret (upload via upload_env_to_k3d.sh)

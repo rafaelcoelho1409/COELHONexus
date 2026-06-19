@@ -92,6 +92,14 @@ def ingest_to_neo4j(
         self.update_state(state = "PROGRESS", meta = payload)
 
     async def _run() -> dict[str, Any]:
+        from infra.langfuse.sessions import session as _lf_session
+        with _lf_session(
+            "ycs-ingest-neo4j",
+            session_id = self.request.id or "(no-request-id)",
+        ):
+            return await _run_inner()
+
+    async def _run_inner() -> dict[str, Any]:
         es = AsyncElasticsearch(
             hosts      = [os.environ["ELASTICSEARCH_HOST"]],
             basic_auth = (

@@ -41,18 +41,24 @@ def rerank_documents(
     if not documents:
         return []
     from flashrank import RerankRequest
+    from domains.ycs.runtime.observability import reranker_span
 
-    ranker = _get_ranker()
-    passages = [
-        {"id": i, "text": doc.page_content[:PER_DOC_CHAR_CAP]}
-        for i, doc in enumerate(documents)
-    ]
-    results = ranker.rerank(RerankRequest(query = query, passages = passages))
+    with reranker_span(
+        model     = "flashrank-default",
+        doc_count = len(documents),
+        top_k     = top_k,
+    ):
+        ranker = _get_ranker()
+        passages = [
+            {"id": i, "text": doc.page_content[:PER_DOC_CHAR_CAP]}
+            for i, doc in enumerate(documents)
+        ]
+        results = ranker.rerank(RerankRequest(query = query, passages = passages))
 
-    reranked: list[Document] = []
-    for result in results[:top_k]:
-        idx = result["id"]
-        doc = documents[idx]
-        doc.metadata["rerank_score"] = result["score"]
-        reranked.append(doc)
-    return reranked
+        reranked: list[Document] = []
+        for result in results[:top_k]:
+            idx = result["id"]
+            doc = documents[idx]
+            doc.metadata["rerank_score"] = result["score"]
+            reranked.append(doc)
+        return reranked

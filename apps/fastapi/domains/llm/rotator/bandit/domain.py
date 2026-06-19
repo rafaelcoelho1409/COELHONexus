@@ -23,7 +23,7 @@ Mode = Literal["ucb", "ts", "fgts_va"]
 
 
 def theta_hat(cell: CellState) -> np.ndarray:
-    """θ̂_a = A_a^-1 · b_a (point estimate of the linear reward params)."""
+    """θ̂_a = A_a^-1 · b_a."""
     return np.linalg.solve(cell.A_a, cell.b_a)
 
 
@@ -32,7 +32,7 @@ def score_ucb(
     context: np.ndarray,
     alpha: float = UCB_ALPHA,
 ) -> tuple[float, float, float]:
-    """LinUCB (Li et al. ICML 2010). Returns (total, exploit, explore_bonus)."""
+    """LinUCB (Li et al. ICML 2010); returns (total, exploit, explore_bonus)."""
     try:
         theta = theta_hat(cell)
     except np.linalg.LinAlgError:
@@ -53,8 +53,7 @@ def score_ts(
     rng: np.random.Generator,
     scale: float = TS_SCALE,
 ) -> tuple[float, float, float]:
-    """LinTS (Agrawal & Goyal ICML 2013). `explore` channel returns the L2
-    perturbation norm for OTel parity with the UCB bonus."""
+    """LinTS (Agrawal & Goyal ICML 2013); `explore` is L2 perturbation norm for OTel parity with UCB bonus."""
     try:
         theta_mean = theta_hat(cell)
     except np.linalg.LinAlgError:
@@ -82,8 +81,7 @@ def score_fgts_va(
     sigma_min_sq: float = FGTS_VA.sigma_min_sq,
     feel_good_beta: float = FGTS_VA.feel_good_beta,
 ) -> tuple[float, float, float]:
-    """FGTS-VA (NeurIPS 2025, arXiv:2511.02123). Per-arm σ̂² replaces fixed
-    scale²; feel-good β·√(ψᵀA^-1ψ) adds optimism. Returns (total, exploit, fg_bonus)."""
+    """FGTS-VA (NeurIPS 2025, arXiv:2511.02123): per-arm σ̂² replaces fixed scale²; feel-good β·√(ψᵀA^-1ψ) adds optimism."""
     try:
         theta_mean = theta_hat(cell)
     except np.linalg.LinAlgError:
@@ -121,7 +119,7 @@ def score_cell(
     rng: np.random.Generator,
     alpha: float = UCB_ALPHA,
 ) -> tuple[float, float, float]:
-    """Dispatch the three scoring modes. Returns (total, exploit, explore)."""
+    """Dispatch ucb/ts/fgts_va; returns (total, exploit, explore)."""
     if mode == "fgts_va":
         return score_fgts_va(cell, context, rng = rng)
     if mode == "ts":
@@ -139,8 +137,7 @@ def make_context_vector(
     time_now: float | None = None,
     recent_error_rates: dict[str, float] | None = None,
 ) -> np.ndarray:
-    """24-dim feature vector. sin/cos hour encoding teaches the bandit that
-    23:00 and 00:00 are adjacent."""
+    """24-dim feature vector; sin/cos hour encoding makes 23:00 and 00:00 adjacent."""
     v = np.zeros(CONTEXT_DIM, dtype = np.float64)
     v[0] = 1.0
     v[1] = float(np.log1p(max(0, chapter_number)) / np.log(20.0))
@@ -178,9 +175,7 @@ def compose_reward(
     hash_recall: float | None = None,
     error_class: str | None = None,
 ) -> float:
-    """Scalar reward roughly in [-0.8, +1.0]. Failure path is fully driven by
-    error_class — penalty magnitudes distinguish "rate-limited now" from
-    "structurally broken"."""
+    """Scalar reward in ~[-0.8, +1.0]; failure path driven by error_class penalties."""
     if not success:
         return float(ERROR_CLASS_PENALTIES.get(error_class or "unknown", ERROR_CLASS_PENALTIES["unknown"]))
     r = REWARDS.success

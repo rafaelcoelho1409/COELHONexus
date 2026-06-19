@@ -1,15 +1,4 @@
-"""Imperative Shell — parallel /v1/models fan-out, key validation, OTel.
-
-Each call is fresh — no cron, no staleness. Total latency = max(provider
-response times) ≈ 0.5-1.5s because all enabled providers run in parallel.
-Fail-soft: a provider that errors returns [] for itself; the others still
-contribute.
-
-OTel metrics:
-    dd.rotator_models_alive          Gauge       per-provider live model count
-    dd.rotator_discovery_duration_s  Histogram   per-call wall-clock
-    dd.rotator_discovery_error_total Counter     per-(provider, error_type)
-"""
+"""Parallel /v1/models fan-out, key validation, OTel. Fail-soft per provider."""
 from __future__ import annotations
 
 import asyncio
@@ -34,15 +23,11 @@ logger = logging.getLogger(__name__)
 _metric_instruments: dict[str, Any] = {}
 
 
-# --------------------------------------------------------------------------- #
-# HTTP fetch (single provider)
-# --------------------------------------------------------------------------- #
 async def _fetch_provider(
     client: httpx.AsyncClient,
     cfg: ProviderConfig,
 ) -> list[DiscoveryRecord]:
-    """One provider's /v1/models → free-tier records. [] on missing key / network
-    error / non-2xx — caller treats empty as "no signal from this provider"."""
+    """[] on missing key / network error / non-2xx; caller treats empty as no-signal."""
     api_key = resolve_key(cfg.key_env)
     if not api_key:
         logger.info(f"[discovery] {cfg.name}: {cfg.key_env} unset (store + env) — skipping")
@@ -86,15 +71,11 @@ async def _fetch_provider(
     ]
 
 
-# --------------------------------------------------------------------------- #
-# Public API
-# --------------------------------------------------------------------------- #
 async def list_all_alive_models(
     *,
     only_providers: list[str] | None = None,
 ) -> dict[str, list[DiscoveryRecord]]:
-    """Parallel fan-out across enabled providers. {provider: [records]}.
-    Errored providers appear with [] (caller detects via OTel error counter)."""
+    """Parallel fan-out; errored providers appear with []."""
     start = time.time()
     selected = [
         cfg for cfg in PROVIDERS.values()
@@ -128,13 +109,12 @@ async def list_all_alive_models(
 
 
 def required_providers() -> list[str]:
-    """Provider ids whose key is MANDATORY (e.g. NIM — embeddings + reranking)."""
+    """Providers whose key is mandatory (e.g. NIM — embeddings + reranking)."""
     return [pid for pid, cfg in PROVIDERS.items() if cfg.required]
 
 
 def missing_required_keys() -> list[dict]:
-    """Required providers with no resolvable key. Empty == ready. Gates DD
-    runs + drives the /settings readiness banner."""
+    """Empty == ready. Gates DD runs and drives the /settings readiness banner."""
     out: list[dict] = []
     for pid, cfg in PROVIDERS.items():
         if cfg.required and not resolve_key(cfg.key_env):
@@ -146,12 +126,7 @@ async def probe_provider_key(
     provider_id: str,
     api_key: str | None = None,
 ) -> dict:
-    """Validate a provider key by hitting its /v1/models. `api_key=None` →
-    resolve via store/env (test the current key). A passed key is probed
-    directly and NOT stored (test-before-save).
-
-    status ∈ {reachable, missing_key, invalid_key, rate_limited, unreachable,
-              unknown_provider}. 429 → ok=True/rate_limited (key authenticated)."""
+    """Test-before-save: passed key is probed directly, not stored. 429 → ok=True (auth ok)."""
     cfg = PROVIDERS.get(provider_id)
     base = {"n_free_models": 0, "n_total_models": 0}
     if cfg is None:
@@ -197,9 +172,7 @@ async def probe_provider_key(
 
 
 async def list_provider_free_models(provider_id: str) -> list[str]:
-    """Free-tier model ids for ONE provider (UI available-models list). Bypasses
-    the registry `enabled` flag so a user with a key for an otherwise-disabled
-    provider still sees its models."""
+    """Bypasses `enabled` flag so a user with a key for a disabled provider still sees models."""
     cfg = PROVIDERS.get(provider_id)
     if cfg is None:
         return []
@@ -212,14 +185,10 @@ def list_all_alive_models_sync(
     *,
     only_providers: list[str] | None = None,
 ) -> dict[str, list[DiscoveryRecord]]:
-    """Sync wrapper for non-async callers (Celery task body, debug CLI).
-    Do NOT call from inside an event loop."""
+    """Do NOT call from inside an event loop."""
     return asyncio.run(list_all_alive_models(only_providers = only_providers))
 
 
-# --------------------------------------------------------------------------- #
-# OTel instruments
-# --------------------------------------------------------------------------- #
 def _ensure_metrics() -> dict[str, Any]:
     if _metric_instruments:
         return _metric_instruments

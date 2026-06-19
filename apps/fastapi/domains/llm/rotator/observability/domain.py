@@ -1,6 +1,4 @@
-"""Pure attribute builders for gen_ai.* span shaping. No I/O, no async, no
-tracer access — these functions take request/response shapes and return
-attribute dicts. Service.py orchestrates the span lifecycle around them."""
+"""Pure attribute builders for gen_ai.* spans; service.py owns the span lifecycle."""
 from __future__ import annotations
 
 import json
@@ -48,12 +46,8 @@ from .params import (
 )
 
 
-# --------------------------------------------------------------------------- #
-# Provider routing — deployment id ↔ gen_ai.system value
-# --------------------------------------------------------------------------- #
 def system_for_deployment(deployment_id: str | None) -> str:
-    """LiteLLM deployment_id prefix → `gen_ai.system`. `groq/llama-...` →
-    `groq`. Unprefixed or empty → `litellm-rotator` (Router-shuffle path)."""
+    """LiteLLM deployment_id prefix → `gen_ai.system`; unprefixed → `litellm-rotator`."""
     if not deployment_id:
         return SYSTEM_LITELLM_ROTATOR
     prefix, sep, _ = deployment_id.partition("/")
@@ -61,20 +55,14 @@ def system_for_deployment(deployment_id: str | None) -> str:
 
 
 def provider_for_deployment(deployment_id: str | None) -> str:
-    """Same prefix-extract but always returns the literal prefix (empty
-    string when unprefixed) — used for the bandit.provider attribute where
-    we want the raw registry id, not the fallback sentinel."""
+    """Literal prefix (empty when unprefixed) for bandit.provider — no fallback sentinel."""
     if not deployment_id or "/" not in deployment_id:
         return ""
     return deployment_id.split("/", 1)[0]
 
 
-# --------------------------------------------------------------------------- #
-# Prompt / completion serialization (truncated)
-# --------------------------------------------------------------------------- #
 def _truncate(s: str, cap: int) -> str:
-    """Truncate `s` to `cap` chars with a `…+Nb` suffix marking dropped
-    bytes. Cap of 0 returns empty."""
+    """Truncate to `cap` chars with a `…+Nb` suffix marking dropped bytes."""
     if cap <= 0 or not s:
         return ""
     if len(s) <= cap:
@@ -83,8 +71,7 @@ def _truncate(s: str, cap: int) -> str:
 
 
 def serialize_messages(messages: list[dict] | None, cap: int = PROMPT_TRUNCATE_CHARS) -> str:
-    """OpenAI-style messages → compact JSON for `gen_ai.prompt`. Truncated.
-    LangFuse renders this as the generation input."""
+    """OpenAI-style messages → truncated compact JSON for `gen_ai.prompt` (LangFuse generation input)."""
     if not messages:
         return ""
     try:
@@ -98,17 +85,13 @@ def serialize_input_texts(
     texts: list[str] | None,
     cap: int = EMBEDDING_PREVIEW_CHARS,
 ) -> str:
-    """Embedding/rerank input list → preview of the first text. Full list
-    would explode span size; the count is recorded separately."""
+    """First-text preview; full list would explode span size (count recorded separately)."""
     if not texts:
         return ""
     head = texts[0] if texts[0] else ""
     return _truncate(head, cap)
 
 
-# --------------------------------------------------------------------------- #
-# Request attribute builders
-# --------------------------------------------------------------------------- #
 def build_chat_request_attrs(
     *,
     request_model: str,
@@ -118,7 +101,6 @@ def build_chat_request_attrs(
     top_p: float | None = None,
     system: str = SYSTEM_LITELLM_ROTATOR,
 ) -> dict[str, Any]:
-    """gen_ai.* request attributes for a chat completion."""
     attrs: dict[str, Any] = {
         GEN_AI_SYSTEM:         system,
         GEN_AI_OPERATION_NAME: OP_CHAT,
@@ -141,7 +123,6 @@ def build_embedding_request_attrs(
     input_type: str | None = None,
     system: str = SYSTEM_LITELLM_ROTATOR,
 ) -> dict[str, Any]:
-    """gen_ai.* request attributes for an embedding batch."""
     attrs: dict[str, Any] = {
         GEN_AI_SYSTEM:               system,
         GEN_AI_OPERATION_NAME:       OP_EMBEDDING,
@@ -161,7 +142,6 @@ def build_rerank_request_attrs(
     documents: list[str],
     system: str = SYSTEM_LITELLM_ROTATOR,
 ) -> dict[str, Any]:
-    """gen_ai.* request attributes for a rerank call."""
     return {
         GEN_AI_SYSTEM:              system,
         GEN_AI_OPERATION_NAME:      OP_RERANK,
@@ -171,12 +151,8 @@ def build_rerank_request_attrs(
     }
 
 
-# --------------------------------------------------------------------------- #
-# Response attribute builders — defensively pull through dict OR object
-# attribute access because LiteLLM response shapes vary by provider.
-# --------------------------------------------------------------------------- #
+# LiteLLM response shapes vary by provider — these helpers tolerate dict OR object access.
 def _get(obj: Any, key: str, default: Any = None) -> Any:
-    """Read `key` from `obj` whether it's a dict or an object."""
     if obj is None:
         return default
     if isinstance(obj, dict):
@@ -185,7 +161,7 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
 
 
 def _coerce_usage(usage: Any) -> dict:
-    """Normalize a LiteLLM `usage` block to a plain dict."""
+    """Normalize LiteLLM `usage` to a plain dict."""
     if usage is None:
         return {}
     if isinstance(usage, dict):
@@ -199,8 +175,7 @@ def _coerce_usage(usage: Any) -> dict:
 
 
 def build_chat_response_attrs(response: Any) -> dict[str, Any]:
-    """gen_ai.* response attributes from a LiteLLM completion response.
-    Returns an empty dict when the shape is unrecognized."""
+    """Returns an empty dict when the response shape is unrecognized."""
     attrs: dict[str, Any] = {}
     response_model = _get(response, "model")
     if response_model:
@@ -229,7 +204,6 @@ def build_chat_response_attrs(response: Any) -> dict[str, Any]:
 
 
 def build_embedding_response_attrs(response: Any) -> dict[str, Any]:
-    """gen_ai.* response attributes for an embedding response."""
     attrs: dict[str, Any] = {}
     response_model = _get(response, "model")
     if response_model:
@@ -246,7 +220,6 @@ def build_embedding_response_attrs(response: Any) -> dict[str, Any]:
 def build_rerank_response_attrs(
     rankings: list[tuple[int, float]] | None,
 ) -> dict[str, Any]:
-    """Custom rerank attributes: result count + top score."""
     if not rankings:
         return {GEN_AI_RESPONSE_RERANK_COUNT: 0}
     return {
@@ -255,9 +228,6 @@ def build_rerank_response_attrs(
     }
 
 
-# --------------------------------------------------------------------------- #
-# Bandit cascade telemetry
-# --------------------------------------------------------------------------- #
 def build_bandit_attempt_attrs(
     *,
     deployment_id: str,
@@ -268,9 +238,7 @@ def build_bandit_attempt_attrs(
     error_class: str | None = None,
     schema_valid: bool | None = None,
 ) -> dict[str, Any]:
-    """Per-attempt cascade attributes. The corresponding gen_ai.* request
-    attrs are added separately by the caller — this fn covers only the
-    bandit-specific axes (arm, attempt, reward, error)."""
+    """Bandit-specific axes only (arm, attempt, reward, error); caller adds gen_ai.* request attrs."""
     attrs: dict[str, Any] = {
         BANDIT_DEPLOYMENT_ID: deployment_id,
         BANDIT_PROVIDER:      provider_for_deployment(deployment_id),
@@ -295,8 +263,7 @@ def build_bandit_cascade_attrs(
     total_attempts: int | None = None,
     fallback: str | None = None,
 ) -> dict[str, Any]:
-    """Parent cascade-span attributes (set at start; total_attempts +
-    fallback updated on the way out)."""
+    """Parent cascade-span attrs; total_attempts + fallback updated at end."""
     attrs: dict[str, Any] = {BANDIT_DD_PROCESS: dd_process}
     if total_attempts is not None:
         attrs[BANDIT_TOTAL_ATTEMPTS] = int(total_attempts)

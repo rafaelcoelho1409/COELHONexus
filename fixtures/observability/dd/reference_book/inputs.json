@@ -1,0 +1,27 @@
+[
+  {
+    "input": {
+      "framework": "TaskQ",
+      "source_keys": ["taskq/cli.md", "taskq/api.md", "taskq/config.md"],
+      "target_chapters": 3,
+      "summary": "TaskQ is a Redis-backed job queue with a CLI runner and a Python decorator API. Workers consume tasks from named queues; configuration covers concurrency, retry policy, and redis_url."
+    },
+    "expected_output": {
+      "chapters": [
+        {
+          "title": "CLI Commands",
+          "key_concepts": ["taskq run", "taskq inspect", "taskq cancel"]
+        },
+        {
+          "title": "Python API",
+          "key_concepts": ["TaskQueue", "@task decorator", "TaskRunner"]
+        },
+        {
+          "title": "Queue Configuration",
+          "key_concepts": ["redis_url", "concurrency", "retry_policy"]
+        }
+      ]
+    },
+    "metadata": {"framework_type": "cli-and-library", "fixture_version": "v1"}
+  }
+]

@@ -54,35 +54,40 @@ def ingest_to_qdrant(
         self.update_state(state = "PROGRESS", meta = payload)
 
     async def _run() -> dict[str, Any]:
-        es = AsyncElasticsearch(
-            hosts      = [os.environ["ELASTICSEARCH_HOST"]],
-            basic_auth = (
-                os.environ["ELASTICSEARCH_USERNAME"],
-                os.environ.get("ELASTICSEARCH_PASSWORD", ""),
-            ),
-            verify_certs = False,
-        )
-        qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:6333")
-        qdrant_port = int(os.environ.get("QDRANT_PORT", "6333"))
-        qdrant_api_key = os.environ.get("QDRANT_API_KEY")
-        qdrant = AsyncQdrantClient(
-            url     = qdrant_url,
-            port    = qdrant_port,
-            api_key = qdrant_api_key if qdrant_api_key else None,
-        )
-        try:
-            result = await run_ingestion(
-                es            = es,
-                qdrant        = qdrant,
-                video_ids     = video_ids,
-                chunk_size    = chunk_size,
-                chunk_overlap = chunk_overlap,
-                progress_cb   = _progress,
+        from infra.langfuse.sessions import session as _lf_session
+        with _lf_session(
+            "ycs-ingest-qdrant",
+            session_id = self.request.id or "(no-request-id)",
+        ):
+            es = AsyncElasticsearch(
+                hosts      = [os.environ["ELASTICSEARCH_HOST"]],
+                basic_auth = (
+                    os.environ["ELASTICSEARCH_USERNAME"],
+                    os.environ.get("ELASTICSEARCH_PASSWORD", ""),
+                ),
+                verify_certs = False,
             )
-            return result
-        finally:
-            await qdrant.close()
-            await es.close()
+            qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:6333")
+            qdrant_port = int(os.environ.get("QDRANT_PORT", "6333"))
+            qdrant_api_key = os.environ.get("QDRANT_API_KEY")
+            qdrant = AsyncQdrantClient(
+                url     = qdrant_url,
+                port    = qdrant_port,
+                api_key = qdrant_api_key if qdrant_api_key else None,
+            )
+            try:
+                result = await run_ingestion(
+                    es            = es,
+                    qdrant        = qdrant,
+                    video_ids     = video_ids,
+                    chunk_size    = chunk_size,
+                    chunk_overlap = chunk_overlap,
+                    progress_cb   = _progress,
+                )
+                return result
+            finally:
+                await qdrant.close()
+                await es.close()
 
     result = asyncio.run(_run())
     logger.info(f"[ingest_to_qdrant] Done: {result}")

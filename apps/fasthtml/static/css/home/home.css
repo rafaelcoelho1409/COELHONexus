@@ -1,39 +1,106 @@
 @layer features {
-/* ===== Home page ===== */
+/* ===== Home page — 2026-06-18 SOTA refactor =====
+   Anchors (June 2026 research):
+     • Linear        — kinetic display typography; rotating accent word
+     • Anthropic     — clarity-led minimalism; restrained measured copy
+     • Vercel        — outcome-focused hero; trust signal immediately under
+   Brand stays warm-paper (#f7f5f1) burgundy (#c41230) — no dark-mode swap;
+   the project's existing aesthetic IS the differentiator. */
+
 .brand { text-decoration: none; }    /* brand is now an <a> */
 .brand:hover .brand-flag { opacity: 0.8; transition: opacity 0.15s; }
 
 .home-root {
   display: flex;
   flex-direction: column;
-  gap: 56px;
+  gap: 72px;       /* was 56px — pushes Anthropic-style breathing room */
 }
 
-/* Hero — typography-heavy, no decoration */
+/* ---------- Hero ---------- */
 .home-hero {
-  padding: 48px 0 36px 0;
+  padding: 56px 0 44px 0;
   border-bottom: 1px solid var(--border);
   display: flex;
   justify-content: center;
 }
 .home-hero-text {
-  max-width: 760px;
+  max-width: 820px;
   text-align: center;
 }
 .home-hero-title {
-  font-size: 2.6rem;
+  font-size: 3.2rem;          /* was 2.6rem */
   font-weight: 600;
   color: var(--text);
-  line-height: 1.1;
-  letter-spacing: -0.01em;
-  margin-bottom: 18px;
+  line-height: 1.04;
+  letter-spacing: -0.025em;   /* tighter — display-grade */
+  margin-bottom: 14px;
 }
+
+/* Kinetic line: "Built for the operator who needs to <rotating-word>" */
+.home-hero-kinetic {
+  font-size: 1.25rem;
+  color: var(--text);
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  margin: 0 0 22px 0;
+  line-height: 1.4;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.home-kinetic-lead { color: var(--text-muted); font-weight: 400; }
+
+.home-kinetic-rotor {
+  position: relative;
+  display: inline-block;
+  height: 1.4em;
+  /* Fits the longest word "track research" (14ch) in mono with buffer.
+     Was 11ch — clipped the tail of "search videos" and "track research". */
+  min-width: 15ch;
+  vertical-align: bottom;
+  overflow: hidden;
+  text-align: left;
+  white-space: nowrap;
+}
+.home-kinetic-word {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  color: var(--primary);
+  font-weight: 600;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.95em;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(0.4em);
+  animation: homeKinetic 9s cubic-bezier(.6, .05, .4, 1) infinite;
+  animation-fill-mode: both;
+  will-change: opacity, transform;
+}
+.home-kinetic-word:nth-child(1) { animation-delay: 0s; }
+.home-kinetic-word:nth-child(2) { animation-delay: 3s; }
+.home-kinetic-word:nth-child(3) { animation-delay: 6s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .home-kinetic-word { animation: none; }
+  .home-kinetic-word:nth-child(1) { opacity: 1; transform: none; }
+  .home-kinetic-word:nth-child(2),
+  .home-kinetic-word:nth-child(3) { display: none; }
+}
+
 .home-hero-tagline {
-  font-size: 1.02rem;
+  font-size: 1.0rem;
   color: var(--text-muted);
   line-height: 1.6;
-  margin: 0 0 28px 0;
+  margin: 0 0 30px 0;
   font-weight: 400;
+  max-width: 680px;
+  margin-left: auto;
+  margin-right: auto;
 }
 .home-hero-cta {
   display: flex;
@@ -43,8 +110,8 @@
   flex-wrap: wrap;
 }
 .home-cta-primary {
-  font-size: 0.88rem;
-  padding: 11px 22px;
+  font-size: 0.9rem;
+  padding: 12px 24px;
 }
 .home-cta-link {
   color: var(--primary);
@@ -57,7 +124,7 @@
 }
 .home-cta-link:hover { border-bottom-style: solid; }
 
-/* Stats strip — dashboard feel, monospace numbers */
+/* ---------- Stats strip ---------- */
 .home-stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -67,31 +134,40 @@
   background: var(--card);
 }
 .home-stat {
-  padding: 20px 22px;
+  padding: 22px 22px 20px 22px;
   border-right: 1px solid var(--border);
 }
 .home-stat:last-child { border-right: 0; }
 .home-stat-num {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 1.55rem;
+  font-size: 1.85rem;       /* was 1.55rem */
   font-weight: 600;
   color: var(--primary);
-  line-height: 1.1;
-  margin-bottom: 6px;
+  line-height: 1.05;
+  margin-bottom: 8px;
+  letter-spacing: -0.01em;
 }
 .home-stat-label {
   font-size: 0.72rem;
-  color: var(--text-muted);
+  color: var(--text);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-weight: 500;
+  letter-spacing: 0.09em;
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+.home-stat-sub {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  letter-spacing: 0;
+  font-weight: 400;
 }
 
-/* Feature cards — 3-up grid */
+/* ---------- Feature cards — 3-up grid, sub-route chips ---------- */
 .home-features {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 16px;
+  scroll-margin-top: 80px;   /* anchor jump from hero "Browse all surfaces" */
 }
 .home-card {
   border: 1px solid var(--border);
@@ -101,9 +177,12 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, transform 0.15s;
 }
-.home-card:hover { border-color: var(--text-muted); }
+.home-card:hover {
+  border-color: var(--primary);
+  transform: translateY(-1px);
+}
 .home-card-head {
   display: flex;
   align-items: center;
@@ -111,9 +190,10 @@
   gap: 12px;
 }
 .home-card-title {
-  font-size: 1.0rem;
+  font-size: 1.05rem;
   font-weight: 600;
   color: var(--text);
+  letter-spacing: -0.005em;
 }
 .home-card-status {
   font-size: 0.66rem;
@@ -124,8 +204,8 @@
   border-radius: 999px;
 }
 .home-card-status-live {
-  background: rgba(42, 139, 70, 0.12);
-  color: #1f6e36;
+  background: var(--ingested-bg);
+  color: var(--ingested-text);
 }
 .home-card-status-coming {
   background: rgba(196, 18, 48, 0.08);
@@ -142,6 +222,28 @@
   margin: 0;
   flex: 1;
 }
+.home-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+.home-card-chip {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  border-radius: 3px;
+  text-decoration: none;
+  transition: border-color 0.12s, color 0.12s;
+}
+.home-card-chip:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+}
 .home-card-link {
   color: var(--primary);
   text-decoration: none;
@@ -150,36 +252,39 @@
   border-bottom: 1px dotted var(--primary);
   align-self: flex-start;
   padding-bottom: 1px;
+  margin-top: 4px;
 }
 .home-card-link:hover { border-bottom-style: solid; }
 
-/* How it works — 4-step strip mirroring the wizard */
+/* ---------- How it works — 4-step strip ---------- */
 .home-section {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 22px;
 }
 .home-section-title {
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.12em;
   font-weight: 600;
   color: var(--text-muted);
 }
 .home-steps {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
+  gap: 14px;
 }
 .home-step {
-  padding: 18px 18px 16px 18px;
+  padding: 20px 18px 18px 18px;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--card);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  transition: border-color 0.15s;
 }
+.home-step:hover { border-color: var(--text-muted); }
 .home-step-num {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 0.78rem;
@@ -188,27 +293,29 @@
   letter-spacing: 0.04em;
 }
 .home-step-label {
-  font-size: 0.95rem;
+  font-size: 0.98rem;
   font-weight: 600;
   color: var(--text);
+  letter-spacing: -0.005em;
 }
 .home-step-desc {
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   color: var(--text-muted);
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
-/* Foot — minimal */
+/* ---------- Foot ---------- */
 .home-foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding-top: 20px;
+  padding-top: 22px;
   border-top: 1px solid var(--border);
-  font-size: 0.76rem;
+  font-size: 0.74rem;
   color: var(--text-muted);
   font-family: 'JetBrains Mono', ui-monospace, monospace;
+  flex-wrap: wrap;
 }
 .home-foot-link {
   color: var(--text-muted);
@@ -220,11 +327,29 @@
   border-bottom-color: var(--primary);
 }
 
+/* ---------- Responsive ---------- */
 @media (max-width: 900px) {
-  .home-hero-title { font-size: 2rem; }
-  .home-stats     { grid-template-columns: repeat(2, 1fr); }
+  .home-hero-title       { font-size: 2.2rem; }
+  .home-hero-kinetic     { font-size: 1.05rem; }
+  .home-stats            { grid-template-columns: repeat(2, 1fr); }
   .home-stat:nth-child(2) { border-right: 0; }
-  .home-features  { grid-template-columns: 1fr; }
-  .home-steps     { grid-template-columns: repeat(2, 1fr); }
+  .home-stat:nth-child(1), .home-stat:nth-child(2) {
+    border-bottom: 1px solid var(--border);
+  }
+  .home-features         { grid-template-columns: 1fr; }
+  .home-steps            { grid-template-columns: repeat(2, 1fr); }
+  .home-root             { gap: 56px; }
 }
+}
+
+/* @keyframes must live OUTSIDE the @layer block. Nested inside
+   @layer features {…}, some browsers (and a few CSS-prep pipelines)
+   fail to resolve the animation-name lookup → the rotor never starts
+   and the three <span>s flow inline as concatenated text. Declaring
+   the keyframes at top level keeps the name in the global @-rule
+   namespace regardless of cascade layer. */
+@keyframes homeKinetic {
+  0%, 30%, 100% { opacity: 0; transform: translateY(0.4em);  }
+  3%,  27%      { opacity: 1; transform: translateY(0);      }
+  33%           { opacity: 0; transform: translateY(-0.4em); }
 }

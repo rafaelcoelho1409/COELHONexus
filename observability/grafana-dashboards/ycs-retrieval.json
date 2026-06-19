@@ -1,0 +1,109 @@
+{
+  "title": "YCS Retrieval — db.* + reranker spans",
+  "uid": "coelhonexus-ycs-retrieval",
+  "tags": ["coelhonexus", "ycs", "retrieval", "qdrant", "elasticsearch", "neo4j"],
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-6h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "system",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "mimir"},
+        "query": "label_values(traces_spanmetrics_calls_total{db_system!=\"\"}, db_system)",
+        "includeAll": true,
+        "multi": true,
+        "current": {"text": "All", "value": "$__all"}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Retriever fan-out rate (parent span)",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "sum(rate(traces_spanmetrics_calls_total{span_name=\"ycs.retriever.smart_fanout\"}[5m]))",
+          "legendFormat": "fan-outs/s"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Sub-span call rate by db.system",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {
+          "expr": "sum by (db_system) (rate(traces_spanmetrics_calls_total{db_system=~\"$system\"}[5m]))",
+          "legendFormat": "{{db_system}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "p95 latency per backend",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 7, "w": 24, "x": 0, "y": 6},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (db_system, le) (rate(traces_spanmetrics_latency_bucket{db_system=~\"$system\"}[5m])))",
+          "legendFormat": "p95 {{db_system}}"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum by (db_system, le) (rate(traces_spanmetrics_latency_bucket{db_system=~\"$system\"}[5m])))",
+          "legendFormat": "p50 {{db_system}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "ms"}}
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Reranker doc count over time (mean)",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 13},
+      "targets": [
+        {
+          "expr": "sum(rate(traces_spanmetrics_calls_total{span_name=\"gen_ai.rerank\"}[5m]))",
+          "legendFormat": "rerank calls/s"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Error rate per backend (last 1h)",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 13},
+      "targets": [
+        {
+          "expr": "sum by (db_system) (rate(traces_spanmetrics_calls_total{db_system=~\"$system\", status_code=\"STATUS_CODE_ERROR\"}[1h])) / sum by (db_system) (rate(traces_spanmetrics_calls_total{db_system=~\"$system\"}[1h]))",
+          "legendFormat": "{{db_system}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "percentunit"}}
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Per-span summary (last 6h)",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 19},
+      "targets": [
+        {
+          "expr": "sum by (span_name, db_system) (increase(traces_spanmetrics_calls_total{span_name=~\"db\\\\..*|gen_ai\\\\.rerank|ycs\\\\..*\"}[6h]))",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    }
+  ]
+}

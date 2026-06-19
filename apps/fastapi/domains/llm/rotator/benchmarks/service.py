@@ -1,21 +1,6 @@
-"""Imperative Shell — HTTP fetchers, Redis caches, OTel, canonicalization
-orchestration, public rank_for_step entry point.
+"""HTTP fetchers, Redis caches, OTel, canonicalization, rank_for_step entry point.
 
-Pure parsing / scoring / metric normalization lives in domain.py. Three live
-sources cover the free-tier pool (confirmed 2026-05-13):
-    OpenLM.ai Chatbot Arena+    HTML (BS4)      ~95%  no auth
-    oolong-tea code.json        JSON 2-step    100%   no auth (coding only)
-    OpenEvals/leaderboard-data  JSON direct    ~50%   no auth (open weights)
-
-Canonicalization layers (descending speed): L1 heuristic → L2 RapidFuzz
-(threshold 95) → L3 HF API (disabled 2026-05-14 — surfaced quantized variants
-above canonical base models). See memory:reference_llm_benchmark_sources.md.
-
-OTel metrics:
-    dd.rotator_benchmark_fetch_total{source, outcome}    Counter
-    dd.rotator_benchmark_fetch_duration_seconds{source}  Histogram
-    dd.rotator_benchmark_cache_hit_total{layer}          Counter
-    dd.rotator_canonical_resolution_total{layer}         Counter
+Three live sources (no-auth): OpenLM Arena (HTML), oolong-tea code.json, OpenEvals.
 """
 from __future__ import annotations
 
@@ -52,24 +37,19 @@ from .params import (
 logger = logging.getLogger(__name__)
 
 
-# In-process caches. Module-level by design — survive across requests within
-# one worker, refreshed lazily on TTL expiry.
+# Module-level by design — survive across requests within one worker.
 _known_canonicals: set[str] = set()
 _inmem_leaderboards: dict[str, tuple[float, dict[str, dict[str, float]]]] = {}
 _metric_instruments: dict[str, Any] = {}
 
 
-# --------------------------------------------------------------------------- #
-# Canonicalization
-# --------------------------------------------------------------------------- #
 async def canonicalize(
     provider_id: str,
     *,
     redis: redis_aio.Redis | None = None,
     fuzzy_threshold: int = FUZZY_THRESHOLD,
 ) -> str:
-    """provider-specific id → canonical name for benchmark lookup. Redis cache
-    (1y TTL) → L1 heuristic → L2 RapidFuzz against known canonicals."""
+    """Redis (1y TTL) → L1 heuristic → L2 RapidFuzz against known canonicals."""
     pid = (provider_id or "").strip()
     if not pid:
         return ""
@@ -109,16 +89,13 @@ async def canonicalize(
     return resolved
 
 
-# --------------------------------------------------------------------------- #
-# Leaderboard cache + fetchers
-# --------------------------------------------------------------------------- #
 async def _get_cached_leaderboard(
     source: str,
     fetcher: Callable[[httpx.AsyncClient], Awaitable[dict[str, dict[str, float]]]],
     redis: redis_aio.Redis | None,
     client: httpx.AsyncClient,
 ) -> dict[str, dict[str, float]]:
-    """L1 in-mem → L2 Redis → fetch. Returns full leaderboard for one source."""
+    """L1 in-mem → L2 Redis → fetch."""
     now = time.time()
     cached = _inmem_leaderboards.get(source)
     if cached and (now - cached[0]) < CACHE_TTL.leaderboard:
@@ -172,7 +149,7 @@ async def _fetch_openlm_arena(client: httpx.AsyncClient) -> dict[str, dict[str, 
 
 
 async def _fetch_oolong_code(client: httpx.AsyncClient) -> dict[str, dict[str, float]]:
-    """2-step fetch: latest.json (pointer) → data/{path}/code.json."""
+    """2-step: latest.json pointer → data/{path}/code.json."""
     base = "https://raw.githubusercontent.com/oolong-tea-2026/arena-ai-leaderboards/main/data"
     try:
         ptr = await client.get(f"{base}/latest.json", headers=_BENCH_HEADERS, timeout=HTTP_TIMEOUT_S)
@@ -214,15 +191,12 @@ _SOURCES: dict[str, Callable[[httpx.AsyncClient], Awaitable[dict[str, dict[str, 
 }
 
 
-# --------------------------------------------------------------------------- #
-# Aggregator
-# --------------------------------------------------------------------------- #
 async def get_benchmarks(
     canonical_name: str,
     *,
     redis: redis_aio.Redis | None = None,
 ) -> dict[str, float]:
-    """L3 Redis cache → fan out to _SOURCES in parallel → merge → cache."""
+    """L3 Redis → fan out _SOURCES in parallel → merge → cache."""
     canonical = (canonical_name or "").strip().lower()
     if not canonical:
         return {}
@@ -254,18 +228,13 @@ async def get_benchmarks(
     return merged
 
 
-# --------------------------------------------------------------------------- #
-# Public ranking API
-# --------------------------------------------------------------------------- #
 async def rank_for_step(
     step: str,
     alive_models: list,
     *,
     redis: redis_aio.Redis | None = None,
 ) -> list[tuple[Any, float]]:
-    """Rank discovered models for a step by composite benchmark score.
-    Models with no coverage get score 0.0 and land at the end. Single httpx
-    client + parallel gather → O(N + 3) instead of O(N × 3)."""
+    """Rank by composite benchmark score; no-coverage → 0.0 lands at end."""
     weights = STEP_WEIGHTS.get(step, STEP_WEIGHTS["dd-all"])
     if not alive_models:
         return []
@@ -284,7 +253,6 @@ async def rank_for_step(
         scores = merge_leaderboards(canonical, valid_boards)
         composite = compute_composite_score(scores, weights)
         ranked.append((record, composite))
-    # Sort: score desc → provider tier asc (groq=1 first) → model_id alpha.
     ranked.sort(
         key = lambda x: (
             -x[1],
@@ -295,9 +263,6 @@ async def rank_for_step(
     return ranked
 
 
-# --------------------------------------------------------------------------- #
-# OTel instruments
-# --------------------------------------------------------------------------- #
 def _ensure_metrics() -> dict[str, Any]:
     if _metric_instruments:
         return _metric_instruments
@@ -320,7 +285,7 @@ def _ensure_metrics() -> dict[str, Any]:
         )
         _metric_instruments["canonical_counter"] = meter.create_counter(
             name = "dd.rotator_canonical_resolution_total",
-            description = "Canonicalization resolutions — labels: layer ∈ {cache, heuristic, fuzzy, hf_api}",
+            description = "Canonicalization resolutions — labels: layer ∈ {cache, heuristic, fuzzy}",
         )
         logger.info(f"[bench] {len(_metric_instruments)} OTel instruments registered")
     except Exception as e:

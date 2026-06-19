@@ -158,14 +158,33 @@ async def _run_radar_scan_async(
         # without needing model wrapping. The callback no-ops when no
         # scan_id is in the context — safe for the shared rotator chain.
         _llm_cb = getattr(agent, "_rr_llm_counter_cb", None)
-        callbacks = [_llm_cb] if _llm_cb is not None else []
-        await agent.ainvoke(
-            {"messages": [{"role": "user", "content": user_message}]},
-            config = {
-                "configurable": {"thread_id": scan_id},
-                "callbacks":     callbacks,
-            },
+        # LangFuse CallbackHandler — emits a session-grouped nested trace
+        # (orchestrator + each subagent + every tool call). Returns None
+        # when LangFuse is unavailable; we filter None from the list.
+        from infra.langfuse.callbacks import build_langchain_callback
+        from infra.langfuse.sessions import session as _lf_session
+        _lf_cb = build_langchain_callback(
+            session_id = scan_id,
+            user_id    = profile_id,
+            tags       = ["rr", "digest", *list(verticals)],
         )
+        callbacks = [c for c in (_llm_cb, _lf_cb) if c is not None]
+        # Stamp baggage so every span (including raw rotator httpx) inherits
+        # session_id / user_id / digest_id. session() is sync; OTel context
+        # propagates across await boundaries via contextvars.
+        with _lf_session(
+            "rr",
+            session_id = scan_id,
+            user_id    = profile_id,
+            digest_id  = scan_id,
+        ):
+            await agent.ainvoke(
+                {"messages": [{"role": "user", "content": user_message}]},
+                config = {
+                    "configurable": {"thread_id": scan_id},
+                    "callbacks":     callbacks,
+                },
+            )
 
         # 3. Build the digest from fs (step-6 refactor 2026-06-12):
         #    The `report` LLM subagent is RETIRED. Assembly + persistence

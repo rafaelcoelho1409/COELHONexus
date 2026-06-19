@@ -5,7 +5,6 @@ from enum import Enum
 
 
 class FreeFilter(Enum):
-    """Free-tier filter selector for a provider; dispatched to a predicate in domain.py."""
     ALL               = "all"
     MISTRAL           = "mistral"
     GEMINI            = "gemini"
@@ -15,10 +14,9 @@ class FreeFilter(Enum):
 
 @dataclass(frozen = True)
 class DiscoveryRecord:
-    """One model entry as observed at fetch time."""
     provider:   str
-    model_id:   str          # canonical id used by LiteLLM's `<provider>/<model_id>`
-    fetched_at: float        # unix seconds
+    model_id:   str          # used by LiteLLM's `<provider>/<model_id>`
+    fetched_at: float
     raw:        dict = field(default_factory = dict)
 
 
@@ -31,6 +29,4 @@ class ProviderConfig:
     response_shape: str                # "openai" | "gemini"
     free_filter:    FreeFilter
     enabled:        bool = True
-    # `required=True` → key is MANDATORY; the whole DD pipeline can't run
-    # without it (e.g. NIM hosts embeddings + reranking).
     required:       bool = False

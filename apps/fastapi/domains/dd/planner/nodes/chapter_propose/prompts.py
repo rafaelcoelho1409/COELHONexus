@@ -59,7 +59,13 @@ def build_propose_prompt(
     target_chapters: int,
 ) -> str:
     """Proposer prompt. distillates=None → full-body pass-through (small N).
-    target_chapters is the adaptive per-corpus target."""
+    target_chapters is the adaptive per-corpus target.
+
+    LangFuse-managed override: if a prompt template named
+    `dd.planner.chapter_propose` is label-deployed in LangFuse, it wins;
+    otherwise the local f-string below renders. The local renderer is
+    always the source of truth — LangFuse is an additive override layer.
+    """
     if distillates is not None:
         corpus_block = _render_distillates_block(distillates, source_keys)
         corpus_label = "DOC DISTILLATES"
@@ -71,6 +77,32 @@ def build_propose_prompt(
 
     headings_block = ", ".join(seeds.get("headings") or []) or "(none)"
     namespaces_block = ", ".join(seeds.get("namespaces") or []) or "(none)"
+
+    try:
+        from infra.langfuse.prompts import get_prompt as _lf_get_prompt
+        _rendered = _lf_get_prompt(
+            "dd.planner.chapter_propose",
+            label     = "production",
+            variables = {
+                "framework":        framework,
+                "target_chapters":  target_chapters,
+                "n_source_keys":    len(source_keys),
+                "proposals_min":    PROPOSALS_MIN,
+                "proposals_max":    PROPOSALS_MAX,
+                "title_min_words":  TITLE_MIN_WORDS,
+                "title_max_words":  TITLE_MAX_WORDS,
+                "concepts_min":     CONCEPTS_MIN,
+                "concepts_max":     CONCEPTS_MAX,
+                "headings_block":   headings_block,
+                "namespaces_block": namespaces_block,
+                "corpus_label":     corpus_label,
+                "corpus_block":     corpus_block,
+            },
+        )
+        if _rendered:
+            return _rendered
+    except Exception:
+        pass
 
     return (
         f"You are the Chapter Planner for the {framework} documentation.\n\n"

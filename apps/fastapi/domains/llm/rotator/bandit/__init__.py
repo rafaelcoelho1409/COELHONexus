@@ -1,9 +1,4 @@
-"""Adaptive contextual bandit routing for the LLM rotator.
-
-Active default since 2026-05-23: FGTS-VA (NeurIPS 2025). LinUCB / LinTS remain
-reachable via env kill-switches; all three share the same (A_a, b_a) state, so
-flipping does not invalidate Redis. See docs/KD-ROTATOR-BANDIT-SOTA-2026-05-23.md.
-"""
+"""Adaptive contextual bandit routing (FGTS-VA NeurIPS 2025 default; LinUCB/LinTS via env kill-switches share the same (A_a, b_a) state)."""
 from __future__ import annotations
 
 from .domain import compose_reward, make_context_vector

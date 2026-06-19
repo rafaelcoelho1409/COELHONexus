@@ -3,13 +3,10 @@ from __future__ import annotations
 
 HTTP_TIMEOUT_S = 30
 
-# 95 (was 85) raised 2026-05-14 after same-family false positives (e.g.
-# gemini-2.5-flash vs -flash-lite scored 86.5 — wrong variant collapse).
+# Lower thresholds collapse same-family variants (e.g. flash vs flash-lite).
 FUZZY_THRESHOLD = 95
 
 
-# Per-step composite-score weights — uses metrics actually retrievable from
-# the three live sources (OpenLM Arena, oolong-tea code, OpenEvals).
 STEP_WEIGHTS: dict[str, dict[str, float]] = {
     "dd-synth": {
         "lmarena_coding": 0.30,
@@ -29,8 +26,7 @@ STEP_WEIGHTS: dict[str, dict[str, float]] = {
         "aaii":     0.35,
         "gsm8k":    0.20,
     },
-    # No public MTEB-equivalent free source — fall back to general quality.
-    # PILOT will diverge embedding ranking from chat ranking quickly.
+    # No free MTEB-equivalent source — fall back to general quality.
     "dd-embed": {"lmarena": 1.0},
     "dd-all": {
         "aaii":           0.30,
@@ -68,21 +64,18 @@ STEP_WEIGHTS: dict[str, dict[str, float]] = {
 }
 
 
-# Tie-break ordering when composite_score ties (typically when no benchmark
-# covered the model, score==0). PILOT will eventually override with learned
-# per-deployment data.
+# Tie-break ordering when composite_score ties.
 PROVIDER_TIER: dict[str, int] = {
-    "groq":      1,    # LPU, sub-100ms TTFT, narrow but fast pool
-    "cerebras":  2,    # WSE, fast, narrow pool
-    "nim":       3,    # NVIDIA DGX Cloud — reliable, broadest catalog
-    "mistral":   4,    # direct API, mid latency
-    "gemini":    5,    # Google free tier — strict quotas
+    "groq":      1,
+    "cerebras":  2,
+    "nim":       3,
+    "mistral":   4,
+    "gemini":    5,
     "sambanova": 6,
     "deepseek":  7,
 }
 
 
-# Raw → [0, 1] clipping ranges per metric.
 SCORE_NORMS: dict[str, tuple[float, float]] = {
     "lmarena":        (700.0, 1500.0),
     "lmarena_coding": (700.0, 1600.0),
@@ -100,8 +93,7 @@ SCORE_NORMS: dict[str, tuple[float, float]] = {
 }
 
 
-# STRIP tuning/format/timestamp suffixes; PRESERVE size/capability suffixes
-# (-flash, -lite, -nano, -mini, etc. are DIFFERENT models with different scores).
+# Strip tuning/format/timestamp suffixes; preserve size suffixes (-flash, -lite, -nano, -mini).
 _PROVIDER_SUFFIXES: tuple[str, ...] = (
     "-2511", "-2512", "-2510", "-2509", "-2507", "-2410", "-2409", "-2408",
     "-versatile",
@@ -119,10 +111,7 @@ _PROVIDER_SUFFIXES: tuple[str, ...] = (
 )
 
 
-# Vestigial: L3 HF API canonicalization was disabled 2026-05-14 (HF search
-# ranked by `downloads`, surfacing quantized variants — fp8/gguf/awq — above
-# canonical base models). Kept for documentation of which orgs SHOULD be HF-
-# resolvable if a smarter L3 (validate-similarity + org-filter) ships later.
+# Vestigial: L3 HF API canonicalization disabled (HF `downloads` ranking surfaced quantized variants over base models).
 _HF_FRIENDLY_PREFIXES: tuple[str, ...] = (
     "meta/", "meta-llama/",
     "mistralai/", "mistral/",
@@ -144,7 +133,7 @@ _HF_FRIENDLY_PREFIXES: tuple[str, ...] = (
 )
 
 
-# HTML column header (lowercased substring) → our metric key.
+# OpenLM column → our score field.
 _OPENLM_COLUMN_MAP: dict[str, str] = {
     "arena elo":     "lmarena",
     "arena score":   "lmarena",
@@ -160,7 +149,7 @@ _OPENLM_COLUMN_MAP: dict[str, str] = {
 }
 
 
-# OpenEvals benchmark column (normalized) → our metric key.
+# OpenEvals column → our score field.
 _OPENEVALS_BENCHMARK_MAP: dict[str, str] = {
     "mmlu_pro":             "mmlu_pro",
     "mmlu-pro":             "mmlu_pro",

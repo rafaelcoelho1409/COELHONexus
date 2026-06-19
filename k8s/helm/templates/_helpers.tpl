@@ -84,6 +84,23 @@ OTEL_SERVICE_NAME: "{{ .Values.otel.service_name }}"
 OTEL_SERVICE_VERSION: "{{ .Values.otel.service_version }}"
 OTEL_RESOURCE_ATTRIBUTES: "deployment.environment={{ .Values.environment }},service.namespace=knowledge-distiller"
 LANGFUSE_OTLP_ENDPOINT: "{{ .Values.otel.langfuse_otlp_endpoint }}"
+# Opt into the latest GenAI semantic-convention attributes (`gen_ai.*`) on
+# every LLM span. Marked "Development" upstream; pin here and bump on each
+# OTel release. Lets LangFuse render input/output messages, token usage,
+# tool calls, finish reasons natively (no Langfuse-specific extras needed).
+OTEL_SEMCONV_STABILITY_OPT_IN: "gen_ai_latest_experimental"
+# LiteLLM v2 OTel — one trace per LLM request following the gen_ai semconv
+# above. Replaces the legacy per-deployment span shape. Fail-soft: legacy
+# emission still works if the flag is unset, but we want the gen_ai shape
+# in both Tempo and LangFuse.
+LITELLM_OTEL_V2: "true"
+# Deploy-identity attrs propagated to every span/metric via the OTel
+# Resource (build_resource in infra/otel/exporters.py). `GIT_SHA` lets
+# Grafana annotations diff "which deploy regressed?"; the chart version
+# carries forward image-tag context. Both are optional — when unset the
+# resource builder skips them.
+GIT_SHA: {{ .Values.otel.git_sha | default "" | quote }}
+HELM_CHART_VERSION: {{ .Chart.Version | quote }}
 # Scope B (2026-05-12 night): per-process LLM concurrency cap. See
 # kd.llmGlobalConcurrency in values.yaml and _get_llm_semaphore() in
 # graphs/knowledge/helpers.py.

@@ -515,6 +515,25 @@ async def run_study_async(
     so the UI surfaces each chapter on render_audit_write completion
     (TTFR ~10-15 min vs ~2h). Runs `book_harmonize` post-loop if ≥2 done.
     """
+    from infra.langfuse.sessions import session as _lf_session
+    with _lf_session(
+        "dd",
+        session_id = study_thread_id,
+        user_id    = slug,
+        study_id   = study_thread_id,
+        framework  = slug,
+    ):
+        return await _run_study_async_inner(
+            study_thread_id, slug, chapter_ids, mode,
+        )
+
+
+async def _run_study_async_inner(
+    study_thread_id: str,
+    slug: str,
+    chapter_ids: list[str],
+    mode: str = "quality",
+) -> dict:
     n_total = len(chapter_ids)
     study_t0 = time.monotonic()
     # Seed per-chapter timing from a prior blob so SKIPPED chapters this

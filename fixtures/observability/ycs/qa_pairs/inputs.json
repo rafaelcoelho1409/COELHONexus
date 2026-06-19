@@ -1,0 +1,57 @@
+[
+  {
+    "input": {
+      "question": "What is the transformer's self-attention mechanism?",
+      "channel_ids": []
+    },
+    "expected_output": {
+      "answer": "Self-attention computes a weighted sum of all token representations in a sequence using query, key, and value vectors. Each token attends to every other token, learning long-range dependencies in parallel.",
+      "ground_truth": "Self-attention; query/key/value vectors; parallel; long-range dependencies."
+    },
+    "metadata": {"topic": "transformers", "fixture_version": "v1"}
+  },
+  {
+    "input": {
+      "question": "How does retrieval-augmented generation (RAG) reduce hallucination?",
+      "channel_ids": []
+    },
+    "expected_output": {
+      "answer": "RAG grounds the LLM's output in retrieved context from a vector store, so generation references concrete documents instead of relying solely on parametric memory.",
+      "ground_truth": "Grounding; vector store retrieval; context conditioning; reduces parametric-memory hallucination."
+    },
+    "metadata": {"topic": "rag", "fixture_version": "v1"}
+  },
+  {
+    "input": {
+      "question": "What is the difference between fine-tuning and prompt engineering?",
+      "channel_ids": []
+    },
+    "expected_output": {
+      "answer": "Fine-tuning updates the model's weights on task-specific data; prompt engineering shapes inputs at inference time without changing weights.",
+      "ground_truth": "Weight updates vs no weight updates; training vs inference time."
+    },
+    "metadata": {"topic": "training", "fixture_version": "v1"}
+  },
+  {
+    "input": {
+      "question": "Why are LLM context windows getting larger?",
+      "channel_ids": []
+    },
+    "expected_output": {
+      "answer": "Larger context windows let the model condition on more documents, longer conversations, and richer in-context examples without retrieval. Advances in efficient attention (sliding window, ring attention) reduce the quadratic cost.",
+      "ground_truth": "More context; efficient attention; reduced quadratic cost."
+    },
+    "metadata": {"topic": "context-window", "fixture_version": "v1"}
+  },
+  {
+    "input": {
+      "question": "What is an LLM-as-judge evaluator?",
+      "channel_ids": []
+    },
+    "expected_output": {
+      "answer": "An LLM-as-judge uses one model to score another model's output against a rubric, replacing or augmenting human evaluation. It scales evaluation but inherits the judge model's biases.",
+      "ground_truth": "Judge model scores generator model; rubric-based; scalable but biased."
+    },
+    "metadata": {"topic": "evals", "fixture_version": "v1"}
+  }
+]

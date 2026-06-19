@@ -261,6 +261,15 @@ wheels = [
 ]
 
 [[package]]
+name = "backoff"
+version = "2.2.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/47/d7/5bbeb12c44d7c4f2fb5b56abce497eb5ed9f34d85701de869acedd602619/backoff-2.2.1.tar.gz", hash = "sha256:03f829f5bb1923180821643f8753b0502c3b682293992485b0eef2807afa5cba", size = 17001 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/df/73/b6e24bd22e6720ca8ee9a85a0c4a2971af8497d8f3193fa05390cbd46e09/backoff-2.2.1-py3-none-any.whl", hash = "sha256:63579f9a0628e06278f7e47b7d7d5b6ce20dc65c5e96a6f3ca99a6adca0396e8", size = 15148 },
+]
+
+[[package]]
 name = "beautifulsoup4"
 version = "4.14.3"
 source = { registry = "https://pypi.org/simple" }
@@ -605,6 +614,7 @@ dependencies = [
     { name = "langchain-openai" },
     { name = "langchain-qdrant" },
     { name = "langchain-text-splitters" },
+    { name = "langfuse" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint-postgres" },
     { name = "litellm" },
@@ -622,6 +632,7 @@ dependencies = [
     { name = "opentelemetry-instrumentation-httpx" },
     { name = "opentelemetry-instrumentation-logging" },
     { name = "opentelemetry-instrumentation-redis" },
+    { name = "opentelemetry-processor-baggage" },
     { name = "opentelemetry-sdk" },
     { name = "playwright" },
     { name = "psycopg", extra = ["binary"] },
@@ -667,6 +678,7 @@ requires-dist = [
     { name = "langchain-openai", specifier = ">=1.1,<2.0" },
     { name = "langchain-qdrant", specifier = ">=1.1,<2.0" },
     { name = "langchain-text-splitters", specifier = ">=1.1,<2.0" },
+    { name = "langfuse", specifier = ">=3,<4" },
     { name = "langgraph", specifier = ">=1.2,<2.0" },
     { name = "langgraph-checkpoint-postgres", specifier = ">=3.1,<4.0" },
     { name = "litellm", specifier = "==1.83.13" },
@@ -684,6 +696,7 @@ requires-dist = [
     { name = "opentelemetry-instrumentation-httpx", specifier = ">=0.50b0,<1.0" },
     { name = "opentelemetry-instrumentation-logging", specifier = ">=0.50b0,<1.0" },
     { name = "opentelemetry-instrumentation-redis", specifier = ">=0.50b0,<1.0" },
+    { name = "opentelemetry-processor-baggage", specifier = ">=0.50b0,<1.0" },
     { name = "opentelemetry-sdk", specifier = ">=1.30,<2.0" },
     { name = "playwright", specifier = ">=1.40,<2.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4.0" },
@@ -1814,6 +1827,26 @@ wheels = [
 ]
 
 [[package]]
+name = "langfuse"
+version = "3.15.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "backoff" },
+    { name = "httpx" },
+    { name = "openai" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
+    { name = "packaging" },
+    { name = "pydantic" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/be/db/08266f22e1843d4c2743a1d23b7f93828ec6d5f6a4445f7d2ad3074d8b95/langfuse-3.15.0.tar.gz", hash = "sha256:4b6453c82c8159e5f0655ced24b145ed8279b47382a6b4a6d7a57111ef922181", size = 237275 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1e/5b/1f16b421f5de996abfb10472d47c72bc829a56cbedacfbf908ebf8cc0469/langfuse-3.15.0-py3-none-any.whl", hash = "sha256:66a3c2b75af9402ffc13690fce73181325d6f78e723463e38844b317d37279ac", size = 424191 },
+]
+
+[[package]]
 name = "langgraph"
 version = "1.2.4"
 source = { registry = "https://pypi.org/simple" }
@@ -2546,6 +2579,20 @@ wheels = [
 ]
 
 [[package]]
+name = "opentelemetry-processor-baggage"
+version = "0.63b1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-sdk" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7b/43/69a8dcb2a540809c02bfc31d01b2e8228b4dd28c363d6d59577bcf9f1361/opentelemetry_processor_baggage-0.63b1.tar.gz", hash = "sha256:334b77963ea5807efd6f05664a6064aa92fc6c03571edbf1f749b9dee370d567", size = 8834 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/23/44/3179fc05c69ca82657565d3223feb14d5208ede33e6838e42e7fe2dc01b8/opentelemetry_processor_baggage-0.63b1-py3-none-any.whl", hash = "sha256:b205c343720ce4d5e420204e09862a043917ee433b2304d87bb6f388084f3c15", size = 9488 },
+]
+
+[[package]]
 name = "opentelemetry-proto"
 version = "1.42.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2663,11 +2710,11 @@ wheels = [
 
 [[package]]
 name = "packaging"
-version = "26.2"
+version = "25.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/d7/f1/e7a6dd94a8d4a5626c03e4e99c87f241ba9e350cd9e6d75123f992427270/packaging-26.2.tar.gz", hash = "sha256:ff452ff5a3e828ce110190feff1178bb1f2ea2281fa2075aadb987c2fb221661", size = 228134 }
+sdist = { url = "https://files.pythonhosted.org/packages/a1/d4/1fc4078c65507b51b96ca8f8c3ba19e6a61c8253c72794544580a7b6c24d/packaging-25.0.tar.gz", hash = "sha256:d443872c98d677bf60f6a1f2f8c1cb748e8fe762d2bf9d3148b5599295b0fc4f", size = 165727 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/df/b2/87e62e8c3e2f4b32e5fe99e0b86d576da1312593b39f47d8ceef365e95ed/packaging-26.2-py3-none-any.whl", hash = "sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e", size = 100195 },
+    { url = "https://files.pythonhosted.org/packages/20/12/38679034af332785aac8774540895e234f4d07f7545804097de4b666afd8/packaging-25.0-py3-none-any.whl", hash = "sha256:29572ef2b1f17581046b3a2227d5c611fb25ec70ca1ba8554b24b0e69331a484", size = 66469 },
 ]
 
 [[package]]

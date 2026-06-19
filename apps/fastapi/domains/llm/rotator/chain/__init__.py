@@ -1,4 +1,3 @@
-"""Unified LLM rotator — LiteLLM Router + chain factories + embed/judge helpers."""
 from __future__ import annotations
 
 from .domain import is_heavyweight

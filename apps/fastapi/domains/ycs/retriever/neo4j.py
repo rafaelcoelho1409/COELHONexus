@@ -127,7 +127,12 @@ class Neo4jRetriever:
             params["channel_ids"] = channel_ids
 
         try:
-            results = self.graph.query(
+            from domains.ycs.runtime.observability import neo4j_query_span
+            with neo4j_query_span(
+                operation         = "entity_lookup",
+                statement_summary = "MATCH __Entity__ + Document/Video + UNION 1-hop",
+            ):
+                results = self.graph.query(
                 # 1) Direct entity match + source documents.
                 "MATCH (e:__Entity__) "
                 "WHERE e.id IS NOT NULL "

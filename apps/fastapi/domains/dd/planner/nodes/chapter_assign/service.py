@@ -252,6 +252,15 @@ async def chapter_assign_run(state: PlannerState) -> dict:
             f"chapter_select. Sample: "
             f"{[(r['key'], r['original_conf']) for r in rescued[:10]]}"
         )
+        try:
+            from infra.langfuse.annotation import flag_for_review
+            flag_for_review(
+                f"chapter_assign rescued {len(rescued)} doc(s) in confidence "
+                f"band [{RESCUE_FLOOR}, {CONFIDENCE_THRESHOLD})",
+                severity = "low",
+            )
+        except Exception:
+            pass
 
     # Rebuild coverage_count AFTER rescue so the post-rescue picture is
     # what flows into the stats payload.

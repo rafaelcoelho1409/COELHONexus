@@ -172,8 +172,7 @@ class CredentialStore:
         self._cache_valid = True
 
     def _maybe_import_env_keys(self) -> int:
-        """Opt-in (KD_CREDS_IMPORT_ENV=1) first-boot migration from Helm
-        configmap env vars into the encrypted store."""
+        """Opt-in env→store migration. KD_CREDS_IMPORT_ENV=1."""
         if "KD_CREDS_IMPORT_ENV" not in os.environ:
             return 0
         if os.environ["KD_CREDS_IMPORT_ENV"].strip().lower() not in ("1", "true", "yes", "on"):
@@ -199,7 +198,7 @@ class CredentialStore:
         return imported
 
     def warm(self) -> None:
-        """Eager KEK init + cache load — call at process start. Best-effort."""
+        """Eager KEK init + cache load. Best-effort; never raises."""
         try:
             with self._lock:
                 self._kek()
@@ -264,7 +263,7 @@ class CredentialStore:
         return KeyStatus.unset()
 
     def read_settings(self, force: bool = False) -> dict:
-        """`force=True` bypasses the TTL cache (used by the dynamic-catalog rebuild)."""
+        """`force=True` bypasses the TTL cache."""
         now = time.monotonic()
         if not force:
             with self._lock:

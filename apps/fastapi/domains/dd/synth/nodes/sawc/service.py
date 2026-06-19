@@ -670,6 +670,13 @@ def _format_memory_block(memory: list[dict]) -> str:
     return "\n".join(lines)
 
 
+try:
+    from infra.langfuse.prompts import with_langfuse_override as _lf_override
+except Exception:
+    _lf_override = lambda *a, **kw: (lambda fn: fn)  # noqa: E731
+
+
+@_lf_override("dd.synth.sawc.writer")
 def build_writer_prompt(
     *,
     framework: str,
@@ -1009,6 +1016,7 @@ def build_critic_picker_prompt(
     )
 
 
+@_lf_override("dd.synth.sawc.repair")
 def build_repair_prompt(
     *,
     framework: str,

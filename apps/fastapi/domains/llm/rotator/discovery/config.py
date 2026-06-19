@@ -3,9 +3,7 @@ from __future__ import annotations
 from .entities import FreeFilter, ProviderConfig
 
 
-# Central provider registry. `required=True` blocks DD runs when the key is
-# missing (NIM hosts mandatory embeddings + reranking). `enabled=False` →
-# held offline by design (paywalled providers).
+# `required=True` blocks DD runs when key is missing (NIM hosts mandatory embeddings + reranking).
 PROVIDERS: dict[str, ProviderConfig] = {
     "groq": ProviderConfig(
         name           = "groq",
@@ -55,7 +53,7 @@ PROVIDERS: dict[str, ProviderConfig] = {
         auth_style     = "bearer",
         response_shape = "openai",
         free_filter    = FreeFilter.SAMBANOVA_PRICING,
-        enabled        = False,    # whole provider paywalled 2026-04-24 Run-8
+        enabled        = False,
     ),
     "deepseek": ProviderConfig(
         name           = "deepseek",
@@ -64,6 +62,6 @@ PROVIDERS: dict[str, ProviderConfig] = {
         auth_style     = "bearer",
         response_shape = "openai",
         free_filter    = FreeFilter.ALWAYS_FALSE,
-        enabled        = False,    # direct API paid-only; NIM-hosted DeepSeek is the free path
+        enabled        = False,    # direct API paid-only; NIM-hosted is the free path
     ),
 }

@@ -1,0 +1,140 @@
+{
+  "title": "DD Pipeline — Synth Health",
+  "uid": "coelhonexus-dd-pipeline",
+  "tags": ["coelhonexus", "dd", "synth", "planner"],
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-6h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "framework",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "mimir"},
+        "query": "label_values(kd_chapter_outcome_total, framework)",
+        "includeAll": true,
+        "multi": true,
+        "current": {"text": "All", "value": "$__all"}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Chapter outcomes (last 1h)",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "sum by (outcome) (increase(kd_chapter_outcome_total{framework=~\"$framework\"}[1h]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Per-chapter synth wall-clock (p50 / p95)",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(kd_chapter_synth_duration_seconds_bucket{framework=~\"$framework\"}[10m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(kd_chapter_synth_duration_seconds_bucket{framework=~\"$framework\"}[10m])))",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Refiner iters-to-accept distribution (p50 / p95)",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 6},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, pinned_model) (rate(kd_refiner_iters_to_accept_bucket{outcome=\"accept\", framework=~\"$framework\"}[1h])))",
+          "legendFormat": "p50 — {{pinned_model}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(kd_refiner_iters_to_accept_bucket{outcome=\"accept\", framework=~\"$framework\"}[1h])))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Per-dim grader scores (mean over 10m)",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 6},
+      "targets": [
+        {
+          "expr": "sum by (dim) (rate(kd_classical_grader_dim_score_sum{framework=~\"$framework\"}[10m])) / sum by (dim) (rate(kd_classical_grader_dim_score_count{framework=~\"$framework\"}[10m]))",
+          "legendFormat": "{{dim}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"min": 0, "max": 1}}
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Audit missing-hash ratio (mean)",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 12},
+      "targets": [
+        {
+          "expr": "rate(kd_audit_missing_hashes_ratio_sum{framework=~\"$framework\"}[10m]) / rate(kd_audit_missing_hashes_ratio_count{framework=~\"$framework\"}[10m])",
+          "legendFormat": "missing ratio"
+        }
+      ],
+      "fieldConfig": {"defaults": {"min": 0, "max": 1}}
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Classical patches applied per dim (rate)",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 12},
+      "targets": [
+        {
+          "expr": "sum by (dim) (rate(kd_classical_patch_applied_total{framework=~\"$framework\"}[10m]))",
+          "legendFormat": "{{dim}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Bucket-split overflow events (last 6h)",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 18},
+      "targets": [
+        {
+          "expr": "sum(increase(kd_bucket_split_overflow_total{framework=~\"$framework\"}[6h]))",
+          "legendFormat": "overflow events"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Study completion p95 (last 6h)",
+      "datasource": {"type": "prometheus", "uid": "mimir"},
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 18},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(kd_study_completion_seconds_bucket{framework=~\"$framework\"}[6h])))",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    }
+  ]
+}

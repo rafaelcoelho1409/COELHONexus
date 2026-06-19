@@ -112,6 +112,16 @@ dependencies = [
     "opentelemetry-instrumentation-redis>=0.50b0,<1.0",
     "opentelemetry-instrumentation-celery>=0.50b0,<1.0",
     "opentelemetry-instrumentation-logging>=0.50b0,<1.0",
+    # BaggageSpanProcessor — propagates allow-listed baggage entries (study_id,
+    # channel_id, digest_id, etc.) onto every child span without kwargs
+    # threading. The recommended pattern per LiteLLM/LangFuse docs. Package is
+    # versioned alongside the instrumentation packs (0.5x → 0.6x).
+    "opentelemetry-processor-baggage>=0.50b0,<1.0",
+    # LangFuse v3 SDK — for SDK-only features (prompt management, sessions,
+    # scores, datasets, evals). Trace ingestion already flows via OTLP from
+    # infra/otel/exporters.py; the SDK is the second surface only. v3 is the
+    # OTLP-native major; v2 used a different ingestion shape.
+    "langfuse>=3,<4",
     # LangGraph 1.0 (Oct 2026) is GA with ZERO breaking changes — the only
     # deprecation is `langgraph.prebuilt` moving to `langchain.agents`, which
     # our code doesn't import (it's a transitive dep only). Same for the

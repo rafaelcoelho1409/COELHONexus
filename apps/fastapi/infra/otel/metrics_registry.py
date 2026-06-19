@@ -1,3 +1,10 @@
+"""Central registry of every KD metric — single source of truth for
+instrument names, units, descriptions, and label vocabulary.
+
+Recorders live next to their callers (`domains/*/runtime/observability/
+metrics.py`); those modules import this registry and the factory in
+`infra.otel.metrics` to create/look up instruments by key.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,8 +13,7 @@ from typing import Literal
 
 @dataclass(frozen = True, slots = True)
 class MetricSpec:
-    """One OTel instrument declaration. `key` is the internal cache name used
-    by record_* helpers; `name` is the wire name that lands in Mimir."""
+    """`name` is the wire name that lands in Mimir."""
     key:         str
     name:        str
     description: str
@@ -15,9 +21,6 @@ class MetricSpec:
     unit:        str = ""
 
 
-# All KD-pipeline-specific metrics. Adding a new metric is one entry here —
-# `_ensure_instruments` builds them all via a single loop. Labels are attached
-# at record time by the record_* helpers in service.py.
 INSTRUMENTS: tuple[MetricSpec, ...] = (
     MetricSpec(
         key         = "chapter_synth_duration",
