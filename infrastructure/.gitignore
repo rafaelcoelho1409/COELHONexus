@@ -1,0 +1,13 @@
+# Terragrunt cache + generated files
+**/.terragrunt-cache/
+**/.generated/
+**/backend.tf
+
+# Local state backend
+.tfstate/
+
+# k3d data bind mount
+.data/
+
+# Per-leaf kubeconfig
+**/kubeconfig

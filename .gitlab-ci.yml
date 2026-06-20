@@ -1,88 +1,82 @@
 # =============================================================================
-# GITLAB CI/CD - COELHONexus
+# GITLAB CI/CD — COELHONexus (Skaffold-driven build, GitOps deploy)
 # =============================================================================
-# Pipeline: git push -> GitLab CI -> Docker build -> ArgoCD Image Updater
+# Pipeline: git push → GitLab CI runs `skaffold build` → ArgoCD Image Updater
+# detects new digests in the in-cluster registry → ArgoCD reconciles → rollout.
 #
-# Fully automated - just push to master!
-# Same workflow as Skaffold: build -> push -> done (ArgoCD handles deploy)
+# Single source of truth: skaffold.yaml at the repo root drives:
+#   - Local dev:        `skaffold dev`         (interactive hot-reload)
+#   - Local one-shot:   `skaffold run`         (build + helm install on coelhonexus)
+#   - CI build (here):  `skaffold build --push --default-repo=… --tag=…`
 #
-# Registry: k3d COELHOCloud Registry (coelho-cloud-registry:5000)
-# Deploy: ArgoCD Image Updater auto-detects new images and syncs
+# Deploy on COELHO Cloud is handled by ArgoCD Image Updater, NOT this pipeline.
+# (Coelhonexus standalone never sees this file — it uses `skaffold run` locally.)
 #
-# No CI/CD variables needed!
+# Registry: in-cluster `coelho-cloud-registry:5000` (k3d-bundled). GitLab
+# runners reach it via Docker bridge DNS; --default-repo rewrites Skaffold's
+# laptop-side `localhost:5001` artifact prefix to this in-cluster hostname.
+#
+# See docs/K8S-DUAL-CLUSTER-FLEX-2026-06-19.md for the cross-cluster rationale.
 # =============================================================================
 
 stages:
   - build
-  # Deploy handled by ArgoCD Image Updater (auto-detects new images)
+  # No deploy stage: ArgoCD Image Updater detects new digests and syncs.
 
 variables:
-  # k3d COELHOCloud Registry (same as Skaffold uses)
-  REGISTRY: "coelho-cloud-registry:5000"
-  FASTAPI_IMAGE: "${REGISTRY}/coelhonexus-fastapi"
-  FASTHTML_IMAGE: "${REGISTRY}/coelhonexus-fasthtml"
-  # Docker-in-Docker configuration
+  # Docker-in-Docker — Skaffold's `local` builder shells out to `docker build`.
   DOCKER_HOST: tcp://docker:2375
   DOCKER_TLS_CERTDIR: ""
   DOCKER_BUILDKIT: "1"
 
-# =============================================================================
-# BUILD STAGE (Docker-in-Docker - same as Skaffold)
-# =============================================================================
-
-build-fastapi:
+build:
   stage: build
-  image: docker:28-cli
+  # Official Skaffold image — pinned for reproducibility.
+  # Bump deliberately when new Skaffold features are needed.
+  image:
+    name: gcr.io/k8s-skaffold/skaffold:v2.16.1
   services:
     - name: docker:28-dind
       alias: docker
-      command: ["dockerd", "--host=tcp://0.0.0.0:2375", "--host=unix:///var/run/docker.sock", "--tls=false", "--insecure-registry=coelho-cloud-registry:5000"]
+      command:
+        - dockerd
+        - --host=tcp://0.0.0.0:2375
+        - --host=unix:///var/run/docker.sock
+        - --tls=false
+        # Allow plain-HTTP push to the in-cluster k3d registry.
+        - --insecure-registry=coelho-cloud-registry:5000
   only:
     - master
     - main
   before_script:
+    # Wait for dind to be reachable before invoking docker via Skaffold.
     - until docker info; do sleep 1; done
   script:
-    - echo "Building FastAPI image with Docker (same as Skaffold)..."
-    - docker build
-      -t ${FASTAPI_IMAGE}:${CI_COMMIT_SHORT_SHA}
-      -t ${FASTAPI_IMAGE}:latest
-      -f apps/fastapi/Dockerfile.fastapi
-      apps/fastapi
-    - docker push ${FASTAPI_IMAGE}:${CI_COMMIT_SHORT_SHA}
-    - docker push ${FASTAPI_IMAGE}:latest
-    - echo "FastAPI image pushed to ${FASTAPI_IMAGE}"
-
-build-fasthtml:
-  stage: build
-  image: docker:28-cli
-  services:
-    - name: docker:28-dind
-      alias: docker
-      command: ["dockerd", "--host=tcp://0.0.0.0:2375", "--host=unix:///var/run/docker.sock", "--tls=false", "--insecure-registry=coelho-cloud-registry:5000"]
-  only:
-    - master
-    - main
-  before_script:
-    - until docker info; do sleep 1; done
-  script:
-    - echo "Building FastHTML image with Docker (same as Skaffold)..."
-    - docker build
-      -t ${FASTHTML_IMAGE}:${CI_COMMIT_SHORT_SHA}
-      -t ${FASTHTML_IMAGE}:latest
-      -f apps/fasthtml/Dockerfile.fasthtml
-      apps/fasthtml
-    - docker push ${FASTHTML_IMAGE}:${CI_COMMIT_SHORT_SHA}
-    - docker push ${FASTHTML_IMAGE}:latest
-    - echo "FastHTML image pushed to ${FASTHTML_IMAGE}"
+    # Builds EVERY artifact declared in skaffold.yaml (fastapi + fasthtml +
+    # fastmcp — note: the previous hand-maintained pipeline silently skipped
+    # fastmcp; that gap is closed here).
+    #
+    # --push                Push to the registry (Skaffold defaults to building only).
+    # --default-repo=…      Rewrite the artifact-image prefix from skaffold.yaml's
+    #                       laptop-side `localhost:5001` to the in-cluster name
+    #                       `coelho-cloud-registry:5000` that GitLab runners reach.
+    # --tag=$CI_…SHA        Override Skaffold's content-hash sha256 tag with the
+    #                       git SHA — easier human correlation. ArgoCD Image
+    #                       Updater uses `update-strategy: digest` so either tag
+    #                       scheme works; SHA wins for debuggability.
+    - skaffold build
+        --push
+        --default-repo=coelho-cloud-registry:5000
+        --tag=$CI_COMMIT_SHORT_SHA
 
 # =============================================================================
-# DEPLOY - Handled by ArgoCD Image Updater
+# DEPLOY — handled by ArgoCD Image Updater on COELHO Cloud
 # =============================================================================
-# No deploy stage needed!
-# ArgoCD Image Updater watches k3d registry and auto-deploys when:
-#   1. CI pushes new images to coelho-cloud-registry:5000
-#   2. Image Updater detects new digest (update-strategy: digest)
-#   3. ArgoCD syncs and restarts pods
+# Flow on production:
+#   1. CI pushes new images to coelho-cloud-registry:5000 (this pipeline)
+#   2. ArgoCD Image Updater detects a new digest (update-strategy: digest, 2-min poll)
+#   3. Image Updater patches the ArgoCD Application's image refs
+#   4. ArgoCD reconciles, rolls out new pods
 #
-# This is the same flow as Skaffold - just build, push, done!
+# No CI variables, no Helm CLI in the pipeline, no kubectl in the pipeline.
+# =============================================================================

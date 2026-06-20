@@ -183,6 +183,61 @@ portForward:
     address: 0.0.0.0
 
 
+# =============================================================================
+# Profiles — per-cluster overrides
+# =============================================================================
+# The base config above targets the COELHO Cloud k3d cluster (registry hostname
+# `localhost:5001`). The `coelhonexus` profile flips the registry to
+# `localhost:5000` for the standalone k3d cluster, layers
+# `values-coelhonexus.yaml` on top, and re-maps `setValueTemplates` to the new
+# IMAGE_FULLY_QUALIFIED_* keys Skaffold derives from the artifact image.
+#
+# Activation:
+#   - Auto:     `kubectl config use-context k3d-coelhonexus` → activation hook
+#               below fires when you run plain `skaffold dev` / `skaffold run`.
+#   - Explicit: `skaffold run -p coelhonexus` / `skaffold dev -p coelhonexus`.
+#
+# Cross-platform: `skaffold` is a Go binary that runs identically on Linux,
+# macOS, and Windows — no bash, no shell-script glue. This replaces the
+# previous `scripts/ci-simulate.sh` (deleted 2026-06-19 in favor of
+# `skaffold run`). See docs/K8S-DUAL-CLUSTER-FLEX-2026-06-19.md.
+# =============================================================================
+profiles:
+  - name: coelhonexus
+    activation:
+      - kubeContext: k3d-coelhonexus
+    patches:
+      # Artifact images: COELHO Cloud's localhost:5001 → COELHONexus' localhost:5000.
+      - op: replace
+        path: /build/artifacts/0/image
+        value: localhost:5000/coelhonexus-fastapi
+      - op: replace
+        path: /build/artifacts/1/image
+        value: localhost:5000/coelhonexus-fasthtml
+      - op: replace
+        path: /build/artifacts/2/image
+        value: localhost:5000/coelhonexus-fastmcp
+      # Helm valuesFiles: layer the COELHONexus override (flips the in-cluster
+      # registry hostname from coelho-cloud-registry to coelhonexus-registry).
+      # For Skaffold-driven dev/run this is mostly redundant (setValueTemplates
+      # below replace image refs directly), but kept for parity with manual
+      # `helm install` flows and for non-image values that may diverge later.
+      - op: add
+        path: /manifests/helm/releases/0/valuesFiles
+        value:
+          - k8s/helm/values-coelhonexus.yaml
+      # setValueTemplates: re-map to the new IMAGE_FULLY_QUALIFIED_* variable
+      # names (Skaffold derives them from artifact image strings with
+      # non-alphanumerics replaced by `_`).
+      - op: replace
+        path: /manifests/helm/releases/0/setValueTemplates
+        value:
+          fastapi.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5000_coelhonexus_fastapi}}"
+          fasthtml.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5000_coelhonexus_fasthtml}}"
+          fastmcp.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5000_coelhonexus_fastmcp}}"
+          environment: local
+
+
 # NOTE: Ensure docker-buildx is installed when useBuildkit is true
 #
 # Port-forward pairing (last digit aligns dev ↔ prod):

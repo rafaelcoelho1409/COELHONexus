@@ -15,6 +15,7 @@ class AdaptiveRAGState(TypedDict):
     """State for the Adaptive RAG parent graph."""
     # Shared fields
     question:           str
+    contextualized:     bool
     mode:               str               # "fast" | "standard" | "deep"
     force_mode:         str               # Optional override from the API
     generation:         str               # Final answer

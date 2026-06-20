@@ -1,16 +1,19 @@
 # =============================================================================
-# ARGOCD APPLICATION - COELHONexus
+# ARGOCD APPLICATION - COELHONexus (COELHO CLOUD ONLY)
 # =============================================================================
-# Deploys COELHONexus from GitLab using Helm chart
+# SCOPE: This file targets the COELHO Cloud production cluster. The
+#   `repoURL` below points at the in-cluster GitLab service, which only
+#   exists on COELHO Cloud (the gitlab module is intentionally NOT included
+#   in the COELHONexus standalone infrastructure port).
 #
-# Apply this to ArgoCD:
+# For the COELHONexus standalone k3d cluster: do NOT apply this file. Use
+#   `skaffold run` instead (after `kubectl config use-context k3d-coelhonexus`)
+#   — the `coelhonexus` profile in skaffold.yaml auto-activates via kubeContext
+#   and handles build, push, and helm install in one cross-platform command.
+#   See docs/K8S-DUAL-CLUSTER-FLEX-2026-06-19.md for the architecture rationale.
+#
+# Apply to COELHO Cloud's ArgoCD:
 #   kubectl apply -f k8s/argocd/application.yaml
-#
-# Or via ArgoCD CLI:
-#   argocd app create coelhonexus -f k8s/argocd/application.yaml
-#
-# Port forwarding (production ports 23000-23019):
-#   echo "fastapi:23000:8000 web:23001:3000" | xargs -n1 | xargs -P2 -I{} sh -c 'p="{}"; kubectl port-forward -n coelhonexus svc/coelhonexus-${p%%:*} ${p#*:} &'
 #
 # Namespaces:
 #   - coelhonexus-dev: Skaffold local development (ports 23020-23039)

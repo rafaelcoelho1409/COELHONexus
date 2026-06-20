@@ -31,7 +31,7 @@ async def contextualize_question(state: AdaptiveRAGState, llm) -> dict:
     """Rewrite the question when prior history exists."""
     history = state.get("conversation_history") or []
     if not history:
-        return {}
+        return {"contextualized": True}
 
     parts: list[str] = []
     for turn in history[-MAX_HISTORY_TURNS:]:
@@ -52,7 +52,11 @@ async def contextualize_question(state: AdaptiveRAGState, llm) -> dict:
         )
         rewritten = strip_think_tags(response.content)
         if rewritten and rewritten != state["question"]:
-            return {"question": rewritten, "search_query": rewritten}
+            return {
+                "question":       rewritten,
+                "search_query":   rewritten,
+                "contextualized": True,
+            }
     except (asyncio.TimeoutError, Exception):
         pass
-    return {}
+    return {"contextualized": True}

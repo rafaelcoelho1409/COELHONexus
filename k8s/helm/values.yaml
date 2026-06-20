@@ -83,18 +83,6 @@ elasticsearch:
   username: "elastic"
   # Password loaded from secret (ELASTICSEARCH_PASSWORD)
 
-# Proxy configuration for YouTube Transcript API (WARP + Tor fallback)
-# In-cluster ClusterIP services
-proxy:
-  warp:
-    # In-cluster ClusterIP service (warp.warp); auth credentials from secret
-    host: "warp.warp.svc.cluster.local"
-    port: 1080
-  tor:
-    # In-cluster ClusterIP service (tor.tor); no auth
-    host: "tor.tor.svc.cluster.local"
-    port: 9150
-
 # Playwright CDP for browser automation (bypasses IP blocking)
 # COELHO Cloud's playwright module deploys SEPARATE Services per mode (renamed
 # during v2 rewrite — was a single `playwright` service in v1):
@@ -270,13 +258,6 @@ dd:
   # rate-limit headroom; roll back to "1" if 429 cascades resume.
   studySem: "2"
 
-# SearXNG — in-cluster metasearch used by Knowledge Distiller to resolve
-# official documentation URLs (and any future web-search need). Internal DNS
-# avoids Tailscale TLS overhead on every query. Service lives in the
-# `searxng` namespace and is already deployed outside this chart.
-searxng:
-  url: "http://searxng.searxng.svc.cluster.local:8080"
-
 # Secret containing credentials (created by upload_env_to_k3d.sh)
 secretName: coelhonexus-secret
 
@@ -354,31 +335,34 @@ secretMappings:
     key: langfuse-host
   - envName: POSTGRES_PASSWORD
     key: postgres-password
-  - envName: WARP_PROXY_USER
-    key: warp-proxy-user
-  - envName: WARP_PROXY_PASS
-    key: warp-proxy-pass
-  - envName: EXA_API_KEY
-    key: exa-api-key
-  - envName: TAVILY_API_KEY
-    key: tavily-api-key
-  - envName: JINA_API_KEY
-    key: jina-api-key
-  - envName: LINKUP_API_KEY
-    key: linkup-api-key
   # Flower basic auth — only consumed when flower.basicAuth.enabled=true
   - envName: FLOWER_BASIC_AUTH
     key: flower-basic-auth
 
-# Registry configuration - uses k3d COELHOCloud Registry (same as Skaffold)
+# Registry configuration
+# DEFAULT TARGETS COELHO CLOUD. The values below all use
+# `coelho-cloud-registry:5000` as the in-cluster registry hostname (k3d-bundled
+# registry on COELHO Cloud's homelab cluster).
+#
+# To deploy to the COELHONexus standalone k3d cluster, layer
+# `values-coelhonexus.yaml` on top — it overrides registry.url + the 3
+# *.image refs to use `coelhonexus-registry:5000`:
+#
+#   helm upgrade --install coelhonexus k8s/helm \
+#     -f k8s/helm/values.yaml \
+#     -f k8s/helm/values-coelhonexus.yaml
+#
+# Or — preferred — run `skaffold run` after `kubectl config use-context
+# k3d-coelhonexus`. The `coelhonexus` profile in skaffold.yaml auto-activates
+# via kubeContext and layers this file. See
+# docs/K8S-DUAL-CLUSTER-FLEX-2026-06-19.md.
 registry:
   url: coelho-cloud-registry:5000
   # k3d registry doesn't need authentication
   imagePullSecret: ""
 
-# Image configurations
-# Uses k3d in-cluster registry (coelho-cloud-registry:5000) — see registry.url below
-# with 'latest' tag and imagePullPolicy: Always
+# Image configurations — see registry.url above for the dual-cluster flex.
+# 'latest' tag + imagePullPolicy: Always means every pod restart pulls fresh.
 
 
 # FastAPI unified ML backend (includes River incremental and Sklearn batch training)

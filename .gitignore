@@ -70,3 +70,4 @@ k8s/helm/charts
 .claude/
 .openclaude/
 .antigravitycli/
+.codex/

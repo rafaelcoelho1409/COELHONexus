@@ -137,17 +137,79 @@ def ingest_to_neo4j(
             if not transcripts:
                 return {"error": "No transcripts found in ES"}
             all_video_ids = list({t["video_id"] for t in transcripts})
+            total_videos = len(all_video_ids)
             metadata_map = await fetch_metadata_from_es(es, all_video_ids)
             # Create Video/Channel nodes from metadata (no LLM cost)
             _progress({
                 "phase": "metadata_graph",
-                "total": len(all_video_ids),
+                "total": total_videos,
             })
             video_metadata = [
                 {**metadata_map.get(vid, {}), "video_id": vid}
                 for vid in all_video_ids
             ]
             build_video_metadata_graph(neo4j_graph, video_metadata)
+            # Progress shown in FastHTML must be cumulative for the full
+            # ingest run. Neo4j retries residual videos on a fresh arm, and
+            # the segment-local callback restarts at `0/1`; without this
+            # adapter the bar falls back to 2% even after 4/5 videos landed.
+            completed_global: set[str] = set()
+            try:
+                rows = neo4j_graph.query(
+                    "MATCH (d:Document) "
+                    "WHERE d.video_id IN $video_ids "
+                    "RETURN collect(DISTINCT d.video_id) AS processed_ids",
+                    params = {"video_ids": all_video_ids},
+                )
+                if rows and rows[0].get("processed_ids"):
+                    completed_global = {
+                        str(vid) for vid in rows[0]["processed_ids"] if vid
+                    }
+            except Exception:
+                completed_global = set()
+
+            def _ordered(ids: set[str]) -> list[str]:
+                return [vid for vid in all_video_ids if vid in ids]
+
+            def _neo4j_progress(payload: dict[str, Any]) -> None:
+                phase = payload.get("phase")
+                if phase == "extracting":
+                    seg_completed = {
+                        str(vid)
+                        for vid in (payload.get("completed_ids") or [])
+                        if vid
+                    }
+                    seg_failed = {
+                        str(vid)
+                        for vid in (payload.get("failed_ids") or [])
+                        if vid
+                    }
+                    completed_global.update(seg_completed)
+                    active_failed = {
+                        vid for vid in seg_failed if vid not in completed_global
+                    }
+                    current = min(
+                        total_videos,
+                        len(completed_global) + len(active_failed),
+                    )
+                    meta = dict(payload)
+                    meta["current"] = current
+                    meta["total"] = total_videos
+                    meta["current_batch"] = current
+                    meta["total_batches"] = total_videos
+                    meta["completed_ids"] = _ordered(completed_global)
+                    meta["failed_ids"] = _ordered(active_failed)
+                    _progress(meta)
+                    return
+                if phase == "resolving":
+                    meta = dict(payload)
+                    meta["current"] = len(completed_global)
+                    meta["total"] = total_videos
+                    meta["completed_ids"] = _ordered(completed_global)
+                    meta["failed_ids"] = []
+                    _progress(meta)
+                    return
+                _progress(payload)
             # Rotator/bandit pick — one deployment per ARM SEGMENT.
             # `seed=hash(task_id)` so retries of the same task drift to
             # the bandit's current best (not a fixed seed) but two
@@ -198,7 +260,7 @@ def ingest_to_neo4j(
                         llm          = llm,
                         neo4j_graph  = neo4j_graph,
                         batch_size   = batch_size,
-                        progress_cb  = _progress,
+                        progress_cb  = _neo4j_progress,
                         abort_after_consecutive = MAX_CONSECUTIVE_NONPRODUCTIVE,
                         # Resolution is a global Neo4j pass — run it ONCE
                         # after the segment loop, not per segment.

@@ -432,7 +432,7 @@ async def run(
             if NON_TARGET_LANGUAGE_PATH_RE.search(p.path or ""):
                 return False
             # Stage 1 noise filter — defaults + per-framework path_filter.
-            from ..filters import passes_path_filter
+            from ...filters import passes_path_filter
             if not passes_path_filter(u, path_filter):
                 return False
             if polyglot and language:

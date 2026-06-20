@@ -19,16 +19,17 @@ import asyncio
 
 from domains.ycs.runtime.observability import traced
 
+from ....domain import parse_json_model_output
 from ...state import AdaptiveRAGState
 from .prompts import CLASSIFY_PROMPT
 from .schemas import QueryClassification
 
 
 # Single LLM call, output cap is small (mode + a handful of sub-
-# questions). 90 s is 3× the 30 s median classify latency observed
-# under load — gives the rotator room to fall back through a couple
-# of arms while still bounding the worst case.
-_CLASSIFY_TIMEOUT_S = 90.0
+# questions). With plain-JSON prompting we no longer wait on provider-
+# native structured-output validation, so 45 s is enough room for a
+# fallback arm while still failing fast to STANDARD when classify drags.
+_CLASSIFY_TIMEOUT_S = 45.0
 
 
 def _resolve_channel_ids(neo4j_graph, channel_names: list[str]) -> list[str]:
@@ -72,15 +73,18 @@ async def classify_query(
             "sub_questions": [],
             "channel_ids":   channel_ids,
         }
-    # 2026-06-11: default `method="json_schema"` — see
-    # `standard/nodes/hallucination/node.py` for the rationale.
-    chain = CLASSIFY_PROMPT | llm.with_structured_output(
-        QueryClassification,
-    )
+    # 2026-06-20 — provider-native structured output was hanging before
+    # the first graph event on local dev runs. Use plain JSON + local
+    # validation instead; same cross-provider pattern as graph-builder's
+    # `ignore_tool_usage=True` fix.
+    chain = CLASSIFY_PROMPT | llm
     try:
-        result = await asyncio.wait_for(
+        response = await asyncio.wait_for(
             chain.ainvoke({"question": state["question"]}),
             timeout = _CLASSIFY_TIMEOUT_S,
+        )
+        result = parse_json_model_output(
+            response.content, QueryClassification,
         )
         mode = force or result.mode
         sub_questions = result.sub_questions if mode == "deep" else []

@@ -30,18 +30,11 @@ QDRANT_URL: "{{ .Values.qdrant.url }}"
 QDRANT_PORT: "{{ .Values.qdrant.port }}"
 ELASTICSEARCH_HOST: "{{ .Values.elasticsearch.host }}"
 ELASTICSEARCH_USERNAME: "{{ .Values.elasticsearch.username }}"
-# Proxy configuration (WARP host/port, Tor host/port)
-WARP_PROXY_HOST: "{{ .Values.proxy.warp.host }}"
-WARP_PROXY_PORT: "{{ .Values.proxy.warp.port }}"
-TOR_PROXY_HOST: "{{ .Values.proxy.tor.host }}"
-TOR_PROXY_PORT: "{{ .Values.proxy.tor.port }}"
 # Playwright CDP endpoints (browser automation, bypasses IP blocking)
 PLAYWRIGHT_CDP_HEADLESS: "{{ .Values.playwright.cdp_headless }}"
 PLAYWRIGHT_CDP_HEADED: "{{ .Values.playwright.cdp_headed }}"
 # Embedding model (NVIDIA NIM API — see docs/NVIDIA-NIM-EMBEDDING-MODELS.md)
 NVIDIA_EMBEDDING_MODEL: "{{ .Values.embedding.model }}"
-# SearXNG metasearch (in-cluster) — used by Knowledge Distiller docs-URL resolver
-SEARXNG_URL: "{{ .Values.searxng.url }}"
 # KD planner MAP step routing — "1" enables the classical pipeline (rotator
 # embed + community_detection + KeyLLM); "0" keeps the legacy LLM path.
 # Read at runtime by graphs/knowledge/distiller.py.

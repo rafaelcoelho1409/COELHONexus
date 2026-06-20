@@ -83,6 +83,16 @@ logger = logging.getLogger(__name__)
 # LLM is bursting tokens.
 _STREAM_PERSIST_INTERVAL_S = 2.5
 
+# 2026-06-20 — local k3d runs were observed hanging before the FIRST
+# `graph.astream(stream_mode="updates")` event while the same graph
+# completed normally under `graph.ainvoke(...)`. After ~15 s of total
+# silence at stream bootstrap, fall back to `ainvoke` and synthesize the
+# minimal node updates the frontend needs to render the answer.
+_ASTREAM_BOOTSTRAP_FALLBACK_S = 15.0
+_ASTREAM_BOOTSTRAP_FALLBACK_TICKS = max(
+    1, int(_ASTREAM_BOOTSTRAP_FALLBACK_S / _STREAM_PERSIST_INTERVAL_S),
+)
+
 # 2026-06-15 — watchdog ceiling on the time between two consecutive
 # `graph.astream()` events. Several adaptive-graph nodes
 # (`check_hallucination`, `critic`, `contextualize`, `rewrite_query`,
@@ -118,6 +128,72 @@ _PERSIST_TIMEOUT_S = 3.0
 # Redis if we ever scale to >1 worker. Always cleaned up in the
 # generator's `finally` so it can't grow unboundedly.
 _CANCELLED_TURN_IDS: set[int] = set()
+
+
+def _result_to_graph_updates(result: dict[str, Any]) -> list[dict[str, dict[str, Any]]]:
+    """Project a final `graph.ainvoke()` result into graph-like updates.
+
+    Used only by the SSE bootstrap fallback when LangGraph's streaming
+    path wedges before the first event. The frontend still receives the
+    same node-shaped payloads (`classify_query`, `run_standard`,
+    `synthesize`, etc.), just emitted after the invoke completes rather
+    than live during execution.
+    """
+    updates: list[dict[str, dict[str, Any]]] = []
+    mode = str(result.get("mode") or "").strip().lower()
+
+    classify_update: dict[str, Any] = {}
+    if mode:
+        classify_update["mode"] = mode
+    if mode == "deep":
+        sub_questions = result.get("sub_questions") or []
+        if sub_questions:
+            classify_update["sub_questions"] = sub_questions
+    if classify_update:
+        updates.append({"classify_query": classify_update})
+
+    if mode == "deep":
+        plan_update: dict[str, Any] = {}
+        sub_questions = result.get("sub_questions") or []
+        if sub_questions:
+            plan_update["sub_questions"] = sub_questions
+        research_plan = str(result.get("research_plan") or "").strip()
+        if research_plan:
+            plan_update["research_plan"] = research_plan
+        if plan_update:
+            updates.append({"plan_research": plan_update})
+        for item in result.get("sub_results") or []:
+            if isinstance(item, dict):
+                updates.append({"run_subagent": {"sub_results": [item]}})
+        synth_update: dict[str, Any] = {}
+        generation = str(result.get("generation") or "")
+        if generation:
+            synth_update["generation"] = generation
+        citations = result.get("citations")
+        if isinstance(citations, list) and citations:
+            synth_update["citations"] = citations
+        if synth_update:
+            updates.append({"synthesize": synth_update})
+        if result.get("confidence_score") is not None:
+            updates.append({
+                "critic": {"confidence_score": result.get("confidence_score")},
+            })
+        return updates
+
+    terminal_node = "direct_answer" if mode == "fast" else "run_standard"
+    terminal_update: dict[str, Any] = {}
+    generation = str(result.get("generation") or "")
+    if generation:
+        terminal_update["generation"] = generation
+    citations = result.get("citations")
+    if isinstance(citations, list) and citations:
+        terminal_update["citations"] = citations
+    search_query = str(result.get("search_query") or "").strip()
+    if search_query:
+        terminal_update["search_query"] = search_query
+    if terminal_update:
+        updates.append({terminal_node: terminal_update})
+    return updates
 
 
 # =============================================================================
@@ -424,6 +500,7 @@ async def rag_search(
     graph = await build_graph_from_request(request)
     initial_state = {
         "question":             payload.question,
+        "contextualized":       False,
         "mode":                 "",
         "force_mode":           payload.force_mode or "",
         "conversation_history": history,
@@ -536,6 +613,7 @@ async def rag_search_stream(
     graph = await build_graph_from_request(request)
     initial_state = {
         "question":             payload.question,
+        "contextualized":       False,
         "mode":                 "",
         "force_mode":           payload.force_mode or "",
         "conversation_history": history,
@@ -783,7 +861,19 @@ async def rag_search_stream(
         # Storing on EVERY turn (not just the first) keeps the field
         # available regardless of which row hydration reads.
         thinking_state: dict = {
-            "stages":      {},
+            "stages":      {
+                "retrieve": {
+                    "status": "active",
+                    "action": (
+                        "Resolving prior context"
+                        if history else
+                        "Classifying intent"
+                    ),
+                },
+                "grade":    {"status": "queued", "action": ""},
+                "generate": {"status": "queued", "action": ""},
+                "verify":   {"status": "queued", "action": ""},
+            },
             "mode":        "",
             "channel_ids": list(effective_channel_ids),
         }
@@ -846,7 +936,11 @@ async def rag_search_stream(
             # `maxsize=1` on the queue (LangGraph never gets more than
             # one event ahead of the consumer).
             event_queue: asyncio.Queue = asyncio.Queue(maxsize=1)
-            async def _producer():
+            producer_tasks: list[asyncio.Task] = []
+            saw_graph_event = False
+            using_invoke_fallback = False
+
+            async def _producer_stream():
                 from infra.langfuse.sessions import session as _lf_session
                 _sess_id = payload.thread_id or "default"
                 _user_id = (effective_channel_ids or ["default"])[0]
@@ -879,7 +973,35 @@ async def rag_search_stream(
                         await event_queue.put(("error", e))
                     except Exception:
                         pass
-            producer_task = asyncio.create_task(_producer())
+
+            async def _producer_invoke_fallback():
+                from infra.langfuse.sessions import session as _lf_session
+                _sess_id = payload.thread_id or "default"
+                _user_id = (effective_channel_ids or ["default"])[0]
+                try:
+                    with _lf_session(
+                        "ycs",
+                        session_id = _sess_id,
+                        user_id    = _user_id,
+                        channel_id = _user_id,
+                    ):
+                        result = await graph.ainvoke(
+                            initial_state,
+                            config = config,
+                        )
+                    for ev in _result_to_graph_updates(result):
+                        await event_queue.put(("event", ev))
+                    await event_queue.put(("done", None))
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    try:
+                        await event_queue.put(("error", e))
+                    except Exception:
+                        pass
+
+            producer_task = asyncio.create_task(_producer_stream())
+            producer_tasks.append(producer_task)
             try:
                 while True:
                     # ── Cancellation check ───────────────────────────
@@ -896,7 +1018,7 @@ async def rag_search_stream(
                         cancelled = True
                         break
                     try:
-                        kind, payload = await asyncio.wait_for(
+                        kind, queue_payload = await asyncio.wait_for(
                             event_queue.get(),
                             timeout = _STREAM_PERSIST_INTERVAL_S,
                         )
@@ -936,6 +1058,38 @@ async def rag_search_stream(
                                     f"[ycs:stream] heartbeat persist "
                                     f"failed: {type(e).__name__}: {e}"
                                 )
+                        if (
+                            not preview_plan
+                            and not saw_graph_event
+                            and not using_invoke_fallback
+                            and heartbeats_since_event
+                            >= _ASTREAM_BOOTSTRAP_FALLBACK_TICKS
+                        ):
+                            using_invoke_fallback = True
+                            logger.warning(
+                                "[ycs:stream] no LangGraph stream event "
+                                f"after {int(_ASTREAM_BOOTSTRAP_FALLBACK_S)}s "
+                                f"on turn_id={turn_id}; cancelling "
+                                "`astream()` producer and falling back "
+                                "to `ainvoke()`"
+                            )
+                            producer_task.cancel()
+                            try:
+                                await asyncio.wait_for(
+                                    producer_task, timeout = 5.0,
+                                )
+                            except (asyncio.CancelledError, asyncio.TimeoutError):
+                                pass
+                            except Exception as e:
+                                logger.warning(
+                                    "[ycs:stream] bootstrap fallback "
+                                    f"cancel wait failed: "
+                                    f"{type(e).__name__}: {e}"
+                                )
+                            producer_task = asyncio.create_task(
+                                _producer_invoke_fallback(),
+                            )
+                            producer_tasks.append(producer_task)
                         # 2026-06-16 — KEEP-ALIVE SSE frame. The
                         # browser's `fetch()` reader drops the
                         # connection after ~60–120 s of TCP silence
@@ -959,10 +1113,11 @@ async def rag_search_stream(
                     if kind == "done":
                         break
                     if kind == "error":
-                        raise payload  # propagate to outer except
+                        raise queue_payload  # propagate to outer except
                     # kind == "event"
-                    event = payload
+                    event = queue_payload
                     # Got a real graph event — reset the watchdog counter.
+                    saw_graph_event = True
                     heartbeats_since_event = 0
                     for node_name, update in event.items():
                         if not isinstance(update, dict):
@@ -1158,11 +1313,13 @@ async def rag_search_stream(
                 # Without this, an aborted SSE could leave the LangGraph
                 # stream running in the background until it timed out
                 # naturally, wasting LLM credits.
-                producer_task.cancel()
-                try:
-                    await producer_task
-                except BaseException:
-                    pass
+                for task in producer_tasks:
+                    task.cancel()
+                for task in producer_tasks:
+                    try:
+                        await task
+                    except BaseException:
+                        pass
         except asyncio.CancelledError:
             # 2026-06-16 — DEDICATED cancellation handler. Earlier this
             # path fell through to the unhandled-BaseException case,

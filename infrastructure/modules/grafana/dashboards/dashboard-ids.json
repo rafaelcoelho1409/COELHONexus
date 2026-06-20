@@ -1,0 +1,158 @@
+{
+  "_comment": "Curated Grafana dashboards downloaded from grafana.com on every `terragrunt apply` of the grafana module. Researched 2026-05-03 — the IDs below are the most maintained / most-downloaded option for each service in the COELHO Cloud as of that date.",
+  "_browse": "Find dashboards at https://grafana.com/grafana/dashboards/ — copy the numeric ID into the `id` field.",
+  "_workflow": "Add/remove entries here, then `cd live/homelab/30-observability/grafana && terragrunt apply`. data.http re-fetches each dashboard's latest revision; if grafana.com updated it, the ConfigMap diffs and Grafana's sidecar re-imports.",
+  "_uid_rewriting": "Module's dashboards.tf rewrites datasource UIDs: ${DS_PROMETHEUS}/$DS_PROMETHEUS/'Prometheus' -> 'mimir'; ${DS_LOKI} -> 'loki'; ${DS_TEMPO} -> 'tempo'.",
+  "_skipped_charts_already_ship_dashboards": "Mimir's chart ships 26 dashboards via metaMonitoring.dashboards.enabled (already on). Loki's chart ships dashboards via monitoring.dashboards.enabled (already on). No JSON entries needed for those — they auto-load via labeled ConfigMaps.",
+  "_skipped_no_metrics": "Vaultwarden, Open WebUI, pgAdmin, RedisInsight, Homepage — these services either don't expose /metrics or have no published dashboard. Nothing to do.",
+
+  "dashboards": [
+    {
+      "id": 24298,
+      "name": "postgresql",
+      "folder": "Databases",
+      "description": "PostgreSQL Monitoring Dashboard — comprehensive (instance info, alerts, connection analysis, query performance, cache & I/O, locks & blocking, vacuum, WAL, replication, table stats). Newer alternative to id 9628."
+    },
+    {
+      "id": 14091,
+      "name": "redis",
+      "folder": "Databases",
+      "description": "Redis Exporter Quickstart — by oliver006, author of the canonical redis_exporter. Works with bitnami/redis exporter sidecar."
+    },
+    {
+      "id": 13502,
+      "name": "minio-cluster",
+      "folder": "Storage",
+      "description": "MinIO Cluster Dashboard — official Grafana Labs dashboard, uses /minio/v2/metrics/cluster."
+    },
+    {
+      "id": 19237,
+      "name": "minio-bucket",
+      "folder": "Storage",
+      "description": "MinIO Bucket Dashboard — per-bucket metrics. Useful since we have multiple buckets (mimir-blocks, loki-chunks, tempo-traces, backups, etc.)."
+    },
+    {
+      "id": 24177,
+      "name": "tailscale-overview",
+      "folder": "Network",
+      "description": "Tailscale / Overview — official, by Tailscale. Tailnet API metrics: devices, users, auth keys."
+    },
+    {
+      "id": 24178,
+      "name": "tailscale-machine",
+      "folder": "Network",
+      "description": "Tailscale / Machine — official, by Tailscale. Per-machine daemon metrics: traffic by path, dropped packets, DERP vs non-DERP."
+    },
+    {
+      "id": 24838,
+      "name": "grafana-internals",
+      "folder": "Observability",
+      "description": "Grafana Internal Metrics — newer/more comprehensive than the legacy id 3590. Covers API request rates, datasource latencies, plugin stats."
+    },
+    {
+      "id": 23242,
+      "name": "tempo-opentelemetry",
+      "folder": "Observability",
+      "description": "OpenTelemetry & Tempo — Tempo operations + OTel collector overview. The single-binary Tempo chart doesn't ship dashboards (only tempo-distributed does via metaMonitoring), so we pull this one explicitly."
+    },
+    {
+      "id": 24685,
+      "name": "alloy-microservices",
+      "folder": "Observability",
+      "description": "K8S Dashboard for Alloy Metrics — Microservices Overview. Drills from cluster-level Alloy stats down to per-pod component flow. The Alloy chart doesn't ship dashboards by default."
+    },
+    {
+      "id": 18927,
+      "name": "gitlab-overview",
+      "folder": "CI-CD",
+      "description": "GitLab Self-managed — Overview. Top-level health: Rails request rates, Sidekiq queues, Gitaly latency, DB pool, web sessions."
+    },
+    {
+      "id": 18917,
+      "name": "gitlab-gitaly",
+      "folder": "CI-CD",
+      "description": "GitLab Self-managed — Gitaly. Git repository server: command latency, RPC volume, SSH/HTTP traffic split."
+    },
+    {
+      "id": 18916,
+      "name": "gitlab-workhorse",
+      "folder": "CI-CD",
+      "description": "GitLab Self-managed — Workhorse. Reverse proxy + git protocol: request rates, response codes, large-blob streaming."
+    },
+    {
+      "id": 18928,
+      "name": "gitlab-ci-pipelines",
+      "folder": "CI-CD",
+      "description": "GitLab Self-managed — CI Pipelines. Job throughput, queue wait time, runner availability, pipeline durations."
+    },
+    {
+      "id": 9631,
+      "name": "gitlab-runner",
+      "folder": "CI-CD",
+      "description": "GitLab Runner — concurrent jobs, request rates, errored jobs, runner version distribution."
+    },
+    {
+      "id": 19993,
+      "name": "argocd-operational",
+      "folder": "CI-CD",
+      "description": "ArgoCD Operational — kubectl op rates, redis ops, sync stats, repo-server / controller / appset metrics."
+    },
+    {
+      "id": 14584,
+      "name": "argocd-applications",
+      "folder": "CI-CD",
+      "description": "ArgoCD Applications — per-Application sync status, health, drift, deploy duration. Populates once you create Applications."
+    },
+    {
+      "id": 24603,
+      "name": "qdrant",
+      "folder": "Databases",
+      "description": "Qdrant vector database metrics — collection sizes, request latencies, search/upsert throughput, index status."
+    },
+    {
+      "id": 6483,
+      "name": "elasticsearch",
+      "folder": "Databases",
+      "description": "Elasticsearch — by sherzberg. Cluster health, JVM heap, indexing/search rates, doc counts, segment counts, queue stats."
+    },
+    {
+      "id": 17324,
+      "name": "mlflow",
+      "folder": "AI",
+      "description": "MLflow tracking server — Prometheus metrics, request latency, experiment run counters, system resources."
+    }
+  ],
+
+  "_future_dashboards_uncomment_when_module_ships": [
+    {
+      "id": 10242,
+      "name": "gitlab-omnibus",
+      "folder": "CI-CD",
+      "description": "GitLab Omnibus — overview for self-hosted GitLab CE/EE"
+    },
+    {
+      "id": 9527,
+      "name": "gitlab-pipelines",
+      "folder": "CI-CD",
+      "description": "GitLab CI Pipelines"
+    },
+    {
+      "id": 20994,
+      "name": "airflow",
+      "folder": "Data-Platform",
+      "description": "Apache Airflow cluster metrics (Prometheus/StatsD)"
+    },
+    {
+      "id": 1860,
+      "name": "node-exporter",
+      "folder": "System",
+      "description": "Node Exporter Full — by rfraile, the canonical node metrics dashboard. Add when node-exporter ships."
+    },
+    {
+      "id": 15661,
+      "name": "k8s-views-global",
+      "folder": "Kubernetes",
+      "description": "K8S Dashboard / Views / Global — by dotdc. Requires kube-state-metrics."
+    }
+  ]
+}

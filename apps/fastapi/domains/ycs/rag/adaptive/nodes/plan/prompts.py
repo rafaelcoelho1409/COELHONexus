@@ -21,7 +21,8 @@ PLAN_FALLBACK_PROMPT = ChatPromptTemplate.from_messages([
         "question into 3-5 focused sub-questions that, when answered "
         "individually from video transcripts, will provide the evidence "
         "needed for a comprehensive analysis. Each sub-question should "
-        "target a specific angle or pattern.",
+        "target a specific angle or pattern. Return ONLY a JSON object "
+        "with keys: sub_questions, strategy. Do not wrap it in markdown.",
     ),
     ("human", "{question}"),
 ])

@@ -19,6 +19,7 @@ import logging
 
 from domains.ycs.runtime.observability import traced
 
+from ....domain import parse_json_model_output
 from ...state import AdaptiveRAGState
 from .prompts import PLAN_FALLBACK_PROMPT
 from .schemas import ResearchPlan
@@ -51,17 +52,19 @@ async def plan_research(state: AdaptiveRAGState, llm) -> dict:
                 f"Investigating {n} aspects of: {state['question']}"
             ),
         }
-    # 2026-06-11: default `method="json_schema"` — see
-    # `standard/nodes/hallucination/node.py` for the rationale.
-    chain = PLAN_FALLBACK_PROMPT | llm.with_structured_output(
-        ResearchPlan,
-    )
+    # 2026-06-20 — match classify's plain-JSON strategy. Native
+    # structured-output validation can wedge before emitting any graph
+    # update; local validation keeps the planner portable across arms.
+    chain = PLAN_FALLBACK_PROMPT | llm
     last_exc: BaseException | None = None
     for attempt in range(1, _PLAN_MAX_ATTEMPTS + 1):
         try:
-            result = await asyncio.wait_for(
+            response = await asyncio.wait_for(
                 chain.ainvoke({"question": state["question"]}),
                 timeout = _PLAN_TIMEOUT_S,
+            )
+            result = parse_json_model_output(
+                response.content, ResearchPlan,
             )
             # Defensive: a structured-output that parsed cleanly but
             # came back empty is the same failure mode for our

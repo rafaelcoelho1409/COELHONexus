@@ -1,0 +1,38 @@
+# =============================================================================
+# values-coelhonexus.yaml — overrides for the COELHONexus standalone k3d cluster
+# =============================================================================
+# Layered on top of values.yaml via:
+#   helm upgrade --install coelhonexus k8s/helm \
+#     -f k8s/helm/values.yaml \
+#     -f k8s/helm/values-coelhonexus.yaml
+#
+# The shared values.yaml targets COELHO Cloud by default (registry hostname
+# `coelho-cloud-registry:5000`). This file flips the registry to the
+# coelhonexus k3d cluster's bundled registry (`coelhonexus-registry:5000`).
+#
+# Everything else inherits from values.yaml — all in-cluster service FQDNs,
+# pipeline tunables, probes, resources, secret mappings, NodePort numbers,
+# and storage class are identical between the two clusters (same module
+# patterns on both, see docs/K8S-DUAL-CLUSTER-FLEX-2026-06-19.md).
+#
+# Deploy path: `skaffold run` (auto-activates the `coelhonexus` profile when
+#              kubeContext = k3d-coelhonexus). Cross-platform, no shell scripts.
+# =============================================================================
+
+registry:
+  url: coelhonexus-registry:5000
+
+elasticsearch:
+  # Standalone Terragrunt creates this deterministic demo user via ECK file
+  # realm. COELHO Cloud keeps the base values.yaml default (`elastic`) and its
+  # private secret workflow.
+  username: "coelhonexus"
+
+fastapi:
+  image: coelhonexus-registry:5000/coelhonexus-fastapi:latest
+
+fasthtml:
+  image: coelhonexus-registry:5000/coelhonexus-fasthtml:latest
+
+fastmcp:
+  image: coelhonexus-registry:5000/coelhonexus-fastmcp:latest

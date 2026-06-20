@@ -69,7 +69,9 @@ CLASSIFY_PROMPT = ChatPromptTemplate.from_messages([
         "- 'What are the best tax strategies?' → channel_names: [] "
         "(no specific person/channel)\n"
         "If the query is about a SPECIFIC person/channel, always include "
-        "their name.",
+        "their name.\n\n"
+        "Return ONLY a JSON object with keys: mode, reasoning, "
+        "sub_questions, channel_names. Do not wrap it in markdown.",
     ),
     ("human", "{question}"),
 ])

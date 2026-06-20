@@ -1,13 +1,19 @@
 # =============================================================================
-# ARGOCD IMAGE UPDATER CR - COELHONexus
+# ARGOCD IMAGE UPDATER CR - COELHONexus (COELHO CLOUD ONLY)
 # =============================================================================
-# Enables automatic image updates for COELHONexus Application.
-# Image Updater v1.1+ uses CRDs (required).
+# SCOPE: pairs with application.yaml — both are COELHO Cloud-only because
+#   they expect ArgoCD + GitLab + the coelho-cloud-registry in-cluster
+#   hostname. None of those exist on the COELHONexus standalone k3d cluster.
 #
-# Apply once alongside the Application:
+# For COELHONexus: `skaffold run` handles build → push → deploy end-to-end
+#   (cross-platform, no shell scripts). No Image Updater needed because
+#   Skaffold rewrites image refs to unique sha256 tags on every build, which
+#   forces a fresh rollout automatically.
+#
+# Apply to COELHO Cloud's ArgoCD:
 #   kubectl apply -f k8s/argocd/
 #
-# Flow: GitLab CI builds -> Registry -> Image Updater detects -> ArgoCD deploys
+# Flow on COELHO Cloud: GitLab CI builds → Registry → Image Updater detects → ArgoCD deploys
 # =============================================================================
 apiVersion: argocd-image-updater.argoproj.io/v1alpha1
 kind: ImageUpdater
@@ -32,5 +38,12 @@ spec:
           manifestTargets:
             helm:
               spec: fasthtml.image  # Full image reference (repo:tag@digest)
+        - alias: fastmcp
+          imageName: coelho-cloud-registry:5000/coelhonexus-fastmcp:latest
+          commonUpdateSettings:
+            updateStrategy: digest
+          manifestTargets:
+            helm:
+              spec: fastmcp.image  # Full image reference (repo:tag@digest)
   writeBackConfig:
     method: argocd
