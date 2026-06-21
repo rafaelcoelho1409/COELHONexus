@@ -41,10 +41,11 @@ resource "kubernetes_namespace_v1" "grafana" {
 }
 
 # -----------------------------------------------------------------------------
-# Admin password (random, persisted in tfstate)
+# Admin login secret
 # -----------------------------------------------------------------------------
-# Retrieve via `terragrunt output -raw admin_password`. User logs in at
-# https://grafana.<domain>.ts.net with admin / <this value>.
+# Defaults to a generated password persisted in tfstate, but callers can supply
+# deterministic `admin_user` / `admin_password` values for demo-style localhost
+# access contracts.
 # -----------------------------------------------------------------------------
 resource "random_password" "admin" {
   length  = 32
@@ -57,6 +58,13 @@ resource "random_password" "admin" {
 resource "random_password" "db" {
   length  = 32
   special = false # alphanumeric — avoids URL-encoding edge cases in postgres:// URI
+}
+
+locals {
+  grafana_admin_user     = trimspace(var.admin_user) != "" ? trimspace(var.admin_user) : "admin"
+  grafana_admin_password = var.admin_password != null && trimspace(var.admin_password) != "" ? trimspace(var.admin_password) : random_password.admin.result
+  grafana_root_url       = var.root_url != null && trimspace(var.root_url) != "" ? trimspace(var.root_url) : "https://${var.tailscale_hostname}.${var.tailscale_domain}/"
+  grafana_domain         = var.root_url != null && trimspace(var.root_url) != "" ? try(regex("^https?://([^/]+)", trimspace(var.root_url))[0], "${var.tailscale_hostname}.${var.tailscale_domain}") : "${var.tailscale_hostname}.${var.tailscale_domain}"
 }
 
 # -----------------------------------------------------------------------------
@@ -76,8 +84,8 @@ resource "kubernetes_secret_v1" "admin" {
   }
 
   data = {
-    "admin-user"     = "admin"
-    "admin-password" = random_password.admin.result
+    "admin-user"     = local.grafana_admin_user
+    "admin-password" = local.grafana_admin_password
   }
 }
 
@@ -249,7 +257,8 @@ resource "helm_release" "grafana" {
       storage_size             = var.storage_size
       sidecar_search_namespace = var.sidecar_search_namespace
       service_monitor_enabled  = var.service_monitor_enabled ? "true" : "false"
-      domain                   = "${var.tailscale_hostname}.${var.tailscale_domain}"
+      domain                   = local.grafana_domain
+      root_url                 = local.grafana_root_url
     })
   ]
 

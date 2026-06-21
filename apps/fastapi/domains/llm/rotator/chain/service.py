@@ -436,7 +436,25 @@ async def chat_judge_async(
             max_tokens = max_tokens,
         )
         span.attach_chat_response(response)
+        _bump_dd_llm_counter(response, deployment=GROUP)
     return (response.choices[0].message.content or "").strip()
+
+
+def _bump_dd_llm_counter(response, deployment: str | None = None) -> dict | None:
+    """Best-effort DD node-level LLM accounting.
+
+    The DD counter module no-ops unless a Planner/Synth node wrapper has
+    set attribution context, so this is safe for RR/YCS/settings callers.
+    """
+    try:
+        from domains.dd.runtime.llm_counter import bump_current_call
+        return bump_current_call(response=response, deployment=deployment)
+    except Exception as e:
+        logger.warning(
+            f"[dd-llm-counter] rotator bump failed: "
+            f"{type(e).__name__}: {e}"
+        )
+        return None
 
 
 async def _redis_for_bandit():
@@ -582,6 +600,10 @@ async def chat_judge_bandit_async(
                             acompletion_kwargs["response_format"] = response_format
                         response = await litellm.acompletion(**acompletion_kwargs)
                         attempt_span.attach_chat_response(response)
+                        dd_counter = _bump_dd_llm_counter(
+                            response,
+                            deployment=deployment_id,
+                        )
                         response_text = (response.choices[0].message.content or "").strip()
                         success = True
                         if pattern is not None:
@@ -627,6 +649,7 @@ async def chat_judge_bandit_async(
                         "latency_s":  latency_s,
                         "reward":     reward,
                         "dd_process": effective_process,
+                        "usage":       dd_counter,
                     }
                 # Success+bad-schema: return; cascade can't fix a schema quirk.
                 if success:
@@ -637,6 +660,7 @@ async def chat_judge_bandit_async(
                         "reward":         reward,
                         "schema_invalid": True,
                         "dd_process":     effective_process,
+                        "usage":          dd_counter,
                     }
             raise RuntimeError(
                 f"dd-judge-bandit: all {attempts} ranked deployments failed; "

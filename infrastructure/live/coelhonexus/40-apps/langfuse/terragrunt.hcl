@@ -14,7 +14,8 @@
 #
 # Adaptations vs COELHO Cloud's leaf:
 #   - DROP dependency "tailscale_operator"
-#   - DUMMY tailscale_* (Ingress unconditional)
+#   - DUMMY tailscale_* (Ingress unconditional); browser access is via
+#     localhost port-forward
 #   - All SOPS secrets → env.hcl `demo` map
 #   - enable_otel_ingestion = true (matches COELHO Cloud for the OTLP path)
 # =============================================================================
@@ -105,6 +106,7 @@ inputs = {
   # --- Tailscale — DUMMY ---
   tailscale_domain        = "tailscale.local"
   tailscale_ingress_class = "tailscale"
+  public_url              = "http://localhost:23006"
 
   # --- Demo secrets from env.hcl (NOT SOPS) ---
   postgres_password       = include.root.locals.env.demo.langfuse_postgres_password

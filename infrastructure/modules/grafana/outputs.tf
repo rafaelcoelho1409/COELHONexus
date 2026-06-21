@@ -18,8 +18,8 @@ output "app_version" {
 }
 
 output "url" {
-  description = "Full HTTPS URL to reach Grafana from any tailnet member."
-  value       = "https://${var.tailscale_hostname}.${var.tailscale_domain}"
+  description = "Browser URL for Grafana."
+  value       = local.grafana_root_url
 }
 
 output "tailscale_hostname" {
@@ -29,12 +29,12 @@ output "tailscale_hostname" {
 
 output "admin_user" {
   description = "Grafana admin username (default 'admin')."
-  value       = "admin"
+  value       = local.grafana_admin_user
 }
 
 output "admin_password" {
-  description = "Grafana admin password. Retrieve via `terragrunt output -raw admin_password`."
-  value       = random_password.admin.result
+  description = "Grafana admin password. Deterministic if `admin_password` was supplied; otherwise generated randomly."
+  value       = local.grafana_admin_password
   sensitive   = true
 }
 

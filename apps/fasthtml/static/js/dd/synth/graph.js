@@ -5,7 +5,12 @@
 // imports from shared.js — never from synth.js — and synth.js
 // re-exports our public functions for main.js compat.
 import * as Sy from '@dd/shared/state/synth.js';
-import { escapeHtml } from '../shared/utils.js';
+import {
+  buildDdModelRows,
+  buildDdNodeMetrics,
+  buildDdTokenMetrics,
+  getDdNodeDetails,
+} from '../shared/node_details.js';
 import { _synthFieldPresent } from './shared.js';
 // _updateCoRefineChip lives in canvas.js; canvas.js imports
 // _buildSynthNodeCtx from this file (graph.js → canvas.js → graph.js
@@ -234,7 +239,7 @@ export function _renderSynthGraph(values, nextNodes) {
   }
 }
 
-export function _buildSynthNodeCtx(nodeId, values) {
+export function _buildSynthNodeCtx(nodeId, values, llmCounters) {
   const idx = Sy.SYNTH_NODE_ORDER.indexOf(nodeId);
   if (idx < 0) return null;
   const label = Sy.SYNTH_NODE_LABELS[idx] || nodeId;
@@ -270,7 +275,14 @@ export function _buildSynthNodeCtx(nodeId, values) {
   const outputs = _synthFieldPresent(values, thisField)
     ? JSON.stringify({ [thisField]: values[thisField] }, null, 2)
     : null;
-  return { label, status, kpis, resultsHtml, inputs, outputs };
+  const details = getDdNodeDetails('synth', nodeId);
+  const metrics = buildDdNodeMetrics('synth', nodeId, values);
+  const tokenMetrics = buildDdTokenMetrics('synth', nodeId, llmCounters);
+  const modelRows = buildDdModelRows('synth', nodeId, llmCounters);
+  return {
+    label, status, kpis, resultsHtml, inputs, outputs,
+    details, metrics, tokenMetrics, modelRows,
+  };
 }
 
 // In-memory event buffer keyed by step name. The SSE handler in

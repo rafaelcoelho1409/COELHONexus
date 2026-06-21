@@ -340,6 +340,11 @@ export async function pollPlannerState(threadId) {
           const prevStep = Sp.PLANNER_NODE_ORDER[stepIdx - 1];
           const prevField = Sp.STEP_TO_FIELD[prevStep];
           await _refreshCardsFromState(threadId, prevField);
+          try {
+            document.dispatchEvent(new CustomEvent('dd:planner:node-done', {
+              detail: { step: prevStep, thread_id: threadId },
+            }));
+          } catch (_) {}
           // _markCardRunning was called BEFORE the state refresh; if
           // renderPlannerCards happens to have flipped this card back
           // to pending (because its field isn't in state yet), re-mark
@@ -364,4 +369,3 @@ export async function pollPlannerState(threadId) {
     }
   };
 }
-

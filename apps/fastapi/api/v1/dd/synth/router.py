@@ -746,6 +746,12 @@ async def synth_state(thread_id: str) -> dict:
     }
 
 
+@router.get("/debug/graph/{thread_id:path}/llm-counters")
+async def synth_llm_counters(thread_id: str) -> dict:
+    from domains.dd.runtime.llm_counter import read_counters
+    return await read_counters(thread_id)
+
+
 @router.get("/debug/graph/{thread_id:path}/history")
 async def synth_history(thread_id: str) -> dict:
     try:

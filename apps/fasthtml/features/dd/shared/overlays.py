@@ -150,6 +150,48 @@ def NodeDrawer():
     )
 
 
+def LlmUsageDrawer():
+    """Right-anchored slide-out for pipeline-level LLM usage summaries."""
+    return Div(
+        Div(
+            Div(
+                Div("LLM usage", id = "fw-llm-drawer-name",
+                    cls = "fw-drawer-name"),
+                Div("", id = "fw-llm-drawer-meta", cls = "fw-drawer-meta"),
+                cls = "fw-drawer-title",
+            ),
+            Div(
+                Button("✕", id = "fw-llm-drawer-close",
+                       cls = "fw-drawer-btn", title = "Close (Esc)"),
+                cls = "fw-drawer-controls",
+            ),
+            cls = "fw-drawer-header",
+        ),
+        Div(
+            Div(
+                Div("Planner LLM usage", cls = "dd-llm-rail-label"),
+                Div(id = "fw-planner-llm-totals", cls = "dd-llm-rail-host"),
+                id = "fw-llm-drawer-planner-section",
+                cls = "dd-llm-rail-section",
+            ),
+            Div(
+                Div("Synth chapter usage", cls = "dd-llm-rail-label"),
+                Div(id = "fw-synth-llm-chapters", cls = "dd-llm-rail-host"),
+                id = "fw-llm-drawer-synth-chapters-section",
+                cls = "dd-llm-rail-section",
+            ),
+            Div(
+                Div("Synth total", cls = "dd-llm-rail-label"),
+                Div(id = "fw-synth-llm-total", cls = "dd-llm-rail-host"),
+                id = "fw-llm-drawer-synth-total-section",
+                cls = "dd-llm-rail-section",
+            ),
+            id = "fw-llm-drawer-body", cls = "fw-drawer-body",
+        ),
+        id = "fw-llm-drawer", cls = "fw-drawer",
+    )
+
+
 def NoticeAndToast():
     """Cache notice + denied toast — both start hidden, JS toggles."""
     return (

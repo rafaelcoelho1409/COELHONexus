@@ -257,6 +257,168 @@
 .fw-node-drawer-results {
   margin-bottom: 22px;
 }
+.fw-node-drawer-spec {
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+.fw-node-drawer-spec-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.fw-node-drawer-spec-title {
+  font-size: 1rem;
+  line-height: 1.25;
+  color: var(--text);
+  font-weight: 650;
+}
+.fw-node-drawer-spec-subtitle {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+.fw-node-drawer-kind {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 9px;
+  color: var(--primary);
+  background: rgba(166, 29, 50, 0.08);
+  font-size: 0.68rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.fw-node-drawer-actions {
+  margin: 0 0 14px 0;
+  padding-left: 18px;
+  color: var(--text);
+  font-size: 0.86rem;
+  line-height: 1.55;
+}
+.fw-node-drawer-actions li {
+  margin: 4px 0;
+}
+.fw-node-drawer-io {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.fw-node-drawer-io > div > span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.fw-node-drawer-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.fw-node-drawer-pill {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.7rem;
+}
+.fw-node-drawer-llm-note {
+  margin: 12px 0;
+  padding-left: 10px;
+  border-left: 3px solid var(--primary);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+.fw-node-drawer-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 8px;
+}
+.fw-node-drawer-metric {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.025);
+}
+.fw-node-drawer-metric-label {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.64rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.fw-node-drawer-metric-value {
+  display: block;
+  margin-top: 3px;
+  color: var(--text);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+.fw-node-drawer-metric-note {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+.fw-node-drawer-models-title {
+  margin-top: 14px;
+  margin-bottom: 6px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+.fw-node-drawer-models {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.72rem;
+}
+.fw-node-drawer-models thead th {
+  text-align: left;
+  color: var(--text-muted);
+  font-weight: 700;
+  padding: 5px 7px;
+  border-bottom: 1px solid var(--border);
+}
+.fw-node-drawer-models thead th:not(:nth-child(-n+2)),
+.fw-node-drawer-models tbody td:not(:nth-child(-n+2)) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.fw-node-drawer-models tbody td {
+  padding: 4px 7px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.fw-node-drawer-models tbody td:first-child,
+.fw-node-drawer-models tbody td:nth-child(2) {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fw-node-drawer-models tbody td:first-child {
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
 .fw-node-drawer-waiting {
   padding: 32px 16px;
   text-align: center;

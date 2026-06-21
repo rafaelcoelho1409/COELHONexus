@@ -53,7 +53,7 @@ envFromSecrets:
 grafana.ini:
   server:
     domain: "${domain}"
-    root_url: "https://%(domain)s/"
+    root_url: "${root_url}"
     serve_from_sub_path: false
   database:
     type: postgres

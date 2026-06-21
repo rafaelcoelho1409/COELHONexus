@@ -230,7 +230,7 @@ export function _renderSynthLiveProgress(stepName, ev) {
              ' (' + (ev.wall_ms || 0) + ' ms)';
     }
   }
-  // sawc_write — Structure-Aware Writing Controller (SurveyGen-I §3.2
+  // sawc_write — Section-Aware Writer-Critic (SurveyGen-I §3.2
   // + MAMM-Refine). Stage-parallel; N=3 best-of-N per section; per-
   // section critic-pick. Emits 6 event kinds so the live progress
   // stream has steady cadence across the stage loop.
@@ -539,6 +539,11 @@ export async function pollStudyState(sid) {
       const _pos   = ev.position || '?';
       const _total = ev.n_total || Sy.studyChapterIds.length || '?';
       _setSynthStagePill('working', 'Working · ' + _pos + '/' + _total);
+      try {
+        document.dispatchEvent(new CustomEvent('dd:synth:chapter-running', {
+          detail: { chapter_id: cid, thread_id: chTid || null },
+        }));
+      } catch (_) {}
       _scheduleAttachCurrent();
       return;
     }
@@ -556,6 +561,11 @@ export async function pollStudyState(sid) {
         Sy.setStudyCurrentChapterThreadId(null);
       }
       Sy.setSynthThreadId(null);
+      try {
+        document.dispatchEvent(new CustomEvent('dd:synth:chapter-done', {
+          detail: { chapter_id: cid, status: status },
+        }));
+      } catch (_) {}
       // NOTE: Step-5 auto-refresh moved to `chapter_ready` so the Study
       // page reloads its chapter list THE INSTANT each chapter becomes
       // readable, not after the whole book finishes.
@@ -743,6 +753,11 @@ export async function pollSynthState(threadId) {
         Sy.setSynthThreadId(null);
         deps.refreshSynthStartState?.();
       }
+      try {
+        document.dispatchEvent(new CustomEvent('dd:synth:terminal', {
+          detail: { status: status, thread_id: threadId },
+        }));
+      } catch (_) {}
       return;
     }
     if (ev.step) {
@@ -765,6 +780,11 @@ export async function pollSynthState(threadId) {
       if (ev.kind === 'done' && _isLive) {
         const field = Sy.SYNTH_STEP_TO_FIELD[ev.step];
         await _refreshSynthCardsFromState(threadId, field);
+        try {
+          document.dispatchEvent(new CustomEvent('dd:synth:node-done', {
+            detail: { step: ev.step, field, thread_id: threadId },
+          }));
+        } catch (_) {}
       }
       _renderSynthLiveProgress(ev.step, ev);
       // Day 5: route to NodeDrawer if open for this synth node.
@@ -792,4 +812,3 @@ export function _genSynthThreadId(slug) {
       });
   return 'docs-distiller/synth/' + slug + '/' + uuid;
 }
-

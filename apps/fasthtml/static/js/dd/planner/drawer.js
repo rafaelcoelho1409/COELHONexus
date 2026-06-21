@@ -55,6 +55,7 @@ export const NodeDrawer = (function() {
   let _pendingEvents = [];
   let _flushScheduled = false;
   let _userPinnedScroll = true; // true = auto-scroll to bottom; false = user scrolled up
+  let _currentCtx = {};
   // "Since last viewed" tracking: maps `${stage}/${nodeId}` → epoch ms
   // of last drawer-open for that node. Events whose timestamp is
   // newer than the previous lastSeen get an `.is-new` highlight.
@@ -147,13 +148,122 @@ export const NodeDrawer = (function() {
     elKpis.style.display = '';
   }
 
+  function _renderPillList(items) {
+    if (!Array.isArray(items) || !items.length) return '';
+    return (
+      '<div class="fw-node-drawer-pills">' +
+        items.map(item =>
+          '<span class="fw-node-drawer-pill">' + escapeHtml(String(item)) + '</span>'
+        ).join('') +
+      '</div>'
+    );
+  }
+
+  function _renderNodeSpec(ctx) {
+    const details = ctx.details || null;
+    if (!details) return '';
+    const actions = Array.isArray(details.actions) ? details.actions : [];
+    const tokenMetrics = Array.isArray(ctx.tokenMetrics)
+      ? ctx.tokenMetrics : [];
+    const baseMetrics = Array.isArray(ctx.metrics) ? ctx.metrics : [];
+    const tokenLabels = new Set(tokenMetrics.map(m => String(m.label || '').toLowerCase()));
+    const metrics = tokenMetrics.concat(
+      tokenMetrics.length
+        ? baseMetrics.filter(m => !tokenLabels.has(String(m.label || '').toLowerCase()))
+        : baseMetrics,
+    );
+    const actionHtml = actions.length
+      ? '<ul class="fw-node-drawer-actions">' +
+          actions.map(a => '<li>' + escapeHtml(String(a)) + '</li>').join('') +
+        '</ul>'
+      : '';
+    const metricHtml = metrics.length
+      ? '<div class="fw-node-drawer-metrics">' +
+          metrics.map(m =>
+            '<span class="fw-node-drawer-metric">' +
+              '<span class="fw-node-drawer-metric-label">' +
+                escapeHtml(String(m.label || 'metric')) +
+              '</span>' +
+              '<span class="fw-node-drawer-metric-value">' +
+                escapeHtml(String(m.value ?? '')) +
+              '</span>' +
+              (m.note
+                ? '<span class="fw-node-drawer-metric-note">' +
+                    escapeHtml(String(m.note)) +
+                  '</span>'
+                : '') +
+            '</span>'
+          ).join('') +
+        '</div>'
+      : '';
+    const modelRows = Array.isArray(ctx.modelRows) ? ctx.modelRows : [];
+    const modelHtml = modelRows.length
+      ? '<div class="fw-node-drawer-models-title">Per provider · model</div>' +
+        '<table class="fw-node-drawer-models">' +
+          '<thead><tr><th>provider</th><th>model</th><th>calls</th>' +
+          '<th>input tokens</th><th>output tokens</th><th>reasoning</th></tr></thead>' +
+          '<tbody>' +
+            modelRows.map(r =>
+              '<tr>' +
+                '<td title="' + escapeHtml(r.raw || '') + '">' +
+                  escapeHtml(r.provider || '') +
+                '</td>' +
+                '<td title="' + escapeHtml(r.raw || '') + '">' +
+                  escapeHtml(r.model || '') +
+                '</td>' +
+                '<td>' + escapeHtml(Number(r.calls || 0).toLocaleString()) + '</td>' +
+                '<td>' + escapeHtml(Number(r.tokens_in || 0).toLocaleString()) + '</td>' +
+                '<td>' + escapeHtml(Number(r.tokens_out || 0).toLocaleString()) + '</td>' +
+                '<td>' + escapeHtml(Number(r.reasoning_tokens || 0).toLocaleString()) + '</td>' +
+              '</tr>'
+            ).join('') +
+          '</tbody>' +
+        '</table>'
+      : '';
+    return (
+      '<section class="fw-node-drawer-spec">' +
+        '<div class="fw-node-drawer-spec-head">' +
+          '<div>' +
+            '<div class="fw-node-drawer-spec-title">' +
+              escapeHtml(details.title || ctx.label || 'Node') +
+            '</div>' +
+            (details.subtitle
+              ? '<div class="fw-node-drawer-spec-subtitle">' +
+                  escapeHtml(details.subtitle) +
+                '</div>'
+              : '') +
+          '</div>' +
+          (details.kind
+            ? '<span class="fw-node-drawer-kind">' +
+                escapeHtml(details.kind) +
+              '</span>'
+            : '') +
+        '</div>' +
+        actionHtml +
+        '<div class="fw-node-drawer-io">' +
+          '<div><span>Inputs</span>' + _renderPillList(details.inputs) + '</div>' +
+          '<div><span>Outputs</span>' + _renderPillList(details.outputs) + '</div>' +
+        '</div>' +
+        (details.llm
+          ? '<div class="fw-node-drawer-llm-note">' +
+              escapeHtml(details.llm) +
+            '</div>'
+          : '') +
+        metricHtml +
+        modelHtml +
+      '</section>'
+    );
+  }
+
   // Render the Overview tab — the rich SUBSTEP_RENDERERS output OR a
   // status-aware empty/waiting state when the node hasn't produced
   // output yet.
   function _renderOverview(ctx) {
     if (!elDetails) return;
+    const specHtml = _renderNodeSpec(ctx);
     if (ctx.resultsHtml) {
       elDetails.innerHTML =
+        specHtml +
         '<div class="fw-node-drawer-results">' + ctx.resultsHtml + '</div>';
       return;
     }
@@ -170,7 +280,7 @@ export const NodeDrawer = (function() {
       : status === 'done'
         ? 'Completed without a rich renderer for this node yet. Inspect Raw I/O for the raw checkpoint, or check Activity for the event trace.'
       : 'Waiting for this node to run.';
-    elDetails.innerHTML =
+    elDetails.innerHTML = specHtml +
       '<div class="fw-empty fw-node-drawer-waiting">' + escapeHtml(msg) +
       '</div>';
   }
@@ -258,8 +368,14 @@ export const NodeDrawer = (function() {
     _pendingEvents = [];
     _newEventCount = 0;
     _userPinnedScroll = true;
-    if (elTitle) elTitle.textContent = ctx.label || nodeId;
-    if (elMeta)  elMeta.textContent  = stage + ' · ' + nodeId;
+    _currentCtx = ctx || {};
+    const details = ctx.details || {};
+    if (elTitle) elTitle.textContent = details.title || ctx.label || nodeId;
+    if (elMeta) {
+      const metaParts = [stage, nodeId];
+      if (details.kind) metaParts.push(details.kind);
+      elMeta.textContent = metaParts.join(' · ');
+    }
     _updateStatusIcon(ctx.status || 'pending');
     _renderKpis(ctx.kpis);
     _renderOverview(ctx);
@@ -295,6 +411,7 @@ export const NodeDrawer = (function() {
     elDrawer.classList.remove('visible');
     _openStage = null;
     _openNodeId = null;
+    _currentCtx = {};
   }
 
   function isOpenFor(stage, nodeId) {
@@ -316,7 +433,14 @@ export const NodeDrawer = (function() {
 
   function updateContext(ctx) {
     if (!_openNodeId) return;
-    ctx = ctx || {};
+    ctx = Object.assign({}, _currentCtx, ctx || {});
+    if (!Object.prototype.hasOwnProperty.call(ctx, 'tokenMetrics')) {
+      ctx.tokenMetrics = _currentCtx.tokenMetrics;
+    }
+    if (!Object.prototype.hasOwnProperty.call(ctx, 'modelRows')) {
+      ctx.modelRows = _currentCtx.modelRows;
+    }
+    _currentCtx = ctx;
     if (ctx.status !== undefined) _updateStatusIcon(ctx.status);
     if (ctx.kpis   !== undefined) _renderKpis(ctx.kpis);
     _renderOverview(ctx);
@@ -368,6 +492,7 @@ export const NodeDrawer = (function() {
     if (elLogEmpty) elLogEmpty.style.display = '';
     _lastSeenAt.clear();
     _prevSeenForOpen = 0;
+    _currentCtx = {};
     _updateActivityBadge();
   }
 

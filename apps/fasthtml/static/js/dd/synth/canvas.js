@@ -50,7 +50,14 @@ export async function _openSynthNodeDrawer(nodeId) {
       if (r.ok) values = (await r.json()).values || {};
     } catch (e) { /* drawer opens with empty results */ }
   }
-  const ctx = _buildSynthNodeCtx(nodeId, values);
+  let llmCounters = null;
+  if (tid) {
+    try {
+      const r = await fetch(Sa.API + '/synth/debug/graph/' + tid + '/llm-counters');
+      if (r.ok) llmCounters = await r.json();
+    } catch (e) { /* counters are optional */ }
+  }
+  const ctx = _buildSynthNodeCtx(nodeId, values, llmCounters);
   // NodeDrawer is from the planner module — use dynamic import to
   // avoid circular dependency at module parse time.
   const { NodeDrawer } = await import('@dd/planner/planner.js');

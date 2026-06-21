@@ -1,8 +1,8 @@
 """Pipeline body — unified Planner + Synth page (2026-06-08).
 
-Stacks the two Cytoscape canvases vertically in the left column (Planner
-zone on top, Synth zone below) with the chapter strip on the right
-spanning both zones. Preserves the exact DOM IDs the existing planner.js
+Shows the two Cytoscape canvases side by side (Planner on the left,
+Synth on the right) with the chapter strip on the right-hand rail.
+Preserves the exact DOM IDs the existing planner.js
 and synth.js modules expect (`#fw-planner-canvas`, `#fw-planner-graph`,
 `#fw-planner-empty`, `#fw-synth-canvas`, `#fw-synth-graph`,
 `#fw-synth-empty`, `#fw-chstrip`, `#fw-chstrip-cells`,
@@ -16,7 +16,9 @@ asset-graph UX where upstream + downstream stages co-exist on one
 canvas — without merging the controls (per-stage Start/Stop/Wipe
 keeps failure isolation). See PIPELINE-UNIFIED-LAYOUT-2026-06-08.md
 for the research backing."""
-from fasthtml.common import Div, NotStr, Script, Span
+from fasthtml.common import Button, Div, NotStr, Script, Span
+
+from .chrome import PipelineTotalSummary
 
 
 # Both inline fallback scripts (planner + synth start buttons) — pulled
@@ -463,11 +465,22 @@ def PipelineBody(slug: str | None):
         Div(empty_msg, id = "fw-pipeline-empty", cls = "fw-stage-empty",
             style = empty_style),
         Div(
-            # LEFT COLUMN — stacked Planner + Synth canvases
+            PipelineTotalSummary(),
+            # LEFT COLUMN — Planner + Synth canvases
             Div(
                 # Planner zone (top)
                 Div(
-                    Div("Planner", cls = "fw-pipeline-zone-label"),
+                    Div(
+                        Div("Planner", cls = "fw-pipeline-zone-label"),
+                        Button(
+                            "LLM usage",
+                            id = "fw-planner-llm-open",
+                            cls = "fw-pipeline-zone-btn",
+                            type = "button",
+                            title = "Open planner LLM usage",
+                        ),
+                        cls = "fw-pipeline-zone-head",
+                    ),
                     Div("Loading planner state…",
                         id = "fw-planner-empty", cls = "fw-stage-empty",
                         style = "display:none"),
@@ -480,7 +493,17 @@ def PipelineBody(slug: str | None):
                 ),
                 # Synth zone (bottom)
                 Div(
-                    Div("Synth", cls = "fw-pipeline-zone-label"),
+                    Div(
+                        Div("Synth", cls = "fw-pipeline-zone-label"),
+                        Button(
+                            "LLM usage",
+                            id = "fw-synth-llm-open",
+                            cls = "fw-pipeline-zone-btn",
+                            type = "button",
+                            title = "Open synth LLM usage",
+                        ),
+                        cls = "fw-pipeline-zone-head",
+                    ),
                     Div("Loading synth state…",
                         id = "fw-synth-empty", cls = "fw-stage-empty"),
                     Div(

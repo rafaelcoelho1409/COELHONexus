@@ -77,11 +77,10 @@
 }
 .fw-stage-canvas {
   width: 100%;
-  /* Tall enough for 8-9 nodes at native size (200x60 + dagre rankSep
-     56 → ~840px tall for 8 nodes) — canvas scrolls within the panel
-     if a stage outgrows it. Increased from 520→720 after the dagre
-     switch + node size bump (200x60 was 150x48). */
-  height: 720px;
+  /* Restored to the original graph canvas baseline. The 720px expansion
+     made the Pipeline page dominate the viewport and pushed the new
+     side-rail observability blocks below the fold too aggressively. */
+  height: 520px;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--card);

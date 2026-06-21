@@ -36,6 +36,5 @@ done
 
 echo "[smoke:grafana] PASS"
 echo
-echo "  Admin password:"
-echo "  kubectl --kubeconfig=${KUBECONFIG_PATH} -n grafana get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d"
+echo "  Login: admin / admin"
 echo "  (port-forward → http://localhost:23005)"

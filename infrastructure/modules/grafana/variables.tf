@@ -37,6 +37,25 @@ variable "release_name" {
   default     = "grafana"
 }
 
+variable "admin_user" {
+  description = "Grafana admin username. Defaults to 'admin'."
+  type        = string
+  default     = "admin"
+}
+
+variable "admin_password" {
+  description = "Optional deterministic Grafana admin password. When null/empty, the module generates one."
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+variable "root_url" {
+  description = "Optional full browser URL for Grafana. Set this for localhost port-forward deployments; otherwise the module derives the Tailscale URL."
+  type        = string
+  default     = null
+}
+
 # -----------------------------------------------------------------------------
 # Network exposure (Tailscale)
 # -----------------------------------------------------------------------------

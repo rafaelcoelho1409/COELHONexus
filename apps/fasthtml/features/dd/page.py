@@ -5,7 +5,7 @@ branches its init sequence without re-parsing window.location."""
 from fasthtml.common import Div, Script
 
 from .shared.overlays import (
-    ConfirmModal, FileDrawer, NodeDrawer, NoticeAndToast,
+    ConfirmModal, FileDrawer, LlmUsageDrawer, NodeDrawer, NoticeAndToast,
 )
 from .shared.sticky import StickyBar
 
@@ -29,6 +29,7 @@ def DDPage(active_stage: str, slug: str | None, body, with_sticky: bool = False)
         ConfirmModal(),
         FileDrawer(),
         NodeDrawer(),
+        LlmUsageDrawer(),
         Script(src = "/static/js/dd/main.js", type = "module"),
         cls = "fw-picker",
         data_dd_stage = active_stage,

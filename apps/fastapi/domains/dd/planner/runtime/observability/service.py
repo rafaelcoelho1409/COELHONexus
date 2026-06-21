@@ -22,6 +22,7 @@ from typing import Awaitable, Callable
 from opentelemetry import trace as _otel_trace
 
 from infra.otel import get_tracer
+from domains.dd.runtime.llm_counter import get_context, set_context
 
 
 logger = logging.getLogger(__name__)
@@ -35,10 +36,23 @@ def traced(name: str) -> Callable:
         @functools.wraps(fn)
         async def wrapper(state: dict, *args, **kwargs) -> dict:
             tracer = get_tracer()
+            prev_stage, prev_thread_id, prev_node_id = get_context()
+            set_context(
+                stage="planner",
+                thread_id=state.get("thread_id") or "",
+                node_id=name,
+            )
             if tracer is None:
                 # OTel not initialized (e.g. local dev without env).
                 # Run the node anyway so the graph stays usable.
-                return await fn(state, *args, **kwargs)
+                try:
+                    return await fn(state, *args, **kwargs)
+                finally:
+                    set_context(
+                        stage=prev_stage,
+                        thread_id=prev_thread_id,
+                        node_id=prev_node_id,
+                    )
             attrs = {
                 "planner.node": name,
                 "planner.thread_id": state.get("thread_id") or "",
@@ -57,6 +71,12 @@ def traced(name: str) -> Callable:
                     span.set_attribute("planner.error_message", str(e)[:200])
                     span.record_exception(e)
                     raise
+                finally:
+                    set_context(
+                        stage=prev_stage,
+                        thread_id=prev_thread_id,
+                        node_id=prev_node_id,
+                    )
         return wrapper
     return decorator
 
@@ -67,6 +87,8 @@ def attach_span_attrs(prefix: str, attrs: dict) -> None:
     backend rejects them."""
     try:
         span = _otel_trace.get_current_span()
+        if hasattr(span, "is_recording") and not span.is_recording():
+            return
         for k, v in attrs.items():
             if v is None:
                 continue

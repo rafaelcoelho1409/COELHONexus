@@ -73,7 +73,7 @@ function _empty(msg) {
 }
 
 // ============================================================
-// 0. outline_sdp — Section-Defined Plan outline construction.
+// 0. outline_sdp — Structure-Driven Planner outline construction.
 //   Headline KPIs: sections, depth, repairs, violations.
 //   Below: violations table (when any), sample headings list.
 // ============================================================
@@ -449,7 +449,7 @@ function renderChecklist(values) {
 }
 
 // ============================================================
-// 5. mgsr_replan — Meta-Generation Self-Refine decision: halt or loop.
+// 5. mgsr_replan — Memory-Guided Structure Replanner decision: halt or loop.
 //   Headline KPIs: halt/loop, reason, confidence, action count.
 // ============================================================
 function renderMgsr(values) {

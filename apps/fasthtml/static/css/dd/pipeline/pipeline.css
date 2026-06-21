@@ -6,14 +6,22 @@
    pattern but with TWO vertically-stacked canvases on the left side. */
 
 .fw-pipeline-grid {
+  --fw-pipeline-panel-height: 576px;
   display: grid;
   grid-template-columns: 1fr 280px;
   gap: 12px;
   min-height: calc(100dvh - 220px);
+  align-items: start;
 }
 
-/* Two canvases side-by-side in a row (2026-06-08): Planner LEFT, Synth
-   RIGHT, equal width. Fits both DAGs at a glance without scrolling. */
+.fw-pipeline-grid > .fw-pipeline-total {
+  grid-column: 1 / -1;
+  justify-self: end;
+  margin: 0;
+}
+
+/* Two stage zones side by side in the left column: Planner on the left,
+   Synth on the right. */
 .fw-pipeline-canvases {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -31,8 +39,18 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 8px;
+  height: var(--fw-pipeline-panel-height);
   min-width: 0;
   min-height: 0;
+}
+.fw-pipeline-zone-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 4px 6px 4px;
+  border-bottom: 1px dashed var(--border);
+  margin-bottom: 8px;
 }
 .fw-pipeline-zone-planner {
   border-left: 3px solid var(--primary);
@@ -47,32 +65,257 @@
   letter-spacing: 0.06em;
   font-weight: 700;
   color: var(--text-muted);
-  padding: 0 4px 6px 4px;
-  border-bottom: 1px dashed var(--border);
-  margin-bottom: 8px;
 }
 .fw-pipeline-zone-planner .fw-pipeline-zone-label { color: var(--primary); }
 .fw-pipeline-zone-synth   .fw-pipeline-zone-label { color: var(--ingested-text); }
+.fw-pipeline-zone-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 5px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.fw-pipeline-zone-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
 
 /* Reuse the per-stage canvas styles (.fw-stage-canvas, .fw-planner-graph)
-   — they're already loaded via planner/canvas.css. Side-by-side row
-   layout means each canvas takes the full available height of the
-   pipeline grid; the canvas container itself stretches via flex:1. */
+   and keep their original fixed-height footprint instead of stretching
+   them to fill the viewport. */
 .fw-pipeline-zone .fw-planner-graph,
 .fw-pipeline-zone .fw-stage-canvas {
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 0 0 auto;
 }
 .fw-pipeline-zone .fw-stage-canvas {
-  height: 100%;
-  min-height: 420px;
+  height: 520px;
+}
+
+#fw-pipeline-grid > #fw-chstrip {
+  align-self: start;
+  height: var(--fw-pipeline-panel-height);
+  margin: 0;
+}
+
+#fw-llm-drawer {
+  width: min(760px, 92vw);
+  min-width: 380px;
+}
+#fw-llm-drawer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+#fw-llm-drawer-planner-section,
+#fw-llm-drawer-synth-chapters-section,
+#fw-llm-drawer-synth-total-section {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.dd-llm-rail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.dd-llm-rail-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+.dd-llm-rail-host:empty {
+  display: none;
+}
+.dd-llm-rail-empty {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+.dd-llm-rail-card,
+.dd-llm-rail-summary {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.dd-llm-rail-summary {
+  padding: 10px 11px;
+}
+.dd-llm-rail-card + .dd-llm-rail-card {
+  margin-top: 8px;
+}
+.dd-llm-rail-card > summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 11px;
+  cursor: pointer;
+  list-style: none;
+}
+.dd-llm-rail-card > summary::-webkit-details-marker {
+  display: none;
+}
+.dd-llm-rail-card > summary::after {
+  content: '▸';
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  transform: translateY(2px);
+}
+.dd-llm-rail-card[open] > summary::after {
+  content: '▾';
+}
+.dd-llm-rail-card-body {
+  padding: 0 11px 11px 11px;
+}
+.dd-llm-rail-title {
+  font-size: 0.8rem;
+  font-weight: 650;
+  color: var(--text);
+  line-height: 1.25;
+}
+.dd-llm-rail-sub {
+  margin-top: 2px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.dd-llm-rail-status {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 7px;
+  font-size: 0.64rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: var(--card);
+}
+.dd-llm-rail-status[data-status="running"] {
+  border-color: var(--running-border);
+  color: var(--running-border);
+  background: var(--running-bg);
+}
+.dd-llm-rail-status[data-status="done"] {
+  border-color: var(--ingested-border);
+  color: var(--ingested-text);
+}
+.dd-llm-rail-kpis {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 10px;
+  margin-top: 9px;
+}
+.dd-llm-rail-kpi {
+  min-width: 0;
+}
+.dd-llm-rail-kpi b {
+  display: block;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.9rem;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.dd-llm-rail-kpi small {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.dd-llm-rail-nodechips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 10px;
+}
+.dd-llm-rail-nodechip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.64rem;
+}
+.dd-llm-rail-nodechip-name {
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+.dd-llm-rail-nodechip-count {
+  color: var(--text);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.dd-llm-rail-table-wrap {
+  margin-top: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+}
+.dd-llm-rail-table {
+  width: 100%;
+  min-width: 420px;
+  border-collapse: collapse;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.66rem;
+}
+.dd-llm-rail-table thead th {
+  text-align: left;
+  color: var(--text-muted);
+  font-weight: 700;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.dd-llm-rail-table thead th:not(:nth-child(-n+2)),
+.dd-llm-rail-table tbody td:not(:nth-child(-n+2)) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.dd-llm-rail-table tbody td {
+  padding: 4px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.dd-llm-rail-table tbody td:first-child,
+.dd-llm-rail-table tbody td:nth-child(2) {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dd-llm-rail-table tbody td:first-child {
+  color: var(--text-muted);
+  text-transform: uppercase;
 }
 
 /* Mobile / narrow viewport — stack zones vertically (planner top, synth
    bottom) so each DAG still gets full width to render. */
 @media (max-width: 1100px) {
-  .fw-pipeline-canvases {
-    grid-template-columns: 1fr;
+  .dd-llm-rail-kpis {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .fw-pipeline-zone-head {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 
@@ -177,12 +420,41 @@
   white-space: nowrap;
   font-weight: 600;
 }
+.fw-pipeline-total {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+.fw-pipeline-total-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+.fw-pipeline-total-metric {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.72rem;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 
 /* Narrow viewports — allow wrap; the framework picker drops to the next
    line if the toolbar overflows. */
 @media (max-width: 1100px) {
   .fw-pipeline-toolbar {
     flex-wrap: wrap;
+  }
+  .fw-pipeline-grid > .fw-pipeline-total {
+    justify-self: stretch;
   }
 }
 .fw-pipeline-autochain:has(.fw-pipeline-autochain-cb:checked) {
@@ -198,6 +470,13 @@
 @media (max-width: 720px) {
   .fw-pipeline-grid {
     grid-template-columns: 1fr;
+  }
+  .dd-llm-rail-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  #fw-llm-drawer {
+    min-width: 0;
+    width: 100vw;
   }
 }
 

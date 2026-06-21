@@ -10,7 +10,12 @@
 import * as Sa from '@dd/shared/state/api.js';
 import * as Si from '@dd/shared/state/ingestion.js';
 import * as Sp from '@dd/shared/state/planner.js';
-import { escapeHtml } from '../shared/utils.js';
+import {
+  buildDdModelRows,
+  buildDdNodeMetrics,
+  buildDdTokenMetrics,
+  getDdNodeDetails,
+} from '../shared/node_details.js';
 import { _fieldPresent, _plannerStorageKey } from './shared.js';
 import { SUBSTEP_RENDERERS } from './renderers.js';
 import { NodeDrawer } from './drawer.js';
@@ -133,7 +138,7 @@ export function _renderPlannerGraph(values) {
   return { doneCount, anyRunning, anyFailed };
 }
 
-export function _buildPlannerNodeCtx(nodeId, values) {
+export function _buildPlannerNodeCtx(nodeId, values, llmCounters) {
   const idx = Sp.PLANNER_NODE_ORDER.indexOf(nodeId);
   if (idx < 0) return null;
   const label = Sp.PLANNER_NODE_LABELS[idx] || nodeId;
@@ -164,7 +169,14 @@ export function _buildPlannerNodeCtx(nodeId, values) {
   const outputs = _fieldPresent(values, thisField)
     ? JSON.stringify({ [thisField]: values[thisField] }, null, 2)
     : null;
-  return { label, status, kpis, resultsHtml, inputs, outputs };
+  const details = getDdNodeDetails('planner', nodeId);
+  const metrics = buildDdNodeMetrics('planner', nodeId, values);
+  const tokenMetrics = buildDdTokenMetrics('planner', nodeId, llmCounters);
+  const modelRows = buildDdModelRows('planner', nodeId, llmCounters);
+  return {
+    label, status, kpis, resultsHtml, inputs, outputs,
+    details, metrics, tokenMetrics, modelRows,
+  };
 }
 
 export async function _openPlannerNodeDrawer(nodeId) {
@@ -185,7 +197,14 @@ export async function _openPlannerNodeDrawer(nodeId) {
       if (r.ok) values = (await r.json()).values || {};
     } catch (e) { /* drawer opens with empty results */ }
   }
-  const ctx = _buildPlannerNodeCtx(nodeId, values);
+  let llmCounters = null;
+  if (tid) {
+    try {
+      const r = await fetch(Sa.API + '/planner/debug/graph/' + tid + '/llm-counters');
+      if (r.ok) llmCounters = await r.json();
+    } catch (e) { /* counters are optional */ }
+  }
+  const ctx = _buildPlannerNodeCtx(nodeId, values, llmCounters);
   if (ctx) NodeDrawer.open('planner', nodeId, ctx);
 }
 
@@ -196,4 +215,3 @@ export function _refreshOpenPlannerDrawer(values) {
   const ctx = _buildPlannerNodeCtx(nodeId, values);
   if (ctx) NodeDrawer.updateContext(ctx);
 }
-

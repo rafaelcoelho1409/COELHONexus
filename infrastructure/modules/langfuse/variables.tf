@@ -374,6 +374,12 @@ variable "tailscale_ingress_class" {
   default     = "tailscale"
 }
 
+variable "public_url" {
+  description = "Optional browser URL for Langfuse. Set this for localhost port-forward deployments; otherwise the module derives the Tailscale URL."
+  type        = string
+  default     = ""
+}
+
 # -----------------------------------------------------------------------------
 # Backup
 # -----------------------------------------------------------------------------

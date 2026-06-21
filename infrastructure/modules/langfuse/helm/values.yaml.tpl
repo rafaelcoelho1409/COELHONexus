@@ -50,7 +50,7 @@ langfuse:
   nodeEnv: production
 
   nextauth:
-    url: "https://${tailscale_hostname}.${tailscale_domain}"
+    url: "${public_url}"
     secret:
       secretKeyRef:
         name: langfuse-app

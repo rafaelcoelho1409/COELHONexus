@@ -79,6 +79,27 @@ def AutoChainToggle():
     )
 
 
+def PipelineTotalSummary():
+    """Compact aggregate shown only when Planner + full Synth are complete."""
+    return Div(
+        Span("Pipeline total", cls = "fw-pipeline-total-label"),
+        Span("—", id = "fw-pipeline-total-calls",
+             cls = "fw-pipeline-total-metric",
+             title = "Total LLM calls across Planner + Synth"),
+        Span("—", id = "fw-pipeline-total-in",
+             cls = "fw-pipeline-total-metric",
+             title = "Total input tokens across Planner + Synth"),
+        Span("—", id = "fw-pipeline-total-out",
+             cls = "fw-pipeline-total-metric",
+             title = "Total output tokens across Planner + Synth"),
+        id = "fw-pipeline-total",
+        cls = "fw-pipeline-total",
+        title = ("Shown only when Planner and the full Synth study are "
+                 "complete for this framework."),
+        style = "display:none;",
+    )
+
+
 def PipelineActions():
     """Toolbar row 3 — Planner cluster → Synth cluster → auto-chain
     checkbox. The framework picker is added separately on the right

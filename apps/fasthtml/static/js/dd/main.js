@@ -19,6 +19,7 @@
 import * as Sc from '@dd/shared/state/catalog.js';
 import * as Si from '@dd/shared/state/ingestion.js';
 import { refreshGenerateState } from './shared/ui.js';
+import { installDdPipelineLlmTotals } from './shared/llm_totals.js';
 import { currentStage, currentSlug, currentRunId } from './shared/nav.js';
 
 // $activePipeline reflects "is a planner/synth run live right now". Set by
@@ -193,6 +194,8 @@ async function initPipeline() {
   catch (e) { console.warn('[init] pipeline planner init failed:', e); }
   try { await initSynth(); }
   catch (e) { console.warn('[init] pipeline synth init failed:', e); }
+  try { installDdPipelineLlmTotals(slug); }
+  catch (e) { console.warn('[init] pipeline LLM totals failed:', e); }
 }
 
 const STAGE_INITS = {

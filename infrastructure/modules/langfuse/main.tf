@@ -35,6 +35,7 @@ locals {
   clickhouse_secret_name = "langfuse-clickhouse"
   minio_secret_name      = "langfuse-minio"
   app_secret_name        = "langfuse-app"
+  public_url             = trimspace(var.public_url) != "" ? trimspace(var.public_url) : "https://${var.tailscale_hostname}.${var.tailscale_domain}"
 }
 
 # -----------------------------------------------------------------------------
@@ -346,8 +347,7 @@ resource "helm_release" "langfuse" {
   values = [
     templatefile("${path.module}/helm/values.yaml.tpl", {
       chart_version             = var.chart_version
-      tailscale_hostname        = var.tailscale_hostname
-      tailscale_domain          = var.tailscale_domain
+      public_url                = local.public_url
       postgres_host             = var.postgres_host
       postgres_port             = var.postgres_port
       postgres_database         = var.postgres_database

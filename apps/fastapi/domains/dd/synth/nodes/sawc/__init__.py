@@ -1,4 +1,4 @@
-"""sawc_write — Structure-Aware Writing Controller (PILOT TARGET).
+"""sawc_write — Section-Aware Writer-Critic (PILOT TARGET).
 
 Combines three published patterns:
   1. SurveyGen-I PlanEvo SAWC (arXiv 2508.14317 §3.2) — stage-parallel

@@ -132,6 +132,15 @@ async def _await_with_watcher(
             f"patch {terminal_patch!r}: {type(e).__name__}: {e}"
         )
 
+    try:
+        from domains.dd.runtime.llm_counter import snapshot as _snapshot_llm
+        await _snapshot_llm(thread_id)
+    except Exception as e:
+        logger.warning(
+            f"[planner] {thread_id}: llm-counter snapshot failed "
+            f"({type(e).__name__}: {e})"
+        )
+
     total_wall_ms = (
         int((time.monotonic() - t0) * 1000) if t0 is not None else None
     )
@@ -257,6 +266,15 @@ async def run_missing_nodes_async(
         logger.warning(
             f"[planner] {thread_id}: aupdate_state failed for catch-up "
             f"terminal patch {terminal_patch!r}: {type(e).__name__}: {e}"
+        )
+
+    try:
+        from domains.dd.runtime.llm_counter import snapshot as _snapshot_llm
+        await _snapshot_llm(thread_id)
+    except Exception as e:
+        logger.warning(
+            f"[planner] {thread_id}: catch-up llm-counter snapshot failed "
+            f"({type(e).__name__}: {e})"
         )
 
     await emit_progress(

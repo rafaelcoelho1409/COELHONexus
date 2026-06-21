@@ -1,4 +1,4 @@
-"""SAWC — Structure-Aware Writing Controller for one chapter.
+"""SAWC — Section-Aware Writer-Critic for one chapter.
 
 v2 cookbook schema: {heading, intro, subtopics: [{subheading, explanation,
 code_ref_hash}], citations}. Each subtopic renders as H3 + 1-2 sentence
@@ -2012,7 +2012,7 @@ def _shorten_pydantic_error(e: ValidationError) -> str:
 
 
 async def sawc_write_run(state: SynthState) -> dict:
-    """Run the Structure-Aware Writing Controller for one chapter."""
+    """Run the Section-Aware Writer-Critic for one chapter."""
     slug = state.get("framework_slug")
     chapter_id = state.get("chapter_id")
     thread_id = state.get("thread_id") or ""

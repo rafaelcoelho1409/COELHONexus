@@ -31,3 +31,8 @@ output "tailscale_url" {
   description = "Public Tailnet URL (https)."
   value       = "https://${var.tailscale_hostname}.${var.tailscale_domain}"
 }
+
+output "public_url" {
+  description = "Browser URL for Langfuse. Uses `public_url` when provided, otherwise the Tailscale URL."
+  value       = local.public_url
+}

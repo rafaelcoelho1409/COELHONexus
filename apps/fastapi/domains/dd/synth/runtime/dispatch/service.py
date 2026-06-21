@@ -93,6 +93,15 @@ async def _await_with_watcher(
             f"patch {terminal_patch!r}: {type(e).__name__}: {e}"
         )
 
+    try:
+        from domains.dd.runtime.llm_counter import snapshot as _snapshot_llm
+        await _snapshot_llm(thread_id)
+    except Exception as e:
+        logger.warning(
+            f"[synth] {thread_id}: llm-counter snapshot failed "
+            f"({type(e).__name__}: {e})"
+        )
+
     await emit_progress(
         thread_id, "synth", "terminal",
         status = terminal_patch.get("status", "unknown"),
@@ -182,6 +191,15 @@ async def run_missing_nodes_async(
         logger.warning(
             f"[synth] {thread_id}: aupdate_state failed for catch-up "
             f"terminal patch {terminal_patch!r}: {type(e).__name__}: {e}"
+        )
+
+    try:
+        from domains.dd.runtime.llm_counter import snapshot as _snapshot_llm
+        await _snapshot_llm(thread_id)
+    except Exception as e:
+        logger.warning(
+            f"[synth] {thread_id}: catch-up llm-counter snapshot failed "
+            f"({type(e).__name__}: {e})"
         )
 
     await emit_progress(
@@ -714,6 +732,15 @@ async def _run_study_async_inner(
                 logger.warning(
                     f"[study-orchestrator] {slug}/{chapter_id}: "
                     f"aupdate_state failed: {type(e).__name__}: {e}"
+                )
+
+            try:
+                from domains.dd.runtime.llm_counter import snapshot as _snapshot_llm
+                await _snapshot_llm(chapter_thread_id)
+            except Exception as e:
+                logger.warning(
+                    f"[study-orchestrator] {slug}/{chapter_id}: "
+                    f"llm-counter snapshot failed: {type(e).__name__}: {e}"
                 )
 
             await emit_progress(
