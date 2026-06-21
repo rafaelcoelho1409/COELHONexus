@@ -202,40 +202,40 @@ portForward:
 # previous `scripts/ci-simulate.sh` (deleted 2026-06-19 in favor of
 # `skaffold run`). See docs/K8S-DUAL-CLUSTER-FLEX-2026-06-19.md.
 # =============================================================================
-profiles:
-  - name: coelhonexus
-    activation:
-      - kubeContext: k3d-coelhonexus
-    patches:
-      # Artifact images: COELHO Cloud's localhost:5001 → COELHONexus' localhost:5000.
-      - op: replace
-        path: /build/artifacts/0/image
-        value: localhost:5000/coelhonexus-fastapi
-      - op: replace
-        path: /build/artifacts/1/image
-        value: localhost:5000/coelhonexus-fasthtml
-      - op: replace
-        path: /build/artifacts/2/image
-        value: localhost:5000/coelhonexus-fastmcp
-      # Helm valuesFiles: layer the COELHONexus override (flips the in-cluster
-      # registry hostname from coelho-cloud-registry to coelhonexus-registry).
-      # For Skaffold-driven dev/run this is mostly redundant (setValueTemplates
-      # below replace image refs directly), but kept for parity with manual
-      # `helm install` flows and for non-image values that may diverge later.
-      - op: add
-        path: /manifests/helm/releases/0/valuesFiles
-        value:
-          - k8s/helm/values-coelhonexus.yaml
-      # setValueTemplates: re-map to the new IMAGE_FULLY_QUALIFIED_* variable
-      # names (Skaffold derives them from artifact image strings with
-      # non-alphanumerics replaced by `_`).
-      - op: replace
-        path: /manifests/helm/releases/0/setValueTemplates
-        value:
-          fastapi.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5000_coelhonexus_fastapi}}"
-          fasthtml.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5000_coelhonexus_fasthtml}}"
-          fastmcp.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5000_coelhonexus_fastmcp}}"
-          environment: local
+#profiles:
+#  - name: coelhonexus
+#    activation:
+#      - kubeContext: k3d-coelhonexus
+#    patches:
+#      # Artifact images: COELHO Cloud's localhost:5001 → COELHONexus' localhost:5000.
+#      - op: replace
+#        path: /build/artifacts/0/image
+#        value: localhost:5000/coelhonexus-fastapi
+#      - op: replace
+#        path: /build/artifacts/1/image
+#        value: localhost:5000/coelhonexus-fasthtml
+#      - op: replace
+#        path: /build/artifacts/2/image
+#        value: localhost:5000/coelhonexus-fastmcp
+#      # Helm valuesFiles: layer the COELHONexus override (flips the in-cluster
+#      # registry hostname from coelho-cloud-registry to coelhonexus-registry).
+#      # For Skaffold-driven dev/run this is mostly redundant (setValueTemplates
+#      # below replace image refs directly), but kept for parity with manual
+#      # `helm install` flows and for non-image values that may diverge later.
+#      - op: add
+#        path: /manifests/helm/releases/0/valuesFiles
+#        value:
+#          - k8s/helm/values-coelhonexus.yaml
+#      # setValueTemplates: re-map to the new IMAGE_FULLY_QUALIFIED_* variable
+#      # names (Skaffold derives them from artifact image strings with
+#      # non-alphanumerics replaced by `_`).
+#      - op: replace
+#        path: /manifests/helm/releases/0/setValueTemplates
+#        value:
+#          fastapi.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5000_coelhonexus_fastapi}}"
+#          fasthtml.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5000_coelhonexus_fasthtml}}"
+#          fastmcp.image: "{{.IMAGE_FULLY_QUALIFIED_localhost_5000_coelhonexus_fastmcp}}"
+#          environment: local
 
 
 # NOTE: Ensure docker-buildx is installed when useBuildkit is true

@@ -16,13 +16,13 @@
 
 @layer base {
 :root {
-  --bg: #0e1713;        /* deep green-black — premium, restrained, lower glare */
-  --card: #16211b;      /* raised surface, close to bg so the shell stays cohesive */
-  --primary: #c41230;
-  --primary-dark: #65201f;
-  --text: #e6d3a3;      /* champagne gold — wealth cue, strong contrast on --card */
-  --text-muted: #aa9b78;/* muted gold-brown — still readable on dark surfaces */
-  --border: #2b3a32;    /* dark olive hairline */
+  --bg: #0b0c10;        /* obsidian base — dark, controlled, less color cast */
+  --card: #14161c;      /* graphite surface — clear separation without going flat */
+  --primary: #a61d32;   /* oxblood accent — power + wealth without yellowing the UI */
+  --primary-dark: #611723;
+  --text: #f1ede4;      /* warm ivory — premium, readable, no champagne/yellow cast */
+  --text-muted: #a8a097;/* softened stone — secondary text stays neutral on dark surfaces */
+  --border: #262a33;    /* cool graphite hairline */
   --notice-bg: #fef7e0;
   --notice-border: #f5c560;
   --notice-text: #6b4d10;
