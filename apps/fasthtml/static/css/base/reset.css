@@ -7,7 +7,7 @@ html, body {
   overflow: hidden;        /* the document never scrolls; .page does */
   background: var(--bg);
   color: var(--text);
-  font-family: 'Raleway', 'HelveticaNeue', 'Helvetica Neue',
+  font-family: 'Source Sans 3', 'HelveticaNeue', 'Helvetica Neue',
                Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   font-weight: 400;

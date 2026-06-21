@@ -229,7 +229,7 @@ export const SUBSTEP_RENDERERS = {
           '<div class="fw-stat-dist-title">LLM verdict (' +
             decisions.length + ' decisions, click column headers to sort)</div>' +
           '<div style="max-height:340px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;background:var(--card)">' +
-            '<table data-table="off-topic-verdicts" style="width:100%;border-collapse:collapse;font-family:Raleway">' +
+            '<table data-table="off-topic-verdicts" style="width:100%;border-collapse:collapse;font-family:Source Sans 3">' +
               '<thead><tr>' +
                 th('index',      'In') +
                 th('verdict',    'Verdict') +
@@ -262,7 +262,7 @@ export const SUBSTEP_RENDERERS = {
         '<div class="fw-stat-dist" style="margin-top:14px">' +
           '<div class="fw-stat-dist-title">Bandit deployment usage (top ' +
             Math.min(10, depUsage.length) + ')</div>' +
-          '<table style="width:100%;border-collapse:collapse;font-family:Raleway">' +
+          '<table style="width:100%;border-collapse:collapse;font-family:Source Sans 3">' +
             '<tbody>' + drows + '</tbody>' +
           '</table>' +
         '</div>';
@@ -446,7 +446,7 @@ export const SUBSTEP_RENDERERS = {
         '<div class="fw-stat-dist" style="margin-top:14px">' +
           '<div class="fw-stat-dist-title">Coverage per proposal (docs with confidence ≥0.5)</div>' +
           '<div style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:4px">' +
-            '<table style="width:100%;border-collapse:collapse;font-family:Raleway">' +
+            '<table style="width:100%;border-collapse:collapse;font-family:Source Sans 3">' +
               '<tbody>' + rows + '</tbody>' +
             '</table>' +
           '</div>' +
@@ -519,7 +519,7 @@ export const SUBSTEP_RENDERERS = {
           '<div class="fw-stat-dist-title">Final chapter set (' +
             titles.length + ', balanced)</div>' +
           '<div style="max-height:380px;overflow-y:auto;border:1px solid var(--border);border-radius:4px">' +
-            '<table style="width:100%;border-collapse:collapse;font-family:Raleway">' +
+            '<table style="width:100%;border-collapse:collapse;font-family:Source Sans 3">' +
               '<tbody>' + rows + '</tbody>' +
             '</table>' +
           '</div>' +
@@ -603,7 +603,7 @@ export const SUBSTEP_RENDERERS = {
           '<div style="max-height:340px;overflow-y:auto;' +
             'border:1px solid var(--border);border-radius:4px">' +
             '<table style="width:100%;border-collapse:collapse;' +
-              'font-family:Raleway"><tbody>' + rows + '</tbody></table>' +
+              'font-family:Source Sans 3"><tbody>' + rows + '</tbody></table>' +
           '</div>' +
         '</div>';
     }
@@ -622,7 +622,7 @@ export const SUBSTEP_RENDERERS = {
       depRow =
         '<div class="fw-stat-dist" style="margin-top:14px">' +
           '<div class="fw-stat-dist-title">Bandit deployment usage</div>' +
-          '<table style="width:100%;border-collapse:collapse;font-family:Raleway">' +
+          '<table style="width:100%;border-collapse:collapse;font-family:Source Sans 3">' +
             '<tbody>' + drows + '</tbody>' +
           '</table>' +
         '</div>';
@@ -726,7 +726,7 @@ export const SUBSTEP_RENDERERS = {
         '<div class="fw-stat-dist-title">Final plan (' +
           sortedChapters.length + ' chapters, hydrated sources)</div>' +
         '<div style="max-height:460px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;background:var(--card)">' +
-          '<table style="width:100%;border-collapse:collapse;font-family:Raleway">' +
+          '<table style="width:100%;border-collapse:collapse;font-family:Source Sans 3">' +
             '<thead><tr>' +
               '<th style="' + headStyle + ';padding-left:8px;width:40px">#</th>' +
               '<th style="' + headStyle + '">Chapter</th>' +

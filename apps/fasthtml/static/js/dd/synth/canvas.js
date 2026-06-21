@@ -141,7 +141,7 @@ function _ensureCoRefineChip() {
     'background: #fef3c7',                // amber-100
     'color: #92400e',                     // amber-800
     'border: 1px solid #d97706',          // amber-600
-    'font: 600 12px/1.0 Raleway, Helvetica Neue, Arial, sans-serif',
+    'font: 600 12px/1.0 Source Sans 3, Helvetica Neue, Arial, sans-serif',
     'letter-spacing: 0.02em',
     'box-shadow: 0 1px 3px rgba(0,0,0,0.08)',
     'pointer-events: none',               // never blocks canvas hits
@@ -228,4 +228,3 @@ export async function _initSynthCanvas() {
   if (Sy.synthGraph) _resizeSynthCanvas();
   m._attachCanvasResizeObserver('fw-synth-canvas', _resizeSynthCanvas);
 }
-

@@ -53,7 +53,7 @@ export async function loadStudyChapters(slug) {
     if (!r.ok) {
       Ss.studyChapterListEl.innerHTML =
         '<div class="fw-empty" style="font-size:0.8rem;padding:8px 4px">' +
-        'Failed to load chapters (HTTP ' + r.status + ').</div>';
+        'No chapter to pick.</div>';
       studyDeps._setStudyStagePill?.('failed', 'Failed');
       return;
     }

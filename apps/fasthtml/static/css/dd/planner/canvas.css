@@ -121,7 +121,7 @@
 /* ===== Substep stats — KPI grid + distribution + footer ===== */
 /* Used inside expanded substep cards. Designed per 2026 dashboard
    best practices: 4 headline KPIs max, one visual element per card,
-   responsive (4-col → 2-col → 1-col), Raleway label + JetBrains-Mono
+   responsive (4-col → 2-col → 1-col), Source Sans 3 label + JetBrains-Mono
    numbers. */
 .fw-stat-grid {
   display: grid;
@@ -145,7 +145,7 @@
   letter-spacing: 0.08em;
   color: var(--text-muted);
   font-weight: 600;
-  font-family: 'Raleway', sans-serif;
+  font-family: 'Source Sans 3', sans-serif;
 }
 .fw-stat-card-value {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
@@ -175,7 +175,7 @@
   letter-spacing: 0.08em;
   color: var(--text-muted);
   font-weight: 600;
-  font-family: 'Raleway', sans-serif;
+  font-family: 'Source Sans 3', sans-serif;
   margin-bottom: 10px;
 }
 .fw-stat-dist-row {
@@ -189,7 +189,7 @@
 .fw-stat-dist-key {
   font-size: 0.65rem;
   color: var(--text-muted);
-  font-family: 'Raleway', sans-serif;
+  font-family: 'Source Sans 3', sans-serif;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   margin-bottom: 3px;
@@ -277,7 +277,7 @@
 .fw-planner-card-body .fw-empty {
   padding: 8px 0;
   text-align: left;
-  font-family: 'Raleway', sans-serif;
+  font-family: 'Source Sans 3', sans-serif;
   font-size: 0.8rem;
 }
 .fw-planner-error {
@@ -286,7 +286,7 @@
   border: 1px solid var(--error-border);
   padding: 8px 10px;
   border-radius: 3px;
-  font-family: 'Raleway', sans-serif;
+  font-family: 'Source Sans 3', sans-serif;
   font-size: 0.8rem;
   margin-bottom: 8px;
 }

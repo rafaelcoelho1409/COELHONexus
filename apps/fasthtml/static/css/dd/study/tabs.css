@@ -12,7 +12,7 @@
 
 /* Prose styling (README + Challenges) */
 .fw-study-prose {
-  font-family: 'Raleway', sans-serif;
+  font-family: 'Source Sans 3', sans-serif;
   font-size: 0.95rem;
   line-height: 1.65;
   color: var(--text);
@@ -64,7 +64,7 @@
   white-space: pre;
   -moz-tab-size: 4;
   tab-size: 4;
-  /* Explicit monospace stack — `.fw-study-prose` sets Raleway
+  /* Explicit monospace stack — `.fw-study-prose` sets Source Sans 3
      sans-serif on the prose; without an override here the inherited
      proportional font makes column-aligned ASCII art / table
      comments drift. */

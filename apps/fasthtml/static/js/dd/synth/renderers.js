@@ -122,7 +122,7 @@ function renderOutline(values) {
         '<div style="max-height:280px;overflow-y:auto;' +
           'border:1px solid var(--border);border-radius:4px">' +
           '<table style="width:100%;border-collapse:collapse;' +
-            'font-family:Raleway"><tbody>' + rows + '</tbody></table>' +
+            'font-family:Source Sans 3"><tbody>' + rows + '</tbody></table>' +
         '</div>' +
       '</div>';
   }

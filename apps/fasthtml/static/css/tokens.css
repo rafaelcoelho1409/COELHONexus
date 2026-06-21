@@ -16,13 +16,13 @@
 
 @layer base {
 :root {
-  --bg: #f7f5f1;        /* warm paper off-white — less glare for long reads */
-  --card: #fffdf9;      /* reading column, slightly warm */
+  --bg: #0e1713;        /* deep green-black — premium, restrained, lower glare */
+  --card: #16211b;      /* raised surface, close to bg so the shell stays cohesive */
   --primary: #c41230;
   --primary-dark: #65201f;
-  --text: #1f1d1b;      /* near-black warm — ~14:1 on --card (WCAG AAA) */
-  --text-muted: #6b6864;/* AA on --card (the old #8b8b8b failed AAA) */
-  --border: #e6e2db;    /* warm hairline */
+  --text: #e6d3a3;      /* champagne gold — wealth cue, strong contrast on --card */
+  --text-muted: #aa9b78;/* muted gold-brown — still readable on dark surfaces */
+  --border: #2b3a32;    /* dark olive hairline */
   --notice-bg: #fef7e0;
   --notice-border: #f5c560;
   --notice-text: #6b4d10;

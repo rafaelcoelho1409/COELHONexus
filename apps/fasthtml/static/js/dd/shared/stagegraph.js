@@ -25,7 +25,7 @@ export const StageGraph = (function() {
           'color':            '#2a2a2a',
           'text-valign':      'center',
           'text-halign':      'center',
-          'font-family':      'Raleway, Helvetica Neue, Arial, sans-serif',
+          'font-family':      'Source Sans 3, Helvetica Neue, Arial, sans-serif',
           'font-size':        14,
           'font-weight':      500,
           'text-wrap':        'wrap',
