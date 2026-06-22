@@ -16,11 +16,22 @@ eck-elasticsearch:
 
   # http: {}  # using ECK's auto-generated TLS — no overrides needed
 
-%{ if app_file_realm_secret_name != "" || app_roles_secret_name != "" ~}
+%{ if elastic_file_realm_secret_name != "" || app_file_realm_secret_name != "" || app_roles_secret_name != "" ~}
   auth:
-%{ if app_file_realm_secret_name != "" ~}
+%{ if elastic_file_realm_secret_name != "" ~}
+    # disableElasticUser: ECK stops managing the built-in elastic user so our
+    # file-realm entry below is the sole authority for elastic credentials.
+    # Without this, ECK's internal reconcile races against our file realm entry.
+    disableElasticUser: true
+%{ endif ~}
+%{ if elastic_file_realm_secret_name != "" || app_file_realm_secret_name != "" ~}
     fileRealm:
+%{ if elastic_file_realm_secret_name != "" ~}
+      - secretName: ${elastic_file_realm_secret_name}
+%{ endif ~}
+%{ if app_file_realm_secret_name != "" ~}
       - secretName: ${app_file_realm_secret_name}
+%{ endif ~}
 %{ endif ~}
 %{ if app_roles_secret_name != "" ~}
     roles:

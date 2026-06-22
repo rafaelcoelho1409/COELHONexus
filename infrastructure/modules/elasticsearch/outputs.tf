@@ -50,8 +50,9 @@ output "username" {
 }
 
 output "password_secret_name" {
-  description = "K8s Secret holding the auto-generated `elastic` user password. Key: `elastic`."
-  value       = "elasticsearch-es-elastic-user"
+  description = "K8s Secret holding the effective `elastic` user password. Key: `elastic`."
+  value       = local.elastic_password_override_enabled ? kubernetes_secret_v1.elastic_admin[0].metadata[0].name : "elasticsearch-es-elastic-user"
+  sensitive   = true
 }
 
 output "ca_secret_name" {
@@ -60,8 +61,9 @@ output "ca_secret_name" {
 }
 
 output "password_retrieval_command" {
-  description = "kubectl one-liner that prints the auto-generated elastic user password."
-  value       = "kubectl get secret -n ${var.namespace} elasticsearch-es-elastic-user -o jsonpath='{.data.elastic}' | base64 -d"
+  description = "kubectl one-liner that prints the effective elastic user password."
+  value       = local.elastic_password_override_enabled ? "kubectl get secret -n ${var.namespace} ${kubernetes_secret_v1.elastic_admin[0].metadata[0].name} -o jsonpath='{.data.elastic}' | base64 -d" : "kubectl get secret -n ${var.namespace} elasticsearch-es-elastic-user -o jsonpath='{.data.elastic}' | base64 -d"
+  sensitive   = true
 }
 
 # -----------------------------------------------------------------------------

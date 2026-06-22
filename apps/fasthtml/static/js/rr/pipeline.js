@@ -236,7 +236,7 @@ function _handleRetry(graph, summary, message) {
       console.warn(`[rr-pipeline] failed to add retry edge ${edgeId}`, err);
     }
   }
-  // 3. Refresh totals strip (the retry counter is part of it).
+  // 3. Refresh totals drawer data (the retry counter is part of it).
   _refreshScanTotals();
 }
 
@@ -358,9 +358,7 @@ function _applyKindShapes(cy) {
 
 
 // ---------------------------------------------------------------------------
-// Per-node drawer — populates `#rr-drawer` with the inline node-details
-// payload server-rendered in pipeline.py. One JSON parse on first open;
-// drawer DOM is reused across clicks.
+// Drawers — per-node details + pipeline-level LLM usage.
 // ---------------------------------------------------------------------------
 let _nodeDetailsCache = null;
 function _readNodeDetails() {
@@ -378,6 +376,7 @@ function _esc(s) {
 }
 
 export function openNodeDrawer(nodeId) {
+  _closeLlmDrawer();
   const drawer = document.getElementById('rr-drawer');
   if (!drawer) return;
   const details = _readNodeDetails();
@@ -435,6 +434,26 @@ export function openNodeDrawer(nodeId) {
   drawer.hidden = false;
   if (d.live_fs_path) _fetchLiveState(d.live_fs_path);
   if (d.llm_phase)    _fetchLlmCounters(d.llm_phase);
+}
+
+function _openLlmDrawer() {
+  _closeDrawer();
+  const drawer = document.getElementById('rr-llm-drawer');
+  if (!drawer) return;
+  const meta = document.getElementById('rr-llm-drawer-meta');
+  const scanId = _getActiveScanId();
+  if (meta) {
+    meta.textContent = scanId
+      ? 'Scan-wide totals for this pipeline run.'
+      : 'Start or open a scan to populate pipeline LLM usage.';
+  }
+  drawer.classList.add('visible');
+  _refreshScanTotals();
+}
+
+function _closeLlmDrawer() {
+  const drawer = document.getElementById('rr-llm-drawer');
+  if (drawer) drawer.classList.remove('visible');
 }
 
 function _getActiveScanId() {
@@ -519,9 +538,9 @@ function _renderLlmCounters(phase, payload) {
       `<div class="rr-llm-row"><span class="rr-llm-k">calls</span>` +
       `<span class="rr-llm-v">${_fmtNumber(ph.calls)} ` +
       `<span class="rr-llm-share">(${totalShare} of scan)</span></span></div>` +
-      `<div class="rr-llm-row"><span class="rr-llm-k">tokens in</span>` +
+      `<div class="rr-llm-row"><span class="rr-llm-k">input tokens</span>` +
       `<span class="rr-llm-v">${_fmtNumber(ph.tokens_in)}</span></div>` +
-      `<div class="rr-llm-row"><span class="rr-llm-k">tokens out</span>` +
+      `<div class="rr-llm-row"><span class="rr-llm-k">output tokens</span>` +
       `<span class="rr-llm-v">${_fmtNumber(ph.tokens_out)}</span></div>` +
       retryRow +
     `</div>`,
@@ -545,7 +564,7 @@ function _renderLlmCounters(phase, payload) {
     lines.push(
       `<div class="rr-llm-models-title">Per model</div>` +
       `<table class="rr-llm-models">` +
-        `<thead><tr><th>provider</th><th>model</th><th>calls</th><th>in</th><th>out</th></tr></thead>` +
+        `<thead><tr><th>provider</th><th>model</th><th>calls</th><th>input tokens</th><th>output tokens</th></tr></thead>` +
         `<tbody>` +
           modelRows.map(r =>
             `<tr>` +
@@ -563,7 +582,7 @@ function _renderLlmCounters(phase, payload) {
   lines.push(
     `<div class="rr-llm-footer">Scan total: ` +
     `${_fmtNumber(total.calls)} calls · ` +
-    `${_fmtNumber(total.tokens_in)} in / ${_fmtNumber(total.tokens_out)} out` +
+    `${_fmtNumber(total.tokens_in)} input / ${_fmtNumber(total.tokens_out)} output` +
     `</div>`
   );
   return lines.join('');
@@ -617,8 +636,12 @@ function _closeDrawer() {
 }
 
 document.getElementById('rr-drawer-close-btn')?.addEventListener('click', _closeDrawer);
+document.getElementById('rr-totals-open')?.addEventListener('click', _openLlmDrawer);
+document.getElementById('rr-llm-drawer-close-btn')?.addEventListener('click', _closeLlmDrawer);
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') _closeDrawer();
+  if (e.key !== 'Escape') return;
+  _closeDrawer();
+  _closeLlmDrawer();
 });
 
 
@@ -710,7 +733,7 @@ async function initPipelineGraph() {
       }
     }
     _applyPhase(graph, phase, message);
-    // Refresh scan-wide LLM totals strip on every phase event. Cheap
+    // Refresh scan-wide LLM totals on every phase event. Cheap
     // (one Redis HGETALL × a few keys) and tracks the scan in flight.
     _refreshScanTotals();
   };
@@ -722,16 +745,16 @@ async function initPipelineGraph() {
 
   // Flush any pre-init state that landed during the cytoscape load.
   if (_lastPhase) _applyPhase(graph, _lastPhase, _lastMessage);
-  // Initial hydrate — if a scan_id is in the URL the totals strip
+  // Initial hydrate — if a scan_id is in the URL the totals drawer
   // shows historical counters even before any SSE event fires.
   _refreshScanTotals();
 }
 
 
 // ---------------------------------------------------------------------------
-// Scan-wide totals strip — fetches /llm-counters and fills the DOM under the
-// graph. Called on page load (if ?scan=<id>) + every SSE phase event + on a
-// short polling interval while the scan is in flight (so the numbers tick
+// Scan-wide totals drawer — fetches /llm-counters and fills the drawer
+// content. Called on page load (if ?scan=<id>) + every SSE phase event + on
+// a short polling interval while the scan is in flight (so the numbers tick
 // within a phase, not just at phase transitions).
 // ---------------------------------------------------------------------------
 let _totalsInFlight = false;
@@ -744,12 +767,12 @@ const _TOTALS_POLL_MS = 2500;
 
 // Phases that mean "scan stopped — don't keep polling". Any other phase
 // (including 'pending' before a scan starts) keeps the timer alive so
-// the strip stays live across the full run.
+// the drawer data stays live across the full run.
 const _TERMINAL_PHASES = new Set(['done', 'error', 'cancelled', 'failed']);
 
 async function _refreshScanTotals() {
-  const stripEl = document.getElementById('rr-totals');
-  if (!stripEl) return;
+  const host = document.getElementById('rr-llm-drawer-totals');
+  if (!host) return;
   const scanId = _getActiveScanId();
   if (!scanId) {
     _renderScanTotals(null);
@@ -828,34 +851,46 @@ function _aggregateByModel(byPhase) {
   return merged;
 }
 
-function _renderScanTotals(payload) {
-  const callsEl  = document.getElementById('rr-totals-calls');
-  const inEl     = document.getElementById('rr-totals-in');
-  const outEl    = document.getElementById('rr-totals-out');
-  const chipsEl  = document.getElementById('rr-totals-phases');
-  const tableEl  = document.getElementById('rr-totals-models');
-  if (!callsEl || !inEl || !outEl || !chipsEl || !tableEl) return;
+function _phaseStatus(phase, hasCalls) {
+  if (!hasCalls) return 'pending';
+  if (_TERMINAL_PHASES.has(_lastPhase)) return 'done';
+  if (_lastPhase === phase) return 'running';
+  const currentIdx = _PHASE_DISPLAY_ORDER.indexOf(_lastPhase);
+  const phaseIdx = _PHASE_DISPLAY_ORDER.indexOf(phase);
+  if (currentIdx >= 0 && phaseIdx >= 0 && phaseIdx < currentIdx) return 'done';
+  return 'pending';
+}
 
-  // No scan in scope OR fetch failed → reset to placeholders.
+function _renderModelTable(rows, klass) {
+  if (!rows.length) return '';
+  return (
+    `<table class="${klass}">` +
+      `<thead><tr>` +
+        `<th>provider</th><th>model</th>` +
+        `<th>calls</th><th>input tokens</th><th>output tokens</th>` +
+      `</tr></thead>` +
+      `<tbody>` +
+        rows.map(r =>
+          `<tr>` +
+          `<td title="${_esc(r.raw)}">${_esc(r.provider)}</td>` +
+          `<td title="${_esc(r.raw)}">${_esc(r.name)}</td>` +
+          `<td>${_fmtNumber(r.calls)}</td>` +
+          `<td>${_fmtNumber(r.tokens_in)}</td>` +
+          `<td>${_fmtNumber(r.tokens_out)}</td>` +
+          `</tr>`
+        ).join('') +
+      `</tbody>` +
+    `</table>`
+  );
+}
+
+function _renderDrawerTotals(payload) {
   if (!payload || !payload.total) {
-    callsEl.textContent = '—';
-    inEl.textContent    = '—';
-    outEl.textContent   = '—';
-    chipsEl.innerHTML   = '';
-    tableEl.innerHTML   = '';
-    return;
+    return '<div class="dd-llm-rail-empty">No LLM usage recorded yet.</div>';
   }
 
-  const total   = payload.total   || {};
+  const total   = payload.total || {};
   const byPhase = payload.by_phase || {};
-
-  // KPI cards.
-  callsEl.textContent = _fmtNumber(total.calls      || 0);
-  inEl.textContent    = _fmtNumber(total.tokens_in  || 0);
-  outEl.textContent   = _fmtNumber(total.tokens_out || 0);
-
-  // Per-phase chips — ordered left-to-right matching the pipeline flow.
-  // Skip phases with zero calls so the row stays compact.
   const chips = _PHASE_DISPLAY_ORDER
     .filter(p => byPhase[p] && byPhase[p].calls)
     .map(p => {
@@ -864,64 +899,100 @@ function _renderScanTotals(payload) {
         ? Math.round((ph.calls / total.calls) * 100) + '%'
         : '—';
       return (
-        `<span class="rr-totals-chip" title="` +
+        `<span class="dd-llm-rail-nodechip" title="` +
           `${_esc(p)}: ${_fmtNumber(ph.calls)} calls · ` +
-          `${_fmtNumber(ph.tokens_in)} in / ${_fmtNumber(ph.tokens_out)} out` +
+          `${_fmtNumber(ph.tokens_in)} input / ${_fmtNumber(ph.tokens_out)} output` +
         `">` +
-        `<span class="rr-totals-chip-name">${_esc(p)}</span>` +
-        `<span class="rr-totals-chip-count">${_fmtNumber(ph.calls)}</span>` +
-        `<span class="rr-totals-chip-share">${share}</span>` +
+        `<span class="dd-llm-rail-nodechip-name">${_esc(p)}</span>` +
+        `<span class="dd-llm-rail-nodechip-count">${_fmtNumber(ph.calls)}</span>` +
+        `<span class="dd-llm-rail-nodechip-count">${share}</span>` +
         `</span>`
       );
-    })
-    .join('');
-  chipsEl.innerHTML = chips;
+    }).join('');
 
-  // Scan-wide per-(provider, model) table — same shape as the drawer's
-  // per-model breakdown, but aggregated across all phases. Sorted by
-  // total calls descending so the heaviest-used arms are at the top.
-  const merged = _aggregateByModel(byPhase);
-  const rows = Object.entries(merged)
+  const totalRows = Object.entries(_aggregateByModel(byPhase))
     .map(([model, stats]) => {
       const { provider, name } = _splitProviderModel(model);
       return {
-        raw:        model,
+        raw: model,
         provider,
         name,
-        calls:      stats.calls      || 0,
-        tokens_in:  stats.tokens_in  || 0,
+        calls: stats.calls || 0,
+        tokens_in: stats.tokens_in || 0,
         tokens_out: stats.tokens_out || 0,
       };
     })
     .sort((a, b) => b.calls - a.calls);
 
-  if (!rows.length) {
-    tableEl.innerHTML = '';
-  } else {
-    tableEl.innerHTML =
-      `<div class="rr-totals-models-title">Per provider · model</div>` +
-      `<table class="rr-totals-models-table">` +
-        `<thead><tr>` +
-          `<th>provider</th><th>model</th>` +
-          `<th>calls</th><th>in</th><th>out</th>` +
-        `</tr></thead>` +
-        `<tbody>` +
-          rows.map(r =>
-            `<tr>` +
-            `<td title="${_esc(r.raw)}">${_esc(r.provider)}</td>` +
-            `<td title="${_esc(r.raw)}">${_esc(r.name)}</td>` +
-            `<td>${_fmtNumber(r.calls)}</td>` +
-            `<td>${_fmtNumber(r.tokens_in)}</td>` +
-            `<td>${_fmtNumber(r.tokens_out)}</td>` +
-            `</tr>`
-          ).join('') +
-        `</tbody>` +
-      `</table>`;
-  }
+  const phaseCards = _PHASE_DISPLAY_ORDER
+    .filter(p => byPhase[p] && byPhase[p].calls)
+    .map(p => {
+      const ph = byPhase[p];
+      const status = _phaseStatus(p, !!ph.calls);
+      const retries = Number(ph.retries || 0);
+      const rows = Object.entries(ph.by_model || {})
+        .map(([model, stats]) => {
+          const { provider, name } = _splitProviderModel(model);
+          return {
+            raw: model,
+            provider,
+            name,
+            calls: stats.calls || 0,
+            tokens_in: stats.tokens_in || 0,
+            tokens_out: stats.tokens_out || 0,
+          };
+        })
+        .sort((a, b) => b.calls - a.calls);
+      return (
+        `<details class="dd-llm-rail-card" ${status === 'running' ? 'open' : ''}>` +
+          `<summary>` +
+            `<div>` +
+              `<div class="dd-llm-rail-title">${_esc(p)}</div>` +
+              `<div class="dd-llm-rail-sub">` +
+                `${_fmtNumber(ph.calls)} calls · ${_fmtNumber(ph.tokens_in)} input · ${_fmtNumber(ph.tokens_out)} output` +
+                `${retries > 0 ? ` · ${_fmtNumber(retries)} retries` : ''}` +
+              `</div>` +
+            `</div>` +
+            `<span class="dd-llm-rail-status" data-status="${status}">${status}</span>` +
+          `</summary>` +
+          `<div class="dd-llm-rail-card-body">` +
+            `<div class="dd-llm-rail-kpis">` +
+              `<div class="dd-llm-rail-kpi"><b>${_fmtNumber(ph.calls)}</b><small>calls</small></div>` +
+              `<div class="dd-llm-rail-kpi"><b>${_fmtNumber(ph.tokens_in)}</b><small>input tokens</small></div>` +
+              `<div class="dd-llm-rail-kpi"><b>${_fmtNumber(ph.tokens_out)}</b><small>output tokens</small></div>` +
+              `<div class="dd-llm-rail-kpi"><b>${_fmtNumber(retries)}</b><small>retries</small></div>` +
+            `</div>` +
+            `${rows.length ? `<div class="rr-totals-models-title">Per provider · model</div>${_renderModelTable(rows, 'rr-totals-models-table')}` : ''}` +
+          `</div>` +
+        `</details>`
+      );
+    }).join('');
+
+  return (
+    `<div class="dd-llm-rail-summary">` +
+      `<div class="dd-llm-rail-title">Pipeline totals</div>` +
+      `<div class="dd-llm-rail-sub">Live scan-wide LLM activity across the full Research Radar pipeline.</div>` +
+      `<div class="dd-llm-rail-kpis">` +
+        `<div class="dd-llm-rail-kpi"><b>${_fmtNumber(total.calls || 0)}</b><small>calls</small></div>` +
+        `<div class="dd-llm-rail-kpi"><b>${_fmtNumber(total.tokens_in || 0)}</b><small>input tokens</small></div>` +
+        `<div class="dd-llm-rail-kpi"><b>${_fmtNumber(total.tokens_out || 0)}</b><small>output tokens</small></div>` +
+        `<div class="dd-llm-rail-kpi"><b>${_fmtNumber(Object.keys(byPhase).filter(p => byPhase[p]?.calls).length)}</b><small>active phases</small></div>` +
+      `</div>` +
+      `${chips ? `<div class="dd-llm-rail-nodechips">${chips}</div>` : ''}` +
+      `${totalRows.length ? `<div class="rr-totals-models-title">Pipeline total by provider · model</div>${_renderModelTable(totalRows, 'rr-totals-models-table')}` : ''}` +
+    `</div>` +
+    phaseCards
+  );
+}
+
+function _renderScanTotals(payload) {
+  const host = document.getElementById('rr-llm-drawer-totals');
+  if (!host) return;
+  host.innerHTML = _renderDrawerTotals(payload);
 
   // Manage the polling lifecycle based on current scan state. The phase
   // contextvar driving _lastPhase is set from the SSE updater; if the
-  // scan is terminal, we stop polling but keep the strip filled so the
+  // scan is terminal, we stop polling but keep the drawer filled so the
   // user can see the final numbers as long as the page is open.
   if (_TERMINAL_PHASES.has(_lastPhase)) _stopTotalsPolling();
   else                                  _startTotalsPolling();

@@ -164,45 +164,59 @@ def _KindLegend():
     return Div(*chips, cls = "rr-legend", **{"aria-label": "Node-shape legend"})
 
 
-def _LlmTotalsStrip():
-    """Scan-wide LLM totals — persistent across node clicks, live-updates
-    as phase events fire (2026-06-16 Path-A v2).
+def _LlmUsageDrawer():
+    """Scan-wide LLM usage drawer for the active pipeline run.
 
-    Hydrated by `pipeline.js::_renderScanTotals()`. Empty placeholder
-    until a scan_id lands in the URL (?scan=<id>); then the JS fetches
-    `/api/v1/rr/scan/{id}/llm-counters` and fills the cards + chips."""
+    Hydrated by `pipeline.js::_renderScanTotals()`. The same live poller
+    used by the previous inline totals strip now fills this drawer so the
+    data keeps updating while the scan runs."""
     return Div(
         Div(
             Div(
-                Div("Total LLM calls",  cls = "rr-totals-kpi-label"),
-                Div("—",                cls = "rr-totals-kpi-value",
-                    id  = "rr-totals-calls"),
-                cls = "rr-totals-kpi",
+                Div("LLM usage", id = "rr-llm-drawer-name",
+                    cls = "fw-drawer-name"),
+                Div("Scan-wide totals for this pipeline run.",
+                    id = "rr-llm-drawer-meta", cls = "fw-drawer-meta"),
+                cls = "fw-drawer-title",
             ),
             Div(
-                Div("Tokens in",        cls = "rr-totals-kpi-label"),
-                Div("—",                cls = "rr-totals-kpi-value",
-                    id  = "rr-totals-in"),
-                cls = "rr-totals-kpi",
+                Button(
+                    "✕",
+                    type = "button",
+                    cls  = "fw-drawer-btn",
+                    id   = "rr-llm-drawer-close-btn",
+                    **{"aria-label": "Close LLM usage drawer"},
+                ),
+                cls = "fw-drawer-controls",
             ),
-            Div(
-                Div("Tokens out",       cls = "rr-totals-kpi-label"),
-                Div("—",                cls = "rr-totals-kpi-value",
-                    id  = "rr-totals-out"),
-                cls = "rr-totals-kpi",
-            ),
-            cls = "rr-totals-kpis",
+            cls = "fw-drawer-header",
         ),
-        # Per-phase mini-breakdown — one chip per phase that has any
-        # activity. JS fills this row dynamically.
-        Div(id = "rr-totals-phases", cls = "rr-totals-phases"),
-        # Scan-wide per-(provider, model) table — same shape as the
-        # per-node drawer's per-model table but rolled up across phases.
-        # Hidden when no rows; JS fills the inner HTML.
-        Div(id = "rr-totals-models", cls = "rr-totals-models"),
-        id  = "rr-totals",
-        cls = "rr-totals",
-        **{"aria-label": "Scan-wide LLM activity totals"},
+        Div(
+            Div(
+                Div("Pipeline LLM usage", cls = "dd-llm-rail-label"),
+                Div(id = "rr-llm-drawer-totals", cls = "dd-llm-rail-host"),
+                id = "rr-llm-drawer-pipeline-section",
+                cls = "dd-llm-rail-section",
+            ),
+            id = "rr-llm-drawer-body", cls = "fw-drawer-body",
+        ),
+        id = "rr-llm-drawer",
+        cls = "fw-drawer",
+    )
+
+
+def _PipelineGraphHead():
+    """Graph header matching DD's graph-box pattern."""
+    return Div(
+        Div("Pipeline", cls = "rr-pipeline-zone-label"),
+        Button(
+            "LLM usage",
+            id = "rr-totals-open",
+            cls = "rr-pipeline-zone-btn",
+            type = "button",
+            title = "Open pipeline LLM usage",
+        ),
+        cls = "rr-pipeline-zone-head",
     )
 
 
@@ -268,7 +282,7 @@ def PipelineBody():
     #     Scan) via body.py's ScanForm; lives next to the controls
     #     that operate on it, mirroring the Digest restructure
     # Slim header now: status pill on the left, kind legend on the
-    # right. Canvas + totals strip + drawer hang directly off rr-page.
+    # right. Pipeline graph box + drawers hang directly off rr-page.
     return Div(
         # 2026-06-17 v3: topic now renders as a page-title heading
         # (red left-bar accent matching the navbar `.title`), not a
@@ -293,13 +307,17 @@ def PipelineBody():
             cls = "rr-pipeline-header",
         ),
         Div(
-            id  = "rr-pipeline-canvas",
-            cls = "rr-pipeline-canvas",
-            # Inline JSON read by pipeline.js to seed the StageGraph.
-            **{"data-topology": _TopologyJson()},
+            _PipelineGraphHead(),
+            Div(
+                id  = "rr-pipeline-canvas",
+                cls = "rr-pipeline-canvas",
+                # Inline JSON read by pipeline.js to seed the StageGraph.
+                **{"data-topology": _TopologyJson()},
+            ),
+            cls = "rr-pipeline-zone",
         ),
-        _LlmTotalsStrip(),
         _NodeDrawer(),
+        _LlmUsageDrawer(),
         # 2026-06-17: ConfirmModal target for showConfirm() — required by
         # the Recent-scans dropdown's per-row trash button. Same component
         # the Digest page mounts.

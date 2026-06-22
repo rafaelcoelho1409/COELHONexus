@@ -237,9 +237,19 @@ variable "app_role_name" {
 }
 
 # -----------------------------------------------------------------------------
-# Note: NO `elastic_password` variable. ECK auto-generates the elastic superuser
-# password and stores it in a Secret named `elasticsearch-es-elastic-user`.
-# Admin jobs read that Secret directly. Retrieve once with:
-#   kubectl get secret elasticsearch-es-elastic-user -n elasticsearch \
-#     -o jsonpath='{.data.elastic}' | base64 -d
+# Optional deterministic built-in `elastic` password (local/demo only)
+# -----------------------------------------------------------------------------
+
+variable "elastic_password_override" {
+  description = "Optional deterministic password for the built-in `elastic` user. Intended for local/demo stacks that must keep a shared app/chart contract expecting username `elastic` without editing app or Helm code."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+# -----------------------------------------------------------------------------
+# Note: by default ECK auto-generates the built-in `elastic` superuser password
+# and stores it in Secret `elasticsearch-es-elastic-user`. The optional
+# `elastic_password_override` above is intended only for local/demo stacks that
+# must preserve a shared app/chart contract outside this module.
 # -----------------------------------------------------------------------------

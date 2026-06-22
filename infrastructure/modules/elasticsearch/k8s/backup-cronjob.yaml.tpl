@@ -1,7 +1,7 @@
 # =============================================================================
 # Elasticsearch Snapshot CronJob — every 6h, retention 20
 # =============================================================================
-# Reads ELASTIC_PASSWORD from the ECK-managed Secret at runtime.
+# Reads ELASTIC_PASSWORD from the effective admin Secret at runtime.
 # =============================================================================
 
 apiVersion: batch/v1
@@ -36,7 +36,7 @@ spec:
                 - name: ELASTIC_PASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: elasticsearch-es-elastic-user
+                      name: ${admin_secret}
                       key: elastic
               command:
                 - /bin/sh

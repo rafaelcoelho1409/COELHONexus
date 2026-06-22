@@ -81,6 +81,11 @@ inputs = {
   app_user_enabled = true
   app_username     = include.root.locals.env.demo.elasticsearch_username
   app_password     = include.root.locals.env.demo.elasticsearch_password
+  # Shared app/chart code still authenticates as username `elastic`, so the
+  # local cluster converges the built-in user's password to the deterministic
+  # demo value below. This keeps plain `skaffold dev` working without touching
+  # shared `apps/` or `k8s/`.
+  elastic_password_override = include.root.locals.env.demo.elasticsearch_password
 
   # ECK auto-generates the `elastic` superuser password — no input needed.
   #

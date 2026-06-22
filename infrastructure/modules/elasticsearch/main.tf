@@ -42,6 +42,13 @@ resource "kubernetes_namespace_v1" "elasticsearch" {
   }
 }
 
+locals {
+  elastic_password_override_enabled = trimspace(var.elastic_password_override) != ""
+  admin_password_secret_name        = local.elastic_password_override_enabled ? kubernetes_secret_v1.elastic_admin[0].metadata[0].name : "elasticsearch-es-elastic-user"
+  admin_password_secret_key         = "elastic"
+  elastic_pw_hash                   = local.elastic_password_override_enabled ? substr(sha256(var.elastic_password_override), 0, 8) : ""
+}
+
 # -----------------------------------------------------------------------------
 # ECK Operator — installs CRDs + controller cluster-wide
 # -----------------------------------------------------------------------------
@@ -103,6 +110,32 @@ resource "kubernetes_secret_v1" "backup_creds" {
     MINIO_BUCKET       = var.backup_bucket
     ELASTICSEARCH_HOST = "elasticsearch-es-http.${kubernetes_namespace_v1.elasticsearch.metadata[0].name}.svc.cluster.local"
     SNAPSHOT_REPO      = var.snapshot_repo_name
+  }
+
+  depends_on = [kubernetes_namespace_v1.elasticsearch]
+}
+
+# -----------------------------------------------------------------------------
+# Optional deterministic admin Secret — mirrors the desired built-in `elastic`
+# password so app-side demo secrets and infra-side admin jobs read the same value.
+# -----------------------------------------------------------------------------
+resource "kubernetes_secret_v1" "elastic_admin" {
+  count = local.elastic_password_override_enabled ? 1 : 0
+
+  metadata {
+    name      = "elasticsearch-admin-credentials"
+    namespace = kubernetes_namespace_v1.elasticsearch.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "elasticsearch"
+      "app.kubernetes.io/component"  = "admin-user"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  type = "Opaque"
+
+  data = {
+    elastic = var.elastic_password_override
   }
 
   depends_on = [kubernetes_namespace_v1.elasticsearch]
@@ -258,20 +291,21 @@ resource "helm_release" "eck_stack" {
 
   values = [
     templatefile("${path.module}/helm/values-stack.yaml.tpl", {
-      es_version                   = var.es_version
-      kibana_version               = var.kibana_version
-      es_memory_request            = var.es_memory_request
-      es_memory_limit              = var.es_memory_limit
-      es_java_heap                 = var.es_java_heap
-      es_cpu_request               = var.es_cpu_request
-      kibana_memory_request        = var.kibana_memory_request
-      kibana_memory_limit          = var.kibana_memory_limit
-      kibana_node_max_old_space_mb = var.kibana_node_max_old_space_mb
-      kibana_cpu_request           = var.kibana_cpu_request
-      storage_size                 = var.storage_size
-      storage_class                = var.storage_class
-      app_file_realm_secret_name   = var.app_user_enabled ? kubernetes_secret_v1.app_user[0].metadata[0].name : ""
-      app_roles_secret_name        = var.app_user_enabled ? kubernetes_secret_v1.app_roles[0].metadata[0].name : ""
+      es_version                    = var.es_version
+      kibana_version                = var.kibana_version
+      es_memory_request             = var.es_memory_request
+      es_memory_limit               = var.es_memory_limit
+      es_java_heap                  = var.es_java_heap
+      es_cpu_request                = var.es_cpu_request
+      kibana_memory_request         = var.kibana_memory_request
+      kibana_memory_limit           = var.kibana_memory_limit
+      kibana_node_max_old_space_mb  = var.kibana_node_max_old_space_mb
+      kibana_cpu_request            = var.kibana_cpu_request
+      storage_size                  = var.storage_size
+      storage_class                 = var.storage_class
+      elastic_file_realm_secret_name = local.elastic_password_override_enabled ? kubernetes_secret_v1.elastic_file_realm[0].metadata[0].name : ""
+      app_file_realm_secret_name    = var.app_user_enabled ? kubernetes_secret_v1.app_user[0].metadata[0].name : ""
+      app_roles_secret_name         = var.app_user_enabled ? kubernetes_secret_v1.app_roles[0].metadata[0].name : ""
     })
   ]
 
@@ -282,16 +316,54 @@ resource "helm_release" "eck_stack" {
     helm_release.eck_operator,
     kubernetes_namespace_v1.elasticsearch,
     kubernetes_secret_v1.es_s3_keystore,
+    kubernetes_secret_v1.elastic_file_realm,
     kubernetes_secret_v1.app_user,
     kubernetes_secret_v1.app_roles,
   ]
 }
 
 # -----------------------------------------------------------------------------
+# Optional elastic file-realm Secret — sets a deterministic password for the
+# built-in `elastic` user via ECK's file realm.
+#
+# Why NOT the _password API: ECK configures the reserved realm as disabled for
+# API-based password changes (returns 400 "reserved realm is disabled"). The
+# correct mechanism is ECK's spec.auth.fileRealm: ECK bcrypt-hashes the
+# password from this kubernetes.io/basic-auth Secret and writes the file realm
+# entry, which takes priority over the reserved realm for authentication.
+#
+# Requires disableElasticUser: true in the ECK Elasticsearch CR (see
+# values-stack.yaml.tpl) so ECK doesn't race-reconcile its own elastic entry.
+# -----------------------------------------------------------------------------
+resource "kubernetes_secret_v1" "elastic_file_realm" {
+  count = local.elastic_password_override_enabled ? 1 : 0
+
+  metadata {
+    name      = "elasticsearch-elastic-filerealm"
+    namespace = kubernetes_namespace_v1.elasticsearch.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "elasticsearch"
+      "app.kubernetes.io/component"  = "elastic-user"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  type = "kubernetes.io/basic-auth"
+
+  data = {
+    username = "elastic"
+    password = var.elastic_password_override
+    roles    = "superuser"
+  }
+
+  depends_on = [kubernetes_namespace_v1.elasticsearch]
+}
+
+# -----------------------------------------------------------------------------
 # Bootstrap Job — register MinIO as snapshot repository
 # -----------------------------------------------------------------------------
-# Reads the auto-generated elastic user password from the ECK-managed Secret
-# at runtime (mounted as an env-from). Inline S3 creds in the JSON body.
+# Reads the effective built-in `elastic` password from the deterministic local
+# Secret when configured, otherwise from the ECK-managed Secret.
 # -----------------------------------------------------------------------------
 resource "kubernetes_job_v1" "register_repo" {
   metadata {
@@ -328,13 +400,13 @@ resource "kubernetes_job_v1" "register_repo" {
             }
           }
 
-          # Inject ES password from the ECK-managed Secret as ELASTIC_PASSWORD env var
+          # Inject ES password from the effective admin Secret as ELASTIC_PASSWORD env var
           env {
             name = "ELASTIC_PASSWORD"
             value_from {
               secret_key_ref {
-                name = "elasticsearch-es-elastic-user"
-                key  = "elastic"
+                name = local.admin_password_secret_name
+                key  = local.admin_password_secret_key
               }
             }
           }
@@ -434,6 +506,7 @@ resource "kubernetes_manifest" "backup_cronjob" {
     backup_schedule  = var.backup_schedule
     backup_retention = var.backup_retention
     creds_secret     = kubernetes_secret_v1.backup_creds.metadata[0].name
+    admin_secret     = local.admin_password_secret_name
   }))
 
   depends_on = [kubernetes_job_v1.register_repo]

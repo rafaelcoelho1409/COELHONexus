@@ -978,7 +978,7 @@
     width: 100%;
     flex: 1 1 auto;
     min-height: 360px;
-    margin-top: 4px;
+    margin-top: 0;
     border: 1px solid var(--border, #eee);
     border-radius: 6px;
     background: var(--bg, #fff);
@@ -1091,14 +1091,210 @@
     white-space: pre-wrap;
   }
 
-  /* ----- Scan-wide totals strip (Path A v2 2026-06-16) ----- */
-  .rr-totals {
-    margin-top: 12px;
-    padding: 10px 14px;
-    border-top: 1px solid var(--border, #e5e5e5);
-    background: rgba(0, 0, 0, 0.015);
-    border-radius: 0 0 6px 6px;
+  .rr-pipeline-zone {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin-top: 6px;
+    padding: 8px;
+    border: 1px solid var(--border, #e5e5e5);
+    border-left: 3px solid var(--primary, #c41230);
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.012);
   }
+  .rr-pipeline-zone-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 0 4px 6px 4px;
+    border-bottom: 1px dashed var(--border, #e5e5e5);
+    margin-bottom: 8px;
+  }
+  .rr-pipeline-zone-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    color: var(--primary, #c41230);
+  }
+  .rr-pipeline-zone-btn {
+    appearance: none;
+    border: 1px solid var(--border, #ccc);
+    border-radius: 999px;
+    background: var(--bg-panel, #fff);
+    color: var(--text-muted, #666);
+    font: inherit;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    padding: 5px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
+  .rr-pipeline-zone-btn:hover {
+    border-color: var(--primary, #c41230);
+    color: var(--primary, #c41230);
+  }
+
+  /* ----- Scan-wide LLM usage drawer ----- */
+  #rr-llm-drawer {
+    width: min(760px, 92vw);
+    min-width: 380px;
+  }
+  #rr-llm-drawer-body {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .dd-llm-rail-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  .dd-llm-rail-label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: var(--text-muted, #666);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+  }
+  .dd-llm-rail-host:empty {
+    display: none;
+  }
+  .dd-llm-rail-empty {
+    font-size: 0.74rem;
+    color: var(--text-muted, #666);
+    line-height: 1.4;
+  }
+  .dd-llm-rail-card,
+  .dd-llm-rail-summary {
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.03);
+  }
+  .dd-llm-rail-summary {
+    padding: 10px 11px;
+  }
+  .dd-llm-rail-card + .dd-llm-rail-card {
+    margin-top: 8px;
+  }
+  .dd-llm-rail-card > summary {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 11px;
+    cursor: pointer;
+    list-style: none;
+  }
+  .dd-llm-rail-card > summary::-webkit-details-marker {
+    display: none;
+  }
+  .dd-llm-rail-card > summary::after {
+    content: '▸';
+    color: var(--text-muted, #666);
+    font-size: 0.78rem;
+    transform: translateY(2px);
+  }
+  .dd-llm-rail-card[open] > summary::after {
+    content: '▾';
+  }
+  .dd-llm-rail-card-body {
+    padding: 0 11px 11px 11px;
+  }
+  .dd-llm-rail-title {
+    font-size: 0.8rem;
+    font-weight: 650;
+    color: var(--text, #111);
+    line-height: 1.25;
+  }
+  .dd-llm-rail-sub {
+    margin-top: 2px;
+    font-size: 0.72rem;
+    color: var(--text-muted, #666);
+  }
+  .dd-llm-rail-status {
+    flex: 0 0 auto;
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 999px;
+    padding: 3px 7px;
+    font-size: 0.64rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted, #666);
+    background: var(--card, #fff);
+  }
+  .dd-llm-rail-status[data-status="running"] {
+    border-color: var(--running-border, #2f6db7);
+    color: var(--running-border, #2f6db7);
+    background: var(--running-bg, rgba(47, 109, 183, 0.08));
+  }
+  .dd-llm-rail-status[data-status="done"] {
+    border-color: var(--ingested-border, #0a8a3e);
+    color: var(--ingested-text, #0a8a3e);
+  }
+  .dd-llm-rail-kpis {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 10px;
+    margin-top: 9px;
+  }
+  .dd-llm-rail-kpi {
+    min-width: 0;
+  }
+  .dd-llm-rail-kpi b {
+    display: block;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 0.9rem;
+    color: var(--text, #111);
+    font-variant-numeric: tabular-nums;
+  }
+  .dd-llm-rail-kpi small {
+    display: block;
+    margin-top: 2px;
+    font-size: 0.62rem;
+    color: var(--text-muted, #666);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .dd-llm-rail-nodechips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 10px;
+  }
+  .dd-llm-rail-nodechip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 100%;
+    padding: 3px 7px;
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 999px;
+    background: var(--card, #fff);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 0.64rem;
+  }
+  .dd-llm-rail-nodechip-name {
+    max-width: 90px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted, #666);
+    text-transform: uppercase;
+  }
+  .dd-llm-rail-nodechip-count {
+    color: var(--text, #111);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ----- Scan-wide totals drawer content ----- */
   .rr-totals-kpis {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -1299,6 +1495,20 @@
     color: var(--text-muted, #888);
     font-family: ui-monospace, SF Mono, Menlo, monospace;
     text-align: right;
+  }
+
+  @media (max-width: 900px) {
+    .rr-pipeline-zone-head {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+    .rr-pipeline-zone-btn {
+      align-self: flex-end;
+    }
+    .rr-totals-kpis {
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
   }
 
   /* ----- Digest ----- */
