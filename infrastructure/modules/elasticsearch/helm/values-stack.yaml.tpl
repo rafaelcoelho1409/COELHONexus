@@ -40,12 +40,6 @@ eck-elasticsearch:
 
 %{ endif ~}
 
-  # secureSettings: ECK loads each KEY from this Secret into ES's keystore
-  # on pod start. Required for the s3 snapshot repo plugin (ES 8.18 rejects
-  # inline credentials in repo settings).
-  secureSettings:
-    - secretName: elasticsearch-s3-keystore
-
   nodeSets:
     - name: default
       count: 1

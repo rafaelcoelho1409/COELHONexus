@@ -53,6 +53,7 @@ from pydantic import ValidationError
 from domains.llm.rotator.chain import chat_judge_bandit_async
 
 from ....ingestion.storage import get_storage
+from ...runtime.observability import record_grader_dim_score
 from ...runtime.progress import emit_progress
 from ...state import SynthState
 from .cocoa import cocoa_alignment_check
@@ -60,6 +61,23 @@ from .faithfulness import atomic_claim_grounding
 
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_criterion_scores(framework: str, criteria: list[dict | CriterionResult]) -> None:
+    for criterion in criteria:
+        if isinstance(criterion, CriterionResult):
+            name = criterion.name
+            passed = criterion.passed
+        else:
+            name = str((criterion or {}).get("name") or "")
+            passed = bool((criterion or {}).get("passed", False))
+        if not name:
+            continue
+        record_grader_dim_score(
+            framework = framework,
+            dim = name,
+            score = 1.0 if passed else 0.0,
+        )
 
 
 # Deterministic pre-gates (7 — pure Python, zero LLM cost)
@@ -1044,6 +1062,7 @@ async def checklist_eval_run(state: SynthState) -> dict:
                 f"({stats['pass_rate']:.0%}), passed = "
                 f"{stats['chapter_passed']}, {elapsed} ms"
             )
+            _emit_criterion_scores(slug, cached.get("criteria") or [])
             return {"checklist_path": latest_key, "checklist_stats": stats}
         except Exception as e:
             logger.warning(
@@ -1312,6 +1331,7 @@ async def checklist_eval_run(state: SynthState) -> dict:
         f"{len(failed_feedback)} feedback strings; "
         f"judge_wall = {judge_wall_ms}ms, total = {elapsed}ms"
     )
+    _emit_criterion_scores(slug, all_results)
     return {"checklist_path": latest_key, "checklist_stats": stats}
 
 

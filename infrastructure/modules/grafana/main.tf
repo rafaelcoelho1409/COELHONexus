@@ -231,6 +231,32 @@ resource "kubernetes_job_v1" "bootstrap_db" {
 }
 
 # -----------------------------------------------------------------------------
+# Admin sync config — lets the Grafana CLI target the real external Postgres DB
+# -----------------------------------------------------------------------------
+resource "kubernetes_config_map_v1" "admin_sync" {
+  metadata {
+    name      = "${var.release_name}-admin-sync"
+    namespace = kubernetes_namespace_v1.grafana.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "grafana-admin-sync"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  data = {
+    "grafana.ini" = <<-EOT
+      [database]
+      type = postgres
+      host = ${var.postgres_host}:${var.postgres_port}
+      name = ${var.grafana_db_name}
+      user = ${var.grafana_db_user}
+      password = $__env{GF_DATABASE_PASSWORD}
+      ssl_mode = disable
+    EOT
+  }
+}
+
+# -----------------------------------------------------------------------------
 # Helm release — grafana-community/grafana
 # -----------------------------------------------------------------------------
 resource "helm_release" "grafana" {
@@ -274,6 +300,150 @@ resource "helm_release" "grafana" {
 }
 
 # -----------------------------------------------------------------------------
+# Admin sync Job — forces the persisted Grafana admin password to match the
+# Kubernetes admin secret even when Grafana is using an external Postgres DB.
+# -----------------------------------------------------------------------------
+# Grafana's admin env vars / Helm secret wiring are bootstrap-time inputs.
+# Once the admin user already exists in Postgres, updating the Secret alone
+# does not reliably reset the persisted password. The official Grafana docs
+# recommend `grafana cli admin reset-admin-password` with BOTH `--homepath`
+# and `--config` when using an external DB so the CLI does not accidentally
+# reset a default local SQLite database instead.
+# -----------------------------------------------------------------------------
+locals {
+  admin_sync_hash = substr(sha256(join(":", [
+    local.grafana_admin_password,
+    random_password.db.result,
+    var.grafana_db_name,
+    var.grafana_db_user,
+    var.grafana_cli_image,
+  ])), 0, 8)
+}
+
+resource "kubernetes_job_v1" "sync_admin_password" {
+  metadata {
+    name      = "${var.release_name}-sync-admin-${local.admin_sync_hash}"
+    namespace = kubernetes_namespace_v1.grafana.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "grafana-admin-sync"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  spec {
+    ttl_seconds_after_finished = 300
+    backoff_limit              = 5
+
+    template {
+      metadata {
+        labels = {
+          "app.kubernetes.io/name" = "grafana-admin-sync"
+        }
+      }
+
+      spec {
+        restart_policy = "OnFailure"
+
+        security_context {
+          fs_group = 472
+        }
+
+        container {
+          name  = "grafana-cli"
+          image = var.grafana_cli_image
+
+          command = ["/bin/sh", "-ec"]
+          args = [<<-EOT
+            for attempt in $(seq 1 60); do
+              if grafana cli --homepath /usr/share/grafana --config /etc/grafana/grafana.ini admin reset-admin-password "$GRAFANA_ADMIN_PASSWORD"; then
+                exit 0
+              fi
+              echo "grafana admin password reset attempt $${attempt}/60 failed; retrying in 5s"
+              sleep 5
+            done
+
+            echo "grafana admin password reset did not succeed after 60 attempts"
+            exit 1
+          EOT
+          ]
+
+          env {
+            name = "GF_DATABASE_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.db.metadata[0].name
+                key  = "GF_DATABASE_PASSWORD"
+              }
+            }
+          }
+
+          env {
+            name = "GRAFANA_ADMIN_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.admin.metadata[0].name
+                key  = "admin-password"
+              }
+            }
+          }
+
+          volume_mount {
+            name       = "grafana-config"
+            mount_path = "/etc/grafana"
+            read_only  = true
+          }
+
+          security_context {
+            allow_privilege_escalation = false
+            run_as_non_root            = true
+            run_as_user                = 472
+            run_as_group               = 472
+
+            capabilities {
+              drop = ["ALL"]
+            }
+
+            seccomp_profile {
+              type = "RuntimeDefault"
+            }
+          }
+
+          resources {
+            requests = {
+              cpu    = "10m"
+              memory = "64Mi"
+            }
+            limits = {
+              memory = "128Mi"
+            }
+          }
+        }
+
+        volume {
+          name = "grafana-config"
+
+          config_map {
+            name = kubernetes_config_map_v1.admin_sync.metadata[0].name
+          }
+        }
+      }
+    }
+  }
+
+  wait_for_completion = true
+  timeouts {
+    create = "10m"
+  }
+
+  depends_on = [
+    helm_release.grafana,
+    kubernetes_config_map_v1.admin_sync,
+    kubernetes_secret_v1.admin,
+    kubernetes_secret_v1.db,
+  ]
+}
+
+# -----------------------------------------------------------------------------
 # Tailscale Ingress
 # -----------------------------------------------------------------------------
 resource "kubernetes_manifest" "ingress" {
@@ -285,5 +455,8 @@ resource "kubernetes_manifest" "ingress" {
     ingress_class_name = var.tailscale_ingress_class
   }))
 
-  depends_on = [helm_release.grafana]
+  depends_on = [
+    helm_release.grafana,
+    kubernetes_job_v1.sync_admin_password,
+  ]
 }

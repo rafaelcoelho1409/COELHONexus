@@ -34,18 +34,6 @@ dependency "k3d" {
   mock_outputs_allowed_terraform_commands = ["validate", "init", "plan"]
 }
 
-# Snapshot backup CronJob target.
-dependency "minio" {
-  config_path = "../minio"
-
-  mock_outputs = {
-    api_endpoint = "http://minio.minio.svc.cluster.local:9000"
-    access_key   = "mock"
-    secret_key   = "mock"
-  }
-  mock_outputs_allowed_terraform_commands = ["validate", "init", "plan"]
-}
-
 # Ordering-only.
 dependencies {
   paths = ["../../10-platform/monitoring-crds"]
@@ -67,15 +55,6 @@ generate "providers" {
 }
 
 inputs = {
-  # Tailscale — DUMMY (Ingresses unconditional in main.tf).
-  tailscale_domain        = "tailscale.local"
-  tailscale_ingress_class = "tailscale"
-
-  # MinIO snapshot endpoint.
-  minio_endpoint   = dependency.minio.outputs.api_endpoint
-  minio_access_key = dependency.minio.outputs.access_key
-  minio_secret_key = dependency.minio.outputs.secret_key
-
   # Public-demo/local app credential. ECK still auto-generates the `elastic`
   # superuser password for admin jobs, but FastAPI/Celery should not use it.
   app_user_enabled = true

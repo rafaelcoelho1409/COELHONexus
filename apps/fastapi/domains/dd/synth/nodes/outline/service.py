@@ -47,6 +47,7 @@ from domains.llm.rotator.chain import chat_judge_bandit_async
 from domains.llm.rotator.chain.service import embed_via_router_async
 
 from ....ingestion.storage import get_storage
+from ...runtime.observability import record_bucket_split_overflow
 from ...runtime.progress import emit_progress
 from ...state import SynthState
 from ..render.keys import planner_latest_key as _planner_latest_key
@@ -1442,6 +1443,10 @@ async def outline_sdp_run(state: SynthState) -> dict:
             f"{adaptive_cap}, n_sources = {len(sources)}). LLM ignored the "
             f"soft cap signal after {n_repairs} repairs; programmatic "
             f"trim restores the bound."
+        )
+        record_bucket_split_overflow(
+            framework = slug,
+            sections_dropped = max(n_before - len(outline.sections), 0),
         )
         # Re-validate post-trim so downstream sees the actual remaining
         # violations (not the pre-trim ones, which may include the

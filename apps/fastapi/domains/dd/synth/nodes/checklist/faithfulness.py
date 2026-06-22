@@ -25,7 +25,7 @@ CONSTRAINT: free-tier-only. No paid APIs. No local inference inside COELHO
 Cloud. All LLM calls flow through the FGTS-VA bandit-routed rotator
 (chat_judge_bandit_async). See project_local_vs_rotator_architecture.
 
-Per `feedback_kd_quality_over_speed`: tokens are free; ~5-30 extra calls per
+Per `feedback_dd_quality_over_speed`: tokens are free; ~5-30 extra calls per
 chapter is trivial cost for the +8-12pp expected F1 lift over cosine baseline
 and 2-3pp delta below the (architecturally-banned) LettuceDetect-large.
 

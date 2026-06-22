@@ -23,7 +23,7 @@ Design notes (June 2026 SOTA distilled from a focused web sweep):
     code it FORCES the model to plug any remaining holes — the critique
     explicitly scans for placeholders and the revise pass fills them.
     +20% avg quality across 7 tasks at 2x token cost — worth it under
-    [[feedback_kd_quality_over_speed]] ("tokens are free; runtime isn't
+    [[feedback_dd_quality_over_speed]] ("tokens are free; runtime isn't
     a concern").
 
   - Single ```python fenced block on output. Hybrid free-form scratchpad

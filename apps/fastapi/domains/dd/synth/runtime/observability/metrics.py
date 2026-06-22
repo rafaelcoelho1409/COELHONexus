@@ -5,10 +5,10 @@ that calls them.
 
 PromQL slice examples:
     histogram_quantile(0.5, sum by (le, pinned_model)
-        (rate(kd_refiner_iters_to_accept_bucket{outcome="accept"}[1h])))
-    rate(kd_audit_missing_hashes_ratio_sum[5m])
-        / rate(kd_audit_missing_hashes_ratio_count[5m])
-    sum by (framework) (rate(kd_bucket_split_overflow_total[1h]))
+        (rate(dd_refiner_iters_to_accept_bucket{outcome="accept"}[1h])))
+    rate(dd_audit_missing_hashes_ratio_sum[5m])
+        / rate(dd_audit_missing_hashes_ratio_count[5m])
+    sum by (framework) (rate(dd_bucket_split_overflow_total[1h]))
 """
 from __future__ import annotations
 

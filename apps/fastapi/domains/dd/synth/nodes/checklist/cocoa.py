@@ -30,7 +30,7 @@ the bandit learns separate quality posteriors for each role:
 Two LLM calls per chapter total (one batched call per stage), matching the
 bundled judge's cost envelope.
 
-Per `feedback_kd_quality_over_speed`: tokens are free, quality is the
+Per `feedback_dd_quality_over_speed`: tokens are free, quality is the
 binding constraint. Token budgets are intentionally generous; truncation
 only kicks in for pathologically long chapters.
 """

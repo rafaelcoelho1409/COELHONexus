@@ -22,7 +22,7 @@ DYNAMIC_STEPS: dict[str, DynamicStepConfig] = {
 class JudgeConfig:
     """ParetoBandit-driven judge tunables. dd-grader keeps grader cells separate
     from synthesizer cells (binary vs continuous reward shape)."""
-    kd_process:         str   = "dd-grader"
+    dd_process:         str   = "dd-grader"
     expected_latency_s: float = 4.0
     bandit_top_k:       int   = 10
 

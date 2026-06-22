@@ -40,31 +40,31 @@ NVIDIA_EMBEDDING_MODEL: "{{ .Values.embedding.model }}"
 # Read at runtime by graphs/knowledge/distiller.py.
 DD_USE_CLASSICAL_MAP: "{{ .Values.dd.useClassicalMap }}"
 # Phase 1.3 (2026-05-13): routes synth grader through classical scorer when "1".
-# See kd.useClassicalGrader in values.yaml.
+# See dd.useClassicalGrader in values.yaml.
 DD_USE_CLASSICAL_GRADER: "{{ .Values.dd.useClassicalGrader }}"
 # Phase 2.1 (2026-05-13): replaces critic's per-chapter LLM faithfulness call
-# with dd-embed similarity heuristic when "1". See kd.useClassicalCritic above.
+# with dd-embed similarity heuristic when "1". See dd.useClassicalCritic above.
 DD_USE_CLASSICAL_CRITIC: "{{ .Values.dd.useClassicalCritic }}"
 # Phase 3.1 (2026-05-13): routes Phase A outline through classical path when "1".
-# See kd.useClassicalOutline in values.yaml.
+# See dd.useClassicalOutline in values.yaml.
 DD_USE_CLASSICAL_OUTLINE: "{{ .Values.dd.useClassicalOutline }}"
 # Phase 4 (2026-05-13): when "1", Self-Refine loop attempts deterministic patches
 # on patchable grader Issue dims before LLM re-synth, and uses template-based
 # adjustment text instead of the ADJUSTMENT_PROMPT LLM call. See
-# kd.useClassicalRefiner in values.yaml.
+# dd.useClassicalRefiner in values.yaml.
 DD_USE_CLASSICAL_REFINER: "{{ .Values.dd.useClassicalRefiner }}"
 # Phase 5 (2026-05-13): when "1", per-chapter curator pass runs through
 # services/knowledge/curator_classical.py (deterministic regex passes, no LLM
-# call). See kd.useClassicalCurator in values.yaml.
+# call). See dd.useClassicalCurator in values.yaml.
 DD_USE_CLASSICAL_CURATOR: "{{ .Values.dd.useClassicalCurator }}"
 # Phase 5 (2026-05-13): when "1", summary.md / assembler step runs through
 # services/knowledge/summary_classical.py (deterministic reading plan +
-# small-LLM creative artifacts only). See kd.useClassicalSummary in values.yaml.
+# small-LLM creative artifacts only). See dd.useClassicalSummary in values.yaml.
 DD_USE_CLASSICAL_SUMMARY: "{{ .Values.dd.useClassicalSummary }}"
 # Scope B (2026-05-12 night): when "1", section synth uses the dd-synth
-# non-reasoning pool instead of dd-all. See kd.useSynthPool in values.yaml.
+# non-reasoning pool instead of dd-all. See dd.useSynthPool in values.yaml.
 DD_USE_SYNTH_POOL: "{{ .Values.dd.useSynthPool }}"
-# Fix #2 (2026-05-12 night): per-chapter model pinning. See kd.pinChapterModel
+# Fix #2 (2026-05-12 night): per-chapter model pinning. See dd.pinChapterModel
 # in values.yaml.
 DD_PIN_CHAPTER_MODEL: "{{ .Values.dd.pinChapterModel }}"
 # OpenTelemetry (2026-05-12 night) — dual-export to Alloy (LGTM) + LangFuse v3.
@@ -75,7 +75,7 @@ DD_PIN_CHAPTER_MODEL: "{{ .Values.dd.pinChapterModel }}"
 OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.otel.alloy_endpoint }}"
 OTEL_SERVICE_NAME: "{{ .Values.otel.service_name }}"
 OTEL_SERVICE_VERSION: "{{ .Values.otel.service_version }}"
-OTEL_RESOURCE_ATTRIBUTES: "deployment.environment={{ .Values.environment }},service.namespace=knowledge-distiller"
+OTEL_RESOURCE_ATTRIBUTES: "deployment.environment={{ .Values.environment }},service.namespace=coelhonexus"
 LANGFUSE_OTLP_ENDPOINT: "{{ .Values.otel.langfuse_otlp_endpoint }}"
 # Opt into the latest GenAI semantic-convention attributes (`gen_ai.*`) on
 # every LLM span. Marked "Development" upstream; pin here and bump on each
@@ -95,18 +95,18 @@ LITELLM_OTEL_V2: "true"
 GIT_SHA: {{ .Values.otel.git_sha | default "" | quote }}
 HELM_CHART_VERSION: {{ .Chart.Version | quote }}
 # Scope B (2026-05-12 night): per-process LLM concurrency cap. See
-# kd.llmGlobalConcurrency in values.yaml and _get_llm_semaphore() in
+# dd.llmGlobalConcurrency in values.yaml and _get_llm_semaphore() in
 # graphs/knowledge/helpers.py.
 DD_LLM_GLOBAL_CONCURRENCY: "{{ .Values.dd.llmGlobalConcurrency }}"
 # R8 (2026-05-11): when "1", MAP runs ONE global pass (label_corpus_classical)
-# instead of per-shard. See `kd.globalMap` in values.yaml and `_use_global_map`
+# instead of per-shard. See `dd.globalMap` in values.yaml and `_use_global_map`
 # in graphs/knowledge/distiller.py.
 DD_GLOBAL_MAP: "{{ .Values.dd.globalMap }}"
 # Phase 1 rotator rebuild (2026-05-14): when "1", build the LiteLLM Router's
 # model_list from live discovery (services/discovery.py) + benchmark ranking
 # (services/benchmarks.py) instead of the hand-curated static catalog in
 # services/llm_chain.py. Falls back to static catalog on any error.
-# See kd.dynamicCatalog in values.yaml.
+# See dd.dynamicCatalog in values.yaml.
 DD_DYNAMIC_CATALOG: "{{ .Values.dd.dynamicCatalog }}"
 # Phase 2 — ParetoBandit ALWAYS-ON adaptive routing (2026-05-14): the bandit
 # runs by default; set "1" to disable (emergency rollback to Phase 1).

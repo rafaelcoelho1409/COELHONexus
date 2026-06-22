@@ -85,7 +85,7 @@ Ranked by ROI for the LGTM half of the stack (where LangFuse is weak).
 | 7 | **Span events** (not spans) for transient fine-grained steps (bandit arm pick, rate-limit wait) | Cheaper than spans, still queryable as `span.event.*` |
 | 8 | **Resource attrs from git SHA + Helm chart version** in `build_resource()` | "Which deploy regressed?" diff in Grafana annotations |
 | 9 | **OTel logs (signal)** for structured prompt-mask events + audit decisions | Logs share trace_id with spans via existing `LoggingInstrumentor` |
-| 10 | **SLO recording rules + burn-rate alerts** on `kd_chapter_outcome` and `gen_ai.client.operation.duration` | Real SLO practice — reusable pattern for any future LLM service |
+| 10 | **SLO recording rules + burn-rate alerts** on `dd_chapter_outcome` and `gen_ai.client.operation.duration` | Real SLO practice — reusable pattern for any future LLM service |
 
 ---
 
@@ -223,7 +223,7 @@ observability/fixtures/          # gold datasets, mirror the domain split
 | 6 | Grader scores → LangFuse `scores` dual-write | ~1 h | First "real" use of scores; per-trace quality visible immediately |
 | 7 | First gold dataset + faithfulness LLM-judge evaluator (DD reference book) | ~3 h | Closes the regression loop end-to-end |
 | 8 | YCS custom `db.*` spans for Qdrant + Neo4j + ES + reranker | ~2 h | Cleanest `db.*` semconv showcase |
-| 9 | Grafana dashboards: RED per provider, cost per tenant, p95 latency exemplar-linked to Tempo | ~2 h | Demo-quality dashboards built on existing `kd_*` + `gen_ai.*` metrics |
+| 9 | Grafana dashboards: RED per provider, cost per tenant, p95 latency exemplar-linked to Tempo | ~2 h | Demo-quality dashboards built on existing `dd_*` + `gen_ai.*` metrics |
 | 10 | Tail sampling at Alloy collector config | ~1 h | **Last** — needs real traffic to set thresholds correctly |
 
 Total: ~14 hours for full coverage of every learning vector listed above.
@@ -233,7 +233,7 @@ Total: ~14 hours for full coverage of every learning vector listed above.
 ## 8. Hard constraints kept in mind
 
 - **Free-tier only** — judges run through the rotator (NIM-hosted Llama / Qwen), never paid SaaS. See [[feedback_free_tier_only]].
-- **No in-cluster inference** — rerankers (FlashRank) and BPE tokenizers stay CPU-side; nothing GPU. The `kd_*` metrics already respect this.
+- **No in-cluster inference** — rerankers (FlashRank) and BPE tokenizers stay CPU-side; nothing GPU. The `dd_*` metrics already respect this.
 - **BYOK rotator** — provider keys via the LLM credentials store at `domains/llm/credentials/`. LangFuse public/secret keys handled identically (Fernet at-rest in MinIO, KEK from env or auto-gen).
 - **Self-hosted LangFuse** — one more K8s service in COELHO Cloud (OSS, free). Provision under `~/COELHOCloud/infrastructure/modules/langfuse/` following the existing Terragrunt pattern.
 - **No deep-research harness usage** per [[feedback_no_deep_research_for_design]] — this doc was built from 4 targeted WebSearches + direct repo reads.

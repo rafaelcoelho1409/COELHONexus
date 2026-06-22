@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Optional
@@ -44,6 +45,11 @@ from ...keys import (
     study_timing_key,
 )
 from ...params import REDIS_CONNECT_TIMEOUT_S, REDIS_OP_TIMEOUT_S, STUDY_SEM
+from ..observability import (
+    record_audit_missing,
+    record_chapter_outcome,
+    record_study_completion,
+)
 from ..progress import emit_progress
 from .domain import missing_implemented_nodes
 from .params import (
@@ -54,6 +60,56 @@ from .params import (
 
 
 logger = logging.getLogger(__name__)
+_CHAPTER_ID_RE = re.compile(r"^ch-(\d+)")
+
+
+def _chapter_number_from_id(chapter_id: str) -> int:
+    m = _CHAPTER_ID_RE.match(chapter_id or "")
+    return int(m.group(1)) if m else 0
+
+
+async def _record_terminal_metrics(graph, config: dict, status: str) -> None:
+    if status != "done":
+        return
+    try:
+        snap = await graph.aget_state(config)
+        state = dict(snap.values or {})
+        slug = str(state.get("framework_slug") or "")
+        chapter_id = str(state.get("chapter_id") or "")
+        chapter_num = _chapter_number_from_id(chapter_id)
+        chapter_stats = state.get("chapter_stats") or {}
+        mgsr_stats = state.get("mgsr_stats") or {}
+        if not slug or not chapter_id or chapter_num <= 0 or not chapter_stats:
+            return
+        wall_ms = int(chapter_stats.get("wall_ms", 0) or 0)
+        refine_iter = int(state.get("refine_iter", 0) or 0)
+        halt_reason = str(mgsr_stats.get("halt_reason") or "")
+        audit_passed = bool(chapter_stats.get("audit_passed", False))
+        outcome = "accept" if halt_reason == "chapter_passed" else "debt_below"
+        record_chapter_outcome(
+            outcome = outcome,
+            framework = slug,
+            chapter_number = chapter_num,
+            duration_s = max(wall_ms / 1000.0, 0.0),
+            iterations = max(refine_iter, 0),
+        )
+        n_code_refs = int(chapter_stats.get("n_code_refs", 0) or 0)
+        n_missing = int(chapter_stats.get("n_missing", 0) or 0)
+        missing_ratio = (
+            float(n_missing) / float(n_code_refs)
+            if n_code_refs > 0 else
+            (1.0 if not audit_passed else 0.0)
+        )
+        record_audit_missing(
+            framework = slug,
+            chapter_number = chapter_num,
+            iteration = max(refine_iter, 0),
+            missing_ratio = max(0.0, min(missing_ratio, 1.0)),
+        )
+    except Exception as e:
+        logger.warning(
+            f"[synth] terminal metric emit failed: {type(e).__name__}: {e}"
+        )
 
 
 async def _await_with_watcher(
@@ -92,6 +148,11 @@ async def _await_with_watcher(
             f"[synth] {thread_id}: aupdate_state failed for terminal "
             f"patch {terminal_patch!r}: {type(e).__name__}: {e}"
         )
+    await _record_terminal_metrics(
+        graph,
+        config,
+        terminal_patch.get("status", "unknown"),
+    )
 
     try:
         from domains.dd.runtime.llm_counter import snapshot as _snapshot_llm
@@ -874,6 +935,19 @@ async def _run_study_async_inner(
         f"{n_completed}/{n_total} completed, {n_failed} failed, "
         f"final_status = {final_status}"
     )
+    try:
+        record_study_completion(
+            framework = slug,
+            duration_s = max(total_wall_ms / 1000.0, 0.0),
+            n_accepted = n_completed,
+            n_total = n_total,
+            outcome = final_status,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[study-orchestrator] {slug}: study metric emit failed "
+            f"({type(e).__name__}: {e})"
+        )
     return {
         "thread_id":      study_thread_id,
         "slug":           slug,

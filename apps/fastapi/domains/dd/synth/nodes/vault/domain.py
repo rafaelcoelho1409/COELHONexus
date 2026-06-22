@@ -220,7 +220,7 @@ def format_entry_for_prompt(
     with the envelope so the LLM can correlate this entry with
     `code_refs[*].hash` in its output.
 
-    Per `feedback_kd_quality_over_speed` (tokens are free, quality >
+    Per `feedback_dd_quality_over_speed` (tokens are free, quality >
     speed) and the visible-vault SOTA (the whole point is the LLM sees
     the actual code), this defaults to NO TRUNCATION. The optional
     `max_chars` is kept as a safety valve for pathological cases.

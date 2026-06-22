@@ -70,33 +70,6 @@ variable "operator_namespace" {
 }
 
 # -----------------------------------------------------------------------------
-# Network exposure (Tailscale) — Kibana ONLY
-# -----------------------------------------------------------------------------
-
-variable "tailscale_hostname_kibana" {
-  description = "Short tailnet hostname for Kibana UI."
-  type        = string
-  default     = "kibana"
-}
-
-variable "tailscale_hostname_es" {
-  description = "Short tailnet hostname for the Elasticsearch HTTPS REST API. Lets laptop scripts (during Nexus development) query ES without kubectl port-forward. Data-plane endpoint — no Homepage tile."
-  type        = string
-  default     = "elasticsearch"
-}
-
-variable "tailscale_domain" {
-  description = "Tailnet domain. Comes from env.hcl."
-  type        = string
-}
-
-variable "tailscale_ingress_class" {
-  description = "IngressClass name from the tailscale-operator unit."
-  type        = string
-  default     = "tailscale"
-}
-
-# -----------------------------------------------------------------------------
 # Storage
 # -----------------------------------------------------------------------------
 
@@ -159,52 +132,6 @@ variable "kibana_node_max_old_space_mb" {
 variable "kibana_cpu_request" {
   type    = string
   default = "100m"
-}
-
-# -----------------------------------------------------------------------------
-# v2 baseline MinIO — for snapshot backups
-# -----------------------------------------------------------------------------
-
-variable "minio_endpoint" {
-  description = "MinIO S3 endpoint (in-cluster, with scheme)."
-  type        = string
-  default     = "http://minio.minio.svc.cluster.local:9000"
-}
-
-variable "minio_access_key" {
-  description = "MinIO access key."
-  type        = string
-  sensitive   = true
-}
-
-variable "minio_secret_key" {
-  description = "MinIO secret key."
-  type        = string
-  sensitive   = true
-}
-
-variable "backup_bucket" {
-  description = "MinIO bucket for snapshots. Uses shared `backups` bucket; ES uses `elasticsearch/` prefix."
-  type        = string
-  default     = "backups"
-}
-
-variable "snapshot_repo_name" {
-  description = "ES snapshot repository name."
-  type        = string
-  default     = "minio-backup"
-}
-
-variable "backup_schedule" {
-  description = "Cron for the snapshot CronJob."
-  type        = string
-  default     = "30 */6 * * *"
-}
-
-variable "backup_retention" {
-  description = "Number of snapshots to keep."
-  type        = number
-  default     = 20
 }
 
 # -----------------------------------------------------------------------------

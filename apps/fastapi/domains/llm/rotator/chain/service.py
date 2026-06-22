@@ -93,7 +93,7 @@ logger = logging.getLogger(__name__)
 try:
     import openai as _openai_sdk
 
-    if not getattr(_openai_sdk, "_kd_no_sdk_retries", False):
+    if not getattr(_openai_sdk, "_dd_no_sdk_retries", False):
         _orig_async_openai_init = _openai_sdk.AsyncOpenAI.__init__
         _orig_sync_openai_init = _openai_sdk.OpenAI.__init__
 
@@ -107,7 +107,7 @@ try:
 
         _openai_sdk.AsyncOpenAI.__init__ = _async_openai_init_no_retries
         _openai_sdk.OpenAI.__init__ = _sync_openai_init_no_retries
-        _openai_sdk._kd_no_sdk_retries = True
+        _openai_sdk._dd_no_sdk_retries = True
         logger.info("[llm-chain] OpenAI SDK hidden retries disabled (max_retries=0)")
 except Exception as _sdk_patch_err:
     logger.warning(

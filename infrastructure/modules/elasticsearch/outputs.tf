@@ -39,11 +39,6 @@ output "in_cluster_url" {
   value       = "https://elasticsearch-es-http.${var.namespace}.svc.cluster.local:9200"
 }
 
-output "external_url" {
-  description = "Elasticsearch HTTPS URL via Tailscale Ingress. Tailscale terminates TLS with an LE-issued cert, then forwards to the in-cluster ES Service over HTTPS. Use this from laptop during Nexus dev."
-  value       = "https://${var.tailscale_hostname_es}.${var.tailscale_domain}"
-}
-
 output "username" {
   description = "Built-in admin username."
   value       = "elastic"
@@ -64,15 +59,6 @@ output "password_retrieval_command" {
   description = "kubectl one-liner that prints the effective elastic user password."
   value       = local.elastic_password_override_enabled ? "kubectl get secret -n ${var.namespace} ${kubernetes_secret_v1.elastic_admin[0].metadata[0].name} -o jsonpath='{.data.elastic}' | base64 -d" : "kubectl get secret -n ${var.namespace} elasticsearch-es-elastic-user -o jsonpath='{.data.elastic}' | base64 -d"
   sensitive   = true
-}
-
-# -----------------------------------------------------------------------------
-# External (Tailnet) — Kibana only
-# -----------------------------------------------------------------------------
-
-output "kibana_url" {
-  description = "Kibana UI URL (HTTPS via Tailscale)."
-  value       = "https://${var.tailscale_hostname_kibana}.${var.tailscale_domain}"
 }
 
 output "ready" {

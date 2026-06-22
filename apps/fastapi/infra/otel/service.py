@@ -114,11 +114,11 @@ def init_otel(also_instrument_fastapi_app=None) -> bool:
         langfuse_ok = add_langfuse_exporter(tracer_provider)
 
         trace.set_tracer_provider(tracer_provider)
-        _tracer = trace.get_tracer("kd.fastapi", "1.0.0")
+        _tracer = trace.get_tracer("coelhonexus.fastapi", "1.0.0")
 
         add_metric_exporter()
         from opentelemetry import metrics as otel_metrics
-        _meter = otel_metrics.get_meter("kd.fastapi", "1.0.0")
+        _meter = otel_metrics.get_meter("coelhonexus.fastapi", "1.0.0")
 
         _instrument_libraries()
 
@@ -152,7 +152,7 @@ def get_tracer():
     if _tracer is not None:
         return _tracer
     from opentelemetry import trace
-    return trace.get_tracer("kd.fastapi.noop")
+    return trace.get_tracer("coelhonexus.fastapi.noop")
 
 
 def get_meter():
@@ -160,7 +160,7 @@ def get_meter():
     if _meter is not None:
         return _meter
     from opentelemetry import metrics
-    return metrics.get_meter("kd.fastapi.noop")
+    return metrics.get_meter("coelhonexus.fastapi.noop")
 
 
 def init_otel_for_celery_worker() -> bool:

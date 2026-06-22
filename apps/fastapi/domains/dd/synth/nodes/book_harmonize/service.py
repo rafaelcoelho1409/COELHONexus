@@ -46,6 +46,7 @@ from typing import Optional
 
 from domains.llm.rotator.chain import chat_judge_bandit_async
 
+from ...runtime.observability import record_classical_patch
 
 from .versions import (
     BOOK_HARMONIZE_PROMPT_VERSION,
@@ -327,6 +328,10 @@ async def harmonize_book(
             })
             if ok:
                 n_patched += 1
+                record_classical_patch(
+                    dim = "cross_chapter_coherence",
+                    framework = framework_slug,
+                )
 
     return {
         "n_chapters": len(chapters),

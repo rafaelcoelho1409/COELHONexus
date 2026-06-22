@@ -5,7 +5,7 @@ from __future__ import annotations
 SERVICE_NAME_DEFAULT = "coelhonexus-fastapi"
 SERVICE_VERSION_DEFAULT = "1.0.0"
 DEPLOYMENT_ENVIRONMENT_DEFAULT = "dev"
-SERVICE_NAMESPACE = "knowledge-distiller"
+SERVICE_NAMESPACE = "coelhonexus"
 
 
 OTLP_TIMEOUT_DEFAULT_S = 30

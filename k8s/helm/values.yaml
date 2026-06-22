@@ -532,7 +532,7 @@ flower:
 
 # FastHTML frontend (Python + python-fasthtml + HTMX + PWA).
 # Replaced the legacy Go web frontend on 2026-05-09 — same /static, same
-# /kd/inspect, same /api/test contract. NodePort 30023 retained to avoid
+# legacy /kd/inspect, same /api/test contract. NodePort 30023 retained to avoid
 # breaking any external callers that may still reference the old `web` URLs.
 fasthtml:
   image: coelho-cloud-registry:5000/coelhonexus-fasthtml:latest

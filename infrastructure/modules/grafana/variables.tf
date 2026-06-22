@@ -50,6 +50,12 @@ variable "admin_password" {
   default     = null
 }
 
+variable "grafana_cli_image" {
+  description = "Image used by the admin-password sync Job. Keep it aligned with the chart appVersion unless you intentionally decouple it."
+  type        = string
+  default     = "grafana/grafana:13.0.1"
+}
+
 variable "root_url" {
   description = "Optional full browser URL for Grafana. Set this for localhost port-forward deployments; otherwise the module derives the Tailscale URL."
   type        = string
