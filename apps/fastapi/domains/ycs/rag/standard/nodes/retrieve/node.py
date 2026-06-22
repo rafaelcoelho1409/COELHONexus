@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from langchain_core.documents import Document
 
-from domains.ycs.runtime.observability import traced
+from domains.ycs.runtime.observability import record_retrieved_docs, traced
 
 from ...state import YouTubeRAGState
 
@@ -75,6 +75,11 @@ async def retrieve(
     sources = list({
         doc.metadata.get("source", "unknown") for doc in documents
     })
+    record_retrieved_docs(
+        route = str(state.get("route") or "unknown"),
+        mode = str(state.get("mode") or "standard"),
+        count = len(documents),
+    )
     merged_pre_grade = _merge_pre_grade(
         state.get("pre_grade_documents"), documents,
     )

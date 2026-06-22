@@ -156,9 +156,82 @@ alloy:
         }
 
         output {
-          traces  = [otelcol.processor.batch.traces.input]
+          traces  = [otelcol.processor.k8sattributes.otlp.input]
+          metrics = [otelcol.processor.k8sattributes.otlp.input]
+          logs    = [otelcol.processor.k8sattributes.otlp.input]
+        }
+      }
+
+      otelcol.processor.k8sattributes "otlp" {
+        extract {
+          metadata = [
+            "k8s.namespace.name",
+            "k8s.pod.name",
+            "k8s.node.name",
+            "k8s.deployment.name",
+            "k8s.statefulset.name",
+            "service.name",
+            "service.namespace",
+            "service.version",
+          ]
+          deployment_name_from_replicaset = true
+        }
+
+        output {
+          traces = [
+            otelcol.connector.spanmetrics.default.input,
+            otelcol.connector.servicegraph.default.input,
+            otelcol.processor.batch.traces.input,
+          ]
           metrics = [otelcol.processor.batch.metrics.input]
           logs    = [otelcol.processor.batch.logs.input]
+        }
+      }
+
+      otelcol.connector.spanmetrics "default" {
+        aggregation_temporality       = "DELTA"
+        aggregation_cardinality_limit = 10000
+        resource_metrics_key_attributes = [
+          "service.name",
+          "service.namespace",
+          "deployment.environment",
+        ]
+
+        dimension {
+          name = "deployment.environment"
+          default = "unknown"
+        }
+
+        dimension {
+          name = "service.namespace"
+          default = "default"
+        }
+
+        histogram {
+          explicit {
+            buckets = ["5ms", "10ms", "25ms", "50ms", "100ms", "250ms", "500ms", "1s", "2s", "5s", "10s", "30s"]
+          }
+        }
+
+        exemplars {
+          enabled = true
+        }
+
+        output {
+          metrics = [otelcol.exporter.prometheus.mimir.input]
+        }
+      }
+
+      otelcol.connector.servicegraph "default" {
+        dimensions = ["deployment.environment", "k8s.namespace.name"]
+
+        store {
+          ttl = "10s"
+          max_items = 5000
+        }
+
+        output {
+          metrics = [otelcol.exporter.prometheus.mimir.input]
         }
       }
 

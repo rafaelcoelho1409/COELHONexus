@@ -42,29 +42,22 @@ def _instrument_libraries() -> None:
         LoggingInstrumentor().instrument(set_logging_format=False)
     except Exception as e:
         logger.debug(f"[otel] logging instrumentation skipped: {e}")
-    # LiteLLM `langfuse_otel` callback emits standardized gen_ai.* spans
-    # through whichever tracer provider is installed — lands in BOTH
-    # Alloy/Tempo AND LangFuse via this process's dual exporter. Module-level
-    # so every Router instance inherits. Idempotent — checks presence before
-    # appending so re-init never duplicates.
+    # COELHO Nexus already emits one authoritative gen_ai.* tracing path from
+    # the rotator span helpers. Do NOT also wire LiteLLM's `langfuse_otel`
+    # callback here: under the Router path it can race with our manual span
+    # lifecycle and try to mutate spans after close, which shows up as
+    # "Setting attribute on ended span" in Celery logs and null-ish LangFuse
+    # traces. Keep only the lightweight cost callback.
     try:
         import litellm
-        cb = "langfuse_otel"
-        succ = list(litellm.success_callback or [])
-        if cb not in succ:
-            litellm.success_callback = succ + [cb]
-        fail = list(litellm.failure_callback or [])
-        if cb not in fail:
-            litellm.failure_callback = fail + [cb]
         # Per-call cost attaches as a LangFuse score on the trace.
-        # Function-callback shape — runs alongside the string-form
-        # `langfuse_otel` builtin (no-op under Router).
+        # Function-callback shape only; no extra LiteLLM trace callback.
         from .litellm_callbacks import cost_callback as _cost_cb
         succ_now = list(litellm.success_callback or [])
         if _cost_cb not in succ_now:
             litellm.success_callback = succ_now + [_cost_cb]
         logger.info(
-            f"[otel] litellm callbacks wired: {cb} (string), cost_callback (fn)"
+            "[otel] litellm callbacks wired: cost_callback (fn)"
         )
     except Exception as e:
         logger.debug(f"[otel] litellm callback wiring skipped: {e}")

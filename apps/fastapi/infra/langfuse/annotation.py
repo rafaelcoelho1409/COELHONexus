@@ -34,9 +34,13 @@ def flag_for_review(
     try:
         from opentelemetry import trace
         span = trace.get_current_span()
-        span.set_attribute("review.required",  True)
-        span.set_attribute("review.reason",    reason[:240])
-        span.set_attribute("review.severity",  severity)
+        is_recording = getattr(span, "is_recording", None)
+        if callable(is_recording) and not is_recording():
+            span = None
+        if span is not None:
+            span.set_attribute("review.required",  True)
+            span.set_attribute("review.reason",    reason[:240])
+            span.set_attribute("review.severity",  severity)
     except Exception as e:
         logger.debug(
             f"[langfuse-annotation] span tag failed: "

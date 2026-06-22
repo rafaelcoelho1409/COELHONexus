@@ -36,8 +36,19 @@ class GenAISpan:
     def __init__(self, span: Any) -> None:
         self._span = span
 
+    def _is_recording(self) -> bool:
+        try:
+            is_recording = getattr(self._span, "is_recording", None)
+            if callable(is_recording):
+                return bool(is_recording())
+        except Exception:
+            return False
+        return True
+
     def attach_attrs(self, attrs: dict[str, Any]) -> None:
         """None values dropped (OTel rejects them)."""
+        if not self._is_recording():
+            return
         for k, v in attrs.items():
             if v is None:
                 continue
@@ -167,14 +178,25 @@ class BanditCascadeSpan:
     def __init__(self, span: Any) -> None:
         self._span = span
 
+    def _is_recording(self) -> bool:
+        try:
+            is_recording = getattr(self._span, "is_recording", None)
+            if callable(is_recording):
+                return bool(is_recording())
+        except Exception:
+            return False
+        return True
+
     def set_total_attempts(self, n: int) -> None:
+        if not self._is_recording():
+            return
         try:
             self._span.set_attribute(BANDIT_TOTAL_ATTEMPTS, int(n))
         except Exception:
             pass
 
     def set_fallback(self, reason: str | None) -> None:
-        if not reason:
+        if not reason or not self._is_recording():
             return
         try:
             self._span.set_attribute(BANDIT_FALLBACK, reason)
@@ -252,6 +274,12 @@ def update_bandit_outcome(
 
 def _record_error(span: Any, exc: Exception) -> None:
     """Attach error.type / error.message + record_exception (no-op safe)."""
+    try:
+        is_recording = getattr(span, "is_recording", None)
+        if callable(is_recording) and not is_recording():
+            return
+    except Exception:
+        return
     try:
         span.set_attribute("error.type", type(exc).__name__)
         span.set_attribute("error.message", str(exc)[:300])

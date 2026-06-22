@@ -9,3 +9,8 @@ doesn't own.
   keys.py      redis_url + Redis channel/key builders
   params.py    Redis timeouts + snapshot retention
 """
+
+from .observability import record_phase_event, record_scan_run
+
+
+__all__ = ["record_phase_event", "record_scan_run"]

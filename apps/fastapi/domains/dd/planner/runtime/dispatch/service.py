@@ -26,11 +26,19 @@ from typing import Optional
 
 import redis.asyncio as redis_aio
 
+from infra.langfuse import (
+    set_current_span_langfuse_io,
+    set_current_span_langfuse_observation_metadata,
+    set_current_span_langfuse_trace_metadata,
+)
+from infra.otel import get_tracer
+
 from ....ingestion.storage import get_storage
 from ..cancel import clear_cancel, watcher as cancel_watcher
 from ...graph import NODE_REGISTRY, build_graph
 from ...keys import active_run_key, planner_timing_key, redis_url
 from ...params import REDIS_CONNECT_TIMEOUT_S, REDIS_OP_TIMEOUT_S
+from ..observability import record_planner_run
 from ..progress import emit_progress
 from .domain import missing_implemented_nodes
 
@@ -88,6 +96,92 @@ async def _clear_active_run(slug: str) -> None:
         )
 
 
+async def _record_terminal_metrics(
+    graph,
+    config: dict,
+    *,
+    fallback_slug: str,
+    fallback_mode: str,
+    status: str,
+    duration_s: float | None,
+) -> None:
+    try:
+        snap = await graph.aget_state(config)
+        state = dict(snap.values or {})
+        framework = str(state.get("framework_slug") or fallback_slug or "unknown")
+        mode = str(state.get("planner_mode") or fallback_mode or "unknown")
+        plan_write_stats = state.get("plan_write_stats") or {}
+        select_stats = state.get("select_stats") or {}
+        chapter_count = (
+            plan_write_stats.get("n_chapters")
+            or select_stats.get("n_chapters_out")
+        )
+        record_planner_run(
+            framework = framework,
+            mode = mode,
+            outcome = status,
+            duration_s = duration_s,
+            chapter_count = (
+                int(chapter_count)
+                if chapter_count is not None else
+                None
+            ),
+        )
+    except Exception as e:
+        logger.warning(
+            f"[planner] terminal metric emit failed: {type(e).__name__}: {e}"
+        )
+
+
+async def _build_langfuse_output(
+    graph,
+    config: dict,
+    *,
+    fallback_slug: str,
+    fallback_mode: str,
+    status: str,
+    error: str | None,
+) -> dict:
+    output = {
+        "status": status,
+        "framework_slug": fallback_slug or "unknown",
+        "mode": fallback_mode or "unknown",
+    }
+    if error:
+        output["error"] = error
+    try:
+        snap = await graph.aget_state(config)
+        state = dict(snap.values or {})
+        output["framework_slug"] = str(
+            state.get("framework_slug") or fallback_slug or "unknown",
+        )
+        output["mode"] = str(
+            state.get("planner_mode") or fallback_mode or "unknown",
+        )
+        select_stats = state.get("select_stats") or {}
+        plan_write_stats = state.get("plan_write_stats") or {}
+        order_stats = state.get("order_chapters_stats") or {}
+        chapter_titles = (
+            plan_write_stats.get("chapter_titles")
+            or select_stats.get("chapter_titles")
+            or order_stats.get("chapter_titles")
+            or []
+        )
+        output["chapter_count"] = (
+            plan_write_stats.get("n_chapters")
+            or select_stats.get("n_chapters_out")
+            or order_stats.get("n_chapters")
+            or 0
+        )
+        if chapter_titles:
+            output["chapter_titles"] = list(chapter_titles)[:12]
+    except Exception as e:
+        logger.warning(
+            f"[planner] langfuse output summary failed: {type(e).__name__}: {e}"
+        )
+    return output
+
+
 async def _await_with_watcher(
     graph,
     config: dict,
@@ -96,6 +190,7 @@ async def _await_with_watcher(
     thread_id: str,
     t0: Optional[float] = None,
     slug: Optional[str] = None,
+    mode: str = "llm",
 ) -> dict:
     """Common terminal-status lifecycle: await the planner task, write
     terminal status to checkpoint, emit SSE terminal event, cancel watcher.
@@ -144,6 +239,18 @@ async def _await_with_watcher(
     total_wall_ms = (
         int((time.monotonic() - t0) * 1000) if t0 is not None else None
     )
+    await _record_terminal_metrics(
+        graph,
+        config,
+        fallback_slug = slug or "",
+        fallback_mode = mode,
+        status = terminal_patch.get("status", "unknown"),
+        duration_s = (
+            max(total_wall_ms / 1000.0, 0.0)
+            if total_wall_ms is not None else
+            None
+        ),
+    )
     if total_wall_ms is not None and slug:
         await _persist_planner_timing(slug, total_wall_ms)
 
@@ -162,10 +269,20 @@ async def _await_with_watcher(
         total_wall_ms = total_wall_ms,
     )
 
+    langfuse_output = await _build_langfuse_output(
+        graph,
+        config,
+        fallback_slug = slug or "",
+        fallback_mode = mode,
+        status = terminal_patch.get("status", "unknown"),
+        error = terminal_patch.get("error"),
+    )
+
     return {
         "thread_id": thread_id,
         "status": terminal_patch.get("status", "unknown"),
         "error": terminal_patch.get("error"),
+        "langfuse_output": langfuse_output,
     }
 
 
@@ -184,7 +301,42 @@ async def run_planner_async(
         study_id   = thread_id,
         framework  = slug,
     ):
-        return await _run_planner_async_inner(thread_id, slug, mode)
+        with get_tracer().start_as_current_span(
+            "dd.planner.run",
+            attributes = {
+                "dd.domain":             "planner",
+                "dd.run.kind":           "planner",
+                "planner.thread_id":     thread_id,
+                "planner.framework_slug": slug,
+                "planner.mode":          mode,
+            },
+        ):
+            set_current_span_langfuse_io(input_data = {
+                "framework_slug": slug,
+                "mode": mode,
+                "thread_id": thread_id,
+            })
+            set_current_span_langfuse_trace_metadata({
+                "pipeline": "dd_planner",
+                "run_kind": "planner",
+                "framework_slug": slug,
+                "mode": mode,
+                "thread_id": thread_id,
+            })
+            set_current_span_langfuse_observation_metadata({
+                "framework_slug": slug,
+                "mode": mode,
+            })
+            result = await _run_planner_async_inner(thread_id, slug, mode)
+            set_current_span_langfuse_io(
+                output_data = result.get("langfuse_output") or {
+                    "status": result.get("status", "unknown"),
+                    "error": result.get("error"),
+                    "framework_slug": slug,
+                    "mode": mode,
+                },
+            )
+            return result
 
 
 async def _run_planner_async_inner(
@@ -218,7 +370,7 @@ async def _run_planner_async_inner(
     watcher_task = asyncio.create_task(cancel_watcher(thread_id, main_task))
     return await _await_with_watcher(
         graph, config, main_task, watcher_task, thread_id,
-        t0 = t0, slug = slug,
+        t0 = t0, slug = slug, mode = mode,
     )
 
 

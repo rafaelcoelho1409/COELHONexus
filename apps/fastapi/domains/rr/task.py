@@ -18,6 +18,12 @@ from typing import Any
 from uuid import UUID
 
 from infra.celery import app
+from infra.langfuse import (
+    set_current_span_langfuse_io,
+    set_current_span_langfuse_observation_metadata,
+    set_current_span_langfuse_trace_metadata,
+)
+from infra.otel import get_tracer
 
 from .agent.graph import build_radar_agent
 from .agent.tools.state import clear_scan_fs, fs_list, fs_read, init_scan_fs
@@ -29,6 +35,7 @@ from .agent.keys import (
 )
 from .entities import Extraction, Finding
 from .runtime.events import emit_event_sync
+from .runtime.observability import record_scan_run
 from .service import (
     begin_scan,
     complete_scan,
@@ -118,6 +125,83 @@ async def _run_radar_scan_async(
     verticals: list[str],
     top_n: int,
 ) -> dict:
+    """Span + metrics wrapper around the RR scan orchestration."""
+    t0 = asyncio.get_running_loop().time()
+    with get_tracer().start_as_current_span(
+        "rr.scan.run",
+        attributes = {
+            "rr.scan_id":        scan_id,
+            "rr.profile_id":     profile_id,
+            "rr.topic":          topic[:200],
+            "rr.vertical_count": len(verticals),
+            "rr.top_n":          top_n,
+        },
+    ):
+        set_current_span_langfuse_io(input_data = {
+            "topic": topic,
+            "verticals": list(verticals or []),
+            "top_n": top_n,
+            "scan_id": scan_id,
+            "profile_id": profile_id,
+        })
+        set_current_span_langfuse_trace_metadata({
+            "pipeline": "rr_scan",
+            "scan_id": scan_id,
+            "profile_id": profile_id,
+            "vertical_count": len(verticals),
+            "top_n": top_n,
+        })
+        set_current_span_langfuse_observation_metadata({
+            "topic": topic[:200],
+            "vertical_count": len(verticals),
+        })
+        try:
+            result = await _run_radar_scan_async_inner(
+                scan_id = scan_id,
+                profile_id = profile_id,
+                topic = topic,
+                verticals = verticals,
+                top_n = top_n,
+            )
+        except Exception as e:
+            set_current_span_langfuse_io(output_data = {
+                "status": "failed",
+                "error": f"{type(e).__name__}: {e}",
+                "n_findings": 0,
+                "total_candidates": 0,
+                "themes": [],
+                "degraded": True,
+            })
+            raise
+        set_current_span_langfuse_io(output_data = {
+            "status": result.get("status", "unknown"),
+            "n_findings": int(result.get("n_findings", 0) or 0),
+            "total_candidates": int(
+                result.get("total_candidates", result.get("n_findings", 0)) or 0
+            ),
+            "themes": list(result.get("themes") or [])[:10],
+            "degraded": bool(result.get("degraded", result.get("status") != "done")),
+            "degradation_reasons": list(result.get("degradation_reasons") or [])[:10],
+            "error": result.get("error"),
+        })
+    record_scan_run(
+        degraded = bool(result.get("degraded", result.get("status") != "done")),
+        outcome = str(result.get("status") or "unknown"),
+        duration_s = max(asyncio.get_running_loop().time() - t0, 0.0),
+        findings = int(result.get("n_findings", 0) or 0),
+        candidates = int(result.get("total_candidates", result.get("n_findings", 0)) or 0),
+        theme_count = len(result.get("themes") or []),
+    )
+    return result
+
+
+async def _run_radar_scan_async_inner(
+    scan_id: str,
+    profile_id: str,
+    topic: str,
+    verticals: list[str],
+    top_n: int,
+) -> dict:
     """End-to-end async pipeline. Emits phase events as it goes."""
     scan_uuid = UUID(scan_id)
 
@@ -158,17 +242,8 @@ async def _run_radar_scan_async(
         # without needing model wrapping. The callback no-ops when no
         # scan_id is in the context — safe for the shared rotator chain.
         _llm_cb = getattr(agent, "_rr_llm_counter_cb", None)
-        # LangFuse CallbackHandler — emits a session-grouped nested trace
-        # (orchestrator + each subagent + every tool call). Returns None
-        # when LangFuse is unavailable; we filter None from the list.
-        from infra.langfuse.callbacks import build_langchain_callback
         from infra.langfuse.sessions import session as _lf_session
-        _lf_cb = build_langchain_callback(
-            session_id = scan_id,
-            user_id    = profile_id,
-            tags       = ["rr", "digest", *list(verticals)],
-        )
-        callbacks = [c for c in (_llm_cb, _lf_cb) if c is not None]
+        callbacks = [c for c in (_llm_cb,) if c is not None]
         # Stamp baggage so every span (including raw rotator httpx) inherits
         # session_id / user_id / digest_id. session() is sync; OTel context
         # propagates across await boundaries via contextvars.
@@ -276,6 +351,7 @@ async def _run_radar_scan_async(
             "scan_id":    scan_id,
             "profile_id": profile_id,
             "status":     "done",
+            "total_candidates": int(digest.get("total_candidates", len(items))),
             **summary,
         }
 

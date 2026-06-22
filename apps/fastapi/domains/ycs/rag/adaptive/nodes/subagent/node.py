@@ -29,7 +29,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from domains.ycs.runtime.observability import traced
+from domains.ycs.runtime.observability import record_subquestion, traced
 
 from ....domain import strip_think_tags
 from ...params import SUBAGENT_RECURSION_LIMIT
@@ -91,7 +91,12 @@ def _classify_subagent_outcome(
     )
 
 
-def _build_initial_state(sub_q: str) -> dict:
+def _build_initial_state(
+    sub_q: str,
+    *,
+    route: str = "",
+    thread_id: str = "",
+) -> dict:
     """Fresh STANDARD-graph state seeded for one sub-question.
 
     Pure helper — same shape used by both the first attempt AND the
@@ -99,6 +104,9 @@ def _build_initial_state(sub_q: str) -> dict:
     drift from the first attempt's invariants."""
     return {
         "question":             sub_q,
+        "thread_id":            thread_id,
+        "route":                route,
+        "mode":                 "deep",
         "documents":            [],
         "generation":           "",
         "retry_count":          0,
@@ -128,7 +136,11 @@ _STANDARD_GRAPH_CONFIG = {
 
 
 async def _run_standard_once(
-    standard_graph, sub_q: str,
+    standard_graph,
+    sub_q: str,
+    *,
+    route: str = "",
+    thread_id: str = "",
 ) -> tuple[dict, BaseException | None]:
     """One bounded sub-graph invocation. Returns `(result, exc)`.
 
@@ -138,7 +150,11 @@ async def _run_standard_once(
     try:
         result = await asyncio.wait_for(
             standard_graph.ainvoke(
-                _build_initial_state(sub_q),
+                _build_initial_state(
+                    sub_q,
+                    route = route,
+                    thread_id = thread_id,
+                ),
                 config = _STANDARD_GRAPH_CONFIG,
             ),
             timeout = SUBAGENT_RUNTIME_TIMEOUT_S,
@@ -201,9 +217,16 @@ async def run_subagent(
     framing."""
     sub_q     = payload["sub_question"]
     parent_q  = payload.get("parent_question", "") or sub_q
+    route     = str(payload.get("route") or "search")
+    thread_id = str(payload.get("thread_id") or "")
 
     # First attempt — original phrasing.
-    result, exc = await _run_standard_once(standard_graph, sub_q)
+    result, exc = await _run_standard_once(
+        standard_graph,
+        sub_q,
+        route = route,
+        thread_id = thread_id,
+    )
     error_kind, answer_text = _classify_subagent_outcome(result, exc)
 
     # 2026-06-16 — no_docs retry with a rephrased sub-question. The
@@ -224,7 +247,10 @@ async def run_subagent(
                 f"as {rewritten[:80]!r}"
             )
             result2, exc2 = await _run_standard_once(
-                standard_graph, rewritten,
+                standard_graph,
+                rewritten,
+                route = route,
+                thread_id = thread_id,
             )
             error_kind2, answer_text2 = _classify_subagent_outcome(
                 result2, exc2,
@@ -239,6 +265,10 @@ async def run_subagent(
                 )
                 answer_text = answer_text2 + retry_note
 
+    record_subquestion(
+        route = route,
+        outcome = error_kind or "success",
+    )
     return {
         "sub_results": [{
             "sub_question":      sub_q,

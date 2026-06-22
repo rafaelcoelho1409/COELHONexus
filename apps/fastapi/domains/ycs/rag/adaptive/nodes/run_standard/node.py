@@ -42,6 +42,9 @@ async def run_standard_pipeline(
     request, not the STANDARD pipeline's hard-coded default."""
     initial = {
         "question":             state["question"],
+        "thread_id":            state.get("thread_id", ""),
+        "route":                state.get("route", "search"),
+        "mode":                 state.get("mode", "standard") or "standard",
         "documents":            [],
         "generation":           "",
         "retry_count":          0,

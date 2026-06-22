@@ -113,6 +113,8 @@ def _fan_out_subagents(state: AdaptiveRAGState) -> list[Send]:
                 "sub_question":    q,
                 "parent_question": parent_q,
                 "channel_ids":     channel_ids,
+                "route":           state.get("route") or "search",
+                "thread_id":       state.get("thread_id") or "",
             },
         )
         for q in state.get("sub_questions", [])

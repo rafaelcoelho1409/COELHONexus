@@ -17,6 +17,17 @@ never an exception. The pipeline must never break because LangFuse is down.
 from __future__ import annotations
 
 from .client import get_client, is_available
+from .otel import (
+    set_current_span_langfuse_io,
+    set_current_span_langfuse_observation_metadata,
+    set_current_span_langfuse_trace_metadata,
+)
 
 
-__all__ = ["get_client", "is_available"]
+__all__ = [
+    "get_client",
+    "is_available",
+    "set_current_span_langfuse_io",
+    "set_current_span_langfuse_trace_metadata",
+    "set_current_span_langfuse_observation_metadata",
+]

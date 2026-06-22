@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 
-from domains.ycs.runtime.observability import traced
+from domains.ycs.runtime.observability import record_rewrite, traced
 
 from ....domain import strip_think_tags
 from ...state import YouTubeRAGState
@@ -27,6 +27,10 @@ _REWRITE_TIMEOUT_S = 30.0
 @traced("rag.rewrite")
 async def rewrite_query(state: YouTubeRAGState, llm) -> dict:
     """Expand/rephrase the query for better retrieval."""
+    record_rewrite(
+        route = str(state.get("route") or "unknown"),
+        mode = str(state.get("mode") or "standard"),
+    )
     chain = REWRITE_PROMPT | llm
     try:
         response = await asyncio.wait_for(

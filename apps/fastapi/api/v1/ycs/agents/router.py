@@ -21,6 +21,14 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from domains.ycs.runtime.observability import record_ask_run
+from infra.langfuse import (
+    set_current_span_langfuse_io,
+    set_current_span_langfuse_observation_metadata,
+    set_current_span_langfuse_trace_metadata,
+)
+from infra.otel import get_tracer
+
 from domains.ycs.cache import cache_response, get_cached_response
 from domains.ycs.conversation import (
     DEFAULT_THREAD_ID,
@@ -128,6 +136,50 @@ _PERSIST_TIMEOUT_S = 3.0
 # Redis if we ever scale to >1 worker. Always cleaned up in the
 # generator's `finally` so it can't grow unboundedly.
 _CANCELLED_TURN_IDS: set[int] = set()
+
+
+def _langfuse_ycs_input(
+    *,
+    question: str,
+    route: str,
+    force_mode: str,
+    channel_ids: list[str],
+    thread_id: str,
+) -> dict:
+    return {
+        "question": question,
+        "route": route,
+        "force_mode": force_mode or "",
+        "channel_ids": list(channel_ids or []),
+        "thread_id": thread_id,
+    }
+
+
+def _langfuse_ycs_output(
+    *,
+    status: str,
+    answer: str,
+    mode: str,
+    grounded: bool,
+    citations: list,
+    sub_questions: list | None = None,
+    confidence_score: float | None = None,
+    error: str | None = None,
+) -> dict:
+    output = {
+        "status": status,
+        "answer": answer[:4000],
+        "mode": mode or "",
+        "grounded": bool(grounded),
+        "citation_count": len(citations or []),
+    }
+    if sub_questions is not None:
+        output["sub_question_count"] = len(sub_questions or [])
+    if confidence_score is not None:
+        output["confidence_score"] = confidence_score
+    if error:
+        output["error"] = error
+    return output
 
 
 def _result_to_graph_updates(result: dict[str, Any]) -> list[dict[str, dict[str, Any]]]:
@@ -500,6 +552,8 @@ async def rag_search(
     graph = await build_graph_from_request(request)
     initial_state = {
         "question":             payload.question,
+        "thread_id":            payload.thread_id or DEFAULT_THREAD_ID,
+        "route":                "search",
         "contextualized":       False,
         "mode":                 "",
         "force_mode":           payload.force_mode or "",
@@ -528,14 +582,77 @@ async def rag_search(
         from infra.langfuse.sessions import session as _lf_session
         _sess_id  = payload.thread_id or "default"
         _user_id  = (payload.channel_ids or ["default"])[0]
+        t0 = time.monotonic()
         with _lf_session(
             "ycs",
             session_id = _sess_id,
             user_id    = _user_id,
             channel_id = _user_id,
         ):
-            result = await graph.ainvoke(initial_state, config = config)
+            with get_tracer().start_as_current_span(
+                "ycs.ask.run",
+                attributes = {
+                    "ycs.route":         "search",
+                    "ycs.thread_id":     _sess_id,
+                    "ycs.question":      payload.question[:200],
+                    "ycs.force_mode":    payload.force_mode or "",
+                    "ycs.channel_count": len(payload.channel_ids or []),
+                },
+            ):
+                set_current_span_langfuse_io(input_data = _langfuse_ycs_input(
+                    question = payload.question,
+                    route = "search",
+                    force_mode = payload.force_mode or "",
+                    channel_ids = list(payload.channel_ids or []),
+                    thread_id = _sess_id,
+                ))
+                set_current_span_langfuse_trace_metadata({
+                    "pipeline": "ycs_ask",
+                    "route": "search",
+                    "thread_id": _sess_id,
+                    "channel_id": _user_id,
+                    "force_mode": payload.force_mode or "",
+                })
+                set_current_span_langfuse_observation_metadata({
+                    "route": "search",
+                    "channel_count": len(payload.channel_ids or []),
+                })
+                try:
+                    result = await graph.ainvoke(initial_state, config = config)
+                except Exception as e:
+                    set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                        status = "error",
+                        answer = "",
+                        mode = payload.force_mode or "unknown",
+                        grounded = False,
+                        citations = [],
+                        error = str(e),
+                    ))
+                    raise
+                set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                    status = "done",
+                    answer = str(result.get("generation") or ""),
+                    mode = str(result.get("mode") or payload.force_mode or "standard"),
+                    grounded = bool(result.get("grounded")),
+                    citations = list(result.get("citations") or []),
+                    sub_questions = result.get("sub_questions"),
+                    confidence_score = result.get("confidence_score"),
+                ))
+        record_ask_run(
+            route = "search",
+            mode = str(result.get("mode") or payload.force_mode or "standard"),
+            outcome = "done",
+            grounded = bool(result.get("grounded")),
+            duration_s = max(time.monotonic() - t0, 0.0),
+            citation_count = len(result.get("citations") or []),
+        )
     except Exception as e:
+        record_ask_run(
+            route = "search",
+            mode = payload.force_mode or "unknown",
+            outcome = "error",
+            grounded = False,
+        )
         raise HTTPException(
             status_code = 500,
             detail      = f"Agent error: {str(e)}",
@@ -613,6 +730,8 @@ async def rag_search_stream(
     graph = await build_graph_from_request(request)
     initial_state = {
         "question":             payload.question,
+        "thread_id":            payload.thread_id or DEFAULT_THREAD_ID,
+        "route":                "search_stream",
         "contextualized":       False,
         "mode":                 "",
         "force_mode":           payload.force_mode or "",
@@ -828,6 +947,46 @@ async def rag_search_stream(
             state["citations"] = citations
 
     async def event_generator():
+        from infra.langfuse.sessions import session as _lf_session
+        _sess_id = payload.thread_id or DEFAULT_THREAD_ID
+        _user_id = (effective_channel_ids or ["default"])[0]
+        _session_cm = _lf_session(
+            "ycs",
+            session_id = _sess_id,
+            user_id    = _user_id,
+            channel_id = _user_id,
+        )
+        _session_cm.__enter__()
+        _span_cm = get_tracer().start_as_current_span(
+            "ycs.ask.stream.run",
+            attributes = {
+                "ycs.route":         "search_stream",
+                "ycs.thread_id":     _sess_id,
+                "ycs.question":      payload.question[:200],
+                "ycs.force_mode":    payload.force_mode or "",
+                "ycs.channel_count": len(effective_channel_ids or []),
+            },
+        )
+        _span_cm.__enter__()
+        set_current_span_langfuse_io(input_data = _langfuse_ycs_input(
+            question = payload.question,
+            route = "search_stream",
+            force_mode = payload.force_mode or "",
+            channel_ids = list(effective_channel_ids or []),
+            thread_id = _sess_id,
+        ))
+        set_current_span_langfuse_trace_metadata({
+            "pipeline": "ycs_ask",
+            "route": "search_stream",
+            "thread_id": _sess_id,
+            "channel_id": _user_id,
+            "force_mode": payload.force_mode or "",
+        })
+        set_current_span_langfuse_observation_metadata({
+            "route": "search_stream",
+            "channel_count": len(effective_channel_ids or []),
+            "preview_plan": preview_plan,
+        })
         last_generation = ""
         last_mode       = ""
         last_persisted  = ""
@@ -839,6 +998,7 @@ async def rag_search_stream(
         # `renderHistoryTurn` to rehydrate the right-rail + restore
         # inline `[N]` pills on past turns.
         last_citations: list = []
+        last_grounded = False
         # 2026-06-16 — `t_run_start` is the wall-clock anchor for
         # the per-turn "Answered in X.Xs" UI badge. Captured at SSE
         # generator entry (the moment the user's Send fires) and
@@ -941,9 +1101,6 @@ async def rag_search_stream(
             using_invoke_fallback = False
 
             async def _producer_stream():
-                from infra.langfuse.sessions import session as _lf_session
-                _sess_id = payload.thread_id or "default"
-                _user_id = (effective_channel_ids or ["default"])[0]
                 try:
                     with _lf_session(
                         "ycs",
@@ -975,9 +1132,6 @@ async def rag_search_stream(
                         pass
 
             async def _producer_invoke_fallback():
-                from infra.langfuse.sessions import session as _lf_session
-                _sess_id = payload.thread_id or "default"
-                _user_id = (effective_channel_ids or ["default"])[0]
                 try:
                     with _lf_session(
                         "ycs",
@@ -1135,6 +1289,8 @@ async def rag_search_stream(
                         # emit `citations` in their update payload.
                         if isinstance(update.get("citations"), list):
                             last_citations = update["citations"]
+                        if update.get("grounded") is not None:
+                            last_grounded = bool(update.get("grounded"))
                         # Accumulate the Thinking expander state so a
                         # refresh mid-stream restores it exactly.
                         thinking_state = _thinking_apply(
@@ -1188,6 +1344,12 @@ async def rag_search_stream(
                         # will re-fire with the user's chosen
                         # (possibly pruned) sub_questions.
                         if preview_plan and node_name == "plan_research":
+                            set_current_span_langfuse_io(output_data = {
+                                "status": "preview",
+                                "mode": last_mode or payload.force_mode or "deep",
+                                "sub_question_count": len(update.get("sub_questions") or []),
+                                "research_plan": str(update.get("research_plan") or "")[:2000],
+                            })
                             yield (
                                 "data: "
                                 + json.dumps({
@@ -1209,6 +1371,21 @@ async def rag_search_stream(
                     logger.info(
                         f"[ycs:stream] cancelled mid-flight turn_id={turn_id}"
                     )
+                    record_ask_run(
+                        route = "search_stream",
+                        mode = last_mode or payload.force_mode or "unknown",
+                        outcome = "cancelled",
+                        grounded = last_grounded,
+                        duration_s = max(time.monotonic() - t_run_start, 0.0),
+                        citation_count = len(last_citations),
+                    )
+                    set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                        status = "cancelled",
+                        answer = last_generation,
+                        mode = last_mode or payload.force_mode or "unknown",
+                        grounded = last_grounded,
+                        citations = last_citations,
+                    ))
                     yield (
                         "data: "
                         + json.dumps({"node": "end", "status": "cancelled"})
@@ -1219,18 +1396,18 @@ async def rag_search_stream(
                     # never yielded an event for 15 minutes. Persist a
                     # clear sentinel so the user sees a real failure
                     # on refresh instead of an "in progress" spinner.
+                    sentinel = (
+                        "(no response — pipeline stalled after "
+                        f"{int(_LANGGRAPH_WATCHDOG_S / 60)} min "
+                        "of silence. A node hung without a "
+                        "timeout; expand Thinking to see the "
+                        "last reachable step.)"
+                    )
                     if turn_id is not None:
                         try:
                             thinking_state = _thinking_finalize(thinking_state)
                             _stamp_duration(thinking_state, t_run_start)
                             _stamp_citations(thinking_state, last_citations)
-                            sentinel = (
-                                "(no response — pipeline stalled after "
-                                f"{int(_LANGGRAPH_WATCHDOG_S / 60)} min "
-                                "of silence. A node hung without a "
-                                "timeout; expand Thinking to see the "
-                                "last reachable step.)"
-                            )
                             await asyncio.wait_for(
                                 update_turn_answer(
                                     request.app.state.pg_url,
@@ -1244,6 +1421,21 @@ async def rag_search_stream(
                                 f"[ycs:stream] watchdog finalize "
                                 f"failed: {type(e).__name__}: {e}"
                             )
+                    record_ask_run(
+                        route = "search_stream",
+                        mode = last_mode or payload.force_mode or "unknown",
+                        outcome = "stalled",
+                        grounded = last_grounded,
+                        duration_s = max(time.monotonic() - t_run_start, 0.0),
+                        citation_count = len(last_citations),
+                    )
+                    set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                        status = "stalled",
+                        answer = sentinel,
+                        mode = last_mode or payload.force_mode or "unknown",
+                        grounded = last_grounded,
+                        citations = last_citations,
+                    ))
                     yield (
                         "data: "
                         + json.dumps({
@@ -1298,6 +1490,36 @@ async def rag_search_stream(
                                 f"[ycs:stream] no-generation finalize "
                                 f"failed: {type(e).__name__}: {e}"
                             )
+                    record_ask_run(
+                        route = "search_stream",
+                        mode = last_mode or payload.force_mode or "unknown",
+                        outcome = "done",
+                        grounded = last_grounded,
+                        duration_s = max(time.monotonic() - t_run_start, 0.0),
+                        citation_count = len(last_citations),
+                    )
+                    final_answer = (
+                        last_generation
+                        if last_generation else
+                        "(no response — see Thinking for pipeline status)"
+                    )
+                    set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                        status = "done",
+                        answer = final_answer,
+                        mode = last_mode or payload.force_mode or "unknown",
+                        grounded = last_grounded,
+                        citations = last_citations,
+                        sub_questions = (
+                            (thinking_state.get("deep") or {}).get("sub_questions")
+                            if isinstance(thinking_state.get("deep"), dict) else
+                            None
+                        ),
+                        confidence_score = (
+                            (thinking_state.get("deep") or {}).get("confidence_score")
+                            if isinstance(thinking_state.get("deep"), dict) else
+                            None
+                        ),
+                    ))
                     yield (
                         "data: "
                         + json.dumps({
@@ -1352,6 +1574,21 @@ async def rag_search_stream(
                 f"[ycs:stream] cancelled (client disconnect) "
                 f"turn_id={turn_id} — scheduling sentinel persist and re-raising"
             )
+            record_ask_run(
+                route = "search_stream",
+                mode = last_mode or payload.force_mode or "unknown",
+                outcome = "client_disconnect",
+                grounded = last_grounded,
+                duration_s = max(time.monotonic() - t_run_start, 0.0),
+                citation_count = len(last_citations),
+            )
+            set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                status = "client_disconnect",
+                answer = last_generation,
+                mode = last_mode or payload.force_mode or "unknown",
+                grounded = last_grounded,
+                citations = last_citations,
+            ))
             if turn_id is not None:
                 thinking_state_snapshot = _thinking_finalize(thinking_state)
                 _stamp_duration(thinking_state_snapshot, t_run_start)
@@ -1419,6 +1656,22 @@ async def rag_search_stream(
                         )
                 except Exception:
                     pass
+            record_ask_run(
+                route = "search_stream",
+                mode = last_mode or payload.force_mode or "unknown",
+                outcome = "error",
+                grounded = last_grounded,
+                duration_s = max(time.monotonic() - t_run_start, 0.0),
+                citation_count = len(last_citations),
+            )
+            set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                status = "error",
+                answer = last_generation,
+                mode = last_mode or payload.force_mode or "unknown",
+                grounded = last_grounded,
+                citations = last_citations,
+                error = str(e),
+            ))
             yield (
                 "data: "
                 + json.dumps({
@@ -1435,6 +1688,14 @@ async def rag_search_stream(
             # completion paths uniformly. (No background heartbeat
             # task to cancel — the heartbeat is folded into the main
             # event loop above via `asyncio.wait_for(timeout=2.5)`.)
+            try:
+                _span_cm.__exit__(None, None, None)
+            except Exception:
+                pass
+            try:
+                _session_cm.__exit__(None, None, None)
+            except Exception:
+                pass
             if turn_id is not None:
                 _CANCELLED_TURN_IDS.discard(turn_id)
 

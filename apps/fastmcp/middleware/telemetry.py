@@ -47,11 +47,13 @@ class TelemetryMiddleware(Middleware):
             kind=trace.SpanKind.SERVER,
         ) as span:
             span.set_attribute("mcp.tool.name", tool_name)
+            span.set_attribute("gen_ai.tool.name", tool_name)
             arg_keys = _safe(
                 lambda: ",".join(sorted((context.message.arguments or {}).keys())),
                 "",
             )
             span.set_attribute("mcp.tool.args.keys", arg_keys)
+            span.set_attribute("gen_ai.tool.argument_keys", arg_keys)
 
             try:
                 result = await call_next(context)
@@ -60,8 +62,12 @@ class TelemetryMiddleware(Middleware):
             except Exception as e:
                 span.record_exception(e)
                 span.set_attribute("mcp.tool.error_type", type(e).__name__)
+                span.set_attribute("gen_ai.tool.error_type", type(e).__name__)
                 span.set_attribute(
                     "mcp.tool.error_msg", str(e).splitlines()[0][:240]
+                )
+                span.set_attribute(
+                    "gen_ai.tool.error_msg", str(e).splitlines()[0][:240]
                 )
                 span.set_status(Status(StatusCode.ERROR, str(e)[:200]))
                 raise

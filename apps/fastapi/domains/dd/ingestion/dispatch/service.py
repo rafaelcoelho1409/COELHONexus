@@ -12,8 +12,11 @@ from dataclasses import asdict
 
 import redis.asyncio as redis_aio
 
+from infra.otel import get_tracer
+
 from ...resolver import index_by_slug
 from .. import post
+from ..observability import record_ingestion_run
 from ..progress import (
     IngestCancelled,
     Progress,
@@ -92,6 +95,31 @@ async def _cleanup_framework(minio, framework_slug: str) -> int:
 
 
 async def run(run_id: str, slug: str) -> dict:
+    """Span + metrics wrapper around the ingestion dispatcher."""
+    t0 = asyncio.get_running_loop().time()
+    with get_tracer().start_as_current_span(
+        "dd.ingestion.run",
+        attributes = {
+            "dd.domain":                "ingestion",
+            "dd.run.kind":              "ingestion",
+            "ingestion.run_id":         run_id,
+            "ingestion.framework_slug": slug,
+        },
+    ):
+        result = await _run_inner(run_id, slug)
+    post_summary = result.get("post") or {}
+    record_ingestion_run(
+        framework = slug,
+        tier_kind = str(result.get("tier_kind") or "unknown"),
+        outcome = str(result.get("status") or "unknown"),
+        duration_s = max(asyncio.get_running_loop().time() - t0, 0.0),
+        output_files = int(post_summary.get("output_files", 0) or 0),
+        output_bytes = int(post_summary.get("output_bytes", 0) or 0),
+    )
+    return result
+
+
+async def _run_inner(run_id: str, slug: str) -> dict:
     """Run ingestion for `slug` under `run_id`. Framework lock is held by
     `run_id` on entry (acquired in POST /runs); released in `finally`."""
     catalog = index_by_slug()

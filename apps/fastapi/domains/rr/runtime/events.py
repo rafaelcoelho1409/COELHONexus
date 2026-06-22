@@ -38,6 +38,7 @@ from typing import AsyncIterator
 import redis.asyncio as redis_aio
 
 from .keys import event_channel, redis_url, snapshot_key, task_id_key
+from .observability import record_phase_event
 from .params import (
     REDIS_CONNECT_TIMEOUT_S,
     REDIS_OP_TIMEOUT_S,
@@ -66,6 +67,7 @@ def emit_event_sync(scan_id: str, phase: str, **fields) -> None:
         **fields,
     }
     payload = json.dumps(event, default=str)
+    record_phase_event(phase = phase)
     import redis as redis_sync
     try:
         r = redis_sync.from_url(
@@ -103,6 +105,7 @@ async def emit_event(scan_id: str, phase: str, **fields) -> None:
         **fields,
     }
     payload = json.dumps(event, default=str)
+    record_phase_event(phase = phase)
     r = redis_aio.from_url(
         redis_url(),
         socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,

@@ -7,7 +7,7 @@ Direct port of deprecated `graphs/youtube/rag.py:L69-78`."""
 from __future__ import annotations
 
 from domains.ycs.grader import DocumentGrader
-from domains.ycs.runtime.observability import traced
+from domains.ycs.runtime.observability import record_graded_docs, traced
 
 from ...state import YouTubeRAGState
 
@@ -19,5 +19,10 @@ async def grade_documents(
     """LLM evaluates each document for relevance IN PARALLEL."""
     relevant_docs = await grader.grade_documents(
         state["question"], state["documents"],
+    )
+    record_graded_docs(
+        route = str(state.get("route") or "unknown"),
+        mode = str(state.get("mode") or "standard"),
+        count = len(relevant_docs),
     )
     return {"documents": relevant_docs}

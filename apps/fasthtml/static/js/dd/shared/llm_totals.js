@@ -453,6 +453,10 @@ function _renderPipelineToolbarTotal(payload) {
   host.style.display = 'inline-flex';
 }
 
+function _hidePipelineToolbarTotal() {
+  _renderPipelineToolbarTotal(null);
+}
+
 export function installDdPipelineLlmTotals(slug) {
   if (!slug) return;
   _bindDrawerControls();
@@ -465,5 +469,11 @@ export function installDdPipelineLlmTotals(slug) {
   document.addEventListener('dd:synth:terminal', () => _scheduleRefresh(slug, 120));
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') _scheduleRefresh(slug, 0);
+  });
+  document.addEventListener('click', (ev) => {
+    if (ev.target.closest('#fw-planner-wipe') ||
+        ev.target.closest('#fw-synth-wipe')) {
+      _hidePipelineToolbarTotal();
+    }
   });
 }
