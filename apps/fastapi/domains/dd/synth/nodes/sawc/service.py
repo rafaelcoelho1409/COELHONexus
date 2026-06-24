@@ -676,7 +676,6 @@ except Exception:
     _lf_override = lambda *a, **kw: (lambda fn: fn)  # noqa: E731
 
 
-@_lf_override("dd.synth.sawc.writer")
 def build_writer_prompt(
     *,
     framework: str,

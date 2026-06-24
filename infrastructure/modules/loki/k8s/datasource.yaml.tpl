@@ -31,3 +31,9 @@ data:
         jsonData:
           maxLines: 1000
           timeout: 60
+          derivedFields:
+            - datasourceUid: tempo
+              matcherRegex: "trace_id=([0-9a-f]+)"
+              name: TraceID
+              url: "$${__value.raw}"
+              urlDisplayLabel: "View Trace"

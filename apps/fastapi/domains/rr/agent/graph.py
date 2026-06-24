@@ -247,9 +247,10 @@ async def build_radar_agent() -> Any:
             discover_hn,
         ] + tools
 
+    _phase_events_mw = PhaseEventsMiddleware()
     middleware = [
         PhaseEnforcerMiddleware(),
-        PhaseEventsMiddleware(),
+        _phase_events_mw,
     ]
 
     system_prompt = _build_orchestrator_prompt(mode)
@@ -264,11 +265,10 @@ async def build_radar_agent() -> Any:
         response_format = ScanComplete,
         checkpointer  = checkpointer,
     )
-    # Expose the LLM-counter callback on the agent for task.py to attach
-    # via `ainvoke(config={"callbacks":[...]})` — propagates to every
-    # nested LangChain runnable (orchestrator + 6 subagents) without
-    # needing model wrapping (which breaks DeepAgents' isinstance check).
-    agent._rr_llm_counter_cb = _LLM_COUNTER_CB  # type: ignore[attr-defined]
+    # Expose the LLM-counter callback + phase-events middleware on the agent
+    # so task.py can attach both without needing to re-instantiate them.
+    agent._rr_llm_counter_cb  = _LLM_COUNTER_CB  # type: ignore[attr-defined]
+    agent._rr_phase_middleware = _phase_events_mw  # type: ignore[attr-defined]
 
     logger.info(
         f"[rr-agent] built mode={mode!r} "

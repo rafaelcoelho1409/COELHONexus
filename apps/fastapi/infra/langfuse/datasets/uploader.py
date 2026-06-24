@@ -1,4 +1,4 @@
-"""One-shot dataset uploader — push a `observability/fixtures/<feature>/<name>/`
+"""One-shot dataset uploader — push a `k8s/helm/files/langfuse/<feature>/<name>/`
 directory into LangFuse as a versioned dataset. Idempotent at the dataset
 level (re-runs only add new items; LangFuse dedupes by source identity
 when provided).
@@ -6,14 +6,14 @@ when provided).
 Usage (Python):
     from infra.langfuse.datasets import upload_dataset_from_fixtures
     upload_dataset_from_fixtures(
-        "observability/fixtures/dd/reference_book",
+        "/etc/langfuse-fixtures/dd/reference_book",
         dataset_name = "dd.reference_book.v1",
         description  = "DD planner chapter-outline gold corpus",
     )
 
 Usage (CLI, run inside the FastAPI image):
     python -m infra.langfuse.datasets.uploader \\
-        observability/fixtures/dd/reference_book dd.reference_book.v1
+        /etc/langfuse-fixtures/dd/reference_book dd.reference_book.v1
 
 Returns the number of items uploaded (0 if LangFuse is unavailable).
 """

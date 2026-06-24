@@ -46,8 +46,13 @@ class TelemetryMiddleware(Middleware):
             f"mcp.tool.{tool_name}",
             kind=trace.SpanKind.SERVER,
         ) as span:
+            span.set_attribute("coelho.langfuse.keep", True)
+            span.set_attribute("coelho.langfuse.kind", "workflow_node")
             span.set_attribute("mcp.tool.name", tool_name)
             span.set_attribute("gen_ai.tool.name", tool_name)
+            span.set_attribute("langfuse.observation.metadata.workflow", "rr_scan")
+            span.set_attribute("langfuse.observation.metadata.node_name", tool_name)
+            span.set_attribute("langfuse.observation.metadata.stage", "mcp_tool")
             arg_keys = _safe(
                 lambda: ",".join(sorted((context.message.arguments or {}).keys())),
                 "",

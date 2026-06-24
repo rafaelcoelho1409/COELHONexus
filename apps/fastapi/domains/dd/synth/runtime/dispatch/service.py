@@ -189,70 +189,82 @@ async def run_single_chapter_async(
 ) -> dict:
     """Fresh per-chapter run. Builds initial state + graph, spawns cancel
     watcher, awaits terminal."""
-    with get_tracer().start_as_current_span(
-        "dd.synth.chapter.run",
-        attributes = {
-            "dd.domain":            "synth",
-            "dd.run.kind":          "chapter",
-            "synth.thread_id":      thread_id,
-            "synth.framework_slug": slug,
-            "synth.chapter_id":     chapter_id,
-            "synth.mode":           mode,
-        },
+    from infra.langfuse.sessions import session as _lf_session
+    with _lf_session(
+        "dd-synth",
+        session_id = thread_id,
+        user_id    = slug,
+        chapter_id = chapter_id,
+        framework  = slug,
     ):
-        set_current_span_langfuse_io(input_data = {
-            "framework_slug": slug,
-            "chapter_id": chapter_id,
-            "mode": mode,
-            "thread_id": thread_id,
-        })
-        set_current_span_langfuse_trace_metadata({
-            "pipeline": "dd_synth",
-            "run_kind": "chapter",
-            "framework_slug": slug,
-            "chapter_id": chapter_id,
-            "mode": mode,
-            "thread_id": thread_id,
-        })
-        set_current_span_langfuse_observation_metadata({
-            "framework_slug": slug,
-            "chapter_id": chapter_id,
-            "mode": mode,
-        })
-        graph = build_graph()
-        config = {"configurable": {"thread_id": thread_id}}
+        with get_tracer().start_as_current_span(
+            "dd.synth.chapter.run",
+            attributes = {
+                "coelho.langfuse.keep":  True,
+                "coelho.langfuse.kind":  "workflow_root",
+                "langfuse.trace.name":  "dd.synth.chapter.run",
+                "dd.domain":            "synth",
+                "dd.run.kind":          "chapter",
+                "synth.thread_id":      thread_id,
+                "synth.framework_slug": slug,
+                "synth.chapter_id":     chapter_id,
+                "synth.mode":           mode,
+                "langfuse.observation.metadata.workflow": "dd_synth",
+            },
+        ):
+            set_current_span_langfuse_io(input_data = {
+                "framework_slug": slug,
+                "chapter_id": chapter_id,
+                "mode": mode,
+                "thread_id": thread_id,
+            })
+            set_current_span_langfuse_trace_metadata({
+                "pipeline": "dd_synth",
+                "run_kind": "chapter",
+                "framework_slug": slug,
+                "chapter_id": chapter_id,
+                "mode": mode,
+                "thread_id": thread_id,
+            })
+            set_current_span_langfuse_observation_metadata({
+                "framework_slug": slug,
+                "chapter_id": chapter_id,
+                "mode": mode,
+            })
+            graph = build_graph()
+            config = {"configurable": {"thread_id": thread_id}}
 
-        r = redis_aio.from_url(
-            redis_url(),
-            socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,
-            socket_timeout = REDIS_OP_TIMEOUT_S,
-        )
-        try:
-            await clear_cancel(r, thread_id)
-        finally:
-            await r.aclose()
+            r = redis_aio.from_url(
+                redis_url(),
+                socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,
+                socket_timeout = REDIS_OP_TIMEOUT_S,
+            )
+            try:
+                await clear_cancel(r, thread_id)
+            finally:
+                await r.aclose()
 
-        initial_state = {
-            "framework_slug": slug,
-            "chapter_id":     chapter_id,
-            "thread_id":      thread_id,
-            "synth_mode":     mode,
-            "status":         "running",
-        }
+            initial_state = {
+                "framework_slug": slug,
+                "chapter_id":     chapter_id,
+                "thread_id":      thread_id,
+                "synth_mode":     mode,
+                "status":         "running",
+            }
 
-        main_task = asyncio.create_task(graph.ainvoke(initial_state, config))
-        watcher_task = asyncio.create_task(cancel_watcher(thread_id, main_task))
-        result = await _await_with_watcher(
-            graph, config, main_task, watcher_task, thread_id,
-        )
-        set_current_span_langfuse_io(output_data = {
-            "status": result.get("status", "unknown"),
-            "error": result.get("error"),
-            "framework_slug": slug,
-            "chapter_id": chapter_id,
-            "mode": mode,
-        })
-        return result
+            main_task = asyncio.create_task(graph.ainvoke(initial_state, config))
+            watcher_task = asyncio.create_task(cancel_watcher(thread_id, main_task))
+            result = await _await_with_watcher(
+                graph, config, main_task, watcher_task, thread_id,
+            )
+            set_current_span_langfuse_io(output_data = {
+                "status": result.get("status", "unknown"),
+                "error": result.get("error"),
+                "framework_slug": slug,
+                "chapter_id": chapter_id,
+                "mode": mode,
+            })
+            return result
 
 
 async def run_missing_nodes_async(
@@ -393,13 +405,18 @@ async def _run_book_harmonize(
     cache skips work on identical inputs. Returns telemetry dict."""
     tracer = get_tracer()
     span_attrs = {
+        "coelho.langfuse.keep": True,
+        "coelho.langfuse.kind": "workflow_node",
         "synth.node":           "book_harmonize",
         "synth.framework_slug": slug,
         "synth.thread_id":      study_thread_id,
         "synth.chapter_count":  len(chapter_ids),
+        "langfuse.observation.metadata.workflow": "dd_synth",
+        "langfuse.observation.metadata.node_name": "book_harmonize",
+        "langfuse.observation.metadata.stage": "synth",
     }
     with tracer.start_as_current_span(
-        "synth/book_harmonize", attributes = span_attrs,
+        "dd.synth.node.book_harmonize", attributes = span_attrs,
     ):
         return await _run_book_harmonize_impl(
             slug = slug,
@@ -648,19 +665,23 @@ async def run_study_async(
         with get_tracer().start_as_current_span(
             "dd.synth.study.run",
             attributes = {
+                "coelho.langfuse.keep":  True,
+                "coelho.langfuse.kind":  "workflow_root",
+                "langfuse.trace.name":  "dd.synth.study.run",
                 "dd.domain":            "synth",
                 "dd.run.kind":          "study",
                 "study.thread_id":      study_thread_id,
                 "study.framework_slug": slug,
                 "study.mode":           mode,
                 "study.chapter_count":  len(chapter_ids),
+                "langfuse.observation.metadata.workflow": "dd_synth",
             },
         ):
             set_current_span_langfuse_io(input_data = {
                 "framework_slug": slug,
                 "mode": mode,
-                "chapter_ids": chapter_ids,
                 "requested_chapter_count": len(chapter_ids),
+                "chapter_ids_preview": chapter_ids[:5],
                 "thread_id": study_thread_id,
             })
             set_current_span_langfuse_trace_metadata({
@@ -687,10 +708,11 @@ async def run_study_async(
                 "completed_chapter_count": result.get("n_completed", 0),
                 "failed_chapter_count": result.get("n_failed", 0),
                 "harmonize_status": (
-                    "done"
-                    if (result.get("book_harmonize") or {}).get("ok") else
-                    ((result.get("book_harmonize") or {}).get("skipped") or "not_run")
-                ),
+                    lambda bh: (
+                        "done" if bh and not bh.get("skipped")
+                        else (bh.get("skipped") or "not_run")
+                    )
+                )(result.get("book_harmonize") or {}),
             })
             return result
 

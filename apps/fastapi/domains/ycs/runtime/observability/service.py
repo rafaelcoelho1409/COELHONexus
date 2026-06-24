@@ -41,12 +41,17 @@ def traced(name: str) -> Callable:
             if tracer is None:
                 return await fn(state, *args, **kwargs)
             attrs = {
+                "coelho.langfuse.keep": True,
+                "coelho.langfuse.kind": "workflow_node",
                 "ycs.node":      name,
                 "ycs.thread_id": state.get("thread_id") or "",
                 "ycs.question":  (state.get("question") or "")[:200],
+                "langfuse.observation.metadata.workflow": "ycs_ask",
+                "langfuse.observation.metadata.node_name": name,
+                "langfuse.observation.metadata.stage": "ycs",
             }
             with tracer.start_as_current_span(
-                f"ycs/{name}", attributes = attrs,
+                f"ycs.node.{name}", attributes = attrs,
             ) as span:
                 try:
                     result = await fn(state, *args, **kwargs)

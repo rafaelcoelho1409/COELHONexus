@@ -310,7 +310,7 @@ class PhaseEnforcerMiddleware(AgentMiddleware):
         else:
             nudge_map = {
                 "triage":     f"Discovery is done but you have not called triage_candidates(scan_id='{scan_id}', topic='<topic>', profile_verticals=[...], top_n=N). Call it NOW — it is unconditional even if some discoveries returned 0.",
-                "synthesis":  f"Deep_read is done. Dispatch task(subagent_type='synthesis', description='scan_id={scan_id}') NOW — followed by task(subagent_type='report', description='scan_id={scan_id}'). Both subagents MUST run before you emit respond_in_format. The ScanComplete Pydantic validator will REJECT your terminal output if synthesis or report are missing from phases.",
+                "synthesis":  f"Deep_read is done. Dispatch task(subagent_type='synthesis', description='scan_id={scan_id}') NOW. After synthesis writes fs/synthesis/report.json you MUST immediately emit respond_in_format with a valid ScanComplete — there is NO report subagent. The digest is assembled in Python after your ScanComplete response.",
             }
             nudge_body = nudge_map[missing]
         # Tag the message so we can detect our own injection and avoid

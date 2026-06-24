@@ -592,11 +592,15 @@ async def rag_search(
             with get_tracer().start_as_current_span(
                 "ycs.ask.run",
                 attributes = {
+                    "coelho.langfuse.keep": True,
+                    "coelho.langfuse.kind": "workflow_root",
+                    "langfuse.trace.name": "ycs.ask.run",
                     "ycs.route":         "search",
                     "ycs.thread_id":     _sess_id,
                     "ycs.question":      payload.question[:200],
                     "ycs.force_mode":    payload.force_mode or "",
                     "ycs.channel_count": len(payload.channel_ids or []),
+                    "langfuse.observation.metadata.workflow": "ycs_ask",
                 },
             ):
                 set_current_span_langfuse_io(input_data = _langfuse_ycs_input(
@@ -960,11 +964,15 @@ async def rag_search_stream(
         _span_cm = get_tracer().start_as_current_span(
             "ycs.ask.stream.run",
             attributes = {
+                "coelho.langfuse.keep": True,
+                "coelho.langfuse.kind": "workflow_root",
+                "langfuse.trace.name": "ycs.ask.stream.run",
                 "ycs.route":         "search_stream",
                 "ycs.thread_id":     _sess_id,
                 "ycs.question":      payload.question[:200],
                 "ycs.force_mode":    payload.force_mode or "",
                 "ycs.channel_count": len(effective_channel_ids or []),
+                "langfuse.observation.metadata.workflow": "ycs_ask",
             },
         )
         _span_cm.__enter__()

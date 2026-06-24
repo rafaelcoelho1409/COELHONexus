@@ -1,0 +1,759 @@
+{
+  "title": "COELHO Nexus - Overview",
+  "uid": "coelhonexus-overview",
+  "tags": [
+    "coelhonexus",
+    "overview",
+    "dd",
+    "ycs",
+    "rr",
+    "otel",
+    "lgtm"
+  ],
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "title": "DD Pipeline",
+      "type": "link",
+      "url": "/d/coelhonexus-dd-pipeline",
+      "targetBlank": false
+    },
+    {
+      "title": "YCS Ask",
+      "type": "link",
+      "url": "/d/coelhonexus-ycs-retrieval",
+      "targetBlank": false
+    },
+    {
+      "title": "RR Scan",
+      "type": "link",
+      "url": "/d/coelhonexus-rr-digests",
+      "targetBlank": false
+    },
+    {
+      "title": "LLM Rotator",
+      "type": "link",
+      "url": "/d/coelhonexus-rotator-red",
+      "targetBlank": false
+    },
+    {
+      "title": "Service Topology",
+      "type": "link",
+      "url": "/d/coelhonexus-service-topology",
+      "targetBlank": false
+    },
+    {
+      "title": "Investigations",
+      "type": "link",
+      "url": "/d/coelhonexus-investigations",
+      "targetBlank": false
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "DD planners observed",
+      "description": "Docs Distiller planner runs observed over the selected period.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum(max_over_time(dd_planner_run_total[24h]))",
+          "legendFormat": "planner runs"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "DD studies observed",
+      "description": "Docs Distiller study completions observed over the selected period.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum(max_over_time(dd_study_completion_seconds_count[24h]))",
+          "legendFormat": "studies"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "DD planner p95",
+      "description": "Planner p95 latency. Use the DD dashboard for deeper breakdowns and exemplars.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(dd_planner_run_duration_seconds_bucket[1h])))",
+          "legendFormat": "p95",
+          "exemplar": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "YCS asks observed",
+      "description": "YouTube Content Search asks observed over the selected period.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum(max_over_time(ycs_ask_run_total[24h]))",
+          "legendFormat": "asks"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "YCS grounded answers",
+      "description": "Grounded YCS answers observed over the selected period.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum(max_over_time(ycs_grounded_total[24h]))",
+          "legendFormat": "grounded"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "YCS ask p95",
+      "description": "Ask p95 latency. Tempo datasource wiring provides trace drilldown from latency panels.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(ycs_ask_run_duration_seconds_bucket[1h])))",
+          "legendFormat": "p95",
+          "exemplar": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "RR scans observed",
+      "description": "Research Radar scans observed over the selected period.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 5
+      },
+      "targets": [
+        {
+          "expr": "sum(max_over_time(rr_scan_run_total[24h]))",
+          "legendFormat": "scans"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "RR degraded share",
+      "description": "Share of scans that completed in degraded mode.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 5
+      },
+      "targets": [
+        {
+          "expr": "sum(max_over_time(rr_scan_run_total{degraded=\"true\"}[24h])) / clamp_min(sum(max_over_time(rr_scan_run_total[24h])), 1)",
+          "legendFormat": "degraded share"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "RR scan p95",
+      "description": "Research Radar p95 latency. Use the RR dashboard for detailed phase and outcome views.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 5
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(rr_scan_run_duration_seconds_bucket[1h])))",
+          "legendFormat": "p95",
+          "exemplar": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Service interaction request rate",
+      "description": "Top service-graph edges from Tempo metrics-generator as written to Mimir.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "targets": [
+        {
+          "expr": "topk(12, sum by (client, server) (rate(traces_service_graph_request_total[30m])))",
+          "legendFormat": "{{client}} -> {{server}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Service interaction failures",
+      "description": "Top failing service-graph edges from Tempo metrics-generator.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      },
+      "targets": [
+        {
+          "expr": "topk(12, sum by (client, server) (rate(traces_service_graph_request_failed_total[30m])))",
+          "legendFormat": "{{client}} -> {{server}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Service interaction latency p95",
+      "description": "Client-side service-graph p95 latency by edge. Investigate via Tempo traces from the app dashboards.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "targets": [
+        {
+          "expr": "topk(12, histogram_quantile(0.95, sum by (client, server, le) (rate(traces_service_graph_request_client_seconds_bucket[30m]))))",
+          "legendFormat": "{{client}} -> {{server}}",
+          "exemplar": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "DD recent non-done share",
+      "description": "Recent planner failure symptom over the last hour.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 21
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(dd_planner_run_total{outcome!=\"done\"}[1h])) / clamp_min(sum(rate(dd_planner_run_total[1h])), 0.000001)",
+          "legendFormat": "non-done share"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "YCS recent non-done share",
+      "description": "Recent ask failure symptom over the last hour.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 21
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(ycs_ask_run_total{outcome!=\"done\"}[1h])) / clamp_min(sum(rate(ycs_ask_run_total[1h])), 0.000001)",
+          "legendFormat": "non-done share"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      }
+    },
+    {
+      "id": 15,
+      "type": "stat",
+      "title": "RR recent non-done share",
+      "description": "Recent Research Radar failure symptom over the last hour.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 21
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(rr_scan_run_total{outcome!=\"done\"}[1h])) / clamp_min(sum(rate(rr_scan_run_total[1h])), 0.000001)",
+          "legendFormat": "non-done share"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      }
+    },
+    {
+      "id": 16,
+      "type": "logs",
+      "title": "Recent COELHO Nexus errors",
+      "description": "Fast path for cross-application error inspection. Use the TraceID derived field when present.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-fastapi|coelhonexus-celery|coelhonexus-fastmcp|coelhonexus-fasthtml\"} |~ \"(?i)(error|exception|traceback|failed|critical)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\"",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Log event rate by level",
+      "description": "5-minute rolling count of log events grouped by detected severity. Error spikes indicate active incidents.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum by (detected_level) (count_over_time({namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-fastapi|coelhonexus-celery|coelhonexus-fastmcp\"} [5m]))",
+          "legendFormat": "{{detected_level}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "error"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#E02F44",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "warn"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FF9830",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "info"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#3274D9",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "type": "stat",
+      "title": "DD Planner p99 latency",
+      "description": "p99 planner wall time over the last hour. SLO target: <600s (10 min). Green=healthy, red=SLO breach.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 0,
+        "y": 31
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(dd_planner_run_duration_seconds_bucket[24h])))",
+          "legendFormat": "DD Planner p99 latency",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 300
+              },
+              {
+                "color": "red",
+                "value": 600
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background"
+      }
+    },
+    {
+      "id": 19,
+      "type": "stat",
+      "title": "YCS grounded rate",
+      "description": "Share of YCS asks that returned a grounded answer in the last hour. SLO target: >80%. Red=SLO breach.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 8,
+        "y": 31
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "sum(max_over_time(ycs_grounded_total[24h])) / clamp_min(sum(max_over_time(ycs_ask_run_total[24h])), 1) * 100",
+          "legendFormat": "YCS grounded rate",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 60
+              },
+              {
+                "color": "green",
+                "value": 80
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background"
+      }
+    },
+    {
+      "id": 20,
+      "type": "stat",
+      "title": "RR degraded scan rate",
+      "description": "Share of RR scans that completed in degraded mode (missing extractions) in the last hour. SLO target: <10%. Red=SLO breach.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 16,
+        "y": 31
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "sum(max_over_time(rr_scan_run_total{degraded=\"true\"}[24h])) / clamp_min(sum(max_over_time(rr_scan_run_total[24h])), 1) * 100",
+          "legendFormat": "RR degraded scan rate",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 25
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background"
+      }
+    }
+  ]
+}

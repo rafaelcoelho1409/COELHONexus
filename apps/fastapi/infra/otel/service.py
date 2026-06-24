@@ -24,22 +24,22 @@ _meter = None
 
 
 def _instrument_libraries() -> None:
-    """Auto-instrument httpx / redis / logging / litellm — once per process."""
+    """Auto-instrument httpx / logging / litellm — once per process.
+    Redis is intentionally NOT instrumented: Celery ↔ Redis task-queue
+    chatter (GET/SET/RPUSH/HSET/PUBLISH every second) produces thousands
+    of zero-value spans that bury LLM traces in both Alloy and LangFuse."""
     try:
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
         HTTPXClientInstrumentor().instrument()
     except Exception as e:
         logger.debug(f"[otel] httpx instrumentation skipped: {e}")
     try:
-        from opentelemetry.instrumentation.redis import RedisInstrumentor
-        RedisInstrumentor().instrument()
-    except Exception as e:
-        logger.debug(f"[otel] redis instrumentation skipped: {e}")
-    try:
         from opentelemetry.instrumentation.logging import LoggingInstrumentor
         # Inject trace_id + span_id into log records so Loki ↔ Tempo
-        # can correlate. set_logging_format=False — formatter is set elsewhere.
-        LoggingInstrumentor().instrument(set_logging_format=False)
+        # can correlate. `basicConfig()` is already configured by the app /
+        # worker entrypoints; setting this True makes the record factory
+        # populate `otelTraceID` / `otelSpanID` on every log record.
+        LoggingInstrumentor().instrument(set_logging_format=True)
     except Exception as e:
         logger.debug(f"[otel] logging instrumentation skipped: {e}")
     # COELHO Nexus already emits one authoritative gen_ai.* tracing path from
@@ -76,7 +76,13 @@ def init_otel(also_instrument_fastapi_app=None) -> bool:
                 from opentelemetry.instrumentation.fastapi import (
                     FastAPIInstrumentor,
                 )
-                FastAPIInstrumentor.instrument_app(also_instrument_fastapi_app)
+                FastAPIInstrumentor.instrument_app(
+                    also_instrument_fastapi_app,
+                    excluded_urls=(
+                        "health,healthz,readyz,livez,ready,live,"
+                        "metrics,docs,redoc,openapi,favicon"
+                    ),
+                )
             except Exception:
                 pass
         return True
@@ -120,7 +126,13 @@ def init_otel(also_instrument_fastapi_app=None) -> bool:
                 from opentelemetry.instrumentation.fastapi import (
                     FastAPIInstrumentor,
                 )
-                FastAPIInstrumentor.instrument_app(also_instrument_fastapi_app)
+                FastAPIInstrumentor.instrument_app(
+                    also_instrument_fastapi_app,
+                    excluded_urls=(
+                        "health,healthz,readyz,livez,ready,live,"
+                        "metrics,docs,redoc,openapi,favicon"
+                    ),
+                )
                 logger.info("[otel] FastAPI app instrumented")
             except Exception as e:
                 logger.warning(f"[otel] FastAPI instrumentation failed: {e}")

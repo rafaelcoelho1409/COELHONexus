@@ -17,6 +17,30 @@ import sys
 if "/app" not in sys.path:
     sys.path.insert(0, "/app")
 
+_LOG_FORMAT = (
+    "%(asctime)s %(levelname)s %(name)s "
+    "[trace_id=%(otelTraceID)s span_id=%(otelSpanID)s] %(message)s"
+)
+
+
+def _install_log_record_defaults() -> None:
+    old_factory = logging.getLogRecordFactory()
+    if getattr(old_factory, "_coelho_otel_defaults", False):
+        return
+
+    def record_factory(*args, **kwargs):
+        record = old_factory(*args, **kwargs)
+        record.otelTraceID = getattr(record, "otelTraceID", "0")
+        record.otelSpanID = getattr(record, "otelSpanID", "0")
+        return record
+
+    record_factory._coelho_otel_defaults = True  # type: ignore[attr-defined]
+    logging.setLogRecordFactory(record_factory)
+
+
+_install_log_record_defaults()
+logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
+
 from celery import Celery
 from celery.signals import worker_process_init
 
@@ -55,7 +79,7 @@ app.config_from_object({
 app.conf.include = TASK_INCLUDE
 
 
-@worker_process_init.connect
+@worker_process_init.connect(weak=False)
 def _worker_process_init(**_kwargs) -> None:
     # OTel SDK — TracerProvider + dual-export (Alloy gRPC → Tempo, LangFuse
     # HTTP → LLM observations) + Celery auto-instrumentation. MUST run before

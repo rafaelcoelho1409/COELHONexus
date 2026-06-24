@@ -304,11 +304,15 @@ async def run_planner_async(
         with get_tracer().start_as_current_span(
             "dd.planner.run",
             attributes = {
+                "coelho.langfuse.keep":  True,
+                "coelho.langfuse.kind":  "workflow_root",
+                "langfuse.trace.name":    "dd.planner.run",
                 "dd.domain":             "planner",
                 "dd.run.kind":           "planner",
                 "planner.thread_id":     thread_id,
                 "planner.framework_slug": slug,
                 "planner.mode":          mode,
+                "langfuse.observation.metadata.workflow": "dd_planner",
             },
         ):
             set_current_span_langfuse_io(input_data = {

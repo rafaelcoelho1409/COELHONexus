@@ -20,12 +20,35 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
+
+_LOG_FORMAT = (
+    "%(asctime)s %(levelname)s %(name)s "
+    "[trace_id=%(otelTraceID)s span_id=%(otelSpanID)s] %(message)s"
+)
+
+
+def _install_log_record_defaults() -> None:
+    old_factory = logging.getLogRecordFactory()
+    if getattr(old_factory, "_coelho_otel_defaults", False):
+        return
+
+    def record_factory(*args, **kwargs):
+        record = old_factory(*args, **kwargs)
+        record.otelTraceID = getattr(record, "otelTraceID", "0")
+        record.otelSpanID = getattr(record, "otelSpanID", "0")
+        return record
+
+    record_factory._coelho_otel_defaults = True  # type: ignore[attr-defined]
+    logging.setLogRecordFactory(record_factory)
+
+
 # basicConfig BEFORE first-party imports so module-load log calls
 # (e.g. domains.llm.rotator.chain registers LiteLLM's OTel callback at
 # import time and logs about it) use our format, not stderr default.
+_install_log_record_defaults()
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    format=_LOG_FORMAT,
 )
 
 import redis.asyncio as redis_aio_module

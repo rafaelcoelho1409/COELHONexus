@@ -40,6 +40,10 @@ _DEFAULT_TTL_S = 60
 _cache: dict[str, tuple[float, object]] = {}
 _cache_lock = Lock()
 
+# Sentinel stored in the cache on 404/fetch-failure so the next call
+# within the TTL sees "miss already attempted" and skips the API hit.
+_MISS = object()
+
 
 def get_prompt(
     name: str,
@@ -65,6 +69,9 @@ def get_prompt(
         if cached and cached[0] > now:
             prompt = cached[1]
 
+    if prompt is _MISS:
+        return fallback
+
     if prompt is None:
         try:
             prompt = client.get_prompt(name, label = label)
@@ -73,6 +80,8 @@ def get_prompt(
                 f"[langfuse] get_prompt({name!r}, label={label!r}) failed: "
                 f"{type(e).__name__}: {e}"
             )
+            with _cache_lock:
+                _cache[cache_key] = (now + ttl_s, _MISS)
             return fallback
         with _cache_lock:
             _cache[cache_key] = (now + ttl_s, prompt)

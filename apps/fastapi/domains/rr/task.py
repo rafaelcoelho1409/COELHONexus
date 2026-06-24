@@ -126,64 +126,75 @@ async def _run_radar_scan_async(
     top_n: int,
 ) -> dict:
     """Span + metrics wrapper around the RR scan orchestration."""
+    from infra.langfuse.sessions import session as _lf_session
     t0 = asyncio.get_running_loop().time()
-    with get_tracer().start_as_current_span(
-        "rr.scan.run",
-        attributes = {
-            "rr.scan_id":        scan_id,
-            "rr.profile_id":     profile_id,
-            "rr.topic":          topic[:200],
-            "rr.vertical_count": len(verticals),
-            "rr.top_n":          top_n,
-        },
+    with _lf_session(
+        "rr",
+        session_id = scan_id,
+        user_id    = profile_id,
+        digest_id  = scan_id,
     ):
-        set_current_span_langfuse_io(input_data = {
-            "topic": topic,
-            "verticals": list(verticals or []),
-            "top_n": top_n,
-            "scan_id": scan_id,
-            "profile_id": profile_id,
-        })
-        set_current_span_langfuse_trace_metadata({
-            "pipeline": "rr_scan",
-            "scan_id": scan_id,
-            "profile_id": profile_id,
-            "vertical_count": len(verticals),
-            "top_n": top_n,
-        })
-        set_current_span_langfuse_observation_metadata({
-            "topic": topic[:200],
-            "vertical_count": len(verticals),
-        })
-        try:
-            result = await _run_radar_scan_async_inner(
-                scan_id = scan_id,
-                profile_id = profile_id,
-                topic = topic,
-                verticals = verticals,
-                top_n = top_n,
-            )
-        except Exception as e:
-            set_current_span_langfuse_io(output_data = {
-                "status": "failed",
-                "error": f"{type(e).__name__}: {e}",
-                "n_findings": 0,
-                "total_candidates": 0,
-                "themes": [],
-                "degraded": True,
+        with get_tracer().start_as_current_span(
+            "rr.scan.run",
+            attributes = {
+                "coelho.langfuse.keep": True,
+                "coelho.langfuse.kind": "workflow_root",
+                "langfuse.trace.name": "rr.scan.run",
+                "rr.scan_id":        scan_id,
+                "rr.profile_id":     profile_id,
+                "rr.topic":          topic[:200],
+                "rr.vertical_count": len(verticals),
+                "rr.top_n":          top_n,
+                "langfuse.observation.metadata.workflow": "rr_scan",
+            },
+        ):
+            set_current_span_langfuse_io(input_data = {
+                "topic": topic,
+                "verticals": list(verticals or []),
+                "top_n": top_n,
+                "scan_id": scan_id,
+                "profile_id": profile_id,
             })
-            raise
-        set_current_span_langfuse_io(output_data = {
-            "status": result.get("status", "unknown"),
-            "n_findings": int(result.get("n_findings", 0) or 0),
-            "total_candidates": int(
-                result.get("total_candidates", result.get("n_findings", 0)) or 0
-            ),
-            "themes": list(result.get("themes") or [])[:10],
-            "degraded": bool(result.get("degraded", result.get("status") != "done")),
-            "degradation_reasons": list(result.get("degradation_reasons") or [])[:10],
-            "error": result.get("error"),
-        })
+            set_current_span_langfuse_trace_metadata({
+                "pipeline": "rr_scan",
+                "scan_id": scan_id,
+                "profile_id": profile_id,
+                "vertical_count": len(verticals),
+                "top_n": top_n,
+            })
+            set_current_span_langfuse_observation_metadata({
+                "topic": topic[:200],
+                "vertical_count": len(verticals),
+            })
+            try:
+                result = await _run_radar_scan_async_inner(
+                    scan_id = scan_id,
+                    profile_id = profile_id,
+                    topic = topic,
+                    verticals = verticals,
+                    top_n = top_n,
+                )
+            except Exception as e:
+                set_current_span_langfuse_io(output_data = {
+                    "status": "failed",
+                    "error": f"{type(e).__name__}: {e}",
+                    "n_findings": 0,
+                    "total_candidates": 0,
+                    "themes": [],
+                    "degraded": True,
+                })
+                raise
+            set_current_span_langfuse_io(output_data = {
+                "status": result.get("status", "unknown"),
+                "n_findings": int(result.get("n_findings", 0) or 0),
+                "total_candidates": int(
+                    result.get("total_candidates", result.get("n_findings", 0)) or 0
+                ),
+                "themes": list(result.get("themes") or [])[:10],
+                "degraded": bool(result.get("degraded", result.get("status") != "done")),
+                "degradation_reasons": list(result.get("degradation_reasons") or [])[:10],
+                "error": result.get("error"),
+            })
     record_scan_run(
         degraded = bool(result.get("degraded", result.get("status") != "done")),
         outcome = str(result.get("status") or "unknown"),
@@ -242,24 +253,17 @@ async def _run_radar_scan_async_inner(
         # without needing model wrapping. The callback no-ops when no
         # scan_id is in the context — safe for the shared rotator chain.
         _llm_cb = getattr(agent, "_rr_llm_counter_cb", None)
-        from infra.langfuse.sessions import session as _lf_session
         callbacks = [c for c in (_llm_cb,) if c is not None]
-        # Stamp baggage so every span (including raw rotator httpx) inherits
-        # session_id / user_id / digest_id. session() is sync; OTel context
-        # propagates across await boundaries via contextvars.
-        with _lf_session(
-            "rr",
-            session_id = scan_id,
-            user_id    = profile_id,
-            digest_id  = scan_id,
-        ):
-            await agent.ainvoke(
-                {"messages": [{"role": "user", "content": user_message}]},
-                config = {
-                    "configurable": {"thread_id": scan_id},
-                    "callbacks":     callbacks,
-                },
-            )
+        await agent.ainvoke(
+            {"messages": [{"role": "user", "content": user_message}]},
+            config = {
+                "configurable": {"thread_id": scan_id},
+                "callbacks":     callbacks,
+            },
+        )
+        # Close the last open phase span (discovery/triage/deep_read/synthesis).
+        if _mw := getattr(agent, "_rr_phase_middleware", None):
+            _mw.finalize_scan(scan_id)
 
         # 3. Build the digest from fs (step-6 refactor 2026-06-12):
         #    The `report` LLM subagent is RETIRED. Assembly + persistence
@@ -294,47 +298,55 @@ async def _run_radar_scan_async_inner(
         # before the orchestrator finished the last deep_read). Skipping
         # when ≥4 are missing — that's a deeper infra issue (rotator down,
         # all arms cooled, etc.) and inline retry won't help.
-        try:
-            await _backfill_missing_extractions(scan_id)
-        except Exception as e:
-            logger.warning(
-                f"[rr-task] backfill_missing_extractions threw "
-                f"{type(e).__name__}: {e}"
+        with get_tracer().start_as_current_span(
+            "rr.node.backfill",
+            attributes={"coelho.langfuse.keep": True, "rr.scan_id": scan_id},
+        ):
+            try:
+                await _backfill_missing_extractions(scan_id)
+            except Exception as e:
+                logger.warning(
+                    f"[rr-task] backfill_missing_extractions threw "
+                    f"{type(e).__name__}: {e}"
+                )
+
+        with get_tracer().start_as_current_span(
+            "rr.node.digest_assemble",
+            attributes={"coelho.langfuse.keep": True, "rr.scan_id": scan_id},
+        ):
+            digest = _build_digest_from_fs(scan_id)
+            if not digest:
+                raise RuntimeError(
+                    f"agent finished AND triage never wrote "
+                    f"{FS_FILE_TRIAGE_TOPN} AND no discovery tool stashed "
+                    f"anything. Pipeline collapsed at phase 1. Check "
+                    f"[fs-tool] discover_* INFO lines + LangFuse trace."
+                )
+
+            emit_event_sync(scan_id, "persisting", message="writing findings + digest")
+
+            # 4. Diff against the profile's seen set so the digest can show
+            #    'New since last scan'.
+            seen_ids = await get_seen_ids(profile_id)
+            items = digest.get("items") or []
+            for item in items:
+                aid = item.get("arxiv_id")
+                item["is_new"] = bool(aid) and aid not in seen_ids
+
+            # 5. Materialize Finding dataclasses for service.persist_scan_result.
+            findings = [_item_to_finding(it) for it in items]
+            await persist_scan_result(
+                scan_uuid, profile_id,
+                findings       = findings,
+                digest_payload = digest,
             )
 
-        digest = _build_digest_from_fs(scan_id)
-        if not digest:
-            raise RuntimeError(
-                f"agent finished AND triage never wrote "
-                f"{FS_FILE_TRIAGE_TOPN} AND no discovery tool stashed "
-                f"anything. Pipeline collapsed at phase 1. Check "
-                f"[fs-tool] discover_* INFO lines + LangFuse trace."
+            # 6. Close out the scan in Postgres.
+            await complete_scan(
+                scan_uuid,
+                total_candidates = int(digest.get("total_candidates", len(items))),
+                total_in_digest  = len(items),
             )
-
-        emit_event_sync(scan_id, "persisting", message="writing findings + digest")
-
-        # 4. Diff against the profile's seen set so the digest can show
-        #    'New since last scan'.
-        seen_ids = await get_seen_ids(profile_id)
-        items = digest.get("items") or []
-        for item in items:
-            aid = item.get("arxiv_id")
-            item["is_new"] = bool(aid) and aid not in seen_ids
-
-        # 5. Materialize Finding dataclasses for service.persist_scan_result.
-        findings = [_item_to_finding(it) for it in items]
-        await persist_scan_result(
-            scan_uuid, profile_id,
-            findings        = findings,
-            digest_payload  = digest,
-        )
-
-        # 6. Close out the scan in Postgres.
-        await complete_scan(
-            scan_uuid,
-            total_candidates = int(digest.get("total_candidates", len(items))),
-            total_in_digest  = len(items),
-        )
 
         summary = {
             "n_findings":          len(findings),

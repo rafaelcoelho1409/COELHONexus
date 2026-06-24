@@ -39,8 +39,9 @@ def _instrument_libraries() -> None:
     try:
         from opentelemetry.instrumentation.logging import LoggingInstrumentor
         # Inject trace_id + span_id into log records so Loki ↔ Tempo can
-        # correlate. set_logging_format=False — formatter set elsewhere.
-        LoggingInstrumentor().instrument(set_logging_format=False)
+        # correlate. `basicConfig()` is already configured by the entrypoint;
+        # setting this True makes the record factory populate the OTel fields.
+        LoggingInstrumentor().instrument(set_logging_format=True)
     except Exception as e:
         logger.debug(f"[otel] logging instrumentation skipped: {e}")
 

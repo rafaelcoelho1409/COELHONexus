@@ -54,12 +54,17 @@ def traced(name: str) -> Callable:
                         node_id=prev_node_id,
                     )
             attrs = {
+                "coelho.langfuse.keep": True,
+                "coelho.langfuse.kind": "workflow_node",
                 "planner.node": name,
                 "planner.thread_id": state.get("thread_id") or "",
                 "planner.framework_slug": state.get("framework_slug") or "",
+                "langfuse.observation.metadata.workflow": "dd_planner",
+                "langfuse.observation.metadata.node_name": name,
+                "langfuse.observation.metadata.stage": "planner",
             }
             with tracer.start_as_current_span(
-                f"planner/{name}", attributes = attrs,
+                f"dd.planner.node.{name}", attributes = attrs,
             ) as span:
                 try:
                     result = await fn(state, *args, **kwargs)

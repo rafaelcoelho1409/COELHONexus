@@ -74,7 +74,12 @@ inputs = {
   minio_access_key = dependency.minio.outputs.access_key
   minio_secret_key = dependency.minio.outputs.secret_key
 
-  # Defaults from variables.tf are appropriate:
-  #   chart 2.1.0, single-binary, OTLP-only receivers,
-  #   100m/256Mi/1Gi resources, 5Gi PVC, 30-day retention.
+  # 2026-06-23: local k3d traces proved the 1Gi default too tight for
+  # multi-trace Explore / LangFuse investigation; the pod was OOMKilled.
+  # Lift only the local coelhonexus leaf so COELHO Cloud keeps its own sizing.
+  memory_request = "512Mi"
+  memory_limit   = "2Gi"
+
+  # Remaining defaults from variables.tf stay appropriate:
+  #   chart 2.1.0, single-binary, OTLP-only receivers, 5Gi PVC, 30-day retention.
 }

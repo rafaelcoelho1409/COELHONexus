@@ -8,6 +8,16 @@ spec:
 {{- include "coelhonexus.DeploymentSpecSettings" (dict "appName" $appName "root" .) | nindent 2 }}
 {{- include "coelhonexus.DeploymentResources" (dict "appName" $appName "root" .) | nindent 10}}
 {{- include "coelhonexus.ProbeSettings" (dict "appName" $appName "root" .) | nindent 10 }}
+          volumeMounts:
+            - name: langfuse-dd-reference-book
+              mountPath: /etc/langfuse-fixtures/dd/reference_book
+              readOnly: true
+            - name: langfuse-rr-known-good-digest
+              mountPath: /etc/langfuse-fixtures/rr/known_good_digest
+              readOnly: true
+            - name: langfuse-ycs-qa-pairs
+              mountPath: /etc/langfuse-fixtures/ycs/qa_pairs
+              readOnly: true
         # Sidecar: PO Token provider for yt-dlp (bypasses YouTube bot detection)
         - name: bgutil-pot
           image: brainicism/bgutil-ytdlp-pot-provider:1.3.1
@@ -32,3 +42,13 @@ spec:
               port: 4416
             initialDelaySeconds: 5
             periodSeconds: 10
+      volumes:
+        - name: langfuse-dd-reference-book
+          configMap:
+            name: coelhonexus-langfuse-dd-reference-book
+        - name: langfuse-rr-known-good-digest
+          configMap:
+            name: coelhonexus-langfuse-rr-known-good-digest
+        - name: langfuse-ycs-qa-pairs
+          configMap:
+            name: coelhonexus-langfuse-ycs-qa-pairs

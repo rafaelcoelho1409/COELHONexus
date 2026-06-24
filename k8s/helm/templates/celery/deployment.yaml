@@ -63,6 +63,11 @@ spec:
             # modifications from the parent process.
             - name: PYTHONPATH
               value: "/app"
+            # Override the shared FastAPI configmap's OTEL service identity so
+            # worker-originated traces/metrics land under the actual Celery
+            # service in Tempo/LangFuse instead of masquerading as fastapi.
+            - name: OTEL_SERVICE_NAME
+              value: "coelhonexus-celery"
             {{- include "coelhonexus.secretEnvVars" . | nindent 12 }}
           resources:
             requests:

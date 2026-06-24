@@ -1,0 +1,93 @@
+{{- if .Values.observability.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coelhonexus-grafana-dashboard-overview
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: grafana
+    release: {{ .Release.Name }}
+    grafana_dashboard: "1"
+data:
+  overview.json: |
+{{ .Files.Get "files/grafana/dashboards/overview.json" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coelhonexus-grafana-dashboard-investigations
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: grafana
+    release: {{ .Release.Name }}
+    grafana_dashboard: "1"
+data:
+  investigations.json: |
+{{ .Files.Get "files/grafana/dashboards/investigations.json" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coelhonexus-grafana-dashboard-dd-pipeline
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: grafana
+    release: {{ .Release.Name }}
+    grafana_dashboard: "1"
+data:
+  dd-pipeline.json: |
+{{ .Files.Get "files/grafana/dashboards/dd-pipeline.json" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coelhonexus-grafana-dashboard-rotator-red
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: grafana
+    release: {{ .Release.Name }}
+    grafana_dashboard: "1"
+data:
+  rotator-red.json: |
+{{ .Files.Get "files/grafana/dashboards/rotator-red.json" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coelhonexus-grafana-dashboard-rr-digests
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: grafana
+    release: {{ .Release.Name }}
+    grafana_dashboard: "1"
+data:
+  rr-digests.json: |
+{{ .Files.Get "files/grafana/dashboards/rr-digests.json" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coelhonexus-grafana-dashboard-ycs-retrieval
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: grafana
+    release: {{ .Release.Name }}
+    grafana_dashboard: "1"
+data:
+  ycs-retrieval.json: |
+{{ .Files.Get "files/grafana/dashboards/ycs-retrieval.json" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coelhonexus-grafana-dashboard-service-topology
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: grafana
+    release: {{ .Release.Name }}
+    grafana_dashboard: "1"
+data:
+  service-topology.json: |
+{{ .Files.Get "files/grafana/dashboards/service-topology.json" | indent 4 }}
+{{- end }}

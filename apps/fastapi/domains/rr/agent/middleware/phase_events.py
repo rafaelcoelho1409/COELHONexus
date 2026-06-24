@@ -1,4 +1,4 @@
-"""PhaseEventsMiddleware — emits per-phase SSE events to Redis pub/sub.
+"""PhaseEventsMiddleware — emits per-phase SSE events to Redis pub/sub + OTel spans.
 
 Today the Celery task emits 3 events per scan: running / persisting / done.
 The SSE stream goes idle during the 1-5 min the agent is running. This
@@ -10,21 +10,30 @@ events so the UI status strip can show:
   Phase: deep_read (3/8 extractions written)
   Phase: synthesis (writing themes...)
 
-Implementation is best-effort: a Redis hiccup logs but does NOT abort the
-agent run. emit_event_sync is already used by task.py for the same channel
-so the SSE relay code on the FastAPI side needs no change.
+OTel spans: on each phase transition, a completed `rr.node.{phase}` span
+is emitted with the correct start/end timestamps so LangFuse shows each
+pipeline stage as a timed child of rr.scan.run. Call finalize_scan() after
+agent.ainvoke to close the final phase span.
+
+Implementation is best-effort: a Redis hiccup or OTel failure logs but does
+NOT abort the agent run. emit_event_sync is already used by task.py for the
+same channel so the SSE relay code on the FastAPI side needs no change.
 """
 from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any
+
+from opentelemetry import context as _otel_ctx
 
 try:
     from langchain.agents.middleware import AgentMiddleware
 except ImportError:                                                       # pragma: no cover
     from langchain.agents.middleware.types import AgentMiddleware         # type: ignore
 
+from infra.otel import get_tracer
 from ...runtime.events import emit_event_sync
 from ..keys import (
     FS_FILE_DIGEST,
@@ -40,7 +49,7 @@ _SCAN_ID_RE = re.compile(r"scan_id=([0-9a-fA-F-]{32,})")
 
 
 class PhaseEventsMiddleware(AgentMiddleware):
-    """Emit a Redis pub/sub event reflecting the agent's current phase."""
+    """Emit a Redis pub/sub event + OTel span per pipeline phase."""
 
     name: str = "rr_phase_events"
 
@@ -52,6 +61,8 @@ class PhaseEventsMiddleware(AgentMiddleware):
         # would swallow them and the strip would freeze on "0/4 sources stashed"
         # until phase=triage fires.
         self._last_emit: dict[str, tuple[str, str]] = {}
+        # (scan_id) → (phase_name, start_ns, otel_context_snapshot)
+        self._phase_timing: dict[str, tuple[str, int, Any]] = {}
 
     @staticmethod
     def _scan_id_from_state(state: dict[str, Any]) -> str | None:
@@ -80,15 +91,54 @@ class PhaseEventsMiddleware(AgentMiddleware):
             return "deep_read", f"{n_extractions}/{len(topn)} extractions written"
         if fs_read(scan_id, FS_FILE_SYNTHESIS_REPORT) is None:
             return "synthesis", "clustering themes"
-        if fs_read(scan_id, FS_FILE_DIGEST) is None:
-            return "report", "assembling digest"
         return "done", "agent finished — task is persisting"
+
+    @staticmethod
+    def _emit_phase_span(
+        scan_id: str, phase: str, start_ns: int, end_ns: int, ctx: Any
+    ) -> None:
+        try:
+            span = get_tracer().start_span(
+                f"rr.node.{phase}",
+                context=ctx,
+                start_time=start_ns,
+                attributes={
+                    "coelho.langfuse.keep": True,
+                    "rr.scan_id": scan_id,
+                    "rr.phase": phase,
+                    "rr.phase_duration_ms": round((end_ns - start_ns) / 1_000_000),
+                },
+            )
+            span.end(end_time=end_ns)
+        except Exception as exc:
+            logger.debug(f"[rr-phase-events] OTel span emit failed: {exc}")
+
+    def _transition_phase(self, scan_id: str, new_phase: str) -> None:
+        now_ns = time.time_ns()
+        ctx = _otel_ctx.get_current()
+        existing = self._phase_timing.pop(scan_id, None)
+        if existing:
+            prev_phase, start_ns, prev_ctx = existing
+            self._emit_phase_span(scan_id, prev_phase, start_ns, now_ns, prev_ctx)
+        self._phase_timing[scan_id] = (new_phase, now_ns, ctx)
+
+    def finalize_scan(self, scan_id: str) -> None:
+        """End the last open phase span — call after agent.ainvoke completes."""
+        existing = self._phase_timing.pop(scan_id, None)
+        if existing:
+            prev_phase, start_ns, ctx = existing
+            self._emit_phase_span(scan_id, prev_phase, start_ns, time.time_ns(), ctx)
 
     def after_model(self, state: dict[str, Any]) -> dict[str, Any] | None:
         scan_id = self._scan_id_from_state(state)
         if not scan_id:
             return None
         phase, message = self._current_phase(scan_id)
+
+        existing = self._phase_timing.get(scan_id)
+        if not existing or existing[0] != phase:
+            self._transition_phase(scan_id, phase)
+
         if self._last_emit.get(scan_id) == (phase, message):
             return None
         self._last_emit[scan_id] = (phase, message)

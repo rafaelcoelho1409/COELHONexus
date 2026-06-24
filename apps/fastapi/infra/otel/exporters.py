@@ -20,7 +20,12 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace import SpanProcessor
+from opentelemetry.sdk.trace.export import (
+    BatchSpanProcessor,
+    SpanExporter,
+    SpanExportResult,
+)
 
 from .params import (
     BSP_EXPORT_TIMEOUT_MS_DEFAULT,
@@ -38,6 +43,124 @@ from .params import (
 
 
 logger = logging.getLogger(__name__)
+
+
+class _LangFuseSpanGate:
+    """Default-deny allow-list for the LangFuse export arm.
+
+    Only spans explicitly in an allow category reach LangFuse. Everything
+    else (HTTP instrumentation, Redis chatter, Celery internals, health
+    probes, unknown spans) is dropped at the processor and exporter.
+
+    Allow categories:
+      - `coelho.langfuse.keep = True` attribute set by domain code
+      - `gen_ai.*` attributes present (LiteLLM / rotator LLM call spans)
+      - span name starts with a domain prefix: dd. rr. ycs. mcp.tool. rotator.
+      - Celery task root spans for domain tasks (run/domains.{dd,rr,ycs}.)
+        — these become the trace root in LangFuse and give the trace its name
+
+    Explicit deny (evaluated before allow, blocks MCP transport noise):
+      - `POST /mcp*`, `GET /mcp*`, `DELETE /mcp*` — httpx client spans from
+        the MCP client making requests to the FastMCP server
+      - `tools/list`, `tools/call*` — JSON-RPC protocol-level spans
+    """
+
+    _CELERY_DOMAIN_PREFIXES: tuple[str, ...] = (
+        "run/domains.dd.",
+        "run/domains.rr.",
+        "run/domains.ycs.",
+    )
+
+    _MCP_TRANSPORT_DROPS: tuple[str, ...] = (
+        "POST /mcp",
+        "GET /mcp",
+        "DELETE /mcp",
+        "tools/list",
+        "tools/call",
+    )
+
+    def _attrs(self, span) -> dict:
+        return dict(span.attributes or {})
+
+    def _has_genai_attrs(self, attrs: dict) -> bool:
+        return any(str(k).startswith("gen_ai.") for k in attrs.keys())
+
+    def _is_explicit_drop(self, span) -> bool:
+        name = span.name or ""
+        return any(name.startswith(p) for p in self._MCP_TRANSPORT_DROPS)
+
+    def _is_curated_keep(self, span, attrs: dict) -> bool:
+        if attrs.get("coelho.langfuse.keep") is True:
+            return True
+        name = span.name or ""
+        return (
+            name.startswith("dd.")
+            or name.startswith("rr.")
+            or name.startswith("ycs.")
+            or name.startswith("mcp.tool.")
+            or name.startswith("rotator.")
+            or any(name.startswith(p) for p in self._CELERY_DOMAIN_PREFIXES)
+        )
+
+    def should_keep(self, span) -> bool:
+        if self._is_explicit_drop(span):
+            return False
+        attrs = self._attrs(span)
+        return self._is_curated_keep(span, attrs) or self._has_genai_attrs(attrs)
+
+
+class LangFuseFilterProcessor(SpanProcessor):
+    """Processor-side gate kept for in-process short-circuiting.
+
+    The exporter arm below is authoritative. This processor only reduces queue
+    pressure before spans hit the LangFuse BatchSpanProcessor.
+    """
+
+    _gate = _LangFuseSpanGate()
+
+    def __init__(self, inner: SpanProcessor) -> None:
+        self._inner = inner
+
+    def on_start(self, span, parent_context=None):
+        self._inner.on_start(span, parent_context)
+
+    def on_end(self, span) -> None:
+        if self._gate.should_keep(span):
+            self._inner.on_end(span)
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._inner.force_flush(timeout_millis)
+
+
+class LangFuseFilterExporter(SpanExporter):
+    """Exporter-side LangFuse allow-list.
+
+    This is the reliable last gate before OTLP/HTTP export. If a span reaches
+    this point and does not match the allow-list, it never leaves the process.
+    """
+
+    _gate = _LangFuseSpanGate()
+
+    def __init__(self, inner: SpanExporter) -> None:
+        self._inner = inner
+
+    def export(self, spans) -> SpanExportResult:
+        kept = tuple(span for span in spans if self._gate.should_keep(span))
+        if not kept:
+            return SpanExportResult.SUCCESS
+        return self._inner.export(kept)
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        inner_flush = getattr(self._inner, "force_flush", None)
+        if callable(inner_flush):
+            return bool(inner_flush(timeout_millis))
+        return True
 
 
 def build_resource() -> Resource:
@@ -155,7 +278,7 @@ def add_langfuse_exporter(tracer_provider) -> bool:
         traces_endpoint = endpoint.rstrip("/")
         if not traces_endpoint.endswith("/v1/traces"):
             traces_endpoint = f"{traces_endpoint}/v1/traces"
-        exporter = HTTPOTLPSpanExporter(
+        raw_exporter = HTTPOTLPSpanExporter(
             endpoint=traces_endpoint,
             headers={"Authorization": f"Basic {basic}"},
             # Default 10s timed out under heavy LLM volume — LangFuse batches
@@ -165,7 +288,12 @@ def add_langfuse_exporter(tracer_provider) -> bool:
             )),
         )
         tracer_provider.add_span_processor(
-            BatchSpanProcessor(exporter, **_bsp_kwargs())
+            LangFuseFilterProcessor(
+                BatchSpanProcessor(
+                    LangFuseFilterExporter(raw_exporter),
+                    **_bsp_kwargs(),
+                )
+            )
         )
         logger.info(
             f"[otel] LangFuse HTTP OTLP exporter attached → {traces_endpoint}"

@@ -76,6 +76,14 @@ langfuse:
     # 5min cuts noise ~10x without hiding genuinely dead Redis sockets.
     - name: REDIS_BLOCKING_SOCKET_TIMEOUT_MS
       value: "${redis_blocking_socket_timeout_ms}"
+
+    # ioredis connection + command timeouts. Default connectTimeout=10s;
+    # raising to 20s avoids spurious drops when Redis is under write pressure
+    # from LangFuse ingestion. commandTimeout=15s bounds runaway slow queries.
+    - name: REDIS_CONNECTION_TIMEOUT_MS
+      value: "20000"
+    - name: REDIS_COMMAND_TIMEOUT_MS
+      value: "15000"
     - name: LANGFUSE_INIT_ORG_ID
       valueFrom:
         secretKeyRef:

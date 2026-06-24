@@ -1,0 +1,294 @@
+{
+  "title": "COELHO Nexus - Investigations",
+  "uid": "coelhonexus-investigations",
+  "tags": [
+    "coelhonexus",
+    "investigation",
+    "logs",
+    "traces",
+    "metrics",
+    "lgtm"
+  ],
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "title": "Overview",
+      "type": "link",
+      "url": "/d/coelhonexus-overview",
+      "targetBlank": false
+    },
+    {
+      "title": "DD Pipeline",
+      "type": "link",
+      "url": "/d/coelhonexus-dd-pipeline",
+      "targetBlank": false
+    },
+    {
+      "title": "YCS Ask",
+      "type": "link",
+      "url": "/d/coelhonexus-ycs-retrieval",
+      "targetBlank": false
+    },
+    {
+      "title": "RR Scan",
+      "type": "link",
+      "url": "/d/coelhonexus-rr-digests",
+      "targetBlank": false
+    },
+    {
+      "title": "Service Topology",
+      "type": "link",
+      "url": "/d/coelhonexus-service-topology",
+      "targetBlank": false
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "How to investigate",
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Start with the latency panels below and use exemplar-backed drilldowns where available. From Tempo, use the provisioned trace-to-logs and trace-to-metrics links. From Loki log rows, use the `TraceID` derived field when present. This dashboard is intentionally mixed: Mimir for symptoms, Loki for recent evidence, Tempo for request-level detail."
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Application p95 latency",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(dd_planner_run_duration_seconds_bucket[30m])))",
+          "legendFormat": "DD planner p95",
+          "exemplar": true
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(ycs_ask_run_duration_seconds_bucket[30m])))",
+          "legendFormat": "YCS ask p95",
+          "exemplar": true
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(rr_scan_run_duration_seconds_bucket[30m])))",
+          "legendFormat": "RR scan p95",
+          "exemplar": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Service-graph failed edge rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "targets": [
+        {
+          "expr": "topk(12, sum by (client, server) (rate(traces_service_graph_request_failed_total[30m])))",
+          "legendFormat": "{{client}} -> {{server}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "logs",
+      "title": "Recent cross-app error logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-fastapi|coelhonexus-celery|coelhonexus-fastmcp|coelhonexus-fasthtml\"} |~ \"(?i)(error|exception|traceback|failed|critical)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\"",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 5,
+      "type": "logs",
+      "title": "Recent orchestration workflow logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-celery|coelhonexus-fastmcp\"} |~ \"(?i)(planner|synth|study|ycs|ask|rr|radar|scan|task|pipeline|trace_id=)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\" | regexp \"(?P<scan_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\"",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 6,
+      "type": "traces",
+      "title": "Slowest traces (last 3h)",
+      "description": "Recent traces from all COELHO Nexus services. Click any row to open the full distributed trace waterfall. Most recent first. For longest traces, look at the RR scan rows (333s+ duration).",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 31
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name=~\"coelhonexus.*\" }",
+          "limit": 20,
+          "refId": "A",
+          "tableType": "traces"
+        }
+      ],
+      "options": {
+        "dedupStrategy": "none"
+      }
+    },
+    {
+      "id": 7,
+      "type": "traces",
+      "title": "Error traces (last 3h)",
+      "description": "All error-status traces across COELHO Nexus. Sorted by duration so the longest-running failures appear first. Pairs with the Loki error log below.",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 31
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name=~\"coelhonexus.*\" && status=error }",
+          "limit": 20,
+          "refId": "A",
+          "tableType": "traces"
+        }
+      ],
+      "options": {
+        "dedupStrategy": "none"
+      }
+    },
+    {
+      "id": 8,
+      "type": "traces",
+      "title": "LLM call traces (gen_ai.chat, last 3h)",
+      "description": "gen_ai.chat spans from Celery \u2014 one row per LLM completion. Sorted by duration to surface slow/stuck model calls. Click a row to see which rotator arm was selected and full token counts.",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 41
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name=\"coelhonexus-celery\" && name=\"gen_ai.chat\" }",
+          "limit": 30,
+          "refId": "A",
+          "tableType": "spans"
+        }
+      ]
+    }
+  ]
+}

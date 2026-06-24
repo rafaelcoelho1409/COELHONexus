@@ -8,7 +8,6 @@ Direct port of deprecated `graphs/youtube/rag.py:L80-101`."""
 from __future__ import annotations
 
 import asyncio
-
 from domains.ycs.runtime.observability import traced
 
 from ....domain import history_to_messages, strip_think_tags

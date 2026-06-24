@@ -1,0 +1,433 @@
+{
+  "title": "COELHO Nexus - RR \u2014 Research Radar Scan Health",
+  "uid": "coelhonexus-rr-digests",
+  "tags": [
+    "coelhonexus",
+    "rr",
+    "pipeline",
+    "otel",
+    "mimir"
+  ],
+  "schemaVersion": 38,
+  "version": 2,
+  "refresh": "30s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "title": "Overview",
+      "type": "link",
+      "url": "/d/coelhonexus-overview",
+      "targetBlank": false
+    },
+    {
+      "title": "DD Pipeline",
+      "type": "link",
+      "url": "/d/coelhonexus-dd-pipeline",
+      "targetBlank": false
+    },
+    {
+      "title": "YCS Ask",
+      "type": "link",
+      "url": "/d/coelhonexus-ycs-retrieval",
+      "targetBlank": false
+    },
+    {
+      "title": "LLM Rotator",
+      "type": "link",
+      "url": "/d/coelhonexus-rotator-red",
+      "targetBlank": false
+    },
+    {
+      "title": "Service Topology",
+      "type": "link",
+      "url": "/d/coelhonexus-service-topology",
+      "targetBlank": false
+    },
+    {
+      "title": "Investigations",
+      "type": "link",
+      "url": "/d/coelhonexus-investigations",
+      "targetBlank": false
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Scan outcomes observed",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum by (outcome, degraded) (max_over_time(rr_scan_run_total[24h]))",
+          "legendFormat": "{{outcome}} / degraded={{degraded}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Scan duration (p50 / p95)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(rr_scan_run_duration_seconds_bucket[30m])))",
+          "exemplar": true,
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(rr_scan_run_duration_seconds_bucket[30m])))",
+          "exemplar": true,
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Degraded scan share",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum(max_over_time(rr_scan_run_total{degraded=\"true\"}[24h])) / clamp_min(sum(max_over_time(rr_scan_run_total[24h])), 1)",
+          "legendFormat": "degraded share"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Findings per scan (mean / p95)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 6
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(rr_findings_sum[30m])) / sum(rate(rr_findings_count[30m]))",
+          "legendFormat": "mean"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(rr_findings_bucket[30m])))",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Candidates per scan (mean / p95)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 6
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(rr_candidates_sum[30m])) / sum(rate(rr_candidates_count[30m]))",
+          "legendFormat": "mean"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(rr_candidates_bucket[30m])))",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Themes per scan (mean / p95)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 6
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(rr_theme_count_sum[30m])) / sum(rate(rr_theme_count_count[30m]))",
+          "legendFormat": "mean"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(rr_theme_count_bucket[30m])))",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Phase events observed",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "targets": [
+        {
+          "expr": "sum by (phase) (max_over_time(rr_phase_event_total[24h]))",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "logs",
+      "title": "Recent RR workflow error logs",
+      "description": "Research Radar errors and scan-specific workflow signals from Celery and FastMCP.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-celery|coelhonexus-fastmcp\"} |~ \"(?i)(radar|scan|rr\\\\b|fastmcp|error|exception|traceback|failed)\" | regexp \"(?P<trace_id>(?i)trace_id=[0-9a-f]{32})\" | regexp \"(?P<scan_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\"",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "RR workflow log rate by level",
+      "description": "5-minute rolling rate of RR scan log events by level. Error spikes = tool errors (429s, schema mismatches) during discovery.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum by (detected_level) (count_over_time({namespace=~\"coelhonexus.*\",service_name=~\"coelhonexus-celery|coelhonexus-fastmcp\"} |~ \"(?i)(radar|scan|rr\\\\b|phase|mcp)\" [5m]))",
+          "legendFormat": "{{detected_level}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "error"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#E02F44",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "warn"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FF9830",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "info"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#3274D9",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "traces",
+      "title": "RR phase spans (Tempo)",
+      "description": "All rr.node.* spans from Tempo for the last completed scan. Click any row to open the full trace waterfall showing phase timing.",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 29
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name=\"coelhonexus-celery\" && span.rr.phase =~ \".+\" }",
+          "limit": 20,
+          "refId": "A",
+          "tableType": "traces"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "traces",
+      "title": "RR error traces",
+      "description": "Error-status spans from Celery + FastMCP. Click a row to open the full distributed trace in Tempo. Useful for diagnosing discovery 429s, triage failures, synthesis timeouts.",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 29
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name=~\"coelhonexus-celery|coelhonexus-fastmcp\" && status=error }",
+          "limit": 20,
+          "refId": "A",
+          "tableType": "traces"
+        }
+      ],
+      "options": {
+        "dedupStrategy": "none"
+      }
+    }
+  ]
+}

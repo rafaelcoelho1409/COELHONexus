@@ -1,0 +1,36 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coelhonexus-langfuse-dd-reference-book
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: langfuse
+    release: {{ .Release.Name }}
+data:
+  inputs.json: |
+{{ .Files.Get "files/langfuse/dd/reference_book/inputs.json" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coelhonexus-langfuse-rr-known-good-digest
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: langfuse
+    release: {{ .Release.Name }}
+data:
+  inputs.json: |
+{{ .Files.Get "files/langfuse/rr/known_good_digest/inputs.json" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coelhonexus-langfuse-ycs-qa-pairs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: langfuse
+    release: {{ .Release.Name }}
+data:
+  inputs.json: |
+{{ .Files.Get "files/langfuse/ycs/qa_pairs/inputs.json" | indent 4 }}

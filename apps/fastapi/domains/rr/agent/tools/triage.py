@@ -329,6 +329,18 @@ async def triage_candidates(
             f"{len(deduped)} arxiv-linked candidates remain"
         )
 
+    if not deduped:
+        msg = (
+            f"[triage] no arxiv-linked candidates after filter "
+            f"(dropped={n_dropped_no_arxiv} arxiv-less, total={n_before_arxiv_filter}); "
+            f"per_source={per_source_counts}"
+        )
+        logger.warning(msg)
+        fs_write(scan_id, FS_FILE_TRIAGE_TOPN, [])
+        try: mirror_write_sync(scan_id, FS_FILE_TRIAGE_TOPN, [])
+        except Exception: pass
+        return msg
+
     n_before_rerank = len(deduped)
 
     # Off-topic rerank gate — drop the half whose topical relevance to
@@ -448,11 +460,15 @@ async def triage_candidates(
         f" cached_arxiv_ids={cached_arxiv_ids} cached_extractions={len(cached_arxiv_ids)}"
         if cached_arxiv_ids else ""
     )
+    score_range = (
+        f"top_score={top[0][1]:.4f} bottom_score={top[-1][1]:.4f} "
+        if top else "top_score=N/A bottom_score=N/A "
+    )
     msg = (
         f"[triage] in={sum(per_source_counts.values())} "
         f"deduped={n_before_rerank} after_rerank={len(relevant)} "
         f"top_n={len(top)} per_source={per_source_counts} "
-        f"top_score={top[0][1]:.4f} bottom_score={top[-1][1]:.4f} "
+        f"{score_range}"
         f"top_arxiv_ids={top_arxiv_ids}{cache_note}"
     )
     logger.info(msg)

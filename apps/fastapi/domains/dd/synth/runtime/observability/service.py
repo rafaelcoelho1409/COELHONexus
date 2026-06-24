@@ -46,13 +46,18 @@ def traced(name: str) -> Callable:
                         node_id=prev_node_id,
                     )
             attrs = {
+                "coelho.langfuse.keep": True,
+                "coelho.langfuse.kind": "workflow_node",
                 "synth.node":           name,
                 "synth.thread_id":      state.get("thread_id") or "",
                 "synth.framework_slug": state.get("framework_slug") or "",
                 "synth.chapter_id":     state.get("chapter_id") or "",
+                "langfuse.observation.metadata.workflow": "dd_synth",
+                "langfuse.observation.metadata.node_name": name,
+                "langfuse.observation.metadata.stage": "synth",
             }
             with tracer.start_as_current_span(
-                f"synth/{name}", attributes = attrs,
+                f"dd.synth.node.{name}", attributes = attrs,
             ) as span:
                 try:
                     result = await fn(state, *args, **kwargs)

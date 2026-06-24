@@ -185,10 +185,25 @@ def build_chat_response_attrs(response: Any) -> dict[str, Any]:
         attrs[GEN_AI_RESPONSE_ID] = str(response_id)
 
     usage = _coerce_usage(_get(response, "usage"))
-    if usage.get("prompt_tokens") is not None:
-        attrs[GEN_AI_USAGE_INPUT_TOKENS]  = int(usage["prompt_tokens"])
-    if usage.get("completion_tokens") is not None:
-        attrs[GEN_AI_USAGE_OUTPUT_TOKENS] = int(usage["completion_tokens"])
+    inp = usage.get("prompt_tokens")
+    out = usage.get("completion_tokens")
+    if inp is not None:
+        attrs[GEN_AI_USAGE_INPUT_TOKENS]        = int(inp)  # new OTel semconv
+        attrs["gen_ai.usage.prompt_tokens"]     = int(inp)  # older convention (LangFuse fallback)
+    if out is not None:
+        attrs[GEN_AI_USAGE_OUTPUT_TOKENS]           = int(out)
+        attrs["gen_ai.usage.completion_tokens"]     = int(out)
+    if inp is not None or out is not None:
+        total = int(inp or 0) + int(out or 0)
+        attrs["gen_ai.usage.total_tokens"] = total
+        # langfuse.observation.usage_details: JSON string LangFuse reads when
+        # gen_ai.usage.* ingestion is broken (v3.x regression on some builds).
+        attrs["langfuse.observation.usage_details"] = json.dumps({
+            "input":  int(inp or 0),
+            "output": int(out or 0),
+            "total":  total,
+            "unit":   "TOKENS",
+        })
 
     choices = _get(response, "choices") or []
     if choices:
@@ -200,6 +215,11 @@ def build_chat_response_attrs(response: Any) -> dict[str, Any]:
         content = _get(message, "content")
         if content:
             attrs[GEN_AI_COMPLETION] = _truncate(str(content), COMPLETION_TRUNCATE_CHARS)
+    # All rotator arms are free-tier ($0). Set explicit zero cost so LangFuse
+    # shows $0.0000 instead of null on cost columns.
+    attrs["langfuse.observation.input_cost"]  = 0.0
+    attrs["langfuse.observation.output_cost"] = 0.0
+    attrs["langfuse.observation.total_cost"]  = 0.0
     return attrs
 
 
@@ -210,7 +230,13 @@ def build_embedding_response_attrs(response: Any) -> dict[str, Any]:
         attrs[GEN_AI_RESPONSE_MODEL] = str(response_model)
     usage = _coerce_usage(_get(response, "usage"))
     if usage.get("prompt_tokens") is not None:
-        attrs[GEN_AI_USAGE_INPUT_TOKENS] = int(usage["prompt_tokens"])
+        inp = int(usage["prompt_tokens"])
+        attrs[GEN_AI_USAGE_INPUT_TOKENS]            = inp
+        attrs["gen_ai.usage.prompt_tokens"]         = inp
+        attrs["gen_ai.usage.total_tokens"]          = inp
+        attrs["langfuse.observation.usage_details"] = json.dumps({
+            "input": inp, "output": 0, "total": inp, "unit": "TOKENS",
+        })
     data = _get(response, "data") or []
     if data:
         attrs[GEN_AI_RESPONSE_EMBEDDING_VECTORS] = len(data)

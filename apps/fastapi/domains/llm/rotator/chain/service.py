@@ -20,9 +20,14 @@ import redis as _redis_sync
 import redis.asyncio as redis_aio
 from litellm import Router
 from litellm.types.router import AllowedFailsPolicy, RetryPolicy
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.messages.utils import convert_to_openai_messages
+from langchain_core.outputs import ChatGenerationChunk
 from langchain_litellm.chat_models import ChatLiteLLMRouter
+from langchain_litellm.chat_models.litellm_router import (
+    _convert_delta_to_message_chunk,
+    _create_usage_metadata,
+)
 
 
 # Cross-provider request sanitization. modify_params drops thinking_blocks /
@@ -976,46 +981,239 @@ class _RotatorAutoRetryRouter(ChatLiteLLMRouter):
             pass
         return result
 
+    def _request_model_name(self) -> str:
+        return str(
+            getattr(self, "model_name", None)
+            or getattr(self, "model", None)
+            or GROUP
+        )
+
+    def _messages_for_observability(self, messages) -> list[dict]:
+        try:
+            payload = convert_to_openai_messages(messages)
+            if isinstance(payload, list):
+                return payload
+        except Exception:
+            pass
+        return [{"role": "user", "content": str(messages)}]
+
+    def _coerce_text_content(self, value) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            parts: list[str] = []
+            for block in value:
+                if isinstance(block, dict):
+                    text = block.get("text") or block.get("content") or ""
+                    if text:
+                        parts.append(str(text))
+                elif block:
+                    parts.append(str(block))
+            return "\n".join(parts).strip()
+        if value is None:
+            return ""
+        return str(value)
+
+    def _temperature_for_call(self, kwargs: dict) -> float | None:
+        val = kwargs.get("temperature", getattr(self, "temperature", None))
+        return float(val) if val is not None else None
+
+    def _attach_chat_result_to_span(self, span: Any, result: Any) -> None:
+        generations = getattr(result, "generations", None) or []
+        first = generations[0] if generations else None
+        if isinstance(first, list):
+            first = first[0] if first else None
+        message = getattr(first, "message", None)
+        response_metadata = dict(getattr(message, "response_metadata", None) or {})
+        usage_metadata = getattr(message, "usage_metadata", None) or {}
+        if hasattr(usage_metadata, "model_dump"):
+            try:
+                usage_metadata = usage_metadata.model_dump()
+            except Exception:
+                usage_metadata = {}
+        elif not isinstance(usage_metadata, dict):
+            usage_metadata = dict(getattr(usage_metadata, "__dict__", {}) or {})
+        llm_output = getattr(result, "llm_output", None) or {}
+        usage: dict[str, int] = {}
+        input_tokens = (
+            usage_metadata.get("input_tokens")
+            or usage_metadata.get("prompt_tokens")
+        )
+        output_tokens = (
+            usage_metadata.get("output_tokens")
+            or usage_metadata.get("completion_tokens")
+        )
+        if input_tokens is not None:
+            usage["prompt_tokens"] = int(input_tokens)
+        if output_tokens is not None:
+            usage["completion_tokens"] = int(output_tokens)
+        finish_reason = response_metadata.get("finish_reason")
+        content = self._coerce_text_content(getattr(message, "content", "") or "")
+        response_payload: dict[str, Any] = {
+            "model": (
+                response_metadata.get("model_name")
+                or llm_output.get("model_name")
+                or self._request_model_name()
+            ),
+            "usage": usage,
+            "choices": [{
+                "message": {"content": content},
+            }],
+        }
+        if response_metadata.get("id"):
+            response_payload["id"] = response_metadata["id"]
+        if finish_reason:
+            response_payload["choices"][0]["finish_reason"] = finish_reason
+        span.attach_chat_response(response_payload)
+
     async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
         messages = _flatten_thinking_content(messages)
+        should_stream = kwargs.get("stream")
+        if should_stream is None:
+            should_stream = bool(getattr(self, "streaming", False))
+        if should_stream:
+            return await super()._agenerate(
+                messages, stop=stop, run_manager=run_manager, **kwargs,
+            )
+        request_messages = self._messages_for_observability(messages)
         last_err: Exception | None = None
-        for attempt in range(_MAX_NOTFOUND_RETRIES):
-            try:
-                result = await super()._agenerate(
-                    messages, stop=stop, run_manager=run_manager, **kwargs,
-                )
-            except Exception as e:
-                # is_eol_error covers NotFoundError(404) + 410/deprecated paths.
-                if not (isinstance(e, litellm.NotFoundError) or is_eol_error(e)):
-                    raise
-                last_err = e
-                model = _extract_model_from_error(str(e), exc=e)
-                if model:
-                    mark_inaccessible(model)
-                else:
-                    # Unidentified deployment (NIM hides model behind a UUID) —
-                    # force a reshuffle; Router's allowed_fails will demote it.
-                    logger.warning(
-                        f"[rotator-retry] EOL-class error on attempt "
-                        f"{attempt+1} from unidentified deployment; forcing "
-                        f"Router reshuffle"
+        async with genai_completion_span(
+            request_model = self._request_model_name(),
+            messages      = request_messages,
+            temperature   = self._temperature_for_call(kwargs),
+            max_tokens    = kwargs.get("max_tokens"),
+            top_p         = kwargs.get("top_p"),
+        ) as completion_span:
+            for attempt in range(_MAX_NOTFOUND_RETRIES):
+                try:
+                    result = await super()._agenerate(
+                        messages, stop=stop, run_manager=run_manager, **kwargs,
                     )
-                self.router = _get_router()
-                continue
-            # Empty generations (Gemini policy filter, parse glitch, {"choices":[]})
-            # would crash at langchain_core/chat_models.py:508 — treat as soft fail.
-            if not result.generations or not result.generations[0]:
-                logger.warning(
-                    f"[rotator-retry] empty generations on attempt {attempt+1}; "
-                    f"forcing deployment reshuffle"
-                )
-                last_err = RuntimeError("empty generations from rotator")
-                self.router = _get_router()
-                continue
-            return result
+                except Exception as e:
+                    # is_eol_error covers NotFoundError(404) + 410/deprecated paths.
+                    if not (isinstance(e, litellm.NotFoundError) or is_eol_error(e)):
+                        raise
+                    last_err = e
+                    model = _extract_model_from_error(str(e), exc=e)
+                    if model:
+                        mark_inaccessible(model)
+                    else:
+                        # Unidentified deployment (NIM hides model behind a UUID) —
+                        # force a reshuffle; Router's allowed_fails will demote it.
+                        logger.warning(
+                            f"[rotator-retry] EOL-class error on attempt "
+                            f"{attempt+1} from unidentified deployment; forcing "
+                            f"Router reshuffle"
+                        )
+                    self.router = _get_router()
+                    continue
+                # Empty generations (Gemini policy filter, parse glitch, {"choices":[]})
+                # would crash at langchain_core/chat_models.py:508 — treat as soft fail.
+                if not result.generations or not result.generations[0]:
+                    logger.warning(
+                        f"[rotator-retry] empty generations on attempt {attempt+1}; "
+                        f"forcing deployment reshuffle"
+                    )
+                    last_err = RuntimeError("empty generations from rotator")
+                    self.router = _get_router()
+                    continue
+                self._attach_chat_result_to_span(completion_span, result)
+                return result
         raise last_err if last_err else RuntimeError(
             "[rotator-retry] exhausted without specific error"
         )
+
+    async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+        messages = _flatten_thinking_content(messages)
+        request_messages = self._messages_for_observability(messages)
+        async with genai_completion_span(
+            request_model = self._request_model_name(),
+            messages      = request_messages,
+            temperature   = self._temperature_for_call(kwargs),
+            max_tokens    = kwargs.get("max_tokens"),
+            top_p         = kwargs.get("top_p"),
+        ) as completion_span:
+            default_chunk_class = AIMessageChunk
+            message_dicts, params = self._create_message_dicts(messages, stop)
+            params = {**params, **kwargs, "stream": True}
+            params = {k: v for k, v in params.items() if v is not None}
+            params["stream_options"] = (
+                self.stream_options
+                if self.stream_options is not None
+                else {"include_usage": True}
+            )
+            self._prepare_params_for_router(params)
+            first_chunk_yielded = False
+            final_model = self._request_model_name()
+            final_usage: dict[str, Any] = {}
+            final_id: str | None = None
+            finish_reason: str | None = None
+            accumulated = ""
+
+            async for raw_chunk in await self.router.acompletion(
+                messages=message_dicts, **params
+            ):
+                usage_metadata = None
+                usage = raw_chunk.get("usage") if isinstance(raw_chunk, dict) else None
+                if usage:
+                    final_usage = usage
+                    usage_metadata = _create_usage_metadata(usage)
+                if isinstance(raw_chunk, dict):
+                    raw_model = raw_chunk.get("model")
+                    if raw_model:
+                        final_model = str(raw_model)
+                    raw_id = raw_chunk.get("id")
+                    if raw_id:
+                        final_id = str(raw_id)
+
+                choices = raw_chunk.get("choices") if isinstance(raw_chunk, dict) else None
+                if not choices:
+                    if usage_metadata:
+                        chunk_obj = default_chunk_class(
+                            content="", usage_metadata=usage_metadata,
+                        )
+                        cg_chunk = ChatGenerationChunk(message=chunk_obj)
+                        if run_manager:
+                            await run_manager.on_llm_new_token(
+                                "", chunk=cg_chunk, **params,
+                            )
+                        yield cg_chunk
+                    continue
+
+                choice0 = choices[0] or {}
+                finish_reason = choice0.get("finish_reason") or finish_reason
+                delta = choice0.get("delta") or {}
+                chunk = _convert_delta_to_message_chunk(delta, default_chunk_class)
+
+                if usage_metadata and isinstance(chunk, AIMessageChunk):
+                    chunk.usage_metadata = usage_metadata
+
+                if isinstance(chunk, AIMessageChunk):
+                    chunk.response_metadata = {
+                        "model_name": final_model,
+                        **({"id": final_id} if final_id else {}),
+                        **({"finish_reason": finish_reason} if finish_reason else {}),
+                    }
+                    accumulated += self._coerce_text_content(chunk.content)
+                    first_chunk_yielded = True
+
+                default_chunk_class = chunk.__class__
+                cg_chunk = ChatGenerationChunk(message=chunk)
+                if run_manager:
+                    await run_manager.on_llm_new_token(
+                        chunk.content, chunk=cg_chunk, **params,
+                    )
+                yield cg_chunk
+
+            completion_span.attach_chat_response({
+                "model": final_model,
+                "id": final_id,
+                "usage": final_usage,
+                "choices": [{
+                    "message": {"content": accumulated},
+                    **({"finish_reason": finish_reason} if finish_reason else {}),
+                }],
+            })
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         messages = _flatten_thinking_content(messages)
@@ -1157,157 +1355,198 @@ class _BanditRoutedRotatorChain(_RotatorAutoRetryRouter):
             last_err: Exception | None = None
             attempts = 0
             inflight = _get_rr_provider_inflight()
-            for deployment_id, _score, _n_obs in ranked:
-                provider = (
-                    deployment_id.split("/", 1)[0] if "/" in deployment_id else ""
-                )
-                # Per-provider cap: skip at-cap arms; cascade advances naturally.
-                provider_cap = _RR_PROVIDER_CAPS.get(provider, 8)
-                if inflight.get(provider, 0) >= provider_cap:
-                    logger.debug(
-                        f"[rr-bandit] {deployment_id} skipped — provider "
-                        f"{provider!r} at cap {provider_cap}"
-                    )
-                    continue
-                attempts += 1
-                api_key = (
-                    resolve_key(provider_key_env(provider))
-                    or resolve_key("NVIDIA_API_KEY")
-                    or ""
-                )
-                deployment_timeout = float(timeout_by_id.get(deployment_id, 120))
-                t0 = time.monotonic()
-                inflight[provider] = inflight.get(provider, 0) + 1
+            async with genai_bandit_cascade_span(
+                dd_process = self._RR_DD_PROCESS,
+            ) as cascade:
                 try:
-                    acompletion_kwargs: dict = dict(
-                        model       = deployment_id,
-                        api_key     = api_key,
-                        messages    = oai_messages,
-                        temperature = temperature,
-                        timeout     = deployment_timeout,
-                    )
-                    if max_tokens is not None:
-                        acompletion_kwargs["max_tokens"] = max_tokens
-                    if tools is not None:
-                        acompletion_kwargs["tools"] = tools
-                    if tool_choice is not None:
-                        acompletion_kwargs["tool_choice"] = tool_choice
-                    if stop is not None:
-                        acompletion_kwargs["stop"] = stop
-                    # response_format only for providers that translate cleanly.
-                    if response_format is not None and any(
-                        deployment_id.startswith(p)
-                        for p in _RESPONSE_FORMAT_SAFE_PROVIDERS
-                    ):
-                        acompletion_kwargs["response_format"] = response_format
-                        # NIM: attach nvext.guided_json so XGrammar enforces
-                        # schema at decode time. KD_RR_GUIDED_JSON gates.
-                        if (
-                            provider == "nvidia_nim"
-                            and os.environ.get(
-                                "KD_RR_GUIDED_JSON", "true"
-                            ).strip().lower() not in ("0", "false", "no", "off")
-                            and isinstance(response_format, dict)
-                        ):
-                            try:
-                                schema = response_format.get("json_schema", {})
-                                if isinstance(schema, dict):
-                                    schema = schema.get("schema", schema)
-                                if isinstance(schema, dict) and schema:
-                                    acompletion_kwargs["extra_body"] = {
-                                        "nvext": {"guided_json": schema}
-                                    }
-                            except Exception:
-                                pass
-                    response = await litellm.acompletion(**acompletion_kwargs)
-                    latency_s = float(time.monotonic() - t0)
-
-                    # langchain-litellm's `_create_chat_result` does
-                    # `params["metadata"]` → KeyError if absent. Router's
-                    # `_prepare_params_for_router` injects that on the normal
-                    # path; bypassing Router we provide an empty dict ourselves.
-                    result = self._create_chat_result(response, metadata={})
-
-                    if not result.generations or not result.generations[0]:
-                        last_err = RuntimeError(
-                            f"empty generations from {deployment_id} "
-                            f"(latency_s={latency_s:.2f})"
+                    for deployment_id, _score, _n_obs in ranked:
+                        provider = (
+                            deployment_id.split("/", 1)[0] if "/" in deployment_id else ""
                         )
-                        try:
-                            await bandit.update(
-                                deployment_id, self._RR_DD_PROCESS,
-                                ctx, 0.0, redis = rds,
+                        # Per-provider cap: skip at-cap arms; cascade advances naturally.
+                        provider_cap = _RR_PROVIDER_CAPS.get(provider, 8)
+                        if inflight.get(provider, 0) >= provider_cap:
+                            logger.debug(
+                                f"[rr-bandit] {deployment_id} skipped — provider "
+                                f"{provider!r} at cap {provider_cap}"
                             )
-                        except Exception:
-                            pass
-                        logger.warning(
-                            f"[rr-bandit] {deployment_id} empty generations; "
-                            f"cascading"
+                            continue
+                        attempts += 1
+                        api_key = (
+                            resolve_key(provider_key_env(provider))
+                            or resolve_key("NVIDIA_API_KEY")
+                            or ""
                         )
-                        continue
+                        deployment_timeout = float(timeout_by_id.get(deployment_id, 120))
+                        t0 = time.monotonic()
+                        inflight[provider] = inflight.get(provider, 0) + 1
+                        success = False
+                        error_class: str | None = None
+                        try:
+                            async with genai_bandit_attempt_span(
+                                deployment_id = deployment_id,
+                                attempt       = attempts,
+                                dd_process    = self._RR_DD_PROCESS,
+                                messages      = oai_messages,
+                                temperature   = temperature,
+                                max_tokens    = max_tokens,
+                            ) as attempt_span:
+                                try:
+                                    acompletion_kwargs: dict = dict(
+                                        model       = deployment_id,
+                                        api_key     = api_key,
+                                        messages    = oai_messages,
+                                        temperature = temperature,
+                                        timeout     = deployment_timeout,
+                                    )
+                                    if max_tokens is not None:
+                                        acompletion_kwargs["max_tokens"] = max_tokens
+                                    if tools is not None:
+                                        acompletion_kwargs["tools"] = tools
+                                    if tool_choice is not None:
+                                        acompletion_kwargs["tool_choice"] = tool_choice
+                                    if stop is not None:
+                                        acompletion_kwargs["stop"] = stop
+                                    # response_format only for providers that translate cleanly.
+                                    if response_format is not None and any(
+                                        deployment_id.startswith(p)
+                                        for p in _RESPONSE_FORMAT_SAFE_PROVIDERS
+                                    ):
+                                        acompletion_kwargs["response_format"] = response_format
+                                        # NIM: attach nvext.guided_json so XGrammar enforces
+                                        # schema at decode time. KD_RR_GUIDED_JSON gates.
+                                        if (
+                                            provider == "nvidia_nim"
+                                            and os.environ.get(
+                                                "KD_RR_GUIDED_JSON", "true"
+                                            ).strip().lower() not in ("0", "false", "no", "off")
+                                            and isinstance(response_format, dict)
+                                        ):
+                                            try:
+                                                schema = response_format.get("json_schema", {})
+                                                if isinstance(schema, dict):
+                                                    schema = schema.get("schema", schema)
+                                                if isinstance(schema, dict) and schema:
+                                                    acompletion_kwargs["extra_body"] = {
+                                                        "nvext": {"guided_json": schema}
+                                                    }
+                                            except Exception:
+                                                pass
+                                    response = await litellm.acompletion(**acompletion_kwargs)
+                                    attempt_span.attach_chat_response(response)
+                                    latency_s = float(time.monotonic() - t0)
 
-                    reward = bandit.compose_reward(
-                        success            = True,
-                        schema_valid       = True,
-                        latency_s          = latency_s,
-                        expected_latency_s = self._RR_EXPECTED_LATENCY_S,
-                        error_class        = None,
-                    )
-                    try:
-                        await bandit.update(
-                            deployment_id, self._RR_DD_PROCESS,
-                            ctx, reward, redis = rds,
-                        )
-                    except Exception:
-                        pass
-                    logger.debug(
-                        f"[rr-bandit] {deployment_id} → ok "
-                        f"(latency_s={latency_s:.2f}, attempt={attempts}, "
-                        f"reward={reward:.3f})"
-                    )
-                    return result
+                                    # langchain-litellm's `_create_chat_result` does
+                                    # `params["metadata"]` → KeyError if absent. Router's
+                                    # `_prepare_params_for_router` injects that on the normal
+                                    # path; bypassing Router we provide an empty dict ourselves.
+                                    result = self._create_chat_result(response, metadata={})
 
-                except Exception as e:
-                    error_class = classify_error(e)
-                    last_err    = e
-                    latency_s   = float(time.monotonic() - t0)
-                    if error_class == "rate_limit":
-                        _arm_cooldown[deployment_id] = (
-                            time.monotonic() + _ARM_COOLDOWN_S
-                        )
-                    reward = bandit.compose_reward(
-                        success            = False,
-                        schema_valid       = False,
-                        latency_s          = latency_s,
-                        expected_latency_s = self._RR_EXPECTED_LATENCY_S,
-                        error_class        = error_class,
+                                    if not result.generations or not result.generations[0]:
+                                        last_err = RuntimeError(
+                                            f"empty generations from {deployment_id} "
+                                            f"(latency_s={latency_s:.2f})"
+                                        )
+                                        reward = 0.0
+                                        update_bandit_outcome(
+                                            attempt_span,
+                                            latency_s    = latency_s,
+                                            reward       = reward,
+                                            error_class  = "empty_generations",
+                                            schema_valid = False,
+                                        )
+                                        try:
+                                            await bandit.update(
+                                                deployment_id, self._RR_DD_PROCESS,
+                                                ctx, reward, redis = rds,
+                                            )
+                                        except Exception:
+                                            pass
+                                        logger.warning(
+                                            f"[rr-bandit] {deployment_id} empty generations; "
+                                            f"cascading"
+                                        )
+                                        continue
+
+                                    success = True
+                                    reward = bandit.compose_reward(
+                                        success            = True,
+                                        schema_valid       = True,
+                                        latency_s          = latency_s,
+                                        expected_latency_s = self._RR_EXPECTED_LATENCY_S,
+                                        error_class        = None,
+                                    )
+                                    update_bandit_outcome(
+                                        attempt_span,
+                                        latency_s    = latency_s,
+                                        reward       = reward,
+                                        error_class  = None,
+                                        schema_valid = True,
+                                    )
+                                    try:
+                                        await bandit.update(
+                                            deployment_id, self._RR_DD_PROCESS,
+                                            ctx, reward, redis = rds,
+                                        )
+                                    except Exception:
+                                        pass
+                                    logger.debug(
+                                        f"[rr-bandit] {deployment_id} → ok "
+                                        f"(latency_s={latency_s:.2f}, attempt={attempts}, "
+                                        f"reward={reward:.3f})"
+                                    )
+                                    return result
+
+                                except Exception as e:
+                                    error_class = classify_error(e)
+                                    last_err    = e
+                                    latency_s   = float(time.monotonic() - t0)
+                                    if error_class == "rate_limit":
+                                        _arm_cooldown[deployment_id] = (
+                                            time.monotonic() + _ARM_COOLDOWN_S
+                                        )
+                                    reward = bandit.compose_reward(
+                                        success            = False,
+                                        schema_valid       = False,
+                                        latency_s          = latency_s,
+                                        expected_latency_s = self._RR_EXPECTED_LATENCY_S,
+                                        error_class        = error_class,
+                                    )
+                                    update_bandit_outcome(
+                                        attempt_span,
+                                        latency_s    = latency_s,
+                                        reward       = reward,
+                                        error_class  = error_class,
+                                        schema_valid = False,
+                                    )
+                                    try:
+                                        await bandit.update(
+                                            deployment_id, self._RR_DD_PROCESS,
+                                            ctx, reward, redis = rds,
+                                        )
+                                    except Exception:
+                                        pass
+                                    logger.info(
+                                        f"[rr-bandit] {deployment_id} → {error_class}: "
+                                        f"{type(e).__name__}; cascading"
+                                    )
+                                    continue
+                        finally:
+                            # Release provider slot on success/fail/skip.
+                            inflight[provider] = max(
+                                0, inflight.get(provider, 0) - 1
+                            )
+
+                    logger.warning(
+                        f"[rr-bandit] all {attempts} ranked arms failed (last: "
+                        f"{type(last_err).__name__ if last_err else 'None'}); "
+                        f"falling back to simple-shuffle Router"
                     )
-                    try:
-                        await bandit.update(
-                            deployment_id, self._RR_DD_PROCESS,
-                            ctx, reward, redis = rds,
-                        )
-                    except Exception:
-                        pass
-                    logger.info(
-                        f"[rr-bandit] {deployment_id} → {error_class}: "
-                        f"{type(e).__name__}; cascading"
+                    return await super()._agenerate(
+                        messages, stop=stop, run_manager=run_manager, **kwargs,
                     )
-                    continue
                 finally:
-                    # Release provider slot on success/fail/skip.
-                    inflight[provider] = max(
-                        0, inflight.get(provider, 0) - 1
-                    )
-
-            logger.warning(
-                f"[rr-bandit] all {attempts} ranked arms failed (last: "
-                f"{type(last_err).__name__ if last_err else 'None'}); "
-                f"falling back to simple-shuffle Router"
-            )
-            return await super()._agenerate(
-                messages, stop=stop, run_manager=run_manager, **kwargs,
-            )
+                    cascade.set_total_attempts(attempts)
 
         finally:
             try:

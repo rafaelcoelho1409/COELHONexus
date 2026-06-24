@@ -5,7 +5,7 @@ environment: production
 
 # Observability - OpenTelemetry to Grafana Alloy + LGTM
 observability:
-  enabled: false
+  enabled: true
   otlp_endpoint: "alloy.monitoring:4317"
 
 # OpenTelemetry (2026-05-12 night) — dual-export pipeline.
@@ -24,9 +24,9 @@ observability:
 #   string disables the LangFuse arm of the dual-export (LGTM-only mode).
 #
 # service_name / service_version:
-#   service.name + service.version resource attrs — surfaced in Grafana +
-#   LangFuse for distinguishing the FastAPI process from Celery workers
-#   (same service.name "coelhonexus-fastapi" but different process.pid).
+#   Default FastAPI service.name + shared service.version resource attrs.
+#   Celery overrides OTEL_SERVICE_NAME at its Deployment so worker traces
+#   land under `coelhonexus-celery` instead of inheriting the FastAPI name.
 otel:
   # NOTE 2026-05-12 night: corrected from `alloy.monitoring` after empirical
   # validation. Cluster's Alloy service lives in the `alloy` namespace (the

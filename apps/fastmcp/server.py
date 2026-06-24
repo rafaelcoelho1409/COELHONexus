@@ -16,7 +16,33 @@ Adding a new feature = (1) a new package under `domains/<feature>/` with its
 own `register(mcp)` function, (2) one call to that register() below.
 Mirrors the apps/fasthtml features.X.register(rt) convention.
 """
+import logging
 import os
+
+
+_LOG_FORMAT = (
+    "%(asctime)s %(levelname)s %(name)s "
+    "[trace_id=%(otelTraceID)s span_id=%(otelSpanID)s] %(message)s"
+)
+
+
+def _install_log_record_defaults() -> None:
+    old_factory = logging.getLogRecordFactory()
+    if getattr(old_factory, "_coelho_otel_defaults", False):
+        return
+
+    def record_factory(*args, **kwargs):
+        record = old_factory(*args, **kwargs)
+        record.otelTraceID = getattr(record, "otelTraceID", "0")
+        record.otelSpanID = getattr(record, "otelSpanID", "0")
+        return record
+
+    record_factory._coelho_otel_defaults = True  # type: ignore[attr-defined]
+    logging.setLogRecordFactory(record_factory)
+
+
+_install_log_record_defaults()
+logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
 
 from fastmcp import FastMCP
 from starlette.requests import Request
@@ -70,7 +96,13 @@ async def health(request: Request) -> JSONResponse:
 # apps/fasthtml `main:app` — entrypoint.sh runs `uvicorn server:http_app`.
 # Host/port are configured on uvicorn (entrypoint flags), not on the FastMCP
 # instance, per FastMCP's deployment guidance.
-http_app = mcp.http_app()
+#
+# OpenTelemetryMiddleware extracts W3C traceparent headers from every
+# incoming HTTP request so that MCP tool-call spans produced by
+# TelemetryMiddleware become children of the Celery worker's rr.scan.run
+# span rather than new root traces in LangFuse.
+from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware
+http_app = OpenTelemetryMiddleware(mcp.http_app())
 
 
 if __name__ == "__main__":

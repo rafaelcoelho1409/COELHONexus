@@ -36,6 +36,11 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.30,<2.0",
     "opentelemetry-instrumentation-httpx>=0.50b0,<1.0",
     "opentelemetry-instrumentation-logging>=0.50b0,<1.0",
+    # ASGI middleware that extracts W3C traceparent headers from incoming
+    # requests — links FastMCP tool-call spans as children of the Celery
+    # worker's rr.scan.run span so RR tool traces appear under the main
+    # scan in LangFuse instead of as orphan root traces.
+    "opentelemetry-instrumentation-asgi>=0.50b0,<1.0",
     # MinIO+Fernet credential reader (infra/credentials/). Reads the same
     # encrypted store the FastAPI BYOK system writes — user-supplied tool API
     # keys (set in the /settings UI) get injected into os.environ at startup.

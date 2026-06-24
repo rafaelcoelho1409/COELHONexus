@@ -36,3 +36,6 @@ data:
           manageAlerts: true
           prometheusType: Mimir
           prometheusVersion: 3.0.0
+          exemplarTraceIdDestinations:
+            - name: traceID
+              datasourceUid: tempo
