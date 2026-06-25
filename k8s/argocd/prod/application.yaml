@@ -1,0 +1,64 @@
+# =============================================================================
+# ARGOCD APPLICATION - COELHONexus (PROD — COELHONexus standalone k3d)
+# =============================================================================
+# SCOPE: COELHONexus standalone k3d cluster. ArgoCD syncs the Helm chart
+#   from the public GitHub repository. Image rollouts are handled separately
+#   by ArgoCD Image Updater watching coelhonexus-registry:5000 (see
+#   image-updater.yaml). Images are built and pushed via skaffold build.
+#
+# Apply:
+#   kubectl apply -f k8s/argocd/prod/
+#
+# Temporary (while GitHub repo is private): create a repo-creds Secret in
+#   the argocd namespace before applying:
+#
+#   kubectl create secret generic argocd-github-repo-creds \
+#     --namespace argocd \
+#     --from-literal=type=git \
+#     --from-literal=url=https://github.com/rafaelcoelho1409/COELHONexus.git \
+#     --from-literal=password=<github-pat> \
+#     --from-literal=username=rafaelcoelho1409
+#   kubectl label secret argocd-github-repo-creds \
+#     -n argocd argocd.argoproj.io/secret-type=repository
+#
+#   Once the repo is public, delete the Secret — ArgoCD clones public repos
+#   anonymously with no credentials.
+#
+# Namespaces:
+#   - coelhonexus-dev: Skaffold local development (ports 23020-23039)
+#   - coelhonexus:     ArgoCD production (ports 23000-23019)
+# =============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: coelhonexus
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/rafaelcoelho1409/COELHONexus.git
+    targetRevision: master
+    path: k8s/helm
+    helm:
+      releaseName: coelhonexus
+      valueFiles:
+        - values.yaml
+        - values-coelhonexus.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: coelhonexus
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

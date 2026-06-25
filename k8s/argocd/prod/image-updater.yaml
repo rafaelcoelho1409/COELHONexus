@@ -1,0 +1,47 @@
+# =============================================================================
+# ARGOCD IMAGE UPDATER CR - COELHONexus (PROD — COELHONexus standalone k3d)
+# =============================================================================
+# SCOPE: pairs with application.yaml. Images are built and pushed to
+#   coelhonexus-registry:5000 via `skaffold build --push
+#   --default-repo=coelhonexus-registry:5000`. Image Updater polls that
+#   registry every 2 minutes (digest strategy) and patches the Application
+#   when a new digest is detected, triggering a rollout.
+#
+# Apply:
+#   kubectl apply -f k8s/argocd/prod/
+#
+# Flow: skaffold build → coelhonexus-registry:5000 → Image Updater
+#   detects new digest → patches Application → ArgoCD reconciles → rollout.
+# =============================================================================
+apiVersion: argocd-image-updater.argoproj.io/v1alpha1
+kind: ImageUpdater
+metadata:
+  name: coelhonexus
+  namespace: argocd
+spec:
+  applicationRefs:
+    - namePattern: coelhonexus
+      images:
+        - alias: fastapi
+          imageName: coelhonexus-registry:5000/coelhonexus-fastapi:latest
+          commonUpdateSettings:
+            updateStrategy: digest
+          manifestTargets:
+            helm:
+              spec: fastapi.image
+        - alias: fasthtml
+          imageName: coelhonexus-registry:5000/coelhonexus-fasthtml:latest
+          commonUpdateSettings:
+            updateStrategy: digest
+          manifestTargets:
+            helm:
+              spec: fasthtml.image
+        - alias: fastmcp
+          imageName: coelhonexus-registry:5000/coelhonexus-fastmcp:latest
+          commonUpdateSettings:
+            updateStrategy: digest
+          manifestTargets:
+            helm:
+              spec: fastmcp.image
+  writeBackConfig:
+    method: argocd
