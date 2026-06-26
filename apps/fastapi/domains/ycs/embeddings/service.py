@@ -54,14 +54,12 @@ class NVIDIAEmbeddings(Embeddings):
             f"[ycs:embeddings] {model} ({self.dimensions}d) via NIM"
         )
 
-    # -------- private API call (retry + backoff) -----------------------
 
     def _call_api(
         self, texts: list[str], input_type: str = "passage",
     ) -> list[list[float]]:
         if domain.is_empty_input(texts):
             return []
-        # Resolve the NIM API key at call time (not at module load) so
         # the BYOK /settings flow can hot-update it without restarting
         # the worker. `resolve_key` reads the MinIO-backed Fernet store
         # first, falls back to the named env var, returns "" if both
@@ -120,7 +118,6 @@ class NVIDIAEmbeddings(Embeddings):
         # Defensive — loop above either returns or raises.
         return []
 
-    # -------- LangChain Embeddings interface ---------------------------
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Batched embedding with rate-limit-aware pacing.
@@ -149,7 +146,6 @@ class NVIDIAEmbeddings(Embeddings):
         return result[0]
 
 
-# ---------- factories (deprecated re-exports) ---------------------------
 
 _dense: Optional[NVIDIAEmbeddings] = None
 

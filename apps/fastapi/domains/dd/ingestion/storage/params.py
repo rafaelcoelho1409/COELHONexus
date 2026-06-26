@@ -13,7 +13,6 @@ MAX_POOL_CONNECTIONS = 32
 CONNECT_TIMEOUT_S = 10
 READ_TIMEOUT_S    = 30
 
-# Retry policy for transient ClientError codes (IncompleteBody, RequestTimeout,
 # InternalError, ServiceUnavailable, SlowDown).
 MAX_RETRY_ATTEMPTS = 10
 

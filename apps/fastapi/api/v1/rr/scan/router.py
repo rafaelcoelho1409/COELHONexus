@@ -1,13 +1,4 @@
-"""Scan endpoints — POST trigger, GET status, GET SSE.
-
-Pattern mirrors `api/v1/dd/planner/router.py`:
-  - Long work runs in Celery (queue=`rr-{env}`), FastAPI is HTTP/SSE.
-  - SSE relays Redis pub/sub events.
-  - Checkpoints land in Postgres; this layer reads via service.* paths.
-
-Per docs/CODE-CONVENTIONS.md §service: routers are THIN — they validate,
-dispatch, and shape responses. Business logic lives in domains/rr/.
-"""
+"""Scan endpoints — Celery dispatch, Postgres status reads, Redis SSE relay."""
 from __future__ import annotations
 
 import json
@@ -39,19 +30,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# --------------------------------------------------------------------------- #
-# GET /scans/recent — history surface for the row-2 picker
-# --------------------------------------------------------------------------- #
 @router.get("/scans/recent")
 async def list_recent_scans(profile_id: str = "default", limit: int = 20) -> dict:
-    """Most-recent scans for a profile. Drives the Recent-scans dropdown
-    on the Digest page. The query pulls the per-scan request shape
-    (topic / verticals / top_n) + outcome (status / counts / duration) +
-    a 1-3 theme preview pulled from the rank-1 finding's digest_json.
-
-    Themes preview implementation: we LEFT JOIN the rank-1 finding row
-    and read `digest_json->'themes'`. Single-row join per scan keeps the
-    query bounded; absent for in-flight or failed scans."""
+    """Most-recent scans for a profile. LEFT JOIN rank-1 finding for a 1-3 theme preview."""
     limit = max(1, min(int(limit), 100))
     async with await psycopg.AsyncConnection.connect(postgres_url()) as conn:
         async with conn.cursor() as cur:
@@ -73,9 +54,7 @@ async def list_recent_scans(profile_id: str = "default", limit: int = 20) -> dic
     items = []
     for row in rows:
         themes_raw = row[8]
-        # digest_json->'themes' is a JSONB array or null. psycopg returns it
-        # as a Python list already (with the JSONB adapter); fall back to []
-        # if it's something else.
+        # psycopg's JSONB adapter returns list directly; non-list rows are legacy str.
         themes = themes_raw if isinstance(themes_raw, list) else []
         items.append({
             "scan_id":         str(row[0]),
@@ -91,19 +70,12 @@ async def list_recent_scans(profile_id: str = "default", limit: int = 20) -> dic
     return {"profile_id": profile_id, "items": items}
 
 
-# --------------------------------------------------------------------------- #
-# POST /scan — trigger a new radar scan
-# --------------------------------------------------------------------------- #
 @router.post("/scan", response_model=ScanCreated, status_code=202)
 async def create_scan(body: ScanRequest) -> ScanCreated:
-    """Enqueue a Celery `run_radar_scan` task; return scan_id + task_id
-    immediately. Clients poll GET /scan/{id} or subscribe to SSE events
-    for progress."""
+    """Enqueue a Celery scan task and return immediately. Clients poll GET /scan/{id} or subscribe to SSE."""
     scan_id  = uuid4()
     now      = datetime.now(timezone.utc)
 
-    # Dispatch to Celery (queue=rr-{env}). The task's first action is to
-    # call service.begin_scan which writes the row + flips to running.
     task = run_radar_scan.delay(
         str(scan_id),
         body.profile_id,
@@ -112,10 +84,7 @@ async def create_scan(body: ScanRequest) -> ScanCreated:
         body.top_n,
     )
 
-    # Record the Celery task UUID so POST /scan/{id}/cancel can resolve
-    # scan_id → task_id and revoke. Best-effort — store_task_id swallows
-    # Redis errors; without the mapping, cancel returns "not found" but
-    # the scan still runs.
+    # Best-effort: store_task_id swallows Redis errors; cancel returns "not found" but scan still runs.
     await store_task_id(str(scan_id), task.id)
 
     logger.info(
@@ -130,32 +99,16 @@ async def create_scan(body: ScanRequest) -> ScanCreated:
     )
 
 
-# --------------------------------------------------------------------------- #
-# DELETE /scan/{id} — per-row delete from the Recent-scans dropdown
-# --------------------------------------------------------------------------- #
 @router.delete("/scan/{scan_id}", status_code=200)
 async def delete_scan_endpoint(scan_id: UUID) -> dict:
-    """Drop one scan's presentation artifacts: Postgres row + findings +
-    MinIO digest object. Accumulated knowledge (Neo4j graph + Qdrant
-    embeddings + radar_seen markers) is intentionally preserved. Returns
-    a per-layer success summary so the UI can confirm what was removed."""
+    """Drop scan artifacts (Postgres + findings + MinIO). Neo4j / Qdrant / radar_seen are intentionally preserved."""
     result = await delete_scan(scan_id)
     return result
 
 
-# --------------------------------------------------------------------------- #
-# POST /scan/{id}/cancel — revoke a running scan
-# --------------------------------------------------------------------------- #
 @router.post("/scan/{scan_id}/cancel", status_code=202)
 async def cancel_scan_endpoint(scan_id: UUID) -> dict:
-    """Stop a running scan: revoke the Celery task, mark Postgres
-    `cancelled`, emit a terminal SSE event so the UI unwinds.
-
-    Returns 202 with `revoked: true` when the task_id was found and the
-    revoke was issued (Celery delivers the SIGTERM asynchronously, so
-    202 not 200). Returns 404 if no task is registered for the scan_id —
-    either it already finished, never existed, or the task_id TTL'd out.
-    """
+    """Revoke the Celery task and mark Postgres `cancelled`. 202 not 200 because SIGTERM is async; 404 if task_id unknown or TTL'd."""
     ok = await cancel_scan(scan_id)
     if not ok:
         raise HTTPException(
@@ -165,16 +118,9 @@ async def cancel_scan_endpoint(scan_id: UUID) -> dict:
     return {"scan_id": str(scan_id), "revoked": True}
 
 
-# --------------------------------------------------------------------------- #
-# GET /scan/{id} — status + findings
-# --------------------------------------------------------------------------- #
 @router.get("/scan/{scan_id}", response_model=ScanResult)
 async def get_scan(scan_id: UUID) -> ScanResult:
-    """Snapshot of a scan's lifecycle + (when done) its full digest items.
-
-    Returns 404 if the scan_id isn't found. Otherwise always succeeds;
-    the response shape stays consistent across statuses (findings is
-    empty until status='done')."""
+    """Scan lifecycle snapshot + digest findings when done. Findings is empty until status='done'."""
     async with await psycopg.AsyncConnection.connect(postgres_url()) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
@@ -200,8 +146,7 @@ async def get_scan(scan_id: UUID) -> ScanResult:
                     (str(scan_id),),
                 )
                 findings = [r[0] for r in await cur.fetchall()]
-    # JSONB → list[str]; psycopg3 returns dict/list directly, but defensive
-    # against legacy str rows.
+    # psycopg3 returns JSONB as list directly; guard against legacy str rows.
     synthesis_themes: list[str] = []
     if isinstance(synthesis_themes_raw, list):
         synthesis_themes = [str(t) for t in synthesis_themes_raw if t]
@@ -230,14 +175,9 @@ async def get_scan(scan_id: UUID) -> ScanResult:
     )
 
 
-# --------------------------------------------------------------------------- #
-# GET /scan/{id}/fs — list mirrored fs paths
-# GET /scan/{id}/fs/{path:path} — read one mirrored fs entry
-# --------------------------------------------------------------------------- #
 @router.get("/scan/{scan_id}/fs")
 async def list_fs(scan_id: UUID) -> dict:
-    """All fs paths mirrored to Redis for this scan. Empty list when the
-    scan never ran OR its 6h TTL expired."""
+    """All fs paths mirrored to Redis for this scan. Empty after 6h TTL."""
     paths = await mirror_index(str(scan_id))
     return {"scan_id": str(scan_id), "paths": paths}
 
@@ -254,72 +194,25 @@ async def read_fs(scan_id: UUID, path: str) -> dict:
     return {"scan_id": str(scan_id), "path": path, "value": value}
 
 
-# --------------------------------------------------------------------------- #
-# GET /scan/{id}/llm-counters — per-phase LLM activity (Path A 2026-06-16)
-# --------------------------------------------------------------------------- #
 @router.get("/scan/{scan_id}/llm-counters")
 async def scan_llm_counters(scan_id: UUID) -> dict:
-    """Per-scan LLM activity counters: total + by_phase + per-model.
-
-    Shape:
-        {
-          "scan_id":  "...",
-          "total":    {"calls": N, "tokens_in": X, "tokens_out": Y},
-          "by_phase": {
-            "discovery": {"calls": ..., "tokens_in": ..., "tokens_out": ...,
-                          "by_model": {"<model>": {...}, ...}},
-            ...
-          }
-        }
-
-    Empty totals (all zeros, empty by_phase) if the scan never ran OR
-    its counters TTL expired (6h). Drives the Pipeline-page drawer's
-    per-node KPI cards.
-    """
+    """Per-scan LLM counters: total + by_phase + per-model. Empty on miss or after 6h TTL."""
     return await read_llm_counters(str(scan_id))
 
 
-# --------------------------------------------------------------------------- #
-# GET /scan/{id}/finding/{arxiv_id}/code — Build-tab Python (lazy synth)
-# --------------------------------------------------------------------------- #
 @router.get("/scan/{scan_id}/finding/{arxiv_id}/code")
 async def scan_finding_code(
     scan_id:    UUID,
     arxiv_id:   str,
     check_only: bool = False,
 ) -> dict:
-    """Return a synthesized Python file built from the finding's 5
-    extraction fields (money_angle, problem, method, how_to_build, math).
-
-    Cache-first: MinIO `rr/scans/{scan_id}/code/{arxiv_id}_{version}.py`
-    is read on every call; only generates if missing. Generation runs
-    the `code_synth.synth_code` self-refine loop (generate → critique →
-    revise) against `build_rr_strong_chain_bandit`, which picks an arm
-    from the same `rr-strong` pool Planner/Synth use, brain = FGTS-VA.
-
-    Query params:
-      check_only (bool, default false): cache PROBE mode. Returns the
-        cached code if present, 404 if missing — NEVER triggers the
-        rotator. The frontend probes on Build-tab activation so a
-        post-refresh visit instantly displays previously-generated code
-        without forcing the operator to re-click the Generate button.
-        The explicit Generate button still uses check_only=false to
-        actually synthesize on miss.
-
-    Why lazy and not pre-computed during deep_read: most papers never
-    have their Build tab opened. Pre-computing would 2-3× the scan's
-    rotator budget for an unobserved artifact. Lazy + cache means the
-    operator pays only for what they read.
-
-    Returns 404 if the finding row doesn't exist (scan not done, or
-    arxiv_id never made it into the digest). With check_only=true a 404
-    also signals "no cache yet, click Generate to create one"."""
+    """Synthesize a Python file from a finding's extraction fields. Cache-first (MinIO).
+    Lazy: most Build tabs are never opened; pre-computing would 2-3× rotator budget."""
     from domains.rr.agent.tools.code_synth import (
         CODE_SYNTH_PROMPT_VERSION, synth_code,
     )
     from domains.rr.stores import minio as minio_store
 
-    # Cache check FIRST — avoids a Postgres round-trip on the hot path.
     cached = await minio_store.get_code_py(
         str(scan_id), arxiv_id, CODE_SYNTH_PROMPT_VERSION,
     )
@@ -333,19 +226,12 @@ async def scan_finding_code(
             "model_id":       None,
         }
 
-    # Probe mode — return 404 instead of synthesizing. Lets the UI
-    # distinguish "no cache" from "endpoint is broken" without paying
-    # the rotator cost.
     if check_only:
         raise HTTPException(
             status_code = 404,
             detail = "no cached code for this finding yet — click Generate to synthesize",
         )
 
-    # Cache miss — load the finding's digest_json so we have the 5
-    # extraction fields. 404 if the finding doesn't exist (scan still
-    # running, scan failed before this paper made it into the digest,
-    # or arxiv_id typo).
     async with await psycopg.AsyncConnection.connect(postgres_url()) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
@@ -375,9 +261,6 @@ async def scan_finding_code(
             detail = f"code_synth failed: {type(e).__name__}: {e}",
         )
 
-    # Persist for next call — best-effort; failure here doesn't fail the
-    # request (operator already has the code in the response). A retry
-    # next time would just regenerate.
     try:
         await minio_store.put_code_py(
             str(scan_id), arxiv_id,
@@ -398,14 +281,9 @@ async def scan_finding_code(
     }
 
 
-# --------------------------------------------------------------------------- #
-# GET /scan/{id}/events — SSE phase stream
-# --------------------------------------------------------------------------- #
 @router.get("/scan/{scan_id}/events")
 async def scan_events(scan_id: UUID, request: Request) -> StreamingResponse:
-    """Server-Sent Events relay. Yields phase events as the Celery task
-    publishes them to Redis pub/sub. Includes catch-up replay so a late
-    subscriber sees phases that already passed."""
+    """SSE relay over Redis pub/sub. Includes catch-up replay for late subscribers."""
     return StreamingResponse(
         _sse_iter(str(scan_id), request),
         media_type = "text/event-stream",
@@ -418,8 +296,7 @@ async def scan_events(scan_id: UUID, request: Request) -> StreamingResponse:
 
 
 async def _sse_iter(scan_id: str, request: Request) -> AsyncIterator[str]:
-    """Format Redis events as SSE frames. Terminates on phase=done|error
-    or client disconnect."""
+    """Format Redis events as SSE frames. Terminates on phase=done|error|cancelled or disconnect."""
     async for event in subscribe_events(scan_id, replay=True):
         if await request.is_disconnected():
             return

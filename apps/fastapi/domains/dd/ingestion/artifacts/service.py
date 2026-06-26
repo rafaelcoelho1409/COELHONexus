@@ -269,7 +269,6 @@ async def extract_and_save_artifacts_from_md(
     if not md or not source_url:
         return md, 0
     payloads = collect_md_payloads(md, source_url)
-    # Skip URLs already at our artifact path — would re-probe for nothing.
     payloads = {
         p: k for p, k in payloads.items()
         if "/api/v1/docs-distiller/ingestion/" not in p

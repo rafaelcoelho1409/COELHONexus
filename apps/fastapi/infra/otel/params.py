@@ -12,7 +12,7 @@ OTLP_TIMEOUT_DEFAULT_S = 30
 LANGFUSE_OTLP_TIMEOUT_DEFAULT_S = 30
 
 
-# Phase E (2026-05-23): SDK defaults (q=2048, b=512, d=5s) caused Alloy
+# Phase E : SDK defaults (q=2048, b=512, d=5s) caused Alloy
 # RESOURCE_EXHAUSTED under heavy LangChain Planner volume. Triple queue +
 # halve batch + double delay so bursts buffer locally and drain in chunks.
 BSP_MAX_QUEUE_SIZE_DEFAULT = 6144

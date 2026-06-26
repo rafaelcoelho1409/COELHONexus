@@ -4,11 +4,7 @@ Validates the synthesis against sub-research evidence. On structured-
 output failure we default to confidence=0.5 + grounded=True so the
 caller still receives a usable envelope (deprecated rationale: prefer
 graceful degradation over total failure for DEEP mode).
-
-Direct port of deprecated `graphs/youtube/adaptive.py:L313-340` +
-2026-06-16 per-call timeout (previously uncapped — the critic runs
-at the end of every DEEP turn and a silent hang here would prevent
-the final answer from landing)."""
+"""
 from __future__ import annotations
 
 import asyncio
@@ -37,7 +33,7 @@ async def critic(state: AdaptiveRAGState, llm) -> dict:
         parts.append(f"Q: {sr['sub_question']}\nA: {sr['answer']}")
     sub_results_text = "\n---\n".join(parts)
 
-    # 2026-06-11: default `method="json_schema"` — see
+    # default `method="json_schema"` — see
     # `standard/nodes/hallucination/node.py` for the rationale.
     chain = CRITIC_PROMPT | llm.with_structured_output(
         CriticAssessment,

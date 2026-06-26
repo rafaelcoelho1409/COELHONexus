@@ -28,7 +28,7 @@ def build_prompt(
     else:
         body_snip = (doc_body or "")[:BODY_CHARS]
         doc_block = f"BODY (truncated):\n{body_snip}"
-    # V6 (2026-05-28) — prompt-prefix reordering for KV cache hits. The
+    # prompt-prefix reordering for KV cache hits. The
     # chapter list + scoring rubric are IDENTICAL across all 135+ doc
     # calls in a single run, so they go FIRST as a cacheable prefix. The
     # per-doc file info (the only thing that varies) goes LAST. Providers

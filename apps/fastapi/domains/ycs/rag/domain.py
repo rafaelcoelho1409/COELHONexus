@@ -73,9 +73,7 @@ def strip_think_tags(text: Any) -> str:
     'list'`. Centralizing list-handling here covers every existing
     `strip_think_tags(response.content)` call site at once
     (direct_answer, contextualize, rewrite, generate, synthesize).
-
-    Direct port of deprecated `graphs/youtube/helpers.py:L24-27` —
-    extended for LangChain 1.x content blocks."""
+x content blocks."""
     if text is None:
         return ""
     if isinstance(text, list):

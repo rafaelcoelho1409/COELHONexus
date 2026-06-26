@@ -1,6 +1,4 @@
-"""ycs/reranker — FlashRank tunables.
-
-Mirror of deprecated `services/youtube/reranker.py` defaults."""
+"""ycs/reranker — FlashRank tunables."""
 from __future__ import annotations
 
 

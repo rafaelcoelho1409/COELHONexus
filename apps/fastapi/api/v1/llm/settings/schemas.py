@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field
 
 class KeyBody(BaseModel):
     api_key: str = Field(min_length=1)
-    force: bool = False     # store even if the test-connect probe fails
 
 
 class EnableBody(BaseModel):

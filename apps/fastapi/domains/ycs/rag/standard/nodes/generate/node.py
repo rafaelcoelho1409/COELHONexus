@@ -1,10 +1,4 @@
-"""ycs/rag/standard/nodes/generate — GENERATE node.
-
-Stitches retrieved documents into a `[Video: title]` header + content
-block per source, then invokes the generation chain. `<think>` blocks
-from reasoning models are stripped before returning.
-
-Direct port of deprecated `graphs/youtube/rag.py:L80-101`."""
+"""ycs/rag/standard/nodes/generate — GENERATE node. Formats retrieved docs + calls the LLM chain."""
 from __future__ import annotations
 
 import asyncio
@@ -15,12 +9,7 @@ from ...state import YouTubeRAGState
 from .prompts import GENERATE_PROMPT
 
 
-# Hard ceiling on a single generation call. Beats the rotator's natural
-# retries: at this point the LiteLLM Router has already cycled through
-# its catalog. If we're still waiting at 180 s the most likely cause is
-# a hung connection that the SDK isn't classifying as a TimeoutError —
-# better to surface a clear error in the streamed `generation` than to
-# leave the frontend's Generate stage spinning forever.
+# 180s: after the Router exhausts its catalog, a hung connection won't raise TimeoutError natively.
 _GENERATE_TIMEOUT_S = 180.0
 
 

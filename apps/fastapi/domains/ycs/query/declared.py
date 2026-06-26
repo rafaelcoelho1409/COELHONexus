@@ -34,9 +34,7 @@ from __future__ import annotations
 from typing import Any
 
 
-# ---------------------------------------------------------------------- #
 # Elasticsearch
-# ---------------------------------------------------------------------- #
 def declared_es_schema() -> dict[str, Any]:
     """Pull the canonical mappings out of `infra/elasticsearch/mappings.py`
     so we never drift from what `ensure_indexes()` actually creates."""
@@ -66,9 +64,7 @@ def declared_es_schema() -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------- #
 # Qdrant
-# ---------------------------------------------------------------------- #
 # Payload field shape — must match `domains/ycs/ingestion/domain.py:
 # build_payload`. Keep this list in sync if the writer changes.
 _QDRANT_EXPECTED_PAYLOAD_KEYS = (
@@ -125,9 +121,7 @@ def declared_qdrant_schema() -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------- #
 # Neo4j
-# ---------------------------------------------------------------------- #
 def declared_neo4j_schema() -> dict[str, Any]:
     """YCS graph shape — what the writers actually create:
 

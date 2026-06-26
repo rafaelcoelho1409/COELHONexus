@@ -34,7 +34,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# Span names that constitute the workflow root for each pipeline.
 _PIPELINE_ROOT_SPANS: dict[str, str] = {
     "dd_planner": "dd.planner.run",
     "dd_synth":   "dd.synth.study.run",
@@ -42,7 +41,6 @@ _PIPELINE_ROOT_SPANS: dict[str, str] = {
     "rr":         "rr.scan.run",
 }
 
-# gen_ai semantic-conventions span name used by the rotator.
 _GENAI_SPAN_NAME = "gen_ai.chat"
 
 
@@ -65,11 +63,7 @@ def _find_trace_for_pipeline(
     span_name: str,
     cutoff: datetime,
 ) -> dict | None:
-    """Return the most-recent trace matching `pipeline_name` in
-    langfuse.trace.metadata.pipeline, produced after `cutoff`.
-
-    Falls back to searching by span name in trace names when metadata
-    filtering is unsupported by the API version."""
+    """Return the most-recent trace for this pipeline after `cutoff`, searching by span name."""
     try:
         page = client.api.trace.list(
             name       = span_name,

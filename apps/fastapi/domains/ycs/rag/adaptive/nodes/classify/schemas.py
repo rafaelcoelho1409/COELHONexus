@@ -1,7 +1,4 @@
 """ycs/rag/adaptive/nodes/classify — structured-output Pydantic.
-
-Direct port of deprecated `schemas/youtube/agents.py:L7-22`.
-
 2026-06-15 — `sub_questions` and `channel_names` no longer carry
 `default_factory=list`: Groq's strict `response_format` validator
 requires every property listed in `properties` to also appear in

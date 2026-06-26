@@ -2,10 +2,7 @@
 
 Functional Core (per `docs/CODE-CONVENTIONS.md` §4) — no I/O, no
 subprocess, no clock other than `_utc_now_iso` (which is a single
-isolated call used by the projection — deprecated did the same).
-
-Mirror of deprecated `YtDlpExtractor` static logic + URL/ID parsing
-that lived inline in `helpers.py`."""
+isolated call used by the projection — deprecated did the same).py`."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -33,7 +30,6 @@ from .patterns import (
 )
 
 
-# ---------- Input normalization -----------------------------------------
 
 def normalize_video_id(raw: str) -> str:
     """Accept a bare id, a watch URL, a youtu.be URL, a shorts URL."""
@@ -93,17 +89,14 @@ def normalize_video_ids(raws: list[str]) -> tuple[list[str], list[str]]:
     return valid, rejected
 
 
-# ---------- argv builders -----------------------------------------------
 
 def build_video_args(video_id: str) -> list[str]:
-    """Full single-video metadata extraction (`--dump-json`).
-    Mirror of deprecated `helpers.py:L128-133`."""
+    """Full single-video metadata extraction (`--dump-json`)."""
     url = f"https://www.youtube.com/watch?v={video_id}"
     return [*BASE_ARGS, "--dump-json", "--no-playlist", url]
 
 
 def build_playlist_args(playlist_id: str, max_videos: int) -> list[str]:
-    """Mirror of deprecated `helpers.py:L352-362`."""
     url = f"https://www.youtube.com/playlist?list={playlist_id}"
     args: list[str] = [
         *BASE_ARGS,
@@ -119,7 +112,6 @@ def build_playlist_args(playlist_id: str, max_videos: int) -> list[str]:
 
 
 def build_channel_args(channel_id_or_handle: str, max_videos: int) -> list[str]:
-    """Mirror of deprecated `helpers.py:L400-419`."""
     if channel_id_or_handle.startswith("UC"):
         url = f"https://www.youtube.com/channel/{channel_id_or_handle}/videos"
     else:
@@ -147,7 +139,6 @@ def aggregate_timeout_s(max_videos: int) -> float:
     return float(max(MIN_AGGREGATE_TIMEOUT_S, min(MAX_AGGREGATE_TIMEOUT_S, raw)))
 
 
-# ---------- Normalization (yt-dlp dict → VideoMetadata-shaped dict) -----
 
 def _utc_now_iso() -> str:
     """Single isolated clock read for the `extracted_at` field."""
@@ -156,7 +147,7 @@ def _utc_now_iso() -> str:
 
 def normalize_full_video(data: dict) -> dict:
     """Project a `--dump-json` dict → the dict shape `VideoMetadata`
-    validates. Mirror of deprecated `helpers.py:L441-531`."""
+    validates."""
     if not data:
         return {}
     chapters = [

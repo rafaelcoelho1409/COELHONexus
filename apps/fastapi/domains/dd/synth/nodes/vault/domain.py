@@ -120,7 +120,6 @@ def sentinelize_doc(md_text: str) -> tuple[str, dict[str, VaultEntry]]:
         if fi < len(fence_ranges) and i == fence_ranges[fi][0]:
             _, end, fence_text, info_string, kind = fence_ranges[fi]
             lang, full_info = _parse_info_string(info_string)
-            # Resolve hash collisions with salt-rehash. At 64-bit
             # truncation the loop should never execute at any realistic
             # corpus size.
             digest = _hash_block(fence_text)
@@ -283,7 +282,6 @@ def format_entries_for_prompt(
     return "\n\n".join(out)
 
 
-#
 # Lightweight scorer applied to vault entries to surface the most
 # pedagogically valuable code blocks per section. Used by the SAWC
 # writer prompt to order allowed_hashes by priority so the LLM picks

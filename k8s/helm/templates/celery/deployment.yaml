@@ -27,7 +27,6 @@ spec:
         - name: {{ .Values.registry.imagePullSecret }}
       {{- end }}
       containers:
-        # Celery worker — same image as FastAPI, different entrypoint
         - name: coelhonexus-celery
           image: {{ $fastapi.image }}
           imagePullPolicy: {{ $fastapi.imagePullPolicy }}
@@ -43,10 +42,7 @@ spec:
             - -A
             - infra.celery
             - worker
-            # Environment-suffixed queue names (e.g. "llm-local" or
-            # "llm-production"). Prevents dev and prod workers from stealing
-            # each other's tasks on the shared Redis broker. Must stay in sync
-            # with TASK_ROUTES in apps/fastapi/infra/celery/params.py.
+            # Suffixed queue names (e.g. "llm-local") prevent dev/prod cross-steal on shared Redis.
             - -Q
             - {{- $env := .Values.environment -}}{{- $queues := splitList "," .Values.celery.queues -}}{{- $suffixed := list -}}{{- range $queues -}}{{- $suffixed = append $suffixed (printf "%s-%s" . $env) -}}{{- end }} {{ join "," $suffixed }}
             - -c
@@ -58,14 +54,9 @@ spec:
             - configMapRef:
                 name: coelhonexus-fastapi-configmap
           env:
-            # PYTHONPATH must include /app so forked worker processes can import
-            # routers/, services/, schemas/ etc. Celery forks don't inherit sys.path
-            # modifications from the parent process.
             - name: PYTHONPATH
               value: "/app"
-            # Override the shared FastAPI configmap's OTEL service identity so
-            # worker-originated traces/metrics land under the actual Celery
-            # service in Tempo/LangFuse instead of masquerading as fastapi.
+            # Override the shared FastAPI configmap; worker traces land under coelhonexus-celery.
             - name: OTEL_SERVICE_NAME
               value: "coelhonexus-celery"
             {{- include "coelhonexus.secretEnvVars" . | nindent 12 }}

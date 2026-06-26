@@ -1,7 +1,4 @@
 """ycs/rag/adaptive/nodes/critic — structured-output Pydantic.
-
-Direct port of deprecated `schemas/youtube/agents.py:L25-35`.
-
 2026-06-11: bool coercion mirrors the hallucination-check schema for
 the same reason — rotator-routed models occasionally emit `"true"` /
 `"false"` strings instead of JSON booleans, and a strict bool field

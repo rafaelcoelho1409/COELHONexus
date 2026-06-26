@@ -3,8 +3,7 @@
 Single LLM call, no retrieval. Returns a synthetic `grounded=True`
 + empty citations so the response envelope shape stays consistent
 with STANDARD / DEEP.
-
-Direct port of deprecated `graphs/youtube/adaptive.py:L135-150`."""
+"""
 from __future__ import annotations
 
 import asyncio

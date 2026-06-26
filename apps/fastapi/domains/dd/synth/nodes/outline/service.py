@@ -575,39 +575,27 @@ def count_vault_sentinels(md_text: str) -> int:
 
 
 
-# === RESTORED FROM OLD COMMIT (lost in refactor) ===
 
-# ---- _N_SAMPLES ----
 _N_SAMPLES               = 3
 
-# ---- _TEMPERATURE_DRAFT ----
 _TEMPERATURE_DRAFT       = 0.4
 
-# ---- _TEMPERATURE_VOTE ----
 _TEMPERATURE_VOTE        = 0.0
 
-# ---- _TEMPERATURE_REPAIR ----
 _TEMPERATURE_REPAIR      = 0.2
 
-# ---- _MAX_REPAIR_RETRIES ----
 _MAX_REPAIR_RETRIES      = 2
 
-# ---- _MAX_TOKENS_DRAFT ----
 _MAX_TOKENS_DRAFT        = 8000
 
-# ---- _MAX_TOKENS_VOTE ----
 _MAX_TOKENS_VOTE         = 200
 
-# ---- _MAX_TOKENS_REPAIR ----
 _MAX_TOKENS_REPAIR       = 8000
 
-# ---- _MAX_SOURCE_CHARS ----
 _MAX_SOURCE_CHARS        = 180_000
 
-# ---- _SOURCE_CONCAT_SEPARATOR ----
 _SOURCE_CONCAT_SEPARATOR = "\n\n---\n\n"
 
-# ---- _OUTLINE_RESPONSE_FORMAT ----
 _OUTLINE_RESPONSE_FORMAT = {
     "type": "json_schema",
     "json_schema": {
@@ -617,16 +605,12 @@ _OUTLINE_RESPONSE_FORMAT = {
     },
 }
 
-# ---- _USC_VOTE_RESPONSE_FORMAT ----
 _USC_VOTE_RESPONSE_FORMAT = {"type": "json_object"}
 
-# ---- _OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR ----
 _OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR = 5
 
-# ---- _OUTLINE_OPTIMAL_STOPPING_RATIO_OF_CAP ----
 _OUTLINE_OPTIMAL_STOPPING_RATIO_OF_CAP = 0.7
 
-# ---- _outline_optimal_stopping_min ----
 def _outline_optimal_stopping_min(n_sources: int | None) -> int:
     """Minimum section count for Optimal-Stopping early-exit. Couples
     to the adaptive cap so small corpora keep the cheap floor while
@@ -641,18 +625,14 @@ def _outline_optimal_stopping_min(n_sources: int | None) -> int:
         int(cap * _OUTLINE_OPTIMAL_STOPPING_RATIO_OF_CAP),
     )
 
-# ---- _OUTLINE_OPTIMAL_STOPPING_ENABLED ----
 _OUTLINE_OPTIMAL_STOPPING_ENABLED = os.environ.get(
     "KD_OUTLINE_OPTIMAL_STOPPING", "true",
 ).lower() in ("true", "1", "yes", "on")
 
-# ---- _BLOB_PREFIX ----
 _BLOB_PREFIX = "synth"
 
-# ---- _JSON_RE ----
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
-# ---- _parse_json_response ----
 def _parse_json_response(text: str) -> Optional[dict]:
     """Best-effort JSON extraction. Tolerates ```json fences + leading
     prose. Same approach as planner/reduce/service.py."""
@@ -674,7 +654,6 @@ def _parse_json_response(text: str) -> Optional[dict]:
     except Exception:
         return None
 
-# ---- _try_parse_outline ----
 def _try_parse_outline(
     raw: dict,
 ) -> tuple[Optional[ChapterOutline], Optional[str]]:
@@ -687,7 +666,6 @@ def _try_parse_outline(
     except Exception as e:
         return None, f"{type(e).__name__}: {str(e)[:200]}"
 
-# ---- _shorten_pydantic_error ----
 def _shorten_pydantic_error(e: ValidationError) -> str:
     """Compact a Pydantic ValidationError into a 200-char summary that's
     still actionable in repair-prompt feedback."""
@@ -702,7 +680,6 @@ def _shorten_pydantic_error(e: ValidationError) -> str:
     suffix = f" (+{len(errs) - 4} more)" if len(errs) > 4 else ""
     return "; ".join(lines) + suffix
 
-# ---- _concat_sources ----
 def _concat_sources(bodies: list[str]) -> tuple[str, bool]:
     """Concatenate source markdown bodies with separators, capped at
     `_MAX_SOURCE_CHARS`. Returns (concat_text, truncated_flag)."""
@@ -723,10 +700,8 @@ def _concat_sources(bodies: list[str]) -> tuple[str, bool]:
         total += len(body) + len(_SOURCE_CONCAT_SEPARATOR)
     return _SOURCE_CONCAT_SEPARATOR.join(parts), truncated
 
-# ---- _SCOPE_LEXICAL_JACCARD ----
 _SCOPE_LEXICAL_JACCARD = 0.40
 
-# ---- _SCOPE_STOPWORDS ----
 _SCOPE_STOPWORDS = frozenset({
     "the", "and", "for", "this", "with", "that", "from", "section", "show",
     "how", "use", "using", "via", "your", "each", "into", "onto", "claude",
@@ -738,7 +713,6 @@ _SCOPE_STOPWORDS = frozenset({
 # that function (used as a default arg, evaluated at module-init).
 _SEMANTIC_H2_DEDUP_THRESHOLD = 0.74
 
-# ---- _scope_words ----
 def _scope_words(text: str) -> set[str]:
     """Lightly-stemmed content words (≥4 chars) of a heading+description,
     for lexical scope-overlap detection. Stopword-filtered."""
@@ -752,7 +726,6 @@ def _scope_words(text: str) -> set[str]:
         out.add(t)
     return out - _SCOPE_STOPWORDS
 
-# ---- _detect_semantic_h2_duplicates ----
 async def _detect_semantic_h2_duplicates(
     outline: ChapterOutline,
     *,
@@ -821,7 +794,6 @@ async def _detect_semantic_h2_duplicates(
         f"leaving hollow 'see other section' sections."
     ]
 
-# ---- _heuristic_fallback_outline ----
 def _heuristic_fallback_outline(md_text: str) -> ChapterOutline:
     """Last-resort: derive sections from H1/H2 in the source. Emitted
     when all N samples fail to parse. Downstream mgsr_replan will
@@ -838,11 +810,9 @@ def _heuristic_fallback_outline(md_text: str) -> ChapterOutline:
         if key in seen:
             continue
         seen.add(key)
-        # Trim to 8 words
         words = h.split()
         if len(words) > 8:
             h = " ".join(words[:8])
-        # Skip banned content-types
         if key in {"introduction", "overview", "summary", "conclusion"}:
             continue
         cleaned.append(h)
@@ -868,7 +838,6 @@ def _heuristic_fallback_outline(md_text: str) -> ChapterOutline:
     ]
     return ChapterOutline(sections=sections)
 
-# ---- _serialize_outline_with_dag ----
 def _serialize_outline_with_dag(
     outline: ChapterOutline, dag: OutlineDAG,
 ) -> dict:
@@ -890,7 +859,6 @@ def _serialize_outline_with_dag(
         },
     }
 
-# ---- _generate_samples ----
 async def _generate_samples(
     prompt: str, n: int, thread_id: str,
     *,
@@ -963,7 +931,6 @@ async def _generate_samples(
             )
     return successful
 
-# ---- _usc_pick ----
 async def _usc_pick(
     candidates: list[tuple[ChapterOutline, OutlineDAG, list[str]]],
     chapter_id: str,
@@ -1008,7 +975,6 @@ async def _usc_pick(
         )
     return 0
 
-# ---- _compute_manifest_hash ----
 def _compute_manifest_hash(
     *,
     sources: list[str],
@@ -1027,7 +993,6 @@ def _compute_manifest_hash(
     )
     return sha256(payload.encode("utf-8")).hexdigest()[:16]
 
-# ---- _find_chapter ----
 def _find_chapter(plan: dict, chapter_id: str) -> Optional[dict]:
     """Look up a chapter by id in plan-latest.json. Returns None if
     not found."""
@@ -1038,7 +1003,6 @@ def _find_chapter(plan: dict, chapter_id: str) -> Optional[dict]:
     return None
 
 
-# === Outline-helpers restored from old commit (2026-06-07) ===
 
 async def _draft_one_outline(
     prompt: str,
@@ -1113,7 +1077,6 @@ async def outline_sdp_run(state: SynthState) -> dict:
     t0 = time.monotonic()
     minio = get_storage()
 
-    # -- Load planner plan + locate chapter ---------------------------------
     plan_key = _planner_latest_key(slug)
     if not await minio.exists(plan_key):
         return {
@@ -1175,9 +1138,8 @@ async def outline_sdp_run(state: SynthState) -> dict:
         n_sources = len(sources),
     )
 
-    # -- Read source bodies -------------------------------------------------
     # Each source is already corpus_normalized + vault_sentinelized by
-    # ingestion (the 2026-05-19 architecture cleanup). We just concat.
+    # ingestion (architecture cleanup). We just concat.
     bodies = await minio.read_many(sources)
     bodies = [b for b in bodies if b]
     if not bodies:
@@ -1202,7 +1164,6 @@ async def outline_sdp_run(state: SynthState) -> dict:
         n_vault_hashes = n_vault_hashes,
     )
 
-    # -- Cache fast-path ----------------------------------------------------
     manifest_hash = _compute_manifest_hash(
         sources = sources,
         sources_bytes = len(sources_concat_md),
@@ -1250,8 +1211,7 @@ async def outline_sdp_run(state: SynthState) -> dict:
                 f"recomputing"
             )
 
-    # -- Build prompt + draft N samples -------------------------------------
-    # v4 (2026-05-29 PM) — the target hint is now the ADAPTIVE CAP, not a
+    # the target hint is now the ADAPTIVE CAP, not a
     # fixed 8. The old fixed-8 hint (plus a USC rubric rewarding "6-12")
     # actively pushed the LLM to over-section small chapters; it then got
     # hard-trimmed (or, pre-v4, deadlocked). Asking for the right count up
@@ -1276,7 +1236,6 @@ async def outline_sdp_run(state: SynthState) -> dict:
         n_samples = len(raw_samples), n_requested = _N_SAMPLES,
     )
 
-    # -- Parse + Pydantic-validate each -------------------------------------
     candidates: list[tuple[ChapterOutline, OutlineDAG, list[str]]] = []
     pydantic_failures = 0
     for parsed_dict, meta in raw_samples:
@@ -1298,7 +1257,6 @@ async def outline_sdp_run(state: SynthState) -> dict:
         n_candidates = len(candidates), n_pydantic_fail = pydantic_failures,
     )
 
-    # -- Fallback if NO candidates parsed -----------------------------------
     if not candidates:
         logger.warning(
             f"[outline_sdp] {slug}/{chapter_id}: ALL {_N_SAMPLES} samples "
@@ -1308,13 +1266,12 @@ async def outline_sdp_run(state: SynthState) -> dict:
         dag = derive_dag(outline.sections)
         candidates = [(outline, dag, ["heuristic_fallback"])]
 
-    # -- USC pick best candidate --------------------------------------------
     chosen_idx = await _usc_pick(
         candidates, chapter_id, chapter_title, adaptive_cap = adaptive_target,
     )
     outline, dag, issues = candidates[chosen_idx]
 
-    # U6 (2026-05-28) — semantic H2 dedup feedback. Embed section
+    # semantic H2 dedup feedback. Embed section
     # heading+description, flag pairs above threshold as repair-loop
     # input. Fail-soft (returns [] on any embed/compute failure).
     semantic_dupe_issues = await _detect_semantic_h2_duplicates(outline)
@@ -1331,7 +1288,6 @@ async def outline_sdp_run(state: SynthState) -> dict:
         chosen_index = chosen_idx, n_initial_violations = len(issues),
     )
 
-    # -- Repair loop --------------------------------------------------------
     n_repairs = 0
     for attempt in range(_MAX_REPAIR_RETRIES):
         if not issues:
@@ -1376,7 +1332,7 @@ async def outline_sdp_run(state: SynthState) -> dict:
             _, new_issues = validate_outline_structure(
                 new_outline, new_dag, n_sources = len(sources),
             )
-            # U6 — re-check semantic H2 dedup on the new outline so the
+            # re-check semantic H2 dedup on the new outline so the
             # repair loop credits/penalizes the LLM's response to the
             # semantic feedback.
             new_semantic = await _detect_semantic_h2_duplicates(new_outline)
@@ -1394,20 +1350,18 @@ async def outline_sdp_run(state: SynthState) -> dict:
             )
             continue
 
-    # S1 (2026-05-26 late evening) — Hard-enforce outline section-count cap.
-    #
-    # CORR-3 Q1 emitted the adaptive-cap violation as a soft issue in
+    # Hard-enforce outline section-count cap.
+    # Previously emitted the adaptive-cap violation as a soft issue in
     # validate_outline_structure but Run 3 evidence showed the LLM
     # ignores it: BU ch-02 shipped 30 H2 (cap = 12) after 3 repairs, CC
     # ch-01 shipped 20 H2 (cap = 14). Soft pressure isn't enough.
-    #
     # Programmatic trim: keep the first `cap` sections in topological
     # stage order (foundational concepts first). Prune prerequisite
     # references to dropped sections. Re-derive the DAG over the
     # trimmed set. This guarantees bounded-output regardless of LLM
     # compliance. Lost content was always defensible-by-fewer-than-3-
     # source-docs anyway (the cap is `n_sources // 3`).
-    # v4 (2026-05-29 PM) — trim to the adaptive cap DIRECTLY. The old
+    # trim to the adaptive cap DIRECTLY. The old
     # `max(SECTIONS_MIN, cap)` floored the trim at 4 (= old SECTIONS_MIN),
     # which made it a NO-OP for the universal 4-section outlines the LLM
     # emits: validate flagged 4 > cap 3, but the trimmer's effective cap was
@@ -1454,7 +1408,7 @@ async def outline_sdp_run(state: SynthState) -> dict:
         _, issues = validate_outline_structure(
             outline, dag, n_sources = len(sources),
         )
-        # U6 — re-check semantic dedup post-trim. Trimming may have
+        # re-check semantic dedup post-trim. Trimming may have
         # removed near-duplicate H2s; reflect the actual remaining
         # situation in the persisted violations list.
         post_trim_semantic = await _detect_semantic_h2_duplicates(outline)
@@ -1468,7 +1422,6 @@ async def outline_sdp_run(state: SynthState) -> dict:
 
     final_violations = issues
 
-    # -- Persist + return ---------------------------------------------------
     payload = _serialize_outline_with_dag(outline, dag)
     payload["framework_slug"]   = slug
     payload["chapter_id"]       = chapter_id

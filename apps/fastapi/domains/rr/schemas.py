@@ -19,9 +19,7 @@ from pydantic import BaseModel, Field, field_validator
 from .taxonomy import is_valid_vertical
 
 
-# --------------------------------------------------------------------------- #
 # POST /scan — the trigger
-# --------------------------------------------------------------------------- #
 class ScanRequest(BaseModel):
     """Body for POST /v1/rr/scan. Captures the operator's intent for ONE
     radar pass. Validated by FastAPI at the HTTP boundary."""
@@ -98,9 +96,6 @@ class ScanCreated(BaseModel):
     started_at: datetime
 
 
-# --------------------------------------------------------------------------- #
-# GET /scan/{id} — the status + findings read
-# --------------------------------------------------------------------------- #
 class ScanResult(BaseModel):
     """Response for GET /v1/rr/scan/{id}. status='done' callers also get the
     full findings array; earlier statuses get just the lifecycle metadata."""
@@ -113,7 +108,7 @@ class ScanResult(BaseModel):
     total_candidates: int                   = 0
     total_in_digest:  int                   = 0
     error:            str | None            = None
-    # 2026-06-17: topic is required for the status-pill + Digest-title-row
+    # topic is required for the status-pill + Digest-title-row
     # topic display on resume. Without it, the client's resumeScan() falls
     # back to the form's localStorage value — which is "whatever was last
     # typed", not the resumed scan's actual topic.

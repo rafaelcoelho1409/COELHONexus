@@ -43,7 +43,6 @@ async def _create_target_database(url: str) -> None:
         admin_url, autocommit = True
     ) as conn:
         # Quote the identifier defensively — CREATE DATABASE can't bind params.
-        # Escape any embedded `"` (extremely unlikely; defense in depth).
         quoted = '"' + target_db.replace('"', '""') + '"'
         await conn.execute(f"CREATE DATABASE {quoted}")
     logger.info(f"[checkpointer] DB '{target_db}' created")
@@ -69,11 +68,9 @@ async def init_checkpointer() -> AsyncPostgresSaver:
     url = postgres_url()
     logger.info(f"[checkpointer] connecting to {url.split('@')[-1]}")
 
-    # Open the saver. If the target database doesn't exist (first-ever startup
     # on a fresh cluster), bootstrap it and retry. Costs nothing in steady
     # state — the recovery path only fires on the very first connect attempt
     # against a cluster whose Postgres hasn't had `CREATE DATABASE <target>`
-    # run against it yet. Subsequent restarts hit the happy path directly.
     try:
         _saver_ctx = AsyncPostgresSaver.from_conn_string(url)
         _saver = await _saver_ctx.__aenter__()

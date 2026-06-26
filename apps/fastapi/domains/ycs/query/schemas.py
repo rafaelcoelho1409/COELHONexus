@@ -86,9 +86,7 @@ class NamespaceMap(BaseModel):
     matrix:   dict[str, dict[str, NamespaceEntry]]   = Field(default_factory = dict)
 
 
-# ---------------------------------------------------------------------- #
-# Raw query — Phase 1 of the SOTA workbench (`docs` thread, 2026-06-15)
-# ---------------------------------------------------------------------- #
+# Raw query typed into the CodeMirror editor
 class RawQueryRequest(BaseModel):
     """Raw DSL/Cypher/JSON typed by the user in the CodeMirror editor.
 
@@ -131,9 +129,7 @@ class RawQueryResponse(BaseModel):
     hits:       list[RawQueryHit] = Field(default_factory = list)
 
 
-# ---------------------------------------------------------------------- #
 # Schema discovery — Phase 3
-# ---------------------------------------------------------------------- #
 class SchemaResponse(BaseModel):
     """Per-backend schema snapshot. Shape is intentionally loose (a
     dict) — the renderer's job is to read the keys it knows about, the
@@ -155,9 +151,7 @@ class SchemaResponse(BaseModel):
         populate_by_name = True
 
 
-# ---------------------------------------------------------------------- #
 # AI text-to-DSL — Phase 4
-# ---------------------------------------------------------------------- #
 class AIGenerateRequest(BaseModel):
     """`prompt` is the user's natural-language description; `previous`
     (optional) is whatever's currently in the editor so the model can
@@ -168,9 +162,7 @@ class AIGenerateRequest(BaseModel):
     previous: str        = ""
 
 
-# ---------------------------------------------------------------------- #
 # Query history — Phase 5
-# ---------------------------------------------------------------------- #
 class HistoryEntry(BaseModel):
     id:         int
     backend:    BackendLiteral

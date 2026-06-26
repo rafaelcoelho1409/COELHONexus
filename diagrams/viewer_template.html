@@ -1,0 +1,1182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>COELHO Nexus — Interactive Diagram Hub</title>
+  <!-- Google Fonts: Outfit & Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg-color: #08090e;
+      --card-bg: rgba(13, 17, 28, 0.75);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --accent-cyan: #00f2fe;
+      --accent-blue: #4facfe;
+      --accent-glow: rgba(0, 242, 254, 0.15);
+      --sidebar-width: 380px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+    }
+
+    /* Ambient background glow */
+    .bg-glow {
+      position: absolute;
+      top: -20%;
+      left: -20%;
+      width: 140vw;
+      height: 140vh;
+      background: radial-gradient(circle at 80% 20%, rgba(79, 172, 254, 0.05), transparent 50%),
+                  radial-gradient(circle at 20% 80%, rgba(0, 242, 254, 0.05), transparent 50%);
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    /* Sidebar styling */
+    aside {
+      width: var(--sidebar-width);
+      background: var(--card-bg);
+      backdrop-filter: blur(16px);
+      border-right: 1px solid var(--card-border);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      z-index: 10;
+      position: relative;
+      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .sidebar-header {
+      padding: 24px;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    .sidebar-header h1 {
+      font-family: 'Outfit', sans-serif;
+      font-size: 22px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #ffffff 30%, var(--accent-cyan));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 4px;
+    }
+
+    .sidebar-header p {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    /* Navigation / Tabs */
+    .nav-tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      padding: 16px 24px;
+      gap: 8px;
+    }
+
+    .tab-btn {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-family: 'Inter', sans-serif;
+    }
+
+    .tab-btn.active {
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+      color: #000000;
+      border-color: transparent;
+      font-weight: 600;
+      box-shadow: 0 4px 12px var(--accent-glow);
+    }
+
+    .tab-btn:hover:not(.active) {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+    }
+
+    /* Search bar */
+    .search-container {
+      padding: 8px 24px 16px;
+      position: relative;
+    }
+
+    .search-input-wrapper {
+      position: relative;
+    }
+
+    .search-input-wrapper input {
+      width: 100%;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--card-border);
+      color: var(--text-main);
+      padding: 12px 16px 12px 40px;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: all 0.2s ease;
+      outline: none;
+    }
+
+    .search-input-wrapper input:focus {
+      border-color: var(--accent-cyan);
+      box-shadow: 0 0 8px var(--accent-glow);
+    }
+
+    .search-icon {
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 16px;
+      height: 16px;
+      stroke: var(--text-muted);
+      fill: none;
+      pointer-events: none;
+    }
+
+    /* Search Results */
+    .search-results {
+      max-height: 180px;
+      overflow-y: auto;
+      padding: 0 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .search-result-item {
+      padding: 8px 12px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .search-result-item:hover {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: var(--accent-cyan);
+    }
+
+    .search-result-category {
+      font-size: 11px;
+      color: var(--accent-cyan);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* Details Panel */
+    .details-container {
+      flex: 1;
+      padding: 24px;
+      overflow-y: auto;
+      border-top: 1px solid var(--card-border);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      text-align: center;
+      color: var(--text-muted);
+      padding: 20px;
+    }
+
+    .empty-state svg {
+      width: 48px;
+      height: 48px;
+      stroke: var(--text-muted);
+      margin-bottom: 16px;
+      opacity: 0.6;
+    }
+
+    .details-panel {
+      display: none;
+      animation: fadeIn 0.3s ease;
+    }
+
+    .details-panel.active {
+      display: block;
+    }
+
+    .details-title-wrapper {
+      margin-bottom: 12px;
+    }
+
+    .details-category {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--accent-cyan);
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .details-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .details-description {
+      font-size: 14px;
+      line-height: 1.6;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+
+    .details-meta-item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--card-border);
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 13px;
+    }
+
+    .details-meta-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+
+    /* Main Viewport styling */
+    main {
+      flex: 1;
+      height: 100vh;
+      position: relative;
+      background-color: var(--bg-color);
+      z-index: 1;
+    }
+
+    .viewport {
+      width: 100%;
+      height: 100%;
+      cursor: grab;
+      position: relative;
+    }
+
+    .viewport:active {
+      cursor: grabbing;
+    }
+
+    .diagram-container {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      display: none;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    .diagram-container.active {
+      display: block;
+      opacity: 1;
+    }
+
+    /* Floating Viewport Controls */
+    .controls {
+      position: absolute;
+      bottom: 24px;
+      right: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 20;
+    }
+
+    .control-btn {
+      width: 42px;
+      height: 42px;
+      background: var(--card-bg);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      color: var(--text-main);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+    }
+
+    .control-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: var(--accent-cyan);
+      color: var(--accent-cyan);
+      box-shadow: 0 0 8px var(--accent-glow);
+    }
+
+    .control-btn svg {
+      width: 20px;
+      height: 20px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+    }
+
+    /* SVG internal interactive enhancements */
+    svg g.node-interactive {
+      cursor: pointer !important;
+      transition: all 0.3s ease;
+    }
+
+    svg g.node-interactive:hover {
+      filter: url(#glow-hover) !important;
+    }
+
+    svg g.node-active {
+      filter: url(#glow-selected) !important;
+    }
+
+    /* Custom scrollbars */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: var(--card-border);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--text-muted);
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+
+  <!-- SVG Glow filters definition -->
+  <svg width="0" height="0" style="position: absolute;">
+    <defs>
+      <filter id="glow-hover" x="-20%" y="-20%" width="140%" height="140%">
+        <feGaussianBlur stdDeviation="8" result="blur" />
+        <feComponentTransfer in="blur" result="glow1">
+          <feFuncA type="linear" slope="0.6"/>
+        </feComponentTransfer>
+        <feMerge>
+          <feMergeNode in="glow1" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+      <filter id="glow-selected" x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur stdDeviation="15" result="blur" />
+        <feComponentTransfer in="blur" result="glow2">
+          <feFuncA type="linear" slope="0.8"/>
+        </feComponentTransfer>
+        <feMerge>
+          <feMergeNode in="glow2" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+    </defs>
+  </svg>
+</head>
+<body>
+  <div class="bg-glow"></div>
+
+  <!-- Sidebar -->
+  <aside>
+    <div class="sidebar-header">
+      <h1>COELHO Nexus</h1>
+      <p>Interactive Architecture Catalog</p>
+    </div>
+
+    <!-- Switcher -->
+    <div class="nav-tabs">
+      <button class="tab-btn active" onclick="switchDiagram('architecture')">Architecture</button>
+      <button class="tab-btn" onclick="switchDiagram('ai-domains')">AI Domains</button>
+    </div>
+
+    <!-- Search -->
+    <div class="search-container">
+      <div class="search-input-wrapper">
+        <svg class="search-icon" viewBox="0 0 24 24">
+          <circle cx="11" cy="11" r="8" stroke-width="2"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65" stroke-width="2"></line>
+        </svg>
+        <input type="text" id="search-input" placeholder="Search components..." oninput="handleSearch(this.value)">
+      </div>
+    </div>
+
+    <!-- Search Results List -->
+    <div class="search-results" id="search-results"></div>
+
+    <!-- Details Pane -->
+    <div class="details-container">
+      <!-- Empty State -->
+      <div class="empty-state" id="details-empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="16" x2="12" y2="12"></line>
+          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+        </svg>
+        <p>Select any node in the diagram or search above to view component details.</p>
+      </div>
+
+      <!-- Detail Card -->
+      <div class="details-panel" id="details-card">
+        <div class="details-title-wrapper">
+          <div class="details-category" id="details-cat-el">Category</div>
+          <h2 class="details-title" id="details-title-el">Component Name</h2>
+        </div>
+        <p class="details-description" id="details-desc-el">Description</p>
+        <div class="details-meta-item">
+          <span class="details-meta-label">Layers/Associations</span>
+          <span id="details-associations-el">Associations details</span>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Viewport -->
+  <main>
+    <div class="viewport" id="viewport">
+      <!-- Platform Architecture Container -->
+      <div class="diagram-container active" id="architecture-container">
+        <!-- ARCHITECTURE_SVG -->
+      </div>
+
+      <!-- AI Domains Container -->
+      <div class="diagram-container" id="ai-domains-container">
+        <!-- AI_DOMAINS_SVG -->
+      </div>
+    </div>
+
+    <!-- Controls -->
+    <div class="controls">
+      <button class="control-btn" onclick="zoomIn()" title="Zoom In">
+        <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+      </button>
+      <button class="control-btn" onclick="zoomOut()" title="Zoom Out">
+        <svg viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+      </button>
+      <button class="control-btn" onclick="resetZoom()" title="Reset View">
+        <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><polyline points="3 3 3 8 8 8"></polyline></svg>
+      </button>
+      <button class="control-btn" onclick="toggleFullscreen()" title="Fullscreen">
+        <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+      </button>
+    </div>
+  </main>
+
+  <!-- PanZoom Library script -->
+  <script src="./panzoom.min.js"></script>
+
+  <script>
+    // Rich component catalog of COELHONexus platform
+    const CATALOG = {
+      // Infrastructure Layer
+      "terraform": {
+        title: "Terraform",
+        category: "Infrastructure & IaC",
+        description: "Declarative Infrastructure as Code (IaC) tool used to spin up, configure, and manage cluster resources, registries, and Rancher layers.",
+        associations: "Orchestrated under the Infrastructure container."
+      },
+      "docker": {
+        title: "Docker",
+        category: "Container Engine",
+        description: "Local container engine used to package and build all core application microservices (Docs Distiller, YCS, Research Radar, and LLM Rotator) into standard image artifacts.",
+        associations: "Integrated with local K3D Registry and hot-reload workflows."
+      },
+      "k3d": {
+        title: "K3D Kubernetes Cluster",
+        category: "Cluster Orchestration",
+        description: "Local Kubernetes orchestrator running inside Docker, configured with 1 server and 3 agent nodes, handling all microservices inside isolated namespaces.",
+        associations: "Provisioned via Terraform and hot-reloaded by Skaffold."
+      },
+      "rancher": {
+        title: "Rancher",
+        category: "Cluster Management",
+        description: "Web management interface for monitoring cluster resources, logs, deployments, services, namespaces, and volumes.",
+        associations: "Connected directly to K3D cluster orchestrator."
+      },
+      "k3d_registry": {
+        title: "K3D Local Registry",
+        category: "Container Registry",
+        description: "Local secure container registry (localhost:5000) that holds built microservice images for instantaneous deployment onto the local cluster.",
+        associations: "Fed by Skaffold dev builds and read by ArgoCD."
+      },
+      "helm": {
+        title: "Helm Chart",
+        category: "Package Manager",
+        description: "Standard packaging definition (coelhonexus) representing all microservices deployment details, environment variables, secrets, and volume mounts.",
+        associations: "Deployed by ArgoCD and hot-reloaded by Skaffold."
+      },
+      "skaffold": {
+        title: "Skaffold",
+        category: "Dev Loop Automation",
+        description: "Developer lifecycle orchestrator that monitors local file edits, auto-triggers Docker builds, pushes them to the K3D local registry, and redeploys via Helm.",
+        associations: "Bypasses GitOps CI/CD pipelines to allow instant local hot-reloading."
+      },
+
+      // GitOps & CI/CD Layer
+      "gitlab": {
+        title: "GitLab CI/CD",
+        category: "Continuous Integration",
+        description: "Standard CI pipeline hosting build steps, unit testing, static analysis, security scans, and production image deployment.",
+        associations: "Pushes validated images to container registries and coordinates CD triggers."
+      },
+      "argocd": {
+        title: "ArgoCD",
+        category: "Continuous Deployment",
+        description: "GitOps agent that continuously monitors changes inside the git workspace and reconciles K3D cluster state automatically to match git declarations.",
+        associations: "Watches GitLab commits and executes Helm charts deployment."
+      },
+      "argocd_updater": {
+        title: "ArgoCD Image Updater",
+        category: "GitOps Automation",
+        description: "Utility daemon that monitors local and remote registry tags and automatically commits new tag values back to Git to initiate ArgoCD synchronizations.",
+        associations: "Bridges local registries directly with ArgoCD sync triggers."
+      },
+
+      // Data & AI Stores
+      "postgresql": {
+        title: "PostgreSQL Database",
+        category: "Data Store",
+        description: "Relational database holding user states, persistent conversation sessions, and LangGraph agent checkpointers/step checklists.",
+        associations: "Utilized by Docs Distiller, YCS, and Research Radar."
+      },
+      "redis": {
+        title: "Redis Cache & Broker",
+        category: "Data Store",
+        description: "Memory cache database acting as Celery's task broker and backend response collector.",
+        associations: "Connects Celery workers directly with core FastAPI backends."
+      },
+      "minio": {
+        title: "MinIO S3 Object Store",
+        category: "Data Store",
+        description: "Secure object storage vault implementing Bring-Your-Own-Key (BYOK) KEK envelope encryption. Stores large unstructured documentation crawlers outputs and final synthesized book outputs.",
+        associations: "Reads crawler payloads and writes final chapter PDF/Markdown outputs."
+      },
+      "neo4j": {
+        title: "Neo4j Graph Database",
+        category: "AI Graph Store",
+        description: "Graph database housing the YouTube transcripts Knowledge Graph. Stores entity nodes, relationship edges, and concepts extracted during Graph-RAG indexing.",
+        associations: "Fed by YCS transcript parser; queried by the SmartRetriever."
+      },
+      "qdrant": {
+        title: "Qdrant Vector DB",
+        category: "AI Vector Store",
+        description: "Hybrid vector store containing high-dimensional text embeddings, supporting dense and sparse vectors simultaneously for hybrid semantic lookup.",
+        associations: "Embedded using NVIDIA Nemotron models; queried during semantic search."
+      },
+      "elasticsearch": {
+        title: "Elasticsearch ECK",
+        category: "AI Text Store",
+        description: "Full-text indexing search engine implementing standard BM25 keyword matching for hybrid retrieval.",
+        associations: "Queried concurrently with Qdrant and Neo4j for hybrid Graph-RAG retrieval."
+      },
+
+      // Application Services
+      "fasthtml": {
+        title: "FastHTML Frontend",
+        category: "Application UI",
+        description: "Fast Python-based server-side rendering framework providing the reactive, interactive user-facing dashboard interfaces.",
+        associations: "Queries the FastAPI services using secure REST endpoints."
+      },
+      "dd": {
+        title: "Docs Distiller (/api/v1/docs-distiller)",
+        category: "AI Domain Service",
+        description: "Autonomous documentation research service. Spawns multi-step LangGraph agents to fetch web data, summarize segments (Map), resolve topics (GMM), arrange chapters (optimal stopping), and write structured books.",
+        associations: "Spawns Celery tasks and writes output files to MinIO objects."
+      },
+      "ycs": {
+        title: "YouTube Content Search (/api/v1/youtube-content-search)",
+        category: "AI Domain Service",
+        description: "Advanced Graph-RAG system that ingests YouTube videos, builds semantic relationships in Neo4j, and performs fused searches (Qdrant + ES + Neo4j) to formulate contextual answers with citations.",
+        associations: "Builds Neo4j graphs, queries Qdrant/ES, and saves logs in PostgreSQL."
+      },
+      "rr": {
+        title: "Research Radar (/api/v1/research-radar)",
+        category: "AI Domain Service",
+        description: "Autonomous scientific search agent utilizing LangGraph ReAct loop. Queries academic papers and discussions across arXiv, Semantic Scholar, HN, and HF daily papers.",
+        associations: "Uses FastMCP registry tools, implements sliding-window rate limiters."
+      },
+      "llm": {
+        title: "LLM Rotator (LiteLLM + ParetoBandit)",
+        category: "Shared AI Core",
+        description: "Decentralized model selection gateway. Uses LiteLLM proxy and a ParetoBandit algorithm to dynamically route calls across Groq, SambaNova, Cerebras, NVIDIA NIM, and DeepSeek, optimizing for latency and quality.",
+        associations: "Uses BYOK vaults for Fernet-encrypted keys; powers all three product domains."
+      },
+      "fastmcp": {
+        title: "FastMCP Server",
+        category: "Application Service",
+        description: "Model Context Protocol gateway that registers and exposes external data search tools to the Research Radar agent.",
+        associations: "Connects Research Radar directly with arXiv, Semantic Scholar, HN, and HF APIs."
+      },
+      "celery": {
+        title: "Celery Workers",
+        category: "Application Service",
+        description: "Asynchronous task queue executing resource-heavy operations like document web scraping, text embeddings generations, and LLM text compilations.",
+        associations: "Triggered via Redis broker queues; monitored via Flower."
+      },
+      "flower": {
+        title: "Flower Monitor",
+        category: "Application Service",
+        description: "Task statistics and queue monitoring server showing execution latencies, fail rates, and worker states for Celery queues.",
+        associations: "Exposes dashboards for monitoring Celery workers."
+      },
+      "playwright": {
+        title: "Playwright Scraper",
+        category: "Application Service",
+        description: "Headless browser instances running inside isolated containers to scrape complex modern websites that require client-side JavaScript rendering.",
+        associations: "Dispatched by Celery crawler tasks to scrape documentation sites."
+      },
+
+      // Observability Layer
+      "alloy": {
+        title: "Grafana Alloy Collector",
+        category: "Observability",
+        description: "Telemetry aggregator configured with tail-sampling policies. Gathers logs, distributed traces, and application metrics, dropping redundant data before pushing upstream.",
+        associations: "Dual-exports traces, metrics, and logs from FastAPI and Celery backends."
+      },
+      "langfuse": {
+        title: "LangFuse v3",
+        category: "LLM Observability",
+        description: "Telemetry platform tracking prompt versions, token counts, costs, latencies, and evaluations of agent outputs.",
+        associations: "Receives OTel HTTP metrics from LLM Rotator queries."
+      },
+      "grafana": {
+        title: "Grafana Dashboard",
+        category: "Observability",
+        description: "Central visualization interface containing pre-built dashboards for system health, database sizes, queue states, and error tracing.",
+        associations: "Queries Tempo for traces, Loki for logs, and Mimir for metrics."
+      },
+      "loki": {
+        title: "Grafana Loki",
+        category: "Observability",
+        description: "Highly scalable, low-index logging database that aggregates and stores container logs.",
+        associations: "Fed by Grafana Alloy; queried by Grafana dashboard UIs."
+      },
+      "tempo": {
+        title: "Grafana Tempo",
+        category: "Observability",
+        description: "High-volume distributed tracing storage engine that visualizes complete request journeys across microservices.",
+        associations: "Fed by Grafana Alloy; queried by Grafana dashboard UIs."
+      },
+      "mimir": {
+        title: "Grafana Mimir",
+        category: "Observability",
+        description: "Multi-tenant Prometheus metrics aggregator providing long-term storage of platform KPIs.",
+        associations: "Fed by Grafana Alloy; queried by Grafana dashboard UIs."
+      },
+
+      // AI Domains extra components
+      "litellm": {
+        title: "LiteLLM Router",
+        category: "LLM Rotator Core",
+        description: "Proxy router providing a standardized format for multiple LLM providers, translating prompts and parameters on-the-fly.",
+        associations: "Fed selected models by the ParetoBandit."
+      },
+      "pareto_bandit": {
+        title: "ParetoBandit Selection",
+        category: "LLM Rotator Core",
+        description: "Multi-armed bandit selection algorithm optimizing LLM routing on a Pareto frontier of response time vs. benchmark accuracy.",
+        associations: "Intercepts incoming LLM requests and select optimal model targets."
+      },
+      "dynamic_catalog": {
+        title: "Dynamic Model Catalog",
+        category: "LLM Rotator Core",
+        description: "Registry holding live price details, latency benchmarks, availability scores, and routing permissions for connected LLM endpoints.",
+        associations: "Feeds fresh parameters to the ParetoBandit selector."
+      },
+      "byok": {
+        title: "BYOK Vault Store",
+        category: "LLM Rotator Core",
+        description: "Credentials database backing Fernet KEK (Key Encrypting Key) keys stored on MinIO object storage to ensure secure end-to-end user-provided API key encryption.",
+        associations: "Injects runtime keys into LiteLLM calls."
+      },
+      "providers": {
+        title: "External Providers",
+        category: "LLM Rotator Core",
+        description: "Global high-throughput inference endpoints (Groq, NVIDIA NIM, SambaNova, Cerebras, Mistral, DeepSeek) providing sub-second generation.",
+        associations: "Connected via secure HTTP API tunnels."
+      },
+      "ingestion": {
+        title: "Ingestion Engine",
+        category: "Docs Distiller Core",
+        description: "Robust scraper retrieving static assets and crawling multi-page documentations using Playwright headless sessions.",
+        associations: "Saves raw document chunks to the Map phase."
+      },
+      "map": {
+        title: "Map Summary Phase",
+        category: "Docs Distiller Core",
+        description: "Distributed chunk processor generating high-level semantic summaries of separate parsed text fragments.",
+        associations: "Sends summarized document shards to the GMM Resolver."
+      },
+      "resolver": {
+        title: "GMM Clustering Resolver",
+        category: "Docs Distiller Core",
+        description: "Unsupervised Gaussian Mixture Model (GMM) clustering agent resolving soft-membership bounds to bundle related topics.",
+        associations: "Pushes resolved cluster concepts to Chapter Assignment."
+      },
+      "chapter_assign": {
+        title: "Chapter Assignment",
+        category: "Docs Distiller Core",
+        description: "Planning agent mapping semantic clusters into a coherent outline utilizing optimal stopping mathematical algorithms.",
+        associations: "Passes chapter structures to the Synthesis Workers."
+      },
+      "synth": {
+        title: "Synthesis Workers",
+        category: "Docs Distiller Core",
+        description: "Deep content generator running self-refinement feedback loops to produce high-fidelity chapter text.",
+        associations: "Submits draft markdown pages to the Critic stage."
+      },
+      "critic": {
+        title: "Critic & Curator",
+        category: "Docs Distiller Core",
+        description: "Grading agent checking draft quality, verifying claims, formatting styling, and exporting approved parts.",
+        associations: "Compiles final document assets to MinIO files."
+      },
+      "embeddings": {
+        title: "Nemotron Embeddings Engine",
+        category: "YouTube Search Core",
+        description: "Vector embedding generator computing dense and sparse text representations using NVIDIA Nemotron models.",
+        associations: "Pushes text chunks to Qdrant vector database."
+      },
+      "graph_builder": {
+        title: "KG Graph Builder",
+        category: "YouTube Search Core",
+        description: "Information extractor parsing transcript entities and relationships to build the Neo4j Knowledge Graph.",
+        associations: "Populates the Neo4j Graph Database."
+      },
+      "smart_retriever": {
+        title: "Smart Retriever",
+        category: "YouTube Search Core",
+        description: "Unified retrieval router fetching information concurrently from Neo4j (structural), Qdrant (semantic), and ES (keyword) to create an enriched context bundle.",
+        associations: "Pushes the unified context vector to the Reranker."
+      },
+      "reranker": {
+        title: "Cross-Encoder Reranker",
+        category: "YouTube Search Core",
+        description: "Deep grading model scoring context passages to remove noisy, irrelevant chunks.",
+        associations: "Passes filtered top-N blocks to the LLM Answer stage."
+      },
+      "answer": {
+        title: "LLM Citations Answer",
+        category: "YouTube Search Core",
+        description: "Answer synthesizer producing response transcripts mapping statements directly to source timestamps and documents.",
+        associations: "Saves chat state in PostgreSQL database memory."
+      },
+      "conversation": {
+        title: "PostgreSQL Thread Memory",
+        category: "YouTube Search Core",
+        description: "State persistence database saving LangGraph thread details, system states, and user configurations.",
+        associations: "Maintains conversational memory."
+      },
+      "deep_agent": {
+        title: "LangGraph DeepAgent",
+        category: "Research Radar Core",
+        description: "ReAct agent looping to analyze academic sources, invoke research tools, and synthesize reports.",
+        associations: "Calls FastMCP tool registries; saves report states in PostgreSQL."
+      },
+      "arxiv": {
+        title: "arXiv Tool",
+        category: "Research Radar Core",
+        description: "Scientific paper search tool pulling abstracts, preprints, and publications from arXiv.",
+        associations: "Registered as a FastMCP endpoint tool."
+      },
+      "semantic_scholar": {
+        title: "Semantic Scholar Tool",
+        category: "Research Radar Core",
+        description: "Academic metadata search tool pulling citations, co-authors, and paper influence metrics.",
+        associations: "Registered as a FastMCP endpoint tool."
+      },
+      "hn": {
+        title: "Hacker News Tool",
+        category: "Research Radar Core",
+        description: "Community discussion search tool pulling comment threads and posts from HN.",
+        associations: "Registered as a FastMCP endpoint tool."
+      },
+      "hf_daily": {
+        title: "HuggingFace Daily Papers Tool",
+        category: "Research Radar Core",
+        description: "Curated ML feed tool fetching daily trending papers and discussions.",
+        associations: "Registered as a FastMCP endpoint tool."
+      },
+      "credentials": {
+        title: "Credentials Injector",
+        category: "Research Radar Core",
+        description: "Rotation agent injecting user-specific keys and tokens into tool requests to prevent provider rate-limits.",
+        associations: "Injects API keys dynamically into FastMCP requests."
+      },
+      "digest_store": {
+        title: "Digest Cache Store",
+        category: "Research Radar Core",
+        description: "Redis and PostgreSQL cache storing generated newsletters and document analysis logs.",
+        associations: "Caches FastMCP query responses."
+      },
+      "rate_limit": {
+        title: "Rate Limiter",
+        category: "Research Radar Core",
+        description: "Token-bucket regulator enforcing request rates for external APIs to avoid provider blocks.",
+        associations: "Regulates deep agent tool calls."
+      }
+    };
+
+    // State Variables
+    let currentDiagramId = 'architecture';
+    let pzInstances = {};
+    let activeNodeElement = null;
+
+    // Initialize PanZoom on load
+    window.onload = function() {
+      // Initialize panzoom instances for both SVGs
+      initPanZoom('architecture');
+      initPanZoom('ai-domains');
+      
+      // Bind click handlers to diagram elements
+      bindSVGElementEvents('architecture');
+      bindSVGElementEvents('ai-domains');
+    };
+
+    function initPanZoom(id) {
+      const container = document.getElementById(`${id}-container`);
+      const svg = container.querySelector('svg');
+      if (!svg) return;
+
+      // Enable panzoom
+      const instance = panzoom(svg, {
+        maxZoom: 3,
+        minZoom: 0.1,
+        smoothScroll: true,
+        bounds: true,
+        boundsPadding: 0.1
+      });
+
+      pzInstances[id] = instance;
+
+      // Fit to screen initially
+      setTimeout(() => {
+        fitDiagramToScreen(id);
+      }, 100);
+    }
+
+    function bindSVGElementEvents(diagramId) {
+      const container = document.getElementById(`${diagramId}-container`);
+      const svg = container.querySelector('svg');
+      if (!svg) return;
+
+      // Find all D2 node groups (they have class names which are base64 of their node IDs)
+      const groups = svg.querySelectorAll('g');
+      
+      groups.forEach(g => {
+        // We know it's a leaf node if it has an image element inside
+        const hasImage = g.querySelector('image') !== null;
+        
+        if (hasImage) {
+          g.classList.add('node-interactive');
+          
+          // Get the node name from the text element
+          const textEl = g.querySelector('text');
+          const nodeName = textEl ? textEl.textContent.trim() : '';
+
+          g.addEventListener('click', (e) => {
+            e.stopPropagation();
+            selectNode(g, nodeName);
+          });
+        }
+      });
+
+      // Clicking on background deselects node
+      svg.addEventListener('click', () => {
+        deselectAllNodes();
+      });
+    }
+
+    function selectNode(groupEl, nodeName) {
+      deselectAllNodes();
+      
+      activeNodeElement = groupEl;
+      groupEl.classList.add('node-active');
+
+      // Find description from catalog
+      const catalogItem = findCatalogItem(nodeName);
+      displayNodeDetails(nodeName, catalogItem);
+
+      // Center view on this node
+      centerOnSVGElement(groupEl);
+    }
+
+    function deselectAllNodes() {
+      if (activeNodeElement) {
+        activeNodeElement.classList.remove('node-active');
+        activeNodeElement = null;
+      }
+      
+      // Hide detail card, show empty state
+      document.getElementById('details-card').classList.remove('active');
+      document.getElementById('details-empty').style.display = 'flex';
+    }
+
+    function findCatalogItem(nodeName) {
+      const clean = nodeName.toLowerCase().replace(/[^a-z0-9]/g, '');
+      
+      // Direct lookup
+      if (CATALOG[clean]) return CATALOG[clean];
+
+      // Fuzzy matching
+      for (const key in CATALOG) {
+        const cleanKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (clean.includes(cleanKey) || cleanKey.includes(clean)) {
+          return CATALOG[key];
+        }
+      }
+      return null;
+    }
+
+    function displayNodeDetails(nodeName, item) {
+      const emptyState = document.getElementById('details-empty');
+      const detailCard = document.getElementById('details-card');
+
+      if (!item) {
+        // Fallback detail card
+        document.getElementById('details-title-el').textContent = nodeName;
+        document.getElementById('details-cat-el').textContent = "General Component";
+        document.getElementById('details-desc-el').textContent = "Part of the COELHO Nexus microservice ecosystem. Standard deployment container.";
+        document.getElementById('details-associations-el').textContent = "Active platform node.";
+      } else {
+        document.getElementById('details-title-el').textContent = item.title;
+        document.getElementById('details-cat-el').textContent = item.category;
+        document.getElementById('details-desc-el').textContent = item.description;
+        document.getElementById('details-associations-el').textContent = item.associations;
+      }
+
+      emptyState.style.display = 'none';
+      detailCard.classList.add('active');
+    }
+
+    function centerOnSVGElement(element) {
+      const instance = pzInstances[currentDiagramId];
+      if (!instance) return;
+
+      const container = document.getElementById(`${currentDiagramId}-container`);
+      const rect = container.getBoundingClientRect();
+      const bbox = element.getBBox();
+
+      // Center coordinates
+      const cx = bbox.x + bbox.width / 2;
+      const cy = bbox.y + bbox.height / 2;
+
+      // Viewport target dimensions
+      const vw = rect.width;
+      const vh = rect.height;
+
+      // Select zoom scale based on element dimensions
+      const scale = Math.min(vw / bbox.width, vh / bbox.height) * 0.35;
+      
+      const tx = vw / 2 - cx * scale;
+      const ty = vh / 2 - cy * scale;
+
+      // Perform smooth transition
+      instance.smoothMoveTo(tx, ty);
+      
+      // Update zoom level smoothly
+      setTimeout(() => {
+        instance.smoothZoom(vw / 2, vh / 2, scale / instance.getTransform().scale);
+      }, 50);
+    }
+
+    // Switch between Platform Architecture and AI Domains diagrams
+    function switchDiagram(id) {
+      if (id === currentDiagramId) return;
+
+      // Toggle Active buttons
+      const buttons = document.querySelectorAll('.tab-btn');
+      buttons.forEach(btn => btn.classList.toggle('active'));
+
+      // Toggle Active containers
+      const currentContainer = document.getElementById(`${currentDiagramId}-container`);
+      const targetContainer = document.getElementById(`${id}-container`);
+
+      currentContainer.classList.remove('active');
+      targetContainer.classList.add('active');
+
+      currentDiagramId = id;
+
+      // Clear search and selection state
+      document.getElementById('search-input').value = '';
+      document.getElementById('search-results').innerHTML = '';
+      deselectAllNodes();
+
+      // Refit active diagram
+      setTimeout(() => {
+        fitDiagramToScreen(id);
+      }, 100);
+    }
+
+    function fitDiagramToScreen(id) {
+      const instance = pzInstances[id];
+      const container = document.getElementById(`${id}-container`);
+      const svg = container.querySelector('svg');
+      if (!instance || !svg) return;
+
+      const containerRect = container.getBoundingClientRect();
+      
+      // Get base layout width and height from SVG viewBox
+      const viewBox = svg.viewBox.baseVal;
+      const svgWidth = viewBox.width || 12000;
+      const svgHeight = viewBox.height || 8000;
+
+      // Compute fitting scale
+      const scaleX = containerRect.width / svgWidth;
+      const scaleY = containerRect.height / svgHeight;
+      const scale = Math.min(scaleX, scaleY) * 0.9;
+
+      // Target centered position
+      const tx = (containerRect.width - svgWidth * scale) / 2 - (viewBox.x || 0) * scale;
+      const ty = (containerRect.height - svgHeight * scale) / 2 - (viewBox.y || 0) * scale;
+
+      instance.moveTo(tx, ty);
+      instance.zoomAbs(0, 0, scale);
+    }
+
+    // Zoom buttons
+    function zoomIn() {
+      const instance = pzInstances[currentDiagramId];
+      if (instance) {
+        const container = document.getElementById(`${currentDiagramId}-container`);
+        const rect = container.getBoundingClientRect();
+        instance.smoothZoom(rect.width / 2, rect.height / 2, 1.3);
+      }
+    }
+
+    // Zoom Out
+    function zoomOut() {
+      const instance = pzInstances[currentDiagramId];
+      if (instance) {
+        const container = document.getElementById(`${currentDiagramId}-container`);
+        const rect = container.getBoundingClientRect();
+        instance.smoothZoom(rect.width / 2, rect.height / 2, 0.7);
+      }
+    }
+
+    function resetZoom() {
+      fitDiagramToScreen(currentDiagramId);
+      deselectAllNodes();
+    }
+
+    function toggleFullscreen() {
+      const elem = document.documentElement;
+      if (!document.fullscreenElement) {
+        elem.requestFullscreen().catch(err => {
+          console.error(`Error enabling fullscreen: ${err.message}`);
+        });
+      } else {
+        document.exitFullscreen();
+      }
+    }
+
+    // Live search functionality
+    function handleSearch(query) {
+      const resultsContainer = document.getElementById('search-results');
+      resultsContainer.innerHTML = '';
+
+      if (!query || query.trim() === '') return;
+
+      const cleanQuery = query.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const matches = [];
+
+      // Find matching items from catalog that are present in the current diagram
+      const container = document.getElementById(`${currentDiagramId}-container`);
+      const svg = container.querySelector('svg');
+      if (!svg) return;
+
+      // Get names of nodes present in active SVG
+      const activeSVGTexts = Array.from(svg.querySelectorAll('g.node-interactive text'))
+        .map(el => el.textContent.trim());
+
+      for (const key in CATALOG) {
+        const item = CATALOG[key];
+        const matchTitle = item.title.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const matchCat = item.category.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+        if (matchTitle.includes(cleanQuery) || matchCat.includes(cleanQuery)) {
+          // Verify if this node exists in the current active SVG layout
+          const isPresent = activeSVGTexts.some(txt => {
+            const cleanTxt = txt.toLowerCase().replace(/[^a-z0-9]/g, '');
+            const cleanItemTitle = item.title.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return cleanTxt.includes(cleanItemTitle) || cleanItemTitle.includes(cleanTxt);
+          });
+
+          if (isPresent) {
+            matches.push(item);
+          }
+        }
+      }
+
+      // Display top 5 search matches
+      matches.slice(0, 5).forEach(match => {
+        const el = document.createElement('div');
+        el.className = 'search-result-item';
+        el.innerHTML = `
+          <span>${match.title}</span>
+          <span class="search-result-category">${match.category}</span>
+        `;
+        el.onclick = () => {
+          // Locate corresponding group in SVG
+          const groups = svg.querySelectorAll('g.node-interactive');
+          let targetGroup = null;
+
+          groups.forEach(g => {
+            const textEl = g.querySelector('text');
+            const nodeName = textEl ? textEl.textContent.trim().toLowerCase() : '';
+            const matchTitle = match.title.toLowerCase();
+            if (nodeName.includes(matchTitle) || matchTitle.includes(nodeName)) {
+              targetGroup = g;
+            }
+          });
+
+          if (targetGroup) {
+            selectNode(targetGroup, match.title);
+          }
+        };
+        resultsContainer.appendChild(el);
+      });
+    }
+  </script>
+</body>
+</html>

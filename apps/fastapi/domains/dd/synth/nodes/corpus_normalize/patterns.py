@@ -9,7 +9,6 @@ from .params import ADMON_KINDS, FENCE_META_ATTRS, MDX_WRAPPER_TAGS
 
 _MDX_TAGS_PATTERN = "|".join(re.escape(t) for t in MDX_WRAPPER_TAGS)
 
-# Open tag: <Tag attr="..." attr> or <Tag /> ; Close tag: </Tag>
 # Whitespace-tolerant. Inner-text preserving (we match only the tag
 # markup, not its body).
 MDX_OPEN_TAG_RE  = re.compile(

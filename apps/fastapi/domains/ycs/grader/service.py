@@ -1,16 +1,14 @@
 """ycs/grader — async concurrency-capped LLM relevance grading.
 
 Imperative Shell — async `gather` orchestration over the structured-
-output chain, BUT throttled by an `asyncio.Semaphore` (2026-06-15) to
+output chain, BUT throttled by an `asyncio.Semaphore` to
 keep the burst pattern compatible with free-tier per-minute rate
 windows. See `params.py::GRADER_CONCURRENCY` for the rationale.
 
 The LLM (`llm` arg) is the rotator's `with_fallbacks` chain — a 429 on
 deployment #1 transparently rotates to #2. The fallback chain is the
 caller's concern, not this module's.
-
-Direct port of deprecated `services/youtube/grader.py:L22-64` +
-2026-06-15 concurrency cap."""
+"""
 from __future__ import annotations
 
 import asyncio
@@ -32,7 +30,7 @@ from .schemas import GradeResult
 logger = logging.getLogger(__name__)
 
 
-# 2026-06-16 — every grade label that counts as "keep the document".
+# every grade label that counts as "keep the document".
 # Currently `relevant` (direct match) and `likely_relevant` (lateral /
 # on-topic without literal answer). Promoted to a module-level
 # `frozenset` so the keep/drop policy is configurable in one place
@@ -62,7 +60,7 @@ def _flatten_message_content(raw_content: Any) -> str:
                              {type:'reasoning',...}]` (kimi-k2, qwen-thinking,
                             deepseek-v4, Claude extended-thinking)
 
-    2026-06-15 bug: YCS sub-agents crashed with
+    Bug fix: YCS sub-agents crashed with
     `'list' object has no attribute 'lower'` because `_rescue_score`
     received a list-shaped content from a reasoning model. The rotator's
     `_flatten_thinking_content` only sanitizes INCOMING messages (next
@@ -103,7 +101,7 @@ def _rescue_score(raw_content: Any) -> str | None:
     `_flatten_message_content`). Returns one of `"relevant"`,
     `"likely_relevant"`, `"not_relevant"`, or `None` (no signal).
 
-    2026-06-16 — extended for the ternary grade. Order of checks
+    extended for the ternary grade. Order of checks
     matters: `not_relevant` is the most specific compound token, then
     `likely_relevant`, then bare `relevant`. Checking `relevant`
     first would swallow both compound variants as positives."""
@@ -131,7 +129,7 @@ class DocumentGrader:
     instead of boolean `true`. See `rag/standard/nodes/hallucination/
     node.py` for the full rationale.
 
-    2026-06-15 — `include_raw=True` ships the raw `AIMessage` alongside
+    `include_raw=True` ships the raw `AIMessage` alongside
     the parsed Pydantic so we can rescue the binary intent from the
     payload when the parser dies (see `_rescue_score`)."""
 
@@ -185,7 +183,7 @@ class DocumentGrader:
             #   - parsed is None + parsing_error present → lenient fallback
             #   - parsed.score != "relevant" → drop
             parsed = result.get("parsed") if isinstance(result, dict) else None
-            # 2026-06-16 — `_KEEPER_SCORES` is the single source of
+            # `_KEEPER_SCORES` is the single source of
             # truth for "keep this doc". Both the parsed and rescue
             # paths gate on the same set so the ternary policy can't
             # accidentally diverge between them.

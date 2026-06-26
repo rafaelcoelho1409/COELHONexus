@@ -21,7 +21,7 @@ from typing import Any
 from .params import BACKEND_ES, BACKEND_NEO4J, BACKEND_QDRANT
 
 
-PROMPT_VERSION = "qaie-v1.3.0"   # 2026-06-16: Qdrant filter-shape rules + text-index hint
+PROMPT_VERSION = "qaie-v1.3.0"   # Qdrant filter-shape rules + text-index hint
 _SCHEMA_CHARS_CAP = 9000
 
 

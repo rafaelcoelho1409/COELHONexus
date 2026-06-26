@@ -5,11 +5,7 @@ LLM-as-judge for factual grounding. Two booleans per
 acceptable. On structured-output error we DEFAULT to grounded=True
 (deprecated rationale: assume grounded to avoid blocking the user
 on a transient LLM hiccup; the graph still bails after MAX_RETRIES).
-
-Direct port of deprecated `graphs/youtube/rag.py:L104-139` +
-2026-06-16 per-call timeout (one of the previously uncapped LLM
-calls — the parent SSE generator had no way to bail on a silent
-hang here)."""
+"""
 from __future__ import annotations
 
 import asyncio
@@ -39,7 +35,7 @@ async def check_hallucination(state: YouTubeRAGState, llm) -> dict:
     ]
     documents_str = "\n---\n".join(doc_texts)
 
-    # 2026-06-11: use the default `method="json_schema"` (cross-
+    # use the default `method="json_schema"` (cross-
     # provider portable: sends `response_format={"type":"json_schema",
     # ...}` via the API instead of `tools` + `tool_choice`). Bypasses
     # Groq's server-side tool-call validator that previously rejected

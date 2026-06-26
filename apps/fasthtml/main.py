@@ -52,7 +52,6 @@ app, rt = fast_app(
 )
 
 
-# Remove FastHTML's built-in catch-all static-extension route, which
 # `fast_app(...)` injects unconditionally as `/{fname:path}.{ext:static}`
 # (regex matches png/jpg/svg/css/js/woff/…) and points at the working-
 # directory `static_path = '.'`. With our explicit `/static` Mount above,

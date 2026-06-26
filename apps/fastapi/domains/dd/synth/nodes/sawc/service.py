@@ -87,7 +87,7 @@ from ..vault.schemas import VaultEntry
 logger = logging.getLogger(__name__)
 
 
-# Code-body identifier extraction (Ship B + E)
+# Code-body identifier extraction.
 # Cheap stopword set — tokens too generic to count as "code-anchored".
 _IDENT_STOPWORDS = frozenset({
     "self", "cls", "str", "int", "bool", "list", "dict", "set", "tuple",
@@ -250,7 +250,6 @@ def extract_memory_entry(
     in favor of a digest-driven heuristic. Future: mgsr_replan can
     upgrade to LLM-extract if needed.
     """
-    # --- summary: combine section intro + first subtopic explanation ---
     parts: list[str] = []
     if section.intro:
         parts.append(section.intro.strip())
@@ -270,7 +269,6 @@ def extract_memory_entry(
         if len(summary) < MEMORY_SUMMARY_CHARS_MIN:
             summary = summary + " — content pending refinement."
 
-    # --- terminology: extract code-ish identifiers from key_facts ---
     candidates: list[str] = []
     for contrib in section_contributions or []:
         for fact in (contrib.get("key_facts") or []):
@@ -437,7 +435,7 @@ def validate_section_against_inputs(
                 # writer's heuristics handle it.
                 continue
 
-            # Ship E: subheading↔code. Strict-AST overlap first; if zero,
+            # subheading↔code. Strict-AST overlap first; if zero,
             # fall back to first-3-lines word overlap (catches less
             # tightly-named patterns like 'Minimal Tool Definition').
             sub_overlap = _prose_tokens(s.subheading) & code_idents
@@ -449,7 +447,7 @@ def validate_section_against_inputs(
                 if not head_overlap:
                     misaligned_sub.append(s.subheading)
 
-            # Ship B: explanation↔code. Stricter than subheading —
+            # explanation↔code. Stricter than subheading —
             # high-precision signal = an INLINE `code` span that names a
             # code identifier. Low-precision signal = bare word tokens.
             # A single bare-word overlap is too easy to game (every prose
@@ -699,7 +697,7 @@ def build_writer_prompt(
     Args:
         vault_rich: optional dict[hash → VaultEntry-like dict] giving the
             LLM full visibility into each allowed code block (Visible Vault,
-            2026-05-24 Ship #1). When provided, renders `<code id = ...>{body}
+            When provided, renders `<code id = ...>{body}
             </code>` envelopes so the LLM can pick pedagogically valuable
             hashes from informed context. When None, falls back to plain
             hash listing (legacy behavior).
@@ -720,8 +718,6 @@ def build_writer_prompt(
     # prose subtopics rather than failing to an empty placeholder.
     prose = prose_mode or not allowed_hashes
 
-    # Fix #3 — cross-section recycling: list the canonical code already shown
-    # earlier in THIS chapter so the writer references instead of re-emitting.
     already_shown_hashes = already_shown_hashes or set()
     shown_here = sorted(h for h in (already_shown_hashes or set()) if h)
     already_shown_block = ""
@@ -1148,7 +1144,6 @@ def summarize_candidate(
 
 
 
-# === SAWC-helpers restored from old commit (2026-06-07) ===
 _CONCURRENCY           = 8
 
 async def _load_chapter_vault_rich(
@@ -1173,7 +1168,6 @@ async def _load_chapter_vault_rich(
     n_loaded = 0
     n_skipped = 0
     for source_key in source_keys:
-        # Try the pre-built per-source vault first.
         vault_key = _source_key_to_vault_key(source_key, slug)
         used_runtime = False
         if await minio.exists(vault_key):
@@ -1267,7 +1261,6 @@ def _dedupe_vault_hashes_across_sections(
         hash_section_options[h].append((sid, rel))
 
     # Snapshot pool sizes for tie-breaking (use original sizes; don't
-    # update during the loop — order-dependent tie-break would make
     # behavior non-deterministic across iterations).
     section_pool_sizes: dict[str, int] = {
         sid: sum(len(c.get("code_refs") or []) for c in contribs)
@@ -1287,7 +1280,6 @@ def _dedupe_vault_hashes_across_sections(
             section_pool_sizes.get(x[0], 0),
             x[0],
         ))[0]
-        # Strip h from every OTHER section's contributions.
         for sid, _rel in options:
             if sid == best_sid:
                 continue
@@ -1416,7 +1408,6 @@ async def _write_section_best_of_n(
                 _make_draft_coro(i) for i in range(_N_DRAFTS)
             ])
 
-        # Filter to drafts that parsed + validated
         valid: list[tuple[int, _LLMSectionDraft, str, int, int]] = []
         for i, (draft, dep, wall, repairs) in enumerate(results):
             if draft is not None:
@@ -1463,7 +1454,6 @@ async def _write_section_best_of_n(
             )
         )
 
-        # Map picker index → original draft index (for transparency)
         original_draft_idx = valid[chosen_idx][0]
         chosen_draft = valid[chosen_idx][1]
         dep_writer = valid[chosen_idx][2]
@@ -1541,7 +1531,6 @@ def _compute_manifest_hash(
     return sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-# === sawc round 2 helpers from old commit ===
 _OPTIMAL_STOPPING_MIN_SUBTOPICS = 4
 
 _OPTIMAL_STOPPING_MIN_CITATIONS = 2
@@ -1605,11 +1594,11 @@ async def _draft_one_section(
 
     deployment: Optional[str] = None
     try:
-        # Option B (2026-05-24): writer drafts use the dd-synth-write
+        # writer drafts use the dd-synth-write
         # bandit pool restricted to heavyweight reasoning models.
         # Workhorse arms (mistral-small, magistral-small, devstral-medium
         # under medium budget) stay reserved for dd-grader filter tasks.
-        # DD-SYNTH-SPEED-SOTA #1 (2026-05-26): response_format=json_schema
+        # response_format=json_schema
         # is attached server-side for NIM/Mistral arms — repair loop below
         # still handles Gemini and any provider slip-through.
         response, meta = await chat_judge_bandit_async(
@@ -1694,7 +1683,7 @@ async def _draft_one_section(
         )
         return None, deployment, wall_ms, n_repairs
 
-    # Cross-ref validation (heading/hashes/citations + Ship B/E alignment)
+    # Cross-ref validation (heading/hashes/citations alignment).
     issues = validate_section_against_inputs(
         draft,
         expected_heading=section_heading,
@@ -1702,7 +1691,7 @@ async def _draft_one_section(
         valid_source_keys=valid_source_set,
         vault_rich=vault_rich,
     )
-    # S3 (2026-05-26 late evening) — repair only on HARD issues. Soft
+    # repair only on HARD issues. Soft
     # quality-nudge issues (subheading/explanation↔code mismatch,
     # subtopic-shy-of-bank) still ship in .issues for downstream but
     # don't burn the repair budget — the LLM can't reliably close them.
@@ -1745,7 +1734,7 @@ async def _draft_one_section(
                 vault_rich=vault_rich,
             )
             # Accept ONLY if it strictly reduces violation count
-            # S3 — accept only when HARD issues strictly decreased.
+            # accept only when HARD issues strictly decreased.
             if len(hard_issues(new_issues)) < len(hard_issues(issues)):
                 draft = new_draft
                 issues = new_issues
@@ -1848,7 +1837,6 @@ async def _critic_pick_best(
     )
 
 
-# === sawc round 3 helpers ===
 _TEMPERATURE_DRAFT     = 0.5
 
 _TEMPERATURE_REPAIR    = 0.2
@@ -1935,7 +1923,7 @@ async def _pairwise_judge_match(
     )
 
     try:
-        # DD-SYNTH-SPEED-SOTA #A7 (2026-05-26): json_object forces the
+        # json_object forces the
         # pairwise critic to emit valid JSON {"winner": "A"|"B", "reason": ...}
         # without prose preamble, eliminating ~most parse-failed tiebreaks.
         response, meta = await chat_judge_bandit_async(
@@ -1962,14 +1950,10 @@ async def _pairwise_judge_match(
     return ("A" if s_a >= s_b else "B"), None
 
 
-# === sawc round 4 helpers ===
-# --- _JSON_RE ---
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
-# --- _MAX_TOKENS_CRITIC ---
 _MAX_TOKENS_CRITIC     = 300
 
-# --- _PAIRWISE_PICKER_PROMPT ---
 _PAIRWISE_PICKER_PROMPT = """You are picking the BETTER of two technical-documentation
 drafts for the same section. The section is part of a larger distilled book.
 
@@ -1993,10 +1977,8 @@ expected primary source contributions: {n_primary_contribs}
 
 Answer in JSON: {{"winner": "A" | "B", "reason": "one short sentence"}}"""
 
-# --- _TEMPERATURE_CRITIC ---
 _TEMPERATURE_CRITIC    = 0.0
 
-# --- _shorten_pydantic_error ---
 def _shorten_pydantic_error(e: ValidationError) -> str:
     errs = e.errors()
     if not errs:
@@ -2111,7 +2093,6 @@ async def sawc_write_run(state: SynthState) -> dict:
                       f"has {len(stages_raw)} stages — both must be >0",
         }
 
-    # Build section_id → outline_section lookup
     sections_by_id: dict[str, dict] = {
         s["section_id"]: s for s in outline_sections
     }
@@ -2119,7 +2100,6 @@ async def sawc_write_run(state: SynthState) -> dict:
     stages: dict[int, list[str]] = {
         int(k): list(v) for k, v in stages_raw.items()
     }
-    # Skip sections that digest source-pool merge folded elsewhere —
     # contributions are re-tagged to the winner; writing them produces a
     # hollow shell that bank-padding then back-fills with canonical code.
     merged_away: set[str] = set(
@@ -2149,7 +2129,7 @@ async def sawc_write_run(state: SynthState) -> dict:
         n_total_drafts = n_sections * N_DRAFTS,
     )
 
-    # Track the iteration counter for the CoRefine loop (2026-05-24).
+    # Track the iteration counter for the CoRefine loop .
     # Each sawc_write invocation bumps it by 1; refine_iter is part of the
     # manifest hash so loop iterations don't cache-hit each other.
     incoming_refine_iter = int(state.get("refine_iter") or 0)
@@ -2222,7 +2202,6 @@ async def sawc_write_run(state: SynthState) -> dict:
                 f"recomputing"
             )
 
-    # Load the full vault entries for every source contributing to this
     # chapter so the writer prompt can render <code id = "..." lang = "...">
     # {body}</code> envelopes — the LLM sees actual code instead of opaque
     # hashes. Render-time substitution still uses the same hash → vault[id]
@@ -2240,9 +2219,6 @@ async def sawc_write_run(state: SynthState) -> dict:
     sem = asyncio.Semaphore(_CONCURRENCY)
     memory_ledger: list[MemoryEntry] = []
     completed_sections: dict[str, Section] = {}
-    # Fix #3 — cross-section recycling: code_ref_hashes already rendered as
-    # subtopics by COMPLETED (prior-stage) sections of this chapter. Passed to
-    # later sections' writer prompts so they reference rather than re-show.
     chapter_used_hashes: set[str] = set()
     n_total_drafts_fired = 0
     n_critic_picks = 0
@@ -2322,13 +2298,12 @@ async def sawc_write_run(state: SynthState) -> dict:
             n_primary_contribs = sum(
                 1 for c in contributions if c.get("relevance") == "primary"
             )
-            # U7 (2026-05-28) — per-section source-doc binding. Restrict
+            # per-section source-doc binding. Restrict
             # citations to source docs that digest_construct actually
             # routed to THIS section, NOT chapter-wide. Combined with
             # U2 vault-hash dedup, this prevents the writer from citing
             # sources that "belong to" other sections — closing the
             # belt-and-suspenders loop on cross-section drift.
-            #
             # Fail-safe: if a section ends up with zero contributing
             # sources (digest under-routed), fall back to chapter-wide
             # so the writer still has SOMETHING to cite. Empirically
@@ -2344,7 +2319,7 @@ async def sawc_write_run(state: SynthState) -> dict:
                     f"this section; falling back to chapter-wide "
                     f"({len(valid_source_keys)} sources) for citations"
                 )
-            # PROSE PATH (Fix #1, trigger corrected 2026-05-30): a section is
+            # PROSE PATH: a section is
             # conceptual/prose when the digest routed it NO real code
             # (n_routed_hashes == 0), OR when even after Ship-A padding the
             # bank can't sustain the minimum code subtopics (tiny no-code
@@ -2423,8 +2398,6 @@ async def sawc_write_run(state: SynthState) -> dict:
                     f"{type(e).__name__}: {e}"
                 )
 
-            # Fix #3 — record this section's rendered code so later stages'
-            # sections reference rather than re-emit it (anti-recycling).
             for st in (getattr(sec, "subtopics", None) or []):
                 h = getattr(st, "code_ref_hash", "")
                 if h:
@@ -2527,7 +2500,6 @@ async def sawc_write_run(state: SynthState) -> dict:
     else:
         # First iteration — current sawc IS the best-seen. We track the
         # VERSIONED key (immutable) not the latest pointer, so render can
-        # load this specific iteration even after subsequent iterations
         # overwrite latest_key.
         patch["best_seen_sawc_path"] = versioned_key
     if incoming_best_score is not None:

@@ -1,20 +1,7 @@
 """COELHO Nexus — FastAPI shell.
 
-Lifespan provisions external services that Docs Distiller ingestion needs
-to be functional end-to-end:
-
-  - OTel bootstrap — Alloy gRPC + LangFuse OTLP/HTTP exporters
-  - MinIO bucket — page-body storage for ingest runs
-  - AsyncPostgresSaver — planner-graph checkpoint store
-
-YCS lifespan adds (Wave 4):
-  - Redis async client (cache + agents config)
-  - Postgres URL + idempotent `conversation_history` table
-  - Neo4jGraph wrapper (graph stats + classifier channel-detect)
-  - 13-model `with_fallbacks` LLM chain (deprecated convention)
-  - DocumentGrader + SmartRetriever fan-out (ES + Qdrant + Neo4j)
-
-Add lifespan deps + routers as more features land.
+Lifespan provisions: OTel (Alloy gRPC + LangFuse), MinIO bucket,
+AsyncPostgresSaver, Redis, Postgres, Neo4j, ES, Qdrant, LLM chains.
 """
 import logging
 import os
@@ -100,9 +87,7 @@ logger = logging.getLogger(__name__)
 
 
 def _redis_url_from_env() -> str:
-    # Same URL-encoding posture as `_postgres_url_from_env` — passwords
-    # with `%`, `@`, `&`, etc. otherwise break DSN parsing in the
-    # redis-py client.
+    # URL-encode password so DSN parsing survives %, @, &, etc.
     from urllib.parse import quote
     host = os.environ.get("REDIS_HOST", "localhost")
     port = os.environ.get("REDIS_PORT", "6379")
@@ -113,11 +98,7 @@ def _redis_url_from_env() -> str:
 
 
 def _postgres_url_from_env() -> str:
-    # `quote(..., safe="")` URL-encodes user + password so DSNs survive
-    # passwords with `%`, `&`, `!`, `#`, `^`, `@`, etc. psycopg / asyncpg
-    # parse the DSN as a URL, and a raw `%%` reads as an invalid
-    # percent-encoded token ("invalid percent-encoded token: ..."),
-    # which kills lifespan and 5xx's every YCS thread-memory call.
+    # URL-encode user+password; raw % in a password breaks asyncpg DSN parsing with "invalid percent-encoded token".
     from urllib.parse import quote
     user = quote(os.environ.get("POSTGRES_USER", "postgres"), safe = "")
     password = quote(os.environ.get("POSTGRES_PASSWORD", ""), safe = "")
@@ -146,9 +127,6 @@ async def lifespan(app: FastAPI):
             f"MinIO is reachable + creds are correct."
         )
 
-    # BYOK credential store — eager KEK init + cache load so the first rotator
-    # build resolves user keys from cache (not a cold MinIO GET). Best-effort:
-    # on failure the rotator falls back to env keys (today's behavior).
     try:
         warm_credentials()
     except Exception as e:
@@ -157,9 +135,6 @@ async def lifespan(app: FastAPI):
             f"{type(e).__name__}: {e}. Rotator will use env keys only."
         )
 
-    # Build the selection-driven dynamic catalog (live discovery + benchmark
-    # rank, filtered to the user's BYOK provider/model selection). Best-effort:
-    # on failure the rotator falls back to the selection-filtered static catalog.
     try:
         await init_dynamic_catalog()
     except Exception as e:
@@ -168,14 +143,7 @@ async def lifespan(app: FastAPI):
             f"{type(e).__name__}: {e}. Rotator will use the static catalog."
         )
 
-    # Periodic catalog refresh — re-runs discovery on every provider every
-    # `DD_CATALOG_REFRESH_INTERVAL_S` seconds (default 900s = 15 min) so the
-    # catalog drops models that NIM/Groq/etc. cycle out of /v1/models without
-    # waiting for a redeploy. Same intent as `~/.config/litellm/gen-config.sh`
-    # (ExecStartPre re-fetch) but recurring + multi-provider. Pair with the
-    # EOL-broadened `_RotatorAutoRetryRouter` which handles 410 / "end of life"
-    # / "decommissioned" prose at call-time (immediate fallover; the loop
-    # cleans up at the cadence).
+    # Periodic re-discovery drops EOL'd models without waiting for a redeploy.
     try:
         start_catalog_refresh_loop()
     except Exception as e:
@@ -193,10 +161,6 @@ async def lifespan(app: FastAPI):
             f"Postgres is reachable + POSTGRES_* env vars are correct."
         )
 
-    # Research Radar stores — Postgres tables + Qdrant collection + Neo4j
-    # constraints + MinIO bucket prefix. Idempotent (IF NOT EXISTS); safe
-    # to re-run. Best-effort: failure here degrades the radar feature but
-    # doesn't block DD/YCS lifespan steps below.
     try:
         await bootstrap_rr_stores()
     except Exception as e:
@@ -206,8 +170,6 @@ async def lifespan(app: FastAPI):
             f"until the missing store is reachable."
         )
 
-    # Elasticsearch — YCS metadata + transcripts indexes. Best-effort:
-    # missing ES degrades YCS ingestion/retrieval but doesn't break DD.
     try:
         await ensure_es_indexes()
     except Exception as e:
@@ -217,9 +179,6 @@ async def lifespan(app: FastAPI):
             f"reachable + ELASTICSEARCH_* env vars are correct."
         )
 
-    # Neo4j — YCS knowledge graph. Same best-effort posture: warm the
-    # LangChain wrapper + verify the async driver can connect so the
-    # first YCS request doesn't pay the cold-start cost.
     try:
         get_neo4j_graph()
         await verify_neo4j_connectivity()
@@ -230,9 +189,6 @@ async def lifespan(app: FastAPI):
             f"NEO4J_* env vars are correct."
         )
 
-    # YCS agents-router state. Each provisioning step is best-effort —
-    # failures degrade that endpoint family but keep the rest of the
-    # server healthy.
     try:
         app.state.redis_aio = redis_aio_module.from_url(
             _redis_url_from_env(),
@@ -271,16 +227,8 @@ async def lifespan(app: FastAPI):
             f"{type(e).__name__}: {e}. /agents/search will 5xx."
         )
 
-    # 2026-06-17 — speed-optimised chain for YCS Query's NL → DSL task.
-    # The default `app.state.llm` targets the `dd-all` pool whose top
-    # arms are reasoning models (kimi-k2.6, qwen3.5-397b, deepseek-v4,
-    # …) — they emit 1-15 s of `<think>` tokens BEFORE any output,
-    # which is pure waste for deterministic structural translation.
-    # `dd-reduce-label` is the existing engineered-for-speed pool:
-    # Groq Llama-3.3-70b (LPU, 1500+ tok/s, no reasoning), Gemini Flash
-    # Lite, NIM gpt-oss-120b, etc., 60-90 s tighter timeouts.
-    # Query AI prefers this chain; if init fails it falls back to
-    # `app.state.llm` at request time (see `domains/ycs/query/service.py`).
+    # query_ai_llm uses the dd-reduce-label pool (no reasoning models) to avoid 1-15s think tokens
+    # on NL→DSL translation; falls back to app.state.llm at request time.
     try:
         app.state.query_ai_llm = build_reduce_label_chain()
     except Exception as e:

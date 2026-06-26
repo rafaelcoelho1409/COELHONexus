@@ -1,7 +1,5 @@
 """ycs/grader — structured-output Pydantic for the relevance LLM call.
-
-Direct port of deprecated `schemas/youtube/agents.py:L56-60` +
-2026-06-16 ternary grade. The binary `relevant` / `not_relevant`
+The binary `relevant` / `not_relevant`
 schema was empirically too strict for DEEP-mode abstract sub-
 questions ("recurring emotional tones?", "evolution across video
 categories?") — a transcript stating "I'm tired of Brazil" is highly

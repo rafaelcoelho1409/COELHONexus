@@ -1,4 +1,4 @@
-"""Research Radar agent factory (step-7 refactor 2026-06-12).
+"""Research Radar agent factory.
 
 Maximizes DeepAgents feature usage per `feedback_rr_learning_purpose`:
 
@@ -79,17 +79,12 @@ from .tools.triage import triage_candidates
 logger = logging.getLogger(__name__)
 
 
-# --------------------------------------------------------------------------- #
-# Model factories — orchestrator + subagents use the rr-strong pool (Wave 1.3
-# expanded 4 → 10 arms 2026-06-16: 7 NIM frontier + 2 Mistral direct + 1
-# SambaNova free-tier 405B). With Wave 1.2 the rotator chain is bandit-
-# routed (FGTS-VA), not simple-shuffle — matching the Planner/Synth
-# routing brain. Net effect under parallel deep_read fan-out: 4 concurrent
-# task() calls pick 4 different bandit-top arms instead of all racing for
-# one simple-shuffle pick.
-# --------------------------------------------------------------------------- #
+# Model factories — orchestrator + subagents use the rr-strong pool (10 arms:
+# 7 NIM frontier + 2 Mistral direct + 1 SambaNova free-tier 405B), bandit-routed
+# (FGTS-VA). Net effect under parallel deep_read fan-out: 4 concurrent task()
+# calls pick 4 different bandit-top arms instead of all racing for one pick.
 # Module-level callback instance — one handler reused across all model
-# bindings. Path-A LLM-counter (2026-06-16): every chat completion bumps
+# bindings. Path-A LLM-counter: every chat completion bumps
 # the per-scan Redis counters. Skips silently when no scan_id is in the
 # contextvar (non-RR callers reuse the same rotator chain). Attached
 # globally via `agent.ainvoke(config={"callbacks":[...]})` in task.py so
@@ -206,11 +201,11 @@ async def build_radar_agent() -> Any:
 
     Mode-specific:
       "subagents": + 4 discovery subagents (report subagent retired
-                     2026-06-16 — synthesis now owns per-paper themes;
+                     synthesis now owns per-paper themes;
                      digest assembly is Python in task.py for both modes)
       "tools":     + 4 discover_* tools (replaces discovery subagents)
 
-    2026-06-16 (post-f52fb84a): report subagent removed from both modes.
+    Report subagent removed from both modes.
     It emitted `{` six times for write_digest across an 8-min window.
     Per-paper theme assignment moved to synthesis subagent
     (write_synthesis_report.per_paper_themes); `_build_digest_from_fs`
@@ -284,11 +279,8 @@ async def build_radar_agent() -> Any:
     return agent
 
 
-# --------------------------------------------------------------------------- #
-# Subagent parallelism model — Wave 1.4 (2026-06-16) findings
-# --------------------------------------------------------------------------- #
+# Subagent parallelism model — Wave 1.4 findings
 # DeepAgents 0.6.8 ships TWO subagent flavors:
-#
 #   1. **SubAgent dict** (what we use)   — in-process compiled langgraph,
 #      dispatched via SubAgentMiddleware.atask() which awaits
 #      `subagent.ainvoke(state, config)`. When the orchestrator emits N
@@ -296,28 +288,23 @@ async def build_radar_agent() -> Any:
 #      ToolNode runs them concurrently via `asyncio.gather`. Result: 4
 #      `task()` calls → 4 concurrent subagent loops, all sharing this
 #      Celery worker's event loop.
-#
 #   2. **AsyncSubAgent**                  — remote LangGraph Platform /
 #      Agent Protocol server. The subagent runs on a SEPARATE service;
 #      DeepAgents talks to it via langgraph_sdk.get_client(). Requires a
 #      deployed LangGraph server endpoint (or self-hosted ASGI). Not
 #      applicable to our single-Celery-worker deployment.
-#
 # We stay on flavor #1. The 10-20 min for 4 deep_reads observed pre-Wave-1
 # was NOT a DeepAgents dispatch problem — it was a ROTATOR problem:
 #   - 4-arm rr-strong pool + LiteLLM Router simple-shuffle
 #   - 4 concurrent ainvoke calls each randomly picked one of 4 arms
 #   - High collision probability → 429 → cascade serial cooldown waits
-#
 # Wave 1.2 (bandit-routed chain) + 1.3 (10-arm pool) eliminate this:
 #   - FGTS-VA Thompson sampling picks DIFFERENT top-K arms across the
 #     4 concurrent subagent calls (RNG-driven exploration)
 #   - 2.5× wider candidate pool absorbs cooldowns without cascade
-#
 # Wave 1.5 (asyncio.Semaphore at task.py entry) caps parallel LLM dispatch
 # so the orchestrator + 4 subagents + cascade retries don't burst past
 # what NIM's 40 RPM / Groq's 30 RPM windows can absorb.
-#
 # Hook for v2: when horizontal scaling beyond one worker is needed,
 # the AsyncSubAgent flavor is one option — but Celery-distributed
 # subagents (workers picking up `deep_read_one_paper` tasks from a queue)

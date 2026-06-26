@@ -23,7 +23,6 @@ def parse_search_response(body: dict[str, Any]) -> list[Paper]:
         try:
             papers.append(_parse_paper(raw))
         except (ValueError, KeyError, TypeError):
-            # Skip malformed entries; one bad record shouldn't fail the page.
             continue
     return papers
 

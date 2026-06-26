@@ -44,10 +44,7 @@ from .state import SynthState
 logger = logging.getLogger(__name__)
 
 
-# Canonical synth node order per SYNTH-ARCHITECTURE-SOTA-2026-05-18.md
-# (after the 2026-05-19 reclassification — corpus_normalize +
-# vault_sentinelize moved to ingestion-time, cache_lookup subsumed by
-# per-stage MinIO content-addressed caches + LangGraph skip-completed).
+# Canonical synth node order (corpus_normalize + vault_sentinelize → ingestion-time; cache_lookup → per-stage MinIO caches).
 NODE_ORDER = (
     "outline_sdp",
     "digest_construct",
@@ -115,7 +112,7 @@ def _route_after_mgsr(state: SynthState) -> str:
         )
         return "render_audit_write"
 
-    # Bundle 7 — iter-1 no-recovery short-circuit.
+    # iter-1 no-recovery short-circuit.
     if refine_iter <= 1 and score < NO_RECOVERY_FLOOR:
         logger.info(
             f"[synth-graph] {state.get('framework_slug')}/"

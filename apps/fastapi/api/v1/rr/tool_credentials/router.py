@@ -1,16 +1,4 @@
-"""Tool API-key management endpoints — BYOK for FastMCP source tools.
-
-Pattern mirrors apps/fastapi/api/v1/llm/settings/router.py — raw key travels
-browser→FastAPI on save; responses carry only masked status. Stored in the
-SAME MinIO+Fernet store as the LLM rotator's BYOK provider keys (different
-whitelist, same secure transport).
-
-Endpoints (mounted at /api/v1/rr/tool-credentials):
-  GET    /keys                       — list all tool keys + their statuses
-  POST   /keys/{key_env}             — set / replace a key
-  DELETE /keys/{key_env}             — delete a key
-  POST   /keys/{key_env}/test        — call the source's API to verify the key
-"""
+"""BYOK API-key management for FastMCP source tools. Same MinIO+Fernet store as the LLM rotator (different whitelist)."""
 from __future__ import annotations
 
 import logging
@@ -33,9 +21,7 @@ router = APIRouter()
 
 
 def _view(d: ToolKeyDef) -> dict:
-    """Single tool-key entry as seen by the UI — no raw secret leaves here.
-    `provider` (catalog) and `source` (KeyStatus) are KEPT DISTINCT — same
-    word semantically would have collided when flattened into one dict."""
+    """`provider` (catalog) kept distinct from `KeyStatus.source` — same word would collide when flattened."""
     status = get_store().key_status(d.key_env)
     return {
         "key_env":      d.key_env,
@@ -114,7 +100,6 @@ async def test_tool_key(key_env: str) -> JSONResponse:
     return JSONResponse(probe)
 
 
-# ---- per-source test-connect probes -----------------------------------------
 async def _probe_semantic_scholar(key: str) -> dict:
     """A 1-result /paper/search call validates the key without consuming budget."""
     try:

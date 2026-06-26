@@ -420,7 +420,6 @@ async def _reexplain_one(
         return None
     if not response:
         return None
-    # Extract JSON; tolerate prose preamble.
     import re as _re
     m = _re.search(r"\{.*\}", response, _re.DOTALL)
     if not m:
@@ -519,8 +518,6 @@ async def _derive_one_subtopic(
         # ── Mutate subtopic in place ────────────────────────────────────
         subtopic["code_source"] = "derived"
         subtopic["derived_code"] = winner
-
-        # ── Ship D (2026-05-25): re-explain ─────────────────────────────
         # The original explanation was written for the thin signature;
         # the derived code is a different (richer) example. Regenerate
         # the explanation conditioned on the new code body so prose↔code
@@ -687,7 +684,6 @@ async def sawc_derive_run(state: SynthState) -> dict:
         minio, slug, needed_hashes, source_keys,
     )
 
-    # Filter to actually-thin candidates.
     thin_candidates: list[tuple[dict, dict, str, str]] = []  # +original_body
     for sec, st, h in candidates:
         entry = vault.get(h)

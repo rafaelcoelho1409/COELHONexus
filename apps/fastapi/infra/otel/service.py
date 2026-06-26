@@ -24,10 +24,8 @@ _meter = None
 
 
 def _instrument_libraries() -> None:
-    """Auto-instrument httpx / logging / litellm — once per process.
-    Redis is intentionally NOT instrumented: Celery ↔ Redis task-queue
-    chatter (GET/SET/RPUSH/HSET/PUBLISH every second) produces thousands
-    of zero-value spans that bury LLM traces in both Alloy and LangFuse."""
+    """Auto-instrument httpx/logging/litellm once per process.
+    Redis intentionally excluded: task-queue chatter produces thousands of zero-value spans."""
     try:
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
         HTTPXClientInstrumentor().instrument()
@@ -35,23 +33,12 @@ def _instrument_libraries() -> None:
         logger.debug(f"[otel] httpx instrumentation skipped: {e}")
     try:
         from opentelemetry.instrumentation.logging import LoggingInstrumentor
-        # Inject trace_id + span_id into log records so Loki ↔ Tempo
-        # can correlate. `basicConfig()` is already configured by the app /
-        # worker entrypoints; setting this True makes the record factory
-        # populate `otelTraceID` / `otelSpanID` on every log record.
         LoggingInstrumentor().instrument(set_logging_format=True)
     except Exception as e:
         logger.debug(f"[otel] logging instrumentation skipped: {e}")
-    # COELHO Nexus already emits one authoritative gen_ai.* tracing path from
-    # the rotator span helpers. Do NOT also wire LiteLLM's `langfuse_otel`
-    # callback here: under the Router path it can race with our manual span
-    # lifecycle and try to mutate spans after close, which shows up as
-    # "Setting attribute on ended span" in Celery logs and null-ish LangFuse
-    # traces. Keep only the lightweight cost callback.
+    # (mutates spans after close → "Setting attribute on ended span"). Cost callback only.
     try:
         import litellm
-        # Per-call cost attaches as a LangFuse score on the trace.
-        # Function-callback shape only; no extra LiteLLM trace callback.
         from .litellm_callbacks import cost_callback as _cost_cb
         succ_now = list(litellm.success_callback or [])
         if _cost_cb not in succ_now:
@@ -70,7 +57,6 @@ def init_otel(also_instrument_fastapi_app=None) -> bool:
     global _otel_initialized, _tracer, _meter
 
     if _otel_initialized:
-        # Re-call may still bring a fresh FastAPI app — instrument it.
         if also_instrument_fastapi_app is not None:
             try:
                 from opentelemetry.instrumentation.fastapi import (
@@ -91,24 +77,16 @@ def init_otel(also_instrument_fastapi_app=None) -> bool:
         from opentelemetry import trace
         from opentelemetry.sdk.trace import TracerProvider
 
-        # Attach log filter BEFORE exporters so the first failed export is
-        # already rate-limited (collector-down at startup is common).
         quiet_otel_export_logs()
 
         resource = build_resource()
         tracer_provider = TracerProvider(resource=resource)
 
-        # Mirror allow-listed baggage entries (study_id / channel_id /
-        # digest_id / framework / session_id / user_id …) onto every child
-        # span's attributes. Attach BEFORE exporters so the mirroring is in
-        # place by the time the first span is produced.
         from .baggage import get_baggage_processor
         if (bsp := get_baggage_processor()) is not None:
             tracer_provider.add_span_processor(bsp)
             logger.info("[otel] BaggageSpanProcessor attached")
 
-        # At least one SHOULD attach; if neither does the provider still
-        # installs (spans go nowhere but tracer.start_as_current_span works).
         alloy_ok = add_alloy_exporter(tracer_provider)
         langfuse_ok = add_langfuse_exporter(tracer_provider)
 

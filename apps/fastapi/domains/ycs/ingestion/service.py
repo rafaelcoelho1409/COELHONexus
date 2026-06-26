@@ -3,8 +3,6 @@
 Imperative Shell — ES scroll, Qdrant collection bootstrap, embedding
 dispatch, upsert. Pure projection in `domain.py`, point-id builder in
 `keys.py`.
-
-Direct port of deprecated `services/youtube/ingestion.py:L49-264`.
 Memory-safe: never holds more than one transcript's chunks in memory
 at a time."""
 from __future__ import annotations
@@ -52,7 +50,6 @@ from .params import (
 logger = logging.getLogger(__name__)
 
 
-# ---------- Qdrant collection bootstrap ---------------------------------
 
 async def ensure_collection(
     qdrant: AsyncQdrantClient, dense_dimensions: int,
@@ -80,7 +77,7 @@ async def ensure_collection(
         has_sparse_slot = (
             isinstance(sparse_cfg, dict) and "sparse" in sparse_cfg
         )
-        # Dimension check (2026-06-10): an embedder-model change (env
+        # Dimension check : an embedder-model change (env
         # `NVIDIA_EMBEDDING_MODEL`) silently passes the slot-name check
         # but every upsert then 400s with a vector-size mismatch.
         # Vectors aren't comparable across models anyway — recreate.
@@ -121,7 +118,7 @@ async def ensure_collection(
             f"[ycs:ingestion] created collection {QDRANT_COLLECTION!r} "
             f"dim={dense_dimensions}"
         )
-    # Payload keyword indexes (2026-06-10) — `video_id` backs the
+    # Payload keyword indexes — `video_id` backs the
     # per-video delete/skip filters, `channel_id` backs the Ask page's
     # channel pre-filter. Without them Qdrant falls back to full scans
     # once the corpus grows. Idempotent: re-creating an existing index
@@ -138,7 +135,6 @@ async def ensure_collection(
     return created
 
 
-# ---------- ES scroll iterators -----------------------------------------
 
 async def _scroll_transcripts(
     es: AsyncElasticsearch,
@@ -209,7 +205,6 @@ async def fetch_transcripts_from_es(
     return out
 
 
-# ---------- main pipeline -----------------------------------------------
 
 async def ingest_to_qdrant(
     es: AsyncElasticsearch,
@@ -222,7 +217,7 @@ async def ingest_to_qdrant(
     """Streaming pipeline: chunk → embed (dense NIM + sparse BM25) →
     upsert. Memory stays flat regardless of corpus size.
 
-    2026-06-10 REWORK (measured on the live cluster):
+    Reworked (measured on the live cluster):
 
       - CROSS-VIDEO CHUNK PACKING. NIM embedding latency is per-CALL
         dominated (~11-15 s/call whether it carries 5 or 50 texts;
@@ -242,8 +237,6 @@ async def ingest_to_qdrant(
         the new total) in the collection forever.
       - Bulk metadata prefetch (one ES query for all ids, was one per
         video).
-
-    Mirror of deprecated `services/youtube/ingestion.py:L148-264`.
     `progress_cb` (Wave 5 polish) receives per-transcript dicts so the
     Celery task wrapper can pipe them into `self.update_state(meta=)`."""
     dense_embeddings = create_dense_embeddings()

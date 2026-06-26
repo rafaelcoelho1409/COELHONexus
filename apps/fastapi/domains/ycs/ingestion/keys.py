@@ -10,7 +10,6 @@ import hashlib
 
 def point_id(video_id: str, chunk_index: int) -> str:
     """Deterministic Qdrant point id — re-ingesting the same chunk
-    overwrites the existing point in place. Mirror of deprecated
-    `_deterministic_id` (`ingestion.py:L49-52`)."""
+    overwrites the existing point in place.py:L49-52`)."""
     raw = f"{video_id}_{chunk_index}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()

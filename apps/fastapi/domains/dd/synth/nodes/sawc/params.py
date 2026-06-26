@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-# v2 schema (2026-05-24 evening): cookbook-style nested structure where
+# v2 schema : cookbook-style nested structure where
 # each Subtopic is a 1:1 pair of (explanation, code block).
 SUBTOPICS_MIN = 3
 SUBTOPICS_MAX = 12

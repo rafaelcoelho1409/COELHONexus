@@ -2,7 +2,7 @@
 
 Wraps `domains/ycs/rag/standard` as a sub-graph + adds the FAST
 (direct answer) and DEEP (planner → subagents → synthesize → critic)
-paths. Direct port of deprecated `graphs/youtube/adaptive.py`."""
+"""
 from .graph import build_adaptive_rag_graph
 from .params import (
     CRITIC_FALLBACK_CONFIDENCE,

@@ -4,8 +4,7 @@ Pure projection — no I/O, no LLM. Walks `state["documents"]`,
 deduplicates by `video_id`, builds a `{video_id, title, channel, url,
 source}` row per unique source. The frontend renders these as
 clickable cards.
-
-Direct port of deprecated `graphs/youtube/rag.py:L142-167`."""
+"""
 from __future__ import annotations
 
 from domains.ycs.runtime.observability import traced

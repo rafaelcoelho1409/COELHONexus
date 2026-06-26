@@ -6,8 +6,7 @@ Strategy (Phase 4):
   3. FlashRank cross-encoder reranks
   4. If both arms fail → fall back to ES full-text
   5. If all three fail → return [] (caller's responsibility to rewrite)
-
-Direct port of deprecated `services/youtube/retriever.py:L415-513`."""
+"""
 from __future__ import annotations
 
 import asyncio

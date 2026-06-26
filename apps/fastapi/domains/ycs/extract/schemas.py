@@ -1,8 +1,4 @@
-"""ycs/extract — Pydantic boundary schemas (request inputs + per-video metadata).
-
-Mirror of deprecated `schemas/youtube/inputs.py` VideosRequest /
-ChannelRequest / PlaylistRequest + the projected video shape from
-`helpers.py:L441-531` (`YtDlpExtractor._normalize_video`)."""
+"""ycs/extract — Pydantic boundary schemas (request inputs + per-video metadata).py:L441-531` (`YtDlpExtractor._normalize_video`)."""
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -66,8 +62,7 @@ class PlaylistPipelineRequest(BaseModel):
 
 
 class VideoMetadata(BaseModel):
-    """Per-video record returned by the extractor. Mirror of deprecated
-    `helpers.py:L441-531` (`YtDlpExtractor._normalize_video`)."""
+    """Per-video record returned by the extractor._normalize_video`)."""
     model_config = ConfigDict(extra = "allow")
 
     id:                  str
@@ -130,8 +125,7 @@ class PlaylistResult(BaseModel):
 
 
 class ChannelResult(BaseModel):
-    """Channel envelope. Mirror of deprecated `helpers.py:L391-439` (the
-    channel branch builds the same shape as playlist)."""
+    """Channel envelope."""
     model_config = ConfigDict(extra = "forbid")
 
     channel_id:        str | None = None

@@ -1,6 +1,5 @@
 """ycs/rag/standard/nodes/hallucination — grounding-judge prompt + version.
-
-Direct port of deprecated `schemas/youtube/prompts.py:L38-55`."""
+"""
 from __future__ import annotations
 
 from langchain_core.prompts import ChatPromptTemplate

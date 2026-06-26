@@ -1,6 +1,5 @@
 """ycs/embeddings — NIM dense + FastEmbed BM25 sparse for Qdrant hybrid.
-
-Direct port of deprecated `services/youtube/embeddings.py`. Does NOT
+Does NOT
 route through the LLM rotator (`docs/YCS-PORT-PLAN-2026-06-06.md`
 Wave 3.1 — deprecated didn't, so neither do we).
 

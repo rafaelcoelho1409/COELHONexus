@@ -161,7 +161,7 @@ def build_adaptive_rag_graph(
         return await direct_answer(state, llm)
 
     async def _run_standard(state, config: RunnableConfig):
-        # 2026-06-16 — `config` arg is auto-injected by LangGraph so we
+        # `config` arg is auto-injected by LangGraph so we
         # can forward the user's `max_retries` down to the scoped
         # STANDARD sub-graph (previously the override silently fell
         # back to the sub-graph's default 3). See
@@ -176,13 +176,11 @@ def build_adaptive_rag_graph(
         # Sub-agents inherit the channel scope from the parent state.
         # Concurrency is gated by a process-wide semaphore (cap=5,
         # matching the max sub-question count) so a typical DEEP plan
-        # runs all sub-agents in a single parallel wave. Build the
         # scoped graph INSIDE the gate — the StateGraph compilation
         # isn't free and we don't want to materialise N sub-graphs for
         # waiting sub-agents that haven't acquired yet (only matters
         # if the env override raises N above the cap).
-        #
-        # 2026-06-16 — also forward the parent rotator `llm` so the
+        # also forward the parent rotator `llm` so the
         # sub-agent can run a single rephrased-question retry when its
         # first STANDARD invocation returns `no_docs`. The retry path
         # lives inside `run_subagent` (see its docstring + the

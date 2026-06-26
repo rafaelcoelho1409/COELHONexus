@@ -1,9 +1,5 @@
 """Resource + exporter builders for Alloy (gRPC) and LangFuse v3 (HTTP).
-
-Each is best-effort: failure logs + returns False so a flaky backend doesn't
-block init. Ported from apps/fastapi/infra/otel/exporters.py with the
-service-name resolution adapted for the peer-app override pattern.
-"""
+Each is best-effort: failure logs + returns False so a flaky backend doesn't block init."""
 from __future__ import annotations
 
 import base64
@@ -128,10 +124,7 @@ class LangFuseFilterProcessor(SpanProcessor):
 
 
 class LangFuseFilterExporter(SpanExporter):
-    """Exporter-side LangFuse allow-list.
-
-    This is the reliable last gate before OTLP/HTTP export.
-    """
+    """Last gate before OTLP/HTTP export; drops spans not matching the allow-list."""
 
     _gate = _LangFuseSpanGate()
 
@@ -155,16 +148,8 @@ class LangFuseFilterExporter(SpanExporter):
 
 
 def _resolve_service_name() -> str:
-    """Peer-app override pattern.
-
-    The shared `coelhonexus.commonEnvVars` Helm helper sets
-    `OTEL_SERVICE_NAME=coelhonexus-fastapi` for *every* pod (it predates the
-    multi-peer-app split). To avoid fastmcp spans being misattributed to
-    fastapi in Tempo/LangFuse we check `OTEL_FASTMCP_SERVICE_NAME` first
-    (set in this app's configmap). Falls back through the shared env to the
-    hardcoded `coelhonexus-fastmcp` default — so traces are correctly named
-    even if the configmap forgets the override.
-    """
+    """Check OTEL_FASTMCP_SERVICE_NAME first — the shared Helm helper sets OTEL_SERVICE_NAME=coelhonexus-fastapi
+    for every pod, which would misattribute fastmcp spans in Tempo/LangFuse."""
     return (
         os.environ.get("OTEL_FASTMCP_SERVICE_NAME")
         or os.environ.get("OTEL_SERVICE_NAME")
@@ -188,9 +173,7 @@ def build_resource() -> Resource:
         for pair in extra.split(","):
             if "=" in pair:
                 k, v = pair.split("=", 1)
-                # Don't let `OTEL_RESOURCE_ATTRIBUTES` overwrite the resolved
-                # service.name — it's set by commonEnvVars to fastapi's name.
-                if k.strip() == "service.name":
+                if k.strip() == "service.name":  # commonEnvVars sets this to fastapi's name; don't overwrite
                     continue
                 attrs[k.strip()] = v.strip()
     return Resource.create(attrs)

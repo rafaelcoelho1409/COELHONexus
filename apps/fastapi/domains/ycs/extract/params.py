@@ -1,7 +1,4 @@
-"""ycs/extract — yt-dlp metadata extraction tunables.
-
-Mirror of deprecated `YtDlpExtractor.__init__` defaults
-(`helpers.py:L74-82`) + the aggregate-timeout clamp for playlist/channel
+"""ycs/extract — yt-dlp metadata extraction tunables.py:L74-82`) + the aggregate-timeout clamp for playlist/channel
 extraction (`helpers.py:L349,L398`)."""
 from __future__ import annotations
 
@@ -15,7 +12,6 @@ TIMEOUT_PER_VIDEO_S = 60.0
 
 # Channel / playlist extraction can be MUCH longer. Dynamic budget:
 #   timeout = clamp(max_results * SECONDS_PER_VIDEO, MIN, MAX)
-# Mirror of deprecated `helpers.py:L349,L398`.
 SECONDS_PER_VIDEO = 10
 MIN_AGGREGATE_TIMEOUT_S = 120
 MAX_AGGREGATE_TIMEOUT_S = 1800

@@ -1,6 +1,5 @@
 """ycs/rag/adaptive/nodes/classify — query-complexity + scope-detect prompt.
-
-Direct port of deprecated `schemas/youtube/prompts.py:L74-101`. Single
+Single
 LLM call returns BOTH the mode (`fast` / `standard` / `deep`) and any
 channel/person names mentioned in the query — the latter feeds the
 auto-scope lookup against Neo4j."""

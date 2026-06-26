@@ -2,15 +2,7 @@
 from __future__ import annotations
 
 
-# Token-counted chunking (2026-05-25 — replaces the legacy CHUNK_CHARS=8000
-# heuristic which used only ~25% of the model's 8192-token capacity because
-# it conflated chars and tokens).
-#
-# Llama-3-family BPE tokenizers (which `llama-nemotron-embed-1b-v2` uses)
-# vary 2.5-4 chars/token depending on content density. The old char-based
-# cap was either over-strict on English (~25% waste) or risked overflow on
-# heavy-code chunks. Token-based caps are byte-for-byte correct.
-#
+# Token-counted chunking: Llama BPE varies 2.5-4 chars/token; the legacy char-based cap (CHUNK_CHARS=8000) used only ~25% of model capacity and risked overflow on heavy-code chunks.
 # TOKEN_TARGET = 7800 leaves ~5% headroom (392 tokens) for:
 #   - special tokens added by AutoTokenizer (`add_special_tokens=False`
 #     prevents most, but NIM may inject input_type prefix server-side)

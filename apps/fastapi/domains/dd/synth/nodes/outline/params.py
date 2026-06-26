@@ -3,7 +3,7 @@ headings, USC vote tuning."""
 from __future__ import annotations
 
 
-# v4 (2026-05-29 PM) — see versions.py rationale.
+# see versions.py rationale.
 SECTIONS_MIN = 2
 SECTIONS_MAX = 40
 MAX_STAGE_DEPTH = 4
@@ -13,7 +13,7 @@ OUTLINE_ADAPTIVE_FLOOR    = 2
 OUTLINE_ADAPTIVE_CEILING  = 10
 OUTLINE_ADAPTIVE_DIVISOR  = 4
 
-# CORR-3 Q3 (2026-05-26) — fuzzy H2 dedup threshold.
+# fuzzy H2 dedup threshold.
 OUTLINE_H2_FUZZY_DEDUP_THRESHOLD = 0.85
 
 MAX_PREREQS_PER_NODE = 3

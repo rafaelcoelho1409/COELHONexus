@@ -1,7 +1,4 @@
 """ycs/transcript — Playwright CDP transcript-extraction.
-
-Direct port of deprecated `routers/v1/youtube/helpers.py:L744-1773`.
-
 Public surface (verbatim deprecated):
   PlaywrightTranscriptService     — class with init / fetch / close
   get_transcript_service()        — lazy singleton accessor

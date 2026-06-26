@@ -209,7 +209,6 @@ async def chapter_propose_run(state: PlannerState) -> dict:
         n_files = n, distill_available = bool(distill_ref),
     )
 
-    # Load distillates (if available) AND raw bodies (always, for seeds).
     distillates_map = None
     if distill_ref:
         distillates_map = await load_distillates(minio, slug)

@@ -22,13 +22,10 @@ class QueryNotAllowed(Exception):
     """Raised when a raw query fails the read-only checks."""
 
 
-# ---------------------------------------------------------------------- #
 # Cypher
-# ---------------------------------------------------------------------- #
 # Match a write-keyword as a WHOLE TOKEN (word boundaries) outside of
 # string literals. Matched in lowercase against a literal-stripped copy
 # of the query so a sneaky `"CREATE ..."` inside a string property doesn't
-# trigger a false positive. Includes APOC write procedures and the
 # graph-projection procedures that mutate state.
 _CYPHER_WRITE_KEYWORDS: tuple[str, ...] = (
     "create", "merge", "delete", "set", "remove",
@@ -49,7 +46,6 @@ _CYPHER_WRITE_PROC = re.compile(
     flags = re.IGNORECASE,
 )
 
-# Strip Cypher string literals (single + double + backtick-quoted ids)
 # before scanning for keywords. Cypher escapes are `\"` / `\\` etc.
 _CYPHER_STRING = re.compile(
     r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|`(?:\\.|[^`\\])*`",
@@ -93,9 +89,7 @@ def assert_cypher_readonly(query: str) -> None:
         )
 
 
-# ---------------------------------------------------------------------- #
 # Elasticsearch
-# ---------------------------------------------------------------------- #
 @dataclass(frozen=True, slots=True)
 class ParsedESBody:
     """Validated ES request payload. Holds the raw dict (returned to the
@@ -159,9 +153,7 @@ def parse_es_body(text: str) -> ParsedESBody:
     return ParsedESBody(body = body, synth_size = synth)
 
 
-# ---------------------------------------------------------------------- #
 # Qdrant
-# ---------------------------------------------------------------------- #
 @dataclass(frozen=True, slots=True)
 class ParsedQdrantOp:
     """One of {`search`, `scroll`, `query_points`} + the validated body."""

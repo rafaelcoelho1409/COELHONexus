@@ -1,15 +1,5 @@
-"""Bootstrap orchestration + module-singleton accessors.
-
-Ported from apps/fastapi/infra/otel/service.py, trimmed for the fastmcp
-peer app:
-  - No FastAPI app instrumentation (this is Starlette via fastmcp.http_app()).
-  - No Celery worker init (no Celery here).
-  - Keeps httpx + logging instrumentation (the source tools all use httpx;
-    trace_id correlation in logs lets Loki ↔ Tempo cross-jump).
-
-`init_otel()` is idempotent — called once at module import in
-apps/fastmcp/server.py.
-"""
+"""OTel bootstrap for the fastmcp peer app. No FastAPI/Celery instrumentation; httpx+logging only.
+`init_otel()` is idempotent."""
 from __future__ import annotations
 
 import logging
@@ -38,9 +28,6 @@ def _instrument_libraries() -> None:
         logger.debug(f"[otel] httpx instrumentation skipped: {e}")
     try:
         from opentelemetry.instrumentation.logging import LoggingInstrumentor
-        # Inject trace_id + span_id into log records so Loki ↔ Tempo can
-        # correlate. `basicConfig()` is already configured by the entrypoint;
-        # setting this True makes the record factory populate the OTel fields.
         LoggingInstrumentor().instrument(set_logging_format=True)
     except Exception as e:
         logger.debug(f"[otel] logging instrumentation skipped: {e}")
@@ -59,15 +46,11 @@ def init_otel() -> bool:
         from opentelemetry import trace
         from opentelemetry.sdk.trace import TracerProvider
 
-        # Attach log filter BEFORE exporters so the first failed export is
-        # already rate-limited (collector-down at startup is common).
         quiet_otel_export_logs()
 
         resource = build_resource()
         tracer_provider = TracerProvider(resource=resource)
 
-        # At least one SHOULD attach; if neither does the provider still
-        # installs (spans go nowhere but tracer.start_as_current_span works).
         alloy_ok = add_alloy_exporter(tracer_provider)
         langfuse_ok = add_langfuse_exporter(tracer_provider)
 

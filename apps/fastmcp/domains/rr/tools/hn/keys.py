@@ -10,7 +10,6 @@ Source: https://hn.algolia.com/api (the `tags` parameter)
 from __future__ import annotations
 
 
-# Default: stories only. The radar cares about top-level posts (which carry
 # the points + comment signal); comments are usually too granular to surface
 # in a daily digest.
 DEFAULT_TAGS: tuple[str, ...] = ("story",)

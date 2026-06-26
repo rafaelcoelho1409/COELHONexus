@@ -1,19 +1,7 @@
-"""OTel span helpers for YCS RAG nodes — mirrors DD planner/synth
-observability shape.
+"""OTel span helpers for YCS RAG nodes — mirrors DD planner/synth observability.
 
-`@traced("name")` wraps any async node coroutine so its execution becomes
-a top-level OTel span. The span is emitted by the global tracer provider
-configured by `infra.otel.init_otel()` — which dual-exports to Alloy
-(gRPC → Tempo) AND LangFuse v3 (HTTP → LLM observations).
-
-In LangFuse, each wrapped node shows up as its own observation under the
-trace whose id matches `state["thread_id"]` (when present). That's how we
-get per-node visibility on the adaptive + standard RAG sub-graphs instead
-of one opaque pipeline-task blob from CeleryInstrumentor.
-
-`attach_span_attrs(prefix, attrs)` attaches a node's stats dict to the
-currently-active span so the LangFuse observation carries the per-node
-metrics tree (retrieved doc count, grader scores, hallucination flag, etc.).
+`@traced("name")` wraps a node into a top-level OTel span (dual-export: Alloy gRPC + LangFuse).
+`attach_span_attrs(prefix, attrs)` attaches a stats dict to the currently-active span.
 """
 from __future__ import annotations
 
@@ -30,10 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def traced(name: str) -> Callable:
-    """Decorate `async def node(state, *args, **kwargs) -> dict` so each
-    invocation is a top-level OTel span. State's `thread_id` / `question` /
-    channel context are attached as span attributes so LangFuse can group
-    spans into a trace and Tempo can filter by user query."""
+    """Wrap an async node so each invocation becomes a top-level OTel span."""
     def decorator(fn: Callable[..., Awaitable[dict]]):
         @functools.wraps(fn)
         async def wrapper(state: dict, *args, **kwargs) -> dict:
@@ -68,9 +53,7 @@ def traced(name: str) -> Callable:
 
 
 def attach_span_attrs(prefix: str, attrs: dict) -> None:
-    """Set namespaced attributes on the currently-active OTel span. No-op
-    if OTel isn't initialized. None values are skipped — the OTel backend
-    rejects them."""
+    """Set namespaced attributes on the current OTel span; no-op if uninitialized; None values skipped."""
     try:
         span = _otel_trace.get_current_span()
         for k, v in attrs.items():

@@ -1,6 +1,5 @@
 """ycs/rag/standard/nodes/hallucination — structured-output Pydantic.
-
-Direct port of deprecated `schemas/youtube/agents.py:L43-53`. Two
+Two
 booleans — `grounded` (no fabricated facts) AND `addresses_question`
 (answer actually responds to the prompt). The graph routing AND's the
 two together (deprecated `rag.py:L134`).

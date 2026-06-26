@@ -1,6 +1,5 @@
 """ycs/rag/standard/nodes/rewrite — query-rewrite prompt + version.
-
-Direct port of deprecated `schemas/youtube/prompts.py:L23-36`."""
+"""
 from __future__ import annotations
 
 from langchain_core.prompts import ChatPromptTemplate

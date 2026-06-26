@@ -11,7 +11,7 @@ If DeepAgents v0.6's `response_format` doesn't accept Pydantic v2 models
 directly (some versions need a JSON schema dict), we have a compatibility
 fallback in agent/graph.py that calls `.model_json_schema()`.
 
-2026-06-15: Added DigestSchema. The report subagent now binds it via
+Added DigestSchema. The report subagent now binds it via
 SubAgent.response_format so the LLM cannot emit malformed JSON (the
 `Invalid \\uXXXX escape` / `Expecting ',' delimiter` bug class). The
 framework's tool-strategy injects a `respond_in_format` tool the LLM
@@ -25,12 +25,11 @@ from pydantic import BaseModel, Field, model_validator
 
 
 # Phase names the orchestrator MUST cover before it's allowed to emit
-# ScanComplete. Used by the completeness validator (2026-06-15) to force
+# ScanComplete. Used by the completeness validator to force
 # the LLM to actually dispatch synthesis rather than terminate after
 # deep_read. The PhaseEnforcer middleware is the fs-level truth check;
 # this Pydantic gate is the cheap structural layer.
-#
-# 2026-06-16 (post-f52fb84a): `report` dropped — synthesis now owns
+# `report` dropped — synthesis now owns
 # per-paper themes via write_synthesis_report.per_paper_themes, and
 # `_build_digest_from_fs` assembles the digest in Python. The report
 # subagent isn't dispatched anymore, so requiring it in phases would
@@ -62,7 +61,7 @@ class ScanComplete(BaseModel):
     digest here (that's persisted via the dedicated path). What we capture
     is the orchestrator's own status report.
 
-    2026-06-15 COMPLETENESS GATE: a `@model_validator(mode='after')` REJECTS
+    COMPLETENESS GATE: a `@model_validator(mode='after')` REJECTS
     the response if synthesis or report are missing/not-completed from
     `phases`, or if `n_findings == 0`, or if the summary is a placeholder
     (the `_build_digest_from_fs` fallback "Top N papers from this radar
@@ -106,13 +105,11 @@ class ScanComplete(BaseModel):
         return self
 
 
-# --------------------------------------------------------------------------- #
 # Digest schemas — bound to the report subagent via response_format= so the
 # LLM's terminal output is structurally validated. Mirrors the shape in
 # agent/skills/digest_rendering.md (which still drives the LLM's behaviour
 # during the gather-data phase). Schema doc-strings ARE the prompt for the
 # LLM-driven respond_in_format() tool call.
-# --------------------------------------------------------------------------- #
 class DigestExtraction(BaseModel):
     """Per-paper deep_read extraction, lifted from fs/extractions/{arxiv_id}.json."""
     arxiv_id:     str   = Field(description="Canonical arXiv id (no version suffix).")

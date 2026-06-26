@@ -22,7 +22,7 @@ class SignalWeights:
     (the radar_profiles.weights JSONB is decoded into a SignalWeights
     with this dataclass's defaults as fallbacks for unspecified fields).
     """
-    # Recency weight raised 0.15 → 0.20 (2026-06-14) to fix the
+    # Recency weight raised 0.15 → 0.20 to fix the
     # arxiv-only ranking degeneracy. When profile_embedding + citations +
     # HN/HF/S2 buzz all collapse to 0 (the common arxiv-only-source path),
     # the only differentiator left between an April-2025 paper and a 2018
@@ -35,7 +35,7 @@ class SignalWeights:
     vertical_fit:        float = 0.15   # paper.categories ∩ profile.verticals
     cross_tier_buzz:     float = 0.10   # log1p(hn_points) + log1p(hf_upvotes)
     has_code:            float = 0.05   # PapersWithCode presence (v2 signal)
-    # 2026-06-16: soft bias toward items with an arxiv_id when both
+    # soft bias toward items with an arxiv_id when both
     # research papers and HN product posts are in the candidate pool.
     # Scan 28094718 had arxiv=0+hf=14+hn=5; with HF as the only paper
     # source the top-4 filled with 1 paper + 3 HN product announcements
@@ -49,7 +49,7 @@ class SignalWeights:
 @dataclass(frozen=True, slots=True)
 class DomainParams:
     """Non-weight constants used by the scoring helpers."""
-    # Half-life raised 30 → 180 (2026-06-14) — 30 days was tuned for the
+    # Half-life raised 30 → 180 — 30 days was tuned for the
     # cross-tier buzz lifecycle (HN posts go stale fast), but the arxiv
     # corpus operates on a months-to-years timescale. With 30-day half-
     # life, a 6-month-old paper got recency ≈ 0.015 (essentially zero),

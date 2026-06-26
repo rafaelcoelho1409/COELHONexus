@@ -1,6 +1,5 @@
 """ycs/extract — Celery tasks: yt-dlp metadata + Playwright transcripts → ES.
-
-Direct port of deprecated `tasks/youtube/crawler.py:L41-292`. Three tasks
+Three tasks
 (one per ingestion mode: by video IDs, by channel, by playlist). Each:
   1. opens a fresh `AsyncElasticsearch` for the worker process
   2. dispatches `YtDlpExtractor.extract_{batch,channel,playlist}`
@@ -67,9 +66,7 @@ def _project_video_meta(v: dict[str, Any]) -> dict[str, Any]:
 logger = get_task_logger(__name__)
 
 
-# =============================================================================
 # Fresh client factory (Celery worker process)
-# =============================================================================
 def _get_es_client() -> AsyncElasticsearch:
     """Build a fresh ES client owned by the running Celery task. The infra
     `get_es()` singleton lives in the FastAPI process; the Celery worker
@@ -85,22 +82,13 @@ def _get_es_client() -> AsyncElasticsearch:
     )
 
 
-# =============================================================================
 # Async implementations (called via asyncio.run from the Celery tasks)
-# =============================================================================
 async def _extract_videos_async(
     video_ids:             list[str],
     include_transcription: bool,
     languages:             list[str] | None,
     progress_cb:           ProgressCb | None = None,
 ) -> dict[str, Any]:
-    """Port of deprecated `_extract_videos_async` (crawler.py:L41-95).
-
-    `progress_cb` (Wave 5 polish) receives stage dicts so the Celery
-    task wrapper can pipe them into `self.update_state(meta=...)`. The
-    FastHTML Ingest page polls Celery `meta` and renders a live progress
-    bar + current-video metadata card. When `progress_cb is None` the
-    behavior is identical to the pre-polish code."""
     es = _get_es_client()
     extractor = get_extractor()
     try:
@@ -116,14 +104,12 @@ async def _extract_videos_async(
             for v in videos
         ]
         es_metadata = await index_videos_to_elasticsearch(es, videos_dicts)
-        # Build the {video_id → projected metadata} map once; the
         # transcript progress callback uses it to surface the most
         # recently completed video to the UI.
         videos_meta_map: dict[str, dict[str, Any]] = {
             v["id"]: _project_video_meta(v)
             for v in videos_dicts if v.get("id")
         }
-        # Emit `all_items` now so the FastHTML Ingest panel's right-
         # column video list can render with titles + channels
         # immediately — before any transcript fetch finishes. Otherwise
         # the user would stare at video_ids until Phase 1 completes,
@@ -245,7 +231,6 @@ async def _extract_channel_async(
     include_transcription: bool,
     languages:             list[str] | None,
 ) -> dict[str, Any]:
-    """Port of deprecated `_extract_channel_async` (crawler.py:L98-157)."""
     es = _get_es_client()
     extractor = get_extractor()
     try:
@@ -317,7 +302,6 @@ async def _extract_playlist_async(
     include_transcription: bool,
     languages:             list[str] | None,
 ) -> dict[str, Any]:
-    """Port of deprecated `_extract_playlist_async` (crawler.py:L160-219)."""
     es = _get_es_client()
     extractor = get_extractor()
     try:
@@ -382,9 +366,7 @@ async def _extract_playlist_async(
         await es.close()
 
 
-# =============================================================================
 # Celery tasks (sync wrappers — Celery is sync by default)
-# =============================================================================
 @app.task(
     bind = True,
     name = "domains.ycs.extract.task.extract_videos",

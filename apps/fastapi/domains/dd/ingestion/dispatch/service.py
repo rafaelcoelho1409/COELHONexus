@@ -304,7 +304,6 @@ async def _run_inner(run_id: str, slug: str) -> dict:
         }
 
     finally:
-        # Stop watcher BEFORE Redis teardown — its next is_cancelled would race aclose().
         watcher_task.cancel()
         try:
             await watcher_task

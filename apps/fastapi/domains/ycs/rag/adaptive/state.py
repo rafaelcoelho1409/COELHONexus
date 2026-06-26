@@ -3,8 +3,7 @@
 Wraps `YouTubeRAGState` fields + DEEP-mode accumulators. `sub_results`
 uses `operator.add` so parallel sub-agents (via LangGraph `Send()`)
 accumulate without overwriting.
-
-Direct port of deprecated `schemas/youtube/state.py:L30-59`."""
+"""
 from __future__ import annotations
 
 import operator

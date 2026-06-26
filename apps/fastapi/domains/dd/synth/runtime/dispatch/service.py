@@ -431,9 +431,7 @@ async def _run_book_harmonize_impl(
     study_thread_id: str,
     chapter_ids: list[str],
 ) -> dict:
-    """Inner implementation of book_harmonize — wrapped by _run_book_harmonize
-    so the whole dispatch path is one OTel span. Splitting keeps the span
-    open across all return paths without indenting the entire body."""
+    """Wrapped by _run_book_harmonize to keep the OTel span open across all return paths."""
     minio = get_storage()
     entry = index_by_slug().get(slug, {})
     framework_name = entry.get("name") or entry.get("slug") or slug
@@ -523,13 +521,7 @@ async def _run_book_harmonize_impl(
             "error": str(e)[:240],
         }
 
-    # `harmonize_book` returns the key as "patches" (not the old
-    # "patched_chapters") with each entry shaped {chapter_id, patched:
-    # bool, new_prose: str | None, n_violations, ...}. The previous
-    # iteration looked up the wrong key, so the writeback loop ran zero
-    # iterations every time — `n_overwritten` was stuck at 0 even when
-    # the LLM successfully produced patched prose (browser-use run
-    # 2026-06-08: 3 issues, 2 patched, 0 overwritten visible to the UI).
+    # harmonize_book returns "patches" not "patched_chapters"; wrong key = writeback loop never ran.
     n_overwritten = 0
     for patched in (result.get("patches") or []):
         if not patched.get("patched"):
@@ -587,8 +579,7 @@ def make_thread_id(slug: str) -> str:
 
 
 def make_study_thread_id(slug: str) -> str:
-    """Per-study orchestrator thread_id; distinct prefix from per-chapter
-    so SQL/Redis pattern-matchers can tell them apart."""
+    """Per-study thread_id with distinct prefix from per-chapter for Redis/SQL pattern matching."""
     return f"{STUDY_THREAD_PREFIX}/{slug}/{uuid.uuid4()}"
 
 
@@ -616,9 +607,7 @@ async def _persist_study_timing(
     session_wall_ms: int,
     finished_ts: float,
 ) -> None:
-    """Best-effort write of the study timing blob. Total = cumulative
-    per-chapter wall + book_harmonize (resume-stable; session wall under-
-    counts on a resume that skips rendered chapters)."""
+    """Best-effort write of study timing; total = cumulative chapter wall + harmonize (resume-stable)."""
     total = sum(int(v) for v in per_chapter_ms.values()) + int(harmonize_ms)
     payload = {
         "slug":            slug,
@@ -725,8 +714,7 @@ async def _run_study_async_inner(
 ) -> dict:
     n_total = len(chapter_ids)
     study_t0 = time.monotonic()
-    # Seed per-chapter timing from a prior blob so SKIPPED chapters this
-    # run keep their previously-measured time instead of dropping to 0 on resume.
+    # Seed from prior blob so skipped-on-resume chapters keep their measured time.
     chapter_ms: dict[str, int] = {}
     try:
         _prior = json.loads(await get_storage().read_text(study_timing_key(slug)))
@@ -753,8 +741,6 @@ async def _run_study_async_inner(
             counters["cancelled"] = True
             return
 
-        # RESUME — skip chapters whose render-latest.json already exists.
-        # Wipe Synth deletes render-latest.json, so post-wipe re-renders all.
         try:
             _minio = get_storage()
             if await _minio.exists(
@@ -817,12 +803,6 @@ async def _run_study_async_inner(
             )
             try:
                 await clear_cancel(r, chapter_thread_id)
-                # Register THIS chapter as active so the study-level cancel
-                # endpoint can propagate to it BEFORE the chapter graph has
-                # had a chance to emit its first progress event. The
-                # snapshot-scan path misses chapters in this just-spawned
-                # window, leaving the spinner stuck while the chapter runs
-                # to completion.
                 try:
                     await r.sadd(
                         f"dd:study:{study_thread_id}:active_chapters",
@@ -875,9 +855,6 @@ async def _run_study_async_inner(
                     await watcher_task
                 except (asyncio.CancelledError, Exception):
                     pass
-                # Drop this chapter from the active-chapter set so a
-                # later cancel doesn't try to set a flag on a completed
-                # chapter (harmless but noisy).
                 _rc = redis_aio.from_url(
                     redis_url(),
                     socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,
@@ -990,8 +967,6 @@ async def _run_study_async_inner(
             )
             harmonize_stats = {"skipped": f"crash: {type(e).__name__}"}
 
-    # Hybrid timing roll-up — persisted so it survives refresh + shows on
-    # cached studies; navbar total = cumulative chapter wall + harmonize.
     harmonize_ms = int((harmonize_stats or {}).get("elapsed_ms", 0) or 0)
     session_wall_ms = int((time.monotonic() - study_t0) * 1000)
     total_wall_ms = sum(int(v) for v in chapter_ms.values()) + harmonize_ms
@@ -1024,7 +999,6 @@ async def _run_study_async_inner(
         n_failed = n_failed,
         n_total = n_total,
     )
-    # Clear the live-run registry so a refresh doesn't reconnect to a finished study.
     try:
         _rc = redis_aio.from_url(
             redis_url(),

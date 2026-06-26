@@ -118,7 +118,7 @@ def build_youtube_rag_graph(
         return await rewrite_query(state, llm)
 
     async def _fallback(state):
-        # 2026-06-16 — CRAG graceful-degradation rescue. Receives the
+        # CRAG graceful-degradation rescue. Receives the
         # same `YouTubeRAGState` every other node sees so it can read
         # `conversation_history` for meta / follow-up resolution and
         # `question` for the literal user intent.

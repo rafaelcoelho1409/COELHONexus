@@ -57,8 +57,7 @@ from .versions import (
 logger = logging.getLogger(__name__)
 
 
-# Cache key (Ship #5, 2026-05-24)
-def compute_harmonize_manifest_hash(chapters: list[dict]) -> str:
+# Cache key def compute_harmonize_manifest_hash(chapters: list[dict]) -> str:
     """Content-addressed cache key for the cross-chapter harmonization pass.
 
     Includes:
@@ -245,7 +244,6 @@ async def harmonize_book(
             "skipped": "less_than_2_chapters",
         }
 
-    # === Phase 1: extract atomic claims + terms per chapter ===
     sem = asyncio.Semaphore(_PER_CHAPTER_CONCURRENCY)
     extractions = await asyncio.gather(*[
         _extract_claims_and_terms(sem, ch) for ch in chapters
@@ -269,10 +267,8 @@ async def harmonize_book(
             "skipped": "no_claims_extracted",
         }
 
-    # === Canonicalize terms (1 LLM call total) ===
     canonical_terms = await _canonicalize_terms(framework_name, terms_by_id)
 
-    # === Phase 2: detect (1 LLM call per chapter, parallel) ===
     detections = await asyncio.gather(*[
         _detect_violations(
             sem=sem,
@@ -285,7 +281,6 @@ async def harmonize_book(
         for ch in chapters
     ])
 
-    # === Phase 3: patch only chapters with violations ===
     patches: list[dict] = []
     n_with_issues = 0
     n_patched = 0

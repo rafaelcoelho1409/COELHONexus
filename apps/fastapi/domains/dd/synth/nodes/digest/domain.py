@@ -89,7 +89,7 @@ def merge_overlapping_sections(
     containment: float = MERGE_CONTAINMENT,
     min_primary_to_defend: int = MERGE_MIN_PRIMARY_TO_DEFEND,
 ) -> tuple[list[SourceDigest], dict[str, str]]:
-    """Fix #3 (DD-SYNTH-SECTION-COUNT, 2026-05-29 PM) — fold sections whose
+    """Fold sections whose
     PRIMARY source pools overlap heavily into a single section.
 
     This is the definitive overlap signal the outline-time heading/embedding
@@ -395,7 +395,6 @@ def derive_source_title_fallback(md_text: str, source_key: str) -> str:
     # Fallback: derive from filename
     base = source_key.rsplit("/", 1)[-1] or source_key
     base = base.rsplit(".", 1)[0]
-    # Strip leading 4-digit index pattern (e.g. "0022-foo")
     base = re.sub(r"^\d+-", "", base)
     title = " ".join(p.capitalize() for p in base.split("-")[:8])
     return title or source_key

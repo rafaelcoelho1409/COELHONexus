@@ -3,8 +3,7 @@
 Merges sub-agent results into a unified analytical report. Citations
 from all sub-results are deduped by `video_id`; retrieval sources are
 union'd.
-
-Direct port of deprecated `graphs/youtube/adaptive.py:L267-311`."""
+"""
 from __future__ import annotations
 
 import asyncio
@@ -59,7 +58,6 @@ async def synthesize(state: AdaptiveRAGState, llm) -> dict:
     except Exception as e:
         generation = f"Synthesis error: {e}"
 
-    # Merge + dedupe citations from all sub-results.
     seen_videos: set[str] = set()
     merged_citations: list[dict] = []
     all_sources: set[str] = set()

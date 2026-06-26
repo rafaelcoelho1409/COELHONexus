@@ -75,7 +75,7 @@ from ....ingestion.storage import get_storage
 
 logger = logging.getLogger(__name__)
 
-# V3 (2026-05-28) — atomic-claim extract cache.
+# atomic-claim extract cache.
 # Extraction is a 1500-token LLM call per chapter. Same prose → same
 # claims under a fixed prompt version, so a per-prose-hash cache turns
 # repeat calls (mgsr_replan loop iterations, re-runs on same plan) into
@@ -117,8 +117,7 @@ Return strict JSON. Cap at {max_claims} most-important claims.
 JSON: {{"claims": ["claim 1", "claim 2", ...]}}"""
 
 
-# CORR-4 (2026-05-26 evening) — softened claim-support semantics.
-#
+# softened claim-support semantics.
 # Empirical: Browser Use Run 2 had 20/30 (ch-01) and 18/28 (ch-02) claims
 # flagged as unsupported. Spot-check: most "unsupported" claims were
 # defensibly TRUE descriptions of code shown in the source — e.g. "the
@@ -127,12 +126,10 @@ JSON: {{"claims": ["claim 1", "claim 2", ...]}}"""
 # strict "explicitly states" criterion correctly fails these by the letter
 # but the SPIRIT of the criterion (is the prose grounded in the source?)
 # considers code demonstration a valid form of support.
-#
 # This is the fix:
 #   1. Prompt teaches the judge that code-based demonstration counts.
 #   2. Threshold relaxed from "zero unsupported" to "<=30% unsupported"
 #      so the criterion no longer requires a flawless 30-claim batch.
-#
 # Method version bump (atomic_claim_v1 → v2) so any downstream cache
 # keyed on `method` invalidates cleanly.
 _JUDGE_PROMPT = """Is the atomic claim at the END faithful to the source documentation?
@@ -175,10 +172,7 @@ _SOURCE_CHARS = 12000
 _EXTRACT_MAX_TOKENS = 1500
 _JUDGE_MAX_TOKENS = 200
 _MIN_CLAIMS_FOR_RUN = 1
-# U2 (2026-05-27) — raised 0.60 → 0.75 after Run 5 evidence.
-#
-# History: 0.0 → 0.30 (CORR-4) → 0.50 (R2) → 0.60 (T2) → 0.75 (U2).
-# Run 5 BU ch-01 landed at 72% unsupported despite all prior softening
+# raised 0.60 → 0.75 after Run 5 evidence.
 # (prompt + threshold). The judge structurally treats code-demonstrated
 # claims as "unsupported" when the source's TEXT doesn't restate the
 # fact verbatim. Spot-check examples from Run 5:
@@ -242,7 +236,7 @@ async def atomic_claim_grounding(
     ]
     n_claims = len(claims)
     n_unsupported = len(unsupported)
-    # CORR-4 — tolerate up to _MAX_UNSUPPORTED_RATIO of unsupported
+    # tolerate up to _MAX_UNSUPPORTED_RATIO of unsupported
     # claims (previously zero-tolerance, which was too strict given
     # code-first documentation often supports claims via demonstration
     # rather than explicit statement).

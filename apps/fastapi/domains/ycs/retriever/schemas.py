@@ -1,6 +1,5 @@
 """ycs/retriever — structured-output Pydantic for the entity-extraction LLM call.
-
-Direct port of deprecated `schemas/youtube/agents.py:L76-80`."""
+"""
 from __future__ import annotations
 
 from pydantic import BaseModel, Field

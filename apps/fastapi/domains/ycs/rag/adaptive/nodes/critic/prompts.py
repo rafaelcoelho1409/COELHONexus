@@ -1,6 +1,5 @@
 """ycs/rag/adaptive/nodes/critic — DEEP-path validation prompt.
-
-Direct port of deprecated `schemas/youtube/prompts.py:L134-152`."""
+"""
 from __future__ import annotations
 
 from langchain_core.prompts import ChatPromptTemplate

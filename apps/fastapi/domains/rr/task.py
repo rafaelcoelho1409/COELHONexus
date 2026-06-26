@@ -48,19 +48,13 @@ from .service import (
 logger = logging.getLogger(__name__)
 
 
-# --------------------------------------------------------------------------- #
-# Task entry — sync wrapper around the async main. Architecture doc §2.6.2.
-# --------------------------------------------------------------------------- #
 @app.task(
     name           = "domains.rr.task.run_radar_scan",
     bind           = True,
     acks_late      = False,
     track_started  = True,
-    # Architecture-doc §2.6.2 calls for soft_time_limit=1800s (30 min).
-    # The agent's LLM cascade can chew that on a cold cache; +5 min hard
-    # cap gives the cleanup paths time to fail loud rather than SIGKILL.
     soft_time_limit = 1800,
-    time_limit      = 2100,
+    time_limit      = 2100,  # +5 min over soft limit; cleanup paths get time to fail loud vs SIGKILL
 )
 def run_radar_scan(
     self,
@@ -99,9 +93,6 @@ def run_radar_scan(
             )
         )
     except Exception as e:
-        # Outer catch — _run_radar_scan_async catches its own and emits
-        # phase=error itself, so this only fires on infra failures (e.g.
-        # asyncio.run setup, missing env vars). Still emit + return.
         logger.exception(f"[rr-task] run_radar_scan failed at outer scope: {e}")
         emit_event_sync(
             scan_id, "error",
@@ -115,9 +106,6 @@ def run_radar_scan(
         }
 
 
-# --------------------------------------------------------------------------- #
-# Async core — the actual orchestration
-# --------------------------------------------------------------------------- #
 async def _run_radar_scan_async(
     scan_id: str,
     profile_id: str,
@@ -216,9 +204,6 @@ async def _run_radar_scan_async_inner(
     """End-to-end async pipeline. Emits phase events as it goes."""
     scan_uuid = UUID(scan_id)
 
-    # 1. Mark the scan running + init the per-scan virtual filesystem.
-    # Persist the request shape so the Recent-scans dropdown can show
-    # what each scan was looking for.
     await begin_scan(
         scan_uuid, profile_id,
         topic     = topic,
@@ -226,10 +211,6 @@ async def _run_radar_scan_async_inner(
         top_n     = top_n,
     )
     init_scan_fs(scan_id)
-    # Bind scan_id into the contextvar that the LLM counter callback
-    # reads on every chat completion. Path-A 2026-06-16: per-phase
-    # rotator-call counters get bumped in Redis as the agent runs,
-    # then the drawer fetches them for KPI cards per pipeline node.
     from .runtime.llm_counter import set_scan as _set_llm_counter_scan
     _set_llm_counter_scan(scan_id)
     emit_event_sync(
@@ -238,8 +219,6 @@ async def _run_radar_scan_async_inner(
     )
 
     try:
-        # 2. Build the agent + invoke. The orchestrator prompt parses the
-        #    user message to extract scan_id + verticals + topic.
         user_message = (
             f"scan_id={scan_id} "
             f"profile_id={profile_id} "
@@ -248,10 +227,6 @@ async def _run_radar_scan_async_inner(
             f"top_n={top_n}"
         )
         agent = await build_radar_agent()
-        # Attach the LLM-counter callback via RunnableConfig so it
-        # propagates into every nested call (orchestrator + subagents)
-        # without needing model wrapping. The callback no-ops when no
-        # scan_id is in the context — safe for the shared rotator chain.
         _llm_cb = getattr(agent, "_rr_llm_counter_cb", None)
         callbacks = [c for c in (_llm_cb,) if c is not None]
         await agent.ainvoke(
@@ -261,19 +236,10 @@ async def _run_radar_scan_async_inner(
                 "callbacks":     callbacks,
             },
         )
-        # Close the last open phase span (discovery/triage/deep_read/synthesis).
         if _mw := getattr(agent, "_rr_phase_middleware", None):
             _mw.finalize_scan(scan_id)
 
-        # 3. Build the digest from fs (step-6 refactor 2026-06-12):
-        #    The `report` LLM subagent is RETIRED. Assembly + persistence
-        #    is now Python, not LLM-driven. The agent's job ends with
-        #    fs/triage/top_n.json + fs/extractions/* + fs/synthesis/report.json
-        #    on disk; THIS code reads them and assembles the final digest.
-        #
-        #    Auto-triage fallback stays: if the orchestrator's LLM ended
-        #    without calling triage but ≥1 discovery did write, we run
-        #    triage from Python here.
+        # Auto-triage fallback: if the orchestrator skipped triage but discovery wrote, run triage from Python.
         if not fs_read(scan_id, FS_FILE_TRIAGE_TOPN):
             discovery_keys = fs_list(scan_id, prefix="discovery/")
             if discovery_keys:
@@ -288,16 +254,6 @@ async def _run_radar_scan_async_inner(
                     "top_n": top_n,
                 })
 
-        # 2026-06-16: missing-extractions inline backfill. After the agent
-        # returns, check (top_n - extractions on disk). For each missing
-        # arxiv_id (up to BACKFILL_MAX, default 3), fire one bandit-routed
-        # LLM call inline to produce the extraction directly — bypassing
-        # the orchestrator and the deep_read subagent. This recovers most
-        # of what was previously a "partial_extractions_X_of_Y" degradation
-        # (scan fd9ad127 dropped 1/8 because the phase enforcer exhausted
-        # before the orchestrator finished the last deep_read). Skipping
-        # when ≥4 are missing — that's a deeper infra issue (rotator down,
-        # all arms cooled, etc.) and inline retry won't help.
         with get_tracer().start_as_current_span(
             "rr.node.backfill",
             attributes={"coelho.langfuse.keep": True, "rr.scan_id": scan_id},
@@ -325,23 +281,18 @@ async def _run_radar_scan_async_inner(
 
             emit_event_sync(scan_id, "persisting", message="writing findings + digest")
 
-            # 4. Diff against the profile's seen set so the digest can show
-            #    'New since last scan'.
             seen_ids = await get_seen_ids(profile_id)
             items = digest.get("items") or []
             for item in items:
                 aid = item.get("arxiv_id")
                 item["is_new"] = bool(aid) and aid not in seen_ids
 
-            # 5. Materialize Finding dataclasses for service.persist_scan_result.
             findings = [_item_to_finding(it) for it in items]
             await persist_scan_result(
                 scan_uuid, profile_id,
                 findings       = findings,
                 digest_payload = digest,
             )
-
-            # 6. Close out the scan in Postgres.
             await complete_scan(
                 scan_uuid,
                 total_candidates = int(digest.get("total_candidates", len(items))),
@@ -382,12 +333,7 @@ async def _run_radar_scan_async_inner(
             "error":      err,
         }
     finally:
-        # 2026-06-17: snapshot LLM counters from Redis → Postgres
-        # (radar_scans.llm_counters JSONB) so the per-scan telemetry
-        # (drawer KPIs + totals strip) survives Redis TTL expiry. Runs
-        # on every exit path (success / failure / cancellation). DELETE
-        # on the scan row removes the counters atomically — no separate
-        # cleanup in the trash-button flow.
+        # Snapshot counters to Postgres so they survive Redis TTL expiry.
         try:
             from .runtime.llm_counter import snapshot_to_postgres
             await snapshot_to_postgres(scan_id)
@@ -396,20 +342,12 @@ async def _run_radar_scan_async_inner(
                 f"[rr-task] llm-counter snapshot failed scan_id={scan_id}: "
                 f"{type(e).__name__}: {e}"
             )
-        # Clear the LLM-counter contextvar so subsequent non-RR work
-        # in the worker doesn't attribute calls to this scan_id.
         try:
             _set_llm_counter_scan(None)
         except Exception:
             pass
-        # Drop the scan's fs — module-level dict, so failing to clear
-        # would leak memory across many scans.
         clear_scan_fs(scan_id)
-        # Release THIS event loop's Neo4j + Qdrant async clients before
-        # `asyncio.run()` tears the loop down. Without this, the clients'
-        # connection pools leak sockets until __del__ runs at process GC.
-        # The per-loop WeakKeyDictionary would still drop the cache entry,
-        # but explicit close keeps the protocol layer tidy.
+        # Explicit close: asyncio.run() tears the loop down before __del__ runs, leaking sockets otherwise.
         from infra.neo4j   import close_neo4j
         from infra.qdrant  import close_qdrant
         try:
@@ -422,9 +360,6 @@ async def _run_radar_scan_async_inner(
             logger.warning(f"[rr-task] close_qdrant failed: {e}")
 
 
-# --------------------------------------------------------------------------- #
-# Helpers — dict → dataclass
-# --------------------------------------------------------------------------- #
 def _item_to_finding(item: dict[str, Any]) -> Finding:
     """Convert one digest item to a Finding dataclass for service.persist_*"""
     ex_dict = item.get("extraction")
@@ -456,20 +391,8 @@ def _extraction_from_dict(d: dict[str, Any]) -> Extraction:
 
 
 def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
-    """Assemble the final digest from what the agent left in fs.
-
-    CANONICAL persistence path. Reads triage + extractions + synthesis
-    from fs, builds Finding-shaped items, returns the digest dict. The
-    LLM-written fs/digest.json (when present) is IGNORED — we always
-    rebuild from upstream artifacts. This makes the report subagent's
-    JSON-emission failures non-fatal (Fix 1+3 ship 2026-06-15).
-
-    Degraded mode (2026-06-15): if synthesis is missing OR no extractions
-    landed, builds the best digest possible and stamps `degraded=True` +
-    `degradation_reasons=[...]`. UI surfaces a "partial data" indicator.
-    Only returns None on TRUE phase-1 collapse: no top_n.json — meaning
-    triage never ran, so we have no ranked paper list to render at all.
-    """
+    """Assemble the digest from fs artifacts. Returns None only on phase-1 collapse (no top_n.json).
+    Always rebuilds from triage+extractions+synthesis — never trusts the LLM-written digest.json."""
     top_n = fs_read(scan_id, FS_FILE_TRIAGE_TOPN)
     if not isinstance(top_n, list) or not top_n:
         return None
@@ -481,24 +404,7 @@ def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
         if isinstance(ex, dict) and ex.get("arxiv_id"):
             extractions_by_id[ex["arxiv_id"]] = ex
 
-    # Two sources for per-paper theme assignment, in priority order:
-    #
-    # 1. **Synthesis subagent's `per_paper_themes`** (2026-06-16 fix). The
-    #    synthesis subagent now owns theme→paper assignment in a single
-    #    structured field, validated against skill HARD RULES at the tool
-    #    layer (strict subset of `themes`, max 2 per paper). This replaces
-    #    the report subagent's per-item `themes` field, which had to be
-    #    extracted from a JSON envelope the LLM repeatedly truncated to
-    #    `{` (scan f52fb84a).
-    #
-    # 2. **Report subagent's digest.json `items[].themes`** (legacy path,
-    #    kept as fallback). Still merged if synthesis didn't emit per-paper
-    #    themes — useful when the synthesis-side rollout lags the report-
-    #    side codebase, OR when running in "tools" mode (where the report
-    #    subagent isn't even instantiated).
-    #
-    # Either source's empty value falls through to `[]`, which is the
-    # correct answer per the skill (empty > the degenerate full-list copy).
+    # Per-paper themes: synthesis.per_paper_themes preferred; digest.json items[].themes as fallback.
     top_themes = synth.get("themes") or []
     top_themes_set = {t for t in top_themes if isinstance(t, str)}
     synth_ppt = synth.get("per_paper_themes") or {}
@@ -513,10 +419,7 @@ def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
                 llm_items_by_id[it["arxiv_id"]] = it
 
     def _per_item_themes(aid: str) -> list[str]:
-        """Lift this paper's themes from synthesis (preferred) or the
-        report subagent's digest (fallback). Both sources go through the
-        skill HARD RULES: subset of top-level themes; cap at 2."""
-        # Source 1: synthesis subagent's per_paper_themes (preferred).
+        """Synthesis per_paper_themes preferred; digest items[].themes fallback. Both capped at 2."""
         synth_raw = synth_ppt.get(aid)
         if isinstance(synth_raw, list) and synth_raw:
             cleaned = [
@@ -525,7 +428,6 @@ def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
             ]
             if cleaned:
                 return cleaned[:2]
-        # Source 2: report subagent's digest item themes (legacy / tools mode).
         llm_item = llm_items_by_id.get(aid) or {}
         raw = llm_item.get("themes") or []
         if not isinstance(raw, list):
@@ -551,11 +453,6 @@ def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
             "arxiv_id":      aid,
             "rank":          i,
             "signal":        paper.get("signal", 0.0),
-            # 2026-06-15: propagate the rerank cross-encoder logit from
-            # triage's top_n.json. The field was added in agent/tools/triage.py
-            # but `_build_digest_from_fs` was dropping it on the rebuild,
-            # surfacing as `topical_logit: None` in every digest. Now
-            # carried through so the drawer can render the relevance score.
             "topical_logit": paper.get("topical_logit"),
             "title":         paper.get("title") or "(untitled)",
             "authors":       paper.get("authors") or [],
@@ -565,9 +462,6 @@ def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
             "extraction":    ex,
         })
 
-    # Degradation diagnostics — surfaced on the digest envelope so the
-    # UI can render a "partial data" badge and the operator knows which
-    # phase fell short. Pipeline still completes; it just produces less.
     degradation_reasons: list[str] = []
     if not synth:
         degradation_reasons.append("synthesis_missing")
@@ -577,31 +471,11 @@ def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
         degradation_reasons.append(
             f"partial_extractions_{len(extractions_by_id)}_of_{len(items)}"
         )
-    # Per-paper themes degradation: fires only when BOTH sources are
-    # absent (synthesis didn't emit per_paper_themes AND the report
-    # digest didn't emit items). With either, the per-item themes can
-    # populate. When top_themes itself is empty (synthesis failed to
-    # cluster), this check doesn't fire — there's no top-level set to
-    # map paper to.
     if not synth_ppt and not llm_items_by_id and top_themes:
         degradation_reasons.append("no_llm_per_item_themes")
 
-    # Per-item themes telemetry — tells us at a glance how many items
-    # ended up with a non-empty themes list and which source supplied
-    # them (synthesis vs report-digest fallback). Empty across the board
-    # = a likely synthesis or report failure mode worth investigating.
-    items_with_themes = sum(
-        1 for it in items if it.get("themes")
-    )
-    # Fix #5 (2026-06-16): sparse-themes degradation. Scan 5 had
-    # items_with_per_item_themes=2/12 (17%) but `degraded=False` — the
-    # checks above only fire when sources are completely missing, not
-    # when synthesis ran but the mapping is mostly empty. Catch the
-    # "right count, wrong quality" failure mode: if <50% of items got
-    # a non-empty themes list AND we have ≥4 items (avoid noise on
-    # tiny scans), flag it. Skip when top_themes is empty (already
-    # covered by the synthesis_missing / no_llm_per_item_themes flags
-    # above — would double-flag).
+    items_with_themes = sum(1 for it in items if it.get("themes"))
+    # Sparse-themes degradation: <50% with themes on ≥4-item scans = mapping mostly empty.
     if (
         top_themes
         and len(items) >= 4
@@ -634,36 +508,13 @@ def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
     }
 
 
-# --------------------------------------------------------------------------- #
-# Missing-extractions inline backfill — Fix #2 (2026-06-16)
-# --------------------------------------------------------------------------- #
-# When the orchestrator drops a deep_read (phase enforcer exhausted, subagent
-# crashed, etc.), we don't want the scan to degrade silently. After the agent
-# returns, this helper checks `top_n.json - fs/extractions/*` and fires one
-# bandit-routed LLM call per missing arxiv_id (capped) to produce the
-# extraction directly — bypassing both the orchestrator and the deep_read
-# subagent. The extraction lands in the same fs path the deep_read subagent
-# would have written, so `_build_digest_from_fs` sees a complete set and
-# `degraded=False`.
-#
-# Quality notes:
-#   - Same model the deep_read subagent uses (`build_rr_strong_chain_bandit`)
-#     → same bandit pool, same FGTS-VA selection, same cascade behavior
-#   - Same system prompt (paper_extraction skill + DEEP_READ_SYSTEM_PROMPT)
-#     → no quality drift vs subagent path
-#   - Backfill calls go through the LLM-counter as `phase=deep_read` so
-#     they're visible in the drawer just like subagent-driven calls
-#   - Cap of 3 backfills per scan — beyond that, infra is likely wedged
-#     and inline retry just burns time + tokens without recovery
+# Inline backfill: recover extractions dropped by the orchestrator (phase enforcer exhausted, etc.).
+# Capped at 3 — beyond that, infra is likely wedged and retrying won't help.
 BACKFILL_MAX = 3
 
 
 async def _backfill_missing_extractions(scan_id: str) -> None:
-    """Inline-recover any top_n arxiv_id whose extraction never landed.
-    No-op when extractions are complete OR more than BACKFILL_MAX are
-    missing. Best-effort — failures log and proceed (downstream digest
-    assembly will mark them as `partial_extractions_X_of_Y` degradation
-    just like before)."""
+    """Recover extractions missing from fs up to BACKFILL_MAX. No-op when complete or gap > cap."""
     top_n_raw = fs_read(scan_id, FS_FILE_TRIAGE_TOPN)
     if not isinstance(top_n_raw, list) or not top_n_raw:
         return
@@ -684,7 +535,7 @@ async def _backfill_missing_extractions(scan_id: str) -> None:
     missing_ids = expected_ids - extracted_ids
     if not missing_ids:
         return
-    if len(missing_ids) > BACKFILL_MAX:
+    if len(missing_ids) > BACKFILL_MAX:  # likely infra issue; inline retry won't help
         logger.warning(
             f"[rr-task] backfill skipped scan_id={scan_id} "
             f"missing={len(missing_ids)} > BACKFILL_MAX={BACKFILL_MAX} "
@@ -695,21 +546,16 @@ async def _backfill_missing_extractions(scan_id: str) -> None:
         f"[rr-task] backfill firing scan_id={scan_id} "
         f"missing={sorted(missing_ids)}"
     )
-    # Index paper data by arxiv_id so the backfill prompt has title+abstract.
     paper_by_id = {
         p.get("arxiv_id"): p
         for p in top_n_raw
         if isinstance(p, dict) and p.get("arxiv_id")
     }
-    # Lazy imports — only what this function uses; `_backfill_one` re-imports
-    # the deep_read-specific prompt + skill + tool itself.
     from domains.llm.rotator.chain.service import build_rr_strong_chain_bandit
     from .runtime.llm_counter import set_phase as _set_llm_phase
 
     chain = build_rr_strong_chain_bandit()
-    # Phase attribution: backfill calls bucket under deep_read so the
-    # drawer KPIs show them as part of the deep_read activity.
-    try: _set_llm_phase("deep_read")
+    try: _set_llm_phase("deep_read")  # bucket backfill calls under deep_read in drawer KPIs
     except Exception: pass
 
     backfilled = 0
@@ -737,8 +583,7 @@ async def _backfill_one(
     paper: dict[str, Any],
     chain: Any,
 ) -> None:
-    """Run one inline deep_read against the bandit chain + write the
-    extraction. Raises on any failure (caller catches)."""
+    """Run one inline deep_read extraction via the bandit chain. Raises on failure."""
     from langchain_core.messages import HumanMessage, SystemMessage
     from .agent.skills import SKILL_PAPER_EXTRACTION
     from .agent.tools.fs_tools import write_extraction
@@ -748,12 +593,6 @@ async def _backfill_one(
     if not abstract:
         raise RuntimeError(f"no abstract on disk for {arxiv_id}")
 
-    # Same composition the deep_read subagent uses for its system prompt:
-    # paper_extraction skill (the 5-field rubric + failure-mode warnings)
-    # + DEEP_READ_SYSTEM_PROMPT (the tool-flow glue). For inline we strip
-    # the "call read_top_n_papers / write_extraction" steps because we
-    # already have the paper + we'll persist via Python below — just keep
-    # the extraction guidance.
     system_prompt = (
         "=== SKILL: paper_extraction ===\n\n"
         f"{SKILL_PAPER_EXTRACTION}\n\n"
@@ -777,8 +616,7 @@ async def _backfill_one(
     raw = (getattr(response, "content", None) or "").strip()
     if not raw:
         raise RuntimeError("empty content from rotator")
-    # Strip code fences defensively (some arms wrap JSON in ```json ... ```).
-    if raw.startswith("```"):
+    if raw.startswith("```"):  # some arms wrap JSON in ```json fences
         lines = raw.splitlines()
         # Drop the opening fence (and optional language tag) + the closing fence
         if lines and lines[0].startswith("```"):
@@ -793,7 +631,6 @@ async def _backfill_one(
         raise RuntimeError(f"json parse failed: {e}; head={raw[:120]!r}")
     if not isinstance(data, dict):
         raise RuntimeError(f"non-dict json: type={type(data).__name__}")
-    # Defensive defaults — write_extraction tool will clamp / validate.
     payload = {
         "scan_id":      scan_id,
         "arxiv_id":     arxiv_id,
@@ -804,10 +641,6 @@ async def _backfill_one(
         "money_angle":  str(data.get("money_angle")  or "").strip(),
         "confidence":   float(data.get("confidence") or 0.5),
     }
-    # Reuse the @tool's persistence path so MinIO mirror + cache write +
-    # retry detection + SSE emit all fire exactly as for a subagent-driven
-    # deep_read. The retry counter will tick if a backfill overwrites an
-    # extraction that arrived after our read — harmless tiny race.
     write_extraction.invoke(payload)
     logger.info(
         f"[rr-task] backfill wrote extraction arxiv_id={arxiv_id} "

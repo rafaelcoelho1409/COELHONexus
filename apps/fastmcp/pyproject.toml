@@ -4,53 +4,23 @@ version = "1.0.0"
 description = "COELHO Nexus - FastMCP server (Model Context Protocol tool surface)"
 requires-python = ">=3.13"
 dependencies = [
-    # FastMCP — the MCP-protocol server framework. Pulls the MCP Python SDK +
-    # Starlette + Pydantic transitively; its Streamable-HTTP transport is a
-    # Starlette ASGI app (`mcp.http_app()`) served by uvicorn — exactly like
-    # apps/fastapi (`app:app`) and apps/fasthtml (`main:app`). 3.x is the
-    # current line (3.0 shipped Jan 2026); cap before 4.0 (next major).
     "fastmcp>=3.2,<4.0",
-    # uvicorn[standard] — ASGI server for the Streamable-HTTP app. [standard]
-    # adds uvloop/httptools/watchfiles; watchfiles powers the
-    # --reload-include/--reload-exclude flags in entrypoint.sh (uvicorn falls
-    # back to StatReload otherwise). Cap matches apps/fastapi + apps/fasthtml.
+    # [standard] adds uvloop/httptools/watchfiles for --reload-include in entrypoint.sh.
     "uvicorn[standard]>=0.32,<1.0",
-    # httpx — async HTTP client used by every Research Radar source tool
-    # (domains/rr/tools/<source>/service.py). FastMCP pulls httpx transitively
-    # too, but pinning explicitly so tool code doesn't depend on an indirect
-    # transitive. Cap matches apps/fastapi + apps/fasthtml.
     "httpx>=0.28,<1.0",
-    # pydantic — boundary validation for MCP tool inputs/outputs
-    # (domains/rr/tools/<source>/schemas.py). FastMCP pulls Pydantic v2
-    # transitively, but pinning explicitly per CODE-CONVENTIONS.md §2.
     "pydantic>=2.9,<3.0",
-    # OpenTelemetry — emits one span per MCP tool call from
-    # middleware/telemetry.py to BOTH Alloy (gRPC → Tempo) AND LangFuse v3
-    # (HTTP → /api/public/otel). Same family + versions as apps/fastapi.
-    # Stable APIs capped before 2.0; instrumentation packs pre-1.0 capped
-    # before 1.0. instrumentation-fastapi/redis/celery deliberately omitted
-    # (this peer app has none of those).
+    # OTel dual-export: Alloy (gRPC) + LangFuse (HTTP). No fastapi/redis/celery instrumentation.
     "opentelemetry-api>=1.30,<2.0",
     "opentelemetry-sdk>=1.30,<2.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.30,<2.0",
     "opentelemetry-exporter-otlp-proto-http>=1.30,<2.0",
     "opentelemetry-instrumentation-httpx>=0.50b0,<1.0",
     "opentelemetry-instrumentation-logging>=0.50b0,<1.0",
-    # ASGI middleware that extracts W3C traceparent headers from incoming
-    # requests — links FastMCP tool-call spans as children of the Celery
-    # worker's rr.scan.run span so RR tool traces appear under the main
-    # scan in LangFuse instead of as orphan root traces.
+    # W3C traceparent extraction: links tool-call spans as children of the Celery rr.scan.run span.
     "opentelemetry-instrumentation-asgi>=0.50b0,<1.0",
-    # MinIO+Fernet credential reader (infra/credentials/). Reads the same
-    # encrypted store the FastAPI BYOK system writes — user-supplied tool API
-    # keys (set in the /settings UI) get injected into os.environ at startup.
-    # Same versions as apps/fastapi (sync botocore + cryptography 46.0.7+ for
-    # CVE-2026-39892 / CVE-2026-26007 fixes).
+    # MinIO+Fernet BYOK store reader; same versions as apps/fastapi.
     "botocore>=1.34,<2.0",
     "cryptography>=46.0.7,<49",
-    # Step-7 (2026-06-12) — Resources backing stores:
-    # `radar://latest_digest` reads Postgres + MinIO; `radar://concept/{name}`
-    # reads Neo4j. Same pins as apps/fastapi to keep the two images in lockstep.
     "psycopg[binary]>=3.2,<4.0",
     "aioboto3>=13.0,<15.0",
     "neo4j>=5,<6",

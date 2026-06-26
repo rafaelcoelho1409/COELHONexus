@@ -4,8 +4,7 @@ The primary planning path reuses `sub_questions` produced by the
 classifier (deprecated `adaptive.py:L120, L192-195`). This prompt only
 fires when the classifier didn't pre-decompose (legacy DEEP entrypoint
 or LLM dropped the field).
-
-Direct port of deprecated `graphs/youtube/adaptive.py:L196-205`."""
+"""
 from __future__ import annotations
 
 from langchain_core.prompts import ChatPromptTemplate

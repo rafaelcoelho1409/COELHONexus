@@ -61,9 +61,6 @@ from .schemas import (
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------- #
-# Result envelope helpers
-# ---------------------------------------------------------------------- #
 def _unsupported(backend: str, app: str, q: str) -> QueryResponse:
     """Same shape as a real response — `supported=False` is the only
     signal the UI needs to render the "no data here" state."""
@@ -94,9 +91,6 @@ def _envelope(
     )
 
 
-# ====================================================================== #
-# Elasticsearch
-# ====================================================================== #
 async def query_es(
     *, app: str, q: str, limit: int, offset: int, request: Request,
 ) -> QueryResponse:
@@ -152,9 +146,6 @@ async def query_es(
     return _envelope(BACKEND_ES, app, q, hits, total, t0)
 
 
-# ====================================================================== #
-# Qdrant
-# ====================================================================== #
 async def query_qdrant(
     *, app: str, q: str, limit: int, request: Request,
 ) -> QueryResponse:
@@ -173,8 +164,6 @@ async def query_qdrant(
     if not is_supported(app, BACKEND_QDRANT):
         return _unsupported(BACKEND_QDRANT, app, q)
 
-    # Collection name comes from `params.AppNamespace.target` so adding
-    # a new (app, qdrant_collection) pair is a one-line change there.
     from .params import APP_BACKENDS
     collection = APP_BACKENDS[app][BACKEND_QDRANT].target
 
@@ -183,9 +172,6 @@ async def query_qdrant(
     raw_q = q.strip()
 
     if raw_q:
-        # Embed via the YCS dense embedder (lazy lookup; same model
-        # used by both YCS ingestion and RR ingestion → cosine is
-        # well-calibrated across both collections).
         smart = getattr(request.app.state, "smart_retriever", None)
         embedder = getattr(getattr(smart, "qdrant_retriever", None), "dense_embeddings", None)
         if embedder is None:
@@ -201,8 +187,7 @@ async def query_qdrant(
                 BACKEND_QDRANT, app, q, hits = [], total = 0, t0 = t0,
                 error = f"embed failed: {type(e).__name__}: {str(e)[:160]}",
             )
-        # YCS's collection uses NAMED vectors (`dense`/`sparse`); RR's
-        # uses the default unnamed vector. Pass the right shape.
+        # YCS uses NAMED vectors ("dense"/"sparse"); RR uses the default unnamed vector.
         query_vector: Any = ("dense", vector) if app == APP_YCS else vector
         try:
             results = await client.search(
@@ -220,7 +205,6 @@ async def query_qdrant(
         hits = [domain.project_qdrant_point(p, app = app) for p in results]
         return _envelope(BACKEND_QDRANT, app, q, hits, total = len(hits), t0 = t0)
 
-    # Browse-mode (empty query) — scroll a single page of points.
     try:
         records, _next = await client.scroll(
             collection_name = collection,
@@ -238,21 +222,7 @@ async def query_qdrant(
     return _envelope(BACKEND_QDRANT, app, q, hits, total = len(hits), t0 = t0)
 
 
-# ====================================================================== #
-# Neo4j
-# ====================================================================== #
-# Per-app Cypher templates. Built here (not `params.py`) because the
-# strings are tightly coupled to the projection contract in `domain.py`
-# (`{label, key, title, snippet, url, properties}`).
-#
-# `q` is empty → list-all by label, ordered by a sensible recency proxy.
-# `q` is set   → CONTAINS on the main text columns (case-insensitive via
-# `toLower`), unioned across labels.
-#
-# We deliberately use CONTAINS rather than full-text indexes here: it's
-# free (no `CREATE FULLTEXT INDEX` to bootstrap on day one) and the
-# corpora are small enough for a contains scan to stay sub-second. Bump
-# to APOC fulltext when the dataset outgrows it.
+# CONTAINS over toLower vs fulltext index: zero bootstrap cost; fast enough for current corpus size.
 _YCS_CYPHER_BROWSE = """
 MATCH (n)
 WHERE  n:Document OR n:Video OR n:Channel OR n:__Entity__
@@ -371,9 +341,7 @@ async def query_neo4j(
     return _envelope(BACKEND_NEO4J, app, q, hits, total = len(hits), t0 = t0)
 
 
-# ====================================================================== #
 # Raw DSL — Phase 1 of the SOTA workbench. User-supplied DSL/Cypher/JSON.
-# ====================================================================== #
 def _raw_envelope(
     backend: str, app: str, t0: float,
     *,
@@ -407,12 +375,10 @@ def _raw_disallowed(backend: str, app: str, msg: str) -> RawQueryResponse:
     )
 
 
-# ---------------------------------------------------------------------- #
 # Elasticsearch — POST the validated body straight at `_search` on the
 # YCS metadata + transcriptions indexes. The URL path is server-pinned
 # (the user never sees /controls it) so the only attack surface is the
 # JSON body — and `parse_es_body` shaped it.
-# ---------------------------------------------------------------------- #
 async def raw_es(
     *, app: str, body_text: str, request: Request,
 ) -> RawQueryResponse:
@@ -470,11 +436,9 @@ async def raw_es(
     )
 
 
-# ---------------------------------------------------------------------- #
 # Qdrant — the editor body is `{"op": ..., ...}`. Dispatch off `op`,
 # pin the collection name from the (app, backend) matrix so the user
 # can't query a different collection.
-# ---------------------------------------------------------------------- #
 async def raw_qdrant(
     *, app: str, body_text: str, request: Request,
 ) -> RawQueryResponse:
@@ -565,13 +529,11 @@ async def raw_qdrant(
     )
 
 
-# ---------------------------------------------------------------------- #
 # Neo4j — run user Cypher inside a read-only transaction. Driver
 # distinguishes `session.execute_read(...)` from `.execute_write(...)`;
 # we ALWAYS use the read variant so even a write-keyword that slipped
 # past the regex (a future Cypher addition we didn't anticipate) is
 # rejected by the server itself.
-# ---------------------------------------------------------------------- #
 async def raw_neo4j(
     *, app: str, body_text: str, request: Request,
 ) -> RawQueryResponse:
@@ -636,14 +598,12 @@ def _neo4j_jsonify(row: dict) -> dict:
     return out
 
 
-# ====================================================================== #
 # AI text-to-DSL — Phase 4
-# ====================================================================== #
 # Why inherit AsyncCallbackHandler: the runtime CallbackManager checks
 # `isinstance(handler, AsyncCallbackHandler)` to decide whether to AWAIT
 # the handler's async methods. A plain class with `async def` methods
 # triggers `RuntimeWarning: coroutine 'ahandle_event' was never awaited`
-# (observed in the pod 2026-06-16) and silently drops the model
+# (observed in production) and silently drops the model
 # capture. Inheriting the real base class fixes both.
 from langchain_core.callbacks import AsyncCallbackHandler
 
@@ -667,7 +627,7 @@ class _ModelCapture(AsyncCallbackHandler):
          only when it's NOT a group alias.
     """
     # Group aliases the rotator uses — NOT what we want to display.
-    # 2026-06-17 added `dd-reduce-label` (Query AI's new fast pool —
+    # added `dd-reduce-label` (Query AI's new fast pool —
     # see `app.py::app.state.query_ai_llm`) so the chip never falls
     # back to the alias even if the deployment-id override fails.
     _GROUP_ALIASES = frozenset({
@@ -774,14 +734,12 @@ async def ai_generate_stream(
     from .examples import EXAMPLES_BY_BACKEND
     from .prompts  import build_generate_prompt, build_repair_prompt
 
-    # 2026-06-17 — prefer the speed-optimised `dd-reduce-label` chain
+    # prefer the speed-optimised `dd-reduce-label` chain
     # built once at lifespan as `app.state.query_ai_llm`. It targets
     # fast non-reasoning arms (Groq Llama-3.3-70b LPU, Gemini Flash
     # Lite, NIM gpt-oss-120b, …) instead of `dd-all`'s reasoning-heavy
-    # default (kimi-k2.6 / qwen3.5-397b / deepseek-v4 — each emits
     # 1-15 s of `<think>` tokens before any DSL). For NL → DSL, which
     # is deterministic structural translation, reasoning is wasted
-    # compute that the user feels as latency.
     # `app.state.llm` is the graceful fallback when the fast chain
     # failed to init (BYOK with no Groq/Gemini/NIM key, lifespan race,
     # etc.) — still functional, just slower.
@@ -862,7 +820,6 @@ async def ai_generate_stream(
                     )
                 text = str(text)
 
-                # Emit the model whenever it CHANGES — initially we
                 # may have only the group alias (fallback); once a
                 # chunk carries the real deployment we flip the chip
                 # in place without the user noticing.
@@ -919,7 +876,6 @@ async def ai_generate_stream(
     final = _post_clean(acc, backend = backend)
     ok, err = _check_with_safety(final, backend = backend)
     if not ok:
-        # Log the rejection so the next Generate error in the pod is
         # diagnosable from `kubectl logs` without a transcript-replay.
         # Capped at 1500 chars to bound log volume.
         logger.warning(
@@ -994,7 +950,6 @@ def _post_clean(text: str, *, backend: str) -> str:
         return ""
     s = text.strip()
 
-    # Strip surrounding code fences (```json / ```cypher / ``` / etc.).
     if s.startswith("```"):
         s = s.split("\n", 1)[1] if "\n" in s else s
     if s.endswith("```"):
@@ -1066,10 +1021,8 @@ def _extract_cypher(s: str) -> str:
         r"^\s*(?:"
         r"MATCH\s*\("                       # MATCH (
         r"|OPTIONAL\s+MATCH\s*\("           # OPTIONAL MATCH (
-        r"|CALL\s+[A-Za-z_][\w.]*\s*\("     # CALL apoc.foo(
         r"|WITH\s+\S"                       # WITH x
         r"|UNWIND\s+\S"                     # UNWIND list
-        r"|RETURN\s+\S"                     # RETURN x
         r")",
         flags = re.IGNORECASE,
     )
@@ -1217,18 +1170,7 @@ def _check_with_safety(text: str, *, backend: str) -> tuple[bool, str | None]:
     return True, None
 
 
-# ====================================================================== #
-# Schema discovery — Phase 3
-# ====================================================================== #
-# Cached 5 min in Redis so backend-switch / editor autocomplete / AI
-# prompt-building can all hit it cheaply. Cache key is namespaced by
-# backend; the YCS pin means we don't need an `app` component yet.
-# 2026-06-16: two-layer schema (declared floor + live overlay). The
-# declared floor guarantees the AI prompt sees the full structural
-# shape even on empty stores; the live layer enriches it with real
-# samples, observed counts, and relationship patterns the writer code
-# couldn't predict (e.g. LLM-generated inter-entity relationship
-# names). Cache-key bumped `:v3` to invalidate any `:v2` blobs.
+# Two-layer schema: declared floor (structural contract) + live overlay (real samples + LLM-generated rel names).
 _SCHEMA_TTL_S = 300
 _SCHEMA_KEY = "ycs:query:schema:{backend}:v3"
 
@@ -1267,9 +1209,6 @@ async def _schema_cached(
     return obj
 
 
-# ---------------------------------------------------------------------- #
-# Elasticsearch — GET _mapping + doc counts per index.
-# ---------------------------------------------------------------------- #
 async def _build_es_schema_live() -> dict[str, Any]:
     """ES live schema — overlay layer for the two-layer merge.
 
@@ -1302,8 +1241,6 @@ async def _build_es_schema_live() -> dict[str, Any]:
         mappings = mapping.get(idx, {}).get("mappings", {})
         props    = mappings.get("properties", {}) or {}
 
-        # Sample 2 docs — small, kept compact in the prompt. `_source`
-        # truncated per-field below (text/content can be huge).
         samples: list[dict[str, Any]] = []
         try:
             s_resp = await es.search(
@@ -1417,9 +1354,6 @@ async def get_es_schema(*, request: Request, refresh: bool = False) -> dict[str,
     )
 
 
-# ---------------------------------------------------------------------- #
-# Qdrant — collection info (vector params + payload schema) + point count.
-# ---------------------------------------------------------------------- #
 async def _build_qdrant_schema_live() -> dict[str, Any]:
     """Qdrant live schema — overlay for the two-layer merge.
 
@@ -1449,9 +1383,7 @@ async def _build_qdrant_schema_live() -> dict[str, Any]:
             }
         return str(v)
 
-    # Sample 3 payloads so the AI sees ACTUAL keys (the declared
-    # payload_schema only carries indexed keys; some payloads have
-    # additional unindexed keys we want to surface).
+    # Sample payloads: payload_schema only has indexed keys; scrolling catches additional unindexed ones.
     samples: list[dict[str, Any]] = []
     try:
         records, _ = await client.scroll(
@@ -1469,8 +1401,6 @@ async def _build_qdrant_schema_live() -> dict[str, Any]:
     except Exception as e:
         logger.debug(f"[ycs:query:schema:qdrant] sample scroll failed: {e}")
 
-    # Union of payload keys observed across samples (catches keys
-    # missing from the declared payload_schema).
     observed_keys: set[str] = set()
     for s in samples:
         observed_keys.update((s.get("payload") or {}).keys())
@@ -1526,8 +1456,6 @@ def _merge_qdrant_schema(declared: dict[str, Any], live: dict[str, Any]) -> dict
             merged["error"] = l["error"]
             out_cols.append(merged)
             continue
-        # `text_indexed_fields` = union of declared + any live field
-        # whose payload_schema data_type starts with "text".
         text_idx: set[str] = set(d.get("text_indexed_fields") or [])
         text_idx.update(l.get("text_indexed_fields") or [])
         for field, cfg in (l.get("payload_schema") or {}).items():
@@ -1557,10 +1485,7 @@ async def get_qdrant_schema(*, request: Request, refresh: bool = False) -> dict[
     )
 
 
-# ---------------------------------------------------------------------- #
-# Neo4j — db.labels + db.relationshipTypes + db.schema.nodeTypeProperties.
-# All read procedures, no APOC dep.
-# ---------------------------------------------------------------------- #
+# All read procedures only — no APOC dep.
 _SCHEMA_CYPHER_LABELS = "CALL db.labels() YIELD label RETURN collect(label) AS labels"
 _SCHEMA_CYPHER_RELS   = "CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) AS rels"
 _SCHEMA_CYPHER_PROPS  = (
@@ -1569,10 +1494,7 @@ _SCHEMA_CYPHER_PROPS  = (
     "RETURN nodeLabels, propertyName, propertyTypes "
     "ORDER BY nodeLabels, propertyName"
 )
-# Real (srcLabel)-[REL]->(dstLabel) patterns, with cardinality. Sampled
-# from up to 5000 random rels per type — gives the AI prompt the actual
-# connectivity shape without scanning the whole graph. The MERCHANDISE
-# of `db.schema.visualization()` would be cheaper but it's APOC-only.
+# db.schema.visualization() would be cheaper but is APOC-only.
 _SCHEMA_CYPHER_REL_PATTERNS = """
 MATCH (a)-[r]->(b)
 WITH labels(a)[0] AS src, type(r) AS rel, labels(b)[0] AS dst, count(*) AS n
@@ -1581,8 +1503,6 @@ RETURN src, rel, dst, n
 ORDER BY n DESC
 LIMIT 50
 """
-# Sample 3 nodes per label with their properties (truncated). Driven
-# by `db.labels()` results — one tiny Cypher per label.
 _SCHEMA_CYPHER_LABEL_SAMPLES = """
 MATCH (n)
 WHERE labels(n)[0] = $label
@@ -1718,28 +1638,22 @@ def _merge_neo4j_schema(declared: dict[str, Any], live: dict[str, Any]) -> dict[
         out["error"] = live["error"]
         return out
 
-    # 1. Labels + relationship types — union.
     labels = sorted(set(declared.get("labels") or []) | set(live.get("labels") or []))
     rels   = sorted(
         set(declared.get("relationship_types") or [])
         | set(live.get("relationship_types") or [])
     )
 
-    # 2. Node properties — union per label (dedupe by name).
     node_props: dict[str, list[dict[str, Any]]] = {}
     for source in (declared.get("node_properties") or {}, live.get("node_properties") or {}):
         for label, props in source.items():
             current = {p["name"]: p for p in node_props.get(label, [])}
             for p in (props or []):
-                # Last writer wins on types (live overrides declared
-                # when both exist — schema-drift is real).
+                # live overrides declared on property types (schema drift is real)
                 current[p["name"]] = p
             node_props[label] = list(current.values())
 
-    # 3. Relationship patterns — keyed by (src, rel, dst). Live count
-    # takes precedence; declared entries with no live counterpart keep
-    # `count = None` so the LLM knows the pattern is structurally
-    # allowed but currently unpopulated.
+    # Live count takes precedence; declared-only entries keep count=None to signal structurally valid but empty.
     pat: dict[tuple[str, str, str], dict[str, Any]] = {}
     for p in (declared.get("relationship_patterns") or []):
         key = (p.get("src", ""), p.get("rel", ""), p.get("dst", ""))
@@ -1750,14 +1664,11 @@ def _merge_neo4j_schema(declared: dict[str, Any], live: dict[str, Any]) -> dict[
             pat[key] = {**pat[key], "count": p.get("count"), "observed": True}
         else:
             pat[key] = {**p, "observed": True}
-    # Sorted: highest-observed-count first, then declared-only, then by name.
     def _pat_sort(p: dict[str, Any]):
         c = p.get("count")
         return (-(c if c is not None else -1), p.get("src", ""), p.get("rel", ""))
     rel_patterns = sorted(pat.values(), key = _pat_sort)
 
-    # 4. Node samples — live wins (declared has none); preserve declared
-    # for labels live didn't sample.
     node_samples: dict[str, list[dict[str, Any]]] = {}
     for source in (declared.get("node_samples") or {}, live.get("node_samples") or {}):
         for label, samples in source.items():

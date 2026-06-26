@@ -9,10 +9,7 @@ them to `channel_id`s via a Neo4j Cypher call.
 deprecated `graphs/youtube/helpers.py:_resolve_channel_ids` (`L4-21`).
 Kept inline here per CODE-CONVENTIONS pragmatism: it's used only by
 this node and ~15 LOC of Cypher.
-
-Direct port of deprecated `graphs/youtube/adaptive.py:L94-133` +
-2026-06-15 per-call timeout (the LLM was observed hanging for 2+ min
-on `deepseek-v4-pro` mid-classify, blocking the whole graph entry)."""
+"""
 from __future__ import annotations
 
 import asyncio
@@ -28,7 +25,6 @@ from .schemas import QueryClassification
 # Single LLM call, output cap is small (mode + a handful of sub-
 # questions). With plain-JSON prompting we no longer wait on provider-
 # native structured-output validation, so 45 s is enough room for a
-# fallback arm while still failing fast to STANDARD when classify drags.
 _CLASSIFY_TIMEOUT_S = 45.0
 
 
@@ -73,7 +69,7 @@ async def classify_query(
             "sub_questions": [],
             "channel_ids":   channel_ids,
         }
-    # 2026-06-20 — provider-native structured output was hanging before
+    # provider-native structured output was hanging before
     # the first graph event on local dev runs. Use plain JSON + local
     # validation instead; same cross-provider pattern as graph-builder's
     # `ignore_tool_usage=True` fix.
@@ -99,7 +95,6 @@ async def classify_query(
         }
     except (asyncio.TimeoutError, Exception):
         # Both timeouts and rotator-exhaustion errors collapse to a safe
-        # default — the user still gets an answer via the STANDARD path.
         return {
             "mode":          force or "standard",
             "sub_questions": [],

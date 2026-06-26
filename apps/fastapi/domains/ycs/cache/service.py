@@ -3,8 +3,7 @@
 Imperative Shell — wraps `redis.asyncio.Redis` with read / write /
 invalidate primitives. Caller passes the redis client (consistent
 with the deprecated signature; no module-level singleton).
-
-Direct port of deprecated `services/youtube/cache.py:L36-98`."""
+"""
 from __future__ import annotations
 
 import json

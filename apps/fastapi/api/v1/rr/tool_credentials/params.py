@@ -1,13 +1,4 @@
-"""Catalog of tool API keys the Settings UI exposes for user input.
-
-Each entry is rendered as one row in the "Source Tool Keys" section. Adding
-a new key = one row here + (optionally) a `_TESTERS` test-call mapping in
-router.py. The env-var name must ALSO be present in
-apps.fastapi.domains.llm.credentials.keys.MANAGED_KEY_ENVS (the storage
-whitelist) — keep both in sync.
-
-Frozen-dataclass per docs/CODE-CONVENTIONS.md §3 (≥3 grouped tunables).
-"""
+"""Catalog of tool API keys the Settings UI exposes. To add a key: add a row here + `_TESTERS` entry in router.py + `MANAGED_KEY_ENVS` whitelist."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,12 +6,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class ToolKeyDef:
-    """One UI-visible tool API key the operator may supply.
-
-    NOTE on field naming: `provider` (NOT `source`) to avoid colliding with
-    `KeyStatus.source` (Literal["user", "env"] | None) when both are flattened
-    into the same dict by the router's _view(). Keep these names distinct.
-    """
+    """`provider` (NOT `source`) — avoids collision with `KeyStatus.source` when flattened in _view()."""
 
     key_env: str                # storage key + injected env-var name
     display_name: str           # UI label, e.g. "Semantic Scholar API Key"

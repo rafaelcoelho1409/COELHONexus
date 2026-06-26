@@ -1,14 +1,4 @@
-"""YouTube Content Search feature router — aggregates the ycs/ sub-routers.
-
-Wave 4 surface (per `docs/YCS-PORT-PLAN-2026-06-06.md`):
-  content  — POST /search /videos /channel /playlist
-  agents   — PUT /config + POST /search /search/stream /ingest/qdrant
-             /ingest/neo4j /pipeline + GET /graph/stats
-  query    — GET /namespaces + POST /{elasticsearch,qdrant,neo4j}
-             (Query-page backend, see features/ycs/query/)
-
-Wave 5 adds `admin/` — GET /admin/ingested-channels /ingested-playlists
-/task/{id} (FastHTML BFF helpers)."""
+"""YCS router — aggregates content, agents, admin, and query sub-routers."""
 from fastapi import APIRouter
 
 from .admin import router as _admin_router

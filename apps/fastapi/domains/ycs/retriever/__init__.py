@@ -1,6 +1,4 @@
 """ycs/retriever — ES + Qdrant hybrid + Neo4j + SmartRetriever orchestrator.
-
-Direct port of deprecated `services/youtube/retriever.py`.
 All four retrievers share the same `retrieve(query, channel_ids)`
 interface so the SmartRetriever fans out uniformly."""
 from .elasticsearch import ElasticsearchRetriever

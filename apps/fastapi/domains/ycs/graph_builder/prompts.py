@@ -1,6 +1,4 @@
 """ycs/graph_builder — extraction instructions + schema-discovery prompt.
-
-Direct port of deprecated `schemas/youtube/prompts.py:L169-200, L202-243`.
 Version marker per `docs/CODE-CONVENTIONS.md` §2."""
 from __future__ import annotations
 

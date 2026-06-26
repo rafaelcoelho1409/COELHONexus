@@ -9,11 +9,10 @@ import os
 
 
 # Standalone Qdrant deployment in the cluster ships with no auth.
-#
 # Honor `QDRANT_URL` as the primary configuration knob (matches what
 # the Helm chart + Celery `qdrant_task` use), falling back to the
 # `QDRANT_HOST`/`PORT`/`HTTPS` triplet only when URL isn't set.
-# Before 2026-06-10: only the host/port path existed, defaulting to
+# Previously only the host/port path existed, defaulting to
 # bare `"qdrant"` — which resolves inside the qdrant namespace but
 # NOT from the coelhonexus-dev namespace where the fastapi pod runs.
 # The AsyncQdrantClient then failed with "All connection attempts
@@ -34,9 +33,7 @@ else:
 
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY") or None
 
-# Default dense vector size — aligns with the rotator's
 # `nvidia/llama-nemotron-embed-1b-v2`. Used at collection-create time.
 DEFAULT_DENSE_DIM = 2048
 
-# Default connection timeouts.
 TIMEOUT_S = 60.0

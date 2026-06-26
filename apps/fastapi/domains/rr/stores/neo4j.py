@@ -37,10 +37,8 @@ from ..keys import (
 logger = logging.getLogger(__name__)
 
 
-# --------------------------------------------------------------------------- #
 # Bootstrap — constraints + indexes. Idempotent (IF NOT EXISTS on every
 # statement). Run once at startup; safe to re-run.
-# --------------------------------------------------------------------------- #
 _BOOTSTRAP_STMTS: tuple[str, ...] = (
     # Uniqueness — guarantees MERGE-by-id is O(1)
     f"CREATE CONSTRAINT paper_id_unique IF NOT EXISTS "
@@ -70,10 +68,8 @@ async def bootstrap_neo4j() -> None:
     )
 
 
-# --------------------------------------------------------------------------- #
 # Paper upsert — MERGE by arxiv_id; sources / authors / concepts grafted
 # onto the same node so cross-source ingest collapses correctly.
-# --------------------------------------------------------------------------- #
 _UPSERT_PAPER_CYPHER = f"""
 MERGE (p:{NEO4J_LABEL_PAPER} {{id: $arxiv_id}})
 SET   p.title    = coalesce($title,    p.title),
@@ -136,10 +132,8 @@ async def upsert_paper(paper: NormalizedPaper, *, signal: float | None = None) -
     return record["paper_id"] if record else paper.arxiv_id
 
 
-# --------------------------------------------------------------------------- #
 # Read paths — used by synthesis (concept clusters) and report (top-N).
 # Kept minimal in step 3; expand as the synthesis subagent's needs solidify.
-# --------------------------------------------------------------------------- #
 async def get_paper_count() -> int:
     """Total :Paper nodes. Cheap sanity check for the bootstrap smoke test."""
     driver: AsyncDriver = get_driver()

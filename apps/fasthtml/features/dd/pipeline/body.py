@@ -117,7 +117,6 @@ _PLANNER_FALLBACK_CLICK = """\
 
 
 # Start-button gating — Pipeline-page UX rule (2026-06-08):
-# Start is enabled only when the respective stage has NO complete
 # output. Once Planner has produced plan-latest.json, the Planner Start
 # button is disabled — user must click Wipe Planner first (which
 # cascades to wipe Synth too, via the existing wipe handler). Same for
@@ -125,7 +124,6 @@ _PLANNER_FALLBACK_CLICK = """\
 # the user explicitly wipes. This prevents accidental re-runs of
 # expensive cached work and makes the wipe-then-start flow the only
 # path, with no inline cascade-confirm dialog needed.
-#
 # Re-probes the server state on: page load, focus restore, planner
 # terminal SSE, any wipe button click. Watches the buttons themselves
 # via MutationObserver so a mid-run state change (Stop → Start)
@@ -518,7 +516,6 @@ def PipelineBody(slug: str | None):
             # Pipeline page, even when empty; populates as Planner emits
             # its chapter list and Synth ticks through them). The
             # `.visible` class is server-rendered here so a fresh page
-            # load or a post-wipe state still keeps the column in the
             # layout — only the cells inside go empty.
             Div(
                 Div(

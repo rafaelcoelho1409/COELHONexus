@@ -2,12 +2,7 @@
 
 If the classifier already emitted `sub_questions`, just stamp a
 research-plan summary. Otherwise run the fallback planner LLM.
-
-Direct port of deprecated `graphs/youtube/adaptive.py:L184-224` +
-2026-06-15 per-call timeout (a hung plan-LLM was observed blocking
-the DEEP path entry for 2+ min on `deepseek-v4-pro`) +
-2026-06-16: bumped timeout to 180 s and added an explicit second
-attempt before the generic fallback. The "Fallback: generic pattern
+The "Fallback: generic pattern
 analysis" path was firing on almost every DEEP run during free-tier
 rate-pressure storms (Gemini 429 → planner gives up → 3 generic
 sub-questions). One explicit retry lets the rotator pick a fresh
@@ -36,7 +31,6 @@ _PLAN_TIMEOUT_S = 180.0
 
 # Number of LLM attempts before falling back to the generic
 # pattern-analysis sub-questions. 2 = one initial + one retry. Each
-# retry forces the rotator to reshuffle, so attempt #2 lands on a
 # different arm than attempt #1 in the common case.
 _PLAN_MAX_ATTEMPTS = 2
 
@@ -52,7 +46,7 @@ async def plan_research(state: AdaptiveRAGState, llm) -> dict:
                 f"Investigating {n} aspects of: {state['question']}"
             ),
         }
-    # 2026-06-20 — match classify's plain-JSON strategy. Native
+    # match classify's plain-JSON strategy. Native
     # structured-output validation can wedge before emitting any graph
     # update; local validation keeps the planner portable across arms.
     chain = PLAN_FALLBACK_PROMPT | llm

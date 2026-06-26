@@ -46,9 +46,7 @@ logger = logging.getLogger(__name__)
 class YtDlpExtractor:
     """Process-bound singleton; the asyncio.Semaphore caps outbound
     subprocesses across concurrent requests. Holding the instance
-    long-lived (vs per-request) is what makes the cap effective.
-
-    Mirror of deprecated `YtDlpExtractor` (`helpers.py:L53-546`)."""
+    long-lived (vs per-request) is what makes the cap effective.py:L53-546`)."""
 
     def __init__(
         self,
@@ -60,7 +58,6 @@ class YtDlpExtractor:
         self._default_timeout = default_timeout_s
         self._buffer_limit = buffer_limit
 
-    # -------- private subprocess primitive -----------------------------
 
     async def _run(
         self, args: list[str], timeout_s: float | None = None,
@@ -101,7 +98,6 @@ class YtDlpExtractor:
         logger.info(f"[yt-dlp] OK {elapsed:.2f}s out={len(stdout)} bytes")
         return stdout.decode("utf-8", errors = "replace")
 
-    # -------- public extractor methods (mirror deprecated 4-tuple) ----
 
     async def extract_video(self, video_id: str) -> VideoMetadata:
         """Single video, full --dump-json projection."""

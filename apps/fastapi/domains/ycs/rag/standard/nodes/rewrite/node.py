@@ -3,10 +3,7 @@
 Expands or rephrases the previous search query for a retry retrieval.
 `<think>` blocks stripped from the model output. Increments
 `retry_count` so the conditional edges can cap the loop.
-
-Direct port of deprecated `graphs/youtube/rag.py:L170-187` +
-2026-06-16 per-call timeout (previously uncapped — a rewrite hang
-would block the standard sub-graph forever)."""
+"""
 from __future__ import annotations
 
 import asyncio

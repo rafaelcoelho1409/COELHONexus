@@ -71,3 +71,4 @@ k8s/helm/charts
 .openclaude/
 .antigravitycli/
 .codex/
+.agents/

@@ -1,9 +1,5 @@
 """ycs/rag/adaptive/nodes/direct_answer — FAST-path zero-retrieval prompt.
-
-Direct port of deprecated `schemas/youtube/prompts.py:L103-111`,
-extended 2026-06-14 with a `MessagesPlaceholder("history")` slot so a
-FAST-mode follow-up can build on prior turns the same way STANDARD's
-generate does — see `nodes/generate/prompts.py` for the rationale.
+py` for the rationale.
 
 2026-06-16 — chat-style output: 2-5 sentences total, conversational
 tone, no headers. Matches the YCS Ask UI's chat container and the

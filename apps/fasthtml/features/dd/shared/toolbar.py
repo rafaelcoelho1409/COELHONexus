@@ -18,7 +18,6 @@ def StageToolbar(active_stage: str, slug: str | None,
         left = [CatalogSearch(catalog), CategoryFilter(catalog)]
     elif active_stage == "ingestion":
         # Row 3 summary line for Ingestion (2026-06-08): the manifest
-        # render writes `#fw-step2-summary` (same element ID as before
         # — the body version is removed), so JS in
         # `manifest.js:_renderSummary` keeps targeting the same selector.
         # Empty by default; populated once `loadManifestForSlug` resolves.

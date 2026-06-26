@@ -1,9 +1,5 @@
 """ycs/pipeline_task — Celery chain: extract → Qdrant → Neo4j → invalidate cache.
-
-Direct port of deprecated `tasks/youtube/pipeline.py` (channel pipeline)
-+ fresh `dispatch_videos_pipeline` (Wave 5 polish — Videos tab UI shows
-3 live progress bars, so the API needs to surface the 3 chain task_ids
-back to the client)."""
+"""
 from .params import NEO4J_BATCH_SIZE
 from .service import (
     dispatch_videos_pipeline,

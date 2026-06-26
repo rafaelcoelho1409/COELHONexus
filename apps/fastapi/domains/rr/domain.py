@@ -1,26 +1,4 @@
-"""Pure functions for the RR domain — no I/O, no event loop, no mocks.
-
-Per docs/CODE-CONVENTIONS.md §domain: this module is the functional core
-in the Cosmic Python split. All side effects (Neo4j, Qdrant, Postgres,
-MinIO, MCP) live in service.py (step 3). Anything here is deterministic
-and unit-testable from a REPL.
-
-Contents (architecture doc §2.5):
-
-  Normalizers          source-specific dict  →  NormalizedPaper
-                       (one per source: arxiv · s2 · hf · hn)
-
-  dedup_by_arxiv_id    cross-source merge — same arxiv_id collapses to
-                       one NormalizedPaper with max-merged per-source
-                       signals (citations · hn_points · hf_upvotes ...)
-
-  signal_score         composite ranking scalar — relevance · recency ·
-                       citation_velocity · influential_ratio · vertical_fit
-                       · cross_tier_buzz · has_code
-
-  diff_vs_seen         partition candidates into (new, returning) given
-                       the profile's seen-set from radar_seen
-"""
+"""Pure functions for the RR domain — no I/O, no event loop, no mocks."""
 from __future__ import annotations
 
 import math
@@ -39,29 +17,19 @@ from .keys import (
 from .params import DOMAIN_PARAMS, WEIGHTS, DomainParams, SignalWeights
 
 
-# --------------------------------------------------------------------------- #
-# Canonical arxiv-id parsing — strip version suffix so dedup is stable across
-# revisions ('2406.12345v2' and '2406.12345v1' are the same paper).
-# --------------------------------------------------------------------------- #
 _ARXIV_ID_RE = re.compile(r"(\d{4}\.\d{4,5})(?:v\d+)?")
 
 
 def _canonical_arxiv_id(raw: str | None) -> str | None:
-    """Extract the canonical 'YYYY.NNNNN' arxiv id from any input form:
-    bare id, versioned id, 'arXiv:' prefix, or full URL. Returns None when
-    nothing matches (e.g. an HN story whose URL doesn't reference arxiv)."""
+    """Extract 'YYYY.NNNNN' from any form: bare id, versioned, 'arXiv:' prefix, or full URL."""
     if not raw:
         return None
     m = _ARXIV_ID_RE.search(raw)
     return m.group(1) if m else None
 
 
-# --------------------------------------------------------------------------- #
-# Date parsing — MCP tools return ISO strings via Pydantic JSON-mode; some
-# sources only have year resolution. Tolerant — bad input → None, never raises.
-# --------------------------------------------------------------------------- #
 def _parse_date(value: Any) -> date | None:
-    """Parse the heterogeneous date shapes the 4 source tools return."""
+    """Parse heterogeneous date shapes the 4 source tools return; bad input → None."""
     if value is None:
         return None
     if isinstance(value, date) and not isinstance(value, datetime):
@@ -71,13 +39,11 @@ def _parse_date(value: Any) -> date | None:
     if not isinstance(value, str) or not value.strip():
         return None
     s = value.strip()
-    # ISO datetime with TZ (arxiv's published comes as 2024-06-12T17:34:21Z)
     if "T" in s:
         try:
             return datetime.fromisoformat(s.replace("Z", "+00:00")).date()
         except ValueError:
             pass
-    # ISO date (YYYY-MM-DD)
     try:
         return date.fromisoformat(s)
     except ValueError:
@@ -89,16 +55,7 @@ def _parse_date(value: Any) -> date | None:
         return None
 
 
-# --------------------------------------------------------------------------- #
-# Normalizers — one per source. Each takes the MCP-serialized dict form of
-# the source's Paper/Hit shape and returns a NormalizedPaper.
-#
-# Cross-source dedup happens AFTER normalization: same arxiv_id from multiple
-# sources collapses via dedup_by_arxiv_id (below).
-# --------------------------------------------------------------------------- #
 def normalize_arxiv(d: dict[str, Any]) -> NormalizedPaper:
-    """arxiv.Paper → NormalizedPaper. arxiv carries categories + abstract
-    but no citation / community signals."""
     return NormalizedPaper(
         arxiv_id              = _canonical_arxiv_id(d.get("arxiv_id")),
         title                 = (d.get("title")    or "").strip(),
@@ -116,9 +73,6 @@ def normalize_arxiv(d: dict[str, Any]) -> NormalizedPaper:
 
 
 def normalize_s2(d: dict[str, Any]) -> NormalizedPaper:
-    """s2.Paper → NormalizedPaper. S2 carries citation_count + influential_
-    citation_count (the radar's quality signals) and the cross-source ArXiv
-    id via external_ids."""
     external_ids = d.get("external_ids") or {}
     arxiv_raw = external_ids.get(S2_EXTERNAL_ID_ARXIV)
     published = _parse_date(d.get("publication_date")) or _parse_date(d.get("year"))
@@ -139,9 +93,6 @@ def normalize_s2(d: dict[str, Any]) -> NormalizedPaper:
 
 
 def normalize_hf(d: dict[str, Any]) -> NormalizedPaper:
-    """hf.Paper → NormalizedPaper. HF Daily Papers always carries arxiv_id
-    (by feed design) + community upvotes. arxiv categories are NOT surfaced
-    by the HF endpoint."""
     return NormalizedPaper(
         arxiv_id              = _canonical_arxiv_id(d.get("arxiv_id")),
         title                 = (d.get("title")    or "").strip(),
@@ -159,16 +110,11 @@ def normalize_hf(d: dict[str, Any]) -> NormalizedPaper:
 
 
 def normalize_hn(d: dict[str, Any]) -> NormalizedPaper:
-    """hn.Hit → NormalizedPaper. HN carries traction signals (points,
-    num_comments) and an EXTRACTED arxiv_id when the story URL points at
-    arxiv.org or huggingface.co/papers — the only path by which HN hits
-    join the cross-source dedup graph."""
     author = (d.get("author") or "").strip()
     return NormalizedPaper(
         arxiv_id              = _canonical_arxiv_id(d.get("arxiv_id")),
         title                 = (d.get("title") or "").strip(),
-        # HN self-post body is the closest analogue to an "abstract"; most
-        # HN hits are link posts and this stays empty.
+        # HN self-post body is the closest analogue to an "abstract"; most HN hits are link posts and this stays empty.
         abstract              = (d.get("story_text") or "").strip(),
         published             = _parse_date(d.get("created_at")),
         authors               = (author,) if author else (),
@@ -182,43 +128,18 @@ def normalize_hn(d: dict[str, Any]) -> NormalizedPaper:
     )
 
 
-# --------------------------------------------------------------------------- #
-# Cross-source dedup — the architectural payoff. Same arxiv_id from multiple
-# sources collapses to one NormalizedPaper whose signal fields are max-merged
-# (the source missing each signal contributed 0, so max == "the source that
-# has it"). Papers without an arxiv_id can't dedup; they're kept as standalone
-# candidates.
-# --------------------------------------------------------------------------- #
 _TITLE_NORM_RE = re.compile(r"[^a-z0-9]+")
 
 
 def _normalized_title(title: str) -> str:
-    """Lower-case, strip punctuation/whitespace, collapse. Used as a
-    secondary dedup key for items without an arxiv_id. `Show HN: Almanac
-    MCP, turn Claude Code into a Deep Research agent` and a duplicate
-    crosspost with the same title collapse to one entry."""
+    """Secondary dedup key for items without arxiv_id — catches HN crossposts with identical titles."""
     if not title:
         return ""
     return _TITLE_NORM_RE.sub(" ", title.lower()).strip()
 
 
 def dedup_by_arxiv_id(items: list[NormalizedPaper]) -> list[NormalizedPaper]:
-    """Merge papers sharing an arxiv_id (primary key) or a normalized
-    title (secondary key, for items without arxiv_id).
-
-    Primary: same arxiv_id → max-merge per-source signals.
-
-    Secondary (2026-06-16, post-28094718): items WITHOUT arxiv_id are
-    deduped by normalized title (lower-cased, punctuation-stripped). This
-    catches HN crossposts and same-title items from different sources.
-    Scan 28094718 surfaced two literal duplicates of `Show HN: Almanac
-    MCP` at ranks 1 and 3, both with sig=0.1805 — caused by passing items
-    through `no_id` without any secondary key.
-
-    Output ordering: arxiv-id dedup groups first (insertion order of the
-    first occurrence of each arxiv_id), then title-deduped no-id items in
-    original order.
-    """
+    """Primary dedup on arxiv_id (max-merge signals); secondary dedup by normalized title for no-id items."""
     by_id: dict[str, NormalizedPaper] = {}
     by_title: dict[str, NormalizedPaper] = {}
     no_key: list[NormalizedPaper] = []
@@ -227,7 +148,6 @@ def dedup_by_arxiv_id(items: list[NormalizedPaper]) -> list[NormalizedPaper]:
             existing = by_id.get(it.arxiv_id)
             by_id[it.arxiv_id] = _merge(existing, it) if existing else it
             continue
-        # No arxiv_id — fall back to title-based dedup.
         nt = _normalized_title(it.title)
         if not nt:
             no_key.append(it)
@@ -238,9 +158,7 @@ def dedup_by_arxiv_id(items: list[NormalizedPaper]) -> list[NormalizedPaper]:
 
 
 def _merge(a: NormalizedPaper, b: NormalizedPaper) -> NormalizedPaper:
-    """Combine two NormalizedPapers that share an arxiv_id. Strings/dates
-    prefer the first non-empty; per-source signals take max; sets / authors /
-    categories union."""
+    """Max-merge per-source signals; strings/dates prefer first non-empty; sets union."""
     return NormalizedPaper(
         arxiv_id              = a.arxiv_id,
         title                 = a.title    or b.title,
@@ -259,10 +177,6 @@ def _merge(a: NormalizedPaper, b: NormalizedPaper) -> NormalizedPaper:
     )
 
 
-# --------------------------------------------------------------------------- #
-# Signal score — composite ranking scalar. See architecture-doc §2.5 for the
-# weights rationale + per-profile override path.
-# --------------------------------------------------------------------------- #
 def signal_score(
     p: NormalizedPaper,
     *,
@@ -272,12 +186,7 @@ def signal_score(
     weights: SignalWeights = WEIGHTS,
     domain_params: DomainParams = DOMAIN_PARAMS,
 ) -> float:
-    """Composite signal score in [0, ~1] for ranking. Higher is better.
-
-    The score is a sortable scalar — weights need not sum to 1. Per-term
-    each component is roughly [0, 1] so weight magnitudes directly express
-    relative influence.
-    """
+    """Sortable composite scalar — weights need not sum to 1; each component is roughly [0, 1]."""
     rel = _cosine(profile_embedding, p.embedding) \
         if (profile_embedding and p.embedding) else 0.0
     rec = _recency_decay(p.published, now, domain_params.recency_half_life_days)
@@ -285,15 +194,11 @@ def signal_score(
     infl = (p.influential_citations / p.citations) if p.citations > 0 else 0.0
     infl = max(0.0, min(infl, 1.0))
     fit = _vertical_fit(p.categories, profile_verticals)
-    # log1p caps buzz dominance from one viral HN post; /14 normalizes since
-    # log1p(1_000_000) ≈ 13.8.
+    # log1p caps buzz dominance from one viral HN post; /14 normalizes since log1p(1_000_000) ≈ 13.8.
     buzz_raw = _log1p(p.hn_points) + _log1p(p.hf_upvotes)
     buzz = min(buzz_raw / 14.0, 1.0)
     code = 1.0 if p.has_code else 0.0
-    # 2026-06-16: arxiv_id presence is a binary research-paper signal.
-    # HN posts without an arxiv_id are usually product announcements;
-    # giving real papers a small lift prevents them from being displaced
-    # at the top when discovery returns a thin paper set.
+    # arxiv_id absence = product announcement; lift prevents displacing real papers on thin result sets.
     has_aid = 1.0 if p.arxiv_id else 0.0
     return (
         weights.relevance         * rel
@@ -307,20 +212,11 @@ def signal_score(
     )
 
 
-# --------------------------------------------------------------------------- #
-# Diff vs seen — partition this scan's candidates into (new, returning) using
-# the profile's seen-set from radar_seen. Drives the digest's "New since last
-# scan" section.
-# --------------------------------------------------------------------------- #
 def diff_vs_seen(
     candidates: list[NormalizedPaper],
     seen_arxiv_ids: frozenset[str],
 ) -> tuple[list[NormalizedPaper], list[NormalizedPaper]]:
-    """Returns (new, returning).
-
-    Papers without an arxiv_id are treated as new — they have no stable
-    identity in radar_seen, so they're always treated as fresh discoveries.
-    """
+    """Returns (new, returning). Papers without arxiv_id are always new — no stable identity in radar_seen."""
     new: list[NormalizedPaper] = []
     returning: list[NormalizedPaper] = []
     for c in candidates:
@@ -331,11 +227,7 @@ def diff_vs_seen(
     return new, returning
 
 
-# --------------------------------------------------------------------------- #
-# Pure helpers (private)
-# --------------------------------------------------------------------------- #
 def _cosine(a: tuple[float, ...] | None, b: tuple[float, ...] | None) -> float:
-    """Cosine similarity in [-1, 1]; 0 on missing / mismatched-dim inputs."""
     if not a or not b or len(a) != len(b):
         return 0.0
     dot = 0.0
@@ -360,8 +252,7 @@ def _recency_decay(published: date | None, now: date, half_life_days: int) -> fl
 
 
 def _velocity(citations: int, published: date | None, now: date, min_age_days: int) -> float:
-    """log1p(citations) / log1p(age_days) — a citations-per-day proxy that
-    log-saturates so the metric stays bounded. Clamped to [0, 1]."""
+    """log1p(citations) / log1p(age_days) — log-saturated citations-per-day proxy, clamped to [0, 1]."""
     if citations <= 0 or published is None:
         return 0.0
     age_days = max((now - published).days, min_age_days)
@@ -372,12 +263,7 @@ def _velocity(citations: int, published: date | None, now: date, min_age_days: i
 
 
 def _vertical_fit(categories: tuple[str, ...], verticals: tuple[str, ...]) -> float:
-    """Fraction of the paper's categories that match the profile's verticals.
-
-    Literal case-insensitive set overlap — the FastHTML profile editor
-    (step 6) provides verticals from a controlled list so both sides use
-    the same vocabulary. Empty inputs → 0.0.
-    """
+    """Fraction of the paper's categories that match profile verticals. Both sides use the same controlled vocabulary."""
     if not categories or not verticals:
         return 0.0
     cats  = {c.lower() for c in categories}
@@ -387,5 +273,4 @@ def _vertical_fit(categories: tuple[str, ...], verticals: tuple[str, ...]) -> fl
 
 
 def _log1p(x: int | float) -> float:
-    """log(1+x); 0.0 for non-positive input."""
     return math.log1p(x) if x > 0 else 0.0

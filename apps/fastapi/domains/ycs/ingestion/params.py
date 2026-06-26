@@ -1,8 +1,4 @@
 """ycs/ingestion — Qdrant collection name + ES scroll batch sizes.
-
-Direct port of deprecated `services/youtube/ingestion.py` defaults
-(`L44-46, L84, L139, L152-153`).
-
 ES index names live in `infra/elasticsearch/params.py` — `service.py`
 imports them from there rather than duplicating the constants."""
 from __future__ import annotations
@@ -19,7 +15,6 @@ SCROLL_BATCH_SIZE = 50
 # (graph_builder reads transcripts that way).
 FETCH_BATCH_SIZE = 100
 
-# Default chunker tunables for `ingest_to_qdrant` — fall back to the
 # canonical chunker defaults if not overridden by caller.
 DEFAULT_CHUNK_SIZE = 2000
 DEFAULT_CHUNK_OVERLAP = 200
@@ -27,7 +22,7 @@ DEFAULT_CHUNK_OVERLAP = 200
 # Progress log throttle.
 LOG_EVERY_N_TRANSCRIPTS = 50
 
-# Cross-video chunk packing (2026-06-10). NIM embedding latency is
+# Cross-video chunk packing . NIM embedding latency is
 # per-CALL dominated (~11-15 s per call whether it carries 5 texts or
 # 50 — measured 60.7 s per-video vs 11.2 s packed for the same 48
 # chunks). Chunks are therefore accumulated ACROSS videos and flushed

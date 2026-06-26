@@ -1,16 +1,5 @@
-"""ycs/content — HTTP surface (sync yt-dlp search + 3 Celery dispatchers).
-
-Wave 4 additions per `docs/YCS-PORT-PLAN-2026-06-06.md`:
-  POST /videos    queues `extract_videos`   (specific IDs)
-  POST /channel   queues `extract_channel`  (all videos in a channel)
-  POST /playlist  queues `extract_playlist` (all videos in a playlist)
-
-The sync `POST /search` (Wave 1) stays untouched. Dispatch endpoints
-return immediately with a Celery task_id — clients poll
-`/api/v1/ycs/admin/task/{id}` for progress (Wave 5).
-
-Errors from the yt-dlp subprocess translate to 502 (upstream failure) /
-504 (timeout) so the FastHTML form can show a sensible message."""
+"""ycs/content — sync yt-dlp search + Celery dispatchers for video/channel/playlist ingestion.
+yt-dlp errors translate to 502 (subprocess failure) / 504 (timeout)."""
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
@@ -38,8 +27,7 @@ router = APIRouter()
 
 @router.post("/search", response_model = SearchResponse)
 async def search_videos(payload: SearchRequest) -> SearchResponse:
-    """Synchronously search YouTube via yt-dlp `ytsearch*` and return
-    snippets. No persistence — deprecated `helpers.py:L161-340`."""
+    """Synchronous yt-dlp `ytsearch*` — returns snippets, no persistence."""
     svc = get_search_service()
     try:
         return await svc.search(payload)
@@ -58,12 +46,7 @@ async def search_videos(payload: SearchRequest) -> SearchResponse:
 
 @router.post("/videos")
 async def get_videos(payload: VideosRequest) -> dict:
-    """Extract specific videos by ID → ES (Celery background task).
-    Returns immediately with task_id.
-
-    Direct port of deprecated `routers/v1/youtube/content.py:L70-89`.
-    Kept for back-compat / parity with channel + playlist; the live
-    Videos tab now POSTs to `/videos/pipeline` (full 3-phase chain)."""
+    """Extract specific videos → ES (Celery). Bare extract only; the Videos tab uses `/videos/pipeline`."""
     if not payload.video_ids:
         raise HTTPException(
             status_code = 400, detail = "video_ids is required",
@@ -85,21 +68,8 @@ async def get_videos(payload: VideosRequest) -> dict:
 async def get_videos_pipeline(
     payload: VideosRequest, request: Request,
 ) -> dict:
-    """Full 3-phase ingest pipeline for a list of video IDs (Celery
-    chain): `extract_videos → ingest_to_qdrant → ingest_to_neo4j →
-    invalidate_cache`. Returns the chain's 3 user-visible task_ids
-    immediately so the FastHTML Ingest page can render 3 live
-    progress bars.
-
-    Wave 5 polish — the Videos tab's `Start ingest` button now wires
-    to this endpoint instead of the bare `/videos` extract. Qdrant +
-    Neo4j ingestion are MANDATORY per the user spec; chaining at the
-    API layer (vs. a single orchestrator task) lets each phase report
-    its own progress via `self.update_state(...)`.
-
-    Also snapshots the dispatch params (video_ids + flags) to Redis
-    so the Ingest page's Rerun button can resurrect this run without
-    making the user pick videos again."""
+    """Full 3-phase pipeline (extract → Qdrant → Neo4j → invalidate). Chained at the API layer so
+    each phase reports its own progress. Snapshots params to Redis to enable Rerun."""
     if not payload.video_ids:
         raise HTTPException(
             status_code = 400, detail = "video_ids is required",
@@ -131,18 +101,8 @@ async def get_videos_pipeline(
 
 @router.post("/videos/pipeline/{extract_id}/rerun")
 async def rerun_videos_pipeline(extract_id: str, request: Request) -> dict:
-    """Re-fire the 3-phase chain for a prior dispatch, looking up the
-    original `{video_ids, include_transcription, languages}` from Redis
-    (keyed by Phase A extract id, 24h TTL).
-
-    Cache behavior on rerun (1:1 deprecated semantics):
-      - Phase A: yt-dlp metadata re-fetches; transcript Playwright
-        fetch SKIPS videos already in ES (`_check_existing_transcriptions`).
-      - Phase B: Qdrant point ids are `md5(video_id_chunk_index)` so
-        re-upserts overwrite in place. No skip — embedding work runs again.
-      - Phase C: `extract_and_store_graph` queries Neo4j for already-
-        tagged Document nodes and SKIPS those video_ids.
-    So partial failures retry cleanly; full successes mostly no-op."""
+    """Re-fire the 3-phase chain from the Redis snapshot of a prior dispatch (24h TTL).
+    Phase A skips existing ES transcripts; Phase B re-upserts (idempotent); Phase C skips tagged video_ids."""
     from domains.ycs.pipeline_task import (
         dispatch_videos_pipeline,
         load_pipeline_state,
@@ -185,15 +145,8 @@ async def rerun_videos_pipeline(extract_id: str, request: Request) -> dict:
 async def get_videos_pipeline_state(
     extract_id: str, request: Request,
 ) -> dict:
-    """Return the saved dispatch state for a pipeline by its
-    extract task id. Used by the Ingest panel's video-list to
-    rehydrate `video_ids` + `phases` after a page refresh /
-    cross-tab navigation when the client's localStorage entry is
-    stale or missing. Best-effort: returns 404 once the 24h Redis
-    TTL expires.
-
-    Mirrors what `dispatch_videos_pipeline` snapshotted — never
-    triggers a new dispatch."""
+    """Return the saved dispatch state for a pipeline. Used to rehydrate `video_ids`+`phases` after
+    page refresh or cross-tab navigation. 404 after the 24h Redis TTL."""
     from domains.ycs.pipeline_task import load_pipeline_state
     state = await load_pipeline_state(
         getattr(request.app.state, "redis_aio", None),
@@ -212,35 +165,9 @@ async def get_videos_pipeline_state(
 
 @router.post("/videos/pipeline/{extract_id}/wipe")
 async def wipe_videos_pipeline(extract_id: str, request: Request) -> dict:
-    """Wipe every artifact tied to the videos in pipeline `extract_id`,
-    then revoke any in-flight phases so the chain can't write orphans
-    after the wipe returns. After wipe + revoke, the user can click
-    `Retry` to re-fire the chain from scratch with no Phase 1 cache
-    hits and no Phase 3 skip-on-video_id short-circuit.
-
-    Order: wipe FIRST (the primary user intent — get the data gone),
-    then revoke (secondary — kill any zombie writers). A failure in
-    revoke doesn't unwipe the data; a failure in wipe still tries
-    revoke. This matches the button's "Wipe cache" name semantics —
-    the user expects data gone; the revoke is implementation-detail
-    cleanup.
-
-    Why both: without revoke, an in-flight Phase 3 mid-LLM-call
-    finishes its batch AFTER the wipe and writes new Document nodes
-    pointing at the deleted Video nodes — orphans. The next Retry's
-    Phase-3 skip check (`MATCH (d:Document) WHERE d.video_id IS NOT
-    NULL`) finds those orphans and skips the videos, defeating the
-    point of the wipe.
-
-    Entity nodes (`__Entity__`) in Neo4j are LEFT INTACT because they
-    may be referenced by other videos' transcripts; deleting them
-    would cascade into other videos' graphs. Orphaned entities are
-    harmless and can be swept lazily later.
-
-    Best-effort across all 3 stores + the revoke — a failure in one
-    is logged + counted, the others still run. Looks up the
-    video_ids + phase task_ids from the same Redis blob used by
-    Stop / Rerun (24h TTL, persisted on dispatch + rerun)."""
+    """Wipe artifacts for `extract_id`, then revoke in-flight phases (wipe first, revoke second).
+    Without revoke a mid-LLM-call Phase 3 writes orphan Document nodes the next Retry's skip-check finds.
+    `__Entity__` nodes left intact — may be shared across other videos."""
     from domains.ycs.pipeline_task import (
         load_pipeline_state,
         revoke_pipeline_phases,
@@ -258,15 +185,10 @@ async def wipe_videos_pipeline(extract_id: str, request: Request) -> dict:
                 f"expired (24h TTL) or unknown."
             ),
         )
-    # 1. Wipe (the user-visible primary action)
     summary = await wipe_videos_data(
         video_ids   = state["video_ids"],
         neo4j_graph = getattr(request.app.state, "neo4j_graph", None),
     )
-    # 2. Revoke any in-flight chain phases so a mid-LLM-call Phase 3
-    #    doesn't finish + write orphans after we've wiped. Best-effort:
-    #    if there's no chain to revoke, revoke_pipeline_phases is a
-    #    no-op per-id.
     phases: dict[str, str] = state.get("phases", {})
     phase_ids = [
         phases.get("extract",    ""),
@@ -284,20 +206,8 @@ async def wipe_videos_pipeline(extract_id: str, request: Request) -> dict:
 
 @router.post("/videos/pipeline/{extract_id}/stop")
 async def stop_videos_pipeline(extract_id: str, request: Request) -> dict:
-    """Revoke every task in the Videos pipeline chain for `extract_id`
-    (`SIGTERM` to the running task; revoke flag prevents queued ones
-    from starting).
-
-    Preserves successful work — any phase already in SUCCESS state
-    keeps its ES / Qdrant / Neo4j writes (revoke is a no-op for
-    terminal tasks). In-flight phases get cut at the next yield
-    point; the data they had partially written stays put. Idempotent
-    Qdrant upserts (md5 chunk ids) and the Phase-C skip-on-video_id
-    check let a subsequent rerun pick up cleanly.
-
-    Looks up the chain task_ids from Redis (`persist_pipeline_state`
-    snapshots them on dispatch + rerun) so the client only needs to
-    pass the extract_id."""
+    """Revoke all in-flight phases for `extract_id`. Preserves SUCCESS-state phases; idempotent
+    Qdrant upserts and Neo4j skip-on-video_id let a rerun pick up cleanly."""
     from domains.ycs.pipeline_task import (
         load_pipeline_state,
         revoke_pipeline_phases,
@@ -335,16 +245,8 @@ async def preview_videos(
     limit:  int = 100,
     offset: int = 0,
 ) -> EnumerationResponse:
-    """Per-id yt-dlp metadata fetch for the Source page's Videos-tab
-    Fetch flow. Accepts a comma-separated `ids=` parameter and returns
-    the same EnumerationResponse shape Channel + Playlist endpoints
-    use, so picker.js renders all three tabs with one shared module.
-
-    URL encoding caps: typical paste of 200 11-char YouTube IDs ≈ 2200
-    chars in the URL — well within the ~8K browser/proxy limits.
-    Server-side pagination via offset/limit (slices the input list)
-    keeps wirePickerTab's Load-more behavior identical to channel/
-    playlist."""
+    """yt-dlp metadata fetch for a comma-separated `ids=` list. Same `EnumerationResponse` shape
+    as channel/playlist so picker.js renders all three tabs with one shared module."""
     video_ids = [v.strip() for v in (ids or "").split(",") if v.strip()]
     if not video_ids:
         raise HTTPException(
@@ -374,17 +276,8 @@ async def enumerate_channel_videos(
     limit:  int = 100,
     offset: int = 0,
 ) -> EnumerationResponse:
-    """Paginated listing of ONE channel's videos. The Channel tab on
-    the Source page calls this on form submit, renders the items in a
-    master+row checkbox table, and dispatches the SELECTED video_ids
-    to `/content/videos/pipeline` (same chain the Videos tab uses).
-
-    Resolves any channel input shape — bare `UC...`, `@handle`,
-    channel URL, custom `/c/<name>` URL — into the channel's UU
-    uploads playlist (where possible) for the cheapest pagination
-    path. Returns `total=None` when yt-dlp can't surface
-    `playlist_count` for the resolved URL; the frontend renders "?" in
-    that case."""
+    """Paginated channel video listing. Resolves any input shape (bare `UC…`, `@handle`, URL) to
+    the uploads playlist for cheapest pagination. `total=None` when yt-dlp can't surface `playlist_count`."""
     svc = get_search_service()
     try:
         return await svc.enumerate_videos(
@@ -412,13 +305,7 @@ async def enumerate_playlist_videos(
     limit:  int = 100,
     offset: int = 0,
 ) -> EnumerationResponse:
-    """Paginated listing of ONE playlist's videos. Same shape as
-    `/channel/videos` — used by the Playlist tab to render a master+row
-    checkbox picker and dispatch the selection to the videos pipeline.
-
-    Accepts any playlist input — raw `PL...` / `UU...` etc. ID, full
-    `playlist?list=...` URL, or a `watch?v=…&list=…` URL with a list=
-    query."""
+    """Paginated playlist video listing. Accepts bare `PL…`/`UU…`, full `playlist?list=…`, or `watch?v=…&list=…` URLs."""
     svc = get_search_service()
     try:
         return await svc.enumerate_videos(
@@ -444,14 +331,7 @@ async def enumerate_playlist_videos(
 async def channel_pipeline(
     payload: ChannelPipelineRequest, request: Request,
 ) -> dict:
-    """Enumerate ALL videos in a channel server-side, then dispatch the
-    3-phase pipeline (extract → Qdrant → Neo4j → invalidate) against
-    every video_id. Bypasses the 100-per-page picker cap so the user
-    can queue a whole channel with one click.
-
-    Returns the same shape `/videos/pipeline` returns — `{phases,
-    video_ids, status, endpoint}` — so the FastHTML dispatch helper
-    works unchanged."""
+    """Enumerate ALL channel videos server-side, then dispatch the 3-phase pipeline. Bypasses the 100-per-page picker cap."""
     svc = get_search_service()
     try:
         video_ids = await svc.enumerate_all_video_ids(
@@ -500,9 +380,7 @@ async def channel_pipeline(
 async def playlist_pipeline(
     payload: PlaylistPipelineRequest, request: Request,
 ) -> dict:
-    """Enumerate ALL videos in a playlist server-side, then dispatch
-    the 3-phase pipeline. Mirror of `/channel/pipeline` — see that
-    handler for the design notes."""
+    """Enumerate ALL playlist videos server-side, then dispatch the 3-phase pipeline."""
     svc = get_search_service()
     try:
         video_ids = await svc.enumerate_all_video_ids(
@@ -549,10 +427,7 @@ async def playlist_pipeline(
 
 @router.post("/channel")
 async def get_channel_videos(payload: ChannelRequest) -> dict:
-    """Extract all channel videos → ES (Celery background task).
-    `max_results=0` fetches ALL videos.
-
-    Direct port of deprecated `routers/v1/youtube/content.py:L92-109`."""
+    """Extract all channel videos → ES (Celery). `max_results=0` fetches ALL videos."""
     from domains.ycs.extract.task import extract_channel
     task = extract_channel.delay(
         payload.channel_id,
@@ -569,10 +444,7 @@ async def get_channel_videos(payload: ChannelRequest) -> dict:
 
 @router.post("/playlist")
 async def get_playlist_videos(payload: PlaylistRequest) -> dict:
-    """Extract all playlist videos → ES (Celery background task).
-    `max_results=0` fetches ALL videos.
-
-    Direct port of deprecated `routers/v1/youtube/content.py:L112-129`."""
+    """Extract all playlist videos → ES (Celery). `max_results=0` fetches ALL videos."""
     from domains.ycs.extract.task import extract_playlist
     task = extract_playlist.delay(
         payload.playlist_id,

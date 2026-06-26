@@ -11,8 +11,6 @@ from ..cache import fetch_catalog
 
 
 def FrameworkPicker(slug: str | None, catalog: list[dict] | None = None):
-    # Resolve the current selection's display info server-side so the
-    # trigger renders with the right name + logo — no JS flicker.
     # Multi-logo stacks (LangChain bundle, Grafana bundle) render the
     # first logo as the trigger badge.
     info = None

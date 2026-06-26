@@ -37,9 +37,7 @@ from ..params import STORES_PARAMS
 logger = logging.getLogger(__name__)
 
 
-# --------------------------------------------------------------------------- #
 # Session / config — one Session per process; clients are per-operation
-# --------------------------------------------------------------------------- #
 _session: Optional[aioboto3.Session] = None
 _boto_config = Config(
     signature_version    = "s3v4",      # MinIO requires v4; default v2 fails
@@ -83,9 +81,7 @@ def _client():
     )
 
 
-# --------------------------------------------------------------------------- #
 # Bootstrap — ensure the bucket exists. Idempotent.
-# --------------------------------------------------------------------------- #
 async def bootstrap_minio() -> None:
     """head_bucket; create_bucket on 404. Same pattern as the dd ingestion
     storage's ensure_bucket()."""
@@ -106,9 +102,7 @@ async def bootstrap_minio() -> None:
         logger.info(f"[rr-minio] created bucket {bucket!r}")
 
 
-# --------------------------------------------------------------------------- #
 # Digest JSON — the final ranked digest for a scan
-# --------------------------------------------------------------------------- #
 async def put_digest_json(scan_id: str, payload: dict[str, Any]) -> str:
     """Write the scan's digest snapshot. Returns the MinIO key."""
     key  = digest_minio_key(scan_id)
@@ -156,9 +150,7 @@ async def delete_digest_json(scan_id: str) -> bool:
             raise
 
 
-# --------------------------------------------------------------------------- #
 # Extraction JSON — per-paper deep_read output (step 4)
-# --------------------------------------------------------------------------- #
 async def put_extraction_json(
     scan_id: str, arxiv_id: str, payload: dict[str, Any]
 ) -> str:
@@ -192,9 +184,7 @@ async def get_extraction_json(
     return json.loads(body)
 
 
-# --------------------------------------------------------------------------- #
 # Build-tab Python — per-paper synthesized code (lazy, on first tab click)
-# --------------------------------------------------------------------------- #
 async def put_code_py(
     scan_id: str, arxiv_id: str, prompt_version: str, code: str,
 ) -> str:

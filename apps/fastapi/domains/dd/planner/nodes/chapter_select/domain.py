@@ -21,7 +21,6 @@ def greedy_select(
                          (highest confidence among SELECTED chapters)
     """
     n_proposals = len(proposals)
-    # Build per-doc confidence vector keyed by chapter index.
     doc_confidences: dict[str, dict[int, float]] = {}
     for k, scores in assignments.items():
         cv: dict[int, float] = {}

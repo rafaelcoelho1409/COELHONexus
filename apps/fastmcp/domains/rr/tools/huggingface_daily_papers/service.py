@@ -78,7 +78,6 @@ async def fetch_daily_papers(
     if req.min_upvotes is not None:
         papers = [p for p in papers if p.upvotes >= req.min_upvotes]
 
-    # Trim to n_max. HF returns however many were curated today; n_max is a
     # client-side cap to keep responses bounded for the agent.
     if len(papers) > req.n_max:
         papers = papers[: req.n_max]

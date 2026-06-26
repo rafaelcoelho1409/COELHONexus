@@ -9,9 +9,7 @@ Rename safety: change here once → propagates everywhere downstream.
 from __future__ import annotations
 
 
-# --------------------------------------------------------------------------- #
 # Source provenance identifiers
-# --------------------------------------------------------------------------- #
 # Match `Paper.source` / `Hit.source` of each MCP tool's boundary schema in
 # apps/fastmcp/domains/rr/tools/<source>/schemas.py EXACTLY (typos here =
 # silent dedup fails).
@@ -28,9 +26,7 @@ SOURCES_ALL: tuple[str, ...] = (SOURCE_ARXIV, SOURCE_S2, SOURCE_HF, SOURCE_HN)
 S2_EXTERNAL_ID_ARXIV: str = "ArXiv"
 
 
-# --------------------------------------------------------------------------- #
 # Postgres tables (architecture doc §2.4.3)
-# --------------------------------------------------------------------------- #
 PG_TABLE_SCANS:    str = "radar_scans"
 PG_TABLE_FINDINGS: str = "radar_findings"
 PG_TABLE_SEEN:     str = "radar_seen"
@@ -47,9 +43,7 @@ SCAN_STATUS_ERROR:     str = "error"
 SCAN_STATUS_CANCELLED: str = "cancelled"
 
 
-# --------------------------------------------------------------------------- #
 # Qdrant
-# --------------------------------------------------------------------------- #
 # Collection name for the radar's paper-abstract vectors. One collection per
 # domain — DD has its own, YCS has its own.
 QDRANT_COLLECTION: str = "radar_papers"
@@ -63,9 +57,7 @@ QDRANT_PAYLOAD_PUBLISHED: str = "published"
 QDRANT_PAYLOAD_SOURCES:   str = "sources"
 
 
-# --------------------------------------------------------------------------- #
 # MinIO — shared bucket, RR keys prefixed `rr/`
-# --------------------------------------------------------------------------- #
 # All RR artifacts share the existing `coelhonexus` bucket (env var
 # MINIO_BUCKET_COELHONEXUS). Prefixes namespace the radar's content from
 # dd/ and ycs/ artifacts.
@@ -110,9 +102,7 @@ def code_minio_key(scan_id: str, arxiv_id: str, prompt_version: str) -> str:
 MINIO_PYTHON_CONTENT_TYPE: str = "text/x-python"
 
 
-# --------------------------------------------------------------------------- #
 # Neo4j — label + relationship names (architecture doc §2.4.1)
-# --------------------------------------------------------------------------- #
 NEO4J_LABEL_PAPER:   str = "Paper"
 NEO4J_LABEL_AUTHOR:  str = "Author"
 NEO4J_LABEL_CONCEPT: str = "Concept"

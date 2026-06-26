@@ -80,7 +80,7 @@ async def distill_one(
         distillate: Optional[DocDistillate] = None
         failure_reason: Optional[str] = None
 
-        # v3 (2026-06-05) — retry loop over TRANSIENT errors only. The
+        # retry loop over TRANSIENT errors only. The
         # bandit rotates to a different deployment on each retry, so a
         # saturated NIM/Groq arm typically clears within one attempt.
         # Non-transient failures (parse, validate, auth) skip the retry
@@ -98,7 +98,6 @@ async def distill_one(
                 parsed = parse(raw)
                 if not parsed:
                     failure_reason = "parse_fail"
-                    break   # parse failures don't get retried
                 distillate, err = try_validate(parsed)
                 if distillate is None and MAX_REPAIR_ATTEMPTS > 0:
                     repair_prompt = (
@@ -242,7 +241,7 @@ async def doc_distill_run(state: PlannerState) -> dict:
     distillates: dict[str, dict] = {}
     failures: list[dict] = []       # no content at all (read fail / empty)
     fallbacks: list[dict] = []      # content present but LLM distill failed
-    # v3 (2026-06-05) — bucket-counter so the planner UI / logs can
+    # bucket-counter so the planner UI / logs can
     # distinguish rate-limit pressure (operational, retry will eventually
     # succeed) from genuine schema failures (prompt drift, model bug).
     failure_reasons: dict[str, int] = {}

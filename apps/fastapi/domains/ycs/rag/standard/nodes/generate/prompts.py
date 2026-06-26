@@ -1,9 +1,4 @@
 """ycs/rag/standard/nodes/generate — answer-generation prompt + version.
-
-Direct port of deprecated `schemas/youtube/prompts.py:L7-21`, extended
-2026-06-14 with a `MessagesPlaceholder("history")` slot so the
-generator sees prior conversation turns when producing a follow-up.
-
 Why: without history the LLM re-derives every answer in isolation —
 "compare those" / "tell me more" / "skip the offshore part" carry no
 weight. With history, the model can reference its own prior wording,

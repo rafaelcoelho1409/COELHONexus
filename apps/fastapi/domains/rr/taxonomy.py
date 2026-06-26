@@ -27,12 +27,10 @@ Regen recipe (zero deps, copy/paste into a REPL):
 from __future__ import annotations
 
 
-# --------------------------------------------------------------------------- #
 # Archive → tuple of subcategory suffixes. The grouped shape keeps this file
 # greppable + scannable; the public `ARXIV_CATEGORIES` frozenset below is
 # what callers reach for. Standalone archives (gr-qc, hep-*, …) live in
 # `_STANDALONE` because they have no subcategory dot-suffix.
-# --------------------------------------------------------------------------- #
 _BY_ARCHIVE: dict[str, tuple[str, ...]] = {
     "cs": (
         "AI", "AR", "CC", "CE", "CG", "CL", "CR", "CV", "CY", "DB",
@@ -89,14 +87,11 @@ def is_valid_vertical(code: str) -> bool:
     return bool(code) and code in ARXIV_CATEGORIES
 
 
-# --------------------------------------------------------------------------- #
 # Code → full subject name. Surfaced as hover tooltips in the browse-all
 # modal so the operator can disambiguate e.g. `math.AT` (Algebraic Topology)
 # from `math.AG` (Algebraic Geometry) without leaving the form.
-#
 # Same regen recipe as ARXIV_CATEGORIES — scrape arxiv.org/category_taxonomy
 # pairs and dump sorted; the `<h4>` regex above captures both code + name.
-# --------------------------------------------------------------------------- #
 ARXIV_DESCRIPTIONS: dict[str, str] = {
     'astro-ph.CO'           : 'Cosmology and Nongalactic Astrophysics',
     'astro-ph.EP'           : 'Earth and Planetary Astrophysics',

@@ -54,9 +54,7 @@ logger = logging.getLogger(__name__)
 CODE_SYNTH_PROMPT_VERSION: str = "v1"
 
 
-# --------------------------------------------------------------------------- #
 # Prompts — see module docstring for the design rationale
-# --------------------------------------------------------------------------- #
 _SYSTEM_PROMPT = """You are a senior Python engineer. You read research-paper extractions and write a COMPLETE, runnable Python file that demonstrates the paper's idea so the reader can extend it.
 
 Hard rules (violating ANY of these makes your output unusable):
@@ -95,9 +93,7 @@ _REVISE_PROMPT = """Rewrite the Python file to fix every issue from the critique
 Output EXACTLY ONE ```python ... ``` block. No prose."""
 
 
-# --------------------------------------------------------------------------- #
 # Public entrypoint
-# --------------------------------------------------------------------------- #
 async def synth_code(finding: dict[str, Any]) -> dict[str, str]:
     """Generate complete Python from a finding's extraction.
 
@@ -169,9 +165,7 @@ async def synth_code(finding: dict[str, Any]) -> dict[str, str]:
     return {"code": revised_code, "model_id": model_id}
 
 
-# --------------------------------------------------------------------------- #
 # Helpers
-# --------------------------------------------------------------------------- #
 def _as_text(v: Any) -> str:
     """Coerce a JSONB / extraction field to a string regardless of shape.
 

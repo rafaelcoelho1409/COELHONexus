@@ -19,7 +19,7 @@ from .domain import sentinelize_doc
 from .schemas import VaultEntry
 
 
-# CRITICAL FIX (2026-05-24 evening) — read-time vault provisioning
+# CRITICAL FIX — read-time vault provisioning
 # Root-cause discovery: ingestion produces per-page markdown files at
 # `ingestion/{slug}/pages/{idx}-{slug}.md` but the vault builder only ran
 # on the consolidated `llms-full.txt` crawl, producing exactly ONE
@@ -28,7 +28,6 @@ from .schemas import VaultEntry
 # on individual ingestion pages they have NO sentinels → digest LLM emits
 # empty code_refs → sawc has zero allowed_hashes per section → final
 # chapter has zero code blocks.
-#
 # Surgical fix: lazy per-source sentinelization. When a per-source vault
 # file doesn't exist on MinIO, run sentinelize_doc on the raw ingestion
 # page at read time. This populates the runtime vault for downstream
@@ -54,7 +53,6 @@ async def get_or_build_source_vault(
     dict maps each hash to its VaultEntry (with the original fence_text
     body that render_audit_write materializes at the end of synth).
     """
-    # Compute the expected per-page vault path. Mirror render's transform
     # (we can't import render here without creating a circular dep).
     basename = source_key.rstrip("/").rsplit("/", 1)[-1]
     if basename.endswith(".md"):

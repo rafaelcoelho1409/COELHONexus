@@ -1,15 +1,4 @@
-"""Profile endpoints — actions over the per-profile state in Postgres.
-
-Currently exposes one action:
-
-  POST /profile/{profile_id}/reset-seen
-      Truncates the `radar_seen` rows for that profile so the next scan's
-      `diff_vs_seen` treats every paper as new. Operator-triggered via the
-      Pipeline-page UI; never invoked by the scan pipeline itself.
-
-Following docs/CODE-CONVENTIONS.md §service — routers stay THIN: validate
-inputs, dispatch to the store, shape the response. No business logic here.
-"""
+"""Profile endpoints — per-profile Postgres state."""
 from __future__ import annotations
 
 import logging
@@ -27,10 +16,7 @@ router = APIRouter()
 
 
 class ResetSeenResponse(BaseModel):
-    """Body of `POST /profile/{profile_id}/reset-seen`. `deleted` is the
-    number of rows that were dropped from `radar_seen` — useful as a sanity
-    check ("we cleared 47 prior arxiv_ids, scans should now show is_new=true
-    again")."""
+    """Body of `POST /profile/{profile_id}/reset-seen`. `deleted` = rows dropped from `radar_seen`."""
     profile_id: str = Field(..., description="The profile that was reset.")
     deleted:    int = Field(..., ge=0,
                             description="Rows removed from radar_seen.")
@@ -42,9 +28,7 @@ class ResetSeenResponse(BaseModel):
     status_code    = 200,
 )
 async def reset_seen_endpoint(profile_id: str) -> ResetSeenResponse:
-    """Wipe the seen-set for one profile. Idempotent (a second call after
-    truncation returns deleted=0). Does NOT touch radar_scans / radar_findings
-    / MinIO digests / Neo4j — only the radar_seen membership table."""
+    """Truncate radar_seen for one profile so the next scan treats every paper as new. Only touches radar_seen."""
     profile_id = (profile_id or "").strip()
     if not profile_id:
         raise HTTPException(status_code=400, detail="profile_id is required")

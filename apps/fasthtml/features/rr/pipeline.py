@@ -113,12 +113,10 @@ def _StatusPill():
 # Shape legend — mirrors the Cytoscape shapes pipeline.js assigns per kind
 # so the visual vocabulary is learnable at a glance. SVG paths sized to a
 # 22×14 box; stroke-only renders so they don't compete with the status pill.
-#
 # Shape choices match `_applyKindShapes` in pipeline.js exactly:
 #   agent     hexagon       6 angular sides
 #   subagent  ellipse       smooth oval
 #   tool      rectangle     sharp 4 corners
-#   store     barrel        curved sides, flat top/bottom
 _KIND_LEGEND: tuple[tuple[str, str, str], ...] = (
     # (kind, svg_inner_markup, label)
     ("agent",

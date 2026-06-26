@@ -1,9 +1,4 @@
 """ycs/transcript — Playwright CDP transcript-extraction service.
-
-Direct port of deprecated `routers/v1/youtube/helpers.py:L1179-1773`,
-reworked 2026-06-10 after a live-cluster failure autopsy (3/5 missing
-Capital Global videos reproduced; all HAD captions per yt-dlp metadata).
-
 Extraction is now a 4-path cascade per video, behind an authoritative
 availability gate:
 
@@ -87,9 +82,7 @@ from .params import (
 log = logging.getLogger("uvicorn.error")
 
 
-# =============================================================================
 # Page-level helpers (helpers.py:L824-1145)
-# =============================================================================
 async def _setup_routes(page) -> None:
     """Set up aggressive resource blocking."""
     for pattern in BLOCK_PATTERNS:
@@ -108,7 +101,7 @@ async def _kill_youtube_background(page) -> None:
     removes the heavy sidebar / comments / recommendation trees so the
     transcript panel wins the render-frame race.
 
-    2026-06-10 REWORK — the f5bff8e clear-all-timers massacre is GONE.
+    the f5bff8e clear-all-timers massacre is GONE.
     Clearing every `setTimeout`/`setInterval` id right after
     `domcontentloaded` also killed Polymer's hydration scheduler on
     fast-DCL navigations: the watch page froze at `bodyChars=0` (no
@@ -387,7 +380,7 @@ async def _fetch_transcript_direct(
     context so the request inherits the session's cookies. Returns
     `[{timestamp, text}, ...]` segments.
 
-    2026-06-10: `po_token` added. The original port assumed the session
+    `po_token` added. The original port assumed the session
     cookies carried the bgutil-PoT — they don't (the sidecar feeds
     yt-dlp's requests, not in-page fetches), which is why every
     fallback died with `empty response` (timedtext's silent rejection
@@ -490,7 +483,6 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
         )
     except Exception:
         log.warning("[dom] Hydration gate not reached in 20s, proceeding")
-    # Check if transcript panel is already visible
     already_visible = await page.evaluate('''() => {
         const segments = document.querySelectorAll('transcript-segment-view-model, ytd-transcript-segment-renderer');
         if (segments.length > 0) return true;
@@ -500,7 +492,6 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
     if already_visible:
         log.info("[dom] Transcript panel already visible")
         return await _extract_transcript_text(page)
-    # Step 2: Wait for and click expand button (with retry)
     expanded = False
     for expand_attempt in range(3):
         try:
@@ -526,7 +517,6 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
             continue
     if not expanded:
         log.info("[dom] Expand button not found after retries, continuing...")
-    # Step 3: Find and click transcript button with multiple selectors
     transcript_clicked = False
     selectors = [
         '[aria-label="Show transcript"]',
@@ -558,7 +548,6 @@ async def _extract_via_dom(page, timeout_ms: int) -> str:
         })''')
         log.warning(f"[dom] Transcript button not found. Debug: {debug_info}")
         raise ValueError("Transcript button not found")
-    # Step 4: Event-driven wait for transcript panel to render.
     # 1:1 with the gold-standard `wait_for_segments(page, timeout_ms=10000)`
     # from commit f5bff8e (`scripts/optimized_transcript_extraction.py`).
     # Replaces the prior 15-attempt × 1s polling loop — the polling
@@ -665,12 +654,9 @@ async def _extract_transcript_text(page) -> str:
     ''')
 
 
-# =============================================================================
 # PlaywrightTranscriptService — Browser Pool with Semaphore Control
-# =============================================================================
 class PlaywrightTranscriptService:
-    """Browser pool with semaphore-controlled concurrency for transcript
-    extraction. Direct port of deprecated helpers.py:L1179-1723.
+    """Browser pool with semaphore-controlled concurrency for transcript extraction.
 
     Features:
       - Semaphore limits concurrent browser contexts (default: 5)
@@ -698,7 +684,6 @@ class PlaywrightTranscriptService:
         browser_refresh_interval: int        = BROWSER_REFRESH_INTERVAL,
         max_retries:              int        = MAX_RETRIES,
     ) -> None:
-        """Args mirror deprecated `__init__` (helpers.py:L1201-L1242)."""
         self._cdp_endpoint = cdp_url
         self.max_concurrent = max_concurrent
         # Pool size should match max_concurrent to avoid context-creation storms.
@@ -1092,7 +1077,6 @@ class PlaywrightTranscriptService:
                     wait_until = "domcontentloaded",
                     timeout    = self.navigation_timeout_ms,
                 )
-                # ---- Availability gate (permanent classifications) ----
                 state = await _get_player_state(page)
                 playability = state.get("playability")
                 if playability and playability in _UNPLAYABLE_STATUSES:
@@ -1154,7 +1138,6 @@ class PlaywrightTranscriptService:
                         "method":            method,
                     }
 
-                # ---- PATH 1: modern get_panel data API ----
                 try:
                     return _ok(
                         await _fetch_via_get_panel(page, video_id),
@@ -1165,7 +1148,6 @@ class PlaywrightTranscriptService:
                         f"[transcript-service] {video_id} get_panel path: "
                         f"{str(e)[:100]}",
                     )
-                # ---- PATH 2: legacy get_transcript data API ----
                 try:
                     return _ok(
                         await _fetch_via_get_transcript(page),
@@ -1176,7 +1158,6 @@ class PlaywrightTranscriptService:
                         f"[transcript-service] {video_id} get_transcript path: "
                         f"{str(e)[:100]}",
                     )
-                # ---- PATH 3: DOM click-scrape ----
                 try:
                     await _kill_youtube_background(page)
                     raw_text = await _extract_via_dom(page, self.timeout_ms)
@@ -1193,7 +1174,6 @@ class PlaywrightTranscriptService:
                         "dom_scrape",
                     )
                 except Exception as dom_err:
-                    # ---- PATH 4: timedtext baseUrl + bgutil-PoT ----
                     direct_segments: list[dict] | None = None
                     if selected and selected.base_url:
                         try:
@@ -1351,14 +1331,11 @@ class PlaywrightTranscriptService:
             f"[transcript-service] Batch complete: {success}/{batch_size} OK "
             f"time={elapsed:.1f}s avg={avg_time:.1f}s/video",
         )
-        # Cleanup contexts after batch to prevent memory accumulation
         await self._cleanup_contexts()
         return results
 
 
-# =============================================================================
 # Module-level singleton + cache-aware batch driver
-# =============================================================================
 _transcript_service: PlaywrightTranscriptService | None = None
 
 
@@ -1400,9 +1377,7 @@ async def close_transcript_service() -> None:
         _transcript_service = None
 
 
-# =============================================================================
 # ES cache check + batch driver (helpers.py:L556-741)
-# =============================================================================
 async def _check_existing_transcriptions(
     es_client: AsyncElasticsearch | None,
     video_ids: list[str],
@@ -1512,7 +1487,6 @@ async def fetch_transcriptions_batch(
             f"[fetch_transcriptions_batch] Cache: {cached_count} hits, "
             f"{len(ids_to_fetch)} to fetch",
         )
-    # Emit one per-video progress callback for EACH cached id, in order,
     # using `total_videos` as the denominator. Before this change the
     # transcripts bar jumped 2% → 100% in cached-only runs because the
     # function returned early without ever firing progress_cb. The bar

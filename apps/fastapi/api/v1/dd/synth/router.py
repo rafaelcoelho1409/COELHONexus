@@ -596,11 +596,7 @@ async def cancel_synth(thread_id: str) -> dict:
         if len(parts) >= 4 and parts[1] == "study":
             slug = parts[2]
             seen: set[str] = set()
-            # PRIMARY — authoritative active-chapter set (study orchestrator
-            # SADDs each chapter_thread_id before spawn, SREMs in finally).
-            # Catches chapters that just started and haven't emitted their
-            # first progress event yet — those are invisible to the
-            # snapshot scan below.
+            # SADDs before spawn → catches chapters that just started but haven't emitted a progress event yet (invisible to snapshot scan).
             try:
                 members = await r.smembers(
                     f"dd:study:{thread_id}:active_chapters",

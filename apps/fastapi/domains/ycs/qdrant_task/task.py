@@ -1,14 +1,4 @@
-"""ycs/qdrant_task — Celery tasks: ES transcripts → Qdrant + cache invalidate.
-
-Direct port of deprecated `tasks/youtube/qdrant.py:L1-99`.
-
-Two tasks:
-  ingest_to_qdrant(video_ids?, chunk_size, chunk_overlap)
-    Streams ES → chunk → embed (NIM dense + BM25 sparse) → Qdrant upsert.
-    Uses the streaming pipeline in `domains.ycs.ingestion` (memory-safe).
-  invalidate_cache()
-    Clears all RAG response cache after new data lands. Called as the
-    last step of `full_channel_pipeline`."""
+"""ycs/qdrant_task — ES transcripts → chunk → embed → Qdrant upsert + cache invalidate."""
 from __future__ import annotations
 
 import asyncio
@@ -39,11 +29,7 @@ def ingest_to_qdrant(
     chunk_size:    int              = 2000,
     chunk_overlap: int              = 200,
 ) -> dict[str, Any]:
-    """Stream ES transcripts → chunk → embed → Qdrant.
-
-    Runs in its own Celery worker process — survives any FastAPI restart
-    (the deprecated module called out that this used to be the
-    OOMKilled-then-killed-by-uvicorn-reload culprit)."""
+    """Stream ES transcripts → chunk → embed → Qdrant upsert."""
     logger.info(
         f"[ingest_to_qdrant] Starting: video_ids={video_ids}, "
         f"chunk_size={chunk_size}",
@@ -152,8 +138,7 @@ def ingest_to_qdrant(
 )
 def invalidate_cache(self) -> dict[str, Any]:
     """Clear all RAG search cache after new data ingestion.
-
-    Direct port of deprecated `tasks/youtube/qdrant.py:L78-98`."""
+"""
     async def _run() -> None:
         redis_host = os.environ.get("REDIS_HOST", "localhost")
         redis_port = os.environ.get("REDIS_PORT", "6379")

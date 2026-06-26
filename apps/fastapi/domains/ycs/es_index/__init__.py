@@ -1,6 +1,4 @@
 """ycs/es_index — async bulk-index helpers for ES metadata + transcripts.
-
-Direct port of deprecated `routers/v1/youtube/helpers.py:L1778-1859`.
 Used by Wave 4 Celery tasks (`extract/task.py`) after yt-dlp + Playwright
 extraction. Targets `infra/elasticsearch.params.INDEX_METADATA` /
 `INDEX_TRANSCRIPTIONS` by default."""

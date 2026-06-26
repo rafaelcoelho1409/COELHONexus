@@ -23,7 +23,6 @@ from fasthtml.common import (
 from .taxonomy import ARXIV_CATEGORIES, ARXIV_DESCRIPTIONS, _BY_ARCHIVE, _STANDALONE
 
 
-# Display labels for the archive headings in the browse-all modal. Mirrors
 # arxiv.org/category_taxonomy's groupings.
 _ARCHIVE_LABELS: dict[str, str] = {
     "cs":       "Computer Science",
@@ -85,7 +84,6 @@ def _VerticalMultiSelect():
             # Add-custom moved to the TOP of the panel — it's the action the
             # operator most often does (curated set rarely needs reordering);
             # putting it above the options keeps the input next to the open
-            # trigger so a fast type→Enter flow doesn't require scrolling.
             Div(
                 Div(
                     Label("Add custom code", For="rr-vertical-custom",

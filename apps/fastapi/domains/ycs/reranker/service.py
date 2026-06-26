@@ -2,8 +2,7 @@
 
 Module-level lazy singleton — `Ranker()` first call downloads ~100 MB
 of model weights. Subsequent calls re-use the in-process instance.
-
-Direct port of deprecated `services/youtube/reranker.py:L22-80`."""
+"""
 from __future__ import annotations
 
 from typing import Any, Optional

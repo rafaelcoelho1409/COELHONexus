@@ -4,17 +4,6 @@ Per docs/CODE-CONVENTIONS.md §service: thin orchestrator. Pure math
 lives in domain.py; per-store ops live under stores/. This module
 composes them into the operations the agent (graph_build, report) and
 the FastAPI router will call.
-
-Public surface:
-
-  bootstrap_stores()       — startup: ensure all 4 stores' schemas exist
-  persist_paper(...)       — graph + vector together (one paper)
-  persist_scan_result(...) — final write at scan end: findings + digest
-                             + seen set
-  begin_scan / complete_scan / fail_scan
-                           — Postgres lifecycle re-exports for the API +
-                             Celery task layer to call without reaching
-                             into stores/postgres directly
 """
 from __future__ import annotations
 
@@ -35,17 +24,8 @@ from .stores import qdrant as qdrant_store
 logger = logging.getLogger(__name__)
 
 
-# --------------------------------------------------------------------------- #
-# Bootstrap — fan out to all 4 stores in parallel. Each is idempotent.
-# Call once at FastAPI lifespan startup (or before the first scan dispatches).
-# --------------------------------------------------------------------------- #
 async def bootstrap_stores() -> None:
-    """Initialize all 4 RR stores. Idempotent + safe to re-run.
-
-    Runs the 4 bootstraps concurrently — they touch different services so
-    there's no contention. On any failure, the others may still complete;
-    the exception propagates with `asyncio.gather(return_exceptions=False)`.
-    """
+    """Initialize all 4 RR stores. Idempotent + safe to re-run."""
     results = await asyncio.gather(
         postgres_store.bootstrap_postgres(),
         neo4j_store.bootstrap_neo4j(),
@@ -55,31 +35,19 @@ async def bootstrap_stores() -> None:
     logger.info(f"[rr-service] bootstrap_stores: 4/4 complete ({len(results)})")
 
 
-# --------------------------------------------------------------------------- #
-# Per-paper persistence — graph + vector together. The orchestrator's
-# graph_build subagent calls this once per paper (parallel fan-out).
-# --------------------------------------------------------------------------- #
 async def persist_paper(
     paper: NormalizedPaper,
     *,
     embedding: list[float] | tuple[float, ...] | None,
     signal: float | None = None,
 ) -> None:
-    """Write a paper to Neo4j (always) + Qdrant (only when embedding given).
-
-    Skip rule: if `paper.arxiv_id is None`, the paper has no stable identity
-    for cross-source dedup; both stores are bypassed and a warning logged.
-    The orchestrator's report subagent still persists it via radar_findings
-    (Postgres uses (scan_id, arxiv_id) as PK; a no-id paper is dropped at
-    Postgres write time).
-    """
+    """Write a paper to Neo4j (always) + Qdrant (only when embedding given)."""
     if not paper.arxiv_id:
         logger.warning(
             f"[rr-service] persist_paper skipped — no arxiv_id "
             f"(title={paper.title[:40]!r})"
         )
         return
-    # Run graph + vector in parallel — they touch unrelated services.
     coros: list[Any] = [neo4j_store.upsert_paper(paper, signal=signal)]
     if embedding is not None:
         coros.append(
@@ -88,11 +56,6 @@ async def persist_paper(
     await asyncio.gather(*coros)
 
 
-# --------------------------------------------------------------------------- #
-# Scan lifecycle — re-exports the Postgres ops for the API/Celery layer.
-# Centralizing them here lets callers import from one place + lets us
-# evolve the schema without touching every callsite.
-# --------------------------------------------------------------------------- #
 async def begin_scan(
     scan_id:    UUID,
     profile_id: str,
@@ -101,9 +64,7 @@ async def begin_scan(
     verticals:  list[str] | None = None,
     top_n:      int | None       = None,
 ) -> None:
-    """Create the radar_scans row (status=pending, with the request shape
-    persisted alongside) then immediately flip to running. Idempotent —
-    the running flip is a no-op if already past."""
+    """Create the radar_scans row (status=pending) then immediately flip to running."""
     await postgres_store.create_scan(
         scan_id, profile_id,
         topic     = topic,
@@ -119,7 +80,6 @@ async def complete_scan(
     total_candidates: int,
     total_in_digest: int,
 ) -> None:
-    """Mark the scan done. Called by the Celery task after persist_scan_result."""
     await postgres_store.mark_scan_done(
         scan_id,
         total_candidates = total_candidates,
@@ -128,30 +88,15 @@ async def complete_scan(
 
 
 async def fail_scan(scan_id: UUID, error: str, *, cancelled: bool = False) -> None:
-    """Mark the scan terminated with a short error string. `cancelled=True`
-    uses SCAN_STATUS_CANCELLED instead of SCAN_STATUS_ERROR."""
     status = SCAN_STATUS_CANCELLED if cancelled else SCAN_STATUS_ERROR
     await postgres_store.mark_scan_error(scan_id, status=status, error=error)
 
 
 async def delete_scan(scan_id: UUID) -> dict:
-    """Per-row delete from the Recent-scans dropdown.
+    """Drop per-scan presentation artifacts: Postgres row + findings + MinIO digest.
 
-    Tier-1 scope — clears the per-scan presentation artifacts only:
-      * Postgres `radar_scans` row (CASCADE → `radar_findings`)
-        — the `llm_counters` JSONB column on this row goes with it
-          atomically, so the per-scan telemetry archive (2026-06-17)
-          needs no separate delete call
-      * MinIO `rr/scans/{scan_id}/digest.json` object
-
-    INTENTIONALLY leaves the accumulated knowledge intact:
-      * Neo4j Paper / Author / Concept nodes (cross-scan graph)
-      * Qdrant abstract embeddings (cross-scan retrieval index)
-      * Postgres `radar_seen` markers (profile-scoped `is_new` memory)
-
-    Idempotent — returns a dict telling the caller what was actually
-    removed so the UI can confirm ("deleted scan: pg=True, minio=False"
-    means the scan was orphaned in Postgres only)."""
+    Intentionally preserves accumulated knowledge: Neo4j graph, Qdrant embeddings, radar_seen markers.
+    """
     from .stores import minio as minio_store
 
     pg_deleted    = False
@@ -165,9 +110,6 @@ async def delete_scan(scan_id: UUID) -> dict:
         minio_deleted = await minio_store.delete_digest_json(str(scan_id))
     except Exception as e:
         logger.warning(f"[rr-service] delete_scan {scan_id} minio failed: {e}")
-    # Build-tab synthesized .py artifacts share the scan's MinIO prefix
-    # but aren't covered by delete_digest_json. Wipe them so the
-    # Recent-scans dropdown's delete button doesn't leak code blobs.
     try:
         code_deleted = await minio_store.delete_code_dir(str(scan_id))
     except Exception as e:
@@ -185,23 +127,11 @@ async def delete_scan(scan_id: UUID) -> dict:
 
 
 async def cancel_scan(scan_id: UUID, *, reason: str = "cancelled by user") -> bool:
-    """Revoke the Celery task driving `scan_id`, mark Postgres + emit a
-    terminal phase event so any SSE subscriber unwinds cleanly.
+    """Revoke the Celery task, mark Postgres cancelled, emit terminal SSE event.
 
-    Returns True if a live task was found and revoked, False if no task_id
-    was registered (already finished, never started, or TTL'd out).
-
-    Order matters:
-      1. Revoke first — frees the Celery worker slot ASAP.
-      2. Mark Postgres cancelled — any subsequent GET /scan/{id} reads
-         the terminal status, not 'running'.
-      3. Emit phase=cancelled — SSE subscribers see the terminal frame
-         and close their stream.
-      4. Drop the task_id key — a second cancel becomes a clean 404.
-
-    A failure in step 2/3/4 doesn't roll back step 1; the worker is
-    already dead, so the user expectation (scan stopped) is met. The
-    inconsistency would clear up on the next reload via the GET.
+    Returns True when a live task was found and revoked, False when no task_id registered.
+    Order: revoke → mark Postgres → emit SSE → drop task_id key.
+    A failure in step 2/3/4 doesn't roll back step 1; the worker is already dead.
     """
     from infra.celery.service import app as celery_app
     from .runtime.events import clear_task_id, emit_event, get_task_id
@@ -238,10 +168,6 @@ async def cancel_scan(scan_id: UUID, *, reason: str = "cancelled by user") -> bo
     return True
 
 
-# --------------------------------------------------------------------------- #
-# Final scan write — findings + digest + seen set, in that order so a
-# partial failure leaves the relational store as the source of truth.
-# --------------------------------------------------------------------------- #
 async def persist_scan_result(
     scan_id: UUID,
     profile_id: str,
@@ -249,19 +175,9 @@ async def persist_scan_result(
     findings: list[Finding],
     digest_payload: dict[str, Any],
 ) -> dict[str, Any]:
-    """Persist the scan's ranked digest:
-      1. INSERT findings into Postgres (radar_findings)
-      2. PUT digest.json to MinIO
-      3. UPSERT arxiv_ids into radar_seen (so the next scan can diff_vs_seen)
-
-    Returns a summary dict suitable for SSE emission + Celery task return.
-    """
+    """Persist ranked digest: findings → Postgres, digest.json → MinIO, arxiv_ids → radar_seen."""
     n_findings = await postgres_store.record_findings(scan_id, findings)
     digest_key = await minio_store.put_digest_json(str(scan_id), digest_payload)
-    # 2026-06-17: surface scan-wide synthesis on the scan row so the
-    # Digest page's themes filter strip + executive summary can render
-    # without a second MinIO fetch. Best-effort — a failed UPDATE here
-    # only loses the convenience field, not the canonical MinIO blob.
     try:
         await postgres_store.write_synthesis_meta(
             scan_id,
@@ -290,23 +206,17 @@ async def persist_scan_result(
     return summary
 
 
-# --------------------------------------------------------------------------- #
-# Read paths used by the API + the agent (re-exports for one-stop import)
-# --------------------------------------------------------------------------- #
 async def get_seen_ids(profile_id: str) -> frozenset[str]:
-    """Re-export: all arxiv_ids the profile has seen. Used by domain.diff_vs_seen."""
     return await postgres_store.get_seen_ids(profile_id)
 
 
 async def get_profile(profile_id: str) -> dict[str, Any] | None:
-    """Re-export: profile blob (interests + weights)."""
     return await postgres_store.get_profile(profile_id)
 
 
 async def upsert_profile(
     profile_id: str, *, interests: dict[str, Any], weights: dict[str, Any],
 ) -> None:
-    """Re-export: create or update a profile."""
     await postgres_store.upsert_profile(
         profile_id, interests=interests, weights=weights,
     )

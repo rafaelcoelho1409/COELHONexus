@@ -1,6 +1,5 @@
 """ycs/graph_builder — structured-output Pydantic for schema discovery.
-
-Direct port of deprecated `schemas/youtube/agents.py:L63-73`."""
+"""
 from __future__ import annotations
 
 from pydantic import BaseModel, Field

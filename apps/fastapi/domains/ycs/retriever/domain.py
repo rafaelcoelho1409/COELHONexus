@@ -1,9 +1,7 @@
 """ycs/retriever — PURE dedup helper shared by the orchestrator.
 
 Functional Core (`docs/CODE-CONVENTIONS.md` §4): no I/O, no async. The
-`SmartRetriever` uses this to merge the three arms before reranking.
-
-Mirror of deprecated `services/youtube/retriever.py:L498-513`."""
+`SmartRetriever` uses this to merge the three arms before reranking."""
 from __future__ import annotations
 
 from langchain_core.documents import Document

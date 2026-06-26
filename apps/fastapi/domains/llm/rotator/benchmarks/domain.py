@@ -25,7 +25,6 @@ def normalize_model_name(name: str) -> str:
     s = (name or "").strip().lower()
     s = PROVIDER_PREFIX_RE.sub("", s)
     s = WHITESPACE_RE.sub("-", s)
-    # Strip up to 4 stacked suffixes (e.g. "-instruct-it" then "-2511").
     for _ in range(4):
         before = s
         for suffix in _PROVIDER_SUFFIXES:

@@ -1,13 +1,7 @@
 """OTel span helpers for synth nodes — mirrors planner/observability/service.
 
-Each `@traced("name")` wrapper makes the node a top-level OTel span so
-LangFuse groups it under the trace whose id matches `state["thread_id"]`.
-Span attributes capture framework_slug + chapter_id so the per-chapter
-Gantt slice is easy to navigate.
-
-`attach_span_attrs(prefix, attrs)` attaches a node's stats dict to the
-currently-active span so the LangFuse observation carries the per-substep
-metrics tree.
+`@traced("name")` wraps a node into a top-level OTel span (chapter_id included for per-chapter Gantt).
+`attach_span_attrs(prefix, attrs)` attaches a stats dict to the currently-active span.
 """
 from __future__ import annotations
 
@@ -80,9 +74,7 @@ def traced(name: str) -> Callable:
 
 
 def attach_span_attrs(prefix: str, attrs: dict) -> None:
-    """Set namespaced attributes on the currently-active OTel span. No-op
-    if OTel isn't initialized. None values are skipped — the OTel backend
-    rejects them."""
+    """Set namespaced attributes on the current OTel span; no-op if uninitialized; None values skipped."""
     try:
         span = _otel_trace.get_current_span()
         if hasattr(span, "is_recording") and not span.is_recording():

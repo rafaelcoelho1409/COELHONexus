@@ -1,19 +1,4 @@
-"""ycs/admin — ES aggregations + Celery task-status helpers for FastHTML.
-
-Endpoints:
-  GET    /admin/ingested-channels      legacy facet (kept for compat)
-  GET    /admin/ingested-playlists     legacy facet (kept for compat)
-  GET    /admin/task/{task_id}         Celery state passthrough
-  GET    /admin/videos                 ⟵ NEW · library rows
-  GET    /admin/videos/facets          ⟵ NEW · channel/lang/status counts
-  DELETE /admin/videos/{video_id}      ⟵ NEW · single-video wipe
-  POST   /admin/videos/bulk-delete     ⟵ NEW · multi-select wipe
-
-The Ingest page's new library view (June 2026 SOTA redesign) calls
-`/admin/videos` for the row list, `/admin/videos/facets` for the
-filter sidebar counts, and the delete endpoints for hover/bulk
-actions. `/admin/ingested-channels` + `/admin/ingested-playlists`
-remain for the Ask page's channel-scope multi-select."""
+"""ycs/admin — ES aggregations, library view, and Celery task-status helpers for FastHTML."""
 from __future__ import annotations
 
 from typing import Any
@@ -35,17 +20,12 @@ from infra.elasticsearch import (
 router = APIRouter()
 
 
-# =============================================================================
-# Internal helpers
-# =============================================================================
 def _es() -> AsyncElasticsearch:
     return get_es()
 
 
 def _absolutize_thumb(url: str | None) -> str:
-    """ES `thumbnail_url` → browser-safe absolute URL (or "" when
-    absent). Thin wrapper over the content-domain helper so the
-    library listing shares the Source preview's exact behavior."""
+    """Thin wrapper over content-domain helper so library listing shares Source preview's exact behavior."""
     return _absolutize_thumbnail_url(url or "")
 
 
@@ -56,10 +36,7 @@ async def _terms_facet(
     extra_field:  str | None = None,
     size:         int        = 1000,
 ) -> list[dict[str, Any]]:
-    """Generic ES terms aggregation over `INDEX_METADATA` grouped by
-    `facet_field`, with a `top_hits` sub-agg projecting the
-    human-readable `label_field` (+ optional `extra_field`) from the
-    first matching doc per bucket."""
+    """ES terms aggregation over `INDEX_METADATA` by `facet_field` with a `top_hits` label lookup."""
     sources = [facet_field, label_field]
     if extra_field:
         sources.append(extra_field)
@@ -108,16 +85,12 @@ async def _terms_facet(
         if extra_field:
             item[extra_field] = source.get(extra_field)
         out.append(item)
-    # Stable sort: highest video_count first → secondary by label
     out.sort(
         key = lambda x: (-(x.get("video_count") or 0), x.get(label_field) or ""),
     )
     return out
 
 
-# =============================================================================
-# Endpoints
-# =============================================================================
 @router.get("/ingested-channels")
 async def ingested_channels() -> dict:
     """Distinct channels in the metadata index with per-channel video count.
@@ -147,10 +120,7 @@ async def ingested_playlists() -> dict:
 
 @router.get("/task/{task_id}")
 async def task_status(task_id: str) -> dict:
-    """Wrap Celery `AsyncResult` so the FastHTML polling loop has one
-    JSON shape to consume. `meta` is the dict the task posts via
-    `self.update_state(meta=...)`; `result` is the task return value
-    (only populated on SUCCESS)."""
+    """Celery `AsyncResult` passthrough. `meta` = `self.update_state(meta=...)` payload; `result` = SUCCESS return value."""
     if not task_id:
         raise HTTPException(status_code = 400, detail = "task_id required")
     try:
@@ -178,15 +148,8 @@ async def task_status(task_id: str) -> dict:
     return payload
 
 
-# =============================================================================
-# Library view (Ingest page redesign — June 2026 SOTA)
-# =============================================================================
 def _status_for(has_transcript: bool, has_neo4j_doc: bool) -> str:
-    """3-state status pill, derived from cross-store presence:
-        - `done`    — metadata + transcript + Neo4j Document
-        - `partial` — metadata + transcript only
-        - `failed`  — metadata only (transcript fetch failed)
-    """
+    """3-state status: `done` = all 3 stores present; `partial` = no Neo4j; `failed` = no transcript."""
     if has_transcript and has_neo4j_doc:
         return "done"
     if has_transcript:
@@ -204,18 +167,11 @@ async def list_videos(
     limit:   int        = 50,
     offset:  int        = 0,
 ) -> dict:
-    """Library rows for the Ingest page. Joins ES metadata + per-video
-    transcript presence + Neo4j Document presence so each row knows
-    its own status pill.
-
-    Filtering happens in ES (channel + free-text `q` over title);
-    `status` + `lang` are post-filtered in Python because they cross
-    multiple stores. limit/offset paginate; the frontend asks for as
-    much as it needs (default 50 fits above-the-fold)."""
+    """Library rows — joins ES metadata, transcript presence, and Neo4j Document presence per video.
+    Channel/`q` filters run in ES; `status`+`lang` are post-filtered in Python (cross-store)."""
     es = _es()
 
-    # 1. ES metadata (filtered, paginated). max(0,…) so a UI bug doesn't
-    #    send negative offsets straight through.
+    # max(0,…) guards against UI bugs sending negative offsets.
     must: list[dict[str, Any]] = []
     if channel:
         must.append({"term": {"channel_id": channel}})
@@ -250,11 +206,7 @@ async def list_videos(
     total_from_es = response.get("hits", {}).get("total", {}).get("value", 0)
     video_ids = [h["_id"] for h in hits]
 
-    # "True" library total = distinct video_ids with a Neo4j Document
-    # node (= status "done"). "partial" and "failed" rows are hidden
-    # from the listing (operational debris), so reporting
-    # `total_from_es` or even the transcript-cardinality count would
-    # lie about how many rows the user can actually see.
+    # Only "done" rows appear in the listing; total_from_es includes debris ("partial"/"failed"), so it overstates what the user can see.
     n_processed_total = 0
     g = getattr(request.app.state, "neo4j_graph", None)
     if g is not None:
@@ -271,7 +223,6 @@ async def list_videos(
     else:
         n_processed_total = total_from_es
 
-    # 2. Transcript presence + dominant language (one terms agg).
     transcript_meta: dict[str, dict[str, Any]] = {}
     if video_ids:
         try:
@@ -316,7 +267,6 @@ async def list_videos(
             # Best-effort; UI degrades to "transcript=False" everywhere.
             pass
 
-    # 3. Neo4j Document presence (single Cypher query covers all ids).
     neo4j_doc_ids: set[str] = set()
     entity_counts: dict[str, int] = {}
     g = getattr(request.app.state, "neo4j_graph", None)
@@ -337,7 +287,6 @@ async def list_videos(
         except Exception:
             pass
 
-    # 4. Project + post-filter on status/lang.
     items: list[dict[str, Any]] = []
     for h in hits:
         src = h["_source"]
@@ -348,15 +297,7 @@ async def list_videos(
         row_status = _status_for(has_transcript, has_neo4j_doc)
         row_langs  = tmeta.get("transcript_langs", [])
 
-        # ALWAYS drop non-"done" entries — only fully-processed videos
-        # (ES metadata + transcript + Neo4j Document) belong in the
-        # library listing. "failed" = metadata-only orphans from a
-        # Stop-mid-Phase-1 or scrape error; "partial" = transcript
-        # but no Neo4j (Phase 3 didn't finish — typically a Stop
-        # during Phase 3 or an LLM-cascade exhaustion). Both are
-        # operational debris, not queryable units. Cleanup paths:
-        # per-row DELETE /admin/videos/{video_id} or Pipeline panel's
-        # Wipe button.
+        # Drop non-"done": "failed" = metadata-only orphan; "partial" = no Neo4j (Phase 3 incomplete). Both are debris, not queryable.
         if row_status != "done":
             continue
         if status and row_status != status:
@@ -375,11 +316,7 @@ async def list_videos(
             "like_count":        src.get("like_count"),
             "upload_date":       src.get("upload_date"),
             "webpage_url":       src.get("webpage_url"),
-            # ES stores the field as `thumbnail_url` (yt-dlp's native
-            # key), NOT `thumbnail` — asking for the latter returned
-            # None and rendered empty rectangles. Mirror the Source
-            # preview path (content/service.py), which also reads
-            # `thumbnail_url` and absolutizes protocol-relative URLs.
+            # yt-dlp stores `thumbnail_url`, not `thumbnail` — the wrong key returns None and renders empty rectangles.
             "thumbnail":         _absolutize_thumb(src.get("thumbnail_url")),
             "playlist_id":       src.get("playlist_id"),
             "playlist_title":    src.get("playlist_title"),
@@ -391,12 +328,7 @@ async def list_videos(
 
     return {
         "items":        items,
-        # `total` reflects what the user can actually see — the
-        # processed-video count (cardinality over the transcripts
-        # index). `total_from_es` is kept on the side for clients
-        # that want to flag "N orphan metadata-only entries" (the
-        # diff between the two is the count of debris from Stop /
-        # mid-fetch failures).
+        # `total` = visible processed videos; `total_raw` = ES cardinality (includes debris); diff = orphan count.
         "total":        n_processed_total,
         "total_raw":    total_from_es,
         "returned":     len(items),
@@ -407,24 +339,8 @@ async def list_videos(
 
 @router.get("/videos/facets")
 async def videos_facets(request: Request) -> dict:
-    """Filter sidebar counts SCOPED TO READY VIDEOS ONLY (status="done"
-    = ES metadata + transcript + Neo4j Document all present).
-
-    Before this scoping: Channels showed every channel that had EVER
-    been ingested, even if its only videos were partial/failed and thus
-    hidden from the listing — clicking the channel chip filtered to 0
-    rows, which read as a broken filter. Languages had the same drift
-    (aggregated over all transcripts including partial-status ones).
-
-    Pipeline:
-      1. Pull the set of done video_ids from Neo4j (`Document.video_id`).
-      2. Channels  — terms agg over ES metadata WHERE _id IN done_ids.
-      3. Languages — terms agg over ES transcripts WHERE video_id IN done_ids.
-      4. Statuses  — single `Done` chip with count = len(done_ids).
-
-    All three facets now share one source of truth — the ready set —
-    so a chip with `count = N` always corresponds to exactly N visible
-    rows when clicked."""
+    """Facet counts scoped to done-only videos so every chip corresponds to exactly N visible rows.
+    Without scoping, channels with only partial/failed videos appear as filter chips that yield 0 rows."""
     es = _es()
     out: dict[str, list[dict[str, Any]]] = {
         "channels":  [],
@@ -432,9 +348,7 @@ async def videos_facets(request: Request) -> dict:
         "statuses":  [],
     }
 
-    # 1. Pull the done set from Neo4j. Empty when Neo4j is down or no
-    #    document yet — every facet then renders empty, which is the
-    #    honest state (no ready videos → no facets to filter by).
+    # Empty done_ids → empty facets, which is honest (no ready videos → nothing to filter by).
     done_ids: list[str] = []
     g = getattr(request.app.state, "neo4j_graph", None)
     if g is not None:
@@ -455,8 +369,7 @@ async def videos_facets(request: Request) -> dict:
         out["statuses"] = [{"key": "done", "label": "Done", "count": 0}]
         return out
 
-    # 2. Channels — agg over ES metadata RESTRICTED to done_ids. ES
-    #    `_id` is the video id (set at index time).
+    # ES `_id` is the video_id (set at index time).
     try:
         c_resp = await es.search(
             index = INDEX_METADATA,
@@ -499,7 +412,6 @@ async def videos_facets(request: Request) -> dict:
     except Exception:
         pass
 
-    # 3. Languages — agg over ES transcripts RESTRICTED to done_ids.
     try:
         t_resp = await es.search(
             index = INDEX_TRANSCRIPTIONS,
@@ -518,11 +430,7 @@ async def videos_facets(request: Request) -> dict:
     except Exception:
         pass
 
-    # 4. Statuses — single `Done` chip. `partial` + `failed` chips
-    #    were dropped in the prior ship (list_videos hides those rows
-    #    unconditionally → filtering for them would yield zero results).
-    #    Kept as one read-only chip so the user sees "Done: N" alongside
-    #    Channels / Languages.
+    # `partial`/`failed` chips omitted — list_videos hides those rows, so filtering for them yields nothing.
     out["statuses"] = [
         {"key": "done", "label": "Done", "count": len(done_ids)},
     ]
@@ -532,10 +440,7 @@ async def videos_facets(request: Request) -> dict:
 
 @router.delete("/videos/{video_id}")
 async def delete_video(video_id: str, request: Request) -> dict:
-    """Single-video wipe — drops ES metadata + transcripts, Qdrant
-    points, Neo4j Document + Video nodes for one id. Reuses the
-    pipeline-side `wipe_videos_data` orchestrator so single-row delete
-    and Pipeline-panel `Wipe cache` share one code path."""
+    """Drop ES metadata + transcripts, Qdrant points, and Neo4j nodes for one video."""
     from domains.ycs.pipeline_task import wipe_videos_data
     if not video_id:
         raise HTTPException(status_code = 400, detail = "video_id required")
@@ -554,10 +459,7 @@ class BulkDeleteRequest(BaseModel):
 async def bulk_delete_videos(
     payload: BulkDeleteRequest, request: Request,
 ) -> dict:
-    """Multi-select wipe. Same one-shot semantics as the single-video
-    DELETE — fans out the supplied list to the shared
-    `wipe_videos_data` orchestrator. Bulk endpoints are POST (not
-    DELETE) because HTTP DELETE doesn't reliably carry a request body."""
+    """Multi-select wipe. POST (not DELETE) because HTTP DELETE doesn't reliably carry a body."""
     from domains.ycs.pipeline_task import wipe_videos_data
     if not payload.video_ids:
         return {"status": "noop", "summary": {"video_ids": []}}

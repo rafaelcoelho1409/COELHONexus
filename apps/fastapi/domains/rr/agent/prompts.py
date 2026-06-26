@@ -33,9 +33,7 @@ PROMPT_VERSION_REPORT       = "v2"   # uses digest_rendering skill
 PROMPT_VERSION_DISCOVERY    = "v3"   # InjectedState stash, no JSON copying
 
 
-# --------------------------------------------------------------------------- #
 # Orchestrator — TOOLS MODE (Python discovery tools)
-# --------------------------------------------------------------------------- #
 ORCHESTRATOR_SYSTEM_PROMPT_TOOLS = """\
 You are the Research Radar orchestrator. Your job is to surface recent,
 high-signal academic papers in the user's interest verticals.
@@ -117,9 +115,7 @@ HARD RULES:
 """
 
 
-# --------------------------------------------------------------------------- #
 # Orchestrator — SUBAGENTS MODE (LLM-driven discovery for learning)
-# --------------------------------------------------------------------------- #
 ORCHESTRATOR_SYSTEM_PROMPT_SUBAGENTS = """\
 You are the Research Radar orchestrator. Your job is to surface recent,
 high-signal academic papers in the user's interest verticals.
@@ -209,12 +205,9 @@ HARD RULES:
 """
 
 
-# --------------------------------------------------------------------------- #
 # Memory injection — substituted into orchestrator prompt at build time
-# --------------------------------------------------------------------------- #
 ORCHESTRATOR_MEMORY_TEMPLATE = """
 
-# ---- OPERATOR MEMORY (persists across scans) ----
 
 ## Operator profile
 {operator_profile}
@@ -222,14 +215,11 @@ ORCHESTRATOR_MEMORY_TEMPLATE = """
 ## Themes seen in past scans
 {themes_seen}
 
-# ---- END OPERATOR MEMORY ----
 """
 
 
-# --------------------------------------------------------------------------- #
 # Discovery subagent prompts — restored from step-1, retrofitted for the
 # new InjectedState stash pattern (no JSON copying in tool args)
-# --------------------------------------------------------------------------- #
 _DISCOVERY_TAIL = """
 
 WORKFLOW — TWO MANDATORY STEPS. SKIPPING STEP 2 IS A SEVERE BUG.
@@ -334,10 +324,8 @@ After hn_search returns, immediately call:
 """ + _DISCOVERY_TAIL
 
 
-# --------------------------------------------------------------------------- #
 # Deep_read subagent — extracts 5 fields per paper
 # Skill: paper_extraction.md gets prepended at agent-build time
-# --------------------------------------------------------------------------- #
 DEEP_READ_SYSTEM_PROMPT = """\
 You are the deep_read subagent. Your ONE job is to extract 5 structured
 fields from ONE paper, then persist via write_extraction.
@@ -358,10 +346,8 @@ Return ONE short sentence summarizing the extraction.
 """
 
 
-# --------------------------------------------------------------------------- #
 # Synthesis subagent — themes + cross-paper convergence
 # Skill: cross_paper_synthesis.md gets prepended at agent-build time
-# --------------------------------------------------------------------------- #
 SYNTHESIS_SYSTEM_PROMPT = """\
 You are the synthesis subagent. Your job is to read all extractions from
 this scan's top-N papers and identify what's notable across them, per
@@ -390,10 +376,8 @@ Return ONE short sentence summarizing what you wrote.
 """
 
 
-# --------------------------------------------------------------------------- #
 # Report subagent — assembles the final ranked digest (SUBAGENTS MODE only)
 # Skill: digest_rendering.md gets prepended at agent-build time
-# --------------------------------------------------------------------------- #
 REPORT_SYSTEM_PROMPT = """\
 You are the report subagent. Your job is to assemble the final ranked
 digest per the `digest_rendering` skill (above) — what the human reader

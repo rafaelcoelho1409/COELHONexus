@@ -9,12 +9,10 @@ from typing import Optional, TypedDict
 
 
 class PlannerState(TypedDict, total=False):
-    # --- inputs (set at graph kick-off) ---
     framework_slug: str
     thread_id: str               # also LangFuse session_id
     planner_mode: str            # future modes ("llm-fast"/"llm-thorough"); default "llm"
 
-    # --- node outputs (one per substep) ---
     raw_files: Optional[list[str]]              # corpus_load — MinIO keys only
     corpus_stats: Optional[dict]                # corpus_load — count/bytes/perc dist
     # Pointer + meta only; the {key→vector} blob lives in MinIO (Postgres
@@ -24,7 +22,6 @@ class PlannerState(TypedDict, total=False):
     relevant_files: Optional[list[str]]         # off_topic (post-embedding filter)
     off_topic_stats: Optional[dict]             # off_topic observability dict
 
-    # --- LLM-first planner path ---
     doc_distill_ref: Optional[str]              # doc_distill — MinIO key of {key→DocDistillate} JSON
     doc_distill_stats: Optional[dict]           # doc_distill — counts + skip-pass flag
     chapter_proposals_ref: Optional[str]        # chapter_propose — MinIO key of proposals JSON
@@ -36,7 +33,6 @@ class PlannerState(TypedDict, total=False):
     chapter_plan_ref: Optional[str]             # chapter_select — MinIO key of the outline JSON
     select_stats: Optional[dict]                # chapter_select — chapter sizes for UI
 
-    # --- shared tail ---
     # Pedagogical ordering; plan_write reads to reorder outline pre-sanitize.
     chapter_order_ref: Optional[str]            # order_chapters — MinIO key
     order_chapters_stats: Optional[dict]        # order_chapters — order + telemetry
@@ -44,6 +40,5 @@ class PlannerState(TypedDict, total=False):
     plan_path: Optional[str]                    # plan_write — MinIO key of latest pointer
     plan_write_stats: Optional[dict]            # plan_write — counts + inline plan for UI
 
-    # --- bookkeeping ---
     status: Optional[str]                       # "running" | "done" | "failed" | "cancelled"
     error: Optional[str]                        # last-node error, if any

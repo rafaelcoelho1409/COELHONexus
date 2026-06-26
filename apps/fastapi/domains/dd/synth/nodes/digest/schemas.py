@@ -237,5 +237,5 @@ class ChapterDigest(BaseModel):
     per_source: list[SourceDigest]
     per_section: dict[str, list[SectionContribution]]
     coverage_stats: CoverageStats
-    # v3 (2026-05-29 PM) — source-pool merge result.
+    # source-pool merge result.
     merged_sections: dict[str, str] = Field(default_factory = dict)

@@ -15,7 +15,6 @@ NEO4J_URI = os.environ.get(
 NEO4J_USERNAME = os.environ.get("NEO4J_USERNAME", "neo4j")
 NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "") or None
 
-# Default database name (Neo4j Community Edition is single-DB; this just
 # matches the deprecated implicit default).
 NEO4J_DATABASE = os.environ.get("NEO4J_DATABASE", "neo4j")
 

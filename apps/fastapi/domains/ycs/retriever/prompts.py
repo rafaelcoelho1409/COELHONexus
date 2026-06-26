@@ -1,6 +1,4 @@
 """ycs/retriever — entity-extraction prompt for the Neo4j retriever.
-
-Direct port of deprecated `schemas/youtube/prompts.py:ENTITY_EXTRACTION_PROMPT`.
 Lives under `retriever/` because it's owned by the Neo4j retriever and
 nothing else uses it — keeping it co-located avoids a cross-module
 import that would otherwise have to live in a `prompts/` package."""

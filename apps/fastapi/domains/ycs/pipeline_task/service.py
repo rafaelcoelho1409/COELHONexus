@@ -81,9 +81,7 @@ def _phase_ids_from_chain(result: AsyncResult) -> dict[str, str]:
     return {keys[i]: ids[i] for i in range(min(len(keys), len(ids)))}
 
 
-# =============================================================================
 # Rerun state (Redis-backed)
-# =============================================================================
 async def persist_pipeline_state(
     redis:                 redis_aio.Redis | None,
     extract_id:            str,
@@ -154,7 +152,6 @@ async def wipe_videos_data(
 
     summary: dict[str, Any] = {"video_ids": list(video_ids)}
 
-    # --- ES + Qdrant clients (FastAPI-side, short-lived) ---
     es = AsyncElasticsearch(
         hosts      = [os.environ["ELASTICSEARCH_HOST"]],
         basic_auth = (

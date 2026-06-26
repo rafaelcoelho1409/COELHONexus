@@ -4,8 +4,7 @@ Imperative Shell: ONE Qdrant call with `Prefetch` per vector type +
 `FusionQuery(fusion=Fusion.RRF)`. Qdrant internally fuses dense +
 sparse scores using Reciprocal Rank Fusion — no manual RRF code on
 our side.
-
-Direct port of deprecated `services/youtube/retriever.py:L115-230`."""
+"""
 from __future__ import annotations
 
 from langchain_core.documents import Document

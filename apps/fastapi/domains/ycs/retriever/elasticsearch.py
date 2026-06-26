@@ -3,8 +3,7 @@
 Imperative Shell: single ES multi_match over the transcript index +
 secondary metadata fetch + LangChain Document projection. Channel
 scope handled as an ES bool/terms filter.
-
-Direct port of deprecated `services/youtube/retriever.py:L42-109`."""
+"""
 from __future__ import annotations
 
 from elasticsearch import AsyncElasticsearch
@@ -32,8 +31,6 @@ class ElasticsearchRetriever:
     async def retrieve(
         self, query: str, channel_ids: list[str] | None = None,
     ) -> list[Document]:
-        # Build the ES query — wrap multi_match in a bool with a terms
-        # filter ONLY when channel_ids was supplied. The two branches
         # are kept separate per deprecated (vs always-wrapped) so the
         # ES query planner gets the simpler form on the common path.
         es_query: dict

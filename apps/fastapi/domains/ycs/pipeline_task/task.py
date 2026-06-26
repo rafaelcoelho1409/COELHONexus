@@ -1,7 +1,4 @@
 """ycs/pipeline_task — Celery chain wrapper for the full channel pipeline.
-
-Direct port of deprecated `tasks/youtube/pipeline.py:L17-56`.
-
 ONE task: `full_channel_pipeline(channel_id, max_results, ...)` chains
   extract_channel → ingest_to_qdrant → ingest_to_neo4j → invalidate_cache
 

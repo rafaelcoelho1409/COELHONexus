@@ -30,11 +30,8 @@ from langchain_litellm.chat_models.litellm_router import (
 )
 
 
-# Cross-provider request sanitization. modify_params drops thinking_blocks /
-# reasoning_content from assistant messages when the next cascade arm's API
-# declares `content: str` — prevents IndexError at langchain_core/chat_models.py:508
-# from empty generations. drop_params strips unsupported per-call params,
-# eliminating UnsupportedParamsError (e.g. nemotron-4-340b rejecting `tools`).
+# modify_params: strips thinking_blocks from assistant messages on cascade (prevents IndexError at chat_models.py:508).
+# drop_params: removes unsupported per-call params (e.g. nemotron-4-340b rejecting `tools`).
 litellm.modify_params = True
 litellm.drop_params   = True
 
@@ -159,9 +156,7 @@ def _get_rr_llm_sem() -> asyncio.Semaphore:
     return sem
 
 
-# RR per-provider in-flight caps. Bandit cascade skips an at-cap provider
-# rather than queueing (the bandit chain bypasses Router so routing_strategy
-# can't help). Tuned to each free-tier's RPM ÷ avg response window.
+# Per-provider in-flight caps; bandit skips at-cap providers (bypasses Router, so routing_strategy can't help).
 _RR_PROVIDER_CAPS: dict[str, int] = {
     "nvidia_nim": 4,  # 40 RPM ÷ ~20s
     "groq":       2,  # 30 RPM peak; tighter cap absorbs bursts
@@ -1329,7 +1324,6 @@ class _BanditRoutedRotatorChain(_RotatorAutoRetryRouter):
                     messages, stop=stop, run_manager=run_manager, **kwargs,
                 )
 
-            # Convert langchain → OpenAI dict once; cascade reuses across arms.
             try:
                 oai_messages = convert_to_openai_messages(messages)
             except Exception as e:
@@ -1708,9 +1702,7 @@ def _get_router() -> Router:
         set_verbose = False,
         **redis_kwargs,
     )
-    # LiteLLM-bundled langfuse disabled: reads langfuse.version.__version__
-    # which doesn't exist on langfuse v3+. Re-enable via custom logger if
-    # cascade visibility becomes critical.
+    # LiteLLM-bundled langfuse disabled: reads langfuse.version.__version__ which doesn't exist in v3+.
     return _router_instance
 
 
@@ -1975,7 +1967,6 @@ async def pick_ycs_neo4j_deployment_bandit(
         rds = redis_aio.from_url(url)
         try:
             candidates = [e["litellm_params"]["model"] for e in entries]
-            # Filter blocklisted arms BEFORE predict_top_k so the bandit
             # never burns a real observation on a known-broken arm.
             candidates = _ycs_neo4j_filter_candidates(candidates)
             if exclude:

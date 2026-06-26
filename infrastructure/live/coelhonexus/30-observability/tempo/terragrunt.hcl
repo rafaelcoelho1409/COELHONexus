@@ -1,19 +1,6 @@
-# =============================================================================
 # Leaf — tempo (coelhonexus standalone, 30-observability layer)
-# =============================================================================
-# Tempo single-binary trace storage. Backend = local MinIO (`tempo-traces`
-# bucket, created by bootstrap Job).
-#
-# Datasource auto-wiring: creates ConfigMap labeled `grafana_datasource: 1`.
-# Grafana's sidecar imports it on startup. Tempo's datasource includes
-# tracesToLogs (→ loki) and tracesToMetrics (→ mimir) cross-links — those
-# work once mimir + grafana also exist (modules #12, #14).
-#
-# Adaptations vs COELHO Cloud's leaf:
-#   - DROP `../grafana` + `../mimir` from dependencies.paths — they apply
-#     AFTER tempo in our order. Grafana's sidecar picks up ConfigMaps
-#     regardless of which one boots first.
-# =============================================================================
+# Single-binary trace storage. Backend = local MinIO (tempo-traces bucket).
+# Grafana datasource ConfigMap created here; sidecar imports on startup.
 
 include "root" {
   path   = find_in_parent_folders("root.hcl")
@@ -34,7 +21,6 @@ dependency "k3d" {
   mock_outputs_allowed_terraform_commands = ["validate", "init", "plan"]
 }
 
-# MinIO — S3 endpoint + creds.
 dependency "minio" {
   config_path = "../../20-data/minio"
 
@@ -46,11 +32,10 @@ dependency "minio" {
   mock_outputs_allowed_terraform_commands = ["validate", "init", "plan"]
 }
 
-# Ordering-only.
 dependencies {
   paths = [
     "../../10-platform/monitoring-crds",
-    "../loki",   # tracesToLogs cross-link uses Loki UID — keep ordering for tidiness
+    "../loki",
   ]
 }
 
@@ -74,12 +59,7 @@ inputs = {
   minio_access_key = dependency.minio.outputs.access_key
   minio_secret_key = dependency.minio.outputs.secret_key
 
-  # 2026-06-23: local k3d traces proved the 1Gi default too tight for
-  # multi-trace Explore / LangFuse investigation; the pod was OOMKilled.
-  # Lift only the local coelhonexus leaf so COELHO Cloud keeps its own sizing.
+  # 1Gi default OOMKilled on multi-trace Explore; lifted for local k3d only.
   memory_request = "512Mi"
   memory_limit   = "2Gi"
-
-  # Remaining defaults from variables.tf stay appropriate:
-  #   chart 2.1.0, single-binary, OTLP-only receivers, 5Gi PVC, 30-day retention.
 }

@@ -130,8 +130,7 @@ async def chapter_select_run(state: PlannerState) -> dict:
         if ci in docs_per_chapter:
             docs_per_chapter[ci].append(k)
 
-    # v2 (2026-06-05) — orphan-protection. Before deciding what to prune,
-    # build a per-doc lookup of every chapter where that doc has an
+    # orphan-protection. Before deciding what to prune,
     # above-threshold score. A small chapter is then prune-eligible ONLY
     # if every one of its members has at least one alternative selected
     # chapter to land in. Otherwise pruning silently orphans docs (the

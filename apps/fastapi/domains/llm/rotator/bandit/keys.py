@@ -25,7 +25,6 @@ NON_DD_TASKS: tuple[str, ...] = (
 )
 _DD_PROCESS_IDX = {p: i for i, p in enumerate(DD_PROCESSES)}
 
-# Maps to context-vector slots [19-23].
 CONTEXT_PROVIDERS: tuple[str, ...] = (
     "groq",
     "nim",

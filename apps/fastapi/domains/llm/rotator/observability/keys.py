@@ -50,5 +50,4 @@ OP_CHAT      = "chat"
 OP_EMBEDDING = "embedding"
 OP_RERANK    = "rerank"
 
-# Default gen_ai.system when deployment id has no provider prefix (Router shuffle).
 SYSTEM_LITELLM_ROTATOR = "litellm-rotator"

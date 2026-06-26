@@ -1,14 +1,9 @@
 """ycs/embeddings — NIM embedding-API config + retry/batch tunables.
 
-Originally a direct port of deprecated `services/youtube/embeddings.py:L36-56`
-which read `NVIDIA_API_KEY` from env at module load. The BYOK rotator
-migration (2026-05-31) moved provider keys into the user-managed
-MinIO store (`domains/llm/credentials/`); the deprecated env-read
-path stopped getting populated and Phase B Qdrant ingest started
-5xx'ing with `Illegal header value b'Bearer '`. The key is now
-resolved at *call* time via `domains.llm.credentials.resolve_key()`
-in `service.py`. We expose only the env-var NAME here so the resolver
-can be invoked uniformly."""
+Provider key is resolved at *call* time via `domains.llm.credentials.resolve_key()`
+rather than at module load — the BYOK rotator migration moved keys into the
+MinIO-backed store; reading `NVIDIA_API_KEY` at import caused `Illegal header
+value b'Bearer '` 5xx errors during Qdrant ingest."""
 from __future__ import annotations
 
 import os
@@ -21,7 +16,6 @@ NIM_URL = "https://integrate.api.nvidia.com/v1"
 # `os.environ[NIM_KEY_ENV]` at module load was the original bug.
 NIM_KEY_ENV = "NVIDIA_API_KEY"
 
-# Default + overridable model id. Override via Helm
 # (`NVIDIA_EMBEDDING_MODEL` env) for A/B; remember to re-ingest the
 # entire Qdrant collection on change (vectors aren't comparable across
 # models).
@@ -31,8 +25,7 @@ EMBEDDING_MODEL = os.environ.get(
 )
 
 # Dimensions per model id. Used to size the Qdrant dense vector slot at
-# collection-create time. Mirror of deprecated MODEL_DIMENSIONS map.
-# `baai/bge-m3` was added 2026-06-07 for the graph_builder semantic
+# `baai/bge-m3` added for the graph_builder semantic
 # entity-resolution check (Option 2 fix for false fuzzy merges) — the
 # Qdrant path keeps using `llama-nemotron-embed-1b-v2`. BGE-M3 was
 # picked empirically: it's multilingual (100+ langs, key for the
@@ -50,7 +43,6 @@ MODEL_DIMENSIONS: dict[str, int] = {
     "baai/bge-m3":                                   1024,
 }
 
-# Retry / batch / pacing — deprecated `embeddings.py:L98, L148, L156`.
 MAX_RETRIES = 5
 BATCH_SIZE = 50
 BATCH_PAUSE_S = 2

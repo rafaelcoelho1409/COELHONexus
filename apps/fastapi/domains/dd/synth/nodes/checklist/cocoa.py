@@ -75,7 +75,7 @@ logger = logging.getLogger(__name__)
 # Tunables
 COCOA_PROMPT_VERSION = "v1-cocoa-2026-05-25"
 
-# Per-hash abstraction cache (Bundle 5, 2026-05-25). Stage 1 abstractions
+# Per-hash abstraction cache . Stage 1 abstractions
 # depend ONLY on the code body — and the body is content-addressed by
 # its vault hash. So the same hash always produces the same spec under
 # a fixed prompt_version. Cache MinIO blob path includes prompt_version
@@ -96,17 +96,14 @@ _JUDGE_MAX_TOKENS     = 4000
 _EXPLAINER_TEMPERATURE = 0.0
 _JUDGE_TEMPERATURE     = 0.0
 
-# U4 (2026-05-28) — reverted 0.70 → 0.85.
-#
+# reverted 0.70 → 0.85.
 # Pass threshold for CoCoA — fraction of aligned subtopics required for
 # c11/c12 to remain at the bundled-judge's verdict. Below this, CoCoA
 # overrides with FAIL.
-#
-# History:
 #   - 0.85 (original, CoCoA paper arXiv 2410.03131)
-#   - 0.70 (U1, 2026-05-27) — relaxed to fix BU ch-01 regression where
+#   - 0.70 — relaxed to fix BU ch-01 regression where
 #     the bandit pool's minor embellishments tripped 0.85.
-#   - 0.85 (U4, 2026-05-28) — REVERTED. Empirically on Claude Code, the
+#   - 0.85 — REVERTED. Empirically on Claude Code, the
 #     0.70 floor let through catastrophic code-prose mismatches
 #     (e.g. prose about "Pin Model Version" paired with `aws sso login`
 #     code). The keyword-overlap pre-check (U5 below) replaces the BU
@@ -115,8 +112,7 @@ _JUDGE_TEMPERATURE     = 0.0
 #     identifier overlap.
 _ALIGN_PASS_FRACTION = 0.85
 
-# U5 (2026-05-28) — structural keyword-overlap pre-check.
-#
+# structural keyword-overlap pre-check.
 # Catches catastrophic mismatches BEFORE the LLM judge: if the
 # explanation contains ZERO identifiers from the code body, mark as
 # misaligned automatically (saves an LLM call AND reliably catches the
@@ -190,7 +186,6 @@ def _has_keyword_overlap(*, code_body: str, explanation: str) -> bool:
     return bool(code_idents & expl_idents)
 
 
-# Stage 1 — Explainer: abstract every code block into a behavioral NL spec
 _EXPLAINER_PROMPT = """You are the Code Explainer (CoCoA stage 1).
 
 For each code snippet below, write ONE concise behavioral abstraction (1
@@ -351,11 +346,9 @@ async def _explain_blocks(blocks: list[dict]) -> dict[str, str]:
         if h and not is_derived:
             await _write_cached_abstraction(minio, h, spec)
 
-    # Merge cache hits + fresh; caller doesn't need to know which is which.
     return {**cached, **fresh}
 
 
-# Stage 2 — Judge: align prose explanation against the explainer's spec
 _JUDGE_PROMPT = """You are the Alignment Judge (CoCoA stage 2).
 
 For each row below, decide if the documentation EXPLANATION faithfully
@@ -478,7 +471,6 @@ async def cocoa_alignment_check(
     """
     sections = sawc_payload.get("sections") or []
 
-    # Build (subtopic, code body) pairs. Derived subtopics use their
     # derived_code directly; verbatim subtopics resolve via vault. We index
     # by a stable integer id so the JSON round-trip is robust.
     pairs: list[dict] = []   # input rows the LLM stages consume
@@ -527,7 +519,7 @@ async def cocoa_alignment_check(
             "feedback":       "no subtopics with both code body + prose",
         }
 
-    # U5 (2026-05-28) — structural keyword-overlap pre-check. Any pair
+    # structural keyword-overlap pre-check. Any pair
     # whose explanation shares ZERO informative identifiers with its
     # code body is auto-flagged misaligned. Catches catastrophic
     # mismatches (CC ch-01 had 6 such cases) without burning LLM calls
@@ -569,7 +561,7 @@ async def cocoa_alignment_check(
         for i in range(0, n_pairs, _MAX_SUBTOPICS_PER_BATCH)
     ]
 
-    # Stage 1: explainer over all blocks (per-hash MinIO cache absorbs
+    # Explainer over all blocks (per-hash MinIO cache absorbs
     # repeat work across iters/chapters/frameworks).
     specs: dict[str, str] = {}
     for batch in batches:
@@ -598,7 +590,7 @@ async def cocoa_alignment_check(
             "feedback":       "cocoa explainer failed; bundled judge stands",
         }
 
-    # Stage 2: judge across all pairs that received an abstraction.
+    # Judge across all pairs that received an abstraction.
     judge_input: list[dict] = []
     for p in pairs:
         spec = specs.get(p["id"])

@@ -1,6 +1,5 @@
 """ycs/grader — relevance-grading prompt + version marker.
-
-Direct port of deprecated `schemas/youtube/prompts.py:L154-167`. Version
+Version
 string is here per `docs/CODE-CONVENTIONS.md` §2: cache-invalidation
 knobs live with the prompts they identify.
 

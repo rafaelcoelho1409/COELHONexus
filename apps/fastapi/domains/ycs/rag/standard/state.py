@@ -1,6 +1,5 @@
 """ycs/rag/standard — LangGraph state for the STANDARD pipeline.
-
-Direct port of deprecated `schemas/youtube/state.py:L17-27`. The
+The
 TypedDict shape is the contract between nodes — LangGraph merges
 each node's returned partial state into this."""
 from __future__ import annotations
@@ -25,7 +24,7 @@ class YouTubeRAGState(TypedDict):
     # — sub-agents (DEEP fan-out) receive [] because their sub-question is
     # already self-contained.
     conversation_history: list[dict]
-    # 2026-06-16 — pre-grade soft evidence. Accumulates docs the
+    # pre-grade soft evidence. Accumulates docs the
     # retriever (Neo4j graph + Qdrant hybrid) returned BEFORE the
     # grader filtered them, deduped + capped across all rewrite
     # rounds. Consumed only by `fallback_answer` when the grader

@@ -300,7 +300,6 @@ async def crawl_urls(
                 dispatcher = dispatcher_primary,
             )
         await _consume(stream, "primary")
-        # Retry — patient timeouts for ERR_ABORTED / nav-timeout class.
         if transient_nav_failures:
             logger.info(
                 f"[playwright] retry pass: {len(transient_nav_failures)} URLs "

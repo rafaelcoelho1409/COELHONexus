@@ -3,10 +3,7 @@
 Module-level dict literals (pure data, no I/O) — `service.py:ensure_indexes`
 reads them at startup and creates the indexes if missing.
 
-Direct port of deprecated `helpers.py:L1870-1933` (metadata) and
-`L1936-1954` (transcriptions). DO NOT add fields without bumping a
-schema version and writing a reindex job — ES doesn't allow mapping
-changes on existing fields."""
+DO NOT add fields without bumping a schema version and writing a reindex job — ES doesn't allow mapping changes on existing fields."""
 from __future__ import annotations
 
 

@@ -29,11 +29,9 @@ def _snippet(text: str | None) -> str:
     return text[:SNIPPET_CHARS].rstrip() + "…"
 
 
-# ---------------------------------------------------------------------- #
 # Elasticsearch — YCS only (metadata + transcriptions). The two indexes
 # have different shapes so we route by the `_index` ES echoes back on
 # every hit.
-# ---------------------------------------------------------------------- #
 _ES_METADATA_INDEX:        str = "coelhonexus-youtube-metadata"
 _ES_TRANSCRIPTIONS_INDEX:  str = "coelhonexus-youtube-transcriptions"
 
@@ -76,11 +74,9 @@ def project_es_hit(hit: dict[str, Any], app: str = APP_YCS) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------- #
 # Qdrant — YCS (`youtube-transcripts`) and RR (`radar_papers`). Both
 # collections embed via the same NIM model (2048d cosine) so query-side
 # embedding is a shared path; only payload shape differs.
-# ---------------------------------------------------------------------- #
 def project_qdrant_point(point: Any, app: str) -> dict[str, Any]:
     """Qdrant point (ScoredPoint or Record) → `QueryHit` dict.
 
@@ -119,11 +115,9 @@ def project_qdrant_point(point: Any, app: str) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------- #
 # Neo4j — YCS (Document/Video/Channel/__Entity__) and RR (Paper/Author/
 # Concept/Source). The Cypher in `service.py` returns a uniform projection
 # dict; the helper below just re-shapes it into a QueryHit.
-# ---------------------------------------------------------------------- #
 def project_neo4j_row(row: dict[str, Any], app: str) -> dict[str, Any]:
     """Cypher row → `QueryHit`.
 

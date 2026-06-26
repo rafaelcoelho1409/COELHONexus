@@ -4,13 +4,7 @@ Calls into `SmartRetriever.retrieve(query, channel_ids)` and records
 which retrieval arms contributed (qdrant_hybrid / neo4j_graph /
 elasticsearch). The `retrieval_sources` field feeds the SSE stream
 + the final response envelope.
-
-Direct port of deprecated `graphs/youtube/rag.py:L48-67`,
-extended 2026-06-16 — also accumulates the pre-grade retrieval set
-into `pre_grade_documents` (deduped + capped) so the CRAG-style
-fallback rescue (`nodes/fallback_answer/`) can use the closest
-Neo4j + Qdrant matches as soft evidence when the grader rejects
-everything strict-relevant. Persisting these BEFORE grading is the
+Persisting these BEFORE grading is the
 only way to surface them later: `grade_documents` replaces
 `state["documents"]` with the filtered subset, losing the rejected
 candidates forever otherwise."""

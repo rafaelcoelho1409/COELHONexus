@@ -1,14 +1,4 @@
-"""ycs/retriever — top_k defaults shared across the four retrievers.
-
-Mirror of deprecated `services/youtube/retriever.py` defaults:
-  ElasticsearchRetriever  → 10 (`L47`)
-  QdrantHybridRetriever   → 10 (`L138`)
-  Neo4jRetriever          → 10 (`L259`)
-  SmartRetriever          → 10 (`L436`)
-
-The Qdrant + Neo4j paths over-fetch internally (Qdrant: `top_k * 2`
-prefetch per vector; Neo4j: `top_k * 2` LIMIT in the UNION) so the
-fusion / dedup step has headroom to reorder before truncating."""
+"""ycs/retriever — top_k defaults shared across the four retrievers."""
 from __future__ import annotations
 
 

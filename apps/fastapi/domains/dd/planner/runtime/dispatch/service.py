@@ -254,8 +254,7 @@ async def _await_with_watcher(
     if total_wall_ms is not None and slug:
         await _persist_planner_timing(slug, total_wall_ms)
 
-    # Clear the live-run registry; derive slug from thread_id when caller
-    # didn't pass it (resume path). Format: `docs-distiller/{slug}/{uuid}`.
+    # Derive slug from thread_id on resume path (format: docs-distiller/{slug}/{uuid}).
     reg_slug = slug or (
         thread_id.split("/")[1] if thread_id.count("/") >= 2 else None
     )
@@ -498,7 +497,6 @@ async def resume_planner_async(thread_id: str) -> dict:
             "error": None,
         }
 
-    # Standard LangGraph resume.
     await emit_progress(
         thread_id, "planner", "resumed",
         next_nodes = list(snap.next or []),

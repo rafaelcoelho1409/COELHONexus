@@ -1,13 +1,4 @@
-"""ycs/agents/byok — Redis read + LLM smoke-test (I/O shell).
-
-Two responsibilities:
-  - `get_byok_config(redis_aio)` — read the persisted `LLMConfig` dict.
-    Returns `None` on miss, malformed shape, or Redis error so callers
-    can fall back silently.
-  - `ping_byok(config)` — build a `ChatLiteLLM` from the config and fire
-    one cheap `ainvoke("ping")` to validate the credentials BEFORE the
-    user commits to using them for a full RAG query. Returns a small
-    result dict the `POST /agents/config/test` endpoint relays verbatim."""
+"""ycs/agents/byok — Redis config read + LLM credential smoke-test."""
 from __future__ import annotations
 
 import logging
@@ -24,9 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 async def get_byok_config(redis_aio: Redis) -> dict[str, Any] | None:
-    """Read the persisted `LLMConfig` from Redis JSON. Returns `None` if
-    the key is missing, malformed, or unreachable — caller is expected
-    to fall back to the rotator chain in that case."""
+    """Read the persisted `LLMConfig` from Redis JSON. Returns `None` on miss, malformed shape, or error."""
     try:
         config = await redis_aio.json().get(CONFIG_REDIS_KEY)
     except Exception as e:
@@ -40,14 +29,7 @@ async def get_byok_config(redis_aio: Redis) -> dict[str, Any] | None:
 
 
 async def ping_byok(config: dict[str, Any]) -> dict[str, Any]:
-    """Single `ainvoke("ping")` round-trip to validate a BYOK config.
-
-    Returned shape (relayed verbatim by `POST /agents/config/test`):
-      - `{"status": "ok",    "model": "...", "ms": int, "reply": "..."}`
-      - `{"status": "error", "error": "..."}`
-
-    On schema-incomplete input the caller's endpoint translates this to
-    a 400 — `ping_byok` only signals semantic outcomes."""
+    """One `ainvoke("ping")` to validate credentials. Returns `{status, model, ms, reply}` or `{status, error}`."""
     llm = build_byok_llm(config)
     if llm is None:
         return {

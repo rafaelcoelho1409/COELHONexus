@@ -55,16 +55,7 @@ from infra.celery import app
 
 logger = get_task_logger(__name__)
 
-# Mid-run arm swaps (2026-06-09 circuit breaker). When the pinned arm
-# circuit-breaks (MAX_CONSECUTIVE_NONPRODUCTIVE non-productive batches
-# in a row), re-pick a different arm and continue — completed videos
-# are skipped via the Neo4j video_id tag, failed ones get retried on
-# the fresh arm. 3 swaps = 4 arms total; with ~12 arms in the pool and
-# cross-provider slot caps forcing diversity, hitting 4 broken arms in
-# a row means the provider side is down — at that point finishing the
-# run on the last arm (however badly) beats cycling forever. Each dead
-# arm costs ~9-10 min, so the worst case adds ~40 min to an overnight
-# run instead of multiplying it by days.
+# 3 arm swaps = 4 arms total; 4 broken arms in a row means the provider side is down.
 MAX_ARM_SWAPS = 3
 
 
@@ -166,11 +157,6 @@ def ingest_to_neo4j(
             username = os.environ.get("NEO4J_USERNAME", "neo4j"),
             password = os.environ.get("NEO4J_PASSWORD", ""),
         )
-        # BYOK preflight — the rotator's SYNTH_GROUP needs at least one
-        # provider key resolvable to be useful for YCS. The factory itself
-        # tolerates partial keying (LiteLLM Router cooldowns the rest),
-        # but if NOTHING is set we want a clean, actionable error before
-        # spending compute on the ES fetch.
         if not any(resolve_key(env_var) for env_var in (
             "NVIDIA_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY",
             "MISTRAL_API_KEY", "GOOGLE_API_KEY", "DEEPSEEK_API_KEY",
@@ -191,7 +177,6 @@ def ingest_to_neo4j(
             all_video_ids = list({t["video_id"] for t in transcripts})
             total_videos = len(all_video_ids)
             metadata_map = await fetch_metadata_from_es(es, all_video_ids)
-            # Create Video/Channel nodes from metadata (no LLM cost)
             _progress({
                 "phase": "metadata_graph",
                 "total": total_videos,
@@ -201,10 +186,7 @@ def ingest_to_neo4j(
                 for vid in all_video_ids
             ]
             build_video_metadata_graph(neo4j_graph, video_metadata)
-            # Progress shown in FastHTML must be cumulative for the full
-            # ingest run. Neo4j retries residual videos on a fresh arm, and
-            # the segment-local callback restarts at `0/1`; without this
-            # adapter the bar falls back to 2% even after 4/5 videos landed.
+            # Cumulative progress adapter: segment-local callback restarts at 0/1; this keeps the bar advancing.
             completed_global: set[str] = set()
             try:
                 rows = neo4j_graph.query(
@@ -262,17 +244,6 @@ def ingest_to_neo4j(
                     _progress(meta)
                     return
                 _progress(payload)
-            # Rotator/bandit pick — one deployment per ARM SEGMENT.
-            # `seed=hash(task_id)` so retries of the same task drift to
-            # the bandit's current best (not a fixed seed) but two
-            # different tasks land deterministically on their own picks.
-            # When a segment circuit-breaks (MAX_CONSECUTIVE_NONPRODUCTIVE
-            # non-productive batches), its NEGATIVE reward is recorded
-            # immediately and the loop re-picks excluding every arm
-            # already tried this run — extract_and_store_graph is
-            # idempotent (completed videos skipped via the Neo4j
-            # video_id tag) so the new segment resumes where the dead
-            # arm stopped and retries its failures.
             seed = abs(hash(self.request.id or "")) & 0xFFFFFFFF
             tried: set[str] = set()
             arms_tried: list[str] = []
@@ -298,9 +269,6 @@ def ingest_to_neo4j(
                     f"(seed={seed}, segment={segment + 1}/"
                     f"{MAX_ARM_SWAPS + 1}, videos={len(all_video_ids)})"
                 )
-                # Run extraction + reward update. Wall-clock and outcome
-                # are PER SEGMENT so the bandit scores each arm on what
-                # it actually did.
                 t0 = time.monotonic()
                 success = False
                 error_class: str | None = None
@@ -328,16 +296,7 @@ def ingest_to_neo4j(
                     raise
                 finally:
                     latency_s = float(time.monotonic() - t0)
-                    # ---- Silent-zero guard ----
-                    # `extract_and_store_graph` swallows per-batch LLM
-                    # exceptions (BadRequest schema rejections, 5xx, etc.)
-                    # so a model that fails EVERY batch still returns
-                    # cleanly with nodes_created=0. Without this check the
-                    # bandit would record reward=+0.6 for a 0-output run
-                    # and then prefer the broken arm next time. We treat
-                    # "processed N docs but produced 0 nodes" — and any
-                    # circuit-breaker abort — as a failure for reward
-                    # purposes.
+                    # Silent-zero guard: extract_and_store_graph swallows per-batch errors; 0-output = failure reward.
                     docs_processed   = int(extraction_stats.get("documents_processed", 0) or 0)
                     nodes_created    = int(extraction_stats.get("nodes_created", 0) or 0)
                     last_batch_error = extraction_stats.get("last_batch_error")
@@ -346,14 +305,6 @@ def ingest_to_neo4j(
                     effective_success = success and not silent_zero and not aborted
                     effective_err     = error_class
                     if aborted:
-                        # Map the breaker trip to the bandit's taxonomy by
-                        # the LAST per-video error: timeout-storm arms
-                        # break with a Timeout; quota-exhausted arms with
-                        # a RateLimitError (observed 2026-06-10:
-                        # gemini-2.5-pro free-tier 429×3 was mislabeled
-                        # schema_invalid, distorting FGTS-VA's per-class
-                        # penalties); 200-OK-empty arms with the
-                        # silent-zero marker (or nothing).
                         lbe = (last_batch_error or "").lower()
                         if "timeout" in lbe:
                             effective_err = "timeout"
@@ -364,10 +315,6 @@ def ingest_to_neo4j(
                             effective_err = "schema_invalid"
                     elif silent_zero:
                         effective_err = "schema_invalid"
-                        # Surface the actual last-batch LLM error body when
-                        # available — without it the user only saw "0 nodes"
-                        # with no provider-side diagnostic, making blocklist
-                        # decisions blind.
                         error_tail = (
                             f" Last LLM error: {last_batch_error}"
                             if last_batch_error
@@ -385,10 +332,6 @@ def ingest_to_neo4j(
                             f"DynamicGraph schema (e.g. Groq + gpt-oss-120b)."
                             f"{error_tail}"
                         )
-                    # Best-effort reward emit. Swallowed errors don't fail
-                    # the Celery task — the entity-extract work already
-                    # succeeded (or failed) by this point; reward update
-                    # is pure telemetry-for-the-bandit.
                     try:
                         await record_ycs_neo4j_reward(
                             deployment_id = pinned_model,
@@ -402,13 +345,7 @@ def ingest_to_neo4j(
                             f"[ingest_to_neo4j] reward update failed: "
                             f"{type(e).__name__}: {e}"
                         )
-                    # Release THIS segment's provider slot so the next
-                    # segment's pick (and DD synth, which shares the
-                    # per-provider slot keys) can reuse it immediately.
-                    # Without this the slot lingered for its 1800s TTL,
-                    # saturating the pool mid-run and forcing the
-                    # round-robin fallthrough (observed 2026-06-10: 3
-                    # leaked slots → swaps landed on rate-limited dregs).
+                    # Release slot immediately; lingering for 1800s TTL saturated the pool mid-run.
                     try:
                         await release_ycs_provider_slot(seg_provider, seg_slot)
                     except Exception as e:
@@ -419,13 +356,6 @@ def ingest_to_neo4j(
                 agg_nodes     += int(extraction_stats.get("nodes_created", 0) or 0)
                 agg_rels      += int(extraction_stats.get("relationships_created", 0) or 0)
                 agg_attempted += int(extraction_stats.get("documents_processed", 0) or 0)
-                # Swap on circuit-break OR a fully-silent-zero segment OR
-                # a PARTIAL segment (some videos failed/zeroed while
-                # others landed — e.g. Groq TPM exhaustion, per-video
-                # silent zeros). Failed videos are untagged in Neo4j, so
-                # the next segment re-runs exactly them on a fresh arm.
-                # The silent-zero condition also covers runs SMALLER than
-                # the breaker threshold (e.g. 2 videos, both timing out).
                 videos_failed = int(extraction_stats.get("videos_failed", 0) or 0)
                 if not (extraction_stats.get("aborted_nonproductive")
                         or silent_zero
@@ -447,11 +377,7 @@ def ingest_to_neo4j(
                         f"{MAX_ARM_SWAPS + 1} arms ({sorted(tried)}) — "
                         f"giving up with partial results"
                     )
-            # Entity resolution — ONCE, over everything all segments
-            # wrote. Previously ran inside every non-aborted segment;
-            # with the residual-retry loop that would repeat the global
-            # pass (minutes of per-pair Cypher + NIM embedding calls)
-            # up to 4 times per run.
+            # Entity resolution — ONCE after all segments (previously ran per-segment, 4× redundant).
             if agg_nodes > 0:
                 _progress({
                     "phase": "resolving",
@@ -468,8 +394,6 @@ def ingest_to_neo4j(
                 "videos_processed": len(all_video_ids),
                 "deployment":       pinned_model,
                 **extraction_stats,
-                # Cross-segment aggregates — per-arm stats above reflect
-                # only the FINAL segment; these cover the whole run.
                 "documents_processed":   agg_attempted,
                 "nodes_created":         agg_nodes,
                 "relationships_created": agg_rels,

@@ -128,7 +128,6 @@ def validate_actions_against_outline(
     available = set(valid_section_ids)
 
     for i, a in enumerate(actions):
-        # Check targets
         bad_targets = [t for t in a.targets if t not in available]
         if bad_targets:
             issues.append(
@@ -136,7 +135,6 @@ def validate_actions_against_outline(
                 f"are not in the current outline OR were deleted by "
                 f"an earlier action in this list."
             )
-        # Check insertion anchors
         if a.insert_after and a.insert_after not in available:
             issues.append(
                 f"action[{i}] ({a.action}): insert_after "
@@ -147,7 +145,6 @@ def validate_actions_against_outline(
                 f"action[{i}] ({a.action}): insert_before "
                 f"{a.insert_before!r} doesn't exist in the outline."
             )
-        # Check new_prerequisites
         if a.new_prerequisites:
             bad_prereqs = [
                 p for p in a.new_prerequisites if p not in available
@@ -165,7 +162,6 @@ def validate_actions_against_outline(
             # Targets after the first are removed (merged INTO the first)
             if len(a.targets) >= 2:
                 available -= set(a.targets[1:])
-        # add / rename / reorder don't remove section_ids
         # (add's new section_id is auto-assigned during apply, not pre-validated)
 
     return issues
@@ -472,7 +468,6 @@ async def _run_llm_replan(
     # If issues STILL remain after repair, drop the offending actions
     # rather than ship invalid actions. Surface in rationale.
     if issues:
-        # Filter out actions referencing unknown ids
         kept_actions: list[ReplanAction] = []
         available = set(valid_section_ids)
         for a in payload.actions:

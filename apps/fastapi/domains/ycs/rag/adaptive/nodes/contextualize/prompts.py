@@ -1,6 +1,5 @@
 """ycs/rag/adaptive/nodes/contextualize — standalone-question rewriter prompt.
-
-Direct port of deprecated `schemas/youtube/prompts.py:L57-72`."""
+"""
 from __future__ import annotations
 
 from langchain_core.prompts import ChatPromptTemplate

@@ -21,7 +21,6 @@ from pathlib import Path
 #                                              the fasthtml container so the
 #                                              per-node drawer can read them
 #                                              at request time)
-#
 # Same duplication pattern as `taxonomy.py`. Keep both in sync; if you edit
 # a skill, copy it over with:
 #   cp apps/fastapi/domains/rr/agent/skills/*.md \

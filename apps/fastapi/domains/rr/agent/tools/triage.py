@@ -170,7 +170,6 @@ def _diversify_by_source(
             by_source[chosen_src].append((p, s))
         else:
             leftovers.append((p, s))
-    # Step 1: take the BEST from each qualifying source (up to top_n).
     out: list[tuple[NormalizedPaper, float]] = []
     seen_ids: set[str] = set()
     for src in sorted(by_source.keys()):
@@ -185,7 +184,6 @@ def _diversify_by_source(
             seen_ids.add(p.arxiv_id)
         if len(out) >= top_n:
             return out
-    # Step 2: fill remaining slots by pure score order from the merged pool.
     remaining_pool = [
         (p, s) for p, s in scored
         if not p.arxiv_id or p.arxiv_id not in seen_ids
@@ -236,26 +234,21 @@ async def triage_candidates(
         A short summary including the count of candidates examined, the
         count after dedup + off-topic filter, and the path written.
     """
-    # ────────────────────────────────────────────────────────────────────────
-    # Idempotency guard (Fix #3 — 2026-06-16).
-    #
+    # Idempotency guard.
     # If `fs/triage/top_n.json` already exists for this scan, REFUSE to
     # overwrite. Return the existing top_arxiv_ids so the orchestrator's
     # Phase 3 dispatch logic still works — but DON'T re-rank, DON'T change
     # `top_n`, DON'T re-prefill from cache.
-    #
     # Why: scan `20f4e4af` showed the orchestrator re-calling triage AFTER
     # synthesis completed (with `top_n=12` and `topic='general'` — both
     # values the LLM invented to try to "broaden the search" after a
     # ScanComplete validation failure). The result was top_n.json was
     # overwritten, 4 of 12 new deep_reads ran, synthesis was NOT re-run,
     # and the final digest had 2/12 papers themed.
-    #
     # The guard breaks the loop at the source: the second call returns a
     # message saying "already done, use these arxiv_ids" → the orchestrator
     # can't change the scan's identity mid-flight. Single-source-of-truth
     # for top_n.json per scan.
-    # ────────────────────────────────────────────────────────────────────────
     existing_top_n = fs_read(scan_id, FS_FILE_TRIAGE_TOPN)
     if isinstance(existing_top_n, list) and existing_top_n:
         existing_ids = [
@@ -312,7 +305,7 @@ async def triage_candidates(
 
     # Cross-source dedup — the architectural payoff (architecture doc §4).
     deduped = dedup_by_arxiv_id(candidates)
-    # Fix #4 (2026-06-16): drop papers without arxiv_id BEFORE rerank +
+    # drop papers without arxiv_id BEFORE rerank +
     # quota composition. Deep_read can only extract papers with an
     # arxiv_id (its tool reads from triage's top_n.json keyed by arxiv_id);
     # including arxiv-less papers (HN posts that didn't link to arxiv,
@@ -369,7 +362,6 @@ async def triage_candidates(
     # min-1-per-source in the top_n so a single source can't monopolize.
     top = _diversify_by_source(scored, max(1, int(top_n)), per_source_counts)
 
-    # Serialize top-N as a list of dicts for downstream subagents to read.
     # Attach rerank logit so downstream extraction can prioritize.
     payload = [
         _paper_as_dict(
@@ -381,7 +373,7 @@ async def triage_candidates(
     fs_write(scan_id, FS_FILE_TRIAGE_TOPN, payload)
     try: mirror_write_sync(scan_id, FS_FILE_TRIAGE_TOPN, payload)
     except Exception: pass
-    # Phase contextvar for LLM-counter attribution (Path A 2026-06-16).
+    # Phase contextvar for LLM-counter attribution (Path A).
     # The next LLM calls (orchestrator dispatching deep_read fan-out)
     # attribute to "triage" until the first write_extraction lands.
     try:
@@ -389,13 +381,10 @@ async def triage_candidates(
         _set_llm_phase("triage")
     except Exception: pass
 
-    # Wave 1.7 (2026-06-16): cross-scan extraction cache prefill.
-    #
-    # ────────────────────────────────────────────────────────────────────────
-    # DISABLED 2026-06-16 EOD — observed behavior across scans 96173afd,
+    # cross-scan extraction cache prefill.
+    # DISABLED — observed behavior across scans 96173afd,
     # 157644c6, c6fe7b76 (cold / 1-repeat / 2-repeat) showed the cache
     # prefill consistently DEGRADED end-to-end wall time + correctness:
-    #
     #   - Cold run (no cache):        5:05  · 8 findings · 8 extractions
     #   - Repeat 1  (8/8 cached):     7:30  · 8 findings · 16 extractions
     #                                          (orchestrator re-extracted
@@ -406,7 +395,6 @@ async def triage_candidates(
     #                                          with top_n=12, then re-ran
     #                                          synthesis — completionist
     #                                          loop in extremis)
-    #
     # Root cause is the orchestrator's strict-phase emission: the LLM
     # can't prove "I dispatched deep_read for these papers" when the cache
     # prefilled them, so ScanComplete validation fails ("deep_read not
@@ -414,13 +402,11 @@ async def triage_candidates(
     # re-dispatch (or worse, re-run triage with a higher top_n to "get
     # more findings"). Net result: cache makes every repeat scan slower
     # and more chaotic than a cold scan.
-    #
     # Wave 1+2 (bandit + 9-arm pool + Semaphore + per-provider caps)
     # already deliver the speedup target (5min vs 10-20min baseline);
     # the cache layer was a speculative add-on that didn't pay off in
     # practice for a RECENT-papers radar where natural cross-scan
     # overlap is low and ScanComplete validation is strict.
-    #
     # PRESERVED for future re-enable:
     #   - The cache module itself (`runtime/extraction_cache.py`)
     #   - `write_extraction` still calls `_cache_extraction(arxiv_id,
@@ -435,13 +421,10 @@ async def triage_candidates(
     #     branches are dead code — but they're defensive guidance the
     #     orchestrator can use for any future "phantom extractions"
     #     scenario, so we leave them in.
-    #
     # TO RE-ENABLE: uncomment the prefill call below. Recommend pairing
     # with the triage-idempotency guard (refuse a 2nd triage call per
     # scan) to prevent the orchestrator's loop fallback.
-    # ────────────────────────────────────────────────────────────────────────
     cached_arxiv_ids: list[str] = []
-    # try:
     #     from ...runtime.extraction_cache import prefill_extractions_from_cache
     #     cached_arxiv_ids = await prefill_extractions_from_cache(scan_id, payload)
     # except Exception as e:

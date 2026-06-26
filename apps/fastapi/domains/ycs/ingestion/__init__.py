@@ -1,6 +1,5 @@
 """ycs/ingestion — streaming ES → Qdrant pipeline.
-
-Direct port of deprecated `services/youtube/ingestion.py`. Memory-safe
+Memory-safe
 (one transcript in memory at a time), idempotent (deterministic point
 ids), hybrid (dense NIM + sparse BM25)."""
 from .keys import point_id

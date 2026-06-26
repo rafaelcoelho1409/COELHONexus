@@ -1,0 +1,553 @@
+direction: right
+
+# ── Global defaults ──────────────────────────────────────────
+*.style.font-size: 64
+*.style.font-color: "#000000"
+(* -> *)[*].style.font-size: 64
+(* -> *)[*].style.font-color: "#000000"
+(* -> *)[*].style.stroke-width: 8
+
+# ============================================================
+# COELHO Nexus — AI Domains & Data Flows
+# ============================================================
+# Generate with:  ./generate.sh
+# Or manually:    d2 --layout=elk coelho_nexus_ai_domains.d2 coelho_nexus_ai_domains.svg
+# ============================================================
+
+title: |md
+  # COELHO Nexus — AI Domains & Data Flows
+| {
+  near: top-center
+  style.font-size: 96
+}
+
+# ── LLM Rotator (shared foundation) ─────────────────────────
+
+llm_layer: LLM Rotator — Shared Foundation {
+  style.fill: "#F5F0FF"
+  style.stroke: "#7C3AED"
+  style.stroke-width: 4
+  style.border-radius: 12
+  style.font-size: 96
+  style.font-color: "#000000"
+  style.bold: true
+
+  litellm: "LiteLLM Router\n(Provider Proxy\nfail-fast pre-call)" {
+    shape: image
+    icon: ./icons/litellm_logo.jpg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  pareto_bandit: "FGTS-VA ParetoBandit\n(NeurIPS 2025\nLatency × Quality)" {
+    shape: image
+    icon: ./icons/python.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  dynamic_catalog: "Dynamic Catalog\n(Live NIM Discovery\n+ Benchmark Ranking)" {
+    shape: image
+    icon: ./icons/python.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  byok: "BYOK Credential Store\n(Fernet KEK\nMinIO-backed)" {
+    shape: image
+    icon: ./icons/minio.png
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+
+  providers: External LLM Providers (Free Tier Only) {
+    style.fill: "#F0EBFF"
+    style.stroke: "#7C3AED"
+    style.stroke-width: 2
+    style.stroke-dash: 5
+    style.border-radius: 8
+    style.font-size: 80
+    style.font-color: "#000000"
+    style.bold: true
+
+    groq: Groq {
+      shape: image
+      icon: ./icons/groq.svg
+      width: 400
+      height: 400
+      style.font-size: 64
+    }
+    nvidia: "NVIDIA NIM" {
+      shape: image
+      icon: ./icons/nvidia_nim.svg
+      width: 400
+      height: 400
+      style.font-size: 64
+    }
+    cerebras: Cerebras {
+      shape: image
+      icon: ./icons/cerebras.svg
+      width: 400
+      height: 400
+      style.font-size: 64
+    }
+    sambanova: SambaNova {
+      shape: image
+      icon: ./icons/sambanova.svg
+      width: 400
+      height: 400
+      style.font-size: 64
+    }
+    mistral: Mistral {
+      shape: image
+      icon: ./icons/mistral.svg
+      width: 400
+      height: 400
+      style.font-size: 64
+    }
+    deepseek: DeepSeek {
+      shape: image
+      icon: ./icons/deepseek.svg
+      width: 400
+      height: 400
+      style.font-size: 64
+    }
+    gemini: "Google Gemini" {
+      shape: image
+      icon: ./icons/gemini.svg
+      width: 400
+      height: 400
+      style.font-size: 64
+    }
+  }
+
+  dynamic_catalog -> pareto_bandit: "ranked\nmodels" {style.stroke: "#7C3AED"; style.stroke-width: 7}
+  pareto_bandit -> litellm: "selected\ndeployment" {style.stroke: "#7C3AED"; style.stroke-width: 7}
+  byok -> litellm: "provider\nAPI keys" {style.stroke: "#7C3AED"; style.stroke-width: 7}
+  litellm -> providers.groq: {style.stroke: "#7C3AED"; style.stroke-width: 2; style.stroke-dash: 5}
+  litellm -> providers.nvidia: {style.stroke: "#7C3AED"; style.stroke-width: 2; style.stroke-dash: 5}
+  litellm -> providers.cerebras: {style.stroke: "#7C3AED"; style.stroke-width: 2; style.stroke-dash: 5}
+  litellm -> providers.sambanova: {style.stroke: "#7C3AED"; style.stroke-width: 2; style.stroke-dash: 5}
+  litellm -> providers.mistral: {style.stroke: "#7C3AED"; style.stroke-width: 2; style.stroke-dash: 5}
+  litellm -> providers.deepseek: {style.stroke: "#7C3AED"; style.stroke-width: 2; style.stroke-dash: 5}
+  litellm -> providers.gemini: {style.stroke: "#7C3AED"; style.stroke-width: 2; style.stroke-dash: 5}
+}
+
+
+# ── Domain 1: Docs Distiller (DD) ───────────────────────────
+
+dd: "DD — Docs Distiller" {
+  style.fill: "#E8F4F8"
+  style.stroke: "#0066CC"
+  style.stroke-width: 4
+  style.border-radius: 12
+  style.font-size: 96
+  style.font-color: "#000000"
+  style.bold: true
+
+  ingestion: "Ingestion\n(Tiered Crawl:\nPlaywright + HTTP + sitemap)" {
+    shape: image
+    icon: ./icons/playwright.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+
+  planner: LangGraph Planner Pipeline {
+    style.fill: "#F0F8FF"
+    style.stroke: "#0066CC"
+    style.stroke-width: 2
+    style.stroke-dash: 5
+    style.border-radius: 8
+    style.font-size: 80
+    style.font-color: "#000000"
+    style.bold: true
+
+    corpus_load: "corpus_load\n(MinIO → docs)" {
+      shape: image
+      icon: ./icons/langgraph.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    embed_corpus: "embed_corpus\n(NVIDIA Nemotron\n1B Dense Embeddings)" {
+      shape: image
+      icon: ./icons/langgraph.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    off_topic: "off_topic\n(Nemotron Rerank\nCross-encoder Filter)" {
+      shape: image
+      icon: ./icons/langgraph.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    doc_distill: "doc_distill\n(Parallel LLM\nDoc Summaries)" {
+      shape: image
+      icon: ./icons/langgraph.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    chapter_propose: "chapter_propose\n(LLM: 6-15 Chapters\nfrom Distillates)" {
+      shape: image
+      icon: ./icons/langgraph.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    chapter_assign: "chapter_assign\n(Per-doc LLM\nMembership Scoring)" {
+      shape: image
+      icon: ./icons/langgraph.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    chapter_select: "chapter_select\n(Greedy\nCoverage)" {
+      shape: image
+      icon: ./icons/langgraph.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    order_chapters: "order_chapters\n(Pedagogical\nOrdering)" {
+      shape: image
+      icon: ./icons/langgraph.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    plan_write: "plan_write\n(Final Plan\n→ MinIO)" {
+      shape: image
+      icon: ./icons/langgraph.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+
+    corpus_load -> embed_corpus: {style.stroke: "#0066CC"; style.stroke-width: 8}
+    embed_corpus -> off_topic: {style.stroke: "#0066CC"; style.stroke-width: 8}
+    off_topic -> doc_distill: {style.stroke: "#0066CC"; style.stroke-width: 8}
+    doc_distill -> chapter_propose: {style.stroke: "#0066CC"; style.stroke-width: 8}
+    chapter_propose -> chapter_assign: {style.stroke: "#0066CC"; style.stroke-width: 8}
+    chapter_assign -> chapter_select: {style.stroke: "#0066CC"; style.stroke-width: 8}
+    chapter_select -> order_chapters: {style.stroke: "#0066CC"; style.stroke-width: 8}
+    order_chapters -> plan_write: {style.stroke: "#0066CC"; style.stroke-width: 8}
+  }
+
+  synth: LangGraph Synth Pipeline (per chapter) {
+    style.fill: "#F0F8FF"
+    style.stroke: "#0066CC"
+    style.stroke-width: 2
+    style.stroke-dash: 5
+    style.border-radius: 8
+    style.font-size: 80
+    style.font-color: "#000000"
+    style.bold: true
+
+    outline: "outline\n(Structure-Driven Planner\nH2 map + code inventory)" {
+      shape: image
+      icon: ./icons/langgraph.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    vault_digest: "vault + digest\n(Code Extraction\n+ Source Digests)" {
+      shape: image
+      icon: ./icons/langgraph.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    sawc: "SAWC / MGSR\n(Section-Aware Writer-Critic\nSelf-Refine loop)" {
+      shape: image
+      icon: ./icons/langgraph.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    sawc_derive: "sawc_derive\n(Business Code\nAnalogie Derivation)" {
+      shape: image
+      icon: ./icons/langgraph.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    render: "render\n(Materialize + Audit\n→ Chapter Markdown)" {
+      shape: image
+      icon: ./icons/langgraph.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    book_harmonize: "book_harmonize\n(Post-study: cross-chapter\ncoherence pass)" {
+      shape: image
+      icon: ./icons/langgraph.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+
+    outline -> vault_digest: {style.stroke: "#0066CC"; style.stroke-width: 8}
+    vault_digest -> sawc: {style.stroke: "#0066CC"; style.stroke-width: 8}
+    sawc -> sawc_derive: {style.stroke: "#0066CC"; style.stroke-width: 8}
+    sawc_derive -> render: {style.stroke: "#0066CC"; style.stroke-width: 8}
+    render -> book_harmonize: "after all\nchapters" {style.stroke: "#0066CC"; style.stroke-width: 2; style.stroke-dash: 5}
+  }
+
+  celery_queues: "Celery Queues\n(crawler · embedding · llm\nplanner · synth · default)" {
+    shape: image
+    icon: ./icons/celery.png
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  artifacts: "Study Artifacts\n(MinIO + Markdown\nper chapter + book)" {
+    shape: image
+    icon: ./icons/minio.png
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+
+  ingestion -> planner.corpus_load: "chunked\ndocuments" {style.stroke: "#0066CC"; style.stroke-width: 8}
+  planner.plan_write -> synth.outline: "chapter\nassignments" {style.stroke: "#0066CC"; style.stroke-width: 8}
+  synth.render -> artifacts: "chapter\nmarkdown" {style.stroke: "#0066CC"; style.stroke-width: 8}
+  synth.book_harmonize -> artifacts: "harmonized\nbook" {style.stroke: "#0066CC"; style.stroke-width: 2; style.stroke-dash: 5}
+  celery_queues -> ingestion: "dispatch" {style.stroke: "#0066CC"; style.stroke-width: 2; style.stroke-dash: 5}
+  celery_queues -> planner.corpus_load: {style.stroke: "#0066CC"; style.stroke-width: 2; style.stroke-dash: 5}
+  celery_queues -> synth.outline: {style.stroke: "#0066CC"; style.stroke-width: 2; style.stroke-dash: 5}
+}
+
+
+# ── Domain 2: YCS — YouTube Content Search ──────────────────
+
+ycs: "YCS — YouTube Content Search" {
+  style.fill: "#FFF0F5"
+  style.stroke: "#E53E3E"
+  style.stroke-width: 4
+  style.border-radius: 12
+  style.font-size: 96
+  style.font-color: "#000000"
+  style.bold: true
+
+  ingestion: "Ingestion\n(Playwright DOM → transcripts\nyt-dlp → metadata)" {
+    shape: image
+    icon: ./icons/playwright.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  embeddings: "Embeddings\n(NVIDIA Nemotron 1B\nDense + Sparse BM25)" {
+    shape: image
+    icon: ./icons/python.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  graph_builder: "Graph Builder\n(Neo4j KG\nLLM Entity Extraction)" {
+    shape: image
+    icon: ./icons/neo4j.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+
+  rag: Graph-RAG Pipeline {
+    style.fill: "#FFF5F7"
+    style.stroke: "#E53E3E"
+    style.stroke-width: 2
+    style.stroke-dash: 5
+    style.border-radius: 8
+    style.font-size: 80
+    style.font-color: "#000000"
+    style.bold: true
+
+    smart_retriever: "SmartRetriever\n(ES BM25 + Qdrant Hybrid\n+ Neo4j Graph — fused)" {
+      shape: image
+      icon: ./icons/python.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    reranker: "Reranker\n(Nemotron Cross-encoder\n+ Document Grader LLM)" {
+      shape: image
+      icon: ./icons/python.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    answer: "LLM Answer\n(CRAG adaptive-RAG\nw/ Citations)" {
+      shape: image
+      icon: ./icons/python.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+  }
+
+  conversation: "Conversation Memory\n(PostgreSQL\nThread Checkpoints)" {
+    shape: image
+    icon: ./icons/postgresql.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+
+  ingestion -> embeddings: "chunked\ntranscripts" {style.stroke: "#E53E3E"; style.stroke-width: 8}
+  ingestion -> graph_builder: "entities\n+ relations" {style.stroke: "#E53E3E"; style.stroke-width: 8}
+  embeddings -> rag.smart_retriever: "vector\nindex" {style.stroke: "#E53E3E"; style.stroke-width: 8}
+  graph_builder -> rag.smart_retriever: "graph\ncontext" {style.stroke: "#E53E3E"; style.stroke-width: 8}
+  rag.smart_retriever -> rag.reranker: {style.stroke: "#E53E3E"; style.stroke-width: 8}
+  rag.reranker -> rag.answer: {style.stroke: "#E53E3E"; style.stroke-width: 8}
+  rag.answer -> conversation: "store\nthread" {style.stroke: "#E53E3E"; style.stroke-width: 7}
+}
+
+
+# ── Domain 3: RR — Research Radar ───────────────────────────
+
+rr: "RR — Research Radar" {
+  style.fill: "#FFF4E6"
+  style.stroke: "#FF6B35"
+  style.stroke-width: 4
+  style.border-radius: 12
+  style.font-size: 96
+  style.font-color: "#000000"
+  style.bold: true
+
+  deep_agent: "DeepAgent Orchestrator\n(create_deep_agent\nDeepAgents + LangGraph)" {
+    shape: image
+    icon: ./icons/deepagents.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+
+  mcp_tools: FastMCP Tool Registry (Streamable-HTTP) {
+    style.fill: "#FFFAF0"
+    style.stroke: "#FF6B35"
+    style.stroke-width: 2
+    style.stroke-dash: 5
+    style.border-radius: 8
+    style.font-size: 80
+    style.font-color: "#000000"
+    style.bold: true
+
+    arxiv: "arXiv\n(Free Papers API)" {
+      shape: image
+      icon: ./icons/arxiv.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    semantic_scholar: "Semantic Scholar\n(S2 Citations API)" {
+      shape: image
+      icon: ./icons/semanticscholar.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    hn: "Hacker News\n(Algolia Search API)" {
+      shape: image
+      icon: ./icons/ycombinator.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    hf_daily: "HF Daily Papers\n(HuggingFace API)" {
+      shape: image
+      icon: ./icons/huggingface.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+  }
+
+  stores: Scan Persistence (4 stores) {
+    style.fill: "#FFFAF0"
+    style.stroke: "#FF6B35"
+    style.stroke-width: 2
+    style.stroke-dash: 5
+    style.border-radius: 8
+    style.font-size: 80
+    style.font-color: "#000000"
+    style.bold: true
+
+    postgres: "PostgreSQL\n(radar_scans · findings\nradar_papers · profiles)" {
+      shape: image
+      icon: ./icons/postgresql.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    neo4j: "Neo4j\n(Paper · Author · Concept\nSource graph — MERGE dedup)" {
+      shape: image
+      icon: ./icons/neo4j.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    qdrant: "Qdrant\n(radar_papers vectors\nNemotron 1B 2048d)" {
+      shape: image
+      icon: ./icons/qdrant.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    minio: "MinIO\n(Scan Artifacts\nDigest + Synthesis files)" {
+      shape: image
+      icon: ./icons/minio.png
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+  }
+
+  credentials: "Credential Rotation\n(BYOK per-user\nenv-injected at boot)" {
+    shape: image
+    icon: ./icons/python.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  rate_limit: "Rate Limiter\n(Per-tool sliding window\nmiddleware)" {
+    shape: image
+    icon: ./icons/python.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+
+  deep_agent -> mcp_tools.arxiv: "MCP tool\ncall" {style.stroke: "#FF6B35"; style.stroke-width: 7}
+  deep_agent -> mcp_tools.semantic_scholar: {style.stroke: "#FF6B35"; style.stroke-width: 7}
+  deep_agent -> mcp_tools.hn: {style.stroke: "#FF6B35"; style.stroke-width: 7}
+  deep_agent -> mcp_tools.hf_daily: {style.stroke: "#FF6B35"; style.stroke-width: 7}
+  deep_agent -> stores.postgres: "scan\nstatus" {style.stroke: "#FF6B35"; style.stroke-width: 7}
+  deep_agent -> stores.neo4j: "paper\ngraph" {style.stroke: "#FF6B35"; style.stroke-width: 7}
+  deep_agent -> stores.qdrant: "paper\nvectors" {style.stroke: "#FF6B35"; style.stroke-width: 7}
+  deep_agent -> stores.minio: "scan\nartifacts" {style.stroke: "#FF6B35"; style.stroke-width: 7}
+  credentials -> mcp_tools: "inject\nAPI keys" {style.stroke: "#FF6B35"; style.stroke-width: 2; style.stroke-dash: 5}
+  rate_limit -> mcp_tools: "throttle" {style.stroke: "#FF6B35"; style.stroke-width: 2; style.stroke-dash: 5}
+}
+
+
+# ============================================================
+# CROSS-LAYER EDGES
+# ============================================================
+
+# Layer ordering
+llm_layer -> dd: {style.stroke: "#CCCCCC"; style.stroke-width: 6; style.stroke-dash: 8; style.opacity: 0.3}
+llm_layer -> ycs: {style.stroke: "#CCCCCC"; style.stroke-width: 6; style.stroke-dash: 8; style.opacity: 0.3}
+llm_layer -> rr: {style.stroke: "#CCCCCC"; style.stroke-width: 6; style.stroke-dash: 8; style.opacity: 0.3}
+
+# LLM rotator feeds all domains
+llm_layer.litellm -> dd.planner.doc_distill: "LLM\ncalls" {style.stroke: "#7C3AED"; style.stroke-width: 7}
+llm_layer.litellm -> dd.planner.chapter_propose: {style.stroke: "#7C3AED"; style.stroke-width: 7}
+llm_layer.litellm -> dd.synth.sawc: {style.stroke: "#7C3AED"; style.stroke-width: 7}
+llm_layer.litellm -> dd.synth.sawc_derive: {style.stroke: "#7C3AED"; style.stroke-width: 7}
+llm_layer.litellm -> ycs.graph_builder: "entity\nextraction" {style.stroke: "#7C3AED"; style.stroke-width: 7}
+llm_layer.litellm -> ycs.rag.answer: "CRAG\ngenerate" {style.stroke: "#7C3AED"; style.stroke-width: 7}
+llm_layer.litellm -> rr.deep_agent: "reasoning\nloop" {style.stroke: "#7C3AED"; style.stroke-width: 8}

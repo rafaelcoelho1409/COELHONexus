@@ -1,11 +1,6 @@
 """ycs/transcript — pure helpers (CDP URL resolver + transcript parser +
 caption-track selection + innertube payload builders/parsers).
-
-Direct port of deprecated `routers/v1/youtube/helpers.py:L780-892, L1148-1173`,
-extended 2026-06-10 with the innertube data-path helpers
-(`build_get_panel_params` / `parse_get_panel_segments` /
-`parse_get_transcript_segments`) for the engine rework — see
-`service.py` module docstring for the 4-path cascade.
+py` module docstring for the 4-path cascade.
 
 Pure side: no Playwright handle, no async I/O. The HTTP probe for CDP URL
 resolution stays sync (`urllib.request.urlopen`) — `service.py` wraps it
@@ -163,7 +158,6 @@ def _parse_transcript(raw_text: str) -> list[TranscriptSegment]:
     ]
     segments: list[TranscriptSegment] = []
     i = 0
-    # Skip leading non-timestamp preamble
     while i < len(lines) and not re.match(r"^\d+:\d{2}$", lines[i]):
         i += 1
     while i < len(lines):

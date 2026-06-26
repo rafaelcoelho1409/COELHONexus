@@ -3,10 +3,7 @@
 If conversation history exists, rewrite the question to be standalone
 ("tell me more about that" → "tell me more about Elon Musk's views on
 AGI"). Short-circuits with zero LLM cost when history is empty.
-
-Direct port of deprecated `graphs/youtube/adaptive.py:L64-92` +
-2026-06-16 per-call timeout (previously uncapped — a contextualize
-hang would block the entire adaptive graph at its entry point)."""
+"""
 from __future__ import annotations
 
 import asyncio

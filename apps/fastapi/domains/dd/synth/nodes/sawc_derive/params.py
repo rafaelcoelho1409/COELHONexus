@@ -18,7 +18,7 @@ CONCURRENCY = 4
 
 # Thin-block heuristics: when ALL apply, the subtopic is a derive
 # candidate. Tuned to catch signature-only docs (the ch03 failure mode
-# in the 2026-05-24 v2 cookbook run) without firing on real examples.
+# in a v2 cookbook run) without firing on real examples.
 THIN_MAX_CHARS = 200          # the whole code body
 THIN_MAX_NEWLINES = 2          # 0-2 newlines = single-line signature
 
@@ -48,7 +48,7 @@ REQUEST_TIMEOUT_S = 60.0
 MAX_OUTPUT_TOKENS = 1200
 
 
-# DD-SYNTH-SPEED-SOTA #B3 (2026-05-26) — Optimal-Stopping for MPSC
+# Optimal-Stopping for MPSC
 # samples. Fire sample 1; if it's AST-valid AND lands in the required
 # LOC + char band, ship it directly. Else fire remaining samples + run
 # rank_mpsc_samples. Flag-gated via KD_SAWC_DERIVE_OPTIMAL_STOPPING

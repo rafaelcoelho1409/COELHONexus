@@ -1,7 +1,4 @@
 """ycs/cache — Redis key builder (pure).
-
-Direct port of deprecated `services/youtube/cache.py:L27-33`.
-
 Per `docs/CODE-CONVENTIONS.md` §2, key-builder functions belong in
 `keys.py` — they're storage path helpers, not loose constants."""
 from __future__ import annotations

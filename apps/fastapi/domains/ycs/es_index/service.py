@@ -1,7 +1,4 @@
 """ycs/es_index — async bulk-index helpers for metadata + transcriptions.
-
-Direct port of deprecated `routers/v1/youtube/helpers.py:L1778-1859`.
-
 Two near-symmetric writers (one per index). Both:
   - skip the no-op early
   - build `[{"index": {...}}, doc, ...]` ops

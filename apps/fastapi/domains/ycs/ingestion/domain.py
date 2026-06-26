@@ -4,9 +4,7 @@ content fingerprint.
 Functional Core: takes a `langchain_core.documents.Document` whose
 metadata was populated by `chunker.chunk_transcript`, projects the
 fields the deprecated payload carries.
-
-Direct port of deprecated `services/youtube/ingestion.py:L237-249`,
-extended 2026-06-10 with `content_hash` (re-ingest skip fingerprint)."""
+"""
 from __future__ import annotations
 
 import hashlib

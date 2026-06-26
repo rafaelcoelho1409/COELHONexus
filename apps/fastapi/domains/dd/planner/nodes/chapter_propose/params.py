@@ -15,7 +15,7 @@ PROPOSALS_MAX = 30   # was 18 — capped large corpora into mega-chapters
                      # Raised so the adaptive target (≤24) is never
                      # schema-clipped.
 
-# Adaptive chapter-count target (2026-05-31, DD-PLANNER-UNDERCHAPTERING).
+# Adaptive chapter-count target .
 # Previously the proposer aimed for a FIXED 4-18 regardless of corpus
 # size, so big corpora got too few chapters → mega-chapters that bind the
 # synth section ceiling (LangChain ch-01 = 184 docs / 10 sections / 18
@@ -43,12 +43,10 @@ TEMPERATURE_VOTE    = 0.0
 
 MAX_REPAIR_ATTEMPTS = 1
 
-# V2 (2026-05-28) — Optimal-Stopping (CGES arXiv 2511.02603). Fire sample
+# Optimal-Stopping (CGES arXiv 2511.02603). Fire sample
 # 0 first; if it parses cleanly AND emits ≥ OPTIMAL_STOPPING_MIN_PROPOSALS,
-# skip remaining N-1 samples and ship it as-is. Saves ~67% of LLM calls
 # in the best case (sample 0 clean). Same pattern as outline_sdp's
 # `OUTLINE_OPTIMAL_STOPPING_*`.
-#
 # Absolute floor of 6; the NODE scales this up to ~0.7×(adaptive target)
 # per corpus so a large corpus doesn't early-stop on a too-small sample-0
 # (e.g. target 24 → effective floor ~17). Small corpora keep 6.

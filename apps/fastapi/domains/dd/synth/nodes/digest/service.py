@@ -129,19 +129,7 @@ logger = logging.getLogger(__name__)
 
 
 # Tunables (quality > speed)
-_CONCURRENCY        = 24    # max concurrent per-source LLM calls
-# V4 (2026-05-28) — bumped 16 → 24 after per-arm cooldown (60s) and
-# bandit drift control stabilized. Empirical evidence: 2026-05-27 run
-# with concurrency 16 saw no 429 cascades for digest (cooldown caught
-# every per-arm spike). 24 is conservative — expected per-chapter
-# digest wall-time drop of ~20-25% on 60+ source chapters.
-# Bumped 2026-05-25 from 6 → 16. Digest is the single heaviest synth
-# step (~17 min for FastMCP's 252 sources at N = 6) because it fans out
-# one LLM call per ingested page. At ~4s per page, wall time ≈
-# n_sources × per_call_s / N. The FGTS-VA bandit distributes across
-# ~30 free-tier providers (NIM, Mistral, Gemini, Cerebras, Groq, etc.)
-# so per-provider 429s under N = 16 are absorbed by the bandit's
-# existing cooldown + arm rotation — no per-call code change needed.
+_CONCURRENCY        = 24    # max concurrent per-source LLM calls; FGTS-VA bandit absorbs 429s via arm rotation, no per-call throttling needed.
 # Expected: 252 × 4s / 16 ≈ 65s ideal; realistic ≈ 7-9 min after
 # accounting for repair attempts, larger-page outliers, and bandit
 # cooldown headroom. Quality is byte-identical (same prompts, same
@@ -159,7 +147,7 @@ _MAX_SOURCE_CHARS = 100_000
 _BLOB_PREFIX = "synth"
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
-# DD-SYNTH-SPEED-SOTA #A1 (2026-05-26) — structured-output schema for the
+# structured-output schema for the
 # per-source digest call. NIM + Mistral honor response_format = json_schema
 # server-side. Caller's existing Pydantic repair loop catches anything
 # that slips through (e.g. Gemini, where translation is rough).
@@ -374,7 +362,6 @@ async def _digest_one_source(
             valid_vault_hashes = valid_hash_set,
         )
         if issues:
-            # Run a content-repair pass with the actionable issues
             attempt = 0
             current = payload.model_dump()
             while attempt < _MAX_REPAIR_ATTEMPTS and issues:
@@ -434,7 +421,6 @@ async def _digest_one_source(
                     f"{len(issues)} unresolved issues: {issues[0][:80]}"
                 )
 
-        # Fallback for ugly LLM titles
         if (
             not payload.source_title
             or payload.source_title.lower() in {"untitled", "n/a", "none"}
@@ -596,7 +582,6 @@ async def digest_construct_run(state: SynthState) -> dict:
         try:
             sentinelized, entries = _sentinelize_doc(body_text)
             sentinelized_bodies.append(sentinelized)
-            # Convert VaultEntry → dict for downstream JSON serialization
             for h, e in entries.items():
                 if h not in runtime_vault_entries:
                     runtime_vault_entries[h] = (
@@ -638,7 +623,6 @@ async def digest_construct_run(state: SynthState) -> dict:
         }
 
     total_bytes = sum(len(b) for _, b in pairs)
-    # Aggregate vault hashes across all sources for the orphan check
     all_vault_hashes: set[str] = set()
     for _, body in pairs:
         all_vault_hashes.update(extract_vault_hashes(body))
@@ -735,13 +719,6 @@ async def digest_construct_run(state: SynthState) -> dict:
 
     section_ids = [s["section_id"] for s in outline_sections]
 
-    # Fix #3 (DD-SYNTH-SECTION-COUNT, 2026-05-29 PM) — source-pool merge.
-    # Fold sections whose PRIMARY source pools overlap heavily into one
-    # (the definitive overlap signal; see merge_overlapping_sections). The
-    # returned per_source has losing contributions re-tagged to their
-    # winner, so the rebuilt per_section index naturally has losers empty;
-    # sawc_write skips merged sections so they never render as hollow
-    # cross-references.
     per_source, merged_sections = merge_overlapping_sections(
         per_source, outline_sections,
     )

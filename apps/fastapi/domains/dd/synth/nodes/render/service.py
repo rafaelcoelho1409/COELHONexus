@@ -55,17 +55,6 @@ from .versions import RENDER_TEMPLATE_VERSION
 logger = logging.getLogger(__name__)
 
 
-# ============================================================
-# LLM code-block normalizer (2026-06-08)
-# ============================================================
-# Pass each vault entry's fence_text through a bandit-routed LLM that
-# fixes formatting drift (broken indentation, MDX-mangled brackets,
-# stripped whitespace, etc.) without changing identifier names, string
-# literals, or any non-whitespace content. Cached per content-hash:
-#   synth-vault/{slug}/normalized/v1/{vault_hash}.txt
-# so the cost is one-shot per unique block. Bump the version segment
-# (v1/) to invalidate everything when the prompt changes.
-
 _NORMALIZE_PROMPT_VERSION = "v3-2026-06-08"
 _NORMALIZE_CACHE_PREFIX = "synth-vault/{slug}/normalized/" + _NORMALIZE_PROMPT_VERSION
 
@@ -117,7 +106,7 @@ def _strip_code_fences(s: str) -> str:
 # fences" instruction and returns prose + a fenced code block (e.g.
 # `"The provided code is already correct.\n```bash\n<code>\n```"`),
 # pull out the LARGEST fenced block's body. Observed in ch-03 line 242
-# of the browser-use 2026-06-08 re-run.
+# of a browser-use re-run.
 _INNER_FENCE_RE = re.compile(
     r'(?P<open>```+|~~~+)(?P<info>[^\n]*)\n(?P<body>.*?)\n(?P=open)',
     re.DOTALL,
@@ -452,7 +441,6 @@ async def _load_per_source_vaults(
                 continue
             _, entries = _sentinelize_doc(raw)
             if entries:
-                # Convert VaultEntry objects → manifest dict shape that
                 # merge_vault_entries expects (entries dict keyed by hash).
                 manifests.append({
                     "entries": {
@@ -697,11 +685,7 @@ async def render_audit_write_run(state: SynthState) -> dict:
         )
         for s in sections
     ]
-    # Write-path quality pass (DD-SYNTH-SECTION-RECYCLING-2026-05-29
-    # fixes #1 + #4): cross-reference within-chapter recycled code
-    # blocks + omit misrouted ones. Audit-safe — only rewrites
-    # code_block strings, so resolution_log/sentinel counts stay
-    # consistent.
+    # Cross-reference within-chapter recycled code blocks + omit misrouted ones (audit-safe: only rewrites code_block strings).
     dedup_stats = dedupe_and_align_sections(
         sections_ctx,
         drop_mismatch = os.environ.get(
@@ -731,7 +715,7 @@ async def render_audit_write_run(state: SynthState) -> dict:
         rendered_chapter_md = chapter_md,
     )
 
-    # CONTENT-PRESENT GATE (DD-SYNTH-PROSE-PATH-2026-05-30 fix #2). A
+    # CONTENT-PRESENT GATE. A
     # section the SAWC writer couldn't draft renders as an empty
     # placeholder (0 subtopics). The byte-exact vault audit can't see
     # this — a placeholder has no code refs, so it PASSES audit while

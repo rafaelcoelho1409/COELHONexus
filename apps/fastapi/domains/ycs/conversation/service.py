@@ -5,8 +5,7 @@ Each handler call opens its own short-lived connection — same posture
 as the deprecated service, and consistent with the existing DD
 AsyncPostgresSaver pattern (no shared async pool needed for this
 low-volume table).
-
-Direct port of deprecated `services/youtube/conversation.py:L14-72`."""
+"""
 from __future__ import annotations
 
 import logging
@@ -29,7 +28,7 @@ async def ensure_conversation_table(pg_url: str) -> None:
     migration. Called from `app.py` lifespan so the first request
     never pays the DDL cost.
 
-    2026-06-15: `thinking_state` JSONB column persists the per-turn
+    `thinking_state` JSONB column persists the per-turn
     progress state (stage status + per-step action + DEEP sub-question
     progress + research plan + confidence) so a hard refresh restores
     the Thinking expander to its exact state — both mid-stream and
@@ -158,7 +157,7 @@ async def list_thread_messages(
         rows = await result.fetchall()
     return [
         {
-            # 2026-06-15 — `id` exposed so the frontend can issue
+            # `id` exposed so the frontend can issue
             # per-turn cancellation against `POST /turns/{id}/cancel`
             # when the user clicks Stop after a page refresh (the
             # original SSE fetch's abort controller died with the

@@ -3,9 +3,6 @@
 Builds a channel-scoped STANDARD sub-graph from the parent state's
 `channel_ids` and invokes it. Maps the sub-graph's `YouTubeRAGState`
 fields back to the parent `AdaptiveRAGState`.
-
-Direct port of deprecated `graphs/youtube/adaptive.py:L152-182`.
-
 2026-06-16 — budget fix. The STANDARD path keeps `max_retries=3` (the
 user-facing default), so its recursion budget must come from
 `standard/params.py::DEFAULT_RECURSION_LIMIT` (30 — sized for that

@@ -40,14 +40,12 @@ from .state import fs_write
 logger = logging.getLogger(__name__)
 
 
-# --------------------------------------------------------------------------- #
 # Robust MCP result parser — langchain-mcp-adapters returns the tool result
 # in several shapes depending on adapter version + tool. Handle all:
 #   - list[dict]            (already-parsed paper records)
 #   - str                   (JSON-encoded list)
 #   - list[TextContent]     ([{"type":"text", "text":"<JSON>"}, ...])
 #   - dict with "text" key  ({"type":"text", "text":"<JSON>"})
-# --------------------------------------------------------------------------- #
 def _parse_mcp_result(result: Any) -> list[dict]:
     """Best-effort extraction of paper list[dict] from any MCP return shape."""
     if result is None:
@@ -102,7 +100,7 @@ async def _call_mcp_safely(
     Schema note: each FastMCP tool's signature is FLAT, e.g.
         async def arxiv_search(ctx: Context, query: str, n_max: int = 20, ...)
     so the LangChain-adapted BaseTool expects the args dict directly. (Flattened
-    2026-06-12 so any LLM tool-call shape — wrapped OR flat — Just Works at the
+    Any LLM tool-call shape — wrapped OR flat — Just Works at the
     server boundary; previously `input: SearchInput` confused LiteLLM-routed
     discovery subagents into sending flat args that FastMCP rejected.)
     """
@@ -131,14 +129,11 @@ async def _call_mcp_safely(
         return []
 
 
-# --------------------------------------------------------------------------- #
 # 4 orchestrator-level discovery tools — one per source.
-#
 # Schema rules for each:
 #   - First arg `scan_id` is always required (partitions the fs).
 #   - Other args mirror each source's MCP SearchInput shape.
 #   - Sensible defaults so the orchestrator can call with minimal args.
-# --------------------------------------------------------------------------- #
 @tool
 async def discover_arxiv(
     scan_id: str,

@@ -1,18 +1,4 @@
-"""ycs/agents — graph factory + streaming-update serializer.
-
-Direct port of deprecated `routers/v1/youtube/helpers.py:L2014-L2108`.
-
-2026-06-15 — BYOK exclusive-override path REMOVED. Every Ask request
-runs through the rotator's full failover chain (`app.state.llm`) so it
-gets FGTS-VA bandit + 7-provider failover + EOL detection + cooldowns,
-same as Planner and Synth. See `build_graph_from_request`'s docstring
-for the rationale.
-
-`build_graph_from_request(request)` returns a freshly-compiled adaptive
-RAG graph wired to the rotator chain.
-
-`_serialize_update(node, update)` projects a LangGraph `astream` update
-into a JSON-safe dict for SSE delivery."""
+"""ycs/agents — graph factory and LangGraph astream serializer."""
 from __future__ import annotations
 
 from typing import Any
@@ -23,31 +9,9 @@ from domains.ycs.rag.adaptive import build_adaptive_rag_graph
 
 
 async def build_graph_from_request(request: Request):
-    """Build the adaptive RAG graph from FastAPI `app.state` against
-    the rotator's full failover chain. **Always** uses
-    `app.state.llm` — the FGTS-VA bandit over 7 providers with EOL
-    detection, periodic catalog refresh, and runtime cooldowns.
-
-    2026-06-15 — dropped the BYOK exclusive-override path. The earlier
-    design let `LLMConfig` substitute a single-model `ChatLiteLLM`
-    that bypassed the rotator entirely. That created a single point of
-    failure (any 429 / timeout / EOL on the picked model = the whole
-    request fails) and threw away every reliability mechanism Planner
-    and Synth already prove out. Same workload shape as Ask; same
-    rotator path is the right call.
-
-    The BYOK Redis config + `POST /agents/config/test` endpoint are
-    kept for a future "preferred arm" feature (user's pick boosted to
-    the top of the rotator pool rather than replacing it). Until that
-    lands, BYOK is effectively advisory and has no runtime effect.
-
-    Provisioned deps (lifespan):
-      - `smart_retriever` — ES + Qdrant + Neo4j fan-out + FlashRank
-      - `grader`          — DocumentGrader bound to `app.state.llm`
-      - `llm`             — rotator's `with_fallbacks` chain
-      - `neo4j_graph`     — LangChain Neo4jGraph wrapper
-
-    `checkpointer=None` matches deprecated."""
+    """Build the adaptive RAG graph wired to `app.state.llm` (rotator chain, not BYOK override).
+    BYOK exclusive-override was dropped — routing one user key through the rotator's fallback
+    defeats explicit provider choice; same workload as Planner/Synth so same rotator path."""
     app = request.app
     return build_adaptive_rag_graph(
         retriever    = app.state.smart_retriever,
@@ -59,12 +23,7 @@ async def build_graph_from_request(request: Request):
 
 
 def _serialize_update(node_name: str, update: dict[str, Any]) -> dict[str, Any]:
-    """Project a LangGraph `astream(stream_mode='updates')` patch into a
-    JSON-safe dict for SSE delivery.
-
-    Direct port of deprecated `helpers.py:L2073-2108`. Document objects
-    are slugged (video_id + title + preview); long generations pass through
-    as-is."""
+    """Project a LangGraph astream update patch into a JSON-safe dict for SSE. Documents are slugged; generations pass through."""
     result: dict[str, Any] = {"node": node_name}
     if "documents" in update:
         documents = update["documents"] or []
@@ -80,25 +39,13 @@ def _serialize_update(node_name: str, update: dict[str, Any]) -> dict[str, Any]:
         result["document_count"] = len(documents)
     if "generation" in update:
         result["generation"] = update["generation"]
-    # 2026-06-17 — propagate citations to the SSE stream so the
-    # frontend's right-rail (`updateSourcesRail`) can populate LIVE
-    # the moment `format_citations` (STANDARD path) or
-    # `fallback_answer` (CRAG no-docs rescue) returns. Before this
-    # patch the field was dropped at serialisation time, so the rail
-    # only ever populated on page reload — citations were persisted
-    # to `thinking_state.citations` and re-read by `renderHistoryTurn`,
-    # but the live tab missed the update entirely. Pass-through is
-    # safe: `citations` is already a list of plain `{video_id, title,
-    # channel, url, source}` dicts (see `cite/node.py` +
-    # `fallback_answer/node.py::_related_citations`), no LangChain
-    # `Document` objects to JSON-flatten.
+    # Without this, citations were dropped at serialisation and only appeared on page reload.
     if "citations" in update and update["citations"]:
         result["citations"] = update["citations"]
     if "search_query" in update:
         result["search_query"] = update["search_query"]
     if "retry_count" in update:
         result["retry_count"] = update["retry_count"]
-    # Adaptive RAG fields
     if "mode" in update:
         result["mode"] = update["mode"]
     if "sub_questions" in update and update["sub_questions"]:
@@ -109,16 +56,7 @@ def _serialize_update(node_name: str, update: dict[str, Any]) -> dict[str, Any]:
         result["sub_results_count"] = len(update["sub_results"])
         latest = update["sub_results"][-1]
         result["latest_sub_question"] = latest.get("sub_question", "")
-        # 2026-06-15 — drop the 200-char cap. The frontend renders the
-        # done sub-question card as a collapsed expander with the FULL
-        # markdown-rendered answer inside, so a preview slice would lose
-        # the bulk of each sub-agent's output. JSONB / SSE payloads
-        # tolerate the size (typical sub-answer ≈ 1–3 KB).
         result["latest_sub_answer"] = latest.get("answer", "")
-        # 2026-06-16 — propagate the structured failure-mode tag
-        # (`""` / `"timeout"` / `"recursion_limit"` / `"no_docs"` /
-        # `"hard_error"`) so the frontend can style placeholder cards
-        # differently from genuine answers.
         result["latest_sub_error_kind"] = latest.get("error_kind", "")
     if "confidence_score" in update and update["confidence_score"]:
         result["confidence_score"] = update["confidence_score"]

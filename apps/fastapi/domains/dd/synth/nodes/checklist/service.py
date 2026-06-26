@@ -84,7 +84,6 @@ def _emit_criterion_scores(framework: str, criteria: list[dict | CriterionResult
 # Each function takes the parsed sawc payload dict and returns one
 # CriterionResult. Stable interface so the node can iterate them in
 # a list without per-check special-casing.
-#
 # We accept the raw dict (not a Pydantic Section list) because the sawc
 # blob is JSON-deserialized into a dict and re-parsing through Pydantic
 # would add cost without benefit — these checks only read fields, no
@@ -545,7 +544,7 @@ def render_digest_for_grounding(
 
 
 # LLM-judge prompts
-# Bundle 9 (2026-05-25) — Per-criterion description block. Keys MUST be the
+# Per-criterion description block. Keys MUST be the
 # `LLM_CRITERIA` names verbatim so the post-shuffle prompt template stays
 # consistent. Each value is the labelled description block that appears in
 # the prompt's CRITERIA section. The cN labels stay attached to their
@@ -863,7 +862,6 @@ def _compute_manifest_hash(
     return sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-# === checklist round 2 helpers from old commit ===
 _TEMPERATURE_JUDGE      = 0.0
 
 _TEMPERATURE_REPAIR     = 0.0
@@ -932,7 +930,6 @@ def _fallback_llm_verdicts(reason: str) -> list[CriterionResult]:
     return out
 
 
-# === checklist round 3 helpers ===
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 def _shorten_pydantic_error(e: ValidationError) -> str:
@@ -966,7 +963,6 @@ async def checklist_eval_run(state: SynthState) -> dict:
     t0 = time.monotonic()
     minio = get_storage()
 
-    # -- Load sawc + digest blobs -------------------------------------------
     sawc_key = _sawc_latest_key(slug, chapter_id)
     digest_key = _digest_latest_key(slug, chapter_id)
 
@@ -1021,7 +1017,6 @@ async def checklist_eval_run(state: SynthState) -> dict:
         pass_threshold = 0.80,
     )
 
-    # -- Cache fast-path ----------------------------------------------------
     manifest_hash = _compute_manifest_hash(
         sawc_manifest_hash = sawc_manifest_hash,
         digest_manifest_hash = digest_manifest_hash,
@@ -1071,7 +1066,6 @@ async def checklist_eval_run(state: SynthState) -> dict:
                 f"recomputing"
             )
 
-    # -- Layer 1: 7 deterministic pre-gates ---------------------------------
     pre_results: list[CriterionResult] = []
     for fn in DETERMINISTIC_CHECKS:
         try:
@@ -1099,7 +1093,6 @@ async def checklist_eval_run(state: SynthState) -> dict:
         names_failed = pre_failed,
     )
 
-    # -- Render chapter + digest for the LLM-judge prompt -------------------
     rendered_chapter, truncated = render_chapter_for_judge(sawc)
     rendered_digest = render_digest_for_grounding(digest)
 
@@ -1110,7 +1103,6 @@ async def checklist_eval_run(state: SynthState) -> dict:
         truncated = truncated,
     )
 
-    # -- Layer 2: 1 batched LLM-judge call ----------------------------------
     llm_results, deployment, repaired, judge_wall_ms = await _run_llm_judge(
         thread_id = thread_id,
         chapter_id = chapter_id,
@@ -1133,7 +1125,6 @@ async def checklist_eval_run(state: SynthState) -> dict:
         repaired = repaired,
     )
 
-    # -- Augment: atomic-claim grounding check (2026-05-24) -----------------
     # The bundled judge above gives a coarse PASS/FAIL on
     # `claims_grounded_in_sources` based on a 3-5 citation spot-check. This
     # separate pass extracts atomic claims + verifies each against the digest
@@ -1141,8 +1132,7 @@ async def checklist_eval_run(state: SynthState) -> dict:
     # If atomic check finds any unsupported claim, we OVERRIDE the bundled
     # judge's verdict to FAIL with specific feedback. Conservative bias:
     # never upgrades the bundled judge — only downgrades it.
-    # See docs/KD-SYNTH-SOTA-2026-05-24.md §3 #2.
-    # DD-SYNTH-SPEED-SOTA #B1 (2026-05-26) — Parallelize CoCoA + atomic-
+    # Parallelize CoCoA + atomic-
     # claim grounding. Both run on the same chapter draft; they share NO
     # state (atomic uses prose+digest; CoCoA uses sawc+vault). Running
     # them concurrently via asyncio.gather drops the ~3-5 min serial path
@@ -1192,7 +1182,6 @@ async def checklist_eval_run(state: SynthState) -> dict:
 
     if atomic_result is not None and not atomic_result["passed"]:
         # Override the bundled judge's `claims_grounded_in_sources` verdict.
-        # Find the entry by name and rebuild it as a failure with the
         # atomic-claim feedback. CriterionResult shape is preserved.
         for i, r in enumerate(llm_results):
             if r.name == "claims_grounded_in_sources":
@@ -1257,14 +1246,12 @@ async def checklist_eval_run(state: SynthState) -> dict:
         wall_ms = cocoa_wall_ms,
     )
 
-    # -- Aggregate ----------------------------------------------------------
     all_results = list(pre_results) + list(llm_results)
     n_passed, n_total, pass_rate, chapter_passed = aggregate_pass_rate(
         all_results
     )
     failed_feedback = collect_failed_feedback(all_results)
 
-    # -- Persist ------------------------------------------------------------
     evaluation = ChecklistEvaluation(
         chapter_id = chapter_id,
         chapter_title = chapter_title,

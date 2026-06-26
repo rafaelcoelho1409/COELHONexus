@@ -238,7 +238,6 @@ class YtDlpSearchService:
             logger.info(f"[ycs:enumerate] JSON_ERROR {target_url!r}: {e}")
             raise YtDlpJsonParseError(str(e)) from e
 
-        # Build snippets from the entries in this page.
         snippets: list[VideoSnippet] = []
         for entry in data.get("entries", []) or []:
             normalized = domain.normalize_search_entry(entry)

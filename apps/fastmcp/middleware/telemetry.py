@@ -1,22 +1,4 @@
-"""TelemetryMiddleware — one OTel span per MCP tool call.
-
-The span flows to ALL exporters configured by infra.otel.init_otel() — today
-Alloy (gRPC → Tempo) AND LangFuse v3 (HTTP → /api/public/otel). One emit,
-two destinations: the "what" / "where" split discussed in
-docs/RESEARCH-RADAR-DESIGN-2026-06-10.md §7.
-
-Attributes emitted per call:
-  mcp.tool.name        — the tool that was invoked
-  mcp.tool.args.keys   — comma-joined argument keys (NOT values; argument
-                          payloads can be huge or contain sensitive data)
-  mcp.tool.error_type  — exception class name on failure
-  mcp.tool.error_msg   — first line of exception text on failure
-
-Status:
-  OK     on successful return
-  ERROR  on any raised exception (which is then re-raised — middleware
-         doesn't swallow tool errors)
-"""
+"""TelemetryMiddleware — one OTel span per MCP tool call, dual-exported to Alloy+LangFuse."""
 from __future__ import annotations
 
 import logging

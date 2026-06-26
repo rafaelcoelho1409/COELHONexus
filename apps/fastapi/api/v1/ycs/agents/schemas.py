@@ -1,8 +1,4 @@
-"""ycs/agents — Pydantic request schemas for the agentic-RAG endpoints.
-
-Direct port of deprecated `schemas/youtube/inputs.py:L16-22, L124-138, L143-176`.
-Field shapes are verbatim deprecated; ConfigDict + NonEmptyStr come from
-the ycs/content schemas module (already shipped Wave 1)."""
+"""ycs/agents — Pydantic request schemas for the agentic-RAG endpoints."""
 from __future__ import annotations
 
 from typing import Literal
@@ -12,20 +8,10 @@ from pydantic import BaseModel, ConfigDict
 from domains.ycs.content.schemas import NonEmptyStr
 
 
-# =============================================================================
 # LLM Configuration
-# =============================================================================
 class LLMConfig(BaseModel):
-    """User-provided LLM config persisted to Redis JSON
-    `coelhonexus:youtube:agents:config`.
-
-    2026-06-14: `api_key` + `base_url` were removed from the Ask form
-    — keys are owned by the global Settings page (rotator credential
-    store), so the BYOK form just picks provider + model + temperature
-    for this request. The fields are kept on the schema as optional
-    so older clients that still send them don't 422; the build path
-    in `byok/domain.py::build_byok_llm` ignores them and resolves the
-    real key via `resolve_key(provider.key_env)`."""
+    """User-provided LLM config persisted to Redis JSON. `api_key`/`base_url` accepted but ignored
+    at build time — keys are owned by the global Settings page and resolved via `resolve_key()`."""
     provider:    NonEmptyStr        = "nim"
     model:       NonEmptyStr | None = None
     temperature: float | None       = None
@@ -34,16 +20,9 @@ class LLMConfig(BaseModel):
     model_config = ConfigDict(extra = "allow")
 
 
-# =============================================================================
 # Agentic RAG Requests
-# =============================================================================
 class RAGSearchRequest(BaseModel):
-    """Adaptive Agentic RAG question.
-
-    Modes (auto-detected by classifier, or forced via `force_mode`):
-      - fast: simple → direct LLM answer, no retrieval (<2s)
-      - standard: factual → full RAG with citations (15-60s)
-      - deep: analytical → multi-agent research synthesis (30-120s)"""
+    """Adaptive RAG question. `force_mode` overrides auto-classification (fast/standard/deep)."""
     question:    NonEmptyStr
     # `thread_id` accepts the soft-empty sentinels ("" or "default") the
     # handler treats as "no thread, no cache, no history" — Pydantic's
@@ -51,24 +30,14 @@ class RAGSearchRequest(BaseModel):
     thread_id:   str                                      = "default"
     max_retries: int                                      = 3
     force_mode:  Literal["fast", "standard", "deep"] | None = None
-    # Scope to specific channels (auto-detected from question if not provided)
     channel_ids: list[NonEmptyStr] | None                 = None
-    # DEEP plan-preview workflow (P6 / 2026-06-14):
-    #   - `preview_plan = True` + DEEP mode → backend emits the plan
-    #     (`plan_research` SSE event) and ENDS the stream early, before
-    #     the parallel sub-agent fan-out begins. Frontend renders the
-    #     sub-questions as a checkbox list so the user can prune them.
-    #   - `sub_questions = [...]` → caller supplies the plan EXPLICITLY;
-    #     the `plan_research` node uses them as-is and skips the LLM
-    #     call. Used by the frontend's second pass after the user
-    #     confirms / prunes the previewed plan.
+    # Two-pass DEEP protocol: preview_plan=True → emit plan early (SSE) and halt before fan-out;
+    # sub_questions=[...] on second request → use caller-supplied plan, skip LLM plan call.
     preview_plan:  bool                            = False
     sub_questions: list[NonEmptyStr] | None        = None
 
 
-# =============================================================================
-# Ingestion (Phase 2)
-# =============================================================================
+# Ingestion
 class IngestRequest(BaseModel):
     """Request to ingest transcripts from ES into Qdrant.
     If `video_ids` is None, ingests ALL transcripts in ES."""
@@ -77,9 +46,7 @@ class IngestRequest(BaseModel):
     chunk_overlap: int                      = 200
 
 
-# =============================================================================
-# Knowledge Graph (Phase 3)
-# =============================================================================
+# Knowledge Graph
 class GraphIngestRequest(BaseModel):
     """Request to extract entities from full transcripts into Neo4j.
     If `video_ids` is None, processes ALL transcripts in ES.
@@ -88,9 +55,7 @@ class GraphIngestRequest(BaseModel):
     batch_size: int                      = 3
 
 
-# =============================================================================
 # Full Pipeline (Celery chain: extract → Qdrant → Neo4j)
-# =============================================================================
 class PipelineRequest(BaseModel):
     """Full channel pipeline: extract → ingest vectors → ingest graph."""
     channel_id:            NonEmptyStr

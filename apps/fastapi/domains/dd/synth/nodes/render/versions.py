@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 RENDER_SCHEMA_VERSION = "2.0-cookbook"
-# v3 (2026-05-29): added the write-path dedupe_and_align_sections pass
+# added the write-path dedupe_and_align_sections pass
 # (cross-section code recycling + misrouted-block omission). Bumped so
 # the render cache invalidates and chapters re-render through the new
 # pass.

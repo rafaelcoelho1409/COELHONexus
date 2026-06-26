@@ -4,10 +4,6 @@ from __future__ import annotations
 import os
 
 
-# Strict env reads — Helm provides all four (REDIS_HOST/PORT in
-# _helpers.tpl, REDIS_PASSWORD via envValueFrom, ENVIRONMENT from
-# .Values.environment). Empty REDIS_PASSWORD = no-auth case, handled
-# below.
 _REDIS_HOST = os.environ["REDIS_HOST"]
 _REDIS_PORT = os.environ["REDIS_PORT"]
 _REDIS_PASSWORD = os.environ["REDIS_PASSWORD"]
@@ -26,16 +22,11 @@ Q_CRAWLER = f"crawler-{ENVIRONMENT}"
 Q_PLANNER = f"planner-{ENVIRONMENT}"
 Q_SYNTH = f"synth-{ENVIRONMENT}"
 Q_YCS = f"ycs-{ENVIRONMENT}"
-# Research Radar (3rd feature) — own queue so its long agent runs don't
-# contend with DD planner/synth or YCS crawler/embed bursts.
+# RR's long DeepAgents runs on own queue to avoid contending with DD/YCS
 Q_RR = f"rr-{ENVIRONMENT}"
 
 
-# Task modules loaded at worker startup. YCS task modules are the Wave 4
-# port of deprecated `tasks/youtube/{crawler,qdrant,neo4j,pipeline}.py`
-# (renamed: `extract` for crawler; `qdrant_task` / `neo4j_task` to dodge
-# the `qdrant_client` / `neo4j` package collisions; `pipeline_task` for
-# the chain wrapper).
+# qdrant_task / neo4j_task names dodge qdrant_client / neo4j package collisions
 TASK_INCLUDE = [
     "domains.dd.ingestion.task",
     "domains.dd.planner.task",
@@ -49,12 +40,7 @@ TASK_INCLUDE = [
 ]
 
 
-# Routing — queue per task module. Isolation prevents the planner's
-# CPU-heavy clustering from contending with HTTP-fetch ingestion, and
-# the synth's LLM+CoCoA bursts from contending with planner. YCS gets its
-# own queue so transcript/embed bursts don't contend with DD. RR's
-# DeepAgents runs are LLM-bound + long — kept on its own queue so a
-# slow agent doesn't block DD/YCS short-running tasks.
+# per-module queue isolation: planner CPU / synth LLM / YCS embed / RR long-running each separated
 TASK_ROUTES = {
     "domains.dd.ingestion.task.*": {"queue": Q_CRAWLER},
     "domains.dd.planner.task.*":   {"queue": Q_PLANNER},

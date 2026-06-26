@@ -110,11 +110,7 @@ class _LangFuseSpanGate:
 
 
 class LangFuseFilterProcessor(SpanProcessor):
-    """Processor-side gate kept for in-process short-circuiting.
-
-    The exporter arm below is authoritative. This processor only reduces queue
-    pressure before spans hit the LangFuse BatchSpanProcessor.
-    """
+    """Processor-side gate; reduces queue pressure before the authoritative LangFuseFilterExporter."""
 
     _gate = _LangFuseSpanGate()
 
@@ -136,11 +132,7 @@ class LangFuseFilterProcessor(SpanProcessor):
 
 
 class LangFuseFilterExporter(SpanExporter):
-    """Exporter-side LangFuse allow-list.
-
-    This is the reliable last gate before OTLP/HTTP export. If a span reaches
-    this point and does not match the allow-list, it never leaves the process.
-    """
+    """Last gate before OTLP/HTTP export; spans not matching the allow-list are dropped here."""
 
     _gate = _LangFuseSpanGate()
 
@@ -176,9 +168,6 @@ def build_resource() -> Resource:
         ),
         "service.namespace": SERVICE_NAMESPACE,
     }
-    # Deploy-identity attrs. Helm injects GIT_SHA + HELM_CHART_VERSION at
-    # template render time so Grafana annotations can diff "which deploy
-    # regressed" against the trace's recorded provenance.
     git_sha = os.environ.get("GIT_SHA") or os.environ.get("OTEL_GIT_SHA")
     if git_sha:
         attrs["service.git_sha"] = git_sha
@@ -198,7 +187,7 @@ def build_resource() -> Resource:
 
 
 def _bsp_kwargs() -> dict:
-    """Shared BatchSpanProcessor settings — see params.py Phase E rationale."""
+    """Shared BatchSpanProcessor settings from env overrides."""
     return {
         "max_queue_size": int(
             os.environ.get(
@@ -273,16 +262,13 @@ def add_langfuse_exporter(tracer_provider) -> bool:
         return False
     try:
         basic = base64.b64encode(f"{pk}:{sk}".encode()).decode()
-        # LangFuse expects `/api/public/otel/v1/traces`; append if the
-        # operator gave just the base.
         traces_endpoint = endpoint.rstrip("/")
         if not traces_endpoint.endswith("/v1/traces"):
             traces_endpoint = f"{traces_endpoint}/v1/traces"
         raw_exporter = HTTPOTLPSpanExporter(
             endpoint=traces_endpoint,
             headers={"Authorization": f"Basic {basic}"},
-            # Default 10s timed out under heavy LLM volume — LangFuse batches
-            # carry rich prompt/response bodies, slow to ingest into PG.
+            # 10s default timed out under heavy LLM volume; rich batches are slow to ingest.
             timeout=int(os.environ.get(
                 "LANGFUSE_OTLP_TIMEOUT", str(LANGFUSE_OTLP_TIMEOUT_DEFAULT_S),
             )),

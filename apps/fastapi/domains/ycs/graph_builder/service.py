@@ -2,9 +2,6 @@
 
 Imperative Shell (`docs/CODE-CONVENTIONS.md` §4): I/O + Cypher writes +
 LLM dispatch. Pure decisions delegated to `domain.py`.
-
-Direct port of deprecated `services/youtube/graph_builder.py:L33-351`.
-
 Public API:
   create_graph_transformer(llm) → LLMGraphTransformer
   extract_and_store_graph(transcripts, metadata_map, llm, neo4j_graph, batch_size)
@@ -81,7 +78,6 @@ def _embed_ids_for_resolution(ids: list[str]) -> dict[str, list[float]]:
 logger = logging.getLogger(__name__)
 
 
-# ---------- factory ------------------------------------------------------
 
 def create_graph_transformer(llm: Any) -> LLMGraphTransformer:
     """Build the LLMGraphTransformer with `ignore_tool_usage=True`
@@ -134,7 +130,6 @@ def create_graph_transformer(llm: Any) -> LLMGraphTransformer:
     )
 
 
-# ---------- main pipeline ------------------------------------------------
 
 async def extract_and_store_graph(
     transcripts: list[dict],
@@ -150,7 +145,7 @@ async def extract_and_store_graph(
     full context → +30% entity quality vs chunked, and 352 calls instead
     of 2911 for a 352-video corpus.
 
-    2026-06-10 REWORK — streaming concurrency + per-video silent-zero
+    streaming concurrency + per-video silent-zero
     gate (replaces the barrier-batch loop):
 
       - `batch_size` > 1 is the pool width (back-compat: the agents
@@ -205,7 +200,6 @@ async def extract_and_store_graph(
     except Exception:
         pass
 
-    # Build one Document per fresh transcript (full text, NIM models
     # support 128K tokens — no truncation).
     documents: list[Document] = []
     for transcript in transcripts:
@@ -313,7 +307,6 @@ async def extract_and_store_graph(
                 # PER-VIDEO silent zero — clean LLM response with no
                 # entities. Do NOT write the source Document: tagging it
                 # would permanently mark this video done and the re-run
-                # skip would hide the loss forever. Real transcripts are
                 # entity-dense; an empty result is a model failure, not
                 # a property of the video.
                 last_batch_error = (
@@ -326,14 +319,7 @@ async def extract_and_store_graph(
                 if vid and vid not in failed_ids:
                     failed_ids.append(vid)
             else:
-                # Tier-2 fix `B` (2026-06-07) — coerce node ids at the
-                # source. `LLMGraphTransformer` occasionally emits an
-                # `id` as a `StringArray` (Python list of alternate-name
-                # strings the LLM saw across the transcript) instead of
-                # a single string. Once that lands in Neo4j it breaks
-                # Step 1's Cypher `trim()`, which kills the entire
-                # normalize pass. Dropping nodes whose id coerces to ""
-                # so we don't write graph rubbish.
+                # LLMGraphTransformer occasionally emits id as a StringArray; coerce before writing to Neo4j.
                 clean_nodes = []
                 for node in gdoc.nodes:
                     node.id = domain.coerce_entity_id(node.id)
@@ -399,7 +385,6 @@ async def extract_and_store_graph(
                     } if vid else None,
                 })
     finally:
-        # Cancel anything still in flight (breaker trip or hard error) —
         # in-flight videos stay untagged and retry on the next segment.
         for t in pool:
             if not t.done():
@@ -430,7 +415,7 @@ async def extract_and_store_graph(
         "nodes_created":         total_nodes,
         "relationships_created": total_relationships,
         "entities_merged":       resolved,
-        # Per-video outcome counts (2026-06-10) — `videos_failed > 0`
+        # Per-video outcome counts — `videos_failed > 0`
         # drives neo4j_task's residual-retry loop: failed videos are
         # untagged, so calling this function again (same transcripts,
         # different arm) retries exactly them.
@@ -447,7 +432,6 @@ async def extract_and_store_graph(
     }
 
 
-# ---------- entity resolution -------------------------------------------
 
 def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     """Three-pass deduplication of `__Entity__` nodes:
@@ -463,7 +447,7 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     installed."""
     merged_count = 0
 
-    # Step 0 — heal historical list-typed ids (2026-06-10).
+    # Heal historical list-typed ids (LLMGraphTransformer used to emit them as lists).
     # `apoc.refactor.mergeNodes(... properties: 'combine')` USED to
     # concatenate conflicting property values into lists, corrupting
     # `e.id` into `['brasil', 'brazil']` shapes that broke every
@@ -475,8 +459,6 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     # so NEW merges keep `n1`'s canonical scalar; this step heals any
     # EXISTING list-typed id by:
     #   (a) trying each element of the list as a potential scalar
-    #       merge target with a same-labeled scalar twin — if found,
-    #       merge the broken node INTO the twin (preserves all
     #       MENTIONS that landed on the list-node);
     #   (b) if no twin exists, fall back to SET id = first element.
     # A naive SET would have failed the uniqueness constraint (every
@@ -560,21 +542,7 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
             f"[ycs:graph:resolve] list-typed id heal failed: {e}"
         )
 
-    # Step 1 — normalize ids to canonical form (Tier-2 fix `F`,
-    # 2026-06-07). Was a single Cypher statement using `trim()` +
-    # `toLower()`, but `trim()` blows up the moment ANY node has a
-    # non-string id (e.g., `StringArray[Gastronomia, Astronomia]`
-    # emitted by LLMGraphTransformer) and the whole pass bails. We
-    # do the normalization in Python now:
-    #   1. Pull every entity's elementId + raw id.
-    #   2. Compute `normalize_entity_id` (handles non-string types
-    #      via `coerce_entity_id`, plus lowercase + NFKD-strip-accents
-    #      + whitespace-collapse).
-    #   3. UNWIND-batched UPDATE for only the ids that actually
-    #      changed.
-    # No more Cypher type errors; accent-stripping also catches
-    # `Petróleo` ↔ `Petroleo` here so Step 2's exact MERGE collapses
-    # them without Step 3 ever needing to think about it.
+    # Python-side normalize (vs Cypher trim()) — trim() blows up on StringArray ids from LLMGraphTransformer.
     try:
         rows = neo4j_graph.query(
             "MATCH (n:__Entity__) WHERE n.id IS NOT NULL "
@@ -603,7 +571,7 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     except Exception as e:
         logger.warning(f"[ycs:graph:resolve] normalize failed: {e}")
 
-    # Step 2 — exact merge (same label + same normalized id).
+    # Exact merge (same label + same normalized id).
     try:
         result = neo4j_graph.query(
             "MATCH (n1:__Entity__), (n2:__Entity__) "
@@ -620,7 +588,7 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     except Exception as e:
         logger.warning(f"[ycs:graph:resolve] exact merge failed: {e}")
 
-    # Step 3 — fuzzy merge with semantic gate (per label, skip numeric).
+    # Fuzzy merge with semantic gate (per label, skip numeric).
     # Pipeline per label:
     #   a) fuzz.ratio pre-filter at FUZZ_MERGE_CUTOFF (75) — fast,
     #      kills the obviously-different pairs.
@@ -664,16 +632,7 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
                 for id2 in ids[i + 1:]:
                     if id2 in already_merged:
                         continue
-                    # Tier-2 fix `E` (2026-06-07) — obvious-merge
-                    # shortcut. If two ids have IDENTICAL canonical
-                    # forms (case+accent+whitespace-only diff), merge
-                    # them unconditionally — skip the fuzz + cosine
-                    # gates entirely. Handles `Donald Trump` ↔
-                    # `donald trump` and `Petróleo` ↔ `Petroleo` even
-                    # if Step 1 + Step 2 missed them. BGE-M3's
-                    # short-string cosine is unreliable here (`Donald
-                    # Trump` gets 0.81, below the 0.85 cutoff), so we
-                    # rely on the deterministic Python check instead.
+                    # Deterministic canonical-form check: BGE-M3 cosine is unreliable on short strings (0.81 < 0.85 cutoff).
                     if domain.is_obvious_merge(id1, id2):
                         canonical, duplicate = domain.pick_canonical(id1, id2)
                         try:
@@ -742,16 +701,11 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     return merged_count
 
 
-# ---------- schema discovery (optional, deprecated 1:1) -----------------
 
 async def discover_schema(
     sample_transcripts: list[str], llm: Any,
 ) -> dict:
-    """LLM-suggested schema from sample transcripts. AutoSchemaKG-style
-    soft schema (95% alignment with hand-crafted). Optional — the
-    deprecated graph_builder defaults to schema-free extraction; this
-    is here for callers that want a curated `allowed_nodes` /
-    `allowed_relationships` set."""
+    """LLM-suggested allowed_nodes/allowed_relationships from sample transcripts (AutoSchemaKG-style, optional)."""
     samples = "\n\n---\n\n".join(
         sample_transcripts[:SCHEMA_DISCOVERY_SAMPLE_COUNT]
     )
@@ -768,7 +722,6 @@ async def discover_schema(
     }
 
 
-# ---------- stats + metadata graph --------------------------------------
 
 async def get_graph_stats(neo4j_graph: Neo4jGraph) -> dict:
     """Cypher counts grouped by label / type."""

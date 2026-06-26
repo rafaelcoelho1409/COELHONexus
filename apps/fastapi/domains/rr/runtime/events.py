@@ -52,10 +52,8 @@ from .params import (
 logger = logging.getLogger(__name__)
 
 
-# --------------------------------------------------------------------------- #
 # Sync emit — for the Celery task body (Celery runs sync, brokers events to
 # Redis without blocking the agent loop's own coroutine).
-# --------------------------------------------------------------------------- #
 def emit_event_sync(scan_id: str, phase: str, **fields) -> None:
     """Sync publisher for the Celery task body. Best-effort — Redis
     failure logs but does NOT raise (we don't want to abort a successful
@@ -92,10 +90,8 @@ def emit_event_sync(scan_id: str, phase: str, **fields) -> None:
         )
 
 
-# --------------------------------------------------------------------------- #
 # Async emit — for in-FastAPI emission paths (currently unused but keeps
 # parity with the planner shape for future-proofing).
-# --------------------------------------------------------------------------- #
 async def emit_event(scan_id: str, phase: str, **fields) -> None:
     """Async publisher. Same payload shape as emit_event_sync."""
     event = {
@@ -131,13 +127,10 @@ async def emit_event(scan_id: str, phase: str, **fields) -> None:
             pass
 
 
-# --------------------------------------------------------------------------- #
 # Task-id store — scan_id → Celery task UUID. Written by `POST /scan` so
 # `POST /scan/{id}/cancel` can revoke the right Celery task. Async (FastAPI
 # request handler is async; no sync caller today). Best-effort: failure to
-# store doesn't sink the scan, but a later cancel becomes a no-op-with-
 # warning since the task_id can't be resolved.
-# --------------------------------------------------------------------------- #
 async def store_task_id(scan_id: str, task_id: str) -> None:
     """SET `rr:{scan_id}:task_id = task_id` with `TASK_ID_TTL_S` expiry."""
     r = redis_aio.from_url(
@@ -204,9 +197,7 @@ async def clear_task_id(scan_id: str) -> None:
             pass
 
 
-# --------------------------------------------------------------------------- #
 # Snapshot replay + subscribe — driven by the SSE route on the FastAPI side
-# --------------------------------------------------------------------------- #
 async def _replay_snapshot(
     r: redis_aio.Redis, scan_id: str,
 ) -> list[dict]:

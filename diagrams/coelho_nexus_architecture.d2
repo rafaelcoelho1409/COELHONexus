@@ -1,0 +1,453 @@
+direction: right
+
+# ── Global defaults for node labels and edge labels ─────────
+*.style.font-size: 64
+*.style.font-color: "#000000"
+(* -> *)[*].style.font-size: 64
+(* -> *)[*].style.font-color: "#000000"
+(* -> *)[*].style.stroke-width: 8
+
+# ============================================================
+# COELHO Nexus — Platform Architecture
+# ============================================================
+# Generate with:  ./generate.sh
+# Or manually:    d2 --layout=elk coelho_nexus_architecture.d2 coelho_nexus_architecture.svg
+# ============================================================
+
+title: |md
+  # COELHO Nexus — Platform Architecture
+| {
+  near: top-center
+  style.font-size: 96
+}
+
+# ── Layer 1: Container Orchestration & IaC ──────────────────
+
+infra: Container Orchestration & Infrastructure as Code {
+  style.fill: "#E6E6FA"
+  style.stroke: "#5C4EE5"
+  style.stroke-width: 4
+  style.border-radius: 12
+  style.font-size: 96
+  style.font-color: "#000000"
+  style.bold: true
+
+  terragrunt: "Terragrunt\n(IaC Orchestrator)" {
+    shape: image
+    icon: ./icons/terragrunt.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  terraform: "OpenTofu\n(Terraform Modules)" {
+    shape: image
+    icon: ./icons/terraform.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  docker: Docker {
+    shape: image
+    icon: ./icons/docker.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  k3d: "K3D Cluster\n(1 Server + 3 Agents)" {
+    shape: image
+    icon: ./icons/k3d.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  rancher: "Rancher\n(Cluster Management)" {
+    shape: image
+    icon: ./icons/rancher.png
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  k3d_registry: "Container Registry\n(coelho-cloud-registry:5000)" {
+    shape: image
+    icon: ./icons/docker.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  helm: "Helm Chart\n(coelhonexus)" {
+    shape: image
+    icon: ./icons/helm.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  skaffold: "Skaffold\n(Dev Hot-Reload)" {
+    shape: image
+    icon: ./icons/skaffold.png
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+
+  # Infrastructure provisioning flow
+  terragrunt -> terraform: "wraps\nmodules" {style.stroke: "#5C4EE5"; style.stroke-width: 8}
+  terraform -> docker: {style.stroke: "#5C4EE5"; style.stroke-width: 8}
+  docker -> k3d: {style.stroke: "#0066CC"; style.stroke-width: 8}
+  terraform -> rancher: provisions {style.stroke: "#5C4EE5"; style.stroke-width: 7}
+  rancher -> k3d: manages {style.stroke: "#5C4EE5"; style.stroke-width: 7}
+  docker -> k3d_registry: {style.stroke: "#0066CC"; style.stroke-width: 2; style.stroke-dash: 5}
+  k3d -> helm: {style.stroke: "#0066CC"; style.stroke-width: 8}
+  skaffold -> helm: "dev workflow" {style.stroke: "#0066CC"; style.stroke-width: 2; style.stroke-dash: 5}
+}
+
+
+# ── Layer 2: GitOps & CI/CD ──────────────────────────────────
+
+gitops: GitOps & CI/CD Layer {
+  style.fill: "#FFF4E6"
+  style.stroke: "#FF6B35"
+  style.stroke-width: 4
+  style.border-radius: 12
+  style.font-size: 96
+  style.font-color: "#000000"
+  style.bold: true
+
+  gitlab: "GitLab\n(CI/CD Pipelines)" {
+    shape: image
+    icon: ./icons/gitlab.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  argocd: "ArgoCD\n(GitOps Sync)" {
+    shape: image
+    icon: ./icons/argocd.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  argocd_updater: "ArgoCD\nImage Updater" {
+    shape: image
+    icon: ./icons/argocd.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+
+  # GitOps internal flow
+  gitops.argocd -> gitops.gitlab: "watches\nrepo (CD)" {style.stroke: "#FF6B35"; style.stroke-width: 2; style.stroke-dash: 5}
+}
+
+
+# ── Layer 3: Data & AI Stores ───────────────────────────────
+
+stores: Data & AI Stores {
+  style.fill: "#F0FFF0"
+  style.stroke: "#28A745"
+  style.stroke-width: 4
+  style.border-radius: 12
+  style.font-size: 96
+  style.font-color: "#000000"
+  style.bold: true
+
+  postgresql: "PostgreSQL\n(Conversations +\nLangGraph State)" {
+    shape: image
+    icon: ./icons/postgresql.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  redis: "Redis\n(Task Broker +\nResult Backend)" {
+    shape: image
+    icon: ./icons/redis.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  minio: "MinIO\n(Object Storage\nBYOK KEK)" {
+    shape: image
+    icon: ./icons/minio.png
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  neo4j: "Neo4j\n(Knowledge Graph)" {
+    shape: image
+    icon: ./icons/neo4j.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+
+  vector_stores: Vector & Search Stores {
+    style.fill: "#F5FFF5"
+    style.stroke: "#28A745"
+    style.stroke-width: 2
+    style.stroke-dash: 5
+    style.border-radius: 8
+    style.font-size: 80
+    style.font-color: "#000000"
+    style.bold: true
+
+    qdrant: "Qdrant\n(Hybrid Vector\nDense + Sparse)" {
+      shape: image
+      icon: ./icons/qdrant.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    elasticsearch: "Elasticsearch\n(ECK + BM25\nFull-text)" {
+      shape: image
+      icon: ./icons/elasticsearch.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+  }
+}
+
+
+# ── Layer 4: Application Services ───────────────────────────
+
+app: Application Services Layer {
+  style.fill: "#E8F4F8"
+  style.stroke: "#0066CC"
+  style.stroke-width: 4
+  style.border-radius: 12
+  style.font-size: 96
+  style.font-color: "#000000"
+  style.bold: true
+
+  fasthtml: "FastHTML\n(Frontend UI)" {
+    shape: image
+    icon: ./icons/fasthtml.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+
+  fastapi: FastAPI — Core Intelligence Service {
+    style.fill: "#F0F4FF"
+    style.stroke: "#0066CC"
+    style.stroke-width: 2
+    style.stroke-dash: 5
+    style.border-radius: 8
+    style.font-size: 80
+    style.font-color: "#000000"
+    style.bold: true
+
+    dd: "/api/v1/docs-distiller\n(Docs Distiller)" {
+      shape: image
+      icon: ./icons/fastapi.png
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    ycs: "/api/v1/youtube-content-search\n(Graph-RAG)" {
+      shape: image
+      icon: ./icons/fastapi.png
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    rr: "/api/v1/research-radar\n(DeepAgent)" {
+      shape: image
+      icon: ./icons/fastapi.png
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    llm: "LLM Rotator\n(LiteLLM + ParetoBandit\nBYOK Provider)" {
+      shape: image
+      icon: ./icons/fastapi.png
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+  }
+
+  fastmcp: "FastMCP\n(MCP Server\nStreamable-HTTP)" {
+    shape: image
+    icon: ./icons/fastmcp.png
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+
+  celery: "Celery Workers\n(crawler, embedding,\nllm, planner, synth)" {
+    shape: image
+    icon: ./icons/celery.png
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+
+  flower: "Flower\n(Task Monitor)" {
+    shape: image
+    icon: ./icons/python.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+
+  playwright: "Playwright\n(Headless/Headed\nCDP Browser)" {
+    shape: image
+    icon: ./icons/playwright.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+
+  otel: "OpenTelemetry SDK\n(Python auto-instr.\nOTLP dual-export)" {
+    shape: image
+    icon: ./icons/opentelemetry.png
+    width: 500
+    height: 500
+    style.font-size: 64
+    # opentelemetry.png → square gear icon (opentelemetry.io/img/logos/opentelemetry-icon-color.png)
+  }
+
+  # OpenTelemetry auto-instruments every app service that initializes it
+  otel -> fastapi: "auto-instrument" {style.stroke: "#E53E3E"; style.stroke-width: 4; style.stroke-dash: 3}
+  otel -> fastmcp: "auto-instrument" {style.stroke: "#E53E3E"; style.stroke-width: 4; style.stroke-dash: 3}
+  otel -> celery: "auto-instrument" {style.stroke: "#E53E3E"; style.stroke-width: 4; style.stroke-dash: 3}
+
+  # Internal app flow
+  fasthtml -> fastapi.dd: "REST API" {style.stroke: "#00B4D8"; style.stroke-width: 8}
+  fasthtml -> fastapi.ycs: {style.stroke: "#00B4D8"; style.stroke-width: 7}
+  fasthtml -> fastapi.rr: {style.stroke: "#00B4D8"; style.stroke-width: 7}
+
+  fastapi.rr -> fastmcp: "MCP\n(Streamable-HTTP)" {style.stroke: "#7C3AED"; style.stroke-width: 7}
+
+  fastapi.dd -> celery: "dispatch\ntasks" {style.stroke: "#0066CC"; style.stroke-width: 7}
+  fastapi.ycs -> celery: {style.stroke: "#0066CC"; style.stroke-width: 7}
+  fastapi.rr -> celery: {style.stroke: "#0066CC"; style.stroke-width: 7}
+
+  celery -> flower: "metrics" {style.stroke: "#0066CC"; style.stroke-width: 2; style.stroke-dash: 5}
+  celery -> playwright: "crawl\nrequests" {style.stroke: "#0066CC"; style.stroke-width: 7}
+
+  fastapi.llm -> fastapi.dd: {style.stroke: "#6B46C1"; style.stroke-width: 2; style.stroke-dash: 5}
+  fastapi.llm -> fastapi.ycs: {style.stroke: "#6B46C1"; style.stroke-width: 2; style.stroke-dash: 5}
+  fastapi.llm -> fastapi.rr: {style.stroke: "#6B46C1"; style.stroke-width: 2; style.stroke-dash: 5}
+}
+
+
+# ── Layer 5: Observability ───────────────────────────────────
+
+monitoring: Observability & LLM Tracing {
+  style.fill: "#FFF0F0"
+  style.stroke: "#E53E3E"
+  style.stroke-width: 4
+  style.border-radius: 12
+  style.font-size: 96
+  style.font-color: "#000000"
+  style.bold: true
+
+  alloy: "Grafana Alloy\n(OTel Collector\nTail-Sampler)" {
+    shape: image
+    icon: ./icons/alloy.png
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  langfuse: "LangFuse v3\n(LLM Observability\nPrompt Management)" {
+    shape: image
+    icon: ./icons/langfuse.svg
+    width: 500
+    height: 500
+    style.font-size: 64
+  }
+  lgtm: LGTM Stack {
+    style.fill: "#FFF8F8"
+    style.stroke: "#E53E3E"
+    style.stroke-width: 2
+    style.stroke-dash: 5
+    style.border-radius: 8
+    style.font-size: 80
+    style.font-color: "#000000"
+    style.bold: true
+
+    grafana: "Grafana\n(Dashboards)" {
+      shape: image
+      icon: ./icons/grafana.svg
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    loki: "Loki\n(Logs)" {
+      shape: image
+      icon: ./icons/loki.png
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    tempo: "Tempo\n(Traces)" {
+      shape: image
+      icon: ./icons/tempo.png
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+    mimir: "Mimir\n(Metrics)" {
+      shape: image
+      icon: ./icons/mimir.png
+      width: 500
+      height: 500
+      style.font-size: 64
+    }
+  }
+
+  # Monitoring internal flow
+  alloy -> lgtm.loki: logs {style.stroke: "#E53E3E"; style.stroke-width: 2; style.stroke-dash: 3}
+  alloy -> lgtm.tempo: traces {style.stroke: "#E53E3E"; style.stroke-width: 2; style.stroke-dash: 3}
+  alloy -> lgtm.mimir: metrics {style.stroke: "#E53E3E"; style.stroke-width: 2; style.stroke-dash: 3}
+  lgtm.grafana -> lgtm.loki: queries {style.stroke: "#E53E3E"; style.stroke-width: 2; style.stroke-dash: 3}
+  lgtm.grafana -> lgtm.tempo: {style.stroke: "#E53E3E"; style.stroke-width: 2; style.stroke-dash: 3}
+  lgtm.grafana -> lgtm.mimir: {style.stroke: "#E53E3E"; style.stroke-width: 2; style.stroke-dash: 3}
+}
+
+
+# ============================================================
+# CROSS-LAYER EDGES
+# ============================================================
+
+# ── Layer ordering (infra -> gitops -> stores -> app -> monitoring) ──
+infra -> gitops: {style.stroke: "#CCCCCC"; style.stroke-width: 6; style.stroke-dash: 8; style.opacity: 0.3}
+gitops -> stores: {style.stroke: "#CCCCCC"; style.stroke-width: 6; style.stroke-dash: 8; style.opacity: 0.3}
+stores -> app: {style.stroke: "#CCCCCC"; style.stroke-width: 6; style.stroke-dash: 8; style.opacity: 0.3}
+app -> monitoring: {style.stroke: "#CCCCCC"; style.stroke-width: 6; style.stroke-dash: 8; style.opacity: 0.3}
+
+# ── GitOps flow (orange dashed) ─────────────────────────────
+gitops.gitlab -> infra.k3d_registry: "CI/CD\nimage push" {style.stroke: "#FF6B35"; style.stroke-width: 2; style.stroke-dash: 5}
+infra.k3d_registry -> gitops.argocd_updater: "detect\nnew tags" {style.stroke: "#FF6B35"; style.stroke-width: 2; style.stroke-dash: 5}
+gitops.argocd_updater -> gitops.argocd: {style.stroke: "#FF6B35"; style.stroke-width: 2; style.stroke-dash: 5}
+gitops.argocd -> infra.helm: "GitOps\ndeploy" {style.stroke: "#FF6B35"; style.stroke-width: 2; style.stroke-dash: 5}
+
+# ── Helm deployment edges (faint dashed blue) ───────────────
+infra.helm -> app.fasthtml: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
+infra.helm -> app.fastapi: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
+infra.helm -> app.fastmcp: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
+infra.helm -> app.celery: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
+infra.helm -> app.flower: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
+infra.helm -> app.playwright: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
+infra.helm -> monitoring.langfuse: {style.stroke: "#004D99"; style.stroke-width: 6; style.stroke-dash: 5; style.opacity: 0.4}
+
+# ── Data store connections (green solid) ────────────────────
+app.fastapi.dd -> stores.postgresql: "LangGraph\ncheckpoints" {style.stroke: "#28A745"; style.stroke-width: 7}
+app.fastapi.ycs -> stores.postgresql: "conversation\nthreads" {style.stroke: "#28A745"; style.stroke-width: 7}
+app.fastapi.rr -> stores.postgresql: {style.stroke: "#28A745"; style.stroke-width: 6}
+app.fastapi.llm -> stores.minio: "BYOK KEK\nencrypted keys" {style.stroke: "#28A745"; style.stroke-width: 7}
+app.celery -> stores.redis: "broker +\nresult backend" {style.stroke: "#28A745"; style.stroke-width: 8}
+app.fastapi -> stores.redis: {style.stroke: "#28A745"; style.stroke-width: 6; style.stroke-dash: 5}
+
+# ── AI store connections ─────────────────────────────────────
+app.fastapi.ycs -> stores.neo4j: "graph\nbuilder" {style.stroke: "#6B46C1"; style.stroke-width: 7}
+app.fastapi.ycs -> stores.vector_stores.qdrant: "hybrid\nvector search" {style.stroke: "#6B46C1"; style.stroke-width: 7}
+app.fastapi.ycs -> stores.vector_stores.elasticsearch: "BM25\nfull-text" {style.stroke: "#6B46C1"; style.stroke-width: 7}
+app.celery -> stores.minio: "artifact\nstorage" {style.stroke: "#28A745"; style.stroke-width: 6}
+
+# ── OTel dual-export (red dashed) ───────────────────────────
+app.fastapi -> monitoring.alloy: "OTel gRPC\n(traces+metrics+logs)" {style.stroke: "#E53E3E"; style.stroke-width: 6; style.stroke-dash: 3}
+app.fastmcp -> monitoring.alloy: {style.stroke: "#E53E3E"; style.stroke-width: 6; style.stroke-dash: 3}
+app.celery -> monitoring.alloy: {style.stroke: "#E53E3E"; style.stroke-width: 6; style.stroke-dash: 3}
+app.fastapi -> monitoring.langfuse: "OTel HTTP\n(LLM traces\n+ scores)" {style.stroke: "#E53E3E"; style.stroke-width: 6; style.stroke-dash: 3}

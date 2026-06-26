@@ -1,6 +1,5 @@
 """ycs/conversation — Postgres conversation-history table.
-
-Direct port of deprecated `services/youtube/conversation.py`. Replaces
+Replaces
 the DD `AsyncPostgresSaver` path that the previous 13-slice ship used
 for thread memory (Wave 1.x revert) — deprecated had its own table."""
 from .params import (

@@ -1,7 +1,4 @@
-"""ycs/rag/standard — graph-wide tunables.
-
-Mirror of deprecated `graphs/youtube/rag.py` defaults
-(`L200, L219`)."""
+"""ycs/rag/standard — graph-wide tunables."""
 from __future__ import annotations
 
 

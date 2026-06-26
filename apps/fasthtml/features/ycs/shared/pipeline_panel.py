@@ -202,7 +202,6 @@ def PipelinePanel():
                 ),
             ),
             # "Videos · N" trigger button — opens the per-video × per-
-            # store status drawer. The N count is updated by JS each
             # poll. Always enabled (the drawer renders empty until
             # Phase 1's all_items lands, then refreshes per poll).
             Button(

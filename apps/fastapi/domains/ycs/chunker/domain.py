@@ -4,8 +4,7 @@ Functional Core (`docs/CODE-CONVENTIONS.md` §4): no I/O, no async, no
 clock. The `RecursiveCharacterTextSplitter` is itself synchronous +
 deterministic; `chunk_transcript` is just a metadata projection over
 its output.
-
-Direct port of deprecated `services/youtube/chunker.py:L31-92`."""
+"""
 from __future__ import annotations
 
 from langchain_core.documents import Document

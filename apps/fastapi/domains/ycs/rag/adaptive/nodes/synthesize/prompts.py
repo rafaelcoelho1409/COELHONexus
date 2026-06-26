@@ -1,8 +1,5 @@
 """ycs/rag/adaptive/nodes/synthesize — DEEP-path merger prompt.
-
-Direct port of deprecated `schemas/youtube/prompts.py:L113-132`,
-extended 2026-06-14 with a `MessagesPlaceholder("history")` slot so the
-synthesizer can continue a multi-turn DEEP-mode investigation — e.g.
+g.
 the user follows "What patterns emerge?" with "Now compare them by
 cost" and the synthesizer references its prior framing instead of
 restarting from zero. See `standard/nodes/generate/prompts.py` for

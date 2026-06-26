@@ -4,18 +4,7 @@ Each parallel sub-agent runs the STANDARD pipeline against ONE
 sub-question. Receives a minimal `payload` dict (not the full parent
 state) per LangGraph `Send()` semantics. Returns into `sub_results`
 via the `operator.add` reducer declared in `state.py`.
-
-Direct port of deprecated `graphs/youtube/adaptive.py:L226-265`,
-extended 2026-06-16 with:
-  - per-invocation total-runtime timeout (~10 min ceiling on the
-    sub-graph) so a stuck sub-agent can't block every other in
-    sequential mode,
-  - structured `error_kind` field on the returned sub_result so the
-    UI placeholder is specific (`timeout` / `recursion_limit` /
-    `no_docs` / `hard_error`) instead of a generic "rotator
-    exhausted" guess,
-  - ONE rephrased-question retry when the first attempt comes back
-    with `error_kind="no_docs"`. The rephrase is delegated to an
+The rephrase is delegated to an
     LLM call that swaps abstract framings for concrete vocabulary,
     closing the gap between abstract DEEP sub-questions and the
     literal phrasing in transcripts. See `prompts.py::REPHRASE_PROMPT`
@@ -121,7 +110,7 @@ def _build_initial_state(
     }
 
 
-# 2026-06-15 — sub-agents pass `max_retries=1` to the STANDARD
+# sub-agents pass `max_retries=1` to the STANDARD
 # sub-graph instead of the default 3. Rationale: the parent planner
 # already produced a focused sub-question — there's nothing to
 # "rewrite" the way a freeform user query needs. One retry covers
@@ -229,7 +218,7 @@ async def run_subagent(
     )
     error_kind, answer_text = _classify_subagent_outcome(result, exc)
 
-    # 2026-06-16 — no_docs retry with a rephrased sub-question. The
+    # no_docs retry with a rephrased sub-question. The
     # initial phrasing typically lost on abstract terms not present
     # in the transcripts; the rephrase swaps in concrete vocabulary
     # (see `prompts.py::REPHRASE_PROMPT`). One retry only — keeps

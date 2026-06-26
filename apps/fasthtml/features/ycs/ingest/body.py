@@ -71,7 +71,6 @@ def IngestBody(slug: str | None):
     # Pipeline panel lives in YCSPage chrome (rendered on every YCS
     # stage page) so it persists across Source / Ingest / Ask
     # navigation. See `shared/pipeline_panel.py`.
-    #
     # Channels + Playlists aggregations were replaced 2026-06-08 by
     # the Library's filter sidebar + flat row list. The Ask page
     # still hits `/admin/ingested-channels` for its scope multi-

@@ -2,15 +2,13 @@
 from __future__ import annotations
 
 
-# LLM judge config (2026-05-25 — head+tail truncation per Chroma 2025
-# Context Rot study + Lost-in-the-Middle ICLR 2025). The KEEP/DROP signal
+# Head+tail truncation per Chroma 2025 Context Rot study + Lost-in-the-Middle ICLR 2025. The KEEP/DROP signal
 # concentrates BOTH at page heads (TOC indicators like 'Code of Conduct',
 # 'Sponsors') AND at page tails (license blocks, 'Edit on GitHub' links,
 # changelog dumps). Head-only truncation systematically misses the tail
 # signals; head+tail at the SAME token cost catches ~+2-4 F1 points on
 # borderline pages without enlarging the input window past the smallest-
 # context model in our bandit pool (8K-window members would 4xx).
-#
 # Sweet spot per research:
 #   - 1.5K-4K tokens / 6-16K chars TOTAL — past that, Context Rot kicks
 #     in and accuracy DEGRADES (15-85% drops measured across 18 models)
@@ -29,7 +27,6 @@ JUDGE_BODY_MIN_FOR_SPLIT = (
 JUDGE_MAX_TOKENS = 8        # plenty for "KEEP" or "DROP" plus whitespace
 # Concurrency: 5 parallel in-flight calls — the ParetoBandit + LiteLLM
 # cascade handles transient failures; the inner helper already routes each
-# call through the best-ranked deployment with per-attempt retries down
 # the bandit's top-K list, so the outer concurrency stays modest.
 JUDGE_CONCURRENCY = 5
 # Per-call retry budget — outer wrapper retries the WHOLE bandit cascade

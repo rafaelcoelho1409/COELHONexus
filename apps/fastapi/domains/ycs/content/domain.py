@@ -22,7 +22,6 @@ def build_string_filter(field: str, value: str) -> str:
     other value defaults to a case-insensitive contains."""
     if value.startswith(STRING_FILTER_OP_PREFIXES):
         return f"{field}{value}"
-    # Default: contains (operator `*=`), single-quote the literal so
     # whitespace in `value` doesn't break the shell-style yt-dlp parser.
     return f"{field}*='{value}'"
 
@@ -147,7 +146,6 @@ def build_search_args(
             f"?search_query={quote_plus(query)}&sp={sp_code}"
         )
     else:
-        # Default video-search prefix.
         search_url = f"ytsearch{fetch_count}:{query}"
 
     args: list[str] = [
@@ -366,8 +364,6 @@ def normalize_search_entry(entry: dict) -> dict:
         return {}
     vid = entry["id"]
     kind = detect_entry_kind(entry)
-    # Default URL shape depends on kind — videos get watch?v=, channels
-    # get channel/UC..., playlists get playlist?list=. Use whatever yt-dlp
     # gave us if present.
     default_url = f"https://www.youtube.com/watch?v={vid}"
     if kind == "channel":

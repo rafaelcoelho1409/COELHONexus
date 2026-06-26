@@ -26,10 +26,8 @@ MAX_LIMIT:     int = 100
 SNIPPET_CHARS: int = 600
 
 
-# ---------------------------------------------------------------------- #
 # Identifier strings — kept here, not as inlined literals scattered
 # through schemas / service / router. Rename in one place → propagates.
-# ---------------------------------------------------------------------- #
 APP_DD:  str = "dd"
 APP_YCS: str = "ycs"
 APP_RR:  str = "rr"

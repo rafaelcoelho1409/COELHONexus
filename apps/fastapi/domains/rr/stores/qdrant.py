@@ -43,10 +43,8 @@ from ..params import STORES_PARAMS
 logger = logging.getLogger(__name__)
 
 
-# --------------------------------------------------------------------------- #
 # Bootstrap — create the collection + payload indexes if missing. Idempotent;
 # never `recreate_collection` (that drops data).
-# --------------------------------------------------------------------------- #
 async def bootstrap_qdrant() -> None:
     """Ensure `radar_papers` collection exists with the right vector config
     + payload indexes. Safe to re-run."""
@@ -89,10 +87,8 @@ async def bootstrap_qdrant() -> None:
             logger.debug(f"[rr-qdrant] payload index {field!r} exists or skip: {e}")
 
 
-# --------------------------------------------------------------------------- #
 # Point IDs — deterministic UUIDs from arxiv_id so re-upserts overwrite in
 # place (Qdrant requires integer or UUID point ids; arxiv_id is a string).
-# --------------------------------------------------------------------------- #
 _POINT_NAMESPACE = uuid5(NAMESPACE_URL, "rr.point.arxiv")
 
 
@@ -102,11 +98,9 @@ def _point_id(arxiv_id: str) -> str:
     return str(uuid5(_POINT_NAMESPACE, arxiv_id))
 
 
-# --------------------------------------------------------------------------- #
 # Upsert — one paper at a time (callers batch via persist_paper from the
 # orchestrator). The signal goes into the payload so search results can
 # be re-ranked by it without touching Postgres.
-# --------------------------------------------------------------------------- #
 async def upsert_paper_vector(
     paper: NormalizedPaper,
     *,
@@ -141,10 +135,8 @@ async def upsert_paper_vector(
     return point.id
 
 
-# --------------------------------------------------------------------------- #
 # Search — used by synthesis's NN-clustering pass + by the profile-editor
 # UI's "similar papers" affordance (step 6).
-# --------------------------------------------------------------------------- #
 async def search_by_embedding(
     query_vector: list[float] | tuple[float, ...],
     *,

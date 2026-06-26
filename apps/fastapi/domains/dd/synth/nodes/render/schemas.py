@@ -50,7 +50,7 @@ class AuditResult(BaseModel):
     sentinels_in_output:    int          # MUST be 0 — defense in depth
     audit_passed:           bool
 
-    # Ship #96 (2026-05-24) — 3-tier classification counts.
+    # 3-tier classification counts.
     n_verbatim:             int = 0
     n_derived:              int = 0
     n_hallucinated:         int = 0

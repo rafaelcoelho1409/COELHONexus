@@ -7,9 +7,6 @@ Two-step pipeline:
        (a) Documents/Videos DIRECTLY linked to those entities, and
        (b) one-hop neighbors (entities connected to the matched ones).
      Both branches UNION'd into a single result set, deduplicated.
-
-Direct port of deprecated `services/youtube/retriever.py:L236-409`.
-
 NOTE: `from langchain_neo4j import Neo4jGraph` lives at module scope
 even though this file is also called `neo4j.py`. Python's absolute-
 import default resolves the bare-name `neo4j` to the installed
@@ -75,7 +72,7 @@ class Neo4jRetriever:
     async def _extract_entities(self, query: str) -> list[str]:
         """Structured-output LLM call. Failures degrade to `[]` so the
         SmartRetriever's other arms still produce results."""
-        # 2026-06-11: default `method="json_schema"` — see
+        # default `method="json_schema"` — see
         # `rag/standard/nodes/hallucination/node.py` for the rationale.
         chain = ENTITY_EXTRACTION_PROMPT | self.llm.with_structured_output(
             ExtractedEntities,

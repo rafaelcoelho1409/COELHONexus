@@ -1,21 +1,5 @@
-"""ycs/query — HTTP surface for the YCS Query workbench.
-
-Mounted by `ycs/__init__.py` under `/api/v1/ycs/query`:
-
-  GET  /query/namespaces            → support matrix (UI grey-out source)
-  POST /query/elasticsearch         → free-text multi_match (legacy)
-  POST /query/qdrant                → free-text kNN / scroll (legacy)
-  POST /query/neo4j                 → free-text CONTAINS / browse (legacy)
-  POST /query/raw/elasticsearch     → raw JSON body → _search (read-only)
-  POST /query/raw/qdrant            → raw `{op, ...}` → AsyncQdrantClient
-  POST /query/raw/neo4j             → raw Cypher in a READ-only tx
-  GET  /query/schema/{backend}      → cached schema snapshot (Phase 3)
-  POST /query/ai/{backend}          → NL → DSL SSE stream (Phase 4)
-  GET|POST /query/history           → user query history (Phase 5)
-
-Each backend endpoint returns 200 even on user-validation rejection
-(`ok=False` envelope) so the editor can show the message inline
-without juggling fetch status codes."""
+"""ycs/query — Query workbench: namespaces, ES/Qdrant/Neo4j queries (simple + raw DSL), AI text-to-DSL SSE, history.
+Backend endpoints return 200 even on validation rejection (`ok=False` envelope) for inline editor messages."""
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
@@ -46,9 +30,7 @@ router = APIRouter()
 
 @router.get("/namespaces", response_model = NamespaceMap)
 async def get_namespaces() -> NamespaceMap:
-    """Return the full (app x backend) support matrix. The Query page
-    fetches this once on mount and uses it to grey out unsupported
-    chips + render the "Searching in: …" caption."""
+    """Support matrix for the Query page — used to grey out unsupported chips."""
     matrix: dict[str, dict[str, NamespaceEntry]] = {}
     for app in APPS:
         matrix[app] = {}
@@ -103,9 +85,6 @@ async def post_query_neo4j(
     )
 
 
-# ====================================================================== #
-# Raw DSL — Phase 1 SOTA workbench
-# ====================================================================== #
 @router.post("/raw/elasticsearch", response_model = RawQueryResponse)
 async def post_raw_es(
     payload: RawQueryRequest, request: Request,
@@ -133,9 +112,6 @@ async def post_raw_neo4j(
     )
 
 
-# ====================================================================== #
-# Schema discovery — Phase 3
-# ====================================================================== #
 @router.get("/schema/{backend}")
 async def get_schema(
     backend: str, request: Request, refresh: bool = False,
@@ -166,9 +142,6 @@ async def get_schema(
     }
 
 
-# ====================================================================== #
-# AI text-to-DSL SSE — Phase 4
-# ====================================================================== #
 _VALID_BACKENDS = {"elasticsearch", "qdrant", "neo4j"}
 
 
@@ -176,17 +149,7 @@ _VALID_BACKENDS = {"elasticsearch", "qdrant", "neo4j"}
 async def post_ai_generate(
     backend: str, payload: AIGenerateRequest, request: Request,
 ) -> StreamingResponse:
-    """Server-Sent Events stream of AI-generated DSL.
-
-    Frames:
-      `{"event": "start", "phase": "generate"}`
-      `{"event": "chunk", "data": "..."}`        — streamed tokens
-      `{"event": "repair", "error": "..."}`       — first attempt failed safety
-      `{"event": "done", "ok": ..., "error": ..., "final": "..."}`
-
-    The client (`query/ai.js`) replaces the editor with `final` on done
-    so the user sees clean output even if the model produced a brief
-    self-repair re-attempt mid-stream."""
+    """AI text-to-DSL SSE stream. `final` on `done` replaces the editor (clean output even after a self-repair mid-stream)."""
     if backend not in _VALID_BACKENDS:
         raise HTTPException(
             status_code = 404, detail = f"unknown backend {backend!r}",
@@ -225,9 +188,6 @@ async def post_ai_generate(
     )
 
 
-# ====================================================================== #
-# Query history — Phase 5 (Postgres-backed)
-# ====================================================================== #
 @router.get("/history")
 async def list_history(
     request: Request,

@@ -2,8 +2,7 @@
 
 Calls into the deprecated `DocumentGrader` (per-doc parallel
 `asyncio.gather` of structured-output LLM calls).
-
-Direct port of deprecated `graphs/youtube/rag.py:L69-78`."""
+"""
 from __future__ import annotations
 
 from domains.ycs.grader import DocumentGrader

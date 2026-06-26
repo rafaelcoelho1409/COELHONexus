@@ -4,7 +4,6 @@ from __future__ import annotations
 from jinja2 import Environment, StrictUndefined
 
 
-# Render env — autoescape OFF (we produce markdown, not HTML). Strict
 # undefined so an unset template var crashes loudly instead of producing
 # silent `None` literals in the output.
 JINJA_ENV = Environment(

@@ -46,9 +46,6 @@ async def debug_resolve(slug: str, entry: CatalogEntry) -> dict:
     }
 
 
-# =============================================================================
-# Stage 2 — Single-tier ingest
-# =============================================================================
 @router.post("/ingest/{slug}")
 async def debug_ingest_one_tier(
     slug: str,

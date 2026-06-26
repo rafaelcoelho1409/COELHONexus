@@ -219,7 +219,6 @@ class ReplanAction(BaseModel):
                     "add must specify EXACTLY ONE of insert_after / "
                     "insert_before"
                 )
-        # delete has no extra required fields beyond targets ≥ 1
 
         return self
 

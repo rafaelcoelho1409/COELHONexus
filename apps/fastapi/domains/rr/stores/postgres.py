@@ -42,9 +42,7 @@ from ..params import STORES_PARAMS
 logger = logging.getLogger(__name__)
 
 
-# --------------------------------------------------------------------------- #
 # Bootstrap — CREATE TABLE IF NOT EXISTS for all 4 RR tables. Idempotent.
-# --------------------------------------------------------------------------- #
 _DDL = f"""
 CREATE TABLE IF NOT EXISTS {PG_TABLE_SCANS} (
     id                  UUID         PRIMARY KEY,
@@ -121,9 +119,7 @@ async def bootstrap_postgres() -> None:
     logger.info("[rr-pg] bootstrap complete (4 tables + 2 indexes ensured)")
 
 
-# --------------------------------------------------------------------------- #
 # Scan lifecycle
-# --------------------------------------------------------------------------- #
 async def create_scan(
     scan_id:    UUID,
     profile_id: str,
@@ -197,9 +193,7 @@ async def mark_scan_error(scan_id: UUID, *, status: str, error: str) -> None:
         await conn.commit()
 
 
-# --------------------------------------------------------------------------- #
 # Findings — one row per digest item; idempotent on (scan_id, arxiv_id)
-# --------------------------------------------------------------------------- #
 async def record_findings(scan_id: UUID, findings: list[Finding]) -> int:
     """Bulk-insert findings for a scan. Returns the row count written.
     Conflicts on (scan_id, arxiv_id) are skipped — re-runs are safe."""
@@ -258,10 +252,8 @@ def _extraction_as_dict(e: Any) -> dict[str, Any]:
     }
 
 
-# --------------------------------------------------------------------------- #
 # Seen-set — what arxiv_ids has the profile already encountered? Drives
 # the digest's "New since last scan" section via domain.diff_vs_seen.
-# --------------------------------------------------------------------------- #
 async def mark_seen_batch(profile_id: str, arxiv_ids: list[str]) -> int:
     """Insert the given (profile_id, arxiv_id) pairs into radar_seen.
     Conflicts are silently dropped (already-seen)."""
@@ -408,9 +400,7 @@ async def reset_seen(profile_id: str) -> int:
     return int(n or 0)
 
 
-# --------------------------------------------------------------------------- #
 # Profiles — interest verticals + per-profile SignalWeights overrides
-# --------------------------------------------------------------------------- #
 async def get_profile(profile_id: str) -> dict[str, Any] | None:
     """Fetch a profile's interests + weights. Returns None if missing."""
     async with await psycopg.AsyncConnection.connect(postgres_url()) as conn:

@@ -28,7 +28,7 @@ PER_DOC_CHAR_CAP = 2000
 # `KD_GRADER_CONCURRENCY` if needed.
 GRADER_CONCURRENCY = 2
 
-# 2026-06-15 — per-call timeout on a single grading invocation. Caps
+# per-call timeout on a single grading invocation. Caps
 # the cost of one rotator-picked slow model on one document at 30 s
 # (about 6× the median grade time). Without this, a hung LLM call
 # inside a sub-agent blocks one grader-semaphore slot for the entire

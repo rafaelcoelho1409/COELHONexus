@@ -11,7 +11,6 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 
-# Strip + non-empty in one annotation; rejects "  ", "\n\t" at validation.
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace = True, min_length = 1)]
 
 

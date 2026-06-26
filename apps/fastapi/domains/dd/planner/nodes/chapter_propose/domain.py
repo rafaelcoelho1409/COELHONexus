@@ -80,7 +80,6 @@ def extract_structural_seeds(
         if ns:
             namespaces_counter[ns] += 1
 
-    # Filter rare headings (appear in only 1 doc) — too narrow to be a
     # chapter seed. Keep ones that occur ≥ 2.
     seed_headings = [
         h for h, n in headings_counter.most_common(SEED_MAX_HEADINGS)

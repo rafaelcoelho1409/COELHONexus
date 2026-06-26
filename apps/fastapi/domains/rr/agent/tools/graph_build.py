@@ -52,7 +52,7 @@ async def graph_build_papers(
     """
     top_n = fs_read(scan_id, FS_FILE_TRIAGE_TOPN)
     if not top_n or not isinstance(top_n, list):
-        # Fix #6 (2026-06-16): diagnostic detail in the warning. Scan
+        # diagnostic detail in the warning. Scan
         # d196a862 logged the bare "no top_n — skipping" 8s before a
         # successful retry where total=12; the warning looked like a
         # real failure but was actually the orchestrator's LLM calling
@@ -87,13 +87,12 @@ async def graph_build_papers(
         f"(total={len(top_n)})"
     )
     logger.info(msg)
-    # Phase contextvar for LLM-counter attribution (Path A 2026-06-16).
+    # Phase contextvar for LLM-counter attribution (Path A).
     try:
         from ...runtime.llm_counter import set_phase as _set_llm_phase
         _set_llm_phase("graph_build")
     except Exception: pass
     if errors:
-        # Log the first error so it's debuggable from logs without exploding
         # the tool's return string.
         first_err = next(
             (str(r) for r in results if isinstance(r, Exception)), "unknown"

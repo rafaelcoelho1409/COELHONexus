@@ -96,7 +96,6 @@ def _parse_entry(entry: ET.Element) -> Paper:
         published=published,
         updated=updated,
         pdf_url=pdf_url,
-        # Fallback abs_url so the consumer always has a citable link.
         abs_url=abs_url or f"https://arxiv.org/abs/{arxiv_id}",
         doi=doi,
         comment=comment,

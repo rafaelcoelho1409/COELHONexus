@@ -14,7 +14,6 @@ SPA_ROOT_RE = re.compile(
 
 # Hydration-marker scripts emitted by Next.js / Nuxt / Gatsby / Remix / Apollo /
 # generic-INITIAL_STATE bundles. Presence ⇒ the body is an SPA shell that won't
-# render content without JS.
 HYDRATED_SPA_RE = re.compile(
     r'<script[^>]+id\s*=\s*["\']?__NEXT_DATA__'
     r'|window\.__NUXT__\s*='
