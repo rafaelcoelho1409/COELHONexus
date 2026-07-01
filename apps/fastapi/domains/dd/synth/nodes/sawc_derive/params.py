@@ -5,10 +5,7 @@ from __future__ import annotations
 import os
 
 
-# MPSC sample count (Multi-Path Self-Consistency, arXiv 2503.04611). 3
-# keeps token budget bounded; majority-of-3 is robust enough for the
-# narrow "expand this signature into runnable code" task while still
-# letting AST-parse filtering reject 1-2 hallucinations per section.
+# MPSC (arXiv 2503.04611): N=3 — bounded token budget; majority-of-3 rejects 1-2 AST hallucinations per section.
 N_MPSC_SAMPLES = 3
 
 # Concurrency for derive calls across sections in a chapter. Same
@@ -48,11 +45,7 @@ REQUEST_TIMEOUT_S = 60.0
 MAX_OUTPUT_TOKENS = 1200
 
 
-# Optimal-Stopping for MPSC
-# samples. Fire sample 1; if it's AST-valid AND lands in the required
-# LOC + char band, ship it directly. Else fire remaining samples + run
-# rank_mpsc_samples. Flag-gated via KD_SAWC_DERIVE_OPTIMAL_STOPPING
-# (default true).
+# Optimal-Stopping: ship sample 1 if AST-valid + in band; else fire remaining + rank. KD_SAWC_DERIVE_OPTIMAL_STOPPING (default true).
 DERIVE_OPTIMAL_STOPPING_ENABLED = (
     os.environ["KD_SAWC_DERIVE_OPTIMAL_STOPPING"].lower()
     in ("true", "1", "yes", "on")

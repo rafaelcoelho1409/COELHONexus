@@ -1,9 +1,4 @@
-"""Tier 4 — httpx-first docs crawler with Crawl4AI Playwright fallback.
-
-Used when only a docs landing URL is available. Phases: 0 docs-path probe,
-1 Crawl4AI seeder + Sphinx objects.inv + DOM toctree, 2 BFS fill,
-3 SPA gate, 4a parallel httpx fetch, 4b Playwright on SPA / high failure.
-"""
+"""httpx-first crawler with Playwright fallback. Phases: 0 docs-path probe, 1 seeder+inventory+toctree, 2 BFS fill, 3 SPA gate, 4a parallel httpx, 4b Playwright on SPA/high-fail."""
 import asyncio
 import logging
 import re
@@ -243,11 +238,7 @@ async def _fetch_one(
     framework_slug: str | None = None,
     store: Store | None = None,
 ) -> list[tuple[str, str, str, str]]:
-    """Fetch + extract. Returns a list of ``(slug, src_url, body_md, title)``:
-    one entry per page in the common case, or N entries when the page
-    matches an anchor-dense / autodoc split pattern (see
-    ``page_split.maybe_split_page``). Empty list on fetch / extract failure.
-    """
+    """Fetch + extract a URL. Returns [(slug, url, body_md, title), ...]; N entries when page_split fires (autodoc/anchored H2), empty list on failure."""
     t0 = time.monotonic()
     try:
         resp = await _get(client, url)
@@ -374,8 +365,7 @@ async def run(
             docs_root_path += "/"
         docs_root = f"{parsed.scheme}://{parsed.netloc}{docs_root_path}"
         inventory = await fetch_inventory(docs_root, client = client)
-        # Inventory iteration order ≈ Sphinx source-tree order ≈ author chapter
-        # order; doc_pages() returns a set whose order is non-deterministic.
+        # Inventory iteration order ≈ Sphinx source-tree order; doc_pages() returns a non-deterministic set.
         inv_pages: list[str] = []
         if inventory:
             _seen_inv: set[str] = set()
@@ -401,8 +391,7 @@ async def run(
             logger.info(
                 f"[tier-4] toctree sidebar contributed {len(toctree)} URLs"
             )
-        # Order-preserving union — sorting alphabetizes & breaks chapter order
-        # (e.g. Bash GNU multi-page manual). Priority: most-author-curated wins.
+        # Order-preserving union; sorting alphabetizes and breaks chapter order (Bash GNU regression). Priority: most-author-curated wins.
         seeds: list[str] = []
         _seen: set[str] = set()
         for src in (toctree, inv_pages, seeded, enriched, [url]):
@@ -451,7 +440,6 @@ async def run(
         logger.info(
             f"[tier-4] {len(seeds)} discovered → {len(filtered)} after filter"
         )
-        # Coverage oracle: log inventory pages we dropped + DOM extras we added.
         if inventory:
             inv_set = inventory.doc_pages()
             kept_set = {u.split("#", 1)[0] for u in filtered}
@@ -478,9 +466,7 @@ async def run(
             )
         await progress.update_total(len(filtered))
         sem = asyncio.Semaphore(CONCURRENCY)
-        # urls_done = source URLs finished (progress-bar denominator);
-        # written  = MinIO pages written (≥ urls_done when page_split fires).
-        # Without two counters the bar overflowed 251/190 on Airflow autodoc.
+        # urls_done = progress-bar denom; written = MinIO pages (page_split makes written > urls_done — bar overflowed 251/190 on Airflow autodoc).
         written = 0
         urls_done = 0
         failed: list[str] = []

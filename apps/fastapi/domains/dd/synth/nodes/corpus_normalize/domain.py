@@ -1,25 +1,4 @@
-"""corpus_normalize — pure functions (ingestion-time markdown cleanup).
-
-Strips rendering noise (Mintlify fence attrs, MDX wrapper tags, raw-
-corpus boundaries, Docusaurus/VitePress container admonitions, GitBook
-hint blocks, GFM alerts that survived HTML→markdown, zero-width chars,
-HTML entities) from ingested framework docs BEFORE any downstream
-consumer (file viewer, embed_corpus, off_topic, cluster, synth) sees
-the bytes.
-
-Idempotent: normalize(normalize(x)) == normalize(x).
-
-Pass order (single token-aware walk; each pass is line-local within its
-responsibility — fence bodies are never touched):
-    1. Unicode/BOM normalize (NFC, strip zero-width chars)
-    2. Extract YAML frontmatter → metadata dict; strip from body
-    3. Strip raw-corpus boundary markers (`--- foo.md ---`)
-    4. Tokenize via markdown-it-py → identify fence line ranges
-    5. Rewrite fence info-strings (strip Mintlify attrs, keep lang)
-    6. Strip container-admonition wrappers (:::tip, {% hint %})
-    7. Strip MDX wrapper tags (<Tip>, <Tabs>, ...) — text preserved
-    8. Whitespace + entity hygiene (decode &amp;, collapse blanks)
-"""
+"""corpus_normalize — 8-pass markdown cleanup pipeline; pure + idempotent."""
 from __future__ import annotations
 
 import unicodedata
@@ -52,28 +31,20 @@ def normalize_doc(
     stats = NormalizeStats(input_bytes = len(md_text.encode("utf-8")))
     text = md_text
 
-    # Pass 1 — Unicode + BOM + zero-width stripping
     text, n_zw = _unicode_pass(text)
     stats.zero_width_chars_stripped = n_zw
 
-    # Pass 2 — extract YAML frontmatter (top-of-file only)
     text, frontmatter = _frontmatter_pass(text)
     stats.frontmatter_extracted = bool(frontmatter)
 
-    # Pass 3 — strip raw-corpus boundary markers (line-anchored regex)
     text, n_bound = _boundary_pass(text)
     stats.boundary_markers_stripped = n_bound
 
-    # Passes 4-7 — token-aware: identify fence regions; transforms apply
-    # ONLY to prose lines (lines outside fence body ranges) for the
-    # admonition + orphan-tag passes. Fence opener lines get their
-    # info-string rewritten in-place. Fence bodies are pass-through.
     text, n_meta, n_admon, n_orphan = _token_aware_passes(text)
     stats.fence_meta_stripped       = n_meta
     stats.container_admonitions     = n_admon
     stats.orphan_tags_stripped      = n_orphan
 
-    # Pass 8 — final cosmetic hygiene (whole-file)
     text, n_ent, n_blank, n_trail = _whitespace_entity_pass(text)
     stats.html_entities_decoded = n_ent
     stats.blank_lines_collapsed = n_blank
@@ -88,9 +59,7 @@ def normalize_doc(
 
 
 def _unicode_pass(text: str) -> tuple[str, int]:
-    """Strip BOM, zero-width chars, normalize NBSP → space. Apply NFC
-    Unicode normalization so all downstream regexes see canonical
-    codepoints."""
+    """NFC + BOM/NBSP/zero-width strip so downstream regexes see canonical codepoints."""
     n = 0
     if text.startswith("﻿"):
         text = text[1:]
@@ -103,11 +72,7 @@ def _unicode_pass(text: str) -> tuple[str, int]:
 
 
 def _frontmatter_pass(text: str) -> tuple[str, dict]:
-    """Extract YAML frontmatter from top of file, return (body, dict).
-    Uses naive YAML parse (key: value) so we don't add a yaml dep just
-    for this. Frontmatter that's too complex falls back to a single
-    `_raw` string field — the synth pipeline doesn't need anything
-    beyond `title` + `description` for v1."""
+    """Extract YAML frontmatter → (body, dict); naive key:val parse to avoid yaml dep."""
     m = FRONTMATTER_RE.match(text)
     if not m:
         return text, {}
@@ -138,9 +103,7 @@ def _boundary_pass(text: str) -> tuple[str, int]:
 
 
 def _identify_fence_ranges(text: str) -> list[tuple[int, int, int]]:
-    """Use markdown-it-py to get fence token ranges. Returns list of
-    (open_line_idx, close_line_idx_exclusive, fence_kind) where kind
-    is 0 for backtick, 1 for tilde."""
+    """Return (open_line_idx, close_exclusive, kind) tuples; kind=0 backtick, 1 tilde."""
     from markdown_it import MarkdownIt
     md = MarkdownIt("commonmark")
     ranges: list[tuple[int, int, int]] = []
@@ -155,14 +118,7 @@ def _identify_fence_ranges(text: str) -> list[tuple[int, int, int]]:
 
 
 def _strip_fence_info_string(info: str) -> tuple[str, bool]:
-    """Reduce a fence info-string to its first whitespace-separated
-    token (the language). Returns (new_info, was_stripped).
-
-    Examples:
-        'python theme={"slug":"dark"} expandable'  → ('python', True)
-        'bash'                                      → ('bash',   False)
-        ''                                          → ('',       False)
-    """
+    """Reduce fence info-string to first token (lang), stripping Mintlify attrs."""
     info = info.strip()
     if not info:
         return "", False
@@ -173,14 +129,7 @@ def _strip_fence_info_string(info: str) -> tuple[str, bool]:
 
 
 def _token_aware_passes(text: str) -> tuple[str, int, int, int]:
-    """Passes 4-7. Walks lines with knowledge of fence ranges:
-
-      - Fence opener lines: rewrite info-string (Mintlify attr strip)
-      - Fence body lines: pass through UNCHANGED
-      - Prose lines: apply admonition strip + MDX wrapper-tag strip
-
-    Returns (new_text, n_fence_meta, n_admonitions, n_orphan_tags).
-    """
+    """Fence-range-aware line walk: rewrite openers, skip bodies, strip prose tags."""
     fence_ranges = _identify_fence_ranges(text)
     lines = text.split("\n")
 
@@ -220,8 +169,7 @@ def _token_aware_passes(text: str) -> tuple[str, int, int, int]:
 
 
 def _rewrite_fence_opener(line: str, kind: int) -> tuple[str, bool]:
-    """Rewrite a fence opener like ``` python theme={...} expandable to
-    ``` python (or ``` if no lang). Returns (new_line, was_changed)."""
+    """Strip Mintlify attrs from fence opener line."""
     fence_char = "~" if kind else "`"
     stripped = line.lstrip()
     indent = line[: len(line) - len(stripped)]
@@ -245,10 +193,7 @@ def _rewrite_fence_opener(line: str, kind: int) -> tuple[str, bool]:
 
 
 def _strip_admonition_markers(line: str) -> tuple[str, bool]:
-    """Strip Docusaurus/VitePress `:::tip` open/close markers and GitBook
-    `{% hint %}` / `{% endhint %}` / `{% tabs %}` / `{% endtabs %}`
-    lines. Inner text preserved (these markers were delimiters on their
-    own lines)."""
+    """Strip :::admonition and GitBook {% hint %} delimiter lines; inner text preserved."""
     for pattern in (
         ADMON_OPEN_RE, ADMON_CLOSE_RE,
         GITBOOK_HINT_OPEN_RE, GITBOOK_HINT_CLOSE_RE,
@@ -260,9 +205,7 @@ def _strip_admonition_markers(line: str) -> tuple[str, bool]:
 
 
 def _strip_mdx_wrapper_tags(line: str) -> tuple[str, int]:
-    r"""Strip MDX/JSX wrapper tags from a prose line, PRESERVING content
-    inside inline-code spans (backtick-delimited).
-    """
+    """Strip MDX/JSX wrapper tags from a prose line; preserves inline-code spans."""
     if "`" not in line:
         # Fast path — no inline code possible, apply regex directly.
         new_line, n_o = MDX_OPEN_TAG_RE.subn("", line)

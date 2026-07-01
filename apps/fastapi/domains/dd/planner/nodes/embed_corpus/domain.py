@@ -1,9 +1,4 @@
-"""embed_corpus — pure helpers (hashing, normalization, npz serialization).
-
-Everything here is deterministic and does NOT depend on the runtime
-tokenizer. Tokenizer-bound chunking lives in `service.chunk_doc` because
-loading the tokenizer is process-level I/O.
-"""
+"""Deterministic embed_corpus helpers — tokenizer-bound chunking is in service.py because tokenizer load is process-level I/O."""
 from __future__ import annotations
 
 import hashlib
@@ -18,15 +13,7 @@ from .versions import CACHE_VERSION
 
 
 def normalize_content(text: str) -> str:
-    """Phase B (2026-05-23) — canonical text normalization applied before
-    any content-hashing. Fixes the "COLD twice on identical manifest"
-    pattern observed across FastMCP+LangChain runs (content-normalization
-    drift is a known cache-miss cause; CRLF vs LF was the likely culprit).
-
-      1. NFC Unicode normalization (canonical composed form)
-      2. Line endings: CRLF → LF
-      3. Strip leading/trailing whitespace
-    """
+    """NFC + CRLF→LF + strip before content-hashing — prevents COLD twice on identical manifest from CRLF/LF drift."""
     return (
         unicodedata.normalize("NFC", text or "")
         .replace("\r\n", "\n")
@@ -35,17 +22,7 @@ def normalize_content(text: str) -> str:
 
 
 def manifest_hash(keys: list[str], total_bytes: int) -> str:
-    """Stable cache key — same corpus (same keys + same byte count + same
-    model + same cache version) → same hash → same MinIO blob. Re-runs
-    after a re-ingestion that changes the corpus produce a different hash
-    and re-embed. Model swaps also invalidate cleanly because the
-    DD_EMBED_MODEL_NAME is part of the digest.
-
-    Phase B (2026-05-23): added explicit dim + input_type fields. The dim
-    matters because the new 8B embedder is 4096-D vs the legacy 1B's
-    2048-D — if both versions ever co-exist via env override, their blobs
-    must not collide. The cache-version bump is also a safety belt.
-    """
+    """Stable cache key including model + dims — model swaps and 4096-D vs 2048-D blobs invalidate cleanly via separate hashes."""
     h = hashlib.sha256()
     h.update(f"model={DD_EMBED_MODEL_NAME}|".encode("utf-8"))
     h.update(f"version={CACHE_VERSION}|".encode("utf-8"))

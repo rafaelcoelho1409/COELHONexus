@@ -11,15 +11,7 @@ from .versions import (
 
 
 def compute_harmonize_manifest_hash(chapters: list[dict]) -> str:
-    """Content-addressed cache key for the cross-chapter harmonization pass.
-
-    Includes:
-      - sha256 of each chapter's full prose (sorted by chapter_id)
-      - prompt_version + schema_version
-
-    On a re-run with identical chapter prose + identical prompts, the
-    manifest hash matches → caller can skip the harmonize call entirely
-    and replay the cached telemetry."""
+    """Content-addressed cache key for the harmonize pass; keyed on prose + prompt version."""
     parts: list[str] = []
     for ch in sorted(chapters, key = lambda c: c.get("chapter_id", "")):
         cid = ch.get("chapter_id", "")

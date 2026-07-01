@@ -10,9 +10,7 @@ from .versions import CHECKLIST_PROMPT_VERSION, CHECKLIST_SCHEMA_VERSION
 
 
 class CriterionResult(BaseModel):
-    """One checklist criterion's verdict. Binary, with a 1-sentence
-    natural-language feedback string when failed (consumed by
-    mgsr_replan as a repair instruction)."""
+    """One criterion verdict; feedback string is consumed by mgsr_replan as a repair instruction."""
     name:     str
     passed:   bool
     kind:     Literal["deterministic", "llm_judge"]
@@ -64,10 +62,7 @@ class LLMVerdict(BaseModel):
 
 
 class LLMJudgePayload(BaseModel):
-    """LLM-judge JSON response — one batched call returns all 5 verdicts.
-
-    Field names MUST match the keys in `LLM_CRITERIA`; the prompt
-    enforces the exact shape."""
+    """LLM-judge JSON response; field names MUST match keys in `LLM_CRITERIA`."""
     chapter_reads_coherently:           LLMVerdict
     claims_grounded_in_sources:         LLMVerdict
     terminology_consistent:             LLMVerdict

@@ -1,14 +1,4 @@
-"""Tier 1 — fetch a single `llms-full.txt` bundle.
-
-Fastest ingestion path: one HTTP GET of a publisher-curated, LLM-ready dump
-of an entire docs site (typically 50 KB – 10 MB of clean markdown). The
-post-process step splits it on H1/H2 boundaries into per-section pages.
-
-Falls through to Tier 2 (raises `ManifestDetected`) when the fetched body
-is actually a llms.txt-style link index disguised as llms-full.txt
-(detected by absence of fenced code blocks + many URL: pointers — a real
-content bundle has dozens-to-thousands of fences).
-"""
+"""Fetch a single llms-full.txt bundle. Raises ManifestDetected when the body is a link index (few fences + many URL: pointers) so dispatcher falls through to Tier 2."""
 import logging
 import time
 from urllib.parse import urlparse
@@ -48,12 +38,7 @@ async def run(
     progress: Progress,
     store: Store,
 ) -> int:
-    """Fetch the bundle and write it as one entry. Returns 1 on success.
-
-    Raises:
-        ManifestDetected — body is a manifest; dispatcher should try Tier 2
-        RuntimeError      — fetch failed, body too short, or HTTP non-200
-    """
+    """Fetch bundle, write one page, return 1. Raises ManifestDetected if body is a link index, RuntimeError on fetch failure or HTTP non-200."""
     host = (urlparse(url).netloc or "").lower()
     if not host:
         raise RuntimeError(f"Tier 1: cannot parse host from url={url!r}")

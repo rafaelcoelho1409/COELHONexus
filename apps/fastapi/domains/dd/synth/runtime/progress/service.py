@@ -1,8 +1,4 @@
-"""Redis pub/sub for sub-node progress + SSE bridge. Mirrors planner/progress.
-
-Channel: `dd:synth:{thread_id}:events`. Snapshot list: `…:events:snapshot`
-(TTL 24h, max 200 events) so late SSE subscribers catch up before live.
-"""
+"""Redis pub/sub for synth progress + SSE bridge; snapshot list at …:events:snapshot (TTL 24h, max 200) so late SSE subscribers catch up before live."""
 from __future__ import annotations
 
 import asyncio

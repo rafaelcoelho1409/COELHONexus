@@ -1,9 +1,4 @@
-"""Per-DD-thread LLM call and token counters.
-
-The DD UI needs fast, deterministic node-level counters without querying
-Langfuse live on every drawer click. This module mirrors the RR pattern:
-Redis is the in-flight store, and MinIO keeps a completed-run snapshot.
-"""
+"""Per-DD-thread LLM call/token counters; Redis for in-flight, MinIO snapshot on completion — avoids live Langfuse queries for the drawer UI."""
 from __future__ import annotations
 
 import json
@@ -137,11 +132,7 @@ def bump_current_call(
     response: Any,
     deployment: str | None = None,
 ) -> dict[str, Any] | None:
-    """Bump counters for the current DD context.
-
-    Called from the rotator boundary. No active DD context means the call
-    belongs to another domain and is ignored.
-    """
+    """Bump counters for the current DD context; no-op when called outside a DD context (other domains)."""
     stage, thread_id, node_id = get_context()
     if not stage or not thread_id or not node_id:
         return None

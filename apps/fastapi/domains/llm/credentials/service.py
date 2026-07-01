@@ -1,10 +1,4 @@
-"""Sync, thread-safe, MinIO-backed Fernet credential store.
-
-Sync because the rotator's provider entry-builders are plain sync functions
-called while materializing the LiteLLM Router — they can't `await`. Hot-path
-`resolve_key()` never raises: a MinIO outage / KEK mismatch degrades to
-env-only resolution instead of breaking the rotator.
-"""
+"""Sync (entry-builders can't await) MinIO-backed Fernet store; resolve_key() never raises — MinIO outage degrades to env-only."""
 from __future__ import annotations
 
 import copy
@@ -172,7 +166,6 @@ class CredentialStore:
         self._cache_valid = True
 
     def _maybe_import_env_keys(self) -> int:
-        """Opt-in env→store migration. KD_CREDS_IMPORT_ENV=1."""
         if "KD_CREDS_IMPORT_ENV" not in os.environ:
             return 0
         if os.environ["KD_CREDS_IMPORT_ENV"].strip().lower() not in ("1", "true", "yes", "on"):
@@ -198,7 +191,7 @@ class CredentialStore:
         return imported
 
     def warm(self) -> None:
-        """Eager KEK init + cache load. Best-effort; never raises."""
+        """Best-effort; never raises."""
         try:
             with self._lock:
                 self._kek()
@@ -212,7 +205,7 @@ class CredentialStore:
             )
 
     def resolve_key(self, key_env: str) -> str:
-        """User-store key if set, else env. Never raises."""
+        """Never raises."""
         try:
             self._ensure_fresh()
             with self._lock:
@@ -308,7 +301,7 @@ def get_store() -> CredentialStore:
 
 
 def resolve_key(key_env: str) -> str:
-    """Hot-path provider-key resolution. Never raises."""
+    """Never raises."""
     try:
         return get_store().resolve_key(key_env)
     except Exception:

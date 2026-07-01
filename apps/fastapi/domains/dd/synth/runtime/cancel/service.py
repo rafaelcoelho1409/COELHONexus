@@ -1,8 +1,4 @@
-"""Cancel flag I/O + watcher task. Mirrors planner/cancel/service.
-
-Per-thread flag at `dd:synth:{thread_id}:cancel`. Watcher polls every 1s
-and cancels the main task on first True. Used by `/synth/{tid}/cancel`.
-"""
+"""Cancel flag I/O + watcher task; per-thread flag at dd:synth:{thread_id}:cancel, polls 1s, cancels main task on first True."""
 from __future__ import annotations
 
 import asyncio

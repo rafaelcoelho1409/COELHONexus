@@ -1,11 +1,4 @@
-"""chapter_select — MinIO key builders.
-
-`select_*` keys hold the chapter_select-specific payload (selected
-indices, pruning, pinning).
-
-`chapter_plan_*` keys hold the legacy reduce_node-compatible outline so
-order_chapters + plan_write read it transparently.
-"""
+"""MinIO key builders; chapter_plan_* keys use the legacy reduce_node-compatible schema so downstream nodes read transparently."""
 from __future__ import annotations
 
 from .params import BLOB_PREFIX

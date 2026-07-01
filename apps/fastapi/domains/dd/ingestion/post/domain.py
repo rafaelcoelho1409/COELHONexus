@@ -1,9 +1,4 @@
-"""Pure monolith-split + cleanup logic.
-
-Boundary precedence: `Source: <url>` markers (Mintlify/Streamlit) → H1 →
-size-aware H2/H3 sub-split (Docusaurus pattern: one site-title H1 over the
-whole bundle). Code fences/tables/HTML stay atomic via markdown-it tokens.
-"""
+"""Monolith splitter: Source-marker → H1 → H2/H3 precedence (Docusaurus: single H1 wraps the whole bundle). markdown-it tokens keep code fences/tables/HTML atomic."""
 from __future__ import annotations
 
 import hashlib

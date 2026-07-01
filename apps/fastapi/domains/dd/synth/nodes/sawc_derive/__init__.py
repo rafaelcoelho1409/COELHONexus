@@ -1,11 +1,4 @@
-"""sawc_derive — Analogical-Prompting + MPSC derived-code enrichment.
-
-Ship #95 (2026-05-24). Runs AFTER sawc_write, BEFORE checklist_eval.
-
-Public surface: the graph node + DeriveStats/DeriveAttempt schemas + the
-small set of pure helpers (`python_ast_valid` is the one render-side
-callers need).
-"""
+"""sawc_derive — Analogical-Prompting + MPSC derived-code enrichment; runs after sawc_write, before checklist_eval."""
 from .domain import (
     is_thin_block,
     parse_code_block,

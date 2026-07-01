@@ -5,10 +5,7 @@ from __future__ import annotations
 import re
 
 
-# Regex matching a Python function/method signature alone (with no body
-# beyond it). Catches the common ch03 pattern:
-#   list_skills(client: Client) -> list[SkillSummary]
-# Also catches `def foo(...): ...` one-liners.
+# Catches signature-only vault entries: bare function signatures and `def foo(...): ...` one-liners (the ch03 thin-block pattern).
 SIGNATURE_ONLY_RE = re.compile(
     r"""
     ^\s*

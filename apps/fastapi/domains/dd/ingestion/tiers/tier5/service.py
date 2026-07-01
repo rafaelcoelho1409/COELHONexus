@@ -1,20 +1,4 @@
-"""Tier 5 — GitHub README-only crawler.
-
-For frameworks whose docs home IS the GitHub repo (no docs site, no GitHub
-Pages). Walks the repo tree once via the GitHub API, then fans out parallel
-GETs to raw.githubusercontent.com for every `.md` / `.mdx` blob.
-
-Pipeline (~5 s on a small repo, vs minutes for Tier 4 BFS on the same view):
-
-  1. Resolve default branch          (api.github.com/repos/{org}/{repo})
-  2. List tree recursively            (.../git/trees/{branch}?recursive=1)
-  3. Filter to docs blobs (.md / .mdx; skip CI/vendor/test/build/locale dirs)
-  4. Parallel raw.githubusercontent.com GETs (sem=10)
-  5. Write each body to the store
-
-Auth: set GITHUB_TOKEN to lift the API rate limit from 60/h to 5,000/h. The
-raw CDN ignores limits regardless.
-"""
+"""GitHub README crawler: resolve default branch, list tree recursively, filter to .md/.mdx docs blobs, parallel-fetch from raw.githubusercontent.com. GITHUB_TOKEN lifts API limit from 60/h to 5000/h (raw CDN is unmetered)."""
 import asyncio
 import logging
 import os

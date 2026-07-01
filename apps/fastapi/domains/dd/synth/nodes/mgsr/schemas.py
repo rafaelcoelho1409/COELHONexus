@@ -34,15 +34,7 @@ HaltReason = Literal[
 
 
 class ReplanAction(BaseModel):
-    """One structured replan action over the outline DAG.
-
-    Action vocabulary verbatim from SurveyGen-I §3.2.3:
-      - merge:   combine targets into one section (first target = new id)
-      - delete:  remove target section(s); cleanup downstream prereqs
-      - rename:  change heading/description of a section
-      - reorder: move a section in reading order (insert_before/after)
-      - add:     create a new section (insert position required)
-    """
+    """One structured replan action (SurveyGen-I §3.2.3): merge | delete | rename | reorder | add."""
     action:    ReplanActionType
     targets:   list[str] = Field(
         default_factory = list,

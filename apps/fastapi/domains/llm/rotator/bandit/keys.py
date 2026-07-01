@@ -17,9 +17,7 @@ DD_PROCESSES: tuple[str, ...] = (
     "dd-grader",
     "dd-critic",
 )
-# Non-DD task keys share the bandit but skip the v[7+idx] one-hot — cells stay
-# per-task via cell_key(). Adding them to DD_PROCESSES would collide with v[16]
-# sin(hour) and require a CONTEXT_DIM bump invalidating every Redis CellState.
+# Non-DD tasks skip the v[7+idx] one-hot; adding to DD_PROCESSES would need a CONTEXT_DIM bump, invalidating Redis CellStates.
 NON_DD_TASKS: tuple[str, ...] = (
     "ycs-neo4j",
 )

@@ -1,8 +1,4 @@
-"""Pure helpers — no I/O. Used by the resume catch-up path to detect
-IMPLEMENTED nodes that haven't run for a thread (e.g. a node landed AFTER
-the thread already completed → LangGraph would short-circuit `ainvoke(None)`
-because the prior checkpoint's END marker is already consumed).
-"""
+"""Pure helpers for the resume catch-up path (detect nodes missing from threads that already reached END)."""
 from __future__ import annotations
 
 from ...graph import IMPLEMENTED, NODE_TO_FIELD

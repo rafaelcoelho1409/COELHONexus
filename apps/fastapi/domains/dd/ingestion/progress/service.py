@@ -1,12 +1,4 @@
-"""Per-run progress + per-framework single-flight lock + cancel flag.
-
-Keys:
-    dd:runs:{run_id}:progress     JSON snapshot (≤1/s throttle)
-    dd:runs:{run_id}:url_records  per-fetch list
-    dd:runs:{run_id}:post         post-process summary
-    dd:runs:{run_id}:cancel       cancel flag
-    dd:lock:{framework_slug}      value = holding run_id
-"""
+"""Per-run progress, per-framework single-flight lock, and cancel flag."""
 from __future__ import annotations
 
 import json
@@ -42,8 +34,7 @@ if redis.call('get', KEYS[1]) == ARGV[1] then
   return redis.call('del', KEYS[1])
 else
   return 0
-end
-"""
+end"""
 
 
 async def acquire_lock(

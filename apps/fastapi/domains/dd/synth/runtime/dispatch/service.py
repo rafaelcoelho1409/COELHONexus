@@ -1,18 +1,4 @@
-"""Async orchestration: per-chapter, resume, study-loop, book_harmonize.
-Mirrors `domains/dd/planner/dispatch/service.py` structurally.
-
-Three runners + one orchestrator + one harmonize helper:
-  - run_single_chapter_async(thread_id, slug, chapter_id, mode):
-        per-chapter graph.ainvoke + cancel watcher; terminal SSE.
-  - resume_synth_async(thread_id):
-        resume from last checkpoint (standard / catch-up / nothing).
-  - run_study_async(study_thread_id, slug, chapter_ids, mode):
-        strict-order chapter loop + per-chapter `chapter_ready` SSE +
-        post-study book_harmonize pass.
-
-book_harmonize is co-located so the Celery study task can invoke it before
-returning (single-process post-study coherence pass).
-"""
+"""Async orchestration: per-chapter, resume, strict-order study-loop, and book_harmonize (co-located so the Celery study task can run it in-process)."""
 from __future__ import annotations
 
 import asyncio
@@ -636,13 +622,7 @@ async def run_study_async(
     chapter_ids: list[str],
     mode: str = "quality",
 ) -> dict:
-    """Strict-order study orchestrator (Bundle 6 streaming).
-
-    Iterates chapter_ids in pedagogical order; each chapter completes before
-    the next starts. Emits `chapter_running` / `chapter_done` / `chapter_ready`
-    so the UI surfaces each chapter on render_audit_write completion
-    (TTFR ~10-15 min vs ~2h). Runs `book_harmonize` post-loop if ≥2 done.
-    """
+    """Strict-order study orchestrator; emits chapter_ready per render so UI shows each chapter as it completes (TTFR ~10-15 min vs ~2h batch). Runs book_harmonize post-loop if ≥2 done."""
     from infra.langfuse.sessions import session as _lf_session
     with _lf_session(
         "dd",

@@ -1,15 +1,4 @@
-"""DD synth pipeline metric recorders. Instrument names + label vocabulary
-are defined centrally in `infra.otel.metrics_registry`; this module owns
-the `record_*` functions that emit them — co-located with the synth code
-that calls them.
-
-PromQL slice examples:
-    histogram_quantile(0.5, sum by (le, pinned_model)
-        (rate(dd_refiner_iters_to_accept_bucket{outcome="accept"}[1h])))
-    rate(dd_audit_missing_hashes_ratio_sum[5m])
-        / rate(dd_audit_missing_hashes_ratio_count[5m])
-    sum by (framework) (rate(dd_bucket_split_overflow_total[1h]))
-"""
+"""DD synth metric recorders; instrument names + label vocabulary defined in infra.otel.metrics_registry."""
 from __future__ import annotations
 
 from infra.otel.metrics import get_instrument

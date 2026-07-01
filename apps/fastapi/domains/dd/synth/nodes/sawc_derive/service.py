@@ -1,16 +1,4 @@
-"""sawc_derive service — pure-function helpers (no I/O, no LLM calls).
-
-Pieces:
-  - `is_thin_block(body)`        — signature/length heuristic
-  - `build_analogical_prompt`    — Yasunaga 2023 (arXiv:2310.01714)
-  - `parse_code_block`           — strip fences, language-aware
-  - `score_derived_candidate`    — AST-validity + LOC + import richness
-  - `rank_mpsc_samples`          — N candidates → winning index (or None)
-  - `python_ast_valid(body)`     — boolean compile gate
-
-All decisions are deterministic given the inputs. The node module
-threads I/O (bandit rotator, MinIO persistence, Redis cancel flags).
-"""
+"""sawc_derive service — Analogical Prompting (arXiv:2310.01714) + MPSC derived-code enrichment for thin vault blocks. Deterministic helpers; I/O (bandit, MinIO, Redis) in node module."""
 from __future__ import annotations
 
 import ast
@@ -53,11 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 def _env_enabled() -> bool:
-    """Default ON; explicit 'false' / '0' / 'no' / 'off' disables.
-
-    Restored 2026-06-07 — lost in the per-node refactor split (was a
-    module-local helper in the old monolithic `sawc_derive/node.py`).
-    Pairs with the `ENV_ENABLED` env-var name constant in `params.py`."""
+    """Default ON; explicit 'false'/'0'/'no'/'off' disables via ENV_ENABLED env var."""
     raw = (os.environ.get(ENV_ENABLED) or "").strip().lower()
     if raw in ("", "1", "true", "yes", "on"):
         return True
@@ -74,19 +58,8 @@ from .params import (
 from .patterns import SIGNATURE_ONLY_RE
 
 
-# Thin-block detection
 def is_thin_block(body: str) -> bool:
-    """True when a vault code body is too thin to teach effectively.
-
-    "Thin" = signature-only OR very short. The two-gate AND lets a
-    short example like a 4-line snippet through, while catching:
-        list_skills(client: Client) -> list[SkillSummary]
-    and similar single-line API references.
-
-    The heuristic is conservative on purpose — we'd rather miss a
-    derive opportunity than over-fire and re-generate already-good
-    code blocks.
-    """
+    """True when vault body is too thin to teach. Conservative: short AND signature-only gate so 4-line snippets pass while bare API signatures are caught."""
     if not body:
         return False
     stripped = body.strip()
@@ -113,7 +86,6 @@ def is_thin_block(body: str) -> bool:
     return False
 
 
-# Prompt builder — Analogical Prompting (Yasunaga 2023 arXiv:2310.01714)
 def build_reexplain_prompt(
     *,
     framework: str,
@@ -123,18 +95,7 @@ def build_reexplain_prompt(
     derived_code: str,
     lang: str = "python",
 ) -> str:
-    """Ship D (2026-05-25): after MPSC promotes a derived code block,
-    the original explanation (written for the thin signature) is stale —
-    it describes APIs/params from the signature, not the expanded
-    example. This prompt regenerates the explanation conditioned on
-    the new code body.
-
-    Per the deep research (Citation-Grounded Code Comprehension arXiv
-    2512.12117): prose grounded to the resolved code beats prose grounded
-    to an imagined topic. The re-explain call mirrors the Ship A "hash
-    first, prose second" ordering — the code is already chosen; we just
-    rewrite the prose to match.
-    """
+    """Regenerate explanation after MPSC promotes a derived block (arXiv 2512.12117). Old explanation was written for the thin signature, not the expanded code."""
     return (
         f"You are regenerating ONE documentation explanation in a "
         f"{framework} learning resource. The code block below has been "
@@ -173,19 +134,7 @@ def build_analogical_prompt(
     original_body: str,
     original_lang: str = "python",
 ) -> str:
-    """Analogical Prompting prompt — ask the LLM to first reason about
-    a relevant, expanded example by analogy, then emit it as a fenced
-    code block.
-
-    Per Yasunaga et al. 2023 ("Large Language Models as Analogical
-    Reasoners"), letting the model first describe a closely-related
-    canonical example improves derived-code quality vs. one-shot
-    generation. We don't need the reasoning text in the output —
-    we strip everything outside the final fenced block server-side.
-
-    Output contract: exactly one fenced code block in the response.
-    Anything outside the fence is discarded.
-    """
+    """Analogical Prompting (Yasunaga et al. 2023, arXiv:2310.01714): LLM reasons about an analogous example before emitting code; improves quality vs one-shot. Output is the fenced block only; prose is stripped server-side."""
     return (
         f"You are expanding a thin documentation reference into a "
         f"COMPLETE RUNNABLE EXAMPLE for a {framework} learning resource.\n\n"
@@ -223,7 +172,6 @@ def build_analogical_prompt(
     )
 
 
-# Code-block extraction
 _FENCE_RE = re.compile(
     r"```(?:[a-zA-Z0-9_+\-]*)\n(.*?)\n```",
     re.DOTALL,
@@ -231,11 +179,7 @@ _FENCE_RE = re.compile(
 
 
 def parse_code_block(raw: str) -> str:
-    """Extract the first fenced code block from an LLM response.
-
-    Returns the inner body (no fences). Empty string if no fenced
-    block is present — the caller treats that as a failed sample.
-    """
+    """Extract first fenced code block; bare code (no fences) passes through as last resort. Empty string = failed sample."""
     if not raw:
         return ""
     m = _FENCE_RE.search(raw)
@@ -250,8 +194,6 @@ def parse_code_block(raw: str) -> str:
     return m.group(1).rstrip("\n")
 
 
-# AST validity gate (Python-only for now; sawc_write subtopics
-# overwhelmingly target python — extend per-lang if framework demands)
 def python_ast_valid(body: str) -> bool:
     """True iff `body` parses as valid Python (incl. async). Catches
     hallucinated names, malformed signatures, broken imports."""
@@ -267,21 +209,8 @@ def python_ast_valid(body: str) -> bool:
         return False
 
 
-# Per-sample scoring
 def score_derived_candidate(body: str) -> float:
-    """Deterministic structural score for one derived candidate.
-
-    Higher = better. Used by `rank_mpsc_samples` to break ties among
-    AST-valid samples.
-
-    Components (~0-10 scale):
-      + AST valid:        4.0
-      + In LOC band:      2.0
-      + Has imports:      1.5  (real lib usage signal)
-      + Multi-line:       1.0  (not a one-shot expression)
-      − Excess length:    up to -2.0 (penalize blobs >40 lines)
-      − Placeholder leak: -3.0 (`...`, `YOUR_*_HERE`, `# TODO`, etc.)
-    """
+    """Structural score; higher=better. AST valid (+4), LOC band (+2), imports (+1.5), multi-line (+1); penalizes excess length and placeholder leaks (-3)."""
     if not body or not body.strip():
         return -10.0
     score = 0.0
@@ -316,15 +245,8 @@ def score_derived_candidate(body: str) -> float:
     return round(score, 3)
 
 
-# MPSC ranker — Multi-Path Self-Consistency (arXiv 2503.04611)
 def rank_mpsc_samples(samples: list[str]) -> tuple[int | None, list[float]]:
-    """Pick the best AST-valid sample by structural score.
-
-    Returns (chosen_idx, scores). chosen_idx is None when no sample is
-    both AST-valid AND in the LOC band — caller then records the attempt
-    as `rejected_ast` (no AST pass) or `rejected_len` (AST passed but
-    nothing in band).
-    """
+    """MPSC ranker (arXiv 2503.04611): pick best AST-valid sample by structural score. chosen_idx=None when no sample is both AST-valid AND in the LOC band."""
     if not samples:
         return None, []
     scores = [score_derived_candidate(s) for s in samples]
@@ -355,10 +277,7 @@ async def _load_referenced_vault_entries(
     needed_hashes: set[str],
     source_keys: list[str],
 ) -> dict[str, VaultEntry]:
-    """Walk the chapter's per_source list, sentinelize each raw doc, and
-    return only the entries whose hash is in `needed_hashes`. Mirrors
-    sawc_write's runtime fallback but trims to just what derive needs.
-    """
+    """Walk source docs, sentinelize, and return entries matching needed_hashes. Mirrors sawc_write's runtime fallback but trims to just derive-needed hashes."""
     found: dict[str, VaultEntry] = {}
     if not needed_hashes:
         return found
@@ -392,10 +311,7 @@ async def _reexplain_one(
     old_explanation: str,
     derived_code: str,
 ) -> Optional[str]:
-    """Fire ONE bandit-routed call to regenerate the explanation
-    against the newly-promoted derived_code. Returns the new explanation
-    string or None on any failure (caller keeps old explanation).
-    """
+    """One bandit-routed call to regenerate explanation for the newly-promoted derived code. Returns new explanation string or None (caller keeps old)."""
     import json as _json
 
     prompt = build_reexplain_prompt(
@@ -518,10 +434,7 @@ async def _derive_one_subtopic(
         # ── Mutate subtopic in place ────────────────────────────────────
         subtopic["code_source"] = "derived"
         subtopic["derived_code"] = winner
-        # The original explanation was written for the thin signature;
-        # the derived code is a different (richer) example. Regenerate
-        # the explanation conditioned on the new code body so prose↔code
-        # alignment holds. One extra bandit call per promotion.
+        # Derived code is richer than the original signature; regenerate explanation to keep prose↔code alignment (one extra bandit call per promotion).
         new_expl = await _reexplain_one(
             framework=framework,
             section_heading=section_heading,

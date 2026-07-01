@@ -1,9 +1,4 @@
-"""MinIO/Redis key builders — canonical object layout.
-
-Three prefixes: `ingestion/{slug}/` (normalized), `ingestion-raw/{slug}/`
-(reversibility across normalizer-version bumps), `synth-vault/{slug}/`
-(sentinelized text — wipeable without touching ingestion).
-"""
+"""Key builders: ingestion/ (normalized), ingestion-raw/ (reversibility across normalizer bumps), synth-vault/ (wipeable without affecting ingestion)."""
 from __future__ import annotations
 
 from .params import SNAPSHOTS_SUBDIR

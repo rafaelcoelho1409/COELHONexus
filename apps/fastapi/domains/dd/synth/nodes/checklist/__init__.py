@@ -1,12 +1,4 @@
-"""checklist_eval — Binary checklist evaluator (CheckEval + RefineBench + 3-layer eval).
-
-12 binary criteria (7 deterministic + 5 LLM-judge). Replaces the
-deprecated 8-dim weighted grader. Failed criteria emit specific
-natural-language feedback strings consumed by mgsr_replan as repair
-instructions.
-
-See docs/SYNTH-ARCHITECTURE-SOTA-2026-05-18.md.
-"""
+"""checklist_eval — binary checklist evaluator (12 criteria: 7 deterministic + 5 LLM-judge)."""
 from .node import checklist_eval
 from .schemas import (
     ChecklistEvaluation,

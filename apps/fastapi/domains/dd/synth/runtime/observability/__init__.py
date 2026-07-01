@@ -1,7 +1,4 @@
-"""Synth observability — OTel spans (service.py) + KD-pipeline metrics
-(metrics.py). Span-attr helpers go in service.py; counters/histograms in
-metrics.py. Instrument definitions live in `infra.otel.metrics_registry`.
-"""
+"""Synth observability — OTel span helpers (service.py) + pipeline metrics (metrics.py); instruments in infra.otel.metrics_registry."""
 from __future__ import annotations
 
 from .metrics import (

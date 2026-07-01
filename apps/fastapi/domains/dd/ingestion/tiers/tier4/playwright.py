@@ -1,11 +1,4 @@
-"""Crawl4AI Playwright fallback — SPA shells / Phase-4a high failure rate.
-
-Connects to remote Chromium-CDP (`PLAYWRIGHT_CDP_HEADLESS`) so the image
-stays slim (no embedded Chromium); falls back to local Chromium when unset.
-Per-URL session_id isolates contexts (Crawl4AI #1379); max_session_permit=4
-fights the "Target page closed" race on shared CDP (Crawl4AI #1326).
-crawl4ai imports are deferred — only paid when this path runs.
-"""
+"""Crawl4AI Playwright fallback for SPA shells / Phase-4a failures. Per-URL session_id avoids context bleed (Crawl4AI #1379); max_session_permit=4 avoids Target-page-closed race (Crawl4AI #1326). crawl4ai imports deferred."""
 import asyncio
 import json
 import logging
@@ -169,12 +162,7 @@ async def crawl_urls(
     store: Store,
     min_ok_bytes: int = DEFAULT_MIN_OK_BYTES,
 ) -> tuple[int, list[str]]:
-    """Crawl every URL via Playwright + Crawl4AI extraction. Streaming
-    consumer writes successes to the store immediately; transient navigation
-    failures get a single retry pass with patient timeouts.
-
-    Returns (pages_written, failed_urls).
-    """
+    """Crawl URLs via Playwright; stream successes to store immediately. Transient navigation failures get one retry with longer timeouts. Returns (pages_written, failed_urls)."""
     if not urls:
         return 0, []
 

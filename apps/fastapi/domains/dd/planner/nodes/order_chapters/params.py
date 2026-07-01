@@ -21,12 +21,7 @@ DESCRIPTION_CHARS = 240
 # Concurrency for the N parallel sample calls.
 SAMPLE_CONCURRENCY = 3
 
-# Foundational-prefix rule: chapter titles matching any of these patterns
-# get pinned to position 0 (installation/quickstart-style chapters MUST
-# come first regardless of LLM ordering). Case-insensitive substring
-# match. Multi-keyword: the FIRST matching chapter goes to position 0;
-# subsequent matches keep their LLM-determined relative order after that
-# anchor.
+# Foundational-prefix rule: these patterns pin the chapter to position 0 regardless of LLM ordering; only the FIRST match anchors.
 FOUNDATIONAL_KEYWORDS = (
     "install",
     "installation",

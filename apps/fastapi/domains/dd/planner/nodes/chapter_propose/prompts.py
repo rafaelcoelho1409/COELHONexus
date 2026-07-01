@@ -1,5 +1,4 @@
-"""chapter_propose prompt builders — chapter proposer + USC vote picker
-+ corpus block renderers."""
+"""Prompt builders: chapter proposer + USC vote picker + corpus block renderers."""
 from __future__ import annotations
 
 from typing import Optional
@@ -17,8 +16,7 @@ from .params import (
 def _render_distillates_block(
     distillates: dict[str, dict], source_keys: list[str],
 ) -> str:
-    """Render per-doc distillates (summary + key_terms) into a token-tight
-    block for the proposer prompt."""
+    """Render distillates into a token-tight block for the proposer prompt."""
     lines: list[str] = []
     for i, key in enumerate(source_keys, 1):
         d = distillates.get(key) or {}
@@ -58,14 +56,7 @@ def build_propose_prompt(
     body_chars_per_doc: int,
     target_chapters: int,
 ) -> str:
-    """Proposer prompt. distillates=None → full-body pass-through (small N).
-    target_chapters is the adaptive per-corpus target.
-
-    LangFuse-managed override: if a prompt template named
-    `dd.planner.chapter_propose` is label-deployed in LangFuse, it wins;
-    otherwise the local f-string below renders. The local renderer is
-    always the source of truth — LangFuse is an additive override layer.
-    """
+    """Proposer prompt. distillates=None → full-body pass-through (small N). LangFuse template `dd.planner.chapter_propose` wins over local f-string when deployed; local is the source of truth."""
     if distillates is not None:
         corpus_block = _render_distillates_block(distillates, source_keys)
         corpus_label = "DOC DISTILLATES"

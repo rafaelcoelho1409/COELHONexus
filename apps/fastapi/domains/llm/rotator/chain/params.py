@@ -15,7 +15,6 @@ _ARM_COOLDOWN_S = 60.0
 _GEN_THROTTLE_S = 10.0
 
 
-# Per-chapter pinning caps per provider — distributes pins across providers.
 _PROVIDER_CHAPTER_CAPS: dict[str, int] = {
     "nvidia_nim": 2,
     "groq":       2,
@@ -25,7 +24,6 @@ _PROVIDER_CHAPTER_CAPS: dict[str, int] = {
 }
 
 
-# Surfaced verbatim by every embed/rerank entry point — actionable BYOK message.
 _NIM_REQUIRED_MSG = (
     "NVIDIA_API_KEY is not set (Settings store or env). NVIDIA NIM powers the "
     "mandatory embedding + reranking models — add your NVIDIA NIM key in "

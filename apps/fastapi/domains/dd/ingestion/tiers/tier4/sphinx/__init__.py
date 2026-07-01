@@ -1,11 +1,4 @@
-"""Sphinx-specific discovery + content-transform primitives — used by tier4.run
-to extract Sphinx/readthedocs sites comprehensively.
-
-  entities.py    — Inventory + InventoryEntity + SubPage value objects
-  inventory.py   — parse `objects.inv` (canonical entity catalog)
-  nav.py         — DOM-based toctree discovery
-  page_split.py  — split autodoc-bundled pages into per-entity sub-pages
-"""
+"""Sphinx discovery: inventory.py parses objects.inv, nav.py does DOM toctree BFS, page_split.py splits autodoc pages into sub-pages."""
 from __future__ import annotations
 
 from .entities import Inventory, InventoryEntity, SubPage

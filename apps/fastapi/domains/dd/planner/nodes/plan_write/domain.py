@@ -19,19 +19,7 @@ from .versions import PROMPT_VERSION
 
 
 def load_outline(text: str) -> dict:
-    """Parse the JSON outline written by chapter_select. Tolerates an
-    empty/malformed blob (returns ``{}`` so downstream can render an
-    empty plan rather than crash mid-run).
-
-    NORMALIZES the chapters list to the top level. chapter_select writes
-    its plan blob as `{"outline": {"chapters": [...]}, ...}` (nested),
-    while this loader's caller expects the legacy reduce-node shape
-    `{"chapters": [...]}` (flat). Without normalization, the loop at
-    plan_write/service.py:126 iterates an empty list → `cluster_keys`
-    stays empty → sanitize_chapters returns `([], 0)` → final plan
-    ships with 0 chapters even when chapter_select successfully
-    selected 4+ chapters covering 100% of docs (browser-use 2026-06-06
-    regression)."""
+    """Parse chapter_select outline; normalizes nested {"outline": {"chapters": [...]}} to flat {"chapters": [...]} — without this, plan_write ships 0 chapters (browser-use 2026-06-06 regression)."""
     try:
         d = json.loads(text or "") or {}
     except Exception:

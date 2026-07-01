@@ -32,7 +32,7 @@ def score_ucb(
     context: np.ndarray,
     alpha: float = UCB_ALPHA,
 ) -> tuple[float, float, float]:
-    """LinUCB (Li et al. ICML 2010); returns (total, exploit, explore_bonus)."""
+    """LinUCB (Li et al. ICML 2010)."""
     try:
         theta = theta_hat(cell)
     except np.linalg.LinAlgError:
@@ -119,7 +119,6 @@ def score_cell(
     rng: np.random.Generator,
     alpha: float = UCB_ALPHA,
 ) -> tuple[float, float, float]:
-    """Dispatch ucb/ts/fgts_va; returns (total, exploit, explore)."""
     if mode == "fgts_va":
         return score_fgts_va(cell, context, rng = rng)
     if mode == "ts":

@@ -12,19 +12,7 @@ from .versions import (
 
 
 class DeriveAttempt(BaseModel):
-    """Per-subtopic record. Persisted for observability + replay.
-
-    `decision`:
-        "promoted"      → derived_code accepted, written back into sawc
-                          subtopic, code_source flipped to "derived"
-        "skipped_thin"  → not thin per the heuristic (signature wasn't
-                          short enough) — left as verbatim
-        "rejected_ast"  → all MPSC samples failed Python AST parse
-        "rejected_len"  → no sample landed in the LOC band
-        "rotator_fail" → bandit rotator returned no usable response
-                          (rate-limit, timeout, content-filter)
-        "disabled"      → KD_ENABLE_SAWC_DERIVE=false, skipped at node
-    """
+    """Per-subtopic derive record; decision: 'promoted'|'skipped_thin'|'rejected_ast'|'rejected_len'|'rotator_fail'|'disabled'."""
     section_id:        str
     subheading:        str
     code_ref_hash:     str

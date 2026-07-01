@@ -6,8 +6,7 @@ KEYLM_GROUP        = "dd-keylm"
 REDUCE_LABEL_GROUP = "dd-reduce-label"
 SYNTH_GROUP        = "dd-synth"
 DD_EMBED_GROUP     = "dd-embed"
-# Curated tool-caller pool for the RR orchestrator. dd-all includes thinking
-# models + small models that struggle with the 6-phase orchestration prompt.
+# dd-all includes thinking/small models that struggle with the 6-phase orchestration prompt; rr-strong excludes them.
 RR_STRONG_GROUP    = "rr-strong"
 
 
@@ -26,7 +25,6 @@ _SETTINGS_GEN_REDIS_KEY = "dd:rotator:settings_gen"
 _JUDGE_KD_PROCESS = "dd-grader"
 
 
-# LiteLLM model-prefix → registry provider id (settings.json uses registry ids).
 _LITELLM_PREFIX_TO_PROVIDER: dict[str, str] = {
     "groq":       "groq",
     "nvidia_nim": "nim",
@@ -37,7 +35,6 @@ _LITELLM_PREFIX_TO_PROVIDER: dict[str, str] = {
     "sambanova":  "sambanova",
 }
 
-# LiteLLM model-prefix → env-var name (resolved per-deployment in cascades).
 _PROVIDER_KEY_ENV: dict[str, str] = {
     "nvidia_nim": "NVIDIA_API_KEY",
     "groq":       "GROQ_API_KEY",
@@ -49,9 +46,7 @@ _PROVIDER_KEY_ENV: dict[str, str] = {
 }
 
 
-# Providers that accept OpenAI-style response_format={"type":"json_schema",...}.
-# Gemini excluded — native API uses response_mime_type; LiteLLM translation
-# breaks on nested Pydantic schemas.
+# Gemini excluded — LiteLLM translation of response_format breaks on nested Pydantic schemas (native API uses response_mime_type).
 _RESPONSE_FORMAT_SAFE_PROVIDERS: tuple[str, ...] = (
     "nvidia_nim/",
     "mistral/",
@@ -60,15 +55,13 @@ _RESPONSE_FORMAT_SAFE_PROVIDERS: tuple[str, ...] = (
 )
 
 
-# Non-chat substring markers excluded from chat pools. The rotator's own
-# embedder lives in dd-embed (separate pool), so "embed" filter never affects it.
+# "embed" filter never affects the rotator's own embedder (lives in dd-embed, a separate pool).
 _NON_CHAT_MARKERS: tuple[str, ...] = (
     "embed", "bge", "e5-", "-e5", "gte-", "rerank", "deplot", "ocr",
     "whisper", "clip", "siglip", "-vit", "vit-", "guard", "reward",
 )
 
-# SAWC writer-pool heavyweight whitelist. Separate σ²_ewma evolution from
-# workhorses; bandit picks best heavyweight by writer-specific reward.
+# Separate σ²_ewma evolution from workhorses; bandit picks best heavyweight by writer-specific reward.
 DD_SYNTH_WRITE_HEAVYWEIGHTS: tuple[str, ...] = (
     "llama-4-maverick",
     "qwen3.5-397b",

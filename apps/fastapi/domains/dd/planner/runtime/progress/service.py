@@ -1,12 +1,4 @@
-"""Redis pub/sub for sub-node progress events (LangGraph's native checkpoint
-fires only between nodes; this surfaces mid-node events live to the UI).
-
-  emit_progress(thread_id, step, kind, **fields)
-      Publish ONE event; best-effort, Redis hiccup must NOT sink real work.
-  subscribe_progress(thread_id) -> async iterator
-      SSE side: subscribes + replays a TTL'd snapshot list so a late
-      subscriber catches up.
-"""
+"""Redis pub/sub progress for mid-node events — LangGraph checkpoints only fire between nodes, so this fills the gap for the UI."""
 from __future__ import annotations
 
 import asyncio
@@ -35,10 +27,7 @@ async def emit_progress(
     kind: str,
     **fields,
 ) -> None:
-    """`step` = planner node name, `kind` = event subtype
-    (start/batch/llm_call/done/error). Extra fields merge as-is.
-    Appends to a per-thread Redis list (capped at SNAPSHOT_MAX_EVENTS) so
-    a late SSE subscriber replays catch-up history before live events."""
+    """Publish a progress event and append to per-thread snapshot list so late SSE subscribers can replay catch-up history."""
     event = {
         "step": step,
         "kind": kind,

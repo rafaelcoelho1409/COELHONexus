@@ -1,9 +1,5 @@
-"""SAWC — Section-Aware Writer-Critic for one chapter.
-
-v2 cookbook schema: {heading, intro, subtopics: [{subheading, explanation,
-code_ref_hash}], citations}. Each subtopic renders as H3 + 1-2 sentence
-prose + ONE code block. Best-of-N drafts + critic-picker (MAMM-Refine);
-2-attempt repair loop fixes alignment violations."""
+"""SAWC — Section-Aware Writer-Critic. v2 cookbook: {heading, intro, subtopics: [{subheading, explanation, code_ref_hash}], citations}.
+Best-of-N writer drafts + critic-picker (MAMM-Refine arXiv 2503.15272); 2-attempt repair loop for alignment violations."""
 from __future__ import annotations
 from .keys import (
     digest_latest_key,
@@ -101,13 +97,7 @@ _IDENT_STOPWORDS = frozenset({
 
 
 def _ast_identifiers(code: str) -> set[str]:
-    """Best-effort identifier extraction for code-doc alignment checks.
-
-    Python-AST path covers ~80% of fastmcp/langchain examples. Falls back
-    to a regex word grab for shell/markdown/etc snippets. Stopwords are
-    dropped so common scaffolding ("self", "return", "data") doesn't
-    inflate overlap scores.
-    """
+    """Best-effort identifier extraction. Python AST covers ~80%; regex fallback for shell/markdown. Stopwords dropped so scaffolding doesn't inflate alignment scores."""
     idents: set[str] = set()
     if not code or not code.strip():
         return idents
@@ -178,11 +168,7 @@ def _prose_tokens(text: str) -> set[str]:
 
 
 def _first_lines_word_set(code: str, n_lines: int = 3) -> set[str]:
-    """Lowercased word tokens from the first N non-blank lines of code —
-    used as a softer fallback for the subheading-alignment check. Catches
-    subheadings like 'Minimal Tool with Type Hints' matching code whose
-    first line says `def list_users(ctx: Context)` (overlap via 'tool',
-    'def', etc, after we drop stopwords on both sides)."""
+    """Lowercased word tokens from first N non-blank code lines — softer fallback for subheading alignment when heading tokens match first-line tokens after stopword removal."""
     if not code:
         return set()
     out: set[str] = set()
@@ -203,10 +189,7 @@ def _first_lines_word_set(code: str, n_lines: int = 3) -> set[str]:
 
 
 def _identifier_overlap(prose: str, code: str) -> tuple[set[str], set[str]]:
-    """Return (overlap_set, code_idents). overlap_set ⊆ code_idents are
-    the identifiers the prose actually references. Case-sensitive on
-    intersection since most code identifiers ARE case-sensitive
-    (`get_access_token` ≠ `Get_Access_Token`)."""
+    """Return (overlap_set, code_idents); case-sensitive (get_access_token ≠ Get_Access_Token)."""
     code_idents = _ast_identifiers(code)
     if not code_idents:
         return set(), set()
@@ -234,22 +217,7 @@ def extract_memory_entry(
     section_contributions: list[dict],
     section_heading: str,
 ) -> MemoryEntry:
-    """Derive a compressed MemoryEntry from a freshly-written section
-    plus its digest contributions.
-
-    v1 strategy (deterministic — saves N extra LLM calls per chapter):
-      - summary: first paragraph of the section, trimmed to fit
-                  MEMORY_SUMMARY_CHARS_MAX
-      - key_terminology: extract from contributions[*].key_facts —
-                          take the first N words of each fact that
-                          looks like an API/type name (capitalized
-                          word or `code` span). Dedupe case-fold.
-
-    The shape mirrors what SurveyGen-I §3.2.2 stores in ℳ ("draft
-    content + extracted terminology") but skips the LLM-extract step
-    in favor of a digest-driven heuristic. Future: mgsr_replan can
-    upgrade to LLM-extract if needed.
-    """
+    """Build MemoryEntry deterministically (saves N LLM calls/chapter). SurveyGen-I §3.2.2 shape; mgsr_replan can upgrade to LLM-extract if needed."""
     parts: list[str] = []
     if section.intro:
         parts.append(section.intro.strip())
@@ -303,10 +271,7 @@ def extract_memory_entry(
     )
 
 
-# Cross-reference validators (post-Pydantic, fail-soft for repair loop)
-# Soft issues (quality nudges) report via .issues but don't trigger the
-# repair loop — the LLM can't reliably close them and burns budget retrying.
-# Hard issues (heading drift, hallucinated hash/source) still repair.
+# Soft issues (quality nudges) report via .issues but skip repair — LLM can't close them reliably and burns budget. Hard issues (heading drift, hallucinated hash/source) still trigger repair.
 _SOFT_ISSUE_PREFIXES = (
     "subheading↔code mismatch",
     "explanation↔code mismatch",
@@ -315,10 +280,7 @@ _SOFT_ISSUE_PREFIXES = (
 
 
 def hard_issues(issues: list[str]) -> list[str]:
-    """Filter to issues that should trigger the writer repair loop.
-    Soft quality-nudge issues are excluded — they still ship for
-    downstream visibility via the section's `.issues` field, but the
-    writer can't reliably close them in a repair cycle."""
+    """Filter to issues that trigger writer repair. Soft issues still ship in .issues for visibility but skip repair — writer can't reliably close them."""
     return [
         i for i in issues
         if not any(i.startswith(p) for p in _SOFT_ISSUE_PREFIXES)
@@ -333,24 +295,7 @@ def validate_section_against_inputs(
     valid_source_keys: set[str],
     vault_rich: dict | None = None,
 ) -> list[str]:
-    """Cross-reference rules beyond per-field Pydantic format.
-
-    Returns natural-language issue strings suitable for repair-prompt
-    feedback. Empty list = clean.
-
-    Catches:
-      - heading drift (LLM didn't echo the outline heading verbatim)
-      - hallucinated code_ref hashes (not in allowed_hashes)
-      - hallucinated citation source_keys (not in valid_source_keys)
-      - Ship E: subheading↔code identifier mismatch (subheading
-        describes a different API than the chosen code shows)
-      - Ship B: explanation↔code identifier mismatch (prose mentions
-        zero identifiers from the chosen code block)
-
-    `vault_rich`: optional dict[hash → VaultEntry-like dict] giving the
-    validator access to the actual code bodies. When None, Ship B + E
-    checks are skipped (graceful degradation — older callers still work).
-    """
+    """Cross-reference rules beyond Pydantic: heading drift, hallucinated hashes/source_keys, subheading↔code mismatch, explanation↔code mismatch. vault_rich=None skips code-body checks gracefully."""
     issues: list[str] = []
 
     if draft.heading.strip().casefold() != expected_heading.strip().casefold():
@@ -447,12 +392,7 @@ def validate_section_against_inputs(
                 if not head_overlap:
                     misaligned_sub.append(s.subheading)
 
-            # explanation↔code. Stricter than subheading —
-            # high-precision signal = an INLINE `code` span that names a
-            # code identifier. Low-precision signal = bare word tokens.
-            # A single bare-word overlap is too easy to game (every prose
-            # mentioning "FastMCP" trivially passes), so the floor is:
-            #   (any inline-backtick match) OR (≥2 distinct bare overlaps).
+            # explanation↔code: inline `code` span = high-precision; bare words = low-precision. Floor: any backtick match OR ≥2 distinct bare overlaps (1 bare is too easy to game).
             inline_prose = set()
             for tk in re.findall(r"`([^`]+)`", s.explanation):
                 for w in re.findall(r"[A-Za-z_][A-Za-z_0-9]{2,}", tk):
@@ -502,24 +442,7 @@ def score_draft_structural(
     n_primary_contribs: int,
     vault_rich: dict | None = None,
 ) -> float:
-    """Deterministic structural quality score, used as a picker fallback
-    when the critic LLM fails to return a parseable choice.
-
-    Inspired by Self-Certainty (arXiv 2502.18581) — pick by a scalar
-    quality estimate when no reward model is available. We don't have
-    logprobs from the bandit rotator, so the proxy is structural:
-
-      base = 5.0
-      − 10 × n_vault_violations
-      − 10 × n_citation_violations
-      − 5  × (heading_mismatch ? 1 : 0)
-      + 5  × min(citation_count / max(n_primary_contribs, 1), 1.0)
-      + 3  × min(paragraph_count / 5, 1.0)
-      − 2  × max(0, paragraph_count - 12)
-      + 2  × min(total_chars / 1500, 2.0)
-
-    Higher = better. Used in argmax-mode by the node.
-    """
+    """Structural quality score (Self-Certainty proxy, arXiv 2502.18581) for when critic LLM fails. Penalizes vault/citation violations and heading mismatch; rewards subtopic count + citation density + explanation length."""
     issues = validate_section_against_inputs(
         draft,
         expected_heading = expected_heading,
@@ -566,7 +489,6 @@ def score_draft_structural(
     return round(score, 3)
 
 
-# Coverage stats (deterministic aggregate)
 def compute_sawc_stats(
     sections: list[Section],
     n_stages: int,
@@ -647,10 +569,7 @@ def _format_contributions_block(contributions: list[dict]) -> str:
 
 
 def _format_memory_block(memory: list[dict]) -> str:
-    """Pretty-format the memory ledger for the writer prompt.
-
-    `memory` is a list of MemoryEntry-shaped dicts (we accept dicts so
-    callers can pass either model_dump() results or raw structures)."""
+    """Pretty-format the memory ledger for the writer prompt; accepts dicts (model_dump() or raw) to avoid callers coercing to MemoryEntry."""
     if not memory:
         return "  (this is the first stage — no prior sections yet)"
     lines: list[str] = []
@@ -692,23 +611,7 @@ def build_writer_prompt(
     prose_mode: bool = False,
     already_shown_hashes: set[str] | None = None,
 ) -> str:
-    """Build the per-section per-draft writer prompt.
-
-    Args:
-        vault_rich: optional dict[hash → VaultEntry-like dict] giving the
-            LLM full visibility into each allowed code block (Visible Vault,
-            When provided, renders `<code id = ...>{body}
-            </code>` envelopes so the LLM can pick pedagogically valuable
-            hashes from informed context. When None, falls back to plain
-            hash listing (legacy behavior).
-        prose_mode: PROSE PATH (2026-05-30). True for a conceptual section
-            with NO code in its sources (empty bank). The writer emits prose
-            subtopics (empty code_ref_hash) instead of failing to a
-            placeholder. Auto-enabled when allowed_hashes is empty.
-        already_shown_hashes: cross-section anti-recycling (Fix #3). Hashes a
-            PRIOR section of this chapter already turned into a subtopic — the
-            writer is told to reference, not re-show, them.
-    """
+    """Build the per-section writer prompt. vault_rich enables Visible Vault (LLM sees code bodies; hash-only listing otherwise). prose_mode=True when bank is empty (prose subtopics instead of placeholder). already_shown_hashes suppresses cross-section hash recycling."""
     prereqs_str = (
         ", ".join(section_prerequisites)
         if section_prerequisites
@@ -960,11 +863,7 @@ def build_critic_picker_prompt(
     n_primary_contribs: int,
     candidates_summary: list[dict],
 ) -> str:
-    """Build the MAMM-Refine-style critic picker prompt.
-
-    The critic sees only structural summaries of each candidate (counts +
-    violation flags + headings), NOT the full prose — matches outline_sdp's
-    USC pattern. Per MAMM-Refine §4: 'reranking > regeneration'."""
+    """MAMM-Refine critic (arXiv 2503.15272): structural summaries only (not full prose) — per §4, reranking > regeneration."""
     lines: list[str] = []
     for i, c in enumerate(candidates_summary):
         violations = c.get("violations") or []
@@ -1029,8 +928,7 @@ def build_repair_prompt(
     issues: list[str],
     prose_mode: bool = False,
 ) -> str:
-    """Repair prompt — same context as writer prompt, plus the
-    issue list, asking for a fixed version preserving good fields."""
+    """Repair prompt: same context as writer + issue list, requesting a corrected output."""
     prose = prose_mode or not allowed_hashes
     prereqs_str = (
         ", ".join(section_prerequisites)
@@ -1094,7 +992,6 @@ def build_repair_prompt(
     )
 
 
-# Candidate summarization for the critic prompt
 def summarize_candidate(
     draft: LLMSectionDraft,
     *,
@@ -1104,10 +1001,7 @@ def summarize_candidate(
     n_primary_contribs: int,
     vault_rich: dict | None = None,
 ) -> dict:
-    """Compact structural summary of one candidate draft for the critic
-    picker. Keeps the picker context small (~250 tokens per candidate)
-    and biases the decision toward STRUCTURE, not content (per
-    outline_sdp's same-pattern argument)."""
+    """Compact candidate summary for critic picker (~250 tokens). Biases toward structure, not content, per outline_sdp's USC pattern."""
     issues = validate_section_against_inputs(
         draft,
         expected_heading = expected_heading,
@@ -1151,17 +1045,7 @@ async def _load_chapter_vault_rich(
     slug: str,
     source_keys: list[str],
 ) -> tuple[dict[str, VaultEntry], int, int]:
-    """Returns (vault, n_loaded, n_skipped). Each value in `vault` is a
-    VaultEntry — not just the fence text — so writer prompts can render
-    full visible envelopes with lang + line_count metadata.
-
-    Resolution per source (mirrors digest's read-time fallback so both
-    nodes have identical vault visibility):
-      1. Pre-built per-source vault file at `synth-vault/{slug}/pages/...`
-      2. Runtime sentinelization of the raw ingestion page (preferred
-         fallback when the consolidated llms-full crawl built only one
-         mega-vault and individual per-page vaults are missing)
-    """
+    """Returns (vault, n_loaded, n_skipped). VaultEntry values (not just fence text) enable Visible Vault with lang+line_count. Mirrors digest's per-source fallback so both nodes have identical vault visibility."""
     from ..vault.domain import sentinelize_doc as _sentinelize_doc
 
     rich_vault: dict[str, VaultEntry] = {}
@@ -1232,14 +1116,7 @@ async def _load_chapter_vault_rich(
 def _dedupe_vault_hashes_across_sections(
     per_section_index: dict[str, list[dict]],
 ) -> tuple[int, int]:
-    """Modify `per_section_index` in-place so each vault hash appears in
-    at most one section. Returns (n_hashes_deduped, n_refs_removed).
-
-    `n_hashes_deduped` = how many distinct hashes had ≥2 section claims
-    `n_refs_removed`   = total code_ref entries removed (one hash can be
-                         removed from multiple losing sections; this is the
-                         sum over all losing sections)
-    """
+    """Modify per_section_index in-place so each vault hash appears in at most one section. Winner = strongest relevance, then smallest pool, then sorted section_id. Returns (n_hashes_deduped, n_refs_removed)."""
     from collections import defaultdict
 
     # Pass 1: for each (hash, section), find the BEST relevance any
@@ -1297,13 +1174,7 @@ def _placeholder_section(
     n_repairs: int,
     deployment_writer: Optional[str],
 ) -> Section:
-    """Returned when every writer draft + every repair attempt fails.
-    Keeps the chapter assemblable and surfaces the failure to
-    mgsr_replan via `issues`.
-
-    v2 cookbook schema: empty subtopics list signals "no code emitted";
-    the checklist density gate flags this for the mgsr→sawc loop.
-    """
+    """Fallback when all writer drafts and repairs fail. Keeps chapter assemblable; empty subtopics triggers checklist density gate → mgsr_replan retargets or merges this section."""
     return Section(
         section_id=section_id,
         heading=heading,
@@ -1341,16 +1212,7 @@ async def _write_section_best_of_n(
     prose_mode: bool = False,
     already_shown_hashes: set[str] | None = None,
 ) -> Section:
-    """Full per-section pipeline: N drafts → critic-pick → Section.
-
-    DD-SYNTH-SPEED-SOTA #4 (2026-05-26) — Optimal-Stopping BoN: fire draft 1
-    sequentially; if it passes the deterministic "good enough" gate (zero
-    violations + >=N_min subtopics + >=N_min citations), ship it directly
-    and skip the remaining N-1 drafts. Otherwise fall through to the
-    original parallel fan-out + pairwise tournament. arXiv 2510.01394
-    (Oct 2025): 15-35% sample reduction at equal Best-of-N quality.
-    Disabled via `KD_SAWC_OPTIMAL_STOPPING=false`.
-    """
+    """N drafts → critic-pick → Section. Optimal-Stopping BoN (arXiv 2510.01394): fire draft 1 first; ship directly if it passes zero-violations gate, else parallel fan-out + tournament. Disabled via KD_SAWC_OPTIMAL_STOPPING=false."""
     async with sem:
         t0 = time.monotonic()
 
@@ -1517,10 +1379,7 @@ def _compute_manifest_hash(
     digest_manifest_hash: str,
     refine_iter: int = 0,
 ) -> str:
-    """Content-addressed manifest hash for sawc cache key. Includes
-    refine_iter (2026-05-24, CoRefine loop closure) so each mgsr→sawc loop
-    iteration produces fresh drafts via bandit-routed exploration — without
-    this, the cache would short-circuit the loop with stale results."""
+    """Content-addressed cache key for SAWC. refine_iter included so each mgsr→sawc loop iteration gets fresh drafts (without it, cache short-circuits with stale results)."""
     payload = (
         f"outline={outline_manifest_hash}|"
         f"digest={digest_manifest_hash}|"
@@ -1562,14 +1421,7 @@ async def _draft_one_section(
     prose_mode: bool = False,
     already_shown_hashes: set[str] | None = None,
 ) -> tuple[Optional[_LLMSectionDraft], Optional[str], int, int]:
-    """One writer call → parse → Pydantic → cross-ref → repair.
-
-    Returns (draft, deployment, wall_ms, n_repairs). draft is None
-    on irrecoverable failure.
-
-    Emits ONE `section_draft_done` event so the UI shows progress
-    through the N=3 fan-out (real-time mechanism we established for
-    outline_sdp + digest_construct)."""
+    """One writer call → parse → Pydantic → cross-ref → repair. Returns (draft, deployment, wall_ms, n_repairs); draft=None on irrecoverable failure."""
     t0 = time.monotonic()
     allowed_hash_set = set(allowed_hashes)
     valid_source_set = set(valid_source_keys)
@@ -1594,13 +1446,7 @@ async def _draft_one_section(
 
     deployment: Optional[str] = None
     try:
-        # writer drafts use the dd-synth-write
-        # bandit pool restricted to heavyweight reasoning models.
-        # Workhorse arms (mistral-small, magistral-small, devstral-medium
-        # under medium budget) stay reserved for dd-grader filter tasks.
-        # response_format=json_schema
-        # is attached server-side for NIM/Mistral arms — repair loop below
-        # still handles Gemini and any provider slip-through.
+        # dd-synth-write pool = heavyweight reasoning models; workhorse arms reserved for dd-grader. NIM/Mistral accept response_format=json_schema server-side; Gemini handled by repair loop.
         response, meta = await chat_judge_bandit_async(
             prompt,
             max_tokens=_MAX_TOKENS_DRAFT,
@@ -1691,10 +1537,7 @@ async def _draft_one_section(
         valid_source_keys=valid_source_set,
         vault_rich=vault_rich,
     )
-    # repair only on HARD issues. Soft
-    # quality-nudge issues (subheading/explanation↔code mismatch,
-    # subtopic-shy-of-bank) still ship in .issues for downstream but
-    # don't burn the repair budget — the LLM can't reliably close them.
+    # Repair on HARD issues only; soft issues (subheading/explanation↔code mismatch) still ship in .issues but skip repair — LLM can't close them reliably.
     while hard_issues(issues) and n_repairs < _MAX_REPAIR_ATTEMPTS:
         n_repairs += 1
         repair_prompt = build_repair_prompt(
@@ -1733,8 +1576,6 @@ async def _draft_one_section(
                 valid_source_keys=valid_source_set,
                 vault_rich=vault_rich,
             )
-            # Accept ONLY if it strictly reduces violation count
-            # accept only when HARD issues strictly decreased.
             if len(hard_issues(new_issues)) < len(hard_issues(issues)):
                 draft = new_draft
                 issues = new_issues
@@ -1771,15 +1612,7 @@ async def _critic_pick_best(
     thread_id: str,
     vault_rich: dict | None = None,
 ) -> tuple[int, Optional[str], Optional[str], float]:
-    """Pairwise tournament picker. Returns
-    (chosen_idx, deployment_critic, fallback_used, structural_score).
-
-    fallback_used ∈ {None, "structural_score"} — None means at least one
-    pairwise match got a clean LLM verdict; "structural_score" means every
-    match fell back to deterministic tiebreak.
-
-    For N=3: 2 matches (knockout). For N=2: 1 match. For N=1: trivial.
-    """
+    """Pairwise tournament picker. fallback_used=None means at least one match got a clean LLM verdict; "structural_score" means all fell back to tiebreak. Returns (chosen_idx, deployment_critic, fallback_used, structural_score)."""
     summaries = [
         summarize_candidate(
             c,
@@ -1893,12 +1726,7 @@ async def _pairwise_judge_match(
     summary_a: dict,
     summary_b: dict,
 ) -> tuple[str, Optional[str]]:
-    """Run ONE pairwise match. Returns (winner_letter, deployment_critic).
-
-    winner_letter ∈ {"A", "B"}. On any parse / call failure, returns the
-    structural-score winner via deterministic tiebreak — the tournament
-    never aborts.
-    """
+    """One pairwise match → (winner_letter ∈ {"A","B"}, deployment_critic). Any parse/call failure falls back to structural-score tiebreak; tournament never aborts."""
     # Compact JSON-stringified summary keeps the prompt token-light.
     def _fmt_summary(s: dict) -> str:
         return json.dumps(
@@ -1923,9 +1751,7 @@ async def _pairwise_judge_match(
     )
 
     try:
-        # json_object forces the
-        # pairwise critic to emit valid JSON {"winner": "A"|"B", "reason": ...}
-        # without prose preamble, eliminating ~most parse-failed tiebreaks.
+        # json_object forces {"winner":"A"|"B"} without prose preamble — eliminates most parse-failed tiebreaks.
         response, meta = await chat_judge_bandit_async(
             prompt,
             max_tokens=_MAX_TOKENS_CRITIC,
@@ -2202,11 +2028,7 @@ async def sawc_write_run(state: SynthState) -> dict:
                 f"recomputing"
             )
 
-    # chapter so the writer prompt can render <code id = "..." lang = "...">
-    # {body}</code> envelopes — the LLM sees actual code instead of opaque
-    # hashes. Render-time substitution still uses the same hash → vault[id]
-    # path so byte-perfect fidelity is preserved (Deterministic Quoting,
-    # Yeung 2025; arXiv 2601.03640).
+    # Visible Vault (arXiv 2601.03640): LLM sees actual code bodies; render substitutes via hash → byte-perfect fidelity preserved.
     vault_rich, n_vaults_loaded, n_vaults_skipped = await _load_chapter_vault_rich(
         minio, slug, valid_source_keys,
     )
@@ -2234,9 +2056,7 @@ async def sawc_write_run(state: SynthState) -> dict:
             section_ids = stage_section_ids,
         )
 
-        # Freeze memory snapshot for this stage — all sections at this
-        # stage see the SAME memory (per SurveyGen-I §3.2.2: memory
-        # accumulates BETWEEN stages, not within)
+        # SurveyGen-I §3.2.2: memory accumulates between stages, not within — all sections in this stage see the same snapshot.
         memory_snapshot = [m.model_dump() for m in memory_ledger]
 
         async def _run_section(sid: str) -> Section:
@@ -2253,18 +2073,12 @@ async def sawc_write_run(state: SynthState) -> dict:
                     deployment_writer = None,
                 )
             contributions = per_section_index.get(sid) or []
-            # Allowed hashes = union of code_refs across contributions
-            # (digest-routed). Padded below from chapter-wide vault when
-            # under-routing leaves the bank thin.
             allowed_hashes_set: set[str] = set()
             for c in contributions:
                 for h in (c.get("code_refs") or []):
                     allowed_hashes_set.add(h)
-            # Gate prose_mode on PRE-pad count — post-pad would pull stray
-            # hashes into a no-code section and emit empty placeholders.
+            # Gate prose_mode on pre-pad count — post-pad would pull stray hashes into a no-code section.
             n_routed_hashes = len(allowed_hashes_set)
-            # Pad thin banks (<6 hashes) with up to 20 pedagogically-ranked
-            # chapter-wide hashes; LLM picks 3-6 via visible-vault renderer.
             _MIN_BANK_SIZE = 6
             _BANK_PAD_TO = 20
             if vault_rich and len(allowed_hashes_set) < _MIN_BANK_SIZE:
@@ -2287,8 +2101,6 @@ async def sawc_write_run(state: SynthState) -> dict:
                         f"{len(allowed_hashes_set)}"
                     )
 
-            # Re-order by pedagogical score (canonical small examples
-            # first); fall back to sorted-hash if vault is empty.
             if vault_rich:
                 allowed_hashes = _rank_hashes_by_pedagogy(
                     sorted(allowed_hashes_set), vault_rich,
@@ -2298,16 +2110,7 @@ async def sawc_write_run(state: SynthState) -> dict:
             n_primary_contribs = sum(
                 1 for c in contributions if c.get("relevance") == "primary"
             )
-            # per-section source-doc binding. Restrict
-            # citations to source docs that digest_construct actually
-            # routed to THIS section, NOT chapter-wide. Combined with
-            # U2 vault-hash dedup, this prevents the writer from citing
-            # sources that "belong to" other sections — closing the
-            # belt-and-suspenders loop on cross-section drift.
-            # Fail-safe: if a section ends up with zero contributing
-            # sources (digest under-routed), fall back to chapter-wide
-            # so the writer still has SOMETHING to cite. Empirically
-            # rare but possible on small corpora.
+            # Restrict citations to sources digest_construct routed to THIS section (not chapter-wide) to prevent cross-section drift. Fail-safe: zero-routed sections fall back to chapter-wide.
             section_source_keys: list[str] = sorted({
                 c.get("source_key", "") for c in contributions
                 if c.get("source_key")
@@ -2319,15 +2122,7 @@ async def sawc_write_run(state: SynthState) -> dict:
                     f"this section; falling back to chapter-wide "
                     f"({len(valid_source_keys)} sources) for citations"
                 )
-            # PROSE PATH: a section is
-            # conceptual/prose when the digest routed it NO real code
-            # (n_routed_hashes == 0), OR when even after Ship-A padding the
-            # bank can't sustain the minimum code subtopics (tiny no-code
-            # chapter — nothing to pad from). Gating on n_routed (not the
-            # padded bank) means a no-code section in a chapter that has a few
-            # stray hashes still goes prose instead of failing to a
-            # placeholder. Code-rich chapters are unaffected: a section with
-            # ≥1 routed hash and a paddable bank stays code-first.
+            # PROSE PATH: gate on pre-pad n_routed_hashes (not padded bank) so a no-code section with stray chapter hashes stays prose instead of failing to placeholder.
             prose_mode = (n_routed_hashes == 0) or (len(allowed_hashes) < SUBTOPICS_MIN)
             return await _write_section_best_of_n(
                 sem = sem,

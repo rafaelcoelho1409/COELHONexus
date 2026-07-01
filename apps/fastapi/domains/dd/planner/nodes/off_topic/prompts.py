@@ -1,5 +1,4 @@
-"""off_topic — LLM judge prompts + the head+tail input prep + anchor
-descriptors. Pure string templates; no I/O."""
+"""LLM judge prompts, head+tail truncation, and anchor descriptors. Pure module; no I/O."""
 from __future__ import annotations
 
 from .params import (
@@ -27,23 +26,7 @@ def build_positive_descriptor(entry: dict) -> str:
 
 
 def head_tail_truncate(body: str) -> str:
-    """Head + tail truncation (2026-05-25). For pages that fit in
-    HEAD+TAIL combined, return the full body. For longer pages, return
-    `body[:HEAD] + SEP + body[-TAIL:]` so the judge sees BOTH:
-
-      - leading content (TOC, opening paragraph, role badges) → catches
-        meta-content DROP signals like "Code of Conduct", "Sponsors",
-        "Contributing Guidelines"
-      - trailing content (license blocks, "Edit on GitHub" links,
-        changelog footers) → catches the OTHER half of DROP signals
-        currently missed by head-only truncation
-
-    Per ICLR 2025 "Lost in the Middle" work, autoregressive LLMs attend
-    most to the start AND end of the input — middle content is wasted
-    attention for binary classification. Head+tail is the structurally
-    correct shape (BERT truncation ablation arXiv 2403.12799 — head+tail
-    beats head-only by 1-3 F1 on long-doc classification).
-    """
+    """Head+tail truncation: LLMs attend most to start+end, middle is wasted attention for binary classification (arXiv 2403.12799: head+tail beats head-only by 1-3 F1). Full body when it fits."""
     s = (body or "").strip()
     if not s:
         return "(empty page)"
@@ -60,8 +43,7 @@ def head_tail_truncate(body: str) -> str:
 def build_judge_prompt(
     framework_name: str, framework_category: str, body: str,
 ) -> str:
-    """Single-shot KEEP/DROP rubric, designed to be unambiguous so the
-    model returns a clean one-word verdict at temperature=0."""
+    """Single-shot KEEP/DROP rubric; unambiguous instruction so model returns one-word verdict at temperature=0."""
     cat_clause = (
         f", a {framework_category} library/framework"
         if framework_category else ""

@@ -130,11 +130,7 @@ async def chapter_select_run(state: PlannerState) -> dict:
         if ci in docs_per_chapter:
             docs_per_chapter[ci].append(k)
 
-    # orphan-protection. Before deciding what to prune,
-    # above-threshold score. A small chapter is then prune-eligible ONLY
-    # if every one of its members has at least one alternative selected
-    # chapter to land in. Otherwise pruning silently orphans docs (the
-    # CC "Skills and Custom Commands" failure mode).
+    # Orphan-protection: only prune a small chapter if every member has ≥1 alternative above-threshold chapter (prevents "Skills and Custom Commands" type orphans).
     above_threshold_chapters: dict[str, set[int]] = {}
     for k, scores in assignments.items():
         above_threshold_chapters[k] = {

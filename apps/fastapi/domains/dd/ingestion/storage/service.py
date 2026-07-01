@@ -1,9 +1,4 @@
-"""MinIO adapter + per-framework Store. Re-runs share one canonical prefix.
-
-Manifests: Redis `dd:runs:{run_id}:manifest` (live, by run_id) vs MinIO
-`ingestion/{slug}/manifest.json` (canonical, by framework_slug). Idempotent
-`ensure_bucket()` runs from FastAPI lifespan + Celery prefork.
-"""
+"""MinIO adapter + per-framework Store. Redis manifest keyed by run_id (live); MinIO manifest keyed by framework_slug (canonical on finalize). ensure_bucket() is idempotent."""
 from __future__ import annotations
 
 import asyncio
@@ -386,10 +381,7 @@ def get_storage() -> MinIOStorage:
 
 
 class Store:
-    """Per-framework store, tagged with run_id for live-progress reads.
-
-    Bodies → canonical MinIO path (re-runs overwrite in place). Redis manifest
-    keyed by run_id (live); canonical MinIO manifest written by finalize()."""
+    """Per-framework store; re-runs overwrite canonical MinIO path in place. Redis manifest keyed by run_id (live); MinIO manifest written on finalize (canonical)."""
     def __init__(
         self,
         run_id: str,
@@ -418,12 +410,7 @@ class Store:
         tier: str,
         title: str = "",
     ) -> ManifestEntry:
-        """Stream a page to MinIO + append the live manifest. Concurrent-safe:
-        idx-assign + manifest append are locked, MinIO PUT is not.
-
-        Normalized body → `ingestion/`; raw body → `ingestion-raw/` for
-        reversibility across normalizer-version bumps.
-        """
+        """Stream page to store. idx-assign+manifest append are locked; MinIO PUT is not (concurrent writes to distinct keys). Raw body also → ingestion-raw/ for normalizer-version reversibility."""
         # Markdown-side artifact hook for tiers 1/2/3/5 (tier4 uses HTML-stage).
         if url:
             try:
@@ -509,12 +496,7 @@ class Store:
             return self._artifact_client
 
     def reorder_by_url_list(self, url_list: list[str]) -> None:
-        """Reorder manifest entries to match `url_list` (the discovery order).
-
-        Parallel fetch + idx-assign-by-completion would otherwise list pages
-        in race order, not chapter order (Bash GNU manual was the regression).
-        `entry.idx` stays unchanged — only the array order changes.
-        """
+        """Reorder manifest to discovery order; parallel fetch writes in race order, not chapter order (Bash GNU manual regression). entry.idx unchanged."""
         if not url_list or not self._cached_manifest:
             return
         url_pos = {u: i for i, u in enumerate(url_list)}

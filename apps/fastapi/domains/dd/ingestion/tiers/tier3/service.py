@@ -1,13 +1,4 @@
-"""Tier 3 — fetch a `sitemap.xml`, then each URL it lists.
-
-Supports both flat sitemaps (a list of `<url><loc>…</loc></url>`) and
-sitemap indexes (a list of `<sitemap><loc>…</loc></sitemap>` pointing to
-nested sitemaps). Recursively flattens to a single URL set.
-
-Applies a conservative doc-page filter (drop blog, news, marketing, legal,
-non-HTML assets) and a hard cap to keep the run bounded. Total page count
-becomes known after parse → indeterminate → determinate progress switch.
-"""
+"""Fetch sitemap.xml (flat or index, recursively flattened), apply doc-page filter (drop blog/news/marketing/assets), and fetch all matching pages. Progress becomes determinate after parse."""
 import asyncio
 import logging
 import time

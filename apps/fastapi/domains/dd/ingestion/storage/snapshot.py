@@ -1,8 +1,4 @@
-"""Per-framework MinIO snapshot/restore. Layout: `ingestion/{slug}/_snapshots/{ts}/`.
-
-`ts` is `YYYYMMDDTHHMMSSZ` UTC so alphabetical = chronological. Debug router
-only; not invoked by the ingestion path.
-"""
+"""MinIO snapshot/restore per framework. ts format YYYYMMDDTHHMMSSZ so alphabetical listing = chronological. Debug router only; not on the ingestion path."""
 from __future__ import annotations
 
 import asyncio

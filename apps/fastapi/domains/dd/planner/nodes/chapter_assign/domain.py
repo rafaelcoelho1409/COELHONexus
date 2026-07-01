@@ -27,12 +27,7 @@ def parse(raw: str) -> Optional[dict]:
 def fallback_assign_scores(
     doc_summary: str, doc_terms: list[str], proposals: list[dict],
 ) -> list[dict]:
-    """Lexical-overlap fallback used when the assign LLM call FAILS —
-    routes the doc to its best word-overlap chapter at threshold
-    confidence so it isn't silently dropped from the book (the
-    assign-node equivalent of the doc_distill fallback). Single-
-    membership: only the best chapter is scored. Empty when there are no
-    proposals to match against."""
+    """Lexical fallback when the assign LLM fails — routes doc to best word-overlap chapter so it isn't silently dropped."""
     if not proposals:
         return []
     dw = {

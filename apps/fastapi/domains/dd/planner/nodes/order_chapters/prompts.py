@@ -1,14 +1,11 @@
-"""order_chapters prompt builder — pedagogical-ordering rubric (domain-
-agnostic so the LLM applies general learning principles without baking
-in framework-specific biases)."""
+"""Pedagogical-ordering prompt; domain-agnostic rubric to avoid baking in framework-specific biases."""
 from __future__ import annotations
 
 from .params import DESCRIPTION_CHARS
 
 
 def _normalize_description(desc: str) -> str:
-    """Trim + clamp to keep the prompt compact (the LLM only needs a hint
-    of what each chapter covers, not the full description)."""
+    """Trim + clamp for prompt compactness; the LLM needs only a hint of each chapter."""
     s = (desc or "").strip().replace("\n", " ")
     if len(s) > DESCRIPTION_CHARS:
         return s[:DESCRIPTION_CHARS].rstrip() + "..."
@@ -16,9 +13,7 @@ def _normalize_description(desc: str) -> str:
 
 
 def build_order_prompt(chapters: list[dict]) -> str:
-    """Build the pedagogical-ordering prompt. Lists chapters by index
-    [0, 1, 2, ...] with title + description; asks the LLM to return a
-    permutation of indices in pedagogical-prerequisite order."""
+    """Build the pedagogical-ordering prompt; asks the LLM to return a permutation of chapter indices in prerequisite order."""
     chapter_block = "\n".join(
         f"[{i}] {ch.get('title', '?')!r} — "
         f"{_normalize_description(ch.get('description', ''))}"

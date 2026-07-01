@@ -1,11 +1,4 @@
-"""Celery bridge to the async LangGraph planner.
-
-Queued from `POST /api/v1/docs-distiller/planner/{slug}` and `/resume`;
-worker runs the full graph and persists checkpoints to Postgres via
-AsyncPostgresSaver. Progress streams over Redis pub/sub from worker.
-Same shape as `domains/dd/ingestion/task.py`: asyncio.run bridge + dict
-return + try/except → "failed" envelope.
-"""
+"""Celery task wrapping the async LangGraph planner; progress streams over Redis pub/sub from the worker process."""
 import asyncio
 import logging
 
@@ -77,9 +70,7 @@ async def _init_and_run(coro):
     time_limit = 3660,
 )
 def run_planner(self, thread_id: str, slug: str, mode: str = "llm") -> dict:
-    """Fresh planner pass. SSE events flow over Redis pub/sub channel
-    `dd:planner:{thread_id}:events`. Outer try/finally CAD-releases the
-    `dd:planner:lock:{slug}` single-flight lock regardless of outcome."""
+    """Fresh planner pass; CAD-releases the single-flight lock in finally regardless of outcome."""
     logger.info(
         f"[task] run_planner thread_id={thread_id} slug={slug} mode={mode}"
     )
@@ -110,10 +101,7 @@ def run_planner(self, thread_id: str, slug: str, mode: str = "llm") -> dict:
     time_limit = 3660,
 )
 def resume_planner(self, thread_id: str) -> dict:
-    """Resume from last checkpoint. Standard ainvoke(None) + catch-up
-    (missing newly-implemented nodes) handled inline. Doesn't acquire
-    the single-flight lock — picks up where a dead task left off — but
-    DOES CAD-release on completion (covers SIGKILL'd original tasks)."""
+    """Resume from last checkpoint; doesn't acquire the start lock but DOES CAD-release on completion (covers SIGKILL'd original tasks)."""
     logger.info(f"[task] resume_planner thread_id={thread_id}")
     slug = _slug_from_planner_thread_id(thread_id)
     try:

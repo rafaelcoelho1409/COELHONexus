@@ -1,5 +1,4 @@
-"""chapter_assign prompt builder — STATIC PREFIX + DYNAMIC SUFFIX shape
-for KV cache hits across providers."""
+"""Prompt builder: static rubric prefix before dynamic per-doc data for KV-cache reuse."""
 from __future__ import annotations
 
 from .params import BODY_CHARS
@@ -28,14 +27,9 @@ def build_prompt(
     else:
         body_snip = (doc_body or "")[:BODY_CHARS]
         doc_block = f"BODY (truncated):\n{body_snip}"
-    # prompt-prefix reordering for KV cache hits. The
-    # chapter list + scoring rubric are IDENTICAL across all 135+ doc
-    # calls in a single run, so they go FIRST as a cacheable prefix. The
-    # per-doc file info (the only thing that varies) goes LAST. Providers
-    # with prefix-KV-cache (Groq, Gemini implicit, DeepSeek, NIM) get
-    # warm hits after the first call.
+    # Static prefix: chapter list + rubric first (KV-cacheable across 135+ calls); per-doc info last.
     return (
-        # ── STATIC PREFIX (KV-cacheable across all docs in this corpus) ──
+        # Static prefix — KV-cacheable across all corpus calls.
         f"You are assigning ONE documentation file to chapters in a "
         f"{framework} learning book. The file may belong to multiple "
         f"chapters (multi-assignment) or none.\n\n"
@@ -53,7 +47,7 @@ def build_prompt(
         f"Cover EVERY chapter (one entry per chapter index, including "
         f"0.0 scores). Be honest — most docs only belong to 1-3 "
         f"chapters.\n\n"
-        # ── DYNAMIC SUFFIX (only thing that varies per call) ──
+        # Dynamic suffix — only thing that varies per call.
         f"== FILE: {source_key} ==\n"
         f"{doc_block}"
     )

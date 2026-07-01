@@ -11,16 +11,7 @@ def build_reexplain_prompt(
     derived_code: str,
     lang: str = "python",
 ) -> str:
-    """Ship D (2026-05-25): after MPSC promotes a derived code block,
-    the original explanation (written for the thin signature) is stale —
-    it describes APIs/params from the signature, not the expanded
-    example. This prompt regenerates the explanation conditioned on the
-    new code body.
-
-    Per the deep research (Citation-Grounded Code Comprehension arXiv
-    2512.12117): prose grounded to the resolved code beats prose
-    grounded to an imagined topic.
-    """
+    """Regenerate explanation conditioned on the promoted derived code. Prose grounded to the resolved code beats prose written for the original signature (arXiv 2512.12117)."""
     return (
         f"You are regenerating ONE documentation explanation in a "
         f"{framework} learning resource. The code block below has been "
@@ -59,19 +50,7 @@ def build_analogical_prompt(
     original_body: str,
     original_lang: str = "python",
 ) -> str:
-    """Analogical Prompting prompt — ask the LLM to first reason about a
-    relevant, expanded example by analogy, then emit it as a fenced code
-    block.
-
-    Per Yasunaga et al. 2023 ("Large Language Models as Analogical
-    Reasoners"), letting the model first describe a closely-related
-    canonical example improves derived-code quality vs. one-shot
-    generation. We don't need the reasoning text in the output — we
-    strip everything outside the final fenced block server-side.
-
-    Output contract: exactly one fenced code block in the response.
-    Anything outside the fence is discarded.
-    """
+    """Analogical Prompting (Yasunaga et al. 2023, arXiv:2310.01714): LLM reasons about a canonical example before emitting code; output contract is one fenced block (everything else stripped server-side)."""
     return (
         f"You are expanding a thin documentation reference into a "
         f"COMPLETE RUNNABLE EXAMPLE for a {framework} learning resource.\n\n"

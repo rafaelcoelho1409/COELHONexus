@@ -1,16 +1,4 @@
-"""sawc_derive — LangGraph node shell.
-
-Ship #95 (2026-05-24). Runs AFTER sawc_write commits its chapter blob
-and BEFORE checklist_eval. Scans the just-written sections for subtopics
-whose vault entry is signature-only / too thin to teach effectively,
-then fires Analogical-Prompting + MPSC (Multi-Path Self-Consistency,
-arXiv 2503.04611) to generate runnable derived examples.
-
-All orchestration lives in service.sawc_derive_run.
-
-State writes:
-  derive_stats — DeriveStats dict (counts + per-subtopic attempt records)
-"""
+"""sawc_derive — LangGraph node; all orchestration in service.sawc_derive_run."""
 from __future__ import annotations
 
 from ...runtime.observability import traced

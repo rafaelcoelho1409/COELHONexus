@@ -1,11 +1,4 @@
-"""digest_construct — LLM-assigned source-to-section routing.
-
-Per-source LLM call (LLMxMapReduce-V3 + IterSurvey paper-card schema)
-that decides which sections each source contributes to + what
-specifically. Replaces the deprecated Phase B cosine routing.
-
-See docs/SYNTH-ARCHITECTURE-SOTA-2026-05-18.md.
-"""
+"""digest_construct — LLM-assigned source-to-section routing (LLMxMapReduce-V3 + IterSurvey schema)."""
 from .domain import (
     build_per_section_index,
     compute_coverage_stats,

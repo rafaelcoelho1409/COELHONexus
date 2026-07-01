@@ -48,12 +48,7 @@ async def distill_one(
     framework: str,
     source_key: str,
 ) -> tuple[str, Optional[DocDistillate], int, bool, Optional[str]]:
-    """(source_key, distillate or None, wall_ms, used_fallback, failure_reason).
-    distillate=None only when doc has no readable content; failed LLM
-    with content gets a deterministic fallback. failure_reason is None
-    on full success, else the bucket from `classify_error` (or
-    'parse_fail' / 'validate_fail') so the operator can tell
-    rate-limit pressure from genuine schema failures."""
+    """Returns (key, distillate, wall_ms, used_fallback, failure_reason); distillate=None only for unreadable docs, never for LLM failures (uses fallback instead)."""
     async with sem:
         t0 = time.monotonic()
         try:
@@ -80,11 +75,7 @@ async def distill_one(
         distillate: Optional[DocDistillate] = None
         failure_reason: Optional[str] = None
 
-        # retry loop over TRANSIENT errors only. The
-        # bandit rotates to a different deployment on each retry, so a
-        # saturated NIM/Groq arm typically clears within one attempt.
-        # Non-transient failures (parse, validate, auth) skip the retry
-        # and fall through to the deterministic fallback immediately.
+        # Retry only transient errors — bandit rotates to a different deployment, so a saturated arm typically clears in one attempt.
         for attempt in range(MAX_TRANSIENT_RETRIES + 1):
             try:
                 # dd-reduce-label = non-reasoning pool (no <think>, 2-3× faster).

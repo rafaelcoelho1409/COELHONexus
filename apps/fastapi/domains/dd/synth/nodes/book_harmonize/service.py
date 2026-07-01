@@ -1,44 +1,7 @@
-"""book_harmonize — Cross-chapter coherence pass (2026-05-24).
-
-Runs at the study-orchestrator level AFTER all chapters' render_audit_write
-have completed. Detects definition-drift, contradictions, and terminology
-divergence between chapters. Patches violating chapters with minimal-edit
-rewrites using a canonical terminology bank.
-
-O(N) LLM calls per book — NOT O(N²). Closes the single biggest acknowledged
-gap in the Synth pipeline (DD-PIPELINE-SOTA-COMPARISON-2026-05-23 +
-KD-SYNTH-SOTA-2026-05-24).
-
-ALGORITHM (3 phases):
-  Phase 1 — Build (deterministic + N+1 LLM calls):
-    a. For each chapter: extract atomic claims (1 LLM call)
-    b. Canonicalize terminology across all chapters (1 LLM call)
-
-  Phase 2 — Detect (1 LLM call per chapter):
-    For each chapter, given (canonical terms, sibling-chapter atomic claims),
-    flag contradictions / definition-drift / terminology-divergence.
-
-  Phase 3 — Remediate (1 LLM call per FLAGGED chapter only):
-    Minimal-edit rewrite that conforms to canonical terms.
-
-  Per-chapter MinIO writes are atomic: the patched README.md overwrites only
-  if the patch passes a re-audit check (the patched content has the same code-
-  ref hashes as before — no new hallucinations).
-
-PAPER REFERENCES:
-  - SurveyGen-I Step 11 "Global Refinement" (IJCNLP 2025, arXiv:2508.14317):
-    re-prompt each chapter with book skeleton + terminology bank ℳ.
-    Ablation: removing this step drops synthesis score 0.43-0.57 points.
-  - SurveyX RAG-rewriting (arXiv:2502.14776): +0.259 composite quality.
-  - ConStory-Checker atomic-claim NLI (arXiv:2603.05890): F1=0.678, 3.2× human recall.
-
-CONSTRAINT: free-tier-only. All LLM calls flow through chat_judge_bandit_async
-(FGTS-VA bandit-routed rotator). No local inference. No paid APIs. No fine-tuning.
-"""
+"""book_harmonize — cross-chapter coherence pass (SurveyGen-I Step 11, arXiv 2508.14317)."""
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import re
@@ -57,35 +20,7 @@ from .versions import (
 logger = logging.getLogger(__name__)
 
 
-# Cache key def compute_harmonize_manifest_hash(chapters: list[dict]) -> str:
-    """Content-addressed cache key for the cross-chapter harmonization pass.
 
-    Includes:
-      - sha256 of each chapter's full prose (sorted by chapter_id)
-      - prompt_version + schema_version
-
-    On a re-run with identical chapter prose + identical prompts, the
-    manifest hash matches → caller can skip the harmonize call entirely
-    and replay the cached telemetry. After a successful patch the chapter
-    READMEs change → manifest hash changes → next run is a miss → harmonize
-    re-runs but finds no violations (idempotent) → writes a new cache
-    blob → THIRD run is a clean hit.
-    """
-    parts: list[str] = []
-    for ch in sorted(chapters, key=lambda c: c.get("chapter_id", "")):
-        cid = ch.get("chapter_id", "")
-        prose = ch.get("prose") or ""
-        prose_hash = hashlib.sha256(prose.encode("utf-8")).hexdigest()[:16]
-        parts.append(f"{cid}={prose_hash}")
-    payload = (
-        f"chapters={'|'.join(parts)}|"
-        f"prompt={BOOK_HARMONIZE_PROMPT_VERSION}|"
-        f"schema={BOOK_HARMONIZE_SCHEMA_VERSION}"
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-
-
-# Tunables
 _MAX_CLAIMS_PER_CHAPTER = 20
 _PROSE_CHARS_FOR_CLAIMS = 10000
 _PROSE_CHARS_FOR_PATCH = 16000
@@ -98,7 +33,6 @@ _PER_CHAPTER_CONCURRENCY = 4
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
-# Prompts
 _EXTRACT_CLAIMS_PROMPT = """Extract the atomic factual claims from this chapter of a distilled technical book.
 
 Atomic claim = a single verifiable assertion about the technology (e.g., "library X
@@ -197,38 +131,13 @@ Output: the full chapter prose, minimally edited. NO commentary, NO explanation,
 NO JSON wrapping — output ONLY the markdown."""
 
 
-# Main entry point
 async def harmonize_book(
     *,
     framework_slug: str,
     framework_name: str,
     chapters: list[dict],
 ) -> dict:
-    """Run the 3-phase cross-chapter harmonization pass.
-
-    Args:
-      framework_slug: short slug (e.g., "langfuse")
-      framework_name: display name (e.g., "LangFuse")
-      chapters: list of
-        {"chapter_id": str, "title": str, "prose": str}
-        — already-rendered chapter prose, fetched by the caller from MinIO.
-
-    Returns telemetry dict:
-      {
-        "n_chapters":              int,
-        "n_atomic_claims":         int,   # total claims across all chapters
-        "n_canonical_terms":       int,
-        "n_chapters_with_issues":  int,
-        "n_chapters_patched":      int,   # patches that produced output
-        "patches":                 [{"chapter_id", "n_violations",
-                                     "patched": bool, "new_prose": str | None}],
-        "elapsed_ms":              int,
-        "skipped":                 Optional[str],   # set if pass was skipped
-      }
-
-    Fail-soft: any LLM/extraction failure is logged but doesn't crash the
-    pipeline; the chapter goes through unmodified.
-    """
+    """Run the 3-phase cross-chapter harmonization pass; fail-soft per chapter."""
     import time
     t0 = time.monotonic()
 
@@ -340,7 +249,6 @@ async def harmonize_book(
     }
 
 
-# Helpers
 async def _extract_claims_and_terms(
     sem: asyncio.Semaphore, chapter: dict,
 ) -> dict:

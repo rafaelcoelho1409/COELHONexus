@@ -4,8 +4,7 @@ from __future__ import annotations
 from jinja2 import Environment, StrictUndefined
 
 
-# undefined so an unset template var crashes loudly instead of producing
-# silent `None` literals in the output.
+# StrictUndefined: unset template vars crash loudly instead of emitting silent None literals.
 JINJA_ENV = Environment(
     autoescape = False,
     undefined = StrictUndefined,

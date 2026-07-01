@@ -32,26 +32,15 @@ _RELEVANCE_RANK = {"primary": 0, "supporting": 1, "tangential": 2}
 
 
 def _best_relevance(a: str, b: str) -> str:
-    """Return the stronger of two relevance grades (primary > supporting
-    > tangential)."""
+    """Return stronger relevance grade (primary > supporting > tangential)."""
     return a if _RELEVANCE_RANK.get(a, 9) <= _RELEVANCE_RANK.get(b, 9) else b
 
 
-# Deterministic aggregation
 def build_per_section_index(
     per_source: list[SourceDigest],
     section_ids: list[str],
 ) -> dict[str, list[SectionContribution]]:
-    """Invert per-source contributions -> per-section list.
-
-    `section_ids` is the canonical list from the outline; sections with
-    zero contributions still appear as empty lists (so checklist_eval
-    can detect missing coverage easily).
-
-    Within each section, contributions are sorted by relevance
-    (primary -> supporting -> tangential), then by source_key for
-    stable ordering.
-    """
+    """Invert per-source contributions → per-section list; zero-contribution sections kept as empty lists."""
     _RELEVANCE_ORDER = {"primary": 0, "supporting": 1, "tangential": 2}
 
     per_section: dict[str, list[SectionContribution]] = {
@@ -61,8 +50,7 @@ def build_per_section_index(
         for contrib in src.contributes_to:
             if contrib.section_id in per_section:
                 per_section[contrib.section_id].append(contrib)
-            # silently drop contributions to unknown section_ids;
-            # validate_source_digest catches this for the LLM to repair
+            # unknown section_ids silently dropped; validate_source_digest catches them for repair
 
     # Stable sort within each section
     for sid in per_section:
@@ -89,34 +77,7 @@ def merge_overlapping_sections(
     containment: float = MERGE_CONTAINMENT,
     min_primary_to_defend: int = MERGE_MIN_PRIMARY_TO_DEFEND,
 ) -> tuple[list[SourceDigest], dict[str, str]]:
-    """Fold sections whose
-    PRIMARY source pools overlap heavily into a single section.
-
-    This is the definitive overlap signal the outline-time heading/embedding
-    proxy cannot see: two sections with DIFFERENT headings (e.g. ch-13's
-    "Cost Tracking" vs "OpenTelemetry Configuration") that nonetheless draw
-    on the SAME 2-3 source documents are the same scope, and the writer will
-    recycle the same code into both — which the renderer then strips into
-    hollow "see other section" cross-references.
-
-    Returns `(retagged_per_source, merged_map)` where `merged_map` is
-    `{loser_section_id: winner_section_id}`. The returned per_source has each
-    losing contribution re-tagged to its winner (deduped within each source,
-    unioning code_refs/key_facts, keeping the stronger relevance), so
-    rebuilding `build_per_section_index` over it yields the merged index with
-    losers as empty lists. Pure + deterministic given identical input.
-
-    Merge rule for a pair (BIG = more primaries, SMALL = fewer; ties broken
-    by outline order so the EARLIER/foundational section wins):
-      - Jaccard(primaries) >= `jaccard`  → strong mutual overlap, OR
-      - containment(small ⊆ big) >= `containment` AND SMALL brings fewer
-        than `min_primary_to_defend` primary sources the BIG one lacks
-        (i.e. SMALL is not independently defensible).
-    Sections with zero primaries are never a merge TARGET on their own but
-    can be folded when subsumed (containment of an empty set is treated as
-    1.0 with 0 unique). Conservative by design — render-time dedup (#1) is
-    the safety net for residual overlap.
-    """
+    """Fold sections whose PRIMARY source pools overlap by Jaccard/containment; conservative — render dedup is the safety net."""
     order = {
         s.get("section_id"): i for i, s in enumerate(outline_sections)
     }
@@ -132,7 +93,6 @@ def merge_overlapping_sections(
         return prim
 
     merged_map: dict[str, str] = {}
-    # All section_ids that currently receive any contribution.
     live_ids = {
         _resolve_merge(merged_map, c.section_id)
         for src in per_source for c in src.contributes_to
@@ -176,7 +136,6 @@ def merge_overlapping_sections(
         loser, winner = chosen
         merged_map[loser] = winner
 
-    # Collapse any transitive chains so every loser maps to a terminal winner.
     merged_map = {
         loser: _resolve_merge(merged_map, winner)
         for loser, winner in merged_map.items()
@@ -184,8 +143,6 @@ def merge_overlapping_sections(
     if not merged_map:
         return per_source, {}
 
-    # Re-tag per_source: every contribution to a loser now points to its
-    # winner; dedup contributions that collide within a single source.
     retagged: list[SourceDigest] = []
     for src in per_source:
         by_sid: dict[str, SectionContribution] = {}
@@ -226,11 +183,7 @@ def compute_coverage_stats(
     section_ids: list[str],
     all_vault_hashes: list[str],
 ) -> CoverageStats:
-    """Compute coverage metrics for downstream consumers.
-
-    `all_vault_hashes` is the union of every hash mentioned in any
-    source — used to identify orphans (hashes no contribution claims).
-    """
+    """Compute coverage metrics; all_vault_hashes identifies orphaned hashes."""
     n_sources = len(per_source)
     n_sections = len(section_ids)
 
@@ -244,9 +197,6 @@ def compute_coverage_stats(
         if not per_section.get(sid)
     ]
 
-    # Over-spread sources: claim "primary" in too many sections (suggests
-    # the LLM hallucinated relevance or the source is genuinely broad —
-    # mgsr_replan can decide whether to merge sections or accept it)
     over_spread_sources: list[str] = []
     for src in per_source:
         n_primary = sum(
@@ -255,9 +205,6 @@ def compute_coverage_stats(
         if n_primary > OVER_SPREAD_THRESHOLD:
             over_spread_sources.append(src.source_key)
 
-    # Orphan code_refs: hashes present in some source but routed to no
-    # section by anyone (whether unassigned by that source OR omitted
-    # entirely from another source's contribs)
     claimed_hashes: set[str] = set()
     for sid, contribs in per_section.items():
         for c in contribs:
@@ -265,7 +212,6 @@ def compute_coverage_stats(
     all_hashes_set = set(all_vault_hashes)
     orphan_code_refs = len(all_hashes_set - claimed_hashes)
 
-    # Avg fan-out metrics
     total_contribs = sum(len(s.contributes_to) for s in per_source)
     avg_sources_per_section = (
         sum(len(per_section.get(sid, [])) for sid in section_ids) / n_sections
@@ -293,21 +239,7 @@ def validate_source_digest(
     valid_section_ids: set[str],
     valid_vault_hashes: set[str],
 ) -> list[str]:
-    """Cross-reference validator beyond per-field schema rules.
-
-    Returns a list of natural-language issue strings suitable for
-    feeding back to the LLM as repair instructions. Empty list = clean.
-
-    Pydantic already enforces format-level rules (section_id regex,
-    hash regex, length bounds, duplicate detection). This catches
-    CROSS-source/outline invariants:
-
-      - section_ids must EXIST in the outline (not just match the regex)
-      - code_refs must EXIST in this source's vault_hashes (LLM
-        sometimes hallucinates hash values)
-      - unassigned_code_refs must also be in vault_hashes
-      - a code_ref cannot appear in BOTH a contribution AND unassigned
-    """
+    """Cross-source/outline invariant validator; returns repair instructions for the LLM."""
     issues: list[str] = []
     bad_section_ids: set[str] = set()
     bad_code_refs_per_contrib: dict[str, list[str]] = {}
@@ -366,13 +298,8 @@ def validate_source_digest(
     return issues
 
 
-# Prompts live in prompts.py — imported above
-
-
-# Helpers
 def extract_vault_hashes(md_text: str) -> list[str]:
-    """Find every vault sentinel `<code-ref hash = "..."/>` in `md_text`
-    and return the unique 16-hex hashes in order of first occurrence."""
+    """Return unique 16-hex vault sentinel hashes in order of first occurrence."""
     seen: set[str] = set()
     out: list[str] = []
     for m in VAULT_HASH_IN_TEXT_RE.finditer(md_text or ""):
@@ -384,15 +311,13 @@ def extract_vault_hashes(md_text: str) -> list[str]:
 
 
 def derive_source_title_fallback(md_text: str, source_key: str) -> str:
-    """If the LLM-emitted source_title is unusable, derive one from the
-    markdown's first H1 OR from the source_key filename."""
+    """Derive title from first H1 or source_key filename when LLM-emitted title is unusable."""
     if md_text:
         m = re.search(r"^#\s+(.+)$", md_text, re.MULTILINE)
         if m:
             title = m.group(1).strip().strip("#").strip()
             if 3 <= len(title) <= 200:
                 return title
-    # Fallback: derive from filename
     base = source_key.rsplit("/", 1)[-1] or source_key
     base = base.rsplit(".", 1)[0]
     base = re.sub(r"^\d+-", "", base)

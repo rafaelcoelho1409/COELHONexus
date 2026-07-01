@@ -1,5 +1,4 @@
-"""render — pure helpers (section context build, dedup/align, render
-templates, vault merger, audit computation, SHA hashing)."""
+"""Pure render helpers: section context build, dedup/align, chapter template rendering, vault merge, audit, and SHA hashing."""
 from __future__ import annotations
 
 import hashlib
@@ -20,7 +19,6 @@ from .prompts import (
 from .schemas import AuditResult, CodeRefResolution
 
 
-# Section context preprocessing
 def _basename(key: str) -> str:
     """Extract the last `/`-segment of a MinIO key."""
     if not key:
@@ -41,28 +39,7 @@ def build_section_context(
     resolution_log: list[CodeRefResolution],
     normalized_hashes: set[str] | None = None,
 ) -> dict:
-    """Pre-process one sawc Section (v2 cookbook schema) into the Jinja
-    template context.
-
-    Side effect: APPENDS one `CodeRefResolution` entry per subtopic
-    code_ref_hash to `resolution_log`.
-
-    Per-subtopic logic (3-tier audit, Ship #96, 2026-05-24):
-      - code_source == "verbatim" (or unset legacy): substitute from
-        vault[hash]; verify byte-drift via re-hash → tier='verbatim',
-        or 'hallucinated' on miss/drift.
-      - code_source == "derived" with derived_code: wrap derived body
-        in a fenced block; emit a Markdown caption above. AST-parse the
-        body → tier='derived', or 'hallucinated' on AST failure.
-
-    `normalized_hashes` (added 2026-06-08) is the set of vault hashes
-    whose bodies were INTENTIONALLY rewritten by the upstream LLM
-    code-block normalizer. Those entries will re-hash to a different
-    value than the SAWC-cited hash — that's an expected mutation, not
-    drift — so for those hashes we set `byte_drift=False` and tier
-    `verbatim`. Without this carve-out every normalize trips a false-
-    positive drift and fails audit_passed.
-    """
+    """Build section template context from sawc Section. Appends CodeRefResolution per subtopic to resolution_log. normalized_hashes=hashes rewritten by LLM normalizer — treated as verbatim to suppress byte-drift false-positives."""
     # Lazy import to avoid a render→sawc_derive cycle.
     from ..sawc_derive.domain import python_ast_valid as _ast_valid
 
@@ -111,9 +88,7 @@ def build_section_context(
                 fence_text = vault[h]
                 code_block = fence_text
                 if normalized_hashes and h in normalized_hashes:
-                    # Body was intentionally rewritten by the LLM
-                    # code-block normalizer — rehash WILL differ, but
-                    # that's the desired mutation, not drift.
+                    # Intentional LLM-normalizer rewrite — rehash will differ but it's not drift.
                     byte_drift = False
                     tier = "verbatim"
                 else:
@@ -166,10 +141,8 @@ def build_section_context(
     }
 
 
-# Write-path quality pass — within-chapter recycling + mismatch
 def _code_inner(code_block: str) -> str:
-    """Strip the leading ```lang line and trailing ``` fence from a
-    materialized code_block, returning the inner body. '' if not fenced."""
+    """Strip leading ```lang line and trailing ``` from a materialized code_block; returns inner body. '' if not fenced."""
     if not code_block or "```" not in code_block:
         return ""
     body = code_block.strip()
@@ -197,16 +170,7 @@ def dedupe_and_align_sections(
     *,
     drop_mismatch: bool = True,
 ) -> dict:
-    """Mutate `sections_ctx` in place; return {n_dedup, n_mismatch}.
-
-    #1 cross-section body dedup — a non-trivial code BODY that already
-       appeared in an earlier subtopic is replaced with a one-line
-       cross-reference; the first occurrence is kept. Catches the ~45%
-       within-chapter recycling that vault-HASH dedup misses.
-    #4 per-subtopic mismatch — a non-trivial code body whose identifiers
-       have ZERO overlap with its subheading+explanation is replaced
-       with a short "omitted — misrouted" note.
-    """
+    """Mutate sections_ctx in place; return {n_dedup, n_mismatch}. #1 cross-section body dedup (catches ~45% recycling that vault-hash dedup misses); #4 per-subtopic mismatch removal."""
     seen: dict[str, tuple[str, str, str]] = {}
     n_dedup = 0
     n_mismatch = 0
@@ -222,7 +186,6 @@ def dedupe_and_align_sections(
                 or len(inner) >= DEDUP_MIN_CHARS
             )
 
-            # #1 — cross-section body dedup (non-trivial bodies only)
             if nontrivial:
                 key = _norm_body(inner)
                 prev = seen.get(key)
@@ -240,7 +203,6 @@ def dedupe_and_align_sections(
                     n_dedup += 1
                     continue
 
-            # #4 — per-subtopic mismatch (kept blocks only)
             if drop_mismatch:
                 ci = _idents(inner)
                 if len(ci) >= MISMATCH_MIN_CODE_IDENTS:
@@ -263,10 +225,8 @@ def dedupe_and_align_sections(
     return {"n_dedup": n_dedup, "n_mismatch": n_mismatch}
 
 
-# Rendering — three pure transforms
 def _build_toc(sections_ctx: list[dict]) -> list[dict]:
-    """Build a nested TOC from sections_ctx for the cookbook chapter
-    template. Only emitted when there are ≥2 sections with subtopics."""
+    """Nested TOC for the chapter template; omitted when fewer than 2 sections."""
     toc = []
     for s in sections_ctx:
         subs = s.get("subtopics") or []
@@ -286,8 +246,7 @@ def render_chapter_md(
     chapter_title: str,
     sections_ctx: list[dict],
 ) -> str:
-    """Render the README.md (full cookbook chapter markdown).
-    Deterministic given identical inputs."""
+    """Render full cookbook chapter markdown. Deterministic given identical inputs."""
     toc = _build_toc(sections_ctx) if len(sections_ctx) >= 2 else []
     tpl = JINJA_ENV.from_string(CHAPTER_MD_TEMPLATE)
     md = tpl.render(
@@ -299,10 +258,8 @@ def render_chapter_md(
     return md.rstrip() + "\n"
 
 
-# Vault loading + merging
 def merge_vault_entries(per_source_manifests: list[dict]) -> dict[str, str]:
-    """Merge a list of VaultManifest dicts into a single
-    `{hash: fence_text}` lookup map. On collision the LAST source wins."""
+    """Merge per-source VaultManifest dicts into {hash: fence_text}. On collision the LAST source wins."""
     merged: dict[str, str] = {}
     for m in per_source_manifests:
         entries = (m or {}).get("entries") or {}
@@ -317,7 +274,6 @@ def merge_vault_entries(per_source_manifests: list[dict]) -> dict[str, str]:
     return merged
 
 
-# Audit computation
 def hash_block(payload: str, salt: int = 0) -> str:
     """16-hex SHA-256 prefix. MUST match `synth/vault.py:_hash_block`
     or the audit will spuriously fail."""
@@ -378,7 +334,6 @@ def compute_audit(
     )
 
 
-# Artifact hashing + manifest hash
 def sha256_bytes(content: str) -> str:
     """Full 64-char SHA-256 of the content's UTF-8 bytes."""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -399,7 +354,6 @@ def compute_manifest_hash(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-# Convenience loader
 def load_render_payload(text: str) -> dict:
     """Parse the persisted render-latest.json blob."""
     return json.loads(text)

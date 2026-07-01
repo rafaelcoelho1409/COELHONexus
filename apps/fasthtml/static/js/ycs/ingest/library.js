@@ -246,6 +246,30 @@ function renderBulkBar() {
     bar.classList.toggle("visible", n > 0);
 }
 
+function syncMasterCheckbox() {
+    const master = document.getElementById("ycs-lib-master-cb");
+    if (!master) return;
+    const rows = STATE.rows;
+    if (!rows.length) {
+        master.checked = false;
+        master.indeterminate = false;
+        return;
+    }
+    const selCount = rows.reduce(
+        (n, v) => n + (STATE.selected.has(v.video_id) ? 1 : 0), 0,
+    );
+    if (selCount === 0) {
+        master.checked = false;
+        master.indeterminate = false;
+    } else if (selCount === rows.length) {
+        master.checked = true;
+        master.indeterminate = false;
+    } else {
+        master.checked = false;
+        master.indeterminate = true;
+    }
+}
+
 function renderCount() {
     const el = document.getElementById("ycs-lib-count");
     if (el) el.textContent = String(STATE.total);
@@ -275,6 +299,7 @@ async function loadRows() {
         STATE.total = r.total || 0;
         renderRows(STATE.rows);
         renderCount();
+        syncMasterCheckbox();
     } catch (e) {
         const list = document.getElementById("ycs-lib-list");
         if (list) {
@@ -376,6 +401,7 @@ function bindRowClicks() {
         else            STATE.selected.delete(vid);
         cb.closest(".ycs-lib-row")?.classList.toggle("selected", cb.checked);
         renderBulkBar();
+        syncMasterCheckbox();
     });
     list.addEventListener("click", async (ev) => {
         const trash = ev.target.closest?.(".ycs-lib-row-trash");
@@ -466,6 +492,20 @@ function bindBulkBar() {
     });
 }
 
+function bindMasterCheckbox() {
+    document.getElementById("ycs-lib-master-cb")?.addEventListener("change", (ev) => {
+        const master = ev.target;
+        if (master.checked) {
+            for (const v of STATE.rows) STATE.selected.add(v.video_id);
+        } else {
+            for (const v of STATE.rows) STATE.selected.delete(v.video_id);
+        }
+        renderRows(STATE.rows);
+        renderBulkBar();
+        syncMasterCheckbox();
+    });
+}
+
 // ---- pipeline → library auto-refresh ---------------------------------------
 /* Debounced refresh fires on:
  *   - `ycs:pipeline:phase-done` (each phase first reaches SUCCESS so
@@ -497,6 +537,7 @@ function bindPipelineEvents() {
     bindSearch();
     bindRowClicks();
     bindBulkBar();
+    bindMasterCheckbox();
     bindPipelineEvents();
     refresh();
 })();

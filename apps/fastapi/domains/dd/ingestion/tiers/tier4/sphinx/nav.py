@@ -1,11 +1,4 @@
-"""Sphinx / readthedocs.io discovery — union of sidebar nav + article body.
-
-RTD root sitemaps are per-version only; sphinx_rtd_theme's default
-collapse_navigation hides anything below the top level; modern docs link
-sub-pages via in-body toctrees (`div.toctree-wrapper`), sphinx-design cards
-(`a.sd-stretched-link`), or inline `:doc:` refs. Sidebar OR body alone
-misses too much. Returns [] for non-Sphinx pages so Tier 4 BFS proceeds.
-"""
+"""Sphinx/RTD discovery: unions sidebar + body because RTD sitemaps are per-version only and collapse_navigation hides nested links. Returns [] for non-Sphinx pages."""
 import asyncio
 import logging
 import re
@@ -109,10 +102,7 @@ async def discover_via_toctree(
     max_depth: int = 1,
     max_pages: int = 50,
 ) -> list[str]:
-    """Sphinx/readthedocs discovery from sidebar + body, BFS-expanded on
-    section pages unless the landing sidebar already has a full tree.
-    Returns [] for non-Sphinx pages so the generic BFS is unchanged.
-    """
+    """BFS-expand sidebar+body links; skips BFS if landing sidebar has a full tree. Returns [] for non-Sphinx pages."""
 
     def _in_scope(u: str) -> bool:
         p = urlparse(u)
@@ -145,8 +135,7 @@ async def discover_via_toctree(
     if not sidebar0 and not body0:
         return []  # not a Sphinx/MkDocs site
 
-    # Insertion-order dedup — preserves toctree (author chapter) order.
-    # Sorting would alphabetize (Bash html_node would ingest Aliases before Shell-Operation).
+    # Insertion-order dedup — preserves author chapter order (sorting alphabetizes: Bash html_node regression).
     discovered: dict[str, None] = {landing_url: None}
     for src in (sidebar0, body0):
         for u in src:

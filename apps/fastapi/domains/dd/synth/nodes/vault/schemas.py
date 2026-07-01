@@ -43,10 +43,7 @@ class VaultEntry(BaseModel):
 
 
 class VaultManifest(BaseModel):
-    """Aggregate vault for one (framework, doc) pair. Persisted to MinIO
-    as `synth-vault/{framework}/{hash_algo}/{doc_sha}.vault.json` by the
-    ingestion-time builder; read by the synth graph's vault_sentinelize
-    node."""
+    """Aggregate vault for one (framework, doc) pair; persisted at synth-vault/{framework}/{hash_algo}/{doc_sha}.vault.json."""
     framework:                str
     source_key:               str
     entries:                  dict[str, VaultEntry] = Field(

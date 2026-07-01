@@ -1,12 +1,4 @@
-"""Split multi-topic Sphinx pages into virtual sub-pages.
-
-Some docs pack N discrete items into one HTML page (anchored-H2 cookbooks
-like ADTK demo.html, autodoc API refs like PyTorch Geometric utils.html).
-Without splitting, digest sees ONE source where the author meant N. When
-the structural signature matches (≥12 anchored H2s or ≥4 autodoc blocks),
-returns SubPages each carrying parent_url#anchor for traceability. Returns
-[] when neither pattern matches.
-"""
+"""Split multi-topic Sphinx pages into virtual sub-pages (≥12 anchored H2s or ≥4 autodoc blocks). Returns [] when neither pattern matches."""
 import logging
 from typing import Optional, TYPE_CHECKING
 
@@ -40,11 +32,7 @@ def maybe_split_page(
     html: str, source_url: str, parent_title: str = "",
     inventory: Optional["Inventory"] = None,
 ) -> list[SubPage]:
-    """Return virtual sub-pages or [] if the page should stay whole.
-
-    Precedence: inventory (deterministic per-entity) → autodoc (≥4 dl.py.class
-    or 1-class-with-≥4-methods) → anchor (≥12 H2 with `a.headerlink`).
-    """
+    """Split precedence: inventory (per-entity) → autodoc (≥4 dl.py.class or 1-class-N-methods) → anchor (≥12 H2). Returns [] if page stays whole."""
     if not html:
         return []
     try:
@@ -82,10 +70,7 @@ def maybe_split_page(
 
 
 def _container_for_anchor(soup: BeautifulSoup, root: Tag, anchor: str) -> Optional[Tag]:
-    """Resolve an inventory anchor id to its enclosing container.
-
-    Sphinx autodoc puts the id on `<dt>` (→ enclosing `<dl>`); narrative pages
-    use `<section>` or `<div class="section">`; older Sphinx puts it on `<h2>`."""
+    """Resolve anchor id to container: autodoc → <dt>'s parent <dl>; narrative → <section>/<div.section>; older Sphinx → <h2>."""
     node = root.find(id=anchor) or soup.find(id=anchor)
     if node is None or not isinstance(node, Tag):
         return None

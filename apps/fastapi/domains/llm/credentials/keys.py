@@ -3,8 +3,7 @@ from __future__ import annotations
 
 KEK_ENV = "KD_CREDS_KEY"
 
-# Anything outside this tuple is rejected by domain.validate_managed —
-# guards against arbitrary env-var exfiltration through set_key().
+# Only names in this tuple accepted by set_key() — blocks env-var exfiltration.
 MANAGED_KEY_ENVS: tuple[str, ...] = (
     "GROQ_API_KEY",
     "NVIDIA_API_KEY",

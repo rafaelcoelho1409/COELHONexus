@@ -1,7 +1,4 @@
-"""Imperative shell: Redis I/O, mode resolution, predict/update, slot reservations, OTel.
-
-Env (priority): KD_BANDIT_MODE={ucb,ts,fgts_va} > KD_DISABLE_BANDIT_TS=1 (→ucb) > KD_DISABLE_FGTS_VA=1 (→ts) > default fgts_va.
-"""
+"""Env kill-switches: KD_BANDIT_MODE={ucb,ts,fgts_va} > KD_DISABLE_BANDIT_TS=1 (→ucb) > KD_DISABLE_FGTS_VA=1 (→ts) > default fgts_va."""
 from __future__ import annotations
 
 import asyncio
@@ -128,7 +125,6 @@ async def init_bandit_warm_start(
     redis: "redis_aio.Redis | None",
     overwrite: bool = False,
 ) -> int:
-    """Init cells for all (deployment, dd_process) pairs from benchmark priors."""
     if redis is None or not deployments_by_step:
         return 0
     count = 0
@@ -234,7 +230,6 @@ async def predict_top_k(
     alpha: float = UCB_ALPHA,
     mode: Mode | None = None,
 ) -> list[tuple[str, float, int]]:
-    """Top-K ranking for cascade-aware routing (#1 → #2 → #3 on failure)."""
     if not candidate_deployments:
         return []
     resolved_mode = _resolve_mode(mode)
@@ -259,7 +254,6 @@ async def predict_top_k(
     return scored[: max(1, k)]
 
 
-# Thundering-herd protection (cell-level + provider-level)
 async def try_reserve(
     deployment: str,
     dd_process: str,

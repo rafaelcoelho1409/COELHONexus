@@ -1,15 +1,4 @@
-"""Substep 4 — doc_distill: LangGraph node shell.
-
-Per-doc semantic representation for the LLM-first planner. Pass-through
-for ≤80 docs; parallel LLM distillation otherwise, with deterministic
-fallback on per-doc LLM failure (Fix #4).
-
-All orchestration lives in service.doc_distill_run.
-
-State writes:
-  doc_distill_ref   — MinIO key of the JSON ({key → DocDistillate, ...})
-  doc_distill_stats — counts + cache_hit + wall_ms
-"""
+"""doc_distill node shell — parallel distillation with deterministic fallback so no content-bearing doc is silently dropped."""
 from __future__ import annotations
 
 from ...runtime.observability import traced

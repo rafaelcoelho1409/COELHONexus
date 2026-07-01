@@ -3957,6 +3957,21 @@
 }
 .ycs-lib-search:focus { border-color: var(--primary); }
 
+/* --- master checkbox header (mirrors .ycs-picker-toolbar) ---- */
+.ycs-lib-list-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.02);
+  font-size: 0.78rem;
+  color: var(--text);
+  flex-shrink: 0;
+}
+.ycs-lib-master-cb { cursor: pointer; }
+.ycs-lib-master-label { cursor: pointer; user-select: none; }
+
 /* --- row list ------------------------------------------------ */
 /* Library list = one flat surface, identical density to the Source
  * picker (Videos | Playlist | Channel). Rows are dividers, not bordered

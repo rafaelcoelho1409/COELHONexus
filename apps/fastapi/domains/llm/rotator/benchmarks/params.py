@@ -64,7 +64,6 @@ STEP_WEIGHTS: dict[str, dict[str, float]] = {
 }
 
 
-# Tie-break ordering when composite_score ties.
 PROVIDER_TIER: dict[str, int] = {
     "groq":      1,
     "cerebras":  2,
@@ -93,7 +92,6 @@ SCORE_NORMS: dict[str, tuple[float, float]] = {
 }
 
 
-# Strip tuning/format/timestamp suffixes; preserve size suffixes (-flash, -lite, -nano, -mini).
 _PROVIDER_SUFFIXES: tuple[str, ...] = (
     "-2511", "-2512", "-2510", "-2509", "-2507", "-2410", "-2409", "-2408",
     "-versatile",
@@ -133,7 +131,6 @@ _HF_FRIENDLY_PREFIXES: tuple[str, ...] = (
 )
 
 
-# OpenLM column → our score field.
 _OPENLM_COLUMN_MAP: dict[str, str] = {
     "arena elo":     "lmarena",
     "arena score":   "lmarena",
@@ -149,7 +146,6 @@ _OPENLM_COLUMN_MAP: dict[str, str] = {
 }
 
 
-# OpenEvals column → our score field.
 _OPENEVALS_BENCHMARK_MAP: dict[str, str] = {
     "mmlu_pro":             "mmlu_pro",
     "mmlu-pro":             "mmlu_pro",

@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CellState:
-    """Bandit posterior state for one (deployment, dd_process) pair; JSON-serializable."""
+    """Per-arm posterior state; JSON-serializable for Redis persistence."""
     deployment: str
     dd_process: str
     A_a: np.ndarray

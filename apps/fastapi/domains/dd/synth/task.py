@@ -1,18 +1,4 @@
-"""Celery tasks: docs distiller synth.
-
-Bridges Celery's sync execution model to the async LangGraph synth.
-Queued from the FastAPI synth endpoints; the worker picks tasks up from
-the `synth-{env}` queue, runs the per-chapter graph (or study
-orchestrator), and persists every checkpoint to Postgres via the shared
-AsyncPostgresSaver. The FastAPI SSE endpoint subscribes to the Redis
-pub/sub channels the worker publishes to, so live progress streams to
-the UI from the worker process.
-
-Three tasks (mirrors `domains/dd/planner/task.py` structurally):
-  - run_single_chapter(thread_id, slug, chapter_id, mode)
-  - resume_synth(thread_id)
-  - run_study(study_thread_id, slug, chapter_ids, mode)
-"""
+"""Celery tasks for the docs distiller synth pipeline."""
 import asyncio
 import logging
 
@@ -33,9 +19,7 @@ from .params import REDIS_CONNECT_TIMEOUT_S, REDIS_OP_TIMEOUT_S
 logger = logging.getLogger(__name__)
 
 
-# Same CAD-release pattern as the planner task — see planner/task.py for
-# the full rationale (compare-and-delete avoids a slow finally clearing
-# a lock held by a racing later start).
+# CAD-release: avoids a slow finally clearing a lock held by a racing later start.
 _CAD_RELEASE_LUA = (
     "if redis.call('GET', KEYS[1]) == ARGV[1] then "
     "return redis.call('DEL', KEYS[1]) end return 0"
@@ -43,11 +27,7 @@ _CAD_RELEASE_LUA = (
 
 
 def _slug_from_synth_thread_id(thread_id: str) -> str | None:
-    """Synth thread_ids come in two shapes:
-      - per-chapter: `docs-distiller/synth/{slug}/{uuid}`  → parts[2]
-      - study:       `docs-distiller/study/{slug}/{uuid}`  → parts[2]
-    Both store under `dd:synth:lock:{slug}` so the same release call
-    works for both. Returns None on malformed input."""
+    """Extract slug from thread_id (`docs-distiller/synth|study/{slug}/{uuid}`), or None."""
     parts = (thread_id or "").split("/", 3)
     if (
         len(parts) >= 3
@@ -59,8 +39,7 @@ def _slug_from_synth_thread_id(thread_id: str) -> str | None:
 
 
 def _release_synth_lock(slug: str, thread_id: str) -> None:
-    """Best-effort sync CAD release of `dd:synth:lock:{slug}` from the
-    task's finally block. Same shape as `_release_planner_lock`."""
+    """Best-effort sync CAD release of `dd:synth:lock:{slug}` from the task finally block."""
     if not slug or not thread_id:
         return
     try:
@@ -81,9 +60,7 @@ def _release_synth_lock(slug: str, thread_id: str) -> None:
 
 
 async def _init_and_run(coro):
-    """Per-task: ensure the AsyncPostgresSaver is open in THIS worker
-    process's interpreter (idempotent — module-scope cache guards), then
-    run the requested coroutine. Same pattern as planner/task.py."""
+    """Init checkpointer (idempotent) then run coro."""
     await init_checkpointer()
     return await coro
 
@@ -105,13 +82,7 @@ def run_single_chapter(
     chapter_id: str,
     mode: str = "quality",
 ) -> dict:
-    """Run a single-chapter synth pass. The graph emits progress events
-    via Redis pub/sub (channel `dd:synth:{thread_id}:events`) that the
-    FastAPI SSE endpoint streams to the UI.
-
-    The outer try/finally releases the global single-flight lock
-    (`dd:synth:lock:{slug}`) acquired by POST /synth/{slug}, no matter
-    how the task terminates."""
+    """Run a single-chapter synth pass; releases dd:synth:lock:{slug} on exit."""
     logger.info(
         f"[task] run_single_chapter thread_id={thread_id} slug={slug} "
         f"chapter_id={chapter_id} mode={mode}"
@@ -148,14 +119,7 @@ def run_single_chapter(
     time_limit = 3660,
 )
 def resume_synth(self, thread_id: str) -> dict:
-    """Resume a synth run from its last LangGraph checkpoint. Handles
-    standard ainvoke(None) resume + catch-up (missing newly-implemented
-    nodes) internally.
-
-    Like resume_planner: doesn't acquire the lock (resume picks up a
-    dead task's thread), but DOES CAD-release on completion so the lock
-    isn't held until its TTL after the resume finishes. CAD makes this
-    safe even if a fresh start has acquired in the meantime."""
+    """Resume from last checkpoint; CAD-releases the lock so a racing fresh start is safe."""
     logger.info(f"[task] resume_synth thread_id={thread_id}")
     slug = _slug_from_synth_thread_id(thread_id)
     try:
@@ -193,14 +157,7 @@ def run_study(
     chapter_ids: list[str],
     mode: str = "quality",
 ) -> dict:
-    """Run the strict-order study orchestrator (Bundle 6) for `slug`.
-    Each chapter runs to completion before the next starts. After the
-    chapter loop, runs `book_harmonize` if ≥2 chapters completed.
-
-    Outer try/finally releases the global single-flight lock acquired by
-    POST /synth/{slug} (study branch). Per-chapter runs spawned by the
-    orchestrator do NOT acquire individual locks — they run within the
-    umbrella of this study's lock."""
+    """Run strict-order study orchestrator; releases dd:synth:lock:{slug} on exit."""
     logger.info(
         f"[task] run_study study_thread_id={study_thread_id} slug={slug} "
         f"n_chapters={len(chapter_ids)} mode={mode}"

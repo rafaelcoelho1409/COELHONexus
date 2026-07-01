@@ -1,5 +1,4 @@
-"""mgsr — pure helpers (halt cascade, validators, JSON parse, manifest
-hash, fallback decision builder)."""
+"""mgsr — pure helpers: halt cascade, validators, JSON parse, manifest hash."""
 from __future__ import annotations
 
 import json
@@ -22,13 +21,8 @@ from .schemas import (
 from .versions import MGSR_PROMPT_VERSION, MGSR_SCHEMA_VERSION
 
 
-# Trivial-pass fast path
 def is_trivial_pass(checklist: dict) -> bool:
-    """Fast-path predicate: chapter already passed the checklist, no
-    replan needed. Avoids the LLM call entirely.
-
-    Per the SOTA doc threshold: pass_rate ≥ 0.80 is shippable.
-    """
+    """True when chapter already passed at ≥ 0.80; skips LLM call."""
     if not checklist:
         return False
     if not bool(checklist.get("chapter_passed", False)):
@@ -54,9 +48,7 @@ def build_trivial_pass_decision(pass_rate: float) -> MGSRDecision:
 
 
 def fallback_decision(reason: str) -> MGSRDecision:
-    """Conservative fallback when the LLM call fails irrecoverably.
-    Emit no actions + halt the pipeline. Pipeline continues to
-    render_audit_write with the current chapter as-is."""
+    """Conservative halt when LLM call fails irrecoverably; renders chapter as-is."""
     return MGSRDecision(
         halt = True,
         halt_reason = "confidence_high",  # conservative
@@ -71,23 +63,13 @@ def fallback_decision(reason: str) -> MGSRDecision:
     )
 
 
-# Halt-reason derivation (when LLM was consulted)
 def derive_halt_reason(
     payload: LLMReplanPayload,
     *,
     iteration: int = 0,
     budget: int = 5,
 ) -> tuple[bool, HaltReason]:
-    """Combine the LLM's emitted `halt` flag with confidence-based and
-    budget-based halt rules. Returns (halt, halt_reason).
-
-    Halt cascade (in priority order):
-      1. iteration ≥ budget → budget_exhausted
-      2. confidence ≥ CONFIDENCE_HIGH_THRESHOLD → confidence_high
-      3. halt==true + no actions → no_actions_needed
-      4. halt==true + actions emitted → confidence_high (LLM said halt)
-      5. Otherwise (v1) → v1_no_loop
-    """
+    """Halt cascade: budget_exhausted → confidence_high → no_actions_needed → v1_no_loop."""
     if iteration >= budget:
         return True, "budget_exhausted"
     if payload.confidence >= CONFIDENCE_HIGH_THRESHOLD:
@@ -99,7 +81,6 @@ def derive_halt_reason(
     return True, "v1_no_loop"
 
 
-# Cross-reference validators (post-Pydantic, fail-soft for repair loop)
 def validate_actions_against_outline(
     actions: list[ReplanAction],
     *,
@@ -137,7 +118,6 @@ def validate_actions_against_outline(
                     f"{bad_prereqs} don't exist in the outline."
                 )
 
-        # Simulate action's effect on `available` for next iteration
         if a.action == "delete":
             available -= set(a.targets)
         elif a.action == "merge":
@@ -147,7 +127,6 @@ def validate_actions_against_outline(
     return issues
 
 
-# JSON helpers
 def parse_json_response(text: str) -> Optional[dict]:
     if not text:
         return None

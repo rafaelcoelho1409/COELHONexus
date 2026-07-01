@@ -1,5 +1,4 @@
-"""book_harmonize — LLM prompt templates (extract / canonicalize /
-detect / patch) for the cross-chapter coherence pass."""
+"""Prompt templates: extract/canonicalize/detect/patch for cross-chapter coherence pass."""
 from __future__ import annotations
 
 

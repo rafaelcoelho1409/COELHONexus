@@ -9,11 +9,5 @@ import re
 HASH_RE = re.compile(r"^[0-9a-f]{16}$")
 SECTION_ID_RE = re.compile(r"^s\d{1,3}$")
 
-# Hash-only matcher — mirrors vault/patterns.py SENTINEL_HASH_RE. The
-# strict `"\s*/>` anchor that was here previously failed to match
-# every sentinel with a `lang="…"` attribute, which is the default vault
-# emits for any fenced block with a language tag (`<code-ref hash="X"
-# lang="python"/>`). Result: `extract_vault_hashes` returned [] for
-# every section → `valid_hash_set` empty → digest LLM forced to emit
-# `code_refs=[]` via repair → SAWC saw `n_routed_hashes=0` everywhere →
+# Hash-only matcher — the strict `/>` anchor was wrong when lang="..." is present; must match <code-ref hash="X" lang="python"/> too.
 VAULT_HASH_IN_TEXT_RE = re.compile(r'<code-ref hash="([0-9a-f]{16})"')

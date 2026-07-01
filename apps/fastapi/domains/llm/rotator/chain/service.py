@@ -1,11 +1,4 @@
-"""Unified LLM Router — LiteLLM-backed with fail-fast pre-call checks.
-
-SECURITY: litellm pinned to 1.83.12 (v1.82.7/1.82.8 compromised 2026-03-24).
-Do NOT allow litellm>=1.82.7,<1.83.0.
-
-Dynamic catalog (DD_DYNAMIC_CATALOG=1 default): discovery + benchmarks → top-K
-per step. Static fallback on failure. BYOK filter applied via `*_current()`.
-"""
+"""SECURITY: litellm pinned to 1.83.12 (v1.82.7/1.82.8 compromised 2026-03-24); do NOT allow >=1.82.7,<1.83.0."""
 from __future__ import annotations
 
 import asyncio
@@ -88,10 +81,7 @@ from ..observability.domain import system_for_deployment
 logger = logging.getLogger(__name__)
 
 
-# Patch openai SDK max_retries=0 process-wide. litellm 1.83.13 hardcodes
-# `data.pop("max_retries", 2)` and strips per-call `max_retries` in the param
-# mapper, so every Router attempt was silently 3 SDK retries × per-deployment
-# timeout. Owned-at-SDK-boundary is the only knob that reaches this path.
+# litellm 1.83.13 hardcodes max_retries=2 in param mapper; patching SDK __init__ is the only knob that reaches this path.
 try:
     import openai as _openai_sdk
 
@@ -133,15 +123,13 @@ _settings_gen_read_at: float = 0.0
 _arm_cooldown: dict[str, float] = {}
 
 
-# Per-loop cap on in-flight bandit-routed LLM calls. WeakKeyDict so the
-# semaphore is GC'd with the loop (each Celery task gets its own asyncio.run).
+# WeakKeyDict: semaphore is GC'd with the loop (each Celery task gets its own asyncio.run).
 import weakref as _weakref
 _RR_LLM_SEM_BY_LOOP: _weakref.WeakKeyDictionary = _weakref.WeakKeyDictionary()
 
 
 def _get_rr_llm_sem() -> asyncio.Semaphore:
-    """Per-loop semaphore capping concurrent bandit-routed RR LLM calls.
-    KD_RR_SEM env overrides (default 8)."""
+    """KD_RR_SEM env overrides (default 8); per-loop so each Celery asyncio.run() gets its own."""
     loop = asyncio.get_running_loop()
     sem = _RR_LLM_SEM_BY_LOOP.get(loop)
     if sem is None:
@@ -265,8 +253,7 @@ def _sambanova_entry(group: str, model: str, timeout_s: int = 120) -> dict:
 
 
 def _keylm_entries() -> list:
-    """Two-deep small-LM rotator for KeyLLM cluster labeling. NIM-only;
-    3B is fallback after NIM 40 RPM saturated on 28-cluster bursts."""
+    """3B is fallback for 28-cluster bursts that saturate NIM 40 RPM."""
     return [
         _nim_entry(KEYLM_GROUP, "meta/llama-3.2-1b-instruct", timeout_s = 30),
         _nim_entry(KEYLM_GROUP, "meta/llama-3.2-3b-instruct", timeout_s = 45),
@@ -274,7 +261,7 @@ def _keylm_entries() -> list:
 
 
 def _reduce_label_entries() -> list:
-    """Non-reasoning rotator for REDUCE labeling/ordering. Fastest LPU/TPU first."""
+    """Non-reasoning only; fastest LPU/TPU first."""
     return [
         _groq_entry(REDUCE_LABEL_GROUP,    "llama-3.3-70b-versatile",                    timeout_s=60),
         _gemini_entry(REDUCE_LABEL_GROUP,  "gemini-3.1-flash-lite",                      timeout_s=60),
@@ -288,21 +275,16 @@ def _reduce_label_entries() -> list:
 
 
 def _synth_entries() -> list:
-    """Hybrid reasoning + non-reasoning pool for hierarchical_synth Phase C.
-    Reasoning first (structured-output completeness gates post-synth audit);
-    non-reasoning Tier 2/3 absorb cooldown."""
+    """Reasoning-first: structured-output completeness gates post-synth audit."""
     return [
-        # Tier 1: Frontier reasoning
         _nim_entry(SYNTH_GROUP, "moonshotai/kimi-k2.6",                         timeout_s = 180),
         _nim_entry(SYNTH_GROUP, "z-ai/glm-5.1",                                 timeout_s = 180),
         _nim_entry(SYNTH_GROUP, "minimaxai/minimax-m2.7",                       timeout_s = 180),
         _nim_entry(SYNTH_GROUP, "deepseek-ai/deepseek-v4-flash",                timeout_s = 180),
-        # Tier 2: Frontier non-reasoning
         _mistral_entry(SYNTH_GROUP, "mistral-large-latest",                     timeout_s = 120),
         _nim_entry(SYNTH_GROUP, "mistralai/mistral-large-3-675b-instruct-2512", timeout_s = 120),
         _nim_entry(SYNTH_GROUP, "nvidia/nemotron-3-super-120b-a12b",            timeout_s = 120),
         _nim_entry(SYNTH_GROUP, "openai/gpt-oss-120b",                          timeout_s = 120),
-        # Tier 3: Deep-tail cooldown absorbers
         _mistral_entry(SYNTH_GROUP, "mistral-medium-latest",                    timeout_s = 120),
         _mistral_entry(SYNTH_GROUP, "mistral-small-latest",                     timeout_s = 90),
         _nim_entry(SYNTH_GROUP, "meta/llama-4-maverick-17b-128e-instruct",      timeout_s = 120),
@@ -310,8 +292,7 @@ def _synth_entries() -> list:
 
 
 def _embed_entries() -> list:
-    """Single-entry embedding group — rotating providers breaks cosine
-    geometry within a study. NIM requires encoding_format."""
+    """Single-entry: rotating providers breaks cosine geometry. NIM requires encoding_format."""
     return [
         {
             "model_name": DD_EMBED_GROUP,
@@ -327,7 +308,6 @@ def _embed_entries() -> list:
 
 
 def _require_nim_key() -> str:
-    """Resolved NVIDIA NIM key or raise — NIM is mandatory for embed+rerank."""
     key = resolve_key("NVIDIA_API_KEY")
     if not key:
         raise RuntimeError(_NIM_REQUIRED_MSG)
@@ -338,9 +318,7 @@ def embed_via_router_sync(
     texts: list[str],
     input_type: str = "passage",
 ) -> list[list[float]]:
-    """Sync batch-embed via dd-embed. input_type: "passage" for indexed docs,
-    "query" for short anchor strings — asymmetric models lose 3-8 cosine pts
-    on the wrong head."""
+    """input_type "passage"/"query" — asymmetric models lose 3-8 cosine pts on the wrong head."""
     if not texts:
         return []
     _require_nim_key()
@@ -375,7 +353,7 @@ async def embed_via_router_async(
     input_type: str = "passage",
     on_batch=None,
 ) -> list[list[float]]:
-    """Async embed. on_batch is fire-and-forget — callback errors swallowed."""
+    """on_batch is fire-and-forget; callback errors swallowed."""
     if not texts:
         return []
     _require_nim_key()
@@ -419,8 +397,7 @@ async def chat_judge_async(
     max_tokens: int = 8,
     temperature: float = 0.0,
 ) -> str:
-    """Single-shot dd-all Router judge. Prefer chat_judge_bandit_async for
-    repeated calls — lets the bandit learn arm reliability."""
+    """Prefer chat_judge_bandit_async for repeated calls (bandit needs observations)."""
     router = _get_router()
     messages = [{"role": "user", "content": prompt}]
     async with genai_completion_span(
@@ -441,11 +418,7 @@ async def chat_judge_async(
 
 
 def _bump_dd_llm_counter(response, deployment: str | None = None) -> dict | None:
-    """Best-effort DD node-level LLM accounting.
-
-    The DD counter module no-ops unless a Planner/Synth node wrapper has
-    set attribution context, so this is safe for RR/YCS/settings callers.
-    """
+    """No-ops unless a Planner/Synth node wrapper has set attribution context."""
     try:
         from domains.dd.runtime.llm_counter import bump_current_call
         return bump_current_call(response=response, deployment=deployment)
@@ -458,7 +431,7 @@ def _bump_dd_llm_counter(response, deployment: str | None = None) -> dict | None
 
 
 async def _redis_for_bandit():
-    """Lazy Redis client for ParetoBandit. None on env-misconfig."""
+    """None on env-misconfig."""
     if "REDIS_HOST" not in os.environ:
         return None
     host = os.environ["REDIS_HOST"].strip()
@@ -493,14 +466,7 @@ async def chat_judge_bandit_async(
     candidate_filter=None,
     response_format: dict | None = None,
 ) -> tuple[str, dict]:
-    """Bandit-routed single-shot judge cascading top-K via direct
-    litellm.acompletion (bypasses Router shuffle). Submits reward per attempt.
-    Falls back to Router-shuffle on infra failure.
-
-    dd_process: bandit-cell namespace; default "dd-grader". Pass "dd-synth-write"
-    for SAWC writer drafts. candidate_filter excludes BEFORE predict_top_k.
-    response_format attaches ONLY to _RESPONSE_FORMAT_SAFE_PROVIDERS.
-    """
+    """Bypasses Router shuffle; response_format only for _RESPONSE_FORMAT_SAFE_PROVIDERS."""
     await ensure_dynamic_catalog()
     effective_process = dd_process or _JUDGE_KD_PROCESS
     _prune_arm_cooldown()
@@ -677,9 +643,7 @@ async def chat_judge_bandit_async(
 async def rerank_via_router_async(
     query: str, documents: list[str], top_n: int | None = None,
 ) -> list[tuple[int, float]]:
-    """Cross-encoder rerank via NIM hosted API. Returns (orig_index, logit) desc.
-    NIM logits are raw (~[-12, +12]); caller thresholds. Direct httpx — NIM
-    rerank API isn't OpenAI-compat."""
+    """NIM logits are raw (~[-12, +12]); direct httpx — NIM rerank API isn't OpenAI-compat."""
     if not documents:
         return []
     api_key = _require_nim_key()
@@ -714,29 +678,21 @@ async def rerank_via_router_async(
 
 
 def _rr_strong_entries() -> list:
-    """Curated 9-arm strong-tier pool for the RR orchestrator. All 120B+
-    frontier tool-callers proven on dd-synth. Order only affects predict_top_k
-    tie-break (lowest n_obs first). Smaller arms (17B-49B) excluded due to
-    phantom-completion mode. SambaNova + Cerebras excluded — their "free"
-    tier requires payment method / returns 404."""
+    """Smaller arms excluded (phantom-completion); SambaNova/Cerebras "free" tier requires payment / returns 404."""
     return [
-        # Tier 1: NIM frontier reasoning (4)
         _nim_entry(RR_STRONG_GROUP,     "moonshotai/kimi-k2.6",                          timeout_s = 120),
         _nim_entry(RR_STRONG_GROUP,     "z-ai/glm-5.1",                                  timeout_s = 120),
         _nim_entry(RR_STRONG_GROUP,     "minimaxai/minimax-m2.7",                        timeout_s = 120),
         _nim_entry(RR_STRONG_GROUP,     "deepseek-ai/deepseek-v4-flash",                 timeout_s = 120),
-        # Tier 2: NIM frontier non-reasoning (3)
         _nim_entry(RR_STRONG_GROUP,     "nvidia/nemotron-3-super-120b-a12b",             timeout_s = 120),
         _nim_entry(RR_STRONG_GROUP,     "openai/gpt-oss-120b",                           timeout_s = 120),
         _nim_entry(RR_STRONG_GROUP,     "mistralai/mistral-large-3-675b-instruct-2512",  timeout_s = 120),
-        # Tier 3: Mistral direct (2)
         _mistral_entry(RR_STRONG_GROUP, "mistral-large-latest",                          timeout_s = 120),
         _mistral_entry(RR_STRONG_GROUP, "mistral-medium-latest",                         timeout_s = 120),
     ]
 
 
 def _all_entries() -> list:
-    """Static dd-all fallback. Strict benchmark order."""
     return [
         _nim_entry(GROUP, "z-ai/glm-5.1",                                  timeout_s = 120),
         _nim_entry(GROUP, "minimaxai/minimax-m2.7",                        timeout_s = 120),
@@ -762,7 +718,6 @@ def _all_entries() -> list:
 
 
 def _read_selection(force: bool = False) -> dict:
-    """The user's BYOK selection blob. force=True bypasses the store's TTL cache."""
     try:
         return get_store().read_settings(force = force) or {}
     except Exception:
@@ -770,8 +725,7 @@ def _read_selection(force: bool = False) -> dict:
 
 
 def _apply_selection_filter(entries: list[dict]) -> list[dict]:
-    """Trim entries to the user's enabled providers + selected models.
-    No-empty guard: empty result → keep entries unchanged."""
+    """No-empty guard: empty result after filter → keep entries unchanged."""
     sel = _read_selection()
     if not sel:
         return entries
@@ -785,9 +739,7 @@ def _apply_selection_filter(entries: list[dict]) -> list[dict]:
     return out
 
 
-# Hard-blocklist of NIM models that 404 with "Function not found for account"
-# on every call. LiteLLM 1.83's RetryPolicy lacks NotFoundErrorRetries so a
-# Router pick on these arms terminates the cascade. Retire when LiteLLM > 1.85.
+# LiteLLM 1.83's RetryPolicy lacks NotFoundErrorRetries; a Router pick on these arms terminates the cascade.
 _ACCOUNT_INACCESSIBLE_BLOCKLIST: frozenset[str] = frozenset({
     "nvidia/llama-3.1-nemotron-ultra-253b-v1",
     "nvidia/nemotron-4-340b-instruct",
@@ -811,8 +763,7 @@ def mark_inaccessible(model_id: str) -> None:
 
 
 def _apply_inaccessibility_filter(entries: list[dict]) -> list[dict]:
-    """Drop arms in static + runtime inaccessibility blocklists. Substring
-    match on `litellm_params.model`. No-empty guard."""
+    """No-empty guard: empty result after filter → keep entries unchanged."""
     blocklist = _ACCOUNT_INACCESSIBLE_BLOCKLIST | frozenset(_RUNTIME_INACCESSIBLE_MODELS)
     if not blocklist:
         return entries
@@ -836,10 +787,7 @@ def _apply_inaccessibility_filter(entries: list[dict]) -> list[dict]:
     return out
 
 
-# Auto-retry Router subclass — catches `litellm.NotFoundError`, parses the
-# failing model out of error text, marks it inaccessible, refreshes Router,
-# retries. Subclassing (not wrapping) ChatLiteLLMRouter because DeepAgents'
-# `resolve_model` does `isinstance(BaseChatModel)`; a wrapper would fail.
+# Subclassing (not wrapping) because DeepAgents' resolve_model does isinstance(BaseChatModel); a wrapper would fail.
 import re as _re
 _MODEL_RE = _re.compile(r"litellm\.acompletion\(model=([^)\s]+)\)")
 _NIM_PREFIX_RE = _re.compile(r"nvidia_nim/([\w./-]+)")
@@ -857,10 +805,7 @@ _GROUP_NAMES: frozenset[str] = frozenset({
 
 
 def _extract_model_from_error(err_text: str, exc: BaseException | None = None) -> str | None:
-    """Pull failing model id from a litellm exception. Returns bare model id
-    so it round-trips through _apply_inaccessibility_filter's substring match.
-    Tries exception attrs (rejecting group aliases), then log-line, prose,
-    bare-prefix matches."""
+    """Returns bare model id for substring match in _apply_inaccessibility_filter."""
     if exc is not None:
         for attr in ("model", "llm_provider"):
             val = getattr(exc, attr, None)
@@ -885,11 +830,7 @@ _MAX_NOTFOUND_RETRIES = 6
 
 
 def _flatten_thinking_content(messages):
-    """Flatten list-shaped content on AI/Tool/HumanMessage so providers
-    declaring `content: str` (Cerebras/Mistral/Groq) don't reject list-form
-    thinking blocks. Without this, cascade exhausts → IndexError at
-    langchain_core/chat_models.py:508. LiteLLM's modify_params handles
-    orphaned tool_calls but does NOT strip list-content."""
+    """Without this, cascade exhausts → IndexError at langchain_core/chat_models.py:508 (Cerebras/Mistral/Groq reject list-content)."""
     out = []
     for m in messages:
         if not isinstance(m.content, list):
@@ -903,7 +844,6 @@ def _flatten_thinking_content(messages):
                     t = block.get("text") or ""
                     if t:
                         texts.append(t)
-                # thinking/reasoning/redacted_thinking/image/tool_use blocks dropped.
             elif isinstance(block, str):
                 if block:
                     texts.append(block)
@@ -919,7 +859,7 @@ def _flatten_thinking_content(messages):
             }
             out.append(AIMessage(content=new_content, **kept))
         elif isinstance(m, ToolMessage):
-            # tool_call_id is REQUIRED to link the tool result back to AIMessage.
+            # tool_call_id REQUIRED to link result back to AIMessage.
             kept = {
                 k: getattr(m, k)
                 for k in ("tool_call_id", "name", "id", "status",
@@ -935,21 +875,14 @@ def _flatten_thinking_content(messages):
             }
             out.append(HumanMessage(content=new_content, **kept))
         else:
-            # Unknown subclass — pass through unchanged.
             out.append(m)
     return out
 
 
 class _RotatorAutoRetryRouter(ChatLiteLLMRouter):
-    """ChatLiteLLMRouter subclass with three cross-provider survival fixes:
-    (1) flatten thinking-block list-content so non-list-tolerant providers
-    don't 400; (2) catch NotFoundError → mark_inaccessible → retry; (3)
-    surface real deployment id (e.g. `nvidia_nim/openai/gpt-oss-120b`) in
-    `response_metadata["model_name"]` instead of the group alias."""
+    """Survival fixes: flatten thinking-block content; catch NotFoundError→mark_inaccessible; surface real deployment id in response_metadata."""
 
     def _create_chat_result(self, response, **params):
-        """Augment parent's ChatResult with the real deployment id from
-        response["model"]."""
         result = super()._create_chat_result(response, **params)
         try:
             real_model = None
@@ -1085,7 +1018,7 @@ class _RotatorAutoRetryRouter(ChatLiteLLMRouter):
                         messages, stop=stop, run_manager=run_manager, **kwargs,
                     )
                 except Exception as e:
-                    # is_eol_error covers NotFoundError(404) + 410/deprecated paths.
+                    # is_eol_error covers 404/410/deprecated.
                     if not (isinstance(e, litellm.NotFoundError) or is_eol_error(e)):
                         raise
                     last_err = e
@@ -1093,8 +1026,7 @@ class _RotatorAutoRetryRouter(ChatLiteLLMRouter):
                     if model:
                         mark_inaccessible(model)
                     else:
-                        # Unidentified deployment (NIM hides model behind a UUID) —
-                        # force a reshuffle; Router's allowed_fails will demote it.
+                        # NIM hides model behind a UUID; Router's allowed_fails will demote it.
                         logger.warning(
                             f"[rotator-retry] EOL-class error on attempt "
                             f"{attempt+1} from unidentified deployment; forcing "
@@ -1102,8 +1034,7 @@ class _RotatorAutoRetryRouter(ChatLiteLLMRouter):
                         )
                     self.router = _get_router()
                     continue
-                # Empty generations (Gemini policy filter, parse glitch, {"choices":[]})
-                # would crash at langchain_core/chat_models.py:508 — treat as soft fail.
+                # Empty generations (Gemini policy filter, {"choices":[]}) → soft fail to avoid crash at chat_models.py:508.
                 if not result.generations or not result.generations[0]:
                     logger.warning(
                         f"[rotator-retry] empty generations on attempt {attempt+1}; "
@@ -1248,11 +1179,7 @@ class _RotatorAutoRetryRouter(ChatLiteLLMRouter):
 
 
 class _BanditRoutedRotatorChain(_RotatorAutoRetryRouter):
-    """RR-only: replaces simple-shuffle with FGTS-VA per LLM turn. Mirrors
-    chat_judge_bandit_async's cascade but preserves tool_calls so DeepAgents
-    subagent loops work unchanged. Falls back to parent simple-shuffle when
-    bandit infra is unavailable or all ranked arms fail. Gated by
-    KD_RR_BANDIT_CHAT at factory time."""
+    """FGTS-VA per LLM turn with tool_calls preserved; falls back to simple-shuffle when bandit infra unavailable."""
 
     # Separate cell from dd-* so RR rewards/penalties don't leak into DD scoring.
     _RR_DD_PROCESS = RR_STRONG_GROUP
@@ -1271,8 +1198,6 @@ class _BanditRoutedRotatorChain(_RotatorAutoRetryRouter):
     async def _agenerate_inner(
         self, messages, stop=None, run_manager=None, **kwargs,
     ):
-        """Bandit cascade body — split out so `_agenerate` wraps with the
-        per-loop concurrency semaphore."""
         rds = await _redis_for_bandit()
         if rds is None:
             return await super()._agenerate(
@@ -1335,7 +1260,6 @@ class _BanditRoutedRotatorChain(_RotatorAutoRetryRouter):
                     messages, stop=stop, run_manager=run_manager, **kwargs,
                 )
 
-            # bind_tools injects tools/tool_choice via kwargs.
             tools          = kwargs.get("tools")
             tool_choice    = kwargs.get("tool_choice")
             temperature    = kwargs.get("temperature", getattr(self, "temperature", 0.0))
@@ -1357,7 +1281,6 @@ class _BanditRoutedRotatorChain(_RotatorAutoRetryRouter):
                         provider = (
                             deployment_id.split("/", 1)[0] if "/" in deployment_id else ""
                         )
-                        # Per-provider cap: skip at-cap arms; cascade advances naturally.
                         provider_cap = _RR_PROVIDER_CAPS.get(provider, 8)
                         if inflight.get(provider, 0) >= provider_cap:
                             logger.debug(
@@ -1430,10 +1353,7 @@ class _BanditRoutedRotatorChain(_RotatorAutoRetryRouter):
                                     attempt_span.attach_chat_response(response)
                                     latency_s = float(time.monotonic() - t0)
 
-                                    # langchain-litellm's `_create_chat_result` does
-                                    # `params["metadata"]` → KeyError if absent. Router's
-                                    # `_prepare_params_for_router` injects that on the normal
-                                    # path; bypassing Router we provide an empty dict ourselves.
+                                    # _create_chat_result needs params["metadata"]; bypassing Router we supply an empty dict.
                                     result = self._create_chat_result(response, metadata={})
 
                                     if not result.generations or not result.generations[0]:
@@ -1526,7 +1446,6 @@ class _BanditRoutedRotatorChain(_RotatorAutoRetryRouter):
                                     )
                                     continue
                         finally:
-                            # Release provider slot on success/fail/skip.
                             inflight[provider] = max(
                                 0, inflight.get(provider, 0) - 1
                             )
@@ -1549,15 +1468,13 @@ class _BanditRoutedRotatorChain(_RotatorAutoRetryRouter):
                 pass
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        """Sync path defers to parent simple-shuffle. Bandit selection is
-        async-only (the actual hot path)."""
+        """Bandit selection is async-only; sync path falls back to simple-shuffle."""
         return super()._generate(
             messages, stop=stop, run_manager=run_manager, **kwargs,
         )
 
 
 def _redis_sync_conn():
-    """Sync Redis client for the settings-gen counter."""
     if "REDIS_HOST" not in os.environ:
         return None
     host = os.environ["REDIS_HOST"].strip()
@@ -1578,7 +1495,6 @@ def _redis_sync_conn():
 
 
 def _read_settings_gen() -> int:
-    """Throttled sync read of the Redis settings-generation counter."""
     global _settings_gen_cache, _settings_gen_read_at
     now = time.monotonic()
     if _settings_gen_read_at and (now - _settings_gen_read_at) < _GEN_THROTTLE_S:
@@ -1602,8 +1518,7 @@ def _read_settings_gen() -> int:
 
 
 def reset_rotator(*, bump_gen: bool = True) -> int:
-    """Drop Router + pinned caches; INCR Redis gen so other processes rebuild
-    on their next access. Returns the new gen."""
+    """INCR Redis gen so other processes rebuild on their next access."""
     global _router_instance, _settings_gen_local, _settings_gen_cache, _settings_gen_read_at
     _router_instance = None
     _pinned_chain_cache.clear()
@@ -1629,10 +1544,7 @@ def reset_rotator(*, bump_gen: bool = True) -> int:
 
 
 def _get_router() -> Router:
-    """Build the unified LiteLLM Router once per process. Shared state in
-    Redis (cooldown cache + per-deployment TPM/RPM tracking) so all Celery
-    workers see the same circuit-breaker state. Rebuilds when settings-gen
-    counter moves so BYOK edits propagate without a redeploy."""
+    """Rebuilds when settings-gen moves so BYOK edits propagate cluster-wide without a redeploy."""
     global _router_instance, _settings_gen_local
     gen = _read_settings_gen()
     if _router_instance is not None and gen == _settings_gen_local:
@@ -1646,8 +1558,7 @@ def _get_router() -> Router:
         _pinned_chain_cache.clear()
         _pinned_to_parent.clear()
     _settings_gen_local = gen
-    # num_retries = cascade length; retry_policy caps per-error;
-    # allowed_fails_policy is the CIRCUIT BREAKER (separate from retries).
+    # allowed_fails_policy is the CIRCUIT BREAKER (separate from retry_policy).
     CASCADE_DEPTH = 40
     retry_policy = RetryPolicy(
         AuthenticationErrorRetries = CASCADE_DEPTH,
@@ -1679,9 +1590,7 @@ def _get_router() -> Router:
                 if pw:
                     redis_kwargs["redis_password"] = pw
     _router_instance = Router(
-        # Combined model_list — all groups share the cooldown circuit-breaker
-        # + Redis state. Chat pools honor BYOK via *_current(); infra pools
-        # (dd-keylm, dd-embed) are unconditional.
+        # All groups share cooldown circuit-breaker + Redis state; infra pools (dd-keylm, dd-embed) are unconditional.
         model_list=(
             _all_entries_current()
             + _reduce_label_entries_current()
@@ -1694,8 +1603,7 @@ def _get_router() -> Router:
         enable_pre_call_checks = True,
         allowed_fails = 3,
         allowed_fails_policy = allowed_fails_policy,
-        # 120s > free-tier rate-limit windows (30-60s) — avoids race where a
-        # re-picked arm 429s on retry while pool absorbs the extra cooldown.
+        # 120s > free-tier rate-limit windows (30-60s) — avoids re-picked arm 429ing during pool absorption.
         cooldown_time = 120,
         retry_policy = retry_policy,
         num_retries = CASCADE_DEPTH,
@@ -1706,33 +1614,29 @@ def _get_router() -> Router:
     return _router_instance
 
 
-# Factories default to dd-all at T=0.0. T=0.7 for Self-Refine (Madaan 2023 §2).
+# T=0.7 for Self-Refine (Madaan 2023 §2).
 def build_llm_fallback_chain(groq_timeout_s: int = 120, nim_timeout_s: int = 300):
-    """General-purpose dd-all chain at T=0.0. Auto-retry on NIM 404 via
-    mark_inaccessible. DeepAgents-compatible (BaseChatModel subclass)."""
+    """DeepAgents-compatible (BaseChatModel subclass); auto-retries NIM 404 via mark_inaccessible."""
     return _RotatorAutoRetryRouter(
         router = _get_router(), model = GROUP, temperature = 0.0,
     )
 
 
 def build_rr_strong_chain():
-    """Strong-tier RR-orchestrator chain. Rollback target for KD_RR_BANDIT_CHAT=false."""
+    """Rollback target for KD_RR_BANDIT_CHAT=false."""
     return _RotatorAutoRetryRouter(
         router = _get_router(), model = RR_STRONG_GROUP, temperature = 0.0,
     )
 
 
 def build_rr_strong_chain_bandit():
-    """Bandit-routed strong-tier chain (default RR path). FGTS-VA per turn
-    instead of simple-shuffle; tool_calls/response_format passthrough preserved.
-    Falls back to simple-shuffle on Redis unavailable or arm-cascade exhausted."""
+    """FGTS-VA per turn; falls back to simple-shuffle when Redis unavailable or all arms exhausted."""
     return _BanditRoutedRotatorChain(
         router = _get_router(), model = RR_STRONG_GROUP, temperature = 0.0,
     )
 
 
 def build_resolver_llm_chain(groq_timeout_s: int = 30, nim_timeout_s: int = 60):
-    """Resolver chain — dd-all at T=0.0."""
     return ChatLiteLLMRouter(
         router = _get_router(),
         model = GROUP,
@@ -1740,7 +1644,6 @@ def build_resolver_llm_chain(groq_timeout_s: int = 30, nim_timeout_s: int = 60):
 
 
 def build_synth_fallback_chain(groq_timeout_s: int = 120, nim_timeout_s: int = 300):
-    """Synth + curator chain. DD_USE_SYNTH_POOL=1 routes to dd-synth pool."""
     use_synth_pool = (
         "DD_USE_SYNTH_POOL" in os.environ
         and os.environ["DD_USE_SYNTH_POOL"].strip().lower() in ("1", "true", "yes")
@@ -1753,18 +1656,15 @@ def build_synth_fallback_chain(groq_timeout_s: int = 120, nim_timeout_s: int = 3
 
 
 def build_synth_pool_chain():
-    """Explicit dd-synth factory regardless of env."""
     return ChatLiteLLMRouter(
         router = _get_router(),
         model = SYNTH_GROUP,
         temperature = 0.0)
 
 
-# Per-chapter pin. Without pinning, refine iters saw different models per iter,
-# so "you missed hash X" feedback couldn't act on output it didn't generate.
+# Without pinning, refine iters saw different models per iter — "you missed hash X" feedback was actionless.
 def pick_synth_deployment(seed: int) -> str:
-    """Deterministic round-robin over dd-synth (seed=chapter.number).
-    Fallback when bandit pinning fails."""
+    """Fallback when bandit pinning fails."""
     entries = _synth_entries_current()
     if not entries:
         raise RuntimeError("SYNTH_GROUP is empty — cannot pin a deployment")
@@ -1779,8 +1679,7 @@ async def pick_synth_deployment_bandit(
     vault_size: int = 0,
     has_thinking_budget: bool = False,
 ) -> str:
-    """Bandit-driven chapter-pin. Top-K cascade with atomic provider-slot +
-    deployment-slot reservations. Falls back to round-robin on Redis failure."""
+    """Top-K cascade with atomic provider-slot + deployment-slot reservations; falls back to round-robin."""
     await ensure_dynamic_catalog()
     entries = _synth_entries_current()
     if not entries:

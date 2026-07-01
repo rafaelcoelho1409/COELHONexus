@@ -1,8 +1,4 @@
-"""embed_corpus I/O shell — HF tokenizer + chunking + embed_corpus_run.
-
-Tokenizer is a process-singleton from the `tokenizers` Rust wheel (~3 MB,
-deterministic BPE lookup, NO model weights / NO inference — preserves the
-no-local-inference architecture rule)."""
+"""embed_corpus I/O shell; tokenizer is a process-singleton from the `tokenizers` Rust wheel (BPE lookup only, no weights — preserves no-local-inference rule)."""
 from __future__ import annotations
 
 import logging
@@ -71,12 +67,7 @@ def _char_chunks(body: str) -> list[str]:
 
 
 def chunk_doc(body: str) -> list[str]:
-    """Split body into ≤TOKEN_TARGET-token chunks via exact-tokenizer
-    encode → slice → decode. Char-fallback (CHUNK_CHARS_FALLBACK, ≤8192
-    tokens at 1.0 char/token worst case) on tokenizer-load failure.
-
-    No sentence boundaries — naive fixed-size beat semantic 69%→54% on
-    the Vecta 2026 RAG benchmark."""
+    """Token-exact chunking via encode→slice→decode; naive fixed-size wins over semantic splitting (Vecta 2026: 69%→54%)."""
     if not body:
         return [" "]
     tok = get_tokenizer()

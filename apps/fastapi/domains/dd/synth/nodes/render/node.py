@@ -1,15 +1,4 @@
-"""Step 9 — render_audit_write: LangGraph node shell.
-
-Materialize chapter markdown + audit + persist. The only synth node with
-ZERO LLM calls. Pure deterministic transform + cryptographic vault
-round-trip audit.
-
-All orchestration lives in service.render_audit_write_run.
-
-State writes:
-  chapter_path  — MinIO key of the README.md (or "" on skip/failure)
-  chapter_stats — audit verdict + sizes + counts + cache_hit
-"""
+"""render_audit_write — LangGraph node; zero LLM calls, deterministic vault round-trip. All orchestration in service.render_audit_write_run."""
 from __future__ import annotations
 
 from ...runtime.observability import traced

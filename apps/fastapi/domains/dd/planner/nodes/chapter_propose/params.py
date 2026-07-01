@@ -4,28 +4,14 @@ from __future__ import annotations
 import os
 
 
-# Chapter-count bounds (Pydantic-enforced ABSOLUTE limits). The per-corpus
-# TARGET is adaptive (see `domain.target_chapters_for_n_docs`). The schema
-# range is wide so the proposer can land anywhere the adaptive target
-# points; the prompt + optimal-stopping floor steer it to the right count
-# for the corpus.
+# Schema range wide so the adaptive target can land anywhere; prompt + optimal-stopping floor steer the final count.
 PROPOSALS_MIN = 4
 PROPOSALS_MAX = 30   # was 18 — capped large corpora into mega-chapters
                      # (LangChain 777 docs → 13 ch / 57 docs-per-ch).
                      # Raised so the adaptive target (≤24) is never
                      # schema-clipped.
 
-# Adaptive chapter-count target .
-# Previously the proposer aimed for a FIXED 4-18 regardless of corpus
-# size, so big corpora got too few chapters → mega-chapters that bind the
-# synth section ceiling (LangChain ch-01 = 184 docs / 10 sections / 18
-# docs-per-section). Anchored to the corpora that decomposed WELL (~8-11
-# docs/chapter):
-#   browser-use 44 → ~5
-#   langfuse 97 → ~9
-#   claude-code 140 → 13 (exact)
-#   langchain 777 → 24 (≈32 docs/ch, healthy) instead of 13 (57 docs/ch)
-# Sub-linear via the ceiling so a huge corpus stays a sane book size.
+# Adaptive target: fixed 4-18 caused mega-chapters on large corpora (LangChain 777 docs → 57 docs/ch instead of 32).
 PROPOSALS_DIVISOR = 11        # ~docs per chapter (anchors CC 140 → 13)
 PROPOSALS_TARGET_FLOOR = 5
 PROPOSALS_TARGET_CEILING = 24
@@ -43,13 +29,7 @@ TEMPERATURE_VOTE    = 0.0
 
 MAX_REPAIR_ATTEMPTS = 1
 
-# Optimal-Stopping (CGES arXiv 2511.02603). Fire sample
-# 0 first; if it parses cleanly AND emits ≥ OPTIMAL_STOPPING_MIN_PROPOSALS,
-# in the best case (sample 0 clean). Same pattern as outline_sdp's
-# `OUTLINE_OPTIMAL_STOPPING_*`.
-# Absolute floor of 6; the NODE scales this up to ~0.7×(adaptive target)
-# per corpus so a large corpus doesn't early-stop on a too-small sample-0
-# (e.g. target 24 → effective floor ~17). Small corpora keep 6.
+# Optimal-stopping (CGES 2511.02603): node scales floor to ~0.7×adaptive_target so large corpora don't early-stop on a small sample-0.
 OPTIMAL_STOPPING_MIN_PROPOSALS = 6
 OPTIMAL_STOPPING_ENABLED = (
     os.environ["KD_PROPOSE_OPTIMAL_STOPPING"].lower()

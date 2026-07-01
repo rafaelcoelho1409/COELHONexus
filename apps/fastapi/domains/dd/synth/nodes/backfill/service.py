@@ -1,26 +1,4 @@
-"""Vault + corpus-normalize backfills.
-
-Run on pages that were ingested BEFORE the corresponding `add_page` hooks
-started persisting these artifacts. Idempotent + per-page best-effort.
-
-Vault backfill:
-  build .vault.json + .sentinelized.md for every existing page; pages with
-  both blobs already present are skipped.
-
-Normalize backfill:
-  run corpus_normalize on every page, write the normalized body back over
-  the canonical `ingestion/{slug}/pages/...md`, preserve the raw at
-  `ingestion-raw/`, and force-rebuild the vault on the normalized body
-  (existing vaults are stale post-normalize — different bytes, different hashes).
-
-Usage (one-shot via kubectl exec):
-
-    kubectl exec -n coelhonexus-dev <pod> -c coelhonexus-fastapi -- \\
-      python -c "import asyncio; \\
-                 from domains.dd.synth.nodes.backfill import \\
-                   backfill_all_normalize; \\
-                 asyncio.run(backfill_all_normalize())"
-"""
+"""Vault + corpus-normalize backfills for pages ingested before the add_page hooks ran."""
 from __future__ import annotations
 
 import asyncio
@@ -161,10 +139,7 @@ backfill_all = backfill_all_vaults
 async def _normalize_one(
     slug: str, page_key_str: str, sem: asyncio.Semaphore,
 ) -> tuple[str, str]:
-    """Normalize one page in place: read body → write raw to ingestion-raw/
-    → normalize → write back to canonical → rebuild vault on the normalized
-    body. Idempotent because normalize_doc is idempotent.
-    Returns (page_slug, status) ∈ {'normalized', 'unchanged', 'error'}."""
+    """Normalize one page in place; returns (page_slug, status ∈ {'normalized','unchanged','error'})."""
     async with sem:
         parsed = _parse_page_key(page_key_str)
         if parsed is None:

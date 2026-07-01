@@ -1,23 +1,4 @@
-"""Synth LangGraph — per-chapter sequential nodes, AsyncPostgresSaver-checkpointed.
-
-Each chapter gets its own thread_id and its own graph invocation. The
-router fans out one graph per chapter when `/synth/{slug}` is hit (or
-runs exactly one when `/synth/{slug}/{chapter_id}` is hit).
-
-Reuses the planner's shared AsyncPostgresSaver — both pipelines write
-into the same `checkpoints` tables but threads are namespaced by
-`thread_id` prefix (`docs-distiller/planner/...` vs
-`docs-distiller/synth/...`) so they coexist cleanly.
-
-Incremental rollout matches the planner pattern:
-
-  NODE_ORDER  — canonical 6-substep catalog from
-                docs/SYNTH-ARCHITECTURE-SOTA-2026-05-18.md
-  IMPLEMENTED — prefix-contiguous subset wired into the runtime
-  NODE_REGISTRY — name → coroutine table
-  NODE_TO_FIELD — primary state output field per node (for /resume's
-                  catch-up path; mirrors planner.NODE_TO_FIELD)
-"""
+"""Synth LangGraph — per-chapter sequential nodes; shares AsyncPostgresSaver with planner (same tables, namespaced by thread_id prefix)."""
 from __future__ import annotations
 
 import logging
@@ -65,8 +46,7 @@ NODE_REGISTRY = {
     "render_audit_write": render_audit_write,
 }
 
-# Primary state field each node writes — used by /resume's catch-up
-# detector (mirror planner.NODE_TO_FIELD).
+# Primary state field each node writes — used by /resume's catch-up detector.
 NODE_TO_FIELD = {
     "outline_sdp":        "outline_path",
     "digest_construct":   "digest_path",
@@ -90,14 +70,7 @@ IMPLEMENTED = (
 
 
 def _route_after_mgsr(state: SynthState) -> str:
-    """Conditional routing after mgsr_replan. Returns the next node name.
-
-    CoRefine-style halting (2026-05-24) thresholds live in params.py:
-      - CHECKLIST_THRESHOLD — pass_rate above this → render (success)
-      - MAX_REFINE_ITER     — iter cap → render (budget exhausted)
-      - PLATEAU_DELTA       — Δscore below this at iter≥2 → render (plateau)
-      - NO_RECOVERY_FLOOR   — iter≤1 + score<floor → render (no-recovery)
-    """
+    """CoRefine halting: success / budget / plateau / no-recovery → render; else loop."""
     stats = state.get("checklist_stats") or {}
     score = float(stats.get("pass_rate", 0.0) or 0.0)
     refine_iter = int(state.get("refine_iter", 0) or 0)
@@ -149,12 +122,7 @@ def _route_after_mgsr(state: SynthState) -> str:
 
 
 def build_graph():
-    """Build + compile the synth graph with the shared AsyncPostgresSaver.
-    Only nodes listed in IMPLEMENTED are wired.
-
-    The mgsr_replan node has a conditional outgoing edge (CoRefine halting):
-    loops back to sawc_write while the chapter has budget AND score < 0.80.
-    """
+    """Build + compile the synth graph with the shared AsyncPostgresSaver."""
     active = [n for n in NODE_ORDER if n in IMPLEMENTED]
     if not active:
         raise RuntimeError(

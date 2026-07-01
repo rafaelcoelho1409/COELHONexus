@@ -1,15 +1,4 @@
-"""Tier 2 — fetch a `llms.txt` index, then each URL it points to.
-
-`llms.txt` is the AnswerDotAI spec: a markdown file containing a structured
-list of `- [Title](url): description` links to the documentation pages.
-Parse the index, dedupe, then fetch each page concurrently (semaphore-bound)
-and extract markdown. Pages that already serve markdown (Mintlify-style
-`.md` URLs, `text/markdown` content-type) are passed through; HTML pages go
-through the extractor.
-
-Total page count is known after the index is parsed → progress switches
-from indeterminate → determinate at that moment.
-"""
+"""Fetch llms.txt index (AnswerDotAI spec), then all linked pages concurrently. Markdown responses pass through; HTML goes through the extractor. Progress becomes determinate after index parse."""
 import asyncio
 import logging
 import time

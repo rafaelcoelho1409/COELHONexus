@@ -1,19 +1,4 @@
-"""Identifier + key-builder surface shared across the synth package.
-
-Redis namespaces:
-  dd:synth:{thread_id}:cancel             → per-thread cancel flag
-  dd:synth:{thread_id}:events             → pub/sub event channel
-  dd:synth:{thread_id}:events:snapshot    → catch-up replay list
-  dd:synth:lock:{slug}                    → single-flight start lock
-  dd:study:current:{slug}                 → live-study registry
-
-MinIO keys:
-  synth/{slug}/study-timing-latest.json
-  synth/{slug}/{chapter_id}/README.md
-  synth/{slug}/{chapter_id}/render-latest.json
-  synth/{slug}/book_harmonize/{manifest_hash}.json
-  synth/{slug}/book_harmonize-latest.json
-"""
+"""Redis + MinIO key builders for the synth pipeline."""
 from __future__ import annotations
 
 import os
@@ -51,8 +36,7 @@ def active_study_key(slug: str) -> str:
 
 
 def study_timing_key(slug: str) -> str:
-    """MinIO key for the persisted study timing roll-up — survives a UI
-    refresh so totals show for finished or cached studies."""
+    """MinIO key for study timing roll-up — persisted so totals survive a UI refresh."""
     return f"synth/{slug}/study-timing-latest.json"
 
 

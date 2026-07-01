@@ -1,9 +1,4 @@
-"""Async orchestration: tier dispatch, fallthrough, post-process, finalize.
-
-Cancel is cooperative — tier modules call `progress.raise_if_cancelled()`;
-the watcher coroutine also pre-empts blocking awaits. Lock TTL (35 min)
-outlives Celery soft_time_limit (30 min) so a crashed task self-releases.
-"""
+"""Cancel is cooperative (progress.raise_if_cancelled + watcher pre-empts blocking awaits). Lock TTL (35 min) outlasts Celery soft_time_limit (30 min) so crashed tasks self-release."""
 from __future__ import annotations
 
 import asyncio
@@ -61,9 +56,7 @@ async def _cancel_watcher(
     main_task: asyncio.Task,
     poll_interval_s: float = CANCEL_POLL_S,
 ) -> None:
-    """Pre-empts blocking awaits (Crawl4AI `arun_many` can block 30-60s).
-    Bypasses Progress throttle by calling `is_cancelled()` directly — sleep
-    is the rate limit."""
+    """Bypasses Progress throttle (calls is_cancelled() directly; sleep is the rate limit). Crawl4AI arun_many can block 30-60 s."""
     try:
         while not main_task.done():
             try:
@@ -120,8 +113,7 @@ async def run(run_id: str, slug: str) -> dict:
 
 
 async def _run_inner(run_id: str, slug: str) -> dict:
-    """Run ingestion for `slug` under `run_id`. Framework lock is held by
-    `run_id` on entry (acquired in POST /runs); released in `finally`."""
+    """Framework lock held by run_id on entry (acquired in POST /runs); released in finally."""
     catalog = index_by_slug()
     entry = catalog.get(slug)
     if entry is None:
@@ -228,7 +220,6 @@ async def _run_inner(run_id: str, slug: str) -> dict:
 
         await progress.raise_if_cancelled()
 
-        # Tier returned 'done'; UI must wait for post + finalize.
         await progress.start(tier = "post", total = 0)
 
         post_summary = await post.apply_to_store(store)
@@ -247,7 +238,6 @@ async def _run_inner(run_id: str, slug: str) -> dict:
 
         await progress.start(tier = "finalize", total = 0)
 
-        # Canonical manifest — written only on success.
         await store.finalize(extra = {
             "framework_name": entry["name"],
             "tier_kind":      base_result["tier_kind"],
@@ -266,20 +256,14 @@ async def _run_inner(run_id: str, slug: str) -> dict:
         }
 
     except (IngestCancelled, asyncio.CancelledError):
-        # Watcher path → CancelledError; cooperative path → IngestCancelled.
         logger.info(f"[dispatch] {slug}: cancelled by user (run_id={run_id})")
-        # CRITICAL: stop the watcher BEFORE cleanup. Otherwise its poll loop
-        # (cancel-flag still set in Redis) fires a SECOND main_task.cancel()
-        # mid-cleanup → CancelledError raised inside delete_prefix → cleanup
-        # aborts with leftover MinIO objects (observed: 428 stragglers).
+        # CRITICAL: stop watcher BEFORE cleanup — poll loop fires a second main_task.cancel() mid-cleanup, raising CancelledError inside delete_prefix and leaving MinIO stragglers (observed: 428).
         watcher_task.cancel()
         try:
             await watcher_task
         except (asyncio.CancelledError, Exception):
             pass
-        # Two-pass cleanup: tier 2/3/4a stream in parallel and may finish
-        # MinIO writes AFTER cancel but BEFORE gather unwinds. Settle gap
-        # lets in-flight writes finish; second sweep catches stragglers.
+        # Two-pass cleanup: in-flight MinIO writes complete after cancel but before gather unwinds; settle gap lets them finish, second sweep catches stragglers.
         n1 = await _cleanup_framework(minio, slug)
         await asyncio.sleep(CLEANUP_SETTLE_S)
         n2 = await _cleanup_framework(minio, slug)

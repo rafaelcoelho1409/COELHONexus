@@ -1,10 +1,4 @@
-"""Tier 2 — pre-compiled regex for llms.txt link parsing.
-
-Two link styles seen in llms.txt files:
-  A) `- [Title](https://url)`           — canonical markdown link (most sites)
-  B) `- Title (extra): https://url`     — bare-URL bullet (Supervision, others)
-      also matches `- Title: https://url` (no parens)
-"""
+"""Compiled regex for llms.txt: LINK_MD_RE for [title](url), LINK_BARE_RE for bare-URL bullet `title: https://...` (Supervision style)."""
 from __future__ import annotations
 
 import re

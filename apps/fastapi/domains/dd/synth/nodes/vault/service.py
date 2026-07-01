@@ -1,16 +1,4 @@
-"""I/O orchestrator for vault sentinelization.
-
-Pure-function helpers (`sentinelize_doc`, `materialize`, `audit_roundtrip`,
-`format_entry_for_prompt`, `format_entries_for_prompt`,
-`score_entry_pedagogy`, `rank_hashes_by_pedagogy`, `build_manifest`,
-`_hash_block`, `_make_sentinel`, `_parse_info_string`) live in
-`.domain` and are re-exported via `__init__.py`. This module owns ONLY
-the async MinIO read path that falls back to runtime sentinelization
-for per-source vaults missing from the pre-built ingestion artifacts.
-
-For the why-vaults-at-all rationale + audit dimensions, see `.domain`
-+ `docs/SYNTH-ARCHITECTURE-SOTA-2026-05-18.md` (step 5).
-"""
+"""Async MinIO read path for vault sentinelization; falls back to runtime sentinelization when per-page vaults are missing from ingestion artifacts."""
 from __future__ import annotations
 
 import json as _json
@@ -19,40 +7,13 @@ from .domain import sentinelize_doc
 from .schemas import VaultEntry
 
 
-# CRITICAL FIX — read-time vault provisioning
-# Root-cause discovery: ingestion produces per-page markdown files at
-# `ingestion/{slug}/pages/{idx}-{slug}.md` but the vault builder only ran
-# on the consolidated `llms-full.txt` crawl, producing exactly ONE
-# `synth-vault/{slug}/pages/0000-gofastmcp-com-llms-full.vault.json` for
-# all 335 fastmcp pages. When digest_construct calls extract_vault_hashes
-# on individual ingestion pages they have NO sentinels → digest LLM emits
-# empty code_refs → sawc has zero allowed_hashes per section → final
-# chapter has zero code blocks.
-# Surgical fix: lazy per-source sentinelization. When a per-source vault
-# file doesn't exist on MinIO, run sentinelize_doc on the raw ingestion
-# page at read time. This populates the runtime vault for downstream
-# nodes WITHOUT requiring an ingestion-pipeline rebuild.
+# CRITICAL: ingestion vault builder only ran on consolidated llms-full.txt (not per-page), so individual pages had no sentinels → digest emits empty code_refs → zero code blocks. Fix: lazy sentinelization at read time.
 
 
 async def get_or_build_source_vault(
     minio, slug: str, source_key: str,
 ) -> tuple[str, dict[str, "VaultEntry"]]:
-    """Return (sentinelized_text, vault_entries) for one source page.
-
-    Resolution order:
-      1. Pre-built per-source artifacts (`synth-vault/{slug}/pages/...
-         {basename}.sentinelized.md` + `.vault.json`) — preferred path,
-         used when the ingestion-time builder ran per-page.
-      2. Runtime sentinelization of `ingestion/{slug}/pages/...` raw
-         markdown — fallback when the per-page artifacts are missing
-         (e.g., the consolidated `llms-full` crawl populated a single
-         mega-vault instead of per-page vaults).
-
-    Always returns sentinelized text so downstream nodes see
-    `<code-ref hash="..."/>` placeholders in source bodies; the vault
-    dict maps each hash to its VaultEntry (with the original fence_text
-    body that render_audit_write materializes at the end of synth).
-    """
+    """Return (sentinelized_text, vault_entries): tries pre-built per-source artifacts first, falls back to runtime sentinelize_doc when per-page artifacts are missing."""
     # (we can't import render here without creating a circular dep).
     basename = source_key.rstrip("/").rsplit("/", 1)[-1]
     if basename.endswith(".md"):

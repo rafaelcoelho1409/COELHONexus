@@ -1,4 +1,3 @@
-"""BYOK credential store for the LLM rotator."""
 from __future__ import annotations
 
 from .entities import KeyStatus

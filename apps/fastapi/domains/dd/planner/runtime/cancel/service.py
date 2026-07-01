@@ -1,10 +1,4 @@
-"""Cancel flag I/O + watcher task.
-
-POST `/planner/{thread_id}/cancel` sets the Redis flag; the watcher inside
-the running planner task polls it every 1s → `main_task.cancel()` →
-LangGraph propagates CancelledError → POST returns `status="cancelled"`.
-TTL 1h since a real run can take 20-30 min on a LangChain-scale corpus.
-"""
+"""Cancel flag I/O + watcher; TTL 1h since planner runs can take 20-30 min on large corpora."""
 from __future__ import annotations
 
 import asyncio

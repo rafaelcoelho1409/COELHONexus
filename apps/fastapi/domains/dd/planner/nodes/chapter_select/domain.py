@@ -13,13 +13,7 @@ def greedy_select(
     assignments: dict[str, list[dict]],
     pinned_indices: set[int],
 ) -> tuple[list[int], dict[str, int]]:
-    """Run greedy coverage selection.
-
-    Returns:
-      selected_indices — list of proposal indices in selection order
-      doc_to_chapter   — for each assigned doc, the picked chapter idx
-                         (highest confidence among SELECTED chapters)
-    """
+    """Greedy coverage: returns (selected_indices, doc_to_chapter) where doc_to_chapter maps to highest-confidence selected chapter."""
     n_proposals = len(proposals)
     doc_confidences: dict[str, dict[int, float]] = {}
     for k, scores in assignments.items():

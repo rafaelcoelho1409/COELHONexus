@@ -1,14 +1,4 @@
-"""Planner LangGraph — strictly sequential, AsyncPostgresSaver-checkpointed.
-
-One node per substep → one checkpoint, one OTel span, one /debug/replay
-target each. Only nodes in `IMPLEMENTED` are wired; the rest are
-catalogued in NODE_ORDER for the UI but skipped at runtime.
-
-LLM-first pipeline:
-  corpus_load → embed_corpus → off_topic → doc_distill
-    → chapter_propose → chapter_assign → chapter_select
-    → order_chapters → plan_write
-"""
+"""LangGraph planner — strictly sequential; one AsyncPostgresSaver checkpoint + OTel span per node."""
 from __future__ import annotations
 
 import logging

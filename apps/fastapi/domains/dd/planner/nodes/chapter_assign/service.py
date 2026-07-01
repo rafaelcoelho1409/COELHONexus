@@ -213,12 +213,7 @@ async def chapter_assign_run(state: PlannerState) -> dict:
         if used_fb:
             fallbacks.append(k)
 
-    # RESCUE PASS. Sub-threshold-but-above-floor docs
-    # greedy_select's `assignable` set. Without this, the [0.3, 0.5)
-    # confidence band silently drops genuine content (~18 docs on CC).
-    # reflects the post-rescue scoring; the original LLM scores are
-    # still visible in the per-doc score list (only the BEST score is
-    # nudged).
+    # RESCUE PASS: docs in [RESCUE_FLOOR, CONFIDENCE_THRESHOLD) get their best score floored to threshold so they aren't silently dropped at chapter_select.
     rescued: list[dict] = []
     for k, scores in assignments.items():
         if not scores:

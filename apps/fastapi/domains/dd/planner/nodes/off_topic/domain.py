@@ -1,8 +1,4 @@
-"""off_topic — pure helpers (verdict parser).
-
-Prompt strings + the head+tail input prep + anchor descriptors live in
-prompts.py.
-"""
+"""off_topic pure helpers (verdict parser); prompt strings + head+tail prep in prompts.py."""
 from __future__ import annotations
 
 

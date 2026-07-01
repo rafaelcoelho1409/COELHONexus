@@ -1,16 +1,4 @@
-"""sawc_write — Section-Aware Writer-Critic (PILOT TARGET).
-
-Combines three published patterns:
-  1. SurveyGen-I PlanEvo SAWC (arXiv 2508.14317 §3.2) — stage-parallel
-     scheduling + memory ledger M for cross-section coherence
-  2. MAMM-Refine multi-agent recipe (arXiv 2503.15272 §4) — N=3 writer
-     drafts + 1 cross-family critic-picker as reranker
-  3. Self-Certainty (arXiv 2502.18581) — structural scoring fallback
-     when the critic LLM fails
-
-Per the conventions doc this leaf is the pattern-establishing module.
-See docs/CODE-CONVENTIONS.md §5.
-"""
+"""sawc_write — Stage-Aware Writer-Critic: SurveyGen-I SAWC (arXiv 2508.14317) + MAMM-Refine N-drafts (arXiv 2503.15272) + Self-Certainty fallback (arXiv 2502.18581)."""
 from .node import sawc_write
 from .schemas import (
     ChapterDraft,

@@ -23,10 +23,7 @@ def build_digest_prompt(
     source_md: str,
     source_vault_hashes: list[str],
 ) -> str:
-    """Build the per-source digest prompt. The LLM sees ONE source at a
-    time + the FULL outline. It decides which sections this source
-    contributes to (multi-label, with a relevance grade per assignment)
-    and routes vault sentinels."""
+    """Per-source digest prompt (LLMxMapReduce-V3, arXiv 2510.10890): LLM sees one source + full outline and routes vault sentinels to sections."""
     outline_block = _format_outline_compact(outline_sections)
     hash_block = (
         "\n".join(f"  - {h}" for h in source_vault_hashes)
@@ -120,8 +117,7 @@ def build_repair_prompt(
     current_json: str,
     issues: list[str],
 ) -> str:
-    """Repair prompt — given an LLM digest that failed validation, ask
-    for a fixed version with the SAME schema."""
+    """Repair prompt for a digest that failed validation; asks for a fixed version with the same schema."""
     outline_block = _format_outline_compact(outline_sections)
     hash_block = (
         "\n".join(f"  - {h}" for h in source_vault_hashes)

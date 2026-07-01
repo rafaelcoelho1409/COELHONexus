@@ -31,8 +31,7 @@ def decrypt_credentials(
     primary: bytes,
     fallback: bytes | None,
 ) -> tuple[dict[str, str], bool]:
-    """(mapping, used_fallback). Fallback migrates ciphertext from the
-    autogen KEK to a newly-introduced env KEK without orphaning saved keys."""
+    """Fallback re-encrypts ciphertext under the env KEK to avoid orphaning autogen-keyed credentials."""
     try:
         data = Fernet(primary).decrypt(raw).decode("utf-8")
         return json.loads(data), False

@@ -1,19 +1,5 @@
-"""Render + audit + persist orchestrator for one chapter.
-
-Pure deterministic transform + cryptographic vault round-trip audit
-for the materialization stage. The byte-exact guarantee (vs arXiv
-2601.03640's literal-payload failure mode) holds because the SAWC
-writer NEVER copies code — vault sentinels hide fenced blocks until
-this node resolves them.
-
-LLM-touched stage (2026-06-08): pre-render, every code block in the
-loaded vault goes through a single bandit-routed normalization call
-that fixes indentation / line-break / whitespace drift introduced by
-upstream ingestion (e.g. Mintlify MDX flattening that strips function
-body indent). Results are cached per-content-hash in MinIO so each
-unique block is normalized exactly once — re-renders are free.
-Plain-text / output-only blocks bypass the LLM entirely.
-"""
+"""Render + audit + persist for one chapter. Vault sentinels prevent SAWC from copying code — byte-exact guarantee holds at materialization.
+LLM normalization pass (cached per-content-hash) fixes ingestion-time drift; plain-text/output blocks bypass it."""
 from __future__ import annotations
 
 import ast
@@ -67,11 +53,7 @@ _SKIP_LANGS = frozenset({
     "mermaid", "ansi",
 })
 
-# Python-family languages get an extra AST-validation pass. Python's
-# `ast` is stdlib (no extra deps) and the highest-signal failure mode
-# we observed in ch-01 (Mintlify MDX-flattened bodies stripping the
-# function-body indent). On AST fail we retry the LLM call with a
-# sharper prompt; on a second failure we keep the LLM's best attempt.
+# Python gets AST validation (stdlib, no deps) — observed Mintlify MDX flattening strips function-body indent. Fail → retry LLM with error; second fail → keep best attempt.
 _PYTHON_LANGS = frozenset({"python", "py", "py3", "python3"})
 
 
@@ -81,16 +63,7 @@ def _normalize_cache_key(slug: str, vault_hash: str) -> str:
 
 
 def _strip_code_fences(s: str) -> str:
-    """If the LLM returned a fenced block (or just a trailing close
-    marker) despite the instruction, peel the leading and trailing
-    fence lines INDEPENDENTLY.
-
-    The earlier version only stripped a trailing fence when a leading
-    fence existed — so a response of ``body\\n``` produced a fence
-    marker that bled into the surrounding markdown and rendered as a
-    stray empty code block (observed in ch-02-configuration line 62
-    on the 2026-06-08 browser-use run).
-    """
+    """Peel leading and trailing fence lines independently — earlier version only stripped trailing when leading existed, causing stray empty code blocks (ch-02 browser-use bug)."""
     s = (s or "").strip("\n")
     if not s:
         return s
@@ -102,11 +75,7 @@ def _strip_code_fences(s: str) -> str:
     return "\n".join(lines)
 
 
-# Inner-fence extractor: when the LLM ignores the "NO commentary, NO
-# fences" instruction and returns prose + a fenced code block (e.g.
-# `"The provided code is already correct.\n```bash\n<code>\n```"`),
-# pull out the LARGEST fenced block's body. Observed in ch-03 line 242
-# of a browser-use re-run.
+# Recovery: LLM ignores "NO fences" instruction and returns prose + nested code block; pull the largest inner fenced block body (observed ch-03 browser-use run).
 _INNER_FENCE_RE = re.compile(
     r'(?P<open>```+|~~~+)(?P<info>[^\n]*)\n(?P<body>.*?)\n(?P=open)',
     re.DOTALL,
@@ -114,20 +83,14 @@ _INNER_FENCE_RE = re.compile(
 
 
 def _extract_largest_fenced_body(s: str) -> str | None:
-    """Find every fenced block in `s` and return the body of the
-    longest one. Used as a recovery path when `_strip_code_fences`
-    leaves residual fence markers (= the LLM returned commentary +
-    a fenced code block inside it)."""
+    """Return body of the longest fenced block; recovery when _strip_code_fences leaves residual markers (LLM returned commentary + nested fence)."""
     candidates = [m.group("body") for m in _INNER_FENCE_RE.finditer(s)]
     if not candidates:
         return None
     return max(candidates, key = len)
 
 
-# Fence parser — fence_text values in the merged vault are full fenced
-# blocks (``` + info-string + body + ```). We split, normalize ONLY the
-# body, and reassemble — so the language info-string and the fence
-# markers are byte-preserved no matter what the LLM does.
+# vault fence_text = full fenced block; normalize ONLY the body so info-string + markers are byte-preserved regardless of LLM output.
 _FENCE_RE = re.compile(
     r'^(?P<open>```+|~~~+)(?P<info>[^\n]*)\n'
     r'(?P<body>.*?)'
@@ -204,10 +167,7 @@ _NORMALIZE_PROMPT_PYTHON_RETRY = (
 
 
 def _python_ast_valid(body: str) -> tuple[bool, str]:
-    """Return (ok, error_message_or_empty). Uses stdlib `ast` so this
-    adds no dep. Treated as the truth source for python/py blocks
-    because the normalizer's biggest observed failure mode is
-    unindented function/class bodies."""
+    """Return (ok, error): stdlib ast (no dep); truth source for python/py blocks because biggest failure mode is unindented function/class bodies."""
     try:
         ast.parse(body)
         return True, ""
@@ -220,16 +180,7 @@ def _python_ast_valid(body: str) -> tuple[bool, str]:
 async def _llm_normalize_body(
     *, body: str, lang: str, prompt: str,
 ) -> str | None:
-    """Single LLM call. Returns the fence-stripped response body, or
-    None on failure / empty output. Cheap helper so the AST retry path
-    can re-call without duplicating error handling.
-
-    Robust against prompt-following failures (2026-06-08): some
-    free-tier models return commentary + a fenced code block instead of
-    raw code. We first strip outer fences, then — if the result still
-    contains fence markers — pull out the largest inner fenced block's
-    body. If neither works (commentary with NO code block) we reject
-    the response so the caller falls back to the original."""
+    """Single LLM normalize call → fence-stripped body or None. Handles prompt-following failures: strip outer fences, extract largest inner block if markers remain, reject if no code found."""
     try:
         response, _meta = await chat_judge_bandit_async(
             prompt,
@@ -272,12 +223,7 @@ async def _normalize_code_block(
     vault_hash: str,
     fence_text: str,
 ) -> tuple[str, bool]:
-    """Send one vault entry through the rotator to fix any formatting
-    drift in its code body. Returns `(fence_text, was_modified)`.
-    `was_modified=True` means the body was intentionally rewritten — the
-    caller uses this to suppress the byte-drift audit check for that
-    hash (otherwise every normalize trips a false-positive drift). Falls
-    back to the original on ANY error; `was_modified=False` then."""
+    """Normalize one vault entry's code body via LLM rotator. was_modified=True suppresses byte-drift audit for that hash (intentional rewrite ≠ drift)."""
     if not fence_text or len(fence_text) > 12_000:
         # Empty / oversized — skip (cache blow-out + diminishing returns).
         return fence_text, False
@@ -312,11 +258,7 @@ async def _normalize_code_block(
     if fixed_body is None:
         return fence_text, False
 
-    # Python-specific AST validation: if the first-pass response still
-    # fails to parse, re-prompt with the parser error so the model can
-    # target the exact failure. This rescues the Mintlify-flatten case
-    # where small free-tier models read the body as two valid statements
-    # at top level and return it unchanged.
+    # Python AST retry: re-prompt with parser error to rescue Mintlify-flatten cases (small models return body unchanged).
     if lang in _PYTHON_LANGS:
         ok, err = _python_ast_valid(fixed_body)
         if not ok:
@@ -356,14 +298,7 @@ async def _normalize_vault_codes(
     slug: str,
     vault: dict,
 ) -> tuple[dict, set[str], int, int]:
-    """Apply `_normalize_code_block` to every vault entry in parallel.
-    The merged vault is `dict[str, str]` (hash → fence_text) per
-    `merge_vault_entries`. Returns `(modified_vault, normalized_hashes,
-    n_normalized, n_skipped)`. `normalized_hashes` is the set of vault
-    hashes whose bodies were intentionally rewritten — callers pass it
-    to `build_section_context` so byte-drift detection treats them as
-    `verbatim` rather than `hallucinated`. Mutates the input dict in
-    place (callers get back the same reference for convenience)."""
+    """Normalize every vault entry in parallel. normalized_hashes suppresses byte-drift false-positives in build_section_context (intentional rewrites ≠ hallucinated)."""
     if not vault:
         return vault, set(), 0, 0
 
@@ -404,17 +339,7 @@ async def _load_per_source_vaults(
     slug: str,
     source_keys: list[str],
 ) -> tuple[dict[str, str], int, int]:
-    """Load + merge per-source vault manifests.
-    Returns (merged_vault, n_loaded, n_skipped_missing).
-
-    CRITICAL FIX 2026-05-24 (lost in the 2026-06-05 cosmic-python refactor
-    bd98674, restored 2026-06-08): when a per-source vault file doesn't
-    exist on MinIO (common when ingestion built only one consolidated
-    `llms-full` vault for the whole corpus), fall back to runtime
-    sentinelization of the raw ingestion page. Without this fallback,
-    render's audit reports `n_resolved=0, n_missing=N` for every
-    code_ref the LLM cited and the final chapter has ZERO code blocks
-    despite the SAWC output containing valid hashes."""
+    """Load + merge per-source vault manifests; falls back to runtime sentinelization when per-source vault is missing (otherwise n_resolved=0 and zero code blocks in the chapter)."""
     from ..vault.domain import sentinelize_doc as _sentinelize_doc
 
     manifests: list[dict] = []
@@ -658,12 +583,7 @@ async def render_audit_write_run(state: SynthState) -> dict:
     vault, n_loaded, n_skipped = await _load_per_source_vaults(
         minio, slug, source_keys,
     )
-    # LLM normalize pass — fixes indentation / whitespace drift from
-    # upstream ingestion (Mintlify MDX flatten, MDX-mangled brackets,
-    # smart quotes, stripped \\t, etc.). One bandit call per UNIQUE
-    # vault entry, cached per-content-hash so re-renders are free.
-    # Failures fall through to the original byte-exact text — never
-    # blocks the render.
+    # LLM normalize pass: fixes ingestion-time drift (Mintlify MDX flatten, smart quotes, stripped tabs). Cached per-content-hash; failures fall through to original.
     vault, normalized_hashes, n_norm, n_skip_norm = await _normalize_vault_codes(
         minio = minio, slug = slug, vault = vault,
     )
@@ -699,10 +619,7 @@ async def render_audit_write_run(state: SynthState) -> dict:
             f"{dedup_stats['n_mismatch']} misrouted block(s) omitted"
         )
 
-    # v2 cookbook (matches RenderResult schema): subtopics replaced
-    # legacy paragraphs. RenderResult declares `n_subtopics_total`;
-    # passing the legacy `n_paragraphs_total` name to it raises
-    # `pydantic.ValidationError: n_subtopics_total field required`.
+    # v2 schema uses n_subtopics_total (not legacy n_paragraphs_total) — wrong name raises ValidationError.
     n_subtopics_total = sum(len(s.get("subtopics") or []) for s in sections)
     n_citations_total = sum(len(s.get("citations") or []) for s in sections)
 
@@ -715,14 +632,7 @@ async def render_audit_write_run(state: SynthState) -> dict:
         rendered_chapter_md = chapter_md,
     )
 
-    # CONTENT-PRESENT GATE. A
-    # section the SAWC writer couldn't draft renders as an empty
-    # placeholder (0 subtopics). The byte-exact vault audit can't see
-    # this — a placeholder has no code refs, so it PASSES audit while
-    # being empty (this masked LangFuse ch-07/ch-08). Count placeholder
-    # sections and FAIL the audit when any exist, so the chapter
-    # surfaces as not-ready (Study sidebar reads audit_passed) instead
-    # of silently shipping blank.
+    # CONTENT-PRESENT GATE: empty sections (0 subtopics) pass byte-audit since they have no code refs — masked ch-07/ch-08. Fail audit explicitly so Study sidebar shows not-ready.
     n_placeholder_sections = sum(
         1 for s in sections_ctx if not (s.get("subtopics"))
     )
@@ -787,12 +697,7 @@ async def render_audit_write_run(state: SynthState) -> dict:
         mgsr_manifest_hash = mgsr_manifest_hash,
         render_manifest_hash = manifest_hash,
         wall_ms = elapsed,
-        # Persist the per-chapter synth thread so the Study chapter strip
-        # can re-open the chapter's LangGraph canvas after a page refresh.
-        # The schema declares this field with a `""` default; without
-        # passing it explicitly, the chapters API returns thread_id=None
-        # and clicking a (done) chapter cell falls into the "no thread"
-        # branch — graph nodes never repaint.
+        # Must pass explicitly — schema default "" causes chapters API to return None, breaking LangGraph canvas repaint after page refresh.
         thread_id = thread_id,
     )
     payload = result.model_dump()

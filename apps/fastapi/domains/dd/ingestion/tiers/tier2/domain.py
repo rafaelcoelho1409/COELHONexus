@@ -10,12 +10,7 @@ from .patterns import LINK_BARE_RE, LINK_MD_RE
 
 
 def parse_index(body: str, base_url: str) -> list[tuple[str, str]]:
-    """Return [(title, absolute_url), ...] from a llms.txt body. Tries the
-    canonical markdown-link format first; then the bare-URL bullet format
-    that Supervision (and likely others) use. Filters URLs to the same
-    host as `base_url` so we don't try to ingest GitHub/PyPI/external
-    meta-links that often appear in long-form llms.txt files. Dedupes
-    while preserving first-occurrence order."""
+    """[(title, url), ...] from llms.txt. Tries [title](url) first, then bare-URL bullets (Supervision style). Same-host filter drops GitHub/PyPI meta-links. Preserves first-occurrence order."""
     base_host = (urlparse(base_url).netloc or "").lower()
     out: list[tuple[str, str]] = []
     seen: set[str] = set()

@@ -5,7 +5,6 @@ from dataclasses import dataclass
 
 @dataclass(frozen = True, slots = True)
 class DynamicStepConfig:
-    """One per dd_process step served by the dynamic catalog."""
     group:     str
     top_k:     int
     timeout_s: int
@@ -20,8 +19,7 @@ DYNAMIC_STEPS: dict[str, DynamicStepConfig] = {
 
 @dataclass(frozen = True, slots = True)
 class JudgeConfig:
-    """ParetoBandit-driven judge tunables. dd-grader keeps grader cells separate
-    from synthesizer cells (binary vs continuous reward shape)."""
+    """dd-grader cells kept separate from synthesizer cells — binary vs continuous reward shape."""
     dd_process:         str   = "dd-grader"
     expected_latency_s: float = 4.0
     bandit_top_k:       int   = 10

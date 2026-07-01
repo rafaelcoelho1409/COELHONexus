@@ -1,4 +1,3 @@
-"""Online benchmark fetch + canonicalization + composite scoring."""
 from __future__ import annotations
 
 from .domain import (

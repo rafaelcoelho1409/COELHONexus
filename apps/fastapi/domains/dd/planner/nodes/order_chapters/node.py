@@ -1,12 +1,4 @@
-"""Substep 7.5 — order_chapters: LangGraph node shell.
-
-Pedagogical chapter ordering via LLM + USC vote (Bundle 8, 2026-05-25).
-Sits between `chapter_select` and `plan_write`. Replaces the arbitrary
-chapter_select order with an LLM-driven pedagogical ordering (Borda
-aggregation) and a deterministic foundational-prefix rule.
-
-All orchestration lives in service.order_chapters_run.
-"""
+"""order_chapters node shell — Borda-aggregated LLM ordering + foundational-prefix rule between chapter_select and plan_write."""
 from __future__ import annotations
 
 from ...runtime.observability import traced

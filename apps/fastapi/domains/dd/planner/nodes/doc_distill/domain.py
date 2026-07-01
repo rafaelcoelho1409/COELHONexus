@@ -40,13 +40,7 @@ def try_validate(d: dict) -> tuple[Optional[DocDistillate], Optional[str]]:
         return None, str(e)[:200]
 
 
-# Per-doc failure-reason buckets. `rate_limit` and `timeout` are TRANSIENT
-# (caller retries); the rest fall through to the deterministic fallback
-# immediately. The classifier is intentionally string-matching — provider
-# clients raise different exception classes for the same operational
-# condition (LiteLLM rate-limit vs httpx 429 vs Google InternalServerError
-# with "quota" in the message), so the lowest-common-denominator signal is
-# substring presence in the str(exc).
+# String-match classifier: provider clients raise different exception types for the same condition (LiteLLM vs httpx vs Google); transient = rate_limit/timeout/connection → retry.
 def classify_error(exc: Exception) -> str:
     name = type(exc).__name__
     msg = str(exc).lower()

@@ -1,11 +1,4 @@
-"""Sphinx `objects.inv` parser — deterministic page + entity discovery.
-
-Probed before the DOM-based `sphinx_nav` extractor. When present, gives
-canonical toctree-reachable page set + per-entity anchors (used by
-`page_split` instead of heuristics). Format is frozen v2 (4-line ASCII
-header + zlib payload, one `name domain:role priority uri dispname` per
-line; `$` shorthand → name in URI, `-` → name in dispname).
-"""
+"""Sphinx objects.inv v2 parser. Probed before DOM toctree; provides deterministic page+anchor catalog. Format: 4-line header + zlib (name domain:role priority uri dispname; $ → name in URI, - → name in dispname)."""
 import logging
 import zlib
 from typing import Optional
@@ -115,10 +108,7 @@ async def _probe_one(
 async def fetch_inventory(
     docs_root: str, *, client: httpx.AsyncClient,
 ) -> Optional[Inventory]:
-    """Fetch+parse `{docs_root}/objects.inv`. None on 404 / non-Sphinx / parse error.
-
-    For unversioned URLs (`/en/`) probes stable/latest/main siblings; the
-    successful candidate's URL becomes the inventory's `base_url`."""
+    """Fetch+parse docs_root/objects.inv. For unversioned paths probes stable/latest/main siblings; returns None on 404/non-Sphinx/parse error."""
     if not docs_root.endswith("/"):
         docs_root = docs_root + "/"
     parsed = urlparse(docs_root)

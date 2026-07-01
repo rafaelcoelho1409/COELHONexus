@@ -1,8 +1,4 @@
-"""PlannerState — TypedDict flowing through every node.
-
-One field per node output. All Optional so the empty skeleton + partial
-replays don't crash. `/debug/graph/{tid}/state` exposes every substep's
-artifact (or its absence)."""
+"""PlannerState TypedDict with one output field per node; all Optional so partial replays don't crash."""
 from __future__ import annotations
 
 from typing import Optional, TypedDict

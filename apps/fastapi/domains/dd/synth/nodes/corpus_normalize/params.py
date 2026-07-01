@@ -2,8 +2,7 @@
 from __future__ import annotations
 
 
-# MDX wrapper tag set (Mintlify v4, Docusaurus 3.x, Nextra 4, Starlight,
-# ReadMe.io, GitBook html). Tags are STRIPPED but inner text is preserved.
+# Tags are STRIPPED but inner text is preserved.
 MDX_WRAPPER_TAGS = (
     # Mintlify v4
     "Tip", "Note", "Warning", "Info", "Caution", "Check", "Danger",
@@ -19,11 +18,7 @@ MDX_WRAPPER_TAGS = (
 )
 
 
-# Mintlify code-fence attribute names per docs.mintlify.com/code (May 2026).
-# Used to detect "is this info-string Mintlify-styled?" — we always reduce
-# info-string to first whitespace-separated token (the lang), so this list
-# is only for stat tracking + identifying the "metadata seen" case for the
-# report.
+# Stat tracking only — we always strip to first token regardless.
 FENCE_META_ATTRS = (
     "theme", "expandable", "lines", "title", "icon",
     "wrap", "highlight", "focus", "filename", "copy",
@@ -31,15 +26,13 @@ FENCE_META_ATTRS = (
 )
 
 
-# Container-admonition kinds (Docusaurus / VitePress / MkDocs Material).
 ADMON_KINDS = (
     "tip", "note", "warning", "caution", "info", "danger", "important",
     "details", "abstract",
 )
 
 
-# HTML entities we always want decoded back to their unicode form.
-# Restricted list — we DON'T blanket-decode (e.g. `&copy;` is fine as-is).
+# Restricted decode list — not blanket (e.g. &copy; left as-is).
 ENTITY_DECODES = (
     ("&amp;",  "&"),
     ("&lt;",   "<"),

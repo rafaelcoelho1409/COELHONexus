@@ -21,16 +21,7 @@ from .patterns import (
 
 
 def is_thin_block(body: str) -> bool:
-    """True when a vault code body is too thin to teach effectively.
-
-    "Thin" = signature-only OR very short. The two-gate AND lets a short
-    example like a 4-line snippet through, while catching:
-        list_skills(client: Client) -> list[SkillSummary]
-    and similar single-line API references.
-
-    The heuristic is conservative on purpose — we'd rather miss a derive
-    opportunity than over-fire and re-generate already-good code blocks.
-    """
+    """True when vault body is too thin to teach. Conservative: short AND signature-only gate so 4-line snippets pass while bare API signatures are caught."""
     if not body:
         return False
     stripped = body.strip()
@@ -91,19 +82,7 @@ def python_ast_valid(body: str) -> bool:
 
 
 def score_derived_candidate(body: str) -> float:
-    """Deterministic structural score for one derived candidate.
-
-    Higher = better. Used by `rank_mpsc_samples` to break ties among
-    AST-valid samples.
-
-    Components (~0-10 scale):
-      + AST valid:        4.0
-      + In LOC band:      2.0
-      + Has imports:      1.5  (real lib usage signal)
-      + Multi-line:       1.0  (not a one-shot expression)
-      − Excess length:    up to -2.0 (penalize blobs >40 lines)
-      − Placeholder leak: -3.0 (`...`, `YOUR_*_HERE`, `# TODO`, etc.)
-    """
+    """Structural score; higher=better. AST valid (+4), LOC band (+2), imports (+1.5), multi-line (+1); penalizes excess length and placeholder leaks (-3)."""
     if not body or not body.strip():
         return -10.0
     score = 0.0
@@ -136,12 +115,7 @@ def score_derived_candidate(body: str) -> float:
 def rank_mpsc_samples(
     samples: list[str],
 ) -> tuple[int | None, list[float]]:
-    """Pick the best AST-valid sample by structural score.
-
-    Returns (chosen_idx, scores). chosen_idx is None when no sample is
-    both AST-valid AND in the LOC band — caller then records the attempt
-    as `rejected_ast` (no AST pass) or `rejected_len` (AST passed but
-    nothing in band)."""
+    """Pick best AST-valid sample by structural score. chosen_idx=None when no sample is both AST-valid AND in the LOC band."""
     if not samples:
         return None, []
     scores = [score_derived_candidate(s) for s in samples]

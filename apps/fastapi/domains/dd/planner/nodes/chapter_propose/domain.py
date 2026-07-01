@@ -64,10 +64,7 @@ def extract_structural_seeds(
     source_keys: list[str],
     bodies_by_key: dict[str, str],
 ) -> dict:
-    """Extract structural seeds from the corpus:
-      - top-level H1/H2 headings (deduped, capped)
-      - file-tree namespaces (CLI subcommands, doc sections)
-    """
+    """Top-level headings + CLI namespace seeds from the corpus for chapter_propose."""
     headings_counter: Counter[str] = Counter()
     for key in source_keys:
         body = bodies_by_key.get(key) or ""

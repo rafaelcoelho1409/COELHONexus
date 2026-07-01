@@ -1,20 +1,4 @@
-"""Async orchestration: kickoff, resume, catch-up. Shared by FastAPI
-in-process mode and the Celery worker — both modes execute the same async
-logic; only the runtime location differs.
-
-Three runners:
-  - run_planner_async(thread_id, slug, mode):
-        fresh planner kickoff. Builds initial state, spawns main task +
-        cancel watcher, awaits terminal status, patches checkpointer,
-        emits SSE terminal event.
-  - resume_planner_async(thread_id):
-        resume from last checkpoint. Three sub-paths:
-          1. standard ainvoke(None) resume
-          2. catch-up: status=done but newer IMPLEMENTED nodes missing
-          3. truly nothing to do
-  - run_missing_nodes_async(thread_id, missing):
-        the catch-up worker (path 2 of resume).
-"""
+"""Async planner orchestration (kickoff, resume, catch-up) shared by FastAPI and Celery — same logic, different runtime location."""
 from __future__ import annotations
 
 import asyncio
@@ -192,12 +176,7 @@ async def _await_with_watcher(
     slug: Optional[str] = None,
     mode: str = "llm",
 ) -> dict:
-    """Common terminal-status lifecycle: await the planner task, write
-    terminal status to checkpoint, emit SSE terminal event, cancel watcher.
-
-    `t0` (monotonic start) → wall-clock carried IN the terminal event
-    (post-terminal events would be missed) + persisted for the cached
-    navbar path."""
+    """Await the planner task, write terminal status + SSE event; wall-clock carried inside the terminal event so it's not lost if the subscriber disconnects after."""
     terminal_patch: dict = {}
     try:
         await main_task
@@ -381,10 +360,7 @@ async def run_missing_nodes_async(
     thread_id: str,
     missing: list[str],
 ) -> dict:
-    """Catch-up worker — invokes each missing IMPLEMENTED node via
-    NODE_REGISTRY directly and patches state. Needed when a thread reached
-    END BEFORE a new IMPLEMENTED node was added — `ainvoke(None)` would
-    short-circuit because the old checkpoint's END is already consumed."""
+    """Catch-up worker for threads that reached END before a new IMPLEMENTED node was added (ainvoke(None) would short-circuit at the consumed END marker)."""
     graph = build_graph()
     config = {"configurable": {"thread_id": thread_id}}
 

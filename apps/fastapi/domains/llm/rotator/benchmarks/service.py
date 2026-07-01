@@ -1,7 +1,4 @@
-"""HTTP fetchers, Redis caches, OTel, canonicalization, rank_for_step entry point.
-
-Three live sources (no-auth): OpenLM Arena (HTML), oolong-tea code.json, OpenEvals.
-"""
+"""Three live benchmark sources (no-auth): OpenLM Arena (HTML), oolong-tea code.json, OpenEvals."""
 from __future__ import annotations
 
 import asyncio
@@ -234,7 +231,6 @@ async def rank_for_step(
     *,
     redis: redis_aio.Redis | None = None,
 ) -> list[tuple[Any, float]]:
-    """Rank by composite benchmark score; no-coverage → 0.0 lands at end."""
     weights = STEP_WEIGHTS.get(step, STEP_WEIGHTS["dd-all"])
     if not alive_models:
         return []

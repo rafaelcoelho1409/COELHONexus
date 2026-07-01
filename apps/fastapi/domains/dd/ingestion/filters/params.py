@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 
-# fnmatch deny-list applied to every multi-page tier — strips marketing, legal,
-# contributor pages, churn, and non-HTML assets.
+# fnmatch deny-list for multi-page tiers — strips marketing, legal, non-HTML assets.
 DEFAULT_DENY_PATTERNS: tuple[str, ...] = (
     "*/blog/*", "*/news/*", "*/posts/*", "*/announcements/*",
     "*/changelog/*", "*/changelogs/*", "*/releases/*", "*/release-notes/*",
@@ -27,10 +26,7 @@ DEFAULT_DENY_PATTERNS: tuple[str, ...] = (
 )
 
 
-# Conservative stage-1 path-noise filter. `/contributing/`, `/community/`,
-# `/code-of-conduct/` intentionally absent — some frameworks host real teaching
-# content there; semantic off_topic in planner handles those.
-# Version-tag form catches XGBoost-style `v2.1.0.html` per-version pages.
+# Stage-1 path-noise filter; contributing/community absent intentionally (real content lives there; planner off_topic handles it). Version-tag catches XGBoost-style vN.M.html pages.
 DEFAULT_EXCLUDE_PATH_PATTERNS: tuple[str, ...] = (
     r"/events?(\.html?|/|$)",
     r"/blog(\.html?|/|$)",

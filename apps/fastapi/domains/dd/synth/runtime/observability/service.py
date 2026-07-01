@@ -1,8 +1,4 @@
-"""OTel span helpers for synth nodes — mirrors planner/observability/service.
-
-`@traced("name")` wraps a node into a top-level OTel span (chapter_id included for per-chapter Gantt).
-`attach_span_attrs(prefix, attrs)` attaches a stats dict to the currently-active span.
-"""
+"""OTel span helpers for synth nodes; @traced wraps a node span with chapter_id for per-chapter Gantt, attach_span_attrs adds stats dict to active span."""
 from __future__ import annotations
 
 import functools

@@ -1,39 +1,4 @@
-"""CoCoA two-stage alignment check (Ship C, 2026-05-25).
-
-Based on Code Comprehension then Auditing (arXiv 2410.03131): single-shot
-LLM-judges that simultaneously parse code AND grade prose perform worst.
-A two-stage pipeline — *explainer* abstracts code into NL behavioral spec
-first, *judge* then compares prose-against-spec — beats single-shot by
-+68% F1 and +20% accuracy on code-NL alignment benchmarks.
-
-INTEGRATION
-
-This module augments (NOT replaces) the bundled LLM-judge in
-`checklist_eval`. The bundled judge already produces verdicts for the 5
-semantic criteria including `prose_code_first_not_meta_framing` (c11) and
-`code_refs_introduced_in_prose` (c12). CoCoA runs after the bundled judge
-and, when it finds explanation↔code drift, OVERRIDES c11+c12 with FAIL
-verdicts carrying specific subtopic feedback so mgsr_replan can drive
-surgical rerolls.
-
-Conservative-bias aggregation: CoCoA NEVER upgrades the bundled judge —
-only downgrades. If CoCoA passes but bundled fails, bundled's FAIL stands.
-
-CONSTRAINTS
-
-Free-tier only — same as faithfulness.py. All LLM calls route through the
-FGTS-VA bandit (chat_judge_bandit_async) with two new dd_process keys so
-the bandit learns separate quality posteriors for each role:
-  - "dd-cocoa-explainer" — cheap arm preferred (per-block abstraction)
-  - "dd-cocoa-judge"     — heavyweight arm preferred (alignment verdict)
-
-Two LLM calls per chapter total (one batched call per stage), matching the
-bundled judge's cost envelope.
-
-Per `feedback_dd_quality_over_speed`: tokens are free, quality is the
-binding constraint. Token budgets are intentionally generous; truncation
-only kicks in for pathologically long chapters.
-"""
+"""CoCoA two-stage alignment check (arXiv 2410.03131) — overrides c11+c12 on drift."""
 from __future__ import annotations
 from .keys import digest_latest_key, latest_blob_key, sawc_latest_key, versioned_blob_key
 from .params import (
@@ -72,54 +37,25 @@ from ....ingestion.storage import get_storage
 logger = logging.getLogger(__name__)
 
 
-# Tunables
 COCOA_PROMPT_VERSION = "v1-cocoa-2026-05-25"
 
-# Per-hash abstraction cache . Stage 1 abstractions
-# depend ONLY on the code body — and the body is content-addressed by
-# its vault hash. So the same hash always produces the same spec under
-# a fixed prompt_version. Cache MinIO blob path includes prompt_version
-# so a prompt revision automatically invalidates without manual flush.
+# Stage-1 cache keyed on vault hash + prompt_version; prompt revision auto-invalidates.
 _COCOA_CACHE_PREFIX = f"synth-cache/cocoa-abstractions/{COCOA_PROMPT_VERSION}"
 
 _DD_PROCESS_EXPLAINER = "dd-cocoa-explainer"
 _DD_PROCESS_JUDGE     = "dd-cocoa-judge"
 
-# A chapter's total subtopic count caps the batched call sizes. Anything
-# above ~80 subtopics gets sliced into chunks so the prompts stay <30k tokens.
 _MAX_SUBTOPICS_PER_BATCH = 60
 
-# Generous token budgets — chapters can carry 50+ code blocks and we'd
-# rather pay than truncate.
 _EXPLAINER_MAX_TOKENS = 8000
 _JUDGE_MAX_TOKENS     = 4000
 _EXPLAINER_TEMPERATURE = 0.0
 _JUDGE_TEMPERATURE     = 0.0
 
-# reverted 0.70 → 0.85.
-# Pass threshold for CoCoA — fraction of aligned subtopics required for
-# c11/c12 to remain at the bundled-judge's verdict. Below this, CoCoA
-# overrides with FAIL.
-#   - 0.85 (original, CoCoA paper arXiv 2410.03131)
-#   - 0.70 — relaxed to fix BU ch-01 regression where
-#     the bandit pool's minor embellishments tripped 0.85.
-#   - 0.85 — REVERTED. Empirically on Claude Code, the
-#     0.70 floor let through catastrophic code-prose mismatches
-#     (e.g. prose about "Pin Model Version" paired with `aws sso login`
-#     code). The keyword-overlap pre-check (U5 below) replaces the BU
-#     rationale: minor embellishments will still be flagged by the LLM
-#     judge, but won't trip the floor as long as MOST pairs share
-#     identifier overlap.
+# reverted 0.70 → 0.85 (CC run: 0.70 let through catastrophic mismatches; keyword-overlap pre-check now covers the BU regression).
 _ALIGN_PASS_FRACTION = 0.85
 
-# structural keyword-overlap pre-check.
-# Catches catastrophic mismatches BEFORE the LLM judge: if the
-# explanation contains ZERO identifiers from the code body, mark as
-# misaligned automatically (saves an LLM call AND reliably catches the
-# `ANTHROPIC_API_KEY`-prose-with-`aws-sso-login`-code class of failure
-# the CC run exposed). Identifiers extracted from code body by regex;
-# Python/JS keywords + common short tokens excluded so the check has
-# signal. Threshold = 1: at least one shared identifier required.
+# Keyword-overlap pre-check: zero shared identifiers between prose and code → misaligned (no LLM call needed).
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
 # Common words that don't carry alignment signal even if they appear in
 # code (control-flow keywords, generic verbs). Lowercase. Frozenset for
@@ -137,8 +73,6 @@ _NOISE_IDENTS = frozenset({
 })
 _MIN_IDENT_LEN = 3
 
-# Per-code-body excerpt cap when rendering code blocks into the explainer
-# prompt. Most code blocks are well under 600 chars; the cap is defense.
 _CODE_EXCERPT_CHARS = 1200
 
 
@@ -158,8 +92,7 @@ def _parse_json(text: str) -> dict | None:
 
 
 def _extract_identifiers(text: str) -> set[str]:
-    """Lowercased identifiers ≥_MIN_IDENT_LEN chars, filtered against
-    _NOISE_IDENTS. Used by the structural keyword-overlap pre-check."""
+    """Lowercased identifiers ≥_MIN_IDENT_LEN chars, noise-filtered."""
     if not text:
         return set()
     out: set[str] = set()
@@ -174,11 +107,7 @@ def _extract_identifiers(text: str) -> set[str]:
 
 
 def _has_keyword_overlap(*, code_body: str, explanation: str) -> bool:
-    """True iff `explanation` mentions ≥1 informative identifier from
-    `code_body`. Catches the worst mismatches structurally (prose about
-    `ANTHROPIC_API_KEY` paired with `aws sso login` code → zero overlap →
-    False). Identifier extraction strips common keywords so generic
-    prose doesn't fake a pass."""
+    """True iff explanation shares ≥1 informative identifier with code_body."""
     code_idents = _extract_identifiers(code_body)
     if not code_idents:
         return True   # nothing to anchor against → don't false-fail
@@ -223,11 +152,7 @@ def _render_blocks_for_explainer(blocks: list[dict]) -> str:
 
 
 async def _read_cached_abstraction(minio, h: str) -> str | None:
-    """Return the cached spec for hash `h`, or None on miss / error.
-    Per-hash blobs are tiny JSON ({spec: "..."}); read latency is
-    dominated by MinIO RTT (~5-15 ms). Even an "all miss" pass over a
-    chapter of ~50 blocks costs <1s total — much cheaper than a single
-    LLM call."""
+    """Return cached spec for hash `h`, or None on miss/error."""
     key = f"{_COCOA_CACHE_PREFIX}/{h}.json"
     try:
         if not await minio.exists(key):
@@ -260,29 +185,13 @@ async def _write_cached_abstraction(minio, h: str, spec: str) -> None:
 
 
 async def _explain_blocks(blocks: list[dict]) -> dict[str, str]:
-    """Run the explainer on a batch of code blocks. Returns {id_str: spec}.
-
-    Bundle 5 (2026-05-25) — per-hash MinIO cache:
-      - Verbatim blocks (default `code_source`) get cache lookup by
-        their vault hash. Same hash + same prompt_version = guaranteed
-        same spec.
-      - Derived blocks (sawc_derive promoted) have AI-generated bodies
-        that vary across runs even for the same originating hash, so
-        they always go to the LLM (no caching).
-      - Misses get one batched LLM call covering ALL miss ids; new specs
-        get written back to cache for future runs.
-
-    Fail-soft: empty dict on any error — caller treats unspecced blocks
-    as "alignment unknown" (passes through without overriding the bundled
-    judge).
-    """
+    """Run the explainer on a batch of code blocks; derived blocks skip cache (body varies per run)."""
     if not blocks:
         return {}
 
     minio = get_storage()
 
-    # Partition into cache hits vs misses. Blocks without `hash` or
-    # flagged `code_source = 'derived'` go straight to the LLM (no cache).
+    # derived blocks (code_source='derived') always go to the LLM; verbatim blocks cache by hash.
     cached: dict[str, str] = {}
     misses: list[dict] = []
     for b in blocks:
@@ -333,9 +242,7 @@ async def _explain_blocks(blocks: list[dict]) -> dict[str, str]:
         if rid and spec:
             fresh[rid] = spec
 
-    # Write back the fresh ones to cache (only for verbatim blocks with
-    # a hash — derived blocks are unsafe to cache by hash since their
-    # bodies vary).
+    # Derived blocks are unsafe to cache by hash (body varies).
     miss_by_id = {b["id"]: b for b in misses}
     for rid, spec in fresh.items():
         b = miss_by_id.get(rid)
@@ -439,40 +346,15 @@ async def _judge_pairs(pairs: list[dict]) -> dict[str, dict]:
     return out
 
 
-# Public entrypoint
 async def cocoa_alignment_check(
     *,
     sawc_payload: dict,
     vault: dict[str, str],
 ) -> dict:
-    """Run CoCoA two-stage alignment over every (subtopic, code) pair in
-    the chapter.
-
-    Args:
-      sawc_payload: parsed sawc-latest.json content.
-      vault: {hash: fence_text} merged vault — same lookup the renderer
-        uses. Subtopics whose hash isn't in the vault are skipped (the
-        round-trip audit catches those as missing).
-
-    Returns:
-      {
-        "passed":              bool,    # ≥85% aligned
-        "method":              "cocoa_v1",
-        "n_pairs":             int,
-        "n_aligned":           int,
-        "n_misaligned":        int,
-        "alignment_rate":      float,   # 0-1
-        "misaligned":          [{"subheading": str, "reason": str, ...}, ...],
-        "feedback":            str,     # 1-sentence summary for mgsr_replan
-      }
-
-    Fail-soft: any infrastructure failure returns passed = True with
-    method = 'cocoa_skipped' so the bundled judge stays authoritative.
-    """
+    """Run CoCoA two-stage alignment over every (subtopic, code) pair; fail-soft → passes."""
     sections = sawc_payload.get("sections") or []
 
-    # derived_code directly; verbatim subtopics resolve via vault. We index
-    # by a stable integer id so the JSON round-trip is robust.
+    # Stable integer id so JSON round-trips are robust.
     pairs: list[dict] = []   # input rows the LLM stages consume
     for s in sections:
         sub_list = s.get("subtopics") or []
@@ -519,13 +401,7 @@ async def cocoa_alignment_check(
             "feedback":       "no subtopics with both code body + prose",
         }
 
-    # structural keyword-overlap pre-check. Any pair
-    # whose explanation shares ZERO informative identifiers with its
-    # code body is auto-flagged misaligned. Catches catastrophic
-    # mismatches (CC ch-01 had 6 such cases) without burning LLM calls
-    # AND adds a hard structural floor under the LLM judge's looser
-    # semantic threshold. Failing pairs skip the explainer + judge
-    # stages entirely.
+    # Zero-identifier overlap → auto-flagged misaligned (CC ch-01: 6 cases caught without LLM calls).
     structural_misaligned: list[dict] = []
     pairs_for_llm: list[dict] = []
     for p in pairs:
@@ -551,8 +427,6 @@ async def cocoa_alignment_check(
             f"misaligned; LLM judge will only see "
             f"{len(pairs_for_llm)} pairs"
         )
-    # The LLM stages only see the pairs that PASSED the structural
-    # pre-check. Misaligned ones are merged back at the verdict stage.
     pairs = pairs_for_llm
 
     # Slice by _MAX_SUBTOPICS_PER_BATCH so prompts don't balloon.
@@ -561,8 +435,6 @@ async def cocoa_alignment_check(
         for i in range(0, n_pairs, _MAX_SUBTOPICS_PER_BATCH)
     ]
 
-    # Explainer over all blocks (per-hash MinIO cache absorbs
-    # repeat work across iters/chapters/frameworks).
     specs: dict[str, str] = {}
     for batch in batches:
         blocks = [
@@ -637,11 +509,7 @@ async def cocoa_alignment_check(
                 "reason": v.get("reason") or "explanation does not ground to the cited code",
             })
 
-    # n_pairs is the ORIGINAL total (includes structurally-misaligned).
-    # n_judged is the denominator for the alignment rate — should also
-    # be the original total, otherwise structural misalignments leak
-    # into a deflated rate. The structural pre-check is part of the
-    # alignment signal, not a separate channel.
+    # n_pairs is the ORIGINAL total (includes structurally-misaligned); structural pre-check is part of the alignment signal.
     n_judged = n_pairs
     rate = (n_aligned / n_judged) if n_judged else 1.0
     passed = rate >= _ALIGN_PASS_FRACTION
@@ -671,10 +539,8 @@ async def cocoa_alignment_check(
     }
 
 
-# Tiny helpers
 def _strip_fences(s: str) -> str:
-    """Strip leading/trailing ```lang ... ``` fence markers from a vault
-    body so the explainer sees clean code."""
+    """Strip ``` fence markers from a vault body so the explainer sees clean code."""
     s = (s or "").strip()
     if not s.startswith("```"):
         return s

@@ -1,81 +1,4 @@
-"""digest_construct — LLM-assigned source-to-section routing.
-
-Step 4 of the synth pipeline (per
-`docs/SYNTH-ARCHITECTURE-SOTA-2026-05-18.md` + the digest_construct
-deep research report). The second LLM-driven synth graph node, runs
-after outline_sdp commits its checkpoint.
-
-WHAT IT DOES (per chapter):
-
-  1. Loads the outline blob produced by outline_sdp from
-     `synth/{slug}/{chapter_id}/outline-latest.json`. The blob carries
-     both the outline sections AND the source_keys, so this node has
-     everything it needs in one read.
-  2. Reads each source page from MinIO (normalized + sentinelized).
-  3. For each source, extracts the vault hashes present (so the LLM
-     only routes hashes it ACTUALLY sees, not hallucinated ones).
-  4. Fires ONE LLM call PER SOURCE in parallel (capped at
-     `_CONCURRENCY` via `asyncio.Semaphore` — matches planner pattern).
-     Emits a `source_done` SSE event AS each source completes (real-
-     time UI progress through the long parallel-fan-out phase).
-  5. Parses + Pydantic-validates each digest. Cross-references the
-     LLM output against the outline's section_ids + the source's
-     actual vault hashes; on issues, runs a repair LLM call.
-  6. Aggregates: builds `per_section` index (inverse of per_source),
-     computes `CoverageStats` (empty sections, over-spread sources,
-     orphan code_refs, fan-out metrics).
-  7. Persists the full `ChapterDigest` to MinIO (versioned + latest
-     pointer, content-addressed by manifest hash).
-  8. Returns state patch with `digest_path` + `digest_stats`.
-
-CACHING — content-addressed:
-
-  versioned: synth/{slug}/{chapter_id}/digest/{manifest_hash}.json
-  latest:    synth/{slug}/{chapter_id}/digest-latest.json
-
-  Manifest hash includes:
-    outline_manifest_hash  (the outline this digest is keyed to)
-    sources_sha            (sorted source MinIO keys)
-    sources_bytes          (post-concat byte count — invalidates on
-                            ingestion changes)
-    n_sources
-    prompt_version
-    schema_version
-
-  Cache hit returns immediately + emits `done` SSE with cache_hit = true.
-
-FAIL-SOFT BEHAVIOR (matches outline_sdp's pattern):
-
-  - One source's LLM call fails: log + emit `sample_done(ok = false)`,
-    skip that source's digest, continue. Empty contributions for that
-    source surface in the aggregate as missing coverage; mgsr_replan
-    can request a retry.
-  - Pydantic validation fails on a source's digest: run one repair
-    LLM call with `validate_source_digest` issues as the feedback. If
-    repair also fails, drop that source's digest (same as above).
-  - All N sources fail: emit a minimal ChapterDigest with empty
-    per_source + empty per_section (no contributions). mgsr_replan
-    surfaces the coverage_stats.empty_sections = ALL list and can
-    request a full retry.
-
-SSE EVENTS (per the established pattern in outline_sdp):
-
-  start              — chapter_id, chapter_title, n_sections, n_sources
-  outline_loaded     — n_sections, n_sources, n_total_vault_hashes
-  source_done        — source_idx, n_total, ok, source_key,
-                        n_contributions, wall_ms, deployment, error?
-  digests_aggregated — n_digests_ok, n_pydantic_fail, n_total
-  done               — n_sources, n_sections_covered, n_empty_sections,
-                        n_orphan_code_refs, wall_ms, cache_hit
-
-OBSERVABILITY:
-
-  Each `source_done` event includes the deployment ID picked by the
-  ParetoBandit so we can see fan-out across providers in real-time.
-  The `dd-grader` bandit cells share state with outline_sdp's cells —
-  successful digest calls reinforce the same deployments that worked
-  for outline drafting.
-"""
+"""digest_construct — per-source parallel LLM routing (one call per source, content-addressed cache)."""
 from __future__ import annotations
 
 import asyncio
@@ -130,10 +53,7 @@ logger = logging.getLogger(__name__)
 
 # Tunables (quality > speed)
 _CONCURRENCY        = 24    # max concurrent per-source LLM calls; FGTS-VA bandit absorbs 429s via arm rotation, no per-call throttling needed.
-# Expected: 252 × 4s / 16 ≈ 65s ideal; realistic ≈ 7-9 min after
-# accounting for repair attempts, larger-page outliers, and bandit
-# cooldown headroom. Quality is byte-identical (same prompts, same
-# model pool); this is pure throughput.
+# Expected ~7-9 min realistic (repair attempts + outliers); quality unchanged, pure throughput.
 _TEMPERATURE_DRAFT  = 0.1   # routing decisions should be ~deterministic
 _TEMPERATURE_REPAIR = 0.0
 _MAX_TOKENS_DRAFT   = 6000
@@ -147,10 +67,7 @@ _MAX_SOURCE_CHARS = 100_000
 _BLOB_PREFIX = "synth"
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
-# structured-output schema for the
-# per-source digest call. NIM + Mistral honor response_format = json_schema
-# server-side. Caller's existing Pydantic repair loop catches anything
-# that slips through (e.g. Gemini, where translation is rough).
+# NIM + Mistral honor response_format=json_schema server-side; Gemini slips through to the Pydantic repair loop.
 _DIGEST_RESPONSE_FORMAT = {
     "type": "json_schema",
     "json_schema": {
@@ -223,7 +140,6 @@ def _try_parse_payload(
         return None, f"{type(e).__name__}: {str(e)[:200]}"
 
 
-# Per-source pipeline
 async def _digest_one_source(
     *,
     sem: asyncio.Semaphore,
@@ -238,12 +154,7 @@ async def _digest_one_source(
     source_key: str,
     source_md: str,
 ) -> Optional[SourceDigest]:
-    """One source's full digest lifecycle: prompt → LLM → parse →
-    validate → repair-if-needed → SourceDigest. Returns None on
-    irrecoverable failure.
-
-    Emits one `source_done` event per source (real-time progress
-    through the fan-out)."""
+    """Prompt → LLM → parse → validate → repair → SourceDigest; None on irrecoverable failure."""
     async with sem:
         t0 = time.monotonic()
         source_vault_hashes = extract_vault_hashes(source_md)
@@ -300,14 +211,10 @@ async def _digest_one_source(
 
         payload, err = _try_parse_payload(parsed)
         if payload is None:
-            # Pydantic rejected — try ONE repair pass before giving up
             attempt = 0
             current = parsed
             while attempt < _MAX_REPAIR_ATTEMPTS and payload is None:
                 attempt += 1
-                # The "issues" feedback for a Pydantic failure is the
-                # error string; for content-level failures we'll use
-                # the richer validate_source_digest output below
                 issues = [f"Pydantic schema rejected the previous output: {err}"]
                 repair_prompt = build_repair_prompt(
                     chapter_id = chapter_id,
@@ -411,10 +318,7 @@ async def _digest_one_source(
                     )
                     break
 
-            # If issues remain, we KEEP the digest anyway but log a
-            # warning — `build_per_section_index` silently drops
-            # unknown section_id contribs, so the aggregate stays
-            # consistent. mgsr_replan can flag the source for revisit.
+            # Keep digest even with remaining issues; build_per_section_index drops unknown ids safely.
             if issues:
                 logger.info(
                     f"[digest_construct] {source_key}: kept with "
@@ -451,7 +355,6 @@ async def _digest_one_source(
         return src_digest
 
 
-# Manifest hash
 def _compute_manifest_hash(
     *,
     outline_manifest_hash: str,
@@ -469,7 +372,6 @@ def _compute_manifest_hash(
     return sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-# The node
 async def digest_construct_run(state: SynthState) -> dict:
     """Run the LLM-assigned source-to-section router for one chapter."""
     slug = state.get("framework_slug")
@@ -489,7 +391,6 @@ async def digest_construct_run(state: SynthState) -> dict:
     t0 = time.monotonic()
     minio = get_storage()
 
-    # ── Load outline blob (the canonical input — has outline + sources) ─
     outline_key = _outline_latest_key(slug, chapter_id)
     if not await minio.exists(outline_key):
         return {
@@ -553,15 +454,7 @@ async def digest_construct_run(state: SynthState) -> dict:
 
     bodies = await minio.read_many(source_keys)
 
-    # When ingestion produced per-page markdown files at
-    # `ingestion/{slug}/pages/...` but didn't build matching per-page
-    # vaults (e.g., the consolidated llms-full crawl built only one mega-
-    # vault), the per-source markdown has no sentinels and the digest
-    # LLM finds zero vault hashes → emits empty code_refs → sawc ends up
-    # with allowed_hashes = [] → final chapter has zero code blocks.
-    # Fix: sentinelize each source on-the-fly here. The resulting
-    # vault entries are accumulated below and the sentinelized bodies
-    # replace the raw ones for downstream LLM input.
+    # Runtime sentinelization: sources without pre-built vaults have no sentinels → LLM routes zero code_refs → zero code blocks in final chapter.
     from ..vault.domain import sentinelize_doc as _sentinelize_doc
     runtime_vault_entries: dict = {}
     sentinelized_bodies: list[bytes | str | None] = []
@@ -575,8 +468,6 @@ async def digest_construct_run(state: SynthState) -> dict:
             else raw_body
         )
         if "<code-ref hash=" in body_text:
-            # Already sentinelized at the source (the pre-built path
-            # would have produced this).
             sentinelized_bodies.append(body_text)
             continue
         try:
@@ -601,7 +492,6 @@ async def digest_construct_run(state: SynthState) -> dict:
             f"sources, accumulated {len(runtime_vault_entries)} vault entries"
         )
 
-    # Pair (source_key, body); drop empties + log
     pairs: list[tuple[str, str]] = []
     for k, b in zip(source_keys, bodies):
         if b:
@@ -806,9 +696,6 @@ async def digest_construct_run(state: SynthState) -> dict:
     return {"digest_path": latest_key, "digest_stats": stats}
 
 
-# Convenience loader for downstream nodes
 def load_digest_payload(text: str) -> dict:
-    """Parse the persisted digest blob. Returns the full payload dict;
-    downstream nodes pick the fields they need (per_section,
-    coverage_stats, etc.)."""
+    """Parse the persisted digest blob."""
     return json.loads(text)

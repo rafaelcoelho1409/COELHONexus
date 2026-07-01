@@ -1,15 +1,4 @@
-"""Identifier + key-builder surface shared across the planner package.
-
-Redis namespaces:
-  dd:planner:{thread_id}:cancel          → cancel flag
-  dd:planner:{thread_id}:events          → pub/sub event channel
-  dd:planner:{thread_id}:events:snapshot → catch-up replay list
-  dd:planner:lock:{slug}                 → single-flight start lock
-  dd:planner:current:{slug}              → live-run registry
-
-MinIO key:
-  planner/{slug}/planner-timing-latest.json
-"""
+"""Redis key-builders for the planner package."""
 from __future__ import annotations
 
 import os

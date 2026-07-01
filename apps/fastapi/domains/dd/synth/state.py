@@ -1,17 +1,4 @@
-"""SynthState — TypedDict that flows through every synth graph node.
-
-Per `docs/SYNTH-ARCHITECTURE-SOTA-2026-05-18.md`, the synth graph runs
-PER-CHAPTER (not per-framework). One synth run = one chapter end-to-end:
-outline_sdp → digest_construct → sawc_write → checklist_eval →
-mgsr_replan → render_audit_write. The router fans out N concurrent
-runs (one per chapter in `planner/{slug}/plan-latest.json`) — each
-gets its own thread_id + checkpoint stream.
-
-Fields are deliberately Optional so the IMPLEMENTED-subset graph builder
-can produce a runnable graph with only a prefix of nodes wired, and so
-a partial-replay (e.g. resume after a pod restart at the `outline_sdp`
-checkpoint) starts cleanly from whatever state survived.
-"""
+"""SynthState — TypedDict shared across all synth graph nodes."""
 from __future__ import annotations
 
 from typing import Optional, TypedDict
@@ -23,9 +10,6 @@ class SynthState(TypedDict, total=False):
     thread_id:      str            # also LangFuse session_id
     synth_mode:     str            # "quality" (default) | "fast"
 
-    # MinIO key of the latest pointer (`synth/{slug}/{chapter_id}/
-    # outline-latest.json`). Versioned blob lives at
-    # `synth/{slug}/{chapter_id}/outline/{manifest_hash}.json`.
     outline_path:   Optional[str]
     outline_stats:  Optional[dict] # counts + DAG shape + cache_hit + wall_ms
 
@@ -35,11 +19,7 @@ class SynthState(TypedDict, total=False):
     sawc_path:      Optional[str]
     sawc_stats:     Optional[dict]
 
-    # AI-derived examples for thin subtopics. Field carries a DeriveStats-
-    # shaped dict (n_promoted, n_candidates_thin, attempts[], etc).
-    # Side effect: mutates sawc-latest.json in place to embed derived_code
-    # on the affected subtopics. No new path field — consumers read the
-    # same sawc-latest.json.
+    # Side effect: mutates sawc-latest.json in place to embed derived_code on affected subtopics.
     derive_stats:   Optional[dict]
 
     checklist_path:  Optional[str]
@@ -51,15 +31,10 @@ class SynthState(TypedDict, total=False):
     chapter_path:   Optional[str]
     chapter_stats:  Optional[dict]
 
-    # Iteration counter incremented each time sawc_write fires. Used by
-    # the conditional edge after mgsr_replan to enforce the 5-iter budget.
     refine_iter:           Optional[int]
-    # Previous iteration's checklist pass_rate, used for plateau detection
-    # (halt when |this_score - prev_score| < 0.03 AND iter >= 2).
+    # Plateau detection: halt when |this_score - prev_score| < PLATEAU_DELTA AND iter >= 2.
     prev_checklist_score:  Optional[float]
-    # OP-12 best-seen rescue: track the sawc artifact (manifest hash + score)
-    # with the highest checklist_pass_rate so far. On budget/plateau halt,
-    # we route the best-seen — not necessarily the latest — to render.
+    # OP-12 best-seen rescue: on budget/plateau halt, route highest-score sawc to render.
     best_seen_sawc_path:   Optional[str]
     best_seen_score:       Optional[float]
 

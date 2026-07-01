@@ -80,16 +80,6 @@ def _emit_criterion_scores(framework: str, criteria: list[dict | CriterionResult
         )
 
 
-# Deterministic pre-gates (7 — pure Python, zero LLM cost)
-# Each function takes the parsed sawc payload dict and returns one
-# CriterionResult. Stable interface so the node can iterate them in
-# a list without per-check special-casing.
-# We accept the raw dict (not a Pydantic Section list) because the sawc
-# blob is JSON-deserialized into a dict and re-parsing through Pydantic
-# would add cost without benefit — these checks only read fields, no
-# validation needed here (sawc_write already validated upstream).
-
-
 def check_all_sections_present(sawc: dict) -> CriterionResult:
     cs = sawc.get("coverage_stats") or {}
     n_done = int(cs.get("n_sections_completed", 0))
@@ -177,10 +167,7 @@ def check_all_sections_cite_at_least_1(sawc: dict) -> CriterionResult:
 
 
 def check_density_within_bounds(sawc: dict) -> CriterionResult:
-    """v2 cookbook schema (2026-05-24 PM): the writer emits 1-2 sentence
-    explanations (8-80 words) BEFORE each code block. The chapter-wide
-    average should land in the productive middle — too thin = under-
-    contextualized code; too verbose = wall-of-text before the code."""
+    """Chapter-wide average explanation words must land in [DENSITY_MIN, DENSITY_MAX]."""
     cs = sawc.get("coverage_stats") or {}
     avg = float(cs.get("avg_explanation_words", 0))
     floor = DENSITY_MIN_AVG_EXPLANATION_WORDS
@@ -252,11 +239,7 @@ def check_picker_fallback_rate_low(sawc: dict) -> CriterionResult:
 
 
 def check_code_density_appropriate(sawc: dict) -> CriterionResult:
-    """Code-first gate (v2 cookbook): subtopic count == code-block count.
-    Passes when (a) avg subtopics/section ≥ MIN_AVG_CODE_REFS_PER_SECTION
-    AND (b) ≥ MIN_CODE_REF_COVERAGE_FRACTION of allowed_hashes per section
-    landed in a subtopic. Sections with no allowed_hashes are exempt from
-    the coverage check; the average check still applies."""
+    """Avg code subtopics/section ≥ floor AND ≥ MIN_CODE_REF_COVERAGE_FRACTION of hashes used."""
     sections = sawc.get("sections") or []
     if not sections:
         return CriterionResult(
@@ -314,19 +297,7 @@ def check_code_density_appropriate(sawc: dict) -> CriterionResult:
 
 
 def check_code_uniqueness_ratio(sawc: dict) -> CriterionResult:
-    """Code-block uniqueness gate. Earlier corpora showed chapters with
-    100s of code blocks but only ~10-20% unique bodies (one snippet
-    repeated 27× across H3s). The density check doesn't catch that —
-    this does.
-
-    Adaptive floor (scales with bank diversity to avoid math-impossible
-    failures):
-      n_unique ≥ 30 → strict 0.50  (rich bank — writer should diversify)
-      15 ≤ n_unique < 30 → 0.35    (constrained — writer used what was there)
-      n_unique < 15 → 0.30         (severely constrained — signal degrades)
-
-    Uses code_ref_hash as the uniqueness key. Excludes 'derived' subtopics
-    (sawc_derive regenerates body per call → hash reuse is fine)."""
+    """Adaptive uniqueness floor (0.50/0.35/0.30 by bank size); excludes derived subtopics."""
     sections = sawc.get("sections") or []
     if not sections:
         return CriterionResult(
@@ -408,7 +379,6 @@ DETERMINISTIC_CHECKS = (
 )
 
 
-# Aggregation helpers
 def aggregate_pass_rate(
     results: list[CriterionResult],
 ) -> tuple[int, int, float, bool]:
@@ -422,9 +392,7 @@ def aggregate_pass_rate(
 
 
 def collect_failed_feedback(results: list[CriterionResult]) -> list[str]:
-    """Extract the natural-language feedback for each failed criterion,
-    formatted as `[criterion_name] feedback_text`. The format makes it
-    easy for mgsr_replan to parse + tag by criterion."""
+    """Extract failed criteria feedback as `[criterion_name] text` for mgsr_replan."""
     out: list[str] = []
     for r in results:
         if not r.passed and r.feedback:
@@ -432,36 +400,12 @@ def collect_failed_feedback(results: list[CriterionResult]) -> list[str]:
     return out
 
 
-# Chapter rendering for the LLM-judge prompt
 def render_chapter_for_judge(
     sawc: dict,
     *,
     char_cap: int = MAX_RENDERED_CHAPTER_CHARS,
 ) -> tuple[str, bool]:
-    """Render the persisted v2 cookbook sections into a markdown-ish
-    block the LLM-judge can read. Mirrors the final-render structure
-    (H2 + intro + H3 subtopics) so the judge sees what the reader sees.
-
-    Format (per section):
-
-        ## s{N}: {heading}
-        {intro}
-
-        ### {subheading_1}
-        {explanation_1}
-
-        [code-block: {hash_prefix}…]
-
-        ### {subheading_2}
-        ...
-
-        [citations (M): source-a.md ('claim'), source-b.md ('claim')]
-
-    Returns (text, truncated_flag). `truncated_flag` is True when we hit
-    `char_cap` and stopped concatenating remaining sections — the LLM-
-    judge prompt notes this so the judge doesn't penalize "incomplete
-    chapter" criteria when truncation was our doing.
-    """
+    """Render v2 cookbook sections for the LLM-judge; returns (text, truncated_flag)."""
     parts: list[str] = []
     total = 0
     truncated = False
@@ -512,9 +456,7 @@ def render_digest_for_grounding(
     *,
     char_cap: int = 20_000,
 ) -> str:
-    """Render compressed per-section contributions so the LLM-judge can
-    check `claims_grounded_in_sources` without seeing the full source
-    documents."""
+    """Render compressed per-section digest contributions for the grounding judge."""
     parts: list[str] = []
     total = 0
     per_section = digest.get("per_section") or {}
@@ -543,14 +485,6 @@ def render_digest_for_grounding(
     return "\n".join(parts)
 
 
-# LLM-judge prompts
-# Per-criterion description block. Keys MUST be the
-# `LLM_CRITERIA` names verbatim so the post-shuffle prompt template stays
-# consistent. Each value is the labelled description block that appears in
-# the prompt's CRITERIA section. The cN labels stay attached to their
-# criterion (they're identifiers, not positional markers), and the OUTPUT
-# JSON key order also follows the shuffle so the LLM's attention shape is
-# uniform across runs.
 _CRITERION_BLOCKS: dict[str, str] = {
     "chapter_reads_coherently": (
         "[c8] chapter_reads_coherently\n"
@@ -604,13 +538,7 @@ _CRITERION_BLOCKS: dict[str, str] = {
 
 
 def _criterion_order_for(chapter_id: str) -> list[str]:
-    """Deterministic per-chapter shuffle of the 5 LLM criteria.
-
-    Caching contract: same chapter_id + same prompt_version → same order →
-    cache hits work. Different chapters get different orders → primacy /
-    recency bias averages out across the corpus (arXiv 2604.03684,
-    2301.08721; LLM-as-judge order-effect mitigation).
-    """
+    """Deterministic per-chapter shuffle; same chapter_id → same order (cache-safe) + bias averages out."""
     seed_material = (
         f"{chapter_id}|{CHECKLIST_PROMPT_VERSION}".encode("utf-8")
     )
@@ -630,15 +558,7 @@ def build_judge_prompt(
     rendered_digest: str,
     truncated: bool,
 ) -> str:
-    """Build the batched LLM-judge prompt — one call returns all 5
-    semantic criteria as a single JSON object. Prometheus-2-style
-    binary rubric (CheckEval evidence: +0.45 inter-evaluator agreement
-    over continuous Likert).
-
-    Bundle 9 (2026-05-25): the criterion blocks AND the output JSON key
-    order are now deterministically shuffled per chapter_id to mitigate
-    LLM position bias. Same chapter → same order (caching preserved);
-    different chapters → different orders (bias averages out)."""
+    """Build the batched LLM-judge prompt with per-chapter criterion shuffle (position-bias mitigation)."""
     trunc_note = (
         "\n\nNOTE: The chapter text was truncated to fit the prompt — "
         "do NOT penalize 'incomplete chapter' or 'missing sections' if "
@@ -716,12 +636,10 @@ def build_repair_prompt(
     )
 
 
-# LLM verdict → CriterionResult coercion
 def llm_payload_to_criteria(
     payload: LLMJudgePayload,
 ) -> list[CriterionResult]:
-    """Map the parsed LLM judge response into 5 CriterionResult entries,
-    preserving the `LLM_CRITERIA` order."""
+    """Map LLM judge payload → 5 CriterionResult entries in LLM_CRITERIA order."""
     name_to_verdict = {
         "chapter_reads_coherently":          payload.chapter_reads_coherently,
         "claims_grounded_in_sources":        payload.claims_grounded_in_sources,
@@ -755,12 +673,7 @@ async def _run_llm_judge(
     rendered_digest: str,
     truncated: bool,
 ) -> tuple[list[CriterionResult], Optional[str], bool, int]:
-    """Fire the batched LLM-judge call → parse → validate → repair-if-needed.
-
-    Returns (criteria_results, deployment, was_repaired, wall_ms).
-    On hard failure, returns a fallback set of FAILED verdicts so the
-    chapter conservatively fails the LLM layer.
-    """
+    """Fire batched judge → parse → repair if needed; hard failure → conservative FAILED fallback."""
     t0 = time.monotonic()
     prompt = build_judge_prompt(
         chapter_id=chapter_id,
@@ -911,11 +824,7 @@ def _try_parse_judge(
         return None, f"{type(e).__name__}: {str(e)[:200]}"
 
 def _fallback_llm_verdicts(reason: str) -> list[CriterionResult]:
-    """When the judge LLM is unreachable / malformed beyond repair,
-    conservatively mark all 5 LLM criteria as failed with the reason
-    as feedback. This drops chapter pass_rate to at most 7/12 = 58%
-    (below the 80% threshold), so mgsr_replan will be invoked — which
-    is the correct behavior when we can't verify the chapter."""
+    """Conservatively fail all 5 LLM criteria when judge is unavailable (triggers mgsr_replan)."""
     out: list[CriterionResult] = []
     for name in _LLM_CRITERIA:
         out.append(CriterionResult(
@@ -1071,8 +980,6 @@ async def checklist_eval_run(state: SynthState) -> dict:
         try:
             pre_results.append(fn(sawc))
         except Exception as e:
-            # Defensive: a check shouldn't crash, but if it does we
-            # surface a clear FAIL so the operator can see which one
             logger.warning(
                 f"[checklist_eval] pre-gate {fn.__name__} crashed: "
                 f"{type(e).__name__}: {e}"
@@ -1125,20 +1032,7 @@ async def checklist_eval_run(state: SynthState) -> dict:
         repaired = repaired,
     )
 
-    # The bundled judge above gives a coarse PASS/FAIL on
-    # `claims_grounded_in_sources` based on a 3-5 citation spot-check. This
-    # separate pass extracts atomic claims + verifies each against the digest
-    # grounding via bandit-routed LLM calls (per-claim, parallel concurrency = 8).
-    # If atomic check finds any unsupported claim, we OVERRIDE the bundled
-    # judge's verdict to FAIL with specific feedback. Conservative bias:
-    # never upgrades the bundled judge — only downgrades it.
-    # Parallelize CoCoA + atomic-
-    # claim grounding. Both run on the same chapter draft; they share NO
-    # state (atomic uses prose+digest; CoCoA uses sawc+vault). Running
-    # them concurrently via asyncio.gather drops the ~3-5 min serial path
-    # to ~max(2.5, 3.5) min ≈ 30-40% on the checklist tail. Each task is
-    # wrapped in its own try/except so the fail-soft semantics are
-    # preserved per-result.
+    # CoCoA + atomic-claim grounding run in parallel (no shared state); conservative-bias: never upgrades bundled judge.
     async def _run_faithfulness():
         t0 = time.monotonic()
         try:
@@ -1181,8 +1075,6 @@ async def checklist_eval_run(state: SynthState) -> dict:
     )
 
     if atomic_result is not None and not atomic_result["passed"]:
-        # Override the bundled judge's `claims_grounded_in_sources` verdict.
-        # atomic-claim feedback. CriterionResult shape is preserved.
         for i, r in enumerate(llm_results):
             if r.name == "claims_grounded_in_sources":
                 llm_results[i] = CriterionResult(
@@ -1206,14 +1098,8 @@ async def checklist_eval_run(state: SynthState) -> dict:
         wall_ms = faithfulness_wall_ms,
     )
 
-    # CoCoA two-stage code/explanation alignment override path. Augments
-    # the bundled judge's c11/c12 verdicts when drift is detected. Note:
-    # the cocoa_result + cocoa_wall_ms were computed above in parallel
-    # with the atomic-claim check via _run_cocoa(). See arXiv 2410.03131.
+    # CoCoA found drift → override c11+c12 (arXiv 2410.03131).
     if cocoa_result is not None and not cocoa_result["passed"]:
-        # CoCoA found drift — override c11 + c12. Each gets the same
-        # alignment-rate-grounded feedback so mgsr_replan sees specific
-        # misaligned-subtopic samples and routes the reroll surgically.
         cocoa_fb = cocoa_result["feedback"]
         for i, r in enumerate(llm_results):
             if r.name in (
@@ -1322,9 +1208,6 @@ async def checklist_eval_run(state: SynthState) -> dict:
     return {"checklist_path": latest_key, "checklist_stats": stats}
 
 
-# Convenience loader for downstream nodes
 def load_checklist_payload(text: str) -> dict:
-    """Parse the persisted checklist blob. Downstream (mgsr_replan)
-    consumes `failed_feedback` + per-criterion `feedback` for guided
-    refinement instructions."""
+    """Parse the persisted checklist blob."""
     return json.loads(text)

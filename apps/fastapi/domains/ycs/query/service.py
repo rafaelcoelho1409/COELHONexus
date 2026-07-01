@@ -1301,8 +1301,10 @@ def _truncate_doc(src: dict, *, max_field_chars: int = 240) -> dict:
             out[k] = v[:3]
         elif isinstance(v, dict):
             out[k] = {ik: iv for ik, iv in list(v.items())[:6]}
-        else:
+        elif isinstance(v, (int, float, bool)) or v is None:
             out[k] = v
+        else:
+            out[k] = str(v)
     return out
 
 

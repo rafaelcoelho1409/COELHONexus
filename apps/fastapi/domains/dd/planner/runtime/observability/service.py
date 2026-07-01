@@ -1,8 +1,4 @@
-"""OTel span helpers for planner nodes.
-
-`@traced("name")` wraps a node coroutine into a top-level OTel span (dual-export: Alloy gRPC + LangFuse).
-`attach_span_attrs(prefix, attrs)` attaches a stats dict to the currently-active span.
-"""
+"""OTel span helpers — @traced wraps a node into a top-level span (Alloy gRPC + LangFuse); attach_span_attrs sets namespaced span attributes."""
 from __future__ import annotations
 
 import functools

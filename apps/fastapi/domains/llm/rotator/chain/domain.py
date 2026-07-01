@@ -14,7 +14,6 @@ from .patterns import (
 
 
 def classify_error(exc: Exception) -> str:
-    """Map a litellm/httpx exception to ParetoBandit's error_class taxonomy."""
     name = type(exc).__name__.lower()
     msg = str(exc).lower()
     if "ratelimit" in name or "429" in msg or "rate limit" in msg:
@@ -31,8 +30,7 @@ def classify_error(exc: Exception) -> str:
 
 
 def is_eol_error(exc: Exception) -> bool:
-    """True if exception text indicates EOL/deprecated/decommissioned —
-    catalog must drop NOW, not after cooldown."""
+    """True for EOL/deprecated: catalog must drop NOW, not wait for cooldown."""
     msg  = str(exc).lower()
     name = type(exc).__name__.lower()
     if "notfound" in name:
@@ -45,19 +43,16 @@ def is_eol_error(exc: Exception) -> bool:
 
 
 def is_heavyweight(deployment_id: str) -> bool:
-    """True if `deployment_id` is on the SAWC-writer heavyweight whitelist."""
     return any(s in deployment_id for s in DD_SYNTH_WRITE_HEAVYWEIGHTS)
 
 
 def is_non_chat_model(model_id: str) -> bool:
-    """True for non-chat models (embedders, rerankers, vision, ASR, classifiers)."""
     name = (model_id or "").lower()
     return any(m in name for m in _NON_CHAT_MARKERS)
 
 
 def passes_capability_floor(model_id: str, min_b: float) -> bool:
-    """True if model meets the param-size floor. MoE bypasses. No parseable
-    size → True (newer-named frontier)."""
+    """MoE bypasses the floor; unparseable name → True (newer-named frontier models)."""
     if min_b <= 0:
         return True
     name = (model_id or "").lower()
@@ -70,25 +65,21 @@ def passes_capability_floor(model_id: str, min_b: float) -> bool:
 
 
 def provider_key_env(provider: str) -> str:
-    """LiteLLM prefix → env-var name. Falls back to NVIDIA_API_KEY."""
     return _PROVIDER_KEY_ENV.get(provider, "NVIDIA_API_KEY")
 
 
 def entry_provider_and_model(entry: dict) -> tuple[str, str]:
-    """(registry_provider_id, model_id) from a LiteLLM entry."""
     m = (entry.get("litellm_params") or {}).get("model", "")
     prefix, _, model = m.partition("/")
     return _LITELLM_PREFIX_TO_PROVIDER.get(prefix, prefix), model
 
 
 def provider_mode(provider_id: str, sel: dict) -> str:
-    """'all' (every free model, opt-in new) or 'custom' (only selected)."""
     return (sel.get("mode") or {}).get(provider_id, "all")
 
 
 def selection_allows(provider_id: str, model_id: str, sel: dict) -> bool:
-    """Canonical BYOK predicate — shared by entry filter AND discovery path.
-    Provider ids are REGISTRY ids (groq/nim/...)."""
+    """Provider ids must be REGISTRY ids (groq/nim/...), not LiteLLM prefixes."""
     enabled = sel.get("enabled")
     if enabled is not None and provider_id not in enabled:
         return False

@@ -17,7 +17,7 @@ floating bar. Server-side rendering of rows would mean a round-trip
 on every checkbox click; the SPA-ish split keeps it snappy."""
 from __future__ import annotations
 
-from fasthtml.common import Button, Div, Span
+from fasthtml.common import Button, Div, Input, Label, Span
 
 
 def _BulkBar():
@@ -66,6 +66,31 @@ def _BulkBar():
     )
 
 
+def _ListHeader():
+    """Master checkbox row above the video list — same Select-all idiom
+    as the Source picker's `.ycs-picker-toolbar`. Sits outside
+    `ycs-lib-list` so `renderRows()` never clobbers it.
+
+    Three-state (unchecked / indeterminate / checked) driven by
+    `syncMasterCheckbox()` in library.js after every row render or
+    per-row checkbox change."""
+    return Div(
+        Input(
+            type       = "checkbox",
+            id         = "ycs-lib-master-cb",
+            cls        = "ycs-lib-master-cb",
+            aria_label = "Select all loaded videos",
+        ),
+        Label(
+            "Select all",
+            for_ = "ycs-lib-master-cb",
+            cls  = "ycs-lib-master-label",
+        ),
+        cls = "ycs-lib-list-header",
+        id  = "ycs-lib-list-header",
+    )
+
+
 def LibraryPanel():
     """Full-width video list + floating bulk-action bar. Filters live
     in the row-3 toolbar (`shared/toolbar.py::_LibraryFilters`).
@@ -74,6 +99,7 @@ def LibraryPanel():
     without it, the library JS no-ops and the list stays stuck on
     "Loading library…"."""
     return Div(
+        _ListHeader(),
         Div(
             Div(
                 "Loading library…",

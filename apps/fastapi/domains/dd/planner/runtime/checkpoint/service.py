@@ -1,10 +1,4 @@
-"""AsyncPostgresSaver lifecycle. Event-loop-aware cache: psycopg's async pool
-is bound to the loop that opened it; Celery prefork workers run each task
-under a fresh `asyncio.run(...)` (new loop per task), so a sticky cached
-saver was using a closed loop → `OperationalError: connection is closed`.
-We re-open whenever the running loop differs (once per Celery task; never
-per FastAPI request).
-"""
+"""AsyncPostgresSaver lifecycle; re-opens when the event loop changes because Celery prefork creates a new loop per task (stale saver → closed-pool OperationalError)."""
 from __future__ import annotations
 
 import asyncio
@@ -27,10 +21,7 @@ _saver_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
 async def _create_target_database(url: str) -> None:
-    """Connect to the admin `postgres` DB on the same server and CREATE the
-    target database from `url`. Called only when the normal connect failed
-    with `database "<name>" does not exist`. CREATE DATABASE cannot run
-    inside a transaction, so we use autocommit + a quoted identifier."""
+    """Bootstrap missing target DB; autocommit required because CREATE DATABASE cannot run inside a transaction."""
     parsed = urlparse(url)
     target_db = (parsed.path or "/").lstrip("/")
     if not target_db or target_db == "postgres":
@@ -68,9 +59,7 @@ async def init_checkpointer() -> AsyncPostgresSaver:
     url = postgres_url()
     logger.info(f"[checkpointer] connecting to {url.split('@')[-1]}")
 
-    # on a fresh cluster), bootstrap it and retry. Costs nothing in steady
-    # state — the recovery path only fires on the very first connect attempt
-    # against a cluster whose Postgres hasn't had `CREATE DATABASE <target>`
+    # Bootstrap missing DB on first connect; recovery path is no-op in steady state.
     try:
         _saver_ctx = AsyncPostgresSaver.from_conn_string(url)
         _saver = await _saver_ctx.__aenter__()

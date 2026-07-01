@@ -181,17 +181,13 @@ def derive_dag(sections: list[OutlineSection]) -> OutlineDAG:
     )
 
 
-# Structural validators (post-Pydantic, fail-soft for repair loop)
 def validate_outline_structure(
     outline: ChapterOutline,
     dag: OutlineDAG,
     *,
     n_sources: Optional[int] = None,
 ) -> tuple[bool, list[str]]:
-    """(ok, issues). NL-string issues feed the repair-prompt loop.
-    Cross-section invariants (Pydantic handles per-section): unique ids/
-    headings, no banned headings, valid prereqs, DAG depth ≤ cap,
-    fuzzy-dup H2 detection (SequenceMatcher ≥ 0.85), adaptive section count."""
+    """(ok, issues): cross-section checks Pydantic can't handle (unique ids/headings, banned headings, valid prereqs, DAG depth cap, fuzzy-dup H2, adaptive section count)."""
     issues: list[str] = []
     ids = [s.section_id for s in outline.sections]
     headings_lc = [s.heading.casefold() for s in outline.sections]
@@ -301,7 +297,6 @@ def validate_outline_structure(
     return (len(issues) == 0, issues)
 
 
-# Prompt templates
 def build_outline_prompt(
     *,
     framework: str,
@@ -312,11 +307,7 @@ def build_outline_prompt(
     sources_concat_md: str,
     target_sections_hint: int = 8,
 ) -> str:
-    """Build the OUTLINE_SDP prompt.
-
-    `target_sections_hint` is the adaptive per-chapter cap (real target,
-    not a fixed ~8 — over-sectioning forces code recycling that the
-    renderer strips into hollow cross-refs)."""
+    """Build the OUTLINE_SDP prompt. target_sections_hint = adaptive per-chapter cap — over-sectioning forces code recycling stripped into hollow cross-refs."""
     return (
         f"You are the Chapter Outliner — `outline_sdp`, step 3 of the "
         f"Docs Distiller synth pipeline. Per SurveyGen-I PlanEvo "
@@ -427,18 +418,7 @@ def build_usc_vote_prompt(
     chapter_title: str,
     adaptive_cap: int = 0,
 ) -> str:
-    """USC picker prompt — Universal Self-Consistency rubric over N
-    candidate outlines.
-
-    `candidates_summary` is a list of dicts with structural metadata
-    (n_sections, max_stage, n_violations, heading_list, etc.) computed
-    deterministically. The LLM picker reads the summaries — NOT the
-    full outline JSON — to keep its context small and its rubric
-    focused on structure (per Brown & Cobbe 2025: USC pickers degrade
-    when fed too much candidate body content).
-
-    Returns a prompt that asks for `{"chosen_index": int}`.
-    """
+    """USC picker prompt (Brown & Cobbe 2025): structural summaries only (not full JSON) so picker stays focused on structure and context stays small."""
     lines: list[str] = []
     for i, c in enumerate(candidates_summary):
         violations = c.get("violations") or []
@@ -510,14 +490,7 @@ def build_repair_prompt(
     issues: list[str],
     sources_concat_md: str,
 ) -> str:
-    """Repair prompt — given a structurally-invalid outline + issue list,
-    ask the LLM to emit a fixed version with the SAME JSON schema.
-
-    Mirrors the deprecated `validate_outline → repair` flow but with
-    machine-readable issue strings (vs prose feedback). The LLM keeps
-    section_ids stable where possible so downstream nodes can
-    cross-reference between iterations.
-    """
+    """Repair prompt for structurally-invalid outline. LLM keeps section_ids stable where possible — downstream nodes cross-reference by id."""
     issues_block = "\n".join(f"- {x}" for x in issues)
     return (
         f"Fix structural issues in this chapter outline. Keep the SAME "
@@ -544,14 +517,10 @@ def build_repair_prompt(
     )
 
 
-# Helpers used by the LangGraph node
 def summarize_candidate(
     outline: ChapterOutline, dag: OutlineDAG, issues: list[str],
 ) -> dict:
-    """Structural summary for the USC picker. Keeps the picker's
-    context small (~200 tokens per candidate) and biases the decision
-    toward STRUCTURE — not content (the picker can't reasonably evaluate
-    400-char descriptions × 40 sections in a small prompt window)."""
+    """Compact structural summary for USC picker (~200 tokens per candidate); biases toward structure, not content."""
     headings = [s.heading for s in outline.sections]
     desc_chars = [len(s.description) for s in outline.sections]
     n_prereqs = [len(s.prerequisites) for s in outline.sections]
@@ -568,9 +537,7 @@ def summarize_candidate(
 
 
 def count_vault_sentinels(md_text: str) -> int:
-    """Cheap estimate of vault size for prompt context. Looks for
-    `<code-ref hash = "..."/>` tags that `corpus_normalize` + ingestion's
-    `vault_sentinelize` leave behind."""
+    """Cheap vault-size estimate for the prompt context hint."""
     return md_text.count("<code-ref hash = ")
 
 
@@ -612,10 +579,7 @@ _OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR = 5
 _OUTLINE_OPTIMAL_STOPPING_RATIO_OF_CAP = 0.7
 
 def _outline_optimal_stopping_min(n_sources: int | None) -> int:
-    """Minimum section count for Optimal-Stopping early-exit. Couples
-    to the adaptive cap so small corpora keep the cheap floor while
-    large corpora demand sample 1 use most of the available budget
-    before short-circuiting."""
+    """Minimum section count for Optimal-Stopping early-exit, coupled to adaptive cap so large corpora demand more sections before short-circuiting."""
     if n_sources is None:
         return _OUTLINE_OPTIMAL_STOPPING_ABS_FLOOR
     # max_h2_for_n_sources already imported at module top from .params
@@ -731,11 +695,7 @@ async def _detect_semantic_h2_duplicates(
     *,
     threshold: float = _SEMANTIC_H2_DEDUP_THRESHOLD,
 ) -> list[str]:
-    """Return issue strings naming pairs of SCOPE-duplicate H2 sections —
-    flagged by embedding cosine (semantic) OR lexical content-word overlap.
-    Empty list if none. Fail-soft: the lexical pass still runs when the
-    embedder is unavailable, so detection never depends solely on the LLM
-    embedding service."""
+    """Return issues for scope-duplicate H2 pairs (embedding cosine OR lexical overlap). Fail-soft: lexical pass still runs when embedder is unavailable."""
     sections = outline.sections
     if len(sections) <= 1:
         return []
@@ -795,10 +755,7 @@ async def _detect_semantic_h2_duplicates(
     ]
 
 def _heuristic_fallback_outline(md_text: str) -> ChapterOutline:
-    """Last-resort: derive sections from H1/H2 in the source. Emitted
-    when all N samples fail to parse. Downstream mgsr_replan will
-    inevitably rewrite this, but having SOMETHING valid keeps the
-    chapter graph runnable instead of poisoning the whole pipeline."""
+    """Last-resort fallback when all N samples fail to parse: derive sections from H1/H2 in source. Keeps chapter graph runnable; mgsr_replan rewrites it."""
     headings = re.findall(r"(?m)^#{1,3}\s+(.+)$", md_text or "")
     cleaned: list[str] = []
     seen: set[str] = set()
@@ -841,11 +798,7 @@ def _heuristic_fallback_outline(md_text: str) -> ChapterOutline:
 def _serialize_outline_with_dag(
     outline: ChapterOutline, dag: OutlineDAG,
 ) -> dict:
-    """Combine outline + dag for MinIO persistence. Schema:
-        {schema_version, prompt_version, outline: <ChapterOutline>,
-         dag: <OutlineDAG>}
-    Edges and stages are JSON-friendly already (tuples → lists, dict
-    keys → str)."""
+    """Combine outline + dag for MinIO persistence. Edges/stages are already JSON-friendly (tuples → lists)."""
     return {
         "schema_version": OUTLINE_SCHEMA_VERSION,
         "prompt_version": OUTLINE_PROMPT_VERSION,
@@ -864,22 +817,7 @@ async def _generate_samples(
     *,
     n_sources: int | None = None,
 ) -> list[tuple[dict, dict]]:
-    """Fire N drafts (sequential w/ early-exit OR concurrent fan-out).
-
-    DD-SYNTH-SPEED-SOTA #B2 (2026-05-26) — Optimal-Stopping: fire sample 1
-    first; if it parses cleanly, passes structure validation with zero
-    issues, AND has >= _outline_optimal_stopping_min(n_sources) sections,
-    ship it alone and skip the remaining N-1 samples. T1 (2026-05-27)
-    raised the floor from fixed-5 to ~70% of the adaptive cap so small
-    outlines don't short-circuit. Else fan out remaining concurrently
-    and let USC vote decide. arXiv 2510.01394 (Oct 2025): 15-35% sample
-    reduction at equal Best-of-N quality. Disabled via
-    `KD_OUTLINE_OPTIMAL_STOPPING=false`.
-
-    Failures (parse fail, None payload) are logged but don't block the rest.
-    Each sample emits a `sample_done` SSE event on completion so the UI
-    sees steady progress through the long-running LLM phase.
-    """
+    """Fire N drafts with Optimal-Stopping (arXiv 2510.01394): sample 1 checked first; if clean + valid + ≥ min sections, skip remaining N-1. Else fan out concurrently, then USC vote. Disabled via KD_OUTLINE_OPTIMAL_STOPPING=false."""
     if _OUTLINE_OPTIMAL_STOPPING_ENABLED and n >= 2:
         r0 = await _draft_one_outline(
             prompt, sample_idx=0, n_total=n, thread_id=thread_id,
@@ -937,13 +875,7 @@ async def _usc_pick(
     chapter_title: str,
     adaptive_cap: int,
 ) -> int:
-    """Run the USC picker over `candidates` (outline, dag, issues).
-    Returns the chosen index. Falls back to 0 (first valid) on any
-    picker failure.
-
-    `adaptive_cap` is the per-chapter section-count ceiling
-    (max_h2_for_n_sources); the picker rewards candidates AT or just
-    under it and penalizes over-decomposed ones (v4, 2026-05-29 PM)."""
+    """Run USC picker over candidates. adaptive_cap = per-chapter section ceiling; picker rewards candidates at or just under it. Falls back to index 0 on failure."""
     if len(candidates) <= 1:
         return 0
     summaries = [
@@ -1011,12 +943,7 @@ async def _draft_one_outline(
     n_total: int,
     thread_id: str,
 ) -> tuple[Optional[dict], dict]:
-    """One LLM call via the dd-grader bandit rotator. Returns (parsed_dict
-    or None, meta dict with deployment/latency/attempts/reward/error).
-
-    Emits a `sample_done` SSE event when this individual sample completes
-    so the UI shows per-sample progress instead of going silent for 30s
-    while asyncio.gather awaits all 3 samples in parallel."""
+    """One LLM call for outline draft. Emits `sample_done` SSE per sample so UI shows per-sample progress during asyncio.gather (otherwise silent for ~30s)."""
     t0 = time.monotonic()
     try:
         response, meta = await chat_judge_bandit_async(
@@ -1211,12 +1138,7 @@ async def outline_sdp_run(state: SynthState) -> dict:
                 f"recomputing"
             )
 
-    # the target hint is now the ADAPTIVE CAP, not a
-    # fixed 8. The old fixed-8 hint (plus a USC rubric rewarding "6-12")
-    # actively pushed the LLM to over-section small chapters; it then got
-    # hard-trimmed (or, pre-v4, deadlocked). Asking for the right count up
-    # front means the winning candidate rarely needs trimming and the
-    # sections are scoped for that count from the start.
+    # Adaptive cap (not fixed 8): old fixed-8 pushed LLM to over-section small chapters (then hard-trimmed or deadlocked). Correct count up front → winner rarely needs trimming.
     adaptive_target = max_h2_for_n_sources(len(sources))
     prompt = build_outline_prompt(
         framework = slug,
@@ -1271,9 +1193,7 @@ async def outline_sdp_run(state: SynthState) -> dict:
     )
     outline, dag, issues = candidates[chosen_idx]
 
-    # semantic H2 dedup feedback. Embed section
-    # heading+description, flag pairs above threshold as repair-loop
-    # input. Fail-soft (returns [] on any embed/compute failure).
+    # Embed heading+description pairs above similarity threshold → repair-loop feedback. Fail-soft.
     semantic_dupe_issues = await _detect_semantic_h2_duplicates(outline)
     if semantic_dupe_issues:
         issues = list(issues) + semantic_dupe_issues
@@ -1332,9 +1252,7 @@ async def outline_sdp_run(state: SynthState) -> dict:
             _, new_issues = validate_outline_structure(
                 new_outline, new_dag, n_sources = len(sources),
             )
-            # re-check semantic H2 dedup on the new outline so the
-            # repair loop credits/penalizes the LLM's response to the
-            # semantic feedback.
+            # Re-check semantic H2 dedup on repaired outline so repair loop credits the LLM's response to feedback.
             new_semantic = await _detect_semantic_h2_duplicates(new_outline)
             if new_semantic:
                 new_issues = list(new_issues) + new_semantic
@@ -1350,25 +1268,7 @@ async def outline_sdp_run(state: SynthState) -> dict:
             )
             continue
 
-    # Hard-enforce outline section-count cap.
-    # Previously emitted the adaptive-cap violation as a soft issue in
-    # validate_outline_structure but Run 3 evidence showed the LLM
-    # ignores it: BU ch-02 shipped 30 H2 (cap = 12) after 3 repairs, CC
-    # ch-01 shipped 20 H2 (cap = 14). Soft pressure isn't enough.
-    # Programmatic trim: keep the first `cap` sections in topological
-    # stage order (foundational concepts first). Prune prerequisite
-    # references to dropped sections. Re-derive the DAG over the
-    # trimmed set. This guarantees bounded-output regardless of LLM
-    # compliance. Lost content was always defensible-by-fewer-than-3-
-    # source-docs anyway (the cap is `n_sources // 3`).
-    # trim to the adaptive cap DIRECTLY. The old
-    # `max(SECTIONS_MIN, cap)` floored the trim at 4 (= old SECTIONS_MIN),
-    # which made it a NO-OP for the universal 4-section outlines the LLM
-    # emits: validate flagged 4 > cap 3, but the trimmer's effective cap was
-    # max(4, 3) = 4, so it never fired and 12/13 CC chapters shipped one
-    # redundant section with a permanent unresolved violation. The adaptive
-    # floor is now 2 (= SECTIONS_MIN), so trimming to the cap is always
-    # schema-valid.
+    # HARD-TRIM: LLM ignores soft cap signal (BU ch-02 shipped 30 H2 at cap 12; CC ch-01 shipped 20 at cap 14). Trim to adaptive_cap directly — old max(SECTIONS_MIN, cap) floor caused NO-OP for 4-section outlines below cap 4.
     adaptive_cap = max_h2_for_n_sources(len(sources))
     if len(outline.sections) > adaptive_cap:
         n_before = len(outline.sections)
@@ -1402,15 +1302,11 @@ async def outline_sdp_run(state: SynthState) -> dict:
             framework = slug,
             sections_dropped = max(n_before - len(outline.sections), 0),
         )
-        # Re-validate post-trim so downstream sees the actual remaining
-        # violations (not the pre-trim ones, which may include the
-        # cap-exceeded issue we just resolved).
+        # Re-validate post-trim so downstream sees actual remaining violations (not pre-trim ones including the now-resolved cap-exceeded).
         _, issues = validate_outline_structure(
             outline, dag, n_sources = len(sources),
         )
-        # re-check semantic dedup post-trim. Trimming may have
-        # removed near-duplicate H2s; reflect the actual remaining
-        # situation in the persisted violations list.
+        # Re-check semantic dedup post-trim (trimming may have removed near-duplicate H2s).
         post_trim_semantic = await _detect_semantic_h2_duplicates(outline)
         if post_trim_semantic:
             issues = list(issues) + post_trim_semantic

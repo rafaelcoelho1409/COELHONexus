@@ -1,16 +1,4 @@
-"""Substep 6 — chapter_assign: LangGraph node shell.
-
-Per-doc LLM assigns confidence scores to each chapter. Multi-assignment
-allowed (a doc can score >threshold on multiple chapters; chapter_select
-breaks ties via coverage greedy). Lexical fallback on per-doc LLM
-failure (Fix, 2026-05-30) so no doc gets silently dropped.
-
-All orchestration lives in service.chapter_assign_run.
-
-State writes:
-  chapter_doc_assignments_ref — MinIO key of the JSON
-  assign_stats                — counts, coverage stats
-"""
+"""chapter_assign node shell — multi-assignment with lexical fallback so no doc is silently dropped."""
 from __future__ import annotations
 
 from ...runtime.observability import traced

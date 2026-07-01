@@ -29,10 +29,7 @@ def planner_latest_key(slug: str) -> str:
 
 
 def source_key_to_vault_key(source_key: str, framework_slug: str) -> str:
-    """Translate `ingestion/{slug}/pages/{idx:04d}-{safe_slug}.md` to
-    `synth-vault/{slug}/pages/{idx:04d}-{safe_slug}.vault.json`. Mirrors
-    `ingestion/storage_minio.py:vault_manifest_key()`'s transform
-    without importing the helper."""
+    """Translate ingestion page key to vault key; mirrors storage_minio.vault_manifest_key() without importing it."""
     basename = source_key.rstrip("/").rsplit("/", 1)[-1]
     if basename.endswith(".md"):
         basename = basename[:-3]

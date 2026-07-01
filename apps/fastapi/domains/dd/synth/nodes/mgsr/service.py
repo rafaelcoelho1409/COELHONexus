@@ -46,13 +46,8 @@ from .versions import MGSR_PROMPT_VERSION
 logger = logging.getLogger(__name__)
 
 
-# Trivial-pass fast path
 def is_trivial_pass(checklist: dict) -> bool:
-    """Fast-path predicate: chapter already passed the checklist, no
-    replan needed. Avoids the LLM call entirely.
-
-    Per the SOTA doc threshold: pass_rate ≥ 0.80 is shippable.
-    """
+    """Fast-path predicate: pass_rate ≥ 0.80 → skip LLM replan entirely."""
     if not checklist:
         return False
     if not bool(checklist.get("chapter_passed", False)):
@@ -79,23 +74,13 @@ def build_trivial_pass_decision(
     )
 
 
-# Halt-reason derivation (when LLM was consulted)
 def derive_halt_reason(
     payload: LLMReplanPayload,
     *,
     iteration: int = 0,
     budget: int = 5,
 ) -> tuple[bool, HaltReason]:
-    """Combine the LLM's emitted `halt` flag with confidence-based and
-    budget-based halt rules. Returns (halt, halt_reason).
-
-    Halt cascade (in priority order):
-      1. iteration ≥ budget → budget_exhausted
-      2. confidence ≥ CONFIDENCE_HIGH_THRESHOLD → confidence_high
-      3. halt==true + no actions → no_actions_needed
-      4. halt==true + actions emitted → confidence_high (LLM said halt)
-      5. Otherwise (v1) → v1_no_loop (we emit actions but don't cycle)
-    """
+    """Combine LLM halt flag with confidence/budget rules. Cascade: budget → confidence_high → no_actions_needed → v1_no_loop."""
     if iteration >= budget:
         return True, "budget_exhausted"
     if payload.confidence >= CONFIDENCE_HIGH_THRESHOLD:
@@ -109,21 +94,12 @@ def derive_halt_reason(
     return True, "v1_no_loop"
 
 
-# Cross-reference validators (post-Pydantic, fail-soft for repair loop)
 def validate_actions_against_outline(
     actions: list[ReplanAction],
     *,
     valid_section_ids: set[str],
 ) -> list[str]:
-    """Return list of issue strings suitable for repair-prompt feedback.
-
-    Checks:
-      - every action.targets[i] is in valid_section_ids
-      - every insert_after / insert_before is in valid_section_ids
-      - every new_prerequisites entry is in valid_section_ids (for `add`)
-      - sequential-application sanity (action[N] doesn't reference
-        section_ids deleted by earlier actions)
-    """
+    """Return issues list: validates action targets + insert positions + new_prerequisites against valid_section_ids (checks sequential consistency)."""
     issues: list[str] = []
     available = set(valid_section_ids)
 
@@ -344,12 +320,7 @@ async def _run_llm_replan(
     outline_sections: list[dict],
     valid_section_ids: set[str],
 ) -> tuple[Optional[LLMReplanPayload], Optional[str], bool, int]:
-    """Fire the replan LLM call → parse → Pydantic → cross-ref →
-    repair-if-needed.
-
-    Returns (payload, deployment, was_repaired, wall_ms). On hard
-    failure, payload is None and the caller uses fallback_decision.
-    """
+    """Fire replan LLM call → parse → Pydantic → cross-ref → repair if needed. Returns (payload, deployment, was_repaired, wall_ms); None payload → caller uses fallback_decision."""
     t0 = time.monotonic()
     prompt = build_replan_prompt(
         framework=framework,

@@ -1,21 +1,4 @@
-"""Pure HTML→Markdown extraction (chrome strip + math normalization + convert).
-
-Doc sites that pre-render math server-side (GitBook, mdBook,
-sphinxcontrib-katex, MyST-Sphinx, MathJax-flavored Jupyter exports) ship
-the same equation THREE times in the DOM: the accessible MathML, the
-visual KaTeX/MathJax HTML, and the canonical LaTeX source. Without
-pre-processing, markdownify converts each textual piece to prose,
-producing the unreadable "triple-print mush" pattern.
-
-Fix: walk every KaTeX `<annotation encoding="application/x-tex">` and
-every MathJax `<mjx-container>` / `<script type="math/tex">`, replace the
-OUTERMOST enclosing math-wrapper with a single text node carrying the
-TeX source wrapped in `$..$` (inline) or `$$..$$` (display) markers.
-markdownify then sees just text and passes it through; the client
-renderer (content_renderer.js) picks up the delimiters and KaTeX
-auto-render produces clean math. Idempotent — zero math containers → no
-mutation.
-"""
+"""Pure HTML→Markdown: strip chrome, normalize KaTeX/MathJax triple-print math (MathML + visual + LaTeX all in DOM) to $…$/$$$…$$$ text nodes so markdownify sees one clean representation."""
 from __future__ import annotations
 
 import logging
@@ -69,10 +52,7 @@ def _katex_container_and_display(annotation: Tag) -> tuple[Optional[Tag], bool]:
 
 
 def _mathjax_source(container: Tag) -> Optional[str]:
-    """Extract the TeX source from a MathJax container. Tries (1) inner
-    ``annotation`` element (MathJax3 MathML fallback), then (2) inner
-    ``<script type="math/tex">`` (legacy MathJax2 / MathJax3 with assistive
-    MathML disabled). Returns ``None`` if the container has neither."""
+    """Extract TeX from MathJax container: tries annotation (MathJax3 MathML), then script[type=math/tex] (MathJax2). None if neither present."""
     ann = container.find("annotation", attrs = {"encoding": "application/x-tex"})
     if ann is not None:
         src = ann.get_text("", strip = False)
@@ -152,12 +132,7 @@ def _normalize_math_to_markdown(soup: BeautifulSoup) -> None:
 
 
 def html_to_markdown(html: str, source_url: Optional[str] = None) -> str:
-    """Convert HTML to markdown. Returns "" on empty/garbage input.
-
-    Behavior: parse → strip chrome → pick best content root → convert.
-    Markdownify settings: ATX headings (## style), fenced code blocks
-    (triple-backtick), strip <a> empties.
-    """
+    """HTML → markdown: strip chrome, pick content root, convert with markdownify (ATX headings, fenced code, strip empty anchors). Empty string on bad input."""
     if not html or not html.strip():
         return ""
     try:

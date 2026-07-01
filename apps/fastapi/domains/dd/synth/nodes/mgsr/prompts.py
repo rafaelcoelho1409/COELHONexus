@@ -1,5 +1,4 @@
-"""mgsr — LLM prompt builders (replan + repair) and the small compact
-formatters they consume."""
+"""Prompt builders for mgsr replan + repair, and the compact formatters they consume."""
 from __future__ import annotations
 
 from .params import MAX_ACTIONS_PER_REPLAN
@@ -35,8 +34,7 @@ def build_replan_prompt(
     failed_feedback: list[str],
     outline_sections: list[dict],
 ) -> str:
-    """Build the LLM replan prompt. Used only when chapter did NOT
-    trivially pass; the trivial-pass case skips this entirely."""
+    """Replan prompt; skipped entirely on trivial-pass chapters."""
     outline_block = _format_outline_compact(outline_sections)
     feedback_block = _format_failed_feedback(failed_feedback)
     return (
@@ -135,8 +133,7 @@ def build_repair_prompt(
     current_json: str,
     issues: list[str],
 ) -> str:
-    """Repair prompt — given an LLM replan output that failed validation,
-    ask for a fixed version with the same schema."""
+    """Repair prompt for replan output that failed validation; asks for a fixed version with the same schema."""
     outline_block = _format_outline_compact(outline_sections)
     feedback_block = _format_failed_feedback(failed_feedback)
     issues_block = "\n".join(f"- {x}" for x in issues)
