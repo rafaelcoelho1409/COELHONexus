@@ -228,3 +228,41 @@ variable "tailscale_ingress_class" {
   type        = string
   default     = "tailscale"
 }
+
+# -----------------------------------------------------------------------------
+# Local access (k3d dev clusters only — e.g. coelhonexus standalone)
+# -----------------------------------------------------------------------------
+# Opt-in NodePort Services for localhost access via k3d's loadbalancer port
+# mapping. Leave `enable_local_expose` unset (default false) on any
+# environment where Tailscale Ingress already provides access (e.g. COELHO
+# Cloud) — neither module below is instantiated in that case. See
+# infrastructure/modules/k3d_expose/.
+#
+# Deliberately does NOT expose playwright-server (the Open WebUI WS backend)
+# — same policy as the module's Tailscale Ingresses already follow (no
+# external ingress for UI-less backends, see main.tf's comment on
+# deployment_server).
+
+variable "enable_local_expose" {
+  description = "Create NodePort Services for localhost access via k3d's loadbalancer port mapping. Only meaningful on k3d-based dev clusters."
+  type        = bool
+  default     = false
+}
+
+variable "k3d_novnc_node_port" {
+  description = "NodePort for local noVNC web UI access (target port 8080, on the headed pod). Required only when enable_local_expose = true; must be unique across the whole cluster."
+  type        = number
+  default     = null
+}
+
+variable "k3d_cdp_headed_node_port" {
+  description = "NodePort for local headed-mode CDP access (target port 9220). Required only when enable_local_expose = true; must be unique across the whole cluster."
+  type        = number
+  default     = null
+}
+
+variable "k3d_cdp_headless_node_port" {
+  description = "NodePort for local headless-mode CDP access (target port 9220). Required only when enable_local_expose = true; must be unique across the whole cluster."
+  type        = number
+  default     = null
+}

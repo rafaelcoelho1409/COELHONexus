@@ -222,3 +222,28 @@ variable "provision_dashboards" {
   type        = bool
   default     = true
 }
+
+# -----------------------------------------------------------------------------
+# Local access (k3d dev clusters only — e.g. coelhonexus standalone)
+# -----------------------------------------------------------------------------
+# Opt-in NodePort Service for localhost access via k3d's loadbalancer port
+# mapping. Leave `enable_local_expose` unset (default false) on any
+# environment where Tailscale Ingress already provides access (e.g. COELHO
+# Cloud) — the module below is never instantiated in that case. See
+# infrastructure/modules/k3d_expose/.
+#
+# NOTE: Grafana already has a working localhost path via
+# scripts/standalone-port-forward.sh (23005->80). This NodePort is a second,
+# independent mechanism to REACH the UI.
+
+variable "enable_local_expose" {
+  description = "Create a NodePort Service for localhost access via k3d's loadbalancer port mapping. Only meaningful on k3d-based dev clusters."
+  type        = bool
+  default     = false
+}
+
+variable "k3d_node_port" {
+  description = "NodePort for local Grafana access (target port 3000, the chart's named 'grafana' container port). Required only when enable_local_expose = true; must be unique across the whole cluster."
+  type        = number
+  default     = null
+}

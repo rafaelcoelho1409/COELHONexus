@@ -173,3 +173,35 @@ variable "replicas" {
     error_message = "replicas must be at least 1."
   }
 }
+
+# -----------------------------------------------------------------------------
+# Local access (k3d dev clusters only — e.g. coelhonexus standalone)
+# -----------------------------------------------------------------------------
+# Opt-in NodePort Services for localhost access via k3d's loadbalancer port
+# mapping. Leave `enable_local_expose` unset (default false) on any
+# environment where Tailscale Ingress already provides access (e.g. COELHO
+# Cloud) — neither module below is instantiated in that case. See
+# infrastructure/modules/k3d_expose/.
+#
+# NOTE: MinIO already has a working localhost path via
+# scripts/standalone-port-forward.sh (23008->9001 console, 23009->9000 API).
+# This is a second, independent mechanism — harmless to run alongside it,
+# but redundant if you're consolidating onto one access pattern.
+
+variable "enable_local_expose" {
+  description = "Create NodePort Services for localhost access via k3d's loadbalancer port mapping. Only meaningful on k3d-based dev clusters."
+  type        = bool
+  default     = false
+}
+
+variable "k3d_api_node_port" {
+  description = "NodePort for local S3 API access (target port 9000). Required only when enable_local_expose = true; must be unique across the whole cluster."
+  type        = number
+  default     = null
+}
+
+variable "k3d_console_node_port" {
+  description = "NodePort for local Console UI access (target port 9001). Required only when enable_local_expose = true; must be unique across the whole cluster."
+  type        = number
+  default     = null
+}

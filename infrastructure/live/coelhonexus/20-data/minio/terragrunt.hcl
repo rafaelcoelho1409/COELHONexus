@@ -23,7 +23,12 @@ include "root" {
 }
 
 terraform {
-  source = "${get_repo_root()}/infrastructure/modules/minio"
+  # `//minio` (not a trailing path) tells Terragrunt to copy the WHOLE
+  # infrastructure/modules/ tree into its cache, then cd into minio/ — needed
+  # because main.tf's `module "k3d_expose_api"` / `"k3d_expose_console"`
+  # reference a SIBLING module via a relative path (same fix as the other
+  # 20-data leaves).
+  source = "${get_repo_root()}/infrastructure/modules//minio"
 }
 
 dependency "k3d" {
@@ -80,4 +85,14 @@ inputs = {
   #   chart 5.4.0, standalone, 15Gi PVC, 10m/200Mi/384Mi resources,
   #   GOMEMLIMIT=350MiB. Default bucket = "backups" (inlined in
   #   helm/values.yaml.tpl).
+
+  # Local access (k3d only) — API 30479->23015, Console 30480->23016, via
+  # `k3d cluster edit coelhonexus --port-add "23015:30479@loadbalancer"`
+  # `k3d cluster edit coelhonexus --port-add "23016:30480@loadbalancer"`
+  # (run manually — not a Terraform resource, see infra/modules/k3d_expose).
+  # NOTE: MinIO already has localhost access via standalone-port-forward.sh
+  # (23008 console / 23009 API) — this is a second, redundant mechanism.
+  enable_local_expose   = true
+  k3d_api_node_port     = 30479
+  k3d_console_node_port = 30480
 }

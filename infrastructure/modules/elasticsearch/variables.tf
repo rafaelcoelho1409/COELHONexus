@@ -180,3 +180,38 @@ variable "elastic_password_override" {
 # `elastic_password_override` above is intended only for local/demo stacks that
 # must preserve a shared app/chart contract outside this module.
 # -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Local access (k3d dev clusters only — e.g. coelhonexus standalone)
+# -----------------------------------------------------------------------------
+# Opt-in NodePort Services so a human on their own laptop can open Kibana and
+# hit the Elasticsearch REST API at localhost:<port> during development.
+# Leave `enable_local_expose` unset (default false) on any environment where
+# Tailscale Ingress already provides access (e.g. COELHO Cloud) — neither
+# module below is instantiated in that case. See
+# infrastructure/modules/k3d_expose/.
+#
+# Both Services carry ECK's auto-generated self-signed TLS (port name
+# "https" on both elasticsearch-es-http and kibana-kb-http) — browsers need
+# a one-time "accept the certificate" step, same as Rancher's setup.
+# Elasticsearch and Kibana are reconciled by the ECK operator into TWO
+# separate sets of pods with different label selectors, so this needs two
+# k3d_expose instances, not one.
+
+variable "enable_local_expose" {
+  description = "Create NodePort Services for localhost access via k3d's loadbalancer port mapping. Only meaningful on k3d-based dev clusters."
+  type        = bool
+  default     = false
+}
+
+variable "k3d_es_node_port" {
+  description = "NodePort for local Elasticsearch REST API access (target port 9200, HTTPS/self-signed). Required only when enable_local_expose = true; must be unique across the whole cluster."
+  type        = number
+  default     = null
+}
+
+variable "k3d_kibana_node_port" {
+  description = "NodePort for local Kibana dashboard access (target port 5601, HTTPS/self-signed). Required only when enable_local_expose = true; must be unique across the whole cluster."
+  type        = number
+  default     = null
+}

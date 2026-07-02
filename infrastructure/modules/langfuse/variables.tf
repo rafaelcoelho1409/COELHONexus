@@ -394,3 +394,31 @@ variable "backup_retention_days" {
   type        = number
   default     = 14
 }
+
+# -----------------------------------------------------------------------------
+# Local access (k3d dev clusters only — e.g. coelhonexus standalone)
+# -----------------------------------------------------------------------------
+# Opt-in NodePort Service for localhost access via k3d's loadbalancer port
+# mapping. Leave `enable_local_expose` unset (default false) on any
+# environment where Tailscale Ingress already provides access (e.g. COELHO
+# Cloud) — the module below is never instantiated in that case. See
+# infrastructure/modules/k3d_expose/.
+#
+# NOTE: Langfuse already has a working localhost path via
+# scripts/standalone-port-forward.sh (23006->3000), and `public_url` above is
+# still pinned to that address for links Langfuse generates internally
+# (shareable trace URLs, etc). This NodePort is a second, independent
+# mechanism to REACH the UI — it doesn't change what Langfuse thinks its own
+# public URL is.
+
+variable "enable_local_expose" {
+  description = "Create a NodePort Service for localhost access via k3d's loadbalancer port mapping. Only meaningful on k3d-based dev clusters."
+  type        = bool
+  default     = false
+}
+
+variable "k3d_web_node_port" {
+  description = "NodePort for local Langfuse UI access (target port 3000). Required only when enable_local_expose = true; must be unique across the whole cluster."
+  type        = number
+  default     = null
+}

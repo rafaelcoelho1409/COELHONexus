@@ -25,7 +25,12 @@ include "root" {
 }
 
 terraform {
-  source = "${get_repo_root()}/infrastructure/modules/grafana"
+  # `//grafana` (not a trailing path) tells Terragrunt to copy the WHOLE
+  # infrastructure/modules/ tree into its cache, then cd into grafana/ —
+  # needed because main.tf's `module "k3d_expose"` references a SIBLING
+  # module via a relative path (same fix as every other local-expose-enabled
+  # leaf).
+  source = "${get_repo_root()}/infrastructure/modules//grafana"
 }
 
 dependency "k3d" {
@@ -98,4 +103,11 @@ inputs = {
   #   chart 12.3.0 (grafana-community), 100m/256Mi/512Mi resources,
   #   persistence disabled (DB external), ServiceMonitor on,
   #   sidecar searches ALL namespaces for grafana_datasource/grafana_dashboard.
+
+  # Local access (k3d only) — NodePort 30486->23022, mapped via
+  # `k3d cluster edit coelhonexus --port-add "23022:30486@loadbalancer"`
+  # (run manually — not a Terraform resource, see infra/modules/k3d_expose).
+  # Second path alongside the existing 23005 port-forward.
+  enable_local_expose = true
+  k3d_node_port       = 30486
 }

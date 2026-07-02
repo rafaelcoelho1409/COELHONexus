@@ -207,3 +207,32 @@ resource "kubernetes_manifest" "backup_cronjob" {
     kubernetes_secret_v1.backup_creds,
   ]
 }
+
+# -----------------------------------------------------------------------------
+# Local access (k3d dev only) — NodePort Service, opt-in via enable_local_expose
+# -----------------------------------------------------------------------------
+# Separate from the Tailscale Ingress above — that stays unconditional and
+# works as-is on any environment with a real Tailscale operator. This is for
+# k3d standalone dev clusters, where Tailscale Ingress is a documented no-op
+# (see this module's live leaf comment: "DUMMY tailscale strings... inert").
+# Selector must match the pods behind the `qdrant` Service above (`app:
+# qdrant, app.kubernetes.io/instance: qdrant, app.kubernetes.io/name: qdrant`,
+# verified via `kubectl get svc qdrant -n qdrant -o yaml`).
+# -----------------------------------------------------------------------------
+module "k3d_expose" {
+  count  = var.enable_local_expose ? 1 : 0
+  source = "../k3d_expose"
+
+  namespace    = kubernetes_namespace_v1.qdrant.metadata[0].name
+  service_name = var.release_name
+  pod_selector = {
+    "app"                        = "qdrant"
+    "app.kubernetes.io/instance" = var.release_name
+    "app.kubernetes.io/name"     = "qdrant"
+  }
+  ports = [
+    { name = "http", target_port = 6333, node_port = var.k3d_http_node_port },
+  ]
+
+  depends_on = [helm_release.qdrant]
+}

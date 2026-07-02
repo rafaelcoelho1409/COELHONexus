@@ -172,21 +172,21 @@ resource "helm_release" "eck_stack" {
 
   values = [
     templatefile("${path.module}/helm/values-stack.yaml.tpl", {
-      es_version                    = var.es_version
-      kibana_version                = var.kibana_version
-      es_memory_request             = var.es_memory_request
-      es_memory_limit               = var.es_memory_limit
-      es_java_heap                  = var.es_java_heap
-      es_cpu_request                = var.es_cpu_request
-      kibana_memory_request         = var.kibana_memory_request
-      kibana_memory_limit           = var.kibana_memory_limit
-      kibana_node_max_old_space_mb  = var.kibana_node_max_old_space_mb
-      kibana_cpu_request            = var.kibana_cpu_request
-      storage_size                  = var.storage_size
-      storage_class                 = var.storage_class
+      es_version                     = var.es_version
+      kibana_version                 = var.kibana_version
+      es_memory_request              = var.es_memory_request
+      es_memory_limit                = var.es_memory_limit
+      es_java_heap                   = var.es_java_heap
+      es_cpu_request                 = var.es_cpu_request
+      kibana_memory_request          = var.kibana_memory_request
+      kibana_memory_limit            = var.kibana_memory_limit
+      kibana_node_max_old_space_mb   = var.kibana_node_max_old_space_mb
+      kibana_cpu_request             = var.kibana_cpu_request
+      storage_size                   = var.storage_size
+      storage_class                  = var.storage_class
       elastic_file_realm_secret_name = local.elastic_password_override_enabled ? kubernetes_secret_v1.elastic_file_realm[0].metadata[0].name : ""
-      app_file_realm_secret_name    = var.app_user_enabled ? kubernetes_secret_v1.app_user[0].metadata[0].name : ""
-      app_roles_secret_name         = var.app_user_enabled ? kubernetes_secret_v1.app_roles[0].metadata[0].name : ""
+      app_file_realm_secret_name     = var.app_user_enabled ? kubernetes_secret_v1.app_user[0].metadata[0].name : ""
+      app_roles_secret_name          = var.app_user_enabled ? kubernetes_secret_v1.app_roles[0].metadata[0].name : ""
     })
   ]
 
@@ -237,5 +237,50 @@ resource "kubernetes_secret_v1" "elastic_file_realm" {
   }
 
   depends_on = [kubernetes_namespace_v1.elasticsearch]
+}
+
+# -----------------------------------------------------------------------------
+# Local access (k3d dev only) — NodePort Services, opt-in via enable_local_expose
+# -----------------------------------------------------------------------------
+# Separate from any Tailscale Ingress — that stays unconditional and works
+# as-is on any environment with a real Tailscale operator. This is for k3d
+# standalone dev clusters. Elasticsearch and Kibana are reconciled by the ECK
+# operator into separate pods with different selectors, so each needs its own
+# k3d_expose instance. Selectors verified via `kubectl get svc -n <namespace>
+# elasticsearch-es-http -o yaml` / `kibana-kb-http -o yaml` against the live
+# cluster.
+# -----------------------------------------------------------------------------
+module "k3d_expose_es" {
+  count  = var.enable_local_expose ? 1 : 0
+  source = "../k3d_expose"
+
+  namespace    = kubernetes_namespace_v1.elasticsearch.metadata[0].name
+  service_name = "elasticsearch-es"
+  pod_selector = {
+    "common.k8s.elastic.co/type"                = "elasticsearch"
+    "elasticsearch.k8s.elastic.co/cluster-name" = "elasticsearch"
+  }
+  ports = [
+    { name = "https", target_port = 9200, node_port = var.k3d_es_node_port },
+  ]
+
+  depends_on = [helm_release.eck_stack]
+}
+
+module "k3d_expose_kibana" {
+  count  = var.enable_local_expose ? 1 : 0
+  source = "../k3d_expose"
+
+  namespace    = kubernetes_namespace_v1.elasticsearch.metadata[0].name
+  service_name = "kibana-kb"
+  pod_selector = {
+    "common.k8s.elastic.co/type" = "kibana"
+    "kibana.k8s.elastic.co/name" = "kibana"
+  }
+  ports = [
+    { name = "https", target_port = 5601, node_port = var.k3d_kibana_node_port },
+  ]
+
+  depends_on = [helm_release.eck_stack]
 }
 

@@ -222,3 +222,30 @@ variable "enable_turtles_capi" {
   type        = bool
   default     = false
 }
+
+# -----------------------------------------------------------------------------
+# Local access (k3d dev clusters only — e.g. coelhonexus standalone)
+# -----------------------------------------------------------------------------
+# Opt-in NodePort Service for localhost access via k3d's loadbalancer port
+# mapping. Leave `enable_local_expose` unset (default false) on any
+# environment where Tailscale Ingress already provides access (e.g. COELHO
+# Cloud) — the module below is never instantiated in that case. See
+# infrastructure/modules/k3d_expose/.
+#
+# NOTE: Rancher already has a working localhost path via
+# scripts/standalone-port-forward.sh (23010->443). This NodePort is a second,
+# independent mechanism to REACH the UI. Both use the chart's own self-signed
+# cert (tls_source="rancher") — browser needs a one-time "accept the
+# certificate" step on either port.
+
+variable "enable_local_expose" {
+  description = "Create a NodePort Service for localhost access via k3d's loadbalancer port mapping. Only meaningful on k3d-based dev clusters."
+  type        = bool
+  default     = false
+}
+
+variable "k3d_https_node_port" {
+  description = "NodePort for local Rancher UI access (target port 443, HTTPS self-signed). Required only when enable_local_expose = true; must be unique across the whole cluster."
+  type        = number
+  default     = null
+}

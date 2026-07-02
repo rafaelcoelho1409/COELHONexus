@@ -245,3 +245,57 @@ variable "rbac_default_policy" {
   type        = string
   default     = "role:admin"
 }
+
+# -----------------------------------------------------------------------------
+# Local access (k3d dev clusters only — e.g. coelhonexus standalone)
+# -----------------------------------------------------------------------------
+# Opt-in NodePort Service for localhost access via k3d's loadbalancer port
+# mapping. Leave `enable_local_expose` unset (default false) on any
+# environment where Tailscale Ingress already provides access (e.g. COELHO
+# Cloud) — the module below is never instantiated in that case. See
+# infrastructure/modules/k3d_expose/.
+#
+# NOTE: ArgoCD already has a working localhost path via
+# scripts/standalone-port-forward.sh (23007->80). This NodePort is a second,
+# independent mechanism to REACH the UI. Both are plain HTTP — the server
+# runs in --insecure mode (see main.tf), so there's no cert to accept either
+# way.
+
+variable "enable_local_expose" {
+  description = "Create a NodePort Service for localhost access via k3d's loadbalancer port mapping. Only meaningful on k3d-based dev clusters."
+  type        = bool
+  default     = false
+}
+
+variable "k3d_node_port" {
+  description = "NodePort for local ArgoCD UI access (target port 8080, the server's --insecure HTTP port). Required only when enable_local_expose = true; must be unique across the whole cluster."
+  type        = number
+  default     = null
+}
+
+# -----------------------------------------------------------------------------
+# Deterministic admin password (optional)
+# -----------------------------------------------------------------------------
+# By default the chart auto-generates a random password in
+# `argocd-initial-admin-secret` at install time. Setting `admin_password`
+# forces it to a known value via a post-install Job — mirroring
+# infrastructure/modules/grafana's `sync_admin_password` Job, which exists
+# for the identical reason: setting the Helm value alone
+# (configs.secret.argocdServerAdminPassword) is documented as unreliable
+# (argo-helm#1407 — the auto-generated initial-admin-secret can still win).
+# Leave unset (default "") to keep the chart's default random-password
+# behavior.
+# -----------------------------------------------------------------------------
+
+variable "admin_password" {
+  description = "Optional deterministic admin password. Empty string = keep the chart's auto-generated random password (read via argocd-initial-admin-secret)."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "argocd_cli_image" {
+  description = "Image used by the admin-password sync Job's bcrypt step. Keep aligned with chart_version's appVersion unless intentionally decoupled."
+  type        = string
+  default     = "quay.io/argoproj/argocd:v3.3.6"
+}

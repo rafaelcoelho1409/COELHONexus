@@ -59,5 +59,6 @@ inputs = {
     langfuse_init_user_password  = "admin-demo-password"
     grafana_admin_user      = "admin"
     grafana_admin_password  = "admin"
+    argocd_admin_password   = "admin"
   }
 }

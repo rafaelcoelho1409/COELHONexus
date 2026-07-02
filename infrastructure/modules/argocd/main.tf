@@ -200,3 +200,221 @@ resource "helm_release" "image_updater" {
 
   depends_on = [helm_release.argocd]
 }
+
+# -----------------------------------------------------------------------------
+# Local access (k3d dev only) — NodePort Service, opt-in via enable_local_expose
+# -----------------------------------------------------------------------------
+# Separate from the Tailscale Ingress above — that stays unconditional and
+# works as-is on any environment with a real Tailscale operator. This is for
+# k3d standalone dev clusters. Selector matches the chart's `argocd-server`
+# Service (`app.kubernetes.io/instance: argocd, app.kubernetes.io/name:
+# argocd-server`), verified via `kubectl get svc argocd-server -n argocd -o
+# yaml` against the live cluster. target_port 8080 is the container's
+# --insecure HTTP port — both the Service's http and https ports already
+# point at the same 8080 target, so there's no separate TLS port to expose.
+# -----------------------------------------------------------------------------
+module "k3d_expose" {
+  count  = var.enable_local_expose ? 1 : 0
+  source = "../k3d_expose"
+
+  namespace    = kubernetes_namespace_v1.argocd.metadata[0].name
+  service_name = "${var.release_name}-server"
+  pod_selector = {
+    "app.kubernetes.io/instance" = var.release_name
+    "app.kubernetes.io/name"     = "argocd-server"
+  }
+  ports = [
+    { name = "http", target_port = 8080, node_port = var.k3d_node_port },
+  ]
+
+  depends_on = [helm_release.argocd]
+}
+
+# -----------------------------------------------------------------------------
+# Deterministic admin password — post-install sync Job (opt-in)
+# -----------------------------------------------------------------------------
+# Why not just the Helm value: configs.secret.argocdServerAdminPassword is
+# documented as unreliable at install time (argo-helm#1407) — the chart's
+# own auto-generated argocd-initial-admin-secret can still win the race.
+# Patching argocd-secret directly, after the chart is already up, always wins
+# — same reasoning as grafana's sync_admin_password Job.
+#
+# Two containers because bcrypt hashing and Secret-patching need different
+# tools that don't coexist in one image: `argocd account bcrypt` is a local,
+# offline computation (no server/config needed — verified against the CLI
+# docs) using the exact algorithm ArgoCD itself validates against; kubectl
+# then patches the Secret over the K8s API. Init container computes the hash
+# onto a shared emptyDir; main container reads it and patches.
+#
+# Job name carries a content hash of the password so a password change
+# forces a fresh Job (Job specs are immutable post-creation — same pattern
+# as grafana's admin-sync Job).
+# -----------------------------------------------------------------------------
+
+resource "kubernetes_service_account_v1" "admin_password_sync" {
+  count = var.admin_password != "" ? 1 : 0
+
+  metadata {
+    name      = "${var.release_name}-admin-pw-sync"
+    namespace = kubernetes_namespace_v1.argocd.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "argocd"
+      "app.kubernetes.io/component"  = "admin-password-sync"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+}
+
+resource "kubernetes_role_v1" "admin_password_sync" {
+  count = var.admin_password != "" ? 1 : 0
+
+  metadata {
+    name      = "${var.release_name}-admin-pw-sync"
+    namespace = kubernetes_namespace_v1.argocd.metadata[0].name
+  }
+
+  # Scoped to exactly one named Secret — least privilege.
+  rule {
+    api_groups     = [""]
+    resources      = ["secrets"]
+    resource_names = ["${var.release_name}-secret"]
+    verbs          = ["get", "patch"]
+  }
+}
+
+resource "kubernetes_role_binding_v1" "admin_password_sync" {
+  count = var.admin_password != "" ? 1 : 0
+
+  metadata {
+    name      = "${var.release_name}-admin-pw-sync"
+    namespace = kubernetes_namespace_v1.argocd.metadata[0].name
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "Role"
+    name      = kubernetes_role_v1.admin_password_sync[0].metadata[0].name
+  }
+
+  subject {
+    kind      = "ServiceAccount"
+    name      = kubernetes_service_account_v1.admin_password_sync[0].metadata[0].name
+    namespace = kubernetes_namespace_v1.argocd.metadata[0].name
+  }
+}
+
+locals {
+  admin_password_hash = var.admin_password != "" ? substr(sha256(var.admin_password), 0, 8) : ""
+}
+
+resource "kubernetes_job_v1" "sync_admin_password" {
+  count = var.admin_password != "" ? 1 : 0
+
+  metadata {
+    name      = "${var.release_name}-admin-pw-sync-${local.admin_password_hash}"
+    namespace = kubernetes_namespace_v1.argocd.metadata[0].name
+    labels = {
+      "app.kubernetes.io/name"       = "argocd"
+      "app.kubernetes.io/component"  = "admin-password-sync"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  spec {
+    backoff_limit              = 3
+    ttl_seconds_after_finished = 300
+
+    template {
+      metadata {
+        labels = {
+          "app.kubernetes.io/name"      = "argocd"
+          "app.kubernetes.io/component" = "admin-password-sync"
+        }
+      }
+
+      spec {
+        service_account_name = kubernetes_service_account_v1.admin_password_sync[0].metadata[0].name
+        restart_policy       = "OnFailure"
+
+        security_context {
+          run_as_non_root = true
+          run_as_user     = 999
+          run_as_group    = 999
+          seccomp_profile {
+            type = "RuntimeDefault"
+          }
+        }
+
+        init_container {
+          name    = "bcrypt"
+          image   = var.argocd_cli_image
+          command = ["/bin/sh", "-c"]
+          args    = ["argocd account bcrypt --password \"$ADMIN_PASSWORD\" > /shared/hash.txt"]
+
+          env {
+            name  = "ADMIN_PASSWORD"
+            value = var.admin_password
+          }
+
+          volume_mount {
+            name       = "shared"
+            mount_path = "/shared"
+          }
+
+          security_context {
+            allow_privilege_escalation = false
+            capabilities {
+              drop = ["ALL"]
+            }
+          }
+        }
+
+        container {
+          name    = "patch-secret"
+          image   = "bitnami/kubectl:latest"
+          command = ["/bin/sh", "-c"]
+          args = [
+            <<-EOT
+            set -e
+            HASH=$(cat /shared/hash.txt)
+            MTIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            kubectl patch secret ${var.release_name}-secret \
+              -n ${kubernetes_namespace_v1.argocd.metadata[0].name} \
+              --type merge \
+              -p "{\"stringData\":{\"admin.password\":\"$HASH\",\"admin.passwordMtime\":\"$MTIME\"}}"
+            EOT
+          ]
+
+          volume_mount {
+            name       = "shared"
+            mount_path = "/shared"
+          }
+
+          security_context {
+            allow_privilege_escalation = false
+            capabilities {
+              drop = ["ALL"]
+            }
+          }
+        }
+
+        volume {
+          name = "shared"
+          empty_dir {}
+        }
+      }
+    }
+  }
+
+  wait_for_completion = true
+
+  timeouts {
+    create = "2m"
+    update = "2m"
+  }
+
+  depends_on = [
+    helm_release.argocd,
+    kubernetes_role_binding_v1.admin_password_sync,
+  ]
+}

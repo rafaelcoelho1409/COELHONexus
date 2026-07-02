@@ -23,7 +23,12 @@ include "root" {
 }
 
 terraform {
-  source = "${get_repo_root()}/infrastructure/modules/rancher"
+  # `//rancher` (not a trailing path) tells Terragrunt to copy the WHOLE
+  # infrastructure/modules/ tree into its cache, then cd into rancher/ —
+  # needed because main.tf's `module "k3d_expose"` references a SIBLING
+  # module via a relative path (same fix as every other local-expose-enabled
+  # leaf).
+  source = "${get_repo_root()}/infrastructure/modules//rancher"
 }
 
 dependency "k3d" {
@@ -111,4 +116,12 @@ inputs = {
 
   # Defaults from variables.tf are appropriate:
   #   chart 2.14.1, 1 replica, 100m/512Mi/1.5Gi resources, audit log off.
+
+  # Local access (k3d only) — NodePort 30485->23021, mapped via
+  # `k3d cluster edit coelhonexus --port-add "23021:30485@loadbalancer"`
+  # (run manually — not a Terraform resource, see infra/modules/k3d_expose).
+  # Second path alongside the existing 23010 port-forward; same self-signed
+  # cert either way.
+  enable_local_expose = true
+  k3d_https_node_port = 30485
 }

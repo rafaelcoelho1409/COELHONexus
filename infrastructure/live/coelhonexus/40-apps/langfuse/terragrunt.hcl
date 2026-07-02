@@ -26,7 +26,11 @@ include "root" {
 }
 
 terraform {
-  source = "${get_repo_root()}/infrastructure/modules/langfuse"
+  # `//langfuse` (not a trailing path) tells Terragrunt to copy the WHOLE
+  # infrastructure/modules/ tree into its cache, then cd into langfuse/ —
+  # needed because main.tf's `module "k3d_expose"` references a SIBLING
+  # module via a relative path (same fix as the 20-data leaves).
+  source = "${get_repo_root()}/infrastructure/modules//langfuse"
 }
 
 dependency "k3d" {
@@ -127,4 +131,13 @@ inputs = {
   # Defaults from variables.tf are appropriate:
   #   chart 1.5.31, ClickHouse 1Gi/3Gi (10Gi PVC), web + worker 100m/1Gi,
   #   daily pg_dump backup, 14-day retention.
+
+  # Local access (k3d only) — NodePort 30481->23017, mapped via
+  # `k3d cluster edit coelhonexus --port-add "23017:30481@loadbalancer"`
+  # (run manually — not a Terraform resource, see infra/modules/k3d_expose).
+  # NOTE: public_url above stays pinned to :23006 (the existing port-forward
+  # path) — this NodePort is a second way to REACH the UI, it doesn't change
+  # what Langfuse thinks its own public URL is.
+  enable_local_expose = true
+  k3d_web_node_port   = 30481
 }

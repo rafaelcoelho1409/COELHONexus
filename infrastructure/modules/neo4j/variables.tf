@@ -225,3 +225,35 @@ variable "backup_retention" {
   type        = number
   default     = 20
 }
+
+# -----------------------------------------------------------------------------
+# Local access (k3d dev clusters only — e.g. coelhonexus standalone)
+# -----------------------------------------------------------------------------
+# Opt-in NodePort Service so a human on their own laptop can open Neo4j
+# Browser at localhost:<port> during development. Leave `enable_local_expose`
+# unset (default false) on any environment where Tailscale Ingress already
+# provides access (e.g. COELHO Cloud) — the module below is never even
+# instantiated in that case. See infrastructure/modules/k3d_expose/.
+#
+# BOTH ports are required, not just HTTP: Neo4j Browser's JS loads over HTTP
+# (7474) but opens a SEPARATE Bolt connection (7687) for the actual login —
+# exposing only 7474 loads the page but fails at "Connect to instance" with
+# a routing-discovery error.
+
+variable "enable_local_expose" {
+  description = "Create NodePort Services for localhost access via k3d's loadbalancer port mapping. Only meaningful on k3d-based dev clusters."
+  type        = bool
+  default     = false
+}
+
+variable "k3d_http_node_port" {
+  description = "NodePort for local Neo4j Browser UI access (target port 7474). Required only when enable_local_expose = true; must be unique across the whole cluster."
+  type        = number
+  default     = null
+}
+
+variable "k3d_bolt_node_port" {
+  description = "NodePort for local Bolt driver access (target port 7687) — needed for Browser's login step, and for any local Bolt client (cypher-shell, drivers). Required only when enable_local_expose = true; must be unique across the whole cluster."
+  type        = number
+  default     = null
+}

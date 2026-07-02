@@ -204,3 +204,55 @@ resource "kubernetes_manifest" "ingress_cdp_headless" {
 
   depends_on = [kubernetes_manifest.service_headless]
 }
+
+# -----------------------------------------------------------------------------
+# Local access (k3d dev only) — NodePort Services, opt-in via enable_local_expose
+# -----------------------------------------------------------------------------
+# Separate from the Tailscale Ingresses above — those stay unconditional and
+# work as-is on any environment with a real Tailscale operator. This is for
+# k3d standalone dev clusters. noVNC and headed-CDP share one Service since
+# both live on the SAME "headed" pod (verified via `kubectl get svc -n
+# playwright playwright-novnc/-headed -o yaml` — identical selector, just
+# different ports); headless-CDP is a genuinely separate pod/selector.
+# -----------------------------------------------------------------------------
+module "k3d_expose_headed" {
+  count  = var.enable_local_expose ? 1 : 0
+  source = "../k3d_expose"
+
+  namespace    = kubernetes_namespace_v1.playwright.metadata[0].name
+  service_name = "playwright-headed"
+  pod_selector = {
+    "app.kubernetes.io/component" = "headed"
+    "app.kubernetes.io/name"      = "playwright"
+  }
+  ports = [
+    { name = "novnc", target_port = 8080, node_port = var.k3d_novnc_node_port },
+    { name = "cdp", target_port = 9220, node_port = var.k3d_cdp_headed_node_port },
+  ]
+
+  depends_on = [
+    kubernetes_manifest.deployment_headed,
+    kubernetes_manifest.service_headed,
+    kubernetes_manifest.service_novnc,
+  ]
+}
+
+module "k3d_expose_headless" {
+  count  = var.enable_local_expose ? 1 : 0
+  source = "../k3d_expose"
+
+  namespace    = kubernetes_namespace_v1.playwright.metadata[0].name
+  service_name = "playwright-headless"
+  pod_selector = {
+    "app.kubernetes.io/component" = "headless"
+    "app.kubernetes.io/name"      = "playwright"
+  }
+  ports = [
+    { name = "cdp", target_port = 9220, node_port = var.k3d_cdp_headless_node_port },
+  ]
+
+  depends_on = [
+    kubernetes_manifest.deployment_headless,
+    kubernetes_manifest.service_headless,
+  ]
+}

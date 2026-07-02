@@ -17,7 +17,11 @@ include "root" {
 }
 
 terraform {
-  source = "${get_repo_root()}/infrastructure/modules/qdrant"
+  # `//qdrant` (not a trailing path) tells Terragrunt to copy the WHOLE
+  # infrastructure/modules/ tree into its cache, then cd into qdrant/ —
+  # needed because main.tf's `module "k3d_expose"` references a SIBLING
+  # module via a relative path (same fix as neo4j's leaf).
+  source = "${get_repo_root()}/infrastructure/modules//qdrant"
 }
 
 dependency "k3d" {
@@ -78,4 +82,10 @@ inputs = {
   # Defaults from variables.tf are appropriate:
   #   chart 1.17.1, single replica, 5Gi data + 5Gi snapshot PVCs,
   #   10m/200Mi/512Mi resources, ServiceMonitor on, backups every 6h.
+
+  # Local access (k3d only) — REST/Dashboard 30476->23011, mapped via
+  # `k3d cluster edit coelhonexus --port-add "23011:30476@loadbalancer"`
+  # (run manually — not a Terraform resource, see infra/modules/k3d_expose).
+  enable_local_expose = true
+  k3d_http_node_port  = 30476
 }

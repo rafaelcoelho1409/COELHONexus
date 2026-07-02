@@ -19,7 +19,11 @@ include "root" {
 }
 
 terraform {
-  source = "${get_repo_root()}/infrastructure/modules/neo4j"
+  # `//neo4j` (not a trailing path) tells Terragrunt to copy the WHOLE
+  # infrastructure/modules/ tree into its cache, then cd into neo4j/ — needed
+  # because main.tf's `module "k3d_expose"` references a SIBLING module via
+  # a relative path, which breaks if only neo4j/ itself gets copied.
+  source = "${get_repo_root()}/infrastructure/modules//neo4j"
 }
 
 dependency "k3d" {
@@ -82,4 +86,14 @@ inputs = {
   #   500m-1000m CPU, 2Gi memory (chart minimums),
   #   APOC plugins enabled, Bolt TLS self-signed,
   #   backups every 6h.
+
+  # Local access (k3d only) — HTTP 30474->23001, Bolt 30475->23012, mapped via
+  # `k3d cluster edit coelhonexus --port-add "23001:30474@loadbalancer"`
+  # `k3d cluster edit coelhonexus --port-add "23012:30475@loadbalancer"`
+  # (run manually — not a Terraform resource, see infra/modules/k3d_expose).
+  # Both required: Neo4j Browser's JS opens a separate Bolt connection for
+  # login, distinct from the HTTP port that serves the page itself.
+  enable_local_expose = true
+  k3d_http_node_port  = 30474
+  k3d_bolt_node_port  = 30475
 }

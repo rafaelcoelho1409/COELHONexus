@@ -23,7 +23,12 @@ include "root" {
 }
 
 terraform {
-  source = "${get_repo_root()}/infrastructure/modules/playwright"
+  # `//playwright` (not a trailing path) tells Terragrunt to copy the WHOLE
+  # infrastructure/modules/ tree into its cache, then cd into playwright/ —
+  # needed because main.tf's `module "k3d_expose_headed"` /
+  # `"k3d_expose_headless"` reference a SIBLING module via a relative path
+  # (same fix as every other local-expose-enabled leaf).
+  source = "${get_repo_root()}/infrastructure/modules//playwright"
 }
 
 dependency "k3d" {
@@ -60,4 +65,17 @@ inputs = {
   #   - Headed pod resources: chromium 768Mi/2Gi + novnc 64Mi/256Mi + nginx tiny
   #   - Headless pod resources: 384Mi/1500Mi
   #   - /dev/shm: 1Gi per pod
+
+  # Local access (k3d only) — noVNC 30482->23018, headed CDP 30483->23019,
+  # headless CDP 30484->23020, mapped via:
+  # `k3d cluster edit coelhonexus --port-add "23018:30482@loadbalancer"`
+  # `k3d cluster edit coelhonexus --port-add "23019:30483@loadbalancer"`
+  # `k3d cluster edit coelhonexus --port-add "23020:30484@loadbalancer"`
+  # (run manually — not a Terraform resource, see infra/modules/k3d_expose).
+  # playwright-server (Open WebUI's WS backend) deliberately NOT exposed —
+  # same "no external access for UI-less backends" policy as Tailscale.
+  enable_local_expose        = true
+  k3d_novnc_node_port        = 30482
+  k3d_cdp_headed_node_port   = 30483
+  k3d_cdp_headless_node_port = 30484
 }

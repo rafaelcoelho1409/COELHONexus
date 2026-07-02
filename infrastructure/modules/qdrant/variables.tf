@@ -164,3 +164,29 @@ variable "service_monitor_enabled" {
   type        = bool
   default     = true
 }
+
+# -----------------------------------------------------------------------------
+# Local access (k3d dev clusters only — e.g. coelhonexus standalone)
+# -----------------------------------------------------------------------------
+# Opt-in NodePort Service so a human on their own laptop can open Qdrant's
+# built-in Dashboard (/dashboard, served on the same port as the REST API) at
+# localhost:<port> during development. Leave `enable_local_expose` unset
+# (default false) on any environment where Tailscale Ingress already provides
+# access (e.g. COELHO Cloud) — the module below is never even instantiated in
+# that case. See infrastructure/modules/k3d_expose/.
+#
+# Only the REST port (6333) is exposed — gRPC (6334) and the internal p2p/raft
+# port (6335) aren't browser-relevant and single-replica homelab doesn't use
+# clustering anyway.
+
+variable "enable_local_expose" {
+  description = "Create a NodePort Service for localhost access via k3d's loadbalancer port mapping. Only meaningful on k3d-based dev clusters."
+  type        = bool
+  default     = false
+}
+
+variable "k3d_http_node_port" {
+  description = "NodePort for local Qdrant Dashboard/REST access (target port 6333). Required only when enable_local_expose = true; must be unique across the whole cluster."
+  type        = number
+  default     = null
+}

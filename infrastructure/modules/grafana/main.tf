@@ -460,3 +460,33 @@ resource "kubernetes_manifest" "ingress" {
     kubernetes_job_v1.sync_admin_password,
   ]
 }
+
+# -----------------------------------------------------------------------------
+# Local access (k3d dev only) — NodePort Service, opt-in via enable_local_expose
+# -----------------------------------------------------------------------------
+# Separate from the Tailscale Ingress above — that stays unconditional and
+# works as-is on any environment with a real Tailscale operator. This is for
+# k3d standalone dev clusters. Selector matches the chart's `grafana` Service
+# (`app.kubernetes.io/instance: grafana, app.kubernetes.io/name: grafana`),
+# verified via `kubectl get svc grafana -n grafana -o yaml` against the live
+# cluster. target_port 3000 is the pod's actual containerPort behind the
+# Service's named "grafana" targetPort — confirmed via `kubectl get pods -n
+# grafana -o json` (Service target ports can be names, but this module's
+# k3d_expose only accepts numeric ports).
+# -----------------------------------------------------------------------------
+module "k3d_expose" {
+  count  = var.enable_local_expose ? 1 : 0
+  source = "../k3d_expose"
+
+  namespace    = kubernetes_namespace_v1.grafana.metadata[0].name
+  service_name = var.release_name
+  pod_selector = {
+    "app.kubernetes.io/instance" = var.release_name
+    "app.kubernetes.io/name"     = "grafana"
+  }
+  ports = [
+    { name = "http", target_port = 3000, node_port = var.k3d_node_port },
+  ]
+
+  depends_on = [helm_release.grafana]
+}

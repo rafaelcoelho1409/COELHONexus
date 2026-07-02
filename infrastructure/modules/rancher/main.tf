@@ -248,3 +248,28 @@ resource "kubernetes_manifest" "rancher_ingress" {
 
   depends_on = [helm_release.rancher]
 }
+
+# -----------------------------------------------------------------------------
+# Local access (k3d dev only) — NodePort Service, opt-in via enable_local_expose
+# -----------------------------------------------------------------------------
+# Separate from the Tailscale Ingress above — that stays unconditional and
+# works as-is on any environment with a real Tailscale operator. This is for
+# k3d standalone dev clusters. Selector matches the chart's `rancher` Service
+# (`app: rancher`), verified via `kubectl get svc rancher -n cattle-system -o
+# yaml` against the live cluster.
+# -----------------------------------------------------------------------------
+module "k3d_expose" {
+  count  = var.enable_local_expose ? 1 : 0
+  source = "../k3d_expose"
+
+  namespace    = kubernetes_namespace_v1.rancher.metadata[0].name
+  service_name = var.release_name
+  pod_selector = {
+    "app" = "rancher"
+  }
+  ports = [
+    { name = "https", target_port = 443, node_port = var.k3d_https_node_port },
+  ]
+
+  depends_on = [helm_release.rancher]
+}

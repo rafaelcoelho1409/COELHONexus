@@ -23,6 +23,11 @@
 #     in main.tf (count = url!=""&&token!=""?1:0); not created here.
 #   - k3d_registry_endpoint overridden to coelhonexus-registry:5000
 #   - Redis password from env.hcl `demo` map (still flows via dependency)
+#   - admin_password from env.hcl `demo` map → post-install sync Job forces
+#     a deterministic password (chart default is a random one-time secret)
+#
+# Admin login (localhost port-forward or NodePort — see main.tf):
+#   admin / admin  (env.hcl demo.argocd_admin_password)
 # =============================================================================
 
 include "root" {
@@ -31,7 +36,12 @@ include "root" {
 }
 
 terraform {
-  source = "${get_repo_root()}/infrastructure/modules/argocd"
+  # `//argocd` (not a trailing path) tells Terragrunt to copy the WHOLE
+  # infrastructure/modules/ tree into its cache, then cd into argocd/ —
+  # needed because main.tf's `module "k3d_expose"` references a SIBLING
+  # module via a relative path (same fix as every other local-expose-enabled
+  # leaf).
+  source = "${get_repo_root()}/infrastructure/modules//argocd"
 }
 
 dependency "k3d" {
@@ -114,4 +124,16 @@ inputs = {
   #   chart 9.4.17, image-updater 1.1.4, notifications + dex off,
   #   applicationset on, ServiceMonitors on, controller 512Mi req / 1Gi limit
   #   (the OOM fix that triggered this whole observability work).
+
+  # Local access (k3d only) — NodePort 30487->23023, mapped via
+  # `k3d cluster edit coelhonexus --port-add "23023:30487@loadbalancer"`
+  # (run manually — not a Terraform resource, see infra/modules/k3d_expose).
+  # Second path alongside the existing 23007 port-forward; both plain HTTP.
+  enable_local_expose = true
+  k3d_node_port       = 30487
+
+  # Deterministic admin password (post-install sync Job — see main.tf).
+  # Login: admin / <this value>. Same demo-credentials convention as every
+  # other service (grafana_admin_password, rancher_bootstrap_password, etc).
+  admin_password = include.root.locals.env.demo.argocd_admin_password
 }

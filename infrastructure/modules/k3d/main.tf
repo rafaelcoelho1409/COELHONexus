@@ -59,6 +59,27 @@ resource "null_resource" "cluster" {
 
       # Idempotency guard: if the cluster already exists with this name,
       # skip the create. This handles `tofu apply` re-runs without errors.
+      #
+      # --port flags below: local-expose ports for k3d dev clusters, baked in
+      # here so a FRESH cluster has them from first boot. Already-running
+      # clusters were patched once via `k3d cluster edit --port-add` (manual,
+      # not Terraform — see infrastructure/modules/k3d_expose/). This list is
+      # hand-maintained: add one --port line per port each time a data-store
+      # module turns on enable_local_expose.
+      #   23001:30474 — Neo4j HTTP Browser
+      #   23012:30475 — Neo4j Bolt (Browser's login step needs this too)
+      #   23011:30476 — Qdrant REST/Dashboard
+      #   23013:30477 — Elasticsearch REST API (HTTPS, self-signed)
+      #   23014:30478 — Kibana dashboard (HTTPS, self-signed)
+      #   23015:30479 — MinIO S3 API
+      #   23016:30480 — MinIO Console UI
+      #   23017:30481 — LangFuse web UI
+      #   23018:30482 — Playwright noVNC web UI
+      #   23019:30483 — Playwright headed-mode CDP
+      #   23020:30484 — Playwright headless-mode CDP
+      #   23021:30485 — Rancher UI (HTTPS, self-signed)
+      #   23022:30486 — Grafana UI
+      #   23023:30487 — ArgoCD UI
       if k3d cluster list -o json 2>/dev/null | jq -e \
            '.[] | select(.name == "${var.cluster_name}")' >/dev/null 2>&1; then
         echo "Cluster ${var.cluster_name} already exists — skipping create."
@@ -72,6 +93,20 @@ resource "null_resource" "cluster" {
           --registry-config "${local_file.registries_yaml.filename}" \
           --volume "${var.data_path}/storage:/var/lib/rancher/k3s/storage@all" \
           --k3s-arg "--disable=traefik@server:*" \
+          --port "23001:30474@loadbalancer" \
+          --port "23012:30475@loadbalancer" \
+          --port "23011:30476@loadbalancer" \
+          --port "23013:30477@loadbalancer" \
+          --port "23014:30478@loadbalancer" \
+          --port "23015:30479@loadbalancer" \
+          --port "23016:30480@loadbalancer" \
+          --port "23017:30481@loadbalancer" \
+          --port "23018:30482@loadbalancer" \
+          --port "23019:30483@loadbalancer" \
+          --port "23020:30484@loadbalancer" \
+          --port "23021:30485@loadbalancer" \
+          --port "23022:30486@loadbalancer" \
+          --port "23023:30487@loadbalancer" \
           --kubeconfig-update-default \
           --wait \
           --timeout 10m

@@ -444,3 +444,32 @@ resource "kubernetes_manifest" "backup_cronjob" {
 
   depends_on = [helm_release.langfuse]
 }
+
+# -----------------------------------------------------------------------------
+# Local access (k3d dev only) — NodePort Service, opt-in via enable_local_expose
+# -----------------------------------------------------------------------------
+# Separate from the Tailscale Ingress above — that stays unconditional and
+# works as-is on any environment with a real Tailscale operator. This is for
+# k3d standalone dev clusters. Selector matches the chart's `langfuse-web`
+# Service (`app: web, app.kubernetes.io/instance: langfuse,
+# app.kubernetes.io/name: langfuse`), verified via `kubectl get svc -n
+# langfuse langfuse-web -o yaml` against the live cluster. ClickHouse's ports
+# are internal-only and deliberately not exposed here.
+# -----------------------------------------------------------------------------
+module "k3d_expose" {
+  count  = var.enable_local_expose ? 1 : 0
+  source = "../k3d_expose"
+
+  namespace    = kubernetes_namespace_v1.langfuse.metadata[0].name
+  service_name = "${var.release_name}-web"
+  pod_selector = {
+    "app"                        = "web"
+    "app.kubernetes.io/instance" = var.release_name
+    "app.kubernetes.io/name"     = "langfuse"
+  }
+  ports = [
+    { name = "http", target_port = 3000, node_port = var.k3d_web_node_port },
+  ]
+
+  depends_on = [helm_release.langfuse]
+}

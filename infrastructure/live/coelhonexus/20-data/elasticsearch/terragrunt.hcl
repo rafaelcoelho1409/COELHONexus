@@ -21,7 +21,11 @@ include "root" {
 }
 
 terraform {
-  source = "${get_repo_root()}/infrastructure/modules/elasticsearch"
+  # `//elasticsearch` (not a trailing path) tells Terragrunt to copy the WHOLE
+  # infrastructure/modules/ tree into its cache, then cd into elasticsearch/ —
+  # needed because main.tf's `module "k3d_expose_es"` / `"k3d_expose_kibana"`
+  # reference a SIBLING module via a relative path (same fix as neo4j/qdrant).
+  source = "${get_repo_root()}/infrastructure/modules//elasticsearch"
 }
 
 dependency "k3d" {
@@ -71,4 +75,14 @@ inputs = {
   # Defaults from variables.tf are appropriate:
   #   eck-operator 3.3.2, eck-stack 0.18.2, ES + Kibana 8.18.8, single node,
   #   200m/2Gi resources, 10Gi PVC, snapshots every 6h, retention 20.
+
+  # Local access (k3d only) — ES 30477->23013, Kibana 30478->23014, mapped via
+  # `k3d cluster edit coelhonexus --port-add "23013:30477@loadbalancer"`
+  # `k3d cluster edit coelhonexus --port-add "23014:30478@loadbalancer"`
+  # (run manually — not a Terraform resource, see infra/modules/k3d_expose).
+  # Both are HTTPS with ECK's self-signed cert — browser will need a one-time
+  # "accept the certificate" step, same as Rancher.
+  enable_local_expose  = true
+  k3d_es_node_port     = 30477
+  k3d_kibana_node_port = 30478
 }

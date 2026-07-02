@@ -127,3 +127,47 @@ resource "kubernetes_manifest" "servicemonitor" {
 
   depends_on = [helm_release.minio]
 }
+
+# -----------------------------------------------------------------------------
+# Local access (k3d dev only) — NodePort Services, opt-in via enable_local_expose
+# -----------------------------------------------------------------------------
+# Separate from the Tailscale Ingresses above — those stay unconditional and
+# work as-is on any environment with a real Tailscale operator. This is for
+# k3d standalone dev clusters. Both the API and Console Services share the
+# same selector (`app: minio, release: minio`) since the chart backs both
+# with the same pod, just different ports — verified via `kubectl get svc -n
+# minio minio -o yaml` / `minio-console -o yaml` against the live cluster.
+# -----------------------------------------------------------------------------
+module "k3d_expose_api" {
+  count  = var.enable_local_expose ? 1 : 0
+  source = "../k3d_expose"
+
+  namespace    = kubernetes_namespace_v1.minio.metadata[0].name
+  service_name = var.release_name
+  pod_selector = {
+    "app"     = "minio"
+    "release" = var.release_name
+  }
+  ports = [
+    { name = "http", target_port = 9000, node_port = var.k3d_api_node_port },
+  ]
+
+  depends_on = [helm_release.minio]
+}
+
+module "k3d_expose_console" {
+  count  = var.enable_local_expose ? 1 : 0
+  source = "../k3d_expose"
+
+  namespace    = kubernetes_namespace_v1.minio.metadata[0].name
+  service_name = "${var.release_name}-console"
+  pod_selector = {
+    "app"     = "minio"
+    "release" = var.release_name
+  }
+  ports = [
+    { name = "http", target_port = 9001, node_port = var.k3d_console_node_port },
+  ]
+
+  depends_on = [helm_release.minio]
+}

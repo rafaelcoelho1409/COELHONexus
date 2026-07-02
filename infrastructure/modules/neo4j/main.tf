@@ -264,3 +264,32 @@ resource "kubernetes_manifest" "backup_cronjob" {
 
   depends_on = [helm_release.neo4j]
 }
+
+# -----------------------------------------------------------------------------
+# Local access (k3d dev only) — NodePort Service, opt-in via enable_local_expose
+# -----------------------------------------------------------------------------
+# Separate from the Tailscale Ingresses above — those stay unconditional and
+# work as-is on any environment with a real Tailscale operator. This is for
+# k3d standalone dev clusters, where Tailscale Ingress is a documented no-op
+# (see this module's live leaf comment: "DUMMY tailscale strings... inert
+# without an Ingress controller"). Selector must match the pods behind the
+# `neo4j` Service above (`app: neo4j, helm.neo4j.com/instance: neo4j`,
+# verified via `kubectl get svc neo4j -n neo4j -o yaml`).
+# -----------------------------------------------------------------------------
+module "k3d_expose" {
+  count  = var.enable_local_expose ? 1 : 0
+  source = "../k3d_expose"
+
+  namespace    = kubernetes_namespace_v1.neo4j.metadata[0].name
+  service_name = var.release_name
+  pod_selector = {
+    "app"                     = "neo4j"
+    "helm.neo4j.com/instance" = var.release_name
+  }
+  ports = [
+    { name = "http", target_port = 7474, node_port = var.k3d_http_node_port },
+    { name = "bolt", target_port = 7687, node_port = var.k3d_bolt_node_port },
+  ]
+
+  depends_on = [helm_release.neo4j]
+}
