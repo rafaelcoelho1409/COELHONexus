@@ -24,6 +24,7 @@
 - [Prerequisites](#prerequisites)
 - [Infrastructure Specifications](#infrastructure-specifications)
 - [Installation](#installation)
+- [Teardown](#teardown)
 - [Service Access](#service-access)
 - [Monitoring & Observability](#monitoring--observability)
 - [CI/CD & Deployment Model](#cicd--deployment-model)
@@ -310,6 +311,30 @@ skaffold dev
 ```
 
 A single `skaffold.yaml` at the repo root drives builds for both this cluster and a separate production cluster it can also target — both expose their bundled registry at the same host port, `localhost:5001` (safe since the two are never run concurrently). Pass the registry explicitly when needed, e.g. `--default-repo=localhost:5001` — the Skaffold profile that used to do this automatically was removed 2026-07-03 (dead config, unused in practice). See [`docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md`](docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md).
+
+## Teardown
+
+Fully irreversible — every data store, all ingested/synthesized content, and the cluster itself are gone for good. There's no confirmation prompt beyond `--non-interactive`; make sure this is what you want before running it.
+
+```bash
+cd infrastructure/live/coelhonexus
+terragrunt run --all destroy --non-interactive
+```
+
+Walks the same 6-layer dependency graph as `apply`, in reverse. The last leaf destroyed (`00-bootstrap/k3d`) runs a destroy-time provisioner that deletes the k3d cluster and its bundled registry container automatically — no separate cluster-deletion step needed in the normal case.
+
+**Manual fallback** — if `terragrunt destroy` fails partway, or you just want to force a full wipe regardless of Terraform state:
+
+```bash
+k3d cluster delete coelhonexus
+```
+
+**Optional**, only if you also want a fully pristine repo checkout afterward — neither is cleaned up automatically, since both are plain host directories Terraform doesn't own as managed resources:
+
+```bash
+rm -rf infrastructure/.data/      # persistent volume data mounted into k3d
+rm -rf infrastructure/.tfstate/   # local Terragrunt state (empty after a clean destroy anyway)
+```
 
 ## Service Access
 

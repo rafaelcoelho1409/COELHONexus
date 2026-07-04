@@ -12,7 +12,7 @@
 
 ## Why this exists
 
-`scripts/standalone-port-forward.sh` is the last bash-only, non-cross-platform piece of the standalone access story. Everything else already moved off bash for the same reason: `upload_env_to_k3d.py` replaced `upload_env_to_k3d.sh`, and Skaffold was chosen over shell scripts for the whole app deploy path (`K8S-DUAL-CLUSTER-FLEX-2026-06-19.md`). This closes the last gap.
+`scripts/standalone-port-forward.sh` is the last bash-only, non-cross-platform piece of the standalone access story. Everything else already moved off bash for the same reason: `upload_env_to_k3d.py` replaced `upload_env_to_k3d.sh`, and Skaffold was chosen over shell scripts for the whole app deploy path. This closes the last gap.
 
 The infra layer (Grafana, LangFuse, ArgoCD, MinIO, Rancher, Neo4j, Qdrant, Elasticsearch, Kibana, Playwright) already works this way: `infrastructure/modules/k3d/main.tf` bakes `--port HOST:NODEPORT@loadbalancer` flags into the `k3d cluster create` call, so those services are reachable on `localhost` immediately after `terragrunt apply` — no script, no background process, works identically on any OS running Docker.
 
