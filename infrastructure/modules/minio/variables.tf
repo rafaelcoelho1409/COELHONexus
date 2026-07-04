@@ -36,39 +36,11 @@ variable "namespace" {
 }
 
 variable "release_name" {
-  description = "Helm release name. Used as the API Service name (Tailscale Ingress backend); the chart auto-creates a `<release>-console` Service for port 9001."
+  description = "Helm release name. Used as the API Service name; the chart auto-creates a `<release>-console` Service for port 9001."
   type        = string
   default     = "minio"
 }
 
-# -----------------------------------------------------------------------------
-# Network exposure (Tailscale)
-# -----------------------------------------------------------------------------
-# Two Ingresses: console (web UI) and API (S3 endpoint). Each gets its own
-# tailnet hostname during the migration window so v1 can keep `minio` /
-# `minio-api` while v2 runs at `minio-v2` / `minio-api-v2`.
-# -----------------------------------------------------------------------------
-
-variable "tailscale_hostname_console" {
-  description = "Short tailnet hostname for the MinIO Console UI (e.g., 'minio-v2' → minio-v2.<domain>.ts.net)."
-  type        = string
-}
-
-variable "tailscale_hostname_api" {
-  description = "Short tailnet hostname for the MinIO S3 API (e.g., 'minio-api-v2' → minio-api-v2.<domain>.ts.net)."
-  type        = string
-}
-
-variable "tailscale_domain" {
-  description = "Tailnet domain (e.g., 'YOUR_TAILNET_DOMAIN.ts.net'). Comes from env.hcl."
-  type        = string
-}
-
-variable "tailscale_ingress_class" {
-  description = "IngressClass name from the tailscale-operator unit. Almost always 'tailscale'."
-  type        = string
-  default     = "tailscale"
-}
 
 # -----------------------------------------------------------------------------
 # Credentials (sensitive)
@@ -179,7 +151,7 @@ variable "replicas" {
 # -----------------------------------------------------------------------------
 # Opt-in NodePort Services for localhost access via k3d's loadbalancer port
 # mapping. Leave `enable_local_expose` unset (default false) on any
-# environment where Tailscale Ingress already provides access (e.g. COELHO
+# environment where external Ingress already provides access (e.g. COELHO
 # Cloud) — neither module below is instantiated in that case. See
 # infrastructure/modules/k3d_expose/.
 #

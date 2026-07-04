@@ -1,5 +1,5 @@
 # =============================================================================
-# Service — playwright-headless (CDP endpoint, in-cluster + Tailscale)
+# Service — playwright-headless (CDP endpoint, in-cluster + external)
 # =============================================================================
 # In-cluster DNS: playwright-headless.playwright.svc.cluster.local:9224
 # Backend cdp-proxy sidecar (nginx) listens on 9220 and HTTP-reverse-proxies

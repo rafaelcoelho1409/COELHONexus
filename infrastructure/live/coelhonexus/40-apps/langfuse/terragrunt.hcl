@@ -13,9 +13,10 @@
 #   password: admin-demo-password
 #
 # Adaptations vs COELHO Cloud's leaf:
-#   - DROP dependency "tailscale_operator"
-#   - DUMMY tailscale_* (Ingress unconditional); browser access is via
-#     localhost port-forward
+#   - DROP the external-ingress-operator dependency
+#   - External Ingress REMOVED from main.tf (2026-07-02) — always inert on
+#     this cluster. Browser access is via localhost port-forward/NodePort.
+#     The external-domain input is kept: main.tf's public_url fallback still references it.
 #   - All SOPS secrets → env.hcl `demo` map
 #   - enable_otel_ingestion = true (matches COELHO Cloud for the OTLP path)
 # =============================================================================
@@ -107,10 +108,9 @@ inputs = {
   minio_access_key = dependency.minio.outputs.access_key
   minio_secret_key = dependency.minio.outputs.secret_key
 
-  # --- Tailscale — DUMMY ---
-  tailscale_domain        = "tailscale.local"
-  tailscale_ingress_class = "tailscale"
-  public_url              = "http://localhost:23006"
+  # --- External domain — DUMMY, unused fallback (public_url below always wins) ---
+  tailscale_domain = "tailscale.local"
+  public_url       = "http://localhost:23006"
 
   # --- Demo secrets from env.hcl (NOT SOPS) ---
   postgres_password       = include.root.locals.env.demo.langfuse_postgres_password

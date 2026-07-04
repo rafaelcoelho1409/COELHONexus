@@ -187,9 +187,8 @@ variable "elastic_password_override" {
 # Opt-in NodePort Services so a human on their own laptop can open Kibana and
 # hit the Elasticsearch REST API at localhost:<port> during development.
 # Leave `enable_local_expose` unset (default false) on any environment where
-# Tailscale Ingress already provides access (e.g. COELHO Cloud) — neither
-# module below is instantiated in that case. See
-# infrastructure/modules/k3d_expose/.
+# external Ingress already provides access — neither module below is
+# instantiated in that case. See infrastructure/modules/k3d_expose/.
 #
 # Both Services carry ECK's auto-generated self-signed TLS (port name
 # "https" on both elasticsearch-es-http and kibana-kb-http) — browsers need

@@ -26,6 +26,12 @@ variable "chart_version" {
   }
 }
 
+variable "cluster_name" {
+  description = "Cluster identifier attached as the `cluster` label on every Loki meta-monitoring metric (relabel rule in helm/values.yaml.tpl). Was hardcoded before 2026-07-03 — set explicitly per environment so metrics aren't mislabeled with a different cluster's name."
+  type        = string
+  default     = "coelhonexus"
+}
+
 variable "namespace" {
   description = "Kubernetes namespace for Loki."
   type        = string
@@ -39,7 +45,7 @@ variable "release_name" {
 }
 
 # -----------------------------------------------------------------------------
-# Note: no Tailscale Ingress vars. Loki has no UI; queries go through
+# Note: no external Ingress vars. Loki has no UI; queries go through
 # Grafana via the in-cluster datasource (per memory feedback_no_external_ingress_for_uiless_backends).
 # -----------------------------------------------------------------------------
 

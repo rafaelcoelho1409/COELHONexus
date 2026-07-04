@@ -12,9 +12,12 @@
 #   admin / admin
 #
 # Adaptations vs COELHO Cloud's leaf:
-#   - DROP dependency "tailscale_operator"
-#   - DUMMY tailscale_domain + ingress_class (Ingress inert); browser access is
-#     via localhost port-forward
+#   - DROP the external-ingress-operator dependency
+#   - External Ingress REMOVED from main.tf (2026-07-02) — always inert on
+#     this cluster. Browser access is via localhost port-forward / NodePort.
+#     The external-domain input is kept: main.tf's grafana_root_url/grafana_domain
+#     locals still reference it as a fallback (unused in practice since
+#     root_url is explicitly set below).
 #   - postgresql connection from dependency (verbatim — admin user is "postgres",
 #     admin password matches env.hcl demo.postgres_password)
 # =============================================================================
@@ -86,10 +89,10 @@ generate "providers" {
 }
 
 inputs = {
-  # Tailscale — DUMMY (no operator in this cluster).
-  tailscale_domain        = "tailscale.local"
-  tailscale_ingress_class = "tailscale"
-  root_url                = "http://localhost:23005/"
+  # External domain — DUMMY, unused fallback in main.tf locals (root_url below
+  # always wins). No operator in this cluster.
+  tailscale_domain = "tailscale.local"
+  root_url         = "http://localhost:23005/"
   admin_user              = include.root.locals.env.demo.grafana_admin_user
   admin_password          = include.root.locals.env.demo.grafana_admin_password
 

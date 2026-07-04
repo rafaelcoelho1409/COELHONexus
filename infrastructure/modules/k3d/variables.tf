@@ -46,9 +46,9 @@ variable "agents" {
 }
 
 variable "registry_port" {
-  description = "Host port for the in-cluster local Docker registry (built into k3d)."
+  description = "Host port for the in-cluster local Docker registry (built into k3d). Matches the registry_port used by another cluster this chart can also target, so a single localhost:5001 reference works for whichever one is currently running — they're never both up at once."
   type        = number
-  default     = 5000
+  default     = 5001
 }
 
 variable "data_path" {

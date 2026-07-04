@@ -22,6 +22,12 @@ variable "chart_version" {
   }
 }
 
+variable "cluster_name" {
+  description = "Cluster identifier attached as the `cluster` label on every Mimir meta-monitoring metric (relabel rule in helm/values.yaml.tpl). Was hardcoded before 2026-07-03 — set explicitly per environment so metrics aren't mislabeled with a different cluster's name."
+  type        = string
+  default     = "coelhonexus"
+}
+
 variable "namespace" {
   description = "Kubernetes namespace for Mimir."
   type        = string
@@ -35,7 +41,7 @@ variable "release_name" {
 }
 
 # -----------------------------------------------------------------------------
-# Note: no Tailscale Ingress vars. Mimir has no UI; queries go through
+# Note: no external Ingress vars. Mimir has no UI; queries go through
 # Grafana via the in-cluster datasource. Same pattern for Loki/Tempo/Alloy.
 # -----------------------------------------------------------------------------
 

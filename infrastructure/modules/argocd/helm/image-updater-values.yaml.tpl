@@ -12,7 +12,7 @@
 #   4. ArgoCD reconciles and rolls the new digest.
 #
 # Required per-Application annotations (set in your manifests/Helm chart):
-#   argocd-image-updater.argoproj.io/image-list: app=coelho-cloud-registry:5000/coelhonexus-fastapi
+#   argocd-image-updater.argoproj.io/image-list: app=<your-registry>:5000/coelhonexus-fastapi
 #   argocd-image-updater.argoproj.io/app.update-strategy: digest
 #   argocd-image-updater.argoproj.io/write-back-method: argocd
 # =============================================================================

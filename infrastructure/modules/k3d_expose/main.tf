@@ -15,9 +15,9 @@
 # address is a separate, manual step — see infrastructure/modules/k3d/main.tf
 # for the fresh-install path. Keeping this module Kubernetes-only means it's
 # inert-but-harmless on any cluster type, not just k3d — a caller on a
-# cluster where NodePort->localhost isn't wired up (e.g. COELHO Cloud, which
-# uses Tailscale Ingress instead) just never sets `enable_local_expose`, so
-# this module is never even instantiated there.
+# cluster where NodePort->localhost isn't wired up (e.g. one that uses
+# external Ingress instead) just never sets `enable_local_expose`, so this
+# module is never even instantiated there.
 #
 # Does NOT modify or replace the target module's existing ClusterIP Service —
 # Kubernetes allows multiple Services with different selectors/types to point

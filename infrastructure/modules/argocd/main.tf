@@ -9,7 +9,7 @@
 #        - bundled redis (~10Mi — too small to bother externalizing)
 #        - dex disabled (no Federated SSO; admin user is enough for homelab)
 #        - notifications disabled (saves ~192Mi; enable when you wire alerts)
-#        - server runs in --insecure mode (TLS terminated at Tailscale proxy)
+#        - server runs in --insecure mode (TLS terminated at external proxy)
 #        - ServiceMonitors per component (Alloy auto-scrapes via prometheus.operator)
 #   3. (Optional) GitLab repo creds Secret labeled `argocd.argoproj.io/secret-type: repo-creds`
 #        - Enables ArgoCD to clone private GitLab repos
@@ -20,7 +20,7 @@
 #        - Detects new digests on tags like :latest or :CI_COMMIT_SHA
 #        - Patches the ArgoCD Application directly (write-back-method: argocd)
 #        - This is what gives us the "CI builds image → ArgoCD redeploys" loop
-#   5. Tailscale Ingress for the web UI (Homepage tile in Development group)
+#   5. External Ingress for the web UI (Homepage tile in Development group)
 #
 # THE AUTO-DEPLOY FLOW (the user's primary requirement):
 #   - Developer pushes code to GitLab
@@ -157,21 +157,6 @@ resource "kubernetes_secret_v1" "gitlab_repo_creds" {
 }
 
 # -----------------------------------------------------------------------------
-# Tailscale Ingress — Web UI
-# -----------------------------------------------------------------------------
-resource "kubernetes_manifest" "ingress" {
-  manifest = yamldecode(templatefile("${path.module}/k8s/ingress.yaml.tpl", {
-    namespace          = kubernetes_namespace_v1.argocd.metadata[0].name
-    release_name       = var.release_name
-    tailscale_hostname = var.tailscale_hostname
-    tailscale_domain   = var.tailscale_domain
-    ingress_class_name = var.tailscale_ingress_class
-  }))
-
-  depends_on = [helm_release.argocd]
-}
-
-# -----------------------------------------------------------------------------
 # Helm release — argo/argocd-image-updater (auto-deploy on new image digests)
 # -----------------------------------------------------------------------------
 resource "helm_release" "image_updater" {
@@ -204,8 +189,8 @@ resource "helm_release" "image_updater" {
 # -----------------------------------------------------------------------------
 # Local access (k3d dev only) — NodePort Service, opt-in via enable_local_expose
 # -----------------------------------------------------------------------------
-# Separate from the Tailscale Ingress above — that stays unconditional and
-# works as-is on any environment with a real Tailscale operator. This is for
+# Separate from the external Ingress above — that stays unconditional and
+# works as-is on any environment with a real external ingress controller. This is for
 # k3d standalone dev clusters. Selector matches the chart's `argocd-server`
 # Service (`app.kubernetes.io/instance: argocd, app.kubernetes.io/name:
 # argocd-server`), verified via `kubectl get svc argocd-server -n argocd -o

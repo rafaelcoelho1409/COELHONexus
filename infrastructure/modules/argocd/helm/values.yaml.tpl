@@ -16,7 +16,7 @@ global:
   domain: ${tailscale_hostname}.${tailscale_domain}
 
 # -----------------------------------------------------------------------------
-# Server — UI + API. Run in --insecure mode (Tailscale proxy terminates TLS).
+# Server — UI + API. Run in --insecure mode (external proxy terminates TLS).
 # -----------------------------------------------------------------------------
 server:
   extraArgs:
@@ -198,7 +198,7 @@ configs:
 %{ endif ~}
 
 # -----------------------------------------------------------------------------
-# Ingress — disabled. Tailscale Ingress comes from k8s/ingress.yaml.tpl in main.tf.
+# Ingress — disabled. External Ingress comes from k8s/ingress.yaml.tpl in main.tf.
 # -----------------------------------------------------------------------------
 ingress:
   enabled: false

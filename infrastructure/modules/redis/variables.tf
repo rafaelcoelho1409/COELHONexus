@@ -158,27 +158,27 @@ variable "minio_bucket" {
 }
 
 # -----------------------------------------------------------------------------
-# Tailscale exposure (optional — off by default)
+# External exposure (optional — off by default)
 # -----------------------------------------------------------------------------
 # Redis is in-cluster only by default. Apps connect via the ClusterIP service.
-# Enable Tailscale exposure if you want redis-cli access from your laptop —
-# same loadBalancerClass=tailscale pattern as Postgres.
+# Enable external exposure if you want redis-cli access from your laptop —
+# same external LoadBalancer pattern as Postgres.
 # -----------------------------------------------------------------------------
 
 variable "enable_tailscale_exposure" {
-  description = "Expose Redis on the tailnet via the Tailscale operator's LoadBalancer pattern. Off by default."
+  description = "Expose Redis externally via an external LoadBalancer controller's pattern. Off by default."
   type        = bool
   default     = false
 }
 
 variable "tailscale_hostname" {
-  description = "Short tailnet hostname (e.g. 'redis' → redis.<domain>.ts.net:6379). Used only when enable_tailscale_exposure=true."
+  description = "Short external hostname (e.g. 'redis' → redis.<domain>.example.com:6379). Used only when external exposure is enabled."
   type        = string
   default     = "redis"
 }
 
 variable "tailscale_domain" {
-  description = "Tailnet domain (e.g. 'YOUR_TAILNET_DOMAIN.ts.net'). Required when enable_tailscale_exposure=true."
+  description = "External domain (e.g. 'YOUR_EXTERNAL_DOMAIN.example.com'). Required when external exposure is enabled."
   type        = string
   default     = ""
 }

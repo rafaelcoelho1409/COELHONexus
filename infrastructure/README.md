@@ -1,8 +1,8 @@
 # `infrastructure/` — COELHO Nexus standalone Kubernetes infrastructure
 
-Self-contained Terragrunt + OpenTofu setup that brings up a local k3d cluster with every backend COELHO Nexus needs. Decoupled from COELHO Cloud — clone the repo and run one script.
+Self-contained Terragrunt + OpenTofu setup that brings up a local k3d cluster with every backend COELHO Nexus needs. Fully decoupled from any other cluster you may separately run — clone the repo and run one script.
 
-**Use this when you want to run COELHO Nexus locally without depending on the COELHO Cloud production cluster.** The `apps/` and `k8s/` folders deploy unchanged against either cluster (`k3d-coelho-cloud` or `k3d-coelhonexus` kubeconfig context).
+**Use this when you want to run COELHO Nexus locally without depending on a separate production cluster.** The `apps/` and `k8s/` folders deploy unchanged against either cluster — just switch the `k3d-coelhonexus` kubeconfig context for whichever one you're targeting.
 
 ---
 
@@ -66,24 +66,35 @@ bash scripts/standalone-up.sh
 
 This applies 17 phases one at a time, running each leaf's `smoke.sh` between phases (the `run --all` path skips smoke). Same end state as the terragrunt path; prefer it on Unix when you're adding a new leaf or debugging an install regression and want to see smoke output between phases.
 
-When it's green:
+When it's green, infrastructure services are already reachable (native k3d NodePort, no extra step). Bring up the app layer with Skaffold — it forwards its own ports while running in the foreground, cross-platform, no shell script:
 
 ```bash
-bash scripts/standalone-port-forward.sh   # opens host ports 23000-23010
+skaffold dev
 ```
+
+Three deploy mechanisms, three disjoint, non-overlapping port ranges: `23001`+`23011-23023` Terragrunt-managed native NodePort infra (below), `23030-23039` Skaffold dev (apps, requires `skaffold dev` running), and `23000-23019` for ArgoCD-deployed apps — optional, not yet active on this cluster (see `k8s/argocd/prod/`), full mapping in `skaffold.yaml`'s header comments.
 
 | Service | URL | Login |
 |---|---|---|
-| FastAPI (main app) | http://localhost:23000 | — |
-| Flower (Celery) | http://localhost:23002 | — |
-| FastHTML | http://localhost:23003 | — |
-| FastMCP | http://localhost:23004 | — |
-| Grafana | http://localhost:23005 | `admin / admin` |
-| LangFuse | http://localhost:23006 | `admin@demo.local / admin-demo-password` |
-| ArgoCD | http://localhost:23007 | `admin` / `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' \| base64 -d` |
-| MinIO Console | http://localhost:23008 | `minioadmin / minioadmin` |
-| MinIO S3 API | http://localhost:23009 | — |
-| Rancher | http://localhost:23010 | `admin / rancher-demo-bootstrap` (forces password change on first login) |
+| FastAPI (main app) | http://localhost:23030 | — (needs `skaffold dev` running) |
+| Flower (Celery) | http://localhost:23032 | — (needs `skaffold dev` running) |
+| FastHTML | http://localhost:23033 | — (needs `skaffold dev` running) |
+| FastMCP | http://localhost:23034 | — (needs `skaffold dev` running) |
+| Neo4j Browser | http://localhost:23001 | `neo4j / neo4j-demo-password` (Bolt URI field: `bolt://localhost:23012`) |
+| Qdrant Dashboard | http://localhost:23011 | API key field: `qdrant-demo-api-key` |
+| Elasticsearch REST API | https://localhost:23013 | `coelhonexus / coelhonexus-demo-password` |
+| Kibana | https://localhost:23014 | `coelhonexus / coelhonexus-demo-password` (same as Elasticsearch, no separate credential) |
+| MinIO S3 API | http://localhost:23015 | `minioadmin / minioadmin` |
+| MinIO Console | http://localhost:23016 | `minioadmin / minioadmin` |
+| LangFuse | http://localhost:23017 | `admin@demo.local / admin-demo-password` |
+| Playwright noVNC | http://localhost:23018 | password-only: `vnc-demo-password` |
+| Playwright headed CDP | ws://localhost:23019 | — (not a browser UI, no auth) |
+| Playwright headless CDP | ws://localhost:23020 | — (not a browser UI, no auth) |
+| Rancher | https://localhost:23021 | `admin / rancher-demo-bootstrap` (forces password change on first login) |
+| Grafana | http://localhost:23022 | `admin / admin` |
+| ArgoCD | http://localhost:23023 | `admin` (or `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' \| base64 -d` if the sync Job hasn't landed yet) |
+
+Full URL/credential reference with quirks and a connectivity smoke test: [`docs/STANDALONE-ACCESS.md`](../docs/STANDALONE-ACCESS.md).
 
 ---
 
@@ -94,7 +105,7 @@ infrastructure/
 ├── env.hcl                  # Single config file — demo credentials, cluster name, data path
 ├── root.hcl                 # Terragrunt root — local backend, no SOPS
 ├── README.md                # ← this file
-├── modules/                 # Reusable Terraform modules (byte-identical to COELHO Cloud where possible)
+├── modules/                 # Reusable Terraform modules, kept byte-identical across environments where possible
 │   ├── k3d/                 # k3d cluster create
 │   ├── monitoring-crds/     # Prometheus Operator CRDs
 │   ├── rancher/             # Rancher cluster UI
@@ -125,8 +136,8 @@ infrastructure/
 
 `scripts/`:
 - `standalone-up.sh` — sequential phased bring-up (alternative to `terragrunt run --all`; Unix only)
-- `standalone-port-forward.sh` — opens host ports 23000-23010 (auto-reconnecting `while true` loops; Unix only)
-- `argocd-port-forward.sh` — same for the COELHO Cloud cluster
+- `standalone-port-forward.sh` — superseded by `skaffold dev`'s built-in `portForward:` (cross-platform); kept for now, not needed for normal use
+- `argocd-port-forward.sh` — same, for a separate production cluster this repo can also target
 - `redis-check.sh` — generic Redis CLI sanity check
 - `observability/` — LangFuse prompt publishers, dataset bootstrap, eval runners
 
@@ -140,7 +151,7 @@ App build + deploy is handled by **Skaffold** at the repo root (`skaffold run` /
 - **OpenTofu** (`terraform_binary = "tofu"` in `root.hcl`) is the engine — Terraform-compatible, FOSS license.
 - **k3d** wraps k3s in Docker. The cluster name is `coelhonexus`; kubeconfig context is `k3d-coelhonexus`.
 - Every leaf has a `smoke.sh` that runs after `terragrunt apply` succeeds. The script validates the leaf is actually usable (e.g., MinIO accepts S3 calls, not just "the pod is running"). Failure aborts the chain.
-- **Pluggable**: COELHO Nexus' `apps/` and `k8s/` work against both this cluster AND COELHO Cloud's homelab — switch with `kubectl config use-context k3d-coelhonexus | k3d-coelho-cloud`.
+- **Pluggable**: COELHO Nexus' `apps/` and `k8s/` work against both this cluster AND a separate production cluster this repo can also target — switch with `kubectl config use-context k3d-coelhonexus` or the other cluster's context.
 
 ---
 
@@ -166,23 +177,7 @@ for f in infrastructure/live/coelhonexus/*/*/smoke.sh; do bash "$f" || break; do
 
 ### Deploy the COELHO Nexus apps (`fastapi`, `fasthtml`, `fastmcp`)
 
-After the infrastructure is up, build and deploy with **Skaffold** — one cross-platform Go binary (works on Linux, macOS, and Windows identically; install at https://skaffold.dev/docs/install/).
-
-```bash
-# One-shot build + push + deploy (CI-style)
-skaffold run
-
-# Interactive dev mode (auto-rebuild on edit, hot-reload via file sync)
-skaffold dev
-```
-
-A single `skaffold.yaml` at the repo root works for both clusters:
-- **Base config** targets the COELHO Cloud k3d cluster (`localhost:5001` registry, default `values.yaml`).
-- **`coelhonexus` profile** auto-activates when your current kubectl context is `k3d-coelhonexus` — flips the registry to `localhost:5000`, layers `values-coelhonexus.yaml`, and re-maps the image template variables.
-
-So plain `skaffold run` after `kubectl config use-context k3d-coelhonexus` Just Works on the standalone cluster. Force the profile explicitly with `skaffold run -p coelhonexus` if you want to be paranoid.
-
-**Why not ArgoCD on the standalone cluster?** ArgoCD GitOps requires a Git source the cluster can reach. `k8s/argocd/application.yaml` points at an in-cluster GitLab service that exists only on COELHO Cloud (GitLab was intentionally dropped from the standalone infrastructure port — it would add ~3 GB RAM for a single-user demo). On standalone, Skaffold is the deploy path; ArgoCD GitOps stays as the COELHO Cloud demo. See `docs/K8S-DUAL-CLUSTER-FLEX-2026-06-19.md` for the full rationale.
+Full instructions — Skaffold (`run`/`dev`) and ArgoCD (build via `docker buildx` or `skaffold build`, then Image Updater deploys) — moved to the root [`README.md`](../README.md)'s Installation section, so app-deploy instructions live in one place rather than being duplicated across two READMEs.
 
 ### Destroy + reset
 
@@ -202,12 +197,7 @@ Note: `run --all destroy` can hang on Helm finalizers (notably Rancher/Fleet). W
 
 ### Build + deploy apps
 
-```bash
-skaffold run               # one-shot build + push + helm install
-skaffold dev               # interactive watch mode w/ hot-reload
-```
-
-Skaffold's `coelhonexus` profile auto-activates via kubeContext — no extra flags needed when you've selected `k3d-coelhonexus`. See the "Deploy the COELHO Nexus apps" section above for details.
+See the root [`README.md`](../README.md)'s Installation section for the full `skaffold run`/`skaffold dev` and ArgoCD deploy instructions.
 
 ### Inspect failing pod
 
@@ -224,7 +214,7 @@ kubectl logs -n <ns> <pod> --tail=100
 
 All demo credentials live in `infrastructure/env.hcl` under the `demo` map. Edit that file and re-apply if you need different passwords. They're plain-text on purpose — this is a local demo, not a production cluster. **Do not commit real secrets** to this file.
 
-For real BYOK secrets (LLM provider API keys), use the in-app Settings UI at `http://localhost:23003/settings` (Fernet-encrypted, stored in MinIO).
+For real BYOK secrets (LLM provider API keys), use the in-app Settings UI at `http://localhost:23033/settings` (Fernet-encrypted, stored in MinIO).
 
 ---
 
@@ -251,6 +241,4 @@ For real BYOK secrets (LLM provider API keys), use the in-app Settings UI at `ht
 
 ## See also
 
-- COELHO Cloud production infrastructure: `~/COELHOCloud/infrastructure/` (same modules, different leaves; uses Tailscale + SOPS)
-- `docs/INFRASTRUCTURE-PORT-2026-06-19.md` — the port plan + module inventory + 7-phase order
-- `docs/OBSERVABILITY-LANGFUSE-OTEL-SOTA-2026-06-18.md` — the LGTM-stack-consuming workload that motivated this infrastructure port
+- `docs/OBSERVABILITY-USAGE-2026-06-18.md` — how to wire a new domain into the LGTM + LangFuse observability stack this infrastructure provisions

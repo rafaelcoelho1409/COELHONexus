@@ -355,27 +355,21 @@ variable "enable_notification_queue" {
 }
 
 # -----------------------------------------------------------------------------
-# Tailscale Ingress
+# External Ingress
 # -----------------------------------------------------------------------------
 variable "tailscale_hostname" {
-  description = "Tailnet hostname for the Langfuse UI (e.g. 'langfuse-v2' or 'langfuse')."
+  description = "External hostname for the Langfuse UI (e.g. 'langfuse-v2' or 'langfuse')."
   type        = string
   default     = "langfuse"
 }
 
 variable "tailscale_domain" {
-  description = "Tailnet base domain (e.g. YOUR_TAILNET_DOMAIN.ts.net)."
+  description = "External base domain (e.g. YOUR_EXTERNAL_DOMAIN.example.com). Still referenced by the public_url fallback in main.tf even though the Ingress resource was removed."
   type        = string
-}
-
-variable "tailscale_ingress_class" {
-  description = "Tailscale operator's IngressClass name."
-  type        = string
-  default     = "tailscale"
 }
 
 variable "public_url" {
-  description = "Optional browser URL for Langfuse. Set this for localhost port-forward deployments; otherwise the module derives the Tailscale URL."
+  description = "Optional browser URL for Langfuse. Set this for localhost port-forward deployments; otherwise the module derives the external URL."
   type        = string
   default     = ""
 }
@@ -400,7 +394,7 @@ variable "backup_retention_days" {
 # -----------------------------------------------------------------------------
 # Opt-in NodePort Service for localhost access via k3d's loadbalancer port
 # mapping. Leave `enable_local_expose` unset (default false) on any
-# environment where Tailscale Ingress already provides access (e.g. COELHO
+# environment where external Ingress already provides access (e.g. COELHO
 # Cloud) — the module below is never instantiated in that case. See
 # infrastructure/modules/k3d_expose/.
 #

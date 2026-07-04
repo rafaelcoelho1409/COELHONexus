@@ -22,7 +22,7 @@
 #   - The Chrome M113+ Host-header DNS-rebinding check applies only to CDP's
 #     /json/* endpoints, not to the Playwright protocol envelope.
 #
-# Why no Tailscale Ingress:
+# Why no external Ingress:
 #   - Internal-only API (no UI). Per memory feedback_no_external_ingress_for_uiless_backends.
 # =============================================================================
 

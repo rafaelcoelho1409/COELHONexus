@@ -20,7 +20,7 @@
 #      wires up tracesToLogs (loki) + tracesToMetrics (mimir) + serviceMap
 #      (mimir) + nodeGraph for the full LGTM cross-pillar UX.
 #
-# No external Tailscale Ingress / Homepage tile (per memory:
+# No external Ingress / Homepage tile (per memory:
 # feedback_no_external_ingress_for_uiless_backends). All viewing happens
 # through Grafana → Explore (Tempo).
 #

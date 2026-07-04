@@ -32,7 +32,7 @@ output "query_url" {
 }
 
 output "gateway_service" {
-  description = "Name of the unified gateway Service (Tailscale Ingress backend)."
+  description = "Name of the unified gateway Service (external Ingress backend)."
   value       = "${var.release_name}-gateway"
 }
 

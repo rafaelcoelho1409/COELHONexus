@@ -2,8 +2,8 @@
 # neo4j module — provider requirements
 # =============================================================================
 # `tls` provider was used in an earlier iteration to generate a self-signed
-# Bolt cert. Removed when we switched to Tailscale Ingress for Bolt (LE cert
-# auto-provisioned by the Tailscale operator).
+# Bolt cert. Removed when we switched to external Ingress for Bolt (LE cert
+# auto-provisioned by the external ingress controller).
 # =============================================================================
 
 terraform {

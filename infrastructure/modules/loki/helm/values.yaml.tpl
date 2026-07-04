@@ -127,7 +127,7 @@ monitoring:
     interval: 30s
     relabelings:
       - targetLabel: cluster
-        replacement: coelho-cloud
+        replacement: ${cluster_name}
   rules:
     enabled: false # Loki recording/alerting rules off in homelab — Grafana's unified alerting handles routing.
   selfMonitoring:

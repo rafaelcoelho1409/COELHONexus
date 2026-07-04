@@ -27,12 +27,7 @@ output "web_url_internal" {
   value       = "http://${helm_release.langfuse.name}-web.${kubernetes_namespace_v1.langfuse.metadata[0].name}.svc.cluster.local:3000"
 }
 
-output "tailscale_url" {
-  description = "Public Tailnet URL (https)."
-  value       = "https://${var.tailscale_hostname}.${var.tailscale_domain}"
-}
-
 output "public_url" {
-  description = "Browser URL for Langfuse. Uses `public_url` when provided, otherwise the Tailscale URL."
+  description = "Browser URL for Langfuse. Uses `public_url` when provided, otherwise the external URL."
   value       = local.public_url
 }

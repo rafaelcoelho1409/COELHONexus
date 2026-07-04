@@ -25,7 +25,7 @@
 #   2. ECK Stack (Elasticsearch + Kibana CRs)
 #   3. Wait for elastic user Secret + ES readiness
 #   4. Register snapshot repo via REST
-#   5. Create backup CronJob + Tailscale Ingress for Kibana
+#   5. Create backup CronJob + external Ingress for Kibana
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -242,8 +242,8 @@ resource "kubernetes_secret_v1" "elastic_file_realm" {
 # -----------------------------------------------------------------------------
 # Local access (k3d dev only) — NodePort Services, opt-in via enable_local_expose
 # -----------------------------------------------------------------------------
-# Separate from any Tailscale Ingress — that stays unconditional and works
-# as-is on any environment with a real Tailscale operator. This is for k3d
+# Separate from any external Ingress — that stays unconditional and works
+# as-is on any environment with a real external ingress controller. This is for k3d
 # standalone dev clusters. Elasticsearch and Kibana are reconciled by the ECK
 # operator into separate pods with different selectors, so each needs its own
 # k3d_expose instance. Selectors verified via `kubectl get svc -n <namespace>

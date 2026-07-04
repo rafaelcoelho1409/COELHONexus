@@ -194,30 +194,30 @@ variable "minio_bucket" {
 }
 
 # -----------------------------------------------------------------------------
-# Tailscale TCP exposure (optional)
+# External TCP exposure (optional)
 # -----------------------------------------------------------------------------
-# Expose Postgres at <hostname>.<tailnet-domain>:5432 for direct psql access
-# from your laptop or any tailnet device. Uses the Tailscale operator's
+# Expose Postgres at <hostname>.<external-domain>:5432 for direct psql access
+# from your laptop or any external device. Uses the external ingress controller's
 # LoadBalancer service pattern (spec.loadBalancerClass: tailscale) — the
 # operator provisions a proxy pod that registers a TCP service on the
-# tailnet. Note: Tailscale's network is already encrypted (WireGuard), so
+# external network. Note: the external network is already encrypted (WireGuard), so
 # Postgres can run plaintext over the proxy — no need for Postgres TLS.
 # -----------------------------------------------------------------------------
 
 variable "enable_tailscale_exposure" {
-  description = "Expose Postgres on the tailnet via the Tailscale operator's LoadBalancer pattern. Off by default (Postgres is internal); turn on for direct psql access from your laptop."
+  description = "Expose Postgres on the external network via the external ingress controller's LoadBalancer pattern. Off by default (Postgres is internal); turn on for direct psql access from your laptop."
   type        = bool
   default     = false
 }
 
 variable "tailscale_hostname" {
-  description = "Short tailnet hostname for direct psql access (e.g. 'postgresql' → postgresql.<domain>.ts.net:5432). Only used when enable_tailscale_exposure=true."
+  description = "Short external hostname for direct psql access (e.g. 'postgresql' → postgresql.<domain>.example.com:5432). Only used when enable_tailscale_exposure=true."
   type        = string
   default     = "postgresql"
 }
 
 variable "tailscale_domain" {
-  description = "Tailnet domain (e.g. 'YOUR_TAILNET_DOMAIN.ts.net'). Comes from env.hcl. Required when enable_tailscale_exposure=true."
+  description = "External domain (e.g. 'YOUR_EXTERNAL_DOMAIN.example.com'). Comes from env.hcl. Required when enable_tailscale_exposure=true."
   type        = string
   default     = ""
 }

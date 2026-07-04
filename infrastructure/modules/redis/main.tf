@@ -7,12 +7,12 @@
 #   2. Bitnami redis Helm release (chart 25.4.1, redis-stack-server image)
 #   3. Secret with MinIO backup credentials
 #   4. Daily backup CronJob: BGSAVE + RDB → MinIO `backups/redis/`
-#   5. (optional) Tailscale-exposed Service for external redis-cli access
+#   5. (optional) Externally-exposed Service for redis-cli access
 #
 # v1 → v2 changes:
 #   - Chart: bitnami/redis (whichever) → 25.4.1
 #   - Dropped `cluster_ready` boolean dependency annotation (v1 anti-pattern)
-#   - Tailscale exposure now optional (was always-on in v1)
+#   - External exposure now optional (was always-on in v1)
 #   - Image still redis/redis-stack-server (RediSearch/JSON/TS/Bloom modules)
 # =============================================================================
 
@@ -104,7 +104,7 @@ resource "kubernetes_manifest" "backup_cronjob" {
 }
 
 # -----------------------------------------------------------------------------
-# Tailscale TCP exposure (optional)
+# External TCP exposure (optional)
 # -----------------------------------------------------------------------------
 resource "kubernetes_manifest" "tailscale_service" {
   count = var.enable_tailscale_exposure ? 1 : 0

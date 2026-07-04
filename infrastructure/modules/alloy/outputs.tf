@@ -36,17 +36,6 @@ output "ui_url_inside_cluster" {
   value       = "http://${var.release_name}.${var.namespace}.svc.cluster.local:12345"
 }
 
-# -----------------------------------------------------------------------------
-# External OTLP HTTP endpoint (only populated when Tailscale exposure is on)
-# -----------------------------------------------------------------------------
-
-output "otlp_http_external_url" {
-  description = "External OTLP HTTP endpoint (HTTPS-terminated by the Tailscale proxy). Use as OTEL_EXPORTER_OTLP_ENDPOINT for laptop / off-cluster apps. Empty string when expose_otlp_http_via_tailscale=false."
-  value = (var.expose_otlp_http_via_tailscale && var.tailscale_domain != "" ?
-    "https://${var.tailscale_hostname}.${var.tailscale_domain}" :
-  "")
-}
-
 output "ready" {
   description = "Helm release status string ('deployed' on success)."
   value       = helm_release.alloy.status

@@ -2,7 +2,6 @@
 
 **Date:** 2026-06-18
 **Audience:** future-me adding observability to a new domain.
-**Companion doc:** `docs/OBSERVABILITY-LANGFUSE-OTEL-SOTA-2026-06-18.md` (architecture, conventions, rationale).
 
 This guide answers: *"I have a new domain `foo`; how do I add spans / metrics / scores / sessions / prompts so it renders in LangFuse + Tempo + Mimir like the existing ones?"*
 

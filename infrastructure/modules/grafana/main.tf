@@ -18,7 +18,7 @@
 #          scraper is online yet)
 #        - Persistence DISABLED — DB is external, plugins re-install at boot,
 #          BLEVE search index regenerates
-#   8. Tailscale Ingress at grafana.<domain>.ts.net (Homepage tile in
+#   8. External Ingress at grafana.<domain>.example.com (Homepage tile in
 #      "Observability" group, mandatory `gethomepage.dev/href` annotation)
 #
 # Chart migration note (per memory feedback_module_migration_playbook):
@@ -444,28 +444,10 @@ resource "kubernetes_job_v1" "sync_admin_password" {
 }
 
 # -----------------------------------------------------------------------------
-# Tailscale Ingress
-# -----------------------------------------------------------------------------
-resource "kubernetes_manifest" "ingress" {
-  manifest = yamldecode(templatefile("${path.module}/k8s/ingress.yaml.tpl", {
-    namespace          = kubernetes_namespace_v1.grafana.metadata[0].name
-    release_name       = var.release_name
-    tailscale_hostname = var.tailscale_hostname
-    tailscale_domain   = var.tailscale_domain
-    ingress_class_name = var.tailscale_ingress_class
-  }))
-
-  depends_on = [
-    helm_release.grafana,
-    kubernetes_job_v1.sync_admin_password,
-  ]
-}
-
-# -----------------------------------------------------------------------------
 # Local access (k3d dev only) — NodePort Service, opt-in via enable_local_expose
 # -----------------------------------------------------------------------------
-# Separate from the Tailscale Ingress above — that stays unconditional and
-# works as-is on any environment with a real Tailscale operator. This is for
+# Separate from the external Ingress above — that stays unconditional and
+# works as-is on any environment with a real external ingress controller. This is for
 # k3d standalone dev clusters. Selector matches the chart's `grafana` Service
 # (`app.kubernetes.io/instance: grafana, app.kubernetes.io/name: grafana`),
 # verified via `kubectl get svc grafana -n grafana -o yaml` against the live

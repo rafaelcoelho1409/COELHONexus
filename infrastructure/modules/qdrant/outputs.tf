@@ -31,25 +31,6 @@ output "grpc_endpoint" {
   value       = "${var.release_name}.${var.namespace}.svc.cluster.local:6334"
 }
 
-# -----------------------------------------------------------------------------
-# External (Tailnet) URL — for laptop dev workflows + the Dashboard UI
-# -----------------------------------------------------------------------------
-
-output "url" {
-  description = "Web UI + REST endpoint via Tailscale. Append /dashboard for the built-in UI."
-  value       = "https://${var.tailscale_hostname}.${var.tailscale_domain}"
-}
-
-output "dashboard_url" {
-  description = "Direct link to the Qdrant Dashboard."
-  value       = "https://${var.tailscale_hostname}.${var.tailscale_domain}/dashboard"
-}
-
-output "tailscale_hostname" {
-  description = "Tailnet hostname (without domain)."
-  value       = var.tailscale_hostname
-}
-
 output "ready" {
   description = "Helm release status string ('deployed' on success)."
   value       = helm_release.qdrant.status

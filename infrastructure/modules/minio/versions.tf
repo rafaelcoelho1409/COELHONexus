@@ -4,7 +4,7 @@
 #
 # Two providers needed:
 #   - helm: deploy the MinIO chart from charts.min.io
-#   - kubernetes: namespace + Tailscale Ingresses + ServiceMonitor (all are
+#   - kubernetes: namespace + external Ingresses + ServiceMonitor (all are
 #     built-in or come from prometheus-operator CRDs already installed by
 #     the monitoring-crds unit; plain kubernetes_manifest is sufficient,
 #     no kubectl_manifest needed since this module deploys no custom

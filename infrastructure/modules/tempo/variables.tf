@@ -38,7 +38,7 @@ variable "release_name" {
 }
 
 # -----------------------------------------------------------------------------
-# Note: no Tailscale Ingress vars. Tempo has no UI; all viewing happens via
+# Note: no external Ingress vars. Tempo has no UI; all viewing happens via
 # Grafana → Explore (Tempo). Per memory feedback_no_external_ingress_for_uiless_backends.
 # -----------------------------------------------------------------------------
 

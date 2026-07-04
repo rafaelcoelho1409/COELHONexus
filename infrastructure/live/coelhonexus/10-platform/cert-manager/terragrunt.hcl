@@ -3,14 +3,14 @@
 # =============================================================================
 # TLS certificate provisioner for the standalone cluster. Required by Rancher
 # when `tls_source = "rancher"` (the only viable Rancher TLS option here, since
-# we dropped tailscale-operator and have no external TLS-terminating proxy).
+# we dropped the external ingress operator and have no external TLS-terminating proxy).
 #
 # Order: applied AFTER monitoring-crds (k3d kubeconfig must exist), BEFORE
 # rancher (Rancher's chart creates an `Issuer` resource on first apply, which
 # requires cert-manager's CRDs to already exist).
 #
-# Not present on COELHO Cloud — that cluster uses Tailscale-operator-provided
-# TLS termination via the tailnet proxy. See infrastructure/modules/cert-manager/
+# Not present on COELHO Cloud — that cluster uses an external-ingress-operator-provided
+# TLS termination via an external proxy. See infrastructure/modules/cert-manager/
 # main.tf for the full rationale.
 # =============================================================================
 

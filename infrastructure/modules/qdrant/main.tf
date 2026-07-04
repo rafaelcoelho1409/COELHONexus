@@ -12,7 +12,7 @@
 #        - 5Gi data PVC + 5Gi snapshot PVC (trimmed from v1's 10Gi each)
 #        - ServiceMonitor enabled (Alloy auto-scrapes via prometheus.operator)
 #        - API-key auth on (read from Secret via env)
-#   6. Tailscale Ingress at qdrant.<domain> + Homepage tile (Databases group)
+#   6. External Ingress at qdrant.<domain> + Homepage tile (Databases group)
 #   7. Backup CronJob — every 6h (configurable):
 #        - Init container: alpine + curl/jq → POST /collections/*/snapshots
 #        - Main container: minio/mc → upload snapshots to MinIO
@@ -175,21 +175,6 @@ resource "helm_release" "qdrant" {
 }
 
 # -----------------------------------------------------------------------------
-# Tailscale Ingress
-# -----------------------------------------------------------------------------
-resource "kubernetes_manifest" "ingress" {
-  manifest = yamldecode(templatefile("${path.module}/k8s/ingress.yaml.tpl", {
-    namespace          = kubernetes_namespace_v1.qdrant.metadata[0].name
-    release_name       = var.release_name
-    tailscale_hostname = var.tailscale_hostname
-    tailscale_domain   = var.tailscale_domain
-    ingress_class_name = var.tailscale_ingress_class
-  }))
-
-  depends_on = [helm_release.qdrant]
-}
-
-# -----------------------------------------------------------------------------
 # Backup CronJob — snapshot every 6h to MinIO
 # -----------------------------------------------------------------------------
 resource "kubernetes_manifest" "backup_cronjob" {
@@ -211,10 +196,10 @@ resource "kubernetes_manifest" "backup_cronjob" {
 # -----------------------------------------------------------------------------
 # Local access (k3d dev only) — NodePort Service, opt-in via enable_local_expose
 # -----------------------------------------------------------------------------
-# Separate from the Tailscale Ingress above — that stays unconditional and
-# works as-is on any environment with a real Tailscale operator. This is for
-# k3d standalone dev clusters, where Tailscale Ingress is a documented no-op
-# (see this module's live leaf comment: "DUMMY tailscale strings... inert").
+# Separate from the external Ingress above — that stays unconditional and
+# works as-is on any environment with a real external ingress controller. This is for
+# k3d standalone dev clusters, where external Ingress is a documented no-op
+# (see this module's live leaf comment: "DUMMY external-ingress strings... inert").
 # Selector must match the pods behind the `qdrant` Service above (`app:
 # qdrant, app.kubernetes.io/instance: qdrant, app.kubernetes.io/name: qdrant`,
 # verified via `kubectl get svc qdrant -n qdrant -o yaml`).

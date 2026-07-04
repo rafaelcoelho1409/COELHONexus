@@ -21,7 +21,7 @@
 #                  (TCP-only) — socat correctly bypassed the localhost-bind
 #                  lockdown but couldn't fix the Host-header DNS-rebinding
 #                  check that causes Chrome to return 500 when reached via
-#                  any k8s Service / Tailscale hostname.
+#                  any k8s Service / external hostname.
 #
 # Service `playwright-headed` maps port 9222 → targetPort 9220 → cdp-proxy
 # (nginx) → 127.0.0.1:9222 (chromium CDP). Consumers in any namespace
@@ -194,7 +194,7 @@ spec:
         # CDP at 127.0.0.1:9222) but HTTP-aware — also rewrites the Host
         # header to "localhost:9222" so Chrome's M113+ DNS-rebinding check
         # accepts requests that arrive via the k8s Service hostname or
-        # Tailscale Ingress hostname. Without this, /json/version returns
+        # external Ingress hostname. Without this, /json/version returns
         # HTTP 500 and Playwright's connect_over_cdp() fails immediately.
         # ---------------------------------------------------------------------
         - name: cdp-proxy

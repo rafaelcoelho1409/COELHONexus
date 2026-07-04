@@ -277,7 +277,7 @@ metaMonitoring:
     interval: 30s
     relabelings:
       - targetLabel: cluster
-        replacement: coelho-cloud
+        replacement: ${cluster_name}
   prometheusRule:
     enabled: true
     mimirAlerts: false # Disable noisy alerts in homelab; turn on later if desired.

@@ -34,7 +34,7 @@ resources:
     memory: ${memory_limit}
 
 # -----------------------------------------------------------------------------
-# Service — ClusterIP. Tailscale Ingress provides external access.
+# Service — ClusterIP. External Ingress provides external access.
 # -----------------------------------------------------------------------------
 service:
   type: ClusterIP

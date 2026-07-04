@@ -35,14 +35,17 @@ inputs = {
   servers = 1
   agents  = 2
 
-  # Host port for `docker push localhost:5000/...`. The k3d registry container
-  # internally listens on 5000; the host port is independent. Standardizing
-  # on 5000 keeps it natural for `IMAGE_REGISTRY=coelhonexus-registry:5000`.
+  # Host port for `docker push localhost:5001/...`. The k3d registry
+  # container internally listens on 5000 regardless (in-cluster DNS name
+  # stays `coelhonexus-registry:5000`) — only this host-side mapping varies.
   #
-  # macOS users with AirPlay Receiver enabled: either disable it (System
-  # Settings → General → AirDrop & Handoff → AirPlay Receiver) or change
-  # this to 5001 and update IMAGE_REGISTRY accordingly.
-  registry_port = 5000
+  # 5001 avoids a known conflict with macOS AirPlay Receiver, which defaults
+  # to port 5000 (System Settings → General → AirDrop & Handoff → AirPlay
+  # Receiver — disable it if you'd rather use 5000 instead). Also matches the
+  # registry_port used by another cluster this chart can target, which is
+  # never run concurrently with this one — see
+  # docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md.
+  registry_port = 5001
 
   # Kubeconfig lives next to this leaf so it's easy to find.
   # Downstream leaves reference it via `dependency.k3d.outputs.kubeconfig_path`.

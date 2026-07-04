@@ -19,7 +19,7 @@
 #   1. Namespace + 5 Secrets
 #   2. Bootstrap Jobs: create Postgres role/db + ensure MinIO bucket
 #   3. Helm release (langfuse/langfuse)
-#   4. Tailscale Ingress + Backup CronJob
+#   4. External Ingress + Backup CronJob
 # =============================================================================
 
 locals {
@@ -409,21 +409,6 @@ resource "helm_release" "langfuse" {
 }
 
 # -----------------------------------------------------------------------------
-# Tailscale Ingress — web UI
-# -----------------------------------------------------------------------------
-resource "kubernetes_manifest" "ingress" {
-  manifest = yamldecode(templatefile("${path.module}/k8s/ingress.yaml.tpl", {
-    namespace          = kubernetes_namespace_v1.langfuse.metadata[0].name
-    release_name       = var.release_name
-    tailscale_hostname = var.tailscale_hostname
-    tailscale_domain   = var.tailscale_domain
-    ingress_class_name = var.tailscale_ingress_class
-  }))
-
-  depends_on = [helm_release.langfuse]
-}
-
-# -----------------------------------------------------------------------------
 # Backup CronJob — daily pg_dump → MinIO
 # -----------------------------------------------------------------------------
 resource "kubernetes_manifest" "backup_cronjob" {
@@ -448,8 +433,8 @@ resource "kubernetes_manifest" "backup_cronjob" {
 # -----------------------------------------------------------------------------
 # Local access (k3d dev only) — NodePort Service, opt-in via enable_local_expose
 # -----------------------------------------------------------------------------
-# Separate from the Tailscale Ingress above — that stays unconditional and
-# works as-is on any environment with a real Tailscale operator. This is for
+# Separate from the external Ingress above — that stays unconditional and
+# works as-is on any environment with a real external ingress controller. This is for
 # k3d standalone dev clusters. Selector matches the chart's `langfuse-web`
 # Service (`app: web, app.kubernetes.io/instance: langfuse,
 # app.kubernetes.io/name: langfuse`), verified via `kubectl get svc -n

@@ -34,8 +34,8 @@ rootUser: "${root_user}"
 rootPassword: "${root_password}"
 
 # -----------------------------------------------------------------------------
-# Service — TWO Services (API on 9000, Console on 9001). Tailscale Ingresses
-# point at the appropriate one. ClusterIP only (Tailscale handles external).
+# Service — TWO Services (API on 9000, Console on 9001). External Ingresses
+# point at the appropriate one. ClusterIP only (external ingress controller handles external).
 # -----------------------------------------------------------------------------
 service:
   type: ClusterIP
@@ -45,7 +45,7 @@ consoleService:
   type: ClusterIP
   port: 9001
 
-# Disable chart's built-in Ingress; Tailscale Ingresses are created
+# Disable chart's built-in Ingress; external Ingresses are created
 # separately via kubernetes_manifest in main.tf.
 ingress:
   enabled: false

@@ -42,25 +42,7 @@ output "ws_server_playwright_version" {
 }
 
 output "novnc_url_in_cluster" {
-  description = "In-cluster noVNC URL (mostly for sanity checks; humans should use the Tailscale URL)."
+  description = "In-cluster noVNC URL. Use the k3d_expose NodePort for browser access from a laptop."
   value       = "http://playwright-novnc.${var.namespace}.svc.cluster.local:6080"
 }
 
-# -----------------------------------------------------------------------------
-# External (Tailnet) endpoints
-# -----------------------------------------------------------------------------
-
-output "novnc_url_external" {
-  description = "noVNC web UI URL (HTTPS via Tailscale Ingress). Append `/vnc.html?autoconnect=1&resize=remote` for direct viewer."
-  value       = "https://${var.tailscale_hostname_novnc}.${var.tailscale_domain}"
-}
-
-output "cdp_headed_url_external" {
-  description = "Headed CDP endpoint over Tailscale (LE TLS). For laptop dev with Browser Use / Crawl4AI undetected."
-  value       = "https://${var.tailscale_hostname_cdp_headed}.${var.tailscale_domain}"
-}
-
-output "cdp_headless_url_external" {
-  description = "Headless CDP endpoint over Tailscale (LE TLS). For Knowledge Distiller laptop crawlers / Crawl4AI default bulk mode."
-  value       = "https://${var.tailscale_hostname_cdp_headless}.${var.tailscale_domain}"
-}

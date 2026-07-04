@@ -154,6 +154,8 @@ These look like they might need flex but actually don't:
 4. **`k8s/helm/values.yaml`** — comment near `registry.url` pointing operators at the override file
 5. **`infrastructure/README.md`** — new "Deploy the COELHO Nexus apps" section documenting the Skaffold workflow + the rationale for the two deploy models
 
+> **Superseded 2026-07-03** — items 2 and 3 above no longer reflect current state: the `coelhonexus` Skaffold profile was removed entirely (was dead config, `--default-repo` is the real mechanism), `k8s/argocd/` gained a `dev/`/`prod/` split (COELHO Cloud / standalone respectively — confusingly named, pending a rename) with the standalone side now actually deployable via ArgoCD + Image Updater rather than being purely COELHO-Cloud-only, and both clusters' registries now share the same host port `localhost:5001` instead of `5001`/`5000`. See `docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md` for the live record of what's changed and what's still pending.
+
 ---
 
 ## Open questions worth thinking about

@@ -9,10 +9,12 @@
 # All three storage backends MUST be applied first.
 #
 # Adaptations vs COELHO Cloud's leaf:
-#   - DROP dependency "tailscale_operator" + dummy tailscale_* inputs
+#   - DROP the external-ingress-operator dependency
+#   - External OTLP Ingress capability REMOVED from main.tf entirely
+#     (2026-07-02) — was already off by default (the OTLP-via-external-proxy flag
+#     defaulted false) and always would be on this cluster.
 #   - keep dependency "mimir" / "loki" / "tempo" — state files exist now
 #   - cluster_label = "coelhonexus" (via env.hcl env_name)
-#   - expose_otlp_http_via_tailscale = false (matches COELHO Cloud default)
 # =============================================================================
 
 include "root" {
@@ -87,11 +89,6 @@ inputs = {
   loki_push_url            = dependency.loki.outputs.push_url
   tempo_otlp_grpc_endpoint = dependency.tempo.outputs.otlp_grpc_endpoint
 
-  # External OTLP HTTP exposure — OFF. App OTLP push is in-cluster only.
-  expose_otlp_http_via_tailscale = false
-  tailscale_hostname             = "alloy"
-  tailscale_domain               = "tailscale.local"
-  tailscale_ingress_class        = "tailscale"
 
   # Critical: OTLP receiver REQUIRED — FastAPI + Celery push gen_ai.* spans
   # via gRPC :4317 and metrics via gRPC :4317.

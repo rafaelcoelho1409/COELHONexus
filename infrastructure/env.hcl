@@ -25,7 +25,7 @@ inputs = {
   # ---------------------------------------------------------------------------
   # Substrate posture
   # ---------------------------------------------------------------------------
-  # All modules support disabling tailnet exposure via this variable;
+  # All modules support disabling external exposure via this variable;
   # propagated to every leaf via the env-level inputs.
   enable_tailscale_exposure = false
 

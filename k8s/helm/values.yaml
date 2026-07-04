@@ -132,13 +132,15 @@ secretMappings:
   - envName: FLOWER_BASIC_AUTH
     key: flower-basic-auth
 
-# Default targets COELHO CLOUD registry. Layer values-coelhonexus.yaml to target the standalone cluster.
+# localhost:5001 resolves correctly on any cluster targeting this chart —
+# each cluster's own containerd mirror (see registries.yaml.tpl) translates
+# it to that cluster's own in-cluster registry. No per-cluster override needed.
 registry:
-  url: coelho-cloud-registry:5000
+  url: localhost:5001
   imagePullSecret: ""
 
 fastapi:
-  image: coelho-cloud-registry:5000/coelhonexus-fastapi:latest
+  image: localhost:5001/coelhonexus-fastapi:latest
   imagePullPolicy: Always
   replicas: 1
   resources:
@@ -242,7 +244,7 @@ flower:
       failureThreshold: 3
 
 fasthtml:
-  image: coelho-cloud-registry:5000/coelhonexus-fasthtml:latest
+  image: localhost:5001/coelhonexus-fasthtml:latest
   imagePullPolicy: Always
   replicas: 1
   resources:
@@ -284,9 +286,12 @@ fasthtml:
       periodSeconds: 5
       failureThreshold: 3
 
-# Internal ClusterIP — Research Radar agent connects as MCP client via Streamable-HTTP at /mcp/.
+# Internal-by-design (Research Radar agent connects as MCP client via Streamable-HTTP at
+# /mcp/) but exposed via LoadBalancer nodePort anyway, same as fastapi/flower/fasthtml —
+# lets a human reach it directly for debugging tool calls, mirroring the old port-forward
+# script's behavior.
 fastmcp:
-  image: coelho-cloud-registry:5000/coelhonexus-fastmcp:latest
+  image: localhost:5001/coelhonexus-fastmcp:latest
   imagePullPolicy: Always
   replicas: 1
   resources:
@@ -301,8 +306,9 @@ fastmcp:
       - name: http
         port: 8000
         targetPort: 8000
+        nodePort: 30024
         protocol: TCP
-    type: ClusterIP
+    type: LoadBalancer
   startupProbeSettings:
     startupProbe:
       httpGet:

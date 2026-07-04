@@ -4,11 +4,12 @@
 # Rancher cluster UI — view pods/services/events/logs across the standalone
 # cluster in real time.
 #
-# Module is byte-identical to COELHO Cloud's; only the leaf differs.
-#
 # Adaptations vs COELHO Cloud's leaf:
-#   - DROP dependency "tailscale_operator" (no Tailscale on standalone)
-#   - DUMMY tailscale_* inputs (the Ingress resource is created inert)
+#   - DROP the external-ingress-operator dependency (no external ingress operator on standalone)
+#   - External Ingress REMOVED from main.tf (2026-07-02) — always inert on
+#     this cluster. The hostname/domain inputs kept: main.tf's
+#     hostname_override fallback still references them (hostname_override
+#     below always wins in practice).
 #   - bootstrap_password from env.hcl `demo` map (forced reset on first login)
 #
 # After apply + port-forward (host port 23010 → 80):
@@ -50,7 +51,7 @@ dependency "k3d" {
 #     helm_release fails with "no matches for kind Issuer in version
 #     cert-manager.io/v1". See infrastructure/modules/cert-manager/main.tf
 #     for why this divergence from COELHO Cloud is correct (COELHO Cloud uses
-#     Tailscale operator instead).
+#     an external ingress operator instead).
 dependencies {
   paths = [
     "../monitoring-crds",
@@ -76,16 +77,15 @@ generate "providers" {
 inputs = {
   bootstrap_password = include.root.locals.env.demo.rancher_bootstrap_password
 
-  # Tailscale — DUMMY (no tailscale-operator on standalone).
-  tailscale_hostname      = "rancher"
-  tailscale_domain        = "tailscale.local"
-  tailscale_ingress_class = "tailscale"
+  # External hostname/domain — DUMMY, unused fallback (hostname_override below always wins).
+  tailscale_hostname = "rancher"
+  tailscale_domain   = "tailscale.local"
 
-  # 2026-06-19: standalone needs Rancher to terminate its own TLS (no Tailscale
-  # operator in front) AND advertise itself as `localhost` so port-forwarded
+  # 2026-06-19: standalone needs Rancher to terminate its own TLS (no external
+  # ingress operator in front) AND advertise itself as `localhost` so port-forwarded
   # access works without DNS gymnastics. Without these two, Rancher serves
   # HTTP only on port 443 (TLS handshake fails) and redirects post-login to
-  # `https://rancher.tailscale.local/` (no DNS → connection refused).
+  # a broken `<hostname>.<dummy-domain>` URL (no DNS → connection refused).
   tls_source        = "rancher"
   hostname_override = "localhost"
 

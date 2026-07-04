@@ -8,12 +8,10 @@
 #   - loki / tempo / mimir (object backends for log/trace/metric storage)
 #   - langfuse (clickhouse object storage, prompt artifacts)
 #
-# Adaptations vs COELHO Cloud's leaf (otherwise verbatim):
-#   - Drop dependency "tailscale_operator" (no operator in this cluster)
-#   - Pass DUMMY tailscale_* inputs — the module's Ingress resources are
-#     UNCONDITIONAL (verbatim rule = no module .tf edits). Created Ingresses
-#     have no controller picking them up → they're inert API objects.
-#     Harmless. Access MinIO via port-forward (host port 23005 → console).
+# Adaptations vs COELHO Cloud's leaf:
+#   - Drop the external-ingress-operator dependency (no operator in this cluster)
+#   - External Ingresses (console + API) REMOVED from main.tf (2026-07-02) —
+#     always inert on this cluster. Access MinIO via port-forward/NodePort.
 #   - Credentials from env.hcl `demo` map instead of SOPS
 # =============================================================================
 
@@ -64,17 +62,6 @@ generate "providers" {
 }
 
 inputs = {
-  # ---------------------------------------------------------------------------
-  # Tailscale — DUMMY values. The module's Ingress resources are unconditional
-  # (verbatim module = no .tf edits). With no tailscale-operator deployed,
-  # these Ingress objects exist in the K8s API but have no controller, so they
-  # never serve traffic. Harmless. Real access path is port-forward.
-  # ---------------------------------------------------------------------------
-  tailscale_hostname_console = "minio"
-  tailscale_hostname_api     = "minio-api"
-  tailscale_domain           = "tailscale.local"
-  tailscale_ingress_class    = "tailscale"
-
   # ---------------------------------------------------------------------------
   # Credentials — from env.hcl `demo` map (NOT SOPS, demo-only scope).
   # ---------------------------------------------------------------------------

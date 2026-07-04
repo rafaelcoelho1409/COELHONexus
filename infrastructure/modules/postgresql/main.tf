@@ -126,16 +126,16 @@ resource "kubernetes_manifest" "backup_cronjob" {
 }
 
 # -----------------------------------------------------------------------------
-# Tailscale TCP exposure (optional — type=LoadBalancer, loadBalancerClass=tailscale)
+# External TCP exposure (optional — type=LoadBalancer, external operator class)
 # -----------------------------------------------------------------------------
 # When enabled, creates a SECOND Service alongside the chart-managed ClusterIP.
-# The Tailscale operator detects the loadBalancerClass=tailscale and
-# provisions a proxy pod that registers `<tailscale_hostname>.<domain>` on
-# the tailnet, routing inbound TCP 5432 to the primary Postgres pod.
+# The external ingress controller detects the loadBalancerClass and provisions
+# a proxy pod that registers `<external_hostname>.<domain>` on the external
+# network, routing inbound TCP 5432 to the primary Postgres pod.
 #
 # Both services co-exist:
 #   - chart's ClusterIP: in-cluster app traffic (5432)
-#   - this LoadBalancer:   external psql access from any tailnet device
+#   - this LoadBalancer:   external psql access from any external device
 # -----------------------------------------------------------------------------
 resource "kubernetes_manifest" "tailscale_service" {
   count = var.enable_tailscale_exposure ? 1 : 0

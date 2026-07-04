@@ -22,11 +22,6 @@ output "url" {
   value       = local.grafana_root_url
 }
 
-output "tailscale_hostname" {
-  description = "Short hostname registered on the tailnet (without domain)."
-  value       = var.tailscale_hostname
-}
-
 output "admin_user" {
   description = "Grafana admin username (default 'admin')."
   value       = local.grafana_admin_user

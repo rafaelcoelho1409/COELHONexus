@@ -126,6 +126,6 @@ volumePermissions:
 networkPolicy:
   enabled: false
 
-# We're not using TLS on Postgres — it's cluster-internal, no Tailscale exposure.
+# We're not using TLS on Postgres — it's cluster-internal, no external exposure.
 tls:
   enabled: false

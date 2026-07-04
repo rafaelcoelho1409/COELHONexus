@@ -20,7 +20,7 @@
 #   5. Grafana datasource ConfigMap (label `grafana_datasource: "1"`) so
 #      Grafana's sidecar auto-imports it as UID `loki`. No Loki restart needed.
 #
-# No external Tailscale Ingress / Homepage tile (per memory:
+# No external Ingress / Homepage tile (per memory:
 # feedback_no_external_ingress_for_uiless_backends). All viewing happens
 # through Grafana → Explore (Loki).
 #
@@ -196,6 +196,7 @@ resource "helm_release" "loki" {
       memory_limit             = var.memory_limit
       storage_class            = var.storage_class
       storage_size             = var.storage_size
+      cluster_name             = var.cluster_name
     })
   ]
 

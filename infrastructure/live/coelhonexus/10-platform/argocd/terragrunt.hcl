@@ -14,11 +14,12 @@
 # standalone-up.sh respects this.
 #
 # Adaptations vs COELHO Cloud's leaf:
-#   - DROP dependency "tailscale_operator" (no operator in this cluster)
+#   - DROP the external-ingress-operator dependency (no operator in this cluster)
 #   - DROP dependencies.paths for "40-apps/gitlab" (no GitLab here)
-#   - DUMMY tailscale_hostname/domain/ingress_class — Ingress resource is
-#     unconditional in main.tf (verbatim rule = no .tf edits). Created
-#     inert; harmless. Real access via port-forward → http://localhost:23007.
+#   - External Ingress REMOVED from main.tf (2026-07-02) — always inert on
+#     this cluster. Real access via port-forward/NodePort. The hostname
+#     + domain inputs are kept: the Helm chart's server.domain value still
+#     references them.
 #   - gitlab_url = "" + gitlab_token = "" → repo-creds Secret is conditional
 #     in main.tf (count = url!=""&&token!=""?1:0); not created here.
 #   - k3d_registry_endpoint overridden to coelhonexus-registry:5000
@@ -88,11 +89,10 @@ generate "providers" {
 
 inputs = {
   # ---------------------------------------------------------------------------
-  # Tailscale — DUMMY (Ingress in main.tf is unconditional; created inert).
+  # External hostname/domain — DUMMY, still referenced by the Helm chart's server.domain value.
   # ---------------------------------------------------------------------------
-  tailscale_hostname      = "argocd"
-  tailscale_domain        = "tailscale.local"
-  tailscale_ingress_class = "tailscale"
+  tailscale_hostname = "argocd"
+  tailscale_domain   = "tailscale.local"
 
   # ---------------------------------------------------------------------------
   # GitLab — empty (no GitLab in this cluster).

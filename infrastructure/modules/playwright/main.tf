@@ -21,7 +21,7 @@
 # Apply order:
 #   1. Namespace + VNC password Secret
 #   2. Two Deployments + three Services (depend on Secret)
-#   3. Three Tailscale Ingresses (noVNC + headed CDP + headless CDP)
+#   3. Three external Ingresses (noVNC + headed CDP + headless CDP)
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -118,7 +118,7 @@ resource "kubernetes_manifest" "deployment_headless" {
 # protocol on port 3000. Consumed by Open WebUI's web-loader engine
 # (WEB_LOADER_ENGINE=playwright, PLAYWRIGHT_WS_URL=ws://playwright-server...).
 #
-# No cdp-proxy sidecar (run-server doesn't expose CDP), no Tailscale Ingress
+# No cdp-proxy sidecar (run-server doesn't expose CDP), no external Ingress
 # (internal-only API, no UI — per memory feedback_no_external_ingress_for_uiless_backends).
 # -----------------------------------------------------------------------------
 resource "kubernetes_manifest" "deployment_server" {
@@ -172,44 +172,10 @@ resource "kubernetes_manifest" "service_server" {
 }
 
 # -----------------------------------------------------------------------------
-# Tailscale Ingresses
-# -----------------------------------------------------------------------------
-resource "kubernetes_manifest" "ingress_novnc" {
-  manifest = yamldecode(templatefile("${path.module}/k8s/ingress-novnc.yaml.tpl", {
-    namespace          = kubernetes_namespace_v1.playwright.metadata[0].name
-    tailscale_hostname = var.tailscale_hostname_novnc
-    tailscale_domain   = var.tailscale_domain
-    ingress_class_name = var.tailscale_ingress_class
-  }))
-
-  depends_on = [kubernetes_manifest.service_novnc]
-}
-
-resource "kubernetes_manifest" "ingress_cdp_headed" {
-  manifest = yamldecode(templatefile("${path.module}/k8s/ingress-cdp-headed.yaml.tpl", {
-    namespace          = kubernetes_namespace_v1.playwright.metadata[0].name
-    tailscale_hostname = var.tailscale_hostname_cdp_headed
-    ingress_class_name = var.tailscale_ingress_class
-  }))
-
-  depends_on = [kubernetes_manifest.service_headed]
-}
-
-resource "kubernetes_manifest" "ingress_cdp_headless" {
-  manifest = yamldecode(templatefile("${path.module}/k8s/ingress-cdp-headless.yaml.tpl", {
-    namespace          = kubernetes_namespace_v1.playwright.metadata[0].name
-    tailscale_hostname = var.tailscale_hostname_cdp_headless
-    ingress_class_name = var.tailscale_ingress_class
-  }))
-
-  depends_on = [kubernetes_manifest.service_headless]
-}
-
-# -----------------------------------------------------------------------------
 # Local access (k3d dev only) — NodePort Services, opt-in via enable_local_expose
 # -----------------------------------------------------------------------------
-# Separate from the Tailscale Ingresses above — those stay unconditional and
-# work as-is on any environment with a real Tailscale operator. This is for
+# Separate from the external Ingresses above — those stay unconditional and
+# work as-is on any environment with a real external ingress controller. This is for
 # k3d standalone dev clusters. noVNC and headed-CDP share one Service since
 # both live on the SAME "headed" pod (verified via `kubectl get svc -n
 # playwright playwright-novnc/-headed -o yaml` — identical selector, just

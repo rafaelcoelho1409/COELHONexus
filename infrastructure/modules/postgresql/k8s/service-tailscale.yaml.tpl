@@ -1,8 +1,8 @@
 # =============================================================================
-# Tailscale-exposed Service for PostgreSQL (TCP 5432)
+# Externally-exposed Service for PostgreSQL (TCP 5432)
 # =============================================================================
-# Pattern: type=LoadBalancer + loadBalancerClass=tailscale tells the Tailscale
-# operator to provision a proxy pod that joins the tailnet at the configured
+# Pattern: type=LoadBalancer + loadBalancerClass=tailscale tells the external
+# ingress controller to provision a proxy pod that joins the external network at the configured
 # hostname and routes inbound TCP traffic to this Service's ClusterIP.
 #
 # This is a SECOND Service (the chart-managed one stays as ClusterIP for

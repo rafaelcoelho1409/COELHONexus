@@ -91,7 +91,7 @@ jvm:
 #     Core ships in the official Neo4j image)
 #   - allowlist + unrestricted entries enable the procedures
 #
-# Bolt: NO native TLS (`tls_level: DISABLED`). Tailscale Ingress terminates
+# Bolt: NO native TLS (`tls_level: DISABLED`). External Ingress terminates
 # TLS for us with a Let's Encrypt cert; Neo4j just speaks plain Bolt and
 # handles WebSocket upgrades on the same port.
 # -----------------------------------------------------------------------------
@@ -100,9 +100,9 @@ config:
   server.memory.heap.max_size: "${heap_max_size}"
   server.memory.pagecache.size: "${pagecache_size}"
 
-  # Advertise the Tailscale hostnames so the Browser dynamically constructs
+  # Advertise the external hostnames so the Browser dynamically constructs
   # the correct Bolt URL when the user opens https://neo4j.<domain>.
-  # Bolt advertised port is 443 (Tailscale Ingress's HTTPS port — that's
+  # Bolt advertised port is 443 (the external Ingress's HTTPS port — that's
   # where Browser's wss:// connects).
   server.bolt.advertised_address: "${bolt_advertised_address}"
   server.http.advertised_address: "${browser_advertised_address}:443"
@@ -112,7 +112,7 @@ config:
   dbms.security.procedures.unrestricted: "apoc.*"
   dbms.security.procedures.allowlist: "apoc.*"
 
-  # Bolt TLS DISABLED — Tailscale Ingress handles TLS termination.
+  # Bolt TLS DISABLED — external Ingress handles TLS termination.
   server.bolt.tls_level: "DISABLED"
 
   # Tx log rotation — chart default ("1 days") never rotates on quiet homelab.
@@ -144,7 +144,7 @@ volumes:
         storage: ${storage_size}
 
 # -----------------------------------------------------------------------------
-# Service — chart's default ClusterIP. Both Tailscale Ingresses target this.
+# Service — chart's default ClusterIP. Both external Ingresses target this.
 # -----------------------------------------------------------------------------
 services:
   neo4j:
@@ -153,14 +153,14 @@ services:
       type: ClusterIP
     ports:
       http:
-        enabled: true # 7474 — Browser via Tailscale Ingress
+        enabled: true # 7474 — Browser via external Ingress
       https:
-        enabled: false # 7473 — not used (Tailscale terminates TLS)
+        enabled: false # 7473 — not used (external Ingress terminates TLS)
       bolt:
-        enabled: true # 7687 — Bolt via Tailscale Ingress (WSS)
+        enabled: true # 7687 — Bolt via external Ingress (WSS)
 
 # -----------------------------------------------------------------------------
-# Chart's built-in Ingress disabled — using Tailscale Ingress.
+# Chart's built-in Ingress disabled — using external Ingress.
 # -----------------------------------------------------------------------------
 ingress:
   enabled: false

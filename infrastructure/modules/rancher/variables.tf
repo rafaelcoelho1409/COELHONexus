@@ -30,33 +30,27 @@ variable "namespace" {
 }
 
 variable "release_name" {
-  description = "Helm release name. Used as the prefix for in-cluster Service names (the Tailscale Ingress backend references this)."
+  description = "Helm release name. Used as the prefix for in-cluster Service names (the external Ingress backend references this)."
   type        = string
   default     = "rancher"
 }
 
 # -----------------------------------------------------------------------------
-# Network exposure (Tailscale)
+# Network exposure (external)
 # -----------------------------------------------------------------------------
 
 variable "tailscale_hostname" {
-  description = "Short hostname for the Tailnet (e.g., 'rancher-v2' → rancher-v2.<domain>.ts.net). The leaf passes this with the migration suffix."
+  description = "Short hostname for the external endpoint (e.g., 'rancher-v2' → rancher-v2.<domain>.example.com). The leaf passes this with the migration suffix."
   type        = string
 }
 
 variable "tailscale_domain" {
-  description = "Tailnet domain (e.g., 'YOUR_TAILNET_DOMAIN.ts.net'). Comes from env.hcl."
+  description = "External domain (e.g., 'YOUR_EXTERNAL_DOMAIN.example.com'). Comes from env.hcl. Still referenced by the hostname_override fallback in main.tf even though the Ingress resource was removed."
   type        = string
-}
-
-variable "tailscale_ingress_class" {
-  description = "IngressClass name configured by the upstream tailscale-operator unit. Almost always 'tailscale'."
-  type        = string
-  default     = "tailscale"
 }
 
 variable "tls_source" {
-  description = "Rancher chart `tls` value. `external` = Rancher serves HTTP only; expects an external proxy (Tailscale operator) to terminate TLS — this is the COELHO Cloud default. `rancher` = Rancher generates self-signed certs and terminates TLS itself — required on standalone clusters with no TLS-terminating proxy (e.g., COELHONexus k3d)."
+  description = "Rancher chart `tls` value. `external` = Rancher serves HTTP only; expects an external proxy (external ingress controller) to terminate TLS — the default for clusters that already have one in front of them. `rancher` = Rancher generates self-signed certs and terminates TLS itself — required on standalone clusters with no TLS-terminating proxy (e.g., COELHONexus k3d)."
   type        = string
   default     = "external"
 
@@ -67,7 +61,7 @@ variable "tls_source" {
 }
 
 variable "hostname_override" {
-  description = "Override the auto-constructed `<tailscale_hostname>.<tailscale_domain>` hostname Rancher uses in self-referencing URLs (e.g., the post-login redirect). Set to `localhost` on standalone clusters so port-forwarded access works without DNS gymnastics. Empty string = use the Tailscale-style construction."
+  description = "Override the auto-constructed `<hostname>.<domain>` hostname Rancher uses in self-referencing URLs (e.g., the post-login redirect). Set to `localhost` on standalone clusters so port-forwarded access works without DNS gymnastics. Empty string = use the default construction from the configured hostname and domain variables."
   type        = string
   default     = ""
 }
@@ -228,8 +222,8 @@ variable "enable_turtles_capi" {
 # -----------------------------------------------------------------------------
 # Opt-in NodePort Service for localhost access via k3d's loadbalancer port
 # mapping. Leave `enable_local_expose` unset (default false) on any
-# environment where Tailscale Ingress already provides access (e.g. COELHO
-# Cloud) — the module below is never instantiated in that case. See
+# environment where an external Ingress already provides access — the
+# module below is never instantiated in that case. See
 # infrastructure/modules/k3d_expose/.
 #
 # NOTE: Rancher already has a working localhost path via

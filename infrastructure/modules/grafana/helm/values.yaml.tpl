@@ -78,7 +78,7 @@ grafana.ini:
     enabled: false
 
 # -----------------------------------------------------------------------------
-# Service — ClusterIP. Tailscale Ingress provides external access.
+# Service — ClusterIP. External Ingress provides external access.
 # -----------------------------------------------------------------------------
 service:
   enabled: true
@@ -87,7 +87,7 @@ service:
   targetPort: 3000
 
 # -----------------------------------------------------------------------------
-# Ingress — chart's built-in is DISABLED. We create a Tailscale-flavored
+# Ingress — chart's built-in is DISABLED. We create a custom external-facing
 # Ingress separately via kubernetes_manifest in main.tf.
 # -----------------------------------------------------------------------------
 ingress:

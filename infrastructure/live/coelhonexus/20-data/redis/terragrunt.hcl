@@ -12,8 +12,8 @@
 #
 # Adaptations vs COELHO Cloud's leaf (otherwise verbatim):
 #   - Password from env.hcl `demo` map (not SOPS)
-#   - enable_tailscale_exposure stays false (module default + we have no
-#     tailscale-operator anyway)
+#   - External exposure stays off (module default + we have no
+#     external ingress operator anyway)
 # =============================================================================
 
 include "root" {
@@ -80,7 +80,7 @@ inputs = {
   minio_access_key = dependency.minio.outputs.s3_config.access_key
   minio_secret_key = dependency.minio.outputs.s3_config.secret_key
 
-  # Tailscale OFF — module supports the toggle natively.
+  # External exposure OFF — module supports the toggle natively.
   enable_tailscale_exposure = false
 
   # Defaults from variables.tf are appropriate:

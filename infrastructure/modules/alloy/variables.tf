@@ -41,43 +41,6 @@ variable "release_name" {
 }
 
 # -----------------------------------------------------------------------------
-# External OTLP exposure (Tailscale Ingress for HTTP only)
-# -----------------------------------------------------------------------------
-# Alloy is unique among the LGTM components: it has a legitimate off-cluster
-# client need (laptop dev loops, external apps shipping telemetry). We expose
-# OTLP HTTP via a Tailscale Ingress; gRPC stays in-cluster only because
-# HTTP/2 streaming through the Tailscale operator's proxy is finicky. If
-# gRPC ingest from outside ever becomes a real need, add a `loadBalancerClass:
-# tailscale` Service for TCP passthrough on 4317 (same pattern as v2 Postgres).
-#
-# No Homepage tile — Alloy is a data ingest endpoint, not a UI.
-# -----------------------------------------------------------------------------
-
-variable "expose_otlp_http_via_tailscale" {
-  description = "If true, create a Tailscale Ingress at <tailscale_hostname>.<tailscale_domain> routing to Alloy's OTLP HTTP port (4318). Set false to keep Alloy fully in-cluster. Default changed 2026-05-25 to FALSE per [[feedback_no_external_ingress_for_uiless_backends]] — Alloy is an API-only data-plane endpoint, no UI, no Homepage tile. Saves ~41 MiB (one Tailscale proxy pod). Flip back to true only if you need to push OTLP from off-cluster (laptop dev)."
-  type        = bool
-  default     = false
-}
-
-variable "tailscale_hostname" {
-  description = "Short tailnet hostname for OTLP HTTP exposure (e.g. 'alloy' → alloy.<domain>.ts.net). Only used when expose_otlp_http_via_tailscale=true."
-  type        = string
-  default     = "alloy"
-}
-
-variable "tailscale_domain" {
-  description = "Tailnet domain (e.g. 'YOUR_TAILNET_DOMAIN.ts.net'). Comes from env.hcl. Only used when expose_otlp_http_via_tailscale=true."
-  type        = string
-  default     = ""
-}
-
-variable "tailscale_ingress_class" {
-  description = "IngressClass name from the tailscale-operator unit. Only used when expose_otlp_http_via_tailscale=true."
-  type        = string
-  default     = "tailscale"
-}
-
-# -----------------------------------------------------------------------------
 # Cluster identity (label baked into every metric and log Alloy emits)
 # -----------------------------------------------------------------------------
 

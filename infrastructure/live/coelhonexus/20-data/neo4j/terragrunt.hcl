@@ -5,11 +5,12 @@
 # YCS (Video/Channel/Entity/Relationship) and RR (Paper/Author/Concept/Source).
 #
 # Adaptations vs COELHO Cloud's leaf:
-#   - DROP dependency "tailscale_operator"
-#   - DUMMY tailscale strings — module has 2 unconditional Ingresses (browser
-#     + Bolt) in main.tf. Both inert without an Ingress controller. In-cluster
-#     access via `bolt://neo4j.neo4j.svc.cluster.local:7687` works fine
-#     (single-node CE, no routing).
+#   - DROP the external-ingress-operator dependency
+#   - External Ingresses (browser + Bolt) REMOVED from main.tf (2026-07-02) —
+#     always inert on this cluster (no Ingress controller). Real access is via
+#     the k3d_expose NodePort module below. The external-domain input is kept: Neo4j's
+#     own browser_advertised_address/bolt_advertised_address Helm values still
+#     reference it (unrelated to the Ingress resources that got removed).
 #   - neo4j_password from env.hcl `demo` map (not SOPS)
 # =============================================================================
 
@@ -69,9 +70,10 @@ generate "providers" {
 }
 
 inputs = {
-  # Tailscale — DUMMY. Browser + Bolt Ingresses are unconditional in main.tf.
-  tailscale_domain        = "tailscale.local"
-  tailscale_ingress_class = "tailscale"
+  # External domain — DUMMY, feeds Neo4j's own advertised_address Helm
+  # values only (the Ingress resources that used to reference it were
+  # removed; see header comment above).
+  tailscale_domain = "tailscale.local"
 
   # Auth from env.hcl `demo` map (built-in `neo4j` user).
   neo4j_password = include.root.locals.env.demo.neo4j_password

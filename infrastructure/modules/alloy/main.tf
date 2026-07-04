@@ -17,7 +17,7 @@
 #        - extraPorts for OTLP (chart's Service template doesn't include them
 #          by default since OTLP is config-driven, not chart-config-driven)
 #
-# No external Tailscale Ingress / Homepage tile (per memory:
+# No external Ingress / Homepage tile (per memory:
 # feedback_no_external_ingress_for_uiless_backends). For external apps that
 # need to push telemetry from outside the cluster, expose later via a
 # separate Ingress + LoadBalancer (gRPC) — out of scope for this initial
@@ -105,32 +105,4 @@ resource "kubernetes_manifest" "clusterrolebinding_kubelet" {
   }))
 
   depends_on = [kubernetes_manifest.clusterrole_kubelet]
-}
-
-# -----------------------------------------------------------------------------
-# Tailscale Ingress — OTLP HTTP (port 4318) only
-# -----------------------------------------------------------------------------
-# Why HTTP-only (no gRPC Ingress):
-#   - OTLP HTTP works fine through Tailscale's HTTPS-terminating proxy.
-#   - OTLP gRPC needs HTTP/2 streaming end-to-end which Tailscale Ingress'
-#     operator-managed proxy doesn't pass cleanly. If gRPC ingest from
-#     outside the cluster becomes a real need, add a separate Service with
-#     `loadBalancerClass: tailscale` for raw TCP passthrough on 4317 (same
-#     pattern v2 Postgres uses).
-#
-# No Homepage tile — Alloy is a data ingest endpoint, not a UI (per memory:
-# feedback_no_external_ingress_for_uiless_backends; this is the documented
-# "external client need" exception).
-# -----------------------------------------------------------------------------
-resource "kubernetes_manifest" "ingress" {
-  count = var.expose_otlp_http_via_tailscale && var.tailscale_domain != "" ? 1 : 0
-
-  manifest = yamldecode(templatefile("${path.module}/k8s/ingress.yaml.tpl", {
-    namespace          = kubernetes_namespace_v1.alloy.metadata[0].name
-    release_name       = var.release_name
-    tailscale_hostname = var.tailscale_hostname
-    ingress_class_name = var.tailscale_ingress_class
-  }))
-
-  depends_on = [helm_release.alloy]
 }

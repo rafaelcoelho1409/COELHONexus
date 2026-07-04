@@ -12,8 +12,10 @@
 #   playwright.cdp_headless: http://playwright-headless.playwright.svc.cluster.local:9224
 #
 # Adaptations vs COELHO Cloud's leaf:
-#   - DROP dependency "tailscale_operator"
-#   - DUMMY tailscale_* (Ingress resources for noVNC + CDP are inert)
+#   - DROP the external-ingress-operator dependency
+#   - External Ingresses (noVNC + headed CDP + headless CDP) REMOVED from
+#     main.tf (2026-07-02) — always inert on this cluster. Real access is via
+#     the k3d_expose NodePort module below.
 #   - vnc_password from env.hcl `demo` map
 # =============================================================================
 
@@ -52,8 +54,6 @@ generate "providers" {
 }
 
 inputs = {
-  tailscale_domain        = "tailscale.local"
-  tailscale_ingress_class = "tailscale"
 
   vnc_password = include.root.locals.env.demo.playwright_vnc_password
 
@@ -73,7 +73,7 @@ inputs = {
   # `k3d cluster edit coelhonexus --port-add "23020:30484@loadbalancer"`
   # (run manually — not a Terraform resource, see infra/modules/k3d_expose).
   # playwright-server (Open WebUI's WS backend) deliberately NOT exposed —
-  # same "no external access for UI-less backends" policy as Tailscale.
+  # same "no external access for UI-less backends" policy as the rest of the cluster.
   enable_local_expose        = true
   k3d_novnc_node_port        = 30482
   k3d_cdp_headed_node_port   = 30483

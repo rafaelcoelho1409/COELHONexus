@@ -10,8 +10,8 @@
 # Backup CronJob: nightly 02:00 UTC → MinIO `backups` bucket / `postgres/` prefix.
 #
 # Adaptations vs COELHO Cloud's leaf:
-#   - DROP dependency "tailscale_operator"
-#   - Set enable_tailscale_exposure = false (module supports the toggle)
+#   - DROP the external-ingress-operator dependency
+#   - External exposure disabled (module supports the toggle)
 #   - admin_password from env.hcl `demo` map (not SOPS)
 #   - minio creds from dependency.minio.outputs.s3_config (verbatim)
 # =============================================================================
@@ -79,7 +79,7 @@ inputs = {
   minio_access_key = dependency.minio.outputs.s3_config.access_key
   minio_secret_key = dependency.minio.outputs.s3_config.secret_key
 
-  # Tailscale OFF — module supports the toggle.
+  # External exposure OFF — module supports the toggle.
   enable_tailscale_exposure = false
 
   # Defaults from variables.tf are appropriate:

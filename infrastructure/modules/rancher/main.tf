@@ -5,14 +5,14 @@
 # Deploys:
 #   1. cattle-system namespace
 #   2. Rancher Helm chart (chart 2.14.1, app v2.14.1)
-#   3. Tailscale Ingress → exposes Rancher at https://<hostname>.<domain>
+#   3. External Ingress → exposes Rancher at https://<hostname>.<domain>
 #
 # Architecture:
 #   - chart's own Ingress: DISABLED (chart's Ingress is for nginx/etc.)
-#   - chart's TLS: 'external' (Tailscale operator's proxy terminates TLS)
-#   - Tailscale Ingress points at the rancher Service (ClusterIP, port 443)
-#   - tailscale-operator (deployed earlier) spawns a proxy pod that joins
-#     the tailnet as the configured hostname
+#   - chart's TLS: 'external' (external ingress controller's proxy terminates TLS)
+#   - External Ingress points at the rancher Service (ClusterIP, port 443)
+#   - external ingress controller (deployed earlier) spawns a proxy pod that joins
+#     the external network as the configured hostname
 #
 # v1 compatibility: identical functional behavior, with chart bumped to 2.14.1.
 # =============================================================================
@@ -232,28 +232,10 @@ resource "null_resource" "starve_turtles_capi" {
 }
 
 # -----------------------------------------------------------------------------
-# Tailscale Ingress
-# -----------------------------------------------------------------------------
-# Built-in Ingress kind — works with plain kubernetes_manifest (no
-# kubectl_manifest needed; the Ingress CRD is part of every cluster).
-# -----------------------------------------------------------------------------
-resource "kubernetes_manifest" "rancher_ingress" {
-  manifest = yamldecode(templatefile("${path.module}/k8s/ingress.yaml.tpl", {
-    namespace          = kubernetes_namespace_v1.rancher.metadata[0].name
-    release_name       = var.release_name
-    tailscale_hostname = var.tailscale_hostname
-    tailscale_domain   = var.tailscale_domain
-    ingress_class_name = var.tailscale_ingress_class
-  }))
-
-  depends_on = [helm_release.rancher]
-}
-
-# -----------------------------------------------------------------------------
 # Local access (k3d dev only) — NodePort Service, opt-in via enable_local_expose
 # -----------------------------------------------------------------------------
-# Separate from the Tailscale Ingress above — that stays unconditional and
-# works as-is on any environment with a real Tailscale operator. This is for
+# Separate from the external Ingress above — that stays unconditional and
+# works as-is on any environment with a real external ingress controller. This is for
 # k3d standalone dev clusters. Selector matches the chart's `rancher` Service
 # (`app: rancher`), verified via `kubectl get svc rancher -n cattle-system -o
 # yaml` against the live cluster.

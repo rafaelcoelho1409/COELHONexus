@@ -4,7 +4,7 @@
 #
 # Three providers needed:
 #   - helm: deploy the Rancher chart
-#   - kubernetes: create namespace explicitly + apply the Tailscale Ingress
+#   - kubernetes: create namespace explicitly + apply the external Ingress
 #   - null: drive local-exec for cleanup of Rancher-auto-installed sub-components
 #          (system-upgrade-controller uninstall, webhook patch, Turtles starve)
 #          that aren't exposed as standalone helm releases we could manage directly.

@@ -10,8 +10,8 @@
 # deterministic demo user from env.hcl, constrained to Nexus YCS indexes.
 #
 # Adaptations vs COELHO Cloud's leaf:
-#   - DROP dependency "tailscale_operator"
-#   - DUMMY tailscale_domain + ingress_class (2 Ingresses inert in main.tf)
+#   - DROP the external-ingress-operator dependency
+#   - DUMMY external-domain + ingress_class inputs (2 Ingresses inert in main.tf)
 #   - minio creds via dependency
 # =============================================================================
 

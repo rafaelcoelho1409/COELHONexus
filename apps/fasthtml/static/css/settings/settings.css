@@ -132,6 +132,15 @@
 }
 .prov-key-input:focus { outline: none; border-color: var(--primary); }
 
+.prov-key-link {
+  display: inline-block;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-decoration: underline;
+}
+.prov-key-link:hover { color: var(--primary); }
+
 /* ---- buttons ---- */
 .set-btn {
   font-family: inherit;

@@ -1,10 +1,10 @@
 # =============================================================================
-# Tailscale-exposed Service for Redis (TCP 6379) — OPTIONAL
+# Externally-exposed Service for Redis (TCP 6379) — OPTIONAL
 # =============================================================================
-# Same loadBalancerClass=tailscale pattern as Postgres. Created only when
-# enable_tailscale_exposure=true.
+# Same external LoadBalancer pattern as Postgres. Created only when
+# external exposure is enabled.
 #
-# Variables interpolated: ${namespace}, ${release_name}, ${tailscale_hostname}
+# Variables interpolated: ${namespace}, ${release_name}, plus the target hostname value below
 # =============================================================================
 apiVersion: v1
 kind: Service

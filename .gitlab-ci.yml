@@ -3,22 +3,6 @@
 # =============================================================================
 # Pipeline: git push → GitLab CI runs `skaffold build` → ArgoCD Image Updater
 # detects new digests in the in-cluster registry → ArgoCD reconciles → rollout.
-#
-# Single source of truth: skaffold.yaml at the repo root drives:
-#   - Local dev:        `skaffold dev`         (interactive hot-reload)
-#   - Local one-shot:   `skaffold run`         (build + helm install on coelhonexus)
-#   - CI build (here):  `skaffold build --push --default-repo=… --tag=…`
-#
-# Deploy on COELHO Cloud is handled by ArgoCD Image Updater, NOT this pipeline.
-# (Coelhonexus standalone never sees this file — it uses `skaffold run` locally.)
-#
-# Registry: in-cluster `coelho-cloud-registry:5000` (k3d-bundled). GitLab
-# runners reach it via Docker bridge DNS; --default-repo rewrites Skaffold's
-# laptop-side `localhost:5001` artifact prefix to this in-cluster hostname.
-#
-# See docs/K8S-DUAL-CLUSTER-FLEX-2026-06-19.md for the cross-cluster rationale.
-# =============================================================================
-
 stages:
   - build
   # No deploy stage: ArgoCD Image Updater detects new digests and syncs.
@@ -44,7 +28,7 @@ build:
         - --host=unix:///var/run/docker.sock
         - --tls=false
         # Allow plain-HTTP push to the in-cluster k3d registry.
-        - --insecure-registry=coelho-cloud-registry:5000
+        - --insecure-registry=localhost:5001
   only:
     - master
     - main
@@ -52,31 +36,7 @@ build:
     # Wait for dind to be reachable before invoking docker via Skaffold.
     - until docker info; do sleep 1; done
   script:
-    # Builds EVERY artifact declared in skaffold.yaml (fastapi + fasthtml +
-    # fastmcp — note: the previous hand-maintained pipeline silently skipped
-    # fastmcp; that gap is closed here).
-    #
-    # --push                Push to the registry (Skaffold defaults to building only).
-    # --default-repo=…      Rewrite the artifact-image prefix from skaffold.yaml's
-    #                       laptop-side `localhost:5001` to the in-cluster name
-    #                       `coelho-cloud-registry:5000` that GitLab runners reach.
-    # --tag=$CI_…SHA        Override Skaffold's content-hash sha256 tag with the
-    #                       git SHA — easier human correlation. ArgoCD Image
-    #                       Updater uses `update-strategy: digest` so either tag
-    #                       scheme works; SHA wins for debuggability.
     - skaffold build
         --push
-        --default-repo=coelho-cloud-registry:5000
+        --default-repo=localhost:5001
         --tag=$CI_COMMIT_SHORT_SHA
-
-# =============================================================================
-# DEPLOY — handled by ArgoCD Image Updater on COELHO Cloud
-# =============================================================================
-# Flow on production:
-#   1. CI pushes new images to coelho-cloud-registry:5000 (this pipeline)
-#   2. ArgoCD Image Updater detects a new digest (update-strategy: digest, 2-min poll)
-#   3. Image Updater patches the ArgoCD Application's image refs
-#   4. ArgoCD reconciles, rolls out new pods
-#
-# No CI variables, no Helm CLI in the pipeline, no kubectl in the pipeline.
-# =============================================================================

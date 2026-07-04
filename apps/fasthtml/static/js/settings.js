@@ -114,6 +114,10 @@ function providerCard(p) {
   }, "Remove");
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") onSaveKey(p, input); });
   card.append(el("div", { class: "prov-key-row" }, [input, saveBtn, testBtn, delBtn]));
+  if (p.key_url)
+    card.append(el("a", {
+      href: p.key_url, target: "_blank", rel: "noopener noreferrer", class: "prov-key-link",
+    }, `Get a ${p.name} API key ↗`));
 
   const result = el("div", { class: "prov-result", dataset: { role: "result" } });
   card.append(result);

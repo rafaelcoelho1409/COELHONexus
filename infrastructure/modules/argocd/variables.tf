@@ -54,24 +54,18 @@ variable "image_updater_release_name" {
 }
 
 # -----------------------------------------------------------------------------
-# Network exposure (Tailscale)
+# Network exposure (external)
 # -----------------------------------------------------------------------------
 
 variable "tailscale_hostname" {
-  description = "Short tailnet hostname for the ArgoCD web UI (e.g. 'argocd' → argocd.<domain>.ts.net)."
+  description = "Short external hostname for the ArgoCD web UI (e.g. 'argocd' → argocd.<domain>.example.com)."
   type        = string
   default     = "argocd"
 }
 
 variable "tailscale_domain" {
-  description = "Tailnet domain (e.g. 'YOUR_TAILNET_DOMAIN.ts.net'). Comes from env.hcl."
+  description = "External domain (e.g. 'YOUR_EXTERNAL_DOMAIN.example.com'). Comes from env.hcl. Still referenced by the Helm chart's server.domain value even though the Ingress resource was removed."
   type        = string
-}
-
-variable "tailscale_ingress_class" {
-  description = "IngressClass name from the tailscale-operator unit."
-  type        = string
-  default     = "tailscale"
 }
 
 # -----------------------------------------------------------------------------
@@ -84,7 +78,7 @@ variable "tailscale_ingress_class" {
 # -----------------------------------------------------------------------------
 
 variable "gitlab_url" {
-  description = "GitLab base URL (in-cluster preferred for ArgoCD repo cloning to bypass Tailscale TLS hop). Empty string skips GitLab repo creds Secret."
+  description = "GitLab base URL (in-cluster preferred for ArgoCD repo cloning to bypass the external proxy TLS hop). Empty string skips GitLab repo creds Secret."
   type        = string
   default     = "http://gitlab-webservice-default.gitlab.svc.cluster.local:8181"
 }
@@ -157,7 +151,7 @@ variable "k3d_registry_endpoint" {
 }
 
 variable "gitlab_registry_endpoint" {
-  description = "GitLab Container Registry hostname:port for Image Updater. Empty string skips this registry config — useful while waiting on the JWT-auth issue documented in docs/gitlab_registry_fallback.md. Once registry is verified working, set to 'registry.YOUR_TAILNET_DOMAIN.ts.net'."
+  description = "GitLab Container Registry hostname:port for Image Updater. Empty string skips this registry config — useful while waiting on the JWT-auth issue documented in docs/gitlab_registry_fallback.md. Once registry is verified working, set to 'registry.YOUR_EXTERNAL_DOMAIN.example.com'."
   type        = string
   default     = ""
 }
@@ -251,8 +245,8 @@ variable "rbac_default_policy" {
 # -----------------------------------------------------------------------------
 # Opt-in NodePort Service for localhost access via k3d's loadbalancer port
 # mapping. Leave `enable_local_expose` unset (default false) on any
-# environment where Tailscale Ingress already provides access (e.g. COELHO
-# Cloud) — the module below is never instantiated in that case. See
+# environment where external Ingress already provides access — the module
+# below is never instantiated in that case. See
 # infrastructure/modules/k3d_expose/.
 #
 # NOTE: ArgoCD already has a working localhost path via

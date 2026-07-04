@@ -36,20 +36,6 @@ output "username" {
   value       = "neo4j"
 }
 
-# -----------------------------------------------------------------------------
-# External (Tailnet) URLs — both with Tailscale-issued LE certs
-# -----------------------------------------------------------------------------
-
-output "browser_url" {
-  description = "Browser UI URL (HTTPS, LE cert)."
-  value       = "https://${var.tailscale_hostname_browser}.${var.tailscale_domain}"
-}
-
-output "bolt_url_for_browser" {
-  description = "Bolt URL to enter in the Browser's connection field. Port 443 implicit (Tailscale Ingress listens there). LE-trusted — no `+ssc` needed."
-  value       = "bolt+s://${var.tailscale_hostname_bolt}.${var.tailscale_domain}"
-}
-
 output "ready" {
   description = "Helm release status string ('deployed' on success)."
   value       = helm_release.neo4j.status

@@ -36,7 +36,7 @@ output "host" {
 }
 
 output "api_endpoint" {
-  description = "In-cluster S3 endpoint URL (HTTP — TLS is at the Tailscale proxy, not internal)."
+  description = "In-cluster S3 endpoint URL (HTTP — TLS is at the external proxy, not internal)."
   value       = "http://${var.release_name}.${kubernetes_namespace_v1.minio.metadata[0].name}.svc.cluster.local:9000"
 }
 
@@ -48,30 +48,6 @@ output "api_port" {
 output "console_port" {
   description = "Console UI port."
   value       = 9001
-}
-
-# -----------------------------------------------------------------------------
-# External (Tailnet) URLs
-# -----------------------------------------------------------------------------
-
-output "console_url" {
-  description = "MinIO Console UI URL (via Tailscale)."
-  value       = "https://${var.tailscale_hostname_console}.${var.tailscale_domain}"
-}
-
-output "api_url" {
-  description = "MinIO S3 API URL (via Tailscale). Used by external clients (mc CLI, S3 SDKs from non-cluster machines)."
-  value       = "https://${var.tailscale_hostname_api}.${var.tailscale_domain}"
-}
-
-output "tailscale_hostname_console" {
-  description = "Short tailnet hostname for the Console (cutover marker: 'minio-v2' → 'minio')."
-  value       = var.tailscale_hostname_console
-}
-
-output "tailscale_hostname_api" {
-  description = "Short tailnet hostname for the S3 API (cutover marker: 'minio-api-v2' → 'minio-api')."
-  value       = var.tailscale_hostname_api
 }
 
 # -----------------------------------------------------------------------------

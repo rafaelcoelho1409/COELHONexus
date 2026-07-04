@@ -38,7 +38,7 @@ output "kubeconfig_content" {
 }
 
 output "registry_host" {
-  description = "Container registry endpoint reachable from the host. Use for `docker push localhost:5000/myimage:tag`."
+  description = "Container registry endpoint reachable from the host. Use for `docker push localhost:5001/myimage:tag`."
   value       = "localhost:${var.registry_port}"
 }
 

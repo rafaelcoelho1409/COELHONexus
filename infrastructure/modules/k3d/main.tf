@@ -65,7 +65,8 @@ resource "null_resource" "cluster" {
       # clusters were patched once via `k3d cluster edit --port-add` (manual,
       # not Terraform — see infrastructure/modules/k3d_expose/). This list is
       # hand-maintained: add one --port line per port each time a data-store
-      # module turns on enable_local_expose.
+      # module turns on enable_local_expose, or (for the four app-layer
+      # entries below) when the Helm chart's own Service NodePort changes.
       #   23001:30474 — Neo4j HTTP Browser
       #   23012:30475 — Neo4j Bolt (Browser's login step needs this too)
       #   23011:30476 — Qdrant REST/Dashboard
@@ -80,6 +81,10 @@ resource "null_resource" "cluster" {
       #   23021:30485 — Rancher UI (HTTPS, self-signed)
       #   23022:30486 — Grafana UI
       #   23023:30487 — ArgoCD UI
+      #   23024:30020 — FastAPI (app layer, k8s/helm/values.yaml)
+      #   23025:30022 — Flower (app layer)
+      #   23026:30023 — FastHTML (app layer)
+      #   23027:30024 — FastMCP (app layer, internal-by-design but exposed for debugging)
       if k3d cluster list -o json 2>/dev/null | jq -e \
            '.[] | select(.name == "${var.cluster_name}")' >/dev/null 2>&1; then
         echo "Cluster ${var.cluster_name} already exists — skipping create."
@@ -107,6 +112,10 @@ resource "null_resource" "cluster" {
           --port "23021:30485@loadbalancer" \
           --port "23022:30486@loadbalancer" \
           --port "23023:30487@loadbalancer" \
+          --port "23024:30020@loadbalancer" \
+          --port "23025:30022@loadbalancer" \
+          --port "23026:30023@loadbalancer" \
+          --port "23027:30024@loadbalancer" \
           --kubeconfig-update-default \
           --wait \
           --timeout 10m

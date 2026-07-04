@@ -32,37 +32,13 @@ variable "release_name" {
   default     = "qdrant"
 }
 
-# -----------------------------------------------------------------------------
-# Network exposure (Tailscale)
-# -----------------------------------------------------------------------------
-# Qdrant has a built-in Dashboard at /dashboard on port 6333. External
-# Ingress applies (per memory feedback_no_external_ingress_for_uiless_backends:
-# UI exists → Ingress + Homepage tile).
-# -----------------------------------------------------------------------------
-
-variable "tailscale_hostname" {
-  description = "Short tailnet hostname (e.g. 'qdrant' → qdrant.<domain>.ts.net)."
-  type        = string
-  default     = "qdrant"
-}
-
-variable "tailscale_domain" {
-  description = "Tailnet domain (e.g. 'YOUR_TAILNET_DOMAIN.ts.net'). Comes from env.hcl."
-  type        = string
-}
-
-variable "tailscale_ingress_class" {
-  description = "IngressClass name from the tailscale-operator unit."
-  type        = string
-  default     = "tailscale"
-}
 
 # -----------------------------------------------------------------------------
 # Auth — API key reused from v1 SOPS (per memory feedback_secrets_reuse)
 # -----------------------------------------------------------------------------
 
 variable "api_key" {
-  description = "Qdrant API key. Reused from v1 — drop into SOPS as `qdrant.api_key` before applying. Empty string disables auth (NOT recommended even for homelab — Qdrant defaults to no auth and any tailnet member could query)."
+  description = "Qdrant API key. Reused from v1 — drop into SOPS as `qdrant.api_key` before applying. Empty string disables auth (NOT recommended even for homelab — Qdrant defaults to no auth and any external network member could query)."
   type        = string
   sensitive   = true
 }
@@ -171,9 +147,9 @@ variable "service_monitor_enabled" {
 # Opt-in NodePort Service so a human on their own laptop can open Qdrant's
 # built-in Dashboard (/dashboard, served on the same port as the REST API) at
 # localhost:<port> during development. Leave `enable_local_expose` unset
-# (default false) on any environment where Tailscale Ingress already provides
-# access (e.g. COELHO Cloud) — the module below is never even instantiated in
-# that case. See infrastructure/modules/k3d_expose/.
+# (default false) on any environment where external Ingress already provides
+# access — the module below is never even instantiated in that case. See
+# infrastructure/modules/k3d_expose/.
 #
 # Only the REST port (6333) is exposed — gRPC (6334) and the internal p2p/raft
 # port (6335) aren't browser-relevant and single-replica homelab doesn't use

@@ -9,21 +9,6 @@
 # Apply:
 #   kubectl apply -f k8s/argocd/prod/
 #
-# Temporary (while GitHub repo is private): create a repo-creds Secret in
-#   the argocd namespace before applying:
-#
-#   kubectl create secret generic argocd-github-repo-creds \
-#     --namespace argocd \
-#     --from-literal=type=git \
-#     --from-literal=url=https://github.com/rafaelcoelho1409/COELHONexus.git \
-#     --from-literal=password=<github-pat> \
-#     --from-literal=username=rafaelcoelho1409
-#   kubectl label secret argocd-github-repo-creds \
-#     -n argocd argocd.argoproj.io/secret-type=repository
-#
-#   Once the repo is public, delete the Secret — ArgoCD clones public repos
-#   anonymously with no credentials.
-#
 # Namespaces:
 #   - coelhonexus-dev: Skaffold local development (ports 23020-23039)
 #   - coelhonexus:     ArgoCD production (ports 23000-23019)

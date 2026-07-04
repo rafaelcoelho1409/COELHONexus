@@ -23,20 +23,6 @@ output "image_updater_chart_version" {
 }
 
 # -----------------------------------------------------------------------------
-# External (Tailnet) URLs
-# -----------------------------------------------------------------------------
-
-output "url" {
-  description = "Web UI URL — log in as `admin` / <kubectl get secret argocd-initial-admin-secret>."
-  value       = "https://${var.tailscale_hostname}.${var.tailscale_domain}"
-}
-
-output "tailscale_hostname" {
-  description = "Tailnet hostname (without domain)."
-  value       = var.tailscale_hostname
-}
-
-# -----------------------------------------------------------------------------
 # In-cluster endpoint — used by argocd CLI from within the cluster
 # -----------------------------------------------------------------------------
 

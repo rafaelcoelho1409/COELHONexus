@@ -8,7 +8,7 @@
 #   ${enable_prometheus_metrics}
 # =============================================================================
 
-# Hostname — must match what the Tailscale Ingress will route.
+# Hostname — must match what the external Ingress will route.
 hostname: "${hostname}"
 
 # Single replica for homelab.
@@ -17,12 +17,12 @@ replicas: ${replicas}
 # Initial admin password. Rancher forces a change on first login.
 bootstrapPassword: "${bootstrap_password}"
 
-# TLS source — `external` on COELHO Cloud (Tailscale operator terminates TLS);
+# TLS source — `external` when an external ingress controller already terminates TLS;
 # `rancher` on COELHONexus standalone (no proxy, Rancher self-signs and serves
 # HTTPS natively on port 443). Driven by the module's `tls_source` input.
 tls: ${tls_source}
 
-# Disable the chart's own Ingress — we create a Tailscale-flavored Ingress
+# Disable the chart's own Ingress — we create a custom external Ingress
 # separately via kubernetes_manifest in main.tf.
 ingress:
   enabled: false

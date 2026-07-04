@@ -114,6 +114,6 @@ containerSecurityContext:
 networkPolicy:
   enabled: false
 
-# No TLS — Redis is in-cluster only (or via Tailscale tunnel which encrypts).
+# No TLS — Redis is in-cluster only (or via the external tunnel which encrypts).
 tls:
   enabled: false

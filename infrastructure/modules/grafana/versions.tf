@@ -3,7 +3,7 @@
 # =============================================================================
 #
 # The grafana-community/grafana chart ships no CRDs, so plain
-# `kubernetes_manifest` is fine for the Tailscale Ingress (no deferred
+# `kubernetes_manifest` is fine for the external Ingress (no deferred
 # validation needed; cf. feedback_kubectl_manifest_pattern).
 # =============================================================================
 

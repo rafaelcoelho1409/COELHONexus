@@ -36,7 +36,15 @@ router = APIRouter()
 
 
 def _registry_default_enabled() -> list[str]:
-    return [pid for pid, cfg in PROVIDERS.items() if cfg.enabled]
+    """cfg.enabled alone isn't enough — a provider with no key would still
+    get seeded into the active pool, where the rotator wastes a blocklist
+    check + cooldown filter on it every round. Only auto-enable providers
+    the registry allows AND that actually have a key."""
+    store = get_store()
+    return [
+        pid for pid, cfg in PROVIDERS.items()
+        if cfg.enabled and store.key_status(cfg.key_env).has_key
+    ]
 
 
 def _ensure_enabled(settings: dict, pid: str, on: bool) -> dict:
@@ -63,6 +71,7 @@ def _provider_view(pid: str, settings: dict) -> dict:
         "id": pid,
         "name": meta["name"],
         "kind": meta["kind"],
+        "key_url": meta.get("key_url"),
         "key_env": cfg.key_env,
         "registry_enabled": cfg.enabled,
         "required": getattr(cfg, "required", False),

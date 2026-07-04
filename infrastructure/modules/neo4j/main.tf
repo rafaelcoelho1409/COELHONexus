@@ -4,27 +4,27 @@
 #
 # v1 → v2 KEY DIFFERENCE: HTTPS instead of HTTP, end-to-end LE-trusted certs
 # ----------------------------------------------------------------------------
-# v1 exposed Browser + Bolt over a single Tailscale LoadBalancer with PLAIN
-# HTTP because the alternative — Tailscale Ingress with HTTPS — broke the
+# v1 exposed Browser + Bolt over a single external LoadBalancer with PLAIN
+# HTTP because the alternative — external Ingress with HTTPS — broke the
 # Browser's WebSocket connection to Bolt (mixed-content security policy).
 #
-# v2 fix: TWO Tailscale Ingresses (both L7, both with Tailscale's auto-issued
+# v2 fix: TWO external Ingresses (both L7, both with the ingress controller's auto-issued
 # Let's Encrypt certs):
-#   - Tailscale Ingress: Browser at https://neo4j.<domain> (port 7474)
-#   - Tailscale Ingress: Bolt at https://neo4j-bolt.<domain> (port 7687,
-#     Tailscale terminates TLS with LE cert; Neo4j receives plain HTTP and
+#   - External Ingress: Browser at https://neo4j.<domain> (port 7474)
+#   - External Ingress: Bolt at https://neo4j-bolt.<domain> (port 7687,
+#     the ingress controller terminates TLS with LE cert; Neo4j receives plain HTTP and
 #     handles the WebSocket upgrade for Bolt-over-WSS)
 #   - Browser URL: bolt+s://neo4j-bolt.<domain> (port 443 implicit, LE cert
 #     trusted by browsers natively — no `+ssc` needed, no mixed-content
 #     warning, clean lock 🔒 in the address bar)
 #
 # Why this works (vs the earlier self-signed Bolt approach):
-#   - Tailscale operator auto-provisions LE certs ONLY for L7 Ingress
-#     resources. LoadBalancer services (L4 TCP) get tailnet IPs but no certs.
-#   - Both Browser and Bolt traffic now traverse Tailscale Ingress proxies
+#   - The external ingress controller auto-provisions LE certs ONLY for L7 Ingress
+#     resources. LoadBalancer services (L4 TCP) get external IPs but no certs.
+#   - Both Browser and Bolt traffic now traverse external Ingress proxies
 #     with valid LE certs → browsers see clean HTTPS + WSS connections.
 #   - Neo4j's Bolt port 7687 natively handles WebSocket upgrade requests,
-#     so the Tailscale proxy can forward HTTP traffic to the same port that
+#     so the external proxy can forward HTTP traffic to the same port that
 #     accepts plain Bolt — no separate WebSocket endpoint needed.
 #
 # APOC FIXES (LangChain compatibility):
@@ -194,7 +194,7 @@ resource "helm_release" "neo4j" {
       storage_class = var.storage_class
       storage_size  = var.storage_size
 
-      # Tailscale advertised addresses
+      # External advertised addresses
       browser_advertised_address = "${var.tailscale_hostname_browser}.${var.tailscale_domain}"
       bolt_advertised_address    = "${var.tailscale_hostname_bolt}.${var.tailscale_domain}:443"
     })
@@ -206,48 +206,6 @@ resource "helm_release" "neo4j" {
   depends_on = [
     kubernetes_job_v1.ensure_bucket,
   ]
-}
-
-# -----------------------------------------------------------------------------
-# Tailscale Ingress — Browser HTTPS (LE cert, port 7474 backend)
-# -----------------------------------------------------------------------------
-resource "kubernetes_manifest" "ingress" {
-  manifest = yamldecode(templatefile("${path.module}/k8s/ingress.yaml.tpl", {
-    namespace          = kubernetes_namespace_v1.neo4j.metadata[0].name
-    release_name       = var.release_name
-    tailscale_hostname = var.tailscale_hostname_browser
-    tailscale_domain   = var.tailscale_domain
-    ingress_class_name = var.tailscale_ingress_class
-    bolt_hostname      = var.tailscale_hostname_bolt
-  }))
-
-  depends_on = [helm_release.neo4j]
-}
-
-# -----------------------------------------------------------------------------
-# Tailscale Ingress — Bolt over WSS (LE cert, port 7687 backend)
-# -----------------------------------------------------------------------------
-# Tailscale's L7 Ingress proxy:
-#   - Terminates TLS with auto-issued LE cert for ${tailscale_hostname_bolt}
-#   - Forwards HTTP to backend Service port 7687
-#   - Passes WebSocket upgrade headers transparently
-#
-# Neo4j on port 7687 detects HTTP "Upgrade: websocket" header and switches
-# to Bolt-over-WSS. The Browser opens wss://neo4j-bolt.<domain>/ over a
-# clean LE-trusted TLS connection — no self-signed cert acceptance, no
-# mixed-content warning.
-#
-# NO Homepage tile — Bolt is a data-plane endpoint, not a tile-worthy URL.
-# -----------------------------------------------------------------------------
-resource "kubernetes_manifest" "bolt_ingress" {
-  manifest = yamldecode(templatefile("${path.module}/k8s/bolt-ingress.yaml.tpl", {
-    namespace          = kubernetes_namespace_v1.neo4j.metadata[0].name
-    release_name       = var.release_name
-    tailscale_hostname = var.tailscale_hostname_bolt
-    ingress_class_name = var.tailscale_ingress_class
-  }))
-
-  depends_on = [helm_release.neo4j]
 }
 
 # -----------------------------------------------------------------------------
@@ -268,10 +226,10 @@ resource "kubernetes_manifest" "backup_cronjob" {
 # -----------------------------------------------------------------------------
 # Local access (k3d dev only) — NodePort Service, opt-in via enable_local_expose
 # -----------------------------------------------------------------------------
-# Separate from the Tailscale Ingresses above — those stay unconditional and
-# work as-is on any environment with a real Tailscale operator. This is for
-# k3d standalone dev clusters, where Tailscale Ingress is a documented no-op
-# (see this module's live leaf comment: "DUMMY tailscale strings... inert
+# Separate from the external Ingresses above — those stay unconditional and
+# work as-is on any environment with a real external ingress controller. This is for
+# k3d standalone dev clusters, where external Ingress is a documented no-op
+# (see this module's live leaf comment: "DUMMY external-ingress strings... inert
 # without an Ingress controller"). Selector must match the pods behind the
 # `neo4j` Service above (`app: neo4j, helm.neo4j.com/instance: neo4j`,
 # verified via `kubectl get svc neo4j -n neo4j -o yaml`).

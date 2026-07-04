@@ -11,7 +11,7 @@
 #                 to 127.0.0.1:9222, and
 #             (b) the Host-header DNS-rebinding check via
 #                 `proxy_set_header Host localhost:9222`, so consumers can
-#                 reach CDP through any k8s Service / Tailscale Ingress
+#                 reach CDP through any k8s Service / external Ingress
 #                 hostname without Chrome rejecting them.
 #
 # Headless pod: single chromedp/headless-shell container. CDP-native, MIT,
@@ -196,50 +196,18 @@ variable "vnc_password" {
   sensitive   = true
 }
 
-# -----------------------------------------------------------------------------
-# Tailscale exposure
-# -----------------------------------------------------------------------------
-
-variable "tailscale_hostname_novnc" {
-  description = "Short tailnet hostname for the noVNC web UI."
-  type        = string
-  default     = "playwright-vnc"
-}
-
-variable "tailscale_hostname_cdp_headed" {
-  description = "Short tailnet hostname for the headed CDP endpoint (laptop dev with Browser Use, Crawl4AI undetected mode)."
-  type        = string
-  default     = "playwright-cdp"
-}
-
-variable "tailscale_hostname_cdp_headless" {
-  description = "Short tailnet hostname for the headless CDP endpoint (Knowledge Distiller laptop crawlers, Crawl4AI default bulk mode)."
-  type        = string
-  default     = "playwright-cdp-headless"
-}
-
-variable "tailscale_domain" {
-  description = "Tailnet domain. Comes from env.hcl."
-  type        = string
-}
-
-variable "tailscale_ingress_class" {
-  description = "IngressClass name from the tailscale-operator unit."
-  type        = string
-  default     = "tailscale"
-}
 
 # -----------------------------------------------------------------------------
 # Local access (k3d dev clusters only — e.g. coelhonexus standalone)
 # -----------------------------------------------------------------------------
 # Opt-in NodePort Services for localhost access via k3d's loadbalancer port
 # mapping. Leave `enable_local_expose` unset (default false) on any
-# environment where Tailscale Ingress already provides access (e.g. COELHO
+# environment where external Ingress already provides access (e.g. COELHO
 # Cloud) — neither module below is instantiated in that case. See
 # infrastructure/modules/k3d_expose/.
 #
 # Deliberately does NOT expose playwright-server (the Open WebUI WS backend)
-# — same policy as the module's Tailscale Ingresses already follow (no
+# — same policy as the module's external Ingresses already follow (no
 # external ingress for UI-less backends, see main.tf's comment on
 # deployment_server).
 

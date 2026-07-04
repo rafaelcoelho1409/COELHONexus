@@ -32,7 +32,7 @@ variable "namespace" {
 }
 
 variable "release_name" {
-  description = "Helm release name. Used as Service name (Tailscale Ingress backend)."
+  description = "Helm release name. Used as Service name (external Ingress backend)."
   type        = string
   default     = "grafana"
 }
@@ -57,30 +57,24 @@ variable "grafana_cli_image" {
 }
 
 variable "root_url" {
-  description = "Optional full browser URL for Grafana. Set this for localhost port-forward deployments; otherwise the module derives the Tailscale URL."
+  description = "Optional full browser URL for Grafana. Set this for localhost port-forward deployments; otherwise the module derives the external URL."
   type        = string
   default     = null
 }
 
 # -----------------------------------------------------------------------------
-# Network exposure (Tailscale)
+# Network exposure (external)
 # -----------------------------------------------------------------------------
 
 variable "tailscale_hostname" {
-  description = "Short tailnet hostname (e.g. 'grafana' → grafana.<domain>.ts.net)."
+  description = "Short external hostname (e.g. 'grafana' → grafana.<domain>.example.com)."
   type        = string
   default     = "grafana"
 }
 
 variable "tailscale_domain" {
-  description = "Tailnet domain (e.g. 'YOUR_TAILNET_DOMAIN.ts.net'). Comes from env.hcl."
+  description = "External domain (e.g. 'YOUR_EXTERNAL_DOMAIN.example.com'). Comes from env.hcl. Still referenced by the grafana_root_url/grafana_domain fallback in main.tf even though the Ingress resource was removed — that fallback only fires when root_url isn't explicitly set."
   type        = string
-}
-
-variable "tailscale_ingress_class" {
-  description = "IngressClass name from the tailscale-operator unit. Almost always 'tailscale'."
-  type        = string
-  default     = "tailscale"
 }
 
 # -----------------------------------------------------------------------------
@@ -228,7 +222,7 @@ variable "provision_dashboards" {
 # -----------------------------------------------------------------------------
 # Opt-in NodePort Service for localhost access via k3d's loadbalancer port
 # mapping. Leave `enable_local_expose` unset (default false) on any
-# environment where Tailscale Ingress already provides access (e.g. COELHO
+# environment where external Ingress already provides access (e.g. COELHO
 # Cloud) — the module below is never instantiated in that case. See
 # infrastructure/modules/k3d_expose/.
 #

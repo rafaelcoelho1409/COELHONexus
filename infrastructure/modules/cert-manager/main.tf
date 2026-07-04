@@ -8,14 +8,15 @@
 #      CertificateSigningRequest — 7 CRDs total)
 #   - Three Deployments: cert-manager controller, webhook, cainjector
 #
-# Why we need this on COELHONexus (and NOT on COELHO Cloud):
+# Why we need this on COELHONexus (and not on a cluster with an external
+# ingress controller already in front of it):
 #   - Rancher's chart with `tls: rancher` creates a `cert-manager.io/v1 Issuer`
 #     resource that asks cert-manager to issue a self-signed cert.
-#   - On COELHO Cloud, Rancher uses `tls: external` — the tailscale-operator's
-#     proxy terminates TLS using Tailscale's auto-provisioned certs. No
-#     cert-manager needed.
-#   - We deliberately dropped tailscale-operator from the standalone install
-#     (no external Tailscale dependency). Without an external TLS terminator,
+#   - With `tls: external` instead, the external ingress controller's proxy
+#     terminates TLS using its own auto-provisioned certs. No cert-manager
+#     needed in that case.
+#   - We deliberately dropped the external ingress controller from the standalone install
+#     (no external ingress dependency). Without an external TLS terminator,
 #     Rancher must self-sign — which means cert-manager.
 #
 # This is the canonical Rancher install path per the official docs:

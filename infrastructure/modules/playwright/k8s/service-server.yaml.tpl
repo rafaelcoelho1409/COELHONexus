@@ -7,7 +7,7 @@
 #   WEB_LOADER_ENGINE=playwright
 #   PLAYWRIGHT_WS_URL=ws://playwright-server.playwright.svc.cluster.local:3000
 #
-# No Tailscale Ingress — internal-only API, no UI. Per memory
+# No external Ingress — internal-only API, no UI. Per memory
 # feedback_no_external_ingress_for_uiless_backends.
 # =============================================================================
 

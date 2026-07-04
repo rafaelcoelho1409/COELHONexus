@@ -5,8 +5,10 @@
 # (no DB deps at runtime); MinIO used only by the snapshot CronJob.
 #
 # Adaptations vs COELHO Cloud's leaf:
-#   - DROP dependency "tailscale_operator"
-#   - DUMMY tailscale strings (Ingress unconditional in main.tf — inert)
+#   - DROP the external-ingress-operator dependency
+#   - External Ingress REMOVED from main.tf (2026-07-02) — always inert on
+#     this cluster (no Ingress controller). Real access is via the
+#     k3d_expose NodePort module below.
 #   - api_key from env.hcl `demo` map (deterministic demo credential;
 #     same value is injected into the app layer as `QDRANT_API_KEY`)
 # =============================================================================
@@ -67,10 +69,6 @@ generate "providers" {
 }
 
 inputs = {
-  # Tailscale — DUMMY (Ingress is unconditional in main.tf; created inert).
-  tailscale_domain        = "tailscale.local"
-  tailscale_ingress_class = "tailscale"
-
   # Deterministic demo API key. Qdrant and the app layer both use this value.
   api_key = include.root.locals.env.demo.qdrant_api_key
 

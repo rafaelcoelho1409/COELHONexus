@@ -13,7 +13,7 @@
 #        - Alertmanager OFF (Grafana's unified alerting handles routing)
 #        - Kafka ingest_storage OFF (using classic remote_write)
 #        - metaMonitoring ON: ServiceMonitor + recording rules + dashboards
-#   4. Tailscale Ingress at mimir.<domain> → gateway:8080 (Homepage tile)
+#   4. External Ingress at mimir.<domain> → gateway:8080 (Homepage tile)
 #   5. Grafana datasource ConfigMap (label `grafana_datasource: "1"`) so
 #      Grafana's sidecar auto-imports it. UID 'mimir' is referenced by
 #      every dashboard ConfigMap shipped from other modules.
@@ -205,6 +205,8 @@ resource "helm_release" "mimir" {
 
       gateway_memory_request = var.gateway_memory_request
       gateway_memory_limit   = var.gateway_memory_limit
+
+      cluster_name = var.cluster_name
     })
   ]
 
@@ -218,7 +220,7 @@ resource "helm_release" "mimir" {
 }
 
 # -----------------------------------------------------------------------------
-# NOTE: No external Tailscale Ingress for Mimir.
+# NOTE: No external Ingress for Mimir.
 # -----------------------------------------------------------------------------
 # Mimir has no UI (only a Prometheus-compatible API); all viewing happens
 # through Grafana via the datasource ConfigMap below. Same applies to Loki,
