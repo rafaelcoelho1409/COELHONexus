@@ -110,7 +110,7 @@ inputs = {
 
   # --- External domain — DUMMY, unused fallback (public_url below always wins) ---
   tailscale_domain = "tailscale.local"
-  public_url       = "http://localhost:23006"
+  public_url       = "http://localhost:23017"
 
   # --- Demo secrets from env.hcl (NOT SOPS) ---
   postgres_password       = include.root.locals.env.demo.langfuse_postgres_password
@@ -135,9 +135,9 @@ inputs = {
   # Local access (k3d only) — NodePort 30481->23017, mapped via
   # `k3d cluster edit coelhonexus --port-add "23017:30481@loadbalancer"`
   # (run manually — not a Terraform resource, see infra/modules/k3d_expose).
-  # NOTE: public_url above stays pinned to :23006 (the existing port-forward
-  # path) — this NodePort is a second way to REACH the UI, it doesn't change
-  # what Langfuse thinks its own public URL is.
+  # public_url above is pinned to this same :23017 address — it's the only
+  # access mechanism now (the old port-forward-script path was deleted
+  # 2026-07-04; see docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md).
   enable_local_expose = true
   k3d_web_node_port   = 30481
 }

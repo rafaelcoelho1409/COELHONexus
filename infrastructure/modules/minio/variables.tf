@@ -155,10 +155,9 @@ variable "replicas" {
 # Cloud) — neither module below is instantiated in that case. See
 # infrastructure/modules/k3d_expose/.
 #
-# NOTE: MinIO already has a working localhost path via
-# scripts/standalone-port-forward.sh (23008->9001 console, 23009->9000 API).
-# This is a second, independent mechanism — harmless to run alongside it,
-# but redundant if you're consolidating onto one access pattern.
+# This NodePort is the sole localhost access mechanism for MinIO (23016->9001
+# console, 23015->9000 API) — the old port-forward-script path was deleted
+# 2026-07-04; see docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md.
 
 variable "enable_local_expose" {
   description = "Create NodePort Services for localhost access via k3d's loadbalancer port mapping. Only meaningful on k3d-based dev clusters."

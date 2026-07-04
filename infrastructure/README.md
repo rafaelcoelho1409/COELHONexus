@@ -57,29 +57,16 @@ cd ~/Workbench/COELHONexus/infrastructure/live/coelhonexus
 terragrunt run --all plan --non-interactive --parallelism 1
 ```
 
-**Alternative — phased bash script with per-leaf smoke tests** (Linux/macOS/WSL only):
-
-```bash
-cd ~/Workbench/COELHONexus
-bash scripts/standalone-up.sh
-```
-
-This applies 17 phases one at a time, running each leaf's `smoke.sh` between phases (the `run --all` path skips smoke). Same end state as the terragrunt path; prefer it on Unix when you're adding a new leaf or debugging an install regression and want to see smoke output between phases.
-
 When it's green, infrastructure services are already reachable (native k3d NodePort, no extra step). Bring up the app layer with Skaffold — it forwards its own ports while running in the foreground, cross-platform, no shell script:
 
 ```bash
 skaffold dev
 ```
 
-Three deploy mechanisms, three disjoint, non-overlapping port ranges: `23001`+`23011-23023` Terragrunt-managed native NodePort infra (below), `23030-23039` Skaffold dev (apps, requires `skaffold dev` running), and `23000-23019` for ArgoCD-deployed apps — optional, not yet active on this cluster (see `k8s/argocd/prod/`), full mapping in `skaffold.yaml`'s header comments.
+Four port ranges, kept disjoint on purpose — see the root [`README.md`](../README.md#service-access) for the full app-layer table (native NodePort at `23024-23027`, ArgoCD's optional `kubectl port-forward` at `23000-23019`, Skaffold dev at `23030-23039`). This file covers just the Terragrunt-managed infra range below (`23001`, `23011-23023`):
 
 | Service | URL | Login |
 |---|---|---|
-| FastAPI (main app) | http://localhost:23030 | — (needs `skaffold dev` running) |
-| Flower (Celery) | http://localhost:23032 | — (needs `skaffold dev` running) |
-| FastHTML | http://localhost:23033 | — (needs `skaffold dev` running) |
-| FastMCP | http://localhost:23034 | — (needs `skaffold dev` running) |
 | Neo4j Browser | http://localhost:23001 | `neo4j / neo4j-demo-password` (Bolt URI field: `bolt://localhost:23012`) |
 | Qdrant Dashboard | http://localhost:23011 | API key field: `qdrant-demo-api-key` |
 | Elasticsearch REST API | https://localhost:23013 | `coelhonexus / coelhonexus-demo-password` |
@@ -135,11 +122,9 @@ infrastructure/
 ```
 
 `scripts/`:
-- `standalone-up.sh` — sequential phased bring-up (alternative to `terragrunt run --all`; Unix only)
-- `standalone-port-forward.sh` — superseded by `skaffold dev`'s built-in `portForward:` (cross-platform); kept for now, not needed for normal use
-- `argocd-port-forward.sh` — same, for a separate production cluster this repo can also target
-- `redis-check.sh` — generic Redis CLI sanity check
 - `observability/` — LangFuse prompt publishers, dataset bootstrap, eval runners
+
+(The phased-bring-up and port-forward `.sh` helpers that used to live here were deleted 2026-07-04 — native k3d NodePort and `skaffold dev`'s built-in `portForward:` cover everything they did, cross-platform. See [`docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md`](../docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md).)
 
 App build + deploy is handled by **Skaffold** at the repo root (`skaffold run` / `skaffold dev`), not by a shell script — cross-platform, single tool.
 
@@ -161,12 +146,6 @@ App build + deploy is handled by **Skaffold** at the repo root (`skaffold run` /
 
 ```bash
 cd infrastructure/live/coelhonexus/<layer>/<module> && terragrunt apply -auto-approve
-```
-
-### Apply a subset (sequential script path only)
-
-```bash
-PHASES="20-data/minio 20-data/redis" bash scripts/standalone-up.sh
 ```
 
 ### Run smoke tests after a `run --all apply` (which skips them)

@@ -226,9 +226,9 @@ variable "provision_dashboards" {
 # Cloud) — the module below is never instantiated in that case. See
 # infrastructure/modules/k3d_expose/.
 #
-# NOTE: Grafana already has a working localhost path via
-# scripts/standalone-port-forward.sh (23005->80). This NodePort is a second,
-# independent mechanism to REACH the UI.
+# This NodePort is the sole localhost access mechanism for Grafana (23022->80)
+# — the old port-forward-script path was deleted 2026-07-04; see
+# docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md.
 
 variable "enable_local_expose" {
   description = "Create a NodePort Service for localhost access via k3d's loadbalancer port mapping. Only meaningful on k3d-based dev clusters."

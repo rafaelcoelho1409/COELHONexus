@@ -398,12 +398,11 @@ variable "backup_retention_days" {
 # Cloud) — the module below is never instantiated in that case. See
 # infrastructure/modules/k3d_expose/.
 #
-# NOTE: Langfuse already has a working localhost path via
-# scripts/standalone-port-forward.sh (23006->3000), and `public_url` above is
-# still pinned to that address for links Langfuse generates internally
-# (shareable trace URLs, etc). This NodePort is a second, independent
-# mechanism to REACH the UI — it doesn't change what Langfuse thinks its own
-# public URL is.
+# This NodePort is the sole localhost access mechanism for Langfuse
+# (23017->3000) — the old port-forward-script path was deleted 2026-07-04;
+# see docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md. `public_url` (see the
+# variable above / leaf terragrunt.hcl) is pinned to this same :23017 address
+# so links Langfuse generates internally (shareable trace URLs, etc) work.
 
 variable "enable_local_expose" {
   description = "Create a NodePort Service for localhost access via k3d's loadbalancer port mapping. Only meaningful on k3d-based dev clusters."

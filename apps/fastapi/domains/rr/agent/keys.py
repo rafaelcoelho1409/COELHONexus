@@ -76,7 +76,10 @@ FS_DISCOVERY_KEY_HF:    str = fs_discovery_path("huggingface_daily_papers")
 FS_DISCOVERY_KEY_HN:    str = fs_discovery_path("hn")
 
 
-# FastMCP server endpoint — in-cluster ClusterIP; env-overridable for local port-forward testing.
+# FastMCP server endpoint — in-cluster Service DNS; env-overridable for local port-forward
+# testing. Port is 8001, not the container's actual listening port (8000) — see
+# k8s/helm/values.yaml's fastmcp.portsSettings comment (Service port deliberately
+# differs from targetPort to avoid a k3d svclb hostPort collision with fastapi).
 MCP_SERVER_NAME = "radar"
 MCP_URL_ENV     = "FASTMCP_INTERNAL_URL"
-MCP_URL_DEFAULT = "http://coelhonexus-fastmcp:8000/mcp/"
+MCP_URL_DEFAULT = "http://coelhonexus-fastmcp:8001/mcp/"

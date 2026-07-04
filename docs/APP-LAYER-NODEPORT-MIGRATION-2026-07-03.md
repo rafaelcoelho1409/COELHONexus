@@ -70,7 +70,17 @@ Resolved by moving `skaffold.yaml`'s `portForward:` block from `23020/23022/2302
 
 No Terragrunt reinstall/reapply was needed for today's fix — `portForward:` is pure client-side Skaffold config, doesn't touch any Kubernetes Service, Helm chart, or Terraform-managed resource.
 
-## Not in scope here
+## Not in scope here (superseded — see Update 2026-07-04 below)
 
-- `scripts/argocd-port-forward.sh` (COELHO Cloud-specific, different cluster) — untouched.
-- `scripts/standalone-up.sh` (Unix-only phased alternative to `terragrunt run --all apply`) — untouched; a separate, lower-priority cross-platform gap, not blocking this migration.
+- ~~`scripts/argocd-port-forward.sh` (COELHO Cloud-specific, different cluster) — untouched.~~
+- ~~`scripts/standalone-up.sh` (Unix-only phased alternative to `terragrunt run --all apply`) — untouched; a separate, lower-priority cross-platform gap, not blocking this migration.~~
+
+## Update 2026-07-04: steps 1-3 done and verified live; scripts deleted
+
+Steps 1-2 (Helm `values.yaml` FastMCP → `LoadBalancer`, `infrastructure/modules/k3d/main.tf` `--port` flags for `23024-23027`) and step 3 (`k3d cluster edit --port-add` on the live cluster) are complete. Confirmed live: FastAPI/FastHTML/FastMCP all return `200` on `/health` at their new native-NodePort URLs; Flower returns `401` for an unrelated, pre-existing reason (see `docs/` — a `basicAuth.enabled: false` chart setting that doesn't seem to actually disable the gate, not investigated further).
+
+One additional bug found and fixed along the way, not anticipated in the original 4-step plan: FastMCP's Service `port` field (8000) collided with FastAPI's identical `port: 8000` at the k3d `svclb` (klipper LoadBalancer) host-port-binding layer — two `LoadBalancer`-type Services can't share the same `.spec.ports[].port` value, since k3d binds a matching `hostPort` per node. Fixed by changing FastMCP's Service `port` to `8001` (keeping `targetPort: 8000` — the container itself is unaffected). This one-line values.yaml change had wider blast radius than expected — three other places hardcoded FastMCP's old port and needed matching fixes: `skaffold.yaml`'s `portForward` entry, `apps/fastapi/domains/rr/agent/keys.py`'s `MCP_URL_DEFAULT` (in-cluster DNS URL Research Radar uses to reach FastMCP — this one broke every RR scan with an `ExceptionGroup`/`httpx.ConnectTimeout` until fixed), and `scripts/argocd-port-forward.sh` (see below).
+
+Step 4 (delete the old script, update docs) is now done: `scripts/standalone-up.sh`, `scripts/standalone-port-forward.sh`, `scripts/argocd-port-forward.sh`, and `scripts/redis-check.sh` were all deleted (the last two aren't port-forward-related, but were deleted too per explicit user request to remove all `.sh` files from `scripts/`). This surfaced a real, pre-existing functional bug unrelated to today's port fix: `infrastructure/live/coelhonexus/40-apps/langfuse/terragrunt.hcl`'s `public_url` was hardcoded to `http://localhost:23006` (the deleted script's old, never-actually-correct port for LangFuse — the real native-NodePort value is `23017`), meaning every LangFuse-generated shareable trace URL was dead. Fixed to `23017`, matching `enable_local_expose`'s NodePort. Stale comments referencing the deleted scripts were also cleaned up in `infrastructure/README.md` and 5 modules' `variables.tf` (`minio`, `grafana`, `argocd`, `rancher`, `langfuse`).
+
+**Remaining follow-up, not yet done**: the LangFuse `terragrunt.hcl` fix needs a `terragrunt apply` on `40-apps/langfuse` to take effect live — it's currently just a file change.

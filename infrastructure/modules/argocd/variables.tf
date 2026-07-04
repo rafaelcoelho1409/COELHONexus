@@ -249,11 +249,10 @@ variable "rbac_default_policy" {
 # below is never instantiated in that case. See
 # infrastructure/modules/k3d_expose/.
 #
-# NOTE: ArgoCD already has a working localhost path via
-# scripts/standalone-port-forward.sh (23007->80). This NodePort is a second,
-# independent mechanism to REACH the UI. Both are plain HTTP — the server
-# runs in --insecure mode (see main.tf), so there's no cert to accept either
-# way.
+# This NodePort is the sole localhost access mechanism for ArgoCD (23023->80)
+# — the old port-forward-script path was deleted 2026-07-04; see
+# docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md. Plain HTTP either way — the
+# server runs in --insecure mode (see main.tf), so there's no cert to accept.
 
 variable "enable_local_expose" {
   description = "Create a NodePort Service for localhost access via k3d's loadbalancer port mapping. Only meaningful on k3d-based dev clusters."

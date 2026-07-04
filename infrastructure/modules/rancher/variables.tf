@@ -226,11 +226,11 @@ variable "enable_turtles_capi" {
 # module below is never instantiated in that case. See
 # infrastructure/modules/k3d_expose/.
 #
-# NOTE: Rancher already has a working localhost path via
-# scripts/standalone-port-forward.sh (23010->443). This NodePort is a second,
-# independent mechanism to REACH the UI. Both use the chart's own self-signed
-# cert (tls_source="rancher") — browser needs a one-time "accept the
-# certificate" step on either port.
+# This NodePort is the sole localhost access mechanism for Rancher (23021->443)
+# — the old port-forward-script path was deleted 2026-07-04; see
+# docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md. Uses the chart's own
+# self-signed cert (tls_source="rancher") — browser needs a one-time "accept
+# the certificate" step.
 
 variable "enable_local_expose" {
   description = "Create a NodePort Service for localhost access via k3d's loadbalancer port mapping. Only meaningful on k3d-based dev clusters."
