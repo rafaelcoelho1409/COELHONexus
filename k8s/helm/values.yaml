@@ -303,8 +303,15 @@ fastmcp:
       cpu: "500m"
   portsSettings:
     ports:
+      # Service port intentionally != targetPort (8001 vs 8000): fastapi's
+      # Service also declares port 8000, and k3d's svclb LoadBalancer
+      # mechanism binds a hostPort matching this field on every node — two
+      # LoadBalancer Services sharing the same `port` collide there (fastapi
+      # already holds hostPort 8000 on all 3 nodes, so fastmcp's svclb pods
+      # could never schedule). The container itself is untouched — it still
+      # listens on 8000 (targetPort + the probes below).
       - name: http
-        port: 8000
+        port: 8001
         targetPort: 8000
         nodePort: 30024
         protocol: TCP

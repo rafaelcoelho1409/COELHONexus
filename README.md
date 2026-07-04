@@ -271,21 +271,16 @@ kubectl apply -f k8s/argocd/prod/
 
 `k8s/argocd/prod/application.yaml` points at this public GitHub repo directly (no in-cluster Git server on the standalone cluster — kept out of the port to save ~3 GB RAM). Same build/push-then-Image-Updater-deploys split `.gitlab-ci.yml` uses elsewhere, just with GitHub as the source and a manual build/push instead of a CI pipeline.
 
-**Reach the deployed app** — these services aren't on the native NodePort mapping (that's Terragrunt-managed infra only, see [Service Access](#service-access)) and there's no automatic forwarding the way Option B gets from `skaffold dev`. Manual `kubectl port-forward` is the only way in:
-
-```bash
-kubectl port-forward -n coelhonexus svc/coelhonexus-fastapi  23000:8000 &
-kubectl port-forward -n coelhonexus svc/coelhonexus-flower   23002:5555 &
-kubectl port-forward -n coelhonexus svc/coelhonexus-fasthtml 23003:3000 &
-kubectl port-forward -n coelhonexus svc/coelhonexus-fastmcp  23004:8000 &
-```
+**Reach the deployed app** — no port-forward process needed. FastAPI/Flower/FastHTML/FastMCP are on the same native k3d NodePort mapping the infrastructure services already use (see [`docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md`](docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md)) — reachable immediately, whichever deployment (this one or `skaffold dev`) currently holds those Service NodePorts:
 
 | Service | URL |
 |---|---|
-| FastAPI | http://localhost:23000 |
-| Flower | http://localhost:23002 |
-| FastHTML | http://localhost:23003 |
-| FastMCP | http://localhost:23004 |
+| FastAPI | http://localhost:23024 |
+| Flower | http://localhost:23025 |
+| FastHTML | http://localhost:23026 |
+| FastMCP | http://localhost:23027 |
+
+Manual `kubectl port-forward` at any port you like is still always possible — it's just no longer necessary.
 
 **Manual Helm install** (bypasses both Skaffold's deploy stage and ArgoCD — direct, for one-off testing only):
 
@@ -320,26 +315,30 @@ A single `skaffold.yaml` at the repo root drives builds for both this cluster an
 
 Two independent access mechanisms exist, and they use *different port numbers* — mixing them up is the most common "why won't this load" moment on a fresh install:
 
-- **Native k3d NodePorts** — baked into the cluster at creation time, work immediately after `terragrunt apply`, no extra process required. This is what the infrastructure services below use.
-- **`skaffold dev`'s built-in `portForward:`** — required for the four app services, since they're deployed by Skaffold rather than Terraform and aren't part of the native NodePort mapping. Cross-platform (it's Skaffold itself doing the forwarding, not a wrapper script), but only active while `skaffold dev` is running in the foreground.
+- **Native k3d NodePorts** — baked into the cluster at creation time, work immediately after `terragrunt apply`, no extra process required. Covers every infrastructure service below *and* the app layer (FastAPI/Flower/FastHTML/FastMCP), reaching whichever deployment — ArgoCD or `skaffold dev` — currently holds those Service NodePorts.
+- **`skaffold dev`'s built-in `portForward:`** — a second, dev-loop-specific way to reach the app layer, guaranteed to target the `coelhonexus-dev` namespace specifically regardless of what else is running. Cross-platform (it's Skaffold itself doing the forwarding, not a wrapper script), but only active while `skaffold dev` is running in the foreground.
 
 Three deploy mechanisms, three disjoint port ranges — kept deliberately non-overlapping so none of them can ever collide with each other:
 
 | Range | Mechanism | Fixed? |
 |---|---|---|
-| `23000-23019` | ArgoCD / `coelhonexus` production (`kubectl port-forward`) | Fixed |
-| `23001`, `23011-23023` | Terragrunt-managed native k3d NodePort infra | Fixed |
-| `23024-23029` | *(unused — headroom for future Terragrunt modules)* | — |
+| `23000-23019` | ArgoCD / `coelhonexus` production (manual `kubectl port-forward`, optional — native NodePort below covers the same services without it) | Fixed |
+| `23001`, `23011-23027` | Terragrunt-managed native k3d NodePort — infra (`23001`, `23011-23023`) + app layer (`23024-23027`) | Fixed |
+| `23028-23029` | *(unused — remaining headroom for future Terragrunt modules)* | — |
 | `23030-23039` | Skaffold / `coelhonexus-dev` (this table) | Fixed |
 
 Full URL/credential table, quirks, and a connectivity smoke-test script live in [`docs/STANDALONE-ACCESS.md`](docs/STANDALONE-ACCESS.md) — the short version:
 
 | Service | Default URL | Requires | Username | Password / Key |
 |---|---|---|---|---|
-| **FastAPI** | http://localhost:23030 | `skaffold dev` | — | — (no auth) |
-| **Flower** (Celery) | http://localhost:23032 | `skaffold dev` | — | — (no auth) |
-| **FastHTML** | http://localhost:23033 | `skaffold dev` | — | — (no auth) |
-| **FastMCP** | http://localhost:23034 | `skaffold dev` | — | — (no auth) |
+| **FastAPI** | http://localhost:23024 | nothing — native NodePort | — | — (no auth) |
+| **Flower** (Celery) | http://localhost:23025 | nothing — native NodePort | — | — (no auth) |
+| **FastHTML** | http://localhost:23026 | nothing — native NodePort | — | — (no auth) |
+| **FastMCP** | http://localhost:23027 | nothing — native NodePort | — | — (no auth) |
+| **FastAPI** (dev loop) | http://localhost:23030 | `skaffold dev` | — | — (no auth) |
+| **Flower** (dev loop) | http://localhost:23032 | `skaffold dev` | — | — (no auth) |
+| **FastHTML** (dev loop) | http://localhost:23033 | `skaffold dev` | — | — (no auth) |
+| **FastMCP** (dev loop) | http://localhost:23034 | `skaffold dev` | — | — (no auth) |
 | **Neo4j Browser** | http://localhost:23001 | nothing — native NodePort | `neo4j` | `neo4j-demo-password`³ |
 | **Qdrant Dashboard** | http://localhost:23011 | nothing — native NodePort | — (API key field, not user/pass) | `qdrant-demo-api-key` |
 | **Elasticsearch REST API** | https://localhost:23013 | nothing — native NodePort | `coelhonexus` | `coelhonexus-demo-password` |
