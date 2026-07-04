@@ -93,8 +93,8 @@ The point of this repo isn't just "three AI apps." It's a demonstration of what 
 | **k3d** | Local Kubernetes cluster (k3s in Docker) |
 | **Kubernetes** | Container orchestration |
 | **Helm** | Kubernetes package management |
-| **ArgoCD** | GitOps continuous delivery (production cluster) |
-| **Skaffold** | Cross-platform local build/deploy workflow (standalone cluster) |
+| **ArgoCD** | GitOps continuous delivery — available on this standalone cluster and production alike |
+| **Skaffold** | Cross-platform local build/deploy workflow — this standalone cluster's dev loop |
 
 ### Data & Storage
 
@@ -241,7 +241,7 @@ cp .env.example .env
 
 ### 4. Deploy the application
 
-Two independent deploy paths — pick one. Neither has been fully verified end-to-end on a fresh install yet.
+Two independent deploy paths — pick one. **Option A (ArgoCD) has been verified end-to-end**: Application `Synced`/`Healthy`, secrets wired and confirmed at the individual-key level, native NodePort access confirmed live. **Option B (Skaffold) has not** — a live test run surfaced real credential-wiring errors (Redis auth failure, MinIO 403s, LLM discovery returning zero models) that haven't been root-caused yet.
 
 #### Option A — ArgoCD
 
@@ -373,12 +373,12 @@ Adding observability to a new domain follows one documented, copy-pasteable patt
 
 ## CI/CD & Deployment Model
 
-COELHO Nexus intentionally runs two different delivery models depending on the cluster, rather than forcing one pattern everywhere:
+COELHO Nexus supports two delivery models on this standalone cluster, rather than forcing one pattern — see [Installation](#installation) for the full command sequence for either:
 
-- **This standalone cluster** (what you get by cloning this repo) — **Skaffold**. `skaffold run` / `skaffold dev` builds all three service images, pushes them to the local k3d registry, and deploys the Helm chart directly. No Git server required locally, cross-platform (Windows/macOS/Linux), and the fastest path to "see it running."
-- **COELHO Cloud** (the author's production homelab cluster) — **ArgoCD GitOps**. An in-cluster GitLab instance is the source of truth; ArgoCD watches it and reconciles automatically, paired with an Image Updater that rolls out new image tags as CI pushes them.
+- **Skaffold** — `skaffold run` / `skaffold dev` builds all three service images, pushes them to the local k3d registry, and deploys the Helm chart directly. No Git server required, cross-platform (Windows/macOS/Linux), and the fastest path to "see it running." Targets the `coelhonexus-dev` namespace.
+- **ArgoCD GitOps** — build/push an image, apply `k8s/argocd/prod/` once, and ArgoCD's Image Updater takes it from there: watches the registry, detects new `:latest` digests, rolls out automatically. Targets the `coelhonexus` namespace. A separate production homelab cluster runs this same model too, against an in-cluster GitLab instance as the source of truth instead of GitHub directly.
 
-Both models deploy the exact same Helm chart (`k8s/helm/`) — only the registry hostname and image references flex between environments (`k8s/helm/values-coelhonexus.yaml` is the 4-line override). The full rationale for this split — and why a self-hosted Git server was deliberately *not* added to the standalone path — is in [`docs/K8S-DUAL-CLUSTER-FLEX-2026-06-19.md`](docs/K8S-DUAL-CLUSTER-FLEX-2026-06-19.md).
+Both models deploy the exact same Helm chart (`k8s/helm/`) — only the registry hostname and image references flex between environments (`k8s/helm/values-coelhonexus.yaml` is the 4-line override).
 
 ## Project Structure
 

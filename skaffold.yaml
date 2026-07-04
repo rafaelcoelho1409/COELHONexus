@@ -153,9 +153,6 @@ deploy:
         - --wait
 
 portForward:
-  # FastAPI ML backend (dev ports: 23030-23039 — see the port-budget table below;
-  # 23020-23029 is deliberately left as headroom for future Terragrunt-managed
-  # native NodePort modules, not used by Skaffold)
   - resourceType: service
     resourceName: coelhonexus-fastapi
     namespace: coelhonexus-dev
@@ -176,39 +173,25 @@ portForward:
     port: 3000
     localPort: 23033
     address: 0.0.0.0
-  # FastMCP server (internal MCP gateway — dev port-forward to inspect /mcp + /health)
+  # FastMCP server
   - resourceType: service
     resourceName: coelhonexus-fastmcp
     namespace: coelhonexus-dev
-    port: 8000
+    port: 8001
     localPort: 23034
     address: 0.0.0.0
 
 
 # NOTE: Ensure docker-buildx is installed when useBuildkit is true
-#
-# Full port budget across all 3 deploy mechanisms — kept disjoint on purpose,
-# see docs/APP-LAYER-NODEPORT-MIGRATION-2026-07-03.md for the full writeup:
-#   23000-23019  ArgoCD / coelhonexus prod  (kubectl port-forward, fixed — do not move)
-#   23001, 23011-23023  Terragrunt-managed native k3d NodePort infra (fixed — do not move)
-#   23024-23029  deliberately unused — headroom for future Terragrunt modules
-#   23030-23039  Skaffold / coelhonexus-dev (this file)
-#
-# Port-forward pairing (last digit aligns dev ↔ prod):
-#   2303X (Skaffold / dev)  ↔  2300X (ArgoCD / prod)
-#   23030 ↔ 23000  fastapi
-#   23032 ↔ 23002  flower
-#   23033 ↔ 23003  fasthtml
-#   23034 ↔ 23004  fastmcp
-#
+
 # Development (Skaffold): ports 23030-23039
 # sh mirror_localhost_tailscale.sh $(for i in {23030..23034}; do echo $i; done)
 # skaffold dev --cache-artifacts=false --no-prune=false --auto-sync=false --auto-build=false
 # # press b (build) or s (sync)
 
 #
-# Production (ArgoCD): ports 23000-23019
-# kubectl port-forward -n coelhonexus svc/coelhonexus-fastapi  23000:8000 &
-# kubectl port-forward -n coelhonexus svc/coelhonexus-flower   23002:5555 &
-# kubectl port-forward -n coelhonexus svc/coelhonexus-fasthtml 23003:3000 &
-# kubectl port-forward -n coelhonexus svc/coelhonexus-fastmcp  23004:8000 &
+# Production (ArgoCD): reachable via native NodePort, no port-forward process needed
+#   FastAPI   http://localhost:23024
+#   Flower    http://localhost:23025
+#   FastHTML  http://localhost:23026
+#   FastMCP   http://localhost:23027
