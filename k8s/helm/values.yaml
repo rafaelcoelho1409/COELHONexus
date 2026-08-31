@@ -313,7 +313,7 @@ fastmcp:
       - name: http
         port: 8001
         targetPort: 8000
-        nodePort: 30024
+        nodePort: 30025
         protocol: TCP
     type: LoadBalancer
   startupProbeSettings:
