@@ -1,5 +1,5 @@
 # =============================================================================
-# GITLAB CI/CD — COELHONexus (Skaffold-driven build, GitOps deploy)
+# GITLAB CI/CD — COELHO Nexus (Skaffold-driven build, GitOps deploy)
 # =============================================================================
 # Pipeline: git push → GitLab CI runs `skaffold build` → ArgoCD Image Updater
 # detects new digests in the in-cluster registry → ArgoCD reconciles → rollout.
@@ -28,7 +28,10 @@ build:
         - --host=unix:///var/run/docker.sock
         - --tls=false
         # Allow plain-HTTP push to the in-cluster k3d registry.
-        - --insecure-registry=localhost:5001
+        # k3d registry in-cluster address (172.22.0.8:5000 on k3d-coelho-cloud network).
+        # localhost:5001 only works from the host, not from inside the CI pod.
+        # --insecure-registry=localhost:5001
+        - --insecure-registry=172.22.0.8:5000
   only:
     - master
     - main
@@ -38,5 +41,5 @@ build:
   script:
     - skaffold build
         --push
-        --default-repo=localhost:5001
+        --default-repo=172.22.0.8:5000
         --tag=$CI_COMMIT_SHORT_SHA

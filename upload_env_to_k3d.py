@@ -1,7 +1,7 @@
-#!/usr/bin/env python3
+# NOTE: Use the command "uv tool install click" before using this new file.
 """Convert a .env file into a Kubernetes Secret. Cross-platform port of upload_env_to_k3d.sh.
 
-Usage: python upload_env_to_k3d.py [env-file] [namespace] [secret-name]
+Usage: python upload_env_to_k3d_click.py [env-file] [namespace] [secret-name]
    or: ./upload_env_to_k3d.py [env-file] [namespace] [secret-name]   (Linux/macOS)
 
 Requires only `kubectl` on PATH — no bash, no jq, no coreutils base64.
@@ -9,25 +9,18 @@ Requires only `kubectl` on PATH — no bash, no jq, no coreutils base64.
 
 from __future__ import annotations
 
-import argparse
 import base64
 import json
 import subprocess
 import sys
 from pathlib import Path
 
+import click
+
 DEFAULT_ENV_FILE = ".env"
 DEFAULT_NAMESPACE = "coelhonexus"
 DEFAULT_SECRET_NAME = "coelhonexus-secret"
 BASE64_PROBE_MIN_LEN = 20
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("env_file", nargs="?", default=DEFAULT_ENV_FILE, help=f"Path to the .env file (default: {DEFAULT_ENV_FILE})")
-    parser.add_argument("namespace", nargs="?", default=DEFAULT_NAMESPACE, help=f"Target namespace (default: {DEFAULT_NAMESPACE})")
-    parser.add_argument("secret_name", nargs="?", default=DEFAULT_SECRET_NAME, help=f"Secret name (default: {DEFAULT_SECRET_NAME})")
-    return parser.parse_args()
 
 
 def strip_quotes(value: str) -> str:
@@ -133,50 +126,53 @@ def get_secret_key_count(secret_name: str, namespace: str) -> str:
         return "?"
 
 
-def main() -> int:
-    args = parse_args()
-    env_path = Path(args.env_file)
+@click.command(help="Convert a .env file into a Kubernetes Secret. Cross-platform port of upload_env_to_k3d.sh.")
+@click.argument("env_file", default=DEFAULT_ENV_FILE, required=False, type=click.Path())
+@click.argument("namespace", default=DEFAULT_NAMESPACE, required=False)
+@click.argument("secret_name", default=DEFAULT_SECRET_NAME, required=False)
+def main(env_file: str, namespace: str, secret_name: str) -> None:
+    env_path = Path(env_file)
 
-    print(f"Converting {args.env_file} to Kubernetes secret...")
-    print(f"Namespace: {args.namespace}")
-    print(f"Secret name: {args.secret_name}")
+    print(f"Converting {env_file} to Kubernetes secret...")
+    print(f"Namespace: {namespace}")
+    print(f"Secret name: {secret_name}")
     print()
 
     if not env_path.is_file():
-        print(f"File '{args.env_file}' not found!")
+        print(f"File '{env_file}' not found!")
         print("Create a .env file with your variables:")
         print("   AWS_ACCESS_KEY_ID=your-key")
         print("   OPENAI_API_KEY=your-key")
         print("   etc...")
-        return 1
+        sys.exit(1)
 
-    ensure_namespace(args.namespace)
-    delete_existing_secret(args.secret_name, args.namespace)
+    ensure_namespace(namespace)
+    delete_existing_secret(secret_name, namespace)
 
     print("Processing environment variables...")
     secret_data = parse_env_file(env_path)
 
     print()
     print("Creating secret...")
-    apply_result = apply_secret(args.secret_name, args.namespace, secret_data)
+    apply_result = apply_secret(secret_name, namespace, secret_data)
 
     if apply_result.returncode == 0:
-        print(f"Secret '{args.secret_name}' created successfully!")
-        key_count = get_secret_key_count(args.secret_name, args.namespace)
+        print(f"Secret '{secret_name}' created successfully!")
+        key_count = get_secret_key_count(secret_name, namespace)
         print(f"Secret contains {key_count} environment variables")
         print()
         print("Your secret is ready for use in:")
-        print(f"   - Namespace: {args.namespace}")
-        print(f"   - Secret name: {args.secret_name}")
+        print(f"   - Namespace: {namespace}")
+        print(f"   - Secret name: {secret_name}")
         print()
-        print(f"Verify with: kubectl get secret {args.secret_name} -n {args.namespace} -o yaml")
+        print(f"Verify with: kubectl get secret {secret_name} -n {namespace} -o yaml")
         print("Start development with: skaffold dev")
-        return 0
+        sys.exit(0)
     else:
         print("Failed to create secret. Debug output:")
         print(apply_result.stderr)
-        return 1
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
