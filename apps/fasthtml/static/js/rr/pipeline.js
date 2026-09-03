@@ -12,6 +12,9 @@
 // same page after this file, so the global is already wired.
 import { ensureCytoscape } from '/static/js/dd/shared/cytoscape_loader.js';
 import { StageGraph }      from '/static/js/dd/shared/stagegraph.js';
+import { getProviderMap } from '/static/js/dd/shared/provider_map.js';
+let _rrProviderMap = null;
+getProviderMap().then(m => { _rrProviderMap = m; });
 
 
 // ---------------------------------------------------------------------------
@@ -589,19 +592,19 @@ function _renderLlmCounters(phase, payload) {
 }
 
 function _splitProviderModel(model) {
-  // Split a LiteLLM deployment id into (provider, name):
-  //   nvidia_nim/openai/gpt-oss-120b  → nvidia_nim · openai/gpt-oss-120b
-  //   mistral/mistral-large-latest    → mistral    · mistral-large-latest
-  //   groq/llama-3.3-70b-versatile    → groq       · llama-3.3-70b-versatile
-  //   gemini/gemini-2.5-flash         → gemini     · gemini-2.5-flash
-  //   rr-strong (fallback group)      → (rotator)  · rr-strong
-  //   ""                              → (unknown)  · (unknown)
-  if (!model) return { provider: '(unknown)', name: '(unknown)' };
-  const s = String(model);
+  const s = String(model || '');
+  if (!s) return { provider: '(unknown)', name: '(unknown)' };
+  const lower = s.toLowerCase();
+  if (_rrProviderMap) {
+    const hit = _rrProviderMap.get(lower) || _rrProviderMap.get(lower.split('/').slice(-1)[0]);
+    if (hit && hit !== 'rotator') {
+      const idx2 = s.indexOf('/');
+      if (idx2 > 0 && lower.startsWith(hit.toLowerCase() + '/')) return { provider: s.slice(0, idx2), name: s.slice(idx2 + 1) };
+      return { provider: hit, name: idx2 > 0 ? s.slice(s.indexOf('/') + 1) : s };
+    }
+  }
   const idx = s.indexOf('/');
   if (idx < 0) {
-    // No prefix → this is the rotator group alias (`rr-strong` etc.),
-    // not a real deployment. Mark it so the user knows it's a fallback.
     return { provider: '(rotator)', name: s };
   }
   const provider = s.slice(0, idx);

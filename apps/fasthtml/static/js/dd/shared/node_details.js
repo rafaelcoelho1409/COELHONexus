@@ -1,3 +1,7 @@
+import { getProviderMap } from './provider_map.js';
+let _providerMap2 = null;
+getProviderMap().then(m => { _providerMap2 = m; });
+
 // DD Planner/Synth node detail registry.
 //
 // This feeds the shared NodeDrawer with stable explanations for what each
@@ -39,18 +43,16 @@ function _splitProviderModel(model) {
   const raw = String(model || '');
   if (!raw) return { provider: 'unknown', name: 'unknown', raw };
   const lower = raw.toLowerCase();
-  if (lower.startsWith('meta-llama/')) {
-    return { provider: 'groq', name: raw, raw };
+  if (_providerMap2) {
+    const hit = _providerMap2.get(lower) || _providerMap2.get(lower.split('/').slice(-1)[0]);
+    if (hit && hit !== 'rotator') {
+      const idx = raw.indexOf('/');
+      if (idx > 0 && lower.startsWith(hit.toLowerCase() + '/')) return { provider: raw.slice(0, idx), name: raw.slice(idx + 1), raw };
+      return { provider: hit, name: idx > 0 ? raw.slice(raw.indexOf('/') + 1) : raw, raw };
+    }
   }
   const idx = raw.indexOf('/');
   if (idx > 0) return { provider: raw.slice(0, idx), name: raw.slice(idx + 1), raw };
-  if (lower.startsWith('mistral')) return { provider: 'mistral', name: raw, raw };
-  if (lower.startsWith('llama-')) {
-    return { provider: 'groq', name: raw, raw };
-  }
-  if (lower.startsWith('openai/')) {
-    return { provider: 'openai', name: raw.slice(7), raw };
-  }
   return { provider: 'implicit', name: raw, raw };
 }
 

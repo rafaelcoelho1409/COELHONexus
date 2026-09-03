@@ -1,5 +1,8 @@
 import * as Sa from '@dd/shared/state/api.js';
 import * as Sy from '@dd/shared/state/synth.js';
+import { getProviderMap } from '@dd/shared/provider_map.js';
+let _providerMap = null;
+getProviderMap().then(m => { _providerMap = m; });
 
 function _num(v) {
   const n = Number(v || 0);
@@ -23,12 +26,18 @@ function _splitProviderModel(model) {
   const raw = String(model || '');
   if (!raw) return { provider: 'unknown', name: 'unknown' };
   const lower = raw.toLowerCase();
-  if (lower.startsWith('meta-llama/')) return { provider: 'groq', name: raw };
+  // authoritative map from coelho-llm-rotator — covers all 166 models across 8 providers
+  if (_providerMap) {
+    const hit = _providerMap.get(lower) || _providerMap.get(lower.split('/').slice(-1)[0]);
+    if (hit && hit !== 'rotator') {
+      const idx = raw.indexOf('/');
+      if (idx > 0 && lower.startsWith(hit.toLowerCase() + '/')) return { provider: raw.slice(0, idx), name: raw.slice(idx + 1) };
+      return { provider: hit, name: idx > 0 ? raw.slice(raw.indexOf('/') + 1) : raw };
+    }
+  }
   const idx = raw.indexOf('/');
   if (idx > 0) return { provider: raw.slice(0, idx), name: raw.slice(idx + 1) };
-  if (lower.startsWith('mistral')) return { provider: 'mistral', name: raw };
-  if (lower.startsWith('llama-')) return { provider: 'groq', name: raw };
-  if (lower.startsWith('openai/')) return { provider: 'openai', name: raw.slice(7) };
+  // bare model without prefix — map will resolve after fetch; show bare as implicit until then
   return { provider: 'implicit', name: raw };
 }
 

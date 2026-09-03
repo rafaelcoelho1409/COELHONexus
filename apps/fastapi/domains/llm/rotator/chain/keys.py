@@ -10,8 +10,8 @@ DD_EMBED_GROUP     = "dd-embed"
 RR_STRONG_GROUP    = "rr-strong"
 
 
-# NIM doesn't expose llama-embed-nemotron-8b at integrate.api.nvidia.com/v1/embeddings.
-DD_EMBED_MODEL_NAME  = "nvidia/llama-nemotron-embed-1b-v2"
+# EOL 2026-08-25: nvidia/llama-nemotron-embed-1b-v2 → Nemotron-3-Embed-1B-BF16 (HF) / nvidia/nemotron-3-embed-1b (NIM API)
+DD_EMBED_MODEL_NAME  = "nvidia/Nemotron-3-Embed-1B-BF16"
 DD_RERANK_MODEL_NAME = "nvidia/llama-nemotron-rerank-1b-v2"
 
 _NIM_RERANK_BASE = "https://ai.api.nvidia.com/v1/retrieval"
