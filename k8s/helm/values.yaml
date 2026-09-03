@@ -3,6 +3,17 @@
 # 'production' = ArgoCD with GitLab Container Registry
 environment: production
 
+coelho-llm-rotator:
+  fastapi:
+    portsSettings:
+      ports:
+        - name: http
+          port: 8000
+          targetPort: 8000
+          nodePort: 30021
+          protocol: TCP
+      type: LoadBalancer
+
 observability:
   enabled: true
   otlp_endpoint: "alloy.monitoring:4317"

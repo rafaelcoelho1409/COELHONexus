@@ -6,4 +6,8 @@ version: 1.0.0
 appVersion: "1.0.0"
 
 
-dependencies: []
+dependencies:
+  - name: coelho-llm-rotator
+    version: 1.0.0
+    repository: oci://ghcr.io/rafaelcoelho1409/charts
+

@@ -1,0 +1,6 @@
+dependencies:
+- name: coelho-llm-rotator
+  repository: oci://ghcr.io/rafaelcoelho1409/charts
+  version: 1.0.0
+digest: sha256:ff34ddd09135d751e8f80c7e4828f8dda43402a1553c576e9d044d6bce17144f
+generated: "2026-09-03T11:19:13.695853771-03:00"

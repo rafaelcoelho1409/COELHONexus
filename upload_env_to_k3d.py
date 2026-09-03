@@ -1,7 +1,7 @@
 # NOTE: Use the command "uv tool install click" before using this new file.
 """Convert a .env file into a Kubernetes Secret. Cross-platform port of upload_env_to_k3d.sh.
 
-Usage: python upload_env_to_k3d_click.py [env-file] [namespace] [secret-name]
+Usage: python upload_env_to_k3d.py [env-file] [namespace] [secret-name]
    or: ./upload_env_to_k3d.py [env-file] [namespace] [secret-name]   (Linux/macOS)
 
 Requires only `kubectl` on PATH — no bash, no jq, no coreutils base64.
