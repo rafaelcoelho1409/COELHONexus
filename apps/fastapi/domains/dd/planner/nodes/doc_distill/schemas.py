@@ -1,7 +1,7 @@
 """doc_distill — per-doc semantic value object (Pydantic-validated)."""
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .params import (
     KEY_TERM_CHARS_MAX,
@@ -15,6 +15,10 @@ from .params import (
 
 class DocDistillate(BaseModel):
     """Per-doc semantic representation for the LLM-first planner."""
+    # Groq strict json_schema mode requires additionalProperties:false on every
+    # object — extra="forbid" makes model_json_schema() emit it.
+    model_config = ConfigDict(extra = "forbid")
+
     summary: str = Field(
         description = (
             f"{SUMMARY_WORDS_MIN}-{SUMMARY_WORDS_MAX} words. ONE sentence "
@@ -76,6 +80,6 @@ DISTILL_RESPONSE_FORMAT = {
     "json_schema": {
         "name":   "doc_distillate",
         "schema": DocDistillate.model_json_schema(),
-        "strict": False,
+        "strict": True,
     },
 }

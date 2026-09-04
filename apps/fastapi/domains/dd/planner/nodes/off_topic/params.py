@@ -13,19 +13,21 @@ JUDGE_BODY_MIN_FOR_SPLIT = (
     JUDGE_HEAD_CHARS + JUDGE_TAIL_CHARS + len(JUDGE_HEAD_TAIL_SEP)
 )
 
-JUDGE_MAX_TOKENS = 8        # plenty for "KEEP" or "DROP" plus whitespace
-# Concurrency: 24 parallel in-flight. Legacy 5 was sized for old LiteLLM bandit
-# cascade (Redis + top-K 5). coelho-llm-rotator's pooled http2 (200/100) +
-# simple-shuffle + allowed_fails absorbs 429s rotator-side, so bottleneck is
-# purely client semaphore. 20 ≈ full utilisation in early tests; 24 saturates
-# pool without the old 36% blowup and matches doc_distill 24 for uniform sizing.
-# SOTA Sept 2026: Baseten/Decodo 200/100 pool break-even ~200 concurrent.
-JUDGE_CONCURRENCY = 24
+JUDGE_MAX_TOKENS = 300     # not just "KEEP"/"DROP": the rotator's general pool
+# includes reasoning-tuned models (gpt-oss, deepseek-v4) that emit a <think>
+# block before the verdict. At 8 tokens that block alone eats the whole
+# budget and the response comes back empty — confirmed from a real run
+# (129/144 judge errors, all unparseable_verdict cases had raw=''). 300
+# gives a short reasoning trace room to finish before the verdict word.
+# Concurrency: 16 parallel (was 24). 24×144 burst → 49 timeouts (88s) on
+# free-tier general; 16 cuts burst ~33% and jitter 1.3× avoids herd.
+# SOTA: Baseten/Decodo 200/100 pool handles 16×8tok easily, 24 saturated.
+JUDGE_CONCURRENCY = 16
 # Per-call retry budget — retries the pooled rotator call (rotator already
 # cascades 40). Jittered backoff avoids herd on shared arms.
 JUDGE_MAX_ATTEMPTS = 2
 JUDGE_BACKOFF_BASE = 1.5
-JUDGE_TIMEOUT_S = 15.0      # KEEP/DROP is 1 token; 15s covers cold TTFT, faster failover than 30s
+JUDGE_TIMEOUT_S = 45.0      # was 30s for 8tok; 300tok budget needs more decode time headroom too
 
 # Stable meta-content descriptor for the LLM judge (CoC, changelogs, issue templates, etc. that bypass URL filters).
 NEGATIVE_DESCRIPTOR = (

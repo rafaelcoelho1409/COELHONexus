@@ -30,7 +30,13 @@ def parse(raw: str) -> Optional[dict]:
     try:
         return json.loads(m.group(0))
     except Exception:
-        return None
+        try:
+            # SOTA: json_repair tolerates trailing commas/quotes (x.ai strict still leaks)
+            import json_repair  # type: ignore
+
+            return json_repair.loads(m.group(0))  # type: ignore
+        except Exception:
+            return None
 
 
 def try_validate(d: dict) -> tuple[Optional[DocDistillate], Optional[str]]:

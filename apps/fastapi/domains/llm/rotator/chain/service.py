@@ -104,9 +104,16 @@ def _build_limits() -> _httpx.Limits:
     )
 
 def _build_timeout(timeout_s: float | None) -> _httpx.Timeout:
-    # Connect short, read covers LLM TTFT + 300 tok generation; write short.
-    # httpx.Timeout defaults 5s is too tight for cold starts.
-    t = timeout_s or 30.0
+    # Connect short, read covers LLM TTFT + generation; write short.
+    # httpx.Timeout defaults 5s is too tight for cold starts. This is the
+    # client-level ceiling used once at construction (_get_async_openai
+    # passes None here) — every real call passes its own `timeout` kwarg
+    # which the SDK uses per-request instead, but the ceiling itself was
+    # previously 30s, smaller than several real per-call timeouts already
+    # in use (45-90s) — an inconsistent floor to fall back to if a
+    # per-request override ever failed to apply. Raised to the largest
+    # per-call timeout actually used across planner/synth nodes.
+    t = timeout_s or 90.0
     return _httpx.Timeout(timeout=t, connect=5.0, read=t, write=5.0, pool=5.0)
 
 async def _get_async_openai():
@@ -360,8 +367,26 @@ async def chat_judge_bandit_async(
         kwargs.pop("timeout", None)
 
     t0 = time.monotonic()
+    # Hard wall-clock backstop. httpx's `read` timeout measures time between
+    # chunks, not total call duration — a pooled HTTP/2 connection that goes
+    # stale (NAT/LB silently drops idle connections) or trickles data can
+    # outlive both the client-level and per-request httpx timeout without
+    # ever raising. asyncio.wait_for enforces actual total duration instead.
+    # Safe to rely on here because max_retries=0 above means there's no
+    # internal SDK retry loop that could eat this budget out from under it
+    # (a naive outer wait_for without that guarantee is not sufficient —
+    # see openai/instructor-style retry loops silently outliving an outer
+    # wait_for in other projects).
+    backstop_s = (timeout_s or 30.0) + 15.0
     try:
-        resp = await client.chat.completions.create(**kwargs)  # type: ignore[arg-type]
+        resp = await asyncio.wait_for(
+            client.chat.completions.create(**kwargs), timeout = backstop_s,  # type: ignore[arg-type]
+        )
+    except asyncio.TimeoutError as e:
+        raise TimeoutError(
+            f"chat_judge_bandit_async hard backstop fired after "
+            f"{backstop_s:.0f}s (requested timeout_s={timeout_s})"
+        ) from e
     except Exception as e:
         # Normalize error for upstream classify_error (preserve message)
         raise e

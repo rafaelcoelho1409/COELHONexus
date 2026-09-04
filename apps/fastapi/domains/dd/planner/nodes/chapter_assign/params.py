@@ -2,14 +2,16 @@
 from __future__ import annotations
 
 
-# SOTA Sept 2026: pooled coelho-llm-rotator (httpx Limits 200/100, http2 fallback)
-# handles 429 rotator-side (simple-shuffle + allowed_fails). 16-way blew 14%
-# on direct NIM+MISTRAL; with pooling 24 saturates without blowup and matches
-# doc_distill/off_topic (24). 8→24 ~3× wall for 135 docs (16.9s→4.5s @0.8s avg).
-CONCURRENCY = 24
+# SOTA Sept 2026: 24×138 burst → 103 lexical fallback (75%) on free-tier 402/timeout;
+# 24→12 cuts burst 50% and pooled 200/100 still saturates, 600tok needs 45s not 30s.
+CONCURRENCY = 12
 
-MAX_TOKENS = 600
+MAX_TOKENS = 1200   # was 600 — scores needs one entry per chapter proposal,
+# and PROPOSALS_MAX=30 alone eats ~450-600 tokens of pure JSON in the worst
+# case, leaving zero headroom for a reasoning model's <think> preamble (same
+# empty-response failure mode confirmed in off_topic/doc_distill).
 TEMPERATURE = 0.0
+TIMEOUT_S = 60.0    # was 45s — paired with the larger token budget above
 MAX_REPAIR_ATTEMPTS = 1
 
 BODY_CHARS = 4_000

@@ -81,45 +81,59 @@ async def distill_one(
         prompt = build_prompt(framework, source_key, body)
         distillate: Optional[DocDistillate] = None
         failure_reason: Optional[str] = None
+        last_raw = ""
+        last_deployment = "?"
 
         # Retry only transient errors — pooled rotator rotates arm, jitter avoids herd.
         for attempt in range(MAX_TRANSIENT_RETRIES + 1):
             try:
-                raw, _meta = await chat_judge_bandit_async(
+                raw, meta = await chat_judge_bandit_async(
                     prompt,
                     max_tokens = MAX_TOKENS,
                     temperature = TEMPERATURE,
+                    timeout_s = 60.0,
                     response_format = DISTILL_RESPONSE_FORMAT,
                     dd_process = "dd-reduce-label",
                 )
+                last_raw = raw or ""
+                last_deployment = (meta or {}).get("deployment") or "?"
                 parsed = parse(raw)
                 if not parsed:
-                    failure_reason = "parse_fail"
+                    # Empty/unparseable raw — often a reasoning model that spent
+                    # its whole token budget on a <think> block and never reached
+                    # the JSON. Same repair path as a validation failure below,
+                    # not an immediate drop to parse_fail: one reask with the
+                    # rejection reason fed back gives it a chance to recover.
                     distillate = None
+                    err = f"unparseable JSON (raw={raw[:200]!r})"
+                    failure_reason = "parse_fail"
                 else:
                     distillate, err = try_validate(parsed)
-                    if distillate is None and MAX_REPAIR_ATTEMPTS > 0:
-                        repair_prompt = (
-                            prompt
-                            + f"\n\nPRIOR OUTPUT was REJECTED: {err}\n"
-                            + f"Emit valid JSON exactly per the schema above."
-                        )
-                        raw2, _ = await chat_judge_bandit_async(
-                            repair_prompt,
-                            max_tokens = MAX_TOKENS,
-                            temperature = 0.0,
-                            response_format = DISTILL_RESPONSE_FORMAT,
-                            dd_process = "dd-reduce-label",
-                        )
-                        parsed2 = parse(raw2)
-                        if parsed2:
-                            distillate, _ = try_validate(parsed2)
+                    if distillate is None:
+                        failure_reason = "validate_fail"
+                if distillate is None and MAX_REPAIR_ATTEMPTS > 0:
+                    repair_prompt = (
+                        prompt
+                        + f"\n\nPRIOR OUTPUT was REJECTED: {err}\n"
+                        + f"Emit valid JSON exactly per the schema above."
+                    )
+                    raw2, meta2 = await chat_judge_bandit_async(
+                        repair_prompt,
+                        max_tokens = MAX_TOKENS,
+                        temperature = 0.0,
+                        timeout_s = 60.0,
+                        response_format = DISTILL_RESPONSE_FORMAT,
+                        dd_process = "dd-reduce-label",
+                    )
+                    last_raw = raw2 or ""
+                    last_deployment = (meta2 or {}).get("deployment") or last_deployment
+                    parsed2 = parse(raw2)
+                    if parsed2:
+                        distillate, _ = try_validate(parsed2)
                 if distillate is not None:
                     failure_reason = None
                     break   # success
-                if failure_reason is None:
-                    failure_reason = "validate_fail"
-                break       # validation failures don't get retried
+                break       # parse_fail/validate_fail keep their reason; no further retry
             except Exception as e:
                 failure_reason = classify_error(e)
                 is_transient = failure_reason in _TRANSIENT_REASONS
@@ -145,8 +159,9 @@ async def distill_one(
             used_fallback = True
             logger.info(
                 f"[doc_distill] {source_key}: distill failed "
-                f"({failure_reason or 'unknown'}) — using deterministic "
-                f"fallback distillate (doc kept, not dropped)"
+                f"({failure_reason or 'unknown'}, deployment={last_deployment}, "
+                f"raw={last_raw[:120]!r}) — using deterministic fallback "
+                f"distillate (doc kept, not dropped)"
             )
 
         wall_ms = int((time.monotonic() - t0) * 1000)

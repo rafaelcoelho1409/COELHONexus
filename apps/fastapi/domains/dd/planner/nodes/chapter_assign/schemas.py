@@ -1,11 +1,16 @@
 """chapter_assign — Pydantic value objects + LLM response_format spec."""
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ChapterScore(BaseModel):
     """One score for one chapter."""
+    # Groq strict json_schema mode requires additionalProperties:false on every
+    # object, including nested $defs — extra="forbid" makes model_json_schema()
+    # emit it for this model's own schema entry.
+    model_config = ConfigDict(extra = "forbid")
+
     chapter_idx: int = Field(description = "Index into the proposals list.")
     confidence: float = Field(
         description = (
@@ -27,6 +32,8 @@ class ChapterScore(BaseModel):
 
 class DocAssignment(BaseModel):
     """LLM output for ONE doc — confidence against each chapter."""
+    model_config = ConfigDict(extra = "forbid")
+
     scores: list[ChapterScore] = Field(
         description = (
             "ONE score entry per chapter proposal (in the same order as "
@@ -40,6 +47,6 @@ ASSIGN_RESPONSE_FORMAT = {
     "json_schema": {
         "name":   "doc_assignment",
         "schema": DocAssignment.model_json_schema(),
-        "strict": False,
+        "strict": True,
     },
 }

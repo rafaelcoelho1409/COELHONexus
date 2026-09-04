@@ -3,7 +3,7 @@ and the chapter_assign_run orchestration.
 
 SOTA Sept 2026 on coelho-llm-rotator pooled:
 - Pooled AsyncOpenAI http2 200/100 replaces per-call ChatOpenAI alloc.
-- CONCURRENCY 24 (was 8, 16 blew 14% on direct NIM) saturates pooled rotator.
+- CONCURRENCY 12 (was 24 → 103 lexical fallback 75%; 12 cuts burst 50%).
 - Bulk read_many for summary-miss docs outside semaphore (shared S3 client).
 - Prompt static prefix (chapters rubric) before dynamic doc → KV-cache reuse.
 """
@@ -14,6 +14,8 @@ import json
 import logging
 import time
 from typing import Optional
+
+from pydantic import ValidationError as _PydanticValidationError
 
 from domains.llm.rotator.chain import chat_judge_bandit_async
 
@@ -32,6 +34,7 @@ from .params import (
     MAX_TOKENS,
     RESCUE_FLOOR,
     TEMPERATURE,
+    TIMEOUT_S,
 )
 from .prompts import build_prompt
 from .schemas import ASSIGN_RESPONSE_FORMAT, DocAssignment
@@ -39,6 +42,24 @@ from .versions import PROMPT_VERSION
 
 
 logger = logging.getLogger(__name__)
+
+
+async def _score_call(prompt: str) -> DocAssignment:
+    """One LLM call + parse + validate. Raises ValueError (unparseable) or
+    pydantic ValidationError (schema mismatch) for reask-eligible failures;
+    anything else (timeout, provider outage) propagates as-is."""
+    raw, _ = await chat_judge_bandit_async(
+        prompt,
+        max_tokens = MAX_TOKENS,
+        temperature = TEMPERATURE,
+        timeout_s = TIMEOUT_S,
+        response_format = ASSIGN_RESPONSE_FORMAT,
+        dd_process = "dd-reduce-label",
+    )
+    parsed = parse(raw)
+    if not parsed:
+        raise ValueError(f"unparseable LLM output: {str(raw)[:200]!r}")
+    return DocAssignment.model_validate(parsed)
 
 
 async def assign_one(
@@ -99,32 +120,46 @@ async def assign_one(
         )
 
         scores: Optional[list[dict]] = None
+        assignment: Optional[DocAssignment] = None
         try:
             # dd-reduce-label = non-reasoning pool; <think> blocks waste 10-25s on JSON scoring.
-            raw, _ = await chat_judge_bandit_async(
-                prompt,
-                max_tokens = MAX_TOKENS,
-                temperature = TEMPERATURE,
-                response_format = ASSIGN_RESPONSE_FORMAT,
-                dd_process = "dd-reduce-label",
+            assignment = await _score_call(prompt)
+        except (_PydanticValidationError, ValueError) as e:
+            # Reask once: the model responded but the output was malformed/invalid —
+            # cheap self-repair by feeding the error back verbatim. Deliberately NOT
+            # applied to the generic-Exception branch below (timeouts, provider
+            # outages) — retrying a doomed call there just burns the concurrency
+            # slot; the rotator's own circuit breaker is what fixes those upstream.
+            logger.info(
+                f"[chapter_assign] {source_key}: reask after "
+                f"{type(e).__name__}: {str(e)[:160]}"
             )
-            parsed = parse(raw)
-            if parsed:
-                assignment = DocAssignment.model_validate(parsed)
-                n_proposals = len(proposals)
-                scores = [
-                    {
-                        "chapter_idx": s.chapter_idx,
-                        "confidence":  s.confidence,
-                    }
-                    for s in assignment.scores
-                    if 0 <= s.chapter_idx < n_proposals
-                ]
+            try:
+                assignment = await _score_call(
+                    f"{prompt}\n\nYour previous response was invalid: "
+                    f"{str(e)[:300]}\nReturn ONLY corrected JSON matching the schema."
+                )
+            except Exception as e2:
+                logger.warning(
+                    f"[chapter_assign] LLM/parse/validate failed for "
+                    f"{source_key} (after reask): {type(e2).__name__}: {e2}"
+                )
         except Exception as e:
             logger.warning(
                 f"[chapter_assign] LLM/parse/validate failed for "
                 f"{source_key}: {type(e).__name__}: {e}"
             )
+
+        if assignment is not None:
+            n_proposals = len(proposals)
+            scores = [
+                {
+                    "chapter_idx": s.chapter_idx,
+                    "confidence":  s.confidence,
+                }
+                for s in assignment.scores
+                if 0 <= s.chapter_idx < n_proposals
+            ]
 
         # Failed LLM (None) → lexical fallback so doc reaches chapter_select.
         # Successful but empty (LLM judged irrelevant) is left as-is.

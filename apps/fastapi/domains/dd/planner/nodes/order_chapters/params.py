@@ -12,8 +12,11 @@ N_SAMPLES = 3
 # valid orderings.
 TEMPERATURE = 0.3
 # Per-sample token budget — N chapter titles + N descriptions + ranking
-# response. ~800 tokens fits up to ~16 chapters comfortably.
-MAX_TOKENS = 800
+# response. Was 800 ("fits ~16 chapters comfortably", but chapter_select can
+# still hand this node more, and 800 leaves ~0 headroom for a reasoning
+# model's <think> preamble — same failure class confirmed in off_topic/
+# doc_distill/chapter_assign).
+MAX_TOKENS = 1200
 # How many characters of each chapter description to include in the
 # prompt. Two sentences is enough context for ordering; longer wastes
 # tokens.

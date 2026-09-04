@@ -41,27 +41,51 @@ async def sample_one_ordering(
     prompt: str,
     n_chapters: int,
 ) -> tuple[list[int] | None, dict]:
-    """One LLM call. Returns (parsed_order_or_None, meta). Pooled rotator
-    handles parallel 3×800 tok via Borda; json_object for strict parse."""
+    """One LLM call + one reask-on-failure. Returns (parsed_order_or_None, meta).
+    Pooled rotator handles parallel sample calls via Borda; json_object for
+    strict parse. Previously this node had no retry at all — one bad sample
+    was just a lost sample; now mirrors the reask pattern already proven for
+    doc_distill/chapter_propose/chapter_assign."""
     async with sem:
         try:
             response, meta = await chat_judge_bandit_async(
                 prompt,
                 max_tokens = MAX_TOKENS,
                 temperature = TEMPERATURE,
-                timeout_s = 30.0,
+                timeout_s = 60.0,
                 response_format = {"type": "json_object"},
             )
         except Exception as e:
             return None, {"error": f"{type(e).__name__}: {str(e)[:120]}"}
     order = parse_order_response(response, n_chapters)
-    if order is None:
-        return None, {
-            **meta,
-            "error": "parse_failed",
-            "raw": (response or "")[:120],
-        }
-    return order, meta
+    if order is not None:
+        return order, meta
+
+    repair_prompt = (
+        prompt
+        + f"\n\nPRIOR OUTPUT was invalid/unparseable "
+        f"(raw={(response or '')[:200]!r}). Emit valid JSON exactly per "
+        f"the schema above."
+    )
+    async with sem:
+        try:
+            response2, meta2 = await chat_judge_bandit_async(
+                repair_prompt,
+                max_tokens = MAX_TOKENS,
+                temperature = 0.0,
+                timeout_s = 60.0,
+                response_format = {"type": "json_object"},
+            )
+        except Exception as e:
+            return None, {"error": f"reask {type(e).__name__}: {str(e)[:120]}"}
+    order2 = parse_order_response(response2, n_chapters)
+    if order2 is not None:
+        return order2, meta2
+    return None, {
+        **meta2,
+        "error": "parse_failed_after_reask",
+        "raw": (response2 or "")[:120],
+    }
 
 
 async def order_chapters_run(state: PlannerState) -> dict:
@@ -193,9 +217,15 @@ async def order_chapters_run(state: PlannerState) -> dict:
 
     if not valid_orderings:
         # All samples failed. Fall back to identity order — better than
-        # refusing to ship.
+        # refusing to ship. Persist each sample's actual error (previously
+        # computed in sample_metas, then silently discarded) so a repeat
+        # of this failure is diagnosable from the stored blob/state instead
+        # of needing to catch a warning log before it rolls off.
         elapsed = int((time.monotonic() - t0) * 1000)
         identity = list(range(n_chapters))
+        sample_errors = [
+            (m or {}).get("error", "unknown") for m in sample_metas
+        ]
         payload = {
             "order":            identity,
             "samples":          [],
@@ -204,19 +234,20 @@ async def order_chapters_run(state: PlannerState) -> dict:
             "prompt_version":   PROMPT_VERSION,
             "deployment_usage": [],
             "error":            "all_samples_failed",
+            "sample_errors":    sample_errors,
         }
         await minio.write(
             cache_key, json.dumps(payload),
             content_type = "application/json",
         )
         logger.warning(
-            f"[order_chapters] {slug}: all {N_SAMPLES} samples failed; "
-            f"identity ordering applied"
+            f"[order_chapters] {slug}: all {N_SAMPLES} samples failed "
+            f"({sample_errors}); identity ordering applied"
         )
         await emit_progress(
             thread_id, "order_chapters", "done",
             n_chapters = n_chapters, wall_ms = elapsed,
-            error = "all_samples_failed",
+            error = "all_samples_failed", sample_errors = sample_errors,
         )
         return {
             "chapter_order_ref": cache_key,
@@ -225,6 +256,7 @@ async def order_chapters_run(state: PlannerState) -> dict:
                 "store_path":     cache_key, "cache_hit": False,
                 "order":          identity, "foundational": [],
                 "error":          "all_samples_failed",
+                "sample_errors":  sample_errors,
             },
         }
 

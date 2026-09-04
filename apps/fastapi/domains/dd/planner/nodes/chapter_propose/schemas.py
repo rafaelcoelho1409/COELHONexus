@@ -1,7 +1,7 @@
 """chapter_propose — Pydantic value objects + LLM response_format specs."""
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .params import (
     CONCEPT_CHARS_MAX,
@@ -19,6 +19,10 @@ from .params import (
 
 class ChapterProposal(BaseModel):
     """One candidate chapter from the proposer LLM."""
+    # Groq strict json_schema mode requires additionalProperties:false on every
+    # object, including nested $defs — extra="forbid" emits it here too.
+    model_config = ConfigDict(extra = "forbid")
+
     title: str = Field(
         description = (
             f"{TITLE_MIN_WORDS}-{TITLE_MAX_WORDS} words. Concrete noun "
@@ -95,6 +99,8 @@ class ChapterProposal(BaseModel):
 
 class ChapterProposalList(BaseModel):
     """LLM output — a list of chapter proposals."""
+    model_config = ConfigDict(extra = "forbid")
+
     proposals: list[ChapterProposal] = Field(
         description = (
             f"{PROPOSALS_MIN}-{PROPOSALS_MAX} chapter proposals covering "
@@ -131,7 +137,7 @@ PROPOSE_RESPONSE_FORMAT = {
     "json_schema": {
         "name":   "chapter_proposal_list",
         "schema": ChapterProposalList.model_json_schema(),
-        "strict": False,
+        "strict": True,
     },
 }
 VOTE_RESPONSE_FORMAT = {"type": "json_object"}

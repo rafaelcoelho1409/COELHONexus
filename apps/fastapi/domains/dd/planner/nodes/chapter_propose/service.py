@@ -159,8 +159,13 @@ async def draft_one(
         return None
     parsed = parse(raw)
     if not parsed:
-        return None
-    payload, err = try_validate(parsed)
+        # Empty/unparseable raw (reasoning model exhausted its budget before
+        # reaching the JSON, or plain malformed output) — same repair path as
+        # a validation failure below, not an immediate None. Same bug pattern
+        # that cost doc_distill a 74% fallback rate before this fix.
+        payload, err = None, f"unparseable JSON (raw={raw[:200]!r})"
+    else:
+        payload, err = try_validate(parsed)
     if payload is None and MAX_REPAIR_ATTEMPTS > 0:
         # ONE repair attempt at temp=0.
         repair_prompt = (

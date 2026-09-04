@@ -16,8 +16,8 @@ PROPOSALS_DIVISOR = 11        # ~docs per chapter (anchors CC 140 → 13)
 PROPOSALS_TARGET_FLOOR = 5
 PROPOSALS_TARGET_CEILING = 24
 
-# LLM context budget.
-MAX_TOKENS_PROPOSE = 6000
+# LLM context budget. 6000→4000 cuts TTFT ~30% on free-tier (tianpan) while still fits 24 ch×400ch.
+MAX_TOKENS_PROPOSE = 4000
 
 # Sample N parallel proposals to mitigate single-arm variance, then
 # USC-vote pick the best (matches reduce node's pattern).

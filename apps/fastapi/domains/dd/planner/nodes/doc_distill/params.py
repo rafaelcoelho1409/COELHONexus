@@ -4,13 +4,12 @@ from __future__ import annotations
 
 PASS_THROUGH_THRESHOLD = 80
 
-BODY_CHARS_MAX = 20_000
+BODY_CHARS_MAX = 8_000
 
-# SOTA Sept 2026: coelho-llm-rotator pooled http2 (200/100) + simple-shuffle absorbs 429s.
-# off_topic already raised to 20; doc_distill 24 saturates rotator without the old 36% blowup
-# on direct NIM+MISTRAL (now router-side). Pooled keep-alive means 24× LLM hops share
-# ~5-8 TCP connections via http2 multiplexing.
-CONCURRENCY = 24
+# SOTA Sept 2026: pooled http2 200/100 16× ~1× latency for 300tok distill; 24
+# saturated free-tier general 402/timeout (49+7 in 138). Cutting 20000→8000
+# chars cuts TTFT ~40% (tianpan.co) and 24→16 avoids burst 402.
+CONCURRENCY = 16
 
 SUMMARY_WORDS_MIN = 8
 SUMMARY_WORDS_MAX = 60
@@ -19,7 +18,10 @@ KEY_TERMS_MAX = 8
 KEY_TERM_CHARS_MIN = 2
 KEY_TERM_CHARS_MAX = 80
 
-MAX_TOKENS = 300
+MAX_TOKENS = 600     # was 300 — barely covers SUMMARY_WORDS_MAX(60)+KEY_TERMS_MAX(8)
+# on its own, leaving ~0 headroom for a reasoning model's <think> preamble
+# (same empty-response failure mode diagnosed in off_topic; 97/131 = 74%
+# parse_fail on a real run). Doubled for room to actually reason AND answer.
 TEMPERATURE = 0.2
 
 MAX_REPAIR_ATTEMPTS = 1

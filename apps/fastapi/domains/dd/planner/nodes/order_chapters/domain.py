@@ -37,13 +37,23 @@ def parse_order_response(text: str, n_chapters: int) -> list[int] | None:
     try:
         parsed = json.loads(text.strip())
     except Exception:
-        m = JSON_RE.search(text)
-        if not m:
-            return None
         try:
-            parsed = json.loads(m.group(0))
+            import json_repair  # type: ignore
+
+            parsed = json_repair.loads(text.strip())  # type: ignore
         except Exception:
-            return None
+            m = JSON_RE.search(text)
+            if not m:
+                return None
+            try:
+                parsed = json.loads(m.group(0))
+            except Exception:
+                try:
+                    import json_repair  # type: ignore
+
+                    parsed = json_repair.loads(m.group(0))  # type: ignore
+                except Exception:
+                    return None
     if isinstance(parsed, dict):
         order_raw = parsed.get("order")
     elif isinstance(parsed, list):
