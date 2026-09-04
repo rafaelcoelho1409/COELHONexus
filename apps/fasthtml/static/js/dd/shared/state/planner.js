@@ -40,8 +40,7 @@ export let _resizeRafPending  = false;
 // -------- constants --------
 export const PLANNER_SUBSTEP_FIELDS = [
   'raw_files',                  // corpus_load
-  'embeddings_ref',             // embed_corpus
-  'relevant_files',             // off_topic
+  'relevant_files',             // off_topic (LLM-only, embed_corpus removed 2026-09-03)
   'doc_distill_ref',            // doc_distill (LLM-first)
   'chapter_proposals_ref',      // chapter_propose
   'chapter_doc_assignments_ref',// chapter_assign
@@ -50,12 +49,12 @@ export const PLANNER_SUBSTEP_FIELDS = [
   'plan_path',                  // plan_write
 ];
 export const PLANNER_NODE_ORDER = [
-  'corpus_load', 'embed_corpus', 'off_topic',
+  'corpus_load', 'off_topic',
   'doc_distill', 'chapter_propose', 'chapter_assign', 'chapter_select',
   'order_chapters', 'plan_write',
 ];
 export const PLANNER_NODE_LABELS = [
-  'Corpus load', 'Embed corpus', 'Off-topic filter',
+  'Corpus load', 'Off-topic filter',
   'Doc distill', 'Chapter propose', 'Chapter assign', 'Chapter select',
   'Order chapters', 'Plan write',
 ];
@@ -68,7 +67,6 @@ export const UI_MODE = 'graph';
 // Mapping: SSE step name → the state field for the planner graph.
 export const STEP_TO_FIELD = {
   corpus_load:      'raw_files',
-  embed_corpus:     'embeddings_ref',
   off_topic:        'relevant_files',
   doc_distill:      'doc_distill_ref',
   chapter_propose:  'chapter_proposals_ref',

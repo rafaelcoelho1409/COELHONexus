@@ -78,39 +78,18 @@ const PLANNER_DETAILS = {
       ];
     },
   },
-  embed_corpus: {
-    title: 'Embed Corpus',
-    subtitle: 'Creates reusable vector embeddings for every loaded document.',
-    kind: 'embedding',
-    actions: [
-      'Batches document text into the configured NIM embedding model.',
-      'Stores the embedding manifest and vector blob for later semantic filtering.',
-      'Reuses cached vectors when the corpus manifest hash has already been embedded.',
-    ],
-    inputs: ['raw_files'],
-    outputs: ['embeddings_ref', 'embed_stats'],
-    llm: 'Embedding model call, not chat-completion reasoning.',
-    metrics(values) {
-      const s = values.embed_stats || {};
-      return [
-        _metric('embedded files', s.files || 0),
-        _metric('dimensions', s.dim || 0),
-        _metric('cache', s.cache_hit ? 'hit' : 'cold'),
-      ];
-    },
-  },
   off_topic: {
     title: 'Off-Topic Filter',
-    subtitle: 'Uses LLM-as-judge routing to keep only relevant corpus pages.',
+    subtitle: 'Uses LLM-as-judge routing to keep only relevant corpus pages (embed_corpus removed 2026-09-03, LLM-only).',
     kind: 'LLM judge',
     actions: [
       'Judges each document against the framework/domain boundary.',
       'Records KEEP/DROP decisions with deployment, latency, and error telemetry.',
       'Writes the filtered relevant_files set consumed by planning.',
     ],
-    inputs: ['raw_files', 'embeddings_ref'],
+    inputs: ['raw_files'],
     outputs: ['relevant_files', 'off_topic_stats'],
-    llm: 'Per-document LLM judge calls through the DD grader rotator.',
+    llm: 'Per-document LLM judge calls through coelho-llm-rotator (pooled http2).',
     metrics(values) {
       const s = values.off_topic_stats || {};
       return [

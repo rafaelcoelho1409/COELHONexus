@@ -11,11 +11,7 @@ class PlannerState(TypedDict, total=False):
 
     raw_files: Optional[list[str]]              # corpus_load — MinIO keys only
     corpus_stats: Optional[dict]                # corpus_load — count/bytes/perc dist
-    # Pointer + meta only; the {key→vector} blob lives in MinIO (Postgres
-    # checkpoint would balloon ~80 MB for 2k docs × 2k dims).
-    embeddings_ref: Optional[str]               # embed_corpus — MinIO key of the .npz blob
-    embed_stats: Optional[dict]                 # embed_corpus — files/dim/cache_hit/wall_ms
-    relevant_files: Optional[list[str]]         # off_topic (post-embedding filter)
+    relevant_files: Optional[list[str]]         # off_topic — LLM-only filter (was post-embedding)
     off_topic_stats: Optional[dict]             # off_topic observability dict
 
     doc_distill_ref: Optional[str]              # doc_distill — MinIO key of {key→DocDistillate} JSON

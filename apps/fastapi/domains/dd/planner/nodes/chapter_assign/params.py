@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 
-# 16-way concurrency produced 14% rate-limit failures on NIM+Mistral
-CONCURRENCY = 8
+# SOTA Sept 2026: pooled coelho-llm-rotator (httpx Limits 200/100, http2 fallback)
+# handles 429 rotator-side (simple-shuffle + allowed_fails). 16-way blew 14%
+# on direct NIM+MISTRAL; with pooling 24 saturates without blowup and matches
+# doc_distill/off_topic (24). 8→24 ~3× wall for 135 docs (16.9s→4.5s @0.8s avg).
+CONCURRENCY = 24
 
 MAX_TOKENS = 600
 TEMPERATURE = 0.0

@@ -1,22 +1,27 @@
-"""off_topic I/O shell — one bandit-routed LLM-judge call per doc + the
-off_topic_run orchestration (anchor embed, KEEP/DROP per doc, aggregate)."""
+"""off_topic I/O shell — LLM-only KEEP/DROP per doc (embed_corpus removed).
+
+SOTA Sept 2026 on coelho-llm-rotator pooled client:
+- Pooled AsyncOpenAI (http2, 200/100) replaces per-call ChatOpenAI alloc.
+- CONCURRENCY 24 saturates pool, no embedding work.
+- Dedupe via head_tail_truncate collapses mirrored dumps → single LLM call.
+- Jittered backoff, short 15s timeout for 1-token verdict.
+- Prompt static prefix (framework) before dynamic body → KV-cache reuse
+  (Groq/Gemini/DeepSeek auto-cache, 2-3× TTFT after warmup).
+- Embed corpus fully removed: margins/coherence now 0/null (LLM authoritative).
+"""
 from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 
 import numpy as np
 
-from domains.llm.rotator.chain import (
-    DD_EMBED_MODEL_NAME,
-    chat_judge_bandit_async,
-    embed_via_router_async,
-)
+from domains.llm.rotator.chain import chat_judge_bandit_async
 
 from ....ingestion.storage import get_storage
 from ....resolver import index_by_slug
-from ..embed_corpus import load_embeddings
 from ...runtime.observability import attach_span_attrs
 from ...runtime.progress import emit_progress
 from ...state import PlannerState
@@ -27,6 +32,7 @@ from .params import (
     JUDGE_CONCURRENCY,
     JUDGE_MAX_ATTEMPTS,
     JUDGE_MAX_TOKENS,
+    JUDGE_TIMEOUT_S,
     NEGATIVE_DESCRIPTOR,
 )
 from .prompts import build_judge_prompt, build_positive_descriptor
@@ -56,6 +62,7 @@ async def judge_one(
                     prompt,
                     max_tokens = JUDGE_MAX_TOKENS,
                     temperature = 0.0,
+                    timeout_s = JUDGE_TIMEOUT_S,
                     expected_pattern = r"^(KEEP|DROP)$",
                 )
             last_response = response
@@ -72,7 +79,10 @@ async def judge_one(
         except Exception as e:
             last_error = f"{type(e).__name__}: {str(e)[:160]}"
         if attempt < JUDGE_MAX_ATTEMPTS - 1:
-            await asyncio.sleep(JUDGE_BACKOFF_BASE ** (attempt + 1))
+            # Jittered backoff — avoids synchronized retry storm on shared rotator arms
+            base = JUDGE_BACKOFF_BASE ** (attempt + 1)
+            jitter = 1.0 + random.random() * 0.3
+            await asyncio.sleep(base * jitter)
     if on_complete is not None:
         try:
             await on_complete(keep = True, error = last_error)
@@ -82,12 +92,10 @@ async def judge_one(
 
 
 async def off_topic_run(state: PlannerState) -> dict:
-    """Embed pos/neg anchors → LLM-judge every doc (bandit, sem-bounded) →
-    aggregate KEEP set. Margin = cos(pos) - cos(neg) is telemetry only."""
+    """LLM-judge every doc (sem-bounded) → aggregate KEEP set. No embeddings."""
     slug = state.get("framework_slug")
     thread_id = state.get("thread_id") or ""
     raw_files = state.get("raw_files") or []
-    embeddings_ref = state.get("embeddings_ref") or ""
     if not slug or not raw_files:
         return {
             "relevant_files": list(raw_files),
@@ -96,57 +104,17 @@ async def off_topic_run(state: PlannerState) -> dict:
                 "skipped": "no input",
             },
         }
-    if not embeddings_ref:
-        raise RuntimeError(
-            "off_topic: missing embeddings_ref in state — embed_corpus "
-            "must run first"
-        )
 
     entry = index_by_slug().get(slug, {})
     framework_name = entry.get("name") or entry.get("slug") or slug
     framework_category = entry.get("category") or ""
-    positive_descriptor = build_positive_descriptor(entry)
-    negative_descriptor = NEGATIVE_DESCRIPTOR
 
     t0 = time.monotonic()
     minio = get_storage()
     await emit_progress(
         thread_id, "off_topic", "start",
-        files = len(raw_files), embeddings_ref = embeddings_ref,
+        files = len(raw_files),
     )
-
-    anchor_vecs = await embed_via_router_async(
-        [positive_descriptor, negative_descriptor], input_type = "query",
-    )
-    await emit_progress(
-        thread_id, "off_topic", "anchors_embedded",
-        positive = positive_descriptor[:200],
-        negative = negative_descriptor[:200],
-    )
-    pos_anchor = np.asarray(anchor_vecs[0], dtype = np.float32)
-    neg_anchor = np.asarray(anchor_vecs[1], dtype = np.float32)
-    pos_anchor /= max(float(np.linalg.norm(pos_anchor)), 1e-9)
-    neg_anchor /= max(float(np.linalg.norm(neg_anchor)), 1e-9)
-
-    blob = await minio.read_bytes(embeddings_ref)
-    stored_keys, page_vecs = load_embeddings(blob)
-
-    key_to_idx = {k: i for i, k in enumerate(stored_keys)}
-    missing = [k for k in raw_files if k not in key_to_idx]
-    if missing:
-        raise RuntimeError(
-            f"off_topic: {len(missing)} files in raw_files have no "
-            f"matching vector in {embeddings_ref!r} — re-run embed_corpus "
-            f"(first missing: {missing[0]!r})"
-        )
-    ordered_idx = np.array(
-        [key_to_idx[k] for k in raw_files], dtype = np.int64,
-    )
-    page_mat = page_vecs[ordered_idx]
-
-    cos_pos = page_mat @ pos_anchor
-    cos_neg = page_mat @ neg_anchor
-    margins = (cos_pos - cos_neg).astype(np.float64)
 
     n = len(raw_files)
     keep_mask = np.zeros(n, dtype = bool)
@@ -156,8 +124,20 @@ async def off_topic_run(state: PlannerState) -> dict:
     bodies = await minio.read_many(raw_files)
     sem = asyncio.Semaphore(JUDGE_CONCURRENCY)
 
+    # Dedupe identical judge inputs before spending LLM calls — the judge prompt
+    # is a pure function of head_tail_truncate(body), so pages that collapse to the
+    # same prompt (empty pages, stub redirects, scaffold duplicates, mirrored dumps)
+    # share one verdict. Group first, judge unique prompts concurrently, fan out.
+    from .prompts import head_tail_truncate
+    groups: dict[str, list[int]] = {}
+    for i, body in enumerate(bodies):
+        groups.setdefault(head_tail_truncate(body or ""), []).append(i)
+    unique_keys = list(groups.keys())
+    n_deduped = n - len(unique_keys)
+
     judged_done = {"n": 0, "keep": 0, "drop": 0, "err": 0}
-    emit_every = max(1, n // 40)   # ~40 events / run
+    n_to_judge = len(unique_keys)
+    emit_every = max(1, n_to_judge // 40)   # ~40 events / run
 
     async def _on_judge_complete(keep: bool, error: str | None) -> None:
         judged_done["n"] += 1
@@ -167,10 +147,11 @@ async def off_topic_run(state: PlannerState) -> dict:
             judged_done["keep"] += 1
         else:
             judged_done["drop"] += 1
-        if judged_done["n"] % emit_every == 0 or judged_done["n"] == n:
+        if judged_done["n"] % emit_every == 0 or judged_done["n"] == n_to_judge:
             await emit_progress(
                 thread_id, "off_topic", "llm_progress",
-                judged = judged_done["n"], total = n,
+                judged = judged_done["n"], total = n_to_judge,
+                deduped = n_deduped,
                 llm_keep = judged_done["keep"],
                 llm_drop = judged_done["drop"],
                 llm_err = judged_done["err"],
@@ -178,12 +159,19 @@ async def off_topic_run(state: PlannerState) -> dict:
 
     tasks = [
         judge_one(
-            sem, framework_name, framework_category, body,
+            sem, framework_name, framework_category, key,
             on_complete = _on_judge_complete,
         )
-        for body in bodies
+        for key in unique_keys
     ]
-    verdicts = await asyncio.gather(*tasks)
+    unique_verdicts = await asyncio.gather(*tasks)
+
+    # Fan unique verdicts back out to the original doc order. Duplicates inherit
+    # the same verdict + meta (deployment usage counted once on the unique call).
+    verdicts: list = [None] * n
+    for key, res in zip(unique_keys, unique_verdicts):
+        for doc_idx in groups[key]:
+            verdicts[doc_idx] = res
 
     deployment_usage: dict[str, int] = {}
     for doc_idx, (keep, raw_resp, err, meta) in enumerate(verdicts):
@@ -192,7 +180,7 @@ async def off_topic_run(state: PlannerState) -> dict:
         deployment_usage[dep] = deployment_usage.get(dep, 0) + 1
         judge_decisions.append({
             "key":        raw_files[doc_idx],
-            "margin":     float(margins[doc_idx]),
+            "margin":     0.0,
             "verdict":    "KEEP" if keep else "DROP",
             "raw":        raw_resp[:60],   # cap for state payload size
             "error":      err,
@@ -206,18 +194,14 @@ async def off_topic_run(state: PlannerState) -> dict:
 
     relevant: list[str] = []
     per_file: list[tuple[str, float, str, bool]] = []
-    cos_kept: list[float] = []
     for i, key in enumerate(raw_files):
         keep = bool(keep_mask[i])
         leaf = key.rsplit("/", 1)[-1]
-        per_file.append((leaf, round(float(margins[i]), 4), "llm", keep))
+        per_file.append((leaf, 0.0, "llm", keep))
         if keep:
             relevant.append(key)
-            cos_kept.append(float(cos_pos[i]))
 
-    domain_coherence = (
-        sum(cos_kept) / len(cos_kept) if cos_kept else 0.0
-    )
+    domain_coherence = 0.0
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     llm_kept = sum(1 for d in judge_decisions if d["verdict"] == "KEEP")
     llm_dropped = sum(1 for d in judge_decisions if d["verdict"] == "DROP")
@@ -247,34 +231,38 @@ async def off_topic_run(state: PlannerState) -> dict:
         kind = err.split(":", 1)[0].strip() or "unknown"
         error_breakdown[kind] = error_breakdown.get(kind, 0) + 1
 
+    # Retrieve descriptors for stats (no embedding)
+    positive_descriptor = build_positive_descriptor(entry)
+    negative_descriptor = NEGATIVE_DESCRIPTOR
+
     stats = {
         "kept":                len(relevant),
         "dropped":             n - len(relevant),
         "total":               n,
-        "llm_judged":          len(judge_decisions),
+        "llm_judged":          n_to_judge,
+        "llm_deduped":         n_deduped,
         "llm_kept":            llm_kept,
         "llm_dropped":         llm_dropped,
         "llm_errors":          len(judge_errors),
         "llm_error_breakdown": error_breakdown,
-        "domain_coherence":    round(domain_coherence, 4),
+        "domain_coherence":    0.0,
         "per_file_margins":    per_file,
         "judge_decisions":     judge_decisions,
         "deployment_usage":    deployment_summary,
         "elapsed_ms":          elapsed_ms,
         "anchor_positive":     positive_descriptor,
         "anchor_negative":     negative_descriptor,
-        "embeddings_ref":      embeddings_ref,
-        "embed_model":         DD_EMBED_MODEL_NAME,
         "judge_concurrency":   JUDGE_CONCURRENCY,
-        "judge_router":        "bandit/dd-grader",
+        "judge_router":        "coelho-llm-rotator",
     }
 
     attach_span_attrs("off_topic", {
         "kept":             stats["kept"],
         "dropped":          stats["dropped"],
-        "llm_judged":       len(judge_decisions),
+        "llm_judged":       n_to_judge,
+        "llm_deduped":      n_deduped,
         "llm_errors":       len(judge_errors),
-        "domain_coherence": stats["domain_coherence"],
+        "domain_coherence": 0.0,
         "elapsed_ms":       elapsed_ms,
     })
 
@@ -285,20 +273,20 @@ async def off_topic_run(state: PlannerState) -> dict:
     logger.info(
         f"[off_topic] {slug}: kept {stats['kept']}/{n} "
         f"(dropped {stats['dropped']}); "
-        f"llm judged={len(judge_decisions)} "
+        f"llm judged={n_to_judge} (deduped {n_deduped}) "
         f"(keep={llm_kept} drop={llm_dropped}, "
         f"errors={len(judge_errors)} = "
         f"{dict(sorted(error_breakdown.items()))}); "
         f"top deployments [{top_dep_summary}]; "
-        f"coherence={stats['domain_coherence']:.3f}; elapsed={elapsed_ms}ms"
+        f"elapsed={elapsed_ms}ms (LLM-only, no embed)"
     )
     await emit_progress(
         thread_id, "off_topic", "done",
         kept = len(relevant), dropped = n - len(relevant), total = n,
-        llm_judged = len(judge_decisions), llm_keep = llm_kept,
+        llm_judged = n_to_judge, llm_deduped = n_deduped,
+        llm_keep = llm_kept,
         llm_drop = llm_dropped, llm_err = len(judge_errors),
         llm_error_breakdown = error_breakdown,
-        coherence = stats["domain_coherence"],
         wall_ms = elapsed_ms,
     )
     return {"relevant_files": relevant, "off_topic_stats": stats}

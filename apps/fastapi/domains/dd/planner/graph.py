@@ -11,7 +11,6 @@ from .nodes.chapter_select.node import chapter_select
 from .runtime.checkpoint import get_checkpointer
 from .nodes.corpus_load.node import corpus_load
 from .nodes.doc_distill.node import doc_distill
-from .nodes.embed_corpus.node import embed_corpus
 from .nodes.off_topic.node import off_topic
 from .nodes.order_chapters.node import order_chapters
 from .nodes.plan_write.node import plan_write
@@ -23,9 +22,11 @@ logger = logging.getLogger(__name__)
 
 # Canonical substep order. Every entry must also appear in NODE_REGISTRY
 # and IMPLEMENTED to be wired into the runtime graph.
+# embed_corpus removed 2026-09-03: off_topic now LLM-only (margins telemetry
+# only), so corpus_load → off_topic → doc_distill is fastest; embed_corpus
+# kept on disk but not wired.
 NODE_ORDER = (
     "corpus_load",
-    "embed_corpus",
     "off_topic",
     "doc_distill",
     "chapter_propose",
@@ -37,7 +38,6 @@ NODE_ORDER = (
 
 NODE_REGISTRY = {
     "corpus_load":      corpus_load,
-    "embed_corpus":     embed_corpus,
     "off_topic":        off_topic,
     "doc_distill":      doc_distill,
     "chapter_propose":  chapter_propose,
@@ -52,7 +52,6 @@ NODE_REGISTRY = {
 # reached END (LangGraph's ainvoke(None) would otherwise short-circuit).
 NODE_TO_FIELD = {
     "corpus_load":      "raw_files",
-    "embed_corpus":     "embeddings_ref",
     "off_topic":        "relevant_files",
     "doc_distill":      "doc_distill_ref",
     "chapter_propose":  "chapter_proposals_ref",

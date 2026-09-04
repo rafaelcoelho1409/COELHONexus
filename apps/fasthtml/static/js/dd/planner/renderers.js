@@ -68,59 +68,10 @@ export const SUBSTEP_RENDERERS = {
     return '<div class="fw-stat-grid">' + cards + '</div>' + dist + foot;
   },
 
-  // embed_corpus — one-shot NIM pass; KPI cards show files / dim /
-  // cache_hit / wall_ms / blob path. Cache-hit runs report ~10 ms
-  // (just the HEAD + read); cold runs show the full embedding wall.
-  1: function renderEmbedCorpus(values) {
-    const s = values.embed_stats || {};
-    if (!s.files) {
-      return '<div class="fw-empty">no embed stats reported</div>';
-    }
-    const kpi = (label, value, sub) =>
-      '<div class="fw-stat-card">' +
-        '<div class="fw-stat-card-label">' + escapeHtml(label) + '</div>' +
-        '<div class="fw-stat-card-value">' + escapeHtml(value) + '</div>' +
-        (sub ? '<div class="fw-stat-card-sub">' + escapeHtml(sub) + '</div>' : '') +
-      '</div>';
-
-    const cacheLabel = s.cache_hit ? 'HIT' : 'cold';
-    const cacheSub   = s.cache_hit
-      ? 'reused stored vectors'
-      : 'NIM embedding pass';
-    const blobKB = s.blob_bytes
-      ? Math.round(s.blob_bytes / 1024).toLocaleString() + ' KB blob'
-      : null;
-
-    const cards =
-      kpi('Files',     s.files.toLocaleString(), null) +
-      kpi('Dimensions', String(s.dim || 0),       'per-doc vector') +
-      kpi('Cache',     cacheLabel,                cacheSub) +
-      kpi('Wall time', (s.wall_ms || 0) + ' ms',  blobKB);
-
-    const truncatedLine = (s.truncated_count !== undefined && s.truncated_count > 0)
-      ? ' · truncated <strong>' + s.truncated_count.toLocaleString() + '</strong>'
-      : '';
-
-    const foot =
-      '<div class="fw-stat-foot">' +
-        'NIM <strong>nvidia/llama-nemotron-embed-1b-v2</strong>' +
-        ' · hash <strong>' + escapeHtml(s.manifest_hash || '—') + '</strong>' +
-        truncatedLine +
-        ' · path <code style="font-family:JetBrains Mono,monospace;font-size:0.72rem">' +
-          escapeHtml(s.store_path || '—') + '</code>' +
-      '</div>';
-
-    return '<div class="fw-stat-grid">' + cards + '</div>' + foot;
-  },
-
-  // off_topic — pure LLM-as-Judge (no cosine cleave). Every doc is
-  // routed through the ParetoBandit-driven dd-grader cells: the bandit
-  // picks the top-K best deployments by UCB score, calls each via
-  // direct litellm, and submits reward signals so future calls learn
-  // which deployments are reliable. KPI cards show keep/drop split +
-  // bandit telemetry (deployments used + average reward). The verdict
-  // sample table shows per-page judgments with the model that answered.
-  2: function renderOffTopic(values) {
+  // off_topic — pure LLM-as-Judge (no embedding, LLM-only after embed_corpus removal 2026-09-03).
+  // Routed via coelho-llm-rotator pooled http2; KPI cards show keep/drop split +
+  // deployment telemetry. The verdict table shows per-page judgments.
+  1: function renderOffTopic(values) {
     const s = values.off_topic_stats || {};
     if (s.kept === undefined && s.dropped === undefined) {
       return '<div class="fw-empty">no off_topic stats reported</div>';
@@ -268,16 +219,13 @@ export const SUBSTEP_RENDERERS = {
         '</div>';
     }
 
-    const embedModel = s.embed_model || 'nvidia/llama-nemotron-embed-1b-v2';
-    const router = s.judge_router || 'bandit/dd-grader';
+    const router = s.judge_router || 'coelho-llm-rotator';
     const foot =
       '<div class="fw-stat-foot">' +
-        'embed <strong>' + escapeHtml(embedModel) + '</strong>' +
-        ' · judge <strong>' + escapeHtml(router) + '</strong>' +
+        'judge <strong>' + escapeHtml(router) + '</strong>' +
         ' · LLM judge ' + judged + ' calls (concurrency ' +
           (s.judge_concurrency || '?') + ')' +
-        ' · coherence ' + (s.domain_coherence || 0).toFixed(3) +
-        ' · ' + elapsed + ' ms total' +
+        ' · ' + elapsed + ' ms total (LLM-only, no embed)' +
       '</div>';
 
     return '<div class="fw-stat-grid">' + cards + '</div>' + table + depRow + foot;
@@ -285,14 +233,14 @@ export const SUBSTEP_RENDERERS = {
 
   // 2026-05-27 P4 — LLM-first renderers replacing the legacy
   // cluster/refine/label/reduce path. PLANNER_NODE_ORDER indices
-  // 3-6 are now doc_distill/chapter_propose/chapter_assign/
-  // chapter_select. plan_write moved 7→8 to match the new 9-slot
-  // PLANNER_SUBSTEP_FIELDS ordering.
+  // 2-5 are now doc_distill/chapter_propose/chapter_assign/
+  // chapter_select. plan_write is 7 to match the new 8-slot
+  // PLANNER_SUBSTEP_FIELDS ordering (embed_corpus removed 2026-09-03).
 
   // doc_distill — per-doc summary + key terms via parallel rotator.
   // Skip-pass for N ≤ 80 (pass-through to chapter_propose's raw-body
   // path). KPI cards show distill success/failure + cache + wall.
-  3: function renderDocDistill(values) {
+  2: function renderDocDistill(values) {
     const s = values.doc_distill_stats || {};
     if (!s.n_files && !s.skipped) {
       return '<div class="fw-empty">no doc_distill stats reported</div>';
@@ -345,7 +293,7 @@ export const SUBSTEP_RENDERERS = {
   // chapter_propose — long-context LLM proposes 6-15 candidate chapters
   // from distillates + structural seeds (markdown headings + file-tree
   // namespaces). N=3 parallel samples + USC vote picks the best.
-  4: function renderChapterPropose(values) {
+  3: function renderChapterPropose(values) {
     const s = values.propose_stats || {};
     const titles = s.titles || [];
     if (!s.n_proposals && !titles.length) {
@@ -393,7 +341,7 @@ export const SUBSTEP_RENDERERS = {
   // chapter_assign — per-doc LLM scores membership against each proposal
   // (confidence 0-1, multi-assignment allowed). Concurrent rotator calls;
   // chapter_select consumes the matrix downstream.
-  5: function renderChapterAssign(values) {
+  4: function renderChapterAssign(values) {
     const s = values.assign_stats || {};
     if (!s.n_docs) {
       return '<div class="fw-empty">no chapter_assign stats reported</div>';
@@ -464,7 +412,7 @@ export const SUBSTEP_RENDERERS = {
   // chapter_select — pure-algorithm greedy coverage. Picks minimum
   // chapter set covering ≥95% of docs above confidence threshold, then
   // prunes <3-doc chapters unless structurally pinned.
-  6: function renderChapterSelect(values) {
+  5: function renderChapterSelect(values) {
     const s = values.select_stats || {};
     if (!s.n_chapters_out && !(s.chapter_titles || []).length) {
       return '<div class="fw-empty">no chapter_select stats reported</div>';
@@ -538,7 +486,7 @@ export const SUBSTEP_RENDERERS = {
   // foundational chapters first, then orders the rest. KPI cards show
   // input chapter count + sample count + foundational pick + wall.
   // Below: side-by-side "before vs after" ordering list.
-  7: function renderOrderChapters(values) {
+  6: function renderOrderChapters(values) {
     const s = values.order_chapters_stats || {};
     if (!s.n_chapters && !s.cache_hit) {
       return '<div class="fw-empty">no order_chapters stats reported</div>';
@@ -641,10 +589,9 @@ export const SUBSTEP_RENDERERS = {
   // Below: the final outline with title, description, per-chapter
   // source count + first-N source paths (so a developer can sanity-
   // check which docs ended up where). Last card of the pipeline.
-  // 2026-05-27 P4 — re-keyed 7 → 8 to match the LLM-first 9-slot
-  // PLANNER_SUBSTEP_FIELDS (index 7 is now order_chapters, which
-  // renders via KPI-only on the graph; no rich drawer panel).
-  8: function renderPlanWrite(values) {
+  // 2026-05-27 P4 — re-keyed; 2026-09-03 embed_corpus removed, now 8-slot
+  // PLANNER_SUBSTEP_FIELDS (index 6 is order_chapters).
+  7: function renderPlanWrite(values) {
     const s = values.plan_write_stats || {};
     const plan = s.plan || {};
     const chapters = (plan.chapters || []).slice();

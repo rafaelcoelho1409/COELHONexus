@@ -1,5 +1,12 @@
 """order_chapters I/O shell — one LLM sample call (bandit-routed) + the
-order_chapters_run orchestration."""
+order_chapters_run orchestration.
+
+SOTA Sept 2026 on coelho-llm-rotator pooled:
+- Pooled AsyncOpenAI http2 200/100 handles N_SAMPLES parallel 800 tok
+  via Borda (old bandit 5-way serialized). N=3 USC sweet spot.
+- JSON response_format for strict parsing (vs regex fallback).
+- Static prefix (pedagogical rubric) before dynamic chapter block → KV-cache.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -34,13 +41,16 @@ async def sample_one_ordering(
     prompt: str,
     n_chapters: int,
 ) -> tuple[list[int] | None, dict]:
-    """One LLM call. Returns (parsed_order_or_None, meta)."""
+    """One LLM call. Returns (parsed_order_or_None, meta). Pooled rotator
+    handles parallel 3×800 tok via Borda; json_object for strict parse."""
     async with sem:
         try:
             response, meta = await chat_judge_bandit_async(
                 prompt,
                 max_tokens = MAX_TOKENS,
                 temperature = TEMPERATURE,
+                timeout_s = 30.0,
+                response_format = {"type": "json_object"},
             )
         except Exception as e:
             return None, {"error": f"{type(e).__name__}: {str(e)[:120]}"}

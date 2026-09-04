@@ -1,7 +1,13 @@
 """plan_write I/O shell — persist the final plan blob (versioned + latest
-pointer) + the plan_write_run orchestration."""
+pointer) + the plan_write_run orchestration.
+
+SOTA Sept 2026: pure-algorithm node (no LLM rotator) — fastest via parallel
+I/O (gather exists/read, concurrent 2-blob writes). Old built-in vs pooled
+rotator is no-op here (never called rotator); SOTA is just MinIO concurrency.
+"""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -34,13 +40,12 @@ async def persist_plan(
     latest_key: str,
     plan: dict,
 ) -> None:
-    """Hash-keyed versioned blob + mutable latest pointer (no S3 symlink)."""
+    """Hash-keyed versioned blob + mutable latest pointer (no S3 symlink).
+    SOTA: 2 writes via gather on shared S3 client (vs 2 sequential RTT)."""
     plan_bytes = json.dumps(plan, indent = 2, ensure_ascii = False)
-    await minio.write(
-        versioned_key, plan_bytes, content_type = "application/json",
-    )
-    await minio.write(
-        latest_key, plan_bytes, content_type = "application/json",
+    await asyncio.gather(
+        minio.write(versioned_key, plan_bytes, content_type = "application/json"),
+        minio.write(latest_key, plan_bytes, content_type = "application/json"),
     )
 
 
@@ -50,7 +55,6 @@ async def plan_write_run(state: PlannerState) -> dict:
     slug = state.get("framework_slug")
     thread_id = state.get("thread_id") or ""
     chapter_plan_ref = state.get("chapter_plan_ref") or ""
-    embeddings_ref = state.get("embeddings_ref") or ""
 
     if not slug or not chapter_plan_ref:
         return {"plan_path": "", "status": "done"}
@@ -68,8 +72,11 @@ async def plan_write_run(state: PlannerState) -> dict:
         manifest_hash = manifest_hash,
     )
 
-    if (await minio.exists(versioned_key)
-            and await minio.exists(latest_key)):
+    # SOTA: parallel exists check (2× RTT → 1×) via gather
+    exists_v, exists_l = await asyncio.gather(
+        minio.exists(versioned_key), minio.exists(latest_key)
+    )
+    if exists_v and exists_l:
         try:
             latest_text = await minio.read_text(latest_key)
             latest = json.loads(latest_text) or {}
@@ -207,7 +214,6 @@ async def plan_write_run(state: PlannerState) -> dict:
         "chapters":       chapters,
         "unassigned":     unassigned_keys,
         "provenance": {
-            "embeddings_ref":    embeddings_ref,
             "chapter_plan_ref":  chapter_plan_ref,
             "prompt_versions":   {"plan_write": PROMPT_VERSION},
             "corpus_doc_count":  len(cluster_keys),

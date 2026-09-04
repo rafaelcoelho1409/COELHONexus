@@ -1,8 +1,15 @@
 """chapter_select I/O shell — persist the 4-blob output (select-specific +
 reduce-compatible plan, each versioned + latest) + the chapter_select_run
-orchestration."""
+orchestration.
+
+SOTA Sept 2026: pure-algorithm node (no LLM rotator) — fastest via parallel
+I/O (gather proposals/assignments/seeds, concurrent 4-blob writes) and
+vectorized greedy. No coelho-llm-rotator call here, so old built-in vs
+pooled is no-op; old rotator never touched this node.
+"""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -39,8 +46,9 @@ async def persist_select_outputs(
     select_payload: dict,
     plan_payload: dict,
 ) -> tuple[str, str]:
-    """Write select + plan blobs (versioned + latest).
-    Returns (plan_latest_key, plan_versioned_key)."""
+    """Write select + plan blobs (versioned + latest) concurrently.
+    Returns (plan_latest_key, plan_versioned_key). SOTA: 4 writes via
+    gather on shared S3 client (vs 4 sequential) — ~4× for MinIO 4-blob."""
     select_blob = json.dumps(
         select_payload, indent = 2, ensure_ascii = False,
     )
@@ -51,17 +59,13 @@ async def persist_select_outputs(
     plan_vkey = chapter_plan_versioned_key(slug, manifest)
     plan_lkey = chapter_plan_latest_key(slug)
 
-    await minio.write(
-        vkey_select, select_blob, content_type = "application/json",
-    )
-    await minio.write(
-        lkey_select, select_blob, content_type = "application/json",
-    )
-    await minio.write(
-        plan_vkey, plan_blob, content_type = "application/json",
-    )
-    await minio.write(
-        plan_lkey, plan_blob, content_type = "application/json",
+    # Concurrent writes — shared client per chunk in storage.service handles
+    # pooling; gather here removes sequential 4× RTT.
+    await asyncio.gather(
+        minio.write(vkey_select, select_blob, content_type = "application/json"),
+        minio.write(lkey_select, select_blob, content_type = "application/json"),
+        minio.write(plan_vkey, plan_blob, content_type = "application/json"),
+        minio.write(plan_lkey, plan_blob, content_type = "application/json"),
     )
 
     return plan_lkey, plan_vkey
@@ -90,26 +94,32 @@ async def chapter_select_run(state: PlannerState) -> dict:
         assignments_ref = assignments_ref,
     )
 
-    proposals_obj = await load_proposals(minio, slug)
+    # Parallel load: proposals + assignments + seeds in one gather (3× RTT → 1×)
+    # Pure I/O, no LLM — old built-in never touched rotator here, so SOTA is
+    # just I/O concurrency, not pooling.
+    async def _load_seeds() -> dict:
+        try:
+            txt = await minio.read_text(proposals_ref)
+            return (json.loads(txt) or {}).get("seeds") or {}
+        except Exception:
+            return {}
+
+    proposals_obj, assignments, seeds = await asyncio.gather(
+        load_proposals(minio, slug),
+        load_assignments(minio, slug),
+        _load_seeds(),
+    )
     if proposals_obj is None or not proposals_obj.proposals:
         return {
             "chapter_plan_ref": None,
             "select_stats": {"skipped": "no_proposals"},
         }
     proposals = [p.model_dump() for p in proposals_obj.proposals]
-    assignments = await load_assignments(minio, slug)
     if not assignments:
         return {
             "chapter_plan_ref": None,
             "select_stats": {"skipped": "no_assignments"},
         }
-
-    seeds: dict = {}   # best-effort propose-side pin signal
-    try:
-        propose_text = await minio.read_text(proposals_ref)
-        seeds = (json.loads(propose_text) or {}).get("seeds") or {}
-    except Exception:
-        pass
 
     pinned = detect_pinned_indices(proposals, seeds)
 

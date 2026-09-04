@@ -43,13 +43,6 @@ export function _kpiForNode(nodeId, values) {
       const s = stats('corpus_stats');
       return s && s.files ? `n=${s.files}` : '';
     }
-    case 'embed_corpus': {
-      const s = stats('embed_stats');
-      if (!s) return '';
-      if (s.dim) return `dim=${s.dim}`;
-      if (s.files) return `n=${s.files}`;
-      return '';
-    }
     case 'off_topic': {
       const s = stats('off_topic_stats');
       return s && (s.kept !== undefined)

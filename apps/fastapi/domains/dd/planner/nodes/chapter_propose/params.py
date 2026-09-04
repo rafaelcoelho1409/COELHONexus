@@ -30,9 +30,14 @@ TEMPERATURE_VOTE    = 0.0
 MAX_REPAIR_ATTEMPTS = 1
 
 # Optimal-stopping (CGES 2511.02603): node scales floor to ~0.7×adaptive_target so large corpora don't early-stop on a small sample-0.
+# SOTA Sept 2026: with coelho-llm-rotator pooled http2 (200/100) 3×6000 tok drafts
+# run concurrently ~1× latency vs 2× sequential s0→remaining. Old default true
+# was cost-saving for bandit cascade; for fastest, default false (env override
+# keeps cost mode). ReASC/Blend-ASC papers show parallel best-of-N + USC
+# scales best when pooled.
 OPTIMAL_STOPPING_MIN_PROPOSALS = 6
 OPTIMAL_STOPPING_ENABLED = (
-    os.environ["KD_PROPOSE_OPTIMAL_STOPPING"].lower()
+    os.getenv("KD_PROPOSE_OPTIMAL_STOPPING", "false").lower()
     in ("true", "1", "yes", "on")
 )
 

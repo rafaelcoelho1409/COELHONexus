@@ -1,5 +1,12 @@
 """chapter_assign I/O shell — per-doc LLM scoring, latest-blob loader,
-and the chapter_assign_run orchestration."""
+and the chapter_assign_run orchestration.
+
+SOTA Sept 2026 on coelho-llm-rotator pooled:
+- Pooled AsyncOpenAI http2 200/100 replaces per-call ChatOpenAI alloc.
+- CONCURRENCY 24 (was 8, 16 blew 14% on direct NIM) saturates pooled rotator.
+- Bulk read_many for summary-miss docs outside semaphore (shared S3 client).
+- Prompt static prefix (chapters rubric) before dynamic doc → KV-cache reuse.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -19,6 +26,7 @@ from ...state import PlannerState
 from .domain import fallback_assign_scores, manifest_hash, parse
 from .keys import latest_key, versioned_key
 from .params import (
+    BODY_CHARS,
     CONCURRENCY,
     CONFIDENCE_THRESHOLD,
     MAX_TOKENS,
@@ -35,30 +43,51 @@ logger = logging.getLogger(__name__)
 
 async def assign_one(
     sem: asyncio.Semaphore,
-    minio,
-    framework: str,
-    source_key: str,
-    distillate: Optional[dict],
-    proposals: list[dict],
+    *args,
+    **kwargs,
 ) -> tuple[str, Optional[list[dict]], int, bool]:
     """(source_key, scores, wall_ms, used_fallback). scores=None only when
-    doc has no content; failed LLM with content gets lexical fallback."""
+    doc has no content; failed LLM with content gets lexical fallback.
+
+    SOTA: doc_body pre-fetched outside semaphore (bulk read_many) so sem
+    gates only the network-bound LLM hop (pooled http2 200/100).
+
+    Supports both new (sem, framework, source_key, distillate, proposals,
+    doc_body="") and legacy (sem, minio, framework, source_key, distillate,
+    proposals) call shapes for backward compat.
+    """
+    # Parse args for backward compat
+    doc_body = kwargs.get("doc_body", "")
+    if len(args) == 5 and hasattr(args[0], "read_text"):
+        # Legacy: (minio, framework, source_key, distillate, proposals)
+        _minio_legacy, framework, source_key, distillate, proposals = args  # type: ignore
+        # If doc_body not supplied, fallback to legacy I/O inside sem (slow path)
+        if not doc_body and not ((distillate or {}).get("summary") or "").strip():
+            try:
+                doc_body = await _minio_legacy.read_text(source_key)  # type: ignore
+            except Exception:
+                doc_body = ""
+    elif len(args) == 5:
+        # New: (framework, source_key, distillate, proposals, doc_body) as positional 5th
+        framework, source_key, distillate, proposals, doc_body = args  # type: ignore
+    elif len(args) == 4:
+        # New: (framework, source_key, distillate, proposals) + kw doc_body
+        framework, source_key, distillate, proposals = args  # type: ignore
+        doc_body = kwargs.get("doc_body", doc_body)
+    else:
+        raise TypeError(f"assign_one: unexpected args len {len(args)}")
+
     async with sem:
         t0 = time.monotonic()
-        doc_summary = (distillate or {}).get("summary") or ""
+        doc_summary = (distillate or {}).get("summary") or ""  # type: ignore
         doc_terms = (distillate or {}).get("key_terms") or []
-        doc_body = ""
-        if not doc_summary:
-            try:
-                doc_body = await minio.read_text(source_key)
-            except Exception:
-                pass
-            if not doc_body:
-                return (
-                    source_key, None,
-                    int((time.monotonic() - t0) * 1000),
-                    False,
-                )
+        # doc_body supplied by caller for summary-miss docs; no I/O here.
+        if not doc_summary and not (doc_body or "").strip():
+            return (
+                source_key, None,
+                int((time.monotonic() - t0) * 1000),
+                False,
+            )
 
         prompt = build_prompt(
             framework = framework,
@@ -192,11 +221,37 @@ async def chapter_assign_run(state: PlannerState) -> dict:
         n_proposals = len(proposals_dicts),
     )
 
+    # Bulk prefetch bodies only for docs lacking distillate summary (fallback path)
+    # SOTA: single read_many chunked (shared S3 client, BoundedSemaphore per chunk)
+    # vs per-doc read_text inside semaphore (wasted LLM slot). Truncate to BODY_CHARS.
+    need_body_keys = [
+        k for k in relevant_files
+        if not ((distillates.get(k) or {}).get("summary") or "").strip()
+    ]
+    body_map: dict[str, str] = {}
+    if need_body_keys:
+        try:
+            bodies = await minio.read_many(need_body_keys)  # type: ignore[attr-defined]
+            if bodies is not None and len(bodies) == len(need_body_keys):
+                body_map = {k: (b or "")[:BODY_CHARS] for k, b in zip(need_body_keys, bodies)}
+            else:
+                raise RuntimeError("read_many length mismatch")
+        except Exception as e:
+            logger.warning(f"[chapter_assign] bulk read_many failed ({type(e).__name__}: {e}), fallback per-key")
+            async def _read_one(k: str) -> tuple[str, str]:
+                try:
+                    return k, (await minio.read_text(k))[:BODY_CHARS]
+                except Exception:
+                    return k, ""
+            results_one = await asyncio.gather(*[_read_one(k) for k in need_body_keys])
+            body_map = dict(results_one)
+
     sem = asyncio.Semaphore(CONCURRENCY)
     tasks = [
         assign_one(
-            sem, minio, slug, k,
+            sem, slug, k,
             distillates.get(k), proposals_dicts,
+            doc_body = body_map.get(k, ""),
         )
         for k in relevant_files
     ]

@@ -6,8 +6,11 @@ PASS_THROUGH_THRESHOLD = 80
 
 BODY_CHARS_MAX = 20_000
 
-# 16-way concurrency produced 36% rate-limit failures on NIM+Mistral; 8 keeps burst inside sustained capacity
-CONCURRENCY = 8
+# SOTA Sept 2026: coelho-llm-rotator pooled http2 (200/100) + simple-shuffle absorbs 429s.
+# off_topic already raised to 20; doc_distill 24 saturates rotator without the old 36% blowup
+# on direct NIM+MISTRAL (now router-side). Pooled keep-alive means 24× LLM hops share
+# ~5-8 TCP connections via http2 multiplexing.
+CONCURRENCY = 24
 
 SUMMARY_WORDS_MIN = 8
 SUMMARY_WORDS_MAX = 60

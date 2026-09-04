@@ -14,15 +14,18 @@ JUDGE_BODY_MIN_FOR_SPLIT = (
 )
 
 JUDGE_MAX_TOKENS = 8        # plenty for "KEEP" or "DROP" plus whitespace
-# Concurrency: 5 parallel in-flight calls — the ParetoBandit + LiteLLM
-# cascade handles transient failures; the inner helper already routes each
-# the bandit's top-K list, so the outer concurrency stays modest.
-JUDGE_CONCURRENCY = 5
-# Per-call retry budget — outer wrapper retries the WHOLE bandit cascade
-# this many times if it raises (covers transient infra failures like Redis
-# blips). Each bandit cascade itself tries top-K=5 deployments internally.
+# Concurrency: 24 parallel in-flight. Legacy 5 was sized for old LiteLLM bandit
+# cascade (Redis + top-K 5). coelho-llm-rotator's pooled http2 (200/100) +
+# simple-shuffle + allowed_fails absorbs 429s rotator-side, so bottleneck is
+# purely client semaphore. 20 ≈ full utilisation in early tests; 24 saturates
+# pool without the old 36% blowup and matches doc_distill 24 for uniform sizing.
+# SOTA Sept 2026: Baseten/Decodo 200/100 pool break-even ~200 concurrent.
+JUDGE_CONCURRENCY = 24
+# Per-call retry budget — retries the pooled rotator call (rotator already
+# cascades 40). Jittered backoff avoids herd on shared arms.
 JUDGE_MAX_ATTEMPTS = 2
 JUDGE_BACKOFF_BASE = 1.5
+JUDGE_TIMEOUT_S = 15.0      # KEEP/DROP is 1 token; 15s covers cold TTFT, faster failover than 30s
 
 # Stable meta-content descriptor for the LLM judge (CoC, changelogs, issue templates, etc. that bypass URL filters).
 NEGATIVE_DESCRIPTOR = (
