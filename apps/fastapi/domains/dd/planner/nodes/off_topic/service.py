@@ -56,12 +56,20 @@ async def judge_one(
     last_response: str = ""
     last_meta: dict = {}
     for attempt in range(JUDGE_MAX_ATTEMPTS):
+        # A prior unparseable_verdict means that attempt's model likely burned
+        # its whole token budget on an unfinished <think> block. temperature=0.0
+        # is deterministic per-model, and when the rotator's alive pool has
+        # shrunk (other providers cooling down from 402/429), a retry has a
+        # real chance of landing back on the same deployment — reproducing the
+        # identical truncated output. Widen the budget and break determinism
+        # on the retry instead of just hoping for a different bandit draw.
+        retrying_unparseable = last_error == "unparseable_verdict"
         try:
             async with sem:
                 response, meta = await chat_judge_bandit_async(
                     prompt,
-                    max_tokens = JUDGE_MAX_TOKENS,
-                    temperature = 0.0,
+                    max_tokens = JUDGE_MAX_TOKENS + (200 if retrying_unparseable else 0),
+                    temperature = 0.4 if retrying_unparseable else 0.0,
                     timeout_s = JUDGE_TIMEOUT_S,
                     expected_pattern = r"^(KEEP|DROP)$",
                 )

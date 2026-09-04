@@ -2,4 +2,4 @@
 from __future__ import annotations
 
 
-PROMPT_VERSION = "v3-rescue-pass-2026-06-05"
+PROMPT_VERSION = "v4-fallback-tiebreak-2026-09-04"

@@ -166,7 +166,7 @@ async def assign_one(
         used_fallback = False
         if scores is None:
             scores = fallback_assign_scores(
-                doc_summary, doc_terms, proposals,
+                doc_summary, doc_terms, proposals, source_key,
             )
             used_fallback = bool(scores)
             if used_fallback:

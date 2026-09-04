@@ -31,8 +31,17 @@ def parse(raw: str) -> Optional[dict]:
 
 def fallback_assign_scores(
     doc_summary: str, doc_terms: list[str], proposals: list[dict],
+    source_key: str = "",
 ) -> list[dict]:
-    """Lexical fallback when the assign LLM fails — routes doc to best word-overlap chapter so it isn't silently dropped."""
+    """Lexical fallback when the assign LLM fails — routes doc to best word-overlap chapter so it isn't silently dropped.
+
+    Ties (including the common all-zero-overlap case — thin distillate,
+    short chapter descriptions) are broken by a stable hash of source_key,
+    not chapter index. Argmax-style first-index tie-breaking silently piled
+    every zero-signal doc into whichever chapter happened to be proposed
+    first, turning it into an incoherent grab-bag under any sustained LLM
+    outage (chapter_assign 47.5% fallback rate on a small corpus put 25/40
+    docs in chapter 0 alone — see 2026-09-04 browser-use Planner run)."""
     if not proposals:
         return []
     dw = {
@@ -41,8 +50,8 @@ def fallback_assign_scores(
         )
         if w not in FB_STOP
     }
-    best_i, best_ov = 0, -1
-    for i, p in enumerate(proposals):
+    overlaps = []
+    for p in proposals:
         text = (
             (p.get("title") or "") + " " + (p.get("description") or "")
             + " " + " ".join(p.get("key_concepts") or [])
@@ -51,9 +60,14 @@ def fallback_assign_scores(
             w for w in FB_WORD_RE.findall(text.lower())
             if w not in FB_STOP
         }
-        ov = len(dw & pw)
-        if ov > best_ov:
-            best_ov, best_i = ov, i
+        overlaps.append(len(dw & pw))
+    best_ov = max(overlaps)
+    tied = [i for i, ov in enumerate(overlaps) if ov == best_ov]
+    if len(tied) == 1:
+        best_i = tied[0]
+    else:
+        h = int(sha256((source_key or doc_summary).encode()).hexdigest(), 16)
+        best_i = tied[h % len(tied)]
     return [{
         "chapter_idx": best_i,
         "confidence":  CONFIDENCE_THRESHOLD,

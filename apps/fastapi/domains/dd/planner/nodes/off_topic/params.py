@@ -13,12 +13,17 @@ JUDGE_BODY_MIN_FOR_SPLIT = (
     JUDGE_HEAD_CHARS + JUDGE_TAIL_CHARS + len(JUDGE_HEAD_TAIL_SEP)
 )
 
-JUDGE_MAX_TOKENS = 300     # not just "KEEP"/"DROP": the rotator's general pool
+JUDGE_MAX_TOKENS = 400     # not just "KEEP"/"DROP": the rotator's general pool
 # includes reasoning-tuned models (gpt-oss, deepseek-v4) that emit a <think>
 # block before the verdict. At 8 tokens that block alone eats the whole
 # budget and the response comes back empty — confirmed from a real run
-# (129/144 judge errors, all unparseable_verdict cases had raw=''). 300
-# gives a short reasoning trace room to finish before the verdict word.
+# (129/144 judge errors, all unparseable_verdict cases had raw=''). 300 was
+# the first fix; raised to 400 after unparseable_verdict kept climbing
+# (2→5→11→15 across consecutive runs) as other providers' cooldowns
+# concentrated traffic onto fewer, more reasoning-heavy deployments — a
+# ceiling costs nothing for models that finish early, so widening it is
+# free insurance. judge_one() also escalates further (+200, temp 0.4) on
+# the in-node retry specifically for this failure mode.
 # Concurrency: 16 parallel (was 24). 24×144 burst → 49 timeouts (88s) on
 # free-tier general; 16 cuts burst ~33% and jitter 1.3× avoids herd.
 # SOTA: Baseten/Decodo 200/100 pool handles 16×8tok easily, 24 saturated.
