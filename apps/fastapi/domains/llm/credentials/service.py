@@ -7,6 +7,7 @@ import logging
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeoutError
 from typing import Optional
 
 from botocore.config import Config
@@ -32,6 +33,14 @@ from .params import CACHE_TTL_S
 
 logger = logging.getLogger(__name__)
 
+# warm() is best-effort (see its docstring) and runs from the async
+# lifespan — it must never block app startup for minutes because MinIO is
+# slow/unreachable. Short client-level timeouts are the primary control;
+# _MINIO_HARD_TIMEOUT_S is a wall-clock backstop around the whole warm()
+# call chain (up to ~6 sequential round trips: KEK resolve/autogen, reload,
+# maybe-import-env re-reload + persist).
+_MINIO_HARD_TIMEOUT_S = 15
+
 
 class CredentialStore:
     def __init__(self) -> None:
@@ -48,9 +57,9 @@ class CredentialStore:
         self._secret_key = os.environ["AWS_SECRET_ACCESS_KEY"]
         self._boto_config = Config(
             signature_version = "s3v4",
-            connect_timeout = 10,
-            read_timeout = 30,
-            retries = {"max_attempts": 5, "mode": "standard"},
+            connect_timeout = 3,
+            read_timeout = 5,
+            retries = {"max_attempts": 1, "mode": "standard"},
         )
 
     def _client(self):
@@ -190,19 +199,33 @@ class CredentialStore:
             logger.info("[llm-creds] imported %d env key(s) into the store", imported)
         return imported
 
+    def _warm_blocking(self) -> None:
+        with self._lock:
+            self._kek()
+            self._reload_locked()
+        self._maybe_import_env_keys()
+        logger.info("[llm-creds] warm: %d user key(s) loaded", len(self._cache))
+
     def warm(self) -> None:
-        """Best-effort; never raises."""
+        """Best-effort; never raises. Runs the blocking MinIO round trips in
+        a throwaway thread with a hard wall-clock ceiling so a slow/unreachable
+        MinIO can't stall the async lifespan that calls this."""
+        executor = ThreadPoolExecutor(max_workers=1)
         try:
-            with self._lock:
-                self._kek()
-                self._reload_locked()
-            self._maybe_import_env_keys()
-            logger.info("[llm-creds] warm: %d user key(s) loaded", len(self._cache))
+            future = executor.submit(self._warm_blocking)
+            future.result(timeout=_MINIO_HARD_TIMEOUT_S)
+        except _FutureTimeoutError:
+            logger.warning(
+                "[llm-creds] warm exceeded %ss hard timeout — env fallback active",
+                _MINIO_HARD_TIMEOUT_S,
+            )
         except Exception as e:
             logger.warning(
                 "[llm-creds] warm failed (%s: %s) — env fallback active",
                 type(e).__name__, e,
             )
+        finally:
+            executor.shutdown(wait=False)
 
     def resolve_key(self, key_env: str) -> str:
         """Never raises."""

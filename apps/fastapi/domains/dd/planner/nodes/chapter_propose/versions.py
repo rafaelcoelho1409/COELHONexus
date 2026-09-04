@@ -2,4 +2,4 @@
 from __future__ import annotations
 
 
-PROMPT_VERSION = "v2-adaptive-count-2026-05-31"
+PROMPT_VERSION = "v3-sdk-coherence-2026-09-04"

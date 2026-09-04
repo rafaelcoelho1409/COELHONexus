@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import time
 from hashlib import sha256
 
@@ -216,7 +217,33 @@ async def order_chapters_run(state: PlannerState) -> dict:
     )
 
     if not valid_orderings:
-        # All samples failed. Fall back to identity order — better than
+        # All samples failed — retry the whole batch once after a jittered
+        # backoff before giving up. Mirrors chapter_propose's outer retry;
+        # sample_one_ordering's own inner reask already fired per-sample and
+        # wasn't enough during a sustained provider-wide bad patch (2026-09-04
+        # Claude Code docs run: all 3 samples hit parse_failed_after_reask).
+        # Jitter (not a flat delay) avoids all N_SAMPLES calls re-hammering
+        # the same still-recovering deployment in lockstep.
+        logger.warning(
+            f"[order_chapters] {slug}: all {N_SAMPLES} samples failed "
+            f"({[(m or {}).get('error', 'unknown') for m in sample_metas]}) — "
+            f"retrying once after backoff"
+        )
+        await asyncio.sleep(2.0 + random.random() * 2.0)
+        retry_results = await asyncio.gather(*[
+            sample_one_ordering(sem, prompt, n_chapters)
+            for _ in range(N_SAMPLES)
+        ])
+        valid_orderings = [r[0] for r in retry_results if r[0] is not None]
+        sample_metas = [r[1] for r in retry_results]
+        if valid_orderings:
+            logger.info(
+                f"[order_chapters] {slug}: retry recovered "
+                f"{len(valid_orderings)}/{N_SAMPLES} samples"
+            )
+
+    if not valid_orderings:
+        # Retry also failed. Fall back to identity order — better than
         # refusing to ship. Persist each sample's actual error (previously
         # computed in sample_metas, then silently discarded) so a repeat
         # of this failure is diagnosable from the stored blob/state instead
@@ -233,7 +260,7 @@ async def order_chapters_run(state: PlannerState) -> dict:
             "n_chapters":       n_chapters,
             "prompt_version":   PROMPT_VERSION,
             "deployment_usage": [],
-            "error":            "all_samples_failed",
+            "error":            "all_samples_failed_after_retry",
             "sample_errors":    sample_errors,
         }
         await minio.write(
@@ -241,13 +268,13 @@ async def order_chapters_run(state: PlannerState) -> dict:
             content_type = "application/json",
         )
         logger.warning(
-            f"[order_chapters] {slug}: all {N_SAMPLES} samples failed "
-            f"({sample_errors}); identity ordering applied"
+            f"[order_chapters] {slug}: all {N_SAMPLES} samples failed even "
+            f"after retry ({sample_errors}); identity ordering applied"
         )
         await emit_progress(
             thread_id, "order_chapters", "done",
             n_chapters = n_chapters, wall_ms = elapsed,
-            error = "all_samples_failed", sample_errors = sample_errors,
+            error = "all_samples_failed_after_retry", sample_errors = sample_errors,
         )
         return {
             "chapter_order_ref": cache_key,
@@ -255,7 +282,7 @@ async def order_chapters_run(state: PlannerState) -> dict:
                 "n_chapters":     n_chapters, "wall_ms": elapsed,
                 "store_path":     cache_key, "cache_hit": False,
                 "order":          identity, "foundational": [],
-                "error":          "all_samples_failed",
+                "error":          "all_samples_failed_after_retry",
                 "sample_errors":  sample_errors,
             },
         }

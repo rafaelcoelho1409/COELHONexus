@@ -74,6 +74,11 @@ COELHO_ROTATOR_MODEL = os.getenv("COELHO_LLM_MODEL", "auto").strip() or "auto"
 COELHO_EMBED_MODEL = os.getenv("COELHO_EMBED_MODEL", "nvidia/nemotron-3-embed-1b")
 COELHO_API_KEY = os.getenv("COELHO_LLM_API_KEY", "dummy")
 
+# litellm's own internal custom_llm_provider adapter name, where it diverges
+# from the rotator's canonical provider id (discovery/config.py `PROVIDERS`
+# keys, same ids the `/v1/models` catalog's `provider_ids` use).
+_LITELLM_PROVIDER_ALIASES = {"nvidia_nim": "nim"}
+
 # Keep keys for manifest hashing / backward-compat imports
 try:
     from .keys import DD_EMBED_MODEL_NAME as _DD_EMBED_MODEL_NAME  # noqa: F401
@@ -412,7 +417,29 @@ async def chat_judge_bandit_async(
             deployment = m
         elif isinstance(resp, dict) and resp.get("model"):
             deployment = str(resp["model"])
-        # Coerce bare :free → openrouter prefix for consistent logging
+        # `resp.model` often just echoes the underlying provider's own raw
+        # model field verbatim (e.g. NIM returns "openai/gpt-oss-20b", no
+        # provider prefix) — litellm carries the ACTUAL provider separately
+        # in _hidden_params, independent of what `model` says. Prepend it
+        # whenever `deployment` doesn't already start with it, so every
+        # consumer (llm_counter, per-node deployment_usage, the FastHTML
+        # provider table) gets one consistently-prefixed "provider/model"
+        # string instead of sometimes getting a bare one and having to guess.
+        hidden = getattr(resp, "_hidden_params", None)
+        if hidden is None and isinstance(resp, dict):
+            hidden = resp.get("_hidden_params")
+        provider = hidden.get("custom_llm_provider") if isinstance(hidden, dict) else None
+        if isinstance(provider, str) and provider:
+            # litellm's adapter name isn't always the rotator's own catalog
+            # id (e.g. NIM is "nvidia_nim" to litellm, "nim" everywhere in
+            # the rotator's discovery/config/`/v1/models` catalog) — normalize
+            # so the prefix stamped here matches what the provider map (built
+            # from the catalog) can actually look up.
+            provider = _LITELLM_PROVIDER_ALIASES.get(provider.lower(), provider)
+            if not deployment.lower().startswith(provider.lower() + "/"):
+                deployment = f"{provider}/{deployment}"
+        # Coerce bare :free → openrouter prefix (fallback for the rare case
+        # _hidden_params isn't available on the response object).
         low = deployment.lower()
         if (low.endswith(":free") or "minimax-m3" in low or "dots-" in low) and "openrouter" not in low and "/" not in deployment:
             deployment = f"openrouter/{deployment}"

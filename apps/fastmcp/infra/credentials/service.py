@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeoutError
 from typing import Optional
 
 from botocore.config import Config
@@ -36,6 +37,16 @@ _CREDENTIALS_KEY = "llm/credentials.enc"
 _KEK_KEY = "llm/kek.key"
 _KEK_ENV = "KD_CREDS_KEY"
 
+# This whole step is called synchronously at module-import time (no event
+# loop yet — see server.py), is explicitly best-effort per the module
+# docstring, and must never be allowed to block startup for minutes just
+# because MinIO is slow/unreachable. Short client-level timeouts are the
+# primary control; _MINIO_HARD_TIMEOUT_S below is a wall-clock backstop in
+# case a stall (e.g. DNS) outlives botocore's own per-call timeouts.
+_MINIO_CONNECT_TIMEOUT_S = 3
+_MINIO_READ_TIMEOUT_S = 5
+_MINIO_HARD_TIMEOUT_S = 8
+
 
 def _minio_client():
     """Build a sync S3 client. Reads the same env vars fastapi's store uses."""
@@ -50,9 +61,9 @@ def _minio_client():
         region_name="us-east-1",
         config=Config(
             signature_version="s3v4",
-            connect_timeout=10,
-            read_timeout=30,
-            retries={"max_attempts": 5, "mode": "standard"},
+            connect_timeout=_MINIO_CONNECT_TIMEOUT_S,
+            read_timeout=_MINIO_READ_TIMEOUT_S,
+            retries={"max_attempts": 1, "mode": "standard"},
         ),
     )
 
@@ -95,7 +106,7 @@ def _resolve_kek() -> Optional[bytes]:
         return None
 
 
-def _load_creds_dict() -> dict[str, str]:
+def _load_creds_dict_blocking() -> dict[str, str]:
     """Decrypt + parse the credentials file. {} on any failure."""
     try:
         kek = _resolve_kek()
@@ -116,6 +127,27 @@ def _load_creds_dict() -> dict[str, str]:
             type(e).__name__, e,
         )
         return {}
+
+
+def _load_creds_dict() -> dict[str, str]:
+    """Hard wall-clock backstop around the blocking MinIO fetch. Called from
+    plain sync code at module-import time — no event loop to hand this to,
+    so a throwaway thread + timeout is the only way to cap worst-case
+    startup delay. `shutdown(wait=False)` on timeout so we don't block here
+    waiting for an abandoned call to finish; the orphaned thread dies on its
+    own once botocore's own (now-tightened) timeouts expire."""
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        future = executor.submit(_load_creds_dict_blocking)
+        return future.result(timeout=_MINIO_HARD_TIMEOUT_S)
+    except _FutureTimeoutError:
+        logger.warning(
+            "[creds] credential load exceeded %ss hard timeout — env fallback",
+            _MINIO_HARD_TIMEOUT_S,
+        )
+        return {}
+    finally:
+        executor.shutdown(wait=False)
 
 
 def resolve_key(key_env: str) -> str:

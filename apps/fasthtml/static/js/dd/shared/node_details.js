@@ -1,6 +1,8 @@
-import { getProviderMap } from './provider_map.js';
+import { getProviderMap, displayProviderName } from './provider_map.js';
 let _providerMap2 = null;
-getProviderMap().then(m => { _providerMap2 = m; });
+async function _refreshProviderMap2() { _providerMap2 = await getProviderMap(); }
+_refreshProviderMap2();
+setInterval(_refreshProviderMap2, 60_000);
 
 // DD Planner/Synth node detail registry.
 //
@@ -39,6 +41,14 @@ function _topModel(byModel) {
   return entries[0];
 }
 
+// litellm's own internal custom_llm_provider adapter name, where it diverges
+// from the rotator's catalog id — e.g. NIM is "nvidia_nim" to litellm but
+// "nim" in the rotator's discovery/config + `/v1/models` catalog. Older
+// logged deployment strings were stamped with the litellm name directly
+// (see COELHOLLMRotator chain/service.py's alias fix); recognize them here
+// too so already-persisted history displays correctly without a re-run.
+const _PROVIDER_ALIASES = { nvidia_nim: 'nim' };
+
 function _splitProviderModel(model) {
   const raw = String(model || '');
   if (!raw) return { provider: 'unknown', name: 'unknown', raw };
@@ -52,8 +62,16 @@ function _splitProviderModel(model) {
     }
   }
   const idx = raw.indexOf('/');
-  if (idx > 0) return { provider: raw.slice(0, idx), name: raw.slice(idx + 1), raw };
-  return { provider: 'implicit', name: raw, raw };
+  if (idx > 0) {
+    const alias = _PROVIDER_ALIASES[raw.slice(0, idx).toLowerCase()];
+    if (alias) return { provider: alias, name: raw.slice(idx + 1), raw };
+  }
+  // Provider map missed this model (not in the rotator's current catalog
+  // snapshot, or not loaded yet) — don't guess. The text before the first
+  // slash is the MODEL's own org prefix (openai/gpt-oss-120b, meta/...,
+  // google/...), not the hosting provider, so treating it as one is wrong
+  // more often than right. Show it honestly unresolved instead.
+  return { provider: 'unknown', name: idx > 0 ? raw.slice(idx + 1) : raw, raw };
 }
 
 const PLANNER_DETAILS = {
@@ -80,7 +98,7 @@ const PLANNER_DETAILS = {
   },
   off_topic: {
     title: 'Off-Topic Filter',
-    subtitle: 'Uses LLM-as-judge routing to keep only relevant corpus pages (embed_corpus removed 2026-09-03, LLM-only).',
+    subtitle: 'Uses LLM-as-judge routing to keep only relevant corpus pages.',
     kind: 'LLM judge',
     actions: [
       'Judges each document against the framework/domain boundary.',
@@ -442,7 +460,7 @@ export function buildDdModelRows(stage, nodeId, counters) {
       const split = _splitProviderModel(model);
       return {
         raw: split.raw,
-        provider: split.provider,
+        provider: split.provider === 'unknown' ? 'unknown' : displayProviderName(split.provider),
         model: split.name,
         calls: _num((stats || {}).calls),
         tokens_in: _num((stats || {}).tokens_in),
