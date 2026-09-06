@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import re
 import time
 from hashlib import sha256
@@ -59,10 +60,31 @@ _TEMPERATURE_REPAIR = 0.0
 _MAX_TOKENS_DRAFT   = 6000
 _MAX_TOKENS_REPAIR  = 6000
 _MAX_REPAIR_ATTEMPTS = 2
+# Draft-call attempts before permanently losing this source's content (its
+# key_facts/code_refs never reach any section — silent, not retried
+# downstream). The Rotator's own ~40-arm cascade already exhausted by the
+# time an exception surfaces here, so this only helps against a transient
+# whole-pool wave (e.g. simultaneous cooldowns), not a deterministic failure.
+_MAX_CALL_ATTEMPTS  = 2
 
 # Per-source body cap — generous since each LLM sees ONLY one source.
 # Most pages are <30K chars; cap at 100K to be safe.
 _MAX_SOURCE_CHARS = 100_000
+
+_CONTEXT_OVERFLOW_MARKERS = (
+    "context_length", "context window", "maximum context length",
+    "context_window_exceeded", "reduce the length", "too many tokens",
+    "context length exceeded", "prompt is too long",
+)
+
+
+def _is_context_overflow_error(e: Exception) -> bool:
+    """Heuristic substring match — same idiom as outline_sdp's classifier.
+    The Rotator is a universal gateway with no context-length-aware arm
+    filtering, so even a single 100K-char source can exceed a small
+    -context arm from a heterogeneous multi-provider pool."""
+    msg = str(e).lower()
+    return any(marker in msg for marker in _CONTEXT_OVERFLOW_MARKERS)
 
 _BLOB_PREFIX = "synth"
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -153,46 +175,72 @@ async def _digest_one_source(
     valid_section_ids: set[str],
     source_key: str,
     source_md: str,
-) -> Optional[SourceDigest]:
-    """Prompt → LLM → parse → validate → repair → SourceDigest; None on irrecoverable failure."""
+) -> tuple[Optional[SourceDigest], Optional[str]]:
+    """Prompt → LLM → parse → validate → repair → SourceDigest. Returns
+    (digest, None) on success or (None, error_reason) on irrecoverable
+    failure — the reason feeds the caller's error_breakdown telemetry."""
     async with sem:
         t0 = time.monotonic()
         source_vault_hashes = extract_vault_hashes(source_md)
         valid_hash_set = set(source_vault_hashes)
 
-        prompt = build_digest_prompt(
-            chapter_id = chapter_id,
-            chapter_title = chapter_title,
-            framework = framework,
-            outline_sections = outline_sections,
-            source_key = source_key,
-            source_md = source_md[:_MAX_SOURCE_CHARS],
-            source_vault_hashes = source_vault_hashes,
-        )
+        def _build_draft_prompt(char_cap: int) -> str:
+            return build_digest_prompt(
+                chapter_id = chapter_id,
+                chapter_title = chapter_title,
+                framework = framework,
+                outline_sections = outline_sections,
+                source_key = source_key,
+                source_md = source_md[:char_cap],
+                source_vault_hashes = source_vault_hashes,
+            )
+
+        prompt = _build_draft_prompt(_MAX_SOURCE_CHARS)
 
         deployment: Optional[str] = None
-        try:
-            response, meta = await chat_judge_bandit_async(
-                prompt,
-                max_tokens = _MAX_TOKENS_DRAFT,
-                temperature = _TEMPERATURE_DRAFT,
-                response_format = _DIGEST_RESPONSE_FORMAT,
-            )
-            deployment = (meta or {}).get("deployment")
-        except Exception as e:
+        response: Optional[str] = None
+        last_error: Optional[Exception] = None
+        for call_attempt in range(_MAX_CALL_ATTEMPTS):
+            try:
+                response, meta = await chat_judge_bandit_async(
+                    prompt,
+                    max_tokens = _MAX_TOKENS_DRAFT,
+                    temperature = _TEMPERATURE_DRAFT,
+                    response_format = _DIGEST_RESPONSE_FORMAT,
+                )
+                deployment = (meta or {}).get("deployment")
+                last_error = None
+                break
+            except Exception as e:
+                last_error = e
+                if call_attempt < _MAX_CALL_ATTEMPTS - 1:
+                    # Rotator's own cascade already exhausted — a retry
+                    # only helps against a transient whole-pool wave.
+                    # Shrink first if this looks like context overflow so
+                    # the retry doesn't just reproduce the same failure.
+                    if _is_context_overflow_error(e):
+                        prompt = _build_draft_prompt(_MAX_SOURCE_CHARS // 2)
+                    await asyncio.sleep(1.0 + random.random())
+
+        if last_error is not None:
             wall_ms = int((time.monotonic() - t0) * 1000)
+            error_tag = (
+                "context_overflow" if _is_context_overflow_error(last_error)
+                else f"{type(last_error).__name__}: {str(last_error)[:200]}"
+            )
             await emit_progress(
                 thread_id, "digest_construct", "source_done",
                 sample_idx = sample_idx, n_total = n_total,
                 source_key = source_key, ok = False,
-                error = f"{type(e).__name__}: {str(e)[:120]}",
+                error = f"{type(last_error).__name__}: {str(last_error)[:120]}",
                 wall_ms = wall_ms,
             )
             logger.warning(
-                f"[digest_construct] {source_key}: LLM call failed: "
-                f"{type(e).__name__}: {e}"
+                f"[digest_construct] {source_key}: LLM call failed after "
+                f"{_MAX_CALL_ATTEMPTS} attempt(s): "
+                f"{type(last_error).__name__}: {last_error}"
             )
-            return None
+            return None, error_tag
 
         parsed = _parse_json_response(response)
         if not parsed:
@@ -207,7 +255,7 @@ async def _digest_one_source(
             logger.info(
                 f"[digest_construct] {source_key}: response not parseable as JSON"
             )
-            return None
+            return None, "parse_failed"
 
         payload, err = _try_parse_payload(parsed)
         if payload is None:
@@ -260,7 +308,7 @@ async def _digest_one_source(
                     f"[digest_construct] {source_key}: pydantic-reject "
                     f"after {_MAX_REPAIR_ATTEMPTS} repairs: {err}"
                 )
-                return None
+                return None, "pydantic_fail"
 
         # Content-level cross-reference validation
         issues = validate_source_digest(
@@ -333,6 +381,15 @@ async def _digest_one_source(
                 source_md, source_key
             )
 
+        # Backfill source_key on every contribution — never asked of the
+        # LLM (it already knows which source it's digesting), but without
+        # this, sawc_write's per-section routing (which reads exactly
+        # this field) finds nothing to route on every single section,
+        # regardless of digest's own success rate. See SectionContribution
+        # in schemas.py for the full history of this bug.
+        for contrib in payload.contributes_to:
+            contrib.source_key = source_key
+
         wall_ms = int((time.monotonic() - t0) * 1000)
         src_digest = SourceDigest(
             source_key = source_key,
@@ -352,7 +409,7 @@ async def _digest_one_source(
             wall_ms = wall_ms,
             deployment = deployment,
         )
-        return src_digest
+        return src_digest, None
 
 
 def _compute_manifest_hash(
@@ -597,8 +654,57 @@ async def digest_construct_run(state: SynthState) -> dict:
         for i, (key, body) in enumerate(pairs)
     ]
     results = await asyncio.gather(*tasks)
-    per_source: list[SourceDigest] = [r for r in results if r is not None]
-    n_pydantic_fail = sum(1 for r in results if r is None)
+
+    # Bulkhead: retry ONLY the sources that failed, once, as a second wave
+    # — not a whole-chapter retry. Each source in the first wave already
+    # burned _MAX_CALL_ATTEMPTS against the Rotator's own ~40-arm cascade,
+    # so this only pays off against a wave-shaped outage (many arms
+    # simultaneously cooling down) that may have cleared in the time the
+    # rest of the chapter's sources took to run — not a deterministic
+    # per-source failure, which will just fail the same way again.
+    failed_idx = [i for i, (d, _) in enumerate(results) if d is None]
+    if failed_idx:
+        logger.info(
+            f"[digest_construct] {slug}/{chapter_id}: retrying "
+            f"{len(failed_idx)}/{len(pairs)} failed source(s) as a "
+            f"second wave before finalizing"
+        )
+        await asyncio.sleep(2.0)
+        retry_tasks = [
+            _digest_one_source(
+                sem = sem,
+                sample_idx = i,
+                n_total = len(pairs),
+                thread_id = thread_id,
+                chapter_id = chapter_id,
+                chapter_title = chapter_title,
+                framework = slug,
+                outline_sections = outline_sections,
+                valid_section_ids = valid_section_ids,
+                source_key = pairs[i][0],
+                source_md = pairs[i][1],
+            )
+            for i in failed_idx
+        ]
+        retry_results = await asyncio.gather(*retry_tasks)
+        n_recovered = 0
+        for i, retried in zip(failed_idx, retry_results):
+            if retried[0] is not None:
+                n_recovered += 1
+            results[i] = retried
+        if n_recovered:
+            logger.info(
+                f"[digest_construct] {slug}/{chapter_id}: second wave "
+                f"recovered {n_recovered}/{len(failed_idx)} source(s)"
+            )
+
+    per_source: list[SourceDigest] = [d for d, _ in results if d is not None]
+    failure_reasons = [err for d, err in results if d is None]
+    n_pydantic_fail = len(failure_reasons)
+    error_breakdown: dict[str, int] = {}
+    for err in failure_reasons:
+        kind = (err or "unknown").split(":", 1)[0].strip() or "unknown"
+        error_breakdown[kind] = error_breakdown.get(kind, 0) + 1
 
     await emit_progress(
         thread_id, "digest_construct", "digests_aggregated",
@@ -666,6 +772,7 @@ async def digest_construct_run(state: SynthState) -> dict:
         "n_orphan_code_refs":   coverage.orphan_code_refs,
         "n_total_vault_hashes": len(all_vault_hashes),
         "n_pydantic_fail":      n_pydantic_fail,
+        "error_breakdown":      error_breakdown,
         "avg_sources_per_section": coverage.avg_sources_per_section,
         "avg_sections_per_source": coverage.avg_sections_per_source,
         "wall_ms":              elapsed,
@@ -688,7 +795,8 @@ async def digest_construct_run(state: SynthState) -> dict:
     )
     logger.info(
         f"[digest_construct] {slug}/{chapter_id}: "
-        f"{stats['n_sources']}/{len(pairs)} sources digested, "
+        f"{stats['n_sources']}/{len(pairs)} sources digested "
+        f"(failed = {dict(sorted(error_breakdown.items()))}), "
         f"{stats['n_sections_covered']}/{stats['n_sections']} sections "
         f"with primary, {stats['n_empty_sections']} empty, "
         f"{stats['n_orphan_code_refs']} orphan refs, {elapsed} ms"

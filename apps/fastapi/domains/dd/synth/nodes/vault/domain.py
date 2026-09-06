@@ -160,7 +160,7 @@ def audit_roundtrip(
 def format_entry_for_prompt(
     entry: VaultEntry, *, max_chars: int | None = None,
 ) -> str:
-    """Render one vault entry as a Visible Vault envelope (hash+lang+LOC+body) for the LLM. Defaults to NO truncation (quality > token budget). Output is still byte-perfect — renderer materializes from vault[hash] regardless of what the LLM echoes."""
+    """Render one vault entry as a Visible Vault envelope (hash+lang+LOC+body) for the LLM. `max_chars=None` (default) means no per-entry cap — callers embedding many entries in one prompt should use `format_entries_for_prompt`'s `max_total_chars` instead of relying on this alone. Output is still byte-perfect — renderer materializes from vault[hash] regardless of what the LLM echoes."""
     body = entry.fence_text or ""
     if max_chars is not None and len(body) > max_chars:
         body = body[:max_chars] + (
@@ -180,30 +180,49 @@ def format_entries_for_prompt(
     max_chars_per_entry: int | None = None,
     max_total_chars: int | None = None,
 ) -> str:
-    """Format vault entries as Visible Vault envelopes. Defaults to NO truncation; bandit handles context-window variance across arms."""
+    """Format vault entries as Visible Vault envelopes. `max_total_chars=None`
+    (default) means no cap. When set, water-fills the budget fairly across
+    entries instead of sequential-fill-then-stop — the Rotator is a
+    universal gateway with no context-length-aware arm filtering (it does
+    NOT compensate for an oversized prompt), so a naive sequential cap
+    would silently zero out every entry after whichever one blows the
+    budget, biased by `hashes` order rather than content importance (the
+    same bug class fixed in outline_sdp's source concatenation)."""
     keys = hashes if hashes is not None else list(entries.keys())
-    out: list[str] = []
-    running = 0
-    for h in keys:
-        entry = entries.get(h)
-        if entry is None:
-            out.append(f'<code id="{h}" missing="true"/>')
-            continue
-        rendered = format_entry_for_prompt(
-            entry, max_chars = max_chars_per_entry,
-        )
-        if (
-            max_total_chars is not None
-            and running + len(rendered) > max_total_chars
-            and out
-        ):
-            out.append(
-                f'<!-- code bank truncated at {running} chars; '
-                f'{len(keys) - len(out)} more entries omitted -->'
-            )
+    rendered = [
+        format_entry_for_prompt(entries[h], max_chars = max_chars_per_entry)
+        if entries.get(h) is not None
+        else f'<code id="{h}" missing="true"/>'
+        for h in keys
+    ]
+    if max_total_chars is None:
+        return "\n\n".join(rendered)
+
+    n = len(rendered)
+    if n == 0:
+        return ""
+    alloc = [0] * n
+    pending = list(range(n))
+    remaining_budget = max_total_chars
+    while pending and remaining_budget > 0:
+        share = remaining_budget // len(pending)
+        if share <= 0:
             break
-        out.append(rendered)
-        running += len(rendered)
+        still_pending: list[int] = []
+        for i in pending:
+            need = len(rendered[i]) - alloc[i]
+            take = min(need, share)
+            alloc[i] += take
+            remaining_budget -= take
+            if alloc[i] < len(rendered[i]):
+                still_pending.append(i)
+        pending = still_pending
+    out = [rendered[i][: alloc[i]] for i in range(n) if alloc[i] > 0]
+    if any(alloc[i] < len(rendered[i]) for i in range(n)):
+        out.append(
+            f'<!-- vault bank water-filled to {max_total_chars} chars '
+            f'total across {n} entries; some bodies truncated -->'
+        )
     return "\n\n".join(out)
 
 

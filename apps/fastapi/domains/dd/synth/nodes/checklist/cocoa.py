@@ -42,9 +42,6 @@ COCOA_PROMPT_VERSION = "v1-cocoa-2026-05-25"
 # Stage-1 cache keyed on vault hash + prompt_version; prompt revision auto-invalidates.
 _COCOA_CACHE_PREFIX = f"synth-cache/cocoa-abstractions/{COCOA_PROMPT_VERSION}"
 
-_DD_PROCESS_EXPLAINER = "dd-cocoa-explainer"
-_DD_PROCESS_JUDGE     = "dd-cocoa-judge"
-
 _MAX_SUBTOPICS_PER_BATCH = 60
 
 _EXPLAINER_MAX_TOKENS = 8000
@@ -54,6 +51,10 @@ _JUDGE_TEMPERATURE     = 0.0
 
 # reverted 0.70 → 0.85 (CC run: 0.70 let through catastrophic mismatches; keyword-overlap pre-check now covers the BU regression).
 _ALIGN_PASS_FRACTION = 0.85
+# Below this fraction of LLM-stage pairs actually judged (explainer/judge
+# call failures dropped the rest silently before this fix), the alignment
+# rate is noise, not signal — an infra outage must not read as prose drift.
+_MIN_EVALUATED_FRACTION = 0.5
 
 # Keyword-overlap pre-check: zero shared identifiers between prose and code → misaligned (no LLM call needed).
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
@@ -222,7 +223,6 @@ async def _explain_blocks(blocks: list[dict]) -> dict[str, str]:
             prompt,
             max_tokens = _EXPLAINER_MAX_TOKENS,
             temperature = _EXPLAINER_TEMPERATURE,
-            dd_process = _DD_PROCESS_EXPLAINER,
             response_format = {"type": "json_object"},
         )
     except Exception as e:
@@ -310,7 +310,9 @@ def _render_pairs_for_judge(pairs: list[dict]) -> str:
 
 async def _judge_pairs(pairs: list[dict]) -> dict[str, dict]:
     """Returns {id_str: {"aligned": bool, "reason": str}}. Failures fall
-    through to {} (alignment unknown for missing ids → treated as PASS)."""
+    through to {} — missing ids are excluded from both the numerator and
+    denominator by the caller (n_judged = len(verdicts)), not defaulted to
+    either aligned or misaligned."""
     if not pairs:
         return {}
     prompt = _JUDGE_PROMPT.format(
@@ -321,7 +323,6 @@ async def _judge_pairs(pairs: list[dict]) -> dict[str, dict]:
             prompt,
             max_tokens = _JUDGE_MAX_TOKENS,
             temperature = _JUDGE_TEMPERATURE,
-            dd_process = _DD_PROCESS_JUDGE,
             response_format = {"type": "json_object"},
         )
     except Exception as e:
@@ -392,6 +393,7 @@ async def cocoa_alignment_check(
     if n_pairs == 0:
         return {
             "passed":         True,
+            "resolved":       True,   # genuinely nothing to check, not an outage
             "method":         "cocoa_skipped",
             "n_pairs":        0,
             "n_aligned":      0,
@@ -453,6 +455,7 @@ async def cocoa_alignment_check(
     if not specs:
         return {
             "passed":         True,    # fail-soft — don't override bundled
+            "resolved":       False,
             "method":         "cocoa_skipped",
             "n_pairs":        n_pairs,
             "n_aligned":      n_pairs,
@@ -481,16 +484,33 @@ async def cocoa_alignment_check(
         partial = await _judge_pairs(batch)
         verdicts.update(partial)
 
-    if not verdicts:
+    # Evaluated-fraction floor over the LLM stage specifically — pairs that
+    # never got a spec (explainer failure) or never got a verdict (judge
+    # failure) must not silently count toward "misaligned" just by being
+    # absent from `verdicts`. n_pairs here is len(pairs_for_llm) (post
+    # structural pre-check), i.e. exactly what SHOULD have reached the judge.
+    n_llm_total = len(pairs)
+    n_llm_judged = len(verdicts)
+    llm_evaluated_fraction = (
+        n_llm_judged / n_llm_total if n_llm_total else 1.0
+    )
+    if llm_evaluated_fraction < _MIN_EVALUATED_FRACTION:
+        logger.warning(
+            f"[cocoa] only {n_llm_judged}/{n_llm_total} LLM-stage pairs "
+            f"({llm_evaluated_fraction:.0%}) got a real verdict — below "
+            f"the {_MIN_EVALUATED_FRACTION:.0%} floor, treating as "
+            f"unresolved rather than computing a rate over missing evidence"
+        )
         return {
             "passed":         True,
+            "resolved":       False,
             "method":         "cocoa_skipped",
             "n_pairs":        n_pairs,
             "n_aligned":      n_pairs,
             "n_misaligned":   0,
             "alignment_rate": 1.0,
             "misaligned":     [],
-            "feedback":       "cocoa judge failed; bundled judge stands",
+            "feedback":       "cocoa judge under-evaluated; bundled judge stands",
         }
 
     n_aligned = 0
@@ -509,8 +529,10 @@ async def cocoa_alignment_check(
                 "reason": v.get("reason") or "explanation does not ground to the cited code",
             })
 
-    # n_pairs is the ORIGINAL total (includes structurally-misaligned); structural pre-check is part of the alignment signal.
-    n_judged = n_pairs
+    # Denominator is structural pre-check pairs + pairs that ACTUALLY got a
+    # judge verdict — not n_pairs, which would let un-judged pairs (explainer
+    # or judge call failures) silently drag the rate down as if misaligned.
+    n_judged = len(structural_misaligned) + n_llm_judged
     rate = (n_aligned / n_judged) if n_judged else 1.0
     passed = rate >= _ALIGN_PASS_FRACTION
 
@@ -529,8 +551,10 @@ async def cocoa_alignment_check(
 
     return {
         "passed":         passed,
+        "resolved":       True,
         "method":         "cocoa_v1",
         "n_pairs":        n_pairs,
+        "n_judged":       n_judged,
         "n_aligned":      n_aligned,
         "n_misaligned":   len(misaligned),
         "alignment_rate": rate,

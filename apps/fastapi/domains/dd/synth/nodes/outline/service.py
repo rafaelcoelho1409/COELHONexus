@@ -43,8 +43,7 @@ from typing import Optional
 
 from pydantic import ValidationError
 
-from domains.llm.rotator.chain import chat_judge_bandit_async
-from domains.llm.rotator.chain.service import embed_via_router_async
+from domains.llm.rotator.chain import chat_judge_bandit_async, embed_via_router_async
 
 from ....ingestion.storage import get_storage
 from ...runtime.observability import record_bucket_split_overflow
@@ -351,12 +350,22 @@ def build_outline_prompt(
         f"}}\n\n"
 
         f"== HARD RULES ==\n"
-        f"1. section_id format: 's' + integer, e.g. 's1', 's2', ..., 's40'. "
-        f"Unique within the chapter. Once assigned, an id is referenced by "
-        f"downstream nodes — do NOT renumber on subsequent rewrites.\n"
-        f"2. heading: 2-8 words, topic-y/code-y, NO leading '#'. BANNED "
-        f"(case-insensitive — these are content-types, not topics): "
-        f"{BANNED_LIST_HUMAN}.\n"
+        f"1. section_id format: 's' + integer ONLY — 's1', 's2', ..., "
+        f"'s40'. Unique within the chapter. Once assigned, an id is "
+        f"referenced by downstream nodes — do NOT renumber on subsequent "
+        f"rewrites. WRONG (rejected every time): a descriptive slug like "
+        f"'config-hierarchy-scopes' or 'file-level-customization' — a "
+        f"human-readable name is NOT a section_id, no matter how well it "
+        f"names the topic. The topic name belongs in `heading`, not here.\n"
+        f"2. heading: 2-8 words, topic-y/code-y, NO leading '#'. WRONG "
+        f"(rejected every time): cramming the whole section scope into "
+        f"one comma-separated list, e.g. 'Extending Claude Code with "
+        f"Skills, Hooks, System Prompts, and Project Context' (11 words, "
+        f"reads like 4 topics glued together). RIGHT: pick the ONE most "
+        f"central topic and name just that, e.g. 'Skills and Hooks' — "
+        f"split the rest into their own section(s) instead of listing "
+        f"them all in one heading. BANNED (case-insensitive — these are "
+        f"content-types, not topics): {BANNED_LIST_HUMAN}.\n"
         f"3. description: 20-400 chars, ONE specific topic. Used by "
         f"`digest_construct` to route source material — vague descriptions "
         f"cause mis-routing. Examples of good: 'how to wire DI overrides "
@@ -500,6 +509,14 @@ def build_repair_prompt(
         f"section_ids unless you're adding a new section — downstream "
         f"nodes reference them by id.\n\n"
 
+        f"If an issue below is a `section_id` format error: the fix is "
+        f"'s' + integer ONLY (e.g. 's3') — a descriptive slug is NOT a "
+        f"valid section_id no matter how well it names the topic; move "
+        f"that name into `heading` instead.\n"
+        f"If an issue below is a `heading` length error: pick the ONE "
+        f"most central topic and name just that in 2-8 words — do NOT "
+        f"comma-separate multiple topics into one long heading.\n\n"
+
         f"FRAMEWORK: {framework}\n"
         f"CHAPTER: {chapter_id} — {chapter_title}\n"
         f"GOAL: {chapter_description}\n\n"
@@ -618,10 +635,71 @@ def _parse_json_response(text: str) -> Optional[dict]:
     except Exception:
         return None
 
+def _normalize_outline_dict(raw: dict) -> dict:
+    """Fix format-only violations the model reliably makes before they
+    ever reach Pydantic — structured-output modes guarantee JSON shape,
+    not that every string field matches an arbitrary regex, and 2026 SOTA
+    practice for this class of failure is normalize-then-validate rather
+    than reject-and-repair-call. Confirmed reproducible this session on
+    two distinct fields: section_id as a descriptive slug instead of
+    's<N>', and heading as a full comma-separated topic list instead of
+    2-8 words. Best-effort only — leaves anything it can't confidently
+    fix for Pydantic (and the repair loop) to catch."""
+    sections = raw.get("sections")
+    if not isinstance(sections, list):
+        return raw
+
+    # section_id: descriptive slug → s<position>, remapped everywhere
+    # (including prerequisites) so cross-references stay consistent.
+    id_remap: dict[str, str] = {}
+    for i, sec in enumerate(sections):
+        if not isinstance(sec, dict):
+            continue
+        sid = sec.get("section_id")
+        if isinstance(sid, str) and not SECTION_ID_RE.match(sid):
+            new_id = f"s{i + 1}"
+            id_remap[sid] = new_id
+            sec["section_id"] = new_id
+    if id_remap:
+        for sec in sections:
+            if not isinstance(sec, dict):
+                continue
+            prereqs = sec.get("prerequisites")
+            if isinstance(prereqs, list):
+                sec["prerequisites"] = [
+                    id_remap.get(p, p) for p in prereqs
+                ]
+
+    # heading: too many words → keep the leading clause (up to the first
+    # comma/semicolon/" and "), then hard-truncate to HEADING_MAX_WORDS.
+    # Lossy, but a shortened real heading beats a hard reject + repair
+    # round-trip for something this cosmetic.
+    for sec in sections:
+        if not isinstance(sec, dict):
+            continue
+        heading = sec.get("heading")
+        if not isinstance(heading, str):
+            continue
+        words = heading.split()
+        if len(words) > HEADING_MAX_WORDS:
+            head = re.split(r",| and |;", heading, maxsplit=1)[0].strip()
+            head_words = head.split()
+            if not (HEADING_MIN_WORDS <= len(head_words) <= HEADING_MAX_WORDS):
+                # Leading clause was too short (or still too long) to use
+                # as-is — fall back to a plain hard-truncate of the
+                # original, which is always exactly HEADING_MAX_WORDS.
+                head_words = words[:HEADING_MAX_WORDS]
+            sec["heading"] = " ".join(head_words)
+
+    return raw
+
+
 def _try_parse_outline(
     raw: dict,
 ) -> tuple[Optional[ChapterOutline], Optional[str]]:
-    """Pydantic-validate raw dict → ChapterOutline. Returns (outline, error)."""
+    """Normalize known format-only violations, then Pydantic-validate.
+    Returns (outline, error)."""
+    raw = _normalize_outline_dict(raw)
     try:
         outline = ChapterOutline.model_validate(raw)
         return outline, None
@@ -644,24 +722,42 @@ def _shorten_pydantic_error(e: ValidationError) -> str:
     suffix = f" (+{len(errs) - 4} more)" if len(errs) > 4 else ""
     return "; ".join(lines) + suffix
 
-def _concat_sources(bodies: list[str]) -> tuple[str, bool]:
+def _concat_sources(
+    bodies: list[str], *, max_chars: int = _MAX_SOURCE_CHARS,
+) -> tuple[str, bool]:
     """Concatenate source markdown bodies with separators, capped at
-    `_MAX_SOURCE_CHARS`. Returns (concat_text, truncated_flag)."""
-    parts: list[str] = []
-    total = 0
-    truncated = False
-    for body in bodies:
-        if not body:
-            continue
-        if total + len(body) > _MAX_SOURCE_CHARS:
-            remaining = _MAX_SOURCE_CHARS - total
-            if remaining > 200:
-                parts.append(body[:remaining])
-                total = _MAX_SOURCE_CHARS
-            truncated = True
+    `max_chars`, via max-min water-filling instead of sequential fill.
+
+    `sources` upstream is `sorted(...)` by key, so a naive fill-then-stop
+    silently zeroes out every source that sorts after the cap is hit —
+    for any chapter whose combined body exceeds the cap, alphabetically
+    -later docs never reach the outliner at all, biasing which topics get
+    a section for reasons unrelated to content importance. Water-filling
+    gives every source a fair, capped share of the budget instead, so a
+    big/small chapter still sees the FULL topic surface, just thinner per
+    doc. Original source order is preserved for readability."""
+    non_empty = [b for b in bodies if b]
+    if not non_empty:
+        return "", False
+    n = len(non_empty)
+    remaining_budget = max_chars
+    alloc = [0] * n
+    pending = list(range(n))
+    while pending and remaining_budget > 0:
+        share = remaining_budget // len(pending)
+        if share <= 0:
             break
-        parts.append(body)
-        total += len(body) + len(_SOURCE_CONCAT_SEPARATOR)
+        still_pending: list[int] = []
+        for i in pending:
+            need = len(non_empty[i]) - alloc[i]
+            take = min(need, share)
+            alloc[i] += take
+            remaining_budget -= take
+            if alloc[i] < len(non_empty[i]):
+                still_pending.append(i)
+        pending = still_pending
+    truncated = any(alloc[i] < len(non_empty[i]) for i in range(n))
+    parts = [non_empty[i][: alloc[i]] for i in range(n) if alloc[i] > 0]
     return _SOURCE_CONCAT_SEPARATOR.join(parts), truncated
 
 _SCOPE_LEXICAL_JACCARD = 0.40
@@ -936,6 +1032,25 @@ def _find_chapter(plan: dict, chapter_id: str) -> Optional[dict]:
 
 
 
+_CONTEXT_OVERFLOW_MARKERS = (
+    "context_length", "context window", "maximum context length",
+    "context_window_exceeded", "reduce the length", "too many tokens",
+    "context length exceeded", "prompt is too long",
+)
+
+
+def _is_context_overflow_error(e: Exception) -> bool:
+    """Heuristic substring match — same idiom the openai-compat retry
+    classifier already uses for payment/rate-limit errors. The Rotator is
+    a universal, provider-agnostic gateway with no context-length-aware
+    arm filtering (confirmed: no such concept exists in its routing
+    code), so a large prompt CAN land on a small-context arm from a
+    heterogeneous pool; the failure surfaces here as a generic exception
+    indistinguishable from any other unless we pattern-match the message."""
+    msg = str(e).lower()
+    return any(marker in msg for marker in _CONTEXT_OVERFLOW_MARKERS)
+
+
 async def _draft_one_outline(
     prompt: str,
     *,
@@ -953,13 +1068,17 @@ async def _draft_one_outline(
             response_format=_OUTLINE_RESPONSE_FORMAT,
         )
     except Exception as e:
+        error_tag = (
+            "context_overflow" if _is_context_overflow_error(e)
+            else f"{type(e).__name__}: {str(e)[:200]}"
+        )
         await emit_progress(
             thread_id, "outline_sdp", "sample_done",
             sample_idx=sample_idx, n_total=n_total,
             ok=False, error=f"{type(e).__name__}: {str(e)[:120]}",
             wall_ms=int((time.monotonic() - t0) * 1000),
         )
-        return None, {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+        return None, {"error": error_tag}
     parsed = _parse_json_response(response)
     if not parsed:
         await emit_progress(
@@ -1178,6 +1297,51 @@ async def outline_sdp_run(state: SynthState) -> dict:
         thread_id, "outline_sdp", "samples_validated",
         n_candidates = len(candidates), n_pydantic_fail = pydantic_failures,
     )
+
+    if not candidates:
+        overflow_count = sum(
+            1 for _, meta in raw_samples
+            if (meta or {}).get("error") == "context_overflow"
+        )
+        if overflow_count >= max(1, len(raw_samples) // 2):
+            # Predominantly context-overflow, not generic hiccups — the
+            # Rotator's arm pool is heterogeneous and un-filtered by
+            # context length (see _is_context_overflow_error), so this
+            # sample batch likely landed on a small-context arm. Retry
+            # once at half the source budget before giving up to the
+            # heuristic fallback.
+            retry_budget = max(_MAX_SOURCE_CHARS // 2, 20_000)
+            logger.warning(
+                f"[outline_sdp] {slug}/{chapter_id}: {overflow_count}/"
+                f"{len(raw_samples)} samples hit context overflow — "
+                f"retrying once at {retry_budget} chars (was "
+                f"{len(sources_concat_md)})"
+            )
+            sources_concat_md, truncated = _concat_sources(
+                bodies, max_chars = retry_budget,
+            )
+            n_vault_hashes = count_vault_sentinels(sources_concat_md)
+            retry_prompt = build_outline_prompt(
+                framework = slug,
+                chapter_id = chapter_id,
+                chapter_title = chapter_title,
+                chapter_description = chapter_description,
+                n_vault_hashes = n_vault_hashes,
+                sources_concat_md = sources_concat_md,
+                target_sections_hint = adaptive_target,
+            )
+            raw_samples = await _generate_samples(
+                retry_prompt, _N_SAMPLES, thread_id, n_sources = len(sources),
+            )
+            for parsed_dict, meta in raw_samples:
+                outline, err = _try_parse_outline(parsed_dict)
+                if outline is None:
+                    continue
+                dag = derive_dag(outline.sections)
+                _, issues = validate_outline_structure(
+                    outline, dag, n_sources = len(sources),
+                )
+                candidates.append((outline, dag, issues))
 
     if not candidates:
         logger.warning(

@@ -37,6 +37,11 @@ class SynthState(TypedDict, total=False):
     # OP-12 best-seen rescue: on budget/plateau halt, route highest-score sawc to render.
     best_seen_sawc_path:   Optional[str]
     best_seen_score:       Optional[float]
+    # Sustained-outage detection: consecutive RETHINK iterations whose low
+    # score was infra-driven (judge/CoCoA/atomic-claim call failures), not
+    # genuine content review. Resets to 0 the moment an iteration is NOT
+    # infra-degraded. Distinct from refine_iter (total budget spent).
+    consecutive_infra_degraded: Optional[int]
 
     status:         Optional[str]  # "running" | "done" | "failed" | "cancelled"
     error:          Optional[str]

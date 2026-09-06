@@ -2,5 +2,5 @@
 from __future__ import annotations
 
 
-DIGEST_SCHEMA_VERSION = "1.0"
-DIGEST_PROMPT_VERSION = "v3-source-pool-merge-2026-05-29"
+DIGEST_SCHEMA_VERSION = "1.1"
+DIGEST_PROMPT_VERSION = "v6-contribution-source-key-2026-09-05"

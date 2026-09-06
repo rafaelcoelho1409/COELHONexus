@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 
 from .params import (
@@ -165,6 +166,27 @@ def _idents(text: str) -> set[str]:
     return {w.lower() for w in IDENT_RE.findall(text or "")} - NOISE_IDENTS
 
 
+# Fixed 2026-09-05 — a "/ plugin marketplace add ..." shipped with a
+# stray space after the leading slash (not a valid Claude Code command;
+# `/plugin` is). Origin is ambiguous — could be an LLM generation slip
+# OR an artifact already present in the ingested source markdown — so
+# this fixes it at render time regardless of where it came from, rather
+# than relying only on prompting the writer not to do it. Scoped tight:
+# only the first line of a fenced block, only a slash immediately
+# followed by whitespace then a word — real code doesn't start a line
+# that way (division operators appear mid-expression, not as the first
+# two tokens of a line).
+_STRAY_SLASH_SPACE_RE = re.compile(r"^(/)[ \t]+(\w)")
+
+
+def _fix_stray_slash_command_space(inner: str) -> str:
+    if not inner:
+        return inner
+    lines = inner.split("\n")
+    lines[0] = _STRAY_SLASH_SPACE_RE.sub(r"\1\2", lines[0], count=1)
+    return "\n".join(lines)
+
+
 def dedupe_and_align_sections(
     sections_ctx: list[dict],
     *,
@@ -177,7 +199,24 @@ def dedupe_and_align_sections(
     for sec in sections_ctx:
         heading = sec.get("heading") or "?"
         for sub in (sec.get("subtopics") or []):
-            inner = _code_inner(sub.get("code_block") or "")
+            raw_block = sub.get("code_block") or ""
+            inner = _code_inner(raw_block)
+            if inner:
+                fixed_inner = _fix_stray_slash_command_space(inner)
+                if fixed_inner != inner:
+                    # Rebuild the fenced block with the corrected inner
+                    # body, mirroring _code_inner's own stripping exactly
+                    # (it strips code_block before splitting on the first
+                    # newline / last ``` — must match here or the fence
+                    # lines would drift from what _code_inner would parse
+                    # back out on a second pass).
+                    body = raw_block.strip()
+                    nl = body.find("\n")
+                    end = body.rfind("```")
+                    fence_start = body[:nl + 1]
+                    fence_end = body[end:]
+                    sub["code_block"] = f"{fence_start}{fixed_inner}\n{fence_end}"
+                    inner = fixed_inner
             if not inner:
                 continue
             subheading = sub.get("subheading") or "?"

@@ -77,7 +77,9 @@ def derive_halt_reason(
     if payload.halt and not payload.actions:
         return True, "no_actions_needed"
     if payload.halt:
+        # LLM said halt with actions emitted (suggestions for v2/manual review)
         return True, "confidence_high"
+    # LLM wants to continue, but v1 doesn't loop yet
     return True, "v1_no_loop"
 
 

@@ -3,4 +3,4 @@ from __future__ import annotations
 
 
 CHECKLIST_SCHEMA_VERSION = "1.0"
-CHECKLIST_PROMPT_VERSION = "v2-2026-05-25"
+CHECKLIST_PROMPT_VERSION = "v4-abstention-semantics-2026-09-05"

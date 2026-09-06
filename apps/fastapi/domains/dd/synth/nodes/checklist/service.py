@@ -400,16 +400,51 @@ def collect_failed_feedback(results: list[CriterionResult]) -> list[str]:
     return out
 
 
+def _water_fill_blocks(
+    blocks: list[str], *, char_cap: int,
+) -> tuple[str, bool]:
+    """Join `blocks` within `char_cap` total chars, water-filling fairly
+    across all of them instead of sequential-fill-then-stop. A naive cap
+    silently drops every block after whichever one blows the budget —
+    for a chapter render that means every section after some midpoint
+    (chapter_reads_coherently / terminology_consistent judge the WHOLE
+    chapter, so never seeing its ending biases both verdicts); for a
+    digest render it means later sections' grounding facts vanish
+    entirely from what claims_grounded_in_sources gets to check against.
+    Same algorithm as outline_sdp's source concatenation / sawc_write's
+    vault-bank fix — order preserved, no entry ever fully zeroed out."""
+    n = len(blocks)
+    if n == 0:
+        return "", False
+    alloc = [0] * n
+    pending = list(range(n))
+    remaining_budget = char_cap
+    while pending and remaining_budget > 0:
+        share = remaining_budget // len(pending)
+        if share <= 0:
+            break
+        still_pending: list[int] = []
+        for i in pending:
+            need = len(blocks[i]) - alloc[i]
+            take = min(need, share)
+            alloc[i] += take
+            remaining_budget -= take
+            if alloc[i] < len(blocks[i]):
+                still_pending.append(i)
+        pending = still_pending
+    truncated = any(alloc[i] < len(blocks[i]) for i in range(n))
+    parts = [blocks[i][: alloc[i]] for i in range(n) if alloc[i] > 0]
+    return "\n".join(parts), truncated
+
+
 def render_chapter_for_judge(
     sawc: dict,
     *,
     char_cap: int = MAX_RENDERED_CHAPTER_CHARS,
 ) -> tuple[str, bool]:
     """Render v2 cookbook sections for the LLM-judge; returns (text, truncated_flag)."""
-    parts: list[str] = []
-    total = 0
-    truncated = False
     sections = sawc.get("sections") or []
+    blocks: list[str] = []
     for s in sections:
         sid = s.get("section_id", "?")
         heading = s.get("heading", "?")
@@ -442,13 +477,8 @@ def render_chapter_for_judge(
             block_lines.append("")
             block_lines.append(f"[citations ({len(citations)}): {cite_summary}]")
         block_lines.append("")
-        block = "\n".join(block_lines)
-        if total + len(block) > char_cap:
-            truncated = True
-            break
-        parts.append(block)
-        total += len(block)
-    return ("\n".join(parts), truncated)
+        blocks.append("\n".join(block_lines))
+    return _water_fill_blocks(blocks, char_cap = char_cap)
 
 
 def render_digest_for_grounding(
@@ -457,9 +487,8 @@ def render_digest_for_grounding(
     char_cap: int = 20_000,
 ) -> str:
     """Render compressed per-section digest contributions for the grounding judge."""
-    parts: list[str] = []
-    total = 0
     per_section = digest.get("per_section") or {}
+    blocks: list[str] = []
     for sid in sorted(per_section.keys()):
         contribs = per_section[sid]
         if not contribs:
@@ -476,13 +505,9 @@ def render_digest_for_grounding(
             )
             for f in facts[:3]:
                 block_lines.append(f"    • {f[:200]}")
-        block = "\n".join(block_lines)
-        if total + len(block) > char_cap:
-            block_lines.append("[...truncated...]")
-            break
-        parts.append(block)
-        total += len(block)
-    return "\n".join(parts)
+        blocks.append("\n".join(block_lines))
+    text, _truncated = _water_fill_blocks(blocks, char_cap = char_cap)
+    return text
 
 
 _CRITERION_BLOCKS: dict[str, str] = {
@@ -669,38 +694,71 @@ async def _run_llm_judge(
     chapter_id: str,
     chapter_title: str,
     framework: str,
+    sawc: dict,
+    digest: dict,
     rendered_chapter: str,
     rendered_digest: str,
     truncated: bool,
 ) -> tuple[list[CriterionResult], Optional[str], bool, int]:
     """Fire batched judge → parse → repair if needed; hard failure → conservative FAILED fallback."""
     t0 = time.monotonic()
-    prompt = build_judge_prompt(
-        chapter_id=chapter_id,
-        chapter_title=chapter_title,
-        framework=framework,
-        rendered_chapter=rendered_chapter,
-        rendered_digest=rendered_digest,
-        truncated=truncated,
-    )
+    cur_rendered_chapter = rendered_chapter
+    cur_rendered_digest = rendered_digest
+    cur_truncated = truncated
 
     deployment: Optional[str] = None
-    try:
-        response, meta = await chat_judge_bandit_async(
-            prompt,
-            max_tokens=_MAX_TOKENS_JUDGE,
-            temperature=_TEMPERATURE_JUDGE,
-            response_format=_JUDGE_RESPONSE_FORMAT,
+    response: Optional[str] = None
+    last_error: Optional[Exception] = None
+    for call_attempt in range(_MAX_CALL_ATTEMPTS):
+        prompt = build_judge_prompt(
+            chapter_id=chapter_id,
+            chapter_title=chapter_title,
+            framework=framework,
+            rendered_chapter=cur_rendered_chapter,
+            rendered_digest=cur_rendered_digest,
+            truncated=cur_truncated,
         )
-        deployment = (meta or {}).get("deployment")
-    except Exception as e:
+        try:
+            response, meta = await chat_judge_bandit_async(
+                prompt,
+                max_tokens=_MAX_TOKENS_JUDGE,
+                temperature=_TEMPERATURE_JUDGE,
+                response_format=_JUDGE_RESPONSE_FORMAT,
+            )
+            deployment = (meta or {}).get("deployment")
+            last_error = None
+            break
+        except Exception as e:
+            last_error = e
+            if call_attempt < _MAX_CALL_ATTEMPTS - 1:
+                # The Rotator's own cascade already exhausted — a retry
+                # mostly helps against a transient whole-pool wave. If
+                # this looks like context overflow (60K chars ≈ 15K
+                # tokens can still exceed a small-context arm from the
+                # heterogeneous pool), re-render at half budget first so
+                # the retry doesn't just reproduce the same failure —
+                # cheap insurance against triggering a full mgsr_replan
+                # cycle for what was really an infra hiccup.
+                if _is_context_overflow_error(e):
+                    cur_rendered_chapter, cur_truncated = (
+                        render_chapter_for_judge(
+                            sawc,
+                            char_cap=MAX_RENDERED_CHAPTER_CHARS // 2,
+                        )
+                    )
+                    cur_rendered_digest = render_digest_for_grounding(
+                        digest, char_cap=10_000,
+                    )
+                await asyncio.sleep(1.0 + random.random())
+    if last_error is not None:
         wall_ms = int((time.monotonic() - t0) * 1000)
         logger.warning(
-            f"[checklist_eval] LLM judge call failed: "
-            f"{type(e).__name__}: {e}"
+            f"[checklist_eval] LLM judge call failed after "
+            f"{_MAX_CALL_ATTEMPTS} attempt(s): "
+            f"{type(last_error).__name__}: {last_error}"
         )
         return (
-            _fallback_llm_verdicts(f"{type(e).__name__}"),
+            _fallback_llm_verdicts(f"{type(last_error).__name__}"),
             None, False, wall_ms,
         )
 
@@ -722,9 +780,9 @@ async def _run_llm_judge(
             chapter_id=chapter_id,
             chapter_title=chapter_title,
             framework=framework,
-            rendered_chapter=rendered_chapter,
-            rendered_digest=rendered_digest,
-            truncated=truncated,
+            rendered_chapter=cur_rendered_chapter,
+            rendered_digest=cur_rendered_digest,
+            truncated=cur_truncated,
             current_json=current_json,
             issues=repair_issues,
         )
@@ -784,6 +842,27 @@ _MAX_TOKENS_JUDGE       = 3000
 _MAX_TOKENS_REPAIR      = 3000
 
 _MAX_REPAIR_ATTEMPTS    = 1
+
+# Draft-call attempts before falling back to the conservative all-FAIL
+# verdict (which triggers a full mgsr_replan cycle) — same idiom as
+# outline_sdp/digest_construct/sawc_write's context-overflow retry.
+_MAX_CALL_ATTEMPTS = 2
+
+_CONTEXT_OVERFLOW_MARKERS = (
+    "context_length", "context window", "maximum context length",
+    "context_window_exceeded", "reduce the length", "too many tokens",
+    "context length exceeded", "prompt is too long",
+)
+
+
+def _is_context_overflow_error(e: Exception) -> bool:
+    """Heuristic substring match — same classifier idiom used across the
+    synth pipeline. The Rotator is a universal gateway with no context
+    -length-aware arm filtering, so the rendered chapter (up to
+    MAX_RENDERED_CHAPTER_CHARS) can still exceed a small-context arm."""
+    msg = str(e).lower()
+    return any(marker in msg for marker in _CONTEXT_OVERFLOW_MARKERS)
+
 
 _JUDGE_RESPONSE_FORMAT = {
     "type": "json_schema",
@@ -944,12 +1023,14 @@ async def checklist_eval_run(state: SynthState) -> dict:
                 "pass_rate":       cached.get("pass_rate", 0.0),
                 "chapter_passed":  cached.get("chapter_passed", False),
                 "n_failed_feedback": len(cached.get("failed_feedback") or []),
+                "failed_feedback":   cached.get("failed_feedback") or [],
                 "wall_ms":         elapsed,
                 "store_path":      latest_key,
                 "versioned_path":  versioned_key,
                 "manifest_hash":   manifest_hash,
                 "cache_hit":       True,
                 "prompt_version":  cached.get("prompt_version"),
+                "infra_degraded":  False,   # a cached result is a completed prior run
             }
             await emit_progress(
                 thread_id, "checklist_eval", "done",
@@ -967,7 +1048,12 @@ async def checklist_eval_run(state: SynthState) -> dict:
                 f"{stats['chapter_passed']}, {elapsed} ms"
             )
             _emit_criterion_scores(slug, cached.get("criteria") or [])
-            return {"checklist_path": latest_key, "checklist_stats": stats}
+            return {
+                "checklist_path": latest_key,
+                "checklist_stats": stats,
+                # A cache hit is a completed prior run, not a live outage — reset the streak.
+                "consecutive_infra_degraded": 0,
+            }
         except Exception as e:
             logger.warning(
                 f"[checklist_eval] {slug}/{chapter_id}: cached blob "
@@ -1015,6 +1101,8 @@ async def checklist_eval_run(state: SynthState) -> dict:
         chapter_id = chapter_id,
         chapter_title = chapter_title,
         framework = slug,
+        sawc = sawc,
+        digest = digest,
         rendered_chapter = rendered_chapter,
         rendered_digest = rendered_digest,
         truncated = truncated,
@@ -1091,8 +1179,13 @@ async def checklist_eval_run(state: SynthState) -> dict:
     await emit_progress(
         thread_id, "checklist_eval", "faithfulness_done",
         method = (atomic_result or {}).get("method", "skipped"),
+        resolved = (atomic_result or {}).get("resolved", False),
         n_claims = (atomic_result or {}).get("n_claims", 0),
+        n_evaluated = (atomic_result or {}).get("n_evaluated", 0),
         n_unsupported = (atomic_result or {}).get("n_unsupported", 0),
+        n_judge_call_failures = (
+            (atomic_result or {}).get("n_judge_call_failures", 0)
+        ),
         overrode_bundled = (atomic_result is not None
                           and not atomic_result["passed"]),
         wall_ms = faithfulness_wall_ms,
@@ -1123,7 +1216,9 @@ async def checklist_eval_run(state: SynthState) -> dict:
     await emit_progress(
         thread_id, "checklist_eval", "cocoa_done",
         method = (cocoa_result or {}).get("method", "skipped"),
+        resolved = (cocoa_result or {}).get("resolved", False),
         n_pairs = (cocoa_result or {}).get("n_pairs", 0),
+        n_judged = (cocoa_result or {}).get("n_judged", 0),
         n_aligned = (cocoa_result or {}).get("n_aligned", 0),
         n_misaligned = (cocoa_result or {}).get("n_misaligned", 0),
         alignment_rate = (cocoa_result or {}).get("alignment_rate", 1.0),
@@ -1166,12 +1261,37 @@ async def checklist_eval_run(state: SynthState) -> dict:
     )
 
     elapsed = int((time.monotonic() - t0) * 1000)
+    # A low pass_rate driven by the judge infra itself failing (not by the
+    # judge reviewing the chapter and rejecting it) is a different signal
+    # than genuine content quality — mgsr's no-recovery short-circuit reads
+    # this to decide whether skipping a RETHINK loop is actually justified.
+    judge_call_failed = deployment is None
+    infra_degraded = (
+        judge_call_failed
+        or (atomic_result is not None and atomic_result.get("resolved") is False)
+        or (cocoa_result is not None and cocoa_result.get("resolved") is False)
+    )
+    # Sustained-outage streak: how many RETHINK iterations IN A ROW,
+    # ending with this one, were infra-degraded. Resets to 0 the moment an
+    # iteration genuinely gets judged (even if it fails on content quality).
+    # graph._route_after_mgsr halts early once this crosses a threshold,
+    # instead of burning the full refine budget against an outage that
+    # isn't clearing (confirmed live: 3+ consecutive degraded iterations
+    # produced zero improvement before this counter existed).
+    consecutive_infra_degraded = (
+        int(state.get("consecutive_infra_degraded") or 0) + 1
+        if infra_degraded else 0
+    )
     stats = {
         "n_total":            n_total,
         "n_passed":           n_passed,
         "pass_rate":          pass_rate,
         "chapter_passed":     chapter_passed,
         "n_failed_feedback":  len(failed_feedback),
+        # The actual strings, not just the count — sawc_write's RETHINK
+        # iteration reads this to close the self-refine loop (previously
+        # a RETHINK reran blind with zero signal about what was wrong).
+        "failed_feedback":    failed_feedback,
         "n_pregate_passed":   n_pre_passed,
         "n_pregate_total":    len(pre_results),
         "n_llm_passed":       n_llm_passed,
@@ -1179,6 +1299,8 @@ async def checklist_eval_run(state: SynthState) -> dict:
         "names_failed":       [r.name for r in all_results if not r.passed],
         "judge_wall_ms":      judge_wall_ms,
         "judge_repaired":     repaired,
+        "judge_call_failed":  judge_call_failed,
+        "infra_degraded":     infra_degraded,
         "wall_ms":            elapsed,
         "store_path":         latest_key,
         "versioned_path":     versioned_key,
@@ -1205,7 +1327,13 @@ async def checklist_eval_run(state: SynthState) -> dict:
         f"judge_wall = {judge_wall_ms}ms, total = {elapsed}ms"
     )
     _emit_criterion_scores(slug, all_results)
-    return {"checklist_path": latest_key, "checklist_stats": stats}
+    return {
+        "checklist_path": latest_key,
+        "checklist_stats": stats,
+        # Top-level (not nested in checklist_stats) — graph._route_after_mgsr
+        # reads SynthState fields directly, same as refine_iter/best_seen_score.
+        "consecutive_infra_degraded": consecutive_infra_degraded,
+    }
 
 
 def load_checklist_payload(text: str) -> dict:

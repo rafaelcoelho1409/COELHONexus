@@ -33,6 +33,19 @@ class SectionContribution(BaseModel):
             "of the section_ids listed in the prompt outline (s1..sN)."
         ),
     )
+    # Backfilled programmatically in _digest_one_source AFTER the LLM
+    # response is parsed — never populated by the LLM itself (the model
+    # already knows which source it's digesting; asking it to repeat the
+    # source key back adds a failure surface for nothing new). Fixed
+    # 2026-09-05: this field didn't exist at all before, so every
+    # persisted contribution silently lost its source_key, and
+    # sawc_write's per-section routing — which reads exactly this field —
+    # found nothing to route, 100% of the time, on every chapter, in
+    # every run, regardless of digest's own success rate.
+    source_key: str = Field(
+        default = "",
+        description = "Populated programmatically, not by the LLM.",
+    )
     relevance: Relevance = Field(
         description = (
             "How central this source is to the section: 'primary' = "

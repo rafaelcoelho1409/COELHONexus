@@ -21,6 +21,13 @@ NOISE_IDENTS = frozenset({
     "int", "self", "get", "set", "use", "run", "via", "your", "null",
     "var", "let", "const", "new", "function", "type", "name", "value",
     "data", "code",
+    # Fixed 2026-09-05 — a "Checkpoint State Recovery" subtopic shipped
+    # `rm file.txt / mv old.txt new.txt / cp source.txt dest.txt` (wholly
+    # unrelated to the /rewind prose) because "file" was the only shared
+    # identifier and wasn't filtered — generic enough to appear in almost
+    # any prose about almost any code, so it carries no real relevance
+    # signal on its own.
+    "file", "files", "path", "paths",
 })
 
 BLOB_PREFIX = "synth"

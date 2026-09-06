@@ -424,7 +424,21 @@ async def _run_book_harmonize_impl(
 
     chapters: list[dict] = []
     skipped_missing: list[str] = []
+    skipped_audit_failed: list[str] = []
     for cid in chapter_ids:
+        # A chapter whose render audit failed must not feed cross-chapter
+        # harmonization — its prose can be a literal unfilled placeholder,
+        # and harmonize_book would treat it as an equally-trustworthy
+        # sibling when extracting claims / patching other chapters.
+        try:
+            render_blob = json.loads(
+                await minio.read_text(chapter_render_latest_key(slug, cid))
+            )
+            if not (render_blob.get("audit") or {}).get("audit_passed", True):
+                skipped_audit_failed.append(cid)
+                continue
+        except Exception:
+            pass   # no render stats yet — fall through to the README check below
         key = chapter_readme_key(slug, cid)
         try:
             blob = await minio.read_bytes(key)
@@ -447,6 +461,7 @@ async def _run_book_harmonize_impl(
             "skipped": "fewer_than_2_rendered_chapters",
             "n_rendered_chapters": len(chapters),
             "missing_chapters": skipped_missing,
+            "audit_failed_chapters": skipped_audit_failed,
         }
 
     manifest_hash = compute_harmonize_manifest_hash(chapters)
@@ -713,7 +728,7 @@ async def _run_study_async_inner(
         concurrency = STUDY_SEM,
     )
 
-    counters = {"completed": 0, "failed": 0, "cancelled": False}
+    counters = {"completed": 0, "needs_review": 0, "failed": 0, "cancelled": False}
     sem = asyncio.Semaphore(STUDY_SEM)
 
     async def _run_one(position: int, chapter_id: str) -> None:
@@ -723,26 +738,47 @@ async def _run_study_async_inner(
 
         try:
             _minio = get_storage()
-            if await _minio.exists(
-                chapter_render_latest_key(slug, chapter_id),
-            ):
-                counters["completed"] += 1
-                await emit_progress(
-                    study_thread_id, "study", "chapter_done",
-                    chapter_id = chapter_id, position = position, n_total = n_total,
-                    status = "done", skipped = True,
-                    wall_ms = chapter_ms.get(chapter_id, 0),
-                )
-                await emit_progress(
-                    study_thread_id, "study", "chapter_ready",
-                    chapter_id = chapter_id, position = position, n_total = n_total,
-                    render_path = chapter_readme_key(slug, chapter_id),
-                )
-                logger.info(
-                    f"[study-orchestrator] {slug}/{chapter_id}: "
-                    f"SKIP (already rendered) ({position}/{n_total})"
-                )
-                return
+            _render_key = chapter_render_latest_key(slug, chapter_id)
+            if await _minio.exists(_render_key):
+                _prior_audit_passed = True
+                try:
+                    _prior_render = json.loads(await _minio.read_text(_render_key))
+                    _prior_audit_passed = bool(
+                        (_prior_render.get("audit") or {}).get("audit_passed", True)
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[study-orchestrator] {slug}/{chapter_id}: "
+                        f"prior render blob unreadable for resume-skip "
+                        f"check ({type(e).__name__}: {e}) — rendering anyway"
+                    )
+                    _prior_audit_passed = False
+                if not _prior_audit_passed:
+                    # A prior run left content whose audit FAILED — resuming
+                    # must not treat that as "already done" forever, or a
+                    # chapter that shipped broken once never gets retried.
+                    logger.info(
+                        f"[study-orchestrator] {slug}/{chapter_id}: prior "
+                        f"render failed its audit — not skipping, re-running"
+                    )
+                else:
+                    counters["completed"] += 1
+                    await emit_progress(
+                        study_thread_id, "study", "chapter_done",
+                        chapter_id = chapter_id, position = position, n_total = n_total,
+                        status = "done", skipped = True,
+                        wall_ms = chapter_ms.get(chapter_id, 0),
+                    )
+                    await emit_progress(
+                        study_thread_id, "study", "chapter_ready",
+                        chapter_id = chapter_id, position = position, n_total = n_total,
+                        render_path = chapter_readme_key(slug, chapter_id),
+                    )
+                    logger.info(
+                        f"[study-orchestrator] {slug}/{chapter_id}: "
+                        f"SKIP (already rendered) ({position}/{n_total})"
+                    )
+                    return
         except Exception as e:
             logger.warning(
                 f"[study-orchestrator] {slug}/{chapter_id}: resume-skip "
@@ -819,7 +855,18 @@ async def _run_study_async_inner(
             chapter_status = "done"
             chapter_error: str | None = None
             try:
-                await main_task
+                final_state = await main_task
+                # graph.ainvoke succeeding is not the same as the chapter
+                # being fit to ship — render_audit_write signals a failed
+                # audit via state["status"], not an exception, so it was
+                # previously discarded here and every chapter read as "done".
+                graph_status = (final_state or {}).get("status")
+                if graph_status == "audit_failed":
+                    chapter_status = "needs_review"
+                    chapter_error = (final_state or {}).get("error") or (
+                        "render audit failed — content persisted for "
+                        "review but not marked done"
+                    )
             except asyncio.CancelledError:
                 chapter_status = "cancelled"
             except Exception as e:
@@ -880,6 +927,8 @@ async def _run_study_async_inner(
             if chapter_status == "done":
                 counters["completed"] += 1
                 chapter_ms[chapter_id] = ch_wall_ms
+            elif chapter_status == "needs_review":
+                counters["needs_review"] += 1
             else:
                 counters["failed"] += 1
             await emit_progress(
@@ -921,11 +970,17 @@ async def _run_study_async_inner(
             break
 
     n_completed = counters["completed"]
+    n_needs_review = counters["needs_review"]
     n_failed = counters["failed"]
     cancelled = counters["cancelled"]
     final_status = (
         "cancelled" if cancelled
-        else ("failed" if n_failed and not n_completed else "done")
+        else "failed" if n_failed and not n_completed
+        # A study isn't cleanly "done" while any chapter shipped with a
+        # failed render audit — surface it distinctly rather than
+        # reporting blanket success.
+        else "needs_review" if n_needs_review
+        else "done"
     )
 
     harmonize_stats: dict | None = None
@@ -961,6 +1016,7 @@ async def _run_study_async_inner(
     await emit_progress(
         study_thread_id, "study", "study_done",
         n_completed = n_completed,
+        n_needs_review = n_needs_review,
         n_failed = n_failed,
         n_total = n_total,
         final_status = final_status,
@@ -976,6 +1032,7 @@ async def _run_study_async_inner(
         status = final_status,
         error = None,
         n_completed = n_completed,
+        n_needs_review = n_needs_review,
         n_failed = n_failed,
         n_total = n_total,
     )

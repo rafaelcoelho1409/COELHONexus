@@ -3,4 +3,4 @@ from __future__ import annotations
 
 
 OUTLINE_SCHEMA_VERSION = "1.0"
-OUTLINE_PROMPT_VERSION = "v4-adaptive-sections-2026-05-29"
+OUTLINE_PROMPT_VERSION = "v6-format-normalize-2026-09-05"

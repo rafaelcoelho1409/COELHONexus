@@ -1,5 +1,5 @@
 """sawc_derive — tunables (MPSC sample count, thin-block heuristics,
-derived-body LOC band, dd_process labels)."""
+derived-body LOC band)."""
 from __future__ import annotations
 
 import os
@@ -33,10 +33,6 @@ MAX_DERIVES_PER_CHAPTER = 30
 # Env flag — default ON. Set KD_ENABLE_SAWC_DERIVE=false to disable.
 ENV_ENABLED = "KD_ENABLE_SAWC_DERIVE"
 
-# dd_process keys for the bandit rotator — distinct arms for derive vs
-# re-explain so the bandit learns separate posteriors per task shape.
-DD_PROCESS = "dd-synth-derive"
-DD_PROCESS_REEXPLAIN = "dd-synth-derive-reexplain"
 REEXPLAIN_MAX_TOKENS = 400
 
 # Per-call timeouts. Derive is a single short generation per sample
@@ -45,10 +41,11 @@ REQUEST_TIMEOUT_S = 60.0
 MAX_OUTPUT_TOKENS = 1200
 
 
-# Optimal-Stopping: ship sample 1 if AST-valid + in band; else fire remaining + rank. KD_SAWC_DERIVE_OPTIMAL_STOPPING (default true).
-DERIVE_OPTIMAL_STOPPING_ENABLED = (
-    os.environ["KD_SAWC_DERIVE_OPTIMAL_STOPPING"].lower()
-    in ("true", "1", "yes", "on")
-)
+# Optimal-Stopping: ship sample 1 if AST-valid + in band; else fire remaining + rank. KD_SAWC_DERIVE_OPTIMAL_STOPPING (default true) — same
+# .get()-with-default pattern as outline_sdp's equivalent flag, so a
+# missing env var degrades to the sane default instead of a hard crash.
+DERIVE_OPTIMAL_STOPPING_ENABLED = os.environ.get(
+    "KD_SAWC_DERIVE_OPTIMAL_STOPPING", "true",
+).lower() in ("true", "1", "yes", "on")
 
 BLOB_PREFIX = "synth"

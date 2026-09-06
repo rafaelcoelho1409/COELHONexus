@@ -340,6 +340,7 @@ class SAWCStats(BaseModel):
     n_sections:           int
     n_sections_completed: int
     n_sections_fallback:  int
+    n_sections_citation_fallback: int = 0
     n_stages:             int
     n_total_drafts_fired: int
     n_critic_picks:       int

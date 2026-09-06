@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 import time
 
@@ -177,22 +178,40 @@ def _python_ast_valid(body: str) -> tuple[bool, str]:
         return False, f"{type(e).__name__}: {e}"
 
 
+_NORMALIZE_MAX_CALL_ATTEMPTS = 2
+
+
 async def _llm_normalize_body(
     *, body: str, lang: str, prompt: str,
 ) -> str | None:
     """Single LLM normalize call → fence-stripped body or None. Handles prompt-following failures: strip outer fences, extract largest inner block if markers remain, reject if no code found."""
-    try:
-        response, _meta = await chat_judge_bandit_async(
-            prompt,
-            max_tokens = min(8000, max(512, 2 * len(body))),
-            temperature = 0.0,
-            timeout_s = 60.0,
-            dd_process = "dd-grader",
-        )
-    except Exception as e:
+    last_error: Exception | None = None
+    response: str | None = None
+    for call_attempt in range(_NORMALIZE_MAX_CALL_ATTEMPTS):
+        try:
+            response, _meta = await chat_judge_bandit_async(
+                prompt,
+                max_tokens = min(8000, max(512, 2 * len(body))),
+                temperature = 0.0,
+                timeout_s = 60.0,
+            )
+            last_error = None
+            break
+        except Exception as e:
+            last_error = e
+            if call_attempt < _NORMALIZE_MAX_CALL_ATTEMPTS - 1:
+                await asyncio.sleep(1.0 + random.random())
+    if last_error is not None:
+        # Lower stakes than sibling nodes: a failure here just means the
+        # ORIGINAL (possibly slightly mangled) code ships verbatim — it
+        # still passes the byte-exact audit — and the next chapter that
+        # cites this same vault hash will retry fresh (nothing gets
+        # cached on failure). The retry above is cheap insurance against
+        # losing a normalize pass to a one-off transient error anyway.
         logger.warning(
-            f"[render-normalize] LLM call failed lang={lang!r}: "
-            f"{type(e).__name__}: {e}"
+            f"[render-normalize] LLM call failed lang={lang!r} after "
+            f"{_NORMALIZE_MAX_CALL_ATTEMPTS} attempt(s): "
+            f"{type(last_error).__name__}: {last_error}"
         )
         return None
 
@@ -409,7 +428,10 @@ async def _verify_cache_hit_artifacts(
 
 
 async def render_audit_write_run(state: SynthState) -> dict:
-    """Render + audit + persist for one chapter. Zero LLM calls."""
+    """Render + audit + persist for one chapter. The render/audit/persist
+    path itself is deterministic (zero LLM calls); the vault-normalize
+    pass it calls into hits the Rotator once per unique code hash ever
+    seen, then serves every subsequent chapter from cache."""
     slug = state.get("framework_slug")
     chapter_id = state.get("chapter_id")
     thread_id = state.get("thread_id") or ""
@@ -427,7 +449,17 @@ async def render_audit_write_run(state: SynthState) -> dict:
     t0 = time.monotonic()
     minio = get_storage()
 
-    sawc_key = sawc_latest_key(slug, chapter_id)
+    # Prefer the best-seen iteration over whatever ran last. Fixed
+    # 2026-09-05 — this used to always read the latest pointer, so a
+    # RETHINK loop that regressed (a later iteration scoring worse than an
+    # earlier one) silently shipped the worse draft while every halt log
+    # claimed "best-seen-rescue applies." best_seen_sawc_path is a
+    # content-addressed versioned key (same content shape as -latest.json,
+    # just an immutable path), so reading from it instead is a drop-in
+    # swap — falls back to the latest pointer if best-seen was never set
+    # (e.g. a graph resumed mid-run from an older checkpoint).
+    best_seen_path = state.get("best_seen_sawc_path")
+    sawc_key = best_seen_path or sawc_latest_key(slug, chapter_id)
     mgsr_key = mgsr_latest_key(slug, chapter_id)
 
     if not await minio.exists(sawc_key):
@@ -747,12 +779,14 @@ async def render_audit_write_run(state: SynthState) -> dict:
     )
     logger.info(
         f"[render_audit_write] {slug}/{chapter_id}: "
+        f"sawc source = {'best-seen' if best_seen_path else 'latest'}, "
         f"audit_passed = {audit.audit_passed}, "
         f"{audit.n_resolved}/{audit.n_code_refs_referenced} code_refs "
         f"resolved, {len(audit.n_missing)} missing, "
         f"{len(audit.n_byte_drift)} drift, "
         f"{audit.sentinels_in_output} sentinels left; "
-        f"3 artifacts written ({sum(a.size_bytes for a in artifacts)} bytes); "
+        f"{len(artifacts)} artifact(s) written "
+        f"({sum(a.size_bytes for a in artifacts)} bytes); "
         f"{elapsed} ms"
     )
     state_status = "audit_failed" if not audit.audit_passed else None

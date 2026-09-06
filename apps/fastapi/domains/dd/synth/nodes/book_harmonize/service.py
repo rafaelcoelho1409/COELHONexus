@@ -4,13 +4,34 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
+import random
 from typing import Optional
 
 from domains.llm.rotator.chain import chat_judge_bandit_async
 
 from ...runtime.observability import record_classical_patch
 
+from .params import (
+    CANONICALIZE_MAX_TOKENS as _CANONICALIZE_MAX_TOKENS,
+    DETECT_MAX_TOKENS as _DETECT_MAX_TOKENS,
+    EXTRACT_MAX_TOKENS as _EXTRACT_MAX_TOKENS,
+    MAX_CLAIMS_PER_CHAPTER as _MAX_CLAIMS_PER_CHAPTER,
+    PATCH_MAX_TOKENS as _PATCH_MAX_TOKENS,
+    PER_CHAPTER_CONCURRENCY as _PER_CHAPTER_CONCURRENCY,
+    PROSE_CHARS_FOR_CLAIMS as _PROSE_CHARS_FOR_CLAIMS,
+    PROSE_CHARS_FOR_PATCH as _PROSE_CHARS_FOR_PATCH,
+)
+from .patterns import JSON_RE as _JSON_RE
+from .prompts import (
+    CANONICALIZE_PROMPT as _CANONICALIZE_PROMPT,
+    DETECT_PROMPT as _DETECT_PROMPT,
+    EXTRACT_CLAIMS_PROMPT as _EXTRACT_CLAIMS_PROMPT,
+    PATCH_PROMPT as _PATCH_PROMPT,
+)
+from .domain import (
+    format_canonical_terms as _format_canonical_terms,
+    pick_sibling_claims as _pick_sibling_claims,
+)
 from .versions import (
     BOOK_HARMONIZE_PROMPT_VERSION,
     BOOK_HARMONIZE_SCHEMA_VERSION,
@@ -19,116 +40,32 @@ from .versions import (
 
 logger = logging.getLogger(__name__)
 
+# Call-retry budget before giving up on a single LLM step (extract /
+# canonicalize / detect / patch each fail-soft already — a chapter with
+# no harmonization pass keeps its original, still-valid prose — but this
+# runs once at the END of a potentially multi-hour Study run, so a cheap
+# retry against a transient Rotator hiccup is worth it. Same idiom as
+# every other synth node.
+_MAX_CALL_ATTEMPTS = 2
 
 
-_MAX_CLAIMS_PER_CHAPTER = 20
-_PROSE_CHARS_FOR_CLAIMS = 10000
-_PROSE_CHARS_FOR_PATCH = 16000
-_DETECT_MAX_TOKENS = 800
-_PATCH_MAX_TOKENS = 14000
-_EXTRACT_MAX_TOKENS = 1000
-_CANONICALIZE_MAX_TOKENS = 1500
-_PER_CHAPTER_CONCURRENCY = 4
-
-_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
-
-
-_EXTRACT_CLAIMS_PROMPT = """Extract the atomic factual claims from this chapter of a distilled technical book.
-
-Atomic claim = a single verifiable assertion about the technology (e.g., "library X
-uses Y as its default serializer", "the timeout defaults to 30 seconds"). Cap at
-{max_claims}. Skip motivational / structural / transitional sentences.
-
-Also extract the chapter's key terminology — terms the chapter uses for specific
-concepts. List them with their working definition AS USED IN THIS CHAPTER.
-
---- CHAPTER PROSE ---
-{prose}
---- END PROSE ---
-
-Return strict JSON:
-{{
-  "claims": ["claim 1", "claim 2", ...],
-  "terms": [{{"name": "term as used", "definition": "1-sentence definition from chapter"}}]
-}}"""
-
-_CANONICALIZE_PROMPT = """You are harmonizing terminology across the chapters of a distilled
-technical book about {framework}. Below are the terms each chapter uses, with the
-working definition the chapter applies.
-
-For each TERM that appears across multiple chapters with DIFFERENT or CONFLICTING
-definitions, decide the CANONICAL definition (or merge them if compatible). Skip
-terms that are only used in one chapter or that have consistent definitions across
-chapters.
-
---- PER-CHAPTER TERMINOLOGY ---
-{terms_block}
---- END ---
-
-Return strict JSON:
-{{
-  "canonical_terms": [
-    {{"term": "name", "canonical_definition": "1-sentence canonical", "affected_chapters": ["ch_id1", "ch_id2"]}}
-  ],
-  "rationale": "1-sentence explanation of the harmonization choices made"
-}}
-
-If no canonicalization is needed, return {{"canonical_terms": [], "rationale": "..."}}."""
-
-_DETECT_PROMPT = """You are auditing chapter {chapter_id} of a distilled technical book about
-{framework} for cross-chapter consistency issues.
-
-Inspect for THREE classes of violations:
-  1. CONTRADICTION — a claim in this chapter directly contradicts a claim in a sibling chapter
-  2. DEFINITION_DRIFT — this chapter uses a term differently than the canonical definition
-  3. TERMINOLOGY_DIVERGENCE — this chapter uses one name for a concept that sibling chapters call something else
-
---- THIS CHAPTER'S PROSE (truncated) ---
-{this_prose}
---- END ---
-
---- CANONICAL TERMINOLOGY BANK ---
-{canonical_terms}
---- END ---
-
---- ATOMIC CLAIMS FROM SIBLING CHAPTERS (sample) ---
-{sibling_claims}
---- END ---
-
-Return strict JSON:
-{{
-  "has_violations": true | false,
-  "violations": [
-    {{"kind": "contradiction" | "definition_drift" | "terminology_divergence",
-      "this_chapter_says": "short quote or paraphrase",
-      "should_say": "the canonical or sibling-chapter version",
-      "evidence": "short pointer to where in this chapter"}}
-  ],
-  "summary": "1-sentence overall verdict"
-}}
-
-If no violations found, return {{"has_violations": false, "violations": [], "summary": "..."}}."""
-
-_PATCH_PROMPT = """You are minimally rewriting chapter {chapter_id} of a distilled technical book
-about {framework} to resolve cross-chapter consistency violations. Preserve EVERYTHING
-that isn't violating — same structure, same headings, same code references, same
-citations, same tone.
-
-ONLY change the spots flagged below. Use minimal edits — replace conflicting
-definitions with canonical ones, swap divergent terms, fix contradictions.
-
-VIOLATIONS TO FIX:
-{violations_block}
-
-CANONICAL TERMINOLOGY (use these definitions/names):
-{canonical_terms}
-
---- ORIGINAL CHAPTER (REWRITE THIS, KEEP MARKDOWN STRUCTURE INTACT) ---
-{original_prose}
---- END ---
-
-Output: the full chapter prose, minimally edited. NO commentary, NO explanation,
-NO JSON wrapping — output ONLY the markdown."""
+async def _call_with_retry(
+    prompt: str, **kwargs,
+) -> tuple[Optional[str], Optional[Exception]]:
+    """chat_judge_bandit_async wrapper with a plain retry-with-backoff.
+    Returns (raw_text, None) on success or (None, last_error) once
+    _MAX_CALL_ATTEMPTS is exhausted — caller logs + applies its own
+    fail-soft fallback, unchanged from before this wrapper existed."""
+    last_error: Optional[Exception] = None
+    for attempt in range(_MAX_CALL_ATTEMPTS):
+        try:
+            raw, _meta = await chat_judge_bandit_async(prompt, **kwargs)
+            return raw, None
+        except Exception as e:
+            last_error = e
+            if attempt < _MAX_CALL_ATTEMPTS - 1:
+                await asyncio.sleep(1.0 + random.random())
+    return None, last_error
 
 
 async def harmonize_book(
@@ -258,10 +195,12 @@ async def _extract_claims_and_terms(
                 max_claims=_MAX_CLAIMS_PER_CHAPTER,
                 prose=(chapter.get("prose") or "")[:_PROSE_CHARS_FOR_CLAIMS],
             )
-            raw, _ = await chat_judge_bandit_async(
+            raw, err = await _call_with_retry(
                 prompt, max_tokens=_EXTRACT_MAX_TOKENS, temperature=0.0,
                 response_format={"type": "json_object"},
             )
+            if err is not None:
+                raise err
             m = _JSON_RE.search(raw or "")
             if not m:
                 return {}
@@ -295,10 +234,12 @@ async def _canonicalize_terms(
         prompt = _CANONICALIZE_PROMPT.format(
             framework=framework_name, terms_block=terms_block,
         )
-        raw, _ = await chat_judge_bandit_async(
+        raw, err = await _call_with_retry(
             prompt, max_tokens=_CANONICALIZE_MAX_TOKENS, temperature=0.1,
             response_format={"type": "json_object"},
         )
+        if err is not None:
+            raise err
         m = _JSON_RE.search(raw or "")
         if not m:
             return []
@@ -309,34 +250,6 @@ async def _canonicalize_terms(
             f"[book_harmonize] canonicalize failed: {type(e).__name__}: {e}"
         )
         return []
-
-
-def _pick_sibling_claims(
-    this_id: str, claims_by_id: dict[str, list[str]],
-) -> str:
-    """Sample sibling-chapter claims into a context-safe blob. Cap at 40
-    sibling claims total to keep the detect-prompt within budget."""
-    sibling = []
-    for cid, cs in claims_by_id.items():
-        if cid == this_id:
-            continue
-        for c in cs[:6]:   # cap per chapter
-            sibling.append(f"  [{cid}] {c}")
-        if len(sibling) >= 40:
-            break
-    return "\n".join(sibling[:40])
-
-
-def _format_canonical_terms(canonical: list[dict]) -> str:
-    if not canonical:
-        return "(no terminology conflicts detected)"
-    lines = []
-    for t in canonical[:25]:
-        name = (t.get("term") or "").strip()
-        defn = (t.get("canonical_definition") or "").strip()
-        if name:
-            lines.append(f"  - {name}: {defn[:240]}")
-    return "\n".join(lines)
 
 
 async def _detect_violations(
@@ -357,10 +270,12 @@ async def _detect_violations(
                 canonical_terms=_format_canonical_terms(canonical_terms),
                 sibling_claims=sibling_claims or "(no sibling claims available)",
             )
-            raw, _ = await chat_judge_bandit_async(
+            raw, err = await _call_with_retry(
                 prompt, max_tokens=_DETECT_MAX_TOKENS, temperature=0.0,
                 response_format={"type": "json_object"},
             )
+            if err is not None:
+                raise err
             m = _JSON_RE.search(raw or "")
             if not m:
                 return {"has_violations": False, "violations": [], "summary": ""}
@@ -400,9 +315,11 @@ async def _patch_chapter(
                 canonical_terms=_format_canonical_terms(canonical_terms),
                 original_prose=original_prose[:_PROSE_CHARS_FOR_PATCH],
             )
-            raw, _ = await chat_judge_bandit_async(
+            raw, err = await _call_with_retry(
                 prompt, max_tokens=_PATCH_MAX_TOKENS, temperature=0.1,
             )
+            if err is not None:
+                raise err
             return (raw or "").strip() or None
         except Exception as e:
             logger.warning(

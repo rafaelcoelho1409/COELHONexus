@@ -15,6 +15,7 @@ from .params import (
     MAX_REFINE_ITER,
     NO_RECOVERY_FLOOR,
     PLATEAU_DELTA,
+    SUSTAINED_INFRA_OUTAGE_LIMIT,
 )
 from .nodes.render.node import render_audit_write
 from .nodes.sawc.node import sawc_write
@@ -85,12 +86,44 @@ def _route_after_mgsr(state: SynthState) -> str:
         )
         return "render_audit_write"
 
-    # iter-1 no-recovery short-circuit.
-    if refine_iter <= 1 and score < NO_RECOVERY_FLOOR:
+    # iter-1 no-recovery short-circuit — but only when the low score is a
+    # genuine content judgment. A score this low driven by the judge/CoCoA/
+    # atomic-claim infra itself failing (Rotator outage, not real review)
+    # deserves the one RETHINK attempt this would otherwise skip, since the
+    # "rarely recovers above 0.80" prior behind this floor was measured
+    # against genuine low-quality drafts, not judge-call failures.
+    if (
+        refine_iter <= 1 and score < NO_RECOVERY_FLOOR
+        and not bool(stats.get("infra_degraded", False))
+    ):
         logger.info(
             f"[synth-graph] {state.get('framework_slug')}/"
             f"{state.get('chapter_id')}: HALT no-recovery "
             f"(iter={refine_iter}, score={score:.2f} < {NO_RECOVERY_FLOOR}); "
+            f"best-seen-rescue applies"
+        )
+        return "render_audit_write"
+
+    if refine_iter <= 1 and score < NO_RECOVERY_FLOOR:
+        logger.info(
+            f"[synth-graph] {state.get('framework_slug')}/"
+            f"{state.get('chapter_id')}: no-recovery floor tripped "
+            f"(score={score:.2f}) but infra_degraded=True — giving it "
+            f"the RETHINK attempt anyway instead of best-seen-rescue"
+        )
+
+    # Sustained-outage halt: N consecutive iterations degraded by the judge/
+    # CoCoA/atomic-claim infra itself (not genuine content review) means the
+    # RETHINK loop isn't testing content quality anymore — it's retrying
+    # against an outage that isn't clearing. Halt before MAX_REFINE_ITER
+    # instead of burning the rest of the budget on the same wall.
+    consecutive_infra_degraded = int(state.get("consecutive_infra_degraded", 0) or 0)
+    if consecutive_infra_degraded >= SUSTAINED_INFRA_OUTAGE_LIMIT:
+        logger.info(
+            f"[synth-graph] {state.get('framework_slug')}/"
+            f"{state.get('chapter_id')}: HALT sustained-outage "
+            f"({consecutive_infra_degraded} consecutive infra-degraded "
+            f"iterations >= {SUSTAINED_INFRA_OUTAGE_LIMIT}); "
             f"best-seen-rescue applies"
         )
         return "render_audit_write"

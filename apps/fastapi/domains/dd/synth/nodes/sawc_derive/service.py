@@ -1,8 +1,5 @@
-"""sawc_derive service — Analogical Prompting (arXiv:2310.01714) + MPSC derived-code enrichment for thin vault blocks. Deterministic helpers; I/O (bandit, MinIO, Redis) in node module."""
+"""sawc_derive service — Analogical Prompting (arXiv:2310.01714) + MPSC derived-code enrichment for thin vault blocks. Deterministic helpers live in domain.py/prompts.py (this module's own architecture note); this module is I/O (bandit, MinIO, Redis) only — previously duplicated the domain.py/prompts.py helpers locally, which is what let Optimal-Stopping's gate (body_passes_derive_gate) go unwired without anyone noticing."""
 from __future__ import annotations
-
-import ast
-import re
 
 import asyncio
 import json
@@ -19,21 +16,24 @@ from ...state import SynthState
 from ..vault.domain import sentinelize_doc
 from ..vault.schemas import VaultEntry
 
-from .keys import (
-    derive_latest_key,
-    ingestion_source_key,
-    sawc_latest_key,
+from .domain import (
+    body_passes_derive_gate,
+    is_thin_block,
+    parse_code_block,
+    python_ast_valid,
+    rank_mpsc_samples,
 )
+from .keys import derive_latest_key, sawc_latest_key
 from .params import (
     CONCURRENCY,
-    DD_PROCESS,
-    DD_PROCESS_REEXPLAIN,
+    DERIVE_OPTIMAL_STOPPING_ENABLED,
     ENV_ENABLED,
     MAX_DERIVES_PER_CHAPTER,
     MAX_OUTPUT_TOKENS,
     N_MPSC_SAMPLES,
     REEXPLAIN_MAX_TOKENS,
 )
+from .prompts import build_analogical_prompt, build_reexplain_prompt
 from .schemas import DeriveAttempt, DeriveStats
 
 
@@ -46,229 +46,6 @@ def _env_enabled() -> bool:
     if raw in ("", "1", "true", "yes", "on"):
         return True
     return False
-
-from .params import (
-    DERIVED_MAX_CHARS,
-    DERIVED_MAX_LINES,
-    DERIVED_MIN_CHARS,
-    DERIVED_MIN_LINES,
-    THIN_MAX_CHARS,
-    THIN_MAX_NEWLINES,
-)
-from .patterns import SIGNATURE_ONLY_RE
-
-
-def is_thin_block(body: str) -> bool:
-    """True when vault body is too thin to teach. Conservative: short AND signature-only gate so 4-line snippets pass while bare API signatures are caught."""
-    if not body:
-        return False
-    stripped = body.strip()
-    if not stripped:
-        return False
-    n_newlines = stripped.count("\n")
-    if len(stripped) > THIN_MAX_CHARS:
-        return False
-    if n_newlines > THIN_MAX_NEWLINES:
-        return False
-    # Single non-empty line that looks like a signature → thin.
-    if n_newlines == 0 and SIGNATURE_ONLY_RE.match(stripped):
-        return True
-    # 1-2 newlines but content fits the signature shape line-wise — also thin.
-    if n_newlines <= THIN_MAX_NEWLINES:
-        non_empty_lines = [
-            ln for ln in stripped.splitlines() if ln.strip()
-        ]
-        if len(non_empty_lines) <= 2 and all(
-            SIGNATURE_ONLY_RE.match(ln.strip()) for ln in non_empty_lines
-        ):
-            return True
-    # Otherwise, fall through — short but isn't a pure signature.
-    return False
-
-
-def build_reexplain_prompt(
-    *,
-    framework: str,
-    section_heading: str,
-    subheading: str,
-    old_explanation: str,
-    derived_code: str,
-    lang: str = "python",
-) -> str:
-    """Regenerate explanation after MPSC promotes a derived block (arXiv 2512.12117). Old explanation was written for the thin signature, not the expanded code."""
-    return (
-        f"You are regenerating ONE documentation explanation in a "
-        f"{framework} learning resource. The code block below has been "
-        f"newly AI-generated to expand a thin signature; the old "
-        f"explanation no longer describes it. Write a fresh explanation "
-        f"that grounds to THIS specific code.\n\n"
-        f"SECTION: {section_heading}\n"
-        f"SUBTOPIC: {subheading}\n\n"
-        f"OLD EXPLANATION (stale — describes a different example):\n"
-        f"{old_explanation.strip()}\n\n"
-        f"NEW CODE BLOCK:\n"
-        f"```{lang}\n{derived_code.strip()}\n```\n\n"
-        f"== TASK ==\n"
-        f"Write a NEW explanation (8-80 words, 1-3 sentences) that:\n"
-        f"  1. Describes WHAT this specific code block demonstrates.\n"
-        f"  2. References at least ONE identifier visible in the code "
-        f"(function name, decorator, type, parameter, or imported "
-        f"symbol).\n"
-        f"  3. Reads as prose that goes IMMEDIATELY BEFORE the code in a "
-        f"cookbook chapter.\n"
-        f"  4. NO code fences, NO inline `code-ref` tags, NO meta-framing "
-        f"('In this example...'). Just the explanation.\n\n"
-        f"OUTPUT: strict JSON, exactly: "
-        f'{{"explanation": "your rewritten 8-80 word explanation here"}}\n'
-        f"NO prose commentary outside JSON."
-    )
-
-
-def build_analogical_prompt(
-    *,
-    framework: str,
-    chapter_title: str,
-    section_heading: str,
-    subheading: str,
-    explanation: str,
-    original_body: str,
-    original_lang: str = "python",
-) -> str:
-    """Analogical Prompting (Yasunaga et al. 2023, arXiv:2310.01714): LLM reasons about an analogous example before emitting code; improves quality vs one-shot. Output is the fenced block only; prose is stripped server-side."""
-    return (
-        f"You are expanding a thin documentation reference into a "
-        f"COMPLETE RUNNABLE EXAMPLE for a {framework} learning resource.\n\n"
-        f"CHAPTER: {chapter_title}\n"
-        f"SECTION: {section_heading}\n"
-        f"SUBTOPIC: {subheading}\n"
-        f"PROSE LEAD-IN (already written, do NOT repeat): "
-        f"{explanation}\n\n"
-        f"== ORIGINAL DOC REFERENCE (too thin to teach) ==\n"
-        f"```{original_lang}\n"
-        f"{original_body.strip()}\n"
-        f"```\n\n"
-        f"== TASK ==\n"
-        f"Think about ONE common production use-case that exercises this "
-        f"API. By analogy to that use-case, write a self-contained, "
-        f"runnable {original_lang} example demonstrating realistic usage. "
-        f"Show real imports, real arguments, real return-value handling.\n\n"
-        f"== HARD RULES ==\n"
-        f"1. Output EXACTLY ONE fenced ```{original_lang} ... ``` block. "
-        f"NO prose before, after, or between fences.\n"
-        f"2. The code MUST parse as valid {original_lang} (AST validates "
-        f"it server-side; ungated samples are discarded).\n"
-        f"3. Length: 4-50 non-blank lines. Tight, focused, teachable.\n"
-        f"4. INCLUDE imports for any types/decorators used.\n"
-        f"5. Use REAL function/method names from {framework} — do NOT "
-        f"invent APIs. If unsure, mirror the surface from the original "
-        f"reference above; expand parameter names + types realistically.\n"
-        f"6. NO placeholders like '...', 'YOUR_KEY_HERE', '# TODO'. "
-        f"Concrete, usable values everywhere.\n"
-        f"7. NO test scaffolding (no `assert`, no `unittest`, no "
-        f"`pytest.mark`). Production-style code only.\n"
-        f"8. NO inline comments explaining what the code does line-by-"
-        f"line — the prose lead-in already framed it.\n\n"
-        f"Respond with the fenced code block ONLY."
-    )
-
-
-_FENCE_RE = re.compile(
-    r"```(?:[a-zA-Z0-9_+\-]*)\n(.*?)\n```",
-    re.DOTALL,
-)
-
-
-def parse_code_block(raw: str) -> str:
-    """Extract first fenced code block; bare code (no fences) passes through as last resort. Empty string = failed sample."""
-    if not raw:
-        return ""
-    m = _FENCE_RE.search(raw)
-    if not m:
-        # Last-resort fallback: if the whole response is plausibly
-        # bare code (no fences at all), return it. AST parse downstream
-        # is the real gate.
-        stripped = raw.strip()
-        if "```" not in stripped and stripped:
-            return stripped
-        return ""
-    return m.group(1).rstrip("\n")
-
-
-def python_ast_valid(body: str) -> bool:
-    """True iff `body` parses as valid Python (incl. async). Catches
-    hallucinated names, malformed signatures, broken imports."""
-    if not body or not body.strip():
-        return False
-    try:
-        ast.parse(body)
-        return True
-    except SyntaxError:
-        return False
-    except Exception:
-        # Any other parser-internal failure → treat as invalid.
-        return False
-
-
-def score_derived_candidate(body: str) -> float:
-    """Structural score; higher=better. AST valid (+4), LOC band (+2), imports (+1.5), multi-line (+1); penalizes excess length and placeholder leaks (-3)."""
-    if not body or not body.strip():
-        return -10.0
-    score = 0.0
-    if python_ast_valid(body):
-        score += 4.0
-    lines = [ln for ln in body.splitlines() if ln.strip()]
-    n_lines = len(lines)
-    if DERIVED_MIN_LINES <= n_lines <= DERIVED_MAX_LINES:
-        score += 2.0
-    n_imports = sum(
-        1 for ln in lines
-        if re.match(r"^\s*(?:from\s+\w+|import\s+\w+)", ln)
-    )
-    if n_imports >= 1:
-        score += 1.5
-    if n_lines >= 3:
-        score += 1.0
-    if n_lines > 40:
-        score -= min(2.0, (n_lines - 40) * 0.1)
-    # Placeholder leaks — clear hallmarks of unfinished code.
-    placeholders = (
-        "YOUR_KEY_HERE", "YOUR_API_KEY", "# TODO", "# FIXME",
-        "pass  # implement", "raise NotImplementedError",
-    )
-    body_lower = body
-    for p in placeholders:
-        if p in body_lower:
-            score -= 3.0
-            break
-    if re.search(r"^\s*\.{3}\s*$", body, re.MULTILINE):
-        score -= 3.0
-    return round(score, 3)
-
-
-def rank_mpsc_samples(samples: list[str]) -> tuple[int | None, list[float]]:
-    """MPSC ranker (arXiv 2503.04611): pick best AST-valid sample by structural score. chosen_idx=None when no sample is both AST-valid AND in the LOC band."""
-    if not samples:
-        return None, []
-    scores = [score_derived_candidate(s) for s in samples]
-    # Require AST validity + length-band; pick highest score among those.
-    valid_idxs = [
-        i for i, s in enumerate(samples)
-        if python_ast_valid(s)
-    ]
-    if not valid_idxs:
-        return None, scores
-    in_band: list[int] = []
-    for i in valid_idxs:
-        body = samples[i]
-        n_lines = sum(1 for ln in body.splitlines() if ln.strip())
-        n_chars = len(body)
-        if (DERIVED_MIN_LINES <= n_lines <= DERIVED_MAX_LINES
-                and DERIVED_MIN_CHARS <= n_chars <= DERIVED_MAX_CHARS):
-            in_band.append(i)
-    if not in_band:
-        return None, scores
-    chosen = max(in_band, key=lambda i: scores[i])
-    return chosen, scores
 
 
 async def _load_referenced_vault_entries(
@@ -323,11 +100,14 @@ async def _reexplain_one(
         lang="python",
     )
     try:
+        # NIM/Mistral honor response_format=json_schema/json_object
+        # server-side (same pattern as sawc_write/digest_construct); a
+        # bare-text ask relied on prompt instructions alone.
         response, _meta = await chat_judge_bandit_async(
             prompt,
             max_tokens=REEXPLAIN_MAX_TOKENS,
             temperature=0.4,
-            dd_process=DD_PROCESS_REEXPLAIN,
+            response_format={"type": "json_object"},
         )
     except Exception as e:
         logger.debug(
@@ -366,7 +146,6 @@ async def _sample_one(prompt: str) -> tuple[str, Optional[str], int]:
             prompt,
             max_tokens=MAX_OUTPUT_TOKENS,
             temperature=0.7,
-            dd_process=DD_PROCESS,
         )
         deployment = (meta or {}).get("deployment")
         body = parse_code_block(response or "")
@@ -389,7 +168,13 @@ async def _derive_one_subtopic(
     sem: asyncio.Semaphore,
 ) -> DeriveAttempt:
     """Run MPSC for one subtopic. Mutates `subtopic` IN PLACE on success.
-    Returns the attempt record either way."""
+    Returns the attempt record either way. Optimal-Stopping (same pattern
+    as outline_sdp/sawc_write, arXiv 2510.01394): ship sample 0 directly
+    when it already clears body_passes_derive_gate, skipping the
+    remaining N-1 Rotator calls. This was documented in params.py and
+    domain.py (body_passes_derive_gate exists for exactly this) but never
+    actually wired in — every subtopic burned all N_MPSC_SAMPLES calls
+    regardless."""
     async with sem:
         original_chars = len(original_body or "")
         original_lines = (original_body or "").count("\n") + 1
@@ -409,10 +194,27 @@ async def _derive_one_subtopic(
             explanation=str(subtopic.get("explanation") or ""),
             original_body=original_body,
         )
-        results = await asyncio.gather(
-            *[_sample_one(prompt) for _ in range(N_MPSC_SAMPLES)],
-            return_exceptions=False,
-        )
+        if DERIVE_OPTIMAL_STOPPING_ENABLED and N_MPSC_SAMPLES >= 2:
+            r0 = await _sample_one(prompt)
+            results = [r0]
+            if body_passes_derive_gate(r0[0]):
+                logger.info(
+                    f"[sawc_derive] {section_id}/"
+                    f"{sub_meta['subheading']!r}: Optimal-Stopping fired — "
+                    f"sample 0 clean; skipping remaining "
+                    f"{N_MPSC_SAMPLES - 1} sample(s)"
+                )
+            else:
+                remaining = await asyncio.gather(
+                    *[_sample_one(prompt) for _ in range(N_MPSC_SAMPLES - 1)],
+                    return_exceptions=False,
+                )
+                results.extend(remaining)
+        else:
+            results = await asyncio.gather(
+                *[_sample_one(prompt) for _ in range(N_MPSC_SAMPLES)],
+                return_exceptions=False,
+            )
         bodies = [r[0] for r in results]
         deployment = next((r[1] for r in results if r[1]), None)
         n_valid = sum(1 for b in bodies if b and python_ast_valid(b))
@@ -424,7 +226,7 @@ async def _derive_one_subtopic(
                 decision = "rotator_fail"
             return DeriveAttempt(
                 decision=decision,
-                n_samples_tried=N_MPSC_SAMPLES,
+                n_samples_tried=len(results),
                 n_samples_valid=n_valid,
                 deployment=deployment,
                 wall_ms=wall_ms,
@@ -449,7 +251,7 @@ async def _derive_one_subtopic(
             decision="promoted",
             derived_chars=len(winner),
             derived_lines=sum(1 for ln in winner.splitlines() if ln.strip()),
-            n_samples_tried=N_MPSC_SAMPLES,
+            n_samples_tried=len(results),
             n_samples_valid=n_valid,
             chosen_sample_idx=chosen_idx,
             deployment=deployment,

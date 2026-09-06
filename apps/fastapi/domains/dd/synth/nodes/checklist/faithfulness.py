@@ -112,6 +112,10 @@ _JUDGE_MAX_TOKENS = 200
 _MIN_CLAIMS_FOR_RUN = 1
 # raised 0.60 → 0.75 (Run 5: judge flags code-demonstrated claims as unsupported when source TEXT doesn't restate; 0.75 still catches catastrophic hallucination ≥85%).
 _MAX_UNSUPPORTED_RATIO = 0.75
+# Below this fraction of claims actually judged (vs. fail-soft defaults from
+# a broken call), the ratio above is noise, not signal — extraction/judge
+# outages must not silently read as "verified faithful."
+_MIN_EVALUATED_FRACTION = 0.5
 
 
 async def atomic_claim_grounding(
@@ -119,14 +123,27 @@ async def atomic_claim_grounding(
     chapter_prose: str,
     grounding_blob: str,
 ) -> dict:
-    """Run atomic-claim grounding; fail-soft (any failure → supported) so bundled judge stands."""
-    claims = await _extract_claims(chapter_prose[:_PROSE_CHARS])
-    if len(claims) < _MIN_CLAIMS_FOR_RUN:
-        # Trivially-pass: nothing to verify.
+    """Run atomic-claim grounding. Three outcomes, not two: passed=True
+    (genuinely verified), passed=False (genuinely unsupported), or
+    resolved=False (not enough real judge signal to say either —
+    extraction crashed, or too many judge calls failed). Callers must
+    treat resolved=False like a crash (defer to the bundled judge),
+    never like a pass — collapsing "couldn't check" into "passed" is
+    exactly what let a Rotator outage read as a clean grounding check."""
+    claims, extraction_ok = await _extract_claims(chapter_prose[:_PROSE_CHARS])
+    if not extraction_ok:
         return {
-            "passed": True, "n_claims": 0, "n_unsupported": 0,
-            "unsupported_claims": [], "feedback": "",
-            "method": "atomic_claim_v1",
+            "passed": True, "resolved": False, "n_claims": 0,
+            "n_evaluated": 0, "n_unsupported": 0, "unsupported_claims": [],
+            "feedback": "", "method": "atomic_claim_v4",
+            "skip_reason": "extraction_failed",
+        }
+    if len(claims) < _MIN_CLAIMS_FOR_RUN:
+        # Genuinely nothing to verify — a real pass, not an outage artifact.
+        return {
+            "passed": True, "resolved": True, "n_claims": 0,
+            "n_evaluated": 0, "n_unsupported": 0, "unsupported_claims": [],
+            "feedback": "", "method": "atomic_claim_v4",
         }
 
     src = grounding_blob[:_SOURCE_CHARS]
@@ -135,36 +152,72 @@ async def atomic_claim_grounding(
         _judge_claim(sem, claim, src) for claim in claims
     ])
 
+    n_claims = len(claims)
+    n_call_failures = sum(1 for v in verdicts if v.get("_call_failed"))
+    n_evaluated = n_claims - n_call_failures
+    evaluated_fraction = n_evaluated / n_claims if n_claims else 0.0
+    if n_call_failures:
+        logger.warning(
+            f"[atomic-claim-grounding] {n_call_failures}/{len(verdicts)} "
+            f"judge calls failed — excluded from the verdict, not "
+            f"defaulted to supported=True"
+        )
+    if evaluated_fraction < _MIN_EVALUATED_FRACTION:
+        logger.warning(
+            f"[atomic-claim-grounding] only {n_evaluated}/{n_claims} claims "
+            f"({evaluated_fraction:.0%}) got a real verdict — below the "
+            f"{_MIN_EVALUATED_FRACTION:.0%} floor, treating as unresolved "
+            f"rather than a genuine pass"
+        )
+        return {
+            "passed": True, "resolved": False, "n_claims": n_claims,
+            "n_evaluated": n_evaluated, "n_unsupported": 0,
+            "unsupported_claims": [], "n_judge_call_failures": n_call_failures,
+            "feedback": "", "method": "atomic_claim_v4",
+            "skip_reason": "insufficient_evaluated_fraction",
+        }
+
+    # Denominator is EVALUATED claims only — a call failure must not be
+    # able to dilute the ratio by masquerading as a "supported" claim.
+    evaluated_pairs = [
+        (claim, v) for claim, v in zip(claims, verdicts)
+        if not v.get("_call_failed")
+    ]
     unsupported = [
         {"claim": claim, "evidence": v.get("evidence", "")}
-        for claim, v in zip(claims, verdicts)
+        for claim, v in evaluated_pairs
         if not v.get("supported", True)
     ]
-    n_claims = len(claims)
     n_unsupported = len(unsupported)
-    unsupported_ratio = n_unsupported / n_claims if n_claims else 0.0
+    unsupported_ratio = n_unsupported / n_evaluated if n_evaluated else 0.0
     passed = unsupported_ratio <= _MAX_UNSUPPORTED_RATIO
     feedback = ""
     if not passed:
         sample = unsupported[0]["claim"][:160]
         feedback = (
-            f"atomic-claim grounding: {n_unsupported}/{n_claims} claims "
+            f"atomic-claim grounding: {n_unsupported}/{n_evaluated} claims "
             f"({unsupported_ratio:.0%}) not supported by source digest "
             f"(ceiling {_MAX_UNSUPPORTED_RATIO:.0%}); e.g. {sample!r}"
         )
 
     return {
         "passed": passed,
+        "resolved": True,
         "n_claims": n_claims,
+        "n_evaluated": n_evaluated,
         "n_unsupported": n_unsupported,
         "unsupported_ratio": round(unsupported_ratio, 3),
         "unsupported_claims": unsupported,
+        "n_judge_call_failures": n_call_failures,
         "feedback": feedback,
-        "method": "atomic_claim_v3",
+        "method": "atomic_claim_v4",
     }
 
 
-async def _extract_claims(prose: str) -> list[str]:
+async def _extract_claims(prose: str) -> tuple[list[str], bool]:
+    """Returns (claims, extraction_ok). extraction_ok=False means the LLM
+    call/parse itself broke — distinct from a genuine "prose has 0 claims"
+    result, since callers must not treat an outage as a trivial pass."""
     minio = get_storage()
     cache_key = f"{_CLAIMS_CACHE_PREFIX}/{_prose_cache_key(prose)}.json"
     try:
@@ -180,7 +233,7 @@ async def _extract_claims(prose: str) -> list[str]:
                 return [
                     str(c).strip() for c in cached_claims
                     if isinstance(c, str) and c.strip()
-                ][:_MAX_CLAIMS]
+                ][:_MAX_CLAIMS], True
     except Exception as e:
         logger.debug(
             f"[atomic-claim-grounding] cache read failed: "
@@ -197,7 +250,11 @@ async def _extract_claims(prose: str) -> list[str]:
         )
         m = _JSON_RE.search(raw or "")
         if not m:
-            return []
+            logger.warning(
+                "[atomic-claim-grounding] extraction failed: "
+                "no JSON object in response"
+            )
+            return [], False
         data = json.loads(m.group(0))
         claims = data.get("claims") or []
         # Sanitize: strings only, non-empty, capped
@@ -210,7 +267,7 @@ async def _extract_claims(prose: str) -> list[str]:
             f"[atomic-claim-grounding] extraction failed: "
             f"{type(e).__name__}: {e}"
         )
-        return []
+        return [], False
 
     # Best-effort cache write.
     try:
@@ -224,7 +281,7 @@ async def _extract_claims(prose: str) -> list[str]:
             f"[atomic-claim-grounding] cache write failed: "
             f"{type(e).__name__}: {e}"
         )
-    return out
+    return out, True
 
 
 async def _judge_claim(
@@ -232,7 +289,9 @@ async def _judge_claim(
 ) -> dict:
     """Verify ONE atomic claim against the source. Fail-soft: any failure
     returns supported = True so we don't override the bundled judge on
-    infra hiccups."""
+    infra hiccups — tagged _call_failed so the caller can tell a genuine
+    pass apart from a silent default (this criterion's whole purpose is
+    anti-hallucination, so rubber-stamping without a trace defeats it)."""
     async with sem:
         try:
             prompt = _JUDGE_PROMPT.format(claim = claim, source = source)
@@ -242,7 +301,15 @@ async def _judge_claim(
             )
             m = _JSON_RE.search(raw or "")
             if not m:
-                return {"supported": True}
+                logger.debug(
+                    "[atomic-claim-grounding] judge response unparseable "
+                    "— defaulting to supported=True"
+                )
+                return {"supported": True, "_call_failed": True}
             return json.loads(m.group(0))
-        except Exception:
-            return {"supported": True}
+        except Exception as e:
+            logger.debug(
+                f"[atomic-claim-grounding] judge call failed: "
+                f"{type(e).__name__}: {e} — defaulting to supported=True"
+            )
+            return {"supported": True, "_call_failed": True}

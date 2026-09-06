@@ -61,6 +61,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 import time
 from hashlib import sha256
@@ -69,7 +70,6 @@ from typing import Optional
 from pydantic import ValidationError
 
 from domains.llm.rotator.chain import chat_judge_bandit_async
-from domains.llm.rotator.chain.domain import is_heavyweight as _sawc_writer_filter
 
 from ....ingestion.storage import get_storage
 from ...runtime.progress import emit_progress
@@ -514,6 +514,9 @@ def compute_sawc_stats(
 
     n_sections_completed = sum(1 for s in sections if _is_present(s))
     n_sections_fallback = sum(1 for s in sections if "placeholder" in s.issues)
+    n_sections_citation_fallback = sum(
+        1 for s in sections if "citation_fallback" in s.issues
+    )
     n_repairs = sum(s.n_repairs for s in sections)
     total_subtopics = sum(len(s.subtopics) for s in sections)
     total_citations = sum(len(s.citations) for s in sections)
@@ -525,6 +528,7 @@ def compute_sawc_stats(
         n_sections = n_sections,
         n_sections_completed = n_sections_completed,
         n_sections_fallback = n_sections_fallback,
+        n_sections_citation_fallback = n_sections_citation_fallback,
         n_stages = n_stages,
         n_total_drafts_fired = n_total_drafts_fired,
         n_critic_picks = n_critic_picks,
@@ -593,6 +597,37 @@ except Exception:
     _lf_override = lambda *a, **kw: (lambda fn: fn)  # noqa: E731
 
 
+# Visible-vault budget for the writer prompt. _BANK_PAD_TO caps a *thin*
+# bank at 20 entries, but a content-heavy section can route far more
+# hashes with no upper bound — uncapped, real code bodies (some spanning
+# hundreds of lines) can make the prompt large enough to exceed a small
+# -context arm from the Rotator's heterogeneous pool. Per-entry cap keeps
+# any single huge file from eating the whole budget; total cap water
+# -fills fairly across all entries (see format_entries_for_prompt).
+_MAX_VAULT_CHARS_PER_ENTRY = 6_000
+_MAX_VAULT_CHARS_TOTAL     = 60_000
+
+# Draft-call attempts before permanently losing this draft slot (best-of-N
+# still covers a single bad draw, but N_DRAFTS=2 shares the SAME prompt —
+# a systematic context overflow fails every draft identically, so this
+# retry is not redundant with best-of-N).
+_MAX_CALL_ATTEMPTS = 2
+
+_CONTEXT_OVERFLOW_MARKERS = (
+    "context_length", "context window", "maximum context length",
+    "context_window_exceeded", "reduce the length", "too many tokens",
+    "context length exceeded", "prompt is too long",
+)
+
+
+def _is_context_overflow_error(e: Exception) -> bool:
+    """Heuristic substring match — same idiom as outline_sdp/digest_construct's
+    classifiers. The Rotator is a universal gateway with no context-length
+    -aware arm filtering."""
+    msg = str(e).lower()
+    return any(marker in msg for marker in _CONTEXT_OVERFLOW_MARKERS)
+
+
 def build_writer_prompt(
     *,
     framework: str,
@@ -610,8 +645,20 @@ def build_writer_prompt(
     vault_rich: dict | None = None,
     prose_mode: bool = False,
     already_shown_hashes: set[str] | None = None,
+    vault_char_budget: int | None = None,
+    prior_feedback: list[str] | None = None,
 ) -> str:
-    """Build the per-section writer prompt. vault_rich enables Visible Vault (LLM sees code bodies; hash-only listing otherwise). prose_mode=True when bank is empty (prose subtopics instead of placeholder). already_shown_hashes suppresses cross-section hash recycling."""
+    """Build the per-section writer prompt. vault_rich enables Visible Vault (LLM sees code bodies; hash-only listing otherwise). prose_mode=True when bank is empty (prose subtopics instead of placeholder). already_shown_hashes suppresses cross-section hash recycling. vault_char_budget overrides _MAX_VAULT_CHARS_TOTAL — used to retry at a smaller budget after a context-overflow failure. prior_feedback: checklist's failed-criteria feedback strings from the PREVIOUS RETHINK iteration — closes the self-refine loop (arXiv 2303.17651 requires critique to inform regeneration; before this, a RETHINK iteration reran blind with zero signal about what was actually wrong, which is why some iterations regressed instead of improving)."""
+    prior_feedback_block = ""
+    if prior_feedback:
+        feedback_lines = "\n".join(f"  - {fb}" for fb in prior_feedback[:8])
+        prior_feedback_block = (
+            f"== PRIOR ATTEMPT FEEDBACK — FIX THESE ==\n"
+            f"The last draft of this chapter failed review for reasons "
+            f"below. This is a REWRITE, not a first draft — address these "
+            f"specifically, don't just repeat the same approach:\n"
+            f"{feedback_lines}\n\n"
+        )
     prereqs_str = (
         ", ".join(section_prerequisites)
         if section_prerequisites
@@ -637,31 +684,42 @@ def build_writer_prompt(
             f"to THIS section's distinct angle:\n  {listing}\n\n"
         )
 
-    # Visible vault — LLM sees full code bodies; render still substitutes
-    # via hash so output is byte-perfect.
+    # Visible vault — LLM sees code bodies (budget-capped: the Rotator is
+    # a universal gateway with no context-length-aware arm filtering, so
+    # an uncapped bank can exceed a small-context arm from a heterogeneous
+    # pool — see format_entries_for_prompt). Render still substitutes via
+    # hash so final output is byte-perfect regardless of what got
+    # truncated here.
     if allowed_hashes and vault_rich:
-        from ..vault.domain import format_entry_for_prompt
+        from ..vault.domain import format_entries_for_prompt
         from ..vault.schemas import VaultEntry as _VaultEntry
 
-        envelopes: list[str] = []
+        coerced_vault: dict[str, _VaultEntry] = {}
         for h in allowed_hashes:
             entry = vault_rich.get(h)
             if entry is None:
-                envelopes.append(f'<code id = "{h}" missing = "true"/>')
                 continue
-            # Coerce dict → VaultEntry if needed for type compatibility.
             if isinstance(entry, dict):
                 try:
                     entry = _VaultEntry(**entry)
                 except Exception:
-                    envelopes.append(
-                        f'<code id = "{h}" lang = "{entry.get("lang","text")}">\n'
-                        f'{entry.get("fence_text") or ""}\n'
-                        f'</code>'
+                    entry = _VaultEntry(
+                        hash = h,
+                        fence_text = entry.get("fence_text") or "",
+                        info_string = entry.get("info_string") or "",
+                        lang = entry.get("lang") or "text",
+                        line_count = int(entry.get("line_count") or 0),
+                        char_count = int(entry.get("char_count") or 0),
+                        sentinel_kind = entry.get(
+                            "sentinel_kind", "fence_backtick",
+                        ),
                     )
-                    continue
-            envelopes.append(format_entry_for_prompt(entry))
-        hash_list = "\n\n".join(envelopes)
+            coerced_vault[h] = entry
+        hash_list = format_entries_for_prompt(
+            coerced_vault, hashes = allowed_hashes,
+            max_chars_per_entry = _MAX_VAULT_CHARS_PER_ENTRY,
+            max_total_chars = vault_char_budget or _MAX_VAULT_CHARS_TOTAL,
+        )
     else:
         hash_list = (
             "\n".join(f"  - {h}" for h in allowed_hashes)
@@ -695,6 +753,17 @@ def build_writer_prompt(
             "actually TEACHES it, grounded in the contributions + citations "
             "(no invented specifics — no numbers, flags, or APIs the sources "
             "don't state).\n"
+            "  - GROUND IT CONCRETELY: name at least one real file path, "
+            "directory name, config key, command, or setting the sources "
+            "actually mention. 'This helps you understand the layout' is "
+            "filler — 'settings.json lives under ~/.claude/' is not. If the "
+            "sources genuinely give you nothing concrete for a subtopic, "
+            "that's a signal to cut it and cover fewer, better-grounded "
+            "subtopics instead.\n"
+            "  - VARY THE OPENING of each explanation — reusing the same "
+            "lead-in phrase across subtopics (e.g. every paragraph starting "
+            "'Exploring the directory...') reads as templated filler, not "
+            "distinct teaching points.\n"
         )
     else:
         prose_note = ""
@@ -722,6 +791,7 @@ def build_writer_prompt(
         f"section. Each code block teaches ONE pedagogically valuable "
         f"thing.\n\n"
 
+        f"{prior_feedback_block}"
         f"{prose_note}"
 
         f"FRAMEWORK: {framework}\n"
@@ -1173,8 +1243,15 @@ def _placeholder_section(
     heading: str,
     n_repairs: int,
     deployment_writer: Optional[str],
+    error_tags: Optional[list[str]] = None,
 ) -> Section:
     """Fallback when all writer drafts and repairs fail. Keeps chapter assemblable; empty subtopics triggers checklist density gate → mgsr_replan retargets or merges this section."""
+    issues = ["placeholder"]
+    if error_tags:
+        # "draft_fail:<tag>" per failed attempt — lets sawc_write_run
+        # aggregate an error_breakdown the same way digest_construct
+        # already does, instead of a total failure being undiagnosable.
+        issues.extend(f"draft_fail:{tag}" for tag in error_tags)
     return Section(
         section_id=section_id,
         heading=heading,
@@ -1189,7 +1266,7 @@ def _placeholder_section(
         n_drafts_tried=_N_DRAFTS,
         n_repairs=n_repairs,
         deployment_writer=deployment_writer,
-        issues=["placeholder"],
+        issues=issues,
     )
 
 async def _write_section_best_of_n(
@@ -1211,6 +1288,8 @@ async def _write_section_best_of_n(
     thread_id: str,
     prose_mode: bool = False,
     already_shown_hashes: set[str] | None = None,
+    citation_fallback: bool = False,
+    prior_feedback: list[str] | None = None,
 ) -> Section:
     """N drafts → critic-pick → Section. Optimal-Stopping BoN (arXiv 2510.01394): fire draft 1 first; ship directly if it passes zero-violations gate, else parallel fan-out + tournament. Disabled via KD_SAWC_OPTIMAL_STOPPING=false."""
     async with sem:
@@ -1236,13 +1315,14 @@ async def _write_section_best_of_n(
                 vault_rich=vault_rich,
                 prose_mode=prose_mode,
                 already_shown_hashes=already_shown_hashes,
+                prior_feedback=prior_feedback,
             )
 
         if _OPTIMAL_STOPPING_ENABLED and _N_DRAFTS >= 2:
             # Fire draft 1 first, decide whether to fire the rest
             r0 = await _make_draft_coro(0)
             results = [r0]
-            draft1, _dep1, _wall1, _repairs1 = r0
+            draft1, _dep1, _wall1, _repairs1, _err1 = r0
             good_enough = False
             if draft1 is not None:
                 issues_1 = validate_section_against_inputs(
@@ -1271,12 +1351,25 @@ async def _write_section_best_of_n(
             ])
 
         valid: list[tuple[int, _LLMSectionDraft, str, int, int]] = []
-        for i, (draft, dep, wall, repairs) in enumerate(results):
+        draft_errors: list[str] = []
+        for i, (draft, dep, wall, repairs, err) in enumerate(results):
             if draft is not None:
                 valid.append((i, draft, dep or "", wall, repairs))
+            elif err:
+                draft_errors.append(err)
 
         if not valid:
-            # ALL drafts failed → placeholder
+            # ALL drafts failed → placeholder. Tag WHY in .issues (same
+            # convention as "placeholder"/"citation_fallback") so
+            # sawc_write_run can aggregate an error_breakdown per chapter
+            # — before this, a total section failure was undiagnosable
+            # from logs alone (digest_construct already had this for
+            # per-source failures; sawc_write never did).
+            error_summary = ",".join(draft_errors) if draft_errors else "unknown"
+            logger.warning(
+                f"[sawc_write] {section_id}: ALL {len(results)} draft "
+                f"attempt(s) failed ({error_summary}) — emitting placeholder"
+            )
             await emit_progress(
                 thread_id, "sawc_write", "section_picked",
                 section_id=section_id, chosen_idx=-1,
@@ -1299,6 +1392,7 @@ async def _write_section_best_of_n(
                     next((d for _, _, d, _, _ in valid), None)
                     if valid else None
                 ),
+                error_tags=draft_errors,
             )
 
         # Critic picker over valid drafts (rerank, not regenerate)
@@ -1356,7 +1450,10 @@ async def _write_section_best_of_n(
             chosen_draft_idx=original_draft_idx,
             structural_score=structural_score,
             fallback_picker=fallback,
-            issues=chosen_issues,
+            issues=(
+                chosen_issues + ["citation_fallback"]
+                if citation_fallback else chosen_issues
+            ),
         )
 
         total_expl_chars = sum(
@@ -1420,51 +1517,84 @@ async def _draft_one_section(
     vault_rich: dict | None = None,
     prose_mode: bool = False,
     already_shown_hashes: set[str] | None = None,
-) -> tuple[Optional[_LLMSectionDraft], Optional[str], int, int]:
-    """One writer call → parse → Pydantic → cross-ref → repair. Returns (draft, deployment, wall_ms, n_repairs); draft=None on irrecoverable failure."""
+    prior_feedback: list[str] | None = None,
+) -> tuple[Optional[_LLMSectionDraft], Optional[str], int, int, Optional[str]]:
+    """One writer call → parse → Pydantic → cross-ref → repair. Returns
+    (draft, deployment, wall_ms, n_repairs, error_reason); draft=None on
+    irrecoverable failure, with error_reason set so the caller can
+    aggregate WHY (mirrors digest_construct's error_breakdown — before
+    this, a section's total draft failure was undiagnosable from logs)."""
     t0 = time.monotonic()
     allowed_hash_set = set(allowed_hashes)
     valid_source_set = set(valid_source_keys)
 
-    prompt = build_writer_prompt(
-        framework=framework,
-        chapter_id=chapter_id,
-        chapter_title=chapter_title,
-        section_id=section_id,
-        section_heading=section_heading,
-        section_description=section_description,
-        section_prerequisites=section_prerequisites,
-        contributions=contributions,
-        allowed_hashes=allowed_hashes,
-        valid_source_keys=valid_source_keys,
-        memory=memory,
-        n_primary_contribs=n_primary_contribs,
-        vault_rich=vault_rich,
-        prose_mode=prose_mode,
-        already_shown_hashes=already_shown_hashes,
-    )
+    def _build_prompt(vault_char_budget: int | None) -> str:
+        return build_writer_prompt(
+            framework=framework,
+            chapter_id=chapter_id,
+            chapter_title=chapter_title,
+            section_id=section_id,
+            section_heading=section_heading,
+            section_description=section_description,
+            section_prerequisites=section_prerequisites,
+            contributions=contributions,
+            allowed_hashes=allowed_hashes,
+            valid_source_keys=valid_source_keys,
+            memory=memory,
+            n_primary_contribs=n_primary_contribs,
+            vault_rich=vault_rich,
+            prose_mode=prose_mode,
+            already_shown_hashes=already_shown_hashes,
+            vault_char_budget=vault_char_budget,
+            prior_feedback=prior_feedback,
+        )
+
+    prompt = _build_prompt(None)
 
     deployment: Optional[str] = None
-    try:
-        # dd-synth-write pool = heavyweight reasoning models; workhorse arms reserved for dd-grader. NIM/Mistral accept response_format=json_schema server-side; Gemini handled by repair loop.
-        response, meta = await chat_judge_bandit_async(
-            prompt,
-            max_tokens=_MAX_TOKENS_DRAFT,
-            temperature=_TEMPERATURE_DRAFT,
-            dd_process="dd-synth-write",
-            candidate_filter=_sawc_writer_filter,
-            response_format=_SAWC_DRAFT_RESPONSE_FORMAT,
-        )
-        deployment = (meta or {}).get("deployment")
-    except Exception as e:
+    response: Optional[str] = None
+    last_error: Optional[Exception] = None
+    for call_attempt in range(_MAX_CALL_ATTEMPTS):
+        try:
+            # NIM/Mistral accept response_format=json_schema server-side; Gemini handled by repair loop.
+            response, meta = await chat_judge_bandit_async(
+                prompt,
+                max_tokens=_MAX_TOKENS_DRAFT,
+                temperature=_TEMPERATURE_DRAFT,
+                response_format=_SAWC_DRAFT_RESPONSE_FORMAT,
+            )
+            deployment = (meta or {}).get("deployment")
+            last_error = None
+            break
+        except Exception as e:
+            last_error = e
+            if call_attempt < _MAX_CALL_ATTEMPTS - 1:
+                # The vault-bank cap above should keep this rare, but a
+                # content-heavy section (many allowed_hashes, each
+                # capped) can still add up — the Rotator has no context
+                # -length-aware arm filtering, so retry at half the
+                # vault budget rather than just reproducing the failure.
+                if _is_context_overflow_error(e):
+                    prompt = _build_prompt(_MAX_VAULT_CHARS_TOTAL // 2)
+                await asyncio.sleep(1.0 + random.random())
+    if last_error is not None:
         wall_ms = int((time.monotonic() - t0) * 1000)
+        error_tag = (
+            "context_overflow" if _is_context_overflow_error(last_error)
+            else type(last_error).__name__
+        )
         await emit_progress(
             thread_id, "sawc_write", "section_draft_done",
             section_id=section_id, draft_idx=draft_idx, n_total=n_total,
-            ok=False, error=f"{type(e).__name__}: {str(e)[:120]}",
+            ok=False, error=f"{type(last_error).__name__}: {str(last_error)[:120]}",
             wall_ms=wall_ms,
         )
-        return None, None, wall_ms, 0
+        logger.warning(
+            f"[sawc_write] {section_id} draft {draft_idx}: LLM call "
+            f"failed after {_MAX_CALL_ATTEMPTS} attempt(s): "
+            f"{type(last_error).__name__}: {last_error}"
+        )
+        return None, None, wall_ms, 0, error_tag
 
     parsed = _parse_json_response(response)
     if not parsed:
@@ -1475,7 +1605,11 @@ async def _draft_one_section(
             ok=False, error="parse_failed", wall_ms=wall_ms,
             deployment=deployment,
         )
-        return None, deployment, wall_ms, 0
+        logger.info(
+            f"[sawc_write] {section_id} draft {draft_idx}: response not "
+            f"parseable as JSON"
+        )
+        return None, deployment, wall_ms, 0, "parse_failed"
 
     draft, err = _try_parse_draft(parsed)
     n_repairs = 0
@@ -1527,7 +1661,11 @@ async def _draft_one_section(
             ok=False, error=f"pydantic_fail: {err}",
             wall_ms=wall_ms, deployment=deployment,
         )
-        return None, deployment, wall_ms, n_repairs
+        logger.info(
+            f"[sawc_write] {section_id} draft {draft_idx}: pydantic-reject "
+            f"after {n_repairs} repair(s): {err}"
+        )
+        return None, deployment, wall_ms, n_repairs, "pydantic_fail"
 
     # Cross-ref validation (heading/hashes/citations alignment).
     issues = validate_section_against_inputs(
@@ -1598,7 +1736,7 @@ async def _draft_one_section(
         n_citations=len(draft.citations),
         n_violations=len(issues),
     )
-    return draft, deployment, wall_ms, n_repairs
+    return draft, deployment, wall_ms, n_repairs, None
 
 async def _critic_pick_best(
     *,
@@ -1961,11 +2099,60 @@ async def sawc_write_run(state: SynthState) -> dict:
     incoming_refine_iter = int(state.get("refine_iter") or 0)
     refine_iter = incoming_refine_iter + 1
 
-    # Best-seen iteration tracking — checklist score updated in mgsr_replan
-    # after sawc returns; render falls back to this at budget halt.
+    # Close the self-refine loop on a RETHINK iteration — previously a
+    # RETHINK just reran the writer prompt unchanged, with zero signal
+    # about what checklist_eval actually flagged, so some iterations
+    # regressed instead of improving (confirmed live this session:
+    # chapters 3 and 6 both scored worse on iteration 2 than iteration 1).
+    prior_feedback: list[str] | None = None
+    if incoming_refine_iter > 0:
+        prior_feedback = (
+            state.get("checklist_stats") or {}
+        ).get("failed_feedback") or None
+
+    # Best-seen iteration tracking. Fixed 2026-09-05 — this used to just
+    # forward whatever iteration 1 wrote, forever, unconditionally (the
+    # "checklist score updated in mgsr_replan after sawc returns" this
+    # comment used to promise never actually happened: mgsr_replan has
+    # zero references to either field). render_audit_write reads
+    # best_seen_sawc_path directly now, so this comparison is what makes
+    # "best-seen-rescue" actually rescue the best iteration instead of
+    # silently shipping whichever one happened to run last — including
+    # ones that regressed after a RETHINK loop made things worse.
     incoming_best_score = state.get("best_seen_score")
     incoming_best_path = state.get("best_seen_sawc_path")
-    incoming_prev_score = state.get("prev_checklist_score")
+    # Plateau detection (graph._route_after_mgsr) needs THIS iteration's
+    # decision to compare against the score from the iteration that just
+    # finished. checklist_eval is about to overwrite checklist_stats with
+    # a fresh pass_rate — so the LAST iteration's value must be captured
+    # here, before that happens, and carried forward as prev_checklist_score.
+    # (Previously read as `state.get("prev_checklist_score")` — always None,
+    # since nothing ever wrote that field; the plateau halt could never fire.)
+    carried_prev_score = (state.get("checklist_stats") or {}).get("pass_rate")
+
+    if incoming_refine_iter > 0 and carried_prev_score is not None:
+        # The iteration that JUST finished (N-1) has a real score now —
+        # reconstruct its own versioned key (content-addressed, so this is
+        # exact, not a guess) and promote it to best-seen if it beats the
+        # running record.
+        prev_iter_versioned_key = _versioned_blob_key(
+            slug, chapter_id,
+            _compute_manifest_hash(
+                outline_manifest_hash = outline_manifest_hash,
+                digest_manifest_hash = digest_manifest_hash,
+                refine_iter = incoming_refine_iter,
+            ),
+        )
+        if incoming_best_score is None or carried_prev_score > incoming_best_score:
+            if incoming_best_score is not None:
+                logger.info(
+                    f"[sawc_write] {slug}/{chapter_id}: new best-seen "
+                    f"iteration {incoming_refine_iter} "
+                    f"(score {carried_prev_score:.2%} > prior best "
+                    f"{incoming_best_score:.2%})"
+                )
+            incoming_best_score = carried_prev_score
+            incoming_best_path = prev_iter_versioned_key
 
     manifest_hash = _compute_manifest_hash(
         outline_manifest_hash = outline_manifest_hash,
@@ -2020,6 +2207,8 @@ async def sawc_write_run(state: SynthState) -> dict:
                 patch["best_seen_sawc_path"] = incoming_best_path
             if incoming_best_score is not None:
                 patch["best_seen_score"] = incoming_best_score
+            if carried_prev_score is not None:
+                patch["prev_checklist_score"] = carried_prev_score
             return patch
         except Exception as e:
             logger.warning(
@@ -2115,7 +2304,8 @@ async def sawc_write_run(state: SynthState) -> dict:
                 c.get("source_key", "") for c in contributions
                 if c.get("source_key")
             })
-            if not section_source_keys:
+            citation_fallback = not section_source_keys
+            if citation_fallback:
                 section_source_keys = valid_source_keys
                 logger.info(
                     f"[sawc_write] {sid}: digest routed 0 sources to "
@@ -2144,6 +2334,8 @@ async def sawc_write_run(state: SynthState) -> dict:
                 thread_id = thread_id,
                 prose_mode = prose_mode,
                 already_shown_hashes = set(chapter_used_hashes),
+                citation_fallback = citation_fallback,
+                prior_feedback = prior_feedback,
             )
 
         section_results = await asyncio.gather(
@@ -2223,6 +2415,17 @@ async def sawc_write_run(state: SynthState) -> dict:
         n_picker_fallbacks = n_picker_fallbacks,
     )
 
+    # Aggregate WHY any section went fully empty — same idea as
+    # digest_construct's error_breakdown, applied to sawc's own draft
+    # failures (previously invisible: a total section failure only ever
+    # showed up as "0/N sections written," with no reason attached).
+    error_breakdown: dict[str, int] = {}
+    for s in final_sections:
+        for tag in (s.issues or []):
+            if tag.startswith("draft_fail:"):
+                kind = tag.split(":", 1)[1] or "unknown"
+                error_breakdown[kind] = error_breakdown.get(kind, 0) + 1
+
     chapter_draft = ChapterDraft(
         chapter_id = chapter_id,
         chapter_title = chapter_title,
@@ -2250,6 +2453,7 @@ async def sawc_write_run(state: SynthState) -> dict:
         "n_sections":            coverage.n_sections,
         "n_completed":           coverage.n_sections_completed,
         "n_fallback":            coverage.n_sections_fallback,
+        "n_citation_fallback":   coverage.n_sections_citation_fallback,
         "n_stages":              coverage.n_stages,
         "n_total_drafts_fired":  coverage.n_total_drafts_fired,
         "n_critic_picks":        coverage.n_critic_picks,
@@ -2259,6 +2463,7 @@ async def sawc_write_run(state: SynthState) -> dict:
         "total_citations":       coverage.total_citations,
         "avg_subtopics_per_section": coverage.avg_subtopics_per_section,
         "avg_explanation_words":     coverage.avg_explanation_words,
+        "error_breakdown":       error_breakdown,
         "wall_ms":               elapsed,
         "store_path":            latest_key,
         "versioned_path":        versioned_key,
@@ -2271,6 +2476,7 @@ async def sawc_write_run(state: SynthState) -> dict:
         n_sections = stats["n_sections"],
         n_completed = stats["n_completed"],
         n_fallback = stats["n_fallback"],
+        n_citation_fallback = stats["n_citation_fallback"],
         n_repairs = stats["n_repairs"],
         total_drafts_fired = stats["n_total_drafts_fired"],
         wall_ms = elapsed,
@@ -2278,13 +2484,18 @@ async def sawc_write_run(state: SynthState) -> dict:
     logger.info(
         f"[sawc_write] {slug}/{chapter_id}: "
         f"{stats['n_completed']}/{stats['n_sections']} sections written, "
-        f"{stats['n_fallback']} fallbacks, {stats['n_repairs']} repairs, "
+        f"{stats['n_fallback']} fallbacks "
+        f"(failed = {dict(sorted(error_breakdown.items()))}), "
+        f"{stats['n_citation_fallback']} citation-fallback (chapter-wide), "
+        f"{stats['n_repairs']} repairs, "
         f"{stats['n_total_drafts_fired']} drafts fired, "
         f"{stats['n_picker_fallbacks']} picker fallbacks, "
         f"refine_iter = {refine_iter}, {elapsed} ms"
     )
-    # mgsr_replan updates best-seen with the checklist score; here we
-    # just forward + default to the current versioned key on first iter.
+    # Best-seen comparison already happened above (see carried_prev_score);
+    # this just forwards whatever incoming_best_score/incoming_best_path
+    # ended up being — either the running record, or this call's own
+    # promotion of the iteration that just finished.
     patch = {
         "sawc_path":   latest_key,
         "sawc_stats":  stats,
@@ -2299,6 +2510,8 @@ async def sawc_write_run(state: SynthState) -> dict:
         patch["best_seen_sawc_path"] = versioned_key
     if incoming_best_score is not None:
         patch["best_seen_score"] = incoming_best_score
+    if carried_prev_score is not None:
+        patch["prev_checklist_score"] = carried_prev_score
     return patch
 
 
