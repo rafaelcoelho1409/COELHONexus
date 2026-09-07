@@ -53,12 +53,27 @@ logger = logging.getLogger(__name__)
 
 
 # Tunables (quality > speed)
-_CONCURRENCY        = 24    # max concurrent per-source LLM calls; FGTS-VA bandit absorbs 429s via arm rotation, no per-call throttling needed.
+# was 24 (issue #18, 2026-09-07): the comment below ("FGTS-VA bandit
+# absorbs 429s") predates the Sept 4 migration to the standalone Rotator
+# microservice — that in-process bandit no longer exists here. The
+# Rotator's own _PROVIDER_CAPS sum to ~19 concurrent slots across every
+# provider combined; 24 alone already exceeds total system capacity
+# before any other node's calls compete for the same slots. Lowered to
+# match Planner's own ceiling (doc_distill/off_topic/chapter_propose all
+# cap at 16 — none of Planner's nodes exceed the shared Rotator's total
+# capacity the way this one did).
+_CONCURRENCY        = 16    # max concurrent per-source LLM calls.
 # Expected ~7-9 min realistic (repair attempts + outliers); quality unchanged, pure throughput.
 _TEMPERATURE_DRAFT  = 0.1   # routing decisions should be ~deterministic
 _TEMPERATURE_REPAIR = 0.0
 _MAX_TOKENS_DRAFT   = 6000
 _MAX_TOKENS_REPAIR  = 6000
+# chat_judge_bandit_async's own default (30s) was undersized — confirmed
+# live across 5 study runs (2026-09-05/07): digest_construct's per-source
+# digestion routinely lost 40-60% of sources to APITimeoutError, driving
+# a mandatory second wave nearly every chapter. Same fix as outline/sawc.
+_TIMEOUT_S_DRAFT    = 90.0
+_TIMEOUT_S_REPAIR   = 90.0
 _MAX_REPAIR_ATTEMPTS = 2
 # Draft-call attempts before permanently losing this source's content (its
 # key_facts/code_refs never reach any section — silent, not retried
@@ -207,6 +222,7 @@ async def _digest_one_source(
                     max_tokens = _MAX_TOKENS_DRAFT,
                     temperature = _TEMPERATURE_DRAFT,
                     response_format = _DIGEST_RESPONSE_FORMAT,
+                    timeout_s = _TIMEOUT_S_DRAFT,
                 )
                 deployment = (meta or {}).get("deployment")
                 last_error = None
@@ -281,6 +297,7 @@ async def _digest_one_source(
                         max_tokens = _MAX_TOKENS_REPAIR,
                         temperature = _TEMPERATURE_REPAIR,
                         response_format = _DIGEST_RESPONSE_FORMAT,
+                        timeout_s = _TIMEOUT_S_REPAIR,
                     )
                     deployment = (rm or {}).get("deployment") or deployment
                     rp = _parse_json_response(rr)
@@ -338,6 +355,7 @@ async def _digest_one_source(
                         max_tokens = _MAX_TOKENS_REPAIR,
                         temperature = _TEMPERATURE_REPAIR,
                         response_format = _DIGEST_RESPONSE_FORMAT,
+                        timeout_s = _TIMEOUT_S_REPAIR,
                     )
                     deployment = (rm or {}).get("deployment") or deployment
                     rp = _parse_json_response(rr)

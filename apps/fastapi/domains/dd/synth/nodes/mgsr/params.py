@@ -31,6 +31,10 @@ TEMPERATURE_REPLAN  = 0.2     # mostly deterministic structural decisions
 TEMPERATURE_REPAIR  = 0.0
 MAX_TOKENS_REPLAN   = 4000
 MAX_TOKENS_REPAIR   = 4000
+# chat_judge_bandit_async's own default (30s) was undersized — same fix
+# as elsewhere in Synth (2026-09-06/07).
+TIMEOUT_S_REPLAN    = 90.0
+TIMEOUT_S_REPAIR    = 90.0
 MAX_REPAIR_ATTEMPTS = 1
 
 BLOB_PREFIX = "synth"

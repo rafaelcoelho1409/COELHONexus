@@ -37,6 +37,12 @@ class SynthState(TypedDict, total=False):
     # OP-12 best-seen rescue: on budget/plateau halt, route highest-score sawc to render.
     best_seen_sawc_path:   Optional[str]
     best_seen_score:       Optional[float]
+    # Tie-breaker for best_seen_score (issue #12, 2026-09-06): a tie on
+    # pass_rate can be an artifact of a judge call failing that round
+    # rather than genuinely equal quality — n_pregate_passed (deterministic
+    # checks, judge-independent) breaks ties toward real structural
+    # completeness. Compared as (best_seen_score, best_seen_pregate).
+    best_seen_pregate:     Optional[int]
     # Sustained-outage detection: consecutive RETHINK iterations whose low
     # score was infra-driven (judge/CoCoA/atomic-claim call failures), not
     # genuine content review. Resets to 0 the moment an iteration is NOT

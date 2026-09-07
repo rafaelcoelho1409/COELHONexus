@@ -13,10 +13,14 @@ from ...runtime.observability import record_classical_patch
 
 from .params import (
     CANONICALIZE_MAX_TOKENS as _CANONICALIZE_MAX_TOKENS,
+    CANONICALIZE_TIMEOUT_S as _CANONICALIZE_TIMEOUT_S,
     DETECT_MAX_TOKENS as _DETECT_MAX_TOKENS,
+    DETECT_TIMEOUT_S as _DETECT_TIMEOUT_S,
     EXTRACT_MAX_TOKENS as _EXTRACT_MAX_TOKENS,
+    EXTRACT_TIMEOUT_S as _EXTRACT_TIMEOUT_S,
     MAX_CLAIMS_PER_CHAPTER as _MAX_CLAIMS_PER_CHAPTER,
     PATCH_MAX_TOKENS as _PATCH_MAX_TOKENS,
+    PATCH_TIMEOUT_S as _PATCH_TIMEOUT_S,
     PER_CHAPTER_CONCURRENCY as _PER_CHAPTER_CONCURRENCY,
     PROSE_CHARS_FOR_CLAIMS as _PROSE_CHARS_FOR_CLAIMS,
     PROSE_CHARS_FOR_PATCH as _PROSE_CHARS_FOR_PATCH,
@@ -66,6 +70,115 @@ async def _call_with_retry(
             if attempt < _MAX_CALL_ATTEMPTS - 1:
                 await asyncio.sleep(1.0 + random.random())
     return None, last_error
+
+
+def _extract_first_json_object(text: str, start_from: int = 0) -> Optional[str]:
+    """Return the first *balanced* {...} substring in text at or after
+    `start_from`, tracking brace depth and skipping over quoted-string
+    content (so a brace inside a string literal doesn't affect depth).
+    Issue #15 follow-up, 2026-09-06: the original
+    `_JSON_RE = re.compile(r"\\{.*\\}", DOTALL)` is greedy across the
+    *entire* response — confirmed live on ch-10 (4,692-char response,
+    real content, still failed both json.loads AND json_repair) — if
+    claim/term text itself quotes a code snippet or JSON example
+    containing stray braces, the greedy match spans from the first real
+    '{' to a much later, unrelated '}' and hands both parsers an
+    unrecoverable hybrid. This never over-extends: it stops at the first
+    point brace depth returns to 0. Returns None if the brace opened at
+    `start_from` never finds its match (e.g. truncated mid-structure, or
+    — issue #16 — a stray duplicate '{' with no closing partner of its
+    own; see `_all_balanced_json_candidates` for the retry that handles
+    that case)."""
+    start = text.find("{", start_from)
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None  # never closed — e.g. truncated mid-structure
+
+
+# Issue #16, 2026-09-06/07: confirmed live on ch-10 — response started
+# `{\n{"claims": [...` (a bare, never-closed '{' immediately followed by
+# a newline and the REAL object's opening '{'). Starting the balanced
+# scan only from the first '{' in the text can never recover this — that
+# outer brace has no matching close anywhere in the response. Bounded to
+# a handful of attempts so a pathological response can't blow up cost.
+_MAX_BRACE_START_ATTEMPTS = 5
+
+
+def _all_balanced_json_candidates(text: str) -> list[str]:
+    """Every balanced {...} substring found by retrying the scan from
+    each successive '{' in text, up to `_MAX_BRACE_START_ATTEMPTS`
+    distinct starting positions. Handles a duplicated/stray leading
+    brace (issue #16): the first '{' fails to close, but the very next
+    one opens a perfectly valid, parseable object."""
+    candidates: list[str] = []
+    search_from = 0
+    for _ in range(_MAX_BRACE_START_ATTEMPTS):
+        start = text.find("{", search_from)
+        if start == -1:
+            break
+        block = _extract_first_json_object(text, start)
+        if block is not None:
+            candidates.append(block)
+        # Always advance past THIS '{', whether it closed or not, so a
+        # duplicated-leading-brace case still reaches the real object
+        # that opens immediately after the failed one.
+        search_from = start + 1
+    return candidates
+
+
+def _parse_json_block(raw: Optional[str]) -> Optional[dict]:
+    """Extract + parse a JSON object out of a raw LLM response. Tries
+    every balanced brace-matched candidate first (strict json.loads,
+    then json_repair on each — issue #16's duplicated-leading-brace
+    fix), then falls back to the original greedy whole-response regex
+    (issue #15, 2026-09-06: ch-06's response_format={"type":"json_object"}
+    call still returned non-strict JSON — single quotes/trailing commas/
+    preamble — and the bare json.loads here had zero recovery path,
+    unlike every other structured-output call site in this codebase).
+    json_repair is the same idiom already used in
+    domains/dd/planner/nodes/*/domain.py and domains/ycs/rag. Returns
+    None (never raises) if nothing can be recovered at all — callers are
+    responsible for logging that outcome, since a silent None here is
+    exactly what made issue #15 hard to diagnose."""
+    text = raw or ""
+    candidates: list[str] = _all_balanced_json_candidates(text)
+    m = _JSON_RE.search(text)
+    if m and m.group(0) not in candidates:
+        candidates.append(m.group(0))  # last-resort: pre-#15 behavior
+
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except Exception:
+            continue
+    for candidate in candidates:
+        try:
+            import json_repair  # type: ignore
+            return json_repair.loads(candidate)  # type: ignore
+        except Exception:
+            continue
+    return None
 
 
 async def harmonize_book(
@@ -190,6 +303,7 @@ async def _extract_claims_and_terms(
     sem: asyncio.Semaphore, chapter: dict,
 ) -> dict:
     async with sem:
+        chapter_id = chapter.get("chapter_id")
         try:
             prompt = _EXTRACT_CLAIMS_PROMPT.format(
                 max_claims=_MAX_CLAIMS_PER_CHAPTER,
@@ -198,13 +312,33 @@ async def _extract_claims_and_terms(
             raw, err = await _call_with_retry(
                 prompt, max_tokens=_EXTRACT_MAX_TOKENS, temperature=0.0,
                 response_format={"type": "json_object"},
+                timeout_s=_EXTRACT_TIMEOUT_S,
             )
             if err is not None:
                 raise err
-            m = _JSON_RE.search(raw or "")
-            if not m:
+            data = _parse_json_block(raw)
+            if data is None:
+                logger.warning(
+                    f"[book_harmonize] claim/term extract for {chapter_id}: "
+                    f"no parseable JSON in a {len(raw or '')}-char response "
+                    f"(balanced-extract, json.loads, and json_repair all "
+                    f"failed) — chapter contributes 0 claims. response "
+                    f"prefix: {(raw or '')[:200]!r}"
+                )
                 return {}
-            return json.loads(m.group(0))
+            if "claims" not in data and "terms" not in data:
+                # Parsed fine, but not the shape we asked for — silently
+                # returning {} here (via .get("claims", [])) is exactly
+                # what made ch-04/ch-05's 0-claims outcome undiagnosable
+                # on 2026-09-06's 4th study run: valid JSON, wrong keys,
+                # no error anywhere. Surface it instead of guessing.
+                logger.warning(
+                    f"[book_harmonize] claim/term extract for {chapter_id}: "
+                    f"JSON parsed but has neither 'claims' nor 'terms' key "
+                    f"— got keys {list(data.keys())!r}. response prefix: "
+                    f"{(raw or '')[:200]!r}"
+                )
+            return data
         except Exception as e:
             logger.warning(
                 f"[book_harmonize] claim/term extract failed for "
@@ -237,13 +371,18 @@ async def _canonicalize_terms(
         raw, err = await _call_with_retry(
             prompt, max_tokens=_CANONICALIZE_MAX_TOKENS, temperature=0.1,
             response_format={"type": "json_object"},
+            timeout_s=_CANONICALIZE_TIMEOUT_S,
         )
         if err is not None:
             raise err
-        m = _JSON_RE.search(raw or "")
-        if not m:
+        data = _parse_json_block(raw)
+        if data is None:
+            logger.warning(
+                f"[book_harmonize] canonicalize: no parseable JSON in a "
+                f"{len(raw or '')}-char response — no canonical terms this "
+                f"run. response prefix: {(raw or '')[:200]!r}"
+            )
             return []
-        data = json.loads(m.group(0))
         return data.get("canonical_terms", []) or []
     except Exception as e:
         logger.warning(
@@ -273,13 +412,19 @@ async def _detect_violations(
             raw, err = await _call_with_retry(
                 prompt, max_tokens=_DETECT_MAX_TOKENS, temperature=0.0,
                 response_format={"type": "json_object"},
+                timeout_s=_DETECT_TIMEOUT_S,
             )
             if err is not None:
                 raise err
-            m = _JSON_RE.search(raw or "")
-            if not m:
+            data = _parse_json_block(raw)
+            if data is None:
+                logger.warning(
+                    f"[book_harmonize] detect for {chapter_id}: no parseable "
+                    f"JSON in a {len(raw or '')}-char response — assuming "
+                    f"no violations. response prefix: {(raw or '')[:200]!r}"
+                )
                 return {"has_violations": False, "violations": [], "summary": ""}
-            return json.loads(m.group(0))
+            return data
         except Exception as e:
             logger.warning(
                 f"[book_harmonize] detect failed for {chapter_id}: "
@@ -317,6 +462,7 @@ async def _patch_chapter(
             )
             raw, err = await _call_with_retry(
                 prompt, max_tokens=_PATCH_MAX_TOKENS, temperature=0.1,
+                timeout_s=_PATCH_TIMEOUT_S,
             )
             if err is not None:
                 raise err

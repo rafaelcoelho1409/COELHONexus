@@ -1562,6 +1562,7 @@ async def _draft_one_section(
                 max_tokens=_MAX_TOKENS_DRAFT,
                 temperature=_TEMPERATURE_DRAFT,
                 response_format=_SAWC_DRAFT_RESPONSE_FORMAT,
+                timeout_s=_TIMEOUT_S_DRAFT,
             )
             deployment = (meta or {}).get("deployment")
             last_error = None
@@ -1640,6 +1641,7 @@ async def _draft_one_section(
                 repair_prompt,
                 max_tokens=_MAX_TOKENS_REPAIR,
                 temperature=_TEMPERATURE_REPAIR,
+                timeout_s=_TIMEOUT_S_REPAIR,
             )
             deployment = (rm or {}).get("deployment") or deployment
             rp = _parse_json_response(rr)
@@ -1699,6 +1701,7 @@ async def _draft_one_section(
                 repair_prompt,
                 max_tokens=_MAX_TOKENS_REPAIR,
                 temperature=_TEMPERATURE_REPAIR,
+                timeout_s=_TIMEOUT_S_REPAIR,
             )
             deployment = (rm or {}).get("deployment") or deployment
             rp = _parse_json_response(rr)
@@ -1816,6 +1819,15 @@ _MAX_TOKENS_DRAFT      = 8000
 
 _MAX_TOKENS_REPAIR     = 8000
 
+# chat_judge_bandit_async's own default (30s) was undersized — confirmed
+# live across 5 study runs (2026-09-05/07): sawc_write's per-section
+# drafting is the single heaviest generation task in the whole pipeline
+# and was by far the worst-hit, routinely losing entire sections to
+# APITimeoutError and driving most of the sustained-outage halts tracked
+# in the Synth known-issues doc. Same fix as outline/digest.
+_TIMEOUT_S_DRAFT       = 120.0
+_TIMEOUT_S_REPAIR      = 120.0
+
 _MAX_REPAIR_ATTEMPTS   = 2
 
 _SAWC_DRAFT_RESPONSE_FORMAT = {
@@ -1895,6 +1907,7 @@ async def _pairwise_judge_match(
             max_tokens=_MAX_TOKENS_CRITIC,
             temperature=_TEMPERATURE_CRITIC,
             response_format={"type": "json_object"},
+            timeout_s=_TIMEOUT_S_CRITIC,
         )
         deployment_critic = (meta or {}).get("deployment")
         parsed = _parse_json_response(response)
@@ -1917,6 +1930,7 @@ async def _pairwise_judge_match(
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 _MAX_TOKENS_CRITIC     = 300
+_TIMEOUT_S_CRITIC      = 45.0
 
 _PAIRWISE_PICKER_PROMPT = """You are picking the BETTER of two technical-documentation
 drafts for the same section. The section is part of a larger distilled book.

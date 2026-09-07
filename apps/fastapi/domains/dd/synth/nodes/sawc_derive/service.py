@@ -32,6 +32,7 @@ from .params import (
     MAX_OUTPUT_TOKENS,
     N_MPSC_SAMPLES,
     REEXPLAIN_MAX_TOKENS,
+    REQUEST_TIMEOUT_S,
 )
 from .prompts import build_analogical_prompt, build_reexplain_prompt
 from .schemas import DeriveAttempt, DeriveStats
@@ -108,6 +109,7 @@ async def _reexplain_one(
             max_tokens=REEXPLAIN_MAX_TOKENS,
             temperature=0.4,
             response_format={"type": "json_object"},
+            timeout_s=REQUEST_TIMEOUT_S,
         )
     except Exception as e:
         logger.debug(
@@ -146,6 +148,7 @@ async def _sample_one(prompt: str) -> tuple[str, Optional[str], int]:
             prompt,
             max_tokens=MAX_OUTPUT_TOKENS,
             temperature=0.7,
+            timeout_s=REQUEST_TIMEOUT_S,
         )
         deployment = (meta or {}).get("deployment")
         body = parse_code_block(response or "")

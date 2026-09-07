@@ -15,6 +15,10 @@ concepts. List them with their working definition AS USED IN THIS CHAPTER.
 {prose}
 --- END PROSE ---
 
+Output ONLY the JSON object below — no preamble, no restating these
+instructions, no reasoning or explanation before or after it. Your
+entire response must be the JSON object and nothing else.
+
 Return strict JSON:
 {{
   "claims": ["claim 1", "claim 2", ...],
@@ -34,6 +38,9 @@ chapters.
 --- PER-CHAPTER TERMINOLOGY ---
 {terms_block}
 --- END ---
+
+Output ONLY the JSON object below — no preamble, no restating these
+instructions, no reasoning or explanation before or after it.
 
 Return strict JSON:
 {{
@@ -65,6 +72,9 @@ Inspect for THREE classes of violations:
 --- ATOMIC CLAIMS FROM SIBLING CHAPTERS (sample) ---
 {sibling_claims}
 --- END ---
+
+Output ONLY the JSON object below — no preamble, no restating these
+instructions, no reasoning or explanation before or after it.
 
 Return strict JSON:
 {{

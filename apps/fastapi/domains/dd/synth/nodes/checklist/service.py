@@ -11,6 +11,10 @@ from .keys import (
     versioned_blob_key,
     versioned_blob_key as _versioned_blob_key,
 )
+# For best-seen promotion — needs sawc's OWN versioned-key convention,
+# not checklist's (each node's versioned_blob_key hardcodes its own path
+# segment). See the best-seen fix below for why this lives here.
+from ..sawc.keys import versioned_blob_key as _sawc_versioned_blob_key
 from .params import (
     DENSITY_MAX_AVG_EXPLANATION_WORDS,
     DENSITY_MAX_CHARS_PER_PARA,
@@ -724,6 +728,7 @@ async def _run_llm_judge(
                 max_tokens=_MAX_TOKENS_JUDGE,
                 temperature=_TEMPERATURE_JUDGE,
                 response_format=_JUDGE_RESPONSE_FORMAT,
+                timeout_s=_TIMEOUT_S_JUDGE,
             )
             deployment = (meta or {}).get("deployment")
             last_error = None
@@ -792,6 +797,7 @@ async def _run_llm_judge(
                 max_tokens=_MAX_TOKENS_REPAIR,
                 temperature=_TEMPERATURE_REPAIR,
                 response_format=_JUDGE_RESPONSE_FORMAT,
+                timeout_s=_TIMEOUT_S_REPAIR,
             )
             deployment = (rm or {}).get("deployment") or deployment
             rp = _parse_json_response(rr)
@@ -840,6 +846,14 @@ _TEMPERATURE_REPAIR     = 0.0
 _MAX_TOKENS_JUDGE       = 3000
 
 _MAX_TOKENS_REPAIR      = 3000
+
+# chat_judge_bandit_async's own default (30s) was undersized — same fix
+# as outline/digest/sawc (2026-09-06/07). A failed bundled-judge call
+# here directly feeds `infra_degraded` (issues #10/#14), so a timeout
+# that would have succeeded with more headroom was actively corrupting
+# the sustained-outage signal, not just costing one bad iteration.
+_TIMEOUT_S_JUDGE        = 90.0
+_TIMEOUT_S_REPAIR       = 90.0
 
 _MAX_REPAIR_ATTEMPTS    = 1
 
@@ -1048,11 +1062,40 @@ async def checklist_eval_run(state: SynthState) -> dict:
                 f"{stats['chapter_passed']}, {elapsed} ms"
             )
             _emit_criterion_scores(slug, cached.get("criteria") or [])
+            # Same immediate best-seen promotion as the fresh-compute path
+            # below, including the issue #12 tie-breaker — a cache hit is
+            # still this iteration's real score. n_pregate_passed isn't a
+            # top-level field on the persisted blob, so recount it from
+            # the cached criteria list (kind == "deterministic").
+            _incoming_best_score = state.get("best_seen_score")
+            _incoming_best_pregate = state.get("best_seen_pregate")
+            _best_seen_score = _incoming_best_score
+            _best_seen_pregate = _incoming_best_pregate
+            _best_seen_sawc_path = state.get("best_seen_sawc_path")
+            _n_pregate_passed = sum(
+                1 for c in (cached.get("criteria") or [])
+                if c.get("kind") == "deterministic" and c.get("passed")
+            )
+            _is_better = (
+                _incoming_best_score is None
+                or (stats["pass_rate"], _n_pregate_passed) > (
+                    _incoming_best_score, _incoming_best_pregate or 0,
+                )
+            )
+            if _is_better:
+                _best_seen_score = stats["pass_rate"]
+                _best_seen_pregate = _n_pregate_passed
+                _best_seen_sawc_path = _sawc_versioned_blob_key(
+                    slug, chapter_id, sawc_manifest_hash,
+                )
             return {
                 "checklist_path": latest_key,
                 "checklist_stats": stats,
                 # A cache hit is a completed prior run, not a live outage — reset the streak.
                 "consecutive_infra_degraded": 0,
+                "best_seen_score": _best_seen_score,
+                "best_seen_pregate": _best_seen_pregate,
+                "best_seen_sawc_path": _best_seen_sawc_path,
             }
         except Exception as e:
             logger.warning(
@@ -1233,6 +1276,47 @@ async def checklist_eval_run(state: SynthState) -> dict:
     )
     failed_feedback = collect_failed_feedback(all_results)
 
+    # Best-seen promotion happens HERE, immediately, not one iteration
+    # later in sawc_write's own (redundant, one-step-behind) copy of this
+    # comparison. Fixed 2026-09-06 — sawc_write only ever compared the
+    # PREVIOUS iteration's score at the START of the NEXT call, which
+    # never runs if THIS iteration is the one the graph halts on.
+    # Confirmed live: iteration 2 scored 57% vs iteration 1's 29%, but the
+    # graph halted right after iteration 2's own mgsr_replan — iteration
+    # 2's better score never got a chance to be promoted, and the WORSE
+    # iteration 1 content shipped as "best-seen" instead. Doing it here
+    # means the current iteration's own fresh score is already reflected
+    # in state before _route_after_mgsr makes its halt/loop decision.
+    # Fixed 2026-09-06 (issue #12) — comparing on pass_rate alone can't
+    # tell "genuinely tied quality" apart from "tied only because a judge
+    # call failure happened to erase a real structural advantage."
+    # Confirmed live: an iteration with the best structural score all
+    # chapter (n_pregate_passed) and the only one to write every section
+    # tied on overall pass_rate with two earlier, less-complete iterations
+    # purely because its OWN bundled judge call failed outright (llm=0/5).
+    # A strict pass_rate comparison keeps the earlier (worse) entry on a
+    # tie. n_pregate_passed is a deterministic, judge-independent signal
+    # (unaffected by a judge call failing that round), so it's the right
+    # tie-breaker: prefer more genuinely-verified structural completeness
+    # when the headline score doesn't discriminate.
+    incoming_best_score = state.get("best_seen_score")
+    incoming_best_pregate = state.get("best_seen_pregate")
+    best_seen_score = incoming_best_score
+    best_seen_pregate = incoming_best_pregate
+    best_seen_sawc_path = state.get("best_seen_sawc_path")
+    is_better = (
+        incoming_best_score is None
+        or (pass_rate, n_pre_passed) > (
+            incoming_best_score, incoming_best_pregate or 0,
+        )
+    )
+    if is_better:
+        best_seen_score = pass_rate
+        best_seen_pregate = n_pre_passed
+        best_seen_sawc_path = _sawc_versioned_blob_key(
+            slug, chapter_id, sawc_manifest_hash,
+        )
+
     evaluation = ChecklistEvaluation(
         chapter_id = chapter_id,
         chapter_title = chapter_title,
@@ -1266,8 +1350,29 @@ async def checklist_eval_run(state: SynthState) -> dict:
     # than genuine content quality — mgsr's no-recovery short-circuit reads
     # this to decide whether skipping a RETHINK loop is actually justified.
     judge_call_failed = deployment is None
+    # Fixed 2026-09-06 — infra_degraded previously only looked at
+    # checklist's OWN call health (judge/cocoa/atomic-claim), completely
+    # missing sawc_write's independently-timing-out writer calls. Confirmed
+    # live across 3 consecutive chapters the same day: a chapter whose
+    # writer failed every draft attempt with APITimeoutError still read
+    # infra_degraded=False whenever checklist's own judge happened to get
+    # a response that round — causing a chapter run to burn the full
+    # 5-iteration budget (~33 min) instead of halting early (~16 min), and
+    # separately causing genuine infra-driven total failures to skip
+    # straight to HALT no-recovery with zero RETHINK attempts.
+    # "parse_failed"/"pydantic_fail" are excluded — those are genuine
+    # model-output-quality issues, not infra; everything else in
+    # sawc_stats.error_breakdown is by construction an exception class
+    # name from a failed LLM call (timeout, rate limit, context overflow,
+    # server error, ...).
+    sawc_error_breakdown = (state.get("sawc_stats") or {}).get("error_breakdown") or {}
+    sawc_writer_degraded = any(
+        kind not in ("parse_failed", "pydantic_fail")
+        for kind in sawc_error_breakdown
+    )
     infra_degraded = (
         judge_call_failed
+        or sawc_writer_degraded
         or (atomic_result is not None and atomic_result.get("resolved") is False)
         or (cocoa_result is not None and cocoa_result.get("resolved") is False)
     )
@@ -1301,6 +1406,7 @@ async def checklist_eval_run(state: SynthState) -> dict:
         "judge_repaired":     repaired,
         "judge_call_failed":  judge_call_failed,
         "infra_degraded":     infra_degraded,
+        "sawc_writer_degraded": sawc_writer_degraded,
         "wall_ms":            elapsed,
         "store_path":         latest_key,
         "versioned_path":     versioned_key,
@@ -1333,6 +1439,9 @@ async def checklist_eval_run(state: SynthState) -> dict:
         # Top-level (not nested in checklist_stats) — graph._route_after_mgsr
         # reads SynthState fields directly, same as refine_iter/best_seen_score.
         "consecutive_infra_degraded": consecutive_infra_degraded,
+        "best_seen_score": best_seen_score,
+        "best_seen_pregate": best_seen_pregate,
+        "best_seen_sawc_path": best_seen_sawc_path,
     }
 
 

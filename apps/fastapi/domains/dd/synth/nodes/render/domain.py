@@ -187,6 +187,29 @@ def _fix_stray_slash_command_space(inner: str) -> str:
     return "\n".join(lines)
 
 
+# Fixed 2026-09-06 (issue #13) — vault/schemas.py deliberately preserves
+# info_string "byte-exactly... carries Mintlify attrs" for audit fidelity
+# (hash/drift checks are keyed on the code BODY, not the fence header), so
+# this must NOT touch the stored vault entry — only the copy that actually
+# reaches the rendered chapter. Confirmed live: `theme={null}` and a
+# leaked framework-name token from the original MDX source appeared
+# verbatim in a chapter's fence header twice in one run — a systematic
+# MDX-authoring pattern (attrs on the fence's info line), not a fluke.
+# `_lang_from_info` in render/service.py already extracts just the first
+# token for internal use (choosing the AST validator, prompt building);
+# this applies the same rule to what the reader actually sees.
+_FENCE_OPEN_RE = re.compile(r"^(```+|~~~+)([^\n]*)$")
+
+
+def _sanitize_fence_info(fence_open_line: str) -> str:
+    m = _FENCE_OPEN_RE.match(fence_open_line)
+    if not m:
+        return fence_open_line
+    marker, info = m.group(1), m.group(2).strip()
+    lang = info.split()[0] if info else ""
+    return f"{marker}{lang}"
+
+
 def dedupe_and_align_sections(
     sections_ctx: list[dict],
     *,
@@ -203,19 +226,21 @@ def dedupe_and_align_sections(
             inner = _code_inner(raw_block)
             if inner:
                 fixed_inner = _fix_stray_slash_command_space(inner)
-                if fixed_inner != inner:
-                    # Rebuild the fenced block with the corrected inner
-                    # body, mirroring _code_inner's own stripping exactly
-                    # (it strips code_block before splitting on the first
-                    # newline / last ``` — must match here or the fence
-                    # lines would drift from what _code_inner would parse
-                    # back out on a second pass).
-                    body = raw_block.strip()
-                    nl = body.find("\n")
-                    end = body.rfind("```")
-                    fence_start = body[:nl + 1]
-                    fence_end = body[end:]
-                    sub["code_block"] = f"{fence_start}{fixed_inner}\n{fence_end}"
+                # mirrors _code_inner's own stripping exactly (it strips
+                # code_block before splitting on the first newline / last
+                # ``` — must match here or the fence lines would drift
+                # from what _code_inner would parse back out on a second
+                # pass).
+                body = raw_block.strip()
+                nl = body.find("\n")
+                end = body.rfind("```")
+                fence_start = body[:nl]
+                fence_end = body[end:]
+                fixed_fence_start = _sanitize_fence_info(fence_start)
+                if fixed_inner != inner or fixed_fence_start != fence_start:
+                    sub["code_block"] = (
+                        f"{fixed_fence_start}\n{fixed_inner}\n{fence_end}"
+                    )
                     inner = fixed_inner
             if not inner:
                 continue

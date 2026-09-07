@@ -48,6 +48,11 @@ _EXPLAINER_MAX_TOKENS = 8000
 _JUDGE_MAX_TOKENS     = 4000
 _EXPLAINER_TEMPERATURE = 0.0
 _JUDGE_TEMPERATURE     = 0.0
+# chat_judge_bandit_async's own default (30s) was undersized — same fix
+# as elsewhere in Synth (2026-09-06/07). A failed CoCoA call here feeds
+# `infra_degraded` (issues #10/#14) the same way the bundled judge does.
+_EXPLAINER_TIMEOUT_S  = 120.0
+_JUDGE_TIMEOUT_S      = 90.0
 
 # reverted 0.70 → 0.85 (CC run: 0.70 let through catastrophic mismatches; keyword-overlap pre-check now covers the BU regression).
 _ALIGN_PASS_FRACTION = 0.85
@@ -55,6 +60,11 @@ _ALIGN_PASS_FRACTION = 0.85
 # call failures dropped the rest silently before this fix), the alignment
 # rate is noise, not signal — an infra outage must not read as prose drift.
 _MIN_EVALUATED_FRACTION = 0.5
+# Same small-sample correction as faithfulness.py's twin constant (issue
+# #14, 2026-09-06): with only 1-2 code pairs (small chapters), a single
+# incidental explainer/judge call failure already reads as 0% evaluated.
+# Require this many actual missing verdicts before trusting the fraction.
+_MIN_ABSOLUTE_GAP_FOR_UNRESOLVED = 2
 
 # Keyword-overlap pre-check: zero shared identifiers between prose and code → misaligned (no LLM call needed).
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
@@ -224,6 +234,7 @@ async def _explain_blocks(blocks: list[dict]) -> dict[str, str]:
             max_tokens = _EXPLAINER_MAX_TOKENS,
             temperature = _EXPLAINER_TEMPERATURE,
             response_format = {"type": "json_object"},
+            timeout_s = _EXPLAINER_TIMEOUT_S,
         )
     except Exception as e:
         logger.warning(
@@ -324,6 +335,7 @@ async def _judge_pairs(pairs: list[dict]) -> dict[str, dict]:
             max_tokens = _JUDGE_MAX_TOKENS,
             temperature = _JUDGE_TEMPERATURE,
             response_format = {"type": "json_object"},
+            timeout_s = _JUDGE_TIMEOUT_S,
         )
     except Exception as e:
         logger.warning(
@@ -494,7 +506,10 @@ async def cocoa_alignment_check(
     llm_evaluated_fraction = (
         n_llm_judged / n_llm_total if n_llm_total else 1.0
     )
-    if llm_evaluated_fraction < _MIN_EVALUATED_FRACTION:
+    if (
+        llm_evaluated_fraction < _MIN_EVALUATED_FRACTION
+        and (n_llm_total - n_llm_judged) >= _MIN_ABSOLUTE_GAP_FOR_UNRESOLVED
+    ):
         logger.warning(
             f"[cocoa] only {n_llm_judged}/{n_llm_total} LLM-stage pairs "
             f"({llm_evaluated_fraction:.0%}) got a real verdict — below "

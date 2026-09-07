@@ -109,6 +109,13 @@ _PROSE_CHARS = 12000
 _SOURCE_CHARS = 12000
 _EXTRACT_MAX_TOKENS = 1500
 _JUDGE_MAX_TOKENS = 200
+# chat_judge_bandit_async's own default (30s) was undersized — same fix
+# as elsewhere in Synth (2026-09-06/07). Also directly relevant to issue
+# #14: a call timeout here is a genuine judge-call failure and correctly
+# feeds infra_degraded — but a timeout that would've succeeded with more
+# headroom is a false positive, not a real signal.
+_EXTRACT_TIMEOUT_S = 60.0
+_JUDGE_TIMEOUT_S = 45.0
 _MIN_CLAIMS_FOR_RUN = 1
 # raised 0.60 → 0.75 (Run 5: judge flags code-demonstrated claims as unsupported when source TEXT doesn't restate; 0.75 still catches catastrophic hallucination ≥85%).
 _MAX_UNSUPPORTED_RATIO = 0.75
@@ -116,6 +123,15 @@ _MAX_UNSUPPORTED_RATIO = 0.75
 # a broken call), the ratio above is noise, not signal — extraction/judge
 # outages must not silently read as "verified faithful."
 _MIN_EVALUATED_FRACTION = 0.5
+# A fraction is only a meaningful signal once it's measured over enough
+# trials — with 1-2 claims (small chapters), a single incidental judge-call
+# blip already reads as 0% evaluated, indistinguishable from a real outage.
+# Same "≥2, not 1" bar this codebase already uses for SUSTAINED_INFRA_
+# OUTAGE_LIMIT: require at least this many actual call failures before the
+# fraction floor above is trusted (issue #14, 2026-09-06 — confirmed live:
+# a 1-section chapter's single timeout was folded into infra_degraded and
+# fed the sustained-outage counter).
+_MIN_ABSOLUTE_FAILURES_FOR_UNRESOLVED = 2
 
 
 async def atomic_claim_grounding(
@@ -162,7 +178,10 @@ async def atomic_claim_grounding(
             f"judge calls failed — excluded from the verdict, not "
             f"defaulted to supported=True"
         )
-    if evaluated_fraction < _MIN_EVALUATED_FRACTION:
+    if (
+        evaluated_fraction < _MIN_EVALUATED_FRACTION
+        and n_call_failures >= _MIN_ABSOLUTE_FAILURES_FOR_UNRESOLVED
+    ):
         logger.warning(
             f"[atomic-claim-grounding] only {n_evaluated}/{n_claims} claims "
             f"({evaluated_fraction:.0%}) got a real verdict — below the "
@@ -247,6 +266,7 @@ async def _extract_claims(prose: str) -> tuple[list[str], bool]:
         raw, _ = await chat_judge_bandit_async(
             prompt, max_tokens = _EXTRACT_MAX_TOKENS, temperature = 0.0,
             response_format = {"type": "json_object"},
+            timeout_s = _EXTRACT_TIMEOUT_S,
         )
         m = _JSON_RE.search(raw or "")
         if not m:
@@ -298,6 +318,7 @@ async def _judge_claim(
             raw, _ = await chat_judge_bandit_async(
                 prompt, max_tokens = _JUDGE_MAX_TOKENS, temperature = 0.0,
                 response_format = {"type": "json_object"},
+                timeout_s = _JUDGE_TIMEOUT_S,
             )
             m = _JSON_RE.search(raw or "")
             if not m:

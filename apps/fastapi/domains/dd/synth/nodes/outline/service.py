@@ -576,6 +576,19 @@ _MAX_TOKENS_VOTE         = 200
 
 _MAX_TOKENS_REPAIR       = 8000
 
+# chat_judge_bandit_async's own default (30s) was undersized for these
+# calls — confirmed live: outline_sdp's repair loop timed out on nearly
+# every chapter across 5 study runs (2026-09-05/07), routinely trimming
+# outlines down as a fallback rather than actually repairing them.
+# Several Rotator-pool models are individually configured with 90-120s
+# provider-level timeouts elsewhere in the Rotator itself, so 30s here
+# was cutting off completions that would likely have succeeded. Scaled
+# to each call's max_tokens, same idiom as render/service.py's existing
+# timeout_s=60.0 override.
+_TIMEOUT_S_DRAFT         = 120.0
+_TIMEOUT_S_VOTE          = 45.0
+_TIMEOUT_S_REPAIR        = 120.0
+
 _MAX_SOURCE_CHARS        = 180_000
 
 _SOURCE_CONCAT_SEPARATOR = "\n\n---\n\n"
@@ -990,6 +1003,7 @@ async def _usc_pick(
             max_tokens=_MAX_TOKENS_VOTE,
             temperature=_TEMPERATURE_VOTE,
             response_format=_USC_VOTE_RESPONSE_FORMAT,
+            timeout_s=_TIMEOUT_S_VOTE,
         )
         parsed = _parse_json_response(response)
         if parsed and "chosen_index" in parsed:
@@ -1066,6 +1080,7 @@ async def _draft_one_outline(
             max_tokens=_MAX_TOKENS_DRAFT,
             temperature=_TEMPERATURE_DRAFT,
             response_format=_OUTLINE_RESPONSE_FORMAT,
+            timeout_s=_TIMEOUT_S_DRAFT,
         )
     except Exception as e:
         error_tag = (
@@ -1397,6 +1412,7 @@ async def outline_sdp_run(state: SynthState) -> dict:
                 max_tokens = _MAX_TOKENS_REPAIR,
                 temperature = _TEMPERATURE_REPAIR,
                 response_format = _OUTLINE_RESPONSE_FORMAT,
+                timeout_s = _TIMEOUT_S_REPAIR,
             )
             parsed = _parse_json_response(repair_response)
             if not parsed:

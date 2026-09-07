@@ -36,6 +36,8 @@ from .params import (
     MAX_TOKENS_REPLAN,
     TEMPERATURE_REPAIR,
     TEMPERATURE_REPLAN,
+    TIMEOUT_S_REPAIR,
+    TIMEOUT_S_REPLAN,
 )
 from .prompts import build_repair_prompt, build_replan_prompt
 from .schemas import (
@@ -86,6 +88,7 @@ async def _run_llm_replan(
                 prompt,
                 max_tokens=MAX_TOKENS_REPLAN,
                 temperature=TEMPERATURE_REPLAN,
+                timeout_s=TIMEOUT_S_REPLAN,
             )
             deployment = (meta or {}).get("deployment")
             last_error = None
@@ -139,6 +142,7 @@ async def _run_llm_replan(
                 repair_prompt,
                 max_tokens=MAX_TOKENS_REPAIR,
                 temperature=TEMPERATURE_REPAIR,
+                timeout_s=TIMEOUT_S_REPAIR,
             )
             deployment = (rm or {}).get("deployment") or deployment
             rp = parse_json_response(rr)
@@ -177,6 +181,7 @@ async def _run_llm_replan(
                 repair_prompt,
                 max_tokens=MAX_TOKENS_REPAIR,
                 temperature=TEMPERATURE_REPAIR,
+                timeout_s=TIMEOUT_S_REPAIR,
             )
             deployment = (rm or {}).get("deployment") or deployment
             rp = parse_json_response(rr)
