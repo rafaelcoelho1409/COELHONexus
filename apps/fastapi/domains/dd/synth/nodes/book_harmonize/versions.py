@@ -23,4 +23,12 @@ BOOK_HARMONIZE_SCHEMA_VERSION = "1.0"
 # the first '{' — `_all_balanced_json_candidates` now retries from each
 # successive '{' (bounded) so the real object right after a stray one is
 # still recovered.
-BOOK_HARMONIZE_PROMPT_VERSION = "v5-preamble-suppress-multi-brace-2026-09-07"
+# v6 (issue #21, 2026-09-08 — confirmed live on the 5th full study run,
+# the first run where book_harmonize genuinely worked: 84 real claims,
+# 2 canonicalized terms, 1 chapter actually patched): a further schema-
+# non-compliance shape diagnosed via v5's own "neither claims nor terms
+# key" warning — the model sometimes collapses the requested envelope to
+# a single bare {"name": ..., "definition": ...} term object. Recovered
+# as one term instead of discarded, same "recover what you can" spirit
+# as v4/v5's fixes.
+BOOK_HARMONIZE_PROMPT_VERSION = "v6-bare-term-recovery-2026-09-08"

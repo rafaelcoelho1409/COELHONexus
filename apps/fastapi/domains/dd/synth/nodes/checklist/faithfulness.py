@@ -133,6 +133,17 @@ _MIN_EVALUATED_FRACTION = 0.5
 # fed the sustained-outage counter).
 _MIN_ABSOLUTE_FAILURES_FOR_UNRESOLVED = 2
 
+# Issue #20, 2026-09-07: temporarily disabled. Confirmed timing out on
+# every single call observed across all three measured post-#17 runs
+# (ch-01 x2, ch-02) — under current Rotator conditions this check is
+# paying its full 45-60s cost on every checklist_eval iteration without
+# completing even once. Fail-soft by design (can only ever downgrade the
+# bundled judge's own verdict, never upgrade it), so disabling loses a
+# currently-dormant safety net, not a working one — re-enable by
+# flipping this back to True once a spot-check shows a real completion
+# rate (see SYNTH-PERFORMANCE-ANALYSIS-2026-09-07.md).
+ATOMIC_CLAIM_ENABLED = False
+
 
 async def atomic_claim_grounding(
     *,
@@ -146,6 +157,13 @@ async def atomic_claim_grounding(
     treat resolved=False like a crash (defer to the bundled judge),
     never like a pass — collapsing "couldn't check" into "passed" is
     exactly what let a Rotator outage read as a clean grounding check."""
+    if not ATOMIC_CLAIM_ENABLED:
+        return {
+            "passed": True, "resolved": True, "n_claims": 0,
+            "n_evaluated": 0, "n_unsupported": 0, "unsupported_claims": [],
+            "feedback": "", "method": "atomic_claim_disabled",
+            "skip_reason": "disabled (issue #20) — see ATOMIC_CLAIM_ENABLED",
+        }
     claims, extraction_ok = await _extract_claims(chapter_prose[:_PROSE_CHARS])
     if not extraction_ok:
         return {

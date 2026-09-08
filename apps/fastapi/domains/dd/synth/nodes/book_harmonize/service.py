@@ -338,6 +338,21 @@ async def _extract_claims_and_terms(
                     f"— got keys {list(data.keys())!r}. response prefix: "
                     f"{(raw or '')[:200]!r}"
                 )
+                # Issue #21, 2026-09-08: confirmed live (5th full study run)
+                # this exact non-compliance shape — the model collapses the
+                # requested {"claims": [...], "terms": [...]} envelope down
+                # to a single bare term object: {"name": ..., "definition":
+                # ...}. Recover it as one term rather than discarding real,
+                # usable data — cheap, additive, matches this file's own
+                # "recover what you can" precedent (json_repair, balanced-
+                # brace retry) rather than inventing a new philosophy.
+                if "name" in data:
+                    logger.info(
+                        f"[book_harmonize] claim/term extract for "
+                        f"{chapter_id}: recovered as a single bare term "
+                        f"(issue #21)"
+                    )
+                    return {"claims": [], "terms": [data]}
             return data
         except Exception as e:
             logger.warning(

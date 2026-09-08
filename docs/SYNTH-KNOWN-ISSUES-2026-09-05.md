@@ -111,8 +111,190 @@ outcome.
 
 ---
 
+## ✅ 19. `mgsr_replan`'s entire LLM analysis was computed and discarded on every non-trivial iteration — FIXED 2026-09-07
+
+**Severity: high — confirmed costing up to 3.5 minutes per iteration for zero effect on outcome.**
+
+Found via a full architecture review (prompted by: "identify any processes
+that can be removed that are not being used anymore and are wasting our
+time per chapter"). Traced every reference to `mgsr_stats`/`mgsr_path`
+in the codebase: `_route_after_mgsr` (`graph.py`, the actual RETHINK-vs-
+halt decision) reads only `checklist_stats` + top-level iteration/infra
+counters — **zero references to `mgsr_stats`, anywhere in the routing
+logic.** The only other reader anywhere in Synth
+(`runtime/dispatch/service.py`) pulls a single field, `halt_reason`,
+into a telemetry label. mgsr's real value-add — the "actions" list
+(which section is broken and how to fix it), confidence, rationale —
+has never had a single consumer since this doc's issue #9 first flagged
+the "v2 loop" as unimplemented. The graph's actual behavior is provably
+identical whether `mgsr_replan`'s LLM call succeeds, fails, or never
+fires at all.
+
+This isn't just idle dead code — it's expensive dead code. The call
+fires on every iteration that doesn't trivially pass (`pass_rate <
+0.80`), at `MAX_TOKENS_REPLAN=4000` / `TIMEOUT_S_REPLAN=90s` x 2 call
+attempts, and has been directly observed taking **210,770ms (3.5
+minutes)** in one logged chapter. With `MAX_REFINE_ITER=5`, a chapter
+needing several RETHINK cycles pays this cost repeatedly, always for
+output nothing reads.
+
+Also cross-checked against current (2026) research on self-corrective
+pipeline design: a recent survey on agentic RAG architecture states
+plainly that *"a system that routes all three of these to a single
+'try harder' self-correction step wastes retries on unfixable
+problems"* and that effective self-correction requires routing "to the
+earliest upstream node that can actually fix it" — which is exactly
+what `mgsr_replan`'s `actions` were designed to enable and exactly what
+never happened. Synth's `_route_after_mgsr` always routes to the same
+one place (`sawc_write`, full re-draft) regardless of what mgsr
+diagnosed — the precise anti-pattern the research names.
+
+**Fixed:** the real LLM call on the non-trivial-pass path is no longer
+fired. Reused the existing `fallback_decision(...)` path (already the
+production-tolerated behavior whenever the real call fails after
+retries) unconditionally instead, at zero LLM cost — behavior-identical
+from the router's perspective, since nothing downstream distinguishes
+"real analysis" from "fallback" today. `_run_llm_replan` (the function
+that fires the call) is left in place, unused, with a comment pointing
+at exactly how to re-enable it if the "v2 loop" (issue #9 — wiring
+`actions` into a *targeted* `sawc_write` re-draft of just the flagged
+section, instead of skipping the call) is ever implemented — at which
+point mgsr's output would finally have a real consumer and this
+shortcut should be removed. `MGSR_PROMPT_VERSION` bumped to invalidate
+any cached mgsr blob computed under the old (real-call) logic.
+
+**Not pursued in the same pass, deliberately:** the fuller "v2 loop"
+fix (actually using mgsr's targeted actions to make RETHINK cheaper
+*and* smarter, rather than just skipping the wasted call) is explicitly
+larger scope — a follow-up project, not a quick fix, per issue #9's own
+original assessment. This fix only removes the waste; it doesn't yet
+capture the upside a working v2 loop would add.
+
+Not yet re-observed live — needs a chapter that hits a non-trivial-pass
+iteration to confirm the time savings and that the graph's behavior is
+truly unaffected.
+
+**Follow-up caught while implementing this fix:** displaying mgsr's now-
+always-fallback stats verbatim on the FastHTML dashboard would show a
+misleading "✓ HALT — chapter accepted" on iterations that are actually
+about to `RETHINK` (loop back to `sawc_write`) — `fallback_decision`
+hardcodes `halt=True`, which has no relationship to what
+`_route_after_mgsr` will actually decide once real analysis stopped
+running. Fixed alongside issue #20 below: a new `skipped: true` field on
+`mgsr_stats`, and `renderers.js`'s `renderMgsr` now shows an explicit
+"Analysis skipped" panel instead of the halt/confidence/actions KPIs
+when it's set, rather than ever presenting a guessed (and possibly
+wrong) verdict as if it were real.
+
+---
+
+## ✅ 20. CoCoA + atomic-claim grounding disabled — timing out on every call across every measured run, paying full cost for zero completions — FIXED 2026-09-07
+
+**Severity: medium — confirmed 0% completion rate across all samples so far; fail-soft, so not a false-positive risk, but a confirmed pure cost.**
+
+Both checks are additional, fail-soft augmentations on top of
+`checklist_eval`'s bundled judge — they can only ever downgrade a
+passing criterion to failed on a *real* detected drift, never upgrade
+one, and if they don't resolve, the bundled judge's own verdict stands
+unchanged. Across all three measured post-#17 runs this session
+(`ch-01` x2, `ch-02`), **both timed out on every single call** —
+`_EXPLAINER_TIMEOUT_S=120s`/`_JUDGE_TIMEOUT_S=90s` for CoCoA,
+`_EXTRACT_TIMEOUT_S=60s`/`_JUDGE_TIMEOUT_S=45s` for atomic-claim. Under
+current Rotator conditions, every `checklist_eval` call pays this full
+cost (up to ~210s combined) for a check that has not completed even
+once in this investigation.
+
+**Fixed — temporarily disabled, explicitly reversible, not a deletion:**
+`COCOA_ENABLED = False` (`cocoa.py`) and `ATOMIC_CLAIM_ENABLED = False`
+(`faithfulness.py`), each gating an early return matching the existing
+"genuinely nothing to check" shape already used elsewhere in the same
+functions (`resolved=True`, so a disabled check reads as a deliberate
+skip, not an infra failure, and correctly does **not** feed
+`infra_degraded`). Comments on both flags explain why and what would
+justify flipping them back — a future spot-check showing a real
+completion rate, once Rotator reliability improves. `CHECKLIST_PROMPT_VERSION`
+bumped to invalidate stale cache.
+
+**Deliberately not chosen:** shortening their timeouts instead of
+disabling. Since they already fail at the current, generous timeouts,
+a shorter one wouldn't meaningfully change their (already ~0%) success
+rate — it would only shave the wasted-wait time, and one of the three
+observed failures was a parse error (`"no JSON object in response"`),
+not a timeout, which a shorter timeout wouldn't touch at all. Full
+disable is the more honest fix given the evidence: zero realized value
+right now, not "slightly too impatient."
+
+Not yet re-observed live — needs a chapter to confirm the time savings.
+
+---
+
+## ✅ 6th study run, 2026-09-07/08 — best result yet, and `book_harmonize` finally works
+
+**10/11 done, 0 failed** (only `ch-05` needs_review), 4h48m29s total.
+Every single chapter's audit shows **0 hallucinations, 0 byte drift,
+100% code-ref resolution** — the best quality outcome across all six
+runs this investigation has covered. Average ~25 min/chapter, matching
+the earlier single-chapter tests (27-55 min) closely — good external
+confirmation those weren't flukes.
+
+**`book_harmonize` produced real output for the first time ever**:
+`n_atomic_claims: 84`, `n_canonical_terms: 2`, `n_chapters_with_issues:
+2`, `n_chapters_patched: 1` (a real chapter got a real prose rewrite —
+`n_chapters_overwritten: 1`), `skipped: None`. Issue #16's fix is now
+validated end-to-end, not just via isolated logic tests. Still real,
+newly-diagnosed gaps on 5 of 10 chapters' extraction — see issue #21.
+
+## ✅ 21. book_harmonize schema-collapse: model returns a bare term object instead of the claims/terms envelope — FIXED 2026-09-08
+
+**Severity: medium — confirmed live on 2 of 10 chapters in the 6th study run, both previously undiagnosable, now recoverable.**
+
+Issue #15/#16's "neither claims nor terms key" warning (added specifically
+so a future occurrence would be diagnosable, not silent) fired for real
+on `ch-08` and `ch-10`: the model returned `{"name": ..., "definition":
+...}` — a single bare term object — instead of the requested
+`{"claims": [...], "terms": [...]}` envelope. Valid JSON, wrong shape,
+previously discarded as zero.
+
+**Fixed:** when this exact shape is detected (`"name"` present, neither
+`"claims"` nor `"terms"`), recover it as `{"claims": [], "terms":
+[data]}` instead of discarding — same "recover what you can" spirit as
+the json_repair/balanced-brace fixes already in this file. Verified
+standalone: recovers the exact observed shape correctly, normal-shaped
+responses pass through unaffected. `BOOK_HARMONIZE_PROMPT_VERSION`
+bumped.
+
+**Also observed this run, documented only — deliberately not fixed,
+too little evidence to act on safely:**
+- `book_harmonize`'s `detect` stage returned a literal 0-char response
+  (call succeeded, no exception, empty string) on several chapters —
+  a distinct failure mode from a timeout or a parse error, root cause
+  not yet investigated.
+- `book_harmonize`'s `patch` call (the heaviest, 150s timeout, full-
+  chapter rewrite) still timed out on `ch-07` — already at the highest
+  timeout of any Synth call; raising it further repeats the same
+  diminishing-returns tradeoff already litigated under issue #17.
+- **`ch-05`'s best-seen-rescue picked a *less* structurally complete
+  iteration over a more complete one.** iter1 wrote 2/2 sections
+  cleanly (0 fallbacks) but the bundled judge scored `llm=0/5` (182s
+  judge_wall, likely a failing candidate cascade) → pass_rate 57%.
+  iter2 *regressed* to 1/2 sections (1 fallback) but the judge
+  succeeded this time, scoring `llm=4/5` → pass_rate 71% — higher
+  despite less actual content, because the 5-point LLM component
+  outweighed the 2-point pregate gap (iter1: 8+0=57%, iter2: 6+4=71%).
+  Best-seen correctly followed its own rules; the rules themselves have
+  a real edge case where judge-reliability variance between iterations
+  can outweigh structural completeness. **Not fixed** — one instance
+  isn't enough to safely touch the scoring formula without risking a
+  repeat of issue #11's own saga (a hasty best-seen fix needing a
+  second fix later). Needs more data points first.
+
+---
+
 | # | Fix | Files |
 |---|---|---|
+| **21** | Recover a bare `{"name":..., "definition":...}` term object as `{"claims": [], "terms": [data]}` instead of discarding it, when book_harmonize's extraction returns that exact schema-collapsed shape (confirmed live on 2 chapters in the 6th study run). | `book_harmonize/service.py`, `book_harmonize/versions.py` |
+| **20** | CoCoA + atomic-claim grounding disabled (`COCOA_ENABLED`/`ATOMIC_CLAIM_ENABLED = False`) — 0% completion rate across every measured call this session, paying full 60-120s timeout cost for zero realized checks. Fail-soft `resolved=True` skip, doesn't feed `infra_degraded`. Also fixed `mgsr_replan`'s FastHTML panel to show "Analysis skipped" instead of a possibly-wrong HALT/LOOP guess. | `checklist/cocoa.py`, `checklist/faithfulness.py`, `checklist/versions.py`, `mgsr/service.py`, `renderers.js` |
+| **19** | `mgsr_replan`'s real LLM call (`_run_llm_replan`, up to 90s x 2 attempts, observed as long as 3.5 min) is no longer fired on the non-trivial-pass path — confirmed its `actions`/rationale output has zero downstream consumers (`_route_after_mgsr` reads only `checklist_stats`). Reuses the existing `fallback_decision` path unconditionally instead, at zero LLM cost, behavior-identical from the router's perspective. | `mgsr/service.py`, `mgsr/versions.py` |
 | **18** | Reverted a first-attempt 20-min forced cap (skipped repairs/retries/iterations) per user correction — 20 min is a target, not an enforced ceiling. What actually shipped: `digest_construct._CONCURRENCY` lowered 24→16, matching Planner's own ceiling and no longer exceeding the Rotator's total ~19-slot cross-provider capacity on its own — a genuine contention reduction with zero quality tradeoff. | `digest/service.py` |
 | **17** | Added explicit `timeout_s` overrides (scaled to each call's `max_tokens`, 45-150s) at every Synth `chat_judge_bandit_async`/`_call_with_retry` call site that relied on the bare 30s default — `outline_sdp`, `digest_construct`, `sawc_write`, `sawc_derive` (wired up an orphaned unused constant), `checklist_eval`, CoCoA, atomic-claim grounding, `mgsr_replan`, `book_harmonize`. | `outline/service.py`, `digest/service.py`, `sawc/service.py`, `sawc_derive/service.py`, `checklist/service.py`, `checklist/cocoa.py`, `checklist/faithfulness.py`, `mgsr/service.py`, `mgsr/params.py`, `book_harmonize/service.py`, `book_harmonize/params.py` |
 

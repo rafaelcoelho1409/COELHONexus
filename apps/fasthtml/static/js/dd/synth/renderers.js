@@ -458,6 +458,36 @@ function renderMgsr(values) {
     return _empty('no mgsr stats reported');
   }
 
+  // Issue #19/#20 (2026-09-07): the real replan LLM call no longer fires
+  // on the non-trivial-pass path — its analysis had zero downstream
+  // consumers (synth-graph decides RETHINK/HALT from checklist_stats
+  // alone). `s.halt` here is a conservative placeholder, NOT a
+  // prediction of the actual routing decision, which can just as easily
+  // be a RETHINK loop. Show that plainly instead of a possibly-wrong
+  // HALT/LOOP verdict.
+  if (s.skipped === true) {
+    const rate = s.pass_rate !== undefined
+      ? (s.pass_rate * 100).toFixed(0) + '%'
+      : '—';
+    const foot = _footer([_wallMs(s.wall_ms), _hashCode(s.manifest_hash)]);
+    return _kpiGrid([
+      _kpiCard('Analysis', 'skipped', 'unused — see issue #19'),
+      _kpiCard('Pass rate', rate, 'from checklist_eval'),
+    ]) +
+      '<div class="fw-stat-dist" style="margin-top:14px">' +
+        '<div class="fw-stat-dist-title">Decision summary</div>' +
+        '<div style="padding:12px 14px;font-size:0.88rem;line-height:1.6;' +
+          'border:1px solid var(--border);border-radius:4px;' +
+          'background:rgba(0,0,0,0.015)">' +
+          'mgsr’s corrective-actions analysis is temporarily skipped ' +
+          '(its output has no consumer). The actual RETHINK-vs-HALT ' +
+          'decision is made independently by synth-graph from ' +
+          'checklist_eval’s pass rate — see that node’s log line ' +
+          'for what actually happens next.' +
+        '</div>' +
+      '</div>' + foot;
+  }
+
   const halt = s.halt === true;
   const conf = s.confidence !== undefined
     ? (s.confidence * 100).toFixed(0) + '%'

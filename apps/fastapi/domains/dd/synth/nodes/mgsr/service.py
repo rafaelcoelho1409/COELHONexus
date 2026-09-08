@@ -17,7 +17,6 @@ from ...state import SynthState
 from .domain import (
     build_trivial_pass_decision,
     compute_manifest_hash,
-    derive_halt_reason,
     fallback_decision,
     is_trivial_pass,
     parse_json_response,
@@ -42,7 +41,6 @@ from .params import (
 from .prompts import build_repair_prompt, build_replan_prompt
 from .schemas import (
     LLMReplanPayload,
-    MGSRDecision,
     MGSRReplan,
     ReplanAction,
 )
@@ -459,60 +457,41 @@ async def mgsr_replan_run(state: SynthState) -> dict:
         )
         return {"mgsr_path": latest_key, "mgsr_stats": stats}
 
-    # ── Slow path: chapter failed checklist; fire LLM replan ───────────
+    # ── Slow path, issue #19 (2026-09-07): SKIPPED, not fired ───────────
+    # `_run_llm_replan`'s entire output — the analyzed `actions` list,
+    # confidence, rationale — was confirmed to have zero downstream
+    # consumers: `_route_after_mgsr` (graph.py) decides RETHINK-vs-halt
+    # from checklist_stats alone, never from mgsr_stats, and the only
+    # other reader (runtime/dispatch/service.py) pulls just the
+    # `halt_reason` string for a telemetry label. This call could cost
+    # up to TIMEOUT_S_REPLAN(90s) x _MAX_CALL_ATTEMPTS(2) plus real
+    # generation time — observed as long as 210,770ms (3.5 min) in one
+    # logged run — analyzing content that then gets thrown away every
+    # time. Reusing the existing "LLM unavailable" fallback path
+    # unconditionally, rather than calling the LLM at all, is behavior-
+    # identical from the router's perspective (already tolerated in
+    # production whenever the real call fails) at zero LLM cost.
+    # Re-enable by restoring the call to `_run_llm_replan` below IF the
+    # "v2 loop" (wiring `actions` into a targeted sawc_write re-draft,
+    # scoped in this package's own schema comments) is ever implemented
+    # — at that point the output would finally have a real consumer.
+    deployment: Optional[str] = None
+    repaired = False
+    decision = fallback_decision(
+        "mgsr_replan LLM call skipped (issue #19) — its analysis has no "
+        "consumer until the v2 targeted-retry loop is implemented"
+    )
     await emit_progress(
-        thread_id, "mgsr_replan", "llm_request",
-        wall_ms_so_far=int((time.monotonic() - t0) * 1000),
-        n_failed_criteria=n_failed,
+        thread_id, "mgsr_replan", "llm_done",
+        n_actions=0,
+        halt=decision.halt,
+        halt_reason=decision.halt_reason,
+        confidence=decision.confidence,
+        wall_ms=0,
+        deployment=None,
+        repaired=False,
+        skipped="unused_output",
     )
-
-    llm_payload, deployment, repaired, llm_wall_ms = await _run_llm_replan(
-        thread_id=thread_id,
-        framework=slug,
-        chapter_id=chapter_id,
-        chapter_title=chapter_title,
-        pass_rate=pass_rate,
-        chapter_passed=chapter_passed,
-        failed_feedback=failed_feedback,
-        outline_sections=outline_sections,
-        valid_section_ids=valid_section_ids,
-    )
-
-    if llm_payload is None:
-        # Hard failure — emit fallback decision
-        decision = fallback_decision(
-            f"LLM replan failed after {MAX_REPAIR_ATTEMPTS} repair "
-            f"attempt(s)"
-        )
-        await emit_progress(
-            thread_id, "mgsr_replan", "llm_done",
-            n_actions=0,
-            halt=True,
-            confidence=decision.confidence,
-            wall_ms=llm_wall_ms,
-            deployment=deployment,
-            repaired=False,
-            error="llm_unavailable",
-        )
-    else:
-        halt, halt_reason = derive_halt_reason(llm_payload, iteration=0)
-        decision = MGSRDecision(
-            halt=halt,
-            halt_reason=halt_reason,
-            confidence=llm_payload.confidence,
-            actions=llm_payload.actions,
-            rationale_overall=llm_payload.rationale_overall,
-        )
-        await emit_progress(
-            thread_id, "mgsr_replan", "llm_done",
-            n_actions=len(llm_payload.actions),
-            halt=halt,
-            halt_reason=halt_reason,
-            confidence=llm_payload.confidence,
-            wall_ms=llm_wall_ms,
-            deployment=deployment,
-            repaired=repaired,
-        )
 
     # ── Persist ────────────────────────────────────────────────────────
     elapsed = int((time.monotonic() - t0) * 1000)
@@ -559,6 +538,15 @@ async def mgsr_replan_run(state: SynthState) -> dict:
         "deployment":      deployment,
         "repaired":        repaired,
         "trivial_pass":    False,
+        # Issue #19/#20: this branch no longer fires the real LLM call, so
+        # `halt` above is `fallback_decision`'s hardcoded conservative
+        # value — NOT a prediction of what `_route_after_mgsr` will
+        # actually decide (that's computed independently from
+        # checklist_stats and can just as easily be a RETHINK loop). Flag
+        # it so any consumer — the FastHTML dashboard included — displays
+        # this as "not computed" rather than a real (and possibly wrong)
+        # halt/loop verdict.
+        "skipped":         True,
     }
     await emit_progress(
         thread_id, "mgsr_replan", "done",

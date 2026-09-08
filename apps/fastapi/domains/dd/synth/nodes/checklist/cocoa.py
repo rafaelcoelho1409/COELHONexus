@@ -39,6 +39,17 @@ logger = logging.getLogger(__name__)
 
 COCOA_PROMPT_VERSION = "v1-cocoa-2026-05-25"
 
+# Issue #20, 2026-09-07: temporarily disabled. Confirmed timing out on
+# every single call observed across all three measured post-#17 runs
+# (ch-01 x2, ch-02) — under current Rotator conditions this check is
+# paying its full 90-120s cost on every checklist_eval iteration without
+# completing even once. Fail-soft by design (can only ever downgrade the
+# bundled judge's own verdict, never upgrade it), so disabling loses a
+# currently-dormant safety net, not a working one — re-enable by
+# flipping this back to True once a spot-check shows a real completion
+# rate (see SYNTH-PERFORMANCE-ANALYSIS-2026-09-07.md).
+COCOA_ENABLED = False
+
 # Stage-1 cache keyed on vault hash + prompt_version; prompt revision auto-invalidates.
 _COCOA_CACHE_PREFIX = f"synth-cache/cocoa-abstractions/{COCOA_PROMPT_VERSION}"
 
@@ -365,6 +376,18 @@ async def cocoa_alignment_check(
     vault: dict[str, str],
 ) -> dict:
     """Run CoCoA two-stage alignment over every (subtopic, code) pair; fail-soft → passes."""
+    if not COCOA_ENABLED:
+        return {
+            "passed":         True,
+            "resolved":       True,  # deliberate skip, not an infra failure
+            "method":         "cocoa_disabled",
+            "n_pairs":        0,
+            "n_aligned":      0,
+            "n_misaligned":   0,
+            "alignment_rate": 1.0,
+            "misaligned":     [],
+            "feedback":       "cocoa temporarily disabled (issue #20) — see COCOA_ENABLED",
+        }
     sections = sawc_payload.get("sections") or []
 
     # Stable integer id so JSON round-trips are robust.
