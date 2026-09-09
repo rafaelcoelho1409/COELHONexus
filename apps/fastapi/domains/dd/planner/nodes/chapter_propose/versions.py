@@ -19,4 +19,9 @@ from __future__ import annotations
 # node in this cluster still below the evidence-based floor, and the only
 # node that failed (fallback_used=True) on every single run this whole
 # investigation.
-PROMPT_VERSION = "v6-timeout-120s-2026-09-08"
+# v7 (2026-09-09): added SETTLE_DELAY_S=130s — the last node in this
+# cluster still missing a settle window against the Rotator's own
+# cooldown_time=120. Confirmed live: chapter_propose failed all 3 samples
+# on every numpy run, even after doc_distill/chapter_assign/order_chapters
+# got their own settle-delay fix.
+PROMPT_VERSION = "v7-settle-130s-2026-09-09"

@@ -13,12 +13,14 @@ from __future__ import annotations
 # how hard each per-minute quota window gets hit.
 CONCURRENCY = 8
 
-# 2026-09-08: chapter_assign runs immediately after doc_distill, whose own
-# burst (even at reduced concurrency) draws down several deployments'
-# current-minute RPM quota. A short settle window gives rolling per-minute
-# quotas a chance to partially refill before this node's fan-out begins.
-# Skipped entirely on a cache hit.
-SETTLE_DELAY_S = 20.0
+# 2026-09-08: 20.0 -> 130.0. Same fix as doc_distill's SETTLE_DELAY_S — the
+# original 20s was far shorter than the Rotator Router's own
+# cooldown_time=120 (chain/service.py's _get_router()), so it could never
+# reliably outlast a deployment benched near the end of doc_distill's run.
+# 130s (cooldown_time + 10s buffer) actually guarantees the pool has
+# cleared, regardless of when in the prior node's run cooldowns were
+# triggered. Skipped entirely on a cache hit.
+SETTLE_DELAY_S = 130.0
 
 MAX_TOKENS = 1200   # was 600 — scores needs one entry per chapter proposal,
 # and PROPOSALS_MAX=30 alone eats ~450-600 tokens of pure JSON in the worst

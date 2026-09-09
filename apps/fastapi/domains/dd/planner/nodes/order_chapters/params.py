@@ -37,15 +37,13 @@ SAMPLE_CONCURRENCY = 3
 # dead call this late should fail fast, not hang for the old ceiling.
 TIMEOUT_S = 70.0
 
-# 2026-09-08: this node runs right after chapter_assign's own heavy burst
-# (chapter_select in between makes no LLM calls). Neither the timeout raise
-# nor the Router's loosened allowed-fails tolerance fixed it — both
-# consecutive live runs still saw all 3 samples fail with
-# RouterRateLimitError "No deployments available", consistent with genuine
-# upstream provider RPM exhaustion rather than a local circuit-breaker
-# false positive. A short settle window gives rolling per-minute quotas a
-# chance to partially refill before this node's own fan-out begins.
-SETTLE_DELAY_S = 20.0
+# 2026-09-08: 20.0 -> 130.0. Same fix as doc_distill/chapter_assign's
+# SETTLE_DELAY_S — 20s was far shorter than the Rotator Router's own
+# cooldown_time=120 (chain/service.py's _get_router()), so it never
+# reliably outlasted a deployment benched near the end of chapter_assign's
+# run (chapter_select in between makes no LLM calls, so no extra recovery
+# time there). 130s (cooldown_time + 10s buffer) actually guarantees it.
+SETTLE_DELAY_S = 130.0
 
 # Foundational-prefix rule: these patterns pin the chapter to position 0 regardless of LLM ordering; only the FIRST match anchors.
 FOUNDATIONAL_KEYWORDS = (

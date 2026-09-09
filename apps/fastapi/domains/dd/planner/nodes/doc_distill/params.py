@@ -18,15 +18,21 @@ BODY_CHARS_MAX = 8_000
 # hard each per-minute quota window gets hit.
 CONCURRENCY = 10
 
-# 2026-09-08: doc_distill runs immediately after off_topic, which (post
-# timeout fix) now takes ~267s of sustained real LLM traffic to complete
-# cleanly — likely still drawing down several deployments' current-minute
-# RPM quota when doc_distill's own 16-way (now 10-way) burst starts with
-# zero gap. A short settle window gives rolling per-minute quotas a chance
-# to partially refill before this node's own fan-out begins. Skipped
-# entirely on a cache hit (see doc_distill_run) so a fully-cached re-plan
-# pays nothing.
-SETTLE_DELAY_S = 20.0
+# 2026-09-08: 20.0 -> 130.0. The original 20s was arithmetically
+# guaranteed to be unreliable: the Rotator's own Router sets
+# cooldown_time=120 (chain/service.py's _get_router(), this session's
+# COELHOLLMRotator repo) — any deployment benched in roughly the last 100s
+# of off_topic's run is still cooling 20s later, so whether this "worked"
+# was a coin-flip on exactly when off_topic's last cooldown got triggered,
+# not a real guarantee. Confirmed live: a fastapi run happened to land
+# lucky (doc_distill succeeded 95%); a numpy run landed unlucky (doc_distill's
+# very first call found the WHOLE pool still in cooldown, 96.5% fallback,
+# which cascaded into chapter_select collapsing the entire plan to 1
+# chapter). 130s (cooldown_time + 10s buffer) actually outlasts the
+# cooldown window regardless of when in the prior node's run it was
+# triggered — a real guarantee, not a hope. Skipped entirely on a cache
+# hit (see doc_distill_run) so a fully-cached re-plan pays nothing.
+SETTLE_DELAY_S = 130.0
 
 SUMMARY_WORDS_MIN = 8
 SUMMARY_WORDS_MAX = 60

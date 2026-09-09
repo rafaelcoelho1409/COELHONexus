@@ -9,4 +9,7 @@ from __future__ import annotations
 # positive timeouts here (and in off_topic/doc_distill before it) fed the
 # Router's TimeoutErrorAllowedFails=2 cooldown trigger until the whole pool
 # was benched simultaneously.
-PROMPT_VERSION = "v5-timeout-120s-2026-09-08"
+# v6 (2026-09-09): SETTLE_DELAY_S corrected 20s -> 130s — same fix as
+# doc_distill; 20s was far shorter than the Rotator's own cooldown_time=120
+# and never reliably outlasted doc_distill's tail-end cooldowns.
+PROMPT_VERSION = "v6-settle-130s-2026-09-09"

@@ -41,6 +41,7 @@ from .params import (
     N_SAMPLES,
     OPTIMAL_STOPPING_ENABLED,
     OPTIMAL_STOPPING_MIN_PROPOSALS,
+    SETTLE_DELAY_S,
     TEMPERATURE_PROPOSE,
     TEMPERATURE_VOTE,
 )
@@ -291,6 +292,22 @@ async def chapter_propose_run(state: PlannerState) -> dict:
         thread_id, "chapter_propose", "start",
         n_files = n, distill_available = bool(distill_ref),
     )
+
+    # Settle window — see SETTLE_DELAY_S. Only reached past the cache-hit
+    # check above, so a fully-cached re-plan never pays this cost.
+    # 2026-09-09: this node runs immediately after doc_distill with NO
+    # recovery gap — chapter_assign/order_chapters/doc_distill itself all
+    # got their own settle delay, but this one was missed, making it the
+    # single most exposed node to the same cooldown-timing problem those
+    # fixes address. Confirmed live: chapter_propose failed all 3 samples
+    # on every numpy run, before AND after the other three nodes' settle
+    # fix — the two runs that did succeed (fastapi) needed luck, not a
+    # guarantee, exactly like the other nodes before their own fix.
+    if SETTLE_DELAY_S > 0:
+        await emit_progress(
+            thread_id, "chapter_propose", "settling", delay_s = SETTLE_DELAY_S,
+        )
+        await asyncio.sleep(SETTLE_DELAY_S)
 
     distillates_map = None
     if distill_ref:
