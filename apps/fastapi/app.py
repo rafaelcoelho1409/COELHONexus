@@ -3,6 +3,7 @@
 Lifespan provisions: OTel (Alloy gRPC + LangFuse), MinIO bucket,
 AsyncPostgresSaver, Redis, Postgres, Neo4j, ES, Qdrant, LLM chains.
 """
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -118,8 +119,20 @@ async def lifespan(app: FastAPI):
             f"LLM traces will not be exported."
         )
 
+    # Bounded (2026-09-08): ensure_bucket() previously had no timeout of its
+    # own — during a MinIO hiccup it could hang the entire lifespan (and
+    # thus the readiness probe) indefinitely instead of just failing the
+    # try/except below. Confirmed live: a MinIO single-drive false-positive
+    # "offline" event (see COELHOCloud minio module fix, same date) froze
+    # this exact call and left the pod stuck at 1/2 Ready until killed.
     try:
-        await get_storage().ensure_bucket()
+        await asyncio.wait_for(get_storage().ensure_bucket(), timeout=30.0)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[lifespan] MinIO ensure_bucket timed out after 30s — "
+            "continuing startup anyway. Ingestion runs will fail until "
+            "MinIO is reachable + creds are correct."
+        )
     except Exception as e:
         logger.warning(
             f"[lifespan] MinIO ensure_bucket failed: "

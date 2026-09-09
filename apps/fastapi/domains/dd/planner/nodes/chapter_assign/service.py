@@ -33,6 +33,7 @@ from .params import (
     CONFIDENCE_THRESHOLD,
     MAX_TOKENS,
     RESCUE_FLOOR,
+    SETTLE_DELAY_S,
     TEMPERATURE,
     TIMEOUT_S,
 )
@@ -255,6 +256,14 @@ async def chapter_assign_run(state: PlannerState) -> dict:
         n_docs = len(relevant_files),
         n_proposals = len(proposals_dicts),
     )
+
+    # Settle window — see SETTLE_DELAY_S. Only reached past the cache-hit
+    # check above, so a fully-cached re-plan never pays this cost.
+    if SETTLE_DELAY_S > 0:
+        await emit_progress(
+            thread_id, "chapter_assign", "settling", delay_s = SETTLE_DELAY_S,
+        )
+        await asyncio.sleep(SETTLE_DELAY_S)
 
     # Bulk prefetch bodies only for docs lacking distillate summary (fallback path)
     # SOTA: single read_many chunked (shared S3 client, BoundedSemaphore per chunk)

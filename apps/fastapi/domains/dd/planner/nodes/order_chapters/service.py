@@ -29,7 +29,14 @@ from .domain import (
     parse_order_response,
 )
 from .keys import blob_key
-from .params import MAX_TOKENS, N_SAMPLES, SAMPLE_CONCURRENCY, TEMPERATURE
+from .params import (
+    MAX_TOKENS,
+    N_SAMPLES,
+    SAMPLE_CONCURRENCY,
+    SETTLE_DELAY_S,
+    TEMPERATURE,
+    TIMEOUT_S,
+)
 from .prompts import build_order_prompt
 from .versions import PROMPT_VERSION
 
@@ -53,7 +60,7 @@ async def sample_one_ordering(
                 prompt,
                 max_tokens = MAX_TOKENS,
                 temperature = TEMPERATURE,
-                timeout_s = 60.0,
+                timeout_s = TIMEOUT_S,
                 response_format = {"type": "json_object"},
             )
         except Exception as e:
@@ -74,7 +81,7 @@ async def sample_one_ordering(
                 repair_prompt,
                 max_tokens = MAX_TOKENS,
                 temperature = 0.0,
-                timeout_s = 60.0,
+                timeout_s = TIMEOUT_S,
                 response_format = {"type": "json_object"},
             )
         except Exception as e:
@@ -200,6 +207,14 @@ async def order_chapters_run(state: PlannerState) -> dict:
                 "skipped": "trivial_n_chapters",
             },
         }
+
+    # Settle window — see SETTLE_DELAY_S. Only reached past the cache-hit
+    # and trivial-n_chapters checks above.
+    if SETTLE_DELAY_S > 0:
+        await emit_progress(
+            thread_id, "order_chapters", "settling", delay_s = SETTLE_DELAY_S,
+        )
+        await asyncio.sleep(SETTLE_DELAY_S)
 
     prompt = build_order_prompt(chapters)
     sem = asyncio.Semaphore(SAMPLE_CONCURRENCY)

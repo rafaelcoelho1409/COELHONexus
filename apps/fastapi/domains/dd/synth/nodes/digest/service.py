@@ -72,8 +72,14 @@ _MAX_TOKENS_REPAIR  = 6000
 # live across 5 study runs (2026-09-05/07): digest_construct's per-source
 # digestion routinely lost 40-60% of sources to APITimeoutError, driving
 # a mandatory second wave nearly every chapter. Same fix as outline/sawc.
-_TIMEOUT_S_DRAFT    = 90.0
-_TIMEOUT_S_REPAIR   = 90.0
+#   2026-09-08: raised 90s -> 120s. Percentile analysis (14-day Langfuse
+#   trace data): successful-call max=89.3s, p99=81.9s — real successes
+#   were stacking right up against the old 90s ceiling. Only ~10% of
+#   failures are actually at-ceiling (rescuable by this change); the
+#   other ~90% fail at a fixed ~30s Rotator-side ReadTimeout this
+#   timeout can't reach — see SYNTH-PERFORMANCE-ANALYSIS-2026-09-07.md.
+_TIMEOUT_S_DRAFT    = 120.0
+_TIMEOUT_S_REPAIR   = 120.0
 _MAX_REPAIR_ATTEMPTS = 2
 # Draft-call attempts before permanently losing this source's content (its
 # key_facts/code_refs never reach any section — silent, not retried

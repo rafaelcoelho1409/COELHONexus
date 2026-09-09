@@ -60,7 +60,7 @@ from ....ingestion.storage import get_storage
 from ...runtime.observability import record_grader_dim_score
 from ...runtime.progress import emit_progress
 from ...state import SynthState
-from .cocoa import cocoa_alignment_check
+from .cocoa import COCOA_ENABLED, cocoa_alignment_check
 from .faithfulness import atomic_claim_grounding
 
 
@@ -810,6 +810,19 @@ async def _run_llm_judge(
                 f"[checklist_eval] LLM judge repair failed: "
                 f"{type(e).__name__}: {e}"
             )
+            # 2026-09-08: `deployment` was still holding the main call's
+            # value here (set at line ~733, before repair was even needed)
+            # — so a repair-call timeout fell through to the fallback-FAIL
+            # return below with a non-None deployment, making
+            # `judge_call_failed = deployment is None` wrongly False.
+            # Confirmed live on the ch-05 retest: this exact shape (main
+            # call unparseable, repair call times out) recorded a pure
+            # infra failure as a genuine content judgment, undermining both
+            # the no-recovery-floor RETHINK protection and the
+            # consecutive_infra_degraded sustained-outage counter (issue
+            # #14's whole mechanism). The main-call-failure path a few
+            # lines up already returns None correctly — this mirrors it.
+            deployment = None
 
     wall_ms = int((time.monotonic() - t0) * 1000)
 
@@ -856,6 +869,14 @@ _TIMEOUT_S_JUDGE        = 90.0
 _TIMEOUT_S_REPAIR       = 90.0
 
 _MAX_REPAIR_ATTEMPTS    = 1
+
+# Issue #22 (2026-09-08): the two result-persistence writes below have no
+# bounded timeout and no log line either side — during the ch-05 retest,
+# checklist_eval went silent for 20+ minutes with no trace of where it was
+# stuck, coinciding with a real MinIO/network degradation window (Langfuse
+# + Alloy exporters were also timing out at the same time). A stuck write
+# here should fail loud and bounded, not hang indefinitely and invisibly.
+_TIMEOUT_S_PERSIST_WRITE = 60.0
 
 # Draft-call attempts before falling back to the conservative all-FAIL
 # verdict (which triggers a full mgsr_replan cycle) — same idiom as
@@ -1181,6 +1202,15 @@ async def checklist_eval_run(state: SynthState) -> dict:
 
     async def _run_cocoa():
         t0 = time.monotonic()
+        if not COCOA_ENABLED:
+            # Issue #20 follow-up (2026-09-08): the disable flag lives
+            # inside cocoa_alignment_check, but this caller was still
+            # doing the full MinIO vault-load BEFORE ever reaching that
+            # check — paying (and, twice observed live on ch-01/ch-05
+            # retests, sometimes hanging/crashing on) the exact cost the
+            # flag was meant to avoid. Skip the load entirely while
+            # disabled.
+            return None, int((time.monotonic() - t0) * 1000)
         try:
             from ..render.service import _load_per_source_vaults as _load_vault
             per_source = digest.get("per_source") or []
@@ -1337,11 +1367,32 @@ async def checklist_eval_run(state: SynthState) -> dict:
     payload["checklist_manifest_hash"] = manifest_hash
 
     blob_bytes = json.dumps(payload, indent = 2, ensure_ascii = False)
-    await minio.write(
-        versioned_key, blob_bytes, content_type = "application/json",
+    logger.info(
+        f"[checklist_eval] {slug}/{chapter_id}: persisting evaluation "
+        f"({len(blob_bytes)} bytes) to MinIO"
     )
-    await minio.write(
-        latest_key, blob_bytes, content_type = "application/json",
+    try:
+        await asyncio.wait_for(
+            minio.write(
+                versioned_key, blob_bytes, content_type = "application/json",
+            ),
+            timeout = _TIMEOUT_S_PERSIST_WRITE,
+        )
+        await asyncio.wait_for(
+            minio.write(
+                latest_key, blob_bytes, content_type = "application/json",
+            ),
+            timeout = _TIMEOUT_S_PERSIST_WRITE,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"[checklist_eval] {slug}/{chapter_id}: evaluation persist "
+            f"timed out after {_TIMEOUT_S_PERSIST_WRITE}s (issue #22) — "
+            f"MinIO likely degraded; re-raising"
+        )
+        raise
+    logger.info(
+        f"[checklist_eval] {slug}/{chapter_id}: evaluation persisted"
     )
 
     elapsed = int((time.monotonic() - t0) * 1000)

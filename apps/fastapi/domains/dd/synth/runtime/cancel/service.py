@@ -50,13 +50,16 @@ async def watcher(
         socket_connect_timeout = REDIS_CONNECT_TIMEOUT_S,
         socket_timeout = REDIS_OP_TIMEOUT_S,
     )
+    logger.info(f"[synth-cancel] watcher started for thread {thread_id}")
     try:
         while not main_task.done():
             try:
                 if await is_cancelled(r, thread_id):
                     logger.info(
                         f"[synth-cancel] flag detected for thread "
-                        f"{thread_id} → cancelling main task"
+                        f"{thread_id} → cancelling main task (issue #22: "
+                        f"logged here so a slow-to-land cancel is "
+                        f"distinguishable from a watcher that never ran)"
                     )
                     main_task.cancel()
                     return

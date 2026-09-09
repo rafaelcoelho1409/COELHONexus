@@ -187,10 +187,3 @@ portForward:
 # Development (Skaffold): ports 23030-23039
 # sh mirror_localhost_tailscale.sh $(for i in {23030..23034}; do echo $i; done)
 # skaffold dev --cache-artifacts=false --no-prune=false --auto-sync=false
-
-#
-# Production (ArgoCD): reachable via native NodePort, no port-forward process needed
-#   FastAPI   http://localhost:23024
-#   Flower    http://localhost:23025
-#   FastHTML  http://localhost:23026
-#   FastMCP   http://localhost:23027

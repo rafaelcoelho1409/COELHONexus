@@ -39,7 +39,9 @@ from .params import (
     MAX_TRANSIENT_RETRIES,
     PASS_THROUGH_THRESHOLD,
     RETRY_BACKOFF_S,
+    SETTLE_DELAY_S,
     TEMPERATURE,
+    TIMEOUT_S,
 )
 from .prompts import build_prompt
 from .schemas import DISTILL_RESPONSE_FORMAT, DocDistillate
@@ -91,7 +93,7 @@ async def distill_one(
                     prompt,
                     max_tokens = MAX_TOKENS,
                     temperature = TEMPERATURE,
-                    timeout_s = 60.0,
+                    timeout_s = TIMEOUT_S,
                     response_format = DISTILL_RESPONSE_FORMAT,
                     dd_process = "dd-reduce-label",
                 )
@@ -121,7 +123,7 @@ async def distill_one(
                         repair_prompt,
                         max_tokens = MAX_TOKENS,
                         temperature = 0.0,
-                        timeout_s = 60.0,
+                        timeout_s = TIMEOUT_S,
                         response_format = DISTILL_RESPONSE_FORMAT,
                         dd_process = "dd-reduce-label",
                     )
@@ -253,6 +255,14 @@ async def doc_distill_run(state: PlannerState) -> dict:
             return {"doc_distill_ref": lkey, "doc_distill_stats": stats}
         except Exception:
             pass
+
+    # Settle window — see SETTLE_DELAY_S. Only reached past the cache-hit
+    # check above, so a fully-cached re-plan never pays this cost.
+    if SETTLE_DELAY_S > 0:
+        await emit_progress(
+            thread_id, "doc_distill", "settling", delay_s = SETTLE_DELAY_S,
+        )
+        await asyncio.sleep(SETTLE_DELAY_S)
 
     # Bulk MinIO read BEFORE semaphore — keep LLM concurrency pure.
     await emit_progress(thread_id, "doc_distill", "loading_bodies", n_files = n)

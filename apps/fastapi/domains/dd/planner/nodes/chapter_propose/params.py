@@ -27,6 +27,17 @@ MAX_TOKENS_VOTE = 200
 TEMPERATURE_PROPOSE = 0.4   # diversity across samples
 TEMPERATURE_VOTE    = 0.0
 
+# 2026-09-08: raised 90s -> 120s. The one node in this cluster still below
+# 120s — every other Planner node (off_topic/doc_distill/chapter_assign/
+# order_chapters) got its own evidence-based timeout this same pass;
+# chapter_propose's own 14-day Langfuse percentiles show genuine
+# successful proposals run p99=86.8s, max=87.9s — 90s left almost no
+# margin, and this node has failed (fallback_used=True) on every single
+# live run this whole investigation. 120s gives ~1.37x margin over the
+# real max, matching chapter_assign's justification (both have larger,
+# more complex calls than off_topic/doc_distill/order_chapters).
+DRAFT_TIMEOUT_S = 120.0
+
 MAX_REPAIR_ATTEMPTS = 1
 
 # Optimal-stopping (CGES 2511.02603): node scales floor to ~0.7×adaptive_target so large corpora don't early-stop on a small sample-0.

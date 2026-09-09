@@ -1825,8 +1825,14 @@ _MAX_TOKENS_REPAIR     = 8000
 # and was by far the worst-hit, routinely losing entire sections to
 # APITimeoutError and driving most of the sustained-outage halts tracked
 # in the Synth known-issues doc. Same fix as outline/digest.
-_TIMEOUT_S_DRAFT       = 120.0
-_TIMEOUT_S_REPAIR      = 120.0
+#   2026-09-08: raised 120s -> 150s. Percentile analysis (14-day Langfuse
+#   trace data): successful-call max=118.9s, p99=106.8s — real successes
+#   were stacking right up against the old 120s ceiling. Only ~8% of
+#   failures are actually at-ceiling (rescuable by this change); the
+#   other ~90%+ fail at a fixed ~30s Rotator-side ReadTimeout this
+#   timeout can't reach — see SYNTH-PERFORMANCE-ANALYSIS-2026-09-07.md.
+_TIMEOUT_S_DRAFT       = 150.0
+_TIMEOUT_S_REPAIR      = 150.0
 
 _MAX_REPAIR_ATTEMPTS   = 2
 

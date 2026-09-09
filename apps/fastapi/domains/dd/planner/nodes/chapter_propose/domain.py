@@ -16,7 +16,13 @@ from .params import (
     SEED_MAX_HEADINGS,
     SEED_MAX_NAMESPACES,
 )
-from .patterns import CLI_PATTERN_RE, H2_RE, JSON_RE
+from .patterns import (
+    CLI_PATTERN_RE,
+    FENCED_CODE_RE,
+    H2_RE,
+    JSON_RE,
+    TRAILING_MD_LINK_RE,
+)
 from .schemas import ChapterProposal, ChapterProposalList
 from .versions import PROMPT_VERSION
 
@@ -34,11 +40,14 @@ def target_chapters_for_n_docs(n_docs: int) -> int:
 
 
 def _extract_h12_headings(body: str, max_n: int) -> list[str]:
-    """First N H1/H2 headings from a markdown body."""
+    """First N H1/H2 headings from a markdown body. Fenced code blocks are
+    stripped first — see FENCED_CODE_RE."""
     out: list[str] = []
-    for m in H2_RE.finditer(body or ""):
+    body_no_code = FENCED_CODE_RE.sub("", body or "")
+    for m in H2_RE.finditer(body_no_code):
         h = " ".join(m.group(1).strip().split())
-        if h.casefold() in GENERIC_HEADINGS:
+        h = TRAILING_MD_LINK_RE.sub("", h).strip()
+        if not h or h.casefold() in GENERIC_HEADINGS:
             continue
         out.append(h)
         if len(out) >= max_n:

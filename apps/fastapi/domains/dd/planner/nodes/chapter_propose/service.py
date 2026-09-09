@@ -34,6 +34,7 @@ from .domain import (
 from .keys import latest_key, versioned_key
 from .params import (
     BODY_CHARS_PER_DOC,
+    DRAFT_TIMEOUT_S,
     MAX_REPAIR_ATTEMPTS,
     MAX_TOKENS_PROPOSE,
     MAX_TOKENS_VOTE,
@@ -148,7 +149,7 @@ async def draft_one(
             prompt,
             max_tokens = MAX_TOKENS_PROPOSE,
             temperature = TEMPERATURE_PROPOSE,
-            timeout_s = 90.0,
+            timeout_s = DRAFT_TIMEOUT_S,
             response_format = PROPOSE_RESPONSE_FORMAT,
         )
     except Exception as e:
@@ -177,7 +178,7 @@ async def draft_one(
                 repair_prompt,
                 max_tokens = MAX_TOKENS_PROPOSE,
                 temperature = 0.0,
-                timeout_s = 90.0,
+                timeout_s = DRAFT_TIMEOUT_S,
                 response_format = PROPOSE_RESPONSE_FORMAT,
             )
             parsed2 = parse(raw2)

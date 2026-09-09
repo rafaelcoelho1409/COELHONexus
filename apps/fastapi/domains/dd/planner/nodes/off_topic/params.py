@@ -32,7 +32,16 @@ JUDGE_CONCURRENCY = 16
 # cascades 40). Jittered backoff avoids herd on shared arms.
 JUDGE_MAX_ATTEMPTS = 2
 JUDGE_BACKOFF_BASE = 1.5
-JUDGE_TIMEOUT_S = 45.0      # was 30s for 8tok; 300tok budget needs more decode time headroom too
+# 2026-09-08: 45s -> 120s -> 70s. First raised to 120s using Synth's own
+# percentile numbers (p99=82-119s) by analogy since both share the pool —
+# that fixed off_topic completely (0 errors) but cost 3x the wall time
+# (82s -> 383s) chasing a ceiling this node never actually needs. Pulling
+# THIS node's own 14-day Langfuse percentiles (not borrowed from Synth)
+# showed genuine successful judgments top out at p99=35s, max=43.5s —
+# off_topic's calls are small (an 8-400 token verdict), nowhere near
+# Synth's much larger section-draft calls. 70s gives ~1.6x margin over the
+# real max while cutting truly-dead calls in ~half the time 120s did.
+JUDGE_TIMEOUT_S = 70.0
 
 # Stable meta-content descriptor for the LLM judge (CoC, changelogs, issue templates, etc. that bypass URL filters).
 NEGATIVE_DESCRIPTOR = (
