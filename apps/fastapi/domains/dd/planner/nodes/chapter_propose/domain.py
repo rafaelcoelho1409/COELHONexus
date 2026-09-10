@@ -21,6 +21,7 @@ from .patterns import (
     FENCED_CODE_RE,
     H2_RE,
     JSON_RE,
+    LEADING_MD_LINK_RE,
     TRAILING_MD_LINK_RE,
 )
 from .schemas import ChapterProposal, ChapterProposalList
@@ -46,6 +47,7 @@ def _extract_h12_headings(body: str, max_n: int) -> list[str]:
     body_no_code = FENCED_CODE_RE.sub("", body or "")
     for m in H2_RE.finditer(body_no_code):
         h = " ".join(m.group(1).strip().split())
+        h = LEADING_MD_LINK_RE.sub("", h)
         h = TRAILING_MD_LINK_RE.sub("", h).strip()
         if not h or h.casefold() in GENERIC_HEADINGS:
             continue

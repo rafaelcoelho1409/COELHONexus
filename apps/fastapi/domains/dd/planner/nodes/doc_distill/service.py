@@ -51,7 +51,19 @@ from .versions import PROMPT_VERSION
 logger = logging.getLogger(__name__)
 
 
-_TRANSIENT_REASONS = frozenset({"rate_limit", "timeout", "connection"})
+# 2026-09-09: "rate_limit" removed. A RouterRateLimitError here means
+# litellm's Router already checked every deployment in the pool and found
+# none available — benched for cooldown_time=120s (chain/service.py's
+# _get_router(), COELHOLLMRotator repo), not a one-off per-deployment
+# blip. The old 2-5s backoff before retrying could never land after a
+# deployment actually became free again, so both retries were guaranteed
+# to fail too — confirmed live on langchain-langgraph-deepagents: 133/166
+# docs hit this, each burning a doomed retry cycle before falling back to
+# the same fallback distillate anyway. Dropping it here means those calls
+# fail straight to fallback — identical outcome, ~8s less wasted wait per
+# occurrence. timeout/connection stay retryable — those genuinely can
+# clear within seconds.
+_TRANSIENT_REASONS = frozenset({"timeout", "connection"})
 
 
 async def distill_one(

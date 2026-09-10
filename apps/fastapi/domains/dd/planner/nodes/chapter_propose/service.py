@@ -102,43 +102,60 @@ def _build_fallback_proposals(
     namespaces = (seeds.get("namespaces") or [])[:]
     # Target clamped to schema range
     n = max(PROPOSALS_MIN, min(PROPOSALS_MAX, target_chapters))
-    # Prefer headings (human-written) then namespaces (file-tree)
-    candidates: list[str] = []
-    for h in headings:
-        if h not in candidates:
-            candidates.append(h)
-            if len(candidates) >= n:
-                break
-    for ns in namespaces:
-        title = ns.replace("-", " ").title()
-        if title not in candidates:
-            candidates.append(title)
-            if len(candidates) >= n:
-                break
-    # Fill generic if still short
     generic = ["Core Concepts", "Configuration", "API Reference", "Guides", "Advanced Topics", "Troubleshooting", "Examples", "Best Practices"]
+
+    # Dedup on the FINAL title (post word-count normalization below), case-
+    # insensitively. Two reasons this has to happen in one place: (1)
+    # headings_counter (domain.py) never case-normalizes, so two docs'
+    # headings differing only in case (e.g. "How It Works" vs "How it
+    # Works") both survive as distinct seed strings; (2) the old code
+    # dedup-checked the RAW title but only applied the 2-8-word
+    # normalization afterward in a separate loop, so two distinct raw
+    # titles could still collide once truncated/suffixed. Either way a
+    # case-sensitive "not in candidates" check here let both through, only
+    # to collide on ChapterProposalList's case-insensitive uniqueness
+    # validator — crashing the fallback itself with no further recovery
+    # path. Confirmed live 2026-09-09 on the fastmcp corpus (duplicate
+    # 'How It Works' after the LLM path had already failed all samples).
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def _try_add(raw_title: str) -> bool:
+        words = raw_title.split()
+        title = raw_title
+        if len(words) < 2:
+            title = title + " Overview"
+        elif len(words) > 8:
+            title = " ".join(words[:8])
+        key = title.casefold()
+        if key in seen:
+            return False
+        seen.add(key)
+        candidates.append(title)
+        return True
+
+    # Prefer headings (human-written) then namespaces (file-tree) then generic.
+    for h in headings:
+        if len(candidates) >= n:
+            break
+        _try_add(h)
+    for ns in namespaces:
+        if len(candidates) >= n:
+            break
+        _try_add(ns.replace("-", " ").title())
     for g in generic:
         if len(candidates) >= n:
             break
-        if g not in candidates:
-            candidates.append(g)
-    # Trim to n
-    candidates = candidates[:n]
-    proposals = []
-    for i, title in enumerate(candidates):
-        # Ensure title 2-8 words
-        words = title.split()
-        if len(words) < 2:
-            title = title + " Overview"
-        if len(words) > 8:
-            title = " ".join(words[:8])
-        proposals.append(
-            ChapterProposal(
-                title = title,
-                description = f"Covers {title.lower()} in {framework} based on structural signals from {n_docs} docs.",
-                key_concepts = [title.lower().replace(" ", "_") + "_1", title.lower().replace(" ", "_") + "_2", title.lower().replace(" ", "_") + "_3"],
-            )
+        _try_add(g)
+
+    proposals = [
+        ChapterProposal(
+            title = title,
+            description = f"Covers {title.lower()} in {framework} based on structural signals from {n_docs} docs.",
+            key_concepts = [title.lower().replace(" ", "_") + "_1", title.lower().replace(" ", "_") + "_2", title.lower().replace(" ", "_") + "_3"],
         )
+        for title in candidates
+    ]
     return ChapterProposalList(proposals = proposals)
 
 

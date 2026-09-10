@@ -21,6 +21,15 @@ CLI_PATTERN_RE = re.compile(
 # corpus (every fallback-path title carried its heading's permalink markup).
 TRAILING_MD_LINK_RE = re.compile(r"\s*\[[^\]]*\]\([^)]*\)\s*$")
 
+# 2026-09-09: a different static-site generator's permalink convention —
+# an empty-text anchor link PREPENDED to the heading instead of appended,
+# e.g. `## [](#static-runtime-context) Static runtime context`. Same root
+# problem as TRAILING_MD_LINK_RE (raw markup leaking into a
+# fallback-generated chapter title when the LLM path fails), different
+# position. Confirmed live 2026-09-09 on the langchain-langgraph-deepagents
+# corpus: every fallback-path title carried a leading `[](#anchor)`.
+LEADING_MD_LINK_RE = re.compile(r"^\s*\[[^\]]*\]\(#[^)]*\)\s*")
+
 # 2026-09-08: H2_RE matches any line starting with 1-2 `#` chars, with no
 # awareness of fenced code blocks — a Python comment like
 # "# Code below omitted 👇" inside a ```python fence gets misread as a

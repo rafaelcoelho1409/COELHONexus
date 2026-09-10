@@ -65,9 +65,18 @@ async def _init_and_run(coro):
     bind = True,
     acks_late = False,
     track_started = True,
-    # 4× headroom over the ~12-15 min observed on LangChain-scale (777 docs).
-    soft_time_limit = 3600,
-    time_limit = 3660,
+    # 2026-09-09: soft_time_limit=3600/time_limit=3660 removed. The "4×
+    # headroom over ~12-15 min" estimate this was based on assumed a
+    # healthy-pool baseline — under real Rotator pool-contention (shared
+    # "universal LLM server", provider-side rate-limit/capacity crunches)
+    # a run can legitimately exceed 1h even on a mid-size corpus (confirmed
+    # live: fastmcp, 394 docs, SoftTimeLimitExceeded at exactly 3600.08s
+    # while doc_distill was still actively making progress — no hang, just
+    # genuinely slow). Celery's signal-based timeout doesn't distinguish
+    # "hung" from "slow", so it was killing healthy-but-slow runs outright.
+    # Cancellation is handled manually instead, via the existing cooperative
+    # cancel path (progress.raise_if_cancelled + the /cancel endpoint) —
+    # see runtime/cancel/service.py. No blanket wall-clock cap.
 )
 def run_planner(self, thread_id: str, slug: str, mode: str = "llm") -> dict:
     """Fresh planner pass; CAD-releases the single-flight lock in finally regardless of outcome."""
@@ -97,8 +106,8 @@ def run_planner(self, thread_id: str, slug: str, mode: str = "llm") -> dict:
     bind = True,
     acks_late = False,
     track_started = True,
-    soft_time_limit = 3600,
-    time_limit = 3660,
+    # 2026-09-09: time limits removed — see run_planner's decorator above
+    # for why. Managed manually via the cooperative cancel path instead.
 )
 def resume_planner(self, thread_id: str) -> dict:
     """Resume from last checkpoint; doesn't acquire the start lock but DOES CAD-release on completion (covers SIGKILL'd original tasks)."""

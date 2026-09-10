@@ -24,4 +24,19 @@ from __future__ import annotations
 # cooldown_time=120. Confirmed live: chapter_propose failed all 3 samples
 # on every numpy run, even after doc_distill/chapter_assign/order_chapters
 # got their own settle-delay fix.
-PROMPT_VERSION = "v7-settle-130s-2026-09-09"
+# v8 (2026-09-09): heading seeds now also strip a LEADING empty-text
+# anchor link (`[](#slug)`) — a different static-site generator's
+# permalink convention than v4's trailing `[¶](#slug "Permanent link")`.
+# Confirmed live on the langchain-langgraph-deepagents corpus: every
+# fallback-path title carried a leading `[](#anchor)` (e.g.
+# `[](#static-runtime-context) Static runtime context`).
+# v9 (2026-09-09): _build_fallback_proposals()'s title dedup is now
+# case-insensitive and runs on the FINAL (post word-count-normalized)
+# title instead of the raw pre-mutation heading/namespace string.
+# Previously two headings differing only in case (or colliding only after
+# the 2-8-word truncation/suffix step) both passed the old case-sensitive
+# pre-mutation check, then crashed ChapterProposalList's case-insensitive
+# uniqueness validator with no further fallback — killing the whole run.
+# Confirmed live on the fastmcp corpus: duplicate 'How It Works' after all
+# 3 LLM samples had already failed.
+PROMPT_VERSION = "v9-fallback-title-dedup-2026-09-09"

@@ -17,4 +17,9 @@ from __future__ import annotations
 # very first doc_distill call found the whole pool still exhausted (96.5%
 # fallback), which cascaded into chapter_select collapsing the plan to a
 # single chapter.
-PROMPT_VERSION = "v6-settle-130s-2026-09-09"
+# v7 (2026-09-09): "rate_limit" removed from the retryable-error set — a
+# RouterRateLimitError means the whole pool was already checked and found
+# empty (120s cooldown), so the old 2-5s retry backoff could never
+# succeed. Same fallback outcome either way, ~8s less wasted wait per
+# occurrence. timeout/connection remain retryable.
+PROMPT_VERSION = "v7-no-retry-rate-limit-2026-09-09"
