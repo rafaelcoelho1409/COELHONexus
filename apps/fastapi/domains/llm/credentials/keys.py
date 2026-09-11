@@ -13,4 +13,8 @@ MANAGED_KEY_ENVS: tuple[str, ...] = (
     "SAMBANOVA_API_KEY",
     "DEEPSEEK_API_KEY",
     "SEMANTIC_SCHOLAR_API_KEY",
+    # API key for the LLM endpoint the Docs Distiller / YCS apps call. Blank
+    # for the bundled in-cluster rotator (no auth); set when pointing at an
+    # external OpenAI-compatible endpoint. See domains/llm/rotator/chain/service.py.
+    "COELHO_LLM_API_KEY",
 )

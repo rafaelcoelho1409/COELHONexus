@@ -10,6 +10,14 @@ class SynthState(TypedDict, total=False):
     thread_id:      str            # also LangFuse session_id
     synth_mode:     str            # "quality" (default) | "fast"
 
+    # Wall-clock start of the CURRENT Celery task execution (time.time()),
+    # set fresh in run_single_chapter_async's initial_state and reset on
+    # resume_synth_async (each is its own task invocation with its own
+    # soft_time_limit clock). Absent → the wall-clock RETHINK gate in
+    # graph.py no-ops (safe default for entry points that don't set it,
+    # e.g. run_study_async's per-book orchestration).
+    run_started_at: Optional[float]
+
     outline_path:   Optional[str]
     outline_stats:  Optional[dict] # counts + DAG shape + cache_hit + wall_ms
 

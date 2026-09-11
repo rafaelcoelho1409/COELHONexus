@@ -236,6 +236,9 @@ async def run_single_chapter_async(
                 "thread_id":      thread_id,
                 "synth_mode":     mode,
                 "status":         "running",
+                # Wall-clock RETHINK gate (graph.py _route_after_mgsr) reads
+                # this against SINGLE_CHAPTER_SOFT_TIME_LIMIT_S.
+                "run_started_at": time.time(),
             }
 
             main_task = asyncio.create_task(graph.ainvoke(initial_state, config))
@@ -373,6 +376,18 @@ async def resume_synth_async(thread_id: str) -> dict:
         thread_id, "synth", "resumed",
         next_nodes = list(snap.next or []),
     )
+    # Fresh wall-clock start for the wall-clock RETHINK gate (graph.py
+    # _route_after_mgsr) — this resume is its own Celery task execution
+    # with its own soft_time_limit clock, independent of when the original
+    # (interrupted) run started.
+    try:
+        await graph.aupdate_state(config, {"run_started_at": time.time()})
+    except Exception as e:
+        logger.warning(
+            f"[synth] {thread_id}: run_started_at reset on resume failed "
+            f"(wall-clock RETHINK gate will use the stale value): "
+            f"{type(e).__name__}: {e}"
+        )
     main_task = asyncio.create_task(graph.ainvoke(None, config))
     watcher_task = asyncio.create_task(cancel_watcher(thread_id, main_task))
     return await _await_with_watcher(

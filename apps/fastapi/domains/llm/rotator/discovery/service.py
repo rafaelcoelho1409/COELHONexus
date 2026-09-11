@@ -114,7 +114,21 @@ def required_providers() -> list[str]:
 
 
 def missing_required_keys() -> list[dict]:
-    """Empty == ready. Gates DD runs and drives the /settings readiness banner."""
+    """Empty == ready. Gates DD runs and drives the /settings readiness banner.
+
+    Nexus no longer bundles a rotator (2026-09-11) — the configured endpoint
+    always owns its own provider keys (NIM for embeddings/reranking included),
+    so `is_external_endpoint()` is always True and this gate is always
+    satisfied. The PROVIDERS loop below is unreachable dead code kept only
+    until the provider-key settings UI itself is removed (Phase 3c).
+    """
+    try:
+        from domains.llm.rotator.chain import is_external_endpoint
+
+        if is_external_endpoint():
+            return []
+    except Exception:
+        pass
     out: list[dict] = []
     for pid, cfg in PROVIDERS.items():
         if cfg.required and not resolve_key(cfg.key_env):

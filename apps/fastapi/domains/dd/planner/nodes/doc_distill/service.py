@@ -97,6 +97,7 @@ async def distill_one(
         failure_reason: Optional[str] = None
         last_raw = ""
         last_deployment = "?"
+        meta: dict | None = None
 
         # Retry only transient errors — pooled rotator rotates arm, jitter avoids herd.
         for attempt in range(MAX_TRANSIENT_RETRIES + 1):
@@ -177,6 +178,14 @@ async def distill_one(
                 f"raw={last_raw[:120]!r}) — using deterministic fallback "
                 f"distillate (doc kept, not dropped)"
             )
+
+        # Wave H2: tell the rotator whether this arm produced a usable distillate
+        # (opt-in, KD_ROTATOR_FEEDBACK; fire-and-forget, no latency impact).
+        try:
+            from domains.llm.rotator.chain.service import fire_feedback
+            fire_feedback(meta, 1.0 if (distillate is not None and not used_fallback) else 0.1)
+        except Exception:
+            pass
 
         wall_ms = int((time.monotonic() - t0) * 1000)
         return source_key, distillate, wall_ms, used_fallback, failure_reason

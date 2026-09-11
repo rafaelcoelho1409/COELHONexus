@@ -5,9 +5,11 @@ type: application
 version: 1.0.0
 appVersion: "1.0.0"
 
-
-dependencies:
-  - name: coelho-llm-rotator
-    version: 1.1.7
-    repository: oci://ghcr.io/rafaelcoelho1409/charts
+# No chart dependencies (2026-09-11) — COELHO LLM Rotator is always a
+# separately-deployed service, never bundled here. See `llm.endpoint` in
+# values.yaml. History: the `coelho-llm-rotator` subchart dependency (v1.1.7,
+# `condition: coelho-llm-rotator.enabled`) was removed once the Settings-page
+# endpoint field + its store-backed runtime override made the bundled copy
+# redundant — it was silently drifting stale under `skaffold dev` because
+# Nexus's own build never touched it. One URL field, no dual path.
 

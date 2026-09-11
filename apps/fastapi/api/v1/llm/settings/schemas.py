@@ -17,3 +17,11 @@ class EnableBody(BaseModel):
 class ModelsBody(BaseModel):
     mode: Literal["all", "custom"]
     selected: list[str] = Field(default_factory=list)
+
+
+class EndpointBody(BaseModel):
+    """LLM endpoint config. `api_key=None` leaves the stored key unchanged;
+    `api_key=""` clears it."""
+    url: str = Field(min_length=1)
+    model: str = "auto"
+    api_key: str | None = None

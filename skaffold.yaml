@@ -152,6 +152,12 @@ deploy:
         - --timeout=10m
         - --wait
 
+# No profiles (2026-09-11) — plain `skaffold dev` is the only mode. COELHO LLM
+# Rotator is never bundled, so there's nothing to switch away from: run its
+# own `skaffold dev` (namespace coelho-llm-rotator-dev) alongside this one,
+# and its default address (values.yaml `llm.endpoint.url`) already points at
+# it. Point the Settings page elsewhere to use a different rotator or OpenAI.
+
 portForward:
   - resourceType: service
     resourceName: coelhonexus-fastapi

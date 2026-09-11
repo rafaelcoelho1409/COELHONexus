@@ -51,6 +51,29 @@ async def planner_info() -> dict:
     }
 
 
+@router.get("/{slug}/health")
+async def planner_health(slug: str, response: Response) -> dict:
+    """Wave H3 — pipeline health from the latest plan (no MinIO archaeology).
+    `degraded` is the one-flag answer to 'will this plan be any good'."""
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        from domains.dd.planner.nodes.plan_write.keys import latest_blob_key
+        raw = await get_storage().read_text(latest_blob_key(slug))
+        plan = json.loads(raw)
+        stats = plan.get("stats") or {}
+        ph = stats.get("pipeline_health") or {}
+        return {
+            "slug": slug,
+            "generated_at": plan.get("generated_at"),
+            "n_chapters": stats.get("n_chapters"),
+            "n_sources": stats.get("n_sources"),
+            "degraded": ph.get("degraded"),
+            "pipeline_health": ph,
+        }
+    except Exception as e:
+        return {"slug": slug, "degraded": None, "error": f"{type(e).__name__}: {e}"}
+
+
 @router.get("/{slug}/timing")
 async def planner_timing(slug: str, response: Response) -> dict:
     response.headers["Cache-Control"] = "no-store"
@@ -66,6 +89,48 @@ async def planner_timing(slug: str, response: Response) -> dict:
 
 
 
+
+
+_BUDGET_GATE_MIN_DOCS = 120
+
+
+async def _budget_gate(slug: str, manifest: dict) -> None:
+    """Wave H4 (opt-in KD_PLANNER_BUDGET_GATE): refuse a large run when the
+    rotator's routing health shows the free-tier daily quotas are already
+    thinning the pool — a doomed run wastes ~45 min. Best-effort; never blocks
+    on the rotator being unreachable."""
+    import os
+    if os.environ.get("KD_PLANNER_BUDGET_GATE", "").strip().lower() not in ("1", "true", "yes", "on"):
+        return
+    try:
+        pages = manifest.get("pages") or manifest.get("files") or manifest.get("urls") or []
+        n_docs = len(pages) if isinstance(pages, list) else int(manifest.get("page_count") or 0)
+    except Exception:
+        n_docs = 0
+    if n_docs < _BUDGET_GATE_MIN_DOCS:
+        return
+    try:
+        import httpx
+        from domains.llm.rotator.chain.service import COELHO_ROTATOR_URL
+        base = COELHO_ROTATOR_URL.rsplit("/openai/v1", 1)[0]
+        async with httpx.AsyncClient(timeout=3.0) as c:
+            h = (await c.get(f"{base}/routing/health")).json()
+        capped = [x for x in (h.get("cooldowns") or []) if (x.get("cooldown_s") or 0) > 1800]
+        pool = h.get("pool_size") or 0
+        if len(capped) >= 3 or (pool and len(capped) / max(pool, 1) > 0.15):
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"{n_docs}-doc run needs ~{n_docs * 3} LLM calls; the rotator "
+                    f"has {len(capped)} model(s) in multi-hour daily-cap cooldown "
+                    f"(pool {pool}). This run will likely degrade — retry after "
+                    f"00:00 UTC or run a smaller corpus. Unset KD_PLANNER_BUDGET_GATE to override."
+                ),
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.debug(f"[budget-gate] skipped ({type(e).__name__}: {e})")
 
 
 @router.post("/{slug}")
@@ -90,11 +155,14 @@ async def start_planner(
             ),
         )
 
-    if not await read_framework_manifest(get_storage(), slug):
+    _manifest = await read_framework_manifest(get_storage(), slug)
+    if not _manifest:
         raise HTTPException(
             status_code=404,
             detail=f"no ingested corpus for {slug!r} — run ingestion first",
         )
+
+    await _budget_gate(slug, _manifest)  # Wave H4 — no-op unless KD_PLANNER_BUDGET_GATE
 
     if not thread_id:
         thread_id = make_thread_id(slug)

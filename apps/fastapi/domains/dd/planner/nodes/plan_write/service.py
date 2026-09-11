@@ -33,6 +33,43 @@ from .versions import PROMPT_VERSION, SCHEMA_VERSION
 logger = logging.getLogger(__name__)
 
 
+def _pipeline_health(state: PlannerState) -> dict:
+    """Roll the per-node fallback/degradation signals into the plan's stats so a
+    'done' plan that silently ran on deterministic fallbacks (generic chapter
+    titles, lopsided buckets) is distinguishable from a high-quality one without
+    MinIO archaeology. Observability only — no behaviour change."""
+    dd = state.get("doc_distill_stats") or {}
+    ot = state.get("off_topic_stats") or {}
+    pr = state.get("propose_stats") or {}
+    asg = state.get("assign_stats") or {}
+    ordc = state.get("order_chapters_stats") or {}
+
+    def _pct(num, den):
+        return round(100.0 * num / den, 1) if den else 0.0
+
+    dd_n = dd.get("n_distilled") or dd.get("n_files") or 0
+    asg_n = asg.get("n_assigned") or asg.get("n_docs") or 0
+    health = {
+        "off_topic_llm_errors":       ot.get("llm_errors", ot.get("llm_err", 0)),
+        "doc_distill_fallback_pct":   _pct(dd.get("n_fallback", 0), dd_n),
+        "doc_distill_failure_reasons": dd.get("failure_reasons") or {},
+        "chapter_propose_fallback_used": bool(pr.get("fallback_used", False)),
+        "chapter_propose_samples_valid": int(pr.get("n_samples_valid", 0)),
+        "chapter_propose_n_proposals": pr.get("n_proposals", 0),
+        "chapter_assign_fallback_pct": _pct(asg.get("n_fallback", 0), asg_n),
+        "chapter_assign_rescued":     asg.get("n_rescued", 0),
+        "order_chapters_valid_samples": ordc.get("n_samples", 0),
+    }
+    # Single headline flag: was any structural stage degraded to its
+    # deterministic fallback? (the thing that produces a throwaway plan)
+    health["degraded"] = bool(
+        pr.get("fallback_used", False)
+        or _pct(dd.get("n_fallback", 0), dd_n) >= 40.0
+        or _pct(asg.get("n_fallback", 0), asg_n) >= 50.0
+    )
+    return health
+
+
 async def persist_plan(
     minio,
     *,
@@ -226,6 +263,7 @@ async def plan_write_run(state: PlannerState) -> dict:
             "n_sources":    n_sources_total,
             "n_unassigned": len(unassigned_keys),
             "n_dropped":    n_dropped,
+            "pipeline_health": _pipeline_health(state),
         },
     }
 

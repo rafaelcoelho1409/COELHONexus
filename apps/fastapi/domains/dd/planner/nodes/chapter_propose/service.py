@@ -13,8 +13,24 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Optional
+
+
+class PlannerDegradedAbort(RuntimeError):
+    """Raised (opt-in, KD_PLANNER_ABORT_ON_DEGRADE) when chapter_propose fell back
+    on a large corpus — surfaces as a normal terminal 'failed' with a clear
+    reason instead of grinding chapter_assign for an unusable plan."""
+
+
+_ABORT_MIN_DOCS = 50
+
+
+def _abort_on_degrade_enabled() -> bool:
+    return os.environ.get("KD_PLANNER_ABORT_ON_DEGRADE", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 from domains.llm.rotator.chain import chat_judge_bandit_async
 
@@ -451,4 +467,17 @@ async def chapter_propose_run(state: PlannerState) -> dict:
         wall_ms = wall_ms,
         titles = stats["titles"],
     )
+
+    # KD_PLANNER_ABORT_ON_DEGRADE: a chapter_propose fallback on a large corpus
+    # is a near-certain predictor of a throwaway plan (generic titles, lopsided
+    # catch-all bucket). The artifact is persisted above, so /resume still works
+    # once the rotator pool recovers — but don't burn chapter_assign's ~18 min
+    # grinding out a plan the caller can't use.
+    if fallback_used and _abort_on_degrade_enabled() and n >= _ABORT_MIN_DOCS:
+        raise PlannerDegradedAbort(
+            f"chapter_propose fell back to deterministic seed titles on {n} docs "
+            f"— aborting before chapter_assign (KD_PLANNER_ABORT_ON_DEGRADE). "
+            f"Retry when the LLM pool recovers; proposals artifact is saved."
+        )
+
     return {"chapter_proposals_ref": lkey, "propose_stats": stats}

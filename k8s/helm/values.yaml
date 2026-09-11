@@ -3,16 +3,22 @@
 # 'production' = ArgoCD with GitLab Container Registry
 environment: production
 
-coelho-llm-rotator:
-  fastapi:
-    portsSettings:
-      ports:
-        - name: http
-          port: 8000
-          targetPort: 8000
-          nodePort: 30021
-          protocol: TCP
-      type: LoadBalancer
+# LLM endpoint the Docs Distiller / YCS apps call (OpenAI-compatible HTTP).
+# COELHO LLM Rotator is always a separately-deployed service (its own
+# `skaffold dev`, chart, namespace) — Nexus never bundles or deploys one.
+# This default is that service's dev-workflow address; override url/apiKey/
+# model here (or, at runtime, from the Settings page — takes precedence)
+# to point at a different rotator instance, or OpenAI/Anthropic directly.
+# Read by apps/fastapi/domains/llm/rotator/chain/service.py.
+# NOTE: no rotator currently runs in a production namespace — a real prod
+# deploy must override `llm.endpoint.url` (ArgoCD Application values) once
+# one exists; this default only resolves inside the local dev cluster.
+llm:
+  endpoint:
+    url: "http://coelho-llm-rotator-fastapi.coelho-llm-rotator-dev.svc.cluster.local:8000/api/v1/llm/openai/v1"
+    apiKey: ""          # blank = no auth. Required for OpenAI / a keyed external endpoint.
+                        # TODO: move to a Secret before any real external/OpenAI use.
+    model: "auto"       # "auto" = let the rotator pick; a concrete model id for a plain endpoint
 
 observability:
   enabled: true
@@ -88,6 +94,11 @@ dd:
   sawcDeriveOptimalStopping: "true"
   # Roll back to "1" if 429 cascades resume.
   studySem: "2"
+  # "1" = abort a Planner run right after chapter_propose when it fell back to
+  # deterministic seed titles on a large corpus (>=50 docs) — a near-certain
+  # predictor of a throwaway plan. Saves chapter_assign's ~18 min; the proposals
+  # artifact is persisted so /resume works once the LLM pool recovers. Default off.
+  plannerAbortOnDegrade: "0"
 
 secretName: coelhonexus-secret
 

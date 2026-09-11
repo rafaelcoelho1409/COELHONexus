@@ -1,9 +1,10 @@
 """COELHO LLM Rotator adapter — exclusive endpoint, no per-process weights.
 
 All Planner/Synth calls now route through the universal free-quota gateway:
-  standalone rotator (coelho-llm-rotator) via OpenAI-compatible HTTP.
-  In-cluster: http://coelho-llm-rotator-fastapi:8000/v1
-  Tailnet:    https://coelho-llm-rotator.tail39dc94.ts.net/v1
+  standalone rotator (coelho-llm-rotator) via OpenAI-compatible HTTP. Always a
+  separately-deployed service — Nexus never bundles or deploys one itself.
+  Dev workflow: http://coelho-llm-rotator-fastapi.coelho-llm-rotator-dev.svc.cluster.local:8000/v1
+  Tailnet:      https://coelho-llm-rotator.tail39dc94.ts.net/v1
   Legacy compat: /api/v1/llm/openai/v1 prefixed path is auto-normalized.
 
 No dd_process / heavyweight / bandit weights here — FGTS-VA + TrueSkill + latency EWMA
@@ -50,7 +51,9 @@ def _normalize_base_url(url: str) -> str:
     """
     u = (url or "").strip().rstrip("/")
     if not u:
-        return "http://coelho-llm-rotator-fastapi:8000/api/v1/llm/openai/v1"
+        # Must track _DEFAULT_ROTATOR_URL below (duplicated: this fn runs
+        # before that constant is defined at module scope).
+        return "http://coelho-llm-rotator-fastapi.coelho-llm-rotator-dev.svc.cluster.local:8000/api/v1/llm/openai/v1"
     # Strip known chat completions suffix if caller accidentally included it
     for suffix in ("/chat/completions", "/chat/completions/"):
         if u.endswith(suffix):
@@ -63,16 +66,89 @@ def _normalize_base_url(url: str) -> str:
         return u + "/api/v1/llm/openai/v1"
     return u
 
-_RAW_ROTATOR_URL = os.getenv(
-    "COELHO_LLM_ROTATOR_URL",
-    "http://coelho-llm-rotator-fastapi:8000/api/v1/llm/openai/v1",
-)
-COELHO_ROTATOR_URL = _normalize_base_url(_RAW_ROTATOR_URL)
+# Endpoint resolution precedence: Settings-page override (credential store,
+# key "llm_endpoint" + managed key "COELHO_LLM_API_KEY") → env var → default.
+# The globals below are the *currently resolved* values, read by ~15 call
+# sites at call time; _apply_endpoint() re-resolves + reassigns them
+# (throttled, or forced from reset_rotator()). A store outage degrades to
+# env/default and never raises.
+#
+# There is no bundled in-cluster rotator anymore (2026-09-11) — COELHO LLM
+# Rotator is always a separately-deployed service (its own `skaffold dev`,
+# its own chart, its own namespace). This default is just that service's
+# usual address for the two-`skaffold dev` dev workflow; the Settings-page
+# field overrides it for anything else (a different rotator, OpenAI, ...).
+# Nexus never bundles or deploys a rotator of its own.
+_DEFAULT_ROTATOR_URL = "http://coelho-llm-rotator-fastapi.coelho-llm-rotator-dev.svc.cluster.local:8000/api/v1/llm/openai/v1"
 
-# Model mapping — coelhonexus rotator's virtual model is "auto" (keep as-is)
-COELHO_ROTATOR_MODEL = os.getenv("COELHO_LLM_MODEL", "auto").strip() or "auto"
+_ENV_ROTATOR_URL = os.getenv("COELHO_LLM_ROTATOR_URL", _DEFAULT_ROTATOR_URL)
+_ENV_ROTATOR_MODEL = os.getenv("COELHO_LLM_MODEL", "auto").strip() or "auto"
+_ENV_API_KEY = os.getenv("COELHO_LLM_API_KEY", "").strip()
+
 COELHO_EMBED_MODEL = os.getenv("COELHO_EMBED_MODEL", "nvidia/nemotron-3-embed-1b")
-COELHO_API_KEY = os.getenv("COELHO_LLM_API_KEY", "dummy")
+
+_ENDPOINT_RESOLVE_TTL_S = 10.0
+_endpoint_resolved_at = 0.0
+
+COELHO_ROTATOR_URL = _normalize_base_url(_ENV_ROTATOR_URL)
+COELHO_ROTATOR_MODEL = _ENV_ROTATOR_MODEL
+COELHO_API_KEY = _ENV_API_KEY or "dummy"
+
+
+def _resolve_endpoint(*, force_store: bool = False) -> tuple[str, str, str]:
+    """(base_url, api_key, model) with Settings-page override applied."""
+    url, model, key = _ENV_ROTATOR_URL, _ENV_ROTATOR_MODEL, _ENV_API_KEY
+    try:
+        from domains.llm.credentials import get_store, resolve_key
+
+        ep = (get_store().read_settings(force=force_store) or {}).get("llm_endpoint")
+        if isinstance(ep, dict):
+            url = (ep.get("url") or "").strip() or url
+            model = (ep.get("model") or "").strip() or model
+        k = (resolve_key("COELHO_LLM_API_KEY") or "").strip()
+        if k:
+            key = k
+    except Exception as e:  # store/import miss → env + default
+        logger.debug(f"[rotator-adapter] endpoint resolve store miss: {e}")
+    return _normalize_base_url(url), (key or "dummy"), (model or "auto")
+
+
+def _apply_endpoint(*, force: bool = False) -> bool:
+    """Re-resolve + reassign the module globals. Returns True if any changed."""
+    global COELHO_ROTATOR_URL, COELHO_API_KEY, COELHO_ROTATOR_MODEL
+    global _endpoint_resolved_at
+    now = time.monotonic()
+    if not force and (now - _endpoint_resolved_at) < _ENDPOINT_RESOLVE_TTL_S:
+        return False
+    _endpoint_resolved_at = now
+    url, key, model = _resolve_endpoint(force_store=force)
+    if (url, key, model) == (COELHO_ROTATOR_URL, COELHO_API_KEY, COELHO_ROTATOR_MODEL):
+        return False
+    COELHO_ROTATOR_URL, COELHO_API_KEY, COELHO_ROTATOR_MODEL = url, key, model
+    logger.info(
+        f"[rotator-adapter] endpoint updated → {url} model={model} "
+        f"key={'set' if key != 'dummy' else 'none'}"
+    )
+    return True
+
+
+_apply_endpoint(force=True)
+
+
+def is_bundled_rotator() -> bool:
+    """Always False (2026-09-11) — Nexus no longer bundles or deploys its own
+    rotator; every endpoint, including the default, is a separately-managed
+    service. Kept as a stable shim so the few remaining callers don't need to
+    branch on removed state."""
+    return False
+
+
+def is_external_endpoint() -> bool:
+    """Always True (2026-09-11) — whatever endpoint is configured owns its own
+    provider keys, so Nexus's NIM-key readiness gate never applies. Kept as a
+    named predicate (rather than inlining `True`) so discovery/service.py's
+    readiness gate still reads as intentional."""
+    return True
 
 # litellm's own internal custom_llm_provider adapter name, where it diverges
 # from the rotator's canonical provider id (discovery/config.py `PROVIDERS`
@@ -124,6 +200,15 @@ def _build_timeout(timeout_s: float | None) -> _httpx.Timeout:
 async def _get_async_openai():
     """Singleton AsyncOpenAI with pooled httpx client (lazy, thread-safe for async)."""
     global _CLIENT
+    # Pick up a Settings-page endpoint change (throttled store re-read). A
+    # process that didn't call reset_rotator() itself (e.g. the celery worker
+    # when the change was made from fastapi) converges within _ENDPOINT_RESOLVE_TTL_S.
+    if _apply_endpoint() and _CLIENT is not None:
+        stale, _CLIENT = _CLIENT, None
+        try:
+            await stale.close()
+        except Exception:
+            pass
     if _CLIENT is not None:
         return _CLIENT
     async with _CLIENT_LOCK:
@@ -362,6 +447,10 @@ async def chat_judge_bandit_async(
         "temperature": temperature,
         "max_tokens": max_tokens,
         "timeout": timeout_s,
+        # Wave H1: opaque per-call-site task label → the rotator uses it ONLY as
+        # a bandit-cell namespace, never interprets it. Isolates DD workloads'
+        # learning from each other and from generic callers.
+        "extra_body": {"metadata": {"rotator_task": f"dd-{dd_process}" if dd_process else "dd"}},
     }
     if response_format is not None:
         # OpenAI expects {"type": "json_object"} or {"type": "json_schema", "json_schema": {...}}
@@ -383,10 +472,23 @@ async def chat_judge_bandit_async(
     # see openai/instructor-style retry loops silently outliving an outer
     # wait_for in other projects).
     backstop_s = (timeout_s or 30.0) + 15.0
+    _rotator_request_id: str | None = None
+
+    async def _do_call():
+        nonlocal _rotator_request_id
+        try:
+            raw = await client.chat.completions.with_raw_response.create(**kwargs)  # type: ignore[arg-type]
+            try:
+                _rotator_request_id = raw.headers.get("x-rotator-request-id")
+            except Exception:
+                pass
+            return raw.parse()
+        except (AttributeError, TypeError):
+            # older SDK without with_raw_response — lose the request id, keep working
+            return await client.chat.completions.create(**kwargs)  # type: ignore[arg-type]
+
     try:
-        resp = await asyncio.wait_for(
-            client.chat.completions.create(**kwargs), timeout = backstop_s,  # type: ignore[arg-type]
-        )
+        resp = await asyncio.wait_for(_do_call(), timeout = backstop_s)
     except asyncio.TimeoutError as e:
         raise TimeoutError(
             f"chat_judge_bandit_async hard backstop fired after "
@@ -452,6 +554,7 @@ async def chat_judge_bandit_async(
         "latency_s": round(latency_s, 3),
         "reward": None,
         "dd_process": dd_process or "auto",
+        "rotator_request_id": _rotator_request_id,
     }
 
     if expected_pattern:
@@ -536,8 +639,13 @@ async def stop_catalog_refresh_loop() -> None:
 
 
 def reset_rotator(*args, **kwargs) -> None:
-    # Reset pooled client if needed (e.g., after network change)
+    # Re-resolve the endpoint (Settings page just changed it) then drop the
+    # pooled client so the next call rebuilds against the new URL/key/model.
     global _CLIENT
+    try:
+        _apply_endpoint(force=True)
+    except Exception:
+        pass
     try:
         if _CLIENT is not None:
             # Close underlying http_client gracefully
@@ -660,3 +768,41 @@ def record_ycs_neo4j_reward(*args, **kwargs):
 
 def release_ycs_provider_slot(*args, **kwargs):
     return None
+
+
+# ── Wave H2 — quality feedback to the rotator ────────────────────────────────
+# DD nodes can judge their own output (valid distillate vs fallback, verdict
+# shape, key-term grounding). Fire-and-forget a 0-1 score to the rotator's
+# /routing/feedback keyed by meta["rotator_request_id"] — closes the FGTS-VA
+# learning loop with a DD-computed signal the rotator never has to understand.
+# Gated by KD_ROTATOR_FEEDBACK=1 (default off).
+
+def _feedback_enabled() -> bool:
+    return os.environ.get("KD_ROTATOR_FEEDBACK", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+async def submit_feedback(rotator_request_id: str | None, quality: float) -> None:
+    """POST {request_id, quality} to <rotator>/routing/feedback. Best-effort,
+    never raises, ~2s cap. Call via asyncio.create_task — do not await inline."""
+    if not rotator_request_id or not _feedback_enabled():
+        return
+    try:
+        base = COELHO_ROTATOR_URL.rsplit("/openai/v1", 1)[0]
+        url = f"{base}/routing/feedback"
+        async with _httpx.AsyncClient(timeout=2.0) as c:
+            await c.post(url, json={
+                "request_id": rotator_request_id,
+                "quality": max(0.0, min(1.0, float(quality))),
+            })
+    except Exception as e:
+        logger.debug(f"[rotator-adapter] submit_feedback: {e}")
+
+
+def fire_feedback(meta: dict | None, quality: float) -> None:
+    """Sync helper: schedule submit_feedback from a node without awaiting."""
+    if not meta:
+        return
+    try:
+        asyncio.create_task(submit_feedback(meta.get("rotator_request_id"), quality))
+    except RuntimeError:
+        pass  # no running loop — skip

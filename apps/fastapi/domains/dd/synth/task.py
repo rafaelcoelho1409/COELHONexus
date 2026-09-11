@@ -13,7 +13,12 @@ from .runtime.dispatch import (
     run_study_async,
 )
 from .keys import lock_key, redis_url
-from .params import REDIS_CONNECT_TIMEOUT_S, REDIS_OP_TIMEOUT_S
+from .params import (
+    REDIS_CONNECT_TIMEOUT_S,
+    REDIS_OP_TIMEOUT_S,
+    SINGLE_CHAPTER_HARD_TIME_LIMIT_S,
+    SINGLE_CHAPTER_SOFT_TIME_LIMIT_S,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -70,10 +75,15 @@ async def _init_and_run(coro):
     bind = True,
     acks_late = False,
     track_started = True,
-    # Per-chapter synth runs typically 10-24 min; 60min soft / 65min hard
-    # gives 2-3× headroom for slow chapters that hit max CoRefine iters.
-    soft_time_limit = 3600,
-    time_limit = 3660,
+    # Per-chapter synth runs typically 10-24 min; 60min soft gives 2-3×
+    # headroom for slow chapters that hit max CoRefine iters. 65min hard
+    # widened to 5min-past-soft 2026-09-11 (Celery's documented minimum gap
+    # for a task to reliably clean up after the soft limit fires — the
+    # graph.py wall-clock RETHINK gate is the primary defense now; this is
+    # the last-resort backstop). Values from params.py (single source of
+    # truth — graph.py's gate reads the soft limit too).
+    soft_time_limit = SINGLE_CHAPTER_SOFT_TIME_LIMIT_S,
+    time_limit = SINGLE_CHAPTER_HARD_TIME_LIMIT_S,
 )
 def run_single_chapter(
     self,
@@ -115,8 +125,9 @@ def run_single_chapter(
     bind = True,
     acks_late = False,
     track_started = True,
-    soft_time_limit = 3600,
-    time_limit = 3660,
+    # Widened 2026-09-11 alongside run_single_chapter — see its comment.
+    soft_time_limit = SINGLE_CHAPTER_SOFT_TIME_LIMIT_S,
+    time_limit = SINGLE_CHAPTER_HARD_TIME_LIMIT_S,
 )
 def resume_synth(self, thread_id: str) -> dict:
     """Resume from last checkpoint; CAD-releases the lock so a racing fresh start is safe."""

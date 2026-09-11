@@ -5,7 +5,7 @@ workers via the Redis generation bump."""
 from __future__ import annotations
 
 from .params import PROVIDER_META
-from .schemas import EnableBody, KeyBody, ModelsBody
+from .schemas import EnableBody, EndpointBody, KeyBody, ModelsBody
 
 import asyncio
 import logging
@@ -229,3 +229,84 @@ async def set_provider_models(pid: str, body: ModelsBody) -> JSONResponse:
     view = await run_in_threadpool(_set_models, pid, body.mode, body.selected)
     await run_in_threadpool(reset_rotator)
     return JSONResponse(content=view)
+
+
+# ---------------------------------------------------------------------------
+# LLM endpoint — the OpenAI-compatible URL the Docs Distiller / YCS apps call.
+# COELHO LLM Rotator is always a separately-deployed service (never bundled
+# here); this field is the single runtime source of truth for where it lives —
+# point it at OpenAI, Anthropic, or a different rotator instance. Overrides
+# the COELHO_LLM_* env/chart defaults when set.
+# ---------------------------------------------------------------------------
+
+_ENDPOINT_KEY_ENV = "COELHO_LLM_API_KEY"
+
+
+def _endpoint_view() -> dict:
+    s = get_store().read_settings() or {}
+    ep = s.get("llm_endpoint") or {}
+    st = get_store().key_status(_ENDPOINT_KEY_ENV)
+    return {
+        "url": ep.get("url") or "",
+        "model": ep.get("model") or "auto",
+        **asdict(st),  # has_key, source, last4
+    }
+
+
+def _write_endpoint(body: EndpointBody) -> None:
+    store = get_store()
+    s = store.read_settings() or {}
+    s["llm_endpoint"] = {
+        "url": body.url.strip(),
+        "model": (body.model or "auto").strip() or "auto",
+    }
+    store.write_settings(s)
+    if body.api_key is not None:
+        if body.api_key.strip():
+            store.set_key(_ENDPOINT_KEY_ENV, body.api_key.strip())
+        else:
+            try:
+                store.delete_key(_ENDPOINT_KEY_ENV)
+            except Exception:
+                pass
+    reset_rotator()
+
+
+@router.get("/endpoint")
+async def get_endpoint() -> JSONResponse:
+    return JSONResponse(content=await run_in_threadpool(_endpoint_view))
+
+
+@router.put("/endpoint")
+async def put_endpoint(body: EndpointBody) -> JSONResponse:
+    try:
+        await run_in_threadpool(_write_endpoint, body)
+    except UnmanagedKeyEnv as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return JSONResponse(content=await run_in_threadpool(_endpoint_view))
+
+
+@router.post("/endpoint/test")
+async def test_endpoint() -> JSONResponse:
+    """One tiny completion against the currently-configured endpoint."""
+    import time as _time
+
+    from domains.llm.rotator.chain import chat_judge_bandit_async
+
+    t0 = _time.monotonic()
+    try:
+        text, meta = await chat_judge_bandit_async(
+            "Reply with exactly: OK", max_tokens=5, timeout_s=20.0,
+        )
+        return JSONResponse(content={
+            "ok": True,
+            "reply": (text or "").strip()[:80],
+            "latency_ms": int((_time.monotonic() - t0) * 1000),
+            "deployment": (meta or {}).get("deployment"),
+        })
+    except Exception as e:
+        return JSONResponse(content={
+            "ok": False,
+            "error": f"{type(e).__name__}: {str(e)[:200]}",
+            "latency_ms": int((_time.monotonic() - t0) * 1000),
+        })

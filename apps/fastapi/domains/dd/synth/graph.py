@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from langgraph.graph import END, START, StateGraph
 
@@ -12,10 +13,13 @@ from .nodes.mgsr.node import mgsr_replan
 from .nodes.outline.node import outline_sdp
 from .params import (
     CHECKLIST_THRESHOLD,
+    FALLBACK_SAWC_WRITE_COST_S,
     MAX_REFINE_ITER,
     NO_RECOVERY_FLOOR,
     PLATEAU_DELTA,
+    SINGLE_CHAPTER_SOFT_TIME_LIMIT_S,
     SUSTAINED_INFRA_OUTAGE_LIMIT,
+    WALL_CLOCK_SAFETY_MARGIN,
 )
 from .nodes.render.node import render_audit_write
 from .nodes.sawc.node import sawc_write
@@ -144,6 +148,36 @@ def _route_after_mgsr(state: SynthState) -> str:
             f"(iter={refine_iter}, score={score:.2f}, prev={prev_score:.2f})"
         )
         return "render_audit_write"
+
+    # Wall-clock RETHINK gate (2026-09-11 incident): another sawc_write
+    # iteration is about to start, but if it can't plausibly finish before
+    # this task's Celery soft_time_limit fires, looping just spends the
+    # remaining budget on a doomed attempt that gets hard-killed with ZERO
+    # output instead of gracefully halting here with whatever best-seen
+    # result already exists. Estimate the next iteration's cost from the
+    # last sawc_write's own measured wall_ms; no prior measurement (shouldn't
+    # happen past iter 1) falls back to the worst cost actually observed
+    # live. Absent run_started_at (entry points that don't set it, e.g.
+    # run_study_async) → skip the check rather than guess.
+    run_started_at = state.get("run_started_at")
+    if isinstance(run_started_at, (int, float)) and run_started_at > 0:
+        elapsed = time.time() - run_started_at
+        remaining = SINGLE_CHAPTER_SOFT_TIME_LIMIT_S - elapsed
+        sawc_stats = state.get("sawc_stats") or {}
+        last_cost_ms = sawc_stats.get("wall_ms")
+        estimated_cost = (
+            (float(last_cost_ms) / 1000.0) if last_cost_ms else FALLBACK_SAWC_WRITE_COST_S
+        ) * WALL_CLOCK_SAFETY_MARGIN
+        if remaining < estimated_cost:
+            logger.info(
+                f"[synth-graph] {state.get('framework_slug')}/"
+                f"{state.get('chapter_id')}: HALT wall-clock-budget "
+                f"(elapsed={elapsed:.0f}s, remaining={remaining:.0f}s < "
+                f"estimated next iteration {estimated_cost:.0f}s); "
+                f"best-seen-rescue applies instead of risking a hard "
+                f"Celery kill with no output"
+            )
+            return "render_audit_write"
 
     logger.info(
         f"[synth-graph] {state.get('framework_slug')}/"

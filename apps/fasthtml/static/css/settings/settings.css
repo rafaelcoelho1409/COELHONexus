@@ -306,3 +306,64 @@
 }
 .tk-signup:hover { text-decoration: underline; }
 }
+
+/* ---- LLM Endpoint card ------------------------------------------------- */
+.settings-endpoint-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  background: var(--surface, transparent);
+}
+.set-ep-fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 12px;
+  align-items: center;
+  margin-top: 8px;
+}
+.set-ep-label {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.set-ep-input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font: inherit;
+  font-size: 0.88rem;
+  background: var(--bg, #fff);
+  color: var(--text);
+}
+.set-ep-fields .settings-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+.set-ep-status { font-size: 0.83rem; color: var(--text-muted); }
+.set-ep-status-ok { color: var(--ok, #2e7d32); }
+.set-ep-status-err { color: var(--err, #c62828); }
+
+/* The provider-key section below only ever configured a bundled in-cluster
+   rotator, which no longer exists (2026-09-11) — always dim it and explain.
+   data-llm-external is unconditionally "1" now (set by settings_endpoint.js). */
+#settings-root[data-llm-external="1"] .settings-providers,
+#settings-root[data-llm-external="1"] .settings-actions:not(.set-ep-fields .settings-actions) {
+  opacity: 0.45;
+  pointer-events: none;
+}
+#settings-root[data-llm-external="1"] .settings-providers::before {
+  content: "COELHO Nexus no longer bundles its own rotator — these provider keys are unused. Set the LLM Endpoint above (rotator, OpenAI, Anthropic, ...).";
+  display: block;
+  opacity: 1;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border-left: 3px solid var(--primary);
+  font-size: 0.85rem;
+  color: var(--text);
+  pointer-events: auto;
+}

@@ -66,6 +66,46 @@ _FALLBACK_CLICK = """\
       showFlash('Pick a framework from the Library picker first.', 'err');
       return;
     }
+    // STOP branch (2026-09-10). While a run is live, planner.js's
+    // refreshPlannerStartState sets this button's label to "Stop". The
+    // inline handler previously only knew how to start/resume, so a Stop
+    // click silently fired a /resume and the run kept going — the
+    // reported "Stop doesn't stop" bug. Issue a cancel instead.
+    var _label = (btn.textContent || '').trim();
+    if (_label === 'Stop' || _label.indexOf('Cancelling') !== -1) {
+      var _tid = null;
+      try { _tid = localStorage.getItem('dd:planner:active:' + slug); } catch (_) {}
+      if (!_tid) {
+        try {
+          var _rr = await fetch('/api/v1/docs-distiller/planner/recent');
+          if (_rr.ok) {
+            var _rd = await _rr.json();
+            var _f = ((_rd && _rd.recent) || []).find(function (it) { return it.slug === slug; });
+            if (_f && _f.thread_id) _tid = _f.thread_id;
+          }
+        } catch (_) {}
+      }
+      if (!_tid) { showFlash('No active planner run found to stop.', 'err'); return; }
+      btn.setAttribute('disabled', 'disabled');
+      btn.textContent = 'Cancelling…';
+      try {
+        var _cr = await fetch('/api/v1/docs-distiller/planner/' + _tid + '/cancel', { method: 'POST' });
+        if (!_cr.ok) {
+          var _ct = await _cr.text();
+          showFlash('Stop failed: HTTP ' + _cr.status + ' - ' + _ct.slice(0, 160), 'err');
+          btn.removeAttribute('disabled');
+          btn.textContent = 'Stop';
+          return;
+        }
+        showFlash('Stop sent - finishing up...');
+        setTimeout(function () { window.location.reload(); }, 2000);
+      } catch (e) {
+        showFlash('Stop request failed: ' + String(e), 'err');
+        btn.removeAttribute('disabled');
+        btn.textContent = 'Stop';
+      }
+      return;
+    }
     btn.setAttribute('disabled', 'disabled');
     var origText = btn.textContent;
     btn.textContent = 'Starting…';

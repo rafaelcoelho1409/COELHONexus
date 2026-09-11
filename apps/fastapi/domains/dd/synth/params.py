@@ -27,6 +27,29 @@ NO_RECOVERY_FLOOR = 0.50
 # tune against real study runs, not a measured optimum.
 SUSTAINED_INFRA_OUTAGE_LIMIT = 2
 
+# Single-chapter Celery task limits — task.py's run_single_chapter /
+# resume_synth decorators import these (single source of truth). Widened
+# 2026-09-11: the prior 60s soft→hard gap (3600/3660) was below Celery's own
+# documented minimum (300s) for a task to reliably clean up after the soft
+# limit fires.
+SINGLE_CHAPTER_SOFT_TIME_LIMIT_S = 3600.0
+SINGLE_CHAPTER_HARD_TIME_LIMIT_S = 3900.0
+
+# Wall-clock RETHINK gate (2026-09-11 incident): a chapter-01 run against a
+# thinned pool burned the full soft_time_limit across ~1.5 RETHINK
+# iterations and was hard-killed by Celery mid-sawc_write with ZERO output —
+# _route_after_mgsr's existing HALT checks (score/iter-count/
+# consecutive_infra_degraded) never got a chance to fire because the kill
+# happened *inside* a node, not at a graph decision boundary. Before looping
+# back into another sawc_write iteration, halt to best-seen-rescue instead
+# if the remaining budget can't plausibly fit one — estimated from the last
+# sawc_write iteration's own measured wall_ms (state["sawc_stats"]["wall_ms"])
+# times this safety margin.
+WALL_CLOCK_SAFETY_MARGIN = 1.15
+# No prior measurement to estimate from (shouldn't happen past iter 1, but
+# defensive): assume the worst cost actually observed live (~28 min).
+FALLBACK_SAWC_WRITE_COST_S = 1700.0
+
 
 # API-bound on K8s; SEM=2 doubles throughput without contention (book_harmonize post-serializes). KD_STUDY_SEM rolls back to 1.
 STUDY_SEM = int(os.environ["KD_STUDY_SEM"])

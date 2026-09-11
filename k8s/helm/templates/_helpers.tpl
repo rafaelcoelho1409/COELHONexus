@@ -15,6 +15,14 @@ Credentials are loaded from secret via secretRef
 {{- define "coelhonexus.commonEnvVars" -}}
 ENVIRONMENT: "{{ .Values.environment }}"
 FASTAPI_HOST: "coelhonexus-fastapi"
+# LLM endpoint (Docs Distiller / YCS) — always a separately-deployed
+# OpenAI-compatible endpoint (COELHO LLM Rotator, or otherwise); Nexus never
+# bundles one. Override llm.endpoint.* for a different instance. Read by
+# domains/llm/rotator/chain/service.py. A runtime override from the Settings
+# page (credential store) takes precedence over these when present.
+COELHO_LLM_ROTATOR_URL: "{{ .Values.llm.endpoint.url }}"
+COELHO_LLM_API_KEY: "{{ .Values.llm.endpoint.apiKey }}"
+COELHO_LLM_MODEL: "{{ .Values.llm.endpoint.model }}"
 REDIS_HOST: "{{ .Values.redis.host }}"
 REDIS_PORT: "{{ .Values.redis.port }}"
 MINIO_HOST: "{{ .Values.minio.host }}"
@@ -120,6 +128,8 @@ KD_PROPOSE_OPTIMAL_STOPPING: "{{ .Values.dd.proposeOptimalStopping }}"
 KD_SAWC_DERIVE_OPTIMAL_STOPPING: "{{ .Values.dd.sawcDeriveOptimalStopping }}"
 # Per-study chapter concurrency semaphore.
 KD_STUDY_SEM: "{{ .Values.dd.studySem }}"
+# "1" = abort right after a degraded chapter_propose on a big corpus (opt-in).
+KD_PLANNER_ABORT_ON_DEGRADE: "{{ .Values.dd.plannerAbortOnDegrade }}"
 {{- end -}}
 
 
