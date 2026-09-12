@@ -51,12 +51,7 @@ from domains.dd.planner.runtime.checkpoint import (
     init_checkpointer,
 )
 from domains.llm.credentials import warm as warm_credentials
-from domains.llm.rotator.chain import (
-    build_reduce_label_chain,
-    init_dynamic_catalog,
-    start_catalog_refresh_loop,
-    stop_catalog_refresh_loop,
-)
+from domains.llm.rotator.chain import build_reduce_label_chain
 from domains.rr.service import bootstrap_stores as bootstrap_rr_stores
 from domains.ycs.conversation import ensure_conversation_table
 from domains.ycs.embeddings import (
@@ -146,23 +141,6 @@ async def lifespan(app: FastAPI):
         logger.warning(
             f"[lifespan] LLM credential store warm failed: "
             f"{type(e).__name__}: {e}. Rotator will use env keys only."
-        )
-
-    try:
-        await init_dynamic_catalog()
-    except Exception as e:
-        logger.warning(
-            f"[lifespan] dynamic catalog init failed: "
-            f"{type(e).__name__}: {e}. Rotator will use the static catalog."
-        )
-
-    # Periodic re-discovery drops EOL'd models without waiting for a redeploy.
-    try:
-        start_catalog_refresh_loop()
-    except Exception as e:
-        logger.warning(
-            f"[lifespan] catalog refresh loop start failed: "
-            f"{type(e).__name__}: {e}. EOL'd models will only drop on redeploy."
         )
 
     try:
@@ -293,11 +271,6 @@ async def lifespan(app: FastAPI):
         )
 
     yield
-
-    try:
-        await stop_catalog_refresh_loop()
-    except Exception as e:
-        logger.warning(f"[lifespan] catalog refresh loop stop failed: {e}")
 
     try:
         await close_checkpointer()

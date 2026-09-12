@@ -108,11 +108,3 @@ def _worker_process_init(**_kwargs) -> None:
             f"[worker-init] LLM credential store warm failed "
             f"({type(e).__name__}: {e}); rotator will use env keys only"
         )
-    try:
-        from domains.llm.rotator.chain import init_dynamic_catalog_sync
-        init_dynamic_catalog_sync()
-    except Exception as e:
-        logger.warning(
-            f"[worker-init] dynamic catalog init failed "
-            f"({type(e).__name__}: {e}); rotator will use the static catalog"
-        )

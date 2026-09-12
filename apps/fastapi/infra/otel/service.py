@@ -36,18 +36,6 @@ def _instrument_libraries() -> None:
         LoggingInstrumentor().instrument(set_logging_format=True)
     except Exception as e:
         logger.debug(f"[otel] logging instrumentation skipped: {e}")
-    # (mutates spans after close → "Setting attribute on ended span"). Cost callback only.
-    try:
-        import litellm
-        from .litellm_callbacks import cost_callback as _cost_cb
-        succ_now = list(litellm.success_callback or [])
-        if _cost_cb not in succ_now:
-            litellm.success_callback = succ_now + [_cost_cb]
-        logger.info(
-            "[otel] litellm callbacks wired: cost_callback (fn)"
-        )
-    except Exception as e:
-        logger.debug(f"[otel] litellm callback wiring skipped: {e}")
 
 
 def init_otel(also_instrument_fastapi_app=None) -> bool:

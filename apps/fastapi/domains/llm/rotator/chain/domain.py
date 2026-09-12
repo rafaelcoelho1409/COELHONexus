@@ -1,16 +1,6 @@
 from __future__ import annotations
 
-from .keys import (
-    DD_SYNTH_WRITE_HEAVYWEIGHTS,
-    _LITELLM_PREFIX_TO_PROVIDER,
-    _NON_CHAT_MARKERS,
-    _PROVIDER_KEY_ENV,
-)
-from .patterns import (
-    MOE_RE,
-    PARAM_SIZE_RE,
-    _EOL_PHRASES,
-)
+from .keys import _NON_CHAT_MARKERS
 
 
 def classify_error(exc: Exception) -> str:
@@ -29,60 +19,6 @@ def classify_error(exc: Exception) -> str:
     return "unknown"
 
 
-def is_eol_error(exc: Exception) -> bool:
-    """True for EOL/deprecated: catalog must drop NOW, not wait for cooldown."""
-    msg  = str(exc).lower()
-    name = type(exc).__name__.lower()
-    if "notfound" in name:
-        return True
-    if "410" in msg or " gone" in msg:
-        return True
-    if "404" in msg and ("model" in msg or "function" in msg):
-        return True
-    return any(p in msg for p in _EOL_PHRASES)
-
-
-def is_heavyweight(deployment_id: str) -> bool:
-    return any(s in deployment_id for s in DD_SYNTH_WRITE_HEAVYWEIGHTS)
-
-
 def is_non_chat_model(model_id: str) -> bool:
     name = (model_id or "").lower()
     return any(m in name for m in _NON_CHAT_MARKERS)
-
-
-def passes_capability_floor(model_id: str, min_b: float) -> bool:
-    """MoE bypasses the floor; unparseable name → True (newer-named frontier models)."""
-    if min_b <= 0:
-        return True
-    name = (model_id or "").lower()
-    if MOE_RE.search(name):
-        return True
-    sizes = [float(x) for x in PARAM_SIZE_RE.findall(name)]
-    if sizes:
-        return max(sizes) >= min_b
-    return True
-
-
-def provider_key_env(provider: str) -> str:
-    return _PROVIDER_KEY_ENV.get(provider, "NVIDIA_API_KEY")
-
-
-def entry_provider_and_model(entry: dict) -> tuple[str, str]:
-    m = (entry.get("litellm_params") or {}).get("model", "")
-    prefix, _, model = m.partition("/")
-    return _LITELLM_PREFIX_TO_PROVIDER.get(prefix, prefix), model
-
-
-def provider_mode(provider_id: str, sel: dict) -> str:
-    return (sel.get("mode") or {}).get(provider_id, "all")
-
-
-def selection_allows(provider_id: str, model_id: str, sel: dict) -> bool:
-    """Provider ids must be REGISTRY ids (groq/nim/...), not LiteLLM prefixes."""
-    enabled = sel.get("enabled")
-    if enabled is not None and provider_id not in enabled:
-        return False
-    if provider_mode(provider_id, sel) == "custom":
-        return model_id in ((sel.get("selected") or {}).get(provider_id) or [])
-    return True

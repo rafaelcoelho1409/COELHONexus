@@ -15,7 +15,6 @@ from fastapi import APIRouter, HTTPException, Response
 from starlette.responses import StreamingResponse
 
 from domains.dd.ingestion.storage import get_storage, read_framework_manifest
-from domains.llm.rotator.discovery import missing_required_keys
 from domains.dd.planner.runtime.cancel import clear_cancel, request_cancel
 from domains.dd.planner.graph import IMPLEMENTED, NODE_ORDER, build_graph
 from domains.dd.planner.keys import (
@@ -141,18 +140,6 @@ async def start_planner(
         raise HTTPException(
             status_code=400,
             detail=f"invalid mode {mode!r}; expected one of {sorted(VALID_MODES)}",
-        )
-
-    _missing = missing_required_keys()
-    if _missing:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "NVIDIA NIM API key required — it powers the mandatory embedding "
-                "+ reranking models this run needs. Add "
-                + ", ".join(m["key_env"] for m in _missing)
-                + " in Settings (/settings), then retry."
-            ),
         )
 
     _manifest = await read_framework_manifest(get_storage(), slug)

@@ -15,7 +15,6 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from starlette.responses import StreamingResponse
 
 from domains.dd.ingestion.storage import get_storage
-from domains.llm.rotator.discovery import missing_required_keys
 from domains.dd.synth.runtime.cancel import clear_cancel, request_cancel
 from domains.dd.synth.graph import IMPLEMENTED, NODE_ORDER, build_graph
 from domains.dd.synth.keys import (
@@ -246,18 +245,6 @@ async def start_synth(
         raise HTTPException(
             status_code=400,
             detail=f"invalid mode {mode!r}; expected one of {sorted(VALID_MODES)}",
-        )
-
-    _missing = missing_required_keys()
-    if _missing:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "NVIDIA NIM API key required — it powers the mandatory embedding "
-                "+ reranking models this run needs. Add "
-                + ", ".join(m["key_env"] for m in _missing)
-                + " in Settings (/settings), then retry."
-            ),
         )
 
     plan = await get_plan(slug)

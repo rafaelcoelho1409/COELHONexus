@@ -150,19 +150,17 @@ def is_external_endpoint() -> bool:
     readiness gate still reads as intentional."""
     return True
 
-# litellm's own internal custom_llm_provider adapter name, where it diverges
-# from the rotator's canonical provider id (discovery/config.py `PROVIDERS`
-# keys, same ids the `/v1/models` catalog's `provider_ids` use).
-_LITELLM_PROVIDER_ALIASES = {"nvidia_nim": "nim"}
+# 2026-09-12: dropped the client-side `_hidden_params.custom_llm_provider`
+# prefix-guessing that used to live here — dead on arrival in this thin HTTP
+# adapter (`resp` is an OpenAI-SDK `ChatCompletion` from an HTTP response
+# body, which never carries litellm's in-process-only `_hidden_params`) and
+# superseded anyway: the rotator itself now returns an already-prefixed
+# "PROVIDER/model" string in `resp.model`
+# (COELHOLLMRotator chain/domain.py::display_model_id).
 
-# Keep keys for manifest hashing / backward-compat imports
 try:
-    from .keys import DD_EMBED_MODEL_NAME as _DD_EMBED_MODEL_NAME  # noqa: F401
-    from .keys import DD_EMBED_GROUP  # noqa: F401
     from .params import DD_EMBED_BATCH_SIZE  # noqa: F401
 except Exception:
-    _DD_EMBED_MODEL_NAME = COELHO_EMBED_MODEL
-    DD_EMBED_GROUP = "dd-embed"
     DD_EMBED_BATCH_SIZE = 64
 
 # ---------------------------------------------------------------------------
@@ -511,7 +509,14 @@ async def chat_judge_bandit_async(
     except Exception:
         text = ""
 
-    # Deployment surfacing — resp.model is the real arm, not the group alias
+    # Deployment surfacing — resp.model is the real arm, not the group alias.
+    # 2026-09-12: dropped the client-side `_hidden_params.custom_llm_provider`
+    # prefix-guessing that used to live here — dead on arrival in this thin
+    # HTTP adapter (`resp` is an OpenAI-SDK `ChatCompletion` from an HTTP
+    # response body, which never carries litellm's in-process-only
+    # `_hidden_params`) and superseded anyway: the rotator itself now returns
+    # an already-prefixed "PROVIDER/model" string in `resp.model`
+    # (COELHOLLMRotator chain/domain.py::display_model_id).
     deployment = COELHO_ROTATOR_MODEL
     try:
         m = getattr(resp, "model", None)
@@ -519,29 +524,9 @@ async def chat_judge_bandit_async(
             deployment = m
         elif isinstance(resp, dict) and resp.get("model"):
             deployment = str(resp["model"])
-        # `resp.model` often just echoes the underlying provider's own raw
-        # model field verbatim (e.g. NIM returns "openai/gpt-oss-20b", no
-        # provider prefix) — litellm carries the ACTUAL provider separately
-        # in _hidden_params, independent of what `model` says. Prepend it
-        # whenever `deployment` doesn't already start with it, so every
-        # consumer (llm_counter, per-node deployment_usage, the FastHTML
-        # provider table) gets one consistently-prefixed "provider/model"
-        # string instead of sometimes getting a bare one and having to guess.
-        hidden = getattr(resp, "_hidden_params", None)
-        if hidden is None and isinstance(resp, dict):
-            hidden = resp.get("_hidden_params")
-        provider = hidden.get("custom_llm_provider") if isinstance(hidden, dict) else None
-        if isinstance(provider, str) and provider:
-            # litellm's adapter name isn't always the rotator's own catalog
-            # id (e.g. NIM is "nvidia_nim" to litellm, "nim" everywhere in
-            # the rotator's discovery/config/`/v1/models` catalog) — normalize
-            # so the prefix stamped here matches what the provider map (built
-            # from the catalog) can actually look up.
-            provider = _LITELLM_PROVIDER_ALIASES.get(provider.lower(), provider)
-            if not deployment.lower().startswith(provider.lower() + "/"):
-                deployment = f"{provider}/{deployment}"
         # Coerce bare :free → openrouter prefix (fallback for the rare case
-        # _hidden_params isn't available on the response object).
+        # the rotator's own prefixing didn't apply — e.g. a provider not yet
+        # in its display-name table).
         low = deployment.lower()
         if (low.endswith(":free") or "minimax-m3" in low or "dots-" in low) and "openrouter" not in low and "/" not in deployment:
             deployment = f"openrouter/{deployment}"
@@ -607,35 +592,17 @@ def _bump_dd_llm_counter(response, deployment: str | None = None) -> dict | None
 
 
 # PEP 562 — any missing build_* import returns the generic ChatOpenAI adapter
+# (covers old chain-builder names — build_curator_llm, build_keylm_chain,
+# build_pinned_chain_any, build_refine_llm_chain, build_resolver_llm_chain,
+# build_synth_*, build_ycs_neo4j_pinned_chain — without keeping a dead
+# explicit stub per name).
 def __getattr__(name: str):
     if name.startswith("build_"):
         def _stub(*args, **kwargs):
             return build_reduce_label_chain(*args, **kwargs)
 
         return _stub
-    if name in {"pick_synth_deployment", "pick_synth_deployment_bandit", "pick_ycs_neo4j_deployment_bandit", "get_entries_for_group", "get_parent_group", "ensure_dynamic_catalog"}:
-        return lambda *a, **k: None
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-# ------------------------------------------------------------------
-# Compat shims — no-ops for lifespan / legacy callers
-# ------------------------------------------------------------------
-
-async def init_dynamic_catalog() -> None:
-    return None
-
-
-def init_dynamic_catalog_sync() -> None:
-    return None
-
-
-def start_catalog_refresh_loop() -> None:
-    return None
-
-
-async def stop_catalog_refresh_loop() -> None:
-    return None
 
 
 def reset_rotator(*args, **kwargs) -> None:
@@ -667,10 +634,6 @@ def reset_rotator(*args, **kwargs) -> None:
     return None
 
 
-def mark_inaccessible(model_id: str) -> None:
-    return None
-
-
 async def rerank_via_router_async(query: str, documents: list[str], top_n: int | None = None):
     # Not used via rotator — fallback to no rerank
     return []
@@ -692,70 +655,24 @@ def build_llm_fallback_chain():
 
 
 # ------------------------------------------------------------------
-# Legacy shims — keep imports from chain/__init__.py working
+# Legacy shims — keep imports from chain/__init__.py working. Every
+# build_* name not explicitly defined above falls through to the
+# module __getattr__ below (returns build_reduce_label_chain(...)), so
+# only names with real external callers whose behavior would otherwise
+# change (async vs sync, a real return value vs None) are kept explicit
+# here. 2026-09-12: dropped build_curator_llm / build_keylm_chain /
+# build_pinned_chain_any / build_refine_llm_chain / build_resolver_llm_chain
+# / build_synth_fallback_chain / build_synth_pinned_chain /
+# build_synth_pool_chain / build_ycs_neo4j_pinned_chain (zero-diff via the
+# generic build_* fallback), get_entries_for_group / get_parent_group /
+# pick_synth_deployment / pick_synth_deployment_bandit (zero real callers
+# anywhere), and _get_router / _redis_for_bandit (zero real callers).
+# ensure_dynamic_catalog stays explicit — real callers `await` it, and the
+# __getattr__ fallback below returns a plain sync lambda, which would raise
+# `TypeError: object NoneType can't be used in 'await' expression'.
 # ------------------------------------------------------------------
-def _get_router(*args, **kwargs):
-    return None
-
-
-async def _redis_for_bandit(*args, **kwargs):
-    return None
-
-
-def build_curator_llm(*args, **kwargs):
-    return build_reduce_label_chain(*args, **kwargs)
-
-
-def build_keylm_chain(*args, **kwargs):
-    return build_reduce_label_chain(*args, **kwargs)
-
-
-def build_pinned_chain_any(*args, **kwargs):
-    return build_reduce_label_chain(*args, **kwargs)
-
-
-def build_refine_llm_chain(*args, **kwargs):
-    return build_reduce_label_chain(*args, **kwargs)
-
-
-def build_resolver_llm_chain(*args, **kwargs):
-    return build_reduce_label_chain(*args, **kwargs)
-
-
-def build_synth_fallback_chain(*args, **kwargs):
-    return build_reduce_label_chain(*args, **kwargs)
-
-
-def build_synth_pinned_chain(*args, **kwargs):
-    return build_reduce_label_chain(*args, **kwargs)
-
-
-def build_synth_pool_chain(*args, **kwargs):
-    return build_reduce_label_chain(*args, **kwargs)
-
-
-def build_ycs_neo4j_pinned_chain(*args, **kwargs):
-    return build_reduce_label_chain(*args, **kwargs)
-
-
 async def ensure_dynamic_catalog(*args, **kwargs):
     return None
-
-
-def get_entries_for_group(*args, **kwargs):
-    return []
-
-
-def get_parent_group(*args, **kwargs):
-    return None
-
-
-def pick_synth_deployment(*args, **kwargs):
-    return COELHO_ROTATOR_MODEL
-
-
-def pick_synth_deployment_bandit(*args, **kwargs):
-    return COELHO_ROTATOR_MODEL
 
 
 def pick_ycs_neo4j_deployment_bandit(*args, **kwargs):
