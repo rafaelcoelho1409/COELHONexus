@@ -6,6 +6,9 @@
 
 import * as Si from '@dd/shared/state/ingestion.js';
 import * as Ss from '@dd/shared/state/study.js';
+import { initStudyProgressBar } from './progress.js';
+
+initStudyProgressBar();
 
 export function _setStudySideOpen(open) {
   if (Ss.studySideEl) Ss.studySideEl.classList.toggle('open', open);

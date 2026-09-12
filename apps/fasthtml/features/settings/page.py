@@ -1,11 +1,21 @@
-"""Settings body — BYOK provider keys + free-model selection + optional
+"""Settings body — LLM endpoint + standalone NVIDIA key + optional
 FastMCP source tool keys.
 
 Server renders only the skeletons; the JS modules populate them:
-  - settings.js            ← /api/v1/llm/settings/*   (LLM provider BYOK)
-  - settings_tool_keys.js  ← /api/v1/rr/tool-credentials/*
+  - settings_endpoint.js  ← /api/v1/llm/settings/endpoint   (LLM Endpoint)
+  - settings_nim_key.js   ← /api/v1/llm/settings/providers/nim/*
+                            (standalone NVIDIA key — YCS embeddings + reranking,
+                             unrelated to chat routing)
+  - settings_tool_keys.js ← /api/v1/rr/tool-credentials/*
                             (optional API keys for Research Radar source tools,
                              e.g. Semantic Scholar — unlocks higher rate limits)
+
+2026-09-11: the old multi-provider chat registry (Groq / OpenRouter / Cerebras /
+Mistral / Gemini / SambaNova / DeepSeek + NIM-for-chat) was removed from this
+page — chat routing is now always the externally-deployed COELHO LLM Rotator,
+configured via the single LLM Endpoint field below. NVIDIA NIM's key survives
+as its own field because YCS embeddings/reranking reads it directly, a
+separate concern from chat routing.
 
 Raw keys go browser → FastAPI on save and are NEVER returned. Responses
 carry masked status only (has_key + source + last4)."""
@@ -21,30 +31,29 @@ def LLMEndpointCard():
     over the chart default. Populated + wired by settings_endpoint.js."""
     return Div(
         H3("LLM Endpoint", cls = "set-section-title"),
-        P(
-            "The OpenAI-compatible API the Docs Distiller uses. Leave as the "
-            "default to use the dev-workflow COELHO LLM Rotator, or point it "
-            "at OpenAI / Anthropic / a different rotator instance. The key is "
-            "write-only — it never comes back to the browser.",
-            cls = "settings-intro",
-        ),
         Div(
             Label("Base URL", fr = "set-ep-url", cls = "set-ep-label"),
             Input(
                 type = "text", id = "set-ep-url", cls = "set-ep-input",
-                placeholder = "http://coelho-llm-rotator-fastapi.coelho-llm-rotator-dev.svc.cluster.local:8000/api/v1/llm/openai/v1",
                 autocomplete = "off", spellcheck = "false",
             ),
             Label("API key", fr = "set-ep-key", cls = "set-ep-label"),
-            Input(
-                type = "password", id = "set-ep-key", cls = "set-ep-input",
-                placeholder = "(blank = no auth, e.g. the dev-workflow rotator)",
-                autocomplete = "new-password",
+            Div(
+                Input(
+                    type = "password", id = "set-ep-key", cls = "set-ep-input",
+                    autocomplete = "new-password",
+                ),
+                # Raw keys are write-only (never returned) — this pill is how
+                # a previously-saved key's presence still "shows up" on the
+                # field without the field itself ever holding the real value.
+                # Same pattern as Source Tool Keys' status pill.
+                Span("", id = "set-ep-key-status", cls = "set-pill set-pill-none"),
+                cls = "set-ep-key-row",
             ),
             Label("Model", fr = "set-ep-model", cls = "set-ep-label"),
             Input(
                 type = "text", id = "set-ep-model", cls = "set-ep-input",
-                placeholder = "auto", autocomplete = "off", spellcheck = "false",
+                autocomplete = "off", spellcheck = "false",
             ),
             Div(
                 Button("Save", id = "set-ep-save", type = "button",
@@ -62,41 +71,47 @@ def LLMEndpointCard():
     )
 
 
+def NvidiaKeyCard():
+    """Standalone NVIDIA NIM API key. Unrelated to chat routing (that's the
+    LLM Endpoint above) — this is what YCS embeddings + reranking reads
+    directly. Reuses the existing generic /providers/nim/{key,test} endpoints
+    (pid="nim") that used to back the removed multi-provider registry UI.
+    Populated + wired by settings_nim_key.js."""
+    return Div(
+        H3("NVIDIA API Key", cls = "set-section-title"),
+        Div(
+            Label("API key", fr = "set-nim-key", cls = "set-ep-label"),
+            Div(
+                Input(
+                    type = "password", id = "set-nim-key", cls = "set-ep-input",
+                    autocomplete = "new-password",
+                ),
+                Span("", id = "set-nim-key-status", cls = "set-pill set-pill-none"),
+                cls = "set-ep-key-row",
+            ),
+            Div(
+                Button("Save", id = "set-nim-save", type = "button",
+                       cls = "set-btn set-btn-primary"),
+                Button("Test", id = "set-nim-test", type = "button",
+                       cls = "set-btn set-btn-ghost"),
+                Button("Remove", id = "set-nim-remove", type = "button",
+                       cls = "set-btn set-btn-danger"),
+                Span("", id = "set-nim-status", cls = "set-ep-status"),
+                cls = "settings-actions",
+            ),
+            cls = "set-ep-fields",
+            id = "settings-nim-key",
+        ),
+        cls = "settings-endpoint-card",
+        id = "settings-nim-key-card",
+    )
+
+
 def SettingsBody():
     return Div(
         Div(
             LLMEndpointCard(),
-            P(
-                "Choose the AI providers and free models COELHO Nexus may use. "
-                "Keys are encrypted and stored on the server — they're never sent "
-                "back to your browser, and they survive restarts.",
-                cls = "settings-intro",
-            ),
-            # Filled by JS from /providers (.ready / .missing_required).
-            # Hidden until populated. Surfaces the NVIDIA NIM requirement
-            # (embeddings + reranking) prominently.
-            Div("", id = "set-readiness", cls = "set-readiness", role = "status"),
-            Div(
-                Button(
-                    "Enable all keyed providers",
-                    cls = "set-btn set-btn-ghost",
-                    id = "set-enable-all",
-                    type = "button",
-                ),
-                Button(
-                    "Test all",
-                    cls = "set-btn set-btn-ghost",
-                    id = "set-test-all",
-                    type = "button",
-                ),
-                Span("", cls = "set-global-note", id = "set-global-note"),
-                cls = "settings-actions",
-            ),
-            Div(
-                Div("Loading providers…", cls = "set-loading"),
-                id = "settings-providers",
-                cls = "settings-providers",
-            ),
+            NvidiaKeyCard(),
             # FastMCP source tool keys (Research Radar) — separate skeleton +
             # JS module. Hidden by default until JS populates; if the catalog
             # is empty the section quietly stays collapsed.
@@ -121,6 +136,6 @@ def SettingsBody():
         ),
         Div("", id = "set-toast", cls = "set-toast", aria_live = "polite"),
         Script(src = "/static/js/settings_endpoint.js", type = "module"),
-        Script(src = "/static/js/settings.js", type = "module"),
+        Script(src = "/static/js/settings_nim_key.js", type = "module"),
         Script(src = "/static/js/settings_tool_keys.js", type = "module"),
     )

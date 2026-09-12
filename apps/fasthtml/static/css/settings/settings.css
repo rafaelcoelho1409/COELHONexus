@@ -20,13 +20,13 @@
   padding-bottom: 16px;
   border-bottom: 1px solid var(--border);
 }
-.set-global-note { color: var(--text-muted); font-size: 0.85rem; }
-
-.settings-providers { display: flex; flex-direction: column; gap: 14px; }
 .set-loading { color: var(--text-muted); padding: 32px 0; text-align: center; }
 .set-error { color: var(--error-text); }
 
-/* ---- provider card ---- */
+/* ---- provider card (SHARED with Source Tool Keys — settings_tool_keys.js
+   builds the same .prov-card/.prov-head/.prov-key-row/.set-pill/.set-btn
+   markup for Research Radar source-tool keys; don't remove these when the
+   LLM chat-provider registry they originally styled goes away). ---- */
 .prov-card {
   background: var(--card);
   border: 1px solid var(--border);
@@ -59,30 +59,6 @@
   border-radius: 3px;
 }
 .set-kind-free { background: var(--ingested-bg); color: var(--ingested-text); border: 1px solid var(--ingested-border); }
-.set-kind-paid { background: var(--notice-bg); color: var(--notice-text); border: 1px solid var(--notice-border); }
-.set-kind-off  { background: transparent; color: var(--text-muted); border: 1px solid var(--border); font-weight: 500; text-transform: none; letter-spacing: 0; }
-.set-kind-required { background: var(--primary); color: #fff; border: 1px solid var(--primary-dark); }
-
-/* ---- readiness banner (required NVIDIA NIM key) ---- */
-.set-readiness { display: none; }
-.set-readiness.ready,
-.set-readiness.missing {
-  display: block;
-  padding: 11px 16px;
-  border-radius: 4px;
-  margin-bottom: 18px;
-  font-size: 0.9rem;
-  line-height: 1.5;
-  border: 1px solid transparent;
-}
-.set-readiness.ready {
-  background: var(--ingested-bg); color: var(--ingested-text);
-  border-color: var(--ingested-border);
-}
-.set-readiness.missing {
-  background: var(--error-bg); color: var(--error-text);
-  border-color: var(--error-border);
-}
 
 /* ---- status / probe pills ---- */
 .set-pill {
@@ -98,26 +74,6 @@
 .set-pill-warn { background: var(--notice-bg); color: var(--notice-text); border-color: var(--notice-border); }
 .set-pill-err  { background: var(--error-bg); color: var(--error-text); border-color: var(--error-border); }
 
-/* ---- enable switch ---- */
-.set-switch { position: relative; display: inline-flex; cursor: pointer; }
-.set-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
-.set-switch-track {
-  width: 38px; height: 21px;
-  background: var(--border);
-  border-radius: 999px;
-  transition: background 0.15s ease;
-  position: relative;
-}
-.set-switch-track::after {
-  content: ""; position: absolute; top: 2px; left: 2px;
-  width: 17px; height: 17px; border-radius: 50%;
-  background: #fff; transition: transform 0.15s ease;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.25);
-}
-.set-switch input:checked + .set-switch-track { background: var(--primary); }
-.set-switch input:checked + .set-switch-track::after { transform: translateX(17px); }
-.set-switch input:focus-visible + .set-switch-track { outline: 2px solid var(--primary-dark); outline-offset: 2px; }
-
 /* ---- key row ---- */
 .prov-key-row { display: flex; gap: 8px; align-items: center; }
 .prov-key-input {
@@ -131,15 +87,6 @@
   color: var(--text);
 }
 .prov-key-input:focus { outline: none; border-color: var(--primary); }
-
-.prov-key-link {
-  display: inline-block;
-  margin-top: 6px;
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  text-decoration: underline;
-}
-.prov-key-link:hover { color: var(--primary); }
 
 /* ---- buttons ---- */
 .set-btn {
@@ -165,59 +112,6 @@
 .prov-result:empty { display: none; }
 .prov-testing { color: var(--text-muted); font-size: 0.82rem; }
 .prov-err-msg { color: var(--error-text); font-size: 0.78rem; }
-
-/* ---- models expander ---- */
-.prov-models-toggle {
-  margin-top: 12px;
-  background: none; border: none; cursor: pointer;
-  font-family: inherit; font-size: 0.85rem; font-weight: 600;
-  color: var(--text-muted);
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 4px 0;
-}
-.prov-models-toggle:hover { color: var(--primary); }
-.prov-models-chevron { transition: transform 0.15s ease; display: inline-block; }
-.prov-models-toggle.open .prov-models-chevron { transform: rotate(90deg); }
-
-.prov-models { display: none; }
-.prov-models.open { display: block; margin-top: 10px; }
-.prov-models-inner {
-  border-top: 1px solid var(--border);
-  padding-top: 14px;
-}
-.prov-model-loading, .prov-model-empty { color: var(--text-muted); font-size: 0.85rem; padding: 8px 0; }
-
-.prov-model-modes { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
-.set-radio { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.9rem; color: var(--text); }
-.set-radio-hint { color: var(--text-muted); font-size: 0.78rem; }
-
-.prov-model-bulk { display: flex; gap: 14px; margin-bottom: 8px; }
-.set-link {
-  background: none; border: none; cursor: pointer;
-  color: var(--primary); font-family: inherit; font-size: 0.82rem; font-weight: 600;
-  padding: 0; text-decoration: underline;
-}
-.set-link:hover { color: var(--primary-dark); }
-
-.prov-model-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 4px 18px;
-  max-height: 280px;
-  overflow-y: auto;
-  padding: 4px 2px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-}
-.prov-model-item {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 0.82rem; color: var(--text);
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  padding: 3px 4px; cursor: pointer;
-}
-.prov-model-item:hover { background: rgba(196, 18, 48, 0.05); }
-.prov-model-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.prov-model-foot { margin-top: 12px; }
 
 /* ---- topbar gear ---- */
 .settings-gear {
@@ -327,6 +221,11 @@
   font-size: 0.85rem;
   font-weight: 600;
 }
+/* Wraps a password input + its status pill on one row (LLM Endpoint's and
+   the NVIDIA key card's API-key fields) so the pill sits right of the
+   input instead of stretching it via the grid's 1fr track. */
+.set-ep-key-row { display: flex; align-items: center; gap: 8px; }
+.set-ep-key-row .set-ep-input { flex: 1; }
 .set-ep-input {
   width: 100%;
   padding: 6px 8px;
@@ -347,23 +246,3 @@
 .set-ep-status { font-size: 0.83rem; color: var(--text-muted); }
 .set-ep-status-ok { color: var(--ok, #2e7d32); }
 .set-ep-status-err { color: var(--err, #c62828); }
-
-/* The provider-key section below only ever configured a bundled in-cluster
-   rotator, which no longer exists (2026-09-11) — always dim it and explain.
-   data-llm-external is unconditionally "1" now (set by settings_endpoint.js). */
-#settings-root[data-llm-external="1"] .settings-providers,
-#settings-root[data-llm-external="1"] .settings-actions:not(.set-ep-fields .settings-actions) {
-  opacity: 0.45;
-  pointer-events: none;
-}
-#settings-root[data-llm-external="1"] .settings-providers::before {
-  content: "COELHO Nexus no longer bundles its own rotator — these provider keys are unused. Set the LLM Endpoint above (rotator, OpenAI, Anthropic, ...).";
-  display: block;
-  opacity: 1;
-  padding: 8px 10px;
-  margin-bottom: 8px;
-  border-left: 3px solid var(--primary);
-  font-size: 0.85rem;
-  color: var(--text);
-  pointer-events: auto;
-}

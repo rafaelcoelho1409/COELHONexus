@@ -78,6 +78,10 @@ export function _renderStudyChapterHead(ch) {
         ? '<span class="badge pass">Audit ✓</span>'
         : '<span class="badge fail">Audit ✗</span>')
     : '<span class="badge">Not rendered</span>';
+  const chars = ch.rendered_chars || 0;
+  // ~5 chars/word (English prose average) at a 200 wpm reading speed —
+  // same yardstick GitBook/Medium-style "N min read" badges use.
+  const readMin = chars > 0 ? Math.max(1, Math.round(chars / 5 / 200)) : 0;
   Ss.studyChapterHeadEl.innerHTML =
     '<div class="fw-study-chapter-head-title">' +
       escapeHtml(ch.title || ch.id) + '</div>' +
@@ -85,9 +89,8 @@ export function _renderStudyChapterHead(ch) {
       auditBadge +
       '<span>' + (ch.n_sections || 0) + ' sections</span>' +
       '<span>' + (ch.n_sources || 0) + ' sources</span>' +
-      ((ch.rendered_chars || 0)
-        ? '<span>' + ((ch.rendered_chars / 1000).toFixed(1)) + 'k chars</span>'
-        : '') +
+      (chars ? '<span>' + ((chars / 1000).toFixed(1)) + 'k chars</span>' : '') +
+      (readMin ? '<span>' + readMin + ' min read</span>' : '') +
     '</div>';
   Ss.studyChapterHeadEl.classList.add('visible');
 }

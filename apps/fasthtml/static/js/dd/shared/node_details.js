@@ -1,9 +1,3 @@
-import { getProviderMap, displayProviderName } from './provider_map.js';
-let _providerMap2 = null;
-async function _refreshProviderMap2() { _providerMap2 = await getProviderMap(); }
-_refreshProviderMap2();
-setInterval(_refreshProviderMap2, 60_000);
-
 // DD Planner/Synth node detail registry.
 //
 // This feeds the shared NodeDrawer with stable explanations for what each
@@ -41,38 +35,6 @@ function _topModel(byModel) {
   return entries[0];
 }
 
-// litellm's own internal custom_llm_provider adapter name, where it diverges
-// from the rotator's catalog id — e.g. NIM is "nvidia_nim" to litellm but
-// "nim" in the rotator's discovery/config + `/v1/models` catalog. Older
-// logged deployment strings were stamped with the litellm name directly
-// (see COELHOLLMRotator chain/service.py's alias fix); recognize them here
-// too so already-persisted history displays correctly without a re-run.
-const _PROVIDER_ALIASES = { nvidia_nim: 'nim' };
-
-function _splitProviderModel(model) {
-  const raw = String(model || '');
-  if (!raw) return { provider: 'unknown', name: 'unknown', raw };
-  const lower = raw.toLowerCase();
-  if (_providerMap2) {
-    const hit = _providerMap2.get(lower) || _providerMap2.get(lower.split('/').slice(-1)[0]);
-    if (hit && hit !== 'rotator') {
-      const idx = raw.indexOf('/');
-      if (idx > 0 && lower.startsWith(hit.toLowerCase() + '/')) return { provider: raw.slice(0, idx), name: raw.slice(idx + 1), raw };
-      return { provider: hit, name: idx > 0 ? raw.slice(raw.indexOf('/') + 1) : raw, raw };
-    }
-  }
-  const idx = raw.indexOf('/');
-  if (idx > 0) {
-    const alias = _PROVIDER_ALIASES[raw.slice(0, idx).toLowerCase()];
-    if (alias) return { provider: alias, name: raw.slice(idx + 1), raw };
-  }
-  // Provider map missed this model (not in the rotator's current catalog
-  // snapshot, or not loaded yet) — don't guess. The text before the first
-  // slash is the MODEL's own org prefix (openai/gpt-oss-120b, meta/...,
-  // google/...), not the hosting provider, so treating it as one is wrong
-  // more often than right. Show it honestly unresolved instead.
-  return { provider: 'unknown', name: idx > 0 ? raw.slice(idx + 1) : raw, raw };
-}
 
 const PLANNER_DETAILS = {
   corpus_load: {
@@ -433,7 +395,7 @@ export function buildDdTokenMetrics(stage, nodeId, counters) {
   const node = byNode[nodeId] || null;
   if (!node || !Number(node.calls || 0)) return [];
   const out = [
-    _metric('LLM calls', _fmtInt(node.calls), 'exact rotator usage'),
+    _metric('LLM calls', _fmtInt(node.calls), 'exact usage'),
     _metric('input tokens', _fmtInt(node.tokens_in)),
     _metric('output tokens', _fmtInt(node.tokens_out)),
   ];
@@ -442,9 +404,15 @@ export function buildDdTokenMetrics(stage, nodeId, counters) {
   }
   const top = _topModel(node.by_model);
   if (top) {
+    // Show the model string verbatim — whatever the configured LLM endpoint
+    // returned in its response's `model` field. COELHO LLM Rotator already
+    // formats it as "PROVIDER/model" (e.g. "NVIDIA/openai/gpt-oss-20b");
+    // any other endpoint returns its own bare id. Slicing to the last
+    // path segment used to assume a specific shape and silently dropped
+    // the provider prefix.
     out.push(_metric(
       'top model',
-      String(top[0]).split('/').slice(-1)[0],
+      String(top[0]),
       _fmtInt((top[1] || {}).calls) + ' calls',
     ));
   }
@@ -456,18 +424,18 @@ export function buildDdModelRows(stage, nodeId, counters) {
   const node = byNode[nodeId] || null;
   if (!node || !node.by_model) return [];
   return Object.entries(node.by_model)
-    .map(([model, stats]) => {
-      const split = _splitProviderModel(model);
-      return {
-        raw: split.raw,
-        provider: split.provider === 'unknown' ? 'unknown' : displayProviderName(split.provider),
-        model: split.name,
-        calls: _num((stats || {}).calls),
-        tokens_in: _num((stats || {}).tokens_in),
-        tokens_out: _num((stats || {}).tokens_out),
-        reasoning_tokens: _num((stats || {}).reasoning_tokens),
-      };
-    })
+    .map(([model, stats]) => ({
+      // No provider column, no client-side provider guessing — the
+      // configured LLM endpoint (COELHO LLM Rotator, OpenAI, Anthropic, a
+      // single-model deployment, ...) is a fixed, page-level fact, not a
+      // per-row one. `model` is its response's `model` field, shown as-is.
+      raw: model,
+      model,
+      calls: _num((stats || {}).calls),
+      tokens_in: _num((stats || {}).tokens_in),
+      tokens_out: _num((stats || {}).tokens_out),
+      reasoning_tokens: _num((stats || {}).reasoning_tokens),
+    }))
     .filter(row => row.calls > 0)
     .sort((a, b) => b.calls - a.calls);
 }

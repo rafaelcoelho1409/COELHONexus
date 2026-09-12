@@ -197,17 +197,20 @@ export const NodeDrawer = (function() {
         '</div>'
       : '';
     const modelRows = Array.isArray(ctx.modelRows) ? ctx.modelRows : [];
+    // No provider column — the configured LLM endpoint (COELHO LLM Rotator,
+    // OpenAI, Anthropic, a single-model deployment, ...) is a fixed,
+    // page-level fact, not a per-row one. `model` is that endpoint's
+    // response `model` field shown as-is: the rotator formats it itself as
+    // "PROVIDER/model" (e.g. "NVIDIA/openai/gpt-oss-20b"); any other
+    // endpoint just returns its own bare model id.
     const modelHtml = modelRows.length
-      ? '<div class="fw-node-drawer-models-title">Per provider · model</div>' +
+      ? '<div class="fw-node-drawer-models-title">By model</div>' +
         '<table class="fw-node-drawer-models">' +
-          '<thead><tr><th>provider</th><th>model</th><th>calls</th>' +
+          '<thead><tr><th>model</th><th>calls</th>' +
           '<th>input tokens</th><th>output tokens</th><th>reasoning</th></tr></thead>' +
           '<tbody>' +
             modelRows.map(r =>
               '<tr>' +
-                '<td title="' + escapeHtml(r.raw || '') + '">' +
-                  escapeHtml(r.provider || '') +
-                '</td>' +
                 '<td title="' + escapeHtml(r.raw || '') + '">' +
                   escapeHtml(r.model || '') +
                 '</td>' +

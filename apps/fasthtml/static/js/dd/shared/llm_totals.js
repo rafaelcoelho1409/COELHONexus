@@ -1,8 +1,5 @@
 import * as Sa from '@dd/shared/state/api.js';
 import * as Sy from '@dd/shared/state/synth.js';
-import { getProviderMap } from '@dd/shared/provider_map.js';
-let _providerMap = null;
-getProviderMap().then(m => { _providerMap = m; });
 
 function _num(v) {
   const n = Number(v || 0);
@@ -20,25 +17,6 @@ function _esc(v) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-function _splitProviderModel(model) {
-  const raw = String(model || '');
-  if (!raw) return { provider: 'unknown', name: 'unknown' };
-  const lower = raw.toLowerCase();
-  // authoritative map from coelho-llm-rotator — covers all 166 models across 8 providers
-  if (_providerMap) {
-    const hit = _providerMap.get(lower) || _providerMap.get(lower.split('/').slice(-1)[0]);
-    if (hit && hit !== 'rotator') {
-      const idx = raw.indexOf('/');
-      if (idx > 0 && lower.startsWith(hit.toLowerCase() + '/')) return { provider: raw.slice(0, idx), name: raw.slice(idx + 1) };
-      return { provider: hit, name: idx > 0 ? raw.slice(raw.indexOf('/') + 1) : raw };
-    }
-  }
-  const idx = raw.indexOf('/');
-  if (idx > 0) return { provider: raw.slice(0, idx), name: raw.slice(idx + 1) };
-  // bare model without prefix — map will resolve after fetch; show bare as implicit until then
-  return { provider: 'implicit', name: raw };
 }
 
 function _emptyPayload(stage) {
@@ -102,11 +80,14 @@ function _aggregateByModel(byNode) {
 function _modelRows(payload) {
   return Object.entries(_aggregateByModel((payload && payload.by_node) || {}))
     .map(([model, stats]) => {
-      const split = _splitProviderModel(model);
       return {
+        // `model` is whatever the configured LLM endpoint returns verbatim
+        // in its response's `model` field — COELHO LLM Rotator formats it
+        // as "PROVIDER/model" itself (e.g. "NVIDIA/openai/gpt-oss-20b");
+        // any other endpoint (OpenAI, Anthropic, a single-model deployment)
+        // just returns its own bare model id. No client-side parsing.
         raw: model,
-        provider: split.provider,
-        name: split.name,
+        name: model,
         calls: _num(stats.calls),
         tokens_in: _num(stats.tokens_in),
         tokens_out: _num(stats.tokens_out),
@@ -156,12 +137,11 @@ function _modelTable(payload) {
   return (
     '<div class="dd-llm-rail-table-wrap">' +
       '<table class="dd-llm-rail-table">' +
-        '<thead><tr><th>provider</th><th>model</th><th>calls</th>' +
+        '<thead><tr><th>model</th><th>calls</th>' +
         '<th>input tokens</th><th>output tokens</th><th>reasoning</th></tr></thead>' +
         '<tbody>' +
           rows.map(r =>
             '<tr>' +
-              '<td title="' + _esc(r.raw) + '">' + _esc(r.provider) + '</td>' +
               '<td title="' + _esc(r.raw) + '">' + _esc(r.name) + '</td>' +
               '<td>' + _fmtInt(r.calls) + '</td>' +
               '<td>' + _fmtInt(r.tokens_in) + '</td>' +
@@ -351,7 +331,7 @@ function _openLlmDrawer(mode) {
   _setDrawerSections(mode);
   if (mode === 'planner') {
     name.textContent = 'Planner LLM usage';
-    meta.textContent = 'Latest planner run, grouped by node and provider/model.';
+    meta.textContent = 'Latest planner run, grouped by node and model.';
   } else {
     name.textContent = 'Synth LLM usage';
     meta.textContent = 'Per chapter while running, plus a final combined total after all chapters finish.';

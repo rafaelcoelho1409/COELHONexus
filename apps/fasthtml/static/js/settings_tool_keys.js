@@ -1,13 +1,16 @@
 /**
  * Source Tool Keys section on /settings.
  *
- * Mirrors the visual + interaction structure of static/js/settings.js
- * (LLM rotator providers) — same DOM helpers, same el() signature, same
- * `prov-card / prov-head / prov-name / prov-status / set-pill / prov-key-row /
- * prov-key-input / set-btn / prov-result` classes. The only additions are a
- * `tk-description` block (provider URL · summary · benefit · signup link)
+ * Reuses the `prov-card / prov-head / prov-name / prov-status / set-pill /
+ * prov-key-row / prov-key-input / set-btn / prov-result` card markup +
+ * settings.css rules that originally styled the multi-provider LLM chat
+ * registry (static/js/settings.js, removed 2026-09-11 — chat routing is
+ * now always the external COELHO LLM Rotator via the LLM Endpoint field).
+ * Those CSS classes stayed because this module still needs them; only the
+ * JS that used to populate the registry is gone. The only addition here is
+ * a `tk-description` block (provider URL · summary · benefit · signup link)
  * between the head and the key row, since tool keys carry richer copy than
- * LLM providers.
+ * LLM providers did.
  *
  * Pulls the catalog of optional FastMCP source-tool API keys from
  * /api/v1/rr/tool-credentials/keys and renders one card per key with
@@ -117,9 +120,6 @@ function toolKeyCard(entry) {
     class: "prov-key-input",
     autocomplete: "off",
     spellcheck: "false",
-    placeholder: entry.has_key
-      ? `Paste new ${entry.key_env} to replace`
-      : `Paste ${entry.key_env}`,
   });
   const saveBtn = el("button", {
     type: "button",

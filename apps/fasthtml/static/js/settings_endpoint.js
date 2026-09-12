@@ -36,20 +36,30 @@ async function api(method, path, body) {
   return data;
 }
 
+// Raw keys are write-only (never returned by the backend), so the field
+// itself always stays empty — this pill is what "shows up" for a
+// previously-saved key: same has_key/source/last4 status Source Tool Keys
+// shows via its own status pill.
+function renderKeyStatus(v) {
+  const pill = $("set-ep-key-status");
+  if (!pill) return;
+  if (v.has_key && v.source === "user") {
+    pill.className = "set-pill set-pill-ok";
+    pill.textContent = `Custom key ••••${v.last4 || ""}`;
+  } else if (v.has_key && v.source === "env") {
+    pill.className = "set-pill set-pill-env";
+    pill.textContent = `Env key ••••${v.last4 || ""}`;
+  } else {
+    pill.className = "set-pill set-pill-none";
+    pill.textContent = "No key";
+  }
+}
+
 function render(v) {
   $("set-ep-url").value = v.url || "";
   $("set-ep-model").value = v.model || "auto";
-  const key = $("set-ep-key");
-  key.value = "";
-  key.placeholder = v.has_key
-    ? `•••• ${v.last4 || ""} (${v.source || "stored"}) — leave blank to keep`
-    : "(blank = no auth, e.g. the dev-workflow rotator)";
-
-  // The provider-key section below only ever configured a *bundled* rotator,
-  // which no longer exists (2026-09-11) — it's unconditionally irrelevant now.
-  // Matches is_external_endpoint() server-side, which is now always True.
-  const root = $("settings-root");
-  if (root) root.dataset.llmExternal = "1";
+  $("set-ep-key").value = "";
+  renderKeyStatus(v);
 }
 
 async function load() {

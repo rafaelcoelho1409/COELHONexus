@@ -5,14 +5,53 @@
 import * as Sa from '@dd/shared/state/api.js';
 import * as Si from '@dd/shared/state/ingestion.js';
 import * as Ss from '@dd/shared/state/study.js';
+import { escapeHtml } from '../shared/utils.js';
 import { showElapsed } from '../shared/timing.js';
 import { setStudyTotalWallMs } from './shared.js';
 import { _loadStudyReadme, _buildReadmeToc } from './readme.js';
+import { resetStudyProgressBar } from './progress.js';
 import { deps as studyDeps } from './study_deps.js';
 
 export function _scrollReaderTop() {
   const page = document.querySelector('.page');
   if (page) page.scrollTo({ top: 0, behavior: 'instant' });
+}
+
+// Prev/next footer nav — order follows the plan's chapter order (not just
+// rendered ones); clicking a not-yet-synthesized neighbor still works,
+// openStudyChapter() already shows the "run Synth first" placeholder for it.
+function _renderChapterNav(cid) {
+  if (!Ss.studyChapterNavEl) return;
+  const list = Ss.studyChapters;
+  const idx = list.findIndex(c => c.id === cid);
+  if (idx < 0) { Ss.studyChapterNavEl.innerHTML = ''; return; }
+  const prev = idx > 0 ? list[idx - 1] : null;
+  const next = idx < list.length - 1 ? list[idx + 1] : null;
+  const side = (ch, dir) => {
+    if (!ch) return '<span class="fw-study-nav-btn fw-study-nav-spacer"></span>';
+    const arrow = dir === 'prev' ? '←' : '→';
+    const label = dir === 'prev' ? 'Previous' : 'Next';
+    return (
+      '<button type="button" class="fw-study-nav-btn fw-study-nav-' + dir + '" ' +
+      'data-chapter-id="' + escapeHtml(ch.id) + '">' +
+        (dir === 'prev' ? '<span class="fw-study-nav-arrow">' + arrow + '</span>' : '') +
+        '<span class="fw-study-nav-text">' +
+          '<span class="fw-study-nav-label">' + label + '</span>' +
+          '<span class="fw-study-nav-title">' + escapeHtml(ch.title || ch.id) + '</span>' +
+        '</span>' +
+        (dir === 'next' ? '<span class="fw-study-nav-arrow">' + arrow + '</span>' : '') +
+      '</button>'
+    );
+  };
+  Ss.studyChapterNavEl.innerHTML = side(prev, 'prev') + side(next, 'next');
+}
+if (Ss.studyChapterNavEl) {
+  Ss.studyChapterNavEl.addEventListener('click', ev => {
+    const btn = ev.target.closest('.fw-study-nav-btn');
+    if (!btn) return;
+    const cid = btn.dataset.chapterId;
+    if (cid) openStudyChapter(cid);
+  });
 }
 
 export async function openStudyChapter(cid) {
@@ -24,6 +63,7 @@ export async function openStudyChapter(cid) {
     Ss.studyReadmeEl.innerHTML =
       '<div class="fw-empty">This chapter has not been synthesized yet. ' +
       'Run Synth on this chapter first.</div>';
+    _renderChapterNav(cid);
     _scrollReaderTop();
     return;
   }
@@ -31,12 +71,14 @@ export async function openStudyChapter(cid) {
   Ss.setStudyLoadedCid(cid);
   studyDeps._renderStudySidebar?.();   // re-render to update active highlight
   studyDeps._renderStudyChapterHead?.(ch);
+  _renderChapterNav(cid);
   studyDeps._setStudyStagePill?.('working', 'Loading…');
   await _loadStudyReadme(Si.activeSlug, cid);
   _buildReadmeToc();
   studyDeps._renderStudySidebar?.();
   studyDeps._setStudyStagePill?.('done', 'Reading · ' + (ch.title || cid));
   _scrollReaderTop();   // new chapter always starts at the top
+  resetStudyProgressBar();
 }
 
 export async function loadStudyChapters(slug) {
@@ -44,6 +86,7 @@ export async function loadStudyChapters(slug) {
   Ss.setStudyChapters([]);
   Ss.setStudyActiveChapter(null);
   Ss.setStudyLoadedCid(null);
+  if (Ss.studyChapterNavEl) Ss.studyChapterNavEl.innerHTML = '';
   studyDeps._setStudyStagePill?.('working', 'Loading chapters…');
   Ss.studyChapterListEl.innerHTML =
     '<div class="fw-empty" style="font-size:0.8rem;padding:8px 4px">' +

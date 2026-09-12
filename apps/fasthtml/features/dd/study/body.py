@@ -28,6 +28,11 @@ def StudyBody(slug: str | None):
                 id = "fw-study-side",
             ),
             Div(
+                Div(
+                    Div(id = "fw-study-progress-fill",
+                        cls = "fw-study-progress-bar-fill"),
+                    id = "fw-study-progress-bar", cls = "fw-study-progress-bar",
+                ),
                 Div(id = "fw-study-chapter-head",
                     cls = "fw-study-chapter-head"),
                 Div(
@@ -42,6 +47,8 @@ def StudyBody(slug: str | None):
                                 id = "fw-study-readme",
                                 cls = "fw-study-prose",
                             ),
+                            Div(id = "fw-study-chapter-nav",
+                                cls = "fw-study-chapter-nav"),
                             cls = "fw-study-learn-col",
                         ),
                         Div(id = "fw-study-toc", cls = "fw-study-toc"),

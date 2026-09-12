@@ -286,8 +286,12 @@
   padding: 5px 6px;
   border-bottom: 1px solid var(--border);
 }
-.dd-llm-rail-table thead th:not(:nth-child(-n+2)),
-.dd-llm-rail-table tbody td:not(:nth-child(-n+2)) {
+/* Single text column now (model) — everything else (calls/tokens/
+   reasoning) is numeric. The provider column this used to also cover was
+   removed 2026-09-11: the configured LLM endpoint is a fixed, page-level
+   fact, not a per-row one, and its `model` field is shown verbatim. */
+.dd-llm-rail-table thead th:not(:first-child),
+.dd-llm-rail-table tbody td:not(:first-child) {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -295,16 +299,11 @@
   padding: 4px 6px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
-.dd-llm-rail-table tbody td:first-child,
-.dd-llm-rail-table tbody td:nth-child(2) {
-  max-width: 120px;
+.dd-llm-rail-table tbody td:first-child {
+  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.dd-llm-rail-table tbody td:first-child {
-  color: var(--text-muted);
-  text-transform: uppercase;
 }
 
 /* Mobile / narrow viewport — stack zones vertically (planner top, synth

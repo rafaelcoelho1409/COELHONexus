@@ -42,4 +42,105 @@
 }
 .fw-study-chapter-head-meta .badge.pass { border-color: #2a8b46; color: #2a8b46; }
 .fw-study-chapter-head-meta .badge.fail { border-color: var(--error-border); color: var(--error-text); }
+
+/* DD-STUDY-SOTA 2026-09-11 — reading-progress bar. Sticky at the top of
+   the reader column so it stays visible while `.page` (the app-shell
+   scroll container) scrolls. Fill width defaults to a JS-driven inline
+   `width` (see progress.js's fallback path); browsers that support
+   scroll-driven animations override it below with a zero-JS transform
+   tied directly to scroll position. */
+.fw-study-progress-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  height: 3px;
+  background: rgba(0, 0, 0, 0.06);
+  margin-bottom: 6px;
+  overflow: hidden;
+  border-radius: 2px;
+}
+.fw-study-progress-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--primary);
+}
+@supports (animation-timeline: scroll()) {
+  .fw-study-progress-bar-fill {
+    width: 100%;
+    transform: scaleX(0);
+    transform-origin: left;
+    animation: fw-study-progress-scroll linear;
+    animation-timeline: scroll(nearest block);
+  }
+  @keyframes fw-study-progress-scroll {
+    from { transform: scaleX(0); }
+    to   { transform: scaleX(1); }
+  }
+}
+
+/* ---- prev/next chapter footer nav ---- */
+.fw-study-chapter-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 28px;
+  padding-top: 18px;
+  border-top: 1px dashed var(--border);
+}
+.fw-study-chapter-nav:empty { display: none; }
+.fw-study-nav-btn {
+  flex: 1 1 0;
+  min-width: 0;             /* let the flex item shrink below its text's
+                               natural min-content width — the default
+                               `min-width: auto` on flex items is what let
+                               long chapter titles push past the button's
+                               border instead of truncating. */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 48%;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: border-color 0.12s, background-color 0.12s;
+}
+.fw-study-nav-btn:hover { border-color: var(--primary); background: rgba(196, 18, 48, 0.04); }
+.fw-study-nav-next { margin-left: auto; text-align: right; }
+.fw-study-nav-next .fw-study-nav-text { align-items: flex-end; }
+.fw-study-nav-spacer { visibility: hidden; }
+.fw-study-nav-arrow { font-size: 1.1rem; color: var(--primary); flex-shrink: 0; }
+/* Same `min-width: 0` fix cascades down: `.fw-study-nav-text` is a flex
+   item of `.fw-study-nav-btn`, and its own children (label/title) are in
+   turn flex items of ITS `flex-direction: column` — each level needs the
+   override or the auto-minimum-size rule wins at that level instead. */
+.fw-study-nav-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+  width: 100%;
+}
+.fw-study-nav-label {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  font-weight: 600;
+  min-width: 0;
+}
+.fw-study-nav-title {
+  font-size: 0.86rem;
+  color: var(--text);
+  font-weight: 600;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 }
