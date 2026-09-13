@@ -14,8 +14,13 @@ CDP_HEADED = os.environ.get(
 )
 
 # Requires playwright-headed pod with ≥4Gi memory; 5 concurrent pages OOMKilled at 2Gi.
-MAX_CONCURRENT = 5
-CONTEXT_POOL_SIZE = 5  # match max_concurrent → no creation storms
+# 2026-09-13: trial bump 5→6 — per-page memory footprint should be lower now
+# thanks to the same day's blocklist expansion (stylesheets/fonts/peripheral
+# player JS). Live-monitored via `kubectl top pod -n playwright --containers`
+# during a real batch before keeping this; revert to 5 if chromium's RSS
+# creeps toward the 4Gi limit.
+MAX_CONCURRENT = 6
+CONTEXT_POOL_SIZE = 6  # match max_concurrent → no creation storms
 TIMEOUT_MS = 30000
 NAVIGATION_TIMEOUT_MS = 60000
 BROWSER_REFRESH_INTERVAL = 15

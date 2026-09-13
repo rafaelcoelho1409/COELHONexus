@@ -42,7 +42,15 @@ const POLL_BACKOFF_AFTER = 60;
 const STORAGE_KEY = "ycs:pipeline:active";
 const STORAGE_TTL_MS = 24 * 60 * 60 * 1000;  // match backend Redis TTL
 
-const BARS = ["transcripts", "qdrant", "neo4j"];
+/* 2026-09-13: "transcripts" split into "playwright" + "elasticsearch".
+ * There is no separate ES task — both bars poll the SAME `extract_videos`
+ * task id (see `ids` in trackPipeline) and are derived from that one
+ * task's `phase` field via `_subPhasePct`/`_subPhaseLabel`. `SHARED_TASK_BARS`
+ * lists bars that share a task id with another bar, so the polling loop
+ * can dedupe (poll each unique task id once per tick, not once per bar). */
+const BARS = ["playwright", "elasticsearch", "qdrant", "neo4j"];
+const SPLIT_PHASE_ORDER = ["metadata", "metadata_done", "transcription", "es_indexing"];
+const SPLIT_PHASE_TARGET = { playwright: "transcription", elasticsearch: "es_indexing" };
 
 // ---- helpers ---------------------------------------------------------------
 async function api(path, opts = {}) {
@@ -145,15 +153,18 @@ function _htmlEscape(s) {
  *   running  — id == current_item.id of THIS store's active task
  *   done     — id is in THIS store's completed_ids
  *   skipped  — backend tagged this id as a cache hit for THIS store
- *              (e.g. Phase 1 cached transcripts, Phase 3 skip-on-
+ *              (e.g. Phase 1 cached transcripts, Phase 4 skip-on-
  *              video_id in Neo4j). NOT currently emitted; reserved.
  *   queued   — none of the above + this store hasn't reached SUCCESS yet
  *   done*    — this store finished successfully and the id is in the
  *              dispatched set (= must have been processed even if
  *              completed_ids is missing from the SUCCESS result dict)
  *
- * `phaseKey` ∈ {"transcripts","qdrant","neo4j"} — same as the bar
- * prefix. `phaseMeta` is the Celery `meta` dict from `/admin/task/{id}`'s
+ * `phaseKey` ∈ {"elasticsearch","qdrant","neo4j"} — the 3 DATA STORES
+ * (not the 4 phase bars — "playwright" has no store of its own, its
+ * fetch-success/failure is what "elasticsearch" reuses as a proxy for
+ * ES-write status, since a fetched transcript is indexed in the same
+ * chunk). `phaseMeta` is the Celery `meta` dict from `/admin/task/{id}`'s
  * last poll; for SUCCESS state the meta is the task RESULT dict.
  * `phaseState` carries the Celery state so a finished store can mark
  * stragglers as "done" even when the result dict lacks completed_ids.
@@ -242,7 +253,7 @@ function _renderVideoTable({ videos, metaByPhase, phaseStates, videoIds }) {
         // Derive per-store status independently.
         const statuses = {};
         let anyRunning = false;
-        for (const p of ["transcripts", "qdrant", "neo4j"]) {
+        for (const p of ["elasticsearch", "qdrant", "neo4j"]) {
             statuses[p] = _videoStoreStatus(
                 vid, p, metaByPhase[p] || {}, phaseStates[p],
             );
@@ -256,14 +267,14 @@ function _renderVideoTable({ videos, metaByPhase, phaseStates, videoIds }) {
             _videoTiming.started.set(vid, now);
         }
         const allDone = (
-            statuses.transcripts === "done" &&
-            statuses.qdrant      === "done" &&
-            statuses.neo4j       === "done"
+            statuses.elasticsearch === "done" &&
+            statuses.qdrant        === "done" &&
+            statuses.neo4j         === "done"
         );
         const anyFailed = (
-            statuses.transcripts === "failed" ||
-            statuses.qdrant      === "failed" ||
-            statuses.neo4j       === "failed"
+            statuses.elasticsearch === "failed" ||
+            statuses.qdrant        === "failed" ||
+            statuses.neo4j         === "failed"
         );
         if ((allDone || anyFailed) && !_videoTiming.finished.has(vid)) {
             _videoTiming.finished.set(vid, now);
@@ -291,7 +302,7 @@ function _renderVideoTable({ videos, metaByPhase, phaseStates, videoIds }) {
                 <div class="ycs-pipe-cell-title" title="${title}">${title}</div>
                 ${channel ? `<div class="ycs-pipe-cell-channel">${channel}</div>` : ""}
             </div>
-            <div class="ycs-pipe-table-cell">${pillFor("transcripts")}</div>
+            <div class="ycs-pipe-table-cell">${pillFor("elasticsearch")}</div>
             <div class="ycs-pipe-table-cell">${pillFor("qdrant")}</div>
             <div class="ycs-pipe-table-cell">${pillFor("neo4j")}</div>
             <div class="ycs-pipe-table-cell ycs-pipe-table-cell-time">${durationLabel}</div>
@@ -346,24 +357,64 @@ function _phasePct(state, meta) {
     return 0;
 }
 
+/* "playwright" and "elasticsearch" both poll the SAME `extract_videos`
+ * task, so a single poll's `meta.phase` string has to be interpreted
+ * relative to EACH bar's own place in SPLIT_PHASE_ORDER — a phase that's
+ * already passed this bar's target reads 100%, one not yet reached reads
+ * 0%, and the bar's own active phase reads its real current/total. */
+function _subPhasePct(prefix, state, meta) {
+    if (state === "SUCCESS") return 100;
+    if (state === "FAILURE" || state === "ERROR") return 100;
+    const m = meta || {};
+    const targetIdx = SPLIT_PHASE_ORDER.indexOf(SPLIT_PHASE_TARGET[prefix]);
+    const currentIdx = m.phase ? SPLIT_PHASE_ORDER.indexOf(m.phase) : -1;
+    if (currentIdx < 0) return 0;
+    if (currentIdx > targetIdx) return 100;
+    if (currentIdx < targetIdx) return 0;
+    if (m.total && m.current != null) {
+        return Math.max(2, Math.min(100, (m.current / m.total) * 100));
+    }
+    return 8;
+}
+
+function _subPhaseLabel(prefix, state, meta) {
+    if (state === "SUCCESS") return "Done";
+    if (state === "FAILURE" || state === "ERROR") return "Failed";
+    if (state === "PENDING") return "Queued";
+    const m = meta || {};
+    const targetIdx = SPLIT_PHASE_ORDER.indexOf(SPLIT_PHASE_TARGET[prefix]);
+    const currentIdx = m.phase ? SPLIT_PHASE_ORDER.indexOf(m.phase) : -1;
+    if (currentIdx < 0) return "Queued";
+    if (currentIdx > targetIdx) return "Done";
+    if (currentIdx < targetIdx) return "Queued";
+    if (m.current != null && m.total) return `${m.current}/${m.total}`;
+    return "Running";
+}
+
 function _successHint(prefix, result) {
-    if (prefix === "transcripts") {
+    if (prefix === "playwright") {
         const t = result.transcriptions || {};
         const m = result.metadata || {};
-        const newIdx = t.indexed ?? 0;
-        const cached = t.cached ?? 0;
         const fetchFailed = t.fetch_failed ?? 0;
-        const indexFailed = t.failed ?? 0;
         const noTranscript = t.no_transcript ?? 0;
-        const available = newIdx + cached;
         const parts = [
             `${m.indexed ?? 0} metadata`,
-            `${available} transcripts in ES (${newIdx} new · ${cached} cached)`,
+            `${(t.indexed ?? 0) + (t.cached ?? 0)} transcripts fetched`,
         ];
         // Permanent "video has no captions" — expected outcome, kept
         // separate from infra fetch failures.
         if (noTranscript) parts.push(`${noTranscript} no transcript`);
         if (fetchFailed) parts.push(`${fetchFailed} fetch failed`);
+        return parts.join(" · ");
+    }
+    if (prefix === "elasticsearch") {
+        const t = result.transcriptions || {};
+        const newIdx = t.indexed ?? 0;
+        const cached = t.cached ?? 0;
+        const indexFailed = t.failed ?? 0;
+        const parts = [
+            `${newIdx + cached} transcripts in ES (${newIdx} new · ${cached} cached)`,
+        ];
         if (indexFailed) parts.push(`${indexFailed} index failed`);
         return parts.join(" · ");
     }
@@ -599,7 +650,7 @@ async function trackPipeline({ extract, qdrant, neo4j, video_ids, startedAt }) {
     // panic button when a corrupt cache is suspected, not just after
     // a terminal finish.
     if (wipeBtn) wipeBtn.disabled = false;
-    const ids = { transcripts: extract, qdrant, neo4j };
+    const ids = { playwright: extract, elasticsearch: extract, qdrant, neo4j };
     // Stable ordering for the video list — `video_ids` is the
     // authoritative dispatch list (saved to localStorage by the POST
     // response handler). Falls back to `[]` for legacy localStorage
@@ -622,24 +673,37 @@ async function trackPipeline({ extract, qdrant, neo4j, video_ids, startedAt }) {
     while (true) {
         tick += 1;
         elapsedEl.textContent = fmtElapsed((Date.now() - startMs) / 1000);
-        const polls = BARS.map((b) => pollTaskOnce(ids[b]));
-        const results = await Promise.all(polls);
+        // Dedupe polls by unique task id — "playwright" and
+        // "elasticsearch" share the same `extract` task id (there's no
+        // separate ES task); polling it twice per tick would be wasteful
+        // and could race into two slightly different snapshots.
+        const uniqueTaskIds = [...new Set(BARS.map((b) => ids[b]))];
+        const uniqueResults = await Promise.all(
+            uniqueTaskIds.map((id) => pollTaskOnce(id)),
+        );
+        const resultByTaskId = {};
+        uniqueTaskIds.forEach((id, i) => { resultByTaskId[id] = uniqueResults[i]; });
         const metaByPhase = {};
         const phaseStates = {};
         let allTerminal = true;
         for (let i = 0; i < BARS.length; i++) {
             const prefix = BARS[i];
-            const r = results[i];
+            const r = resultByTaskId[ids[prefix]];
             const state = r.state || "PENDING";
             const meta = r.meta || (r.result ?? {});
             metaByPhase[prefix] = meta;
             phaseStates[prefix] = state;
+            const isSplit = prefix === "playwright" || prefix === "elasticsearch";
             _setBar(prefix, {
                 state: state.toLowerCase(),
-                pct: _phasePct(state, meta),
+                pct: isSplit
+                    ? _subPhasePct(prefix, state, meta)
+                    : _phasePct(state, meta),
                 label: state === "FAILURE" || state === "ERROR"
                     ? `Failed: ${(r.error || "").slice(0, 60)}`
-                    : _phaseLabel(state, meta),
+                    : isSplit
+                        ? _subPhaseLabel(prefix, state, meta)
+                        : _phaseLabel(state, meta),
                 hint: state === "SUCCESS" && r.result
                     ? _successHint(prefix, r.result)
                     : null,
@@ -655,11 +719,14 @@ async function trackPipeline({ extract, qdrant, neo4j, video_ids, startedAt }) {
             }
             // Dispatch a phase-completion event the moment THIS phase
             // first reaches SUCCESS so the Ingest-page Library widget
-            // auto-refreshes WITHOUT waiting for Phase 3. Phase 1 done
-            // ⇒ ES metadata + transcripts are now visible (library
-            // shows "partial" pill). Phase 3 done ⇒ Neo4j entity_count
-            // populated (library flips "partial"→"done"). One event
-            // per phase per run (guarded by phaseDoneFired set).
+            // auto-refreshes WITHOUT waiting for Phase 4. Playwright/
+            // ElasticSearch done ⇒ ES metadata + transcripts are now
+            // visible (library shows "partial" pill) — both fire off the
+            // same underlying `extract` task reaching SUCCESS, so they
+            // land in the same tick; harmless, just two events instead of
+            // one. Phase 4 (Neo4j) done ⇒ entity_count populated (library
+            // flips "partial"→"done"). One event per phase per run
+            // (guarded by phaseDoneFired set).
             if (state === "SUCCESS" && !phaseDoneFired.has(prefix)) {
                 phaseDoneFired.add(prefix);
                 try {

@@ -188,6 +188,33 @@ async def _extract_videos_async(
                 browser_refresh_interval = 10,
                 max_retries              = 3,
             )
+            def _es_index_cb(indexed: int, total: int) -> None:
+                # Phase 2 (ElasticSearch) — separate bar from Phase 1
+                # (Playwright). Chunk-grained by nature (one bulk write
+                # per chunk), so this ticks in jumps, not smoothly.
+                #
+                # Carries completed_ids/failed_ids/all_items forward from
+                # the transcription phase — Celery's update_state REPLACES
+                # the meta dict each call, so without this the drawer
+                # table's per-video ES column would go blank the instant
+                # this phase starts (its own payload has no per-video
+                # detail, only phase/current/total).
+                if not progress_cb:
+                    return
+                try:
+                    progress_cb({
+                        "phase":         "es_indexing",
+                        "current":       indexed,
+                        "total":         total,
+                        "completed_ids": list(completed_ids),
+                        "failed_ids":    list(failed_ids),
+                        "all_items":     all_items,
+                    })
+                except Exception as cb_err:
+                    logger.warning(
+                        f"[extract_videos] es_index progress_cb raised: "
+                        f"{type(cb_err).__name__}: {cb_err}"
+                    )
             try:
                 trans_stats: dict[str, int] = {}
                 transcription_docs = await fetch_transcriptions_batch(
@@ -197,6 +224,7 @@ async def _extract_videos_async(
                     languages          = languages,
                     video_metadata     = video_metadata,
                     progress_cb        = _per_video_cb if progress_cb else None,
+                    es_progress_cb     = _es_index_cb if progress_cb else None,
                     stats              = trans_stats,
                 )
                 if transcription_docs:

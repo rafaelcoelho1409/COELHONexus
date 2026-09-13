@@ -2935,7 +2935,9 @@
  * + 1 below 760px (covered by media query at the bottom). */
 .ycs-pipe-bars-row {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  /* 2026-09-13: 3 -> 4 columns (Playwright/ElasticSearch split out of
+     the old combined bar). */
+  grid-template-columns: 1fr 1fr 1fr 1fr;
   gap: 16px;
   margin: 6px 0;
 }
@@ -3172,6 +3174,12 @@
 .ycs-pipe-cell-pill-done    { background: rgba(44, 138, 62, 0.16);  color: #1f6635;           border-color: rgba(44, 138, 62, 0.32); }
 .ycs-pipe-cell-pill-failed  { background: rgba(196, 18, 48, 0.14);  color: #8a142a;           border-color: rgba(196, 18, 48, 0.36); }
 .ycs-pipe-cell-pill-skipped { background: rgba(0, 102, 204, 0.12);  color: #0b4a8a;           border-color: rgba(0, 102, 204, 0.30); }
+
+@media (max-width: 1000px) {
+  /* 2026-09-13: 2x2 grid before dropping to a single column — 4 bars
+     at 1fr each get cramped below ~1000px. */
+  .ycs-pipe-bars-row { grid-template-columns: 1fr 1fr; }
+}
 
 @media (max-width: 760px) {
   /* Drop to 1 column at narrow widths; bars stack vertically. */

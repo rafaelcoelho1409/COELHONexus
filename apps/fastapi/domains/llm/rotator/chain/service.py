@@ -263,6 +263,41 @@ def _get_openai_sync():
 # Helpers — ChatOpenAI / OpenAIEmbeddings via endpoint (legacy compat)
 # ---------------------------------------------------------------------------
 
+def _build_chat_openai(
+    *,
+    timeout_s:       float | None = None,
+    max_tokens:      int | None   = None,
+    temperature:     float | None = None,
+    response_format: dict | None  = None,
+):
+    """Shared LangChain `ChatOpenAI` construction for every non-hot-path
+    caller — one place to keep `max_retries=0` applied consistently.
+    Rotator handles cascade server-side; an SDK-level retry loop on top
+    of it would stack a second, redundant retry (same reasoning as the
+    raw-client hot path's `max_retries=0` in `_get_async_openai`).
+
+    2026-09-13: added after finding TWO independent `ChatOpenAI`
+    construction sites (`_get_chat_llm` and YCS's Neo4j chain builder)
+    had each separately forgotten this — consolidating so it can't
+    drift apart a third time."""
+    from langchain_openai import ChatOpenAI
+
+    kwargs: dict = {
+        "base_url":     COELHO_ROTATOR_URL,
+        "api_key":      COELHO_API_KEY,
+        "model":        COELHO_ROTATOR_MODEL,
+        "temperature":  temperature if temperature is not None else 0.0,
+        "max_retries":  0,
+    }
+    if timeout_s is not None:
+        kwargs["timeout"] = timeout_s
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    if response_format is not None:
+        kwargs["model_kwargs"] = {"response_format": response_format}
+    return ChatOpenAI(**kwargs)
+
+
 def _get_chat_llm(
     *,
     max_tokens: int | None = None,
@@ -276,21 +311,12 @@ def _get_chat_llm(
     via _get_async_openai() for lower overhead. This stays for backward-compat
     callers that pass LangChain messages.
     """
-    from langchain_openai import ChatOpenAI
-
-    kwargs: dict = {
-        "base_url": COELHO_ROTATOR_URL,
-        "api_key": COELHO_API_KEY,
-        "model": COELHO_ROTATOR_MODEL,
-        "temperature": temperature if temperature is not None else 0.0,
-    }
-    if max_tokens is not None:
-        kwargs["max_tokens"] = max_tokens
-    if timeout_s is not None:
-        kwargs["timeout"] = timeout_s
-    if response_format is not None:
-        kwargs["model_kwargs"] = {"response_format": response_format}
-    return ChatOpenAI(**kwargs)
+    return _build_chat_openai(
+        timeout_s       = timeout_s,
+        max_tokens      = max_tokens,
+        temperature     = temperature,
+        response_format = response_format,
+    )
 
 
 @functools.lru_cache(maxsize=1)
@@ -703,7 +729,30 @@ def build_ycs_neo4j_pinned_chain(pinned_model: str | None = None, *args, **kwarg
     # because that stub forwards to the zero-arg build_reduce_label_chain,
     # which raises TypeError on the positional pinned_model argument
     # task.py actually passes.
-    return build_reduce_label_chain()
+    #
+    # 2026-09-13: no longer delegates to build_reduce_label_chain() — that
+    # bare ChatOpenAI(...) had no timeout override and no max_retries=0,
+    # so it fell back to the openai SDK's own defaults (600s timeout,
+    # max_retries=2). An SDK-level retry there stacks a second, redundant
+    # retry loop on top of the rotator's own arm-swap cascade — the
+    # rotator returns a 504 in ~20-30s when it's genuinely giving up, and
+    # the SDK would silently retry that itself before neo4j_task's own
+    # circuit breaker ever saw a clean failure to react to. max_retries=0
+    # fixes that regardless of the timeout value.
+    #
+    # 2026-09-13 CORRECTION (same day): first shipped with timeout_s=120.0,
+    # reasoning "comfortably above the observed 20-30s 504 latency." Wrong
+    # — that 20-30s figure was the rotator's fast-fail path; a genuinely
+    # slow-but-working call for this workload (large transcripts → large
+    # completions) legitimately needs more. Live-tested at both
+    # concurrency=5 AND concurrency=3: every first-batch call timed out
+    # simultaneously at exactly 120s with ZERO successes, ruling out
+    # concurrency/contention as the cause — 120s was just too tight for
+    # this call shape. Raised to 400s: still comfortably under the 600s
+    # GRAPH_BATCH_TIMEOUT_S outer watchdog in graph_builder/service.py,
+    # but much closer to the ~600s implicit default that was actually
+    # working (with occasional real 504s) before any of today's changes.
+    return _build_chat_openai(timeout_s = 400.0)
 
 
 async def record_ycs_neo4j_reward(*args, **kwargs):

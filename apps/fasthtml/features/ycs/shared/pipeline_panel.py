@@ -1,4 +1,4 @@
-"""Shared pipeline panel — 3 live progress bars + current-video card.
+"""Shared pipeline panel — 4 live progress bars + current-video card.
 
 Lives in `shared/` rather than inside any one stage's body because it
 needs to render at the TOP of every YCS page (Source / Ingest / Ask) so
@@ -17,10 +17,10 @@ from fasthtml.common import Button, Div, Span
 
 
 def _Bar(prefix: str, title: str, hint: str):
-    """One row of the 3-phase pipeline panel — title + percentage label,
-    fill bar, counter line, status text. Reused for `transcripts`,
-    `qdrant`, `neo4j`. `prefix` namespaces all ids so JS targets
-    `ycs-bar-{prefix}-*`."""
+    """One row of the 4-phase pipeline panel — title + percentage label,
+    fill bar, counter line, status text. Reused for `playwright`,
+    `elasticsearch`, `qdrant`, `neo4j`. `prefix` namespaces all ids so
+    JS targets `ycs-bar-{prefix}-*`."""
     return Div(
         Div(
             Span(title, cls = "ycs-bar-title"),
@@ -118,9 +118,12 @@ def _VideoDrawer():
 
 
 def PipelinePanel():
-    """Wave-5 polish — 3 live progress bars (transcripts, Qdrant, Neo4j)
-    + a sticky "current video" metadata card, fed by 3 simultaneous
-    Celery task polls.
+    """Wave-5 polish, split into 4 bars 2026-09-13 — live progress bars
+    (Playwright, ElasticSearch, Qdrant, Neo4j) + a sticky "current
+    video" metadata card, fed by 3 simultaneous Celery task polls
+    (Playwright + ElasticSearch share one task id — `extract_videos` —
+    since ES-indexing isn't a separate task; the two bars are derived
+    from that one task's `phase` field, see `pipeline_panel.js`).
 
     Rendered at the TOP of every YCS page (via `YCSPage` chrome) so a
     long-running ingest stays visible while the user navigates between
@@ -149,7 +152,7 @@ def PipelinePanel():
                     "Revoke unfinished phases (SIGTERM the running "
                     "task, cancel queued ones). Completed phases keep "
                     "their writes; rerun resumes via Phase 1 ES-cache "
-                    "and Phase 3 Neo4j skip-on-video_id."
+                    "and Phase 4 Neo4j skip-on-video_id."
                 ),
             ),
             Button(
@@ -159,10 +162,10 @@ def PipelinePanel():
                 cls      = "ycs-pipe-rerun-btn",
                 disabled = True,
                 title    = (
-                    "Re-fire the 3-phase chain over the same video "
+                    "Re-fire the 4-phase chain over the same video "
                     "IDs. Phase 1 skips transcripts already in ES; "
-                    "Phase 3 skips video IDs already tagged in Neo4j; "
-                    "Phase 2 re-embeds (Qdrant upserts are idempotent "
+                    "Phase 4 skips video IDs already tagged in Neo4j; "
+                    "Phase 3 re-embeds (Qdrant upserts are idempotent "
                     "on md5(video_id_chunk_index)). Use after a "
                     "partial failure to fill in the gaps without "
                     "re-picking videos from Search."
@@ -179,12 +182,12 @@ def PipelinePanel():
                     "ES metadata + transcripts, Qdrant points, Neo4j "
                     "Document/Video nodes + their orphaned __Entity__ "
                     "nodes — AND revoke any in-flight chain phases so "
-                    "a mid-LLM Phase 3 doesn't write orphans after the "
+                    "a mid-LLM Phase 4 doesn't write orphans after the "
                     "wipe. Wiped videos disappear from the Library "
                     "automatically, but this panel STAYS so you can "
                     "re-dispatch via Retry. The next Retry re-runs "
                     "the chain from scratch (no Phase 1 cache hits, "
-                    "no Phase 3 skip-on-video_id). Entity nodes shared "
+                    "no Phase 4 skip-on-video_id). Entity nodes shared "
                     "with other videos are left intact."
                 ),
             ),
@@ -222,25 +225,37 @@ def PipelinePanel():
             ),
             cls = "ycs-pipe-panel-head",
         ),
-        # Horizontal bar row — 3 stepper-style stage bars side by
+        # Horizontal bar row — 4 stepper-style stage bars side by
         # side. Pattern: PatternFly progress stepper / MUI horizontal
         # stepper for short (3–7 step) sequential flows. The detailed
         # per-video × per-store status table moved out to a right-side
         # drawer (`_VideoDrawer()`) so the panel stays compact.
+        #
+        # 2026-09-13: split the old combined "Playwright & ElasticSearch"
+        # bar into two — both poll the SAME `extract_videos` task id
+        # (there's no separate ES task), but the task now emits a
+        # distinct `es_indexing` phase after Playwright's `transcription`
+        # phase, so JS can derive two independent progress bars from one
+        # task's poll stream. See `pipeline_panel.js`'s `_subPhasePct`.
         Div(
             _Bar(
-                "transcripts",
-                "Phase 1 · Playwright & ElasticSearch",
+                "playwright",
+                "Phase 1 · Playwright",
                 "yt-dlp metadata + Playwright transcript scrape.",
             ),
             _Bar(
+                "elasticsearch",
+                "Phase 2 · ElasticSearch",
+                "Bulk-index fetched transcripts (chunk-grained).",
+            ),
+            _Bar(
                 "qdrant",
-                "Phase 2 · Qdrant",
+                "Phase 3 · Qdrant",
                 "Hybrid dense + BM25 upsert.",
             ),
             _Bar(
                 "neo4j",
-                "Phase 3 · Neo4j",
+                "Phase 4 · Neo4j",
                 "Full-transcript LLM entity extraction.",
             ),
             cls = "ycs-pipe-bars-row",
