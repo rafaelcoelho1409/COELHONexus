@@ -25,3 +25,14 @@ class EndpointBody(BaseModel):
     url: str = Field(min_length=1)
     model: str = "auto"
     api_key: str | None = None
+
+
+class EmbeddingBody(BaseModel):
+    """Embedding endpoint config — independent connection from chat's
+    EndpointBody above, same shape. Can point at COELHO LLM Rotator (its
+    Embedding Curator resolves the actual model) or any other OpenAI-
+    compatible embedding service. `api_key=None` leaves the stored key
+    unchanged; `api_key=""` clears it."""
+    url: str = Field(min_length=1)
+    model: str = "auto"
+    api_key: str | None = None

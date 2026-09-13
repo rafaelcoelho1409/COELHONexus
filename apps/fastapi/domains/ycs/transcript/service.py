@@ -167,6 +167,36 @@ async def _get_caption_tracks(page) -> list[CaptionTrack]:
     ]
 
 
+async def _wait_for_innertube_context(page, timeout_ms: int = 3000) -> bool:
+    """Wait for `window.ytcfg.get('INNERTUBE_CONTEXT')` to exist before
+    Path 1/2 read it.
+
+    `ytcfg` is a separate inline script from `ytInitialPlayerResponse` and
+    isn't covered by `_get_player_state`'s wait — under concurrent
+    CPU-shared rendering (5 contexts sharing one headed-Chrome pod) its
+    population can lag past `domcontentloaded`, intermittently. Without
+    this gate, `_fetch_via_get_panel`/`_fetch_via_get_transcript` read it
+    too early, fail with 'no INNERTUBE_CONTEXT', and fall through to the
+    much slower (and equally contention-sensitive) DOM-scrape path —
+    burning its full ~100s hydration/panel-wait budget before failing.
+    Empirically reproduced 2026-09-12 on a Raiam Santos McArn batch: the
+    same videos that failed this way in one chunk recovered via get_panel
+    on a later retry once contention eased (45.5s/video → 4.0s/video),
+    meaning the condition was transient, not a captcha or permanent
+    block — just a missed wait. Best-effort: returns False (not raised)
+    on timeout so the caller still attempts get_panel/get_transcript,
+    which raise their own ValueError if ytcfg truly never populates."""
+    try:
+        await page.wait_for_function(
+            "() => !!(window.ytcfg && window.ytcfg.get "
+            "&& window.ytcfg.get('INNERTUBE_CONTEXT'))",
+            timeout = timeout_ms,
+        )
+        return True
+    except Exception:
+        return False
+
+
 async def _get_player_state(page) -> dict[str, Any]:
     """Authoritative availability gate from `ytInitialPlayerResponse`
     (present in the initial HTML — readable even on unhydrated pages).
@@ -1065,16 +1095,21 @@ class PlaywrightTranscriptService:
                 page = await context.new_page()
                 await _setup_routes(page)
                 url = f"https://www.youtube.com/watch?v={video_id}"
-                # `wait_until="domcontentloaded"` per the gold-standard
-                # script — was `"load"`, which waited on the very
-                # analytics/manifest requests we abort via BLOCK_PATTERNS,
-                # eating navigation budget for nothing. DCL fires as
-                # soon as the HTML is parsed; the availability gate +
-                # data-path fetches below read window globals that are
-                # already in the initial HTML.
+                # `wait_until="commit"` (2026-09-13, was "domcontentloaded",
+                # was "load" before that). `commit` returns as soon as
+                # response headers are parsed — BEFORE the HTML body is
+                # even parsed. Safe here because `_get_player_state` and
+                # `_wait_for_innertube_context` below already re-poll for
+                # `ytInitialPlayerResponse`/`ytcfg` via `wait_for_function`
+                # regardless of what `goto()` waited for; the only effect
+                # of an earlier-returning `wait_until` is that those polls
+                # START sooner, closing the dead time between commit and
+                # DCL where Python was previously just blocked. Measured
+                # live 2026-09-13: DCL alone was firing ~2.5s in — commit
+                # returns near-immediately after the response arrives.
                 await page.goto(
                     url,
-                    wait_until = "domcontentloaded",
+                    wait_until = "commit",
                     timeout    = self.navigation_timeout_ms,
                 )
                 state = await _get_player_state(page)
@@ -1138,6 +1173,7 @@ class PlaywrightTranscriptService:
                         "method":            method,
                     }
 
+                await _wait_for_innertube_context(page)
                 try:
                     return _ok(
                         await _fetch_via_get_panel(page, video_id),

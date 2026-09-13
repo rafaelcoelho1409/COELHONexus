@@ -28,10 +28,11 @@ from .params import QDRANT_DEFAULT_TOP_K
 
 
 class QdrantHybridRetriever:
-    """Dense (NIM `nvidia/llama-nemotron-embed-1b-v2`) + Sparse
-    (`FastEmbedSparse("Qdrant/bm25")`) fused in one query. Replaces
-    ES full-text on the hot path — dense catches semantic matches,
-    sparse catches keyword matches, RRF blends the two ranked lists."""
+    """Dense (the Settings-page-configured embedding endpoint — see
+    `domains/llm/embeddings`) + Sparse (`FastEmbedSparse("Qdrant/bm25")`)
+    fused in one query. Replaces ES full-text on the hot path — dense
+    catches semantic matches, sparse catches keyword matches, RRF blends
+    the two ranked lists."""
 
     def __init__(
         self,
@@ -51,7 +52,7 @@ class QdrantHybridRetriever:
         # Two query-side vectors, one Qdrant call. Each Prefetch over-
         # fetches at `top_k * 2` so RRF has headroom to reorder before
         # the final `limit = top_k` truncation.
-        dense_vector = self.dense_embeddings.embed_query(query)
+        dense_vector = await self.dense_embeddings.aembed_query(query)
         sparse_vector = self.sparse_embeddings.embed_query(query)
 
         # PRE-filter (not post-filter) — applied during the vector

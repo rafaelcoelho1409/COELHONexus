@@ -663,27 +663,54 @@ def build_llm_fallback_chain():
 # here. 2026-09-12: dropped build_curator_llm / build_keylm_chain /
 # build_pinned_chain_any / build_refine_llm_chain / build_resolver_llm_chain
 # / build_synth_fallback_chain / build_synth_pinned_chain /
-# build_synth_pool_chain / build_ycs_neo4j_pinned_chain (zero-diff via the
-# generic build_* fallback), get_entries_for_group / get_parent_group /
-# pick_synth_deployment / pick_synth_deployment_bandit (zero real callers
-# anywhere), and _get_router / _redis_for_bandit (zero real callers).
+# build_synth_pool_chain (zero-diff via the generic build_* fallback),
+# get_entries_for_group / get_parent_group / pick_synth_deployment /
+# pick_synth_deployment_bandit (zero real callers anywhere), and
+# _get_router / _redis_for_bandit (zero real callers).
+#
 # ensure_dynamic_catalog stays explicit — real callers `await` it, and the
 # __getattr__ fallback below returns a plain sync lambda, which would raise
 # `TypeError: object NoneType can't be used in 'await' expression'.
+#
+# 2026-09-13 FIX: pick_ycs_neo4j_deployment_bandit / record_ycs_neo4j_reward
+# / release_ycs_provider_slot / build_ycs_neo4j_pinned_chain were ALL
+# broken — `neo4j_task/task.py` awaits them and unpacks a 3-tuple from the
+# first one, but these were left as sync single-value shims (and
+# build_ycs_neo4j_pinned_chain fell through the __getattr__ stub into
+# build_reduce_label_chain(), a zero-arg function, called with 1 arg).
+# Every ingest_to_neo4j run crashed on its very first call before entity
+# extraction ever started. No per-process arm pinning exists anymore
+# anyway — the rotator's own FGTS-VA bandit picks per HTTP call when
+# model="auto" (same as every other build_* consumer) — so these are now
+# real async functions matching the shapes task.py actually needs, not
+# reintroducing the deleted local bandit.
 # ------------------------------------------------------------------
 async def ensure_dynamic_catalog(*args, **kwargs):
     return None
 
 
-def pick_ycs_neo4j_deployment_bandit(*args, **kwargs):
-    return COELHO_ROTATOR_MODEL
+async def pick_ycs_neo4j_deployment_bandit(*args, **kwargs):
+    # (pinned_model, provider, slot) — provider/slot are vestigial from the
+    # deleted local per-arm-pool design; kept only so release_ycs_provider_slot
+    # still has something to receive. The rotator owns real arm selection now.
+    return COELHO_ROTATOR_MODEL, "rotator", None
 
 
-def record_ycs_neo4j_reward(*args, **kwargs):
+def build_ycs_neo4j_pinned_chain(pinned_model: str | None = None, *args, **kwargs):
+    # pinned_model is accepted for call-site compat but ignored — the
+    # rotator picks per HTTP call (model="auto"), same as every other
+    # build_* consumer. Explicit (not the generic __getattr__ stub)
+    # because that stub forwards to the zero-arg build_reduce_label_chain,
+    # which raises TypeError on the positional pinned_model argument
+    # task.py actually passes.
+    return build_reduce_label_chain()
+
+
+async def record_ycs_neo4j_reward(*args, **kwargs):
     return None
 
 
-def release_ycs_provider_slot(*args, **kwargs):
+async def release_ycs_provider_slot(*args, **kwargs):
     return None
 
 

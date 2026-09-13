@@ -230,7 +230,7 @@ def PipelinePanel():
         Div(
             _Bar(
                 "transcripts",
-                "Phase 1 · ElasticSearch",
+                "Phase 1 · Playwright & ElasticSearch",
                 "yt-dlp metadata + Playwright transcript scrape.",
             ),
             _Bar(

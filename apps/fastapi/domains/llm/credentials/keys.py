@@ -17,4 +17,7 @@ MANAGED_KEY_ENVS: tuple[str, ...] = (
     # for the bundled in-cluster rotator (no auth); set when pointing at an
     # external OpenAI-compatible endpoint. See domains/llm/rotator/chain/service.py.
     "COELHO_LLM_API_KEY",
+    # Same idea, independent endpoint — embeddings (YCS, once rewired) can
+    # point at a different provider than chat. See domains/llm/embeddings/service.py.
+    "COELHO_EMBEDDING_API_KEY",
 )

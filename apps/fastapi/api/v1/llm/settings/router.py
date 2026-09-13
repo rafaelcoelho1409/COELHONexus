@@ -5,7 +5,7 @@ workers via the Redis generation bump."""
 from __future__ import annotations
 
 from .params import PROVIDER_META
-from .schemas import EnableBody, EndpointBody, KeyBody, ModelsBody
+from .schemas import EmbeddingBody, EnableBody, EndpointBody, KeyBody, ModelsBody
 
 import asyncio
 import logging
@@ -303,6 +303,89 @@ async def test_endpoint() -> JSONResponse:
             "reply": (text or "").strip()[:80],
             "latency_ms": int((_time.monotonic() - t0) * 1000),
             "deployment": (meta or {}).get("deployment"),
+        })
+    except Exception as e:
+        return JSONResponse(content={
+            "ok": False,
+            "error": f"{type(e).__name__}: {str(e)[:200]}",
+            "latency_ms": int((_time.monotonic() - t0) * 1000),
+        })
+
+
+# ---------------------------------------------------------------------------
+# Embedding endpoint — independent connection from the LLM Endpoint above.
+# 2026-09-12: replaces the removed standalone NVIDIA key card — YCS's direct
+# NIM embeddings call is being retired in favor of a configurable embeddings
+# endpoint (e.g. COELHO LLM Rotator's Embedding Curator, or any other
+# OpenAI-compatible embedding service — same flexibility the LLM Endpoint
+# card already has for chat, kept as its own connection rather than tied
+# to chat's).
+# ---------------------------------------------------------------------------
+
+_EMBEDDING_KEY_ENV = "COELHO_EMBEDDING_API_KEY"
+
+
+def _embedding_view() -> dict:
+    s = get_store().read_settings() or {}
+    ep = s.get("embedding_endpoint") or {}
+    st = get_store().key_status(_EMBEDDING_KEY_ENV)
+    return {
+        "url": ep.get("url") or "",
+        "model": ep.get("model") or "auto",
+        **asdict(st),  # has_key, source, last4
+    }
+
+
+def _write_embedding(body: EmbeddingBody) -> None:
+    store = get_store()
+    s = store.read_settings() or {}
+    s["embedding_endpoint"] = {
+        "url": body.url.strip(),
+        "model": (body.model or "auto").strip() or "auto",
+    }
+    store.write_settings(s)
+    if body.api_key is not None:
+        if body.api_key.strip():
+            store.set_key(_EMBEDDING_KEY_ENV, body.api_key.strip())
+        else:
+            try:
+                store.delete_key(_EMBEDDING_KEY_ENV)
+            except Exception:
+                pass
+    from domains.llm.embeddings import reset_embedding_client
+    reset_embedding_client()
+
+
+@router.get("/embedding")
+async def get_embedding() -> JSONResponse:
+    return JSONResponse(content=await run_in_threadpool(_embedding_view))
+
+
+@router.put("/embedding")
+async def put_embedding(body: EmbeddingBody) -> JSONResponse:
+    try:
+        await run_in_threadpool(_write_embedding, body)
+    except UnmanagedKeyEnv as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return JSONResponse(content=await run_in_threadpool(_embedding_view))
+
+
+@router.post("/embedding/test")
+async def test_embedding() -> JSONResponse:
+    """One tiny real embeddings call against the currently-configured
+    embedding endpoint — proves it actually works."""
+    import time as _time
+
+    from domains.llm.embeddings import embed_probe_async
+
+    t0 = _time.monotonic()
+    try:
+        vector, meta = await embed_probe_async()
+        return JSONResponse(content={
+            "ok": True,
+            "dimensions": len(vector),
+            "deployment": meta.get("deployment"),
+            "latency_ms": int((_time.monotonic() - t0) * 1000),
         })
     except Exception as e:
         return JSONResponse(content={

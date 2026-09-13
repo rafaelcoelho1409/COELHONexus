@@ -32,7 +32,6 @@ from celery.utils.log import get_task_logger
 from elasticsearch import AsyncElasticsearch
 from langchain_neo4j import Neo4jGraph
 
-from domains.llm.credentials import resolve_key
 from domains.llm.rotator.chain import (
     build_ycs_neo4j_pinned_chain,
     pick_ycs_neo4j_deployment_bandit,
@@ -157,18 +156,17 @@ def ingest_to_neo4j(
             username = os.environ.get("NEO4J_USERNAME", "neo4j"),
             password = os.environ.get("NEO4J_PASSWORD", ""),
         )
-        if not any(resolve_key(env_var) for env_var in (
-            "NVIDIA_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY",
-            "MISTRAL_API_KEY", "GOOGLE_API_KEY", "DEEPSEEK_API_KEY",
-        )):
-            return {
-                "error": (
-                    "No provider keys configured in the BYOK credential "
-                    "store. Open /settings (LLM rotator) and paste at "
-                    "least one provider key. Phase 3 entity extraction "
-                    "can't proceed without it."
-                ),
-            }
+        # 2026-09-13: dropped the old "at least one of these 6 per-provider
+        # keys must be set" gate — it checked credentials from the bundled-
+        # litellm-router era that no longer determine chat readiness. Chat
+        # (entity extraction) always goes through the LLM Endpoint
+        # (`chain/service.py::build_reduce_label_chain`), which resolves to
+        # a working default even with zero explicit Settings-page config —
+        # there's no meaningful "unconfigured" state left to gate on. A
+        # genuinely unreachable endpoint now surfaces as a real error from
+        # the actual call, same as everywhere else this session moved away
+        # from synthetic pre-flight checks (see the DD readiness-gate
+        # finding: a hardcoded-True check is worse than no check).
         try:
             _progress({"phase": "fetching"})
             transcripts = await fetch_transcripts_from_es(es, video_ids)
@@ -385,7 +383,7 @@ def ingest_to_neo4j(
                     "rels":  agg_rels,
                 })
                 logger.info("[ingest_to_neo4j] entity resolution starting")
-                agg_merged = resolve_entities(neo4j_graph)
+                agg_merged = await resolve_entities(neo4j_graph)
                 logger.info(
                     f"[ingest_to_neo4j] entity resolution: "
                     f"{agg_merged} nodes merged"

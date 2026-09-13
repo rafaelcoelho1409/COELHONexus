@@ -18,10 +18,14 @@ GRAPH_BATCH_TIMEOUT_S = max(
 # 3 consecutive 0-entity results on a working corpus signals a dead arm, not empty videos.
 MAX_CONSECUTIVE_NONPRODUCTIVE = 3
 
-# fuzz.ratio pre-filter; BGE-M3 cosine gate at 0.85 catches false positives like Astronomia↔Gastronomia.
+# fuzz.ratio pre-filter; embedding cosine gate at 0.85 catches false positives like Astronomia↔Gastronomia.
 FUZZ_MERGE_CUTOFF = 75
 
-RESOLVE_EMBED_MODEL = "baai/bge-m3"
+# 2026-09-13: tuned against baai/bge-m3's score distribution back when
+# entity-resolution pinned that model specifically via its own
+# NVIDIAEmbeddings instance. Now shares the main embedding-endpoint
+# singleton (no per-call model pinning) — may need re-tuning against
+# whatever the endpoint currently resolves to.
 EMBED_COSINE_CUTOFF = 0.85
 
 # Numeric/date labels: high fuzz ratio ≠ same entity (e.g. "$100k" vs "$1M").

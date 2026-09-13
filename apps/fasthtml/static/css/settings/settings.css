@@ -221,9 +221,9 @@
   font-size: 0.85rem;
   font-weight: 600;
 }
-/* Wraps a password input + its status pill on one row (LLM Endpoint's and
-   the NVIDIA key card's API-key fields) so the pill sits right of the
-   input instead of stretching it via the grid's 1fr track. */
+/* Wraps a password input + its status pill on one row (LLM Endpoint's
+   API-key field) so the pill sits right of the input instead of
+   stretching it via the grid's 1fr track. */
 .set-ep-key-row { display: flex; align-items: center; gap: 8px; }
 .set-ep-key-row .set-ep-input { flex: 1; }
 .set-ep-input {

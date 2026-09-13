@@ -1,27 +1,22 @@
-"""ycs/embeddings — PURE retry/backoff helpers.
+"""ycs/embeddings — PURE helpers.
 
 Functional Core (`docs/CODE-CONVENTIONS.md` §4): no I/O, no clock,
-no logging. Mirror of the inline branches in deprecated `_call_api`."""
+no logging.
+
+2026-09-13: `is_transient_status`/`backoff_delay_s` removed along with the
+manual HTTP retry loop they served — that loop existed because the OLD
+design had no server-side failover (hardcoded to one NIM model, so a
+retry was the only way to ride out a transient blip). The embedding
+endpoint (COELHO LLM Rotator, or whatever's configured) now owns
+provider failover itself via its Embedding Curator; a client-side retry
+loop on top would just duplicate that policy."""
 from __future__ import annotations
 
 
 def is_empty_input(texts: list[str]) -> bool:
-    """NIM rejects empty lists AND lists with all-empty/whitespace
-    elements with a deterministic 400. Pre-check so the retry loop
-    doesn't block the event loop on a guaranteed failure."""
+    """The embedding endpoint rejects empty lists AND lists with all-
+    empty/whitespace elements with a deterministic 400. Pre-check so we
+    don't burn a call on a guaranteed failure."""
     if not texts:
         return True
     return all((not t) or (not t.strip()) for t in texts)
-
-
-def is_transient_status(status_code: int) -> bool:
-    """429 or any 5xx — retryable. 4xx (other than 429) — deterministic
-    client error, do NOT retry (deprecated comment: retry is useless
-    and blocks the event loop)."""
-    return status_code == 429 or status_code >= 500
-
-
-def backoff_delay_s(attempt: int) -> int:
-    """Exponential backoff: 2, 4, 8, 16, 32 seconds. Mirror of
-    deprecated `wait = 2 ** (attempt + 1)`."""
-    return 2 ** (attempt + 1)

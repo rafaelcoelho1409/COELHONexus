@@ -29,7 +29,7 @@ from domains.ycs.chunker import chunk_transcript, create_chunker
 from domains.ycs.embeddings import (
     create_dense_embeddings,
     create_sparse_embeddings,
-    get_embedding_dimensions,
+    get_embedding_info,
 )
 from infra.elasticsearch import INDEX_METADATA, INDEX_TRANSCRIPTIONS
 
@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 
 async def ensure_collection(
-    qdrant: AsyncQdrantClient, dense_dimensions: int,
+    qdrant: AsyncQdrantClient, dense_dimensions: int, embedding_model: str = "",
 ) -> bool:
     """Idempotent collection create. Returns True only on first
     creation (False on a no-op).
@@ -63,7 +63,17 @@ async def ensure_collection(
     from before the hybrid migration), we drop and recreate it.
     Without this guard, the legacy collection survives and every
     upsert fails with `Wrong input: Not existing vector name error:
-    sparse` (HTTP 400)."""
+    sparse` (HTTP 400).
+
+    2026-09-13: `embedding_model` closes a gap the dimension check alone
+    doesn't catch — the configured endpoint can now switch to a DIFFERENT
+    model at the SAME dimension (e.g. two 2048-dim models), which would
+    silently pass `dims_match` while mixing incomparable vectors in one
+    cosine space. Sampled from an existing point's `embedding_model`
+    payload field (set by `ingestion/service.py::_flush`), the same way
+    `content_hash` is already sampled just below this function — no new
+    storage mechanism, since Qdrant collections don't carry arbitrary
+    custom metadata outside point payloads."""
     collections = await qdrant.get_collections()
     existing = {c.name for c in collections.collections}
     created = False
@@ -77,24 +87,40 @@ async def ensure_collection(
         has_sparse_slot = (
             isinstance(sparse_cfg, dict) and "sparse" in sparse_cfg
         )
-        # Dimension check : an embedder-model change (env
-        # `NVIDIA_EMBEDDING_MODEL`) silently passes the slot-name check
-        # but every upsert then 400s with a vector-size mismatch.
-        # Vectors aren't comparable across models anyway — recreate.
+        # Dimension check: an embedding-endpoint model change silently
+        # passes the slot-name check but every upsert then 400s with a
+        # vector-size mismatch. Vectors aren't comparable across models
+        # anyway — recreate.
         dims_match = (
             has_dense_slot
             and getattr(vectors_cfg["dense"], "size", None) == dense_dimensions
         )
-        if not (has_dense_slot and has_sparse_slot and dims_match):
+        model_match = True
+        if has_dense_slot and dims_match and embedding_model:
+            try:
+                points, _ = await qdrant.scroll(
+                    collection_name = QDRANT_COLLECTION,
+                    limit = 1,
+                    with_payload = ["embedding_model"],
+                    with_vectors = False,
+                )
+                if points:
+                    stored_model = (points[0].payload or {}).get("embedding_model")
+                    # No stored value (pre-migration points) → can't prove a
+                    # mismatch, don't force a recreate on that basis alone.
+                    model_match = (not stored_model) or (stored_model == embedding_model)
+            except Exception:
+                pass  # collection-level trouble — dims_match check below still applies
+        if not (has_dense_slot and has_sparse_slot and dims_match and model_match):
             # Wrong-schema collection found. Drop + recreate. The points
-            # inside were built against the legacy schema and can't be
+            # inside were built against the old schema/model and can't be
             # rewritten in place; downstream Phase A → ES indexing is the
             # source of truth, so a Rerun will rebuild this from scratch.
             logger.warning(
                 f"[ycs:ingestion] dropping collection {QDRANT_COLLECTION!r} "
                 f"— schema mismatch (dense_slot={has_dense_slot}, "
-                f"sparse_slot={has_sparse_slot}, dims_match={dims_match}); "
-                f"recreating with hybrid schema."
+                f"sparse_slot={has_sparse_slot}, dims_match={dims_match}, "
+                f"model_match={model_match}); recreating with hybrid schema."
             )
             await qdrant.delete_collection(QDRANT_COLLECTION)
             existing.discard(QDRANT_COLLECTION)
@@ -241,9 +267,9 @@ async def ingest_to_qdrant(
     Celery task wrapper can pipe them into `self.update_state(meta=)`."""
     dense_embeddings = create_dense_embeddings()
     sparse_embeddings = create_sparse_embeddings()
-    dimensions = get_embedding_dimensions()
+    dimensions, embedding_model = await get_embedding_info()
 
-    collection_created = await ensure_collection(qdrant, dimensions)
+    collection_created = await ensure_collection(qdrant, dimensions, embedding_model)
 
     # Two-phase: enumerate transcripts first (fast — text only, ~5s
     # for 359 transcripts), THEN embed (slow — API calls). Separating
@@ -343,8 +369,13 @@ async def ingest_to_qdrant(
         if not buffer:
             return
         texts = [doc.page_content for doc in buffer]
-        dense_vectors = dense_embeddings.embed_documents(texts)
+        dense_vectors = await dense_embeddings.aembed_documents(texts)
         sparse_vectors = list(sparse_embeddings.embed_documents(texts))
+        # embedding_model recorded per point so ensure_collection's
+        # model-identity guard can detect a live endpoint switch on the
+        # next run (see that function's docstring) — sampled from the
+        # SAME real calls above, not re-derived.
+        model_used = dense_embeddings.last_model or ""
         points = [
             PointStruct(
                 id = point_id(
@@ -358,7 +389,7 @@ async def ingest_to_qdrant(
                         values =  sparse_vectors[i].values,
                     ),
                 },
-                payload = domain.build_payload(doc),
+                payload = {**domain.build_payload(doc), "embedding_model": model_used},
             )
             for i, doc in enumerate(buffer)
         ]
@@ -441,7 +472,10 @@ async def ingest_to_qdrant(
         "points_upserted":     total_upserted,
         "videos_unchanged":    len(skip_vids),
         "collection_created":  collection_created,
-        "embedding":           "nvidia-nim-api",
+        # 2026-09-13: was hardcoded "nvidia-nim-api" — stale the moment
+        # embeddings stopped being hardcoded to NIM. Reports whatever the
+        # configured endpoint actually resolved to for this run.
+        "embedding":           embedding_model or "(unknown)",
         "collection":          QDRANT_COLLECTION,
     }
 

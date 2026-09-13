@@ -21,7 +21,7 @@ from langchain_experimental.graph_transformers import LLMGraphTransformer
 from langchain_neo4j import Neo4jGraph
 from rapidfuzz import fuzz
 
-from domains.ycs.embeddings import NVIDIAEmbeddings
+from domains.ycs.embeddings import create_dense_embeddings
 
 from . import domain
 from .params import (
@@ -30,7 +30,6 @@ from .params import (
     EXTRACT_CONCURRENCY,
     FUZZ_MERGE_CUTOFF,
     GRAPH_BATCH_TIMEOUT_S,
-    RESOLVE_EMBED_MODEL,
     SCHEMA_DISCOVERY_SAMPLE_CHAR_CAP,
     SCHEMA_DISCOVERY_SAMPLE_COUNT,
 )
@@ -38,37 +37,36 @@ from .prompts import EXTRACTION_INSTRUCTIONS, SCHEMA_DISCOVERY_PROMPT
 from .schemas import SchemaDiscovery
 
 
-# Lazy singleton — re-used across resolve_entities calls within the
-# same Celery worker process. NVIDIAEmbeddings owns its own httpx
-# client + retry/backoff, so once warm it's free to reuse.
-_resolve_embedder: NVIDIAEmbeddings | None = None
+async def _embed_ids_for_resolution(ids: list[str]) -> dict[str, list[float]]:
+    """Embed a batch of entity-id strings via the configured embedding
+    endpoint, returning a `{id: vector}` map for downstream cosine
+    comparisons.
 
+    2026-09-13: previously pinned its own separate NVIDIAEmbeddings
+    instance to `baai/bge-m3` specifically (tuned for short-string
+    entity-id similarity — multilingual, clean cosine gap at 0.85).
+    Now shares the SAME embedding-endpoint singleton as the main Qdrant
+    path — the endpoint resolves its own model dynamically ("auto"), so
+    there's no client-side way to pin a specific model per call anymore.
+    `EMBED_COSINE_CUTOFF` (0.85) was tuned against bge-m3's score
+    distribution specifically and may need re-tuning if the endpoint's
+    current pick scores entity-id similarity differently — flagged, not
+    silently assumed fine.
 
-def _get_resolve_embedder() -> NVIDIAEmbeddings:
-    global _resolve_embedder
-    if _resolve_embedder is None:
-        _resolve_embedder = NVIDIAEmbeddings(model = RESOLVE_EMBED_MODEL)
-    return _resolve_embedder
-
-
-def _embed_ids_for_resolution(ids: list[str]) -> dict[str, list[float]]:
-    """Embed a batch of entity-id strings via NIM BGE-M3, returning a
-    `{id: vector}` map for downstream cosine comparisons.
-
-    Best-effort: any NIM hiccup logs a warning and returns `{}` — the
-    caller falls back to fuzz-only behavior (drops the semantic gate
-    but doesn't crash entity resolution). This degrades correctness
-    silently (a NIM outage could let through false merges), but
-    preserves availability — same tradeoff as Steps 1+2's wide
-    try/except guards."""
+    Best-effort: any embedding-call failure logs a warning and returns
+    `{}` — the caller falls back to fuzz-only behavior (drops the
+    semantic gate but doesn't crash entity resolution). This degrades
+    correctness silently (an endpoint outage could let through false
+    merges), but preserves availability — same tradeoff as Steps 1+2's
+    wide try/except guards."""
     if not ids:
         return {}
     try:
-        vecs = _get_resolve_embedder().embed_documents(ids)
+        vecs = await create_dense_embeddings().aembed_documents(ids)
     except Exception as e:
         logger.warning(
-            f"[ycs:graph:resolve] NIM embedding failed; falling back "
-            f"to fuzz-only merge for this label "
+            f"[ycs:graph:resolve] embedding endpoint call failed; falling "
+            f"back to fuzz-only merge for this label "
             f"({type(e).__name__}: {str(e)[:120]})"
         )
         return {}
@@ -407,7 +405,7 @@ async def extract_and_store_graph(
                 "rels":    total_relationships,
             })
         logger.info("[ycs:graph] entity resolution starting")
-        resolved = resolve_entities(neo4j_graph)
+        resolved = await resolve_entities(neo4j_graph)
         logger.info(f"[ycs:graph] entity resolution: {resolved} nodes merged")
 
     return {
@@ -433,7 +431,7 @@ async def extract_and_store_graph(
 
 
 
-def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
+async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     """Three-pass deduplication of `__Entity__` nodes:
 
       1. Lowercase + trim every id.
@@ -624,7 +622,7 @@ def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
             # front. Cached per-label so the inner cosine check is
             # zero-network. `{}` on NIM failure → gate always fails →
             # no merges in this label (safe fallback).
-            embeddings = _embed_ids_for_resolution(ids)
+            embeddings = await _embed_ids_for_resolution(ids)
             already_merged: set[str] = set()
             for i, id1 in enumerate(ids):
                 if id1 in already_merged:

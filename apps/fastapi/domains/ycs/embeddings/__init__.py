@@ -1,32 +1,32 @@
-"""ycs/embeddings — NIM dense + FastEmbed BM25 sparse for Qdrant hybrid.
-Does NOT
-route through the LLM rotator (`docs/YCS-PORT-PLAN-2026-06-06.md`
-Wave 3.1 — deprecated didn't, so neither do we).
+"""ycs/embeddings — external-endpoint dense + FastEmbed BM25 sparse for
+Qdrant hybrid.
 
-Public surface mirrors deprecated factory names so consumers can
-import without adaptation."""
+2026-09-13: dense embeddings now route through the Settings-page-
+configured endpoint (`domains/llm/embeddings`) instead of hardcoding NIM
+directly — see `service.py`'s module docstring for why.
+
+Public surface mirrors the old factory names so consumers don't need
+churn beyond `NVIDIAEmbeddings` → `ExternalEmbeddings` and
+`get_embedding_dimensions()` → `await get_embedding_info()`."""
 from .errors import (
     EmbeddingAPIError,
     EmbeddingEmptyQueryError,
     EmbeddingError,
 )
-from .params import EMBEDDING_MODEL, MODEL_DIMENSIONS
 from .service import (
-    NVIDIAEmbeddings,
+    ExternalEmbeddings,
     create_dense_embeddings,
     create_sparse_embeddings,
-    get_embedding_dimensions,
+    get_embedding_info,
 )
 
 
 __all__ = [
-    "EMBEDDING_MODEL",
     "EmbeddingAPIError",
     "EmbeddingEmptyQueryError",
     "EmbeddingError",
-    "MODEL_DIMENSIONS",
-    "NVIDIAEmbeddings",
+    "ExternalEmbeddings",
     "create_dense_embeddings",
     "create_sparse_embeddings",
-    "get_embedding_dimensions",
+    "get_embedding_info",
 ]

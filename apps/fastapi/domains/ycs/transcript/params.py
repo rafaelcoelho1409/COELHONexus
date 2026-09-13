@@ -70,10 +70,40 @@ BLOCK_PATTERNS = (
     "**/*.webp",
     "**/yt3.ggpht.com/*",
     "**/i.ytimg.com/*",
+    # 2026-09-13 speed pass: webfont CSS + icon SVGs served from these
+    # domains (neither is caught by BLOCK_RESOURCE_TYPES — the CSS request
+    # itself is resourceType "stylesheet", not "font").
+    "**/fonts.googleapis.com/*",
+    "**/fonts.gstatic.com/*",
+    # Ad-conversion pixels not covered by the narrower pagead/* patterns
+    # above (those have a single-`*` tail that doesn't cross further `/`
+    # segments; these fire as .../pagead/1p-user-list/<id>/?... etc.).
+    "**/google.com/pagead/**",
+    "**/google.com.br/pagead/**",
+    # Chromecast sender SDK — irrelevant, no cast targets on a datacenter
+    # headed instance.
+    "**/cast_sender.js",
+    # Player-feature JS bundles verified (2026-09-13, live DOM inspection)
+    # to load via separate <script src> tags, fully independent of the
+    # INLINE <script> tags that set `ytcfg`/`ytInitialPlayerResponse` —
+    # blocking these cannot affect either global. None of captions/
+    # miniplayer/endscreen/annotations/remote(cast)/offline/lottie are
+    # touched by the get_panel/get_transcript in-page-fetch paths.
+    "**/player_es6.vflset/**/captions.js",
+    "**/player_es6.vflset/**/miniplayer.js",
+    "**/player_es6.vflset/**/endscreen.js",
+    "**/player_es6.vflset/**/annotations_module.js",
+    "**/player_es6.vflset/**/remote.js",
+    "**/player_es6.vflset/**/offline.js",
+    "**/lottie-light.vflset/**",
 )
 
-# image + font abort reduces background paint pressure that delayed transcript-segment-view-model render.
-BLOCK_RESOURCE_TYPES: frozenset[str] = frozenset({"media", "image", "font"})
+# image + font abort reduces background paint pressure that delayed
+# transcript-segment-view-model render. "stylesheet" added 2026-09-13 —
+# CSS/layout is never read by the fetch-based extraction paths.
+BLOCK_RESOURCE_TYPES: frozenset[str] = frozenset({
+    "media", "image", "font", "stylesheet",
+})
 
 
 PERMANENT_ERRORS = (

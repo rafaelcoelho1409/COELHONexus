@@ -1,175 +1,155 @@
-"""ycs/embeddings — NIM embedding client + sparse BM25 factory.
+"""ycs/embeddings — external-endpoint embedding client + sparse BM25 factory.
 
-Imperative Shell (`docs/CODE-CONVENTIONS.md` §4): HTTP I/O, retry loop,
-batch pacing, logging. Pure decisions delegated to `domain.py`.
+Imperative Shell (`docs/CODE-CONVENTIONS.md` §4): I/O, batch pacing,
+logging. Pure decisions delegated to `domain.py`.
 
 Implements the LangChain `Embeddings` interface so it slots into
-`langchain_qdrant`'s hybrid retriever without adaptation. Direct port
-of deprecated `services/youtube/embeddings.py:L59-194`."""
+`langchain_qdrant`'s hybrid retriever without adaptation — same contract
+as before, just backed by a flexible endpoint instead of a hardcoded NIM
+call.
+
+2026-09-13: replaced the direct-to-NIM HTTP client with calls to
+`domains.llm.embeddings` (the Settings-page "Embedding" card — COELHO LLM
+Rotator by default, any OpenAI-compatible embedding service if pointed
+elsewhere). This removes YCS's single hardcoded-provider dependency — the
+exact failure mode that silently broke every Qdrant ingestion run for
+weeks after NIM retired the previously-hardcoded model on 2026-08-25.
+Dimension is learned from the real endpoint response, never hardcoded —
+no provider publishes it in a models listing (same finding that shaped
+the rotator's own Embedding Curator this session)."""
 from __future__ import annotations
 
+import asyncio
 import logging
-import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
-import httpx
 from langchain_core.embeddings import Embeddings
 from langchain_qdrant import FastEmbedSparse
 
-from domains.llm.credentials import resolve_key
+from domains.llm.embeddings import embed_probe_async, embed_texts_async
 
 from . import domain
 from .errors import EmbeddingAPIError, EmbeddingEmptyQueryError
-from .params import (
-    BATCH_PAUSE_S,
-    BATCH_SIZE,
-    EMBEDDING_MODEL,
-    HTTP_TIMEOUT_S,
-    MAX_RETRIES,
-    MODEL_DIMENSIONS,
-    NIM_KEY_ENV,
-    NIM_URL,
-    SPARSE_MODEL_NAME,
-)
+from .params import BATCH_PAUSE_S, BATCH_SIZE, SPARSE_MODEL_NAME
 
 
 logger = logging.getLogger(__name__)
 
-
-class NVIDIAEmbeddings(Embeddings):
-    """NIM embedding API client with retry + rate-limit pacing.
-
-    Sync httpx by design — deprecated chose sync because (a) the
-    Celery worker context already wraps everything in `asyncio.run`,
-    (b) `time.sleep` between batches inside the gather-bound coroutine
-    is a noop-blocker that helps NIM's rate-limit budget, (c) LangChain's
-    `Embeddings` interface is sync.
-    """
-
-    def __init__(self, model: str = EMBEDDING_MODEL) -> None:
-        self.model = model
-        self.dimensions = MODEL_DIMENSIONS.get(model, 2048)
-        self._client = httpx.Client(timeout = HTTP_TIMEOUT_S)
-        logger.info(
-            f"[ycs:embeddings] {model} ({self.dimensions}d) via NIM"
-        )
+# Dedicated thread pool bridging LangChain's sync `Embeddings` interface to
+# the real async call — for callers we don't directly control (e.g.
+# langchain_qdrant's own internals may invoke embed_documents/embed_query
+# synchronously as part of standard vector-store operations). Our own two
+# known call sites (ingestion/service.py, retriever/qdrant_hybrid.py) are
+# already async and call the a*-prefixed methods directly, never hitting
+# this bridge. A fresh event loop per call (via asyncio.run in a separate
+# thread) is safe regardless of whether the CALLING thread already has one
+# running — asyncio.run()/run_until_complete() would raise in that case,
+# a separate thread never has that conflict.
+_bridge_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ycs-embed-bridge")
 
 
-    def _call_api(
-        self, texts: list[str], input_type: str = "passage",
-    ) -> list[list[float]]:
+def _run_async_sync(coro):
+    return _bridge_executor.submit(asyncio.run, coro).result()
+
+
+class ExternalEmbeddings(Embeddings):
+    """Embedding client backed by the Settings-page-configured endpoint,
+    not a hardcoded provider. `dimensions` starts `None` and is learned
+    from the first real response — callers that need it upfront (Qdrant
+    collection sizing) should call `probe()` explicitly rather than
+    assuming a batch call has already happened."""
+
+    def __init__(self) -> None:
+        self.dimensions: int | None = None
+        self.last_model: str | None = None
+        logger.info("[ycs:embeddings] backed by the configured Embedding endpoint")
+
+    def _record(self, vectors: list[list[float]], model: str | None = None) -> None:
+        if vectors and vectors[0]:
+            self.dimensions = len(vectors[0])
+        if model:
+            self.last_model = model
+
+    async def probe(self) -> tuple[int, str]:
+        """One tiny real call to learn (dimensions, model) upfront —
+        needed at Qdrant collection-create time, before any real batch
+        has necessarily run yet."""
+        vector, meta = await embed_probe_async()
+        self._record([vector] if vector else [], meta.get("deployment"))
+        return self.dimensions or 0, self.last_model or ""
+
+    # --- async (preferred) — our own call sites use these directly ---
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        """Batched with the same pacing the old NIM-direct client used —
+        conservative default, not a hard requirement now that the
+        endpoint owns its own provider-level rate-limit handling. See
+        params.py for the real-scale-test note."""
         if domain.is_empty_input(texts):
-            return []
-        # the BYOK /settings flow can hot-update it without restarting
-        # the worker. `resolve_key` reads the MinIO-backed Fernet store
-        # first, falls back to the named env var, returns "" if both
-        # miss. We fail fast with a user-actionable message rather than
-        # letting httpx 502 with "Illegal header value b'Bearer '".
-        nim_key = resolve_key(NIM_KEY_ENV)
-        if not nim_key:
-            raise EmbeddingAPIError(
-                0,
-                "No NVIDIA_API_KEY configured. Open the /settings page "
-                "(LLM rotator) and paste your NIM key, OR set "
-                "NVIDIA_API_KEY in the worker pod env. Embeddings + "
-                "Phase B Qdrant ingest can't proceed without it.",
-            )
-        for attempt in range(MAX_RETRIES + 1):
-            try:
-                response = self._client.post(
-                    f"{NIM_URL}/embeddings",
-                    headers = {
-                        "Authorization": f"Bearer {nim_key}",
-                        "Content-Type":  "application/json",
-                    },
-                    json = {
-                        "model":      self.model,
-                        "input":      texts,
-                        "input_type": input_type,
-                    },
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    return [item["embedding"] for item in data["data"]]
-                if domain.is_transient_status(response.status_code):
-                    if attempt < MAX_RETRIES:
-                        wait = domain.backoff_delay_s(attempt)
-                        logger.info(
-                            f"[ycs:embeddings] HTTP {response.status_code}, "
-                            f"retry {attempt + 1}/{MAX_RETRIES} in {wait}s"
-                        )
-                        time.sleep(wait)
-                        continue
-                    raise EmbeddingAPIError(response.status_code, response.text)
-                # 4xx other than 429: deterministic, no retry.
-                raise EmbeddingAPIError(response.status_code, response.text)
-            except EmbeddingAPIError:
-                raise
-            except Exception as e:
-                if attempt < MAX_RETRIES:
-                    wait = domain.backoff_delay_s(attempt)
-                    logger.warning(
-                        f"[ycs:embeddings] network error: {e}, "
-                        f"retry {attempt + 1}/{MAX_RETRIES} in {wait}s"
-                    )
-                    time.sleep(wait)
-                    continue
-                raise
-        # Defensive — loop above either returns or raises.
-        return []
-
-
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        """Batched embedding with rate-limit-aware pacing.
-
-        Deprecated math: 50 texts × 30 batches/min ≈ 1500 texts/min,
-        comfortably under the 40 RPM NIM ceiling on the embedding model.
-        For a 1800-chunk ingest: ~36 batches × 2s pause ≈ 72s pacing +
-        API time = ~3-5 min total."""
-        if not texts:
             return []
         out: list[list[float]] = []
         for i in range(0, len(texts), BATCH_SIZE):
-            batch = texts[i:i + BATCH_SIZE]
-            out.extend(self._call_api(batch, input_type = "passage"))
+            batch = texts[i : i + BATCH_SIZE]
+            try:
+                vectors = await embed_texts_async(batch)
+            except Exception as e:
+                raise EmbeddingAPIError(0, f"{type(e).__name__}: {e}") from e
+            self._record(vectors)
+            out.extend(vectors)
             if i + BATCH_SIZE < len(texts):
-                time.sleep(BATCH_PAUSE_S)
+                await asyncio.sleep(BATCH_PAUSE_S)
         return out
 
-    def embed_query(self, text: str) -> list[float]:
+    async def aembed_query(self, text: str) -> list[float]:
         """Single-shot — no batching, no pacing."""
         if not text or not text.strip():
             raise EmbeddingEmptyQueryError("query text was empty")
-        result = self._call_api([text], input_type = "query")
-        if not result:
-            raise EmbeddingAPIError(0, "NIM returned no result for query")
-        return result[0]
+        vectors = await self.aembed_documents([text])
+        if not vectors:
+            raise EmbeddingAPIError(0, "embedding endpoint returned no result for query")
+        return vectors[0]
+
+    # --- sync (LangChain ABC compliance, for callers we don't control) ---
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return _run_async_sync(self.aembed_documents(texts))
+
+    def embed_query(self, text: str) -> list[float]:
+        return _run_async_sync(self.aembed_query(text))
 
 
+_dense: Optional[ExternalEmbeddings] = None
 
-_dense: Optional[NVIDIAEmbeddings] = None
 
-
-def create_dense_embeddings() -> NVIDIAEmbeddings:
-    """Lazy singleton; downstream consumers re-use the same httpx client."""
+def create_dense_embeddings() -> ExternalEmbeddings:
+    """Lazy singleton; downstream consumers re-use the same instance."""
     global _dense
     if _dense is None:
-        _dense = NVIDIAEmbeddings(model = EMBEDDING_MODEL)
+        _dense = ExternalEmbeddings()
     return _dense
 
 
-def get_embedding_dimensions() -> int:
-    """Vector size for the configured model — needed at Qdrant
-    collection-create time."""
-    return MODEL_DIMENSIONS.get(EMBEDDING_MODEL, 2048)
+async def get_embedding_info() -> tuple[int, str]:
+    """(dimensions, model) for the currently-configured embedding
+    endpoint — needed at Qdrant collection-create/schema-check time.
+    Replaces the old static `MODEL_DIMENSIONS` lookup: the model (and
+    therefore the dimension) is chosen dynamically by whatever endpoint
+    is configured, so this makes one real probe call rather than trusting
+    a hardcoded table that goes stale the moment the endpoint's pick
+    changes."""
+    dense = create_dense_embeddings()
+    if dense.dimensions is not None and dense.last_model:
+        return dense.dimensions, dense.last_model
+    return await dense.probe()
 
 
 _sparse: Optional[FastEmbedSparse] = None
 
 
 def create_sparse_embeddings() -> FastEmbedSparse:
-    """BM25 sparse — local, deterministic, tiny CPU cost. Mirror of
-    deprecated `services/youtube/embeddings.py:L189-194`.
+    """BM25 sparse — local, deterministic, tiny CPU cost. Unrelated to the
+    dense embedding endpoint above.
 
     Lazy singleton (2026-06-10): FastEmbedSparse init loads (and on a
     fresh pod, downloads) the fastembed model — ~1 s warm, tens of
