@@ -698,28 +698,19 @@ def build_llm_fallback_chain():
 # __getattr__ fallback below returns a plain sync lambda, which would raise
 # `TypeError: object NoneType can't be used in 'await' expression'.
 #
-# 2026-09-13 FIX: pick_ycs_neo4j_deployment_bandit / record_ycs_neo4j_reward
-# / release_ycs_provider_slot / build_ycs_neo4j_pinned_chain were ALL
-# broken — `neo4j_task/task.py` awaits them and unpacks a 3-tuple from the
-# first one, but these were left as sync single-value shims (and
-# build_ycs_neo4j_pinned_chain fell through the __getattr__ stub into
-# build_reduce_label_chain(), a zero-arg function, called with 1 arg).
-# Every ingest_to_neo4j run crashed on its very first call before entity
-# extraction ever started. No per-process arm pinning exists anymore
-# anyway — the rotator's own FGTS-VA bandit picks per HTTP call when
-# model="auto" (same as every other build_* consumer) — so these are now
-# real async functions matching the shapes task.py actually needs, not
-# reintroducing the deleted local bandit.
+# 2026-09-13: pick_ycs_neo4j_deployment_bandit / record_ycs_neo4j_reward /
+# release_ycs_provider_slot were REMOVED (not just fixed) once confirmed
+# to be pure no-ops that neo4j_task/task.py's "arm-swap" loop was calling
+# for no effect — the bandit-pick always returned the same generic
+# target regardless of any exclusion set, and the reward/slot functions
+# did nothing at all. There is no local arm-pool to pin/reward/release
+# anymore; the rotator's own FGTS-VA bandit picks per HTTP call when
+# model="auto" (same as every other build_* consumer). neo4j_task now
+# calls build_ycs_neo4j_pinned_chain() directly and retries failed
+# videos in-place instead of "swapping arms."
 # ------------------------------------------------------------------
 async def ensure_dynamic_catalog(*args, **kwargs):
     return None
-
-
-async def pick_ycs_neo4j_deployment_bandit(*args, **kwargs):
-    # (pinned_model, provider, slot) — provider/slot are vestigial from the
-    # deleted local per-arm-pool design; kept only so release_ycs_provider_slot
-    # still has something to receive. The rotator owns real arm selection now.
-    return COELHO_ROTATOR_MODEL, "rotator", None
 
 
 def build_ycs_neo4j_pinned_chain(pinned_model: str | None = None, *args, **kwargs):
@@ -753,14 +744,6 @@ def build_ycs_neo4j_pinned_chain(pinned_model: str | None = None, *args, **kwarg
     # but much closer to the ~600s implicit default that was actually
     # working (with occasional real 504s) before any of today's changes.
     return _build_chat_openai(timeout_s = 400.0)
-
-
-async def record_ycs_neo4j_reward(*args, **kwargs):
-    return None
-
-
-async def release_ycs_provider_slot(*args, **kwargs):
-    return None
 
 
 # ── Wave H2 — quality feedback to the rotator ────────────────────────────────

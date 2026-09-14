@@ -1523,17 +1523,22 @@ async def fetch_transcriptions_batch(
     video_metadata:     dict[str, dict[str, Any]] | None  = None,
     progress_cb:        Callable[[int, int, str | None, bool], None] | None = None,
     es_progress_cb:     Callable[[int, int], None] | None = None,
+    on_video_indexed:   Callable[[str], None] | None      = None,
     stats:              dict[str, int] | None             = None,
 ) -> list[dict[str, Any]]:
     """Fetch transcriptions for videos with ES caching + chunked processing.
 
     Strategy (helpers.py:L623-741):
       1. ES cache lookup — skip videos with existing transcriptions
-      2. Chunk processing — process in batches of `chunk_size` for
-         crash resilience (each chunk is indexed immediately)
+      2. Chunk processing — process in batches of `chunk_size` (crash
+         resilience boundary for Playwright's own retry/refresh cycle;
+         ES indexing itself is now per-video, see below)
       3. Playwright CDP via the supplied / global `transcript_service`
 
-    Returns list of transcription docs ready for ES bulk indexing.
+    Returns list of transcription docs (for callers, like
+    `extract/task.py`, that still want the full batch's docs after the
+    fact).
+
     `stats` (optional out-dict) gets populated with
     `{cached, fetched_ok, fetched_failed, no_transcript}` so the caller
     can surface the per-run breakdown in its result envelope (Phase A
@@ -1541,13 +1546,30 @@ async def fetch_transcriptions_batch(
     from "fetch failed" from "no transcript" — the last one is the
     video-has-no-captions permanent case, NOT an infra failure).
 
-    `es_progress_cb(indexed_so_far, total_to_index)` (2026-09-13) fires
-    after each chunk's ES bulk-index call completes — separate from
-    `progress_cb`, which tracks PLAYWRIGHT fetch completion per video.
-    Backs the Ingest page's split Phase 1 (Playwright) / Phase 2
-    (ElasticSearch) bars: this phase's progress is inherently chunk-
-    grained (bulk writes), not per-video, so it ticks in jumps rather
-    than smoothly."""
+    2026-09-13: ES indexing moved from "once per chunk of `chunk_size`"
+    to per-video, fired the instant `service.fetch_batch`'s
+    `on_video_done` reports a video's terminal, successful outcome —
+    this is the hook the per-video streaming fan-out needs (Neo4j/
+    Qdrant can't safely start on a video until its transcript is
+    actually committed to ES). `BULK_REFRESH=True` on the underlying
+    bulk-index call means each single-doc write blocks until
+    searchable, so `on_video_indexed(video_id)` firing is a real
+    guarantee, not a best-effort signal. The single-doc ES calls run as
+    fire-and-forget `asyncio.Task`s (the callback that schedules them
+    is sync, called from within `fetch_batch`'s own completion loop)
+    and are all awaited via `asyncio.gather` before this function
+    returns, so a caller relying on the return value still sees a
+    fully-indexed batch either way.
+
+    `es_progress_cb(indexed_so_far, total_to_index)` fires after each
+    per-video ES write completes — separate from `progress_cb`, which
+    tracks PLAYWRIGHT fetch completion. Backs the Ingest page's split
+    Phase 1 (Playwright) / Phase 2 (ElasticSearch) bars; now ticks
+    per-video instead of per-chunk-of-10, same as Phase 1.
+
+    `on_video_indexed(video_id)` (2026-09-13) fires once per
+    successfully-indexed video — the hook `extract/task.py` uses to
+    dispatch that video's Neo4j/Qdrant streaming tasks immediately."""
     def _set_stats(
         cached: int, ok: int, failed: int, no_transcript: int = 0,
     ) -> None:
@@ -1590,9 +1612,9 @@ async def fetch_transcriptions_batch(
     # the right (current/total) shape + completed_ids[] entry, so the
     # per-store cell in the drawer flips Queued→Done as expected.
     n_progressed = 0
-    if progress_cb:
-        for vid in cached_ids:
-            n_progressed += 1
+    for vid in cached_ids:
+        n_progressed += 1
+        if progress_cb:
             try:
                 progress_cb(n_progressed, total_videos, vid, True)
             except Exception as cb_err:
@@ -1600,11 +1622,27 @@ async def fetch_transcriptions_batch(
                     f"[fetch_transcriptions_batch] cached progress_cb raised: "
                     f"{type(cb_err).__name__}: {cb_err}"
                 )
+        # 2026-09-13: a cached video's transcript is ALREADY safely in
+        # ES from a prior run — it still needs `on_video_indexed` so a
+        # Rerun dispatches Neo4j/Qdrant streaming work for it too. The
+        # old design didn't need this hook to exist at all; the new
+        # per-video fan-out does, or a Rerun over mostly-cached videos
+        # would fire downstream work for 0 of them.
+        if on_video_indexed:
+            try:
+                on_video_indexed(vid)
+            except Exception as cb_err:
+                log.warning(
+                    f"[fetch_transcriptions_batch] on_video_indexed "
+                    f"(cached) raised: {type(cb_err).__name__}: {cb_err}"
+                )
     if not ids_to_fetch:
         log.info(
             "[fetch_transcriptions_batch] All videos cached, no fetch needed",
         )
         _set_stats(cached_count, 0, 0)
+        if stats is not None:
+            stats["dispatched_streaming"] = cached_count
         return []
     service = transcript_service or _transcript_service
     if not service or not service._initialized:
@@ -1623,28 +1661,103 @@ async def fetch_transcriptions_batch(
     total_success = 0
     total_failed = 0
     total_no_transcript = 0
+    total_index_write_failed = 0
     # Live per-video progress: fired by `fetch_batch` the instant each
     # video reaches a terminal state (completion order), so the bar
     # advances 1/N → 2/N as transcripts land instead of jumping 0→100
     # when the chunk's gather returns. `fetched_emitted` persists across
     # chunks and continues from the cached-id count (`n_progressed`).
     fetched_emitted = 0
+    # 2026-09-13: per-video ES indexing runs as fire-and-forget tasks
+    # (the callback that schedules them, `_on_video_done`, is sync —
+    # required by `fetch_batch`'s contract) — collected here so they're
+    # all awaited before this function returns, regardless of which
+    # chunk or retry pass they were scheduled from.
+    _pending_index_tasks: list[asyncio.Task] = []
+
+    async def _index_and_notify(doc: dict[str, Any], vid: str) -> None:
+        nonlocal total_success, total_index_write_failed
+        if es_client:
+            try:
+                await index_transcriptions_to_elasticsearch(es_client, [doc])
+            except Exception as e:
+                total_index_write_failed += 1
+                log.error(
+                    f"[fetch_transcriptions_batch] {vid} index error: {e}",
+                )
+                return  # not counted as success if the write itself failed
+        transcription_docs.append(doc)
+        total_success += 1
+        if es_progress_cb:
+            try:
+                es_progress_cb(total_success, total_to_fetch)
+            except Exception as cb_err:
+                log.warning(
+                    f"[fetch_transcriptions_batch] es_progress_cb raised: "
+                    f"{type(cb_err).__name__}: {cb_err}"
+                )
+        if on_video_indexed:
+            try:
+                on_video_indexed(vid)
+            except Exception as cb_err:
+                log.warning(
+                    f"[fetch_transcriptions_batch] on_video_indexed raised: "
+                    f"{type(cb_err).__name__}: {cb_err}"
+                )
 
     def _on_video_done(vid: str, result: dict[str, Any]) -> None:
-        nonlocal fetched_emitted
+        nonlocal fetched_emitted, total_failed, total_no_transcript
         fetched_emitted += 1
-        if not progress_cb:
-            return
         ok = "error" not in result and bool(result.get("page_content"))
-        try:
-            progress_cb(
-                n_progressed + fetched_emitted, total_videos, vid, ok,
+        if ok:
+            lang = result.get("language", "unknown")
+            content = result.get("page_content", "")
+            is_auto = result.get("is_auto_generated", True)
+            meta = (video_metadata or {}).get(vid, {})
+            doc = {
+                "id":            f"{vid}_{lang}",
+                "video_id":      vid,
+                "lang":          lang,
+                "content":       content,
+                "is_auto":       is_auto,
+                "method":        result.get("method", "dom_scrape"),
+                "channel_id":    meta.get("channel_id"),
+                "playlist_id":   meta.get("playlist_id"),
+                "_extracted_at": datetime.utcnow().isoformat(),
+            }
+            log.info(
+                f"[fetch_transcriptions_batch] OK {vid} lang={lang} "
+                f"auto={is_auto} len={len(content)}",
             )
-        except Exception as cb_err:
+            _pending_index_tasks.append(
+                asyncio.ensure_future(_index_and_notify(doc, vid)),
+            )
+        elif result.get("no_transcript"):
+            # Permanent: video has no captions (or is unplayable for
+            # this session). Expected outcome, not an infra failure.
+            # No ES doc, no downstream dispatch — this video never
+            # counts toward the streaming phase totals.
+            total_no_transcript += 1
+            log.info(
+                f"[fetch_transcriptions_batch] NO-TRANSCRIPT {vid}: "
+                f"{result.get('error', '')[:100]}",
+            )
+        else:
+            total_failed += 1
             log.warning(
-                f"[fetch_transcriptions_batch] live progress_cb raised: "
-                f"{type(cb_err).__name__}: {cb_err}"
+                f"[fetch_transcriptions_batch] FAIL {vid}: "
+                f"{result.get('error', '')[:100]}",
             )
+        if progress_cb:
+            try:
+                progress_cb(
+                    n_progressed + fetched_emitted, total_videos, vid, ok,
+                )
+            except Exception as cb_err:
+                log.warning(
+                    f"[fetch_transcriptions_batch] live progress_cb raised: "
+                    f"{type(cb_err).__name__}: {cb_err}"
+                )
 
     for chunk_num in range(num_chunks):
         start_idx = chunk_num * chunk_size
@@ -1654,91 +1767,30 @@ async def fetch_transcriptions_batch(
             f"[fetch_transcriptions_batch] Chunk {chunk_num + 1}/{num_chunks}: "
             f"{len(chunk_ids)} videos",
         )
-        chunk_results = await service.fetch_batch(
+        await service.fetch_batch(
             chunk_ids, prefer_manual = True, on_video_done = _on_video_done,
         )
-        chunk_docs: list[dict[str, Any]] = []
-        for result in chunk_results:
-            vid = result.get("video_id")
-            if not vid:
-                continue
-            if "error" not in result and result.get("page_content"):
-                lang = result.get("language", "unknown")
-                content = result.get("page_content", "")
-                is_auto = result.get("is_auto_generated", True)
-                meta = (video_metadata or {}).get(vid, {})
-                doc = {
-                    "id":            f"{vid}_{lang}",
-                    "video_id":      vid,
-                    "lang":          lang,
-                    "content":       content,
-                    "is_auto":       is_auto,
-                    "method":        result.get("method", "dom_scrape"),
-                    "channel_id":    meta.get("channel_id"),
-                    "playlist_id":   meta.get("playlist_id"),
-                    "_extracted_at": datetime.utcnow().isoformat(),
-                }
-                chunk_docs.append(doc)
-                transcription_docs.append(doc)
-                total_success += 1
-                log.info(
-                    f"[fetch_transcriptions_batch] OK {vid} lang={lang} "
-                    f"auto={is_auto} len={len(content)}",
-                )
-            elif result.get("no_transcript"):
-                # Permanent: video has no captions (or is unplayable for
-                # this session). Expected outcome, not an infra failure.
-                total_no_transcript += 1
-                log.info(
-                    f"[fetch_transcriptions_batch] NO-TRANSCRIPT {vid}: "
-                    f"{result.get('error', '')[:100]}",
-                )
-            else:
-                total_failed += 1
-                log.warning(
-                    f"[fetch_transcriptions_batch] FAIL {vid}: "
-                    f"{result.get('error', '')[:100]}",
-                )
-            # NOTE: per-video progress is now emitted LIVE by
-            # `_on_video_done` (passed into `fetch_batch`) the instant
-            # each video finishes — NOT here, where the whole chunk's
-            # results are already in hand and would fire in one burst
-            # (the 0→100 jump). This loop only builds docs + tallies
-            # stats for the result envelope.
-        # Index chunk results immediately (crash resilience)
-        if chunk_docs and es_client:
-            try:
-                await index_transcriptions_to_elasticsearch(
-                    es_client, chunk_docs,
-                )
-                log.info(
-                    f"[fetch_transcriptions_batch] Chunk "
-                    f"{chunk_num + 1} indexed: {len(chunk_docs)} docs",
-                )
-            except Exception as e:
-                log.error(
-                    f"[fetch_transcriptions_batch] Chunk "
-                    f"{chunk_num + 1} index error: {e}",
-                )
-        # Phase 2 (ElasticSearch) progress — chunk-grained by nature (one
-        # bulk write per chunk), fires even on an empty chunk so the bar
-        # still advances monotonically alongside Phase 1.
-        if es_progress_cb:
-            try:
-                es_progress_cb(total_success, total_to_fetch)
-            except Exception as cb_err:
-                log.warning(
-                    f"[fetch_transcriptions_batch] es_progress_cb raised: "
-                    f"{type(cb_err).__name__}: {cb_err}"
-                )
         log.info(
             f"[fetch_transcriptions_batch] Chunk {chunk_num + 1}/{num_chunks} "
             f"complete: {total_success} OK, {total_failed} failed, "
             f"{total_no_transcript} no-transcript so far",
         )
+    if _pending_index_tasks:
+        await asyncio.gather(*_pending_index_tasks, return_exceptions = True)
     _set_stats(
         cached_count, total_success, total_failed, total_no_transcript,
     )
+    if stats is not None:
+        # Count of videos `on_video_indexed` actually fired for — every
+        # cached video (already safe in ES from a prior run) PLUS every
+        # freshly-fetched video whose single-doc ES write succeeded in
+        # `_index_and_notify`. This is the exact total `extract/task.py`
+        # needs to record as the streaming phases' `total` once its
+        # dispatch loop finishes — a video that fails its ES write is
+        # NOT counted (it never got a chance to dispatch downstream
+        # work, same as a permanently-failed/no-transcript video).
+        stats["dispatched_streaming"] = cached_count + total_success
+        stats["index_write_failed"] = total_index_write_failed
     log.info(
         f"[fetch_transcriptions_batch] Complete: "
         f"{total_success}/{total_to_fetch} fetched, "

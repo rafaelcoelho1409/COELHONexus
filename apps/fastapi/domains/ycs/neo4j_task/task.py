@@ -1,50 +1,59 @@
 """ycs/neo4j_task — Celery: extract entities from FULL transcripts → Neo4j.
 
-ONE task: `ingest_to_neo4j(video_ids?, batch_size=1)`.
+ONE task: `ingest_to_neo4j(video_ids?, batch_size=1, skip_resolution=False,
+extract_id=None)`. Two callers, two shapes:
+  - Bulk/legacy (`skip_resolution=False`): `video_ids` is the WHOLE
+    batch, `batch_size` defaults to 1 (per-video progress-bar
+    granularity; see `graph_builder.params.EXTRACT_CONCURRENCY` for the
+    actual pool width used when `batch_size<=1`).
+  - Streaming (`skip_resolution=True`, `extract_id` set,
+    2026-09-13/14): `extract/task.py`'s `_on_video_indexed` calls this
+    with a CHUNK of up to `EXTRACT_CONCURRENCY` video ids (accumulated
+    as videos finish Phase 1, flushed once the chunk fills) and
+    `batch_size=len(chunk)`, so `extract_and_store_graph`'s internal
+    pool width exactly matches the chunk — full concurrency within the
+    chunk, starting well before the whole run's video batch clears
+    Phase 1. (An earlier same-day version dispatched one Celery task
+    PER VIDEO instead of per chunk — reverted after a live 25-video
+    run showed it starving on the shared 2-slot Celery worker pool,
+    serializing all 21 downstream videos to one-at-a-time and wasting
+    the internal concurrency entirely.)
 
 Internally:
   1. Fresh AsyncElasticsearch (worker process)
   2. Fresh `Neo4jGraph` — deprecated did NOT pass `refresh_schema=False`
      here (only in app.py). Preserve that omission per port-fidelity.
-  3. Pick a deployment from the unified LLM rotator via FGTS-VA bandit
-     under `dd_process="ycs-neo4j"` (separate cell state from DD so
-     DD prose variance doesn't drag down JSON-strong arms for entity
-     extraction, and vice-versa). Bandit picks one model per Celery
-     task (= one ingest run); all transcripts in this run share the
-     pinned model. The 11-model ad-hoc `with_fallbacks` chain that
-     previously lived here is GONE — it duplicated rotator policy
-     (cooldown, BYOK selection, per-error retry) and bypassed the
-     bandit entirely.
+  3. Build the chat chain via `build_ycs_neo4j_pinned_chain()` — talks
+     to COELHO LLM Rotator with `model="auto"`; the rotator's own
+     server-side FGTS-VA bandit does the real arm/deployment selection.
+     2026-09-13: removed the local `pick_ycs_neo4j_deployment_bandit`/
+     `record_ycs_neo4j_reward`/`release_ycs_provider_slot` calls — all
+     three were confirmed no-ops (the bandit pick always returned the
+     same constant regardless of its `exclude` set, reward/slot-release
+     did nothing). There was no local bandit left to feed; only the
+     shell of one remained.
   4. Fetch transcripts + metadata from ES.
   5. `build_video_metadata_graph` — Video/Channel nodes (no LLM cost).
-  6. `extract_and_store_graph` — LLM entity extraction with batching.
-  7. Emit one bandit reward observation after the run completes (or
-     bails). Aggregated per task — partial failure = failure reward."""
+  6. `extract_and_store_graph` — LLM entity extraction, one real attempt
+     per video. Videos that fail get retried (same connection, same
+     model) up to `MAX_RETRY_PASSES` times — see that constant's
+     comment for why this replaced the old "arm-swap" framing."""
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
-import time
 from typing import Any
 
 from celery.utils.log import get_task_logger
 from elasticsearch import AsyncElasticsearch
 from langchain_neo4j import Neo4jGraph
 
-from domains.llm.rotator.chain import (
-    build_ycs_neo4j_pinned_chain,
-    pick_ycs_neo4j_deployment_bandit,
-    record_ycs_neo4j_reward,
-    release_ycs_provider_slot,
-)
-from domains.llm.rotator.chain.domain import classify_error
+from domains.llm.rotator.chain import build_ycs_neo4j_pinned_chain
 from domains.ycs.graph_builder import (
     build_video_metadata_graph,
     extract_and_store_graph,
     resolve_entities,
 )
-from domains.ycs.graph_builder.params import MAX_CONSECUTIVE_NONPRODUCTIVE
 from domains.ycs.ingestion import (
     fetch_metadata_from_es,
     fetch_transcripts_from_es,
@@ -54,8 +63,15 @@ from infra.celery import app
 
 logger = get_task_logger(__name__)
 
-# 3 arm swaps = 4 arms total; 4 broken arms in a row means the provider side is down.
-MAX_ARM_SWAPS = 3
+# 2026-09-13: replaces the old MAX_ARM_SWAPS. There is no longer a real
+# "arm" to swap to — pick_ycs_neo4j_deployment_bandit and
+# build_ycs_neo4j_pinned_chain were confirmed to always resolve to the
+# same generic "auto" target server-side, regardless of any client-side
+# exclusion tracking (the rotator does the real arm selection now). What
+# this loop actually does is retry videos that failed on the previous
+# pass — same connection, same model, just giving transient failures
+# (504s, timeouts) another chance. 3 retries = 4 total attempts per video.
+MAX_RETRY_PASSES = 3
 
 
 @app.task(
@@ -64,17 +80,31 @@ MAX_ARM_SWAPS = 3
 )
 def ingest_to_neo4j(
     self,
-    video_ids:  list[str] | None = None,
-    batch_size: int              = 1,
+    video_ids:       list[str] | None = None,
+    batch_size:      int              = 1,
+    skip_resolution: bool             = False,
+    extract_id:      str | None       = None,
 ) -> dict[str, Any]:
     """Extract entities from FULL transcripts via the rotator-bandit-pinned
-    LLM → Neo4j. With `pipeline_task.NEO4J_BATCH_SIZE=1` each batch is one
-    video, so per-video progress matches Phase 1 / Phase 2 granularity.
+    LLM → Neo4j. With `batch_size=1` (the per-video streaming caller's
+    default) each call is one video, so per-video progress matches
+    Phase 1 / Phase 2 granularity.
 
-    Includes entity resolution post-processing via rapidfuzz."""
+    Includes entity resolution post-processing via rapidfuzz — UNLESS
+    `skip_resolution=True` (2026-09-13, per-video streaming callers).
+    In that mode this task is one of N independent per-video dispatches
+    for one pipeline run (`extract_id`); resolution can't safely run
+    per-video (it would re-run the same whole-graph fuzzy-merge pass N
+    times — the exact "4× redundant" bug a previous ship already fixed
+    for the batched path). Instead, each streaming call reports its
+    outcome to `pipeline_task.streaming.mark_video_done`; whichever call
+    turns out to be the LAST one for the run's Neo4j phase (atomic
+    counter reaching the total `extract_videos` recorded) runs
+    resolution exactly once, then checks whether Qdrant's phase is also
+    done to fire the run's `invalidate_cache`."""
     logger.info(
         f"[ingest_to_neo4j] Starting: video_ids={video_ids}, "
-        f"batch_size={batch_size}",
+        f"batch_size={batch_size}, skip_resolution={skip_resolution}",
     )
     self.update_state(state = "PROGRESS", meta = {"phase": "init"})
 
@@ -170,9 +200,37 @@ def ingest_to_neo4j(
         try:
             _progress({"phase": "fetching"})
             transcripts = await fetch_transcripts_from_es(es, video_ids)
+            all_video_ids = list({t["video_id"] for t in transcripts})
+            # 2026-09-14: with chunked streaming dispatch (a chunk can
+            # now carry several video_ids, not just one), a transcript
+            # missing from ES for SOME of them is a real, expected case
+            # — not just the "all missing" case the old single-video
+            # check covered. Every requested id that ISN'T in
+            # `all_video_ids` still has to be marked done (as a
+            # failure) in streaming mode, or the exactly-once finalize
+            # counter never reaches its total and the run hangs waiting
+            # on a video that will never report in.
+            missing_ids = [
+                vid for vid in (video_ids or []) if vid not in all_video_ids
+            ]
+            if missing_ids and skip_resolution and extract_id:
+                from domains.ycs.pipeline_task.streaming import (
+                    build_redis_client,
+                    mark_video_done,
+                    maybe_finalize,
+                )
+                r = build_redis_client()
+                try:
+                    for vid in missing_ids:
+                        await mark_video_done(
+                            r, extract_id, "neo4j", vid, success = False,
+                            extra = {"error": "no transcript found in ES"},
+                        )
+                        await maybe_finalize(r, extract_id)
+                finally:
+                    await r.close()
             if not transcripts:
                 return {"error": "No transcripts found in ES"}
-            all_video_ids = list({t["video_id"] for t in transcripts})
             total_videos = len(all_video_ids)
             metadata_map = await fetch_metadata_from_es(es, all_video_ids)
             _progress({
@@ -242,141 +300,148 @@ def ingest_to_neo4j(
                     _progress(meta)
                     return
                 _progress(payload)
-            seed = abs(hash(self.request.id or "")) & 0xFFFFFFFF
-            tried: set[str] = set()
-            arms_tried: list[str] = []
+            llm = build_ycs_neo4j_pinned_chain()
+            logger.info(
+                f"[ingest_to_neo4j] videos={len(all_video_ids)}, "
+                f"max_retry_passes={MAX_RETRY_PASSES}",
+            )
             agg_nodes = 0
             agg_rels = 0
             agg_attempted = 0
             agg_merged = 0
-            pinned_model = ""
+            final_failed_ids: list[str] = []
+            pending_transcripts = transcripts
             extraction_stats: dict[str, Any] = {}
-            for segment in range(MAX_ARM_SWAPS + 1):
-                pinned_model, seg_provider, seg_slot = (
-                    await pick_ycs_neo4j_deployment_bandit(
-                        seed        = seed + segment,
-                        video_count = len(all_video_ids),
-                        exclude     = frozenset(tried),
-                    )
+            for attempt in range(MAX_RETRY_PASSES + 1):
+                pass_label = (
+                    "First pass" if attempt == 0
+                    else f"Retry pass {attempt}/{MAX_RETRY_PASSES}"
                 )
-                tried.add(pinned_model)
-                arms_tried.append(pinned_model)
-                llm = build_ycs_neo4j_pinned_chain(pinned_model)
                 logger.info(
-                    f"[ingest_to_neo4j] pinned model: {pinned_model} "
-                    f"(seed={seed}, segment={segment + 1}/"
-                    f"{MAX_ARM_SWAPS + 1}, videos={len(all_video_ids)})"
+                    f"[ingest_to_neo4j] {pass_label}: "
+                    f"{len(pending_transcripts)} transcript(s)",
                 )
-                t0 = time.monotonic()
-                success = False
-                error_class: str | None = None
-                extraction_stats = {}
-                try:
-                    extraction_stats = await extract_and_store_graph(
-                        transcripts  = transcripts,
-                        metadata_map = metadata_map,
-                        llm          = llm,
-                        neo4j_graph  = neo4j_graph,
-                        batch_size   = batch_size,
-                        progress_cb  = _neo4j_progress,
-                        abort_after_consecutive = MAX_CONSECUTIVE_NONPRODUCTIVE,
-                        # Resolution is a global Neo4j pass — run it ONCE
-                        # after the segment loop, not per segment.
-                        run_resolution = False,
-                    )
-                    success = True
-                except Exception as e:
-                    error_class = classify_error(e)
-                    logger.warning(
-                        f"[ingest_to_neo4j] extraction failed for "
-                        f"{pinned_model}: {type(e).__name__}: {e}"
-                    )
-                    raise
-                finally:
-                    latency_s = float(time.monotonic() - t0)
-                    # Silent-zero guard: extract_and_store_graph swallows per-batch errors; 0-output = failure reward.
-                    docs_processed   = int(extraction_stats.get("documents_processed", 0) or 0)
-                    nodes_created    = int(extraction_stats.get("nodes_created", 0) or 0)
-                    last_batch_error = extraction_stats.get("last_batch_error")
-                    aborted          = bool(extraction_stats.get("aborted_nonproductive"))
-                    silent_zero      = success and docs_processed > 0 and nodes_created == 0
-                    effective_success = success and not silent_zero and not aborted
-                    effective_err     = error_class
-                    if aborted:
-                        lbe = (last_batch_error or "").lower()
-                        if "timeout" in lbe:
-                            effective_err = "timeout"
-                        elif ("ratelimit" in lbe or "rate limit" in lbe
-                                or "429" in lbe):
-                            effective_err = "rate_limit"
-                        else:
-                            effective_err = "schema_invalid"
-                    elif silent_zero:
-                        effective_err = "schema_invalid"
-                        error_tail = (
-                            f" Last LLM error: {last_batch_error}"
-                            if last_batch_error
-                            else " (no per-batch error recorded — LLM returned"
-                                 " 0 entities cleanly; model likely passed"
-                                 " schema validation but doesn't perform the"
-                                 " extraction task)"
-                        )
-                        logger.warning(
-                            f"[ingest_to_neo4j] silent-zero detected for "
-                            f"{pinned_model}: {docs_processed} docs processed "
-                            f"but 0 nodes created — recording NEGATIVE reward "
-                            f"so the bandit stops re-picking this arm. Common "
-                            f"cause: provider rejects LLMGraphTransformer's "
-                            f"DynamicGraph schema (e.g. Groq + gpt-oss-120b)."
-                            f"{error_tail}"
-                        )
-                    try:
-                        await record_ycs_neo4j_reward(
-                            deployment_id = pinned_model,
-                            success       = effective_success,
-                            latency_s     = latency_s,
-                            error_class   = effective_err,
-                            video_count   = len(all_video_ids),
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"[ingest_to_neo4j] reward update failed: "
-                            f"{type(e).__name__}: {e}"
-                        )
-                    # Release slot immediately; lingering for 1800s TTL saturated the pool mid-run.
-                    try:
-                        await release_ycs_provider_slot(seg_provider, seg_slot)
-                    except Exception as e:
-                        logger.warning(
-                            f"[ingest_to_neo4j] slot release failed: "
-                            f"{type(e).__name__}: {e}"
-                        )
+                extraction_stats = await extract_and_store_graph(
+                    transcripts  = pending_transcripts,
+                    metadata_map = metadata_map,
+                    llm          = llm,
+                    neo4j_graph  = neo4j_graph,
+                    batch_size   = batch_size,
+                    progress_cb  = _neo4j_progress,
+                    # Resolution is a global Neo4j pass — run it ONCE
+                    # after the retry loop, not per pass.
+                    run_resolution = False,
+                )
                 agg_nodes     += int(extraction_stats.get("nodes_created", 0) or 0)
                 agg_rels      += int(extraction_stats.get("relationships_created", 0) or 0)
                 agg_attempted += int(extraction_stats.get("documents_processed", 0) or 0)
-                videos_failed = int(extraction_stats.get("videos_failed", 0) or 0)
-                if not (extraction_stats.get("aborted_nonproductive")
-                        or silent_zero
-                        or videos_failed > 0):
-                    break
-                if segment < MAX_ARM_SWAPS:
-                    failed_ids_log = extraction_stats.get("failed_video_ids") or []
+                docs_processed = int(extraction_stats.get("documents_processed", 0) or 0)
+                nodes_created  = int(extraction_stats.get("nodes_created", 0) or 0)
+                if docs_processed > 0 and nodes_created == 0:
                     logger.warning(
-                        f"[ingest_to_neo4j] arm {pinned_model}: "
-                        f"{'circuit-break/silent-zero' if not videos_failed else f'{videos_failed} video(s) unprocessed'}"
-                        f" — swapping arm for the remainder "
-                        f"({segment + 1}/{MAX_ARM_SWAPS} swaps used, "
-                        f"excluded: {sorted(tried)}, "
-                        f"residual: {failed_ids_log[:10]})"
+                        f"[ingest_to_neo4j] {pass_label}: {docs_processed} "
+                        f"docs processed but 0 nodes created — model "
+                        f"likely passed schema validation but isn't "
+                        f"performing the extraction task. Last LLM error: "
+                        f"{extraction_stats.get('last_batch_error')}"
                     )
+                failed_ids = extraction_stats.get("failed_video_ids") or []
+                if not failed_ids:
+                    final_failed_ids = []
+                    break
+                final_failed_ids = failed_ids
+                videos_completed_this_pass = int(
+                    extraction_stats.get("videos_completed", 0) or 0,
+                )
+                if videos_completed_this_pass == 0:
+                    logger.error(
+                        f"[ingest_to_neo4j] {pass_label} produced 0 "
+                        f"successes out of {len(pending_transcripts)} "
+                        f"attempted — endpoint likely down, giving up on "
+                        f"the remaining {len(failed_ids)} video(s) for "
+                        f"this run: {failed_ids[:10]}"
+                    )
+                    break
+                if attempt < MAX_RETRY_PASSES:
+                    logger.warning(
+                        f"[ingest_to_neo4j] {len(failed_ids)} video(s) "
+                        f"failed {pass_label} — retrying "
+                        f"({attempt + 1}/{MAX_RETRY_PASSES}): "
+                        f"{failed_ids[:10]}"
+                    )
+                    pending_transcripts = [
+                        t for t in transcripts
+                        if t["video_id"] in failed_ids
+                    ]
                 else:
                     logger.error(
-                        f"[ingest_to_neo4j] swap budget exhausted after "
-                        f"{MAX_ARM_SWAPS + 1} arms ({sorted(tried)}) — "
-                        f"giving up with partial results"
+                        f"[ingest_to_neo4j] retry budget exhausted after "
+                        f"{MAX_RETRY_PASSES} retries — giving up with "
+                        f"partial results ({len(failed_ids)} video(s) "
+                        f"unprocessed): {failed_ids[:10]}"
                     )
-            # Entity resolution — ONCE after all segments (previously ran per-segment, 4× redundant).
-            if agg_nodes > 0:
+            if skip_resolution:
+                # Streaming mode: this call handles a CHUNK of up to
+                # `EXTRACT_CONCURRENCY` videos for `extract_id`'s Neo4j
+                # phase (2026-09-14 — reverted from one-Celery-task-per-
+                # video after that design starved on the shared 2-slot
+                # worker pool; see `extract/task.py`'s `_on_video_indexed`
+                # comment for the full story). Report EVERY video in the
+                # chunk individually — `mark_video_done`'s counter is
+                # per-video regardless of how many videos one task
+                # handles. Whichever video's increment turns out to be
+                # the LAST one for the whole run triggers resolution
+                # exactly once (unconditionally safe/idempotent even if
+                # THIS chunk created 0 nodes but an earlier one did).
+                if extract_id and all_video_ids:
+                    from domains.ycs.pipeline_task.streaming import (
+                        build_redis_client,
+                        mark_video_done,
+                        maybe_finalize,
+                        update_video_extra,
+                    )
+                    r = build_redis_client()
+                    try:
+                        for i, vid in enumerate(all_video_ids):
+                            # Chunk-level aggregates (agg_nodes/agg_rels)
+                            # describe the WHOLE chunk, not this one
+                            # video — attach them to only the FIRST
+                            # video in the chunk so `get_phase_progress`'s
+                            # cross-video summation counts them once,
+                            # not once per video in the chunk.
+                            extra = (
+                                {
+                                    "nodes_created":         agg_nodes,
+                                    "relationships_created": agg_rels,
+                                } if i == 0 else {}
+                            )
+                            finished, total = await mark_video_done(
+                                r, extract_id, "neo4j", vid,
+                                success = vid not in final_failed_ids,
+                                extra = extra,
+                            )
+                            if total is not None and finished >= total:
+                                logger.info(
+                                    f"[ingest_to_neo4j] {extract_id}: last "
+                                    f"video of the run's Neo4j phase "
+                                    f"({finished}/{total}) — running entity "
+                                    f"resolution once"
+                                )
+                                agg_merged = await resolve_entities(neo4j_graph)
+                                # entities_merged is a WHOLE-RUN number,
+                                # only known now — patched onto THIS
+                                # video's status entry (not re-counted,
+                                # just merged in) so get_phase_progress's
+                                # summation picks it up exactly once.
+                                await update_video_extra(
+                                    r, extract_id, "neo4j", vid,
+                                    {"entities_merged": agg_merged},
+                                )
+                            await maybe_finalize(r, extract_id)
+                    finally:
+                        await r.close()
+            elif agg_nodes > 0:
+                # Entity resolution — ONCE after all segments (previously ran per-segment, 4× redundant).
                 _progress({
                     "phase": "resolving",
                     "nodes": agg_nodes,
@@ -388,16 +453,29 @@ def ingest_to_neo4j(
                     f"[ingest_to_neo4j] entity resolution: "
                     f"{agg_merged} nodes merged"
                 )
+            # 2026-09-13: build the result from `completed_global` (the
+            # same cumulative set the live progress bar uses — updated by
+            # `_neo4j_progress` after every pass, and seeded from Neo4j's
+            # actual tagged Documents so it also counts videos already
+            # done from a prior interrupted run), NOT `**extraction_stats`
+            # — that dict is only the LAST pass's stats. Spreading it here
+            # previously made the task's own self-reported
+            # videos_completed/videos_failed badly understate a multi-
+            # pass run's real outcome (a run with 11 real successes
+            # across 4 passes once reported `videos_completed: 2` — only
+            # the last pass's count).
+            final_completed_ids = _ordered(completed_global)
             return {
-                "videos_processed": len(all_video_ids),
-                "deployment":       pinned_model,
-                **extraction_stats,
+                "videos_processed":      len(all_video_ids),
                 "documents_processed":   agg_attempted,
                 "nodes_created":         agg_nodes,
                 "relationships_created": agg_rels,
                 "entities_merged":       agg_merged,
-                "arms_tried":            arms_tried,
-                "arm_swaps":             len(arms_tried) - 1,
+                "videos_completed":      len(final_completed_ids),
+                "completed_video_ids":   final_completed_ids,
+                "videos_failed":         len(final_failed_ids),
+                "failed_video_ids":      final_failed_ids,
+                "last_batch_error":      extraction_stats.get("last_batch_error"),
             }
         finally:
             await es.close()

@@ -134,6 +134,111 @@ def ingest_to_qdrant(
 
 @app.task(
     bind = True,
+    name = "domains.ycs.qdrant_task.task.stream_video_to_qdrant",
+)
+def stream_video_to_qdrant(
+    self,
+    video_id:      str,
+    extract_id:    str,
+    chunk_size:    int = 2000,
+    chunk_overlap: int = 200,
+) -> dict[str, Any]:
+    """2026-09-13: per-video streaming counterpart to `ingest_to_qdrant`
+    — dispatched once per video by `extract/task.py` as soon as that
+    video's transcript lands in ES, instead of waiting for the whole
+    batch. Chunks this ONE video and pushes onto `extract_id`'s shared
+    Redis buffer (`ingestion/streaming.py`), flushing whenever the
+    buffer crosses `FLUSH_CHUNKS`. Reports its outcome to
+    `pipeline_task.streaming.mark_video_done`; whichever call turns out
+    to be last for the run's Qdrant phase drains any buffer remainder
+    and checks whether Neo4j's phase is also done to fire
+    `invalidate_cache`."""
+    logger.info(f"[stream_video_to_qdrant] {extract_id}: {video_id}")
+
+    async def _run() -> dict[str, Any]:
+        from domains.ycs.ingestion.streaming import (
+            finalize_qdrant_buffer,
+            stream_video_to_qdrant as _stream_one,
+        )
+        from domains.ycs.pipeline_task.streaming import (
+            build_redis_client,
+            mark_video_done,
+            maybe_finalize,
+        )
+
+        es = AsyncElasticsearch(
+            hosts      = [os.environ["ELASTICSEARCH_HOST"]],
+            basic_auth = (
+                os.environ["ELASTICSEARCH_USERNAME"],
+                os.environ.get("ELASTICSEARCH_PASSWORD", ""),
+            ),
+            verify_certs = False,
+        )
+        qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:6333")
+        qdrant_port = int(os.environ.get("QDRANT_PORT", "6333"))
+        qdrant_api_key = os.environ.get("QDRANT_API_KEY")
+        qdrant = AsyncQdrantClient(
+            url     = qdrant_url,
+            port    = qdrant_port,
+            api_key = qdrant_api_key if qdrant_api_key else None,
+        )
+        redis = build_redis_client()
+        try:
+            result = await _stream_one(
+                es = es, qdrant = qdrant, redis = redis,
+                video_id = video_id, extract_id = extract_id,
+                chunk_size = chunk_size, chunk_overlap = chunk_overlap,
+            )
+            success = "error" not in result
+            # Summed across every video by `get_phase_progress` into
+            # the aggregator's SUCCESS result — the numbers
+            # `pipeline_panel.js`'s `_successHint("qdrant", ...)`
+            # expects (`points_upserted`, `total_chunks`).
+            extra = (
+                {"error": result.get("error")} if not success
+                else {
+                    "points_upserted": result.get("points_flushed", 0),
+                    "total_chunks":    result.get("chunks", 0),
+                }
+            )
+            finished, total = await mark_video_done(
+                redis, extract_id, "qdrant", video_id, success = success,
+                extra = extra,
+            )
+            if total is not None and finished >= total:
+                logger.info(
+                    f"[stream_video_to_qdrant] {extract_id}: last video "
+                    f"of the run's Qdrant phase ({finished}/{total}) — "
+                    f"draining buffer remainder"
+                )
+                drained = await finalize_qdrant_buffer(redis, qdrant, extract_id)
+                result["final_drain_points"] = drained
+            await maybe_finalize(redis, extract_id)
+            return result
+        except Exception as e:
+            finished, total = await mark_video_done(
+                redis, extract_id, "qdrant", video_id, success = False,
+                extra = {"error": f"{type(e).__name__}: {e}"},
+            )
+            if total is not None and finished >= total:
+                try:
+                    await finalize_qdrant_buffer(redis, qdrant, extract_id)
+                except Exception:
+                    pass
+            await maybe_finalize(redis, extract_id)
+            raise
+        finally:
+            await qdrant.close()
+            await es.close()
+            await redis.close()
+
+    result = asyncio.run(_run())
+    logger.info(f"[stream_video_to_qdrant] {extract_id}: {video_id} done: {result}")
+    return result
+
+
+@app.task(
+    bind = True,
     name = "domains.ycs.qdrant_task.task.invalidate_cache",
 )
 def invalidate_cache(self) -> dict[str, Any]:

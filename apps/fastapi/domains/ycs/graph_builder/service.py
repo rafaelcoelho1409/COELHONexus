@@ -136,7 +136,6 @@ async def extract_and_store_graph(
     neo4j_graph: Neo4jGraph,
     batch_size: int = DEFAULT_BATCH_SIZE,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
-    abort_after_consecutive: int = 0,
     run_resolution: bool = True,
 ) -> dict:
     """One LLM call PER TRANSCRIPT (not per chunk). Deprecated rationale:
@@ -167,11 +166,17 @@ async def extract_and_store_graph(
     Idempotent — skips any video whose `video_id` is already tagged on
     a Document node in Neo4j (and only PRODUCTIVE videos get tagged).
 
-    `abort_after_consecutive` > 0 arms the circuit breaker: after that
-    many consecutive non-productive completions (raised OR 0 nodes +
-    0 rels) the pool is cancelled and the stats carry
-    `aborted_nonproductive=True` so the caller (neo4j_task) can re-pick
-    a different arm and call again. 0 disables (full-run behavior).
+    2026-09-13: dropped the `abort_after_consecutive` circuit breaker.
+    It existed so the caller could "swap to a different arm" after 3
+    consecutive failures — but `pick_ycs_neo4j_deployment_bandit`/
+    `build_ycs_neo4j_pinned_chain` were confirmed to always resolve to
+    the same generic "auto" target regardless of any client-side
+    exclusion set (the rotator's own server-side bandit does the real
+    arm selection). "Swapping arms" therefore replayed the identical
+    call — the abort bought nothing but abandoning whatever else was
+    still in-flight in the pool. Now every document in `documents` gets
+    a real attempt; the caller (`neo4j_task`) retries only the videos
+    that come back in `failed_video_ids`, not the whole batch.
 
     Returns counters dict suitable for the API response envelope."""
     transformer = create_graph_transformer(llm)
@@ -249,9 +254,6 @@ async def extract_and_store_graph(
     # can surface the actual LLM error body in the log (otherwise the
     # user only sees "0 nodes" with no diagnostic).
     last_batch_error: str | None = None
-    # Circuit-breaker state — see `abort_after_consecutive` docstring.
-    consecutive_nonproductive = 0
-    aborted_nonproductive = False
 
     sem = asyncio.Semaphore(concurrency)
 
@@ -293,7 +295,6 @@ async def extract_and_store_graph(
         for fut in asyncio.as_completed(pool):
             vid, gdoc, err = await fut
             total_processed += 1
-            productive = False
             if err is not None:
                 last_batch_error = err
                 logger.warning(
@@ -312,7 +313,7 @@ async def extract_and_store_graph(
                 )
                 logger.warning(
                     f"[ycs:graph] {vid}: clean response but 0 entities — "
-                    f"left untagged for retry on a different arm"
+                    f"left untagged for retry"
                 )
                 if vid and vid not in failed_ids:
                     failed_ids.append(vid)
@@ -335,7 +336,6 @@ async def extract_and_store_graph(
                 )
                 total_nodes += len(gdoc.nodes)
                 total_relationships += len(gdoc.relationships)
-                productive = bool(gdoc.nodes or gdoc.relationships)
                 if vid and vid not in completed_ids:
                     completed_ids.append(vid)
                 logger.info(
@@ -343,23 +343,6 @@ async def extract_and_store_graph(
                     f"{total_processed}/{len(documents)} transcripts, "
                     f"{total_nodes} nodes, {total_relationships} rels"
                 )
-            # Circuit breaker: raised OR wrote nothing → non-productive.
-            if productive:
-                consecutive_nonproductive = 0
-            else:
-                consecutive_nonproductive += 1
-            if (abort_after_consecutive > 0
-                    and consecutive_nonproductive >= abort_after_consecutive):
-                aborted_nonproductive = True
-                logger.warning(
-                    f"[ycs:graph] circuit breaker: "
-                    f"{consecutive_nonproductive} consecutive "
-                    f"non-productive extractions — aborting this arm "
-                    f"so the caller can swap. "
-                    f"({total_processed}/{len(documents)} attempted, "
-                    f"{total_nodes} nodes so far)"
-                )
-                break
             # Per-completion progress emission so the FastHTML Neo4j bar
             # advances in real time. `current` counts attempted (not
             # just succeeded) transcripts so the bar fills monotonically
@@ -390,12 +373,11 @@ async def extract_and_store_graph(
         await asyncio.gather(*pool, return_exceptions = True)
 
     # Entity resolution is a GLOBAL pass over Neo4j — callers that loop
-    # segments (neo4j_task's arm-swap / residual-retry) pass
-    # `run_resolution=False` and run it ONCE after the last segment;
-    # standalone callers keep the default. Also skipped on a circuit-
-    # breaker abort (the caller is about to re-run on a fresh arm).
+    # retry passes (neo4j_task's retry-failed-only loop) pass
+    # `run_resolution=False` and run it ONCE after the last pass;
+    # standalone callers keep the default.
     resolved = 0
-    if run_resolution and not aborted_nonproductive:
+    if run_resolution:
         if progress_cb:
             progress_cb({
                 "phase":   "resolving",
@@ -418,6 +400,7 @@ async def extract_and_store_graph(
         # untagged, so calling this function again (same transcripts,
         # different arm) retries exactly them.
         "videos_completed":      len(completed_ids),
+        "completed_video_ids":   list(completed_ids),
         "videos_failed":         len(failed_ids),
         "failed_video_ids":      list(failed_ids),
         # Surface the most-recent per-video LLM exception so the
@@ -425,8 +408,6 @@ async def extract_and_store_graph(
         # the user only sees "0 nodes" with no diagnostic). None when
         # every extraction succeeded.
         "last_batch_error":      last_batch_error,
-        # Circuit-breaker verdict for the arm-swap loop in neo4j_task.
-        "aborted_nonproductive": aborted_nonproductive,
     }
 
 

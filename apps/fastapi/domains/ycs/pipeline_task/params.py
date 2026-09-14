@@ -1,21 +1,15 @@
-"""ycs/pipeline_task — chain dispatch tunables.
+"""ycs/pipeline_task — dispatch + streaming-coordination tunables.
 
-Single source of truth for the LLM-entity-extraction batch size used
-when chaining `ingest_to_neo4j` from the Videos pipeline.
-
-2026-06-08 — lowered 3 → 1 for the Videos-tab pipeline so the
-Ingest-page progress bar advances per video (not per batch).
-
-2026-06-10 — the sequential-for-granularity tradeoff is GONE:
-`extract_and_store_graph` now runs a streaming pool that completes
-(and reports) one video at a time at ANY width. `batch_size <= 1`
-means "use `graph_builder.params.EXTRACT_CONCURRENCY`" (default 3,
-env `YCS_NEO4J_CONCURRENCY`); values > 1 set the pool width
-explicitly. Keeping 1 here = default concurrency + per-video bar."""
+2026-09-13: `NEO4J_BATCH_SIZE` removed — the Videos-tab pipeline no
+longer dispatches one `ingest_to_neo4j` call for the whole batch (with
+this constant controlling its internal granularity). Per-video
+streaming fan-out (`extract/task.py`'s `_on_video_indexed`) now calls
+`ingest_to_neo4j.si([video_id], 1, ...)` directly, one Celery task per
+video — the "batch of N, batch_size=1 for per-video progress" tradeoff
+this constant used to encode no longer applies; every dispatch already
+IS one video."""
 from __future__ import annotations
 
-
-NEO4J_BATCH_SIZE: int = 1
 
 # How long the pipeline's dispatch params (video_ids + flags) live in
 # Redis. Used by the FastHTML Ingest page's "Rerun" button to re-fire

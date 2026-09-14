@@ -82,12 +82,46 @@ def _get_es_client() -> AsyncElasticsearch:
     )
 
 
+async def _dispatch_streaming_totals(
+    extract_id: str, dispatched_count: int,
+) -> None:
+    """Called once, after `_extract_videos_async`'s fetch loop finishes
+    dispatching every video's downstream work. Records the Neo4j/Qdrant
+    phase totals so `pipeline_task.streaming.maybe_finalize` knows when
+    the run is actually done, then makes one speculative finalize check
+    itself — covering the (unlikely but real) race where every
+    dispatched per-video task already finished before this function got
+    a chance to set the totals."""
+    from domains.ycs.pipeline_task.streaming import (
+        build_redis_client,
+        maybe_finalize,
+        set_phase_total,
+    )
+    if dispatched_count == 0:
+        # Nothing fetched this run (all cached-in-ES-already videos
+        # notwithstanding — see below) — nothing for Neo4j/Qdrant to
+        # do, so there's nothing to wait on. Fire the cache-bust
+        # directly; a run with zero new content still touched ES
+        # metadata, so this stays cheap/harmless either way.
+        from domains.ycs.qdrant_task.task import invalidate_cache
+        invalidate_cache.delay()
+        return
+    redis = build_redis_client()
+    try:
+        await set_phase_total(redis, extract_id, "neo4j", dispatched_count)
+        await set_phase_total(redis, extract_id, "qdrant", dispatched_count)
+        await maybe_finalize(redis, extract_id)
+    finally:
+        await redis.close()
+
+
 # Async implementations (called via asyncio.run from the Celery tasks)
 async def _extract_videos_async(
     video_ids:             list[str],
     include_transcription: bool,
     languages:             list[str] | None,
     progress_cb:           ProgressCb | None = None,
+    extract_id:            str | None        = None,
 ) -> dict[str, Any]:
     es = _get_es_client()
     extractor = get_extractor()
@@ -130,6 +164,7 @@ async def _extract_videos_async(
                 "all_items": all_items,
             })
         es_transcriptions = {"indexed": 0, "failed": 0}
+        dispatched_count = 0
         if include_transcription:
             valid_ids = [
                 v["id"] for v in videos_dicts
@@ -142,6 +177,89 @@ async def _extract_videos_async(
                 }
                 for v in videos_dicts if v.get("id")
             }
+
+            # 2026-09-14: Neo4j no longer gets one Celery task PER VIDEO.
+            # Live-tested on a 25-video Capital Global batch: with only
+            # 2 total Celery worker slots (shared across every domain)
+            # and `extract_videos` itself pinning one slot for its whole
+            # run, per-video dispatch left exactly 1 slot for ALL
+            # downstream work — 21 videos ran through Neo4j strictly
+            # one at a time, throwing away `extract_and_store_graph`'s
+            # own internal `EXTRACT_CONCURRENCY`-wide (5) asyncio pool
+            # entirely (a pool of width 5 processing 1 document at a
+            # time buys nothing). That's a real regression from the
+            # PRE-streaming design, where one `ingest_to_neo4j` call
+            # processed 5 videos concurrently.
+            #
+            # Fix: accumulate video ids into a chunk here (in-process —
+            # `extract_videos` is the one place already watching every
+            # video complete, in order, so no Redis queue is needed for
+            # this) and flush ONE `ingest_to_neo4j` call per chunk, with
+            # `batch_size=len(chunk)` so the internal pool width exactly
+            # matches the chunk — full concurrency restored, while still
+            # starting well before the whole 25-video batch finishes
+            # Phase 1 (chunks flush every `EXTRACT_CONCURRENCY` videos,
+            # not after all 25). `ingest_to_neo4j` already natively
+            # accepts and pools a list — this reverts ONLY the call
+            # site back to batching, not the task's own logic.
+            #
+            # Qdrant stays per-video: its tasks complete in ~0.1-0.5s
+            # each (chunk + buffer-push, occasionally a flush) — never
+            # the bottleneck, no reason to add chunking complexity there.
+            neo4j_chunk: list[str] = []
+            _pending_track_tasks: list[asyncio.Task] = []
+
+            def _flush_neo4j_chunk() -> None:
+                nonlocal neo4j_chunk
+                if not neo4j_chunk:
+                    return
+                from domains.ycs.neo4j_task.task import ingest_to_neo4j
+                chunk = neo4j_chunk
+                neo4j_chunk = []
+                neo4j_task = ingest_to_neo4j.si(
+                    chunk, len(chunk), skip_resolution = True, extract_id = extract_id,
+                ).apply_async()
+                _track_dispatched(neo4j_task.id)
+
+            def _track_dispatched(task_id: str) -> None:
+                # Gathered before this function returns (see the
+                # `asyncio.gather` below) instead of pure fire-and-
+                # forget — the previous fire-and-forget version showed
+                # up live as repeated "Task was destroyed but it is
+                # pending" warnings (the event loop tore down before
+                # some of these ever got to run), meaning Stop's
+                # revoke list was silently incomplete.
+                from domains.ycs.pipeline_task.streaming import (
+                    build_redis_client, track_dispatched_task,
+                )
+                async def _track() -> None:
+                    r = build_redis_client()
+                    try:
+                        await track_dispatched_task(r, extract_id, task_id)
+                    finally:
+                        await r.close()
+                _pending_track_tasks.append(asyncio.ensure_future(_track()))
+
+            def _on_video_indexed(vid: str) -> None:
+                # 2026-09-13: fires the instant a video's transcript is
+                # safely committed to ES (freshly fetched, OR already
+                # cached from a prior run) — dispatches that video's
+                # Neo4j + Qdrant streaming work immediately, instead of
+                # waiting for the whole batch to clear Phase 1 first.
+                # `extract_id` is this task's own id (`self.request.id`,
+                # threaded in from `extract_videos`) — the namespace
+                # every downstream piece of Redis bookkeeping shares.
+                nonlocal dispatched_count
+                from domains.ycs.graph_builder.params import EXTRACT_CONCURRENCY
+                from domains.ycs.qdrant_task.task import stream_video_to_qdrant
+                dispatched_count += 1
+                neo4j_chunk.append(vid)
+                if len(neo4j_chunk) >= EXTRACT_CONCURRENCY:
+                    _flush_neo4j_chunk()
+                qdrant_task = stream_video_to_qdrant.si(
+                    vid, extract_id,
+                ).apply_async()
+                _track_dispatched(qdrant_task.id)
             # Per-video status tracking for the Ingest-page video list.
             # The right-column status pill is derived from these lists:
             #   id in failed_ids                → Failed
@@ -217,7 +335,7 @@ async def _extract_videos_async(
                     )
             try:
                 trans_stats: dict[str, int] = {}
-                transcription_docs = await fetch_transcriptions_batch(
+                await fetch_transcriptions_batch(
                     valid_ids,
                     transcript_service = transcript_service,
                     es_client          = es,
@@ -225,20 +343,37 @@ async def _extract_videos_async(
                     video_metadata     = video_metadata,
                     progress_cb        = _per_video_cb if progress_cb else None,
                     es_progress_cb     = _es_index_cb if progress_cb else None,
+                    on_video_indexed   = _on_video_indexed if extract_id else None,
                     stats              = trans_stats,
                 )
-                if transcription_docs:
-                    es_transcriptions = await index_transcriptions_to_elasticsearch(
-                        es, transcription_docs,
-                    )
+                # 2026-09-13: ES indexing now happens PER-VIDEO inside
+                # `fetch_transcriptions_batch` itself (each doc is
+                # written the instant its video's fetch succeeds, so
+                # `_on_video_indexed` can safely trigger downstream
+                # Neo4j/Qdrant work against a document guaranteed to
+                # already be searchable — `BULK_REFRESH=True` makes the
+                # per-video write block until visible). The bulk
+                # re-index that used to happen here on the full
+                # `transcription_docs` list would just be re-writing
+                # the exact same docs a second time — removed.
+                es_transcriptions["indexed"]       = trans_stats.get("fetched_ok", 0)
+                es_transcriptions["failed"]        = trans_stats.get("index_write_failed", 0)
                 # Augment ES indexing counters with cache + fetch
                 # breakdown so the Ingest hint can show
                 # "N cached · M new · K failed".
                 es_transcriptions["cached"]       = trans_stats.get("cached", 0)
                 es_transcriptions["fetch_failed"] = trans_stats.get("fetched_failed", 0)
                 es_transcriptions["no_transcript"] = trans_stats.get("no_transcript", 0)
+                # Flush whatever's left below the EXTRACT_CONCURRENCY
+                # threshold — otherwise a tail of 1-4 videos would never
+                # get a Neo4j task at all.
+                _flush_neo4j_chunk()
+                if _pending_track_tasks:
+                    await asyncio.gather(*_pending_track_tasks, return_exceptions = True)
             finally:
                 await close_transcript_service()
+        if extract_id:
+            await _dispatch_streaming_totals(extract_id, dispatched_count)
         return {
             "total_videos":   len(videos_dicts),
             "metadata":       es_metadata,
@@ -419,6 +554,7 @@ def extract_videos(
         _extract_videos_async(
             video_ids, include_transcription, languages,
             progress_cb = _progress,
+            extract_id  = self.request.id,
         ),
     )
     logger.info(f"[extract_videos] Done: {result}")

@@ -51,6 +51,13 @@ const STORAGE_TTL_MS = 24 * 60 * 60 * 1000;  // match backend Redis TTL
 const BARS = ["playwright", "elasticsearch", "qdrant", "neo4j"];
 const SPLIT_PHASE_ORDER = ["metadata", "metadata_done", "transcription", "es_indexing"];
 const SPLIT_PHASE_TARGET = { playwright: "transcription", elasticsearch: "es_indexing" };
+/* 2026-09-13: Neo4j/Qdrant now fan out per video from inside
+ * `extract_videos` (see `pipeline_task.streaming`'s docstring) — there
+ * is no longer one Celery task id per phase to poll. `ids.qdrant`/
+ * `ids.neo4j` from the backend are `extract_id` reused as a lookup key,
+ * NOT real task ids; these two bars poll the aggregator endpoint
+ * (`pollStreamOnce`) instead of `pollTaskOnce`. */
+const STREAM_BARS = new Set(["qdrant", "neo4j"]);
 
 // ---- helpers ---------------------------------------------------------------
 async function api(path, opts = {}) {
@@ -116,6 +123,23 @@ function writePersisted(ids) {
 async function pollTaskOnce(taskId) {
     try {
         return await api(`/admin/task/${encodeURIComponent(taskId)}`);
+    } catch (e) {
+        return { state: "ERROR", error: e.message ?? String(e) };
+    }
+}
+
+/* 2026-09-13: aggregator counterpart to `pollTaskOnce` for the
+ * `STREAM_BARS` (qdrant/neo4j) — `extractId` here is `ids.qdrant`/
+ * `ids.neo4j`, which the backend now hands back as `extract_id`
+ * reused as a lookup key (see `STREAM_BARS`'s comment above). Returns
+ * the SAME `{state, meta?, result?, error?}` shape `pollTaskOnce`
+ * does, so every downstream renderer (`_setBar`, `_phasePct`, …) is
+ * unchanged. */
+async function pollStreamOnce(extractId, phase) {
+    try {
+        return await api(
+            `/admin/pipeline/${encodeURIComponent(extractId)}/stream/${phase}`,
+        );
     } catch (e) {
         return { state: "ERROR", error: e.message ?? String(e) };
     }
@@ -673,22 +697,32 @@ async function trackPipeline({ extract, qdrant, neo4j, video_ids, startedAt }) {
     while (true) {
         tick += 1;
         elapsedEl.textContent = fmtElapsed((Date.now() - startMs) / 1000);
-        // Dedupe polls by unique task id — "playwright" and
+        // Dedupe TASK-based polls by unique task id — "playwright" and
         // "elasticsearch" share the same `extract` task id (there's no
         // separate ES task); polling it twice per tick would be wasteful
         // and could race into two slightly different snapshots.
-        const uniqueTaskIds = [...new Set(BARS.map((b) => ids[b]))];
-        const uniqueResults = await Promise.all(
-            uniqueTaskIds.map((id) => pollTaskOnce(id)),
-        );
+        // qdrant/neo4j (`STREAM_BARS`) are excluded from this dedupe —
+        // they don't have real task ids any more (see that const's
+        // comment) and poll a different endpoint entirely.
+        const taskBars = BARS.filter((b) => !STREAM_BARS.has(b));
+        const uniqueTaskIds = [...new Set(taskBars.map((b) => ids[b]))];
+        const streamBars = BARS.filter((b) => STREAM_BARS.has(b));
+        const [taskResults, streamResults] = await Promise.all([
+            Promise.all(uniqueTaskIds.map((id) => pollTaskOnce(id))),
+            Promise.all(streamBars.map((b) => pollStreamOnce(ids[b], b))),
+        ]);
         const resultByTaskId = {};
-        uniqueTaskIds.forEach((id, i) => { resultByTaskId[id] = uniqueResults[i]; });
+        uniqueTaskIds.forEach((id, i) => { resultByTaskId[id] = taskResults[i]; });
+        const resultByStreamBar = {};
+        streamBars.forEach((b, i) => { resultByStreamBar[b] = streamResults[i]; });
         const metaByPhase = {};
         const phaseStates = {};
         let allTerminal = true;
         for (let i = 0; i < BARS.length; i++) {
             const prefix = BARS[i];
-            const r = resultByTaskId[ids[prefix]];
+            const r = STREAM_BARS.has(prefix)
+                ? resultByStreamBar[prefix]
+                : resultByTaskId[ids[prefix]];
             const state = r.state || "PENDING";
             const meta = r.meta || (r.result ?? {});
             metaByPhase[prefix] = meta;

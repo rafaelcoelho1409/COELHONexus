@@ -148,6 +148,34 @@ async def task_status(task_id: str) -> dict:
     return payload
 
 
+@router.get("/pipeline/{extract_id}/stream/{phase}")
+async def pipeline_stream_status(
+    extract_id: str, phase: str, request: Request,
+) -> dict:
+    """2026-09-13: aggregator counterpart to `task_status` above, for
+    the Videos pipeline's per-video streaming fan-out (Neo4j/Qdrant no
+    longer map to one Celery task id — see `pipeline_task.streaming`'s
+    docstring). Synthesizes the SAME `{task_id, state, meta, result,
+    error}` shape `task_status` returns from Redis counters instead of
+    one `AsyncResult`, so `pipeline_panel.js`'s existing bar-rendering
+    code (`_setBar`/`_phasePct`/`_phaseLabel`/`_successHint`) needs no
+    changes beyond routing the qdrant/neo4j bars to this endpoint
+    instead of `/admin/task/{id}`."""
+    if phase not in ("neo4j", "qdrant"):
+        raise HTTPException(status_code = 400, detail = "phase must be 'neo4j' or 'qdrant'")
+    redis = getattr(request.app.state, "redis_aio", None)
+    if redis is None:
+        raise HTTPException(status_code = 503, detail = "Redis unavailable")
+    from domains.ycs.pipeline_task import get_phase_progress
+    progress = await get_phase_progress(redis, extract_id, phase)
+    payload: dict[str, Any] = {"task_id": extract_id, "state": progress["state"]}
+    if progress["state"] == "SUCCESS":
+        payload["result"] = progress.get("result") or {}
+    else:
+        payload["meta"] = progress.get("meta") or {}
+    return payload
+
+
 def _status_for(has_transcript: bool, has_neo4j_doc: bool) -> str:
     """3-state status: `done` = all 3 stores present; `partial` = no Neo4j; `failed` = no transcript."""
     if has_transcript and has_neo4j_doc:

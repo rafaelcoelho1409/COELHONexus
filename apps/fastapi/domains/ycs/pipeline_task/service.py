@@ -1,16 +1,33 @@
-"""ycs/pipeline_task — Celery chain dispatchers (Imperative Shell).
+"""ycs/pipeline_task — Celery dispatcher (Imperative Shell).
 
 Per `docs/CODE-CONVENTIONS.md` §4: I/O orchestration goes in `service.py`.
-This module builds the Celery `chain(...)` signatures, applies them to
-the broker, walks the resulting `.parent` chain to capture every link's
-task_id, and returns the IDs as a flat dict so the FastAPI layer can
-hand them back to the FastHTML poller verbatim.
 
-The chain semantics are guaranteed by Celery: every link's UUID is
-assigned at chain-build time (not at run time), so `.parent` walking
-gives us all IDs upfront — even for tasks that haven't been queued
-yet. Polling against an as-yet-unqueued task returns `PENDING`, which
-the UI renders as "queued".
+2026-09-13, superseding the earlier same-day `chain(extract,
+group(qdrant, neo4j), invalidate)` design: Neo4j and Qdrant no longer
+wait for Phase 1 to finish for ALL videos either. `extract_videos`
+itself now dispatches each video's Neo4j + Qdrant work the instant
+that video's transcript lands in ES (see `extract/task.py`'s
+`_on_video_indexed`), so `dispatch_videos_pipeline` has nothing left to
+build a static chain/chord OVER — there is no fixed, known-at-dispatch-
+time set of "the qdrant task" / "the neo4j task" any more, only N
+per-video tasks fired progressively as `extract_videos` runs.
+
+That breaks the assumption this whole pipeline was built on: that
+`qdrant`/`neo4j`/`invalidate` are each one real, poll-able Celery task
+id known at dispatch time. The fix is `pipeline_task.streaming`'s
+exactly-once atomic-counter finalize model (see that module's
+docstring) instead of Celery's own canvas machinery — `invalidate_cache`
+is now dispatched dynamically, from whichever per-video task turns out
+to be last, not from a callback Celery wires up front.
+
+Consequently this function now only dispatches `extract_videos` itself.
+The returned `phases` dict still carries `qdrant`/`neo4j` keys (for
+backward-compat with every consumer keyed on those names — the FastAPI
+aggregator endpoints, the FastHTML poller, Rerun's truthy-check) but
+their VALUE is `extract_id` itself, reused as the Redis lookup key for
+`pipeline_task.streaming.get_phase_progress` — not a Celery task id.
+`invalidate` is `""` since its real id isn't known until
+`maybe_finalize` actually dispatches it.
 
 `persist_pipeline_state` / `load_pipeline_state` snapshot the dispatch
 inputs (`video_ids`, transcription flags) keyed by the extract task id
@@ -23,11 +40,10 @@ import logging
 from typing import Any
 
 import redis.asyncio as redis_aio
-from celery import chain
 from celery.result import AsyncResult
 
 from .keys import pipeline_state_key
-from .params import NEO4J_BATCH_SIZE, PIPELINE_STATE_TTL_S
+from .params import PIPELINE_STATE_TTL_S
 
 
 logger = logging.getLogger(__name__)
@@ -38,8 +54,10 @@ def dispatch_videos_pipeline(
     include_transcription: bool             = True,
     languages:             list[str] | None = None,
 ) -> dict[str, Any]:
-    """Queue the 4-link Videos ingestion chain (extract → Qdrant →
-    Neo4j → invalidate_cache) scoped to the supplied `video_ids`.
+    """Queue `extract_videos`, which now self-dispatches every video's
+    Neo4j + Qdrant streaming work as its transcripts land in ES (see
+    this module's docstring for why there's no static chain/chord to
+    build any more).
 
     Imports are deferred (function-local) because the Celery task
     modules import the worker app, and that app has a chain of imports
@@ -47,38 +65,23 @@ def dispatch_videos_pipeline(
     these inside the function lets `domains/ycs/pipeline_task/` import
     cleanly in test environments without those deps installed.
 
-    Returns `{extract, qdrant, neo4j, invalidate}` task_ids — the
-    FastHTML poller treats `extract` / `qdrant` / `neo4j` as the three
-    user-visible progress bars; `invalidate` is silent."""
+    Returns `{extract, qdrant, neo4j, invalidate}` — `extract` is a
+    real Celery task id; `qdrant`/`neo4j` are `extract_id` reused as the
+    streaming-aggregator lookup key (not real task ids — see docstring);
+    `invalidate` is `""` (its real id is only known once the run's
+    exactly-once finalize actually dispatches it)."""
     from domains.ycs.extract.task import extract_videos
-    from domains.ycs.neo4j_task.task import ingest_to_neo4j
-    from domains.ycs.qdrant_task.task import (
-        ingest_to_qdrant,
-        invalidate_cache,
+
+    result: AsyncResult = extract_videos.apply_async(
+        args = (video_ids, include_transcription, languages),
     )
-
-    chain_sig = chain(
-        extract_videos.si(video_ids, include_transcription, languages),
-        ingest_to_qdrant.si(video_ids),
-        ingest_to_neo4j.si(video_ids, NEO4J_BATCH_SIZE),
-        invalidate_cache.si(),
-    )
-    result: AsyncResult = chain_sig.apply_async()
-    return _phase_ids_from_chain(result)
-
-
-def _phase_ids_from_chain(result: AsyncResult) -> dict[str, str]:
-    """Walk `.parent` from the chain's last AsyncResult to harvest every
-    link's task_id. Returns a dict in chain order:
-    `{extract, qdrant, neo4j, invalidate}`."""
-    ids: list[str] = []
-    cur: AsyncResult | None = result
-    while cur is not None:
-        ids.append(cur.id)
-        cur = cur.parent
-    ids.reverse()
-    keys = ["extract", "qdrant", "neo4j", "invalidate"]
-    return {keys[i]: ids[i] for i in range(min(len(keys), len(ids)))}
+    extract_id = result.id
+    return {
+        "extract":    extract_id,
+        "qdrant":     extract_id,
+        "neo4j":      extract_id,
+        "invalidate": "",
+    }
 
 
 # Rerun state (Redis-backed)

@@ -15,13 +15,15 @@ DEFAULT_BATCH_SIZE = 3
 # cause: chain/service.py's build_ycs_neo4j_pinned_chain() had an explicit
 # 120.0s timeout that was too tight for this call shape (large transcripts
 # → large completions) — fixed there (raised to 400.0s). Back to 5 now
-# that the real cause is fixed. The circuit-breaker abandonment bug
-# (graph_builder/service.py's `asyncio.as_completed` + `break` drops
-# whatever's still in-flight in that segment untried) is still real and
-# pre-existing, independent of this constant — worth a dedicated fix
-# separately. Do not push toward doc_distill's CONCURRENCY=10 — these
-# calls carry much larger prompts/completions than doc_distill's 600-
-# token summaries and are more likely to hit free-tier rate limits sooner.
+# that the real cause is fixed. The old circuit-breaker abandonment bug
+# (graph_builder/service.py's `asyncio.as_completed` + `break` dropping
+# whatever's still in-flight untried) is FIXED — the circuit breaker was
+# removed entirely (it existed to let the caller "swap arms," which was
+# confirmed to always resolve to the same target anyway) and replaced
+# with neo4j_task's real retry-failed-only loop. Do not push toward
+# doc_distill's CONCURRENCY=10 — these calls carry much larger prompts/
+# completions than doc_distill's 600-token summaries and are more likely
+# to hit free-tier rate limits sooner.
 EXTRACT_CONCURRENCY = max(
     1, int(_os.environ.get("YCS_NEO4J_CONCURRENCY", "5") or "5"),
 )
@@ -30,9 +32,6 @@ EXTRACT_CONCURRENCY = max(
 GRAPH_BATCH_TIMEOUT_S = max(
     300.0, float(_os.environ.get("YCS_NEO4J_BATCH_WATCHDOG_S", "600") or "600"),
 )
-
-# 3 consecutive 0-entity results on a working corpus signals a dead arm, not empty videos.
-MAX_CONSECUTIVE_NONPRODUCTIVE = 3
 
 # fuzz.ratio pre-filter; embedding cosine gate at 0.85 catches false positives like Astronomia↔Gastronomia.
 FUZZ_MERGE_CUTOFF = 75

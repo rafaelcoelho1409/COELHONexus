@@ -34,3 +34,15 @@ FLUSH_CHUNKS = 50
 # ES scroll context lifetime — 5 minutes is comfortable for the
 # enumerate-then-process two-phase flow.
 SCROLL_KEEPALIVE = "5m"
+
+# 2026-09-13: streaming-buffer Redis namespace (`keys.py`'s
+# `qdrant_buffer_key`/`qdrant_flush_lock_key`). Must match
+# `pipeline_task.params.PIPELINE_STATE_PREFIX`'s literal value — kept
+# as a separate constant (not imported) to avoid pulling
+# `pipeline_task/__init__.py`'s full Celery-task import chain into
+# `ingestion` just to read one string. Same TTL as that module's
+# `PIPELINE_STATE_TTL_S` for the same reason (24h — long enough to
+# survive a slow run, short enough that a crashed run's buffer doesn't
+# linger in Redis forever).
+STREAMING_KEY_PREFIX = "ycs:pipeline:"
+STREAMING_KEY_TTL_S = 86400

@@ -11,9 +11,6 @@ from .service import (
     ensure_dynamic_catalog,
     is_bundled_rotator,
     is_external_endpoint,
-    pick_ycs_neo4j_deployment_bandit,
-    record_ycs_neo4j_reward,
-    release_ycs_provider_slot,
     rerank_via_router_async,
     reset_rotator,
 )
@@ -29,9 +26,6 @@ __all__ = [
     "ensure_dynamic_catalog",
     "is_bundled_rotator",
     "is_external_endpoint",
-    "pick_ycs_neo4j_deployment_bandit",
-    "record_ycs_neo4j_reward",
-    "release_ycs_provider_slot",
     "rerank_via_router_async",
     "reset_rotator",
 ]

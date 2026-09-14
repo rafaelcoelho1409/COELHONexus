@@ -169,14 +169,13 @@ async def wipe_videos_pipeline(extract_id: str, request: Request) -> dict:
     Without revoke a mid-LLM-call Phase 3 writes orphan Document nodes the next Retry's skip-check finds.
     `__Entity__` nodes left intact — may be shared across other videos."""
     from domains.ycs.pipeline_task import (
+        get_dispatched_task_ids,
         load_pipeline_state,
         revoke_pipeline_phases,
         wipe_videos_data,
     )
-    state = await load_pipeline_state(
-        getattr(request.app.state, "redis_aio", None),
-        extract_id,
-    )
+    redis = getattr(request.app.state, "redis_aio", None)
+    state = await load_pipeline_state(redis, extract_id)
     if not state or not state.get("video_ids"):
         raise HTTPException(
             status_code = 404,
@@ -189,13 +188,16 @@ async def wipe_videos_pipeline(extract_id: str, request: Request) -> dict:
         video_ids   = state["video_ids"],
         neo4j_graph = getattr(request.app.state, "neo4j_graph", None),
     )
+    # `extract` is the only real static task id left — the per-video
+    # streaming fan-out means Neo4j/Qdrant have no fixed ids to revoke;
+    # `get_dispatched_task_ids` reads back every per-video task id
+    # `extract/task.py` recorded as it fired them (best-effort tracking
+    # — see that module's `_on_video_indexed`).
     phases: dict[str, str] = state.get("phases", {})
-    phase_ids = [
-        phases.get("extract",    ""),
-        phases.get("qdrant",     ""),
-        phases.get("neo4j",      ""),
-        phases.get("invalidate", ""),
-    ]
+    phase_ids = [phases.get("extract", ""), phases.get("invalidate", "")]
+    phase_ids.extend(
+        await get_dispatched_task_ids(redis, extract_id) if redis else [],
+    )
     revoke_outcomes = revoke_pipeline_phases(phase_ids)
     return {
         "status":          "wiped",
@@ -209,13 +211,12 @@ async def stop_videos_pipeline(extract_id: str, request: Request) -> dict:
     """Revoke all in-flight phases for `extract_id`. Preserves SUCCESS-state phases; idempotent
     Qdrant upserts and Neo4j skip-on-video_id let a rerun pick up cleanly."""
     from domains.ycs.pipeline_task import (
+        get_dispatched_task_ids,
         load_pipeline_state,
         revoke_pipeline_phases,
     )
-    state = await load_pipeline_state(
-        getattr(request.app.state, "redis_aio", None),
-        extract_id,
-    )
+    redis = getattr(request.app.state, "redis_aio", None)
+    state = await load_pipeline_state(redis, extract_id)
     if not state or not state.get("phases"):
         raise HTTPException(
             status_code = 404,
@@ -225,12 +226,10 @@ async def stop_videos_pipeline(extract_id: str, request: Request) -> dict:
             ),
         )
     phases: dict[str, str] = state["phases"]
-    phase_ids = [
-        phases.get("extract", ""),
-        phases.get("qdrant", ""),
-        phases.get("neo4j", ""),
-        phases.get("invalidate", ""),
-    ]
+    phase_ids = [phases.get("extract", ""), phases.get("invalidate", "")]
+    phase_ids.extend(
+        await get_dispatched_task_ids(redis, extract_id) if redis else [],
+    )
     outcomes = revoke_pipeline_phases(phase_ids)
     return {
         "status":   "revoked",
