@@ -45,6 +45,7 @@ from .keys import (
     dispatched_tasks_key,
     finalize_flag_key,
     phase_finished_key,
+    phase_preview_key,
     phase_status_key,
     phase_total_key,
 )
@@ -74,14 +75,30 @@ def build_redis_client() -> redis_aio.Redis:
 
 async def set_phase_total(
     redis: redis_aio.Redis, extract_id: str, phase: str, total: int,
-) -> None:
-    """Called exactly once per phase, by `extract_videos`, after its
-    dispatch loop finishes. `total` is the count of videos that
-    actually got a downstream task fired (cached-transcript videos
-    still count — they get a per-video task same as freshly-fetched
-    ones; only permanently-failed/no-transcript videos are excluded,
-    since those never produce an ES doc for downstream to read)."""
+) -> tuple[int, int]:
+    """Called by `extract_videos`: once UPFRONT (seeded to the full
+    requested count, for early progress feedback while Playwright is
+    still running) and once FINAL (corrected down to the count of
+    videos that actually got a real per-video/chunk task dispatched —
+    no-transcript/fetch-failed/index-write-failed videos are excluded
+    entirely, not counted as failures in a store they were never
+    eligible to reach).
+
+    Returns `(finished, total)` — the finished counter read
+    immediately after writing `total` — so a caller can tell whether
+    THIS write is itself the moment the phase becomes complete (every
+    dispatched video already reported in before the total was
+    corrected to its final, lower value). Same race
+    `mark_video_done`'s per-video completion already has to handle,
+    generalized to the total-correction path: with the old design
+    (total seeded once as the full requested count and never
+    corrected), the only way a total-set could "complete" a phase was
+    via a synthetic skip-mark; now that totals are genuinely corrected
+    downward, the correction itself needs the same completion check."""
     await redis.set(phase_total_key(extract_id, phase), total, ex = PIPELINE_STATE_TTL_S)
+    raw_finished = await redis.get(phase_finished_key(extract_id, phase))
+    finished = int(raw_finished) if raw_finished is not None else 0
+    return finished, total
 
 
 async def mark_video_done(
@@ -136,6 +153,29 @@ async def update_video_extra(
         logger.warning(
             f"[ycs:pipeline:streaming] status merge failed for "
             f"{phase}/{video_id}: {type(e).__name__}: {e}"
+        )
+
+
+async def update_phase_preview(
+    redis: redis_aio.Redis, extract_id: str, phase: str, completed_ids: list[str],
+) -> None:
+    """Best-effort overwrite of the display-only in-progress preview
+    (see `keys.phase_preview_key`). Called by chunked phase tasks as
+    videos complete INSIDE the chunk; never touches the finalize
+    counters. Failures log and swallow — progress display must never
+    break extraction."""
+    if not extract_id:
+        return
+    try:
+        await redis.set(
+            phase_preview_key(extract_id, phase),
+            json.dumps([vid for vid in completed_ids if vid]),
+            ex = PIPELINE_STATE_TTL_S,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[ycs:pipeline:streaming] preview write failed for "
+            f"{phase}: {type(e).__name__}: {e}"
         )
 
 
@@ -248,11 +288,51 @@ async def get_phase_progress(
         # Nothing was ever dispatched to this phase (e.g. every video
         # failed/had no transcript) — trivially done.
         state = "SUCCESS"
+    if phase == "qdrant" and state == "SUCCESS":
+        # 2026-09-14: the per-video counter reaching `total` happens the
+        # INSTANT the last video's `mark_video_done` call returns — which
+        # is BEFORE `ingestion.streaming._flush_buffer`'s drain of
+        # whatever's still buffered even STARTS, let alone finishes.
+        # Reporting SUCCESS at that instant showed a "Done" bar while a
+        # slow embedding call was still running, with no signal that
+        # stopping the run would silently kill it mid-write (observed
+        # live: a Stop aimed at the unrelated Neo4j phase SIGTERM'd an
+        # in-flight drain because Stop revokes every tracked task for
+        # the run). Downgrade back to PROGRESS while the drain flag
+        # (`ingestion.keys.qdrant_draining_key`) is still set — it
+        # self-expires (120s TTL) so a hard-killed drain can't wedge
+        # the bar at PROGRESS forever.
+        try:
+            from domains.ycs.ingestion.keys import qdrant_draining_key
+            if await redis.get(qdrant_draining_key(extract_id)):
+                state = "PROGRESS"
+        except Exception:
+            pass
+    if state == "PROGRESS":
+        # 2026-09-14: union the display-only in-chunk preview (written
+        # by chunked phase tasks as videos complete INSIDE the chunk)
+        # into the DISPLAYED completed/current — chunk tasks only call
+        # `mark_video_done` when the whole chunk lands, so without this
+        # the bar sits at 0/N while videos are visibly succeeding in
+        # the logs. Never touches `finished`/`total`/finalize.
+        try:
+            raw_preview = await redis.get(phase_preview_key(extract_id, phase))
+            if raw_preview:
+                preview = json.loads(raw_preview)
+                if isinstance(preview, list):
+                    known = set(completed_ids) | set(failed_ids)
+                    for vid in preview:
+                        if vid and vid not in known:
+                            completed_ids.append(vid)
+                            known.add(vid)
+        except Exception:
+            pass
     return {
         "state": state,
         "meta": {
             "phase":         "streaming",
-            "current":       min(finished, total),
+            "current":       (min(max(finished, len(completed_ids)), total)
+                              if state == "PROGRESS" else min(finished, total)),
             "total":         total,
             "completed_ids": completed_ids,
             "failed_ids":    failed_ids,

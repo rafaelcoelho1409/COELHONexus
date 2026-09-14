@@ -13,7 +13,9 @@ Public API:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import random
 from typing import Any, Callable
 
 from langchain_core.documents import Document
@@ -28,10 +30,14 @@ from .params import (
     DEFAULT_BATCH_SIZE,
     EMBED_COSINE_CUTOFF,
     EXTRACT_CONCURRENCY,
+    EXTRACT_PROMPT_VERSION,
     FUZZ_MERGE_CUTOFF,
     GRAPH_BATCH_TIMEOUT_S,
+    MAX_CONSECUTIVE_INFRA_PASSES,
+    RETRY_PASS_BACKOFF_S,
     SCHEMA_DISCOVERY_SAMPLE_CHAR_CAP,
     SCHEMA_DISCOVERY_SAMPLE_COUNT,
+    WRITE_TIMEOUT_S,
 )
 from .prompts import EXTRACTION_INSTRUCTIONS, SCHEMA_DISCOVERY_PROMPT
 from .schemas import SchemaDiscovery
@@ -188,32 +194,73 @@ async def extract_and_store_graph(
     total_processed = 0
     total_skipped = 0
 
-    # Skip-on-re-run: query Neo4j for already-processed video_ids.
+    # Skip-on-re-run, fingerprint-aware (2026-09-14, DD manifest_hash
+    # pattern adapted): a video skips only when its Document carries a
+    # matching `transcript_sha` AND `extract_prompt_version`. A
+    # transcript edit or a prompt bump (EXTRACT_PROMPT_VERSION) makes
+    # the tag stale → re-extract instead of trusting outdated entities.
+    # Stale Documents are wiped first (scoped delete) so the re-extract
+    # can't duplicate nodes.
+    current_fingerprints: dict[str, tuple[str, int]] = {}
+    for transcript in transcripts:
+        if not isinstance(transcript, dict):
+            continue
+        vid = transcript.get("video_id", "")
+        content = transcript.get("content") or ""
+        if vid and content.strip():
+            current_fingerprints[vid] = (
+                hashlib.sha256(content.encode("utf-8")).hexdigest()[:16],
+                EXTRACT_PROMPT_VERSION,
+            )
     already_processed: set[str] = set()
+    stale_ids: list[str] = []
     try:
         result = neo4j_graph.query(
             "MATCH (d:Document) WHERE d.video_id IS NOT NULL "
-            "RETURN collect(DISTINCT d.video_id) AS processed_ids"
+            "RETURN d.video_id AS vid, d.transcript_sha AS sha, "
+            "       d.extract_prompt_version AS ver"
         )
-        if result and result[0].get("processed_ids"):
-            already_processed = set(result[0]["processed_ids"])
+        for row in result or []:
+            if not isinstance(row, dict):
+                continue
+            vid = row.get("vid")
+            if not vid or vid not in current_fingerprints:
+                continue
+            if ((row.get("sha"), row.get("ver"))
+                    == current_fingerprints[vid]):
+                already_processed.add(vid)
+            else:
+                stale_ids.append(vid)
+        if already_processed:
             logger.info(
-                f"[ycs:graph] {len(already_processed)} videos already in Neo4j; skip"
+                f"[ycs:graph] {len(already_processed)} videos already in "
+                f"Neo4j with current fingerprint; skip"
             )
+        if stale_ids:
+            logger.info(
+                f"[ycs:graph] {len(stale_ids)} video(s) with stale "
+                f"fingerprint — wiping for re-extract: {stale_ids[:10]}"
+            )
+            delete_documents_for_videos(neo4j_graph, stale_ids)
     except Exception:
         pass
 
     # support 128K tokens — no truncation).
     documents: list[Document] = []
     for transcript in transcripts:
-        vid = transcript["video_id"]
-        if vid in already_processed:
+        if not isinstance(transcript, dict):
+            continue
+        vid = transcript.get("video_id", "")
+        if not vid or vid in already_processed:
             total_skipped += 1
             continue
         content = transcript.get("content") or ""
         if not content.strip():
             continue
         meta = metadata_map.get(vid, {})
+        if not isinstance(meta, dict):
+            meta = {}
+        sha, ver = current_fingerprints.get(vid, ("", EXTRACT_PROMPT_VERSION))
         documents.append(
             Document(
                 page_content = content,
@@ -221,6 +268,11 @@ async def extract_and_store_graph(
                     "video_id": vid,
                     "title":    meta.get("title", ""),
                     "channel":  meta.get("channel", ""),
+                    # Fingerprint — written onto the Document node via
+                    # include_source (`SET d += metadata`), read back by
+                    # the skip check above on re-runs.
+                    "transcript_sha":         sha,
+                    "extract_prompt_version": ver,
                 },
             ),
         )
@@ -252,16 +304,51 @@ async def extract_and_store_graph(
 
     # Track the LAST per-video error so the silent-zero guard downstream
     # can surface the actual LLM error body in the log (otherwise the
-    # user only sees "0 nodes" with no diagnostic).
+    # user only sees "0 nodes" with no diagnostic). `error_breakdown`
+    # counts per failure KIND (DD's histogram pattern) so a 25-video
+    # run with 3 different failure modes stays diagnosable.
     last_batch_error: str | None = None
+    error_breakdown: dict[str, int] = {}
+    thin_video_ids: list[str] = []
+
+    def _record_error(err: str | None) -> None:
+        if not err:
+            return
+        kind = err.split(":")[0].strip() or "unknown"
+        error_breakdown[kind] = error_breakdown.get(kind, 0) + 1
+
+    def _is_infra_error(err: str) -> bool:
+        # Shared definition in domain.py (also used by neo4j_task's
+        # streak halt) — kept as a thin alias so call sites read local.
+        return domain.is_infra_error(err)
+
+    def _is_overflow_error(err: str) -> bool:
+        return domain.is_overflow_error(err)
+
+    def _split_content(content: str) -> list[str]:
+        """Halve a too-large transcript on paragraph boundaries (DD's
+        shrink-and-retry, adapted: split instead of truncate — truncating
+        would silently drop entities)."""
+        paras = [p for p in content.split("\n\n") if p.strip()]
+        if len(paras) < 4:
+            mid = len(content) // 2
+            return [content[:mid], content[mid:]]
+        mid = len(paras) // 2
+        return ["\n\n".join(paras[:mid]), "\n\n".join(paras[mid:])]
 
     sem = asyncio.Semaphore(concurrency)
+
+    async def _convert(doc: Document):
+        return await asyncio.wait_for(
+            transformer.aconvert_to_graph_documents([doc]),
+            timeout = GRAPH_BATCH_TIMEOUT_S,
+        )
 
     async def _extract_one(doc: Document) -> tuple[str, Any, str | None]:
         """One transcript → (video_id, GraphDocument|None, error|None).
         Exceptions are mapped to the error string here so the consumer
         loop keeps video attribution in completion order."""
-        vid = doc.metadata.get("video_id", "")
+        vid = doc.metadata.get("video_id", "") if isinstance(doc.metadata, dict) else ""
         try:
             async with sem:
                 # Watchdog: hard wall-clock ceiling per transcript. The
@@ -271,11 +358,16 @@ async def extract_and_store_graph(
                 # stack wedges — and guarantees one slow arm can't burn
                 # the whole run before the bandit gets its negative
                 # reward.
-                gdocs = await asyncio.wait_for(
-                    transformer.aconvert_to_graph_documents([doc]),
-                    timeout = GRAPH_BATCH_TIMEOUT_S,
-                )
-            return vid, (gdocs[0] if gdocs else None), None
+                gdocs = await _convert(doc)
+                if not gdocs:
+                    return vid, None, None
+                # Overflow split-union (2026-09-14): a context-overflow
+                # manifests as an exception, not an empty result — but
+                # if the FIRST segment errors with overflow markers on
+                # a large doc, retrying the same full doc is doomed.
+                # Handled in the except branch below via `_split_content`
+                # (needs the original doc — kept in scope here).
+                return vid, (gdocs[0] if gdocs else None), None
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -288,6 +380,44 @@ async def extract_and_store_graph(
                 )
             else:
                 err = f"{type(e).__name__}: {str(e)[:400]}"
+            # Overflow → split in halves and extract per segment,
+            # unioning nodes/rels (truncate would drop entities).
+            if _is_overflow_error(err):
+                try:
+                    parts = _split_content(doc.page_content or "")
+                    merged_nodes: list = []
+                    merged_rels: list = []
+                    first = None
+                    for part in parts:
+                        seg = Document(
+                            page_content = part,
+                            metadata = dict(doc.metadata),
+                        )
+                        async with sem:
+                            seg_gdocs = await _convert(seg)
+                        if seg_gdocs and seg_gdocs[0]:
+                            if first is None:
+                                first = seg_gdocs[0]
+                            merged_nodes.extend(seg_gdocs[0].nodes or [])
+                            merged_rels.extend(
+                                seg_gdocs[0].relationships or []
+                            )
+                    if first is not None and (merged_nodes or merged_rels):
+                        first.nodes = merged_nodes
+                        first.relationships = merged_rels
+                        return vid, first, None
+                    err = f"{err} (split-union yielded nothing)"
+                except Exception as split_e:
+                    err = f"{err} | split-union failed: {type(split_e).__name__}"
+            # 2026-09-14: non-transient errors (anything that ISN'T a
+            # timeout/connection/rate-limit/5xx from the provider) are
+            # almost certainly code bugs (e.g. the observed
+            # `AttributeError: 'list' object has no attribute 'get'`
+            # from inside the transformer) — log the full traceback
+            # once here so the next occurrence is diagnosable instead
+            # of just a one-line `failed:` warning downstream.
+            if not _is_infra_error(err):
+                logger.exception(f"[ycs:graph] {vid} unexpected error")
             return vid, None, err
 
     pool = [asyncio.create_task(_extract_one(doc)) for doc in documents]
@@ -297,6 +427,7 @@ async def extract_and_store_graph(
             total_processed += 1
             if err is not None:
                 last_batch_error = err
+                _record_error(err)
                 logger.warning(
                     f"[ycs:graph] {vid} failed: {err}. Continuing."
                 )
@@ -311,6 +442,7 @@ async def extract_and_store_graph(
                 last_batch_error = (
                     f"silent-zero: model returned no entities for {vid}"
                 )
+                _record_error(last_batch_error)
                 logger.warning(
                     f"[ycs:graph] {vid}: clean response but 0 entities — "
                     f"left untagged for retry"
@@ -325,17 +457,85 @@ async def extract_and_store_graph(
                     if node.id:
                         clean_nodes.append(node)
                 gdoc.nodes = clean_nodes
+                # Quality gates (diagnostic only — never fail a video
+                # here; thin-but-real graphs must still land):
+                # orphan rels reference node ids absent from this
+                # video's node set; thin = suspiciously few entities.
+                _node_ids = {n.id for n in gdoc.nodes if n.id}
+                _orphans = sum(
+                    1 for r in (gdoc.relationships or [])
+                    if getattr(getattr(r, "source", None), "id", None) not in _node_ids
+                    or getattr(getattr(r, "target", None), "id", None) not in _node_ids
+                )
+                if _orphans:
+                    logger.warning(
+                        f"[ycs:graph] {vid}: {_orphans} orphan "
+                        f"relationship(s) dropped from write "
+                        f"({len(gdoc.nodes)} nodes)"
+                    )
+                    gdoc.relationships = [
+                        r for r in (gdoc.relationships or [])
+                        if getattr(getattr(r, "source", None), "id", None) in _node_ids
+                        and getattr(getattr(r, "target", None), "id", None) in _node_ids
+                    ]
+                if 0 < len(gdoc.nodes) < 3:
+                    thin_video_ids.append(vid)
+                    logger.warning(
+                        f"[ycs:graph] {vid}: thin graph "
+                        f"({len(gdoc.nodes)} nodes, "
+                        f"{len(gdoc.relationships or [])} rels) — kept"
+                    )
                 # video_id tagging happens NATIVELY inside
                 # add_graph_documents: langchain-neo4j's include_source
                 # path runs `SET d += $document.metadata`, and our
                 # source Documents carry {video_id, title, channel}.
-                neo4j_graph.add_graph_documents(
-                    [gdoc],
-                    include_source = True,
-                    baseEntityLabel = True,
-                )
+                # 2026-09-14: sync driver call in a thread + watchdog
+                # (DD's bounded-write pattern) — a wedged Bolt
+                # connection must not hang the task past its budget.
+                try:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(
+                            neo4j_graph.add_graph_documents,
+                            [gdoc],
+                            include_source = True,
+                            baseEntityLabel = True,
+                        ),
+                        timeout = WRITE_TIMEOUT_S,
+                    )
+                except Exception as write_err:
+                    _werr = f"{type(write_err).__name__}: {str(write_err)[:200]}"
+                    last_batch_error = _werr
+                    _record_error(_werr)
+                    logger.warning(
+                        f"[ycs:graph] {vid} write failed: {_werr}. Continuing."
+                    )
+                    if vid and vid not in failed_ids:
+                        failed_ids.append(vid)
+                    # Progress emission below still runs (counts the
+                    # attempt); skip the success accounting.
+                    if progress_cb:
+                        meta = metadata_map.get(vid, {}) if vid else {}
+                        if not isinstance(meta, dict):
+                            meta = {}
+                        progress_cb({
+                            "phase":         "extracting",
+                            "current":       total_processed,
+                            "total":         len(documents),
+                            "current_batch": total_processed,
+                            "total_batches": len(documents),
+                            "nodes":         total_nodes,
+                            "rels":          total_relationships,
+                            "completed_ids": list(completed_ids),
+                            "failed_ids":    list(failed_ids),
+                            "current_item": {
+                                "id":      vid,
+                                "title":   meta.get("title", ""),
+                                "channel": meta.get("channel", ""),
+                            } if vid else None,
+                        })
+                    continue
                 total_nodes += len(gdoc.nodes)
-                total_relationships += len(gdoc.relationships)
+                total_relationships += len(gdoc.relationships or [])
                 if vid and vid not in completed_ids:
                     completed_ids.append(vid)
                 logger.info(
@@ -349,6 +549,8 @@ async def extract_and_store_graph(
             # even when an individual extraction raises.
             if progress_cb:
                 meta = metadata_map.get(vid, {}) if vid else {}
+                if not isinstance(meta, dict):
+                    meta = {}
                 progress_cb({
                     "phase":         "extracting",
                     "current":       total_processed,
@@ -406,8 +608,12 @@ async def extract_and_store_graph(
         # Surface the most-recent per-video LLM exception so the
         # neo4j_task's silent-zero guard can log the body (otherwise
         # the user only sees "0 nodes" with no diagnostic). None when
-        # every extraction succeeded.
+        # every extraction succeeded. `error_breakdown` histograms
+        # failure KINDS across the batch (DD pattern); `thin_video_ids`
+        # flags suspiciously-small-but-kept graphs for tuning.
         "last_batch_error":      last_batch_error,
+        "error_breakdown":       dict(error_breakdown),
+        "thin_video_ids":        list(thin_video_ids),
     }
 
 

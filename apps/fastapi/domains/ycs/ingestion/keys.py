@@ -41,3 +41,23 @@ def qdrant_flush_lock_key(extract_id: str) -> str:
     at nearly the same moment don't both pop + upsert the same
     chunks."""
     return f"{STREAMING_KEY_PREFIX}{extract_id}:qdrant:flush_lock"
+
+
+def qdrant_draining_key(extract_id: str) -> str:
+    """2026-09-14: set while a buffer flush (periodic OR the final
+    drain) is actively embedding+upserting, cleared when it returns —
+    with a short TTL as a self-healing backstop if the worker process
+    is hard-killed mid-flush (a SIGTERM revoke doesn't run Python
+    cleanup code, so an un-cleared flag would otherwise wedge the bar
+    at PROGRESS forever).
+
+    `pipeline_task.streaming.get_phase_progress` checks this for the
+    "qdrant" phase before reporting SUCCESS. Without it: the per-video
+    finished counter reaches its total the INSTANT the last video's
+    `mark_video_done` call returns — which is BEFORE the drain even
+    starts, let alone finishes. The bar showed "Done" while a slow
+    embedding call was still in flight, with no signal that stopping
+    the run would kill it mid-write — exactly what let a Stop click
+    (aimed at a different, unrelated phase) silently kill an in-flight
+    drain the user had no way to know was still running."""
+    return f"{STREAMING_KEY_PREFIX}{extract_id}:qdrant:draining"

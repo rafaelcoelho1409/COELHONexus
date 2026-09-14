@@ -83,7 +83,10 @@ def _get_es_client() -> AsyncElasticsearch:
 
 
 async def _dispatch_streaming_totals(
-    extract_id: str, dispatched_count: int,
+    extract_id: str,
+    video_ids: list[str],
+    dispatched_ids: list[str],
+    include_transcription: bool,
 ) -> None:
     """Called once, after `_extract_videos_async`'s fetch loop finishes
     dispatching every video's downstream work. Records the Neo4j/Qdrant
@@ -91,25 +94,161 @@ async def _dispatch_streaming_totals(
     the run is actually done, then makes one speculative finalize check
     itself — covering the (unlikely but real) race where every
     dispatched per-video task already finished before this function got
-    a chance to set the totals."""
+    a chance to correct the totals.
+
+    2026-09-14: totals are corrected down to `len(dispatched_ids)` (K —
+    videos that actually got a real per-video/chunk task; excludes
+    no-transcript/fetch-failed/index-write-failed videos entirely) —
+    was `len(video_ids)` (N, the full requested count), with every
+    excluded video synthetically marked "failed" in both phases just
+    to make the counters reconcile. That synthetic marking is GONE: a
+    video that never had a transcript never reaches Qdrant or Neo4j,
+    so counting it as a failure there was misleading (a red/yellow
+    pill for a step it was never eligible to run) — it already shows
+    correctly as failed/no-transcript in Playwright/ES, where the
+    determination actually happened. Every video now counted in K WILL
+    naturally report in via a real task, so no workaround is needed to
+    make the counters reconcile — `total` is simply seeded to N upfront
+    (see `_extract_videos_async`, for early progress feedback while
+    Playwright is still running) and corrected down to K here.
+
+    A degenerate empty `dispatched_ids` (every requested video failed
+    or had no transcript) falls out naturally: totals correct to 0,
+    which `get_phase_progress`/`maybe_finalize` already treat as
+    trivially done — no separate branch needed."""
     from domains.ycs.pipeline_task.streaming import (
         build_redis_client,
         maybe_finalize,
         set_phase_total,
     )
-    if dispatched_count == 0:
-        # Nothing fetched this run (all cached-in-ES-already videos
-        # notwithstanding — see below) — nothing for Neo4j/Qdrant to
-        # do, so there's nothing to wait on. Fire the cache-bust
-        # directly; a run with zero new content still touched ES
-        # metadata, so this stays cheap/harmless either way.
-        from domains.ycs.qdrant_task.task import invalidate_cache
-        invalidate_cache.delay()
+    if not include_transcription:
+        # Metadata-only run — no downstream work exists. Zero the
+        # seeded totals so both stream bars read trivially done
+        # instead of dangling at 0/N.
+        redis = build_redis_client()
+        try:
+            await set_phase_total(redis, extract_id, "neo4j", 0)
+            await set_phase_total(redis, extract_id, "qdrant", 0)
+            await maybe_finalize(redis, extract_id)
+        finally:
+            await redis.close()
         return
+    dispatched_count = len(dispatched_ids or [])
     redis = build_redis_client()
     try:
-        await set_phase_total(redis, extract_id, "neo4j", dispatched_count)
-        await set_phase_total(redis, extract_id, "qdrant", dispatched_count)
+        neo4j_finished, neo4j_total = await set_phase_total(
+            redis, extract_id, "neo4j", dispatched_count,
+        )
+        qdrant_finished, qdrant_total = await set_phase_total(
+            redis, extract_id, "qdrant", dispatched_count,
+        )
+        # 2026-09-14: either correction — not a skip-mark any more —
+        # can itself be the moment its phase completes: every real
+        # video already reported in (finished == the OLD, higher seed)
+        # before this call corrected total down to K. Confirmed live
+        # this exact race is real for Qdrant (see this function's
+        # docstring for the original incident); Neo4j gets the same
+        # treatment on the same reasoning even though it's far less
+        # likely to actually fire in practice (Neo4j chunk tasks take
+        # minutes each — this function normally runs long before any
+        # of them could have finished) — correctness here shouldn't
+        # depend on that timing being reliably slow.
+        qdrant_completed_here = (
+            qdrant_total > 0 and qdrant_finished >= qdrant_total
+        )
+        neo4j_completed_here = (
+            neo4j_total > 0 and neo4j_finished >= neo4j_total
+        )
+        if qdrant_completed_here:
+            from domains.ycs.ingestion.streaming import finalize_qdrant_buffer
+            from domains.ycs.pipeline_task.streaming import update_video_extra
+            from qdrant_client import AsyncQdrantClient
+            qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:6333")
+            qdrant_port = int(os.environ.get("QDRANT_PORT", "6333"))
+            qdrant_api_key = os.environ.get("QDRANT_API_KEY")
+            qdrant = AsyncQdrantClient(
+                url     = qdrant_url,
+                port    = qdrant_port,
+                api_key = qdrant_api_key if qdrant_api_key else None,
+            )
+            try:
+                # `finalize_qdrant_buffer` re-queues and RAISES on a
+                # transient embed/upsert failure (by design — see its
+                # docstring). This call has no `mark_video_done`
+                # counterpart to protect here (unlike
+                # `stream_video_to_qdrant`'s), but an uncaught raise
+                # would still propagate out of `_extract_videos_async`
+                # and fail the WHOLE otherwise-successful extract_videos
+                # task over a drain hiccup. Swallow — the chunks stay
+                # re-queued in the buffer for a future Rerun's drain to
+                # pick up; this run has already reported its true
+                # outcome to Redis regardless.
+                drained = await finalize_qdrant_buffer(redis, qdrant, extract_id)
+                logger.info(
+                    f"[extract_videos] {extract_id}: totals-correction "
+                    f"completed the Qdrant phase — drained {drained} "
+                    f"remaining point(s)"
+                )
+                # 2026-09-14: confirmed live — the drain genuinely
+                # succeeded (28/28 points really landed in Qdrant) but
+                # the bar still showed "0 points", because NO per-video
+                # status entry ever recorded them: every one of the K
+                # real videos reported `points_upserted: 0` (none of
+                # them individually crossed FLUSH_CHUNKS or triggered
+                # the drain themselves — the TOTAL correction did), and
+                # `get_phase_progress`'s success hint only sums what's
+                # in the status hash. Same pattern `qdrant_task/task.py`
+                # already uses for its own drain trigger — attach the
+                # count to one of the dispatched videos so the sum
+                # picks it up.
+                if drained and dispatched_ids:
+                    await update_video_extra(
+                        redis, extract_id, "qdrant", dispatched_ids[-1],
+                        {"points_upserted": drained},
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"[extract_videos] {extract_id}: totals-correction "
+                    f"Qdrant drain failed (chunks re-queued for a "
+                    f"later attempt): {type(e).__name__}: {e}"
+                )
+            finally:
+                await qdrant.close()
+        if neo4j_completed_here:
+            # 2026-09-14: the WHOLE block, including building the
+            # connection, is inside try/except — caught the hard way
+            # while testing the Qdrant fix above: `Neo4jGraph(...)`
+            # itself can raise (`ServiceUnavailable` etc.) if Neo4j is
+            # transiently unreachable at exactly this moment, and an
+            # uncaught raise here would crash the WHOLE otherwise-
+            # successful extract_videos task over a resolution hiccup
+            # — same class of risk the Qdrant drain above already
+            # guards against, just missed here on the first pass.
+            try:
+                from domains.ycs.graph_builder import resolve_entities
+                from domains.ycs.pipeline_task.streaming import update_video_extra
+                from langchain_neo4j import Neo4jGraph
+                neo4j_graph = Neo4jGraph(
+                    url      = os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
+                    username = os.environ.get("NEO4J_USERNAME", "neo4j"),
+                    password = os.environ.get("NEO4J_PASSWORD", ""),
+                )
+                merged = await resolve_entities(neo4j_graph)
+                logger.info(
+                    f"[extract_videos] {extract_id}: totals-correction "
+                    f"completed the Neo4j phase — resolution merged "
+                    f"{merged} node(s)"
+                )
+                if merged and dispatched_ids:
+                    await update_video_extra(
+                        redis, extract_id, "neo4j", dispatched_ids[-1],
+                        {"entities_merged": merged},
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"[extract_videos] {extract_id}: totals-correction "
+                    f"entity resolution failed: {type(e).__name__}: {e}"
+                )
         await maybe_finalize(redis, extract_id)
     finally:
         await redis.close()
@@ -132,6 +271,32 @@ async def _extract_videos_async(
                 "current": 0,
                 "total":   len(video_ids),
             })
+        if extract_id and include_transcription and video_ids:
+            # 2026-09-14: seed the streaming phase totals UPFRONT so
+            # the Qdrant/Neo4j bars track per-video completions IN
+            # PARALLEL with Playwright (instead of sitting at
+            # PENDING/0% until this whole function finishes and only
+            # then jumping). Seeded to `len(video_ids)` (N, the full
+            # requested count — the only number known this early);
+            # `_dispatch_streaming_totals` corrects it DOWN to the real
+            # dispatched count (K, excluding no-transcript/failed
+            # videos) once that's known, at the end.
+            try:
+                from domains.ycs.pipeline_task.streaming import (
+                    build_redis_client,
+                    set_phase_total,
+                )
+                _r = build_redis_client()
+                try:
+                    await set_phase_total(_r, extract_id, "neo4j", len(video_ids))
+                    await set_phase_total(_r, extract_id, "qdrant", len(video_ids))
+                finally:
+                    await _r.close()
+            except Exception as _seed_err:
+                logger.warning(
+                    f"[extract_videos] streaming totals seed failed: "
+                    f"{type(_seed_err).__name__}: {_seed_err}"
+                )
         videos = await extractor.extract_batch(video_ids)
         videos_dicts = [
             v.model_dump(exclude_none = False) if hasattr(v, "model_dump") else v
@@ -164,7 +329,16 @@ async def _extract_videos_async(
                 "all_items": all_items,
             })
         es_transcriptions = {"indexed": 0, "failed": 0}
-        dispatched_count = 0
+        # 2026-09-14: declared HERE (not inside `if include_transcription:`
+        # below) — both are referenced after that block, in the final
+        # return dict and in `_dispatch_streaming_totals`'s call, which
+        # run regardless of `include_transcription`. Python treats a
+        # name assigned anywhere in a function as local to the whole
+        # function; leaving these to be defined only inside the `if`
+        # raised `UnboundLocalError` on a metadata-only
+        # (`include_transcription=False`) run.
+        dispatched_ids:     list[str] = []
+        no_transcript_ids:  list[str] = []
         if include_transcription:
             valid_ids = [
                 v["id"] for v in videos_dicts
@@ -249,10 +423,9 @@ async def _extract_videos_async(
                 # `extract_id` is this task's own id (`self.request.id`,
                 # threaded in from `extract_videos`) — the namespace
                 # every downstream piece of Redis bookkeeping shares.
-                nonlocal dispatched_count
                 from domains.ycs.graph_builder.params import EXTRACT_CONCURRENCY
                 from domains.ycs.qdrant_task.task import stream_video_to_qdrant
-                dispatched_count += 1
+                dispatched_ids.append(vid)
                 neo4j_chunk.append(vid)
                 if len(neo4j_chunk) >= EXTRACT_CONCURRENCY:
                     _flush_neo4j_chunk()
@@ -268,19 +441,29 @@ async def _extract_videos_async(
             #   else                            → Queued
             completed_ids: list[str] = []
             failed_ids:    list[str] = []
+            # `no_transcript_ids` tracked separately from `failed_ids`
+            # (declared at the top of this function, alongside
+            # `dispatched_ids`) — a no-transcript video is never a
+            # candidate for ES/Qdrant/Neo4j processing at all (not just
+            # "failed" at it), so the drawer table renders it with a
+            # distinct "N/A" pill for those 3 columns instead of a
+            # misleading red "Failed" one. Playwright's own column is
+            # unaffected (still shows via `failed_ids` there — that
+            # step IS what made the determination).
             if progress_cb:
                 progress_cb({
-                    "phase":         "transcription",
-                    "current":       0,
-                    "total":         len(valid_ids),
-                    "completed_ids": list(completed_ids),
-                    "failed_ids":    list(failed_ids),
-                    "all_items":     all_items,
+                    "phase":             "transcription",
+                    "current":           0,
+                    "total":             len(valid_ids),
+                    "completed_ids":     list(completed_ids),
+                    "failed_ids":        list(failed_ids),
+                    "no_transcript_ids": list(no_transcript_ids),
+                    "all_items":         all_items,
                 })
 
             def _per_video_cb(
                 done: int, total: int, video_id: str | None,
-                success: bool = True,
+                success: bool = True, *, no_transcript: bool = False,
             ) -> None:
                 if not progress_cb:
                     return
@@ -289,13 +472,16 @@ async def _extract_videos_async(
                         completed_ids.append(video_id)
                     elif (not success) and video_id not in failed_ids:
                         failed_ids.append(video_id)
+                    if no_transcript and video_id not in no_transcript_ids:
+                        no_transcript_ids.append(video_id)
                 payload: dict[str, Any] = {
-                    "phase":         "transcription",
-                    "current":       done,
-                    "total":         total,
-                    "completed_ids": list(completed_ids),
-                    "failed_ids":    list(failed_ids),
-                    "all_items":     all_items,
+                    "phase":             "transcription",
+                    "current":           done,
+                    "total":             total,
+                    "completed_ids":     list(completed_ids),
+                    "failed_ids":        list(failed_ids),
+                    "no_transcript_ids": list(no_transcript_ids),
+                    "all_items":         all_items,
                 }
                 if video_id and video_id in videos_meta_map:
                     payload["current_item"] = videos_meta_map[video_id]
@@ -321,12 +507,13 @@ async def _extract_videos_async(
                     return
                 try:
                     progress_cb({
-                        "phase":         "es_indexing",
-                        "current":       indexed,
-                        "total":         total,
-                        "completed_ids": list(completed_ids),
-                        "failed_ids":    list(failed_ids),
-                        "all_items":     all_items,
+                        "phase":             "es_indexing",
+                        "current":           indexed,
+                        "total":             total,
+                        "completed_ids":     list(completed_ids),
+                        "failed_ids":        list(failed_ids),
+                        "no_transcript_ids": list(no_transcript_ids),
+                        "all_items":         all_items,
                     })
                 except Exception as cb_err:
                     logger.warning(
@@ -373,16 +560,20 @@ async def _extract_videos_async(
             finally:
                 await close_transcript_service()
         if extract_id:
-            await _dispatch_streaming_totals(extract_id, dispatched_count)
+            await _dispatch_streaming_totals(
+                extract_id, video_ids, dispatched_ids,
+                include_transcription,
+            )
         return {
-            "total_videos":   len(videos_dicts),
-            "metadata":       es_metadata,
-            "transcriptions": es_transcriptions,
+            "total_videos":      len(videos_dicts),
+            "metadata":          es_metadata,
+            "transcriptions":    es_transcriptions,
             # Surface in the final result too, so a JS poll that lands
             # only AFTER Phase 1 reaches SUCCESS (page reload mid-Phase-2/3,
             # late-tab visit) still gets titles to render the right
             # column with names instead of bare video_ids.
-            "all_items":      all_items,
+            "all_items":         all_items,
+            "no_transcript_ids": no_transcript_ids,
         }
     finally:
         await es.close()

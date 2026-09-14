@@ -46,13 +46,14 @@ def _Bar(prefix: str, title: str, hint: str):
 
 def _VideoDrawer():
     """Right-side slide-out drawer carrying the per-video × per-store
-    status table. 5 columns: Video (title + channel) · ES · Qdrant ·
+    status table. 6 columns: Video (title + channel) · PW · ES · Qdrant ·
     Neo4j · Duration. Each store cell holds its own status pill
-    (Queued / Running / Done / Failed / Skipped) derived per-phase
-    from `completed_ids` / `failed_ids` / `current_item` meta —
-    replaces the single conflated row-level pill that was misleading
-    (it only updated when Neo4j finished, never showed ES/Qdrant
-    progress).
+    (Queued / Running / Done / Failed / Skipped) derived per-phase —
+    PW from the transcription fetch, ES gated on chunk-commit (so it
+    trails PW per chunk, matching the Phase 2 bar), Qdrant/Neo4j from
+    their streaming aggregators. Replaces the single conflated
+    row-level pill that was misleading (it only updated when Neo4j
+    finished, never showed ES/Qdrant progress).
 
     Drawer DOM is rendered server-side as an empty shell; JS
     (`pipeline_panel.js::_renderVideoTable`) injects table rows once
@@ -93,7 +94,10 @@ def _VideoDrawer():
             Div(
                 Div(
                     Span("Video",   cls = "ycs-pipe-table-h ycs-pipe-table-h-video"),
-                    Span("ES",      cls = "ycs-pipe-table-h"),
+                    Span("PW",      cls = "ycs-pipe-table-h",
+                         title = "Playwright transcript fetch"),
+                    Span("ES",      cls = "ycs-pipe-table-h",
+                         title = "ElasticSearch chunk-commit"),
                     Span("Qdrant",  cls = "ycs-pipe-table-h"),
                     Span("Neo4j",   cls = "ycs-pipe-table-h"),
                     Span("Time",    cls = "ycs-pipe-table-h ycs-pipe-table-h-time"),
@@ -220,7 +224,7 @@ def PipelinePanel():
                 cls   = "ycs-pipe-videos-btn",
                 title = (
                     "Show per-video × per-store status table "
-                    "(ES / Qdrant / Neo4j independent cells)."
+                    "(PW / ES / Qdrant / Neo4j independent cells)."
                 ),
             ),
             cls = "ycs-pipe-panel-head",

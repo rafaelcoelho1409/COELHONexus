@@ -164,6 +164,7 @@ def stream_video_to_qdrant(
             build_redis_client,
             mark_video_done,
             maybe_finalize,
+            update_video_extra,
         )
 
         es = AsyncElasticsearch(
@@ -211,8 +212,37 @@ def stream_video_to_qdrant(
                     f"of the run's Qdrant phase ({finished}/{total}) — "
                     f"draining buffer remainder"
                 )
-                drained = await finalize_qdrant_buffer(redis, qdrant, extract_id)
-                result["final_drain_points"] = drained
+                # 2026-09-14: `mark_video_done` for THIS video already
+                # completed successfully above — a raise from the drain
+                # itself must not fall into the `except` block below,
+                # which would call `mark_video_done` a SECOND time for
+                # this same video_id (double-incrementing the exactly-
+                # once finished counter, corrupting it for the rest of
+                # the run). `finalize_qdrant_buffer` already re-queues
+                # on failure (see its docstring), so swallowing here
+                # loses nothing — a later Rerun's drain picks it up.
+                try:
+                    drained = await finalize_qdrant_buffer(redis, qdrant, extract_id)
+                    result["final_drain_points"] = drained
+                    # 2026-09-14: the drain count must be patched onto
+                    # THIS video's status entry (same `update_video_extra`
+                    # pattern Neo4j uses for `entities_merged`) — it is
+                    # only known AFTER `mark_video_done` already
+                    # recorded this video's `points_upserted`, so
+                    # without this the bar shows "0 points" on runs
+                    # whose chunks all landed via the final drain (e.g.
+                    # 43 chunks < FLUSH_CHUNKS=50).
+                    if drained:
+                        await update_video_extra(
+                            redis, extract_id, "qdrant", video_id,
+                            {"points_upserted": result.get("points_flushed", 0) + drained},
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"[stream_video_to_qdrant] {extract_id}: final "
+                        f"drain failed (chunks re-queued for a later "
+                        f"attempt): {type(e).__name__}: {e}"
+                    )
             await maybe_finalize(redis, extract_id)
             return result
         except Exception as e:

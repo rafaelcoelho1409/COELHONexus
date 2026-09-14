@@ -269,6 +269,7 @@ def _build_chat_openai(
     max_tokens:      int | None   = None,
     temperature:     float | None = None,
     response_format: dict | None  = None,
+    rotator_task:    str | None   = None,
 ):
     """Shared LangChain `ChatOpenAI` construction for every non-hot-path
     caller — one place to keep `max_retries=0` applied consistently.
@@ -279,7 +280,23 @@ def _build_chat_openai(
     2026-09-13: added after finding TWO independent `ChatOpenAI`
     construction sites (`_get_chat_llm` and YCS's Neo4j chain builder)
     had each separately forgotten this — consolidating so it can't
-    drift apart a third time."""
+    drift apart a third time.
+
+    2026-09-14: `rotator_task` (optional — most callers stay untagged,
+    which the rotator defaults server-side to `"general"`) sets
+    `extra_body={"metadata": {"rotator_task": ...}}`, verified against
+    the rotator's actual source
+    (`~/Workbench/COELHOLLMRotator/apps/fastapi/domains/llm/rotator/
+    bandit/service.py`'s `cell_key(deployment, task)`) to genuinely
+    partition the FGTS-VA bandit's per-arm statistics by task, not
+    just tag requests for observability — DD's raw-`AsyncOpenAI` hot
+    path already does the equivalent via `chat_judge_bandit_async`'s
+    own `extra_body`; this brings the same calibration to
+    `ChatOpenAI`-based callers, starting with YCS's Neo4j chain
+    (`build_ycs_neo4j_pinned_chain` below), which previously sent every
+    call untagged despite being a distinctly heavy shape (full-
+    transcript input, large JSON completion) that shouldn't be judged
+    by the same pooled stats as lighter untagged traffic."""
     from langchain_openai import ChatOpenAI
 
     kwargs: dict = {
@@ -295,6 +312,8 @@ def _build_chat_openai(
         kwargs["max_tokens"] = max_tokens
     if response_format is not None:
         kwargs["model_kwargs"] = {"response_format": response_format}
+    if rotator_task:
+        kwargs["extra_body"] = {"metadata": {"rotator_task": rotator_task}}
     return ChatOpenAI(**kwargs)
 
 
@@ -743,7 +762,18 @@ def build_ycs_neo4j_pinned_chain(pinned_model: str | None = None, *args, **kwarg
     # GRAPH_BATCH_TIMEOUT_S outer watchdog in graph_builder/service.py,
     # but much closer to the ~600s implicit default that was actually
     # working (with occasional real 504s) before any of today's changes.
-    return _build_chat_openai(timeout_s = 400.0)
+    #
+    # 2026-09-14: `rotator_task="ycs-neo4j-extract"` — see
+    # `_build_chat_openai`'s docstring. Every call from this chain was
+    # previously untagged (defaults server-side to `"general"`), so the
+    # rotator's bandit had never built calibrated statistics for THIS
+    # workload's shape (full-transcript input, large JSON completion) —
+    # it was judging models against whatever mix of lighter untagged
+    # traffic happens to also land in "general". Tagging gives it a
+    # dedicated cell to actually learn which deployments handle large-
+    # context extraction well, the same mechanism DD's `dd-{dd_process}`
+    # tags already exploit per node type.
+    return _build_chat_openai(timeout_s = 400.0, rotator_task = "ycs-neo4j-extract")
 
 
 # ── Wave H2 — quality feedback to the rotator ────────────────────────────────

@@ -1177,10 +1177,18 @@ class PlaywrightTranscriptService:
                         await innertube_task
                     except asyncio.CancelledError:
                         pass
-                    # Authoritative: playable video, zero caption tracks
-                    # → there IS no transcript. Permanent; never retried;
-                    # batch stats bucket this separately from infra
-                    # failures.
+                    # Playable video, zero caption tracks on THIS page
+                    # load. 2026-09-14: no longer treated as an
+                    # instant, unretried verdict — `"no caption
+                    # tracks"` is in `RETRYABLE_ERRORS` now, so
+                    # `fetch_transcriptions_batch`'s batch-retry-pass
+                    # loop gives it up to `MAX_RETRIES` fresh page
+                    # loads before finalizing it as genuinely
+                    # caption-less (unlike a deleted/private/region-
+                    # blocked video, which stays a real single-shot
+                    # permanent verdict — see `_UNPLAYABLE_STATUSES`
+                    # above). Batch stats still bucket this separately
+                    # from infra failures once finalized.
                     log.info(
                         f"[transcript-service] {video_id}: no caption "
                         f"tracks (playability={playability})",
@@ -1521,6 +1529,10 @@ async def fetch_transcriptions_batch(
     languages:          list[str] | None                  = None,
     chunk_size:         int                               = DEFAULT_CHUNK_SIZE,
     video_metadata:     dict[str, dict[str, Any]] | None  = None,
+    # `Callable` can't express the optional `no_transcript` keyword arg
+    # this is actually called with (see the live `_on_video_done` call
+    # site below) — real signature is
+    # `(done, total, video_id, success, *, no_transcript=False)`.
     progress_cb:        Callable[[int, int, str | None, bool], None] | None = None,
     es_progress_cb:     Callable[[int, int], None] | None = None,
     on_video_indexed:   Callable[[str], None] | None      = None,
@@ -1752,6 +1764,7 @@ async def fetch_transcriptions_batch(
             try:
                 progress_cb(
                     n_progressed + fetched_emitted, total_videos, vid, ok,
+                    no_transcript = bool(result.get("no_transcript")),
                 )
             except Exception as cb_err:
                 log.warning(

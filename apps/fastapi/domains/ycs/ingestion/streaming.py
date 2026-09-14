@@ -41,7 +41,7 @@ from domains.ycs.embeddings import (
 )
 
 from . import domain
-from .keys import point_id, qdrant_buffer_key, qdrant_flush_lock_key
+from .keys import point_id, qdrant_buffer_key, qdrant_draining_key, qdrant_flush_lock_key
 from .params import (
     DEFAULT_CHUNK_OVERLAP,
     DEFAULT_CHUNK_SIZE,
@@ -83,7 +83,16 @@ async def _flush_buffer(
     redis: Redis, qdrant: AsyncQdrantClient, extract_id: str, *, drain_all: bool = False,
 ) -> int:
     """Lock-guarded pop-and-upsert. Returns points upserted (0 if
-    another caller was already flushing, or the buffer was empty)."""
+    another caller was already flushing, or the buffer was empty).
+
+    2026-09-14: popped chunks are re-queued (front of the list, same
+    order) if embedding/upsert fails — previously they were silently
+    dropped, so 2 transient rotator blips on a 25-video run permanently
+    lost those videos' points (22/24). A later video's flush or the
+    final drain retries them. The embed call itself gets 3 attempts
+    with backoff before giving up for this flush."""
+    import asyncio as _asyncio
+
     lock = Lock(
         redis, qdrant_flush_lock_key(extract_id), timeout = 60, blocking_timeout = 0,
     )
@@ -103,6 +112,36 @@ async def _flush_buffer(
         raw_items = await redis.lpop(buffer_key, count)
         if not raw_items:
             return 0
+
+        # 2026-09-14: mark this phase as actively draining for the
+        # duration of the embed+upsert below — TTL is a self-healing
+        # backstop if this process gets hard-killed (SIGTERM revoke)
+        # before the `finally` gets to clear it. See `qdrant_draining_
+        # key`'s docstring for why this exists: `get_phase_progress`
+        # reads it so the bar doesn't report "Done" while this is
+        # still running (that gap is what let a Stop click aimed at an
+        # unrelated phase kill an in-flight drain with no warning).
+        draining_key = qdrant_draining_key(extract_id)
+        await redis.set(draining_key, "1", ex = 120)
+
+        async def _requeue(why: str) -> None:
+            # Put popped chunks BACK at the front of the buffer (same
+            # order) so a later flush or the final drain retries them
+            # instead of losing them. Best-effort — logs and swallows.
+            try:
+                if raw_items:
+                    await redis.lpush(buffer_key, *reversed(raw_items))
+                    await redis.expire(buffer_key, STREAMING_KEY_TTL_S)
+                    logger.warning(
+                        f"[ycs:ingestion:streaming] {extract_id}: "
+                        f"re-queued {len(raw_items)} chunks after {why}"
+                    )
+            except Exception as requeue_err:
+                logger.warning(
+                    f"[ycs:ingestion:streaming] {extract_id}: re-queue "
+                    f"failed after {why}: "
+                    f"{type(requeue_err).__name__}: {requeue_err}"
+                )
         docs: list[Document] = []
         for raw in raw_items:
             text = raw.decode() if isinstance(raw, (bytes, bytearray)) else raw
@@ -116,12 +155,39 @@ async def _flush_buffer(
                 )
         if not docs:
             return 0
-        dense_embeddings = create_dense_embeddings()
-        sparse_embeddings = create_sparse_embeddings()
-        dimensions, embedding_model = await get_embedding_info()
-        await ensure_collection(qdrant, dimensions, embedding_model)
+        try:
+            dense_embeddings = create_dense_embeddings()
+            sparse_embeddings = create_sparse_embeddings()
+            dimensions, embedding_model = await get_embedding_info()
+            await ensure_collection(qdrant, dimensions, embedding_model)
+        except Exception as setup_err:
+            # Probe/collection failure happens AFTER the pop — without
+            # a re-queue these chunks are lost (observed live:
+            # `embed_probe_async timed out after 20s` dropped a whole
+            # video's chunks). Re-queue and let a later flush retry.
+            await _requeue(f"setup failure ({type(setup_err).__name__})")
+            raise
         texts = [doc.page_content for doc in docs]
-        dense_vectors = await dense_embeddings.aembed_documents(texts)
+        last_err: Exception | None = None
+        dense_vectors = None
+        for attempt in range(3):
+            try:
+                dense_vectors = await dense_embeddings.aembed_documents(texts)
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                logger.warning(
+                    f"[ycs:ingestion:streaming] {extract_id}: embed "
+                    f"attempt {attempt + 1}/3 failed "
+                    f"({type(e).__name__}: {e}) — "
+                    f"{len(docs)} chunks stay buffered for retry"
+                )
+                await _asyncio.sleep(2 * (attempt + 1))
+        if dense_vectors is None:
+            # All attempts failed — re-queue for a later flush / drain.
+            await _requeue("embed failure")
+            raise last_err
         sparse_vectors = list(sparse_embeddings.embed_documents(texts))
         model_used = dense_embeddings.last_model or ""
         points = [
@@ -138,13 +204,27 @@ async def _flush_buffer(
             )
             for i, doc in enumerate(docs)
         ]
-        await qdrant.upsert(collection_name = QDRANT_COLLECTION, points = points)
+        try:
+            await qdrant.upsert(collection_name = QDRANT_COLLECTION, points = points)
+        except Exception:
+            # An upsert failure must not lose already-popped chunks.
+            await _requeue("upsert failure")
+            raise
         logger.info(
             f"[ycs:ingestion:streaming] {extract_id}: flushed "
             f"{len(points)} points (drain_all={drain_all})"
         )
         return len(points)
     finally:
+        # Clears unconditionally — a harmless no-op delete if we
+        # returned before the flag was ever set (empty buffer, no
+        # docs). Runs on every exit path (return OR raise) from the
+        # try above, so a re-queued failure clears it exactly the same
+        # as a clean flush.
+        try:
+            await redis.delete(qdrant_draining_key(extract_id))
+        except Exception:
+            pass
         try:
             await lock.release()
         except Exception:
@@ -169,9 +249,11 @@ async def stream_video_to_qdrant(
     transcripts = await fetch_transcripts_from_es(es, [video_id])
     if not transcripts:
         return {"video_id": video_id, "chunks": 0, "skipped": False, "error": "not found in ES"}
-    transcript = transcripts[0]
+    transcript = transcripts[0] if isinstance(transcripts[0], dict) else {}
     metadata_map = await fetch_metadata_from_es(es, [video_id])
     meta = metadata_map.get(video_id, {})
+    if not isinstance(meta, dict):
+        meta = {}
     content = transcript.get("content") or ""
     content_hash = domain.content_hash(content)
 

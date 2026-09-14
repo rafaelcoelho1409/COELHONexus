@@ -2844,6 +2844,16 @@
 .ycs-bar-row[data-state="success"] .ycs-bar-fill {
   background: #2c8a3e;
 }
+/* 2026-09-14: partial = phase finished but with per-video losses
+ * (e.g. Neo4j 7/24 on a provider-outage run). Amber, not green —
+ * green 100% "Done" hid real data loss on the last run. */
+.ycs-bar-row[data-state="partial"] .ycs-bar-fill {
+  background: #d97706;
+}
+.ycs-bar-row[data-state="partial"] .ycs-bar-hint {
+  font-style: normal;
+  color: var(--text);
+}
 .ycs-bar-row[data-state="failure"] .ycs-bar-fill,
 .ycs-bar-row[data-state="error"] .ycs-bar-fill {
   background: var(--error-text, #c41230);
@@ -3080,7 +3090,7 @@
 }
 .ycs-pipe-table-headrow {
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) 80px 80px 80px 64px;
+  grid-template-columns: minmax(140px, 1fr) 70px 70px 80px 80px 64px;
   gap: 8px;
   padding: 8px 14px;
   background: rgba(0, 0, 0, 0.025);
@@ -3105,7 +3115,7 @@
 }
 .ycs-pipe-table-row {
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) 80px 80px 80px 64px;
+  grid-template-columns: minmax(140px, 1fr) 70px 70px 80px 80px 64px;
   gap: 8px;
   padding: 8px 14px;
   align-items: center;
@@ -3174,6 +3184,10 @@
 .ycs-pipe-cell-pill-done    { background: rgba(44, 138, 62, 0.16);  color: #1f6635;           border-color: rgba(44, 138, 62, 0.32); }
 .ycs-pipe-cell-pill-failed  { background: rgba(196, 18, 48, 0.14);  color: #8a142a;           border-color: rgba(196, 18, 48, 0.36); }
 .ycs-pipe-cell-pill-skipped { background: rgba(0, 102, 204, 0.12);  color: #0b4a8a;           border-color: rgba(0, 102, 204, 0.30); }
+/* 2026-09-14: distinct GOLD yellow — deliberately not `running`'s
+   orange (rgba(255,159,64,...) above) so "actively processing" and
+   "never eligible to process" stay visually distinct at a glance. */
+.ycs-pipe-cell-pill-unavailable { background: rgba(212, 175, 55, 0.20); color: #7a6110;           border-color: rgba(212, 175, 55, 0.45); }
 
 @media (max-width: 1000px) {
   /* 2026-09-13: 2x2 grid before dropping to a single column — 4 bars
@@ -3188,7 +3202,7 @@
   /* Tighten the table — collapse Time column to free room */
   .ycs-pipe-table-headrow,
   .ycs-pipe-table-row {
-    grid-template-columns: minmax(120px, 1fr) 70px 70px 70px;
+    grid-template-columns: minmax(120px, 1fr) 60px 60px 70px 70px;
   }
   .ycs-pipe-table-h-time,
   .ycs-pipe-table-cell-time { display: none; }

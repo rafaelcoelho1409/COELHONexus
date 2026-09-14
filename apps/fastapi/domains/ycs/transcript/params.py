@@ -112,7 +112,6 @@ BLOCK_RESOURCE_TYPES: frozenset[str] = frozenset({
 
 
 PERMANENT_ERRORS = (
-    "no transcript",
     "unavailable",
     "video unavailable",
     "private video",
@@ -126,4 +125,19 @@ RETRYABLE_ERRORS = (
     "browser",
     "context",
     "expand",
+    # 2026-09-14: "0 caption tracks" read from `ytInitialPlayerResponse`
+    # used to be PERMANENT — a single page load, single verdict, no
+    # second look. That's a real gap: unlike a deleted/private/region-
+    # blocked video (still `"unavailable"`/`"video unavailable"` above,
+    # correctly permanent — reloading won't change a server-side
+    # playability fact), "0 tracks" is read from the SAME kind of
+    # page-load that this file's OWN docstring documents as subject to
+    # transient contention under concurrency (see
+    # `_wait_for_innertube_context`'s INNERTUBE_CONTEXT race). Moving
+    # it here reuses the EXISTING batch-retry-pass loop
+    # (`fetch_transcriptions_batch`'s pass/cooldown mechanism, bounded
+    # by `MAX_RETRIES`) instead of trusting one load's reading —
+    # matches `"no caption tracks"` in the exact message
+    # `service.py::_fetch_single_attempt` returns for this case.
+    "no caption tracks",
 )

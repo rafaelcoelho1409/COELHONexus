@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import random
 from typing import Any
 
 from celery.utils.log import get_task_logger
@@ -53,6 +54,11 @@ from domains.ycs.graph_builder import (
     build_video_metadata_graph,
     extract_and_store_graph,
     resolve_entities,
+)
+from domains.ycs.graph_builder.domain import is_infra_error
+from domains.ycs.graph_builder.params import (
+    MAX_CONSECUTIVE_INFRA_PASSES,
+    RETRY_PASS_BACKOFF_S,
 )
 from domains.ycs.ingestion import (
     fetch_metadata_from_es,
@@ -186,6 +192,11 @@ def ingest_to_neo4j(
             username = os.environ.get("NEO4J_USERNAME", "neo4j"),
             password = os.environ.get("NEO4J_PASSWORD", ""),
         )
+        # 2026-09-14: initialized up here (not where the client is
+        # created below) so the `finally` can always reference them,
+        # including the early `return {"error": ...}` path.
+        _preview_redis = None
+        _preview_tasks: set = set()
         # 2026-09-13: dropped the old "at least one of these 6 per-provider
         # keys must be set" gate — it checked credentials from the bundled-
         # litellm-router era that no longer determine chat readiness. Chat
@@ -261,6 +272,45 @@ def ingest_to_neo4j(
             def _ordered(ids: set[str]) -> list[str]:
                 return [vid for vid in all_video_ids if vid in ids]
 
+            # 2026-09-14: display-only in-chunk preview (see
+            # `pipeline_task.streaming.update_phase_preview`) — the bar
+            # polls the per-video aggregator, which only advances when
+            # a whole CHUNK task reports. Without this push the bar
+            # sits at 0/N while videos visibly succeed in the logs.
+            # Fire-and-forget tasks, awaited in the `finally` below so
+            # none is destroyed mid-write; failures swallow (display
+            # must never break extraction). (`_preview_redis` /
+            # `_preview_tasks` are initialized at the top of
+            # `_run_inner` so the `finally` is safe on every path.)
+            if skip_resolution and extract_id:
+                try:
+                    from domains.ycs.pipeline_task.streaming import (
+                        build_redis_client,
+                        update_phase_preview,
+                    )
+                    _preview_redis = build_redis_client()
+                except Exception:
+                    _preview_redis = None
+
+            def _push_preview() -> None:
+                if _preview_redis is None or not extract_id:
+                    return
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    return
+                try:
+                    t = loop.create_task(
+                        update_phase_preview(
+                            _preview_redis, extract_id, "neo4j",
+                            _ordered(completed_global),
+                        )
+                    )
+                    _preview_tasks.add(t)
+                    t.add_done_callback(_preview_tasks.discard)
+                except Exception:
+                    pass
+
             def _neo4j_progress(payload: dict[str, Any]) -> None:
                 phase = payload.get("phase")
                 if phase == "extracting":
@@ -278,6 +328,7 @@ def ingest_to_neo4j(
                     active_failed = {
                         vid for vid in seg_failed if vid not in completed_global
                     }
+                    _push_preview()
                     current = min(
                         total_videos,
                         len(completed_global) + len(active_failed),
@@ -309,10 +360,23 @@ def ingest_to_neo4j(
             agg_rels = 0
             agg_attempted = 0
             agg_merged = 0
+            agg_error_breakdown: dict[str, int] = {}
             final_failed_ids: list[str] = []
+            consecutive_infra_passes = 0
             pending_transcripts = transcripts
             extraction_stats: dict[str, Any] = {}
             for attempt in range(MAX_RETRY_PASSES + 1):
+                if attempt > 0:
+                    # Jittered backoff between passes (DD pattern,
+                    # scaled for heavy calls): immediate retries hammer
+                    # an already-exhausted free-tier pool.
+                    _lo, _hi = RETRY_PASS_BACKOFF_S
+                    _sleep_s = _lo + random.uniform(0, _hi - _lo)
+                    logger.info(
+                        f"[ingest_to_neo4j] backing off {_sleep_s:.1f}s "
+                        f"before retry pass {attempt}/{MAX_RETRY_PASSES}"
+                    )
+                    await asyncio.sleep(_sleep_s)
                 pass_label = (
                     "First pass" if attempt == 0
                     else f"Retry pass {attempt}/{MAX_RETRY_PASSES}"
@@ -335,6 +399,8 @@ def ingest_to_neo4j(
                 agg_nodes     += int(extraction_stats.get("nodes_created", 0) or 0)
                 agg_rels      += int(extraction_stats.get("relationships_created", 0) or 0)
                 agg_attempted += int(extraction_stats.get("documents_processed", 0) or 0)
+                for _k, _v in (extraction_stats.get("error_breakdown") or {}).items():
+                    agg_error_breakdown[_k] = agg_error_breakdown.get(_k, 0) + int(_v or 0)
                 docs_processed = int(extraction_stats.get("documents_processed", 0) or 0)
                 nodes_created  = int(extraction_stats.get("nodes_created", 0) or 0)
                 if docs_processed > 0 and nodes_created == 0:
@@ -354,15 +420,57 @@ def ingest_to_neo4j(
                     extraction_stats.get("videos_completed", 0) or 0,
                 )
                 if videos_completed_this_pass == 0:
+                    # Streak halt (DD's SUSTAINED_INFRA_OUTAGE_LIMIT,
+                    # adapted to passes): consecutive all-failed INFRA
+                    # passes stop early — the provider is down, not
+                    # flaky. Non-infra zeros (model/silent-zero) break
+                    # immediately: re-attempting won't heal those.
+                    # Any success resets the streak (handled below —
+                    # this branch only runs on zero successes).
+                    _last_err = str(
+                        extraction_stats.get("last_batch_error") or ""
+                    )
+                    if is_infra_error(_last_err):
+                        consecutive_infra_passes += 1
+                        if consecutive_infra_passes >= MAX_CONSECUTIVE_INFRA_PASSES:
+                            logger.error(
+                                f"[ingest_to_neo4j] {pass_label} produced 0 "
+                                f"successes out of {len(pending_transcripts)} "
+                                f"attempted ({consecutive_infra_passes}x "
+                                f"consecutive infra failure) — provider "
+                                f"down, giving up on the remaining "
+                                f"{len(failed_ids)} video(s) for this run: "
+                                f"{failed_ids[:10]} "
+                                f"(breakdown={agg_error_breakdown})"
+                            )
+                            break
+                        logger.warning(
+                            f"[ingest_to_neo4j] {pass_label} produced 0 "
+                            f"successes (infra streak "
+                            f"{consecutive_infra_passes}/"
+                            f"{MAX_CONSECUTIVE_INFRA_PASSES}) — one more "
+                            f"pass after backoff"
+                        )
+                        if attempt < MAX_RETRY_PASSES:
+                            pending_transcripts = [
+                                t for t in transcripts
+                                if t["video_id"] in failed_ids
+                            ]
+                            continue
                     logger.error(
                         f"[ingest_to_neo4j] {pass_label} produced 0 "
                         f"successes out of {len(pending_transcripts)} "
                         f"attempted — endpoint likely down, giving up on "
                         f"the remaining {len(failed_ids)} video(s) for "
-                        f"this run: {failed_ids[:10]}"
+                        f"this run: {failed_ids[:10]} "
+                        f"(breakdown={agg_error_breakdown})"
                     )
                     break
                 if attempt < MAX_RETRY_PASSES:
+                    # This pass had ≥1 success (zero-success passes break
+                    # above) — reset the infra streak: the provider is
+                    # flaky, not down.
+                    consecutive_infra_passes = 0
                     logger.warning(
                         f"[ingest_to_neo4j] {len(failed_ids)} video(s) "
                         f"failed {pass_label} — retrying "
@@ -476,8 +584,16 @@ def ingest_to_neo4j(
                 "videos_failed":         len(final_failed_ids),
                 "failed_video_ids":      final_failed_ids,
                 "last_batch_error":      extraction_stats.get("last_batch_error"),
+                "error_breakdown":       agg_error_breakdown,
             }
         finally:
+            if _preview_tasks:
+                await asyncio.gather(*_preview_tasks, return_exceptions = True)
+            if _preview_redis is not None:
+                try:
+                    await _preview_redis.close()
+                except Exception:
+                    pass
             await es.close()
 
     result = asyncio.run(_run())

@@ -427,6 +427,19 @@ class YtDlpSearchService:
                 continue
             snippets.append(VideoSnippet.model_validate(normalized))
 
+        # 2026-09-14: every requested id failed (bot-check, all
+        # private/deleted, etc.) — surface a real 502 instead of a
+        # misleading 200 with `items=[]` (the picker would render
+        # "Loaded 0 of N videos", indistinguishable from a UI bug).
+        if page_ids and not snippets:
+            from .errors import YtDlpSubprocessError
+            raise YtDlpSubprocessError(
+                "yt-dlp extracted 0 of "
+                f"{len(page_ids)} requested videos "
+                "(likely YouTube bot-check or all ids unavailable)",
+                1,
+            )
+
         logger.info(
             f"[ycs:preview] OK ids={total} page_items={len(snippets)} "
             f"slice={lo}:{hi} elapsed={elapsed:.2f}s"

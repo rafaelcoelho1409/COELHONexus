@@ -184,16 +184,26 @@ function _htmlEscape(s) {
  *              dispatched set (= must have been processed even if
  *              completed_ids is missing from the SUCCESS result dict)
  *
- * `phaseKey` ∈ {"elasticsearch","qdrant","neo4j"} — the 3 DATA STORES
- * (not the 4 phase bars — "playwright" has no store of its own, its
- * fetch-success/failure is what "elasticsearch" reuses as a proxy for
- * ES-write status, since a fetched transcript is indexed in the same
- * chunk). `phaseMeta` is the Celery `meta` dict from `/admin/task/{id}`'s
- * last poll; for SUCCESS state the meta is the task RESULT dict.
- * `phaseState` carries the Celery state so a finished store can mark
- * stragglers as "done" even when the result dict lacks completed_ids.
+ * `phaseKey` ∈ {"playwright","elasticsearch","qdrant","neo4j"}.
+ * "playwright" and "elasticsearch" both read the SAME `extract_videos`
+ * poll snapshot (there is no separate ES task) but interpret it
+ * differently — see `_videoPlaywrightStatus` / `_videoEsStatus`
+ * below. "qdrant"/"neo4j" read their streaming-aggregator snapshots.
+ * `phaseMeta` is the last-poll meta dict; for SUCCESS state the meta
+ * is the task RESULT dict. `phaseState` carries the Celery state so a
+ * finished store can mark stragglers as "done" even when the result
+ * dict lacks completed_ids.
  */
-function _videoStoreStatus(videoId, phaseKey, phaseMeta, phaseState) {
+/* `noTranscriptIds` (2026-09-14): the set of video ids Playwright
+ * determined have no captions at all — never eligible for ES/Qdrant/
+ * Neo4j in the first place. Checked FIRST, ahead of failed/done/etc,
+ * so these render a distinct "N/A" pill instead of a misleading red
+ * "Failed" one for a step that was never going to run for them.
+ * `undefined`/omitted (the Playwright column's own call) skips this
+ * check entirely — Playwright IS the step that made the determination,
+ * so it keeps showing its own real outcome there. */
+function _videoStoreStatus(videoId, phaseKey, phaseMeta, phaseState, noTranscriptIds) {
+    if (noTranscriptIds && noTranscriptIds.has(videoId)) return "unavailable";
     const m = phaseMeta || {};
     if (Array.isArray(m.failed_ids) && m.failed_ids.includes(videoId)) {
         return "failed";
@@ -203,9 +213,10 @@ function _videoStoreStatus(videoId, phaseKey, phaseMeta, phaseState) {
         return "done";
     }
     // Phase reached terminal SUCCESS but the result dict didn't carry
-    // completed_ids (Qdrant + Phase 3's success payloads don't enumerate
-    // per-video). Anything still queued at that point must have been
-    // processed — there's nothing for this phase left to do.
+    // completed_ids (streaming aggregators always carry them; the old
+    // single-task Qdrant/Neo4j payloads didn't). Anything still queued
+    // at that point must have been processed — there's nothing for
+    // this phase left to do.
     if (phaseState === "SUCCESS") return "done";
     if (phaseState === "FAILURE" || phaseState === "REVOKED" || phaseState === "ERROR") {
         return "failed";
@@ -213,12 +224,49 @@ function _videoStoreStatus(videoId, phaseKey, phaseMeta, phaseState) {
     return "queued";
 }
 
+/* 2026-09-14: Playwright vs ElasticSearch per-video split. Both read
+ * the same `extract_videos` snapshot, but they answer different
+ * questions:
+ *  - Playwright: did THIS video's transcript fetch resolve
+ *    (completed/failed/current_item in the transcription phase)?
+ *  - ElasticSearch: is THIS video's doc chunk-committed? ES writes
+ *    land per chunk (one bulk write per ~10 videos), so a fetched
+ *    video reads "running" until its chunk's `es_indexing` payload
+ *    (or task SUCCESS) confirms the write — matching the Phase 2
+ *    bar's chunk-grained jumps instead of parroting the PW cell. */
+function _videoPlaywrightStatus(videoId, extractMeta, extractState) {
+    return _videoStoreStatus(videoId, "playwright", extractMeta, extractState);
+}
+
+function _videoEsStatus(videoId, extractMeta, extractState, noTranscriptIds) {
+    if (noTranscriptIds && noTranscriptIds.has(videoId)) return "unavailable";
+    const m = extractMeta || {};
+    if (Array.isArray(m.failed_ids) && m.failed_ids.includes(videoId)) {
+        return "failed";
+    }
+    const fetched =
+        Array.isArray(m.completed_ids) && m.completed_ids.includes(videoId);
+    if (!fetched) {
+        if (m.current_item?.id === videoId) return "running";
+        if (extractState === "SUCCESS") return "done";
+        if (extractState === "FAILURE" || extractState === "REVOKED" || extractState === "ERROR") {
+            return "failed";
+        }
+        return "queued";
+    }
+    // Fetched — but committed to ES only once its chunk's bulk write
+    // lands (`es_indexing` phase) or the whole task succeeds.
+    if (m.phase === "es_indexing" || extractState === "SUCCESS") return "done";
+    return "running";
+}
+
 const _STORE_STATUS_LABEL = {
-    queued:  "Queued",
-    running: "Running",
-    done:    "Done",
-    failed:  "Failed",
-    skipped: "Skipped",
+    queued:      "Queued",
+    running:     "Running",
+    done:        "Done",
+    failed:      "Failed",
+    skipped:     "Skipped",
+    unavailable: "N/A",
 };
 
 /* Track per-video timings — start time = first poll where ANY store
@@ -240,11 +288,12 @@ function _fmtCellDuration(ms) {
     return `${m}:${r}`;
 }
 
-/* Render the 5-column per-video × per-store table inside the drawer.
- * Columns: Video (title + channel) · ES · Qdrant · Neo4j · Time.
- * Each store cell is an independent pill so the user sees ES finish
- * before Qdrant starts before Neo4j starts — instead of one row-wide
- * pill that's misleadingly "queued" until Phase 3 ends.
+/* Render the 6-column per-video × per-store table inside the drawer.
+ * Columns: Video (title + channel) · PW · ES · Qdrant · Neo4j · Time.
+ * Each store cell is an independent pill so the user sees Playwright
+ * resolve, then ES chunk-commit, then Qdrant/Neo4j stream per video —
+ * instead of one row-wide pill that's misleadingly "queued" until
+ * Phase 4 ends.
  *
  * `videos`: metadata array from Phase 1's `all_items` payload (titles
  *           + channels). Empty until that arrives.
@@ -274,28 +323,43 @@ function _renderVideoTable({ videos, metaByPhase, phaseStates, videoIds }) {
         const v      = metaById.get(vid) || { id: vid };
         const title  = _htmlEscape(v.title || vid);
         const channel = v.channel ? _htmlEscape(v.channel) : "";
-        // Derive per-store status independently.
+        // Derive per-store status independently. Playwright and ES
+        // share the extract snapshot but answer different questions
+        // (fetched vs chunk-committed — see `_videoEsStatus`).
         const statuses = {};
         let anyRunning = false;
-        for (const p of ["elasticsearch", "qdrant", "neo4j"]) {
+        const extractMeta = metaByPhase.playwright || metaByPhase.elasticsearch || {};
+        const extractState = phaseStates.playwright || phaseStates.elasticsearch;
+        // 2026-09-14: videos Playwright found have no captions at all
+        // — never eligible for ES/Qdrant/Neo4j. Playwright's OWN
+        // column is untouched (it's the step that made the call);
+        // the other 3 render a distinct "N/A" pill instead of a
+        // misleading "Failed" one for a step that was never going to
+        // run for these ids.
+        const noTranscriptIds = new Set(extractMeta.no_transcript_ids || []);
+        statuses.playwright = _videoPlaywrightStatus(vid, extractMeta, extractState);
+        if (statuses.playwright === "running") anyRunning = true;
+        statuses.elasticsearch = _videoEsStatus(vid, extractMeta, extractState, noTranscriptIds);
+        if (statuses.elasticsearch === "running") anyRunning = true;
+        for (const p of ["qdrant", "neo4j"]) {
             statuses[p] = _videoStoreStatus(
-                vid, p, metaByPhase[p] || {}, phaseStates[p],
+                vid, p, metaByPhase[p] || {}, phaseStates[p], noTranscriptIds,
             );
             if (statuses[p] === "running") anyRunning = true;
         }
-        const neo4jDone   = statuses.neo4j === "done";
-        const neo4jFailed = statuses.neo4j === "failed";
         // Timing: started = first time we observed running; finished =
-        // first time we observed all-3-done OR a failure on any store.
+        // first time we observed all-4-done OR a failure on any store.
         if (anyRunning && !_videoTiming.started.has(vid)) {
             _videoTiming.started.set(vid, now);
         }
         const allDone = (
+            statuses.playwright     === "done" &&
             statuses.elasticsearch === "done" &&
             statuses.qdrant        === "done" &&
             statuses.neo4j         === "done"
         );
         const anyFailed = (
+            statuses.playwright     === "failed" ||
             statuses.elasticsearch === "failed" ||
             statuses.qdrant        === "failed" ||
             statuses.neo4j         === "failed"
@@ -326,6 +390,7 @@ function _renderVideoTable({ videos, metaByPhase, phaseStates, videoIds }) {
                 <div class="ycs-pipe-cell-title" title="${title}">${title}</div>
                 ${channel ? `<div class="ycs-pipe-cell-channel">${channel}</div>` : ""}
             </div>
+            <div class="ycs-pipe-table-cell">${pillFor("playwright")}</div>
             <div class="ycs-pipe-table-cell">${pillFor("elasticsearch")}</div>
             <div class="ycs-pipe-table-cell">${pillFor("qdrant")}</div>
             <div class="ycs-pipe-table-cell">${pillFor("neo4j")}</div>
@@ -381,11 +446,135 @@ function _phasePct(state, meta) {
     return 0;
 }
 
+/* 2026-09-14: streaming-phase (qdrant/neo4j) counterparts to
+ * `_phasePct`/`_phaseLabel`. Two differences from the task-based
+ * versions above:
+ *  1. PARTIAL SUCCESS. The aggregator reports Celery-style SUCCESS
+ *     whenever finished >= total — even when half the videos failed
+ *     (e.g. 7/24 Neo4j on a provider-outage run). Showing that as a
+ *     green 100% "Done" hid real data loss; it now reads "Partial"
+ *     (amber, `data-state="partial"`) with an explicit done/failed
+ *     split, while a clean run keeps the green "Done".
+ *  2. LIVE TOTALS. Totals are seeded up-front (see
+ *     `extract/task.py`) so `current/total` advances per video IN
+ *     PARALLEL with Playwright — not 0% until extract finishes. */
+function _streamFailed(meta) {
+    const m = meta || {};
+    if (Array.isArray(m.failed_ids)) return m.failed_ids.length;
+    return 0;
+}
+
+function _streamDone(meta) {
+    const m = meta || {};
+    if (Array.isArray(m.completed_ids)) return m.completed_ids.length;
+    return 0;
+}
+
+function _streamPhasePct(state, meta) {
+    if (state === "SUCCESS") return 100;
+    if (state === "FAILURE" || state === "ERROR") return 100;
+    const m = meta || {};
+    if (m.total && m.current != null) {
+        return Math.max(2, Math.min(100, (m.current / m.total) * 100));
+    }
+    if (m.phase && state === "PROGRESS") return 8;
+    return 0;
+}
+
+function _streamPhaseLabel(state, meta) {
+    if (state === "SUCCESS") {
+        const failed = _streamFailed(meta);
+        if (failed > 0) {
+            const done = _streamDone(meta);
+            return `${done}/${done + failed} done · ${failed} failed`;
+        }
+        return "Done";
+    }
+    if (state === "FAILURE" || state === "ERROR") return "Failed";
+    if (state === "PENDING") return "Queued";
+    const m = meta || {};
+    if (m.current != null && m.total) {
+        return `running · ${m.current}/${m.total}`;
+    }
+    if (m.phase) return m.phase;
+    return state || "Running";
+}
+
+function _streamBarState(state, meta) {
+    // Maps the poll state + failure mix to the bar's `data-state`
+    // (drives fill color in CSS). Partial = finished but lossy.
+    if (state === "SUCCESS") {
+        return _streamFailed(meta) > 0 ? "partial" : "success";
+    }
+    return state.toLowerCase();
+}
+
+/* 2026-09-14: extract-result outcome for the SPLIT bars. The task
+ * reports Celery SUCCESS even when yt-dlp fetched nothing (bot-check,
+ * all ids invalid) — rendering that green 100% "Done" with a
+ * "0 metadata · 0 transcripts fetched" hint hid a total failure.
+ * Returns "success" | "partial" | "failure" from the RESULT dict
+ * (only meaningful on SUCCESS; callers fall through otherwise). */
+function _extractOutcome(prefix, result) {
+    const r = result || {};
+    const total = r.total_videos ?? 0;
+    if (!total) return "success";  // nothing attempted — not a failure
+    const t = r.transcriptions || {};
+    const m = r.metadata || {};
+    if (prefix === "playwright") {
+        const fetched = (t.indexed ?? 0) + (t.cached ?? 0);
+        if ((t.fetch_failed ?? 0) > 0) return "partial";
+        if (fetched <= 0) return "failure";
+        // `no_transcript` (video genuinely has no captions) is an
+        // expected outcome, not a failure — but a shortfall vs total
+        // still deserves amber instead of green.
+        return fetched < total ? "partial" : "success";
+    }
+    // elasticsearch — 2026-09-14: denominator is videos that were
+    // actually ELIGIBLE to be indexed (total minus no-transcript ones,
+    // which ES was never going to receive), not the full requested
+    // count. A video genuinely lacking captions isn't an ES shortfall;
+    // only counting real misses (fetch_failed / index write failures)
+    // against the total means an otherwise-clean run reads green
+    // instead of permanently amber whenever any video has no captions.
+    const eligibleTotal = total - (t.no_transcript ?? 0);
+    if (eligibleTotal <= 0) return "success";  // nothing was ever eligible
+    const indexed = (t.indexed ?? 0) + (t.cached ?? 0);
+    if (indexed <= 0) return "failure";
+    if ((t.failed ?? 0) > 0 || indexed < eligibleTotal) return "partial";
+    return "success";
+}
+
+function _extractBarState(prefix, state, result) {
+    if (state !== "SUCCESS") return state.toLowerCase();
+    return _extractOutcome(prefix, result);
+}
+
+function _extractSuccessLabel(prefix, result) {
+    // SUCCESS-state label for the split bars — honest about empty /
+    // lossy outcomes instead of a flat "Done".
+    const outcome = _extractOutcome(prefix, result);
+    if (outcome === "success") return "Done";
+    const r = result || {};
+    const t = r.transcriptions || {};
+    if (prefix === "playwright") {
+        const fetched = (t.indexed ?? 0) + (t.cached ?? 0);
+        if (outcome === "failure") return "Failed: 0 fetched";
+        return `${fetched}/${r.total_videos ?? "?"} fetched`;
+    }
+    const indexed = (t.indexed ?? 0) + (t.cached ?? 0);
+    const eligibleTotal = (r.total_videos ?? 0) - (t.no_transcript ?? 0);
+    if (outcome === "failure") return "Failed: 0 indexed";
+    return `${indexed}/${eligibleTotal} indexed`;
+}
+
 /* "playwright" and "elasticsearch" both poll the SAME `extract_videos`
  * task, so a single poll's `meta.phase` string has to be interpreted
  * relative to EACH bar's own place in SPLIT_PHASE_ORDER — a phase that's
  * already passed this bar's target reads 100%, one not yet reached reads
- * 0%, and the bar's own active phase reads its real current/total. */
+ * 0%, and the bar's own active phase reads its real current/total.
+ * On SUCCESS the label/state come from `_extractSuccessLabel` /
+ * `_extractBarState` (result-aware) instead of the flat versions. */
 function _subPhasePct(prefix, state, meta) {
     if (state === "SUCCESS") return 100;
     if (state === "FAILURE" || state === "ERROR") return 100;
@@ -443,6 +632,7 @@ function _successHint(prefix, result) {
         return parts.join(" · ");
     }
     if (prefix === "qdrant") {
+        const failed = Array.isArray(result.failed_ids) ? result.failed_ids.length : 0;
         const parts = [
             `${result.total_transcripts ?? 0} transcripts`,
             `${result.total_chunks ?? 0} chunks`,
@@ -451,10 +641,22 @@ function _successHint(prefix, result) {
         // Videos whose content_hash matched — skipped without re-embedding.
         const unchanged = result.videos_unchanged ?? 0;
         if (unchanged) parts.push(`${unchanged} unchanged`);
+        if (failed) parts.push(`${failed} failed`);
         return parts.join(" · ");
     }
     if (prefix === "neo4j") {
-        return `${result.nodes_created ?? 0} nodes · ${result.relationships_created ?? 0} rels · ${result.entities_merged ?? 0} merged`;
+        const failed = Array.isArray(result.failed_ids) ? result.failed_ids.length : 0;
+        const done = Array.isArray(result.completed_ids) ? result.completed_ids.length : 0;
+        const base =
+            `${result.nodes_created ?? 0} nodes · ` +
+            `${result.relationships_created ?? 0} rels · ` +
+            `${result.entities_merged ?? 0} merged`;
+        // Surface partial completeness in the hint itself — the bar
+        // label already shows the done/failed split (see
+        // `_streamPhaseLabel`), this keeps the numbers visible after
+        // the poll loop stops on SUCCESS.
+        if (failed) return `${done} videos ok · ${failed} failed · ${base}`;
+        return base;
     }
     return "";
 }
@@ -728,16 +930,28 @@ async function trackPipeline({ extract, qdrant, neo4j, video_ids, startedAt }) {
             metaByPhase[prefix] = meta;
             phaseStates[prefix] = state;
             const isSplit = prefix === "playwright" || prefix === "elasticsearch";
+            const isStream = STREAM_BARS.has(prefix);
+            const splitDone = isSplit && state === "SUCCESS";
             _setBar(prefix, {
-                state: state.toLowerCase(),
+                state: isStream
+                    ? _streamBarState(state, meta)
+                    : splitDone
+                        ? _extractBarState(prefix, state, r.result)
+                        : state.toLowerCase(),
                 pct: isSplit
                     ? _subPhasePct(prefix, state, meta)
-                    : _phasePct(state, meta),
+                    : isStream
+                        ? _streamPhasePct(state, meta)
+                        : _phasePct(state, meta),
                 label: state === "FAILURE" || state === "ERROR"
                     ? `Failed: ${(r.error || "").slice(0, 60)}`
-                    : isSplit
-                        ? _subPhaseLabel(prefix, state, meta)
-                        : _phaseLabel(state, meta),
+                    : splitDone
+                        ? _extractSuccessLabel(prefix, r.result)
+                        : isSplit
+                            ? _subPhaseLabel(prefix, state, meta)
+                            : isStream
+                                ? _streamPhaseLabel(state, meta)
+                                : _phaseLabel(state, meta),
                 hint: state === "SUCCESS" && r.result
                     ? _successHint(prefix, r.result)
                     : null,
@@ -789,7 +1003,7 @@ async function trackPipeline({ extract, qdrant, neo4j, video_ids, startedAt }) {
                 for (const prefix of BARS) {
                     const row = document.getElementById(`ycs-bar-${prefix}`);
                     const curState = row?.dataset?.state;
-                    if (curState && ["success", "failure", "error"].includes(curState)) continue;
+                    if (curState && ["success", "partial", "failure", "error"].includes(curState)) continue;
                     _setBar(prefix, {
                         state: "cancelled",
                         pct: 100,

@@ -144,3 +144,34 @@ def is_obvious_merge(a: Any, b: Any) -> bool:
     norm_a = normalize_entity_id(a)
     norm_b = normalize_entity_id(b)
     return bool(norm_a) and norm_a == norm_b
+
+
+def is_infra_error(err: str | None) -> bool:
+    """True for provider/infra failures worth retrying (timeouts, 5xx,
+    rate limits, connection/overload). Everything else — auth,
+    context-length, schema/validation, code bugs — will not heal on an
+    immediate re-attempt (DD's classifier split, adapted). Pure so both
+    `service.py` (logging) and `neo4j_task/task.py` (streak halt) share
+    one definition."""
+    m = (err or "").lower()
+    if any(s in m for s in (
+        "context", "auth", "401", "403", "filter", "schema",
+        "valid", "attributerror", "keyerror", "typeerror",
+    )):
+        return False
+    return (
+        "timeout" in m or "504" in m or "503" in m or "502" in m
+        or "429" in m or "rate" in m or "connection" in m
+        or "overload" in m or "unavailable" in m
+    )
+
+
+def is_overflow_error(err: str | None) -> bool:
+    """True when the failure signals context-window overflow (split the
+    input and retry per segment instead of hammering the full doc)."""
+    m = (err or "").lower()
+    return (
+        ("context" in m and "length" in m)
+        or "too many tokens" in m or "max_tokens" in m
+        or "context_length" in m or "contextwindow" in m
+    )

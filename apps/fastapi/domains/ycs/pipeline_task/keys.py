@@ -60,3 +60,14 @@ def dispatched_tasks_key(extract_id: str) -> str:
     4-id list no longer covers what's actually in flight once
     downstream work fans out per video."""
     return f"{PIPELINE_STATE_PREFIX}{extract_id}:dispatched_tasks"
+
+
+def phase_preview_key(extract_id: str, phase: str) -> str:
+    """2026-09-14: display-only in-progress preview for chunked phases.
+    Neo4j dispatches CHUNKS (up to 5 videos per Celery task) but the
+    bar/drawer poll per-video state — without this, the bar sits at
+    0/N until the whole chunk lands. Chunk tasks overwrite this key
+    with their cumulative `completed_ids` as videos finish inside the
+    chunk; `get_phase_progress` unions it into the DISPLAYED
+    completed/current (never into the finalize counters)."""
+    return f"{PIPELINE_STATE_PREFIX}{extract_id}:{phase}:preview"

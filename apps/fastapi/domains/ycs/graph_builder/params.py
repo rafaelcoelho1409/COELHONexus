@@ -25,7 +25,7 @@ DEFAULT_BATCH_SIZE = 3
 # completions than doc_distill's 600-token summaries and are more likely
 # to hit free-tier rate limits sooner.
 EXTRACT_CONCURRENCY = max(
-    1, int(_os.environ.get("YCS_NEO4J_CONCURRENCY", "5") or "5"),
+    1, int(_os.environ.get("YCS_NEO4J_CONCURRENCY", "1") or "1"),
 )
 
 # Must exceed YCS_NEO4J_EXTRACT_TIMEOUT_S (default 300s) or the watchdog fires before the call's own deadline.
@@ -35,6 +35,32 @@ GRAPH_BATCH_TIMEOUT_S = max(
 
 # fuzz.ratio pre-filter; embedding cosine gate at 0.85 catches false positives like Astronomia↔Gastronomia.
 FUZZ_MERGE_CUTOFF = 75
+
+# 2026-09-14: extraction fingerprint version, stored on every
+# source Document alongside `transcript_sha`. Bump when the extraction
+# prompt/schema changes in a way that makes previously-extracted graphs
+# stale — the skip-on-video_id check then re-extracts instead of
+# trusting outdated entities (DD's manifest_hash pattern, adapted:
+# DD versions prompt+inputs per node; here one version covers the
+# single LLMGraphTransformer call shape).
+EXTRACT_PROMPT_VERSION = 1
+
+# Inter-retry-pass backoff (jittered): immediate retries hammer an
+# already-exhausted free-tier pool (DD: 2-5s+jitter per item; scaled up
+# here since one Neo4j call carries a ~20K-char transcript, not a
+# 600-token summary — but far below DD's 130s inter-node settle, which
+# would dominate per-chunk).
+RETRY_PASS_BACKOFF_S = (10.0, 30.0)
+
+# Consecutive all-failed INFRA passes before giving up early (DD's
+# SUSTAINED_INFRA_OUTAGE_LIMIT=2, adapted: counts passes, not videos —
+# with 5-video chunks a per-video streak would be trigger-happy).
+MAX_CONSECUTIVE_INFRA_PASSES = 2
+
+# Per-video Bolt write budget (DD: wait_for(write,60)). add_graph_documents
+# is a SYNC driver call — run in a thread + watchdog so a wedged
+# connection can't hang the task past its retry budget.
+WRITE_TIMEOUT_S = 120.0
 
 # 2026-09-13: tuned against baai/bge-m3's score distribution back when
 # entity-resolution pinned that model specifically via its own

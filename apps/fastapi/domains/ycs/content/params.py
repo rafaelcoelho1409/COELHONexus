@@ -49,5 +49,13 @@ BASE_ARGS: tuple[str, ...] = (
     "--retries", "3",
     "--age-limit", "0",
     "--extractor-args", "youtube:skip=dash,hls,translated_subs",
+    # 2026-09-14: YouTube's "Sign in to confirm you're not a bot"
+    # check started blocking the default web client from this
+    # cluster's egress IP (Source Videos-tab preview returned 0/5).
+    # The android player client isn't subjected to that check —
+    # verified live from the pod. Applies to every yt-dlp call site
+    # (preview/batch/channel/playlist/search); flat-playlist paths
+    # ignore it harmlessly.
+    "--extractor-args", "youtube:player_client=android",
     "--extractor-args", f"youtubepot-bgutilhttp:base_url={_POT_PROVIDER_URL}",
 )
