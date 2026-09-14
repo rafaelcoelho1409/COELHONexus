@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from domains.ycs.content.domain import _absolutize_thumbnail_url
+from domains.ycs.graph_builder.params import SOURCE_LABEL
 from infra.celery import app as celery_app
 from infra.elasticsearch import (
     INDEX_METADATA,
@@ -240,7 +241,7 @@ async def list_videos(
     if g is not None:
         try:
             rows = g.query(
-                "MATCH (d:Document) WHERE d.video_id IS NOT NULL "
+                f"MATCH (d:Document:{SOURCE_LABEL}) WHERE d.video_id IS NOT NULL "
                 "RETURN count(DISTINCT d.video_id) AS n",
             )
             n_processed_total = int(rows[0]["n"]) if rows else 0
@@ -301,9 +302,9 @@ async def list_videos(
     if g is not None and video_ids:
         try:
             rows = g.query(
-                "MATCH (d:Document) "
+                f"MATCH (d:Document:{SOURCE_LABEL}) "
                 "WHERE d.video_id IN $vids "
-                "OPTIONAL MATCH (d)-[:MENTIONS]-(e:__Entity__) "
+                f"OPTIONAL MATCH (d)-[:MENTIONS]-(e:__Entity__:{SOURCE_LABEL}) "
                 "WITH d.video_id AS vid, count(DISTINCT e) AS n_entities "
                 "RETURN vid, n_entities",
                 params = {"vids": video_ids},
@@ -382,7 +383,7 @@ async def videos_facets(request: Request) -> dict:
     if g is not None:
         try:
             rows = g.query(
-                "MATCH (d:Document) WHERE d.video_id IS NOT NULL "
+                f"MATCH (d:Document:{SOURCE_LABEL}) WHERE d.video_id IS NOT NULL "
                 "RETURN collect(DISTINCT d.video_id) AS ids",
             )
             if rows and rows[0].get("ids"):

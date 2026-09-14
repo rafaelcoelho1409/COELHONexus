@@ -31,7 +31,13 @@ from domains.llm.embeddings import embed_probe_async, embed_texts_async
 
 from . import domain
 from .errors import EmbeddingAPIError, EmbeddingEmptyQueryError
-from .params import BATCH_PAUSE_S, BATCH_SIZE, SPARSE_MODEL_NAME
+from .params import (
+    BATCH_PAUSE_S,
+    BATCH_SIZE,
+    PROBE_RETRY_ATTEMPTS,
+    PROBE_RETRY_BACKOFF_S,
+    SPARSE_MODEL_NAME,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -74,10 +80,33 @@ class ExternalEmbeddings(Embeddings):
     async def probe(self) -> tuple[int, str]:
         """One tiny real call to learn (dimensions, model) upfront —
         needed at Qdrant collection-create time, before any real batch
-        has necessarily run yet."""
-        vector, meta = await embed_probe_async()
-        self._record([vector] if vector else [], meta.get("deployment"))
-        return self.dimensions or 0, self.last_model or ""
+        has necessarily run yet.
+
+        2026-09-14: retries with backoff (same shape as
+        `aembed_documents` below) — `embed_probe_async` itself stays a
+        single-shot 20s primitive, but a cold embedding endpoint
+        routinely needs longer than one 20s window to answer its first
+        request post-redeploy. Without this, every Qdrant flush on a
+        freshly-started worker had exactly one 20s shot at a possibly-
+        still-warming-up endpoint, with no time given to recover
+        between attempts."""
+        last_err: Exception | None = None
+        for attempt in range(PROBE_RETRY_ATTEMPTS):
+            try:
+                vector, meta = await embed_probe_async()
+                self._record([vector] if vector else [], meta.get("deployment"))
+                return self.dimensions or 0, self.last_model or ""
+            except Exception as e:
+                last_err = e
+                logger.warning(
+                    f"[ycs:embeddings] probe attempt {attempt + 1}/"
+                    f"{PROBE_RETRY_ATTEMPTS} failed "
+                    f"({type(e).__name__}: {e})"
+                )
+                if attempt + 1 < PROBE_RETRY_ATTEMPTS:
+                    await asyncio.sleep(PROBE_RETRY_BACKOFF_S * (attempt + 1))
+        assert last_err is not None
+        raise last_err
 
     # --- async (preferred) — our own call sites use these directly ---
 

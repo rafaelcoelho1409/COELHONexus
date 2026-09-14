@@ -59,6 +59,7 @@ from domains.ycs.graph_builder.domain import is_infra_error
 from domains.ycs.graph_builder.params import (
     MAX_CONSECUTIVE_INFRA_PASSES,
     RETRY_PASS_BACKOFF_S,
+    SOURCE_LABEL,
 )
 from domains.ycs.ingestion import (
     fetch_metadata_from_es,
@@ -257,7 +258,7 @@ def ingest_to_neo4j(
             completed_global: set[str] = set()
             try:
                 rows = neo4j_graph.query(
-                    "MATCH (d:Document) "
+                    f"MATCH (d:Document:{SOURCE_LABEL}) "
                     "WHERE d.video_id IN $video_ids "
                     "RETURN collect(DISTINCT d.video_id) AS processed_ids",
                     params = {"video_ids": all_video_ids},

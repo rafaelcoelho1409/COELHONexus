@@ -19,6 +19,8 @@ from typing import Any
 from langchain_core.documents import Document
 from langchain_neo4j import Neo4jGraph
 
+from domains.ycs.graph_builder.params import SOURCE_LABEL
+
 from .params import NEO4J_DEFAULT_TOP_K
 from .prompts import ENTITY_EXTRACTION_PROMPT
 from .schemas import ExtractedEntities
@@ -131,7 +133,7 @@ class Neo4jRetriever:
             ):
                 results = self.graph.query(
                 # 1) Direct entity match + source documents.
-                "MATCH (e:__Entity__) "
+                f"MATCH (e:__Entity__:{SOURCE_LABEL}) "
                 "WHERE e.id IS NOT NULL "
                 f"WITH e, ({_NORMALIZE_ID}) AS eid "
                 "WHERE toLower(toString(eid)) IN $entities "
@@ -150,11 +152,11 @@ class Neo4jRetriever:
                 "LIMIT $limit "
                 "UNION "
                 # 2) One-hop neighbors: entities connected to matched ones.
-                "MATCH (e:__Entity__) "
+                f"MATCH (e:__Entity__:{SOURCE_LABEL}) "
                 "WHERE e.id IS NOT NULL "
                 f"WITH e, ({_NORMALIZE_ID}) AS eid "
                 "WHERE toLower(toString(eid)) IN $entities "
-                "MATCH (e)-[r]-(neighbor:__Entity__) "
+                f"MATCH (e)-[r]-(neighbor:__Entity__:{SOURCE_LABEL}) "
                 "WHERE e <> neighbor "
                 "OPTIONAL MATCH (neighbor)<--(doc:Document) "
                 "OPTIONAL MATCH (neighbor)<--(v:Video) "

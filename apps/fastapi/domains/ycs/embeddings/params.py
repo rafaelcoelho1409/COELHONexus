@@ -20,3 +20,16 @@ BATCH_PAUSE_S = 2
 # CPU, ~zero overhead (tokenization + counting only). Unrelated to the
 # dense embedding endpoint above.
 SPARSE_MODEL_NAME = "Qdrant/bm25"
+
+# 2026-09-14: `probe()`'s retry budget. `embed_probe_async` itself stays
+# a single-shot 20s primitive (the Settings page "Test" button wants
+# fast, honest feedback on one attempt) — but `get_embedding_info()`'s
+# internal callers (every Qdrant flush) hit it on every cold worker
+# process, and a cold embedding endpoint routinely needs longer than
+# 20s to answer its first request. Observed live: back-to-back calls
+# right after a redeploy both failed within the same ~20s window —
+# same cold endpoint, no time given to warm up between them. Mirrors
+# `aembed_documents`'s own proven 3-attempt/backoff pattern in this
+# same file rather than inventing a new resilience shape.
+PROBE_RETRY_ATTEMPTS = 3
+PROBE_RETRY_BACKOFF_S = 5

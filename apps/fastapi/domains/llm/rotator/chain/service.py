@@ -270,6 +270,7 @@ def _build_chat_openai(
     temperature:     float | None = None,
     response_format: dict | None  = None,
     rotator_task:    str | None   = None,
+    max_wall_s:      float | None = None,
 ):
     """Shared LangChain `ChatOpenAI` construction for every non-hot-path
     caller — one place to keep `max_retries=0` applied consistently.
@@ -296,7 +297,21 @@ def _build_chat_openai(
     (`build_ycs_neo4j_pinned_chain` below), which previously sent every
     call untagged despite being a distinctly heavy shape (full-
     transcript input, large JSON completion) that shouldn't be judged
-    by the same pooled stats as lighter untagged traffic."""
+    by the same pooled stats as lighter untagged traffic.
+
+    2026-09-14: `max_wall_s` (optional) sets
+    `extra_body.metadata.max_wall_s` — a per-request override of the
+    rotator's own internal wall-clock safety valve
+    (`_MAX_CASCADE_WALL_S`, default 180s, in the rotator's
+    `api/v1/llm/openai/router.py`). Root-caused: the rotator is a
+    UNIVERSAL multi-project server, and 180s was calibrated for DD's
+    Synth specifically — it was silently capping every request's total
+    time (all internal retries included) regardless of what `timeout_s`
+    this client set, which is why raising `timeout_s` alone never
+    helped YCS's Neo4j extraction (full-transcript input, large JSON
+    completion, routinely needs 300-400s). This asks the rotator for
+    more budget WITHOUT touching its shared default for every other
+    caller/project."""
     from langchain_openai import ChatOpenAI
 
     kwargs: dict = {
@@ -312,8 +327,13 @@ def _build_chat_openai(
         kwargs["max_tokens"] = max_tokens
     if response_format is not None:
         kwargs["model_kwargs"] = {"response_format": response_format}
-    if rotator_task:
-        kwargs["extra_body"] = {"metadata": {"rotator_task": rotator_task}}
+    if rotator_task or max_wall_s is not None:
+        metadata: dict = {}
+        if rotator_task:
+            metadata["rotator_task"] = rotator_task
+        if max_wall_s is not None:
+            metadata["max_wall_s"] = max_wall_s
+        kwargs["extra_body"] = {"metadata": metadata}
     return ChatOpenAI(**kwargs)
 
 
@@ -773,7 +793,28 @@ def build_ycs_neo4j_pinned_chain(pinned_model: str | None = None, *args, **kwarg
     # dedicated cell to actually learn which deployments handle large-
     # context extraction well, the same mechanism DD's `dd-{dd_process}`
     # tags already exploit per node type.
-    return _build_chat_openai(timeout_s = 400.0, rotator_task = "ycs-neo4j-extract")
+    #
+    # 2026-09-14: `max_wall_s` — root-caused the persistent ~180s 504s
+    # to the ROTATOR's OWN internal wall-clock safety valve
+    # (`_MAX_CASCADE_WALL_S`, default 180s in the rotator's
+    # `api/v1/llm/openai/router.py`), which caps total time across ALL
+    # its internal retries/cascade attempts — completely independent of
+    # this client's own `timeout_s`. First shipped at 350.0 (under the
+    # client's then-400.0s timeout); a real isolated call still used
+    # the full budget and failed, and the user's priority is
+    # completeness (don't discard relationships) over speed — bigger
+    # completions need more room, not less. Raised to 600.0 — the
+    # rotator's own `_MAX_WALL_S_CEILING`, so this is the most this
+    # specific call can ever ask for; `timeout_s` raised to 650.0 to
+    # stay above it (this client must never cut the rotator's cascade
+    # off mid-flight — see the 350/400 pairing's rationale above).
+    # `GRAPH_BATCH_TIMEOUT_S` (graph_builder/params.py, 700s) sits
+    # above BOTH so ITS OWN watchdog doesn't fire first either.
+    return _build_chat_openai(
+        timeout_s    = 650.0,
+        rotator_task = "ycs-neo4j-extract",
+        max_wall_s   = 600.0,
+    )
 
 
 # ── Wave H2 — quality feedback to the rotator ────────────────────────────────

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 
+from domains.ycs.graph_builder.params import SOURCE_LABEL
 from domains.ycs.runtime.observability import traced
 
 from ....domain import parse_json_model_output
@@ -38,7 +39,7 @@ def _resolve_channel_ids(neo4j_graph, channel_names: list[str]) -> list[str]:
     patterns = [n.lower() for n in channel_names]
     try:
         results = neo4j_graph.query(
-            "MATCH (c:Channel) "
+            f"MATCH (c:Channel:{SOURCE_LABEL}) "
             "WHERE toLower(c.name) IN $names OR toLower(c.id) IN $names "
             "RETURN c.id AS channel_id",
             params = {"names": patterns},

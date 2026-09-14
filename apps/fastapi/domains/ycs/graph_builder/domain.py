@@ -109,6 +109,41 @@ def coerce_entity_id(value: Any) -> str:
     return str(value)
 
 
+def sanitize_neo4j_label(value: Any, fallback: str = "Entity") -> str:
+    """Coerce whatever `LLMGraphTransformer` emitted as a node/relationship
+    `type` into something Neo4j's kernel will actually accept as a label/
+    relationship-type token.
+
+    2026-09-14: root-caused a live failure —
+    `apoc.create.addLabels`/`apoc.merge.relationship` (both called with
+    the type string taken verbatim from the LLM's output, completely
+    unsanitized by langchain-neo4j's `add_graph_documents`) threw
+    `Neo.ClientError.Procedure.ProcedureCallFailed` wrapping
+    `org.neo4j.internal.kernel.api.exceptions.schema.
+    IllegalTokenNameException` — poisoning the ENTIRE video's write
+    (one write, all nodes+rels for that video) because the exception
+    aborted the whole `add_graph_documents` call, not just the one bad
+    node. Neo4j label/type tokens must be non-empty and must not
+    contain NUL/control characters; the exact offending value wasn't
+    recoverable (the caller's own error-log truncation cut it off
+    before the kernel's specific reason), so this is deliberately
+    defensive rather than targeting one exact bad shape: strip control
+    chars, collapse to a safe fallback if empty, cap length. Pure: no
+    Neo4j, no LLM, no I/O."""
+    coerced = coerce_entity_id(value).strip()
+    # Strip NUL + other C0/C1 control characters — the class of
+    # character most likely to trip IllegalTokenNameException; ordinary
+    # spaces/punctuation/unicode are fine as Neo4j label tokens.
+    cleaned = "".join(ch for ch in coerced if ch.isprintable() or ch == " ")
+    cleaned = cleaned.strip()
+    if not cleaned:
+        return fallback
+    # Neo4j's own token-name limit is far higher than this, but a
+    # pathological multi-KB "type" string is a model failure, not a
+    # real label — cap it so it can't distort the schema either way.
+    return cleaned[:200]
+
+
 def normalize_entity_id(value: Any) -> str:
     """Canonical form for comparison + write-back. Pipeline:
       1. Coerce to string (handles `list`/`None`/anything).

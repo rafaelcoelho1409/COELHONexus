@@ -159,19 +159,28 @@ async def update_video_extra(
 async def update_phase_preview(
     redis: redis_aio.Redis, extract_id: str, phase: str, completed_ids: list[str],
 ) -> None:
-    """Best-effort overwrite of the display-only in-progress preview
-    (see `keys.phase_preview_key`). Called by chunked phase tasks as
-    videos complete INSIDE the chunk; never touches the finalize
-    counters. Failures log and swallow — progress display must never
-    break extraction."""
-    if not extract_id:
+    """Best-effort ADD to the display-only in-progress preview (see
+    `keys.phase_preview_key`). Called by chunked phase tasks as videos
+    complete INSIDE the chunk; never touches the finalize counters.
+    Failures log and swallow — progress display must never break
+    extraction.
+
+    2026-09-14: SADD (atomic union), NOT a JSON-list `SET` (overwrite)
+    — with EXTRACT_CONCURRENCY > 1, multiple chunk tasks run
+    concurrently, each tracking only ITS OWN local `completed_ids`.
+    A blind overwrite meant whichever chunk's callback fired last
+    replaced the shared key with only its own small set, erasing
+    another still-in-flight chunk's already-displayed progress —
+    observed live as the bar jumping back down (e.g. 40% -> 0% -> 40%)
+    instead of advancing monotonically. SADD lets every chunk
+    contribute its own ids without clobbering siblings'."""
+    ids = [vid for vid in completed_ids if vid]
+    if not extract_id or not ids:
         return
     try:
-        await redis.set(
-            phase_preview_key(extract_id, phase),
-            json.dumps([vid for vid in completed_ids if vid]),
-            ex = PIPELINE_STATE_TTL_S,
-        )
+        key = phase_preview_key(extract_id, phase)
+        await redis.sadd(key, *ids)
+        await redis.expire(key, PIPELINE_STATE_TTL_S)
     except Exception as e:
         logger.warning(
             f"[ycs:pipeline:streaming] preview write failed for "
@@ -316,15 +325,17 @@ async def get_phase_progress(
         # the bar sits at 0/N while videos are visibly succeeding in
         # the logs. Never touches `finished`/`total`/finalize.
         try:
-            raw_preview = await redis.get(phase_preview_key(extract_id, phase))
-            if raw_preview:
-                preview = json.loads(raw_preview)
-                if isinstance(preview, list):
-                    known = set(completed_ids) | set(failed_ids)
-                    for vid in preview:
-                        if vid and vid not in known:
-                            completed_ids.append(vid)
-                            known.add(vid)
+            # SMEMBERS, not GET+json.loads — see update_phase_preview's
+            # docstring (SADD replaced a JSON-list overwrite that
+            # clobbered concurrent chunks' progress).
+            raw_members = await redis.smembers(phase_preview_key(extract_id, phase))
+            if raw_members:
+                known = set(completed_ids) | set(failed_ids)
+                for raw_vid in raw_members:
+                    vid = raw_vid.decode() if isinstance(raw_vid, (bytes, bytearray)) else raw_vid
+                    if vid and vid not in known:
+                        completed_ids.append(vid)
+                        known.add(vid)
         except Exception:
             pass
     return {

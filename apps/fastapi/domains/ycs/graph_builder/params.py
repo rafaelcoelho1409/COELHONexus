@@ -24,14 +24,49 @@ DEFAULT_BATCH_SIZE = 3
 # doc_distill's CONCURRENCY=10 — these calls carry much larger prompts/
 # completions than doc_distill's 600-token summaries and are more likely
 # to hit free-tier rate limits sooner.
+#
+# 2026-09-14: 1 -> 3. The distributed Redis semaphore (see
+# NEO4J_EXTRACT_SEM_KEY below) now makes this a REAL global cap, not
+# just an in-process one — earlier "concurrency was never the driver"
+# findings predate that fix, when concurrency=N never actually reached
+# N real simultaneous rotator calls. Raised alongside GRAPH_BATCH_
+# TIMEOUT_S/the rotator's max_wall_s (600s) rather than in isolation —
+# per-request budget is now generous enough that queuing behind 2
+# siblings (tightest provider caps) shouldn't by itself exhaust it the
+# way the old 180s ceiling did.
 EXTRACT_CONCURRENCY = max(
-    1, int(_os.environ.get("YCS_NEO4J_CONCURRENCY", "1") or "1"),
+    1, int(_os.environ.get("YCS_NEO4J_CONCURRENCY", "3") or "3"),
 )
 
-# Must exceed YCS_NEO4J_EXTRACT_TIMEOUT_S (default 300s) or the watchdog fires before the call's own deadline.
+# 2026-09-14: 600 -> 700. Must exceed the rotator's own max_wall_s
+# (600s, see build_ycs_neo4j_pinned_chain) AND this client's own
+# ChatOpenAI timeout (650s) — otherwise THIS watchdog fires first and
+# cancels a call that the rotator was still legitimately working on,
+# making the larger rotator/client budgets pointless. NEO4J_EXTRACT_
+# SEM_LEASE_S below derives from this, so it scales automatically.
 GRAPH_BATCH_TIMEOUT_S = max(
-    300.0, float(_os.environ.get("YCS_NEO4J_BATCH_WATCHDOG_S", "600") or "600"),
+    300.0, float(_os.environ.get("YCS_NEO4J_BATCH_WATCHDOG_S", "700") or "700"),
 )
+
+# 2026-09-14: EXTRACT_CONCURRENCY only ever gated an in-process
+# asyncio.Semaphore — invisible across separate Celery worker
+# processes. Since neo4j_task dispatches ONE Celery task PER VIDEO,
+# multiple such tasks run concurrently across the worker pool
+# (confirmed live: 2 simultaneous rotator LLM calls at
+# EXTRACT_CONCURRENCY=1 with the worker pool's max-concurrency=2),
+# defeating the whole point of testing concurrency=1 against the
+# rotator's per-provider caps. This Redis sorted-set key backs a real
+# distributed semaphore (Redis in Action fair-semaphore pattern,
+# self-healing via score-based eviction) shared by every worker/pod —
+# EXTRACT_CONCURRENCY now caps the TRUE global in-flight call count,
+# not just one process's view of it.
+NEO4J_EXTRACT_SEM_KEY = "ycs:neo4j:extract:sem"
+
+# Lease TTL for one held slot. Must exceed GRAPH_BATCH_TIMEOUT_S (the
+# hard per-call watchdog) — a legitimately-still-running holder must
+# never look "stale" to another worker's cleanup pass. Margin covers
+# slot-acquire overhead + clock skew across pods.
+NEO4J_EXTRACT_SEM_LEASE_S = GRAPH_BATCH_TIMEOUT_S + 30.0
 
 # fuzz.ratio pre-filter; embedding cosine gate at 0.85 catches false positives like Astronomia↔Gastronomia.
 FUZZ_MERGE_CUTOFF = 75
@@ -81,3 +116,15 @@ NUMERIC_LABELS_SKIP: frozenset[str] = frozenset({
 
 SCHEMA_DISCOVERY_SAMPLE_COUNT = 3
 SCHEMA_DISCOVERY_SAMPLE_CHAR_CAP = 10000
+
+# 2026-09-14: Neo4j Community Edition has no multi-database support (hard
+# DBMS limit, confirmed unchanged as of Sept 2026 — Enterprise/Aura-paid
+# only), so a shared instance is the only option. Every Video/Channel/
+# Document/__Entity__ node this feature writes also gets these two static
+# labels — app-level + feature-level — so a future second Neo4j-writing
+# project can't have its nodes silently fuzzy-merged or graph-walked
+# together with YCS's by resolve_entities() or anything else that scans
+# by label. Neo4j nodes support multiple labels natively; no schema
+# migration needed to add more.
+PROJECT_LABEL = "COELHONexus"
+SOURCE_LABEL = "YCS"

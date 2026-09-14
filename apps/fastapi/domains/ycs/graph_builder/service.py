@@ -16,7 +16,10 @@ import asyncio
 import hashlib
 import logging
 import random
-from typing import Any, Callable
+import time
+import uuid
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Callable
 
 from langchain_core.documents import Document
 from langchain_experimental.graph_transformers import LLMGraphTransformer
@@ -34,9 +37,13 @@ from .params import (
     FUZZ_MERGE_CUTOFF,
     GRAPH_BATCH_TIMEOUT_S,
     MAX_CONSECUTIVE_INFRA_PASSES,
+    NEO4J_EXTRACT_SEM_KEY,
+    NEO4J_EXTRACT_SEM_LEASE_S,
+    PROJECT_LABEL,
     RETRY_PASS_BACKOFF_S,
     SCHEMA_DISCOVERY_SAMPLE_CHAR_CAP,
     SCHEMA_DISCOVERY_SAMPLE_COUNT,
+    SOURCE_LABEL,
     WRITE_TIMEOUT_S,
 )
 from .prompts import EXTRACTION_INSTRUCTIONS, SCHEMA_DISCOVERY_PROMPT
@@ -134,6 +141,49 @@ def create_graph_transformer(llm: Any) -> LLMGraphTransformer:
     )
 
 
+async def _acquire_extract_slot(
+    redis: Any, key: str, limit: int, lease_s: float, poll_s: float = 0.5,
+) -> str:
+    """Distributed counting semaphore (Redis-sorted-set fair-semaphore
+    pattern) — blocks until one of `limit` global slots is free, across
+    EVERY worker process/pod sharing `redis`, not just this one.
+
+    Each waiter registers `{token: now}` in the sorted set, then checks
+    its own rank; rank < limit means it holds a slot. Stale holders
+    (crashed worker, wedged call) self-heal via the `lease_s`-old
+    score-eviction sweep run on every attempt — no separate reaper
+    process needed. Returns `token`; caller MUST release it via
+    `_release_extract_slot` (a `finally` block) or the slot leaks until
+    `lease_s` expires."""
+    token = uuid.uuid4().hex
+    while True:
+        now = time.time()
+        await redis.zremrangebyscore(key, "-inf", now - lease_s)
+        await redis.zadd(key, {token: now})
+        rank = await redis.zrank(key, token)
+        if rank is not None and rank < limit:
+            return token
+        await redis.zrem(key, token)
+        await asyncio.sleep(poll_s + random.uniform(0, poll_s))
+
+
+async def _release_extract_slot(redis: Any, key: str, token: str) -> None:
+    try:
+        await redis.zrem(key, token)
+    except Exception:
+        pass
+
+
+@asynccontextmanager
+async def _distributed_extract_slot(
+    redis: Any, key: str, limit: int, lease_s: float,
+) -> AsyncIterator[None]:
+    token = await _acquire_extract_slot(redis, key, limit, lease_s)
+    try:
+        yield
+    finally:
+        await _release_extract_slot(redis, key, token)
+
 
 async def extract_and_store_graph(
     transcripts: list[dict],
@@ -189,6 +239,15 @@ async def extract_and_store_graph(
     concurrency = (
         batch_size if batch_size and batch_size > 1 else EXTRACT_CONCURRENCY
     )
+    # Distributed slot — see _acquire_extract_slot's docstring. Closed
+    # in the `finally:` below alongside the in-flight-task cleanup;
+    # unused (never acquired) when `documents` ends up empty. Deferred
+    # import: `pipeline_task.streaming` sits behind `pipeline_task`'s
+    # package `__init__` → `task.py` → `infra.celery` chain, which
+    # needs REDIS_HOST at import time — a module-level import here
+    # would drag that whole chain into graph_builder's own import path.
+    from domains.ycs.pipeline_task.streaming import build_redis_client
+    redis_client = build_redis_client()
     total_nodes = 0
     total_relationships = 0
     total_processed = 0
@@ -216,7 +275,7 @@ async def extract_and_store_graph(
     stale_ids: list[str] = []
     try:
         result = neo4j_graph.query(
-            "MATCH (d:Document) WHERE d.video_id IS NOT NULL "
+            f"MATCH (d:Document:{SOURCE_LABEL}) WHERE d.video_id IS NOT NULL "
             "RETURN d.video_id AS vid, d.transcript_sha AS sha, "
             "       d.extract_prompt_version AS ver"
         )
@@ -336,13 +395,32 @@ async def extract_and_store_graph(
         mid = len(paras) // 2
         return ["\n\n".join(paras[:mid]), "\n\n".join(paras[mid:])]
 
+    # In-process pool width (this task's own view) — kept alongside the
+    # distributed slot below since a single task can still be asked for
+    # batch_size > 1 (the agents endpoint's direct callers).
     sem = asyncio.Semaphore(concurrency)
 
     async def _convert(doc: Document):
-        return await asyncio.wait_for(
-            transformer.aconvert_to_graph_documents([doc]),
-            timeout = GRAPH_BATCH_TIMEOUT_S,
-        )
+        async with sem:
+            # 2026-09-14: the GLOBAL slot's limit must be the configured
+            # EXTRACT_CONCURRENCY, NOT the local `concurrency` above —
+            # that one is batch_size-derived and varies per chunk (a
+            # 2-video leftover chunk computes concurrency=2). Passing
+            # it here meant two chunks running at once would enforce
+            # TWO DIFFERENT ceilings on the SAME shared Redis semaphore
+            # — whichever chunk was smaller silently capped the whole
+            # run's true concurrency to its own size, independent of
+            # what EXTRACT_CONCURRENCY was actually configured to
+            # (observed live: a 2-video leftover chunk capped the run
+            # to 2 concurrent slots even with EXTRACT_CONCURRENCY=3).
+            async with _distributed_extract_slot(
+                redis_client, NEO4J_EXTRACT_SEM_KEY, EXTRACT_CONCURRENCY,
+                NEO4J_EXTRACT_SEM_LEASE_S,
+            ):
+                return await asyncio.wait_for(
+                    transformer.aconvert_to_graph_documents([doc]),
+                    timeout = GRAPH_BATCH_TIMEOUT_S,
+                )
 
     async def _extract_one(doc: Document) -> tuple[str, Any, str | None]:
         """One transcript → (video_id, GraphDocument|None, error|None).
@@ -350,24 +428,23 @@ async def extract_and_store_graph(
         loop keeps video attribution in completion order."""
         vid = doc.metadata.get("video_id", "") if isinstance(doc.metadata, dict) else ""
         try:
-            async with sem:
-                # Watchdog: hard wall-clock ceiling per transcript. The
-                # inner request stack already has per-deployment
-                # timeouts + a zero-timeout-retry policy (see
-                # _build_pinned_chain), so this only fires when that
-                # stack wedges — and guarantees one slow arm can't burn
-                # the whole run before the bandit gets its negative
-                # reward.
-                gdocs = await _convert(doc)
-                if not gdocs:
-                    return vid, None, None
-                # Overflow split-union (2026-09-14): a context-overflow
-                # manifests as an exception, not an empty result — but
-                # if the FIRST segment errors with overflow markers on
-                # a large doc, retrying the same full doc is doomed.
-                # Handled in the except branch below via `_split_content`
-                # (needs the original doc — kept in scope here).
-                return vid, (gdocs[0] if gdocs else None), None
+            # Watchdog: hard wall-clock ceiling per transcript. The
+            # inner request stack already has per-deployment timeouts +
+            # a zero-timeout-retry policy (see _build_pinned_chain), so
+            # this only fires when that stack wedges — and guarantees
+            # one slow arm can't burn the whole run before the bandit
+            # gets its negative reward. Gating (both in-process AND
+            # distributed) lives inside `_convert` now.
+            gdocs = await _convert(doc)
+            if not gdocs:
+                return vid, None, None
+            # Overflow split-union (2026-09-14): a context-overflow
+            # manifests as an exception, not an empty result — but
+            # if the FIRST segment errors with overflow markers on
+            # a large doc, retrying the same full doc is doomed.
+            # Handled in the except branch below via `_split_content`
+            # (needs the original doc — kept in scope here).
+            return vid, (gdocs[0] if gdocs else None), None
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -393,8 +470,7 @@ async def extract_and_store_graph(
                             page_content = part,
                             metadata = dict(doc.metadata),
                         )
-                        async with sem:
-                            seg_gdocs = await _convert(seg)
+                        seg_gdocs = await _convert(seg)
                         if seg_gdocs and seg_gdocs[0]:
                             if first is None:
                                 first = seg_gdocs[0]
@@ -451,12 +527,22 @@ async def extract_and_store_graph(
                     failed_ids.append(vid)
             else:
                 # LLMGraphTransformer occasionally emits id as a StringArray; coerce before writing to Neo4j.
+                # `type` is sanitized too (see sanitize_neo4j_label's
+                # docstring) — it's written verbatim as a Neo4j label/
+                # relationship-type token by langchain-neo4j's own
+                # unsanitized Cypher; an unprintable/empty value there
+                # previously poisoned the ENTIRE video's write.
                 clean_nodes = []
                 for node in gdoc.nodes:
                     node.id = domain.coerce_entity_id(node.id)
+                    node.type = domain.sanitize_neo4j_label(node.type)
                     if node.id:
                         clean_nodes.append(node)
                 gdoc.nodes = clean_nodes
+                for rel in (gdoc.relationships or []):
+                    rel.type = domain.sanitize_neo4j_label(
+                        rel.type, fallback = "RELATED_TO",
+                    )
                 # Quality gates (diagnostic only — never fail a video
                 # here; thin-but-real graphs must still land):
                 # orphan rels reference node ids absent from this
@@ -503,7 +589,12 @@ async def extract_and_store_graph(
                         timeout = WRITE_TIMEOUT_S,
                     )
                 except Exception as write_err:
-                    _werr = f"{type(write_err).__name__}: {str(write_err)[:200]}"
+                    # 2026-09-14: widened 200->500 — the 200-char cut
+                    # previously truncated Neo4j's ClientError body
+                    # right before the kernel's specific IllegalToken-
+                    # NameException reason, making a real write failure
+                    # undiagnosable from logs alone.
+                    _werr = f"{type(write_err).__name__}: {str(write_err)[:500]}"
                     last_batch_error = _werr
                     _record_error(_werr)
                     logger.warning(
@@ -534,6 +625,35 @@ async def extract_and_store_graph(
                             } if vid else None,
                         })
                     continue
+                # Best-effort source tagging — does not affect
+                # success/failure accounting (the graph data itself
+                # already landed correctly above; a missed tag is a
+                # scoping gap for resolve_entities, not data loss).
+                # Scoped by video_id: Document's real MERGE key is a
+                # content-hash LangChain auto-derives when metadata
+                # carries no "id" — video_id is the reliable property
+                # already used elsewhere in this file for this exact
+                # video-scoped-query purpose. See params.py's
+                # PROJECT_LABEL/SOURCE_LABEL comment for why.
+                try:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(
+                            neo4j_graph.query,
+                            f"MATCH (d:Document {{video_id: $video_id}}) "
+                            f"SET d:{PROJECT_LABEL}:{SOURCE_LABEL} "
+                            "WITH d "
+                            "MATCH (d)-[:MENTIONS]->(e:__Entity__) "
+                            f"SET e:{PROJECT_LABEL}:{SOURCE_LABEL}",
+                            params = {"video_id": vid},
+                        ),
+                        timeout = WRITE_TIMEOUT_S,
+                    )
+                except Exception as tag_err:
+                    logger.warning(
+                        f"[ycs:graph] {vid} source-tagging failed "
+                        f"(graph write itself succeeded): "
+                        f"{type(tag_err).__name__}: {str(tag_err)[:200]}"
+                    )
                 total_nodes += len(gdoc.nodes)
                 total_relationships += len(gdoc.relationships or [])
                 if vid and vid not in completed_ids:
@@ -573,6 +693,10 @@ async def extract_and_store_graph(
             if not t.done():
                 t.cancel()
         await asyncio.gather(*pool, return_exceptions = True)
+        try:
+            await redis_client.close()
+        except Exception:
+            pass
 
     # Entity resolution is a GLOBAL pass over Neo4j — callers that loop
     # retry passes (neo4j_task's retry-failed-only loop) pass
@@ -651,7 +775,7 @@ async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     # the corruption was created in the first place). Safe to re-run.
     try:
         rows = neo4j_graph.query(
-            "MATCH (n:__Entity__) "
+            f"MATCH (n:__Entity__:{SOURCE_LABEL}) "
             "WHERE valueType(n.id) CONTAINS 'LIST' "
             "RETURN elementId(n) AS nid, n.id AS raw, "
             "       [l IN labels(n) WHERE l <> '__Entity__'] AS lbls"
@@ -675,9 +799,9 @@ async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
             for cand in candidates:
                 try:
                     res = neo4j_graph.query(
-                        "MATCH (broken:__Entity__) "
+                        f"MATCH (broken:__Entity__:{SOURCE_LABEL}) "
                         "WHERE elementId(broken) = $nid "
-                        "MATCH (twin:__Entity__) "
+                        f"MATCH (twin:__Entity__:{SOURCE_LABEL}) "
                         "WHERE twin <> broken AND twin.id = $cand "
                         "AND any(L IN labels(twin) "
                         "        WHERE L IN $lbls AND L <> '__Entity__') "
@@ -730,7 +854,7 @@ async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     # Python-side normalize (vs Cypher trim()) — trim() blows up on StringArray ids from LLMGraphTransformer.
     try:
         rows = neo4j_graph.query(
-            "MATCH (n:__Entity__) WHERE n.id IS NOT NULL "
+            f"MATCH (n:__Entity__:{SOURCE_LABEL}) WHERE n.id IS NOT NULL "
             "RETURN elementId(n) AS nid, n.id AS raw_id"
         )
         updates = []
@@ -759,7 +883,7 @@ async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     # Exact merge (same label + same normalized id).
     try:
         result = neo4j_graph.query(
-            "MATCH (n1:__Entity__), (n2:__Entity__) "
+            f"MATCH (n1:__Entity__:{SOURCE_LABEL}), (n2:__Entity__:{SOURCE_LABEL}) "
             "WHERE n1 <> n2 AND n1.id = n2.id "
             "AND any(label IN labels(n1) WHERE label IN labels(n2) AND label <> '__Entity__') "
             "WITH n1, collect(DISTINCT n2) AS duplicates "
@@ -791,7 +915,7 @@ async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     # introducing semantic confusions.
     try:
         entities = neo4j_graph.query(
-            "MATCH (n:__Entity__) "
+            f"MATCH (n:__Entity__:{SOURCE_LABEL}) "
             "WHERE n.id IS NOT NULL AND n.id <> '' "
             "UNWIND labels(n) AS label "
             "WITH label, n.id AS id "
@@ -822,8 +946,8 @@ async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
                         canonical, duplicate = domain.pick_canonical(id1, id2)
                         try:
                             neo4j_graph.query(
-                                f"MATCH (n1:`{label}` {{id: $canonical}}), "
-                                f"      (n2:`{label}` {{id: $duplicate}}) "
+                                f"MATCH (n1:`{label}`:{SOURCE_LABEL} {{id: $canonical}}), "
+                                f"      (n2:`{label}`:{SOURCE_LABEL} {{id: $duplicate}}) "
                                 "CALL apoc.refactor.mergeNodes([n1, n2], "
                                 "  {properties: 'discard', mergeRels: true}) "
                                 "YIELD node "
@@ -861,8 +985,8 @@ async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
                     canonical, duplicate = domain.pick_canonical(id1, id2)
                     try:
                         neo4j_graph.query(
-                            f"MATCH (n1:`{label}` {{id: $canonical}}), "
-                            f"      (n2:`{label}` {{id: $duplicate}}) "
+                            f"MATCH (n1:`{label}`:{SOURCE_LABEL} {{id: $canonical}}), "
+                            f"      (n2:`{label}`:{SOURCE_LABEL} {{id: $duplicate}}) "
                             "CALL apoc.refactor.mergeNodes([n1, n2], "
                             "  {properties: 'discard', mergeRels: true}) "
                             "YIELD node "
@@ -909,16 +1033,19 @@ async def discover_schema(
 
 
 async def get_graph_stats(neo4j_graph: Neo4jGraph) -> dict:
-    """Cypher counts grouped by label / type."""
+    """Cypher counts grouped by label / type. Scoped to SOURCE_LABEL —
+    this is surfaced as YCS's own graph-size stats (api/v1/ycs/agents),
+    not a whole-instance admin view, so it must not count a future
+    second project's nodes sharing this same Neo4j CE instance."""
     nodes_result = neo4j_graph.query(
-        "MATCH (n) "
+        f"MATCH (n:{SOURCE_LABEL}) "
         "UNWIND labels(n) AS label "
         "RETURN label, count(*) AS count "
         "ORDER BY count DESC"
     )
     nodes_by_label = {row["label"]: row["count"] for row in nodes_result}
     rels_result = neo4j_graph.query(
-        "MATCH ()-[r]->() "
+        f"MATCH (a:{SOURCE_LABEL})-[r]->(b:{SOURCE_LABEL}) "
         "RETURN type(r) AS type, count(*) AS count "
         "ORDER BY count DESC"
     )
@@ -936,10 +1063,14 @@ def build_video_metadata_graph(
     videos: list[dict],
 ) -> None:
     """`MERGE Video {id}` + `MERGE Channel {id}` + `(Video)-[:BELONGS_TO]->(Channel)`.
-    No LLM call — pure metadata pass before the entity extraction."""
+    No LLM call — pure metadata pass before the entity extraction.
+    Video/Channel carry PROJECT_LABEL/SOURCE_LABEL from creation (see
+    params.py) — unlike Document/__Entity__, these are only ever MERGEd
+    here, so the tag can go straight into the pattern instead of a
+    follow-up query."""
     for video in videos:
         neo4j_graph.query(
-            "MERGE (v:Video {id: $id}) "
+            f"MERGE (v:Video:{PROJECT_LABEL}:{SOURCE_LABEL} {{id: $id}}) "
             "SET v.title = $title, "
             "    v.upload_date = $upload_date, "
             "    v.webpage_url = $webpage_url",
@@ -954,10 +1085,10 @@ def build_video_metadata_graph(
         channel_id = video.get("channel_id", "")
         if channel and channel_id:
             neo4j_graph.query(
-                "MERGE (c:Channel {id: $channel_id}) "
+                f"MERGE (c:Channel:{PROJECT_LABEL}:{SOURCE_LABEL} {{id: $channel_id}}) "
                 "SET c.name = $channel_name "
                 "WITH c "
-                "MATCH (v:Video {id: $video_id}) "
+                f"MATCH (v:Video:{SOURCE_LABEL} {{id: $video_id}}) "
                 "MERGE (v)-[:BELONGS_TO]->(c)",
                 params = {
                     "channel_id":   channel_id,
@@ -1009,7 +1140,7 @@ def delete_documents_for_videos(
     candidate_ids: list[str] = []
     try:
         cand = neo4j_graph.query(
-            "MATCH (d:Document)-[:MENTIONS]->(e:__Entity__) "
+            f"MATCH (d:Document:{SOURCE_LABEL})-[:MENTIONS]->(e:__Entity__:{SOURCE_LABEL}) "
             "WHERE d.video_id IN $vids "
             "RETURN collect(DISTINCT elementId(e)) AS ids",
             params = {"vids": list(video_ids)},
@@ -1023,7 +1154,7 @@ def delete_documents_for_videos(
 
     try:
         doc_result = neo4j_graph.query(
-            "MATCH (d:Document) WHERE d.video_id IN $vids "
+            f"MATCH (d:Document:{SOURCE_LABEL}) WHERE d.video_id IN $vids "
             "WITH d, count(d) AS _ "
             "DETACH DELETE d "
             "RETURN count(*) AS deleted",
@@ -1041,7 +1172,7 @@ def delete_documents_for_videos(
         )
     try:
         vid_result = neo4j_graph.query(
-            "MATCH (v:Video) WHERE v.id IN $vids "
+            f"MATCH (v:Video:{SOURCE_LABEL}) WHERE v.id IN $vids "
             "DETACH DELETE v "
             "RETURN count(*) AS deleted",
             params = {"vids": list(video_ids)},
@@ -1065,7 +1196,7 @@ def delete_documents_for_videos(
     if candidate_ids:
         try:
             sweep = neo4j_graph.query(
-                "MATCH (e:__Entity__) "
+                f"MATCH (e:__Entity__:{SOURCE_LABEL}) "
                 "WHERE elementId(e) IN $ids "
                 "AND NOT EXISTS { MATCH (:Document)-[:MENTIONS]->(e) } "
                 "DETACH DELETE e "

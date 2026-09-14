@@ -246,15 +246,55 @@ def stream_video_to_qdrant(
             await maybe_finalize(redis, extract_id)
             return result
         except Exception as e:
+            # `finished`/`total` can only be learned by actually calling
+            # mark_video_done (it owns the atomic counter) — so THIS
+            # video is provisionally recorded failed first, same as
+            # always. But if it turns out to be the run's last video
+            # AND the recovery drain below succeeds, the failure was
+            # transient (e.g. a cold-start embed_probe_async timeout)
+            # and the data made it into Qdrant regardless — correcting
+            # the record via update_video_extra (safe: merges fields,
+            # never touches the finished counter) and skipping the
+            # re-raise reflects what actually happened instead of
+            # reporting a false failure for a run that fully succeeded.
             finished, total = await mark_video_done(
                 redis, extract_id, "qdrant", video_id, success = False,
                 extra = {"error": f"{type(e).__name__}: {e}"},
             )
             if total is not None and finished >= total:
                 try:
-                    await finalize_qdrant_buffer(redis, qdrant, extract_id)
-                except Exception:
-                    pass
+                    drained = await finalize_qdrant_buffer(redis, qdrant, extract_id)
+                except Exception as drain_err:
+                    drained = None
+                    logger.warning(
+                        f"[stream_video_to_qdrant] {extract_id}: final "
+                        f"drain ALSO failed (chunks re-queued for a "
+                        f"later attempt): {type(drain_err).__name__}: "
+                        f"{drain_err}"
+                    )
+                if drained is not None:
+                    logger.info(
+                        f"[stream_video_to_qdrant] {extract_id}: {video_id} "
+                        f"recovered via final drain ({drained} point(s)) "
+                        f"after {type(e).__name__}: {e}"
+                    )
+                    await update_video_extra(
+                        redis, extract_id, "qdrant", video_id,
+                        {
+                            "success":         True,
+                            "error":           None,
+                            "points_upserted": drained,
+                            "recovered_from":  f"{type(e).__name__}: {str(e)[:200]}",
+                        },
+                    )
+                    await maybe_finalize(redis, extract_id)
+                    return {
+                        "video_id":          video_id,
+                        "chunks":            0,
+                        "skipped":           False,
+                        "points_flushed":    drained,
+                        "recovered_from":    f"{type(e).__name__}: {str(e)[:200]}",
+                    }
             await maybe_finalize(redis, extract_id)
             raise
         finally:
