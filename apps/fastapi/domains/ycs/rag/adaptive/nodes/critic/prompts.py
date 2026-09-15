@@ -19,6 +19,9 @@ CRITIC_PROMPT = ChatPromptTemplate.from_messages([
         "3. Did the synthesis adequately cover all sub-questions?\n"
         "4. Assign a confidence score from 0.0 (unreliable) to 1.0 "
         "(fully supported).\n"
+        "Sub-questions whose answer starts with `[FAILED — ...]` "
+        "produced nothing usable. A synthesis CANNOT score above 0.7 "
+        "when such gaps exist; 0.5 if the core claims rest on them. "
         "Be strict but fair.",
     ),
     (

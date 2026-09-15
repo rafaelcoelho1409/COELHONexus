@@ -28,11 +28,24 @@ async def synthesize(state: AdaptiveRAGState, llm) -> dict:
     """Merge sub-results into one report + deduped citations."""
     parts: list[str] = []
     for i, sr in enumerate(state.get("sub_results", []), 1):
+        err = sr.get("error_kind") or ""
+        if err:
+            ans = f"[FAILED — {err}] {sr.get('answer') or '(no answer)'}"
+        else:
+            ans = sr.get("answer", "")
         parts.append(
             f"### Sub-question {i}: {sr['sub_question']}\n"
-            f"**Answer:** {sr['answer']}\n"
+            f"**Answer:** {ans}\n"
             f"**Grounded:** {sr['grounded']}\n"
             f"**Sources:** {', '.join(sr.get('retrieval_sources', []))}"
+        )
+    n_sub = len(state.get("sub_results", []))
+    n_fail = sum(1 for sr in state.get("sub_results", []) if sr.get("error_kind"))
+    if n_fail:
+        parts.append(
+            f"\n_\u26a0 {n_fail}/{n_sub} sub-questions failed — flag "
+            f"the gap(s) explicitly in the synthesis; don't paper over "
+            f"them. The critic reads this too._"
         )
     sub_results_text = "\n\n".join(parts)
 
