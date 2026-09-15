@@ -466,3 +466,12 @@ export function installDdPipelineLlmTotals(slug) {
     }
   });
 }
+
+// 2026-09-14: exported so other features (YCS's Neo4j LLM-usage box)
+// can render the same KPI grid / model table without duplicating this
+// markup+CSS-class pairing — `.dd-llm-rail-*` is loaded globally
+// (`layout/head.py`'s HEAD ships `dd/pipeline/pipeline.css` on every
+// page), so reusing the class names elsewhere already renders
+// correctly with zero new CSS. Purely additive — no existing call
+// site here changes.
+export { _kpiGrid as kpiGrid, _modelTable as modelTable };

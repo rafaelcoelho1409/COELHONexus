@@ -167,10 +167,19 @@ async def get_videos_pipeline_state(
 async def wipe_videos_pipeline(extract_id: str, request: Request) -> dict:
     """Wipe artifacts for `extract_id`, then revoke in-flight phases (wipe first, revoke second).
     Without revoke a mid-LLM-call Phase 3 writes orphan Document nodes the next Retry's skip-check finds.
-    `__Entity__` nodes left intact — may be shared across other videos."""
+    `__Entity__` nodes left intact — may be shared across other videos.
+
+    Sets the cooperative-cancel flag too (best-effort — a task already
+    past its next checkpoint won't see it before the hard revoke below
+    lands anyway), but keeps `terminate=True`: unlike Stop, Wipe has a
+    correctness requirement (no orphan writes after data is deleted)
+    that cooperative-only cancellation can't guarantee — a task stuck
+    mid-LLM-call between checkpoints would otherwise finish and write
+    after the wipe already ran."""
     from domains.ycs.pipeline_task import (
         get_dispatched_task_ids,
         load_pipeline_state,
+        request_cancel,
         revoke_pipeline_phases,
         wipe_videos_data,
     )
@@ -184,6 +193,8 @@ async def wipe_videos_pipeline(extract_id: str, request: Request) -> dict:
                 f"expired (24h TTL) or unknown."
             ),
         )
+    if redis is not None:
+        await request_cancel(redis, extract_id)
     summary = await wipe_videos_data(
         video_ids   = state["video_ids"],
         neo4j_graph = getattr(request.app.state, "neo4j_graph", None),
@@ -198,7 +209,7 @@ async def wipe_videos_pipeline(extract_id: str, request: Request) -> dict:
     phase_ids.extend(
         await get_dispatched_task_ids(redis, extract_id) if redis else [],
     )
-    revoke_outcomes = revoke_pipeline_phases(phase_ids)
+    revoke_outcomes = revoke_pipeline_phases(phase_ids, terminate = True)
     return {
         "status":          "wiped",
         "summary":         summary,
@@ -208,11 +219,23 @@ async def wipe_videos_pipeline(extract_id: str, request: Request) -> dict:
 
 @router.post("/videos/pipeline/{extract_id}/stop")
 async def stop_videos_pipeline(extract_id: str, request: Request) -> dict:
-    """Revoke all in-flight phases for `extract_id`. Preserves SUCCESS-state phases; idempotent
-    Qdrant upserts and Neo4j skip-on-video_id let a rerun pick up cleanly."""
+    """Cooperatively cancel `extract_id`: sets a Redis flag `extract_videos`'
+    Playwright chunk loop and `ingest_to_neo4j`'s retry-pass loop poll at safe
+    checkpoints, then revokes (non-terminating) any phase/per-video task still
+    queued but not yet started. Preserves SUCCESS-state phases; idempotent
+    Qdrant upserts and Neo4j skip-on-video_id let a rerun pick up cleanly.
+
+    2026-09-14: no longer sends SIGTERM to already-running tasks — that
+    was observed live to wedge Celery's prefork pool (see
+    `pipeline_task.service.revoke_pipeline_phases` docstring for the
+    full incident). A task already past its last checkpoint when Stop
+    is clicked finishes that unit of work (one Playwright chunk of up
+    to 10 videos, or one Neo4j retry pass) before noticing the flag —
+    bounded, not indefinite."""
     from domains.ycs.pipeline_task import (
         get_dispatched_task_ids,
         load_pipeline_state,
+        request_cancel,
         revoke_pipeline_phases,
     )
     redis = getattr(request.app.state, "redis_aio", None)
@@ -225,14 +248,16 @@ async def stop_videos_pipeline(extract_id: str, request: Request) -> dict:
                 f"expired (24h TTL) or unknown."
             ),
         )
+    if redis is not None:
+        await request_cancel(redis, extract_id)
     phases: dict[str, str] = state["phases"]
     phase_ids = [phases.get("extract", ""), phases.get("invalidate", "")]
     phase_ids.extend(
         await get_dispatched_task_ids(redis, extract_id) if redis else [],
     )
-    outcomes = revoke_pipeline_phases(phase_ids)
+    outcomes = revoke_pipeline_phases(phase_ids, terminate = False)
     return {
-        "status":   "revoked",
+        "status":   "cancel_requested",
         "phases":   phases,
         "outcomes": outcomes,
     }

@@ -226,17 +226,26 @@ def ingest_to_neo4j(
                 vid for vid in (video_ids or []) if vid not in all_video_ids
             ]
             if missing_ids and skip_resolution and extract_id:
+                from domains.ycs.ingestion.domain import parent_video_id
                 from domains.ycs.pipeline_task.streaming import (
                     build_redis_client,
-                    mark_video_done,
+                    mark_video_or_partition_done,
                     maybe_finalize,
                 )
                 r = build_redis_client()
                 try:
                     for vid in missing_ids:
-                        await mark_video_done(
+                        # part_total unknowable here (the ES doc this
+                        # id would have carried it on doesn't exist) —
+                        # a partition genuinely missing from ES this
+                        # early is a rare edge case; parent_video_id is
+                        # still derived from the id string so it at
+                        # least reports under the right group instead
+                        # of double-counting a split video's total.
+                        await mark_video_or_partition_done(
                             r, extract_id, "neo4j", vid, success = False,
                             extra = {"error": "no transcript found in ES"},
+                            parent_video_id = parent_video_id(vid),
                         )
                         await maybe_finalize(r, extract_id)
                 finally:
@@ -367,6 +376,35 @@ def ingest_to_neo4j(
             pending_transcripts = transcripts
             extraction_stats: dict[str, Any] = {}
             for attempt in range(MAX_RETRY_PASSES + 1):
+                # 2026-09-14: cooperative-cancel checkpoint — only
+                # between passes (never mid-pass; a pass's own
+                # `extract_and_store_graph` call always runs to
+                # completion for whatever it's already dispatched).
+                # Stop's replacement for `revoke(terminate=True)` — see
+                # `pipeline_task.service.revoke_pipeline_phases`.
+                if attempt > 0 and extract_id:
+                    try:
+                        from domains.ycs.pipeline_task import is_pipeline_cancelled
+                        from domains.ycs.pipeline_task.streaming import (
+                            build_redis_client as _build_cancel_redis,
+                        )
+                        _cr = _build_cancel_redis()
+                        try:
+                            if await is_pipeline_cancelled(_cr, extract_id):
+                                logger.info(
+                                    f"[ingest_to_neo4j] {extract_id}: "
+                                    f"cancelled — stopping retry passes "
+                                    f"({len(final_failed_ids)} video(s) "
+                                    f"left unretried)"
+                                )
+                                break
+                        finally:
+                            await _cr.close()
+                    except Exception as e:
+                        logger.warning(
+                            f"[ingest_to_neo4j] cancel check failed: "
+                            f"{type(e).__name__}: {e}"
+                        )
                 if attempt > 0:
                     # Jittered backoff between passes (DD pattern,
                     # scaled for heavy calls): immediate retries hammer
@@ -396,6 +434,7 @@ def ingest_to_neo4j(
                     # Resolution is a global Neo4j pass — run it ONCE
                     # after the retry loop, not per pass.
                     run_resolution = False,
+                    extract_id     = extract_id,
                 )
                 agg_nodes     += int(extraction_stats.get("nodes_created", 0) or 0)
                 agg_rels      += int(extraction_stats.get("relationships_created", 0) or 0)
@@ -503,12 +542,21 @@ def ingest_to_neo4j(
                 # exactly once (unconditionally safe/idempotent even if
                 # THIS chunk created 0 nodes but an earlier one did).
                 if extract_id and all_video_ids:
+                    from domains.ycs.ingestion.domain import parent_video_id
                     from domains.ycs.pipeline_task.streaming import (
                         build_redis_client,
-                        mark_video_done,
+                        mark_video_or_partition_done,
                         maybe_finalize,
                         update_video_extra,
                     )
+                    # 2026-09-14: long-video partitioning — `part_total`
+                    # per video, read from the SAME `transcripts` this
+                    # pass already fetched (now carrying it thanks to
+                    # `_scroll_transcripts`'s widened `_source`).
+                    part_total_by_vid = {
+                        t["video_id"]: t.get("part_total")
+                        for t in transcripts if isinstance(t, dict)
+                    }
                     r = build_redis_client()
                     try:
                         for i, vid in enumerate(all_video_ids):
@@ -517,19 +565,30 @@ def ingest_to_neo4j(
                             # video — attach them to only the FIRST
                             # video in the chunk so `get_phase_progress`'s
                             # cross-video summation counts them once,
-                            # not once per video in the chunk.
+                            # not once per video in the chunk. NOTE: if
+                            # that first video is itself one partition
+                            # of a split video sharing a chunk with
+                            # OTHER unrelated videos, this chunk-wide
+                            # total isn't attributable purely to that
+                            # partition — a known, cosmetic imprecision
+                            # in the displayed node/rel count for that
+                            # case, not a correctness issue (the actual
+                            # graph data is unaffected either way).
                             extra = (
                                 {
                                     "nodes_created":         agg_nodes,
                                     "relationships_created": agg_rels,
                                 } if i == 0 else {}
                             )
-                            finished, total = await mark_video_done(
+                            parent_vid = parent_video_id(vid)
+                            finished, total = await mark_video_or_partition_done(
                                 r, extract_id, "neo4j", vid,
                                 success = vid not in final_failed_ids,
                                 extra = extra,
+                                parent_video_id = parent_vid,
+                                part_total = part_total_by_vid.get(vid),
                             )
-                            if total is not None and finished >= total:
+                            if total is not None and finished is not None and finished >= total:
                                 logger.info(
                                     f"[ingest_to_neo4j] {extract_id}: last "
                                     f"video of the run's Neo4j phase "
@@ -538,12 +597,15 @@ def ingest_to_neo4j(
                                 )
                                 agg_merged = await resolve_entities(neo4j_graph)
                                 # entities_merged is a WHOLE-RUN number,
-                                # only known now — patched onto THIS
-                                # video's status entry (not re-counted,
-                                # just merged in) so get_phase_progress's
-                                # summation picks it up exactly once.
+                                # only known now — patched onto the
+                                # DISPLAYED status entry: parent_vid, not
+                                # vid — a partition's own id never gets
+                                # its own phase_status_key entry (its
+                                # outcome lives in the partition-group
+                                # hash until the group completes and
+                                # folds into one entry under the parent).
                                 await update_video_extra(
-                                    r, extract_id, "neo4j", vid,
+                                    r, extract_id, "neo4j", parent_vid,
                                     {"entities_merged": agg_merged},
                                 )
                             await maybe_finalize(r, extract_id)

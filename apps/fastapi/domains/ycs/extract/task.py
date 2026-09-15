@@ -133,7 +133,19 @@ async def _dispatch_streaming_totals(
         finally:
             await redis.close()
         return
-    dispatched_count = len(dispatched_ids or [])
+    # 2026-09-14: long-video partitioning — `dispatched_ids` holds one
+    # entry PER PARTITION (`_on_video_indexed` fires once per
+    # partition, not once per original video), but the phase total
+    # must count VIDEOS: a video split into 5 partitions should count
+    # as 1 toward the total, exactly like an unsplit video, not 5.
+    # `mark_video_or_partition_done` (pipeline_task/streaming.py)
+    # aggregates all of a video's partition completions into exactly
+    # one `mark_video_done` call for the parent id — this dedupe here
+    # is what that single call is measured against.
+    from domains.ycs.ingestion.domain import parent_video_id
+    dispatched_count = len({
+        parent_video_id(vid) for vid in (dispatched_ids or [])
+    })
     redis = build_redis_client()
     try:
         neo4j_finished, neo4j_total = await set_phase_total(
@@ -492,6 +504,25 @@ async def _extract_videos_async(
                 browser_refresh_interval = 10,
                 max_retries              = 3,
             )
+            # 2026-09-14: cooperative-cancel — checked once per Playwright
+            # chunk (see `fetch_transcriptions_batch`'s `cancel_check`
+            # param). A fresh client + raw GET per chunk boundary (every
+            # ~10 videos) is cheap enough to skip throttling; this is the
+            # Stop button's replacement for `revoke(terminate=True)`,
+            # which was observed live to wedge Celery's prefork pool
+            # (see `pipeline_task.service.revoke_pipeline_phases`).
+            async def _cancel_check() -> bool:
+                if not extract_id:
+                    return False
+                from domains.ycs.pipeline_task import is_pipeline_cancelled
+                from domains.ycs.pipeline_task.streaming import build_redis_client
+                r = build_redis_client()
+                try:
+                    return await is_pipeline_cancelled(r, extract_id)
+                except Exception:
+                    return False
+                finally:
+                    await r.close()
             def _es_index_cb(indexed: int, total: int) -> None:
                 # Phase 2 (ElasticSearch) — separate bar from Phase 1
                 # (Playwright). Chunk-grained by nature (one bulk write
@@ -532,6 +563,7 @@ async def _extract_videos_async(
                     es_progress_cb     = _es_index_cb if progress_cb else None,
                     on_video_indexed   = _on_video_indexed if extract_id else None,
                     stats              = trans_stats,
+                    cancel_check       = _cancel_check if extract_id else None,
                 )
                 # 2026-09-13: ES indexing now happens PER-VIDEO inside
                 # `fetch_transcriptions_batch` itself (each doc is

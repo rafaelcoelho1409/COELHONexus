@@ -62,6 +62,37 @@ def dispatched_tasks_key(extract_id: str) -> str:
     return f"{PIPELINE_STATE_PREFIX}{extract_id}:dispatched_tasks"
 
 
+def partition_group_key(extract_id: str, phase: str, parent_video_id: str) -> str:
+    """Redis HASH `{partition_id: json(outcome)}` — per-parent-video
+    tracker for long-video partitions (`"XYZ#p1".."XYZ#pN"`). A
+    partition finishing `phase` records here instead of touching
+    `phase_finished_key` directly; only once every expected partition
+    has reported does `mark_video_or_partition_done` fire ONE
+    aggregated `mark_video_done` call for `parent_video_id` — so a
+    5-partition video counts as exactly 1 toward the phase total, the
+    same as any other video, and the drawer row for the original id
+    reports done/failed based on the whole group, not one partition."""
+    return f"{PIPELINE_STATE_PREFIX}{extract_id}:{phase}:partgroup:{parent_video_id}"
+
+
+def pipeline_cancel_key(extract_id: str) -> str:
+    """Cooperative-cancel flag — Stop sets this instead of relying only
+    on `celery.control.revoke(terminate=True)`. `extract_videos`'
+    Playwright chunk loop and `ingest_to_neo4j`'s retry-pass loop poll
+    it at safe checkpoints (chunk/pass boundaries, never mid-await) and
+    exit early on their own when it's set.
+
+    2026-09-14: added after a live SIGTERM-revoke wedged Celery's
+    prefork pool — killing a task running Playwright's Node driver
+    subprocess left the worker slot's OS process idle but the pool's
+    own bookkeeping still marked it busy, so every task dispatched
+    after sat in `reserved` forever. Cooperative self-exit sidesteps
+    that failure mode entirely for the common "user clicked Stop"
+    case; `revoke_pipeline_phases` (non-terminating) still discards
+    anything not yet started."""
+    return f"{PIPELINE_STATE_PREFIX}{extract_id}:cancel"
+
+
 def phase_preview_key(extract_id: str, phase: str) -> str:
     """2026-09-14: display-only in-progress preview for chunked phases.
     Neo4j dispatches CHUNKS (up to 5 videos per Celery task) but the

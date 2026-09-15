@@ -280,6 +280,113 @@ def parse_get_transcript_segments(data: Any) -> list[dict]:
     return segments
 
 
+def _parse_timestamp_s(ts: str) -> float:
+    """"M:SS" or "H:MM:SS" -> seconds. Malformed/empty -> 0.0 (caller
+    treats a run of zeros as "no real timing data available")."""
+    try:
+        parts = [int(p) for p in str(ts).strip().split(":")]
+    except (ValueError, TypeError):
+        return 0.0
+    if len(parts) == 2:
+        return float(parts[0] * 60 + parts[1])
+    if len(parts) == 3:
+        return float(parts[0] * 3600 + parts[1] * 60 + parts[2])
+    return 0.0
+
+
+def split_segments_by_gap(
+    segments: list[dict],
+    *,
+    threshold_s: float,
+    target_partition_s: float,
+    search_window_ratio: float = 0.3,
+) -> list[list[dict]]:
+    """Split one video's `[{timestamp, text}]` segments into partitions
+    for long-video Neo4j extraction, cutting at the largest caption-
+    silence gap nearest each target boundary — not a blind fixed-clock
+    chunk, which would routinely sever a sentence mid-stream.
+
+    Returns `[segments]` unchanged (a single partition) when the
+    transcript's total duration doesn't exceed `threshold_s`, or when
+    there's too little segment data to find a sensible cut — callers
+    must treat a 1-element result as "no split happened" and handle it
+    identically to the pre-split code path.
+
+    Pure: no Neo4j, no ES, no I/O — the caller decides what a
+    partition becomes (an ES document, an id, an overlap prefix)."""
+    if not segments:
+        return [segments]
+    times = [_parse_timestamp_s(s.get("timestamp", "")) for s in segments]
+    total_s = times[-1]
+    if total_s <= threshold_s or len(segments) < 8:
+        return [segments]
+
+    n_partitions = max(2, round(total_s / target_partition_s))
+    window_s = target_partition_s * search_window_ratio
+    cut_indices: list[int] = []
+    for i in range(1, n_partitions):
+        ideal_s = total_s * i / n_partitions
+        lo, hi = ideal_s - window_s, ideal_s + window_s
+        floor_idx = cut_indices[-1] if cut_indices else 0
+        best_idx: int | None = None
+        best_gap = -1.0
+        for j in range(floor_idx + 1, len(times)):
+            if times[j] < lo:
+                continue
+            if times[j] > hi:
+                break
+            gap = times[j] - times[j - 1]
+            if gap > best_gap:
+                best_gap, best_idx = gap, j
+        if best_idx is None:
+            # No candidate inside the window (unlikely with real
+            # caption density, but a video with sparse/bursty captions
+            # could hit this) — fall back to the nearest segment to the
+            # ideal boundary, skipping this cut entirely if that lands
+            # at or before the previous one (keeps partitions strictly
+            # increasing rather than emitting an empty slice).
+            nearest = min(
+                range(floor_idx + 1, len(times)),
+                key = lambda k: abs(times[k] - ideal_s),
+                default = None,
+            )
+            if nearest is None or nearest <= floor_idx:
+                continue
+            best_idx = nearest
+        cut_indices.append(best_idx)
+
+    if not cut_indices:
+        return [segments]
+    partitions: list[list[dict]] = []
+    start = 0
+    for idx in cut_indices:
+        partitions.append(segments[start:idx])
+        start = idx
+    partitions.append(segments[start:])
+    return [p for p in partitions if p]
+
+
+def build_partition_texts(
+    partitions: list[list[dict]], overlap_words: int,
+) -> list[str]:
+    """Flatten each partition's segments to text (same `" ".join`
+    LangChain-facing shape as the unsplit path), prefixing partitions
+    after the first with a trailing-word overlap from the PREVIOUS
+    partition — standard chunking-with-overlap, gives the LLM a few
+    seconds of continuity across a cut instead of starting cold. The
+    overlap is text-only: it does not change any partition's own
+    `segments` list or duration."""
+    texts = [" ".join(s.get("text", "") for s in part) for part in partitions]
+    if overlap_words <= 0:
+        return texts
+    out = [texts[0]] if texts else []
+    for i in range(1, len(texts)):
+        prev_words = texts[i - 1].split()
+        overlap = " ".join(prev_words[-overlap_words:])
+        out.append(f"{overlap} {texts[i]}".strip() if overlap else texts[i])
+    return out
+
+
 def classify_error(error_msg: str) -> str:
     """Return one of `permanent`, `retryable`, or `unknown` from a fetch-
     failure message. Mirrors helpers.py:L1666-1670 (`is_retryable`).

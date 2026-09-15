@@ -42,8 +42,8 @@ from typing import Any
 import redis.asyncio as redis_aio
 from celery.result import AsyncResult
 
-from .keys import pipeline_state_key
-from .params import PIPELINE_STATE_TTL_S
+from .keys import pipeline_cancel_key, pipeline_state_key
+from .params import PIPELINE_CANCEL_TTL_S, PIPELINE_STATE_TTL_S
 
 
 logger = logging.getLogger(__name__)
@@ -198,16 +198,33 @@ async def wipe_videos_data(
     return summary
 
 
-def revoke_pipeline_phases(phase_ids: list[str]) -> dict[str, str]:
-    """Send Celery revoke to every supplied task_id. `terminate=True`
-    sends SIGTERM to the worker process running the task (or queues
-    the revoke for tasks not yet started). Idempotent — re-revoking
-    an already-terminal task is a no-op.
+def revoke_pipeline_phases(
+    phase_ids: list[str], *, terminate: bool = False,
+) -> dict[str, str]:
+    """Send Celery revoke to every supplied task_id. Without `terminate`
+    (the default, used by Stop — see `request_cancel` below for how the
+    already-running task is asked to stop) this only discards tasks
+    still sitting in the broker queue, never touched by a worker yet —
+    safe, no signal sent to any live OS process. `terminate=True` (kept
+    for Wipe, which needs a hard correctness guarantee — see that
+    endpoint's docstring) sends SIGTERM to whatever worker process IS
+    running the task.
 
+    2026-09-14: Stop used to always pass `terminate=True`. Live-observed
+    failure mode: SIGTERM against a task holding Playwright's Node
+    driver subprocess left that worker's OS process idle but Celery's
+    prefork pool bookkeeping still marked the slot busy — every task
+    dispatched afterward sat in `reserved` forever (`celery inspect
+    active` empty, `inspect reserved` showing `acknowledged: False,
+    worker_pid: None`), requiring a full worker pod restart to clear.
+    Cooperative cancellation (`request_cancel`) now handles the
+    already-running case for Stop; this function only needs to sweep
+    queued-but-unstarted tasks for that path.
+
+    Idempotent — re-revoking an already-terminal task is a no-op.
     Returns `{task_id: outcome}` for log/UI surfacing. `outcome` is
     `"revoked"` on success or `"error: …"` on failure (one bad ID
     doesn't sink the rest of the sweep)."""
-    from celery.result import AsyncResult
     from infra.celery import app
 
     outcomes: dict[str, str] = {}
@@ -215,7 +232,10 @@ def revoke_pipeline_phases(phase_ids: list[str]) -> dict[str, str]:
         if not tid:
             continue
         try:
-            app.control.revoke(tid, terminate = True, signal = "SIGTERM")
+            kwargs: dict[str, Any] = {"terminate": terminate}
+            if terminate:
+                kwargs["signal"] = "SIGTERM"
+            app.control.revoke(tid, **kwargs)
             outcomes[tid] = "revoked"
         except Exception as e:
             outcomes[tid] = f"error: {type(e).__name__}: {e}"
@@ -224,6 +244,32 @@ def revoke_pipeline_phases(phase_ids: list[str]) -> dict[str, str]:
                 f"{type(e).__name__}: {e}"
             )
     return outcomes
+
+
+async def request_cancel(redis: redis_aio.Redis, extract_id: str) -> None:
+    """Set the cooperative-cancel flag for `extract_id`. Checked by
+    `extract_videos`' Playwright chunk loop and `ingest_to_neo4j`'s
+    retry-pass loop at safe checkpoints — see `keys.pipeline_cancel_key`
+    for why this replaced hard SIGTERM as Stop's primary mechanism."""
+    try:
+        await redis.set(
+            pipeline_cancel_key(extract_id), "1", ex = PIPELINE_CANCEL_TTL_S,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[ycs:pipeline] request_cancel failed for {extract_id}: "
+            f"{type(e).__name__}: {e}"
+        )
+
+
+async def is_pipeline_cancelled(
+    redis: redis_aio.Redis, extract_id: str,
+) -> bool:
+    try:
+        v = await redis.get(pipeline_cancel_key(extract_id))
+    except Exception:
+        return False
+    return bool(v)
 
 
 async def load_pipeline_state(

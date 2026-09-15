@@ -16,12 +16,23 @@ from __future__ import annotations
 from fasthtml.common import Button, Div, Span
 
 
-def _Bar(prefix: str, title: str, hint: str):
+def _Bar(prefix: str, title: str, hint: str, show_llm_usage: bool = False):
     """One row of the 4-phase pipeline panel — title + percentage label,
     fill bar, counter line, status text. Reused for `playwright`,
     `elasticsearch`, `qdrant`, `neo4j`. `prefix` namespaces all ids so
-    JS targets `ycs-bar-{prefix}-*`."""
-    return Div(
+    JS targets `ycs-bar-{prefix}-*`.
+
+    `show_llm_usage` (Neo4j only) adds a small button opening the
+    side-view LLM-usage drawer (`_YcsLlmUsageDrawer()` below) — same
+    `.fw-drawer`/`.dd-llm-rail-*` classes + JS rendering functions
+    (`kpiGrid`/`modelTable`, `static/js/dd/shared/llm_totals.js`)
+    DD/RR's own LLM-usage drawers already use, following the exact
+    pattern RR's `_LlmUsageDrawer()` established (`features/rr/
+    pipeline.py`) rather than inventing a fourth variant. Was an
+    always-expanded inline section in the bar itself; moved to a
+    drawer on request — the bar row stays compact, the table opens on
+    demand."""
+    children = [
         Div(
             Span(title, cls = "ycs-bar-title"),
             Span("Queued", cls = "ycs-bar-state",
@@ -35,12 +46,71 @@ def _Bar(prefix: str, title: str, hint: str):
             cls = "ycs-bar-track",
         ),
         Div(
-            Span(hint, id = f"ycs-bar-{prefix}-hint", cls = "ycs-bar-hint"),
+            *(
+                [Span(hint, id = f"ycs-bar-{prefix}-hint", cls = "ycs-bar-hint")]
+                + (
+                    [Button(
+                        "LLM usage",
+                        id = f"ycs-bar-{prefix}-llm-open",
+                        cls = "ycs-bar-llm-btn",
+                        type = "button",
+                        title = "Open LLM usage (COELHO LLM Rotator)",
+                    )] if show_llm_usage else []
+                )
+            ),
             cls = "ycs-bar-meta",
         ),
+    ]
+    return Div(
+        *children,
         cls = "ycs-bar-row",
         id  = f"ycs-bar-{prefix}",
         data_phase = prefix,
+    )
+
+
+def _YcsLlmUsageDrawer():
+    """Right-anchored slide-out for the Neo4j phase's LLM usage — same
+    structure as RR's `_LlmUsageDrawer()` (`features/rr/pipeline.py`),
+    own ids, single section (YCS has one call type — full-transcript
+    extraction — so no per-node/chapter breakdown is needed, unlike
+    DD's 3-section drawer). Hydrated by `static/js/ycs/llm_usage.js`."""
+    return Div(
+        Div(
+            Div(
+                Div("LLM usage", id = "ycs-llm-drawer-name",
+                    cls = "fw-drawer-name"),
+                Div("COELHO LLM Rotator usage for this run's Neo4j extraction.",
+                    id = "ycs-llm-drawer-meta", cls = "fw-drawer-meta"),
+                cls = "fw-drawer-title",
+            ),
+            Div(
+                Button(
+                    "✕",
+                    type = "button",
+                    cls  = "fw-drawer-btn",
+                    id   = "ycs-llm-drawer-close-btn",
+                    **{"aria-label": "Close LLM usage drawer"},
+                ),
+                cls = "fw-drawer-controls",
+            ),
+            cls = "fw-drawer-header",
+        ),
+        Div(
+            Div(
+                Div("Neo4j extraction LLM usage", cls = "dd-llm-rail-label"),
+                Div(
+                    Div("No LLM usage recorded yet.", cls = "dd-llm-rail-empty"),
+                    id  = "ycs-llm-drawer-totals",
+                    cls = "dd-llm-rail-host",
+                ),
+                id  = "ycs-llm-drawer-neo4j-section",
+                cls = "dd-llm-rail-section",
+            ),
+            id = "ycs-llm-drawer-body", cls = "fw-drawer-body",
+        ),
+        id  = "ycs-llm-drawer",
+        cls = "fw-drawer",
     )
 
 
@@ -261,6 +331,7 @@ def PipelinePanel():
                 "neo4j",
                 "Phase 4 · Neo4j",
                 "Full-transcript LLM entity extraction.",
+                show_llm_usage = True,
             ),
             cls = "ycs-pipe-bars-row",
         ),
@@ -269,6 +340,11 @@ def PipelinePanel():
         # subtree. Hidden by default; CSS slides it in from the right
         # when `.is-open` is applied.
         _VideoDrawer(),
+        # Separate drawer system (shared `.fw-drawer`/`.visible` — the
+        # SAME one DD/RR's own LLM-usage drawers use, not `_VideoDrawer`'s
+        # own `.is-open` convention) — see `_YcsLlmUsageDrawer`'s
+        # docstring for why this follows RR's pattern specifically.
+        _YcsLlmUsageDrawer(),
         id    = "ycs-pipe-panel",
         cls   = "ycs-pipe-panel",
         style = "display:none;",

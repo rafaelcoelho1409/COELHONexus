@@ -87,6 +87,21 @@ TRANSCRIPTIONS_MAPPING: dict = {
             "channel_id":    {"type": "keyword"},
             "playlist_id":   {"type": "keyword"},
             "_extracted_at": {"type": "date"},
+            # 2026-09-14: per-caption timing, captured by Playwright all
+            # along (`transcript/domain.py`'s parsers) but previously
+            # discarded before storage — `content` was already just
+            # `" ".join(s["text"] for s in segments)`. `enabled: false`
+            # — stored in `_source` for the long-video splitter to read
+            # back, never queried/searched as its own field, so no
+            # per-element indexing cost.
+            "segments":        {"type": "object", "enabled": False},
+            # Long-video partitioning (>30-35 min transcripts split at
+            # caption-silence gaps): unset for ordinary single-document
+            # videos. `parent_video_id` lets admin listing / fingerprint
+            # checks regroup partitions back to the source video.
+            "parent_video_id": {"type": "keyword"},
+            "part_index":      {"type": "integer"},
+            "part_total":      {"type": "integer"},
         },
     },
     "settings": {

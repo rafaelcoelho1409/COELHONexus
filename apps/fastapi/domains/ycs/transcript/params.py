@@ -141,3 +141,28 @@ RETRYABLE_ERRORS = (
     # `service.py::_fetch_single_attempt` returns for this case.
     "no caption tracks",
 )
+
+# 2026-09-14: long-video partitioning. Below this threshold, a video is
+# stored as a single ES document exactly as before — this only engages
+# for the small minority of videos where a full-transcript single-shot
+# LLM extraction genuinely risks the rotator's wall-clock budget (see
+# `docs/YCS-NEO4J-RELIABILITY-2026-09-13.md`'s 2h04m podcast case:
+# every other video in that batch was 14-19 min and succeeded cleanly,
+# only the outlier over an hour needed this). 1800s = 30 min, the
+# largest length observed to work reliably at a single shot so far.
+SPLIT_THRESHOLD_S = 30 * 60
+# Aim for partitions around this size — NOT a hard cap; actual cut
+# points land on the nearest real caption-silence gap (see
+# `domain.split_segments_by_gap`), so a partition can run a bit shorter
+# or longer than this depending on where speech actually pauses.
+SPLIT_TARGET_PARTITION_S = 20 * 60
+# How far a cut point may drift from its ideal boundary while
+# searching for the largest silence gap — keeps one huge pause near
+# the start from swallowing every cut instead of just its own.
+SPLIT_SEARCH_WINDOW_RATIO = 0.3
+# Trailing words from partition N carried as a prefix into partition
+# N+1's extraction text — standard chunking-with-overlap, gives the
+# LLM a few seconds of context across the cut instead of starting cold
+# (does not affect partition N's own stored segments/duration, only
+# the flattened text partition N+1 is extracted from).
+SPLIT_OVERLAP_WORDS = 120

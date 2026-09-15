@@ -44,6 +44,7 @@ import redis.asyncio as redis_aio
 from .keys import (
     dispatched_tasks_key,
     finalize_flag_key,
+    partition_group_key,
     phase_finished_key,
     phase_preview_key,
     phase_status_key,
@@ -133,6 +134,90 @@ async def mark_video_done(
     raw_total = await redis.get(phase_total_key(extract_id, phase))
     total = int(raw_total) if raw_total is not None else None
     return int(finished), total
+
+
+async def mark_video_or_partition_done(
+    redis:            redis_aio.Redis,
+    extract_id:       str,
+    phase:            str,
+    video_id:         str,
+    success:          bool,
+    extra:            dict[str, Any] | None = None,
+    *,
+    parent_video_id:  str | None = None,
+    part_total:       int | None = None,
+) -> tuple[int, int | None] | tuple[None, None]:
+    """2026-09-14: long-video partitioning. `video_id` here may be one
+    partition of a video split into `part_total` pieces
+    (`parent_video_id` set, e.g. `video_id="XYZ#p3"`,
+    `parent_video_id="XYZ"`). A partition finishing must NOT bump the
+    global `phase_finished_key` counter directly — that would count a
+    5-partition video as 5 toward the phase total instead of 1, and
+    the drawer row for "XYZ" (the id the user actually requested and
+    the only one ever shown) would never see a `mark_video_done` call
+    for its own literal id, since nothing dispatches "XYZ" itself once
+    it's split.
+
+    Every partition's outcome is instead recorded into a per-parent
+    tracker (`partition_group_key`); only once every expected partition
+    has reported does this fire exactly ONE `mark_video_done` call for
+    `parent_video_id`, with the aggregated success (AND of all parts)
+    and summed numeric `extra` fields (nodes_created, points_upserted,
+    etc. — same shape a single video's own `extra` would carry).
+
+    Callers with `parent_video_id=None` (every non-split video — the
+    overwhelming majority) get the EXACT same direct `mark_video_done`
+    call as before this function existed — zero behavior change.
+
+    Returns `(finished, total)` from the eventual `mark_video_done`
+    call once the group completes, or `(None, None)` while siblings
+    are still pending — callers MUST treat `(None, None)` as "not this
+    video's turn to be reported yet," not as an error, and must not
+    call `maybe_finalize`/drain logic keyed off it in that case."""
+    if not parent_video_id or parent_video_id == video_id:
+        return await mark_video_done(redis, extract_id, phase, video_id, success, extra)
+
+    group_key = partition_group_key(extract_id, phase, parent_video_id)
+    try:
+        await redis.hset(
+            group_key, video_id,
+            json.dumps({"success": bool(success), **(extra or {})}),
+        )
+        await redis.expire(group_key, PIPELINE_STATE_TTL_S)
+        reported = await redis.hgetall(group_key)
+    except Exception as e:
+        logger.warning(
+            f"[ycs:pipeline:streaming] partition-group write failed for "
+            f"{phase}/{parent_video_id}/{video_id}: {type(e).__name__}: {e}"
+        )
+        return None, None
+
+    if part_total and len(reported) < part_total:
+        # Siblings still pending — this partition's own outcome is
+        # safely recorded above; the group just isn't complete yet.
+        return None, None
+
+    all_success = True
+    agg_extra: dict[str, Any] = {}
+    for raw in reported.values():
+        try:
+            entry = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+        except Exception:
+            continue
+        if not entry.get("success"):
+            all_success = False
+        for k, v in entry.items():
+            if k == "success" or not isinstance(v, (int, float)):
+                continue
+            agg_extra[k] = agg_extra.get(k, 0) + v
+    logger.info(
+        f"[ycs:pipeline:streaming] {extract_id}: all {len(reported)} "
+        f"partition(s) of {parent_video_id} reported for {phase} — "
+        f"aggregate success={all_success}"
+    )
+    return await mark_video_done(
+        redis, extract_id, phase, parent_video_id, all_success, agg_extra,
+    )
 
 
 async def update_video_extra(

@@ -177,6 +177,19 @@ async def pipeline_stream_status(
     return payload
 
 
+@router.get("/pipeline/{extract_id}/llm-counters")
+async def pipeline_llm_counters(extract_id: str) -> dict:
+    """LLM-usage drawer for the Neo4j box — same contract as DD's
+    `/planner|synth/debug/graph/{thread_id}/llm-counters`
+    (`domains.dd.runtime.llm_counter.read_counters`), backed by YCS's
+    own counter store (`domains.ycs.runtime.llm_counter`) since YCS's
+    extraction isn't a LangGraph graph with a thread_id to key off —
+    keyed by extract_id instead, "node" is the video_id being
+    extracted rather than a workflow node."""
+    from domains.ycs.runtime.llm_counter import read_counters
+    return await read_counters(extract_id)
+
+
 def _status_for(has_transcript: bool, has_neo4j_doc: bool) -> str:
     """3-state status: `done` = all 3 stores present; `partial` = no Neo4j; `failed` = no transcript."""
     if has_transcript and has_neo4j_doc:
@@ -240,9 +253,10 @@ async def list_videos(
     g = getattr(request.app.state, "neo4j_graph", None)
     if g is not None:
         try:
+            # COALESCE so a split video's N partitions count once, not N.
             rows = g.query(
                 f"MATCH (d:Document:{SOURCE_LABEL}) WHERE d.video_id IS NOT NULL "
-                "RETURN count(DISTINCT d.video_id) AS n",
+                "RETURN count(DISTINCT COALESCE(d.parent_video_id, d.video_id)) AS n",
             )
             n_processed_total = int(rows[0]["n"]) if rows else 0
         except Exception:
@@ -255,40 +269,48 @@ async def list_videos(
     transcript_meta: dict[str, dict[str, Any]] = {}
     if video_ids:
         try:
+            # 2026-09-14: long-video partitioning — a split video's
+            # transcript docs carry `video_id="XYZ#p{n}"`, never the
+            # original id, so the OLD `terms: {video_id: video_ids}` +
+            # per-video-id aggregation would find nothing for it (every
+            # split video looked "no transcript" forever, regardless of
+            # how many partitions actually succeeded). Fetches raw hits
+            # matched by EITHER `video_id` (unsplit videos) OR
+            # `parent_video_id` (partitions) and groups client-side —
+            # ES terms aggs can't easily bucket by "field A if present
+            # else field B" without painless scripting, and this page
+            # is already bounded (`video_ids` <= `limit`, itself capped
+            # at 500), so the extra round-trip cost is negligible.
+            # `has_transcript` requires EVERY expected partition to be
+            # present, not just one — a video split into 5 with only 3
+            # landed must still show as incomplete.
             t_response = await es.search(
                 index = INDEX_TRANSCRIPTIONS,
-                size  = 0,
-                query = {"terms": {"video_id": video_ids}},
-                aggs  = {
-                    "per_video": {
-                        "terms": {"field": "video_id", "size": len(video_ids)},
-                        "aggs": {
-                            "langs": {"terms": {"field": "lang", "size": 5}},
-                            "any_doc": {
-                                "top_hits": {
-                                    "size": 1,
-                                    "_source": ["content"],
-                                },
-                            },
-                        },
-                    },
-                },
+                size  = min(10000, max(200, len(video_ids) * 10)),
+                query = {"bool": {"should": [
+                    {"terms": {"video_id": video_ids}},
+                    {"terms": {"parent_video_id": video_ids}},
+                ]}},
+                _source = [
+                    "video_id", "parent_video_id", "part_total",
+                    "lang", "content",
+                ],
             )
-            buckets = (
-                t_response.get("aggregations", {})
-                .get("per_video", {}).get("buckets", [])
-            )
-            for b in buckets:
-                vid = b["key"]
-                lang_buckets = b.get("langs", {}).get("buckets", [])
-                langs = [lb["key"] for lb in lang_buckets] or ["unknown"]
-                top = b.get("any_doc", {}).get("hits", {}).get("hits", [])
-                content_len = (
-                    len(top[0].get("_source", {}).get("content", ""))
-                    if top else 0
-                )
+            grouped: dict[str, list[dict]] = {}
+            for h in t_response.get("hits", {}).get("hits", []):
+                s = h.get("_source") or {}
+                eff_id = s.get("parent_video_id") or s.get("video_id")
+                if eff_id:
+                    grouped.setdefault(eff_id, []).append(s)
+            for vid, docs in grouped.items():
+                expected = next(
+                    (d.get("part_total") for d in docs if d.get("part_total")),
+                    None,
+                ) or 1
+                langs = sorted({d.get("lang", "unknown") for d in docs})
+                content_len = sum(len(d.get("content") or "") for d in docs)
                 transcript_meta[vid] = {
-                    "has_transcript":    True,
+                    "has_transcript":    len(docs) >= expected,
                     "transcript_langs":  langs,
                     "transcript_length": content_len,
                 }
@@ -301,18 +323,29 @@ async def list_videos(
     g = getattr(request.app.state, "neo4j_graph", None)
     if g is not None and video_ids:
         try:
+            # 2026-09-14: same partitioning fix as the ES transcript
+            # check above — a split video's Document nodes carry
+            # `video_id="XYZ#p{n}"` and `parent_video_id="XYZ"`; group
+            # by COALESCE so the row lands under the original id, and
+            # require every expected partition's Document to exist
+            # (`n_docs >= part_total`) before counting it as done.
             rows = g.query(
                 f"MATCH (d:Document:{SOURCE_LABEL}) "
-                "WHERE d.video_id IN $vids "
+                "WHERE d.video_id IN $vids OR d.parent_video_id IN $vids "
                 f"OPTIONAL MATCH (d)-[:MENTIONS]-(e:__Entity__:{SOURCE_LABEL}) "
-                "WITH d.video_id AS vid, count(DISTINCT e) AS n_entities "
-                "RETURN vid, n_entities",
+                "WITH COALESCE(d.parent_video_id, d.video_id) AS vid, "
+                "     d.part_total AS part_total, "
+                "     count(DISTINCT d) AS n_docs, "
+                "     count(DISTINCT e) AS n_entities "
+                "RETURN vid, part_total, n_docs, n_entities",
                 params = {"vids": video_ids},
             )
             for r in rows:
                 vid = r["vid"]
-                neo4j_doc_ids.add(vid)
-                entity_counts[vid] = int(r["n_entities"] or 0)
+                expected = r.get("part_total") or 1
+                if int(r["n_docs"] or 0) >= expected:
+                    neo4j_doc_ids.add(vid)
+                entity_counts[vid] = entity_counts.get(vid, 0) + int(r["n_entities"] or 0)
         except Exception:
             pass
 
@@ -382,9 +415,17 @@ async def videos_facets(request: Request) -> dict:
     g = getattr(request.app.state, "neo4j_graph", None)
     if g is not None:
         try:
+            # Grouped by COALESCE + gated on `n_docs >= part_total` —
+            # same reasoning as `list_videos` above: a split video's
+            # Document nodes carry the original id only via
+            # `parent_video_id`, and it isn't "done" until every
+            # expected partition landed, not just the first one.
             rows = g.query(
                 f"MATCH (d:Document:{SOURCE_LABEL}) WHERE d.video_id IS NOT NULL "
-                "RETURN collect(DISTINCT d.video_id) AS ids",
+                "WITH COALESCE(d.parent_video_id, d.video_id) AS vid, "
+                "     d.part_total AS part_total, count(DISTINCT d) AS n_docs "
+                "WHERE n_docs >= COALESCE(part_total, 1) "
+                "RETURN collect(DISTINCT vid) AS ids",
             )
             if rows and rows[0].get("ids"):
                 done_ids = [str(x) for x in rows[0]["ids"] if x]

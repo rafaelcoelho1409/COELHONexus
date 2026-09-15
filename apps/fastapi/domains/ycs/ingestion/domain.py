@@ -12,6 +12,18 @@ import hashlib
 from langchain_core.documents import Document
 
 
+def parent_video_id(vid: str) -> str:
+    """Strip a long-video partition suffix (`"XYZ#p3"` -> `"XYZ"`).
+    Identity for any id that isn't a partition. `INDEX_METADATA` (yt-dlp
+    title/channel/upload_date/webpage_url) is only ever written once per
+    real YouTube video — a partition id has no entry of its own, so any
+    metadata lookup keyed on the raw partition id would silently come
+    back empty. Centralized here (used by `fetch_metadata_from_es`)
+    rather than patched at each of its 3 call sites."""
+    base, sep, rest = vid.partition("#p")
+    return base if base and sep and rest.isdigit() else vid
+
+
 def content_hash(content: str) -> str:
     """Fingerprint of a transcript's full text. Stored on every Qdrant
     point of the video; an unchanged hash on re-ingest means the

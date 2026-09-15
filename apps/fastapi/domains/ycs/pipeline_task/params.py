@@ -21,3 +21,8 @@ PIPELINE_STATE_TTL_S: int = 86400
 # Redis key namespace for the dispatch-params lookup. Pairs with
 # `keys.pipeline_state_key(extract_id)`.
 PIPELINE_STATE_PREFIX: str = "ycs:pipeline:"
+
+# 2026-09-14: cooperative-cancel flag TTL (`keys.pipeline_cancel_key`).
+# Same window as PIPELINE_STATE_TTL_S — no reason for the cancel flag to
+# outlive (or expire before) the run's own dispatch-state bookkeeping.
+PIPELINE_CANCEL_TTL_S: int = PIPELINE_STATE_TTL_S

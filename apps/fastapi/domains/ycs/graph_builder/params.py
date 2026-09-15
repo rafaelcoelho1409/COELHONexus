@@ -34,8 +34,18 @@ DEFAULT_BATCH_SIZE = 3
 # per-request budget is now generous enough that queuing behind 2
 # siblings (tightest provider caps) shouldn't by itself exhaust it the
 # way the old 180s ceiling did.
+#
+# 2026-09-14: 3 -> 5, requested test now that BOTH the semaphore-limit
+# bug (was silently capping at whatever the smallest concurrent chunk
+# happened to be, not this value) and the wall-clock ceiling are fixed
+# and confirmed live (3 genuinely concurrent holders observed). 5 still
+# exceeds every single free-tier provider's own in-flight cap in the
+# rotator (nvidia_nim=4 is the highest; most are 2) — some queuing
+# inside the rotator's own cascade is expected and is the thing this
+# test is actually checking, now that queued time has real room (600s)
+# to resolve in instead of blowing the old 180s ceiling.
 EXTRACT_CONCURRENCY = max(
-    1, int(_os.environ.get("YCS_NEO4J_CONCURRENCY", "3") or "3"),
+    1, int(_os.environ.get("YCS_NEO4J_CONCURRENCY", "5") or "5"),
 )
 
 # 2026-09-14: 600 -> 700. Must exceed the rotator's own max_wall_s

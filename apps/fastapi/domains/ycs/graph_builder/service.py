@@ -27,6 +27,8 @@ from langchain_neo4j import Neo4jGraph
 from rapidfuzz import fuzz
 
 from domains.ycs.embeddings import create_dense_embeddings
+from domains.ycs.runtime import llm_counter
+from domains.ycs.runtime.llm_counter import YCSLLMUsageCallback
 
 from . import domain
 from .params import (
@@ -193,6 +195,7 @@ async def extract_and_store_graph(
     batch_size: int = DEFAULT_BATCH_SIZE,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
     run_resolution: bool = True,
+    extract_id: str | None = None,
 ) -> dict:
     """One LLM call PER TRANSCRIPT (not per chunk). Deprecated rationale:
     full context → +30% entity quality vs chunked, and 352 calls instead
@@ -235,6 +238,14 @@ async def extract_and_store_graph(
     that come back in `failed_video_ids`, not the whole batch.
 
     Returns counters dict suitable for the API response envelope."""
+    # LLM-usage drawer (mirrors DD Planner/Synth's) — attached here,
+    # not inside create_graph_transformer, so that utility stays a
+    # plain "given an llm, build a transformer" function. Only fires
+    # when `extract_id` is supplied (the agents-endpoint direct callers
+    # that predate this feature pass none, and stay silently unmetered
+    # rather than erroring).
+    if extract_id:
+        llm = llm.with_config(callbacks=[YCSLLMUsageCallback()])
     transformer = create_graph_transformer(llm)
     concurrency = (
         batch_size if batch_size and batch_size > 1 else EXTRACT_CONCURRENCY
@@ -320,20 +331,28 @@ async def extract_and_store_graph(
         if not isinstance(meta, dict):
             meta = {}
         sha, ver = current_fingerprints.get(vid, ("", EXTRACT_PROMPT_VERSION))
+        doc_metadata: dict[str, Any] = {
+            "video_id": vid,
+            "title":    meta.get("title", ""),
+            "channel":  meta.get("channel", ""),
+            # Fingerprint — written onto the Document node via
+            # include_source (`SET d += metadata`), read back by
+            # the skip check above on re-runs.
+            "transcript_sha":         sha,
+            "extract_prompt_version": ver,
+        }
+        # 2026-09-14: long-video partitioning — carried onto the
+        # Document node itself (not just ES) so admin listing / any
+        # future graph query can find "every partition of video X"
+        # without needing to parse the id string. Absent for the
+        # overwhelming majority of (unsplit) videos.
+        parent_vid = transcript.get("parent_video_id")
+        if parent_vid:
+            doc_metadata["parent_video_id"] = parent_vid
+            doc_metadata["part_index"] = transcript.get("part_index")
+            doc_metadata["part_total"] = transcript.get("part_total")
         documents.append(
-            Document(
-                page_content = content,
-                metadata = {
-                    "video_id": vid,
-                    "title":    meta.get("title", ""),
-                    "channel":  meta.get("channel", ""),
-                    # Fingerprint — written onto the Document node via
-                    # include_source (`SET d += metadata`), read back by
-                    # the skip check above on re-runs.
-                    "transcript_sha":         sha,
-                    "extract_prompt_version": ver,
-                },
-            ),
+            Document(page_content = content, metadata = doc_metadata),
         )
 
     logger.info(
@@ -427,6 +446,8 @@ async def extract_and_store_graph(
         Exceptions are mapped to the error string here so the consumer
         loop keeps video attribution in completion order."""
         vid = doc.metadata.get("video_id", "") if isinstance(doc.metadata, dict) else ""
+        if extract_id:
+            llm_counter.set_context(extract_id = extract_id, video_id = vid)
         try:
             # Watchdog: hard wall-clock ceiling per transcript. The
             # inner request stack already has per-deployment timeouts +

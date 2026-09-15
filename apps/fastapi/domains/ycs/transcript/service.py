@@ -54,8 +54,10 @@ from .domain import (
     _parse_transcript,
     _select_best_track,
     build_get_panel_params,
+    build_partition_texts,
     parse_get_panel_segments,
     parse_get_transcript_segments,
+    split_segments_by_gap,
 )
 from .params import (
     BLOCK_PATTERNS,
@@ -75,6 +77,10 @@ from .params import (
     POT_REQUEST_TIMEOUT_S,
     RETRY_LIMIT,
     RETRYABLE_ERRORS,
+    SPLIT_OVERLAP_WORDS,
+    SPLIT_SEARCH_WINDOW_RATIO,
+    SPLIT_TARGET_PARTITION_S,
+    SPLIT_THRESHOLD_S,
     TIMEOUT_MS,
 )
 
@@ -1537,6 +1543,7 @@ async def fetch_transcriptions_batch(
     es_progress_cb:     Callable[[int, int], None] | None = None,
     on_video_indexed:   Callable[[str], None] | None      = None,
     stats:              dict[str, int] | None             = None,
+    cancel_check:       Callable[[], Any] | None          = None,
 ) -> list[dict[str, Any]]:
     """Fetch transcriptions for videos with ES caching + chunked processing.
 
@@ -1581,7 +1588,17 @@ async def fetch_transcriptions_batch(
 
     `on_video_indexed(video_id)` (2026-09-13) fires once per
     successfully-indexed video — the hook `extract/task.py` uses to
-    dispatch that video's Neo4j/Qdrant streaming tasks immediately."""
+    dispatch that video's Neo4j/Qdrant streaming tasks immediately.
+
+    `cancel_check()` (2026-09-14, optional async callable → bool),
+    checked once at the START of each chunk (never mid-chunk — a chunk
+    already in flight always finishes, so an in-progress Playwright
+    fetch is never abandoned). Returning True stops the loop before the
+    NEXT chunk starts; whatever wasn't fetched yet just stays
+    unprocessed (shows as still-Queued in the UI, which is the honest
+    outcome for a stopped run). Cooperative alternative to
+    `revoke(terminate=True)` — see `pipeline_task.service
+    .revoke_pipeline_phases` for why that was replaced for Stop."""
     def _set_stats(
         cached: int, ok: int, failed: int, no_transcript: int = 0,
     ) -> None:
@@ -1724,26 +1741,77 @@ async def fetch_transcriptions_batch(
         if ok:
             lang = result.get("language", "unknown")
             content = result.get("page_content", "")
+            segments = result.get("segments") or []
             is_auto = result.get("is_auto_generated", True)
             meta = (video_metadata or {}).get(vid, {})
-            doc = {
-                "id":            f"{vid}_{lang}",
-                "video_id":      vid,
+            base_fields = {
                 "lang":          lang,
-                "content":       content,
                 "is_auto":       is_auto,
                 "method":        result.get("method", "dom_scrape"),
                 "channel_id":    meta.get("channel_id"),
                 "playlist_id":   meta.get("playlist_id"),
                 "_extracted_at": datetime.utcnow().isoformat(),
             }
-            log.info(
-                f"[fetch_transcriptions_batch] OK {vid} lang={lang} "
-                f"auto={is_auto} len={len(content)}",
+            # 2026-09-14: long-video partitioning. `segments` (per-
+            # caption timing) was already produced by every fetch path
+            # — only `page_content` (the flattened join) reached
+            # storage before this. Below SPLIT_THRESHOLD_S (the
+            # overwhelming majority of videos), this is a no-op: single
+            # partition == the exact same one-document path as before.
+            # Above it, each partition is dispatched through
+            # `_index_and_notify`/`on_video_indexed` as its OWN id
+            # (`{vid}#p{n}`) — Qdrant/Neo4j's per-video dispatch,
+            # concurrency, and fingerprint-skip machinery already treat
+            # any id as just an id, so this needs no changes there; the
+            # Playwright/ES-fetch progress counters below still count
+            # by the ORIGINAL video (fetching is unaffected — splitting
+            # happens only to what gets stored/dispatched downstream).
+            partitions = (
+                split_segments_by_gap(
+                    segments,
+                    threshold_s = SPLIT_THRESHOLD_S,
+                    target_partition_s = SPLIT_TARGET_PARTITION_S,
+                    search_window_ratio = SPLIT_SEARCH_WINDOW_RATIO,
+                ) if segments else [segments]
             )
-            _pending_index_tasks.append(
-                asyncio.ensure_future(_index_and_notify(doc, vid)),
-            )
+            if len(partitions) <= 1:
+                doc = {
+                    "id":              f"{vid}_{lang}",
+                    "video_id":        vid,
+                    "content":         content,
+                    "segments":        segments,
+                    **base_fields,
+                }
+                log.info(
+                    f"[fetch_transcriptions_batch] OK {vid} lang={lang} "
+                    f"auto={is_auto} len={len(content)}",
+                )
+                _pending_index_tasks.append(
+                    asyncio.ensure_future(_index_and_notify(doc, vid)),
+                )
+            else:
+                texts = build_partition_texts(partitions, SPLIT_OVERLAP_WORDS)
+                log.info(
+                    f"[fetch_transcriptions_batch] OK {vid} lang={lang} "
+                    f"auto={is_auto} len={len(content)} — split into "
+                    f"{len(partitions)} partitions "
+                    f"(> {SPLIT_THRESHOLD_S // 60}min)",
+                )
+                for i, (part, text) in enumerate(zip(partitions, texts), start = 1):
+                    part_id = f"{vid}#p{i}"
+                    doc = {
+                        "id":              f"{part_id}_{lang}",
+                        "video_id":        part_id,
+                        "content":         text,
+                        "segments":        part,
+                        "parent_video_id": vid,
+                        "part_index":      i,
+                        "part_total":      len(partitions),
+                        **base_fields,
+                    }
+                    _pending_index_tasks.append(
+                        asyncio.ensure_future(_index_and_notify(doc, part_id)),
+                    )
         elif result.get("no_transcript"):
             # Permanent: video has no captions (or is unplayable for
             # this session). Expected outcome, not an infra failure.
@@ -1773,6 +1841,21 @@ async def fetch_transcriptions_batch(
                 )
 
     for chunk_num in range(num_chunks):
+        if cancel_check is not None:
+            try:
+                if await cancel_check():
+                    remaining = total_to_fetch - (chunk_num * chunk_size)
+                    log.info(
+                        f"[fetch_transcriptions_batch] cancelled before "
+                        f"chunk {chunk_num + 1}/{num_chunks} — "
+                        f"{remaining} video(s) left unfetched"
+                    )
+                    break
+            except Exception as e:
+                log.warning(
+                    f"[fetch_transcriptions_batch] cancel_check raised: "
+                    f"{type(e).__name__}: {e}"
+                )
         start_idx = chunk_num * chunk_size
         end_idx = min(start_idx + chunk_size, total_to_fetch)
         chunk_ids = ids_to_fetch[start_idx:end_idx]

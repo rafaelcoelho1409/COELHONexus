@@ -250,6 +250,15 @@ async def stream_video_to_qdrant(
     if not transcripts:
         return {"video_id": video_id, "chunks": 0, "skipped": False, "error": "not found in ES"}
     transcript = transcripts[0] if isinstance(transcripts[0], dict) else {}
+    # 2026-09-14: long-video partitioning — carried through every
+    # return path below so `qdrant_task/task.py` can route this
+    # partition's outcome through `mark_video_or_partition_done`
+    # instead of directly bumping the phase counter. `None` for the
+    # overwhelming majority (unsplit) videos.
+    part_group = {
+        "parent_video_id": transcript.get("parent_video_id"),
+        "part_total":       transcript.get("part_total"),
+    }
     metadata_map = await fetch_metadata_from_es(es, [video_id])
     meta = metadata_map.get(video_id, {})
     if not isinstance(meta, dict):
@@ -259,7 +268,7 @@ async def stream_video_to_qdrant(
 
     if await _already_current(qdrant, video_id, content_hash):
         logger.info(f"[ycs:ingestion:streaming] {video_id}: unchanged, skipping re-embed")
-        return {"video_id": video_id, "chunks": 0, "skipped": True}
+        return {"video_id": video_id, "chunks": 0, "skipped": True, **part_group}
 
     chunker = create_chunker(chunk_size, chunk_overlap)
     chunks = chunk_transcript(
@@ -277,7 +286,7 @@ async def stream_video_to_qdrant(
         chunker = chunker,
     )
     if not chunks:
-        return {"video_id": video_id, "chunks": 0, "skipped": False}
+        return {"video_id": video_id, "chunks": 0, "skipped": False, **part_group}
 
     # Stale-chunk sweep — a shorter re-chunk could otherwise leave
     # orphans at high chunk_index values (same rationale as the bulk
@@ -308,6 +317,7 @@ async def stream_video_to_qdrant(
         "chunks":         len(chunks),
         "skipped":        False,
         "points_flushed": points_flushed,
+        **part_group,
     }
 
 

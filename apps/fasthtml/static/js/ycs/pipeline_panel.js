@@ -28,6 +28,7 @@
  * `window.confirm()` keeps the Stop dialog visually consistent with
  * DD's Wipe Planner / Wipe Synth confirmations. */
 import { showConfirm } from "@dd/shared/ui/overlays.js";
+import { bindYcsLlmUsageDrawer, refreshYcsNeo4jLlmUsage } from "@ycs/llm_usage.js";
 
 const API = "/api/v1/ycs";
 /* Poll cadence — 700ms was 1500ms. Phase 2 (Qdrant) finishes in ~5s
@@ -869,6 +870,7 @@ async function trackPipeline({ extract, qdrant, neo4j, video_ids, startedAt }) {
     bindWipe(wipeBtn, extract);
     bindDismiss(dismissBtn);
     _bindDrawer();
+    bindYcsLlmUsageDrawer();
     if (stopBtn) stopBtn.disabled = false;
     // Wipe is always enabled — the backend wipe endpoint now revokes
     // any in-flight chain phases before/during the wipe, so it's safe
@@ -896,9 +898,18 @@ async function trackPipeline({ extract, qdrant, neo4j, video_ids, startedAt }) {
     const startMs = Number(startedAt) || Date.now();
     let tick = 0;
     let interval = POLL_INTERVAL_MS;
+    // LLM-usage box polls its own endpoint separately from the bar
+    // state above — throttled to ~5s regardless of the bar poll's own
+    // interval/backoff, since token counters don't need 700ms
+    // freshness and this is one extra fetch per refresh.
+    let lastLlmUsageRefreshMs = 0;
     while (true) {
         tick += 1;
         elapsedEl.textContent = fmtElapsed((Date.now() - startMs) / 1000);
+        if (Date.now() - lastLlmUsageRefreshMs > 5000) {
+            lastLlmUsageRefreshMs = Date.now();
+            refreshYcsNeo4jLlmUsage(ids.neo4j).catch(() => {});
+        }
         // Dedupe TASK-based polls by unique task id — "playwright" and
         // "elasticsearch" share the same `extract` task id (there's no
         // separate ES task); polling it twice per tick would be wasteful

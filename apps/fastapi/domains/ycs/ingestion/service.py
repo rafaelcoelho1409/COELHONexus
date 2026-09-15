@@ -179,7 +179,16 @@ async def _scroll_transcripts(
         query = query,
         size = batch_size,
         scroll = SCROLL_KEEPALIVE,
-        _source = ["video_id", "content", "lang", "channel_id"],
+        # 2026-09-14: parent_video_id/part_index/part_total added for
+        # the long-video splitter's partition-group completion
+        # tracking (neo4j_task/qdrant_task need to know "is this a
+        # partition, and how many siblings does it have") — omitted
+        # before this, they'd silently read as None/missing downstream
+        # even though the ES document actually carries them.
+        _source = [
+            "video_id", "content", "lang", "channel_id",
+            "parent_video_id", "part_index", "part_total",
+        ],
     )
     scroll_id = response.get("_scroll_id")
     hits = response["hits"]["hits"]
@@ -204,18 +213,31 @@ async def fetch_metadata_from_es(
     es: AsyncElasticsearch, video_ids: list[str],
 ) -> dict:
     """Bulk-fetch metadata for the supplied ids. Returns
-    `{video_id: metadata_dict}`."""
+    `{video_id: metadata_dict}` — keyed by whatever id was PASSED IN,
+    even though the actual `INDEX_METADATA` lookup resolves long-video
+    partition ids (`"XYZ#p3"`) back to their parent (`"XYZ"`) first:
+    yt-dlp metadata is only ever written once per real video, so a
+    partition id has no entry of its own and would otherwise come back
+    empty (blank title/channel on every partition's Video/Document
+    node). Callers need no changes — same shape in, same shape out,
+    just no longer silently empty for partitions."""
     if not video_ids:
         return {}
+    lookup_ids = {vid: domain.parent_video_id(vid) for vid in video_ids}
     response = await es.search(
         index = INDEX_METADATA,
-        query = {"ids": {"values": video_ids}},
-        size = len(video_ids),
+        query = {"ids": {"values": list(set(lookup_ids.values()))}},
+        size = len(set(lookup_ids.values())),
         _source = [
             "title", "channel", "channel_id", "upload_date", "webpage_url",
         ],
     )
-    return {h["_id"]: h["_source"] for h in response["hits"]["hits"]}
+    by_parent = {h["_id"]: h["_source"] for h in response["hits"]["hits"]}
+    return {
+        vid: by_parent[parent]
+        for vid, parent in lookup_ids.items()
+        if parent in by_parent
+    }
 
 
 async def fetch_transcripts_from_es(
