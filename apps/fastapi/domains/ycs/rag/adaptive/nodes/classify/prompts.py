@@ -69,8 +69,13 @@ CLASSIFY_PROMPT = ChatPromptTemplate.from_messages([
         "(no specific person/channel)\n"
         "If the query is about a SPECIFIC person/channel, always include "
         "their name.\n\n"
+        "CONVERSATION HISTORY (may be empty): prior turns are provided "
+        "below so follow-ups ('tell me more', 'e ele?', 'why?') can be "
+        "resolved against what was already discussed — classify the "
+        "RESOLVED intent, not the raw fragment. Empty history → classify "
+        "the question standalone.\n\n"
         "Return ONLY a JSON object with keys: mode, reasoning, "
         "sub_questions, channel_names. Do not wrap it in markdown.",
     ),
-    ("human", "{question}"),
+    ("human", "History:\n{history}\n\nQuestion:\n{question}"),
 ])

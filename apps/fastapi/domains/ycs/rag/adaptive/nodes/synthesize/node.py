@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 
+from domains.ycs.rag.llm_call import resilient_ainvoke
 from domains.ycs.runtime.observability import traced
 
 from ....domain import history_to_messages, strip_think_tags
@@ -37,16 +38,18 @@ async def synthesize(state: AdaptiveRAGState, llm) -> dict:
 
     chain = SYNTHESIZE_PROMPT | llm
     try:
-        response = await asyncio.wait_for(
-            chain.ainvoke({
+        response = await resilient_ainvoke(
+            chain,
+            {
                 "question":       state["question"],
                 "research_plan":  state.get("research_plan", ""),
                 "sub_results":    sub_results_text,
                 "history":        history_to_messages(
                     state.get("conversation_history"),
                 ),
-            }),
-            timeout = _SYNTHESIZE_TIMEOUT_S,
+            },
+            operation = "synthesize",
+            timeout_s = _SYNTHESIZE_TIMEOUT_S,
         )
         generation = strip_think_tags(response.content)
     except asyncio.TimeoutError:

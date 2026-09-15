@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 
+from domains.ycs.rag.llm_call import resilient_ainvoke
 from domains.ycs.runtime.observability import traced
 
 from ...state import YouTubeRAGState
@@ -18,13 +19,9 @@ from .prompts import HALLUCINATION_PROMPT
 from .schemas import HallucinationCheck
 
 
-# 60 s ceiling on the hallucination judge LLM. Single structured-
-# output call with at most ~10 short doc excerpts and the generation
-# itself; healthy models return in 5–15 s. 60 s leaves room for one
-# rotator fallback inside the call. Matches the sizing of the other
-# adaptive-graph node timeouts (`_CLASSIFY_TIMEOUT_S`,
-# `_PLAN_TIMEOUT_S`).
-_HALLUCINATION_TIMEOUT_S = 60.0
+# 2026-09-15: 60 → 45s tiering — failure defaults to grounded=True
+# (non-blocking judge), so fail fast.
+_HALLUCINATION_TIMEOUT_S = 45.0
 
 
 @traced("rag.hallucination")
@@ -46,13 +43,16 @@ async def check_hallucination(state: YouTubeRAGState, llm) -> dict:
         HallucinationCheck,
     )
     try:
-        result: HallucinationCheck = await asyncio.wait_for(
-            chain.ainvoke({
+        result: HallucinationCheck = await resilient_ainvoke(
+            chain,
+            {
                 "question":   state["question"],
                 "generation": state["generation"],
                 "documents":  documents_str,
-            }),
-            timeout = _HALLUCINATION_TIMEOUT_S,
+            },
+            operation    = "hallucination",
+            timeout_s    = _HALLUCINATION_TIMEOUT_S,
+            max_attempts = 2,
         )
         # AND the two booleans — both must hold for "good enough".
         return {"grounded": result.grounded and result.addresses_question}

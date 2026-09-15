@@ -22,6 +22,7 @@ import asyncio
 
 from langchain_core.documents import Document
 
+from domains.ycs.rag.llm_call import resilient_ainvoke
 from domains.ycs.runtime.observability import traced
 
 from ....domain import history_to_messages, strip_think_tags
@@ -30,10 +31,10 @@ from .prompts import FALLBACK_PROMPT
 
 
 # Tighter than `generate`'s 180s — soft-evidence prompts run shorter
-# context, so the rotator should answer faster. 90s covers the
-# cascade across a slow arm + one retry; longer than that is a hung
-# deployment we should surface instead of waiting on.
-_FALLBACK_TIMEOUT_S = 90.0
+# context, so the rotator should answer faster. 2026-09-15: 90 → 60s
+# tiering — this is the last-resort answer; waiting 90s+ here is the
+# worst UX on the path.
+_FALLBACK_TIMEOUT_S = 60.0
 
 # Cap on soft-evidence docs passed into the prompt context. The state
 # field is capped at 12 across all rewrite rounds (see
@@ -116,15 +117,18 @@ async def fallback_answer(state: YouTubeRAGState, llm) -> dict:
 
     chain = FALLBACK_PROMPT | llm
     try:
-        response = await asyncio.wait_for(
-            chain.ainvoke({
+        response = await resilient_ainvoke(
+            chain,
+            {
                 "question":      state["question"],
                 "soft_evidence": soft_evidence_text,
                 "history":       history_to_messages(
                     state.get("conversation_history"),
                 ),
-            }),
-            timeout = _FALLBACK_TIMEOUT_S,
+            },
+            operation    = "fallback_answer",
+            timeout_s    = _FALLBACK_TIMEOUT_S,
+            max_attempts = 2,
         )
         return {
             "generation": strip_think_tags(response.content),

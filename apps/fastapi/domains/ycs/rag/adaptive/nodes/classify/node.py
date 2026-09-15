@@ -15,9 +15,11 @@ from __future__ import annotations
 import asyncio
 
 from domains.ycs.graph_builder.params import SOURCE_LABEL
+from domains.ycs.rag.llm_call import resilient_ainvoke
 from domains.ycs.runtime.observability import traced
 
 from ....domain import parse_json_model_output
+from ...params import MAX_HISTORY_ANSWER_CHARS, MAX_HISTORY_TURNS
 from ...state import AdaptiveRAGState
 from .prompts import CLASSIFY_PROMPT
 from .schemas import QueryClassification
@@ -25,8 +27,10 @@ from .schemas import QueryClassification
 
 # Single LLM call, output cap is small (mode + a handful of sub-
 # questions). With plain-JSON prompting we no longer wait on provider-
-# native structured-output validation, so 45 s is enough room for a
-_CLASSIFY_TIMEOUT_S = 45.0
+# native structured-output validation. 2026-09-15: 45 → 30s tiering —
+# this node degrades gracefully (falls back to standard mode), so a
+# slow arm should fail over fast, not burn 45s.
+_CLASSIFY_TIMEOUT_S = 30.0
 
 
 def _resolve_channel_ids(neo4j_graph, channel_names: list[str]) -> list[str]:
@@ -74,11 +78,26 @@ async def classify_query(
     # the first graph event on local dev runs. Use plain JSON + local
     # validation instead; same cross-provider pattern as graph-builder's
     # `ignore_tool_usage=True` fix.
+    # 2026-09-15: history is formatted here (same truncation as
+    # contextualize) so this node runs CONCURRENTLY with it (see
+    # graph.py::_prepare) on identical information — follow-ups resolve
+    # against history inside the classify call itself.
+    history = state.get("conversation_history") or []
+    parts: list[str] = []
+    for turn in history[-MAX_HISTORY_TURNS:]:
+        parts.append(
+            f"Q: {turn['question']}\n"
+            f"A: {turn['answer'][:MAX_HISTORY_ANSWER_CHARS]}"
+        )
+    formatted_history = "\n---\n".join(parts)
     chain = CLASSIFY_PROMPT | llm
     try:
-        response = await asyncio.wait_for(
-            chain.ainvoke({"question": state["question"]}),
-            timeout = _CLASSIFY_TIMEOUT_S,
+        response = await resilient_ainvoke(
+            chain,
+            {"history": formatted_history, "question": state["question"]},
+            operation    = "classify",
+            timeout_s    = _CLASSIFY_TIMEOUT_S,
+            max_attempts = 2,
         )
         result = parse_json_model_output(
             response.content, QueryClassification,

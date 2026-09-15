@@ -85,6 +85,19 @@ _ASTREAM_BOOTSTRAP_FALLBACK_TICKS = max(
 # 15 min ≈ 3× the slowest DEEP sub-agent (recursion_limit=12, cap=3).
 _LANGGRAPH_WATCHDOG_S = 15 * 60.0
 
+# Global per-request deadlines by requested mode (2026-09-15): bounds
+# the total grind during provider outages — DD's backstop principle at
+# graph scope. Auto gets the roomy default since it may classify deep;
+# forced modes get exact budgets. On expiry the request serves ONE
+# bounded `fallback_answer` pass (general knowledge + whatever was
+# asked) instead of spinning until the client gives up.
+_ASK_DEADLINE_S = {
+    "fast":     300.0,
+    "standard": 600.0,
+    "deep":     1500.0,
+}
+_ASK_DEADLINE_DEFAULT_S = 900.0
+
 # Hung PG connection blocks the heartbeat.
 _PERSIST_TIMEOUT_S = 3.0
 
@@ -487,7 +500,40 @@ async def rag_search(
                     "channel_count": len(payload.channel_ids or []),
                 })
                 try:
-                    result = await graph.ainvoke(initial_state, config = config)
+                    _deadline = _ASK_DEADLINE_S.get(
+                        (payload.force_mode or "").lower(),
+                        _ASK_DEADLINE_DEFAULT_S,
+                    )
+                    try:
+                        result = await asyncio.wait_for(
+                            graph.ainvoke(initial_state, config = config),
+                            timeout = _deadline,
+                        )
+                    except asyncio.TimeoutError:
+                        # Global deadline hit — one bounded fallback pass
+                        # instead of grinding until the client disconnects.
+                        from domains.ycs.rag.standard.nodes.fallback_answer import (
+                            fallback_answer as _deadline_fallback,
+                        )
+                        _fb = await _deadline_fallback(
+                            {
+                                "question":             payload.question,
+                                "conversation_history": history,
+                                "pre_grade_documents":  [],
+                                "documents":            [],
+                            },
+                            request.app.state.llm,
+                        )
+                        result = {
+                            "generation":        _fb.get("generation", ""),
+                            "mode":              payload.force_mode or "standard",
+                            "citations":         _fb.get("citations", []),
+                            "grounded":          False,
+                            "retrieval_sources": [],
+                            "retry_count":       0,
+                            "search_query":      payload.question,
+                            "_deadline_hit":     True,
+                        }
                 except Exception as e:
                     set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
                         status = "error",
@@ -510,7 +556,7 @@ async def rag_search(
         record_ask_run(
             route = "search",
             mode = str(result.get("mode") or payload.force_mode or "standard"),
-            outcome = "done",
+            outcome = "deadline" if result.get("_deadline_hit") else "done",
             grounded = bool(result.get("grounded")),
             duration_s = max(time.monotonic() - t0, 0.0),
             citation_count = len(result.get("citations") or []),
@@ -551,7 +597,12 @@ async def rag_search(
             request.app.state.redis_aio,
             payload.question,
             response,
-            mode = mode,
+            # 2026-09-15: key MUST be the read key (force_mode as given,
+            # possibly None) — writing the resolved mode meant auto
+            # requests (read key: question-only) never hit their own
+            # writes (question+resolved-mode). The payload's internal
+            # "mode" field still carries the resolved mode.
+            mode = payload.force_mode,
         )
     return response
 
@@ -609,6 +660,77 @@ async def rag_search_stream(
         "recursion_limit": 100,
     }
     preview_plan = bool(payload.preview_plan)
+
+    # 2026-09-15: stream-side answer cache (parity with sync `/search`).
+    # Stateless turns only (same condition as sync), never plan-preview
+    # or caller-planned second passes. Hit → replay the cached answer as
+    # `generate` + `end` frames (the frontend renders `generation` +
+    # `citations` from any node event); the turn is still persisted to
+    # Postgres so history stays consistent.
+    if (
+        (not payload.thread_id or payload.thread_id == "default")
+        and not preview_plan
+        and not (payload.sub_questions or [])
+    ):
+        _hit = await get_cached_response(
+            request.app.state.redis_aio,
+            payload.question,
+            payload.force_mode,
+        )
+        if _hit and _hit.get("answer"):
+            async def _replay_cached():
+                _hit_turn_id: int | None = None
+                try:
+                    _hit_turn_id = await insert_turn(
+                        request.app.state.pg_url,
+                        payload.thread_id,
+                        payload.question,
+                    )
+                except Exception:
+                    pass
+                yield (
+                    "data: "
+                    + json.dumps({"node": "_meta", "turn_id": _hit_turn_id})
+                    + "\n\n"
+                )
+                yield (
+                    "data: "
+                    + json.dumps({
+                        "node":      "generate",
+                        "generation": _hit.get("answer", ""),
+                        "mode":       _hit.get("mode", "standard"),
+                        "grounded":   _hit.get("grounded", True),
+                        "citations":  _hit.get("citations", []),
+                    })
+                    + "\n\n"
+                )
+                if _hit_turn_id is not None:
+                    try:
+                        await update_turn_answer(
+                            request.app.state.pg_url,
+                            _hit_turn_id,
+                            _hit.get("answer", ""),
+                            _hit.get("mode") or "standard",
+                            thinking_state = {
+                                "duration_ms": 0,
+                                "cached":      True,
+                            },
+                        )
+                    except Exception:
+                        pass
+                yield (
+                    "data: "
+                    + json.dumps({
+                        "node":        "end",
+                        "status":      "complete",
+                        "duration_ms": 0,
+                    })
+                    + "\n\n"
+                )
+
+            return StreamingResponse(
+                _replay_cached(), media_type = "text/event-stream",
+            )
 
     turn_id: int | None = None
     if not preview_plan:
@@ -1143,6 +1265,29 @@ async def rag_search_stream(
                         duration_s = max(time.monotonic() - t_run_start, 0.0),
                         citation_count = len(last_citations),
                     )
+                    # 2026-09-15: stream-side cache write (read lives at
+                    # the top of this endpoint + in sync `/search`). Same
+                    # stateless-only rule; key uses force_mode as given
+                    # (see the sync-write comment for why resolved mode
+                    # must NOT be the key).
+                    if (
+                        (not payload.thread_id or payload.thread_id == "default")
+                        and not preview_plan
+                        and not (payload.sub_questions or [])
+                        and last_generation
+                    ):
+                        await cache_response(
+                            request.app.state.redis_aio,
+                            payload.question,
+                            {
+                                "answer":            last_generation,
+                                "mode":              last_mode or "standard",
+                                "citations":         last_citations,
+                                "grounded":          last_grounded,
+                                "retrieval_sources": [],
+                            },
+                            mode = payload.force_mode,
+                        )
                     final_answer = (
                         last_generation
                         if last_generation else

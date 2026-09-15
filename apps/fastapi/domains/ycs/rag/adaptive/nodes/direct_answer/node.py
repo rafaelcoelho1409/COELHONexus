@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 
+from domains.ycs.rag.llm_call import resilient_ainvoke
 from domains.ycs.runtime.observability import traced
 
 from ....domain import history_to_messages, strip_think_tags
@@ -26,12 +27,21 @@ async def direct_answer(state: AdaptiveRAGState, llm) -> dict:
     """FAST path: direct LLM answer without retrieval."""
     chain = DIRECT_ANSWER_PROMPT | llm
     try:
-        response = await asyncio.wait_for(
-            chain.ainvoke({
+        # 2026-09-15: transient-only retries inside the bound (DD
+        # doc_distill parity) — raises last error unchanged, so the
+        # handlers below behave exactly as before.
+        response = await resilient_ainvoke(
+            chain,
+            {
                 "question": state["question"],
                 "history":  history_to_messages(state.get("conversation_history")),
-            }),
-            timeout = _DIRECT_ANSWER_TIMEOUT_S,
+            },
+            operation = "direct_answer",
+            timeout_s = _DIRECT_ANSWER_TIMEOUT_S,
+            # FAST must stay fast: 2 attempts (≈182s worst) then the
+            # graph falls back to STANDARD — not 3 (≈274s) before the
+            # real retrieval path even starts.
+            max_attempts = 2,
         )
         return {
             "generation":        strip_think_tags(response.content),

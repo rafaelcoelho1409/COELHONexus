@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 
+from domains.ycs.rag.llm_call import resilient_ainvoke
 from domains.ycs.runtime.observability import traced
 
 from ....domain import strip_think_tags
@@ -16,11 +17,9 @@ from ...state import AdaptiveRAGState
 from .prompts import CONTEXTUALIZE_PROMPT
 
 
-# 45 s ceiling on the contextualize LLM. Short prompt (≤5 prior
-# turns, each truncated to ~300 chars) + a single one-line rewrite;
-# healthy models return in 2–10 s. 45 s leaves margin for the rotator
-# to retry once.
-_CONTEXTUALIZE_TIMEOUT_S = 45.0
+# 2026-09-15: 45 → 30s tiering — failure degrades to skipping the
+# rewrite (uses the question as-is), so fail fast.
+_CONTEXTUALIZE_TIMEOUT_S = 30.0
 
 
 @traced("rag.contextualize")
@@ -40,12 +39,15 @@ async def contextualize_question(state: AdaptiveRAGState, llm) -> dict:
 
     chain = CONTEXTUALIZE_PROMPT | llm
     try:
-        response = await asyncio.wait_for(
-            chain.ainvoke({
+        response = await resilient_ainvoke(
+            chain,
+            {
                 "history":  formatted,
                 "question": state["question"],
-            }),
-            timeout = _CONTEXTUALIZE_TIMEOUT_S,
+            },
+            operation    = "contextualize",
+            timeout_s    = _CONTEXTUALIZE_TIMEOUT_S,
+            max_attempts = 2,
         )
         rewritten = strip_think_tags(response.content)
         if rewritten and rewritten != state["question"]:

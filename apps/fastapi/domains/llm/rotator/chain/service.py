@@ -263,6 +263,40 @@ def _get_openai_sync():
 # Helpers — ChatOpenAI / OpenAIEmbeddings via endpoint (legacy compat)
 # ---------------------------------------------------------------------------
 
+_SHARED_HTTP_CLIENT: object | None = None
+
+
+def _get_shared_http_client():
+    """Module-level pooled `httpx.AsyncClient` shared by every `ChatOpenAI`
+    built below (lazily created, no lock — worst case two racing callers
+    each build one and one wins; both are functionally identical pools).
+
+    Same pool shape as the raw hot path (`_build_limits` + http2 with
+    http/1.1-keepalive fallback). If the Settings-page endpoint moves,
+    the pool is transport-agnostic (per-request base_url comes from the
+    SDK client, not this transport), so nothing needs rebuilding here —
+    only `_get_async_openai`'s bound client needs the reset treatment."""
+    global _SHARED_HTTP_CLIENT
+    if _SHARED_HTTP_CLIENT is not None:
+        return _SHARED_HTTP_CLIENT
+    try:
+        client = _httpx.AsyncClient(
+            limits=_build_limits(),
+            http2=True,
+            timeout=_build_timeout(None),
+            follow_redirects=True,
+        )
+    except ImportError:
+        client = _httpx.AsyncClient(
+            limits=_build_limits(),
+            http2=False,
+            timeout=_build_timeout(None),
+            follow_redirects=True,
+        )
+    _SHARED_HTTP_CLIENT = client
+    return client
+
+
 def _build_chat_openai(
     *,
     timeout_s:       float | None = None,
@@ -311,15 +345,24 @@ def _build_chat_openai(
     helped YCS's Neo4j extraction (full-transcript input, large JSON
     completion, routinely needs 300-400s). This asks the rotator for
     more budget WITHOUT touching its shared default for every other
-    caller/project."""
+    caller/project.
+
+    2026-09-15: every instance now shares ONE module-level pooled
+    `httpx.AsyncClient` (`_get_shared_http_client`, same 200/100 pool +
+    http2-fallback shape as the raw hot path's client) instead of each
+    `ChatOpenAI(...)` allocating its own pool. Planner-proven: reuses
+    TCP/keep-alive across calls, avoids ~15ms + TLS/handshake per-call
+    alloc. Per-request `timeout_s` still governs each call (the SDK
+    prefers it over the transport default)."""
     from langchain_openai import ChatOpenAI
 
     kwargs: dict = {
-        "base_url":     COELHO_ROTATOR_URL,
-        "api_key":      COELHO_API_KEY,
-        "model":        COELHO_ROTATOR_MODEL,
-        "temperature":  temperature if temperature is not None else 0.0,
-        "max_retries":  0,
+        "base_url":          COELHO_ROTATOR_URL,
+        "api_key":           COELHO_API_KEY,
+        "model":             COELHO_ROTATOR_MODEL,
+        "temperature":       temperature if temperature is not None else 0.0,
+        "max_retries":       0,
+        "http_async_client": _get_shared_http_client(),
     }
     if timeout_s is not None:
         kwargs["timeout"] = timeout_s
@@ -704,19 +747,35 @@ async def rerank_via_router_async(query: str, documents: list[str], top_n: int |
     return []
 
 
-def build_reduce_label_chain():
-    from langchain_openai import ChatOpenAI
-
-    return ChatOpenAI(
-        base_url=COELHO_ROTATOR_URL,
-        api_key=COELHO_API_KEY,
-        model=COELHO_ROTATOR_MODEL,
-        temperature=0.0,
+def build_reduce_label_chain(
+    *,
+    timeout_s:    float | None = 600.0,
+    rotator_task: str | None   = None,
+):
+    """Generic external-provider `ChatOpenAI` — base_url/model come from
+    the Settings-page override (or env/default), NOT from any in-Nexus
+    pool. 2026-09-15: routes through `_build_chat_openai` so
+    `max_retries=0` is applied (the rotator cascades server-side; an
+    SDK-level retry loop on top would stack a redundant retry, hiding
+    clean failures from the caller's own handling). Default 600s
+    ceiling matches the SDK implicit default — callers with tighter
+    budgets (NL-to-DSL translation, health checks) pass their own
+    `timeout_s` + `rotator_task` tag instead."""
+    return _build_chat_openai(
+        timeout_s    = timeout_s,
+        rotator_task = rotator_task,
     )
 
 
-def build_llm_fallback_chain():
-    return build_reduce_label_chain()
+def build_llm_fallback_chain(
+    *,
+    timeout_s:    float | None = 600.0,
+    rotator_task: str | None   = None,
+):
+    return build_reduce_label_chain(
+        timeout_s    = timeout_s,
+        rotator_task = rotator_task,
+    )
 
 
 # ------------------------------------------------------------------

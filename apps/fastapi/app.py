@@ -218,10 +218,14 @@ async def lifespan(app: FastAPI):
             f"{type(e).__name__}: {e}. /agents/search will 5xx."
         )
 
-    # query_ai_llm uses the dd-reduce-label pool (no reasoning models) to avoid 1-15s think tokens
-    # on NL→DSL translation; falls back to app.state.llm at request time.
+    # query_ai_llm targets the external provider for NL→DSL translation
+    # (tiny deterministic output — 120s ceiling is plenty); falls back
+    # to app.state.llm at request time.
     try:
-        app.state.query_ai_llm = build_reduce_label_chain()
+        app.state.query_ai_llm = build_reduce_label_chain(
+            timeout_s    = 120.0,
+            rotator_task = "ycs-query",
+        )
     except Exception as e:
         app.state.query_ai_llm = None
         logger.warning(

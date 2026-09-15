@@ -98,6 +98,19 @@ def _route_by_mode(state: AdaptiveRAGState) -> str:
     return "run_standard"
 
 
+def _route_after_direct(state: AdaptiveRAGState) -> str:
+    """After FAST: success ends, failure falls back to STANDARD.
+
+    2026-09-15 (DD placeholder principle — a degraded
+    retrieval-grounded answer beats an error string): `direct_answer`
+    marks every success `grounded=True` and every failure
+    `grounded=False`, so a hung/failed fast call transparently retries
+    as one STANDARD pass instead of surfacing
+    "The model didn't respond..." to the user. No cycle risk —
+    `run_standard` always terminates at END."""
+    return "end" if state.get("grounded") else "run_standard"
+
+
 def _fan_out_subagents(state: AdaptiveRAGState) -> list[Send]:
     """After planning, fan out sub-questions to parallel subagents via
     `Send`. Each Send carries one sub-question + the inherited channel
@@ -151,11 +164,24 @@ def build_adaptive_rag_graph(
 
     # Bind deps via async closures — LangGraph requires the node value
     # to be a true async callable.
-    async def _contextualize(state):
-        return await contextualize_question(state, llm)
+    async def _prepare(state):
+        """CONTEXTUALIZE + CLASSIFY concurrently (2026-09-15, was serial).
 
-    async def _classify(state):
-        return await classify_query(state, llm, neo4j_graph)
+        Both read the ORIGINAL question + history and write disjoint
+        keys (contextualize: question/search_query/contextualized;
+        classify: mode/sub_questions/channel_ids) — safe under gather.
+        Classify resolves follow-ups against history inside its own
+        prompt, so it no longer needs contextualize's rewrite first.
+        Worst case drops from 30s + 30s serial to max(30s, 30s); the
+        no-history fast path is unchanged (contextualize passthrough
+        is instant, classify runs as before)."""
+        import asyncio as _asyncio
+
+        ctx_result, cls_result = await _asyncio.gather(
+            contextualize_question(state, llm),
+            classify_query(state, llm, neo4j_graph),
+        )
+        return {**ctx_result, **cls_result}
 
     async def _direct(state):
         return await direct_answer(state, llm)
@@ -197,8 +223,7 @@ def build_adaptive_rag_graph(
     async def _critic(state):
         return await critic(state, llm)
 
-    workflow.add_node("contextualize",   _contextualize)
-    workflow.add_node("classify_query",  _classify)
+    workflow.add_node("prepare",         _prepare)
     workflow.add_node("direct_answer",   _direct)
     workflow.add_node("run_standard",    _run_standard)
     workflow.add_node("plan_research",   _plan)
@@ -206,10 +231,9 @@ def build_adaptive_rag_graph(
     workflow.add_node("synthesize",      _synthesize)
     workflow.add_node("critic",          _critic)
 
-    workflow.set_entry_point("contextualize")
-    workflow.add_edge("contextualize", "classify_query")
+    workflow.set_entry_point("prepare")
     workflow.add_conditional_edges(
-        "classify_query",
+        "prepare",
         _route_by_mode,
         {
             "direct_answer":  "direct_answer",
@@ -217,8 +241,15 @@ def build_adaptive_rag_graph(
             "plan_research":  "plan_research",
         },
     )
-    # FAST / STANDARD terminals.
-    workflow.add_edge("direct_answer", END)
+    # FAST terminal on success, STANDARD fallback on failure.
+    workflow.add_conditional_edges(
+        "direct_answer",
+        _route_after_direct,
+        {
+            "end":            END,
+            "run_standard":   "run_standard",
+        },
+    )
     workflow.add_edge("run_standard",  END)
     # DEEP: plan → Send(run_subagent) ... → synthesize → critic → END.
     workflow.add_conditional_edges(

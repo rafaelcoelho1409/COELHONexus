@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 
+from domains.ycs.rag.llm_call import resilient_ainvoke
 from domains.ycs.runtime.observability import record_rewrite, traced
 
 from ....domain import strip_think_tags
@@ -15,10 +16,9 @@ from ...state import YouTubeRAGState
 from .prompts import REWRITE_PROMPT
 
 
-# 30 s ceiling on the rewrite LLM. Tiny prompt + single short
-# completion, no retrieval involved; if a healthy arm can't return
-# in 30 s the rotator should already have fallen over.
-_REWRITE_TIMEOUT_S = 30.0
+# 2026-09-15: 30 → 20s tiering — failure falls back to
+# "{question} (expanded)", so fail fast.
+_REWRITE_TIMEOUT_S = 20.0
 
 
 @traced("rag.rewrite")
@@ -30,12 +30,15 @@ async def rewrite_query(state: YouTubeRAGState, llm) -> dict:
     )
     chain = REWRITE_PROMPT | llm
     try:
-        response = await asyncio.wait_for(
-            chain.ainvoke({
+        response = await resilient_ainvoke(
+            chain,
+            {
                 "question":     state["question"],
                 "search_query": state.get("search_query") or state["question"],
-            }),
-            timeout = _REWRITE_TIMEOUT_S,
+            },
+            operation    = "rewrite",
+            timeout_s    = _REWRITE_TIMEOUT_S,
+            max_attempts = 2,
         )
         new_query = strip_think_tags(response.content)
     except (asyncio.TimeoutError, Exception):

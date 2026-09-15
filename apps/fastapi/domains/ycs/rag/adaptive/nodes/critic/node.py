@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 
+from domains.ycs.rag.llm_call import resilient_ainvoke
 from domains.ycs.runtime.observability import traced
 
 from ...params import CRITIC_FALLBACK_CONFIDENCE
@@ -17,11 +18,9 @@ from .prompts import CRITIC_PROMPT
 from .schemas import CriticAssessment
 
 
-# 90 s ceiling on the critic LLM. Larger context than the other
-# adaptive timeouts — the input is the synthesis + every sub-research
-# Q&A pair, which can run several thousand tokens on a 5-question
-# plan. 90 s leaves room for one rotator fallback inside the call.
-_CRITIC_TIMEOUT_S = 90.0
+# 2026-09-15: 90 → 60s tiering — failure falls back to
+# confidence=0.5 + grounded=True, so fail fast.
+_CRITIC_TIMEOUT_S = 60.0
 
 
 @traced("rag.critic")
@@ -39,13 +38,16 @@ async def critic(state: AdaptiveRAGState, llm) -> dict:
         CriticAssessment,
     )
     try:
-        result = await asyncio.wait_for(
-            chain.ainvoke({
+        result = await resilient_ainvoke(
+            chain,
+            {
                 "question":     state["question"],
                 "synthesis":    state.get("generation", ""),
                 "sub_results":  sub_results_text,
-            }),
-            timeout = _CRITIC_TIMEOUT_S,
+            },
+            operation    = "critic",
+            timeout_s    = _CRITIC_TIMEOUT_S,
+            max_attempts = 2,
         )
         return {
             "confidence_score": result.confidence_score,

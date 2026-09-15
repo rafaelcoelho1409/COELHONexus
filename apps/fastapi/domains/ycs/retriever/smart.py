@@ -1,12 +1,18 @@
 """ycs/retriever — multi-source orchestrator with FlashRank rerank.
 
-Strategy (Phase 4):
-  1. Fan out Qdrant + Neo4j in parallel via `asyncio.gather`
+Strategy (2026-09-15: 3-way parallel — was Qdrant+Neo4j with ES as
+sequential fallback):
+  1. Fan out Qdrant + Neo4j + ES full-text in ONE `asyncio.gather`
   2. Merge surviving results (deduped via `domain.dedupe_documents`)
   3. FlashRank cross-encoder reranks
-  4. If both arms fail → fall back to ES full-text
-  5. If all three fail → return [] (caller's responsibility to rewrite)
-"""
+  4. All arms empty/failed → return [] (caller's responsibility to rewrite)
+
+Rationale: ES is millisecond-scale local full-text — running it inline
+costs max(arms) latency, not the sum, and keyword recall complements
+vector (Qdrant) + graph (Neo4j) on exact-match questions (titles,
+names, quoted phrases) where embeddings underperform. The old
+sequential fallback saved nothing measurable and starved those
+queries of keyword hits whenever a primary returned anything."""
 from __future__ import annotations
 
 import asyncio
@@ -54,14 +60,15 @@ class SmartRetriever:
     async def _retrieve_inner(
         self, query: str, channel_ids: list[str] | None = None,
     ) -> list[Document]:
-        # Fan out the two PRIMARY arms (Qdrant + Neo4j) in parallel.
-        # ES is the fallback only — we don't pay its latency unless the
-        # primaries return nothing usable.
+        # Fan out ALL THREE arms (Qdrant + Neo4j + ES) in parallel —
+        # ES latency hides inside max(arms), and keyword hits complement
+        # vector + graph recall on exact-match questions.
         tasks: dict[str, Awaitable[list[Document]]] = {}
         if self.qdrant_retriever:
             tasks["qdrant"] = self.qdrant_retriever.retrieve(query, channel_ids)
         if self.neo4j_retriever:
             tasks["neo4j"] = self.neo4j_retriever.retrieve(query, channel_ids)
+        tasks["es"] = self.es_retriever.retrieve(query, channel_ids)
 
         if tasks:
             results = await asyncio.gather(
@@ -83,12 +90,8 @@ class SmartRetriever:
                 deduped = domain.dedupe_documents(all_docs)
                 return self._rerank(query, deduped)
 
-        # Primaries returned nothing — fall back to ES full-text.
-        try:
-            docs = await self.es_retriever.retrieve(query, channel_ids)
-            return self._rerank(query, docs)
-        except Exception:
-            return []
+        # Every arm empty or failed — caller rewrites and retries.
+        return []
 
     def _rerank(
         self, query: str, documents: list[Document],
