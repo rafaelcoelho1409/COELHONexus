@@ -1307,9 +1307,39 @@ async def rag_search_stream(
     )
 
 
+async def _raise_if_embedding_migration_needed() -> None:
+    """2026-09-15: shares the SAME check `api/v1/ycs/content/router.py`
+    uses before every Videos-tab dispatch. This endpoint (the Source
+    tab's "Continue to Qdrant" follow-up, `static/js/ycs/ingest.js`) and
+    `/pipeline` below (when `include_qdrant`) had NO gate at all before
+    this — either can write a video's vectors under a DIFFERENT model
+    than everything already in the active collection, exactly the
+    silent-corpus-fragmentation failure mode the gate exists to
+    prevent. See `domains.ycs.embedding_migration.check_migration_needed_now`
+    for the actual check."""
+    from domains.ycs.embedding_migration import check_migration_needed_now
+    mismatch = await check_migration_needed_now()
+    if mismatch is not None:
+        raise HTTPException(
+            status_code = 423,
+            detail = {
+                "error": "embedding_migration_required",
+                "message": (
+                    f"The configured embedding model changed from "
+                    f"{mismatch['from_model']!r} to {mismatch['to_model']!r} "
+                    f"since the last ingestion. Start a migration "
+                    f"(POST /api/v1/ycs/content/embedding-migration/start) "
+                    f"before ingesting more videos."
+                ),
+                **mismatch,
+            },
+        )
+
+
 @router.post("/ingest/qdrant")
 async def ingest_to_qdrant(payload: IngestRequest) -> dict:
     """Queue ES transcripts → Qdrant ingestion (Celery)."""
+    await _raise_if_embedding_migration_needed()
     from domains.ycs.qdrant_task.task import ingest_to_qdrant as ingest_task
     task = ingest_task.delay(
         payload.video_ids,
@@ -1351,6 +1381,8 @@ async def graph_stats(request: Request) -> dict:
 @router.post("/pipeline")
 async def full_pipeline(payload: PipelineRequest) -> dict:
     """Queue full Celery chain: extract → Qdrant → Neo4j → cache."""
+    if payload.include_qdrant:
+        await _raise_if_embedding_migration_needed()
     from domains.ycs.pipeline_task.task import full_channel_pipeline
     task = full_channel_pipeline.delay(
         payload.channel_id,

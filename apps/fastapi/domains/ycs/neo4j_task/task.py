@@ -258,10 +258,28 @@ def ingest_to_neo4j(
                 "phase": "metadata_graph",
                 "total": total_videos,
             })
-            video_metadata = [
-                {**metadata_map.get(vid, {}), "video_id": vid}
-                for vid in all_video_ids
-            ]
+            # 2026-09-15: dedupe to PARENT video ids before building the
+            # Video/Channel metadata graph — `all_video_ids` carries one
+            # entry PER PARTITION for a split video (correct for
+            # Document nodes, one per piece), but `build_video_metadata_graph`
+            # MERGEs on `video_id` verbatim, so passing partition ids
+            # through unchanged created one duplicate `Video` node per
+            # partition (`id: "xyz#p1"`, `"xyz#p2"`, …) instead of one
+            # canonical node for the parent — confirmed live on a
+            # 4-partition video. `metadata_map` already holds the
+            # correct parent-level metadata under EVERY partition key
+            # (`fetch_metadata_from_es` resolves partitions to their
+            # parent before querying ES) — just keep the first
+            # occurrence per parent and re-tag it with the parent id.
+            from domains.ycs.ingestion.domain import parent_video_id
+            _seen_parents: set[str] = set()
+            video_metadata = []
+            for vid in all_video_ids:
+                parent = parent_video_id(vid)
+                if parent in _seen_parents:
+                    continue
+                _seen_parents.add(parent)
+                video_metadata.append({**metadata_map.get(vid, {}), "video_id": parent})
             build_video_metadata_graph(neo4j_graph, video_metadata)
             # Cumulative progress adapter: segment-local callback restarts at 0/1; this keeps the bar advancing.
             completed_global: set[str] = set()
@@ -595,19 +613,40 @@ def ingest_to_neo4j(
                                     f"({finished}/{total}) — running entity "
                                     f"resolution once"
                                 )
-                                agg_merged = await resolve_entities(neo4j_graph)
-                                # entities_merged is a WHOLE-RUN number,
-                                # only known now — patched onto the
-                                # DISPLAYED status entry: parent_vid, not
-                                # vid — a partition's own id never gets
-                                # its own phase_status_key entry (its
-                                # outcome lives in the partition-group
-                                # hash until the group completes and
-                                # folds into one entry under the parent).
-                                await update_video_extra(
-                                    r, extract_id, "neo4j", parent_vid,
-                                    {"entities_merged": agg_merged},
+                                # 2026-09-15: `finished >= total` (just
+                                # above) already flips the poller-facing
+                                # state to SUCCESS/100% — but
+                                # `entities_merged` isn't known until
+                                # this whole-graph resolve pass finishes
+                                # (tens of seconds on a large graph).
+                                # `neo4j_resolving_key` tells
+                                # `get_phase_progress` to keep reporting
+                                # PROGRESS until it's actually written,
+                                # so the bar doesn't freeze at "0
+                                # merged". TTL is a backstop if this
+                                # process dies mid-resolution.
+                                from domains.ycs.pipeline_task.keys import (
+                                    neo4j_resolving_key,
                                 )
+                                await r.set(
+                                    neo4j_resolving_key(extract_id), "1", ex = 300,
+                                )
+                                try:
+                                    agg_merged = await resolve_entities(neo4j_graph)
+                                    # entities_merged is a WHOLE-RUN number,
+                                    # only known now — patched onto the
+                                    # DISPLAYED status entry: parent_vid, not
+                                    # vid — a partition's own id never gets
+                                    # its own phase_status_key entry (its
+                                    # outcome lives in the partition-group
+                                    # hash until the group completes and
+                                    # folds into one entry under the parent).
+                                    await update_video_extra(
+                                        r, extract_id, "neo4j", parent_vid,
+                                        {"entities_merged": agg_merged},
+                                    )
+                                finally:
+                                    await r.delete(neo4j_resolving_key(extract_id))
                             await maybe_finalize(r, extract_id)
                     finally:
                         await r.close()

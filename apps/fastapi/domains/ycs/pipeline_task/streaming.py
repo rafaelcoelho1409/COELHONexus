@@ -46,6 +46,8 @@ from .keys import (
     finalize_flag_key,
     partition_group_key,
     phase_finished_key,
+    phase_piece_finished_key,
+    phase_piece_total_key,
     phase_preview_key,
     phase_status_key,
     phase_total_key,
@@ -100,6 +102,27 @@ async def set_phase_total(
     raw_finished = await redis.get(phase_finished_key(extract_id, phase))
     finished = int(raw_finished) if raw_finished is not None else 0
     return finished, total
+
+
+async def set_phase_piece_total(
+    redis: redis_aio.Redis, extract_id: str, phase: str, total: int,
+) -> None:
+    """Companion to `set_phase_total` — the individual-PIECE count
+    (partitions + unsplit videos), not the video-level count. See
+    `keys.phase_piece_total_key`. Purely informational (the Neo4j
+    bar's "K/M pieces" display) — never read by `maybe_finalize` or
+    any other completion logic, so it carries no correctness weight;
+    a failed write just means the bar falls back to video-level
+    K/N until/unless the caller retries."""
+    try:
+        await redis.set(
+            phase_piece_total_key(extract_id, phase), total, ex = PIPELINE_STATE_TTL_S,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[ycs:pipeline:streaming] piece-total set failed for "
+            f"{phase}: {type(e).__name__}: {e}"
+        )
 
 
 async def mark_video_done(
@@ -173,7 +196,24 @@ async def mark_video_or_partition_done(
     call once the group completes, or `(None, None)` while siblings
     are still pending — callers MUST treat `(None, None)` as "not this
     video's turn to be reported yet," not as an error, and must not
-    call `maybe_finalize`/drain logic keyed off it in that case."""
+    call `maybe_finalize`/drain logic keyed off it in that case.
+
+    2026-09-15: also bumps `phase_piece_finished_key` — a PIECE-level
+    counter (every call counts, whether or not it's the one completing
+    a partition group), paired with `phase_piece_total_key`. Purely
+    additive display data for the Neo4j bar's "K/M pieces" — never
+    gates finalize/completion logic, unlike the video-level counter
+    below."""
+    try:
+        await redis.incr(phase_piece_finished_key(extract_id, phase))
+        await redis.expire(
+            phase_piece_finished_key(extract_id, phase), PIPELINE_STATE_TTL_S,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[ycs:pipeline:streaming] piece-finished incr failed for "
+            f"{phase}/{video_id}: {type(e).__name__}: {e}"
+        )
     if not parent_video_id or parent_video_id == video_id:
         return await mark_video_done(redis, extract_id, phase, video_id, success, extra)
 
@@ -346,6 +386,13 @@ async def get_phase_progress(
     total = int(raw_total) if raw_total is not None else None
     raw_finished = await redis.get(phase_finished_key(extract_id, phase))
     finished = int(raw_finished) if raw_finished is not None else 0
+    # 2026-09-15: PIECE-level counters (partitions counted individually,
+    # unlike `total`/`finished` above which count a split video as 1) —
+    # purely for display, see `keys.phase_piece_total_key`.
+    raw_piece_total = await redis.get(phase_piece_total_key(extract_id, phase))
+    piece_total = int(raw_piece_total) if raw_piece_total is not None else None
+    raw_piece_finished = await redis.get(phase_piece_finished_key(extract_id, phase))
+    piece_finished = int(raw_piece_finished) if raw_piece_finished is not None else 0
     try:
         raw_status = await redis.hgetall(phase_status_key(extract_id, phase))
     except Exception:
@@ -402,6 +449,20 @@ async def get_phase_progress(
                 state = "PROGRESS"
         except Exception:
             pass
+    if phase == "neo4j" and state == "SUCCESS":
+        # 2026-09-15: mirrors the qdrant-draining downgrade above —
+        # `finished >= total` flips the instant the last video/
+        # partition-group's `mark_video_done` returns, but
+        # `entities_merged` is only written AFTER the whole-graph
+        # `resolve_entities` pass finishes (tens of seconds later on a
+        # large graph). Without this, a poller that stops on SUCCESS
+        # freezes the displayed merge count at 0 forever.
+        try:
+            from .keys import neo4j_resolving_key
+            if await redis.get(neo4j_resolving_key(extract_id)):
+                state = "PROGRESS"
+        except Exception:
+            pass
     if state == "PROGRESS":
         # 2026-09-14: union the display-only in-chunk preview (written
         # by chunked phase tasks as videos complete INSIDE the chunk)
@@ -432,11 +493,26 @@ async def get_phase_progress(
             "total":         total,
             "completed_ids": completed_ids,
             "failed_ids":    failed_ids,
+            # 2026-09-15: PIECE-level (partitions counted individually)
+            # counterpart to current/total above — only present once
+            # `extract_videos` has corrected the piece total (see
+            # `keys.phase_piece_total_key`). The Neo4j bar prefers this
+            # pair when present so a split video reads as "5/5 pieces"
+            # instead of "2/2 videos", which understated how much
+            # per-piece LLM extraction work the phase actually did.
+            **({
+                "piece_current": min(piece_finished, piece_total),
+                "piece_total":   piece_total,
+            } if piece_total is not None else {}),
         },
         "result": {
             "completed_ids":   completed_ids,
             "failed_ids":      failed_ids,
             "total_transcripts": len(completed_ids),
             **numeric_totals,
+            **({
+                "piece_current": min(piece_finished, piece_total),
+                "piece_total":   piece_total,
+            } if piece_total is not None else {}),
         } if state == "SUCCESS" else None,
     }

@@ -20,7 +20,13 @@ async function api(path, opts = {}) {
     let data = null;
     try { data = await r.json(); } catch (_) { /* */ }
     if (!r.ok) {
-        const msg = (data && (data.detail ?? data.message)) || r.statusText;
+        // `detail` is a plain string for most errors, but the embedding-
+        // migration gate (423) sends a structured object — unwrap its
+        // own `.message` so the user sees the real reason instead of a
+        // generic "request failed".
+        const detail = data && data.detail;
+        const msg = (detail && typeof detail === "object" ? detail.message : detail)
+            ?? data?.message ?? r.statusText;
         const err = new Error(typeof msg === "string" ? msg : "request failed");
         err.status = r.status;
         throw err;

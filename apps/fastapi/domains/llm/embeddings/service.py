@@ -93,6 +93,16 @@ def _apply_endpoint(*, force: bool = False) -> bool:
     return True
 
 
+def get_configured_model() -> str:
+    """The currently-configured pin (`"{provider}/{model}"`, or literally
+    `"auto"`) — re-resolves the Settings store first (same TTL as every
+    other read here) so a just-saved Settings-page change is picked up
+    without waiting for the next embed call. Used by
+    `domains.ycs.embedding_migration`'s gate check."""
+    _apply_endpoint()
+    return COELHO_EMBEDDING_MODEL
+
+
 _apply_endpoint(force=True)
 
 
@@ -193,16 +203,88 @@ async def embed_probe_async(
     return vector, meta
 
 
-async def embed_texts_async(texts: list[str], *, languages: list[str] | None = None) -> list[list[float]]:
-    """Real batch embeddings call for actual callers (YCS, once rewired) —
-    not just the Settings-page probe. Raises on failure; callers decide
-    how to react."""
+async def embed_texts_async(
+    texts: list[str], *, languages: list[str] | None = None,
+) -> tuple[list[list[float]], str]:
+    """Real batch embeddings call for actual callers (YCS). Raises on
+    failure; callers decide how to react.
+
+    2026-09-15: now returns `(vectors, model)` — was vectors-only, which
+    silently discarded `resp.model` (the model that ACTUALLY served this
+    call) on every single real embed, even though the rotator has always
+    put it in the response. Callers that persist vectors (YCS's Qdrant
+    payloads) need this to detect a model change, not just the one-off
+    Settings-page probe (`embed_probe_async`, unchanged below)."""
     if not texts:
-        return []
+        return [], COELHO_EMBEDDING_MODEL
     client = await _get_async_openai()
     kwargs: dict = {"model": COELHO_EMBEDDING_MODEL, "input": texts}
     if languages:
         kwargs["extra_body"] = {"metadata": {"languages": languages}}
     resp = await client.embeddings.create(**kwargs)
     data = sorted(resp.data, key=lambda d: d.index)
-    return [list(d.embedding) for d in data]
+    model = getattr(resp, "model", None) or COELHO_EMBEDDING_MODEL
+    return [list(d.embedding) for d in data], model
+
+
+# ---------------------------------------------------------------------------
+# Embedding Curator advisory surface (COELHO LLM Rotator only) — the
+# rotator's `/v1/embeddings` no longer auto-follows this surface (2026-09-15,
+# see that endpoint's docstring); it's now purely informational, for a human
+# (Settings page "browse models" button) or the embedding-migration gate to
+# decide WHEN to move the pin. Best-effort: any other OpenAI-compatible
+# endpoint the user points embeddings at won't have these routes at all —
+# every function here returns None rather than raising on failure.
+# ---------------------------------------------------------------------------
+
+_ROTATOR_OPENAI_SUFFIX = "/api/v1/llm/openai/v1"
+
+
+def _rotator_origin() -> str | None:
+    """Best-guess rotator origin (scheme+host+port) derived from the
+    configured embedding base_url. Only valid when that url actually
+    points at COELHO LLM Rotator (the normal case, but not guaranteed —
+    the Embedding endpoint card accepts any OpenAI-compatible service)."""
+    url = COELHO_EMBEDDING_URL
+    if url.endswith(_ROTATOR_OPENAI_SUFFIX):
+        return url[: -len(_ROTATOR_OPENAI_SUFFIX)]
+    return None
+
+
+async def fetch_rotator_recommendation(
+    *, languages: list[str] | None = None, timeout_s: float = 10.0,
+) -> dict | None:
+    """`GET /api/v1/embeddings/recommend` — the shared current pick +
+    full ranking. None if the configured endpoint isn't the rotator, or
+    the call fails for any reason (never raises — this is advisory)."""
+    origin = _rotator_origin()
+    if origin is None:
+        return None
+    try:
+        import httpx
+        params = {"languages": ",".join(languages)} if languages else {}
+        async with httpx.AsyncClient(timeout = timeout_s) as client:
+            resp = await client.get(f"{origin}/api/v1/embeddings/recommend", params = params)
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as e:
+        logger.debug(f"[embedding-adapter] recommend fetch failed: {e}")
+        return None
+
+
+async def fetch_rotator_candidates(*, timeout_s: float = 10.0) -> list[dict] | None:
+    """`GET /api/v1/embeddings/candidates` — live discovery snapshot of
+    every embedding-looking model the rotator currently sees across
+    connected providers. None on failure (see `fetch_rotator_recommendation`)."""
+    origin = _rotator_origin()
+    if origin is None:
+        return None
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout = timeout_s) as client:
+            resp = await client.get(f"{origin}/api/v1/embeddings/candidates")
+            resp.raise_for_status()
+            return (resp.json() or {}).get("candidates") or []
+    except Exception as e:
+        logger.debug(f"[embedding-adapter] candidates fetch failed: {e}")
+        return None

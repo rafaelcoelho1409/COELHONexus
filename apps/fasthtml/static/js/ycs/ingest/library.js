@@ -98,13 +98,31 @@ const _FACET_API_KEY = {
 
 function renderFacets(facets) {
     /* Facets — each group is exclusive (radio-like via checkboxes).
-     * Click toggles; second click on the same chip clears that facet. */
+     * Click toggles; second click on the same chip clears that facet.
+     *
+     * 2026-09-15: every group's list now leads with an explicit "All"
+     * row (sentinel `data-key=""`) — previously "All" only existed as
+     * the trigger's idle label text, with no way to pick it back
+     * BACK once a specific facet was selected short of un-checking
+     * that same row (not a discoverable interaction) or the separate
+     * "Clear" button (resets all 3 groups at once, too broad if only
+     * one should reset). */
     for (const group of ["status", "channels", "languages"]) {
         const apiKey = _FACET_API_KEY[group];
         const items = facets[apiKey] || facets[group] || [];
         const container = document.getElementById(`ycs-lib-facet-${group}`);
         if (!container) continue;
         const frag = document.createDocumentFragment();
+        const allRow = document.createElement("label");
+        allRow.className = "ycs-lib-facet-row ycs-lib-facet-row-all";
+        allRow.innerHTML = `
+            <input type="checkbox"
+                   class="ycs-lib-facet-check"
+                   data-group="${group}"
+                   data-key="">
+            <span class="ycs-lib-facet-label">All</span>
+        `;
+        frag.appendChild(allRow);
         for (const f of items) {
             const key = f.key ?? f.channel_id ?? "";
             const label = f.label ?? f.channel ?? key;
@@ -139,7 +157,9 @@ function syncFacetChecks() {
         const container = document.getElementById(`ycs-lib-facet-${group}`);
         if (!container) continue;
         container.querySelectorAll(".ycs-lib-facet-check").forEach((cb) => {
-            cb.checked = (cb.dataset.key === value);
+            // Sentinel key "" (the "All" row) reads as checked whenever
+            // no real facet is selected (`value` null/empty).
+            cb.checked = (cb.dataset.key === (value || ""));
         });
     }
     syncFacetTriggerLabels();
@@ -327,7 +347,10 @@ function bindFacetClicks() {
         cb.closest(".ycs-lib-facet-list")
           .querySelectorAll(".ycs-lib-facet-check")
           .forEach((other) => { if (other !== cb) other.checked = false; });
-        const value = cb.checked ? key : null;
+        // Empty key = the "All" row — always resolves to null,
+        // regardless of its own checked state (clicking it either
+        // way means "no filter for this group").
+        const value = (cb.checked && key) ? key : null;
         if (group === "status")    STATE.status  = value;
         if (group === "channels")  STATE.channel = value;
         if (group === "languages") STATE.lang    = value;

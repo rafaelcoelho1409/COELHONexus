@@ -246,3 +246,92 @@
 .set-ep-status { font-size: 0.83rem; color: var(--text-muted); }
 .set-ep-status-ok { color: var(--ok, #2e7d32); }
 .set-ep-status-err { color: var(--err, #c62828); }
+
+/* Embedding card's Model field + "Browse models" trigger button. */
+.set-emb-model-row { display: flex; align-items: center; gap: 8px; }
+.set-emb-model-row .set-ep-input { flex: 1; }
+
+/* Browse-models popover — simple anchored card, same visual language as
+   the rest of the Settings cards (border/radius/surface), hidden by
+   default via the .visible toggle (established pattern, e.g. YCS's
+   LLM-usage drawer). */
+.set-emb-browse-popover {
+  display: none;
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  max-height: 280px;
+  overflow-y: auto;
+}
+.set-emb-browse-popover.visible { display: block; }
+.set-emb-browse-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--surface, #fff);
+}
+.set-emb-browse-title { font-size: 0.85rem; font-weight: 600; color: var(--text-muted); }
+.set-emb-browse-close {
+  border: none;
+  background: transparent;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 2px 6px;
+}
+.set-emb-browse-close:hover { color: var(--text); }
+.set-emb-browse-list { display: flex; flex-direction: column; padding: 4px; }
+.set-emb-browse-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 6px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  font: inherit;
+}
+.set-emb-browse-row:hover { background: rgba(0, 0, 0, 0.04); }
+.set-emb-browse-row-current { background: var(--ingested-bg); }
+.set-emb-browse-row-id {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.8rem;
+  color: var(--text);
+  word-break: break-all;
+}
+.set-emb-browse-row-meta { font-size: 0.72rem; color: var(--text-muted); }
+.set-emb-browse-empty { padding: 12px; font-size: 0.83rem; color: var(--text-muted); }
+
+/* Embedding-migration status — read-only collection line + banner/button,
+   shown only when a migration is needed or in flight. */
+.set-emb-migration { margin-top: 10px; }
+.set-emb-migration-collection {
+  font-size: 0.76rem;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--text-muted);
+}
+.set-emb-migration-banner { display: none; }
+.set-emb-migration-banner-visible {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--notice-border, var(--border));
+  background: var(--notice-bg);
+  color: var(--notice-text);
+  font-size: 0.83rem;
+}
+.set-emb-migration-text { flex: 1; }
+.set-emb-migration-progress { font-size: 0.78rem; color: var(--text-muted); margin-top: 4px; }

@@ -199,6 +199,98 @@ def _status_for(has_transcript: bool, has_neo4j_doc: bool) -> str:
     return "failed"
 
 
+async def _compute_video_statuses(
+    es: AsyncElasticsearch, neo4j_graph: Any | None, video_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Per-video `{status, transcript_langs, transcript_length,
+    entity_count}` for `video_ids` — partition-aware (a split video's
+    parts carry `video_id="XYZ#p{n}"` + `parent_video_id="XYZ"`;
+    presence requires EVERY expected part, not just one).
+
+    2026-09-15: factored out of `list_videos` so `list_videos` (one
+    page) and `videos_facets` (whole corpus) compute status through the
+    exact same logic — they'd silently drift apart otherwise, which is
+    exactly how the facets' "done-only" scoping went stale relative to
+    what the listing actually showed."""
+    if not video_ids:
+        return {}
+    transcript_meta: dict[str, dict[str, Any]] = {}
+    try:
+        t_response = await es.search(
+            index = INDEX_TRANSCRIPTIONS,
+            size  = min(10000, max(200, len(video_ids) * 10)),
+            query = {"bool": {"should": [
+                {"terms": {"video_id": video_ids}},
+                # `.keyword`, not the bare field — `parent_video_id` is
+                # mapped `text` (analyzed) with a `.keyword` sub-field;
+                # a `terms` query against the bare name tokenizes and
+                # silently matches nothing. This clause has been dead
+                # since it was first added (2026-09-14) until fixed
+                # live (2026-09-15) — every split video's status was
+                # computed as if it had no transcript at all, since its
+                # transcript docs (keyed by partition id) were never
+                # found when this ran with the PARENT id.
+                {"terms": {"parent_video_id.keyword": video_ids}},
+            ]}},
+            _source = ["video_id", "parent_video_id", "part_total", "lang", "content"],
+        )
+        grouped: dict[str, list[dict]] = {}
+        for h in t_response.get("hits", {}).get("hits", []):
+            s = h.get("_source") or {}
+            eff_id = s.get("parent_video_id") or s.get("video_id")
+            if eff_id:
+                grouped.setdefault(eff_id, []).append(s)
+        for vid, docs in grouped.items():
+            expected = next(
+                (d.get("part_total") for d in docs if d.get("part_total")), None,
+            ) or 1
+            langs = sorted({d.get("lang", "unknown") for d in docs})
+            content_len = sum(len(d.get("content") or "") for d in docs)
+            transcript_meta[vid] = {
+                "has_transcript":    len(docs) >= expected,
+                "transcript_langs":  langs,
+                "transcript_length": content_len,
+            }
+    except Exception:
+        pass  # best-effort; every video degrades to has_transcript=False
+
+    neo4j_doc_ids: set[str] = set()
+    entity_counts: dict[str, int] = {}
+    if neo4j_graph is not None:
+        try:
+            rows = neo4j_graph.query(
+                f"MATCH (d:Document:{SOURCE_LABEL}) "
+                "WHERE d.video_id IN $vids OR d.parent_video_id IN $vids "
+                f"OPTIONAL MATCH (d)-[:MENTIONS]-(e:__Entity__:{SOURCE_LABEL}) "
+                "WITH COALESCE(d.parent_video_id, d.video_id) AS vid, "
+                "     d.part_total AS part_total, "
+                "     count(DISTINCT d) AS n_docs, "
+                "     count(DISTINCT e) AS n_entities "
+                "RETURN vid, part_total, n_docs, n_entities",
+                params = {"vids": video_ids},
+            )
+            for r in rows:
+                vid = r["vid"]
+                expected = r.get("part_total") or 1
+                if int(r["n_docs"] or 0) >= expected:
+                    neo4j_doc_ids.add(vid)
+                entity_counts[vid] = entity_counts.get(vid, 0) + int(r["n_entities"] or 0)
+        except Exception:
+            pass
+
+    out: dict[str, dict[str, Any]] = {}
+    for vid in video_ids:
+        tmeta = transcript_meta.get(vid, {})
+        has_transcript = bool(tmeta.get("has_transcript"))
+        out[vid] = {
+            "status":            _status_for(has_transcript, vid in neo4j_doc_ids),
+            "transcript_langs":  tmeta.get("transcript_langs", []),
+            "transcript_length": tmeta.get("transcript_length", 0),
+            "entity_count":      entity_counts.get(vid, 0),
+        }
+    return out
+
+
 @router.get("/videos")
 async def list_videos(
     request: Request,
@@ -248,120 +340,30 @@ async def list_videos(
     total_from_es = response.get("hits", {}).get("total", {}).get("value", 0)
     video_ids = [h["_id"] for h in hits]
 
-    # Only "done" rows appear in the listing; total_from_es includes debris ("partial"/"failed"), so it overstates what the user can see.
-    n_processed_total = 0
-    g = getattr(request.app.state, "neo4j_graph", None)
-    if g is not None:
-        try:
-            # COALESCE so a split video's N partitions count once, not N.
-            rows = g.query(
-                f"MATCH (d:Document:{SOURCE_LABEL}) WHERE d.video_id IS NOT NULL "
-                "RETURN count(DISTINCT COALESCE(d.parent_video_id, d.video_id)) AS n",
-            )
-            n_processed_total = int(rows[0]["n"]) if rows else 0
-        except Exception:
-            # Neo4j hiccup → fall back to total_from_es so the count
-            # is non-zero. The row filter still hides non-done rows.
-            n_processed_total = total_from_es
-    else:
-        n_processed_total = total_from_es
-
-    transcript_meta: dict[str, dict[str, Any]] = {}
-    if video_ids:
-        try:
-            # 2026-09-14: long-video partitioning — a split video's
-            # transcript docs carry `video_id="XYZ#p{n}"`, never the
-            # original id, so the OLD `terms: {video_id: video_ids}` +
-            # per-video-id aggregation would find nothing for it (every
-            # split video looked "no transcript" forever, regardless of
-            # how many partitions actually succeeded). Fetches raw hits
-            # matched by EITHER `video_id` (unsplit videos) OR
-            # `parent_video_id` (partitions) and groups client-side —
-            # ES terms aggs can't easily bucket by "field A if present
-            # else field B" without painless scripting, and this page
-            # is already bounded (`video_ids` <= `limit`, itself capped
-            # at 500), so the extra round-trip cost is negligible.
-            # `has_transcript` requires EVERY expected partition to be
-            # present, not just one — a video split into 5 with only 3
-            # landed must still show as incomplete.
-            t_response = await es.search(
-                index = INDEX_TRANSCRIPTIONS,
-                size  = min(10000, max(200, len(video_ids) * 10)),
-                query = {"bool": {"should": [
-                    {"terms": {"video_id": video_ids}},
-                    {"terms": {"parent_video_id": video_ids}},
-                ]}},
-                _source = [
-                    "video_id", "parent_video_id", "part_total",
-                    "lang", "content",
-                ],
-            )
-            grouped: dict[str, list[dict]] = {}
-            for h in t_response.get("hits", {}).get("hits", []):
-                s = h.get("_source") or {}
-                eff_id = s.get("parent_video_id") or s.get("video_id")
-                if eff_id:
-                    grouped.setdefault(eff_id, []).append(s)
-            for vid, docs in grouped.items():
-                expected = next(
-                    (d.get("part_total") for d in docs if d.get("part_total")),
-                    None,
-                ) or 1
-                langs = sorted({d.get("lang", "unknown") for d in docs})
-                content_len = sum(len(d.get("content") or "") for d in docs)
-                transcript_meta[vid] = {
-                    "has_transcript":    len(docs) >= expected,
-                    "transcript_langs":  langs,
-                    "transcript_length": content_len,
-                }
-        except Exception:
-            # Best-effort; UI degrades to "transcript=False" everywhere.
-            pass
-
-    neo4j_doc_ids: set[str] = set()
-    entity_counts: dict[str, int] = {}
-    g = getattr(request.app.state, "neo4j_graph", None)
-    if g is not None and video_ids:
-        try:
-            # 2026-09-14: same partitioning fix as the ES transcript
-            # check above — a split video's Document nodes carry
-            # `video_id="XYZ#p{n}"` and `parent_video_id="XYZ"`; group
-            # by COALESCE so the row lands under the original id, and
-            # require every expected partition's Document to exist
-            # (`n_docs >= part_total`) before counting it as done.
-            rows = g.query(
-                f"MATCH (d:Document:{SOURCE_LABEL}) "
-                "WHERE d.video_id IN $vids OR d.parent_video_id IN $vids "
-                f"OPTIONAL MATCH (d)-[:MENTIONS]-(e:__Entity__:{SOURCE_LABEL}) "
-                "WITH COALESCE(d.parent_video_id, d.video_id) AS vid, "
-                "     d.part_total AS part_total, "
-                "     count(DISTINCT d) AS n_docs, "
-                "     count(DISTINCT e) AS n_entities "
-                "RETURN vid, part_total, n_docs, n_entities",
-                params = {"vids": video_ids},
-            )
-            for r in rows:
-                vid = r["vid"]
-                expected = r.get("part_total") or 1
-                if int(r["n_docs"] or 0) >= expected:
-                    neo4j_doc_ids.add(vid)
-                entity_counts[vid] = entity_counts.get(vid, 0) + int(r["n_entities"] or 0)
-        except Exception:
-            pass
+    # 2026-09-15: every indexed video is now listed — a video with a
+    # transcript but no Neo4j graph yet ("partial") is still fully
+    # queryable via Qdrant/RAG, it just hasn't had entity extraction
+    # run. Hard-dropping it here (the OLD behavior) meant ANY gap in
+    # Neo4j — a wipe, Neo4j simply not having run yet, or a user who
+    # never enabled graph extraction for a batch — made those videos
+    # vanish from the Library entirely, even with every filter left on
+    # "All". `status` is still a real, explicit filter (see below); it
+    # was never meant to be an invisible always-on one.
+    video_meta = await _compute_video_statuses(
+        es, getattr(request.app.state, "neo4j_graph", None), video_ids,
+    )
 
     items: list[dict[str, Any]] = []
     for h in hits:
         src = h["_source"]
         vid = h["_id"]
-        tmeta = transcript_meta.get(vid, {})
-        has_transcript = bool(tmeta.get("has_transcript"))
-        has_neo4j_doc  = vid in neo4j_doc_ids
-        row_status = _status_for(has_transcript, has_neo4j_doc)
-        row_langs  = tmeta.get("transcript_langs", [])
+        m = video_meta.get(vid) or {
+            "status": "failed", "transcript_langs": [],
+            "transcript_length": 0, "entity_count": 0,
+        }
+        row_status = m["status"]
+        row_langs  = m["transcript_langs"]
 
-        # Drop non-"done": "failed" = metadata-only orphan; "partial" = no Neo4j (Phase 3 incomplete). Both are debris, not queryable.
-        if row_status != "done":
-            continue
         if status and row_status != status:
             continue
         if lang and lang not in row_langs:
@@ -384,14 +386,16 @@ async def list_videos(
             "playlist_title":    src.get("playlist_title"),
             "status":            row_status,
             "transcript_langs":  row_langs,
-            "transcript_length": tmeta.get("transcript_length", 0),
-            "entity_count":      entity_counts.get(vid, 0),
+            "transcript_length": m["transcript_length"],
+            "entity_count":      m["entity_count"],
         })
 
     return {
         "items":        items,
-        # `total` = visible processed videos; `total_raw` = ES cardinality (includes debris); diff = orphan count.
-        "total":        n_processed_total,
+        # `total` = ES cardinality for this query (every status included
+        # now); `total_raw` kept identical for backward-compat with any
+        # caller still reading it.
+        "total":        total_from_es,
         "total_raw":    total_from_es,
         "returned":     len(items),
         "offset":       offset,
@@ -401,8 +405,20 @@ async def list_videos(
 
 @router.get("/videos/facets")
 async def videos_facets(request: Request) -> dict:
-    """Facet counts scoped to done-only videos so every chip corresponds to exactly N visible rows.
-    Without scoping, channels with only partial/failed videos appear as filter chips that yield 0 rows."""
+    """Facet counts across EVERY indexed video, not just Neo4j-"done"
+    ones.
+
+    2026-09-15: previously scoped to done-only video ids — if a video's
+    Neo4j processing was behind (or wiped, or never run), its channel
+    and language silently vanished from every filter option, and the
+    Status filter was permanently stuck offering only "Done" (a fixed
+    one-entry list, not a real facet) even though the frontend already
+    has CSS for all 3 status pills. Channels/languages now aggregate
+    over the whole metadata/transcript indices directly — no id-scoping
+    needed since nothing is hidden by status anymore (see
+    `list_videos`). Statuses is a REAL 3-way breakdown, computed via the
+    same `_compute_video_statuses` `list_videos` uses, so the two can
+    never drift apart again."""
     es = _es()
     out: dict[str, list[dict[str, Any]]] = {
         "channels":  [],
@@ -410,41 +426,10 @@ async def videos_facets(request: Request) -> dict:
         "statuses":  [],
     }
 
-    # Empty done_ids → empty facets, which is honest (no ready videos → nothing to filter by).
-    done_ids: list[str] = []
-    g = getattr(request.app.state, "neo4j_graph", None)
-    if g is not None:
-        try:
-            # Grouped by COALESCE + gated on `n_docs >= part_total` —
-            # same reasoning as `list_videos` above: a split video's
-            # Document nodes carry the original id only via
-            # `parent_video_id`, and it isn't "done" until every
-            # expected partition landed, not just the first one.
-            rows = g.query(
-                f"MATCH (d:Document:{SOURCE_LABEL}) WHERE d.video_id IS NOT NULL "
-                "WITH COALESCE(d.parent_video_id, d.video_id) AS vid, "
-                "     d.part_total AS part_total, count(DISTINCT d) AS n_docs "
-                "WHERE n_docs >= COALESCE(part_total, 1) "
-                "RETURN collect(DISTINCT vid) AS ids",
-            )
-            if rows and rows[0].get("ids"):
-                done_ids = [str(x) for x in rows[0]["ids"] if x]
-        except Exception:
-            pass
-
-    if not done_ids:
-        # No ready videos → empty facets + zero Done chip. Skip the
-        # ES aggs to avoid issuing a `terms:{values:[]}` filter (some
-        # ES versions error on empty terms).
-        out["statuses"] = [{"key": "done", "label": "Done", "count": 0}]
-        return out
-
-    # ES `_id` is the video_id (set at index time).
     try:
         c_resp = await es.search(
             index = INDEX_METADATA,
             size  = 0,
-            query = {"ids": {"values": done_ids}},
             aggs  = {
                 "by_channel": {
                     "terms": {"field": "channel_id", "size": 1000},
@@ -486,7 +471,6 @@ async def videos_facets(request: Request) -> dict:
         t_resp = await es.search(
             index = INDEX_TRANSCRIPTIONS,
             size  = 0,
-            query = {"terms": {"video_id": done_ids}},
             aggs  = {
                 "by_lang": {"terms": {"field": "lang", "size": 50}},
             },
@@ -500,10 +484,27 @@ async def videos_facets(request: Request) -> dict:
     except Exception:
         pass
 
-    # `partial`/`failed` chips omitted — list_videos hides those rows, so filtering for them yields nothing.
-    out["statuses"] = [
-        {"key": "done", "label": "Done", "count": len(done_ids)},
-    ]
+    try:
+        # Bounded like `list_videos`'s own transcript lookup — fine at
+        # this scale (10k id cap); a corpus past that needs a real
+        # scroll, not a bigger constant.
+        id_resp = await es.search(
+            index = INDEX_METADATA, size = 10000, _source = False,
+        )
+        all_ids = [h["_id"] for h in id_resp.get("hits", {}).get("hits", [])]
+        video_meta = await _compute_video_statuses(
+            es, getattr(request.app.state, "neo4j_graph", None), all_ids,
+        )
+        counts = {"done": 0, "partial": 0, "failed": 0}
+        for m in video_meta.values():
+            counts[m["status"]] = counts.get(m["status"], 0) + 1
+        labels = {"done": "Done", "partial": "Partial", "failed": "Failed"}
+        out["statuses"] = [
+            {"key": k, "label": labels[k], "count": v}
+            for k, v in counts.items() if v > 0
+        ]
+    except Exception:
+        pass
 
     return out
 

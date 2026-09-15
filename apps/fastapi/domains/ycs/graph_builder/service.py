@@ -1133,8 +1133,13 @@ def delete_documents_for_videos(
     affecting any video still present.
 
     Scoped deletes:
-      - `Document` nodes whose `video_id` is in the list (DETACH DELETE
-        drops their MENTIONS edges to entities cleanly).
+      - `Document` nodes whose `video_id` OR `parent_video_id` is in the
+        list (DETACH DELETE drops their MENTIONS edges to entities
+        cleanly). 2026-09-15: added the `parent_video_id` half — a split
+        video's Document nodes carry `video_id="XYZ#p{n}"`, never the
+        parent id, so deleting "XYZ" alone previously left every
+        partition's Document (and the entities it uniquely mentioned)
+        behind forever.
       - `Video` metadata nodes whose `id` is in the list.
       - `__Entity__` nodes that were mentioned by the deleted Documents
         AND have ZERO remaining MENTIONS edges from any other Document.
@@ -1162,7 +1167,7 @@ def delete_documents_for_videos(
     try:
         cand = neo4j_graph.query(
             f"MATCH (d:Document:{SOURCE_LABEL})-[:MENTIONS]->(e:__Entity__:{SOURCE_LABEL}) "
-            "WHERE d.video_id IN $vids "
+            "WHERE d.video_id IN $vids OR d.parent_video_id IN $vids "
             "RETURN collect(DISTINCT elementId(e)) AS ids",
             params = {"vids": list(video_ids)},
         )
@@ -1175,7 +1180,8 @@ def delete_documents_for_videos(
 
     try:
         doc_result = neo4j_graph.query(
-            f"MATCH (d:Document:{SOURCE_LABEL}) WHERE d.video_id IN $vids "
+            f"MATCH (d:Document:{SOURCE_LABEL}) "
+            "WHERE d.video_id IN $vids OR d.parent_video_id IN $vids "
             "WITH d, count(d) AS _ "
             "DETACH DELETE d "
             "RETURN count(*) AS deleted",

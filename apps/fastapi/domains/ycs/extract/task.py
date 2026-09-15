@@ -148,6 +148,15 @@ async def _dispatch_streaming_totals(
     })
     redis = build_redis_client()
     try:
+        # 2026-09-15: PIECE-level total (partitions counted
+        # individually) for the Neo4j bar's "K/M pieces" display —
+        # `dispatched_ids` itself, undeduped, is exactly that count.
+        # Neo4j-only per scope (Qdrant's bar is unchanged); see
+        # `pipeline_task.keys.phase_piece_total_key`.
+        from domains.ycs.pipeline_task.streaming import set_phase_piece_total
+        await set_phase_piece_total(
+            redis, extract_id, "neo4j", len(dispatched_ids or []),
+        )
         neo4j_finished, neo4j_total = await set_phase_total(
             redis, extract_id, "neo4j", dispatched_count,
         )

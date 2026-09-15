@@ -10,6 +10,7 @@ from .params import (
 from .service import (
     delete_points_for_videos,
     ensure_collection,
+    expand_with_partition_ids,
     fetch_metadata_from_es,
     fetch_transcripts_from_es,
     ingest_to_qdrant,
@@ -21,6 +22,7 @@ __all__ = [
     "SCROLL_BATCH_SIZE",
     "delete_points_for_videos",
     "ensure_collection",
+    "expand_with_partition_ids",
     "fetch_metadata_from_es",
     "fetch_transcripts_from_es",
     "ingest_to_qdrant",

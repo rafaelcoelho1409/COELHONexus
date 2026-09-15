@@ -66,7 +66,14 @@ async function api(path, opts = {}) {
     let data = null;
     try { data = await r.json(); } catch (_) { /* */ }
     if (!r.ok) {
-        const msg = (data && (data.detail ?? data.message)) || r.statusText;
+        // `detail` is a plain string for most errors, but the embedding-
+        // migration gate (423 — see `content/router.py::
+        // _raise_if_embedding_migration_needed`) sends a structured
+        // object — unwrap its own `.message` so the user sees the real
+        // reason instead of a generic "request failed".
+        const detail = data && data.detail;
+        const msg = (detail && typeof detail === "object" ? detail.message : detail)
+            ?? data?.message ?? r.statusText;
         const err = new Error(typeof msg === "string" ? msg : "request failed");
         err.status = r.status;
         throw err;
@@ -471,10 +478,22 @@ function _streamDone(meta) {
     return 0;
 }
 
-function _streamPhasePct(state, meta) {
+// 2026-09-15: `prefix` lets Neo4j prefer PIECE-level counts
+// (`piece_current`/`piece_total` — partitions counted individually,
+// set by `pipeline_task.streaming.get_phase_progress`) over the
+// VIDEO-level `current`/`total` Qdrant still uses. A video split into
+// N partitions is 1 unit of "current/total" but N units of LLM
+// extraction work — piece counts are what the Neo4j bar's fill/label
+// should track; falls back to video counts when piece data isn't set
+// yet (e.g. right at run start, before `extract_videos` corrects the
+// totals) so the bar never shows nothing.
+function _streamPhasePct(prefix, state, meta) {
     if (state === "SUCCESS") return 100;
     if (state === "FAILURE" || state === "ERROR") return 100;
     const m = meta || {};
+    if (prefix === "neo4j" && m.piece_total && m.piece_current != null) {
+        return Math.max(2, Math.min(100, (m.piece_current / m.piece_total) * 100));
+    }
     if (m.total && m.current != null) {
         return Math.max(2, Math.min(100, (m.current / m.total) * 100));
     }
@@ -482,7 +501,7 @@ function _streamPhasePct(state, meta) {
     return 0;
 }
 
-function _streamPhaseLabel(state, meta) {
+function _streamPhaseLabel(prefix, state, meta) {
     if (state === "SUCCESS") {
         const failed = _streamFailed(meta);
         if (failed > 0) {
@@ -494,6 +513,13 @@ function _streamPhaseLabel(state, meta) {
     if (state === "FAILURE" || state === "ERROR") return "Failed";
     if (state === "PENDING") return "Queued";
     const m = meta || {};
+    // 2026-09-15: pieces (partitions counted individually), not videos
+    // — see `_streamPhasePct`'s comment. A run with 2 videos where one
+    // is a 4-partition long video reads "running · 5/5 pieces" instead
+    // of the misleading "running · 2/2" a video-only count gave.
+    if (prefix === "neo4j" && m.piece_total && m.piece_current != null) {
+        return `running · ${m.piece_current}/${m.piece_total} pieces`;
+    }
     if (m.current != null && m.total) {
         return `running · ${m.current}/${m.total}`;
     }
@@ -952,7 +978,7 @@ async function trackPipeline({ extract, qdrant, neo4j, video_ids, startedAt }) {
                 pct: isSplit
                     ? _subPhasePct(prefix, state, meta)
                     : isStream
-                        ? _streamPhasePct(state, meta)
+                        ? _streamPhasePct(prefix, state, meta)
                         : _phasePct(state, meta),
                 label: state === "FAILURE" || state === "ERROR"
                     ? `Failed: ${(r.error || "").slice(0, 60)}`
@@ -961,7 +987,7 @@ async function trackPipeline({ extract, qdrant, neo4j, video_ids, startedAt }) {
                         : isSplit
                             ? _subPhaseLabel(prefix, state, meta)
                             : isStream
-                                ? _streamPhaseLabel(state, meta)
+                                ? _streamPhaseLabel(prefix, state, meta)
                                 : _phaseLabel(state, meta),
                 hint: state === "SUCCESS" && r.result
                     ? _successHint(prefix, r.result)

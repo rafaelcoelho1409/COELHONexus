@@ -393,3 +393,26 @@ async def test_embedding() -> JSONResponse:
             "error": f"{type(e).__name__}: {str(e)[:200]}",
             "latency_ms": int((_time.monotonic() - t0) * 1000),
         })
+
+
+@router.get("/embedding/candidates")
+async def embedding_candidates() -> JSONResponse:
+    """Proxies COELHO LLM Rotator's live embedding-model discovery
+    (`GET /api/v1/embeddings/candidates`) so the Settings page can browse
+    without a direct browser-to-rotator network path. `null` (not an
+    error) when the configured endpoint isn't the rotator — every
+    OpenAI-compatible embedding service is still a valid Settings target,
+    it just doesn't have this advisory surface."""
+    from domains.llm.embeddings import fetch_rotator_candidates
+    candidates = await fetch_rotator_candidates()
+    return JSONResponse(content={"candidates": candidates})
+
+
+@router.get("/embedding/recommend")
+async def embedding_recommend() -> JSONResponse:
+    """Proxies the rotator's `GET /api/v1/embeddings/recommend` — the
+    current best pick + full ranking. See `embedding_candidates` for why
+    `null` here isn't an error."""
+    from domains.llm.embeddings import fetch_rotator_recommendation
+    recommendation = await fetch_rotator_recommendation()
+    return JSONResponse(content={"recommendation": recommendation})

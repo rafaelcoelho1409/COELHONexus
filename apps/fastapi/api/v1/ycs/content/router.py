@@ -25,6 +25,47 @@ from domains.ycs.extract import (
 router = APIRouter()
 
 
+async def _raise_if_embedding_migration_needed(include_transcription: bool) -> None:
+    """2026-09-15: gate for the embedding-migration flow
+    (`domains.ycs.embedding_migration`) — blocks dispatching a NEW
+    ingestion run while the corpus is split across two embedding models
+    (a change was detected but not yet migrated, or a migration is
+    currently in flight). Without this, new videos would land in the
+    active collection under a DIFFERENT model than everything already
+    there, permanently fragmenting the corpus across two incomparable
+    cosine spaces.
+
+    Metadata-only requests (`include_transcription=False`) never touch
+    embeddings — skip the check entirely rather than blocking them on an
+    unrelated migration.
+
+    This SAME check also guards `api/v1/ycs/agents/router.py`'s
+    `/ingest/qdrant` and `/pipeline` endpoints — every entry point that
+    can write to Qdrant needs it, not just this router's (a real gap:
+    `/agents/ingest/qdrant`, live in the Source tab's UI, had no gate at
+    all until this was found)."""
+    if not include_transcription:
+        return
+    from domains.ycs.embedding_migration import check_migration_needed_now
+    mismatch = await check_migration_needed_now()
+    if mismatch is not None:
+        raise HTTPException(
+            status_code = 423,
+            detail = {
+                "error": "embedding_migration_required",
+                "message": (
+                    f"The configured embedding model changed from "
+                    f"{mismatch['from_model']!r} to {mismatch['to_model']!r} "
+                    f"since the last ingestion. Start a migration "
+                    f"(POST /api/v1/ycs/content/embedding-migration/start) "
+                    f"before ingesting new videos, or the corpus will "
+                    f"split across two incomparable embedding spaces."
+                ),
+                **mismatch,
+            },
+        )
+
+
 @router.post("/search", response_model = SearchResponse)
 async def search_videos(payload: SearchRequest) -> SearchResponse:
     """Synchronous yt-dlp `ytsearch*` — returns snippets, no persistence."""
@@ -46,11 +87,19 @@ async def search_videos(payload: SearchRequest) -> SearchResponse:
 
 @router.post("/videos")
 async def get_videos(payload: VideosRequest) -> dict:
-    """Extract specific videos → ES (Celery). Bare extract only; the Videos tab uses `/videos/pipeline`."""
+    """Extract specific videos → ES (Celery). Bare extract only; the Videos tab uses `/videos/pipeline`.
+
+    2026-09-15: "bare" is about the API SHAPE, not behavior — `extract_videos`
+    (the Celery task, shared verbatim with `/videos/pipeline`) always uses
+    its own task id as `extract_id` and self-dispatches per-video Qdrant/
+    Neo4j streaming work once `include_transcription=True`, regardless of
+    which endpoint fired it. Needs the same gate as every other entry
+    point that can write to Qdrant."""
     if not payload.video_ids:
         raise HTTPException(
             status_code = 400, detail = "video_ids is required",
         )
+    await _raise_if_embedding_migration_needed(payload.include_transcription)
     from domains.ycs.extract.task import extract_videos
     task = extract_videos.delay(
         payload.video_ids,
@@ -74,6 +123,7 @@ async def get_videos_pipeline(
         raise HTTPException(
             status_code = 400, detail = "video_ids is required",
         )
+    await _raise_if_embedding_migration_needed(payload.include_transcription)
     from domains.ycs.pipeline_task import (
         dispatch_videos_pipeline,
         persist_pipeline_state,
@@ -120,6 +170,7 @@ async def rerun_videos_pipeline(extract_id: str, request: Request) -> dict:
                 f"window (24h) expired or the id is unknown."
             ),
         )
+    await _raise_if_embedding_migration_needed(state.get("include_transcription", True))
     phases = dispatch_videos_pipeline(
         video_ids             = state["video_ids"],
         include_transcription = state.get("include_transcription", True),
@@ -375,6 +426,7 @@ async def channel_pipeline(
             status_code = 404,
             detail = f"No videos found in channel {payload.channel_id!r}",
         )
+    await _raise_if_embedding_migration_needed(payload.include_transcription)
     from domains.ycs.pipeline_task import (
         dispatch_videos_pipeline,
         persist_pipeline_state,
@@ -424,6 +476,7 @@ async def playlist_pipeline(
             status_code = 404,
             detail = f"No videos found in playlist {payload.playlist_id!r}",
         )
+    await _raise_if_embedding_migration_needed(payload.include_transcription)
     from domains.ycs.pipeline_task import (
         dispatch_videos_pipeline,
         persist_pipeline_state,
@@ -480,4 +533,79 @@ async def get_playlist_videos(payload: PlaylistRequest) -> dict:
         "task_id":  task.id,
         "status":   "queued",
         "endpoint": f"/api/v1/ycs/admin/task/{task.id}",
+    }
+
+
+def _build_qdrant():
+    import os
+    from qdrant_client import AsyncQdrantClient
+    qdrant_api_key = os.environ.get("QDRANT_API_KEY")
+    return AsyncQdrantClient(
+        url     = os.environ.get("QDRANT_URL", "http://localhost:6333"),
+        port    = int(os.environ.get("QDRANT_PORT", "6333")),
+        api_key = qdrant_api_key if qdrant_api_key else None,
+    )
+
+
+@router.get("/embedding-migration/status")
+async def embedding_migration_status(request: Request) -> dict:
+    """Whether a migration is needed and/or already running — same check
+    `_raise_if_embedding_migration_needed` uses, exposed read-only for the
+    Settings/Ingestion page to show a banner before the user even tries
+    to dispatch anything."""
+    from domains.llm.embeddings import get_configured_model
+    from domains.ycs.embedding_migration import (
+        check_migration_needed,
+        get_active_collection_name,
+        get_migration_state,
+    )
+
+    qdrant = _build_qdrant()
+    try:
+        mismatch = await check_migration_needed(qdrant, get_configured_model())
+        active_collection = await get_active_collection_name(qdrant)
+    finally:
+        await qdrant.close()
+    redis = getattr(request.app.state, "redis_aio", None)
+    state = await get_migration_state(redis) if redis is not None else None
+    return {
+        "needed":            mismatch is not None,
+        "mismatch":          mismatch,
+        "state":             state,
+        "active_collection": active_collection,
+    }
+
+
+@router.post("/embedding-migration/start")
+async def embedding_migration_start(request: Request) -> dict:
+    """Dispatch the re-embed job. 404 if nothing actually needs
+    migrating (avoids a spurious re-embed if the user double-clicks
+    after the gate already cleared)."""
+    from domains.llm.embeddings import get_configured_model
+    from domains.ycs.embedding_migration import check_migration_needed, dispatch_migration
+    from domains.ycs.embeddings import get_embedding_info
+
+    redis = getattr(request.app.state, "redis_aio", None)
+    if redis is None:
+        raise HTTPException(status_code = 503, detail = "Redis unavailable")
+    qdrant = _build_qdrant()
+    try:
+        to_model = get_configured_model()
+        mismatch = await check_migration_needed(qdrant, to_model)
+        if mismatch is None:
+            raise HTTPException(
+                status_code = 404,
+                detail = "No embedding-model mismatch detected — nothing to migrate.",
+            )
+        dimensions, _ = await get_embedding_info()
+        state = await dispatch_migration(
+            redis, qdrant,
+            from_model = mismatch["from_model"], to_model = to_model, dimensions = dimensions,
+        )
+    finally:
+        await qdrant.close()
+    return {
+        "status":   "queued",
+        "state":    state,
+        "endpoint": f"/api/v1/ycs/admin/task/{state.get('task_id', '')}",
     }

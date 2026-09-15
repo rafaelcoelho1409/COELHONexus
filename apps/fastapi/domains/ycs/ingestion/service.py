@@ -53,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 async def ensure_collection(
     qdrant: AsyncQdrantClient, dense_dimensions: int, embedding_model: str = "",
+    collection_name: str = QDRANT_COLLECTION,
 ) -> bool:
     """Idempotent collection create. Returns True only on first
     creation (False on a no-op).
@@ -73,12 +74,40 @@ async def ensure_collection(
     payload field (set by `ingestion/service.py::_flush`), the same way
     `content_hash` is already sampled just below this function — no new
     storage mechanism, since Qdrant collections don't carry arbitrary
-    custom metadata outside point payloads."""
-    collections = await qdrant.get_collections()
-    existing = {c.name for c in collections.collections}
+    custom metadata outside point payloads.
+
+    2026-09-15: a model mismatch NO LONGER auto-drops the collection —
+    that used to silently destroy every previously-ingested vector the
+    instant the configured embedding model changed (live-confirmed: a
+    whole corpus's Qdrant data gone, "a Rerun will rebuild this from
+    scratch" was the only recovery path, no consent, no warning). The
+    actual consent+re-embed flow now lives in
+    `domains.ycs.embedding_migration` and gates dispatch BEFORE this
+    function ever sees a mismatch in normal operation — reaching that
+    state here means the gate was bypassed, so this raises instead of
+    silently mixing incomparable vectors in one cosine space OR
+    silently deleting data. `collection_name` defaults to the module
+    constant (the stable alias — see that module's docstring) but the
+    migration job passes its own staging collection name, which is
+    always fresh/empty and never hits this branch.
+
+    Dimension/schema mismatches (missing slot, wrong vector size) are
+    UNCHANGED — still auto-recreated, since a collection that fails
+    those checks has no valid data of ANY model to lose (wrong schema
+    entirely, not "different model").
+
+    2026-09-15: existence check switched from `get_collections()`
+    (list of REAL collection names only — live-confirmed Qdrant never
+    includes aliases in that listing) to `collection_exists()`, which
+    resolves through an alias transparently. `QDRANT_COLLECTION` is a
+    real collection today but becomes an alias the first time
+    `embedding_migration` cuts one over — the old list-membership check
+    would have silently stopped seeing it as existing at that point and
+    tried (and failed) to create a real collection over the alias."""
+    exists = await qdrant.collection_exists(collection_name)
     created = False
-    if QDRANT_COLLECTION in existing:
-        info = await qdrant.get_collection(QDRANT_COLLECTION)
+    if exists:
+        info = await qdrant.get_collection(collection_name)
         vectors_cfg = info.config.params.vectors
         sparse_cfg  = info.config.params.sparse_vectors
         has_dense_slot = (
@@ -99,7 +128,7 @@ async def ensure_collection(
         if has_dense_slot and dims_match and embedding_model:
             try:
                 points, _ = await qdrant.scroll(
-                    collection_name = QDRANT_COLLECTION,
+                    collection_name = collection_name,
                     limit = 1,
                     with_payload = ["embedding_model"],
                     with_vectors = False,
@@ -111,22 +140,36 @@ async def ensure_collection(
                     model_match = (not stored_model) or (stored_model == embedding_model)
             except Exception:
                 pass  # collection-level trouble — dims_match check below still applies
-        if not (has_dense_slot and has_sparse_slot and dims_match and model_match):
-            # Wrong-schema collection found. Drop + recreate. The points
-            # inside were built against the old schema/model and can't be
-            # rewritten in place; downstream Phase A → ES indexing is the
-            # source of truth, so a Rerun will rebuild this from scratch.
-            logger.warning(
-                f"[ycs:ingestion] dropping collection {QDRANT_COLLECTION!r} "
-                f"— schema mismatch (dense_slot={has_dense_slot}, "
-                f"sparse_slot={has_sparse_slot}, dims_match={dims_match}, "
-                f"model_match={model_match}); recreating with hybrid schema."
+        if not model_match:
+            # 2026-09-15: no longer auto-drops (see this function's
+            # docstring) — the consent+re-embed gate in
+            # `domains.ycs.embedding_migration` should have caught this
+            # BEFORE dispatch. Reaching it here means that gate was
+            # bypassed; fail loud rather than silently mixing
+            # incomparable vectors in one cosine space or deleting data.
+            raise RuntimeError(
+                f"[ycs:ingestion] collection {collection_name!r} holds "
+                f"vectors from a different embedding model than the one "
+                f"currently configured — refusing to write. This should "
+                f"have been caught by the embedding-migration gate before "
+                f"dispatch; if you're seeing this, that gate was bypassed "
+                f"or the migration hasn't completed yet."
             )
-            await qdrant.delete_collection(QDRANT_COLLECTION)
-            existing.discard(QDRANT_COLLECTION)
-    if QDRANT_COLLECTION not in existing:
+        if not (has_dense_slot and has_sparse_slot and dims_match):
+            # Wrong SCHEMA (missing vector slot, or a real dimension
+            # mismatch) — not a model swap. A collection failing this has
+            # no valid data of any model to lose, safe to auto-recreate.
+            logger.warning(
+                f"[ycs:ingestion] dropping collection {collection_name!r} "
+                f"— schema mismatch (dense_slot={has_dense_slot}, "
+                f"sparse_slot={has_sparse_slot}, dims_match={dims_match}); "
+                f"recreating with hybrid schema."
+            )
+            await qdrant.delete_collection(collection_name)
+            exists = False
+    if not exists:
         await qdrant.create_collection(
-            collection_name = QDRANT_COLLECTION,
+            collection_name = collection_name,
             vectors_config = {
                 "dense": VectorParams(
                     size = dense_dimensions,
@@ -141,7 +184,7 @@ async def ensure_collection(
         )
         created = True
         logger.info(
-            f"[ycs:ingestion] created collection {QDRANT_COLLECTION!r} "
+            f"[ycs:ingestion] created collection {collection_name!r} "
             f"dim={dense_dimensions}"
         )
     # Payload keyword indexes — `video_id` backs the
@@ -152,7 +195,7 @@ async def ensure_collection(
     for field in ("video_id", "channel_id"):
         try:
             await qdrant.create_payload_index(
-                collection_name = QDRANT_COLLECTION,
+                collection_name = collection_name,
                 field_name      = field,
                 field_schema    = "keyword",
             )
@@ -261,6 +304,7 @@ async def ingest_to_qdrant(
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    collection_name: str = QDRANT_COLLECTION,
 ) -> dict:
     """Streaming pipeline: chunk → embed (dense NIM + sparse BM25) →
     upsert. Memory stays flat regardless of corpus size.
@@ -291,7 +335,9 @@ async def ingest_to_qdrant(
     sparse_embeddings = create_sparse_embeddings()
     dimensions, embedding_model = await get_embedding_info()
 
-    collection_created = await ensure_collection(qdrant, dimensions, embedding_model)
+    collection_created = await ensure_collection(
+        qdrant, dimensions, embedding_model, collection_name = collection_name,
+    )
 
     # Two-phase: enumerate transcripts first (fast — text only, ~5s
     # for 359 transcripts), THEN embed (slow — API calls). Separating
@@ -319,7 +365,7 @@ async def ingest_to_qdrant(
         for vid in all_ids:
             try:
                 points, _ = await qdrant.scroll(
-                    collection_name = QDRANT_COLLECTION,
+                    collection_name = collection_name,
                     scroll_filter = Filter(must = [
                         FieldCondition(
                             key = "video_id", match = MatchAny(any = [vid]),
@@ -416,7 +462,7 @@ async def ingest_to_qdrant(
             for i, doc in enumerate(buffer)
         ]
         await qdrant.upsert(
-            collection_name = QDRANT_COLLECTION, points = points,
+            collection_name = collection_name, points = points,
         )
         total_upserted += len(points)
         buffer.clear()
@@ -462,7 +508,7 @@ async def ingest_to_qdrant(
         if not collection_created:
             try:
                 await qdrant.delete(
-                    collection_name = QDRANT_COLLECTION,
+                    collection_name = collection_name,
                     points_selector = FilterSelector(
                         filter = Filter(must = [
                             FieldCondition(
@@ -498,8 +544,81 @@ async def ingest_to_qdrant(
         # embeddings stopped being hardcoded to NIM. Reports whatever the
         # configured endpoint actually resolved to for this run.
         "embedding":           embedding_model or "(unknown)",
-        "collection":          QDRANT_COLLECTION,
+        "collection":          collection_name,
     }
+
+
+async def expand_with_partition_ids(
+    es: AsyncElasticsearch, video_ids: list[str],
+) -> list[str]:
+    """`video_ids` plus every known partition id (`"{vid}#p{n}"`) whose
+    `parent_video_id` is one of them — looked up from
+    `INDEX_TRANSCRIPTIONS`, which still has the mapping even for docs
+    ingested before this function existed.
+
+    2026-09-15: Qdrant point payloads carry `video_id` only (a split
+    video's chunks are tagged with the PARTITION id) — unlike ES
+    transcripts/Neo4j Documents, there's no `parent_video_id` payload
+    field on a Qdrant point to OR against. `delete_points_for_videos`
+    needs the FULL id set up front instead; this is that lookup,
+    factored out so it stays correct for old data without a Qdrant
+    payload schema change."""
+    if not video_ids:
+        return []
+    try:
+        resp = await es.search(
+            index = INDEX_TRANSCRIPTIONS,
+            size  = min(10000, max(200, len(video_ids) * 10)),
+            # `.keyword`, not the bare field — `parent_video_id` is
+            # mapped `text` (analyzed) with a `.keyword` sub-field for
+            # exact matching (unlike `video_id`, which is pure
+            # `keyword`); a `terms` query against the bare name
+            # tokenizes and silently matches nothing. Verified live
+            # against real partition data (2026-09-15).
+            query = {"terms": {"parent_video_id.keyword": list(video_ids)}},
+            _source = ["video_id"],
+        )
+        partition_ids = {
+            h["_source"]["video_id"]
+            for h in resp.get("hits", {}).get("hits", [])
+            if h.get("_source", {}).get("video_id")
+        }
+    except Exception as e:
+        logger.warning(
+            f"[ycs:ingestion] partition-id expansion failed: "
+            f"{type(e).__name__}: {str(e)[:200]} — proceeding with the "
+            f"original {len(video_ids)} id(s) only"
+        )
+        return list(video_ids)
+    return list(set(video_ids) | partition_ids)
+
+
+async def _find_all_ycs_collections(qdrant: AsyncQdrantClient) -> list[str]:
+    """Every REAL Qdrant collection that could hold YCS video data —
+    the bare `QDRANT_COLLECTION` name (if it's still a literal, pre-
+    migration collection) plus every versioned physical collection any
+    past embedding-migration ever created
+    (`domains.ycs.embedding_migration.domain.physical_collection_name`
+    → `"{QDRANT_COLLECTION}__{model}__{dim}d"`).
+
+    2026-09-15: added — `delete_points_for_videos` previously only
+    swept the CURRENT alias target, silently leaving a video's vectors
+    behind forever in any collection an earlier embedding migration
+    superseded (those are deliberately kept around as a migration
+    safety net, not deleted automatically — see that module's
+    docstring — so they build up over time and need to be included
+    here). Scoped by name prefix so this can never touch another
+    project's collection sharing the same Qdrant instance (e.g.
+    Research Radar's `radar_papers`)."""
+    try:
+        collections = await qdrant.get_collections()
+    except Exception:
+        return [QDRANT_COLLECTION]
+    prefix = f"{QDRANT_COLLECTION}__"
+    return [
+        c.name for c in collections.collections
+        if c.name == QDRANT_COLLECTION or c.name.startswith(prefix)
+    ] or [QDRANT_COLLECTION]
 
 
 async def delete_points_for_videos(
@@ -507,47 +626,69 @@ async def delete_points_for_videos(
     video_ids: list[str],
 ) -> dict[str, Any]:
     """Best-effort delete of every Qdrant point whose payload
-    `video_id` is in `video_ids`. Used by the Pipeline panel's
-    `Wipe cache` button.
+    `video_id` is in `video_ids`, across EVERY collection any embedding
+    migration ever created for YCS — not just the currently-active one.
+    Used by the Pipeline panel's `Wipe cache` button and the Library's
+    per-row/bulk delete.
 
     Uses a payload-filter selector (NOT point-id lookups) because
     point ids are `md5(video_id_chunk_index)` — we would need to know
     the chunk_index for every chunk, which we don't. The filter
     selector tells Qdrant "delete every point matching this filter,"
-    which sweeps all chunks per video in one call.
+    which sweeps all chunks per video in one call, per collection.
 
-    Best-effort: collection-missing or Qdrant-down errors are logged
-    + counted, never raised — the wipe of other stores still happens."""
+    2026-09-15: sweeps every collection `_find_all_ycs_collections`
+    finds, not just `QDRANT_COLLECTION` — a video ingested before an
+    embedding-model migration has vectors in the OLD (superseded)
+    physical collection too, which is kept around deliberately as a
+    migration safety net; deleting a video must still remove it from
+    there, or "delete this video" silently leaves stale copies of it
+    behind under a retired model, forever, in a collection nothing else
+    ever looks at again. Callers should pass `video_ids` already
+    expanded with any known partition ids (see
+    `expand_with_partition_ids`) — Qdrant payloads carry `video_id`
+    only, never a `parent_video_id` to OR against.
+
+    Best-effort per collection: one collection's error doesn't stop the
+    sweep of the others, and never blocks the wipe of other stores."""
     if not video_ids:
         return {"qdrant_deleted": 0}
-    try:
-        result = await qdrant.delete(
-            collection_name = QDRANT_COLLECTION,
-            points_selector = FilterSelector(
-                filter = Filter(
-                    must = [
-                        FieldCondition(
-                            key = "video_id",
-                            match = MatchAny(any = list(video_ids)),
-                        ),
-                    ],
+    target_collections = await _find_all_ycs_collections(qdrant)
+    per_collection: dict[str, str] = {}
+    errors: dict[str, str] = {}
+    for name in target_collections:
+        try:
+            result = await qdrant.delete(
+                collection_name = name,
+                points_selector = FilterSelector(
+                    filter = Filter(
+                        must = [
+                            FieldCondition(
+                                key = "video_id",
+                                match = MatchAny(any = list(video_ids)),
+                            ),
+                        ],
+                    ),
                 ),
-            ),
-            wait = True,
-        )
-        status_str = str(getattr(result, "status", "unknown"))
-        logger.info(
-            f"[ycs:qdrant:wipe] collection={QDRANT_COLLECTION} "
-            f"status={status_str} video_ids={len(video_ids)}"
-        )
-        return {
-            "qdrant_deleted": len(video_ids),
-            "qdrant_status":  status_str,
-        }
-    except Exception as e:
-        logger.warning(
-            f"[ycs:qdrant:wipe] failed for {len(video_ids)} videos: "
-            f"{type(e).__name__}: {str(e)[:200]}"
-        )
-        return {"qdrant_deleted": 0, "qdrant_error": str(e)[:200]}
+                wait = True,
+            )
+            per_collection[name] = str(getattr(result, "status", "unknown"))
+        except Exception as e:
+            errors[name] = f"{type(e).__name__}: {str(e)[:200]}"
+            logger.warning(
+                f"[ycs:qdrant:wipe] {name} failed for "
+                f"{len(video_ids)} videos: {errors[name]}"
+            )
+    logger.info(
+        f"[ycs:qdrant:wipe] swept {len(target_collections)} "
+        f"collection(s) for {len(video_ids)} video id(s) "
+        f"(incl. any known partitions): {per_collection}"
+    )
+    out: dict[str, Any] = {
+        "qdrant_deleted":             len(video_ids) if per_collection else 0,
+        "qdrant_collections_swept":  per_collection,
+    }
+    if errors:
+        out["qdrant_errors"] = errors
+    return out
 

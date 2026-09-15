@@ -44,8 +44,18 @@ DEFAULT_BATCH_SIZE = 3
 # inside the rotator's own cascade is expected and is the thing this
 # test is actually checking, now that queued time has real room (600s)
 # to resolve in instead of blowing the old 180s ceiling.
+# 2026-09-15: 5 -> 3. Live-observed on a real chunk: 5 concurrent
+# full-transcript extraction calls blew through Mistral's + Groq's
+# free-tier per-minute quotas almost instantly (RateLimitError burst on
+# 3 different models within the first ~5s), forcing the cascade through
+# several dead providers before landing on one with headroom. Nothing
+# actually failed permanently (retry passes absorbed it), but for
+# whole-channel runs (many chunks back-to-back against the same scarce
+# free-tier pool, not just one 5-video test) that overhead compounds.
+# 3 trades a little peak throughput for meaningfully fewer 429/504
+# retries at that scale.
 EXTRACT_CONCURRENCY = max(
-    1, int(_os.environ.get("YCS_NEO4J_CONCURRENCY", "5") or "5"),
+    1, int(_os.environ.get("YCS_NEO4J_CONCURRENCY", "3") or "3"),
 )
 
 # 2026-09-14: 600 -> 700. Must exceed the rotator's own max_wall_s

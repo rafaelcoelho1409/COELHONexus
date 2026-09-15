@@ -93,6 +93,45 @@ def pipeline_cancel_key(extract_id: str) -> str:
     return f"{PIPELINE_STATE_PREFIX}{extract_id}:cancel"
 
 
+def phase_piece_total_key(extract_id: str, phase: str) -> str:
+    """Total individual PIECES (partitions + unsplit videos) dispatched
+    to `phase`, distinct from `phase_total_key`'s VIDEO-level count. A
+    video split into 4 partitions counts as 1 toward `phase_total_key`
+    (so admin listing / finalize / cross-phase checks stay video-
+    scoped — the whole point of `mark_video_or_partition_done`) but as
+    4 here.
+
+    2026-09-15: added so the Neo4j bar can show "K/M pieces" instead of
+    "K/N videos" — LLM extraction concurrency/cost is piece-scoped, so
+    K/N badly understated how much work was happening (2 videos / 5
+    pieces displayed identically to "2/2 done" either way, live-
+    observed as confusing after a 4-partition long video)."""
+    return f"{PIPELINE_STATE_PREFIX}{extract_id}:{phase}:piece_total"
+
+
+def phase_piece_finished_key(extract_id: str, phase: str) -> str:
+    """Atomic counter — INCR'd once per PIECE (every
+    `mark_video_or_partition_done` call, whether or not it completes a
+    partition group) — pairs with `phase_piece_total_key`."""
+    return f"{PIPELINE_STATE_PREFIX}{extract_id}:{phase}:piece_finished"
+
+
+def neo4j_resolving_key(extract_id: str) -> str:
+    """2026-09-15: set while the run's ONE post-streaming entity-resolution
+    pass (`resolve_entities`, rapidfuzz cross-reference dedup over the
+    whole graph) is in flight. `phase_finished_key` for "neo4j" reaches
+    its total the INSTANT the last video/partition-group reports —
+    before resolution even starts, since `entities_merged` is only
+    known after it finishes (observed live: 858 nodes/1764 rels showed
+    correctly the instant the phase hit SUCCESS, but `entities_merged`
+    stayed 0 because resolution was still running ~60s+ after that).
+    `get_phase_progress` downgrades neo4j's SUCCESS back to PROGRESS
+    while this is set — same pattern as
+    `ingestion.keys.qdrant_draining_key` for Qdrant's post-total drain.
+    Self-expiring TTL so a crash mid-resolution can't wedge the bar."""
+    return f"{PIPELINE_STATE_PREFIX}{extract_id}:neo4j:resolving"
+
+
 def phase_preview_key(extract_id: str, phase: str) -> str:
     """2026-09-14: display-only in-progress preview for chunked phases.
     Neo4j dispatches CHUNKS (up to 5 videos per Celery task) but the

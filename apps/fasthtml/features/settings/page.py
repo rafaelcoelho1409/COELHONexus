@@ -108,9 +108,15 @@ def EmbeddingCard():
                 cls = "set-ep-key-row",
             ),
             Label("Model", fr = "set-emb-model", cls = "set-ep-label"),
-            Input(
-                type = "text", id = "set-emb-model", cls = "set-ep-input",
-                autocomplete = "off", spellcheck = "false",
+            Div(
+                Input(
+                    type = "text", id = "set-emb-model", cls = "set-ep-input",
+                    autocomplete = "off", spellcheck = "false",
+                    placeholder = "auto, or provider/model — e.g. nim/nvidia/llama-embed-nemotron-8b",
+                ),
+                Button("Browse models", id = "set-emb-browse", type = "button",
+                       cls = "set-btn set-btn-ghost"),
+                cls = "set-emb-model-row",
             ),
             Div(
                 Button("Save", id = "set-emb-save", type = "button",
@@ -122,6 +128,47 @@ def EmbeddingCard():
             ),
             cls = "set-ep-fields",
             id = "settings-embedding",
+        ),
+        # 2026-09-15: "Browse models" popover — live discovery + ranking
+        # from COELHO LLM Rotator's Embedding Curator (`GET .../embedding
+        # /candidates` + `/recommend`, proxied so the browser never talks
+        # to the rotator directly). Picking a row fills the Model field
+        # with its `pinned_id` — an explicit pin, not auto-follow (see
+        # that endpoint's docstring on the rotator side for why auto-
+        # follow was removed as the default for a consumer like YCS that
+        # persists vectors across calls). Empty/hidden until populated —
+        # `settings_embedding.js` no-ops gracefully if the configured
+        # endpoint isn't the rotator (candidates/recommend come back null).
+        Div(
+            Div(
+                Span("Available embedding models", cls = "set-emb-browse-title"),
+                Button("×", id = "set-emb-browse-close", type = "button",
+                       cls = "set-emb-browse-close", aria_label = "Close"),
+                cls = "set-emb-browse-header",
+            ),
+            Div(
+                "Loading…", id = "set-emb-browse-list", cls = "set-emb-browse-list",
+            ),
+            cls = "set-emb-browse-popover",
+            id = "set-emb-browse-popover",
+        ),
+        # 2026-09-15: embedding-migration status — read-only "active
+        # collection" line always shown (transparency: the physical
+        # Qdrant collection name is auto-derived and otherwise invisible
+        # — see `domains.ycs.embedding_migration`'s docstring for why it
+        # stays auto-derived rather than user-editable: every ingestion/
+        # retrieval call site trusts ONE stable alias name, and Qdrant's
+        # native alias feature already gives atomic, zero-downtime
+        # cutover for free — hand-rolling the same indirection as a
+        # user-typed Settings field would just reintroduce "did every
+        # call site get updated" risk for no functional gain), plus a
+        # banner + button that appears only when a migration is actually
+        # needed or in flight. Populated by `settings_embedding.js`.
+        Div(
+            Div("", id = "set-emb-migration-collection", cls = "set-emb-migration-collection"),
+            Div(id = "set-emb-migration-banner", cls = "set-emb-migration-banner"),
+            cls = "set-emb-migration",
+            id = "set-emb-migration",
         ),
         cls = "settings-endpoint-card",
         id = "settings-embedding-card",

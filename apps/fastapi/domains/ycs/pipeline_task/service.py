@@ -172,8 +172,18 @@ async def wipe_videos_data(
     try:
         # 1. Elasticsearch — metadata + transcripts indexes
         summary["es"] = await delete_videos_from_es(es, video_ids)
-        # 2. Qdrant — hybrid collection (dense + sparse)
-        summary["qdrant"] = await delete_points_for_videos(qdrant, video_ids)
+        # 2. Qdrant — hybrid collection (dense + sparse). 2026-09-15:
+        # Qdrant point payloads carry `video_id` only (a split video's
+        # chunks are tagged with the PARTITION id, e.g. "xyz#p1" — there
+        # is no `parent_video_id` payload field to OR against, unlike ES
+        # transcripts/Neo4j Documents, which both have one). Expand the
+        # requested ids with any known partition ids first — ES's
+        # transcripts index still has the parent→partition mapping even
+        # for docs ingested before this fix, so this stays correct for
+        # old data too, without a Qdrant payload schema change.
+        from domains.ycs.ingestion import expand_with_partition_ids
+        expanded_ids = await expand_with_partition_ids(es, video_ids)
+        summary["qdrant"] = await delete_points_for_videos(qdrant, expanded_ids)
         # 3. Neo4j — Document + Video nodes (entities left intact;
         #    may be referenced by other videos' graphs)
         if neo4j_graph is not None:

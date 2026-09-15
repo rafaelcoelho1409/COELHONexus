@@ -5,6 +5,12 @@
 // returns masked status).
 
 const API = "/api/v1/llm/settings";
+// Migration status/trigger + task polling live under the YCS content
+// router (`domains.ycs.embedding_migration`), not the settings router —
+// reused as-is rather than duplicated, since it's also what the
+// Ingestion-page dispatch gate calls server-side.
+const YCS_API = "/api/v1/ycs/content";
+const ADMIN_API = "/api/v1/ycs/admin";
 
 const $ = (id) => document.getElementById(id);
 
@@ -91,6 +97,7 @@ async function save() {
     render(await api("PUT", "/embedding", body));
     setStatus("Saved.", "ok");
     toast("Embedding endpoint updated");
+    loadMigrationStatus();
   } catch (e) {
     setStatus(`Save failed: ${e.message}`, "err");
   } finally {
@@ -120,13 +127,216 @@ async function test() {
   }
 }
 
+// ---- Browse available embedding models (COELHO LLM Rotator only) ---------
+// Live discovery (`/embedding/candidates`) + benchmark ranking + current
+// pick (`/embedding/recommend`), both proxied through Nexus so the browser
+// never talks to the rotator directly. Either can come back `null` if the
+// configured endpoint isn't the rotator — rendered as a quiet explanatory
+// message, not an error (any OpenAI-compatible embedding service is a
+// valid Settings target; it just doesn't have this advisory surface).
+function htmlEscape(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+async function loadBrowseModels() {
+  const list = $("set-emb-browse-list");
+  if (!list) return;
+  list.innerHTML = "Loading…";
+  let candidates = null;
+  let recommendation = null;
+  try {
+    [candidates, recommendation] = await Promise.all([
+      api("GET", "/embedding/candidates").then((r) => r.candidates),
+      api("GET", "/embedding/recommend").then((r) => r.recommendation),
+    ]);
+  } catch (e) {
+    list.innerHTML = `<div class="set-emb-browse-empty">Couldn't load: ${htmlEscape(e.message)}</div>`;
+    return;
+  }
+  if (!candidates || !candidates.length) {
+    list.innerHTML =
+      '<div class="set-emb-browse-empty">No live catalog available — this only works when the ' +
+      "Base URL above points at COELHO LLM Rotator (any other OpenAI-compatible embedding " +
+      "service doesn't expose this).</div>";
+    return;
+  }
+  const currentPinId = (recommendation && recommendation.current_pick && recommendation.current_pick.pinned_id) || "";
+  // Rank/score/liveness come from `recommend`'s `ranked` list when present
+  // (richer — benchmark score + alive/dead) — fall back to bare discovery
+  // order from `candidates` if recommend itself came back null.
+  const ranked = (recommendation && recommendation.ranked) || null;
+  const rows = ranked || candidates;
+  const frag = rows.map((c) => {
+    const pinnedId = c.pinned_id;
+    const isCurrent = pinnedId === currentPinId;
+    const scoreText = typeof c.score === "number" ? c.score.toFixed(3) : "—";
+    const aliveText = c.alive === false ? " · dead" : c.alive === true ? " · alive" : "";
+    return `
+      <button type="button" class="set-emb-browse-row${isCurrent ? " set-emb-browse-row-current" : ""}"
+              data-pinned-id="${htmlEscape(pinnedId)}">
+        <span class="set-emb-browse-row-id">${htmlEscape(pinnedId)}</span>
+        <span class="set-emb-browse-row-meta">${scoreText}${aliveText}${isCurrent ? " · current pick" : ""}</span>
+      </button>`;
+  }).join("");
+  list.innerHTML = frag;
+}
+
+function openBrowseModels() {
+  $("set-emb-browse-popover")?.classList.add("visible");
+  loadBrowseModels();
+}
+
+function closeBrowseModels() {
+  $("set-emb-browse-popover")?.classList.remove("visible");
+}
+
+function bindBrowseModels() {
+  $("set-emb-browse")?.addEventListener("click", openBrowseModels);
+  $("set-emb-browse-close")?.addEventListener("click", closeBrowseModels);
+  $("set-emb-browse-list")?.addEventListener("click", (ev) => {
+    const row = ev.target.closest?.(".set-emb-browse-row");
+    if (!row) return;
+    const modelField = $("set-emb-model");
+    if (modelField) modelField.value = row.dataset.pinnedId;
+    closeBrowseModels();
+  });
+}
+
+// ---- Embedding migration — status banner + trigger + progress ------------
+// Gate lives server-side (every ingestion-dispatch endpoint 423s while a
+// migration is needed/running — see `api/v1/ycs/content/router.py
+// ::_raise_if_embedding_migration_needed`); this is the UI half: show the
+// read-only active-collection name always, and a banner + "Migrate now"
+// button only when `needed` or a migration is already in flight.
+let _migrationPollTimer = null;
+
+function stopMigrationPoll() {
+  if (_migrationPollTimer) {
+    clearTimeout(_migrationPollTimer);
+    _migrationPollTimer = null;
+  }
+}
+
+function renderMigrationBanner(status) {
+  const banner = $("set-emb-migration-banner");
+  const collectionLine = $("set-emb-migration-collection");
+  if (!banner || !collectionLine) return;
+  collectionLine.textContent = status.active_collection
+    ? `Active Qdrant collection: ${status.active_collection}`
+    : "";
+
+  const running = status.state && status.state.status === "running";
+  if (!status.needed && !running) {
+    banner.innerHTML = "";
+    banner.className = "set-emb-migration-banner";
+    return;
+  }
+  banner.className = "set-emb-migration-banner set-emb-migration-banner-visible";
+  if (running) {
+    banner.innerHTML = `
+      <div class="set-emb-migration-text">
+        Migrating ${htmlEscape(status.state.from_model)} → ${htmlEscape(status.state.to_model)}…
+      </div>
+      <div class="set-emb-migration-progress" id="set-emb-migration-progress">Starting…</div>`;
+    pollMigrationTask(status.state.task_id);
+    return;
+  }
+  const m = status.mismatch || {};
+  banner.innerHTML = `
+    <div class="set-emb-migration-text">
+      Embedding model changed from <b>${htmlEscape(m.from_model)}</b> to
+      <b>${htmlEscape(m.to_model)}</b>. Previously-ingested videos won't be
+      searchable under the new model until you migrate them.
+    </div>
+    <button type="button" class="set-btn set-btn-primary" id="set-emb-migration-start">Migrate now</button>`;
+  $("set-emb-migration-start")?.addEventListener("click", startMigration);
+}
+
+async function loadMigrationStatus() {
+  try {
+    const res = await fetch(`${YCS_API}/embedding-migration/status`);
+    const status = await res.json();
+    renderMigrationBanner(status);
+  } catch (e) {
+    // Best-effort — a failed status check shouldn't block the rest of
+    // the Settings page from working.
+    console.warn("[settings:embedding] migration status check failed", e);
+  }
+}
+
+async function startMigration() {
+  const btn = $("set-emb-migration-start");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Starting…";
+  }
+  try {
+    const res = await fetch(`${YCS_API}/embedding-migration/start`, { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error((data && (data.detail?.message || data.detail || data.error)) || `HTTP ${res.status}`);
+    }
+    toast("Migration started");
+    await loadMigrationStatus();
+  } catch (e) {
+    toast(`Migration failed to start: ${e.message}`, "err");
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Migrate now";
+    }
+  }
+}
+
+async function pollMigrationTask(taskId) {
+  stopMigrationPoll();
+  if (!taskId) return;
+  const tick = async () => {
+    let data;
+    try {
+      const res = await fetch(`${ADMIN_API}/task/${encodeURIComponent(taskId)}`);
+      data = await res.json();
+    } catch {
+      _migrationPollTimer = setTimeout(tick, 3000);
+      return;
+    }
+    const progressEl = $("set-emb-migration-progress");
+    if (progressEl) {
+      const meta = data.meta || {};
+      if (data.state === "PROGRESS" && meta.total) {
+        progressEl.textContent = `${meta.current ?? 0}/${meta.total} transcripts re-embedded`;
+      } else {
+        progressEl.textContent = data.state || "Running…";
+      }
+    }
+    if (["SUCCESS", "FAILURE", "REVOKED"].includes(data.state)) {
+      stopMigrationPoll();
+      if (data.state === "SUCCESS") {
+        toast("Embedding migration complete");
+      } else {
+        toast("Embedding migration failed — check Flower/Celery logs", "err");
+      }
+      // Re-check: on SUCCESS the finalize-cutover task (linked, runs
+      // right after) needs a moment to land — the status check below
+      // naturally reflects whichever is true by the time it lands.
+      setTimeout(loadMigrationStatus, 2000);
+      return;
+    }
+    _migrationPollTimer = setTimeout(tick, 3000);
+  };
+  tick();
+}
+
 function init() {
   const save_ = $("set-emb-save");
   const test_ = $("set-emb-test");
   if (!save_ || !test_) return;
   save_.addEventListener("click", save);
   test_.addEventListener("click", test);
+  bindBrowseModels();
   load();
+  loadMigrationStatus();
 }
 
 if (document.readyState === "loading") {

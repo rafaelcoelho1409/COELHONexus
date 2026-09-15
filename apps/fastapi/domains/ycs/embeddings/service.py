@@ -121,10 +121,10 @@ class ExternalEmbeddings(Embeddings):
         for i in range(0, len(texts), BATCH_SIZE):
             batch = texts[i : i + BATCH_SIZE]
             try:
-                vectors = await embed_texts_async(batch)
+                vectors, model = await embed_texts_async(batch)
             except Exception as e:
                 raise EmbeddingAPIError(0, f"{type(e).__name__}: {e}") from e
-            self._record(vectors)
+            self._record(vectors, model)
             out.extend(vectors)
             if i + BATCH_SIZE < len(texts):
                 await asyncio.sleep(BATCH_PAUSE_S)

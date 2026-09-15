@@ -161,10 +161,15 @@ async def delete_videos_from_es(
         deleting by `terms.video_id` matches nothing — the field
         doesn't exist in this index — and earlier this returned
         `metadata_deleted: 0` even when 5 metadata docs were present.
-        Use `ids` query to target the `_id` field directly.
+        Use `ids` query to target the `_id` field directly. Metadata is
+        never per-partition (only one doc per original video), so no
+        `parent_video_id` half is needed here.
       - `INDEX_TRANSCRIPTIONS`: video_id is a regular field (one
-        transcript doc per `{video_id}_{lang}` pair), so `terms`
-        works.
+        transcript doc per `{video_id}_{lang}` pair) — matched via
+        `terms`. 2026-09-15: OR'd with `parent_video_id` too — a split
+        video's transcript docs carry `video_id="XYZ#p{n}"`, never the
+        parent id, so deleting "XYZ" alone previously left every
+        partition's transcript doc behind.
 
     `delete_by_query` (vs. doc-by-doc DELETE) lets a single request
     drop every match — small/large batches behave the same. `conflicts:
@@ -175,8 +180,15 @@ async def delete_videos_from_es(
         return {"metadata_deleted": 0, "transcripts_deleted": 0}
     out: dict[str, Any] = {}
     queries: tuple[tuple[str, str, dict], ...] = (
-        ("metadata",    INDEX_METADATA,        {"ids":   {"values": list(video_ids)}}),
-        ("transcripts", INDEX_TRANSCRIPTIONS,  {"terms": {"video_id": list(video_ids)}}),
+        ("metadata",    INDEX_METADATA,        {"ids": {"values": list(video_ids)}}),
+        ("transcripts", INDEX_TRANSCRIPTIONS,  {"bool": {"should": [
+            {"terms": {"video_id":                 list(video_ids)}},
+            # `.keyword`, not the bare field — see
+            # `ingestion.service.expand_with_partition_ids`'s comment;
+            # `parent_video_id` is analyzed `text`, a `terms` query
+            # against the bare name silently matches nothing.
+            {"terms": {"parent_video_id.keyword": list(video_ids)}},
+        ]}}),
     )
     for index_label, index_name, query in queries:
         try:

@@ -3942,6 +3942,12 @@
   user-select: none;
 }
 .ycs-lib-facet-row:hover { background: rgba(0, 0, 0, 0.04); }
+.ycs-lib-facet-row-all {
+  padding-bottom: 6px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+}
+.ycs-lib-facet-row-all .ycs-lib-facet-label { font-weight: 600; }
 .ycs-lib-facet-label {
   font-size: 0.82rem;
   color: var(--text);

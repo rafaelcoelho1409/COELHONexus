@@ -25,11 +25,19 @@ logger = get_task_logger(__name__)
 )
 def ingest_to_qdrant(
     self,
-    video_ids:     list[str] | None = None,
-    chunk_size:    int              = 2000,
-    chunk_overlap: int              = 200,
+    video_ids:       list[str] | None = None,
+    chunk_size:      int              = 2000,
+    chunk_overlap:   int              = 200,
+    collection_name: str | None       = None,
 ) -> dict[str, Any]:
-    """Stream ES transcripts → chunk → embed → Qdrant upsert."""
+    """Stream ES transcripts → chunk → embed → Qdrant upsert.
+
+    `collection_name` (2026-09-15) — override for
+    `domains.ycs.embedding_migration`'s re-embed job, which targets a
+    fresh versioned staging collection instead of the live one; `None`
+    (every other caller) keeps the default from `ingestion.service
+    .ingest_to_qdrant`'s own signature (the live `QDRANT_COLLECTION`
+    alias)."""
     logger.info(
         f"[ingest_to_qdrant] Starting: video_ids={video_ids}, "
         f"chunk_size={chunk_size}",
@@ -100,14 +108,17 @@ def ingest_to_qdrant(
                 )
                 try:
                     try:
-                        result = await run_ingestion(
-                            es            = es,
-                            qdrant        = qdrant,
-                            video_ids     = video_ids,
-                            chunk_size    = chunk_size,
-                            chunk_overlap = chunk_overlap,
-                            progress_cb   = _progress,
-                        )
+                        _kwargs: dict[str, Any] = {
+                            "es":            es,
+                            "qdrant":        qdrant,
+                            "video_ids":     video_ids,
+                            "chunk_size":    chunk_size,
+                            "chunk_overlap": chunk_overlap,
+                            "progress_cb":   _progress,
+                        }
+                        if collection_name:
+                            _kwargs["collection_name"] = collection_name
+                        result = await run_ingestion(**_kwargs)
                     except Exception as e:
                         set_current_span_langfuse_io(output_data = {
                             "status": "failed",

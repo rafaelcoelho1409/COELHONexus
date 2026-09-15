@@ -35,6 +35,7 @@ TASK_INCLUDE = [
     "domains.ycs.qdrant_task.task",
     "domains.ycs.neo4j_task.task",
     "domains.ycs.pipeline_task.task",
+    "domains.ycs.embedding_migration.task",
     # Research Radar (3rd feature)
     "domains.rr.task",
 ]
