@@ -61,6 +61,8 @@ async def classify_query(
 
     Routing precedence:
       1. `force_mode + channel_ids` already on state → skip LLM entirely
+      1b. `force_mode == "fast"` (even without channel_ids) → skip LLM:
+          FAST retrieves nothing, so scope detection is unused.
       2. LLM classifies; `force_mode` (if set) overrides the predicted
          `mode` but the LLM's `sub_questions` + `channel_names` are
          still used.
@@ -71,6 +73,16 @@ async def classify_query(
     if force and channel_ids:
         return {
             "mode":          force,
+            "sub_questions": [],
+            "channel_ids":   channel_ids,
+        }
+    if (force or "").lower() == "fast":
+        # 2026-09-15: forced FAST skips the LLM entirely — channel scope
+        # exists to narrow retrieval and FAST retrieves nothing, so the
+        # classify call buys zero information on this path. (Auto-mode
+        # fast verdicts still go through the LLM below.)
+        return {
+            "mode":          "fast",
             "sub_questions": [],
             "channel_ids":   channel_ids,
         }

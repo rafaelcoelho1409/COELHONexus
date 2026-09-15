@@ -19,6 +19,7 @@ async def build_graph_from_request(request: Request):
         llm          = app.state.llm,
         checkpointer = None,
         neo4j_graph  = app.state.neo4j_graph,
+        llm_fast     = getattr(app.state, "llm_fast", None),
     )
 
 

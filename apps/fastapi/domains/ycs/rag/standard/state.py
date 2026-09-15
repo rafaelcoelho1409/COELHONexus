@@ -36,3 +36,10 @@ class YouTubeRAGState(TypedDict):
     # for the strict-evidence `generate` path; this is the parallel
     # channel for the rescue path.
     pre_grade_documents: list[Document]
+    # Per-request retrieval-arm breaker (2026-09-15). `skipped_arms`
+    # holds arm names ("neo4j", "es" — never "qdrant") the retrieve node
+    # stops querying for the rest of this request; `arm_empty_streaks`
+    # counts consecutive clean-empty rounds per arm (skip after 2).
+    # Failed arms skip immediately (provider error, not clean-empty).
+    skipped_arms:        list[str]
+    arm_empty_streaks:   dict[str, int]

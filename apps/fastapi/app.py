@@ -44,7 +44,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.v1.router import api_v1
-from api.v1.ycs.agents.llm_chain import build_deprecated_llm_chain
+from api.v1.ycs.agents.llm_chain import (
+    build_deprecated_llm_chain,
+    build_fast_llm_chain,
+)
 from domains.dd.ingestion.storage import get_storage
 from domains.dd.planner.runtime.checkpoint import (
     close_checkpointer,
@@ -216,6 +219,17 @@ async def lifespan(app: FastAPI):
         logger.warning(
             f"[lifespan] YCS LLM chain init failed: "
             f"{type(e).__name__}: {e}. /agents/search will 5xx."
+        )
+
+    # Dedicated FAST-mode client (short outputs, own bandit cell) —
+    # direct_answer prefers it, falls back to app.state.llm when None.
+    try:
+        app.state.llm_fast = build_fast_llm_chain()
+    except Exception as e:
+        app.state.llm_fast = None
+        logger.warning(
+            f"[lifespan] YCS FAST LLM chain init failed: "
+            f"{type(e).__name__}: {e}. FAST falls back to app.state.llm."
         )
 
     # query_ai_llm targets the external provider for NL→DSL translation

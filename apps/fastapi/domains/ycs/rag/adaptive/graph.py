@@ -140,12 +140,17 @@ def build_adaptive_rag_graph(
     llm,
     checkpointer = None,
     neo4j_graph = None,
+    llm_fast = None,
 ):
     """Build the Adaptive RAG parent graph.
 
     Wraps the STANDARD pipeline as a sub-graph and adds FAST (direct
     answer) and DEEP (multi-agent research) paths. Channel scope auto-
     detection runs in `classify_query` via `neo4j_graph`.
+
+    `llm_fast` (2026-09-15): dedicated short-output client for
+    `direct_answer` (own bandit cell + max_tokens cap) — falls back to
+    `llm` when None so older callers keep working.
 
     `checkpointer` is accepted but unused (preserved for API
     compatibility with deprecated)."""
@@ -184,7 +189,7 @@ def build_adaptive_rag_graph(
         return {**ctx_result, **cls_result}
 
     async def _direct(state):
-        return await direct_answer(state, llm)
+        return await direct_answer(state, llm_fast or llm)
 
     async def _run_standard(state, config: RunnableConfig):
         # `config` arg is auto-injected by LangGraph so we

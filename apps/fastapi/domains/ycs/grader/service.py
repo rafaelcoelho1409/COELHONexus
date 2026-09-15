@@ -190,7 +190,6 @@ class DocumentGrader:
             if parsed is not None and getattr(parsed, "score", None) in _KEEPER_SCORES:
                 kept.append(doc)
                 continue
-            # Lenient fallback: rescue intent from the raw payload.
             if isinstance(result, dict) and parsed is None:
                 raw = result.get("raw")
                 raw_content = getattr(raw, "content", "") if raw is not None else ""
@@ -209,4 +208,19 @@ class DocumentGrader:
                 f"[ycs:grader] rescued {rescued}/{len(documents)} doc(s) "
                 f"via raw-payload substring fallback"
             )
+        if not kept and documents:
+            # 2026-09-15 empty-grade passthrough: every doc dropped
+            # (outage hard-errors, or a strict pass on real docs) must
+            # NOT yield an empty set — that forces a rewrite round that
+            # re-retrieves the same pool and drops it again (observed
+            # death spiral). Pass the top reranked docs through instead;
+            # the hallucination gate still guards generation quality
+            # downstream. Rerank order preserved (best-first).
+            fallback_n = min(4, len(documents))
+            logger.warning(
+                f"[ycs:grader] kept 0/{len(documents)} — passing top "
+                f"{fallback_n} reranked doc(s) through instead of an "
+                f"empty set"
+            )
+            return list(documents[:fallback_n])
         return kept

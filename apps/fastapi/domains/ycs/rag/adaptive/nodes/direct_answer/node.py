@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 
-from domains.ycs.rag.llm_call import resilient_ainvoke
+from domains.ycs.rag.llm_call import hedged_ainvoke
 from domains.ycs.runtime.observability import traced
 
 from ....domain import history_to_messages, strip_think_tags
@@ -27,10 +27,12 @@ async def direct_answer(state: AdaptiveRAGState, llm) -> dict:
     """FAST path: direct LLM answer without retrieval."""
     chain = DIRECT_ANSWER_PROMPT | llm
     try:
-        # 2026-09-15: transient-only retries inside the bound (DD
-        # doc_distill parity) — raises last error unchanged, so the
+        # 2026-09-15: hedged racer (Tail-at-Scale) instead of plain
+        # retry — primary + one duplicate fired at +20s, first wins.
+        # Healthy path pays zero extra; slow tail gets raced, not
+        # waited out twice. Raises last error unchanged, so the
         # handlers below behave exactly as before.
-        response = await resilient_ainvoke(
+        response = await hedged_ainvoke(
             chain,
             {
                 "question": state["question"],
@@ -38,10 +40,6 @@ async def direct_answer(state: AdaptiveRAGState, llm) -> dict:
             },
             operation = "direct_answer",
             timeout_s = _DIRECT_ANSWER_TIMEOUT_S,
-            # FAST must stay fast: 2 attempts (≈182s worst) then the
-            # graph falls back to STANDARD — not 3 (≈274s) before the
-            # real retrieval path even starts.
-            max_attempts = 2,
         )
         return {
             "generation":        strip_think_tags(response.content),

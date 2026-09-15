@@ -17,6 +17,7 @@ from qdrant_client.http.models import (
     FieldCondition,
     Filter,
     FilterSelector,
+    HnswConfigDiff,
     MatchAny,
     PointStruct,
     SparseIndexParams,
@@ -174,6 +175,16 @@ async def ensure_collection(
                 "dense": VectorParams(
                     size = dense_dimensions,
                     distance = Distance.COSINE,
+                    # 2026-09-15: explicit HNSW (was server defaults
+                    # m=16/ef_construct=100). ef_construct=200 is the
+                    # canonical production default — one-time build cost
+                    # for a permanently better graph; m=16 unchanged
+                    # (32 buys <1% recall at 2× RAM). Applies to future
+                    # collections; existing ones keep their graph.
+                    hnsw_config = HnswConfigDiff(
+                        m = 16,
+                        ef_construct = 200,
+                    ),
                 ),
             },
             sparse_vectors_config = {

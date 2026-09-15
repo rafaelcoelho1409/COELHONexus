@@ -18,6 +18,7 @@ from qdrant_client.http.models import (
     FusionQuery,
     MatchAny,
     Prefetch,
+    SearchParams,
     SparseVector,
 )
 
@@ -100,6 +101,16 @@ class QdrantHybridRetriever:
                 query = FusionQuery(fusion = Fusion.RRF),
                 limit = self.top_k,
                 with_payload = True,
+                # 2026-09-15 (SOTA follow-up): explicit search-time
+                # exploration. Server default `ef == ef_construct`
+                # couples search to build quality; 128 is the
+                # benchmarked probe value (recall climbs, latency
+                # flat at our scale). No-op today: 72 points sit
+                # under full_scan_threshold, so this is exact scan —
+                # it takes effect automatically as the corpus grows
+                # past 10k points toward HNSW. (1.16.1 names this
+                # `search_params`; per-prefetch `params` left default.)
+                search_params = SearchParams(hnsw_ef = 128),
             )
 
         documents: list[Document] = []

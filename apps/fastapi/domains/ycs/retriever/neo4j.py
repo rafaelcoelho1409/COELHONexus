@@ -20,6 +20,7 @@ from langchain_core.documents import Document
 from langchain_neo4j import Neo4jGraph
 
 from domains.ycs.graph_builder.params import SOURCE_LABEL
+from domains.ycs.rag.llm_call import resilient_ainvoke
 
 from .params import NEO4J_DEFAULT_TOP_K
 from .prompts import ENTITY_EXTRACTION_PROMPT
@@ -27,6 +28,12 @@ from .schemas import ExtractedEntities
 
 
 logger = logging.getLogger(__name__)
+
+
+class _Neo4jExtractionError(Exception):
+    """LLM entity extraction failed (provider error) — distinct from
+    'no entities found', so callers can break the arm for the rest of
+    the request instead of re-burning 60s+ per rewrite round."""
 
 
 # Cypher fragments — kept at module scope (not `params.py`) because
@@ -64,23 +71,50 @@ class Neo4jRetriever:
 
     async def retrieve(
         self, query: str, channel_ids: list[str] | None = None,
-    ) -> list[Document]:
-        entities = await self._extract_entities(query)
+    ) -> tuple[list[Document], str]:
+        """Returns (documents, status) where status is one of:
+        "ok" (docs found), "no_entities" (nothing to look up — not a
+        failure), "extraction_failed" (LLM error — provider-side, likely
+        to persist across rewrite rounds of the same request),
+        "traversal_failed" (Cypher error). The status lets SmartRetriever
+        tell a dead arm from an empty one (2026-09-15 per-request arm
+        breaker)."""
+        try:
+            entities = await self._extract_entities(query)
+        except _Neo4jExtractionError:
+            return [], "extraction_failed"
         if not entities:
-            return []
-        documents = self._traverse_graph(entities, channel_ids)
-        return documents[:self.top_k]
+            return [], "no_entities"
+        try:
+            documents = self._traverse_graph(entities, channel_ids)
+        except Exception as e:
+            logger.warning(
+                f"[ycs:neo4j] traversal failed: "
+                f"{type(e).__name__}: {str(e)[:200]}"
+            )
+            return [], "traversal_failed"
+        return documents[:self.top_k], ("ok" if documents else "no_entities")
 
     async def _extract_entities(self, query: str) -> list[str]:
         """Structured-output LLM call. Failures degrade to `[]` so the
-        SmartRetriever's other arms still produce results."""
+        SmartRetriever's other arms still produce results.
+
+        2026-09-15: wrapped in `resilient_ainvoke` (30s × 2, transient
+        only) — this was the last unguarded LLM call on the retrieval
+        path; a hang here stalled the whole gather with no bound."""
         # default `method="json_schema"` — see
         # `rag/standard/nodes/hallucination/node.py` for the rationale.
         chain = ENTITY_EXTRACTION_PROMPT | self.llm.with_structured_output(
             ExtractedEntities,
         )
         try:
-            result = await chain.ainvoke({"query": query})
+            result = await resilient_ainvoke(
+                chain,
+                {"query": query},
+                operation    = "neo4j_entity_extract",
+                timeout_s    = 30.0,
+                max_attempts = 2,
+            )
             logger.info(f"[ycs:neo4j] extracted entities: {result.entities}")
             return result.entities
         except Exception as e:
@@ -88,7 +122,7 @@ class Neo4jRetriever:
                 f"[ycs:neo4j] entity extraction failed: "
                 f"{type(e).__name__}: {str(e)[:200]}"
             )
-            return []
+            raise _Neo4jExtractionError(str(e)[:200]) from e
 
     def _traverse_graph(
         self, entities: list[str], channel_ids: list[str] | None = None,

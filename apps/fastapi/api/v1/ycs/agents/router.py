@@ -929,6 +929,14 @@ async def rag_search_stream(
         }
         cancelled = False
         stalled   = False
+        deadline_hit = False
+        # 2026-09-15 stream-side global deadline (parity with sync
+        # `/search`'s per-mode table): the silence watchdog below only
+        # catches a hung producer — a grinding producer (events flowing,
+        # no progress) needs a wall-clock bound too.
+        _stream_deadline_s = _ASK_DEADLINE_S.get(
+            (payload.force_mode or "").lower(), _ASK_DEADLINE_DEFAULT_S,
+        )
         # Heartbeat in the main loop, not a background task — CancelledError would silently kill a background coroutine.
         # DEEP sub-agents yield zero parent events for 5-15 min; ticks prevent false stall detection.
         hb_seq                  = 0
@@ -1005,6 +1013,19 @@ async def rag_search_stream(
                         break
                     if await request.is_disconnected():
                         cancelled = True
+                        break
+                    if not preview_plan and (
+                        time.monotonic() - t_run_start
+                    ) > _stream_deadline_s:
+                        logger.warning(
+                            f"[ycs:stream] deadline: "
+                            f"{int(_stream_deadline_s)}s wall exceeded on "
+                            f"turn_id={turn_id} — finalizing with partial "
+                            f"content instead of grinding."
+                        )
+                        for task in producer_tasks:
+                            task.cancel()
+                        deadline_hit = True
                         break
                     try:
                         kind, queue_payload = await asyncio.wait_for(
@@ -1168,6 +1189,74 @@ async def rag_search_stream(
                         + json.dumps({"node": "end", "status": "cancelled"})
                         + "\n\n"
                     )
+                elif deadline_hit:
+                    # 2026-09-15: global deadline expired — mirror the
+                    # sync deadline path: keep partial content (a
+                    # mid-generate answer is real work), never sentinel
+                    # text over it. Falls through to the normal done
+                    # finalize below via `stalled = False` shape — reuse
+                    # the `else` branch by NOT touching it; emit
+                    # `deadline` outcome on metrics only.
+                    if not last_generation:
+                        last_generation = (
+                            "(partial — the pipeline hit its "
+                            f"{int(_stream_deadline_s / 60)}-minute "
+                            "budget before finishing. Retry or switch "
+                            "modes; expand Thinking for progress.)"
+                        )
+                    record_ask_run(
+                        route = "search_stream",
+                        mode = last_mode or payload.force_mode or "unknown",
+                        outcome = "deadline",
+                        grounded = last_grounded,
+                        duration_s = max(time.monotonic() - t_run_start, 0.0),
+                        citation_count = len(last_citations),
+                    )
+                    # Fall through to the normal done-finalize path so
+                    # the turn persists + `end complete` fires with
+                    # partial content — identical to a healthy finish.
+                    if turn_id is not None and last_generation:
+                        try:
+                            thinking_state = _thinking_finalize(thinking_state)
+                            _stamp_duration(thinking_state, t_run_start)
+                            _stamp_citations(thinking_state, last_citations)
+                            await asyncio.wait_for(
+                                update_turn_answer(
+                                    request.app.state.pg_url,
+                                    turn_id, last_generation, last_mode,
+                                    thinking_state = thinking_state,
+                                ),
+                                timeout = _PERSIST_TIMEOUT_S,
+                            )
+                        except (asyncio.TimeoutError, Exception) as e:
+                            logger.warning(
+                                f"[ycs:stream] deadline finalize "
+                                f"failed: {type(e).__name__}: {e}"
+                            )
+                    record_ask_run(
+                        route = "search_stream",
+                        mode = last_mode or payload.force_mode or "unknown",
+                        outcome = "done",
+                        grounded = last_grounded,
+                        duration_s = max(time.monotonic() - t_run_start, 0.0),
+                        citation_count = len(last_citations),
+                    )
+                    set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                        status = "done",
+                        answer = last_generation,
+                        mode = last_mode or payload.force_mode or "unknown",
+                        grounded = last_grounded,
+                        citations = last_citations,
+                    ))
+                    yield (
+                        "data: "
+                        + json.dumps({
+                            "node":        "end",
+                            "status":      "complete",
+                            "duration_ms": thinking_state.get("duration_ms"),
+                        })
+                        + "\n\n"
+                    )
                 elif stalled:
                     sentinel = (
                         "(no response — pipeline stalled after "
@@ -1214,6 +1303,100 @@ async def rag_search_stream(
                         + json.dumps({
                             "node":        "end",
                             "status":      "stalled",
+                            "duration_ms": thinking_state.get("duration_ms"),
+                        })
+                        + "\n\n"
+                    )
+                elif deadline_hit:
+                    # 2026-09-15 stream-side global deadline (parity with sync
+                    # `/search`'s per-mode table): wall-clock bound exceeded —
+                    # run one bounded fallback pass if no generation exists yet,
+                    # and finalize with outcome="deadline" + status="complete".
+                    if not last_generation:
+                        from domains.ycs.rag.standard.nodes.fallback_answer import (
+                            fallback_answer as _deadline_fallback,
+                        )
+                        try:
+                            _fb = await _deadline_fallback(
+                                {
+                                    "question":             payload.question,
+                                    "conversation_history": history,
+                                    "pre_grade_documents":  [],
+                                    "documents":            [],
+                                },
+                                request.app.state.llm,
+                            )
+                            last_generation = _fb.get("generation", "")
+                            last_citations = _fb.get("citations", [])
+                            last_mode = payload.force_mode or "standard"
+                            last_grounded = False
+                            yield (
+                                "data: "
+                                + json.dumps({
+                                    "node":       "fallback_answer",
+                                    "generation": last_generation,
+                                    "citations":  last_citations,
+                                    "grounded":   last_grounded,
+                                })
+                                + "\n\n"
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"[ycs:stream] deadline fallback failed: "
+                                f"{type(e).__name__}: {e}"
+                            )
+                            last_generation = (
+                                f"(no response — pipeline exceeded "
+                                f"{int(_stream_deadline_s)}s deadline. Please retry.)"
+                            )
+                    if turn_id is not None:
+                        try:
+                            thinking_state = _thinking_finalize(thinking_state)
+                            _stamp_duration(thinking_state, t_run_start)
+                            _stamp_citations(thinking_state, last_citations)
+                            await asyncio.wait_for(
+                                update_turn_answer(
+                                    request.app.state.pg_url,
+                                    turn_id, last_generation, last_mode,
+                                    thinking_state = thinking_state,
+                                ),
+                                timeout = _PERSIST_TIMEOUT_S,
+                            )
+                        except (asyncio.TimeoutError, Exception) as e:
+                            logger.warning(
+                                f"[ycs:stream] deadline finalize failed: "
+                                f"{type(e).__name__}: {e}"
+                            )
+                    record_ask_run(
+                        route = "search_stream",
+                        mode = last_mode or payload.force_mode or "unknown",
+                        outcome = "deadline",
+                        grounded = last_grounded,
+                        duration_s = max(time.monotonic() - t_run_start, 0.0),
+                        citation_count = len(last_citations),
+                    )
+                    set_current_span_langfuse_io(output_data = _langfuse_ycs_output(
+                        status = "done",
+                        answer = last_generation,
+                        mode = last_mode or payload.force_mode or "unknown",
+                        grounded = last_grounded,
+                        citations = last_citations,
+                        sub_questions = (
+                            (thinking_state.get("deep") or {}).get("sub_questions")
+                            if isinstance(thinking_state.get("deep"), dict) else
+                            None
+                        ),
+                        confidence_score = (
+                            (thinking_state.get("deep") or {}).get("confidence_score")
+                            if isinstance(thinking_state.get("deep"), dict) else
+                            None
+                        ),
+                    ))
+                    yield (
+                        "data: "
+                        + json.dumps({
+                            "node":        "end",
+                            "status":      "complete",
                             "duration_ms": thinking_state.get("duration_ms"),
                         })
                         + "\n\n"
