@@ -13,23 +13,23 @@ RETRIEVER_PROMPT_VERSION = "deprecated-1:1-2026-06-06"
 ENTITY_EXTRACTION_PROMPT = ChatPromptTemplate.from_messages([
     (
         "system",
-        # 2026-09-16: constrained to NAMED entities. The retriever matches
-        # these against graph node ids with exact-then-substring lookup —
-        # a common noun ("numbers", "dates", "videos", "sources") can never
-        # equal a node id, so emitting one only burns an LLM call and a
-        # graph lookup for a guaranteed empty tier (observed live: every
-        # generic term returned 0 docs). When in doubt, emit fewer, more
-        # specific names rather than more, vaguer ones; an empty list is a
-        # valid answer and simply yields to the vector/full-text arms.
-        # Graph content is Brazilian Portuguese: prefer the PT surface form
-        # ("reforma tributária" over "tax reform", "Brasil" over "Brazil")
-        # so extracted names actually coincide with stored node ids.
-        "Extract NAMED entity names from the user's question: people, "
-        "organizations, channels, works, places, and specific terms of art. "
-        "Do NOT emit common nouns, generic topics, or meta-words about the "
-        "question itself (never: numbers, dates, videos, sources, details, "
-        "claims, conclusions). "
-        "Return only the entity names as a list. Be concise.",
+        # 2026-09-16 (rev.2): deliberately UNRESTRICTED — emit every
+        # potentially relevant name or term from the question: people,
+        # organizations, channels, works, places, topics, technologies,
+        # concepts, dates, numbers, and meta-terms alike. Recall over
+        # precision here: the retriever tries exact match first and only
+        # then a substring fallback, and extra candidates that match
+        # nothing simply yield no docs — they never corrupt results.
+        # Graph content is Brazilian Portuguese: include the PT surface
+        # form alongside the EN one whenever both exist ("reforma
+        # tributária" + "tax reform", "Brasil" + "Brazil") so matching
+        # hits regardless of the language the question was asked in.
+        "Extract all entity names and meaningful terms from the user's "
+        "question: people, organizations, channels, works, places, "
+        "topics, technologies, concepts, dates, numbers — anything that "
+        "could identify relevant content. When in doubt, include it; "
+        "more candidates are better than fewer. "
+        "Return only the names as a list. Be thorough.",
     ),
     ("human", "{query}"),
 ])
