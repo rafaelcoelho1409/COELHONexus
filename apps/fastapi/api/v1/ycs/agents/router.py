@@ -33,6 +33,12 @@ from domains.ycs.conversation import (
     update_turn_answer,
 )
 from domains.ycs.graph_builder import get_graph_stats
+from domains.ycs.runtime.llm_counter import (
+    clear_state as _llm_counter_reset,
+    read_counters as _llm_read_counters,
+    set_node as _llm_set_node,
+    set_thread as _llm_set_thread,
+)
 
 from domains.llm.credentials           import resolve_key
 from domains.llm.rotator.benchmarks    import rank_for_step
@@ -217,6 +223,13 @@ async def get_agents_config(request: Request) -> dict:
         return {"config": {}, "has_api_key": False}
     safe = {k: v for k, v in config.items() if k != "api_key"}
     return {"config": safe, "has_api_key": bool(config.get("api_key"))}
+
+
+@router.get("/usage/{thread_id}")
+async def get_thread_usage(thread_id: str) -> dict:
+    """Aggregate LLM usage for one Ask conversation (models + tokens per
+    node, and totals) — mirrors Ingestion's per-video LLM drawer."""
+    return await _llm_read_counters(thread_id)
 
 
 @router.put("/config")
@@ -459,6 +472,12 @@ async def rag_search(
     try:
         from infra.langfuse.sessions import session as _lf_session
         _sess_id  = payload.thread_id or "default"
+        # 2026-09-15: every graph call runs under this thread key so the
+        # per-conversation LLM-usage counter accumulates across nodes.
+        # Sync + stream both set it; ingestion's extract_id path is
+        # unchanged (different context altogether).
+        _llm_set_thread(thread_id = _sess_id)
+        _llm_set_node(node = None)  # nodes tag themselves before calling
         _user_id  = (payload.channel_ids or ["default"])[0]
         t0 = time.monotonic()
         with _lf_session(
@@ -861,6 +880,10 @@ async def rag_search_stream(
         from infra.langfuse.sessions import session as _lf_session
         _sess_id = payload.thread_id or DEFAULT_THREAD_ID
         _user_id = (effective_channel_ids or ["default"])[0]
+        # 2026-09-15: same thread-tagging as sync `/search` so the
+        # conversation-level usage counter captures this stream too.
+        _llm_set_thread(thread_id = _sess_id)
+        _llm_set_node(node = None)
         _session_cm = _lf_session(
             "ycs",
             session_id = _sess_id,

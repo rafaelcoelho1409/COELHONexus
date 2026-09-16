@@ -31,8 +31,16 @@ logger = logging.getLogger(__name__)
 _extract_id_var: ContextVar[str | None] = ContextVar(
     "ycs_llm_extract_id", default=None,
 )
-_video_id_var: ContextVar[str | None] = ContextVar(
+_video_id_var:  ContextVar[str | None] = ContextVar(
     "ycs_llm_video_id", default=None,
+)
+# 2026-09-15: Ask path re-uses this counter with a fake "thread" id as
+# the channel — one conversation's full LLM bill under one counter.
+_thread_id_var: ContextVar[str | None] = ContextVar(
+    "ycs_llm_thread_id", default=None,
+)
+_node_var: ContextVar[str | None] = ContextVar(
+    "ycs_llm_node", default=None,
 )
 
 _COUNTER_TTL_S = 24 * 60 * 60  # matches PIPELINE_STATE_TTL_S
@@ -47,12 +55,39 @@ def set_context(*, extract_id: str | None, video_id: str | None) -> None:
     _video_id_var.set(video_id)
 
 
+def set_thread(*, thread_id: str | None) -> None:
+    """2026-09-15: per-request attribution key for the Ask path —
+    threads the conversation's aggregate under one counter (vs an
+    extract_id/video_id pair in ingestion). Namespace: a thread never
+    sees a video's `video_id` too, so buckets don't collide."""
+    _thread_id_var.set(thread_id)
+
+
+def set_node(*, node: str | None) -> None:
+    """Which node in the Ask graph is calling (generate/synthesize/
+    classify/critic/…). The per-thread counter splits by this so
+    `/agents/usage/{thread_id}` can show a per-node breakdown like
+    Ingestion's per-video drawer does."""
+    _node_var.set(node)
+
+
 def clear_context() -> None:
     set_context(extract_id=None, video_id=None)
 
 
 def get_context() -> tuple[str | None, str | None]:
     return _extract_id_var.get(), _video_id_var.get()
+
+
+def get_thread_state() -> tuple[str | None, str | None]:
+    return _thread_id_var.get(), _node_var.get()
+
+
+def clear_state() -> None:
+    """Reset ALL four vars — safe default for a request boundary."""
+    set_context(extract_id=None, video_id=None)
+    set_thread(thread_id=None)
+    set_node(node=None)
 
 
 def _counters_key(extract_id: str) -> str:
@@ -65,16 +100,25 @@ def _models_key(extract_id: str, video_id: str) -> str:
 
 async def bump_current_call(
     *,
-    tokens_in: int,
-    tokens_out: int,
+    tokens_in:    int,
+    tokens_out:   int,
     reasoning_tokens: int,
-    model: str,
+    model:        str,
 ) -> None:
     """Bump counters for the current YCS context; no-op outside one
     (e.g. a caller that never set_context, or a call that raced past
-    clear_context — safe to just skip rather than mis-attribute)."""
-    extract_id, video_id = get_context()
-    if not extract_id or not video_id:
+    clear_context — safe to just skip rather than mis-attribute).
+
+    2026-09-15: a `thread_id` context (from `set_thread`) takes the Ask
+    path's aggregate — `ycs:{thread_id}` keys instead of
+    `ycs:{extract_id}` — so one conversation's total bill sits under
+    one Redis counter regardless of which nodes ran inside it. Nodes
+    WITHOUT a thread fall back to the original extract/video path."""
+    thread_id, node = get_thread_state()
+    extract_id, video_id = None, None
+    if not thread_id:
+        extract_id, video_id = get_context()
+    if not (thread_id or (extract_id and video_id)):
         return
     # Deferred import — pipeline_task's package __init__ drags in
     # infra.celery, which needs real env vars at import time (see
@@ -83,9 +127,14 @@ async def bump_current_call(
 
     redis = build_redis_client()
     try:
-        counters_k = _counters_key(extract_id)
-        models_k = _models_key(extract_id, video_id)
-        pp = f"node:{video_id}"
+        if thread_id:
+            counters_k = f"ycs:{thread_id}:llm:counters"
+            models_k   = f"ycs:{thread_id}:llm:models:{node or 'unknown'}"
+            pp         = f"node:{node or 'unknown'}"
+        else:
+            counters_k = _counters_key(extract_id or "")
+            models_k   = _models_key(extract_id or "", video_id or "")
+            pp         = f"node:{video_id or 'unknown'}"
         pipe = redis.pipeline(transaction=False)
         pipe.hincrby(counters_k, f"{pp}:calls", 1)
         pipe.hincrby(counters_k, f"{pp}:tokens_in", int(tokens_in))
@@ -116,7 +165,13 @@ async def bump_current_call(
 
 async def read_counters(extract_id: str) -> dict[str, Any]:
     """Same `{total, by_node}` shape DD's `read_counters` returns — the
-    frontend's `llm_totals.js` renders either with zero changes."""
+    frontend's `llm_totals.js` renders either with zero changes.
+
+    2026-09-15: re-tasked for Ask: the input is a THREAD id (via the
+    new `set_thread` path), so `/agents/usage/{thread_id}` reports the
+    aggregate for one conversation. Ingestion's video-keyed counter is
+    untouched — pass an extract_id-shaped string and it works as before."""
+    key = _counters_key(extract_id)  # unchanged — extract_id IS the key
     empty: dict[str, Any] = {
         "extract_id": extract_id,
         "total": {
@@ -131,7 +186,7 @@ async def read_counters(extract_id: str) -> dict[str, Any]:
 
     redis = build_redis_client()
     try:
-        raw = await redis.hgetall(_counters_key(extract_id))
+        raw = await redis.hgetall(key)
         if not raw:
             return empty
         counters = {
@@ -200,6 +255,11 @@ class YCSLLMUsageCallback(AsyncCallbackHandler):
     `aconvert_to_graph_documents` never exposes to its caller)."""
 
     async def on_llm_end(self, response: Any, **kwargs: Any) -> None:
+        """Fires for every LLM call — LangChain's `with_structured_output`
+        goes through this same hook (the wrapper is just a Runnable that
+        delegates to the inner `Runnable` — verified in langchain-openai
+        1.x). Nodes tag themselves via `set_node` right before invoking,
+        so this lands in the right bucket."""
         try:
             llm_output = getattr(response, "llm_output", None) or {}
             usage = (

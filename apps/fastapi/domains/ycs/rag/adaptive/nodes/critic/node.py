@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 
 from domains.ycs.rag.llm_call import resilient_ainvoke
+from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
 from domains.ycs.runtime.observability import traced
 
 from ...params import CRITIC_FALLBACK_CONFIDENCE
@@ -38,6 +39,7 @@ async def critic(state: AdaptiveRAGState, llm) -> dict:
         CriticAssessment,
     )
     try:
+        _llm_set_node(node = "critic")
         result = await resilient_ainvoke(
             chain,
             {

@@ -156,6 +156,11 @@ class DocumentGrader:
 
         async def _grade_one(doc: Document):
             async with sem:
+                # 2026-09-15: tag every graded doc with the retrieval
+                # node so the conversation-level usage counter splits
+                # retrieval.grade from retrieval.generate.
+                from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
+                _llm_set_node(node = "grader")
                 # Per-call timeout prevents a single slow / hung model
                 # from blocking a semaphore slot indefinitely.
                 return await asyncio.wait_for(

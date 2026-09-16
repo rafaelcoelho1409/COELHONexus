@@ -21,6 +21,7 @@ from langchain_neo4j import Neo4jGraph
 
 from domains.ycs.graph_builder.params import SOURCE_LABEL
 from domains.ycs.rag.llm_call import resilient_ainvoke
+from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
 
 from .params import NEO4J_DEFAULT_TOP_K
 from .prompts import ENTITY_EXTRACTION_PROMPT
@@ -108,6 +109,7 @@ class Neo4jRetriever:
             ExtractedEntities,
         )
         try:
+            _llm_set_node(node = "neo4j_entity_extract")
             result = await resilient_ainvoke(
                 chain,
                 {"query": query},

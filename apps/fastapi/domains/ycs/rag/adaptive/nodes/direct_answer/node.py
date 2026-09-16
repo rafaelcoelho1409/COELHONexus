@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 
 from domains.ycs.rag.llm_call import hedged_ainvoke
+from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
 from domains.ycs.runtime.observability import traced
 
 from ....domain import history_to_messages, strip_think_tags
@@ -27,6 +28,7 @@ async def direct_answer(state: AdaptiveRAGState, llm) -> dict:
     """FAST path: direct LLM answer without retrieval."""
     chain = DIRECT_ANSWER_PROMPT | llm
     try:
+        _llm_set_node(node = "direct_answer")
         # 2026-09-15: hedged racer (Tail-at-Scale) instead of plain
         # retry — primary + one duplicate fired at +20s, first wins.
         # Healthy path pays zero extra; slow tail gets raced, not

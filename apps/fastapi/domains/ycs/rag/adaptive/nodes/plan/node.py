@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
 from domains.ycs.runtime.observability import traced
 
 from ....domain import parse_json_model_output
@@ -53,6 +54,7 @@ async def plan_research(state: AdaptiveRAGState, llm) -> dict:
     last_exc: BaseException | None = None
     for attempt in range(1, _PLAN_MAX_ATTEMPTS + 1):
         try:
+            _llm_set_node(node = "plan")
             response = await asyncio.wait_for(
                 chain.ainvoke({"question": state["question"]}),
                 timeout = _PLAN_TIMEOUT_S,

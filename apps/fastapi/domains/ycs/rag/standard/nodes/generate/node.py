@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from domains.ycs.rag.llm_call import resilient_ainvoke
+from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
 from domains.ycs.runtime.observability import traced
 
 from ....domain import history_to_messages, strip_think_tags
@@ -46,6 +47,7 @@ async def generate(state: YouTubeRAGState, llm) -> dict:
 
     chain = GENERATE_PROMPT | llm
     try:
+        _llm_set_node(node = "generate")
         response = await resilient_ainvoke(
             chain,
             {

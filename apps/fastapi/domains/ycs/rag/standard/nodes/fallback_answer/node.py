@@ -23,6 +23,7 @@ import asyncio
 from langchain_core.documents import Document
 
 from domains.ycs.rag.llm_call import resilient_ainvoke
+from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
 from domains.ycs.runtime.observability import traced
 
 from ....domain import history_to_messages, strip_think_tags
@@ -117,6 +118,7 @@ async def fallback_answer(state: YouTubeRAGState, llm) -> dict:
 
     chain = FALLBACK_PROMPT | llm
     try:
+        _llm_set_node(node = "fallback_answer")
         response = await resilient_ainvoke(
             chain,
             {

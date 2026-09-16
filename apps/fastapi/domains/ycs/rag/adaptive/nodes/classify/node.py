@@ -16,6 +16,7 @@ import asyncio
 
 from domains.ycs.graph_builder.params import SOURCE_LABEL
 from domains.ycs.rag.llm_call import resilient_ainvoke
+from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
 from domains.ycs.runtime.observability import traced
 
 from ....domain import parse_json_model_output
@@ -104,6 +105,7 @@ async def classify_query(
     formatted_history = "\n---\n".join(parts)
     chain = CLASSIFY_PROMPT | llm
     try:
+        _llm_set_node(node = "classify")
         response = await resilient_ainvoke(
             chain,
             {"history": formatted_history, "question": state["question"]},
