@@ -31,9 +31,11 @@ class RAGSearchRequest(BaseModel):
     max_retries: int                                      = 3
     force_mode:  Literal["fast", "standard", "deep"] | None = None
     channel_ids: list[NonEmptyStr] | None                 = None
-    # Two-pass DEEP protocol: preview_plan=True → emit plan early (SSE) and halt before fan-out;
-    # sub_questions=[...] on second request → use caller-supplied plan, skip LLM plan call.
-    preview_plan:  bool                            = False
+    # 2026-09-16: the plan-preview/approval UI was removed — DEEP now
+    # always runs straight through, same as FAST/STANDARD. This still
+    # accepts a caller-supplied plan (skips the `plan_research` LLM
+    # call) for programmatic use; nothing in the frontend populates it
+    # anymore.
     sub_questions: list[NonEmptyStr] | None        = None
 
 

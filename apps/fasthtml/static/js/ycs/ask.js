@@ -927,8 +927,6 @@ conversationEl?.addEventListener("click", (ev) => {
 conversationEl?.addEventListener("click", (ev) => {
     const head = ev.target.closest?.(".ycs-ask-deep-card-head");
     if (!head) return;
-    // Don't swallow checkbox / Run-research clicks (preview mode).
-    if (ev.target.closest(".ycs-ask-deep-check, .ycs-ask-deep-run")) return;
     const card = head.closest(".ycs-ask-deep-card");
     if (!card || card.dataset.state !== "done") return;
     card.classList.toggle("expanded");
@@ -1764,37 +1762,28 @@ function renderDeepCards(subQuestions, researchPlan) {
     deep.style.display = "block";
     cards.replaceChildren();
     deepCardIndex.clear();
-    /* P6 preview-mode rendering: each card gets a checkbox (default
-     * checked) and a "Run research" button is appended at the bottom.
-     * On click, the chosen subset is fed back to the backend via the
-     * second pass (sub_questions=[...], no preview_plan). */
-    const isPreview = !!currentTurnEl
-        && currentTurnEl.classList.contains("ycs-ask-turn-preview");
+    // 2026-09-16: the plan-preview/approval step (checkbox per card +
+    // "Run research" button) was removed — DEEP now fans out to every
+    // planned sub-question immediately, so these cards only ever show
+    // live progress ("queued" -> "done"), never a pending approval.
     if (banner) {
         const planTxt = researchPlan
             ? `<div class="ycs-ask-deep-banner-plan">${htmlEscape(String(researchPlan))}</div>`
             : "";
-        const prefix = isPreview ? "Plan preview" : "Research plan";
         banner.innerHTML =
-            `<div class="ycs-ask-deep-banner-head"><strong>${prefix}</strong> - ${subQuestions.length} sub-questions</div>${planTxt}`;
+            `<div class="ycs-ask-deep-banner-head"><strong>Research plan</strong> - ${subQuestions.length} sub-questions</div>${planTxt}`;
     }
     for (const q of subQuestions) {
         const card = document.createElement("div");
         card.className = "ycs-ask-deep-card";
-        card.dataset.state = isPreview ? "preview" : "queued";
-        const stateLabel = isPreview ? "pending" : "queued";
-        const checkbox = isPreview
-            ? `<input type="checkbox" class="ycs-ask-deep-check"
-                      value="${htmlEscape(q)}" checked>`
-            : "";
+        card.dataset.state = "queued";
         // Chevron rendered inline; visible only when card hits the
         // `done` state (CSS-gated on `[data-state="done"]`). Click on
         // the head toggles `.expanded` via the delegated handler below.
         card.innerHTML = `
             <div class="ycs-ask-deep-card-head">
-                ${checkbox}
                 <span class="ycs-ask-deep-card-chevron">▾</span>
-                <span class="ycs-ask-deep-card-state">${stateLabel}</span>
+                <span class="ycs-ask-deep-card-state">queued</span>
                 <span class="ycs-ask-deep-card-q">${htmlEscape(q)}</span>
             </div>
             <div class="ycs-ask-deep-card-body"></div>
@@ -1802,42 +1791,7 @@ function renderDeepCards(subQuestions, researchPlan) {
         cards.appendChild(card);
         deepCardIndex.set(q, card);
     }
-    if (isPreview) {
-        const actions = document.createElement("div");
-        actions.className = "ycs-ask-deep-actions";
-        actions.innerHTML = `
-            <button type="button" class="ycs-ask-deep-run">Run research</button>
-            <span class="ycs-ask-deep-actions-hint">
-                Uncheck any sub-question you don't want to research.
-            </span>
-        `;
-        cards.appendChild(actions);
-    }
 }
-
-/* "Run research" — user confirmed the preview plan; fire the second
- * pass into the SAME turn (reuseTurn) with the checked subset as
- * `sub_questions` so the backend skips `plan_research`. */
-conversationEl?.addEventListener("click", async (ev) => {
-    const btn = ev.target.closest?.(".ycs-ask-deep-run");
-    if (!btn) return;
-    ev.stopPropagation();
-    const turn = btn.closest(".ycs-ask-turn");
-    if (!turn) return;
-    const checked = [...turn.querySelectorAll(".ycs-ask-deep-check:checked")]
-        .map((cb) => cb.value);
-    if (!checked.length) {
-        showToast("Pick at least one sub-question.");
-        return;
-    }
-    const question = turn.dataset.question || "";
-    if (!question) return;
-    currentTurnEl = turn;
-    await sendQuestion(question, {
-        reuseTurn:     true,
-        sub_questions: checked,
-    });
-});
 
 function advanceDeepCard(question, fullAnswer) {
     if (!question || !deepCardIndex.size) return;
@@ -2117,7 +2071,17 @@ function applyUpdate(node, update) {
         currentSubQuestions = update.sub_questions.slice();
         renderDeepCards(update.sub_questions, update.research_plan || "");
     }
-    if (update.latest_sub_question) {
+    // 2026-09-16: backend now ships the FULL `sub_results` list per
+    // event (one item for live custom per-finish frames, N for a bulk
+    // `run_subagents` return) — flip every listed card so none stays
+    // silently queued. `latest_sub_*` stays as fallback for older pods.
+    if (Array.isArray(update.sub_results) && update.sub_results.length) {
+        for (const item of update.sub_results) {
+            if (item && item.sub_question) {
+                advanceDeepCard(item.sub_question, item.answer ?? "");
+            }
+        }
+    } else if (update.latest_sub_question) {
         // 2026-06-15 — prefer the full `latest_sub_answer`; fall back
         // to `latest_sub_answer_preview` for the brief window where a
         // server pod with the pre-fix code is still emitting events.
@@ -2181,17 +2145,6 @@ async function consumeSSE(payload, signal) {
                 continue;
             }
             if (node === "end") {
-                // Preview-mode end ("status":"preview") — the user must
-                // confirm the plan before fan-out runs. Stay on the
-                // current turn, leave the deep cards visible with
-                // checkboxes + Run-research button (handled in
-                // applyUpdate below). DON'T freeze or promote the
-                // thread label — no row was saved server-side.
-                if (evt.status === "preview") {
-                    askStatus.textContent = "Plan ready — pick which sub-questions to research.";
-                    askStatus.className = "ycs-search-status";
-                    return;
-                }
                 markStage("verify", "done");
                 askStatus.textContent = "Done.";
                 askStatus.className = "ycs-search-status";
@@ -2237,22 +2190,16 @@ async function consumeSSE(payload, signal) {
 }
 
 /* The core "send a question" path — extracted so the per-turn
- * Regenerate action and the DEEP plan-preview second pass can re-fire
- * without duplicating the SSE wiring. Options:
- *   - `preview_plan` (bool) — DEEP plan preview (P6): backend halts
- *     after `plan_research` so the user can prune sub-questions.
+ * Regenerate action can re-fire without duplicating the SSE wiring.
+ * 2026-09-16: DEEP's plan-preview/approval step was removed — DEEP
+ * now runs straight through like FAST/STANDARD, all sub-questions
+ * approved automatically. Options:
  *   - `sub_questions` (array) — bypass the planner LLM, use these.
  *   - `reuseTurn` (bool) — stream into the existing `currentTurnEl`
- *     instead of creating a new one (used by the preview → execute
- *     hand-off so the conversation reads as one turn). */
+ *     instead of creating a new one. */
 async function sendQuestion(question, opts = {}) {
     if (!question) return;
     if (!opts.reuseTurn) startNewTurn(question);
-    if (opts.preview_plan && currentTurnEl) {
-        currentTurnEl.classList.add("ycs-ask-turn-preview");
-    } else if (currentTurnEl) {
-        currentTurnEl.classList.remove("ycs-ask-turn-preview");
-    }
     setStatus(askStatus, "running", "Thinking…");
     /* 2026-06-17 — first submit of a thread snapshots the current
      * `selectedChannels` as the thread's permanent scope. The server
@@ -2263,7 +2210,6 @@ async function sendQuestion(question, opts = {}) {
     const payload = { question, thread_id: threadId };
     if (channel_ids.length)         payload.channel_ids   = channel_ids;
     if (activeMode)                 payload.force_mode    = activeMode;
-    if (opts.preview_plan)          payload.preview_plan  = true;
     if (Array.isArray(opts.sub_questions) && opts.sub_questions.length) {
         payload.sub_questions = opts.sub_questions;
     }
@@ -2295,14 +2241,9 @@ askForm?.addEventListener("submit", async (ev) => {
     if (!question) return;
     askInput.value = "";
     resetTextareaHeight();
-    /* DEEP mode → first pass preview, second pass execute. Other modes
-     * just send straight through. The hand-off happens on the
-     * `.ycs-ask-deep-run` click handler defined below. */
-    if (activeMode === "deep") {
-        await sendQuestion(question, { preview_plan: true });
-    } else {
-        await sendQuestion(question);
-    }
+    // 2026-09-16: DEEP no longer pauses for plan approval — every mode
+    // sends straight through and runs to completion.
+    await sendQuestion(question);
 });
 
 // ---- per-turn action chips (Copy / Regenerate / Branch) -------------------

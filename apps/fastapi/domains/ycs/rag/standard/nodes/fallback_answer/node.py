@@ -9,13 +9,24 @@ Produces a real `generation` from:
     are the closest matches the corpus has — the strict grader
     rejected them as not directly relevant, but they remain useful
     as topical hints.
+  - WEB SEARCH (2026-09-16): a best-effort external lookup via
+    `domains.ycs.rag.web_search.search_web` (Parallel's free keyless
+    MCP endpoint) when the corpus has nothing — closes genuine corpus
+    gaps (topics never covered by any indexed video) instead of
+    relying on stale/absent parametric knowledge alone. Deliberately
+    scoped to ONLY this node, not the main retrieval fan-out — see
+    that module's docstring for the full rationale. Best-effort: an
+    empty/failed search degrades silently, never blocks the answer.
   - CONVERSATION HISTORY: prior chat turns (for meta-questions and
     follow-ups).
   - LLM PARAMETRIC KNOWLEDGE: only for widely-known facts.
 
 Plus surfaces the soft-evidence videos as "related videos" citations
 in the right-rail so the user can click through. Citations are
-deduped by `video_id` (mirrors `cite/node.py`'s policy)."""
+deduped by `video_id` (mirrors `cite/node.py`'s policy). Web results
+are NOT added as citations (no stable per-user-session URL contract
+the rail's click-through UX expects) — they're prose context only,
+explicitly framed as external in the prompt's output rules."""
 from __future__ import annotations
 
 import asyncio
@@ -23,6 +34,7 @@ import asyncio
 from langchain_core.documents import Document
 
 from domains.ycs.rag.llm_call import resilient_ainvoke
+from domains.ycs.rag.web_search import search_web
 from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
 from domains.ycs.runtime.observability import traced
 
@@ -74,6 +86,18 @@ def _format_soft_evidence(docs: list[Document]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def _format_web_context(raw: str) -> str:
+    """Mirrors `_format_soft_evidence`'s always-something-in-the-slot
+    contract — a stable sentinel when the search returned nothing
+    (missing dependency, network failure, rate limit, or a genuinely
+    empty result set) keeps the prompt structure predictable for the
+    LLM regardless of why it's empty."""
+    text = (raw or "").strip()
+    if not text:
+        return "(no web search results available)"
+    return text
+
+
 def _related_citations(docs: list[Document]) -> list[dict]:
     """Build a citation list from the soft-evidence pool, deduped by
     `video_id`. Same shape as `cite/node.py::format_citations` so the
@@ -116,6 +140,16 @@ async def fallback_answer(state: YouTubeRAGState, llm) -> dict:
     soft_evidence_docs = state.get("pre_grade_documents") or []
     soft_evidence_text = _format_soft_evidence(soft_evidence_docs)
     related_citations  = _related_citations(soft_evidence_docs)
+    # Best-effort, short-timeout, never raises — see `search_web`'s
+    # own docstring. Runs BEFORE the generation call below (adds to
+    # this already-worst-case-latency path), so it stays capped at
+    # `web_search._SEARCH_TIMEOUT_S` (15s) independent of the
+    # generation call's own 60s budget.
+    web_context_text = _format_web_context(
+        await search_web(
+            state["question"], session_id = state.get("thread_id"),
+        ),
+    )
 
     chain = FALLBACK_PROMPT | llm
     try:
@@ -125,6 +159,7 @@ async def fallback_answer(state: YouTubeRAGState, llm) -> dict:
             {
                 "question":      state["question"],
                 "soft_evidence": soft_evidence_text,
+                "web_context":   web_context_text,
                 "history":       history_to_messages(
                     state.get("conversation_history"),
                 ),

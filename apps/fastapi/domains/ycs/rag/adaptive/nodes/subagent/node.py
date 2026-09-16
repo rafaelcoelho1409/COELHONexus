@@ -296,48 +296,99 @@ async def run_subagents_bounded(
     to finish — the instant the deadline hits. `asyncio.wait` only
     reports back `done`/`pending`, so sub-questions that finished
     within budget keep their real answer; only the ones STILL running
-    at the deadline get cancelled and a placeholder instead."""
+    at the deadline get cancelled and a placeholder instead.
+
+    Live progress (2026-09-16): each item is also emitted via
+    `get_stream_writer()` the instant its task settles — not just in
+    the bulk return at the end — so the SSE layer (`stream_mode=
+    ["updates", "custom"]`) can flip that card `queued→done` in real
+    time while siblings are still researching. Best-effort: no writer
+    outside a streaming run (e.g. sync `ainvoke`) means a silent
+    no-op, never a failure."""
     if not sub_questions:
         return {"sub_results": []}
-    tasks = {asyncio.ensure_future(run_one(q)): q for q in sub_questions}
-    done, pending = await asyncio.wait(tasks.keys(), timeout = deadline_s)
+    try:
+        from langgraph.config import get_stream_writer
+        _writer = get_stream_writer()
+    except Exception:
+        _writer = None
 
-    sub_results: list[dict] = []
-    for t in done:
+    def _emit_live(item: dict) -> None:
+        if _writer is None:
+            return
+        try:
+            _writer({"sub_result": item})
+        except Exception:
+            pass
+
+    def _item_from_done(t: asyncio.Task, q: str) -> dict:
         try:
             r = t.result()
-            sub_results.extend(r.get("sub_results") or [])
+            items = r.get("sub_results") or []
+            if items:
+                return items[0]
+            raise ValueError("run_one returned no sub_results")
         except Exception as e:
-            q = tasks[t]
+            _ename = type(e).__name__
             logger.warning(
                 f"[ycs:subagent] bounded fan-out: sub_q={q[:60]!r} "
-                f"raised {type(e).__name__}: {e}"
+                f"raised {_ename}: {e}"
             )
             record_subquestion(route = route, outcome = "hard_error")
-            sub_results.append({
+            return {
                 "sub_question":      q,
                 "answer": (
                     f"_(this sub-question failed with an error: "
-                    f"`{type(e).__name__}`.)_"
+                    f"`{_ename}`.)_"
                 ),
                 "citations":         [],
                 "grounded":          False,
                 "retrieval_sources": [],
                 "error_kind":        "hard_error",
-            })
+            }
 
-    if pending:
+    import time as _time
+    sub_results: list[dict] = []
+    remaining_tasks = {asyncio.ensure_future(run_one(q)): q for q in sub_questions}
+    _start = _time.monotonic()
+    try:
+        while remaining_tasks:
+            _elapsed = _time.monotonic() - _start
+            _budget = deadline_s - _elapsed
+            if _budget <= 0:
+                break
+            done, pending = await asyncio.wait(
+                remaining_tasks.keys(), timeout = _budget,
+                return_when = asyncio.FIRST_COMPLETED,
+            )
+            if not done:
+                break  # budget expired with nothing new settling
+            for t in done:
+                q = remaining_tasks.pop(t)
+                item = _item_from_done(t, q)
+                sub_results.append(item)
+                _emit_live(item)
+    except asyncio.CancelledError:
+        # Stop button / client disconnect: the SSE generator cancels the
+        # graph producer, which lands here. `asyncio.wait` does NOT cancel
+        # the children itself — without this they keep burning rotator
+        # slots for results nobody will read. Cancel + settle, re-raise.
+        for t in remaining_tasks:
+            t.cancel()
+        await asyncio.gather(*remaining_tasks.keys(), return_exceptions = True)
+        raise
+
+    if remaining_tasks:
         logger.warning(
-            f"[ycs:subagent] bounded fan-out: {len(pending)}/"
+            f"[ycs:subagent] bounded fan-out: {len(remaining_tasks)}/"
             f"{len(sub_questions)} sub-question(s) still running at "
             f"the {int(deadline_s)}s deadline — cancelling + "
             f"placeholding"
         )
-        for t in pending:
-            q = tasks[t]
+        for t, q in list(remaining_tasks.items()):
             t.cancel()
             record_subquestion(route = route, outcome = "deadline")
-            sub_results.append({
+            item = {
                 "sub_question": q,
                 "answer": (
                     "_(this sub-question was still researching when "
@@ -350,10 +401,12 @@ async def run_subagents_bounded(
                 "grounded":          False,
                 "retrieval_sources": [],
                 "error_kind":        "deadline",
-            })
+            }
+            sub_results.append(item)
+            _emit_live(item)
         # Let the cancellations actually settle before returning — an
         # un-awaited cancelled task keeps running in the background,
         # burning rotator slots for a result nobody will see.
-        await asyncio.gather(*pending, return_exceptions = True)
+        await asyncio.gather(*remaining_tasks.keys(), return_exceptions = True)
 
     return {"sub_results": sub_results}

@@ -1786,45 +1786,6 @@
 .ycs-ask-deep-card-body pre { padding: 6px; font-size: 0.72rem; }
 .ycs-ask-deep-card-body code { font-size: 0.72rem; }
 
-/* P6 plan-preview state — checkbox + "Run research" button below the
- * cards. Once user confirms, the second pass replaces this with the
- * normal execution rendering. */
-.ycs-ask-deep-check {
-  margin-right: 8px;
-  width: 14px;
-  height: 14px;
-  accent-color: var(--primary);
-  cursor: pointer;
-}
-.ycs-ask-deep-card[data-state="preview"] {
-  border-color: var(--border);
-  opacity: 1;
-}
-.ycs-ask-deep-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 10px;
-  margin-top: 6px;
-  border-top: 1px dashed var(--border);
-}
-.ycs-ask-deep-run {
-  padding: 6px 14px;
-  background: var(--primary);
-  color: #fff;
-  border: 0;
-  border-radius: 4px;
-  font-family: inherit;
-  font-size: 0.84rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-.ycs-ask-deep-run:hover { filter: brightness(1.05); }
-.ycs-ask-deep-actions-hint {
-  color: var(--text-muted);
-  font-size: 0.76rem;
-}
-
 /* ===== Wave 5 additions ===== */
 
 /* ---- Source · transcript options + form actions ---- */

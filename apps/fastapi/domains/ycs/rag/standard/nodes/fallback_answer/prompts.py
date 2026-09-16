@@ -38,13 +38,22 @@ agentic-RAG starter kit, 2026; Cognito-LangGraph-RAG, 2026). Aligns
 with the knowledge-boundary literature (Divide-Then-Align, arxiv
 2505.20871) — the system distinguishes "within parametric/soft
 boundary" (answer) from "outside boundary" (decline) instead of
-silently emitting an empty response."""
+silently emitting an empty response.
+
+2026-09-16 v3 — WEB SEARCH slot. `{web_context}` (from `domains.ycs.
+rag.web_search.search_web`, Parallel's free MCP endpoint) adds a 4th
+knowledge source for genuine corpus gaps — topics the indexed videos
+never covered at all, where soft evidence has nothing useful to
+paraphrase and parametric knowledge alone risks staleness. Same
+honesty contract as soft evidence: explicitly labeled as EXTERNAL
+(not from the indexed videos), never blended into the answer as if it
+were transcript content."""
 from __future__ import annotations
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 
-FALLBACK_PROMPT_VERSION = "crag-soft-evidence-2026-06-16"
+FALLBACK_PROMPT_VERSION = "crag-web-fallback-2026-09-16"
 
 
 FALLBACK_PROMPT = ChatPromptTemplate.from_messages([
@@ -66,10 +75,17 @@ FALLBACK_PROMPT = ChatPromptTemplate.from_messages([
         "   answers. They are the corpus's nearest content — useful "
         "   for related context, but the strict grader rejected them, "
         "   so any answer you build from them is necessarily indirect.\n"
-        "2. CONVERSATION HISTORY — the prior turns of this chat. "
+        "2. WEB SEARCH RESULTS — a live external search for this "
+        "   question (provided below in the `Web search results` "
+        "   block), run because the indexed videos had nothing "
+        "   directly relevant. Use this for genuine corpus gaps — "
+        "   topics the videos never cover at all. Always frame it as "
+        "   EXTERNAL: 'a quick web search suggests...', never as if "
+        "   it came from the indexed videos.\n"
+        "3. CONVERSATION HISTORY — the prior turns of this chat. "
         "   Authoritative for meta-questions ('what did I ask?', "
         "   'resume your last answer') and for resolving follow-ups.\n"
-        "3. GENERAL KNOWLEDGE — your training data. Use ONLY for "
+        "4. GENERAL KNOWLEDGE — your training data. Use ONLY for "
         "   widely-known facts (definitions, common concepts, public "
         "   history). Decline transparently for specific people, "
         "   recent events, or niche claims.\n\n"
@@ -83,6 +99,9 @@ FALLBACK_PROMPT = ChatPromptTemplate.from_messages([
         "   - Topical context from the soft evidence (PARAPHRASED — "
         "     'the closest transcripts touch on X, but don't go into "
         "     Y specifically').\n"
+        "   - Web search results, EXPLICITLY labeled as external, "
+        "     when the soft evidence and history don't cover the "
+        "     question at all.\n"
         "   - General knowledge where it's safe and widely-known.\n"
         "3. **Length: 2–5 sentences for meta or simple questions; up "
         "   to 4 short paragraphs only if the topic genuinely warrants "
@@ -98,6 +117,10 @@ FALLBACK_PROMPT = ChatPromptTemplate.from_messages([
         "  closest matches discuss X', not 'the video says X'.\n"
         "- NEVER fabricate transcript content. If the soft evidence "
         "  doesn't cover the question, say so.\n"
+        "- NEVER present web search results as if they came from the "
+        "  indexed videos, and never cite them with `[Video: ...]` "
+        "  syntax. If the web search block says no results were "
+        "  available, don't invent any.\n"
         "- NEVER write 'In summary' / 'In conclusion' / report-style "
         "  framing — this is conversational prose.\n"
         "- If the prior conversation already answered an equivalent "
@@ -116,6 +139,9 @@ FALLBACK_PROMPT = ChatPromptTemplate.from_messages([
         "Soft evidence (closest retriever matches — NOT graded as "
         "directly relevant; use as topical hints only):\n"
         "{soft_evidence}\n\n"
+        "Web search results (EXTERNAL — not from the indexed videos; "
+        "run only because the corpus had nothing relevant):\n"
+        "{web_context}\n\n"
         "Answer per the system rules.",
     ),
 ])

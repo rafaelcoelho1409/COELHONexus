@@ -84,7 +84,16 @@ _STREAM_PERSIST_INTERVAL_S = 2.5
 
 # If no astream() event arrives within this window at bootstrap, fall back to ainvoke()
 # (local k3d hangs before the first stream event while ainvoke completes normally).
-_ASTREAM_BOOTSTRAP_FALLBACK_S = 15.0
+# 2026-09-16: 15s → 60s. 15s assumed a healthy rotator (prepare = 2 fast LLM
+# calls, first event in seconds). Observed live on a degraded rotator: prepare
+# alone exceeds 15s while the graph is healthy-but-slow, so the fallback fired
+# spuriously and switched a good stream to blind ainvoke — plan cards never
+# painted, only the spinner, until the whole DEEP run landed at once. 60s keeps
+# the live path (plan render + per-card custom flips) through slow patches;
+# heartbeats keep TCP alive meanwhile, and the 15-min watchdog still guards a
+# genuinely hung producer. Tradeoff accepted: a true k3d-level hang now costs
+# 60s of spinner before fallback instead of 15s.
+_ASTREAM_BOOTSTRAP_FALLBACK_S = 60.0
 _ASTREAM_BOOTSTRAP_FALLBACK_TICKS = max(
     1, int(_ASTREAM_BOOTSTRAP_FALLBACK_S / _STREAM_PERSIST_INTERVAL_S),
 )
@@ -695,17 +704,14 @@ async def rag_search_stream(
         },
         "recursion_limit": 100,
     }
-    preview_plan = bool(payload.preview_plan)
-
     # 2026-09-15: stream-side answer cache (parity with sync `/search`).
-    # Stateless turns only (same condition as sync), never plan-preview
-    # or caller-planned second passes. Hit → replay the cached answer as
-    # `generate` + `end` frames (the frontend renders `generation` +
-    # `citations` from any node event); the turn is still persisted to
-    # Postgres so history stays consistent.
+    # Stateless turns only (same condition as sync), never a caller-
+    # planned request. Hit → replay the cached answer as `generate` +
+    # `end` frames (the frontend renders `generation` + `citations`
+    # from any node event); the turn is still persisted to Postgres so
+    # history stays consistent.
     if (
         (not payload.thread_id or payload.thread_id == "default")
-        and not preview_plan
         and not (payload.sub_questions or [])
     ):
         _hit = await get_cached_response(
@@ -769,18 +775,17 @@ async def rag_search_stream(
             )
 
     turn_id: int | None = None
-    if not preview_plan:
-        try:
-            turn_id = await insert_turn(
-                request.app.state.pg_url,
-                payload.thread_id,
-                payload.question,
-            )
-        except Exception as e:
-            logger.warning(
-                f"[ycs:stream] turn placeholder insert failed: "
-                f"{type(e).__name__}: {e}"
-            )
+    try:
+        turn_id = await insert_turn(
+            request.app.state.pg_url,
+            payload.thread_id,
+            payload.question,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[ycs:stream] turn placeholder insert failed: "
+            f"{type(e).__name__}: {e}"
+        )
 
     _STAGE_ORDER = ["retrieve", "grade", "generate", "verify"]
     _NODE_STAGE_ACTION: dict[str, tuple[str, str]] = {
@@ -836,8 +841,14 @@ async def rag_search_stream(
         if update.get("sub_results"):
             deep = state.get("deep")
             if isinstance(deep, dict) and isinstance(deep.get("sub_questions"), list):
-                latest = update["sub_results"][-1] if update["sub_results"] else None
-                if isinstance(latest, dict):
+                # 2026-09-16: mark EVERY item, not just [-1] — a bulk
+                # `run_subagents` return carries N results in one update,
+                # and custom per-finish events carry one each; either way
+                # every listed question must flip, or cards silently stay
+                # queued (observed live: only the last card flipped).
+                for latest in update["sub_results"]:
+                    if not isinstance(latest, dict):
+                        continue
                     target = latest.get("sub_question", "") or ""
                     full_answer = latest.get("answer", "") or ""
                     if not full_answer.strip():
@@ -968,7 +979,6 @@ async def rag_search_stream(
         set_current_span_langfuse_observation_metadata({
             "route": "search_stream",
             "channel_count": len(effective_channel_ids or []),
-            "preview_plan": preview_plan,
         })
         last_generation = ""
         last_mode       = ""
@@ -1034,12 +1044,30 @@ async def rag_search_stream(
                         user_id    = _user_id,
                         channel_id = _user_id,
                     ):
+                        # 2026-09-16: ["updates","custom"] — "updates" carries
+                        # the per-node patches as before; "custom" carries
+                        # per-sub-question live finishes from
+                        # `run_subagents_bounded`'s stream writer (one card
+                        # flip per finish, while siblings still run). With
+                        # a mode list, astream yields (mode, payload)
+                        # tuples instead of bare update dicts.
                         async for ev in graph.astream(
                             initial_state,
                             config      = config,
-                            stream_mode = "updates",
+                            stream_mode = ["updates", "custom"],
                         ):
-                            await event_queue.put(("event", ev))
+                            if (
+                                isinstance(ev, tuple)
+                                and len(ev) == 2
+                                and ev[0] in ("updates", "custom")
+                            ):
+                                _mode, _payload = ev
+                                if _mode == "custom":
+                                    await event_queue.put(("custom", _payload))
+                                else:
+                                    await event_queue.put(("event", _payload))
+                            else:
+                                await event_queue.put(("event", ev))
                         await event_queue.put(("done", None))
                 except asyncio.CancelledError:
                     raise
@@ -1082,7 +1110,7 @@ async def rag_search_stream(
                     if await request.is_disconnected():
                         cancelled = True
                         break
-                    if not preview_plan and (
+                    if (
                         time.monotonic() - t_run_start
                     ) > _stream_deadline_s:
                         logger.warning(
@@ -1131,8 +1159,7 @@ async def rag_search_stream(
                                     f"failed: {type(e).__name__}: {e}"
                                 )
                         if (
-                            not preview_plan
-                            and not saw_graph_event
+                            not saw_graph_event
                             and not using_invoke_fallback
                             and heartbeats_since_event
                             >= _ASTREAM_BOOTSTRAP_FALLBACK_TICKS
@@ -1169,6 +1196,22 @@ async def rag_search_stream(
                         break
                     if kind == "error":
                         raise queue_payload  # propagate to outer except
+                    if kind == "custom":
+                        # 2026-09-16: live per-finish from
+                        # `run_subagents_bounded`'s stream writer —
+                        # normalize to the same {"run_subagent":
+                        # {"sub_results": [...]}} shape the updates path
+                        # already handles, so thinking/persist/serialize
+                        # stay in one place. Malformed customs are
+                        # skipped, never fatal.
+                        _item = (
+                            queue_payload.get("sub_result")
+                            if isinstance(queue_payload, dict) else None
+                        )
+                        if not isinstance(_item, dict):
+                            continue
+                        queue_payload = {"run_subagent": {"sub_results": [_item]}}
+                        kind = "event"
                     # kind == "event"
                     event = queue_payload
                     saw_graph_event = True
@@ -1217,22 +1260,6 @@ async def rag_search_stream(
                                     f"[ycs:stream] incremental persist "
                                     f"failed: {type(e).__name__}: {e}"
                                 )
-                        if preview_plan and node_name == "plan_research":
-                            set_current_span_langfuse_io(output_data = {
-                                "status": "preview",
-                                "mode": last_mode or payload.force_mode or "deep",
-                                "sub_question_count": len(update.get("sub_questions") or []),
-                                "research_plan": str(update.get("research_plan") or "")[:2000],
-                            })
-                            yield (
-                                "data: "
-                                + json.dumps({
-                                    "node":   "end",
-                                    "status": "preview",
-                                })
-                                + "\n\n"
-                            )
-                            return
                 if cancelled:
                     logger.info(
                         f"[ycs:stream] cancelled mid-flight turn_id={turn_id}"
@@ -1541,7 +1568,6 @@ async def rag_search_stream(
                     # must NOT be the key).
                     if (
                         (not payload.thread_id or payload.thread_id == "default")
-                        and not preview_plan
                         and not (payload.sub_questions or [])
                         and last_generation
                     ):

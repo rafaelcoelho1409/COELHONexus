@@ -55,6 +55,18 @@ def _serialize_update(node_name: str, update: dict[str, Any]) -> dict[str, Any]:
         result["research_plan"] = update["research_plan"]
     if "sub_results" in update and update["sub_results"]:
         result["sub_results_count"] = len(update["sub_results"])
+        # 2026-09-16: ship the FULL list (not just latest) so the
+        # frontend flips every card even on a bulk `run_subagents`
+        # return; `latest_*` stay for backward compat with older JS.
+        result["sub_results"] = [
+            {
+                "sub_question": (item.get("sub_question", "") or ""),
+                "answer":       (item.get("answer", "") or ""),
+                "error_kind":   (item.get("error_kind", "") or ""),
+            }
+            for item in update["sub_results"]
+            if isinstance(item, dict)
+        ]
         latest = update["sub_results"][-1]
         result["latest_sub_question"] = latest.get("sub_question", "")
         result["latest_sub_answer"] = latest.get("answer", "")
