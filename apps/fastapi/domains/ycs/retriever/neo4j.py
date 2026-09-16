@@ -41,6 +41,36 @@ class _Neo4jExtractionError(Exception):
 # they're tightly coupled to the traversal queries below and never
 # imported elsewhere.
 
+# Name of the trigram TEXT index backing the CONTAINS fallback tier
+# (see `_traverse_graph`). Created lazily, once per worker process.
+_TEXT_INDEX_NAME = "ycs_entity_id_text"
+_text_index_ready = False
+
+
+def _ensure_entity_text_index(graph: Neo4jGraph) -> None:
+    """Best-effort `CREATE TEXT INDEX ... IF NOT EXISTS` on `:__Entity__(id)`.
+
+    2026-09-16: the CONTAINS fallback tier is correct without any index
+    (label scan + filter over a few hundred nodes is milliseconds), but a
+    trigram TEXT index lets the planner turn it into an index probe as the
+    graph grows. Runs once per worker process; any failure is swallowed —
+    the fallback query runs identically with or without it."""
+    global _text_index_ready
+    if _text_index_ready:
+        return
+    try:
+        graph.query(
+            f"CREATE TEXT INDEX {_TEXT_INDEX_NAME} IF NOT EXISTS "
+            f"FOR (e:__Entity__) ON (e.id)"
+        )
+        _text_index_ready = True
+    except Exception as e:
+        logger.warning(
+            f"[ycs:neo4j] text-index ensure failed "
+            f"(fallback still runs unindexed): "
+            f"{type(e).__name__}: {str(e)[:150]}"
+        )
+
 # LLMGraphTransformer stores ~28% of entity IDs as Cypher LISTs (e.g.
 # `['Dubai', 'UAE']`) — the `valueType` check normalizes them to their
 # first element. Neo4j-5+ syntax.
@@ -129,14 +159,47 @@ class Neo4jRetriever:
     def _traverse_graph(
         self, entities: list[str], channel_ids: list[str] | None = None,
     ) -> list[Document]:
-        """Cypher UNION query:
-          1. Direct entity match: `MATCH (e:__Entity__) WHERE eid IN $entities`
-          2. One-hop neighbors:   `MATCH (e)-[r]-(neighbor:__Entity__)`
-        Both branches optionally JOIN against `:Channel` via `BELONGS_TO`
-        when `channel_ids` is supplied."""
+        """Two-tier entity lookup (2026-09-16):
+
+        Tier 1 — exact: `toLower(eid) IN $entities` (unchanged legacy
+        behavior, cheapest when the extractor nails the surface form).
+        Tier 2 — substring fallback, only when tier 1 returns nothing:
+        `any(pat IN $entities WHERE toLower(eid) CONTAINS pat)`, so
+        "offshore strategies" still finds a node id "offshore" instead of
+        yielding zero docs. Short patterns (<3 chars) are dropped from
+        tier 2 — a 1-2 char CONTAINS matches nearly everything and would
+        trade a clean miss for noise. First non-empty tier wins; an empty
+        tier 2 returns [] exactly as before (caller maps it to
+        "no_entities", never an error)."""
         if not entities:
             return []
         entity_patterns = [e.lower() for e in entities]
+        documents = self._lookup(entity_patterns, channel_ids, fuzzy = False)
+        if documents:
+            return documents
+        pats = [p for p in entity_patterns if len(p) >= 3]
+        if not pats:
+            return []
+        logger.info(
+            f"[ycs:neo4j] exact matched 0 for {entity_patterns!r} — "
+            f"retrying CONTAINS fallback"
+        )
+        _ensure_entity_text_index(self.graph)
+        return self._lookup(pats, channel_ids, fuzzy = True)
+
+    def _lookup(
+        self,
+        entity_patterns: list[str],
+        channel_ids: list[str] | None,
+        *,
+        fuzzy: bool,
+    ) -> list[Document]:
+        """Cypher UNION query:
+          1. Direct entity match
+          2. One-hop neighbors:   `MATCH (e)-[r]-(neighbor:__Entity__)`
+        Both branches optionally JOIN against `:Channel` via `BELONGS_TO`
+        when `channel_ids` is supplied. `fuzzy` switches the entity-match
+        predicate from exact-`IN` to substring-`CONTAINS` (tier 2)."""
 
         channel_filter = ""
         channel_filter_onehop = ""
@@ -160,6 +223,15 @@ class Neo4jRetriever:
         }
         if channel_ids:
             params["channel_ids"] = channel_ids
+        # Tier predicate: exact-`IN` normally, substring-`CONTAINS` on the
+        # fallback pass. `eid` is bound by the preceding WITH in both UNION
+        # branches, so one fragment serves both sites.
+        entity_pred = (
+            "WHERE any(_fpat IN $entities "
+            "WHERE toLower(toString(eid)) CONTAINS _fpat) "
+            if fuzzy else
+            "WHERE toLower(toString(eid)) IN $entities "
+        )
 
         try:
             from domains.ycs.runtime.observability import neo4j_query_span
@@ -172,7 +244,7 @@ class Neo4jRetriever:
                 f"MATCH (e:__Entity__:{SOURCE_LABEL}) "
                 "WHERE e.id IS NOT NULL "
                 f"WITH e, ({_NORMALIZE_ID}) AS eid "
-                "WHERE toLower(toString(eid)) IN $entities "
+                f"{entity_pred}"
                 "OPTIONAL MATCH (e)<-[r]-(doc:Document) "
                 "OPTIONAL MATCH (e)<-[r2]-(v:Video) "
                 "WITH e, eid, doc, v, r, r2 "
@@ -191,7 +263,7 @@ class Neo4jRetriever:
                 f"MATCH (e:__Entity__:{SOURCE_LABEL}) "
                 "WHERE e.id IS NOT NULL "
                 f"WITH e, ({_NORMALIZE_ID}) AS eid "
-                "WHERE toLower(toString(eid)) IN $entities "
+                f"{entity_pred}"
                 f"MATCH (e)-[r]-(neighbor:__Entity__:{SOURCE_LABEL}) "
                 "WHERE e <> neighbor "
                 "OPTIONAL MATCH (neighbor)<--(doc:Document) "

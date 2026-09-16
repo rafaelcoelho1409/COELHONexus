@@ -49,6 +49,24 @@ def _resolve_channel_ids(neo4j_graph, channel_names: list[str]) -> list[str]:
             "RETURN c.id AS channel_id",
             params = {"names": patterns},
         )
+        ids = [r["channel_id"] for r in results if r.get("channel_id")]
+        if ids:
+            return ids
+        # 2026-09-16 tier 2 (mirrors `retriever/neo4j.py`'s two-tier
+        # lookup): the LLM often emits a shortened/approximate channel
+        # name, so an exact miss retries as substring on the NAME only
+        # (ids are opaque `UC…` strings — CONTAINS on them is noise).
+        # Still empty → [] → caller falls back to "all channels".
+        pats = [p for p in patterns if len(p) >= 3]
+        if not pats:
+            return []
+        results = neo4j_graph.query(
+            f"MATCH (c:Channel:{SOURCE_LABEL}) "
+            "WHERE any(_p IN $names "
+            "WHERE toLower(c.name) CONTAINS _p) "
+            "RETURN c.id AS channel_id",
+            params = {"names": pats},
+        )
         return [r["channel_id"] for r in results if r.get("channel_id")]
     except Exception:
         return []

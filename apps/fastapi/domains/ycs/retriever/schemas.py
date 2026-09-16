@@ -9,7 +9,9 @@ class ExtractedEntities(BaseModel):
     """Entity names identified in a user query (for graph retrieval)."""
     entities: list[str] = Field(
         description = (
-            "List of entity names (people, topics, technologies, channels) "
-            "mentioned in the query"
+            "List of NAMED entity names (people, organizations, channels, "
+            "works, places, terms of art) mentioned in the query. Never "
+            "common nouns or meta-words (numbers, dates, videos, sources). "
+            "Empty list when the query names nothing specific."
         ),
     )
