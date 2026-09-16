@@ -32,4 +32,9 @@ ENTITY_EXTRACTION_PROMPT = ChatPromptTemplate.from_messages([
         "Return only the names as a list. Be thorough.",
     ),
     ("human", "{query}"),
+    # 2026-09-16: `{known_entities}` is the live inventory hint
+    # (`retriever/neo4j.py::fetch_entity_inventory`) — real surface forms
+    # from the graph, prefer-exact-spellings, never a closed allowlist
+    # (empty string when unavailable; extraction proceeds unhinted).
+    ("human", "{known_entities}"),
 ])

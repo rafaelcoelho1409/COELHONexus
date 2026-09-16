@@ -14,6 +14,7 @@ package, not to this submodule."""
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from langchain_core.documents import Document
@@ -23,7 +24,7 @@ from domains.ycs.graph_builder.params import SOURCE_LABEL
 from domains.ycs.rag.llm_call import resilient_ainvoke
 from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
 
-from .params import NEO4J_DEFAULT_TOP_K
+from .params import INVENTORY_MAX_IDS, INVENTORY_TTL_S, NEO4J_DEFAULT_TOP_K
 from .prompts import ENTITY_EXTRACTION_PROMPT
 from .schemas import ExtractedEntities
 
@@ -35,6 +36,47 @@ class _Neo4jExtractionError(Exception):
     """LLM entity extraction failed (provider error) — distinct from
     'no entities found', so callers can break the arm for the rest of
     the request instead of re-burning 60s+ per rewrite round."""
+
+
+# Live entity inventory (surface forms) — process-level cache with TTL,
+# shared by every request on this worker. One indexed scan per worker
+# per TTL window, not per query.
+_inventory_cache: dict = {"ts": 0.0, "items": []}
+
+
+def fetch_entity_inventory(graph: Neo4jGraph) -> list[str]:
+    """Distinct `__Entity__` surface forms in this YCS graph, for the
+    extraction prompt's prefer-exact-spellings hint (2026-09-16).
+
+    List-valued ids (LLMGraphTransformer stores ~28% that way) resolve
+    to their head element; empties dropped; capped at
+    `INVENTORY_MAX_IDS`. Any Cypher failure → [] (extraction proceeds
+    unhinted — the exact->CONTAINS tiers are the real safety net, this
+    hint only steers spelling)."""
+    now = time.monotonic()
+    if now - _inventory_cache["ts"] < INVENTORY_TTL_S:
+        return list(_inventory_cache["items"])
+    try:
+        rows = graph.query(
+            f"MATCH (e:__Entity__:{SOURCE_LABEL}) "
+            "WHERE e.id IS NOT NULL "
+            "WITH CASE WHEN valueType(e.id) STARTS WITH 'LIST' "
+            "THEN head(e.id) ELSE e.id END AS eid "
+            "WHERE eid IS NOT NULL AND trim(toString(eid)) <> '' "
+            "RETURN DISTINCT toString(eid) AS name "
+            "LIMIT $limit",
+            params = {"limit": INVENTORY_MAX_IDS},
+        )
+        items = [r["name"] for r in rows if r.get("name")]
+        _inventory_cache["ts"] = now
+        _inventory_cache["items"] = items
+        return list(items)
+    except Exception as e:
+        logger.warning(
+            f"[ycs:neo4j] inventory fetch failed (unhinted extraction): "
+            f"{type(e).__name__}: {str(e)[:150]}"
+        )
+        return list(_inventory_cache["items"])
 
 
 # Cypher fragments — kept at module scope (not `params.py`) because
@@ -140,9 +182,22 @@ class Neo4jRetriever:
         )
         try:
             _llm_set_node(node = "neo4j_entity_extract")
+            # Prefer-exact-spellings hint (2026-09-16): real surface forms
+            # from the graph so the LLM emits names that exist. Best
+            # effort — empty when the graph is unreachable/empty, and
+            # phrased as a preference, never a closed allowlist (new
+            # topics must stay answerable).
+            known = fetch_entity_inventory(self.graph)
+            hint = (
+                "Known entities in the knowledge graph — prefer these "
+                "exact spellings when relevant, but you may also emit "
+                "names not listed:\n"
+                + "\n".join(f"- {name}" for name in known)
+                if known else ""
+            )
             result = await resilient_ainvoke(
                 chain,
-                {"query": query},
+                {"query": query, "known_entities": hint},
                 operation    = "neo4j_entity_extract",
                 timeout_s    = 30.0,
                 max_attempts = 2,
