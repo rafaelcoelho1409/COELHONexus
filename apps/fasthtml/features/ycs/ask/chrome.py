@@ -116,6 +116,26 @@ def AskNewThreadButton():
     )
 
 
+def AskLlmUsageTrigger():
+    """2026-09-16 — row-3 right cluster: opens the per-thread LLM-usage
+    drawer (`_AskLlmUsageDrawer()` in `ask/body.py`), showing which
+    models answered this conversation, total input/output tokens, and
+    a per-model breakdown — same `kpiGrid`/`modelTable` rendering
+    (`static/js/dd/shared/llm_totals.js`) Ingestion's Neo4j-bar button
+    already uses, wired to `GET /agents/usage/{thread_id}` instead of
+    the per-run pipeline counter. Own DOM ids (`ycs-ask-llm-*`) so this
+    doesn't collide with the Ingestion drawer — `PipelinePanel()`
+    renders on every YCS page, Ask included, so both drawers coexist
+    in the DOM at once."""
+    return Button(
+        "LLM usage",
+        type  = "button",
+        id    = "ycs-ask-llm-open",
+        cls   = "dd-catfilter-trigger ycs-ask-llm-open-btn",
+        title = "Open this conversation's LLM usage (COELHO LLM Rotator)",
+    )
+
+
 def AskThreadBar():
     """Thread picker — row-3 right cluster.
 

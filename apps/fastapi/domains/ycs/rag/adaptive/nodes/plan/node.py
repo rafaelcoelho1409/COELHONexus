@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from domains.ycs.rag.llm_call import capture_llm_usage
 from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
 from domains.ycs.runtime.observability import traced
 
@@ -59,6 +60,7 @@ async def plan_research(state: AdaptiveRAGState, llm) -> dict:
                 chain.ainvoke({"question": state["question"]}),
                 timeout = _PLAN_TIMEOUT_S,
             )
+            await capture_llm_usage(response)
             result = parse_json_model_output(
                 response.content, ResearchPlan,
             )

@@ -463,6 +463,10 @@ async def get_phase_progress(
                 state = "PROGRESS"
         except Exception:
             pass
+    # 2026-09-16: piece-granular twin of the video-level preview count
+    # below — see the `piece_current` computation further down for why
+    # this needs its own count instead of reusing `len(completed_ids)`.
+    preview_piece_count = 0
     if state == "PROGRESS":
         # 2026-09-14: union the display-only in-chunk preview (written
         # by chunked phase tasks as videos complete INSIDE the chunk)
@@ -476,6 +480,17 @@ async def get_phase_progress(
             # clobbered concurrent chunks' progress).
             raw_members = await redis.smembers(phase_preview_key(extract_id, phase))
             if raw_members:
+                # 2026-09-16: `raw_members` is ALREADY piece-granular —
+                # `neo4j_task/task.py` populates it from
+                # `collect(DISTINCT d.video_id)`, and a split video's
+                # `Document` nodes are one per PARTITION, not one per
+                # parent. So its own count is directly the piece-level
+                # analog of `len(completed_ids)` below — no further
+                # dedup/grouping needed, unlike `completed_ids` (which
+                # stays video-level and CAN mix parent + partition ids
+                # here, a pre-existing display-only quirk out of scope
+                # for this fix).
+                preview_piece_count = len(raw_members)
                 known = set(completed_ids) | set(failed_ids)
                 for raw_vid in raw_members:
                     vid = raw_vid.decode() if isinstance(raw_vid, (bytes, bytearray)) else raw_vid
@@ -500,8 +515,27 @@ async def get_phase_progress(
             # pair when present so a split video reads as "5/5 pieces"
             # instead of "2/2 videos", which understated how much
             # per-piece LLM extraction work the phase actually did.
+            #
+            # 2026-09-16 fix: `piece_current` used to be the RAW
+            # `phase_piece_finished_key` counter only, with no preview
+            # boost — but `phase_piece_finished_key` only increments
+            # when a chunk task's FINAL reporting loop runs (after
+            # every video in that chunk finishes, success or exhausted
+            # retries), same as `finished` above. A live 5-video run
+            # showed this exact gap: chunk `[YVj5yETvEl0, -mjwZ-hM_Y0]`
+            # had `-mjwZ-hM_Y0` visibly done (in the preview set,
+            # boosting `current` to 4/5) while `YVj5yETvEl0` was still
+            # retrying — so the whole chunk's reporting loop hadn't run
+            # yet, leaving `piece_finished` at 3 and the bar reading
+            # "0%"/"0/5 pieces" while the video-level bar correctly
+            # showed progress. Mirrors `current`'s own
+            # `max(finished, len(completed_ids))` pattern exactly.
             **({
-                "piece_current": min(piece_finished, piece_total),
+                "piece_current": (
+                    min(max(piece_finished, preview_piece_count), piece_total)
+                    if state == "PROGRESS" else
+                    min(piece_finished, piece_total)
+                ),
                 "piece_total":   piece_total,
             } if piece_total is not None else {}),
         },

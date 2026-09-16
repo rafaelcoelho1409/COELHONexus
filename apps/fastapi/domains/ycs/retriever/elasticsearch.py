@@ -99,21 +99,25 @@ class ElasticsearchRetriever:
         """Secondary fetch from the metadata index — the transcripts
         index only carries video_id (denormalized) + lang + content +
         channel_id, so titles / channels / upload_date / urls live in
-        the separate metadata index."""
+        the separate metadata index.
+
+        2026-09-16 fix: delegates to `ingestion.service.
+        fetch_metadata_from_es` instead of querying `INDEX_METADATA`
+        by the raw ids directly — a split video's transcript hits
+        carry the PARTITION id (`"XYZ#p3"`), which has no metadata doc
+        of its own (yt-dlp metadata is written once per real video).
+        The old direct `{"ids": {"values": video_ids}}` query silently
+        came back empty for every partition hit, showing "(untitled)"
+        / "Unknown channel" on every ES-sourced citation for a split
+        video. Same shape in, same shape out — the shared helper
+        already does the partition→parent resolution (see its
+        docstring)."""
         if not video_ids:
             return {}
+        from domains.ycs.ingestion.service import fetch_metadata_from_es
         with es_search_span(
             index                = INDEX_METADATA,
             top_k                = len(video_ids),
             operation            = "metadata_lookup",
         ):
-            results = await self.es.search(
-                index = INDEX_METADATA,
-                query = {"ids": {"values": video_ids}},
-                size = len(video_ids),
-                _source = ["title", "channel", "upload_date", "webpage_url"],
-            )
-        return {
-            h["_id"]: h["_source"]
-            for h in results["hits"]["hits"]
-        }
+            return await fetch_metadata_from_es(self.es, video_ids)

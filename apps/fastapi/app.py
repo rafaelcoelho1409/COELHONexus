@@ -256,6 +256,7 @@ async def lifespan(app: FastAPI):
             qdrant            = qdrant,
             dense_embeddings  = create_dense_embeddings(),
             sparse_embeddings = create_sparse_embeddings(),
+            es_client         = es,
         )
         neo4j_retriever = (
             Neo4jRetriever(

@@ -12,6 +12,7 @@
  * bubble.
  */
 import { showConfirm, showToast } from "@dd/shared/ui/overlays.js";
+import { kpiGrid, modelTable } from "@dd/shared/llm_totals.js";
 
 const API = "/api/v1/ycs";
 
@@ -428,6 +429,7 @@ const askStatus      = document.getElementById("ycs-ask-status");
 const conversationEl = document.getElementById("ycs-ask-conversation");
 const threadIdEl     = document.getElementById("ycs-ask-thread-id");
 const newThreadBtn   = document.getElementById("ycs-ask-new-thread");
+const llmUsageBtn    = document.getElementById("ycs-ask-llm-open");
 const stopBtn        = document.getElementById("ycs-ask-stop");
 const sendBtn        = document.getElementById("ycs-ask-send");
 const emptyEl        = document.getElementById("ycs-ask-empty");
@@ -553,6 +555,83 @@ function _setTurnDuration(turnEl, ms) {
     el.textContent = text ? `in ${text}` : "";
 }
 
+function _fmtTokens(n) {
+    const v = Number(n || 0);
+    return Number.isFinite(v) ? v.toLocaleString("en-US") : "0";
+}
+
+/* 2026-09-16 — per-turn LLM usage button, same idempotent pattern as
+ * `_setTurnDuration`. `usage` is `{total:{tokens_in,tokens_out,calls},
+ * by_model:{model:{tokens_in,tokens_out,calls}}}` — the diff the
+ * backend computes between counter snapshots taken right before and
+ * right after this turn's graph run (`_llm_diff_usage` in
+ * `api/v1/ycs/agents/router.py`). Stashes the raw object into
+ * `turnDataMap` (via `getTurnData`) so `toggleTurnUsagePanel` can
+ * render it on click without a second fetch — the data is already
+ * here, live turns get it off the SSE `end` frame, history turns off
+ * `thinking_state.usage`. Empty/missing usage disables the button
+ * (CSS `:disabled` mutes it) rather than hiding it — a response that
+ * made zero LLM calls (e.g. a cache-hit reuse) is itself information
+ * worth a inert "0 calls" affordance, not a vanished control that
+ * shifts the head row's layout turn to turn. */
+function _setTurnUsage(turnEl, usage) {
+    if (!turnEl) return;
+    const el = turnEl.querySelector(".ycs-ask-turn-usage");
+    if (!el) return;
+    const data = getTurnData(turnEl);
+    if (data) data.usage = usage || null;
+    const total = (usage && usage.total) || {};
+    const calls = Number(total.calls || 0);
+    if (!calls) {
+        el.textContent = "Usage";
+        el.disabled = true;
+        el.title = "No LLM calls recorded for this response";
+        return;
+    }
+    el.disabled = false;
+    el.textContent =
+        `${_fmtTokens(total.tokens_in)} in · ${_fmtTokens(total.tokens_out)} out`;
+    const models = Object.keys((usage && usage.by_model) || {});
+    el.title = models.length
+        ? `${models.join(", ")} — click for the full breakdown`
+        : "Click for the full breakdown";
+}
+
+/* Toggle the collapsible per-turn breakdown panel (`[data-usage-panel]`)
+ * open/closed, rendering `kpiGrid`+`modelTable` (same functions the
+ * thread-total drawer uses — `@dd/shared/llm_totals.js`) from the
+ * turn's stashed `usage` object on first open. */
+function toggleTurnUsagePanel(turn) {
+    if (!turn) return;
+    const panel = turn.querySelector("[data-usage-panel]");
+    if (!panel) return;
+    const opening = !panel.classList.contains("ycs-ask-turn-usage-panel-open");
+    if (opening) {
+        const usage = getTurnData(turn)?.usage;
+        const calls = Number(((usage || {}).total || {}).calls || 0);
+        // `modelTable` (from `@dd/shared/llm_totals.js`) derives its
+        // rows from `payload.by_node[*].by_model`, not a flat
+        // `by_model` — it was built for DD/Ingestion's node-keyed
+        // counters. The per-turn diff this panel renders is flat
+        // (`{total, by_model}`, see `_llm_diff_usage` in
+        // `api/v1/ycs/agents/router.py` — one turn has no "node"
+        // breakdown to speak of), so `by_node` was always empty and
+        // the model table silently rendered nothing. 2026-09-16 fix:
+        // wrap it under one synthetic node key — `_aggregateByModel`
+        // just flattens across whatever nodes it's given, so a single
+        // node produces the same per-model rows either way, with zero
+        // changes needed to the shared renderer.
+        const adapted = {
+            total:   (usage || {}).total || {},
+            by_node: { response: { by_model: (usage || {}).by_model || {} } },
+        };
+        panel.innerHTML = calls
+            ? kpiGrid(adapted) + modelTable(adapted)
+            : '<div class="dd-llm-rail-empty">No LLM usage recorded for this response.</div>';
+    }
+    panel.classList.toggle("ycs-ask-turn-usage-panel-open", opening);
+}
+
 /* Build the streaming-turn DOM skeleton. The same shape `renderHistoryTurn`
  * uses for past turns minus the stages strip + DEEP panel (those are
  * streaming-only — they get filled in by SSE events as the turn unfolds). */
@@ -579,7 +658,10 @@ function _streamingTurnSkeleton(question) {
                 <span class="ycs-ask-turn-role">Assistant</span>
                 <span class="ycs-ask-turn-mode-badge" data-mode=""></span>
                 <span class="ycs-ask-turn-duration" title="Total time from Send to final answer"></span>
+                <button type="button" class="ycs-ask-turn-usage" data-action="usage"
+                        title="LLM tokens spent on this response" disabled></button>
             </div>
+            <div class="ycs-ask-turn-usage-panel" data-usage-panel></div>
             <div class="ycs-ask-turn-process">
                 <button type="button"
                         class="ycs-ask-turn-process-head"
@@ -655,7 +737,7 @@ const turnDataMap = new WeakMap();
 function getTurnData(turn) {
     if (!turn) return null;
     let d = turnDataMap.get(turn);
-    if (!d) { d = { generation: "", citations: [] }; turnDataMap.set(turn, d); }
+    if (!d) { d = { generation: "", citations: [], usage: null }; turnDataMap.set(turn, d); }
     return d;
 }
 
@@ -1023,6 +1105,21 @@ function renderHistoryTurn({
         `<span class="ycs-ask-turn-duration" title="Total time from Send to final answer">${
             durationText ? `in ${htmlEscape(durationText)}` : ""
         }</span>`;
+    /* 2026-09-16 — per-response usage button, rehydrated the same way
+     * as the duration chip: live turns get it from the SSE `end`
+     * frame's `evt.usage` (`_setTurnUsage`); past turns pull it back
+     * out of `thinking_state.usage`, written by `_stamp_usage` at
+     * every terminal persist path in the backend. Rendered disabled
+     * here — `_setTurnUsage` (called right after this turn is
+     * appended, below) fills in the label/enabled-state AND stashes
+     * the raw object for `toggleTurnUsagePanel` in one place, so the
+     * enable/disable + label logic isn't duplicated between the live
+     * and history render paths.*/
+    const persistedUsage = (thinking_state && typeof thinking_state === "object")
+        ? thinking_state.usage : null;
+    const usageBadge =
+        '<button type="button" class="ycs-ask-turn-usage" data-action="usage" ' +
+        'title="LLM tokens spent on this response" disabled></button>';
     /* 2026-06-16 — pull persisted citations off `thinking_state` so a
      * page reload can: (1) re-render the answer body with `[N]` pills
      * instead of raw `[Video: title]` markers, (2) feed the Sources
@@ -1045,7 +1142,9 @@ function renderHistoryTurn({
                 <span class="ycs-ask-turn-role">Assistant</span>
                 ${modeBadge}
                 ${durationBadge}
+                ${usageBadge}
             </div>
+            <div class="ycs-ask-turn-usage-panel" data-usage-panel></div>
             ${_historyThinkingHTML(thinking_state, !!answer, inProgress)}
             <div class="ycs-ask-turn-body ycs-ask-answer">${answerBody}</div>
             ${_actionChipsHTML()}
@@ -1067,6 +1166,9 @@ function renderHistoryTurn({
     // citation list. Without this, history-loaded turns would show
     // "Sources (0)" until the user clicked Regenerate.
     _updateTurnSourcesCount(turn, persistedCitations.length);
+    // Label/enable the usage button + stash the raw object for
+    // `toggleTurnUsagePanel` — same helper the live SSE path uses.
+    _setTurnUsage(turn, persistedUsage);
 }
 
 /* Wipe the whole conversation column + show the empty state. Used by
@@ -1141,6 +1243,7 @@ newThreadBtn?.addEventListener("click", () => {
     setThreadLabel("");
     clearConversation();
     _closeAllCatfilters();
+    refreshAskLlmUsage();
 });
 
 /* Switch to an existing thread: persist the new id, clear the DOM,
@@ -1167,7 +1270,45 @@ async function switchThread(id) {
     clearConversation();
     _closeAllCatfilters();
     await hydrateThreadHistory();
+    refreshAskLlmUsage();
 }
+
+/* 2026-09-16 — per-thread LLM-usage drawer. Mirrors Ingestion's
+ * `refreshYcsNeo4jLlmUsage`/`bindYcsLlmUsageDrawer` (`@ycs/llm_usage.js`)
+ * but reads the live `threadId` module var and hits the Ask-specific
+ * `GET /agents/usage/{thread_id}` endpoint — own ids throughout
+ * (`ycs-ask-llm-*`) so the two drawers coexist (`PipelinePanel`
+ * renders on every YCS page, Ask included). "New"/unsaved threads
+ * (never posted to Postgres) have no counters yet — empty state. */
+async function refreshAskLlmUsage() {
+    const host = document.getElementById("ycs-ask-llm-drawer-totals");
+    if (!host) return;
+    let payload = null;
+    try { payload = await api(`/agents/usage/${encodeURIComponent(threadId)}`); }
+    catch (_) { payload = null; }
+    const calls = Number(((payload || {}).total || {}).calls || 0);
+    if (!calls) {
+        host.innerHTML = '<div class="dd-llm-rail-empty">No LLM usage recorded yet.</div>';
+        return;
+    }
+    host.innerHTML = kpiGrid(payload) + modelTable(payload);
+}
+
+function _openAskLlmDrawer() {
+    document.getElementById("ycs-ask-llm-drawer")?.classList.add("visible");
+    refreshAskLlmUsage();
+}
+
+function _closeAskLlmDrawer() {
+    document.getElementById("ycs-ask-llm-drawer")?.classList.remove("visible");
+}
+
+llmUsageBtn?.addEventListener("click", _openAskLlmDrawer);
+document.getElementById("ycs-ask-llm-drawer-close-btn")
+    ?.addEventListener("click", _closeAskLlmDrawer);
+document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") _closeAskLlmDrawer();
+});
 
 /* Format a "2h ago" relative timestamp from an ISO string. Falls back
  * to the raw string if parsing fails. */
@@ -1345,6 +1486,7 @@ async function hydrateThreadHistory() {
     } catch (_) { /* non-fatal */ }
 }
 hydrateThreadHistory();
+refreshAskLlmUsage();
 
 /* ─────────────────────────────────────────────────────────────────
  * Refresh-during-stream poll loop
@@ -1768,13 +1910,33 @@ const _SOURCE_ARM_LABEL = {
 };
 
 function renderCitation(c) {
-    const card = document.createElement("a");
+    // 2026-09-16 — split the click target: the whole card used to be
+    // one `<a>`, so clicking ANYWHERE (including the text you're
+    // trying to read) jumped straight to YouTube. Now only the
+    // thumbnail is a real link; the text half is a button that
+    // expands the excerpt in place (`.ycs-ask-citation-snippet`'s
+    // 2-line clamp toggles off) instead of navigating away.
+    const card = document.createElement("div");
     card.className = "ycs-ask-citation";
-    card.target = "_blank";
-    card.rel = "noopener noreferrer";
-    card.href = c.url ?? "#";
-    card.title = c.title ?? "(untitled)";
-    const vid = c.video_id ?? "";
+    // `||`, not `??` — the backend defaults missing metadata to `""`
+    // (`meta.get("title", "")` in `cite/node.py`), not `null`/`undefined`,
+    // so `??` never caught it: empty-string titles/channels rendered as
+    // silently blank text instead of falling back. 2026-09-16 fix.
+    const title = c.title || "(untitled)";
+    card.title = title;
+    const url = c.url || "";
+    const rawVid = c.video_id || "";
+    // 2026-09-16 fix: a split-video chunk's `video_id` is the PARTITION
+    // id (`"{parent}#p{n}"`, see `ingestion/service.py`'s partition
+    // scheme). Passed verbatim into an `<img src>`, the `#` is parsed as
+    // a URL FRAGMENT, not sent to the server — the request silently
+    // becomes `.../vi/{parent}` (missing `#p{n}` was harmless) but for
+    // ids that don't cleanly resolve this served YouTube's generic grey
+    // "no thumbnail" placeholder (200 OK, so `onerror` below never
+    // fired — the broken-looking gray box in every partition-chunk
+    // source card). Stripping to the parent id before building the URL
+    // fixes the common case outright.
+    const vid = rawVid.split("#")[0];
     // YouTube serves mqdefault.jpg for every public video. maxresdefault
     // is hit-or-miss; mq is the most reliable thumbnail.
     const thumb = vid
@@ -1789,21 +1951,52 @@ function renderCitation(c) {
         ? `<span class="ycs-ask-citation-source-chip"
                   title="Retrieved via ${htmlEscape(arm)}">${htmlEscape(armLabel)}</span>`
         : "";
+    // 2026-09-16 — /sota-search: a short excerpt of the matched passage
+    // is table-stakes for a source card (Perplexity/ChatGPT-search
+    // convention, ~200 chars). Backend caps at 220 chars
+    // (`cite/node.py::_SNIPPET_CHAR_CAP`); this is a defensive second
+    // cap, not the primary truncation point.
+    const snippet = (c.snippet || "").slice(0, 220).trim();
+    const snippetHTML = snippet
+        ? `<div class="ycs-ask-citation-snippet">${htmlEscape(snippet)}</div>`
+        : "";
+    // Thumbnail is the ONLY part that opens the video — no `url` means
+    // no working link target, so it renders as a plain (unclickable)
+    // fallback icon instead of a dead `href="#"`.
+    const thumbInner = `
+        ${thumb}
+        <span class="ycs-ask-citation-arrow" aria-hidden="true">↗</span>
+    `;
+    const thumbHTML = url
+        ? `<a class="ycs-ask-citation-thumb-wrap${vid ? "" : " no-thumb"}"
+              href="${htmlEscape(url)}" target="_blank" rel="noopener noreferrer"
+              title="Open video: ${htmlEscape(title)}"
+              onclick="event.stopPropagation()">${thumbInner}</a>`
+        : `<div class="ycs-ask-citation-thumb-wrap${vid ? "" : " no-thumb"}">${thumbInner}</div>`;
     card.innerHTML = `
-        <div class="ycs-ask-citation-thumb-wrap">
-            ${thumb}
-            <span class="ycs-ask-citation-arrow" aria-hidden="true">↗</span>
-        </div>
-        <div class="ycs-ask-citation-body">
-            <div class="ycs-ask-citation-title">${htmlEscape(c.title ?? "(untitled)")}</div>
+        ${thumbHTML}
+        <button type="button" class="ycs-ask-citation-body"
+                title="Show the full matched excerpt">
+            <div class="ycs-ask-citation-title">${htmlEscape(title)}</div>
+            ${snippetHTML}
             <div class="ycs-ask-citation-meta">
-                <span class="ycs-ask-citation-channel">${htmlEscape(c.channel ?? "Unknown channel")}</span>
+                <span class="ycs-ask-citation-channel">${htmlEscape(c.channel || "Unknown channel")}</span>
                 ${armChip}
             </div>
-        </div>
+        </button>
     `;
     return card;
 }
+
+/* Toggle a citation card's excerpt between clamped (2 lines) and full
+ * (up to the 220-char cap already shipped in the payload — see
+ * `cite/node.py::_SNIPPET_CHAR_CAP`). Delegated on `railListEl` so it
+ * works for every card without per-card listeners. */
+railListEl?.addEventListener("click", (ev) => {
+    const btn = ev.target.closest?.(".ycs-ask-citation-body");
+    if (!btn) return;
+    btn.classList.toggle("expanded");
+});
 
 function setStageAction(stage, text) {
     if (!stage) return;
@@ -2025,10 +2218,12 @@ async function consumeSSE(payload, signal) {
                 // `renderHistoryTurn` so refreshing the page doesn't
                 // lose the chip.
                 _setTurnDuration(currentTurnEl, evt.duration_ms);
+                _setTurnUsage(currentTurnEl, evt.usage);
                 freezeCurrentTurn();
                 // The candidate threadId now has a real Postgres row —
                 // promote the trigger from "New" to the live id.
                 setThreadLabel(threadId);
+                refreshAskLlmUsage();
                 return;
             }
             if (node === "error") {
@@ -2199,12 +2394,13 @@ async function branchTurn(turn) {
     setThreadLabel(threadId);
     clearConversation();
     await hydrateThreadHistory();
+    refreshAskLlmUsage();
     showToast(`Branched into new thread (${r.copied} turns copied).`);
 }
 
 conversationEl?.addEventListener("click", (ev) => {
-    const btn = ev.target.closest?.(".ycs-ask-turn-action");
-    if (!btn) return;
+    const btn = ev.target.closest?.(".ycs-ask-turn-action, .ycs-ask-turn-usage");
+    if (!btn || btn.disabled) return;
     ev.stopPropagation();
     const turn = btn.closest(".ycs-ask-turn");
     if (!turn) return;
@@ -2213,6 +2409,7 @@ conversationEl?.addEventListener("click", (ev) => {
         case "regenerate": regenerateTurn(turn); break;
         case "branch":     branchTurn(turn);     break;
         case "sources":    showTurnSources(turn); break;
+        case "usage":      toggleTurnUsagePanel(turn); break;
     }
 });
 

@@ -7,6 +7,7 @@ our side.
 """
 from __future__ import annotations
 
+from elasticsearch import AsyncElasticsearch
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_qdrant import FastEmbedSparse
@@ -41,11 +42,17 @@ class QdrantHybridRetriever:
         dense_embeddings: Embeddings,
         sparse_embeddings: FastEmbedSparse,
         top_k: int = QDRANT_DEFAULT_TOP_K,
+        es_client: AsyncElasticsearch | None = None,
     ) -> None:
         self.qdrant = qdrant
         self.dense_embeddings = dense_embeddings
         self.sparse_embeddings = sparse_embeddings
         self.top_k = top_k
+        # 2026-09-16: optional — only used to backfill title/channel on
+        # points whose PAYLOAD has them stored empty (see `retrieve()`'s
+        # post-fetch patch below). `None` (e.g. tests) just skips that
+        # step; nothing else here depends on it.
+        self.es_client = es_client
 
     async def retrieve(
         self, query: str, channel_ids: list[str] | None = None,
@@ -131,4 +138,52 @@ class QdrantHybridRetriever:
                     "source":       "qdrant_hybrid",
                 },
             ))
+        await self._backfill_missing_metadata(documents)
         return documents
+
+    async def _backfill_missing_metadata(
+        self, documents: list[Document],
+    ) -> None:
+        """2026-09-16 fix: patches `title`/`channel` in place for any
+        document whose Qdrant PAYLOAD has them stored empty — live-
+        verified on the running cluster: split-video chunk points
+        (`video_id="XYZ#p3"`) carry `title=""`/`channel=""` baked in
+        from an ingestion run that predates `fetch_metadata_from_es`'s
+        partition→parent resolution (their content hasn't changed
+        since, so the content-hash-skip in `ingest_to_qdrant` means a
+        normal re-ingest never re-embeds/re-upserts them — the stale
+        payload persists indefinitely). Re-deriving at RETRIEVAL time
+        instead of only fixing future writes means every ALREADY-
+        INGESTED video gets correct citations immediately, no backfill
+        migration needed, and it's a no-op the instant a point does
+        carry real values.
+
+        No-op when `es_client` wasn't wired in, or nothing's missing —
+        the common case costs one dict comprehension over an already-
+        small `documents` list."""
+        if self.es_client is None:
+            return
+        missing_ids = [
+            doc.metadata["video_id"]
+            for doc in documents
+            if doc.metadata.get("video_id")
+            and not doc.metadata.get("title")
+            and not doc.metadata.get("channel")
+        ]
+        if not missing_ids:
+            return
+        from domains.ycs.ingestion.service import fetch_metadata_from_es
+        fetched = await fetch_metadata_from_es(self.es_client, missing_ids)
+        for doc in documents:
+            vid = doc.metadata.get("video_id")
+            meta = fetched.get(vid)
+            if not meta:
+                continue
+            doc.metadata["title"] = meta.get("title") or doc.metadata["title"]
+            doc.metadata["channel"] = meta.get("channel") or doc.metadata["channel"]
+            doc.metadata["upload_date"] = (
+                meta.get("upload_date") or doc.metadata["upload_date"]
+            )
+            doc.metadata["webpage_url"] = (
+                meta.get("webpage_url") or doc.metadata["webpage_url"]
+            )

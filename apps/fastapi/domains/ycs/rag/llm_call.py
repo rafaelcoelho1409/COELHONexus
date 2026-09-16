@@ -78,6 +78,43 @@ def is_transient(exc: BaseException) -> bool:
     return any(k in msg for k in _TRANSIENT_SUBSTRINGS)
 
 
+async def capture_llm_usage(response: object) -> None:
+    """2026-09-16 fix: every Ask node calls `resilient_ainvoke`/
+    `hedged_ainvoke`, but neither ever read the response's token usage
+    — `set_node()` (called by every node before invoking) only tags
+    WHICH node is active; nothing was actually bumping the counter, so
+    `/agents/usage/{thread_id}` silently stayed empty for the whole
+    Ask graph (only Neo4j extraction's separate `LLMGraphTransformer`
+    callback path worked). `app.state.llm`/`llm_fast` are plain
+    `ChatOpenAI` (`domains/llm/rotator/chain/service.py`) — LangChain
+    populates `AIMessage.usage_metadata` from any OpenAI-compatible
+    `usage` response field automatically, no rotator-specific parsing
+    needed. Best-effort: a malformed/missing usage block must never
+    fail the caller's real answer."""
+    try:
+        from domains.ycs.runtime.llm_counter import bump_current_call
+
+        usage = getattr(response, "usage_metadata", None) or {}
+        tokens_in  = int(usage.get("input_tokens") or 0)
+        tokens_out = int(usage.get("output_tokens") or 0)
+        if not (tokens_in or tokens_out):
+            return
+        details = usage.get("output_token_details") or {}
+        reasoning = int(
+            (details.get("reasoning") if isinstance(details, dict) else 0) or 0
+        )
+        meta = getattr(response, "response_metadata", None) or {}
+        model = meta.get("model_name") or meta.get("model") or "unknown"
+        await bump_current_call(
+            tokens_in = tokens_in, tokens_out = tokens_out,
+            reasoning_tokens = reasoning, model = model,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[ycs:rag:usage] capture failed: {type(e).__name__}: {e}"
+        )
+
+
 async def resilient_ainvoke(
     chain,
     payload: dict,
@@ -93,10 +130,12 @@ async def resilient_ainvoke(
     last_exc: BaseException | None = None
     for attempt in range(1, max_attempts + 1):
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 chain.ainvoke(payload),
                 timeout = timeout_s,
             )
+            await capture_llm_usage(result)
+            return result
         except Exception as e:  # noqa: BLE001 — classified below
             last_exc = e
             if not is_transient(e) or attempt >= max_attempts:
@@ -146,7 +185,9 @@ async def hedged_ainvoke(
     async def _one() -> object:
         nonlocal invokes
         invokes += 1
-        return await chain.ainvoke(payload)
+        result = await chain.ainvoke(payload)
+        await capture_llm_usage(result)
+        return result
 
     async def _delayed() -> object:
         try:

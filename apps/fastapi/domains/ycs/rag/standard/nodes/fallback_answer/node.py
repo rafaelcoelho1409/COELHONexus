@@ -93,6 +93,7 @@ def _related_citations(docs: list[Document]) -> list[dict]:
             "channel":  meta.get("channel", ""),
             "url":      meta.get("webpage_url", ""),
             "source":   meta.get("source", ""),
+            "snippet":  (getattr(doc, "page_content", "") or "")[:220].strip(),
         })
         if len(out) >= _RELATED_CITATIONS_CAP:
             break

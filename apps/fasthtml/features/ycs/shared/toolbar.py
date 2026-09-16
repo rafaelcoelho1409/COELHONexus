@@ -21,6 +21,7 @@ from __future__ import annotations
 from fasthtml.common import Button, Div, Form, Input, Span
 
 from ..ask.chrome    import (
+    AskLlmUsageTrigger,
     AskModeTabs,
     AskNewThreadButton,
     AskScopeTrigger,
@@ -119,7 +120,7 @@ def StageToolbar(active_stage: str, slug: str | None):
         # promoted out of the Thread dropdown so it's a one-click
         # primary action, not a hidden secondary one.
         left  = [AskModeTabs(), AskScopeTrigger()]
-        right = [AskNewThreadButton(), AskThreadBar()]
+        right = [AskLlmUsageTrigger(), AskNewThreadButton(), AskThreadBar()]
     elif active_stage == "query":
         # Backend pill on the left only — Query is scoped to YCS while
         # the cross-app surface is rebuilt. The right cluster (app

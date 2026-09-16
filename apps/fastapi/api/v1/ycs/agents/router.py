@@ -35,6 +35,7 @@ from domains.ycs.conversation import (
 from domains.ycs.graph_builder import get_graph_stats
 from domains.ycs.runtime.llm_counter import (
     clear_state as _llm_counter_reset,
+    diff_usage as _llm_diff_usage,
     read_counters as _llm_read_counters,
     set_node as _llm_set_node,
     set_thread as _llm_set_thread,
@@ -478,6 +479,13 @@ async def rag_search(
         # unchanged (different context altogether).
         _llm_set_thread(thread_id = _sess_id)
         _llm_set_node(node = None)  # nodes tag themselves before calling
+        # 2026-09-16: pre-turn snapshot for the per-response usage badge
+        # (see `_llm_diff_usage` below, mirroring the stream endpoint's
+        # `_usage_before`/`_stamp_usage`).
+        try:
+            _usage_before = await _llm_read_counters(_sess_id)
+        except Exception:
+            _usage_before = None
         _user_id  = (payload.channel_ids or ["default"])[0]
         t0 = time.monotonic()
         with _lf_session(
@@ -592,6 +600,14 @@ async def rag_search(
             detail      = f"Agent error: {str(e)}",
         )
     mode = result.get("mode", "standard")
+    usage: dict = {"total": {}, "by_model": {}}
+    if _usage_before is not None:
+        try:
+            usage = _llm_diff_usage(
+                _usage_before, await _llm_read_counters(_sess_id),
+            )
+        except Exception:
+            pass
     response = {
         "answer":             result.get("generation", "No answer generated."),
         "mode":               mode,
@@ -600,6 +616,7 @@ async def rag_search(
         "retrieval_sources":  result.get("retrieval_sources", []),
         "retry_count":        result.get("retry_count", 0),
         "search_query":       result.get("search_query", payload.question),
+        "usage":              usage,
     }
     if mode == "deep":
         response["sub_questions"]    = result.get("sub_questions", [])
@@ -876,6 +893,26 @@ async def rag_search_stream(
         if isinstance(citations, list) and citations:
             state["citations"] = citations
 
+    async def _stamp_usage(
+        state: dict, thread_id: str, before: dict | None,
+    ) -> None:
+        """Diff live counters against the `before` snapshot taken at
+        turn start and write the delta into state["usage"] — same
+        JSONB-piggyback pattern as `_stamp_duration`/`_stamp_citations`
+        so it survives in `thinking_state` with zero schema change and
+        rides the SSE `end` frame for the live badge. Best-effort: a
+        Redis hiccup here must never fail an otherwise-successful turn."""
+        if before is None:
+            return
+        try:
+            after = await _llm_read_counters(thread_id)
+            state["usage"] = _llm_diff_usage(before, after)
+        except Exception as e:
+            logger.warning(
+                f"[ycs:stream] usage stamp failed thread_id={thread_id}: "
+                f"{type(e).__name__}: {e}"
+            )
+
     async def event_generator():
         from infra.langfuse.sessions import session as _lf_session
         _sess_id = payload.thread_id or DEFAULT_THREAD_ID
@@ -884,6 +921,14 @@ async def rag_search_stream(
         # conversation-level usage counter captures this stream too.
         _llm_set_thread(thread_id = _sess_id)
         _llm_set_node(node = None)
+        # 2026-09-16: pre-turn snapshot for the per-response usage badge
+        # (`_stamp_usage` diffs against this at every terminal branch).
+        # `None` on failure — `_stamp_usage` no-ops rather than stamping
+        # a misleading delta off a missing baseline.
+        try:
+            _usage_before = await _llm_read_counters(_sess_id)
+        except Exception:
+            _usage_before = None
         _session_cm = _lf_session(
             "ycs",
             session_id = _sess_id,
@@ -1242,6 +1287,9 @@ async def rag_search_stream(
                         try:
                             thinking_state = _thinking_finalize(thinking_state)
                             _stamp_duration(thinking_state, t_run_start)
+                            await _stamp_usage(
+                                thinking_state, _sess_id, _usage_before,
+                            )
                             _stamp_citations(thinking_state, last_citations)
                             await asyncio.wait_for(
                                 update_turn_answer(
@@ -1277,6 +1325,7 @@ async def rag_search_stream(
                             "node":        "end",
                             "status":      "complete",
                             "duration_ms": thinking_state.get("duration_ms"),
+                            "usage":       thinking_state.get("usage"),
                         })
                         + "\n\n"
                     )
@@ -1292,6 +1341,9 @@ async def rag_search_stream(
                         try:
                             thinking_state = _thinking_finalize(thinking_state)
                             _stamp_duration(thinking_state, t_run_start)
+                            await _stamp_usage(
+                                thinking_state, _sess_id, _usage_before,
+                            )
                             _stamp_citations(thinking_state, last_citations)
                             await asyncio.wait_for(
                                 update_turn_answer(
@@ -1327,6 +1379,7 @@ async def rag_search_stream(
                             "node":        "end",
                             "status":      "stalled",
                             "duration_ms": thinking_state.get("duration_ms"),
+                            "usage":       thinking_state.get("usage"),
                         })
                         + "\n\n"
                     )
@@ -1376,6 +1429,9 @@ async def rag_search_stream(
                         try:
                             thinking_state = _thinking_finalize(thinking_state)
                             _stamp_duration(thinking_state, t_run_start)
+                            await _stamp_usage(
+                                thinking_state, _sess_id, _usage_before,
+                            )
                             _stamp_citations(thinking_state, last_citations)
                             await asyncio.wait_for(
                                 update_turn_answer(
@@ -1421,6 +1477,7 @@ async def rag_search_stream(
                             "node":        "end",
                             "status":      "complete",
                             "duration_ms": thinking_state.get("duration_ms"),
+                            "usage":       thinking_state.get("usage"),
                         })
                         + "\n\n"
                     )
@@ -1429,6 +1486,9 @@ async def rag_search_stream(
                         try:
                             thinking_state = _thinking_finalize(thinking_state)
                             _stamp_duration(thinking_state, t_run_start)
+                            await _stamp_usage(
+                                thinking_state, _sess_id, _usage_before,
+                            )
                             _stamp_citations(thinking_state, last_citations)
                             await asyncio.wait_for(
                                 update_turn_answer(
@@ -1447,6 +1507,9 @@ async def rag_search_stream(
                         try:
                             thinking_state = _thinking_finalize(thinking_state)
                             _stamp_duration(thinking_state, t_run_start)
+                            await _stamp_usage(
+                                thinking_state, _sess_id, _usage_before,
+                            )
                             _stamp_citations(thinking_state, last_citations)
                             await asyncio.wait_for(
                                 update_turn_answer(
@@ -1522,6 +1585,7 @@ async def rag_search_stream(
                             "node":        "end",
                             "status":      "complete",
                             "duration_ms": thinking_state.get("duration_ms"),
+                            "usage":       thinking_state.get("usage"),
                         })
                         + "\n\n"
                     )
@@ -1600,6 +1664,9 @@ async def rag_search_stream(
                     if last_generation:
                         _stamp_duration(thinking_state, t_run_start)
                         _stamp_citations(thinking_state, last_citations)
+                        await _stamp_usage(
+                            thinking_state, _sess_id, _usage_before,
+                        )
                         await update_turn_answer(
                             request.app.state.pg_url,
                             turn_id, last_generation, last_mode,
@@ -1633,6 +1700,7 @@ async def rag_search_stream(
                     "node":        "error",
                     "error":       str(e),
                     "duration_ms": thinking_state.get("duration_ms"),
+                    "usage":       thinking_state.get("usage"),
                 })
                 + "\n\n"
             )

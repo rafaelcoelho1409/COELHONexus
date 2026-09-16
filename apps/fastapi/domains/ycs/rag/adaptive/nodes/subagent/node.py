@@ -18,6 +18,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from domains.ycs.rag.llm_call import capture_llm_usage
+from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
 from domains.ycs.runtime.observability import record_subquestion, traced
 
 from ....domain import strip_think_tags
@@ -171,6 +173,7 @@ async def _rephrase_subquestion(
         return None
     chain = REPHRASE_PROMPT | llm
     try:
+        _llm_set_node(node = "subagent_rephrase")
         response = await asyncio.wait_for(
             chain.ainvoke({
                 "sub_question":    sub_q,
@@ -178,6 +181,7 @@ async def _rephrase_subquestion(
             }),
             timeout = REPHRASE_TIMEOUT_S,
         )
+        await capture_llm_usage(response)
     except (asyncio.TimeoutError, Exception) as e:
         logger.info(
             f"[ycs:subagent] rephrase failed for sub_q={sub_q[:60]!r}: "
@@ -268,3 +272,88 @@ async def run_subagent(
             "error_kind":        error_kind,
         }],
     }
+
+
+async def run_subagents_bounded(
+    sub_questions:   list[str],
+    *,
+    run_one,
+    deadline_s:      float,
+    route:           str = "search",
+) -> dict:
+    """Fan out `run_one(sub_q)` over every sub-question with an OUTER
+    wall-clock deadline, instead of relying purely on LangGraph's
+    `Send()`/superstep barrier for the join — confirmed (2026-09-16
+    /sota-search) that LangGraph only advances a superstep once EVERY
+    parallel branch reports back, with no native "proceed without
+    stragglers" option. Left unbounded, a single degraded sub-question
+    can hold the WHOLE DEEP response hostage for up to `run_subagent`'s
+    documented worst case (~20.5 min) even though the other 4 finished
+    in seconds — this is what turned a real run into a 15m46s response.
+
+    Uses `asyncio.wait`, not `asyncio.wait_for` + `gather`: `wait_for`
+    cancels the entire gather — every child task, including ones about
+    to finish — the instant the deadline hits. `asyncio.wait` only
+    reports back `done`/`pending`, so sub-questions that finished
+    within budget keep their real answer; only the ones STILL running
+    at the deadline get cancelled and a placeholder instead."""
+    if not sub_questions:
+        return {"sub_results": []}
+    tasks = {asyncio.ensure_future(run_one(q)): q for q in sub_questions}
+    done, pending = await asyncio.wait(tasks.keys(), timeout = deadline_s)
+
+    sub_results: list[dict] = []
+    for t in done:
+        try:
+            r = t.result()
+            sub_results.extend(r.get("sub_results") or [])
+        except Exception as e:
+            q = tasks[t]
+            logger.warning(
+                f"[ycs:subagent] bounded fan-out: sub_q={q[:60]!r} "
+                f"raised {type(e).__name__}: {e}"
+            )
+            record_subquestion(route = route, outcome = "hard_error")
+            sub_results.append({
+                "sub_question":      q,
+                "answer": (
+                    f"_(this sub-question failed with an error: "
+                    f"`{type(e).__name__}`.)_"
+                ),
+                "citations":         [],
+                "grounded":          False,
+                "retrieval_sources": [],
+                "error_kind":        "hard_error",
+            })
+
+    if pending:
+        logger.warning(
+            f"[ycs:subagent] bounded fan-out: {len(pending)}/"
+            f"{len(sub_questions)} sub-question(s) still running at "
+            f"the {int(deadline_s)}s deadline — cancelling + "
+            f"placeholding"
+        )
+        for t in pending:
+            q = tasks[t]
+            t.cancel()
+            record_subquestion(route = route, outcome = "deadline")
+            sub_results.append({
+                "sub_question": q,
+                "answer": (
+                    "_(this sub-question was still researching when "
+                    "the overall research deadline was reached — the "
+                    "other sub-questions below are complete. Re-asking "
+                    "may give this one enough time, or land on a "
+                    "faster rotator arm.)_"
+                ),
+                "citations":         [],
+                "grounded":          False,
+                "retrieval_sources": [],
+                "error_kind":        "deadline",
+            })
+        # Let the cancellations actually settle before returning — an
+        # un-awaited cancelled task keeps running in the background,
+        # burning rotator slots for a result nobody will see.
+        await asyncio.gather(*pending, return_exceptions = True)
+
+    return {"sub_results": sub_results}

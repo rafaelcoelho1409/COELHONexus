@@ -159,17 +159,27 @@ class DocumentGrader:
                 # 2026-09-15: tag every graded doc with the retrieval
                 # node so the conversation-level usage counter splits
                 # retrieval.grade from retrieval.generate.
+                from domains.ycs.rag.llm_call import capture_llm_usage
                 from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
                 _llm_set_node(node = "grader")
                 # Per-call timeout prevents a single slow / hung model
                 # from blocking a semaphore slot indefinitely.
-                return await asyncio.wait_for(
+                result = await asyncio.wait_for(
                     self.grader.ainvoke({
                         "question": question,
                         "document": doc.page_content[:PER_DOC_CHAR_CAP],
                     }),
                     timeout = GRADER_CALL_TIMEOUT_S,
                 )
+                # 2026-09-16: unlike `resilient_ainvoke`'s callers, this
+                # bypasses that helper (own semaphore + per-call
+                # timeout), so usage capture has to happen here too.
+                # `include_raw=True` (see below) returns a dict, not an
+                # AIMessage directly — `capture_llm_usage` needs the "raw"
+                # half, which carries `.usage_metadata`.
+                if isinstance(result, dict):
+                    await capture_llm_usage(result.get("raw"))
+                return result
 
         results = await asyncio.gather(
             *(_grade_one(doc) for doc in documents),

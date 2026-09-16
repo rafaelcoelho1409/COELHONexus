@@ -1,4 +1,4 @@
-from .node import run_subagent
+from .node import run_subagent, run_subagents_bounded
 
 
-__all__ = ["run_subagent"]
+__all__ = ["run_subagent", "run_subagents_bounded"]

@@ -1495,15 +1495,30 @@
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.07);
 }
 .ycs-ask-citation-thumb-wrap {
+  display: block;
   position: relative;
   width: 104px;
   height: 58px;
   flex-shrink: 0;
   border-radius: 5px;
   overflow: hidden;
+  text-decoration: none;
+  color: inherit;
   background: linear-gradient(135deg,
     rgba(196, 18, 48, 0.10),
     rgba(196, 18, 48, 0.04));
+}
+/* 2026-09-16: `.no-thumb` is now applied server-side (in the template,
+ * when `video_id` is absent entirely) as well as by the `onerror`
+ * handler (image genuinely fails to load) — previously it only ever
+ * fired from `onerror`, but YouTube's thumbnail CDN returns 200 OK
+ * with a generic grey placeholder for malformed ids rather than 404ing,
+ * so a broken-looking image could still render underneath an
+ * unset `.no-thumb` class. Hiding the `<img>` itself here (not just
+ * overlaying a ::before) guarantees the fallback glyph is what's
+ * seen, never a stray placeholder JPG. */
+.ycs-ask-citation-thumb-wrap.no-thumb .ycs-ask-citation-thumb {
+  display: none;
 }
 .ycs-ask-citation-thumb-wrap.no-thumb::before {
   content: "▶";
@@ -1512,8 +1527,32 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: rgba(196, 18, 48, 0.40);
-  font-size: 1.5rem;
+  color: rgba(196, 18, 48, 0.55);
+  font-size: 1.4rem;
+  background: linear-gradient(135deg,
+    rgba(196, 18, 48, 0.14),
+    rgba(196, 18, 48, 0.06));
+}
+/* Short excerpt of the matched passage — sits between title and the
+ * channel/arm-chip meta row. 2-line clamp keeps card height stable
+ * across a card with/without a snippet. 2026-09-16: clicking the
+ * `.ycs-ask-citation-body` button toggles `.expanded` on itself,
+ * which lifts the clamp here so the FULL fetched excerpt (up to the
+ * 220-char backend cap) shows instead of just navigating to YouTube —
+ * see `renderCitation()`'s docstring for why the click target split. */
+.ycs-ask-citation-snippet {
+  font-size: 0.74rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ycs-ask-citation-body.expanded .ycs-ask-citation-snippet {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
 }
 .ycs-ask-citation-thumb {
   width: 100%;
@@ -1544,13 +1583,24 @@
   opacity: 1;
   transform: translateY(0);
 }
+/* 2026-09-16: a real `<button>` now (was a plain `<div>` when the
+ * whole card was one `<a>`) — reset browser button chrome, keep the
+ * original flex layout verbatim. */
 .ycs-ask-citation-body {
   flex: 1;
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   gap: 4px;
   min-width: 0;
-  padding-right: 2px;
+  padding: 0 2px 0 0;
+  margin: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
 }
 .ycs-ask-citation-title {
   font-size: 0.86rem;
@@ -2404,6 +2454,46 @@
   cursor: help;
 }
 .ycs-ask-turn-duration:empty { display: none; }
+/* 2026-09-16 — per-response usage button. Same muted/metadata visual
+ * weight as the duration chip (sits right next to it) but clickable —
+ * toggles `.ycs-ask-turn-usage-panel` below it open/closed. Backend
+ * stamps `evt.usage` on SSE `end`; history reload pulls it from
+ * `thinking_state.usage`. Disabled (not hidden) when a turn made zero
+ * LLM calls, so the head row's layout stays stable turn to turn. */
+.ycs-ask-turn-usage {
+  font: inherit;
+  font-size: 0.66rem;
+  font-style: italic;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+.ycs-ask-turn-usage:hover:not(:disabled) { color: var(--text); }
+.ycs-ask-turn-usage:disabled {
+  cursor: default;
+  text-decoration: none;
+  opacity: 0.55;
+}
+/* Collapsible breakdown panel — same `kpiGrid`/`modelTable` rendering
+ * (`@dd/shared/llm_totals.js`) the thread-total drawer uses, scoped to
+ * just this turn. Rendered lazily on first open (`toggleTurnUsagePanel`);
+ * empty + collapsed by default so history-heavy threads don't pay for
+ * N unopened panels. */
+.ycs-ask-turn-usage-panel {
+  display: none;
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.15);
+}
+.ycs-ask-turn-usage-panel.ycs-ask-turn-usage-panel-open { display: block; }
 /* 2026-06-16 — partial-answer badge. The class lands on the turn
  * wrapper when the critic's confidence drops below 80%; the badge
  * pseudo-element rides next to the mode badge so the user sees the

@@ -23,6 +23,53 @@ from fasthtml.common import (
 )
 
 
+def _AskLlmUsageDrawer():
+    """2026-09-16 — right-anchored slide-out for this conversation's LLM
+    usage, opened by `AskLlmUsageTrigger()` (`ask/chrome.py`). Same
+    `.fw-drawer` shell + `.dd-llm-rail-*` body classes as Ingestion's
+    Neo4j-bar drawer (`_YcsLlmUsageDrawer()` in `shared/pipeline_panel.py`)
+    — own ids throughout so the two coexist (`PipelinePanel` renders on
+    every YCS page). Hydrated by `ask.js`'s `refreshAskLlmUsage()`,
+    fetching `GET /agents/usage/{thread_id}`."""
+    return Div(
+        Div(
+            Div(
+                Div("LLM usage", id = "ycs-ask-llm-drawer-name",
+                    cls = "fw-drawer-name"),
+                Div("COELHO LLM Rotator usage for this conversation.",
+                    id = "ycs-ask-llm-drawer-meta", cls = "fw-drawer-meta"),
+                cls = "fw-drawer-title",
+            ),
+            Div(
+                Button(
+                    "✕",
+                    type = "button",
+                    cls  = "fw-drawer-btn",
+                    id   = "ycs-ask-llm-drawer-close-btn",
+                    **{"aria-label": "Close LLM usage drawer"},
+                ),
+                cls = "fw-drawer-controls",
+            ),
+            cls = "fw-drawer-header",
+        ),
+        Div(
+            Div(
+                Div("Conversation LLM usage", cls = "dd-llm-rail-label"),
+                Div(
+                    Div("No LLM usage recorded yet.", cls = "dd-llm-rail-empty"),
+                    id  = "ycs-ask-llm-drawer-totals",
+                    cls = "dd-llm-rail-host",
+                ),
+                id  = "ycs-ask-llm-drawer-section",
+                cls = "dd-llm-rail-section",
+            ),
+            id = "ycs-ask-llm-drawer-body", cls = "fw-drawer-body",
+        ),
+        id  = "ycs-ask-llm-drawer",
+        cls = "fw-drawer",
+    )
+
+
 def _Composer():
     return Form(
         Textarea(
@@ -136,5 +183,6 @@ def AskBody(slug: str | None):
             cls = "ycs-ask-main",
         ),
         _SourcesRail(),
+        _AskLlmUsageDrawer(),
         cls = "ycs-ask-layout",
     )

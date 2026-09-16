@@ -9,7 +9,7 @@ Topology (deprecated `graphs/youtube/adaptive.py:L15-29`):
     classify_query
       ├── FAST     → direct_answer → END
       ├── STANDARD → run_standard  → END
-      └── DEEP     → plan_research → Send(run_subagent) ... → synthesize → critic → END
+      └── DEEP     → plan_research → run_subagents (bounded fan-out) → synthesize → critic → END
 
 The STANDARD path is the deprecated `YouTubeContentGraph`; both the
 `run_standard` and `run_subagent` nodes invoke a channel-scoped
@@ -23,7 +23,19 @@ parallel wave instead of N sequential waves, cutting DEEP wall-time
 concurrent users on the same worker still respect the cap. See
 `params.py::SUBAGENT_CONCURRENCY` for the rotator-parallelism
 safety analysis (provider distribution + per-arm 60s cooldown +
-grader sub-agent gate)."""
+grader sub-agent gate).
+
+2026-09-16 — the fan-out itself is no longer a LangGraph `Send()`
+conditional edge. A live DEEP run took 15m46s; tracing it back showed
+Send's superstep barrier won't advance to `synthesize` until EVERY
+sub-question reports back, and one sub-question can legitimately take
+`run_subagent`'s documented worst case (~20.5 min) — so a single
+degraded sub-question held the whole response hostage while the other
+4 finished in seconds. `run_subagents` (plural) is now a plain node
+that runs the fan-out itself via `run_subagents_bounded` (asyncio.wait
+with an outer `DEEP_FANOUT_DEADLINE_S` deadline), so `synthesize`
+always starts on time regardless of how many sub-questions are still
+in flight."""
 from __future__ import annotations
 
 import asyncio
@@ -32,7 +44,6 @@ import os
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
-from langgraph.types import Send
 
 from domains.ycs.grader import DocumentGrader
 from domains.ycs.rag.standard import build_youtube_rag_graph
@@ -43,9 +54,9 @@ from .nodes.critic import critic
 from .nodes.direct_answer import direct_answer
 from .nodes.plan import plan_research
 from .nodes.run_standard import run_standard_pipeline
-from .nodes.subagent import run_subagent
+from .nodes.subagent import run_subagent, run_subagents_bounded
 from .nodes.synthesize import synthesize
-from .params import SUBAGENT_CONCURRENCY
+from .params import DEEP_FANOUT_DEADLINE_S, SUBAGENT_CONCURRENCY
 from .state import AdaptiveRAGState
 
 
@@ -109,29 +120,6 @@ def _route_after_direct(state: AdaptiveRAGState) -> str:
     "The model didn't respond..." to the user. No cycle risk —
     `run_standard` always terminates at END."""
     return "end" if state.get("grounded") else "run_standard"
-
-
-def _fan_out_subagents(state: AdaptiveRAGState) -> list[Send]:
-    """After planning, fan out sub-questions to parallel subagents via
-    `Send`. Each Send carries one sub-question + the inherited channel
-    scope + the parent question (2026-06-16: used by the sub-agent's
-    `no_docs` rephrase retry to anchor the rewrite to the original
-    intent — see `nodes/subagent/node.py::_rephrase_subquestion`)."""
-    channel_ids = state.get("channel_ids") or []
-    parent_q    = state.get("question", "") or ""
-    return [
-        Send(
-            "run_subagent",
-            {
-                "sub_question":    q,
-                "parent_question": parent_q,
-                "channel_ids":     channel_ids,
-                "route":           state.get("route") or "search",
-                "thread_id":       state.get("thread_id") or "",
-            },
-        )
-        for q in state.get("sub_questions", [])
-    ]
 
 
 def build_adaptive_rag_graph(
@@ -203,24 +191,50 @@ def build_adaptive_rag_graph(
     async def _plan(state):
         return await plan_research(state, llm)
 
-    async def _subagent(payload):
-        # Sub-agents inherit the channel scope from the parent state.
-        # Concurrency is gated by a process-wide semaphore (cap=5,
-        # matching the max sub-question count) so a typical DEEP plan
-        # scoped graph INSIDE the gate — the StateGraph compilation
-        # isn't free and we don't want to materialise N sub-graphs for
-        # waiting sub-agents that haven't acquired yet (only matters
-        # if the env override raises N above the cap).
-        # also forward the parent rotator `llm` so the
-        # sub-agent can run a single rephrased-question retry when its
-        # first STANDARD invocation returns `no_docs`. The retry path
-        # lives inside `run_subagent` (see its docstring + the
-        # subagent/prompts.py rephrase rationale).
-        sem = _get_subagent_semaphore()
-        async with sem:
-            channel_ids = payload.get("channel_ids")
-            scoped_graph = _build_standard_graph(channel_ids)
-            return await run_subagent(payload, scoped_graph, llm = llm)
+    async def _run_subagents(state: AdaptiveRAGState):
+        """DEEP fan-out — bounded by `DEEP_FANOUT_DEADLINE_S`, NOT a
+        LangGraph `Send()` (see `run_subagents_bounded`'s docstring for
+        why: Send's superstep barrier can't proceed without every
+        branch, so an outer deadline has to be enforced by this node
+        itself via `asyncio.wait`, not the graph)."""
+        channel_ids = state.get("channel_ids") or []
+        parent_q    = state.get("question", "") or ""
+        route       = state.get("route") or "search"
+        thread_id   = state.get("thread_id") or ""
+
+        async def _one(sub_q: str) -> dict:
+            # Sub-agents inherit the channel scope from the parent
+            # state. Concurrency is gated by a process-wide semaphore
+            # (cap=5, matching the max sub-question count) so a typical
+            # DEEP plan runs every sub-agent in one wave — the
+            # scoped graph is built INSIDE the gate — StateGraph
+            # compilation isn't free and we don't want to materialise N
+            # sub-graphs for waiting sub-agents that haven't acquired
+            # yet (only matters if the env override raises N above the
+            # cap). Also forwards the parent rotator `llm` so the
+            # sub-agent can run a single rephrased-question retry when
+            # its first STANDARD invocation returns `no_docs` (see
+            # `run_subagent`'s docstring + `subagent/prompts.py`).
+            sem = _get_subagent_semaphore()
+            async with sem:
+                scoped_graph = _build_standard_graph(channel_ids)
+                return await run_subagent(
+                    {
+                        "sub_question":    sub_q,
+                        "parent_question": parent_q,
+                        "channel_ids":     channel_ids,
+                        "route":           route,
+                        "thread_id":       thread_id,
+                    },
+                    scoped_graph, llm = llm,
+                )
+
+        return await run_subagents_bounded(
+            state.get("sub_questions") or [],
+            run_one    = _one,
+            deadline_s = DEEP_FANOUT_DEADLINE_S,
+            route      = route,
+        )
 
     async def _synthesize(state):
         return await synthesize(state, llm)
@@ -232,7 +246,7 @@ def build_adaptive_rag_graph(
     workflow.add_node("direct_answer",   _direct)
     workflow.add_node("run_standard",    _run_standard)
     workflow.add_node("plan_research",   _plan)
-    workflow.add_node("run_subagent",    _subagent)
+    workflow.add_node("run_subagents",   _run_subagents)
     workflow.add_node("synthesize",      _synthesize)
     workflow.add_node("critic",          _critic)
 
@@ -256,12 +270,14 @@ def build_adaptive_rag_graph(
         },
     )
     workflow.add_edge("run_standard",  END)
-    # DEEP: plan → Send(run_subagent) ... → synthesize → critic → END.
-    workflow.add_conditional_edges(
-        "plan_research", _fan_out_subagents, ["run_subagent"],
-    )
-    workflow.add_edge("run_subagent", "synthesize")
-    workflow.add_edge("synthesize",   "critic")
-    workflow.add_edge("critic",       END)
+    # DEEP: plan → run_subagents (bounded fan-out) → synthesize → critic
+    # → END. Plain edge, not a conditional `Send()` fan-out — the
+    # bounded-deadline orchestration happens INSIDE `_run_subagents`
+    # itself (see its docstring), not via LangGraph's own parallel-
+    # branch machinery.
+    workflow.add_edge("plan_research",  "run_subagents")
+    workflow.add_edge("run_subagents",  "synthesize")
+    workflow.add_edge("synthesize",     "critic")
+    workflow.add_edge("critic",         END)
 
     return workflow.compile()
