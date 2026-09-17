@@ -72,8 +72,7 @@ def strip_think_tags(text: Any) -> str:
     `re.sub` → `TypeError: expected string or bytes-like object, got
     'list'`. Centralizing list-handling here covers every existing
     `strip_think_tags(response.content)` call site at once
-    (direct_answer, contextualize, rewrite, generate, synthesize).
-x content blocks."""
+    (direct_answer, contextualize, rewrite, generate, synthesize)."""
     if text is None:
         return ""
     if isinstance(text, list):
@@ -93,7 +92,19 @@ x content blocks."""
         text = "".join(parts)
     elif not isinstance(text, str):
         text = str(text)
-    return _THINK_TAG_RE.sub("", text).strip()
+    text = _THINK_TAG_RE.sub("", text)
+    # 2026-09-17: some reasoning models (GPT-OSS/DeepSeek-R1/Qwen3
+    # reasoning class, seen live via the rotator) emit a bare closing
+    # `</think>` with NO matching opening tag — the serving harness
+    # swallows the implicit opener but leaves the raw reasoning text
+    # (often a verbatim draft of the final answer) in front of it.
+    # `_THINK_TAG_RE` can't match an unpaired tag, so it passed
+    # through untouched, leaking duplicated reasoning + a literal
+    # "</think>" into the shipped answer. Keep only what follows the
+    # LAST such tag — that's the model's actual final answer.
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[-1]
+    return text.strip()
 
 
 def parse_json_model_output(text: Any, model_cls: type[_ModelT]) -> _ModelT:
