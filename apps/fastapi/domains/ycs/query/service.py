@@ -188,14 +188,25 @@ async def query_qdrant(
                 error = f"embed failed: {type(e).__name__}: {str(e)[:160]}",
             )
         # YCS uses NAMED vectors ("dense"/"sparse"); RR uses the default unnamed vector.
-        query_vector: Any = ("dense", vector) if app == APP_YCS else vector
+        using = "dense" if app == APP_YCS else None
         try:
-            results = await client.search(
+            # 2026-09-17: `AsyncQdrantClient.search()` was removed in
+            # qdrant-client 1.16 (live-confirmed: `AttributeError:
+            # 'AsyncQdrantClient' object has no attribute 'search'` —
+            # this call site had silently been dead since whatever
+            # upgrade dropped it). `query_points()` is the replacement:
+            # the named-vector selector moves from a `(name, vector)`
+            # tuple into its own `using=` kwarg, and the vector itself
+            # goes bare into `query=`. Same shape `retriever/
+            # qdrant_hybrid.py` already uses for the RAG path.
+            response = await client.query_points(
                 collection_name = collection,
-                query_vector    = query_vector,
+                query           = vector,
+                using           = using,
                 limit           = limit,
                 with_payload    = True,
             )
+            results = response.points
         except Exception as e:
             logger.warning(f"[ycs:query:qdrant] search failed: {type(e).__name__}: {e}")
             return _envelope(
@@ -436,6 +447,31 @@ async def raw_es(
     )
 
 
+def _translate_search_body(body: dict[str, Any]) -> dict[str, Any]:
+    """Legacy `search()` kwargs → `query_points()` kwargs.
+
+    `query_vector` (search's arg) becomes `query` (+ `using` when the
+    old body named a vector). Handles the three shapes a hand-typed or
+    AI-generated raw body might use for a named vector: a `{"name":
+    ..., "vector": ...}` dict (NamedVector's JSON shape), a `[name,
+    vector]` pair (the old Python-tuple convention, JSON-serialized as
+    a 2-element list), or a bare vector (unnamed collection)."""
+    out = dict(body)
+    qv = out.pop("query_vector", None)
+    query, using = qv, None
+    if isinstance(qv, dict) and "name" in qv and "vector" in qv:
+        using, query = qv["name"], qv["vector"]
+    elif (
+        isinstance(qv, list) and len(qv) == 2
+        and isinstance(qv[0], str) and isinstance(qv[1], list)
+    ):
+        using, query = qv
+    out["query"] = query
+    if using is not None:
+        out["using"] = using
+    return out
+
+
 # Qdrant — the editor body is `{"op": ..., ...}`. Dispatch off `op`,
 # pin the collection name from the (app, backend) matrix so the user
 # can't query a different collection.
@@ -470,7 +506,17 @@ async def raw_qdrant(
 
     try:
         if op == "search":
-            results = await client.search(**body)
+            # 2026-09-17: `AsyncQdrantClient.search()` was removed in
+            # qdrant-client 1.16 (live-confirmed via the semantic-search
+            # tab throwing `AttributeError: 'AsyncQdrantClient' object
+            # has no attribute 'search'`) — "search" is this editor's
+            # DEFAULT op (`safety.py::parse_qdrant_body`), so this was
+            # broken for anyone who didn't explicitly type `"op":
+            # "query_points"`. Translate the legacy body shape and
+            # dispatch through `query_points()` instead, same as the
+            # explicit `query_points` branch below.
+            r = await client.query_points(**_translate_search_body(body))
+            results = getattr(r, "points", r)
         elif op == "scroll":
             records, _ = await client.scroll(**body)
             results    = records
@@ -599,115 +645,25 @@ def _neo4j_jsonify(row: dict) -> dict:
 
 
 # AI text-to-DSL — Phase 4
-# Why inherit AsyncCallbackHandler: the runtime CallbackManager checks
-# `isinstance(handler, AsyncCallbackHandler)` to decide whether to AWAIT
-# the handler's async methods. A plain class with `async def` methods
-# triggers `RuntimeWarning: coroutine 'ahandle_event' was never awaited`
-# (observed in production) and silently drops the model
-# capture. Inheriting the real base class fixes both.
-from langchain_core.callbacks import AsyncCallbackHandler
-
-
-class _ModelCapture(AsyncCallbackHandler):
-    """Captures the FGTS-VA-selected REAL deployment id.
-
-    The rotator's `_RotatorAutoRetryRouter._create_chat_result` writes
-    the deployment that actually answered (e.g.
-    `nvidia_nim/openai/gpt-oss-120b`) into both `llm_output["model_name"]`
-    AND `AIMessage.response_metadata["model_name"]` — see
-    `domains/llm/rotator/chain/service.py:1080-1133`. We read from those
-    two sources because the chain's `invocation_params["model"]` only
-    holds the group alias (`dd-all`), which is what we DON'T want to
-    show.
-
-    Sources of truth, in order of preference:
-      1. `on_llm_end(response)` → `response.llm_output["model_name"]`
-      2. `chunk.response_metadata["model_name"]` (per-chunk in _stream)
-      3. `on_chat_model_start` `invocation_params["model"]` — fallback
-         only when it's NOT a group alias.
-    """
-    # Group aliases the rotator uses — NOT what we want to display.
-    # added `dd-reduce-label` (Query AI's new fast pool —
-    # see `app.py::app.state.query_ai_llm`) so the chip never falls
-    # back to the alias even if the deployment-id override fails.
-    _GROUP_ALIASES = frozenset({
-        "dd-all", "dd-grader", "dd-synth-write", "dd-planner",
-        "dd-reduce-label", "dd-synth", "dd-keylm", "dd-embed",
-        "ycs-query-ai", "rr-strong",
-    })
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.model: str | None = None
-        self.attempts: list[str] = []
-
-    @classmethod
-    def _is_group_alias(cls, name: str | None) -> bool:
-        if not name:
-            return True
-        n = str(name).lower().strip()
-        if n in cls._GROUP_ALIASES:
-            return True
-        # General pattern: group aliases use `<context>-<role>` with
-        # only hyphens and no provider/model slash. Real deployments
-        # ALWAYS contain a `/` (`nvidia_nim/...`, `groq/...`,
-        # `gemini/...`).
-        return "/" not in n and n.startswith(("dd-", "rr-", "ycs-"))
-
-    def _absorb(self, candidate: str | None) -> None:
-        """Take a candidate model string and store it only if it looks
-        like a real deployment (filters group aliases)."""
-        if not candidate:
-            return
-        c = str(candidate)
-        if self._is_group_alias(c):
-            # Only stash as a last-resort fallback; do NOT overwrite a
-            # better-quality capture we already have.
-            if self.model is None:
-                self.model = c
-            return
-        # Real deployment — always wins.
-        self.model = c
-        self.attempts.append(c)
-
-    @staticmethod
-    def _model_from_start(serialized: dict | None, kwargs: dict) -> str | None:
-        params = kwargs.get("invocation_params") or {}
-        return (
-            params.get("model")
-            or params.get("model_name")
-            or (serialized or {}).get("name")
-        )
-
-    async def on_chat_model_start(self, serialized, messages, **kwargs):
-        self._absorb(self._model_from_start(serialized, kwargs))
-
-    async def on_llm_start(self, serialized, prompts, **kwargs):
-        self._absorb(self._model_from_start(serialized, kwargs))
-
-    async def on_llm_end(self, response, **kwargs):
-        """Authoritative pass — the rotator stamps the real deployment
-        id into the response. This fires AFTER streaming completes but
-        BEFORE our generator's `done` frame, so the model chip flips
-        from any prior group-alias fallback to the real arm just in
-        time."""
-        try:
-            llm_output = getattr(response, "llm_output", None) or {}
-            real = llm_output.get("model_name") or llm_output.get("model")
-            if not real:
-                gens = getattr(response, "generations", None) or []
-                if gens and gens[0]:
-                    g0 = gens[0][0]
-                    gi = getattr(g0, "generation_info", None) or {}
-                    real = gi.get("model_name") or gi.get("model")
-                    if not real:
-                        msg = getattr(g0, "message", None)
-                        if msg is not None:
-                            rm = getattr(msg, "response_metadata", None) or {}
-                            real = rm.get("model_name") or rm.get("model")
-            self._absorb(real)
-        except Exception:
-            pass
+# 2026-09-17: the model chip used to come from a `_ModelCapture`
+# `AsyncCallbackHandler` reading `chunk.response_metadata` off
+# `llm.astream()` — live-verified (direct probe against the real
+# rotator, several attempts) that NEITHER the per-chunk
+# `response_metadata` NOR the final aggregated streaming message ever
+# carries the real resolved deployment when the Settings-page model is
+# `"auto"` — every chunk just echoes back the literal request value
+# `"auto"`, so the chip could never move past that placeholder no
+# matter how the callback tried to read it. A plain non-streaming
+# `llm.ainvoke()` call on the SAME client DOES correctly return it in
+# `response.response_metadata["model_name"]` — that's exactly the field
+# `domains.ycs.rag.llm_call.capture_llm_usage`/`resilient_ainvoke`
+# already read for DD's Planner/Synth and YCS Ingestion/Ask's model
+# chips and usage tables. Rather than fight the rotator's streaming
+# response shape, `_stream()` below now generates the SAME way those
+# do — one `ainvoke()`, not a token stream — and reports whatever chunk
+# size it gets back as a single SSE "chunk" event, trading live token-
+# by-token typing (NL→DSL outputs are short JSON/Cypher, not prose)
+# for a model chip that's actually correct.
 
 
 async def ai_generate_stream(
@@ -721,8 +677,9 @@ async def ai_generate_stream(
          still generate with a fallback hint.
       2. Build the generation prompt (rules + schema + few-shot +
          previous editor content).
-      3. Stream from `app.state.llm` — every token is forwarded to the
-         client as `data: {"chunk": "..."}`.
+      3. Generate via one `ainvoke()` call (see `_stream`'s docstring
+         for why not a token stream) and forward the full text to the
+         client as a single `data: {"chunk": "..."}` frame.
       4. After the stream completes, run the same safety guard the Run
          path uses. On rejection, ONE self-repair retry (full re-generate
          with the error fed in).
@@ -782,65 +739,79 @@ async def ai_generate_stream(
         text is threaded through the tuple so the caller has it on the
         terminal `done` frame.
 
-        Model capture: `_ModelCapture` is a LangChain `AsyncCallbackHandler`
-        that pulls the bandit-selected model_id from `on_chat_model_start`
-        / `on_llm_start`. The rotator's `ChatLiteLLMRouter` runs the
-        FGTS-VA bandit pick BEFORE the model call, so by the time the
-        first chunk arrives, `capture.model` is set. We emit a `model`
-        tuple the first time it's populated — the orchestrator turns
-        that into an SSE frame for the AI panel."""
+        One `ainvoke()`, not a token stream — see the module comment
+        above `ai_generate_stream` for why: `response.response_metadata`
+        is the only place the real resolved deployment reliably shows
+        up for this rotator, and that field is only populated on the
+        non-streaming response shape."""
         accumulated = ""
-        capture = _ModelCapture()
         try:
-            astream = llm.astream(
-                prompt_text, config = {"callbacks": [capture]},
+            response = await llm.ainvoke(prompt_text)
+        except Exception as e:
+            yield ("error", f"{type(e).__name__}: {e}", accumulated)
+            return
+
+        meta = getattr(response, "response_metadata", None) or {}
+        model = meta.get("model_name") or meta.get("model")
+        if model:
+            yield ("model", model, accumulated)
+
+        text = getattr(response, "content", "") or ""
+        if isinstance(text, list):
+            text = " ".join(
+                b.get("text", "") if isinstance(b, dict) else str(b)
+                for b in text
             )
-        except Exception as e:
-            yield ("error", f"{type(e).__name__}: {e}", accumulated)
-            return
-        last_emitted: str | None = None
+        text = str(text)
+        if text:
+            accumulated = text
+            payload = _json.dumps({"event": "chunk", "data": text})
+            yield ("yield", payload, accumulated)
+
         try:
-            async for chunk in astream:
-                # Pull the real deployment id straight from the chunk's
-                # response_metadata — the rotator's
-                # `_create_chat_result` stamps it on every chunk
-                # message (see service.py:1114-1129). This bypasses
-                # `invocation_params["model"]` which would only carry
-                # the group alias ("dd-all").
-                rm = getattr(chunk, "response_metadata", None) or {}
-                cm = rm.get("model_name") or rm.get("model")
-                if cm:
-                    capture._absorb(cm)
+            from domains.ycs.rag.llm_call import capture_llm_usage
+            await capture_llm_usage(response)
+        except Exception:
+            pass
 
-                text = getattr(chunk, "content", "") or ""
-                if isinstance(text, list):
-                    text = " ".join(
-                        b.get("text", "") if isinstance(b, dict) else str(b)
-                        for b in text
-                    )
-                text = str(text)
-
-                # may have only the group alias (fallback); once a
-                # chunk carries the real deployment we flip the chip
-                # in place without the user noticing.
-                if capture.model and capture.model != last_emitted:
-                    last_emitted = capture.model
-                    yield ("model", capture.model, accumulated)
-
-                if not text:
-                    continue
-                accumulated += text
-                payload = _json.dumps({"event": "chunk", "data": text})
-                yield ("yield", payload, accumulated)
-        except Exception as e:
-            yield ("error", f"{type(e).__name__}: {e}", accumulated)
-            return
-        # Final pass — `on_llm_end` (authoritative) fires AFTER the
-        # async iterator exits, so by here capture.model holds the
-        # rotator's resolved deployment id. Re-emit if it changed.
-        if capture.model and capture.model != last_emitted:
-            yield ("model", capture.model, accumulated)
         yield ("done", "", accumulated)
+
+    async def _stream_with_retry(prompt_text: str, *, max_attempts: int = 2):
+        """One retry when an attempt fails before emitting any real
+        text — every OTHER LLM call site in this codebase goes through
+        `resilient_ainvoke` (max_attempts=2); this generator-streaming
+        path never had an equivalent, so a single bad FGTS-VA bandit
+        pick was a dead end straight to the user.
+
+        2026-09-17: live-reproduced on the Qdrant backend — the bandit
+        picked NVIDIA NIM (`gpt-oss-20b`, then `z-ai/glm-5.3` on a
+        second attempt) and both hung for the full 120s client timeout
+        with zero tokens back, while Gemini sat benched on an already-
+        exhausted daily free-tier cap. Only retries when NOTHING has
+        streamed yet (`kind == "yield"` never seen) — a `model` event
+        alone doesn't count, since the rotator emits that from
+        `on_chat_model_start` before the provider has sent anything.
+        Once real text has reached the client, a later failure ships
+        as-is rather than risk a duplicated/confusing second
+        generation on top of what's already rendered."""
+        for attempt in range(max_attempts):
+            got_text = False
+            async for kind, payload, txt in _stream(prompt_text):
+                if kind == "yield":
+                    got_text = True
+                if (
+                    kind == "error" and not got_text
+                    and attempt + 1 < max_attempts
+                ):
+                    logger.warning(
+                        f"[ycs:query:ai] stream attempt {attempt + 1}/"
+                        f"{max_attempts} failed before any text "
+                        f"({payload!r}); retrying"
+                    )
+                    break
+                yield (kind, payload, txt)
+                if kind in ("done", "error"):
+                    return
 
     # First pass.
     prompt1 = build_generate_prompt(
@@ -853,7 +824,7 @@ async def ai_generate_stream(
     yield {"data": _json.dumps({"event": "start", "phase": "generate"})}
     acc = ""
     stream_err: str | None = None
-    async for kind, payload, txt in _stream(prompt1):
+    async for kind, payload, txt in _stream_with_retry(prompt1):
         if kind == "yield":
             yield {"data": payload}
         elif kind == "model":
@@ -896,7 +867,7 @@ async def ai_generate_stream(
             examples    = examples,
         )
         acc2 = ""
-        async for kind, payload, txt in _stream(prompt2):
+        async for kind, payload, txt in _stream_with_retry(prompt2):
             if kind == "yield":
                 yield {"data": payload}
             elif kind == "model":
