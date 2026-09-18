@@ -43,7 +43,8 @@ from typing import Optional
 
 from pydantic import ValidationError
 
-from domains.llm.rotator.chain import chat_judge_bandit_async, embed_via_router_async
+from domains.llm.embeddings import embed_texts_async
+from domains.llm.rotator.chain import chat_judge_bandit_async
 
 from ....ingestion.storage import get_storage
 from ...runtime.observability import record_bucket_split_overflow
@@ -812,11 +813,22 @@ async def _detect_semantic_h2_duplicates(
     words = [_scope_words(f"{s.heading} {s.description}") for s in sections]
 
     # Embedding cosine (semantic signal) — best-effort.
+    # 2026-09-18: was `embed_via_router_async` (domains.llm.rotator.chain)
+    # — despite the name, that function is NOT the Settings-page-
+    # configured embedding endpoint; it's local in-process FastEmbed
+    # ONNX by default (a 2026-08-25-era workaround for a since-retired
+    # NIM embedding model going EOL), only reaching an external provider
+    # as a last-resort fallback. Switched to `domains.llm.embeddings.
+    # embed_texts_async`, the genuine external-provider path YCS's own
+    # embedding pipeline already migrated to on 2026-09-13 for the same
+    # reason. Safe here specifically because this whole block is
+    # explicitly fail-soft (see docstring) — any embedding failure,
+    # slow or fast, already falls back to the lexical-only comparison
+    # below, unchanged.
     sim = None
     try:
-        embeddings = await embed_via_router_async(
+        embeddings, _model = await embed_texts_async(
             [f"{s.heading}\n{s.description}" for s in sections],
-            input_type="query",
         )
         import numpy as np
         embs = np.array(embeddings, dtype=np.float32)

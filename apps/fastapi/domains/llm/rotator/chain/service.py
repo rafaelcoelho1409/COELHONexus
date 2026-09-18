@@ -9,8 +9,11 @@ All Planner/Synth calls now route through the universal free-quota gateway:
 
 No dd_process / heavyweight / bandit weights here — FGTS-VA + TrueSkill + latency EWMA
 lives inside the rotator itself (single auto pool, 21 models). This module is a thin
-OpenAI-compat adapter preserving the old `chat_judge_*` / `embed_via_router_*` signatures
-so Planner/Synth require zero per-file churn.
+OpenAI-compat adapter preserving the old `chat_judge_*` signatures so Planner/Synth
+require zero per-file churn. (2026-09-18: the `embed_via_router_*` pair this
+docstring used to also mention was removed — it was local in-process FastEmbed,
+not the external rotator its name implied; embeddings go through
+`domains.llm.embeddings` now, the genuine Settings-page-configured endpoint.)
 
 SOTA Sept 2026 optimizations:
 - Singleton AsyncOpenAI with pooled httpx.AsyncClient (Limits 200/100, http2, keepalive 30s)
@@ -85,8 +88,6 @@ _ENV_ROTATOR_URL = os.getenv("COELHO_LLM_ROTATOR_URL", _DEFAULT_ROTATOR_URL)
 _ENV_ROTATOR_MODEL = os.getenv("COELHO_LLM_MODEL", "auto").strip() or "auto"
 _ENV_API_KEY = os.getenv("COELHO_LLM_API_KEY", "").strip()
 
-COELHO_EMBED_MODEL = os.getenv("COELHO_EMBED_MODEL", "nvidia/nemotron-3-embed-1b")
-
 _ENDPOINT_RESOLVE_TTL_S = 10.0
 _endpoint_resolved_at = 0.0
 
@@ -157,11 +158,6 @@ def is_external_endpoint() -> bool:
 # superseded anyway: the rotator itself now returns an already-prefixed
 # "PROVIDER/model" string in `resp.model`
 # (COELHOLLMRotator chain/domain.py::display_model_id).
-
-try:
-    from .params import DD_EMBED_BATCH_SIZE  # noqa: F401
-except Exception:
-    DD_EMBED_BATCH_SIZE = 64
 
 # ---------------------------------------------------------------------------
 # Pooled AsyncOpenAI singleton — SOTA httpx limits + http2
@@ -416,122 +412,6 @@ def _get_chat_llm(
         temperature     = temperature,
         response_format = response_format,
     )
-
-
-@functools.lru_cache(maxsize=1)
-def _get_embeddings():
-    # Local FastEmbed — avoids NIM 403/EOL (1B HF too large for 512Mi pod); 384d bge-small is fast.
-    # Cached: re-instantiating reloads ONNX runtime + tokenizer (~100-500ms per run).
-    # parallel=None (default): use onnxruntime's built-in threading, don't spawn external workers.
-    # batch_size=256 (FastEmbed default): ONNX utilisation > HTTP round-trips in local mode.
-    try:
-        from langchain_community.embeddings import FastEmbedEmbeddings
-
-        return FastEmbedEmbeddings(
-            model_name="BAAI/bge-small-en-v1.5",
-            batch_size=256,
-            parallel=None,
-        )
-    except Exception as e:
-        logger.warning(f"[embed] FastEmbed failed {e}, trying HF")
-        try:
-            from langchain_huggingface import HuggingFaceEmbeddings
-
-            return HuggingFaceEmbeddings(
-                model_name="nvidia/Nemotron-3-Embed-1B-BF16",
-                model_kwargs={"trust_remote_code": True},
-                encode_kwargs={"normalize_embeddings": True},
-            )
-        except Exception as e2:
-            logger.warning(f"[embed] HF also failed {e2}, trying NIM")
-            from langchain_openai import OpenAIEmbeddings
-
-            try:
-                from domains.llm.credentials import resolve_key
-
-                nim_key = resolve_key("NVIDIA_API_KEY") or os.getenv("NVIDIA_API_KEY", "")
-            except Exception:
-                nim_key = os.getenv("NVIDIA_API_KEY", "")
-            return OpenAIEmbeddings(
-                base_url="https://integrate.api.nvidia.com/v1",
-                api_key=nim_key,
-                model=COELHO_EMBED_MODEL,
-            )
-
-
-# ------------------------------------------------------------------
-# Embeddings — drop-in for embed_via_router_{sync,async}
-# ------------------------------------------------------------------
-
-def embed_via_router_sync(
-    texts: list[str],
-    input_type: str = "passage",
-) -> list[list[float]]:
-    if not texts:
-        return []
-    # input_type ignored — rotator single embedding model (cosine symmetric)
-    emb = _get_embeddings()
-    clean = [t if (t and t.strip()) else " " for t in texts]
-    out: list[list[float]] = []
-    for start in range(0, len(clean), DD_EMBED_BATCH_SIZE):
-        batch = clean[start : start + DD_EMBED_BATCH_SIZE]
-        vecs = emb.embed_documents(batch)
-        out.extend(vecs)
-    if len(out) != len(texts):
-        raise RuntimeError(f"embed: rotator returned {len(out)} vectors for {len(texts)} inputs")
-    return out
-
-
-async def embed_via_router_async(
-    texts: list[str],
-    input_type: str = "passage",
-    on_batch=None,
-) -> list[list[float]]:
-    if not texts:
-        return []
-    emb = _get_embeddings()
-    clean = [t if (t and t.strip()) else " " for t in texts]
-    total = len(clean)
-    # Dedupe identical chunks before embedding — boilerplate-heavy corpora (licenses,
-    # headers, repeated intros) waste re-embedding compute; round-trip via index map
-    # keeps output order stable. Only embed uniques then fan back out.
-    uniques: list[str] = []
-    idx_map: list[int] = []
-    seen: dict[str, int] = {}
-    for t in clean:
-        i = seen.get(t)
-        if i is None:
-            i = len(uniques)
-            seen[t] = i
-            uniques.append(t)
-        idx_map.append(i)
-    out_uniq: list[list[float]] = []
-    for start in range(0, len(uniques), DD_EMBED_BATCH_SIZE):
-        batch = uniques[start : start + DD_EMBED_BATCH_SIZE]
-        # FastEmbed is sync-only; use to_thread if aembed missing
-        try:
-            if hasattr(emb, "aembed_documents"):
-                vecs = await emb.aembed_documents(batch)  # type: ignore
-            else:
-                vecs = await asyncio.to_thread(emb.embed_documents, batch)
-        except NotImplementedError:
-            vecs = await asyncio.to_thread(emb.embed_documents, batch)
-        out_uniq.extend(vecs)
-        if on_batch is not None:
-            try:
-                # Progress based on original dedup-fan-out count to keep UX truthful
-                n_recon = sum(idx <= len(out_uniq) - 1 for idx in idx_map)
-                await on_batch(
-                    n_done=min(n_recon, total),
-                    n_total=total,
-                    batch_size=len(batch),
-                )
-            except Exception:
-                pass
-    out = [out_uniq[i] for i in idx_map]
-    if len(out) != len(texts):
-        raise RuntimeError(f"embed: rotator returned {len(out)} vectors for {len(texts)} inputs")
-    return out
 
 
 # ------------------------------------------------------------------

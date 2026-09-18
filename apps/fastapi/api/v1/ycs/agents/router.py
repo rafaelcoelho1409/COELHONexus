@@ -230,9 +230,18 @@ async def rotator_ping(request: Request) -> dict:
             block.get("text", "") if isinstance(block, dict) else str(block)
             for block in reply
         )
+    # 2026-09-18: was a hardcoded "rotator (FGTS-VA across 7 providers)"
+    # string — a stale, client-side guess at the external rotator's own
+    # arm count, which lives entirely in that separate repo now and can
+    # change without this client knowing. Report the REAL resolved
+    # deployment from response_metadata instead, same as every other
+    # model-name read this session (capture_llm_usage, code_synth's
+    # _resolve_model_id) — actually informative for a connectivity check.
+    meta = getattr(response, "response_metadata", None) or {}
+    model = meta.get("model_name") or meta.get("model") or "unknown"
     return {
         "status": "ok",
-        "model":  "rotator (FGTS-VA across 7 providers)",
+        "model":  model,
         "ms":     elapsed_ms,
         "reply":  str(reply)[:200],
     }

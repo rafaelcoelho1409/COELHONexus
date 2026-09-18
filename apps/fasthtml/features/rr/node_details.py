@@ -76,10 +76,12 @@ NODE_LLM_PHASE: dict[str, str] = {
     "discovery_hn":                          "discovery",
     "deep_read":                             "deep_read",
     "synthesis":                             "synthesis",
-    # triage + graph_build + persist + report do no LLM work (triage runs
-    # the NIM rerank but it's a one-shot embedding call, not the chat
-    # rotator). Omitting means the drawer hides the "LLM activity" block
-    # for these nodes.
+    # triage + graph_build + persist + report do no LLM work at all —
+    # triage's off-topic rerank gate (NIM cross-encoder) was removed
+    # 2026-09-17 (it called a hardcoded stub that always returned `[]`,
+    # so it was already a permanent no-op); triage is now pure
+    # deterministic Python (dedup + signal_score + diversify). Omitting
+    # means the drawer hides the "LLM activity" block for these nodes.
 }
 
 

@@ -1,8 +1,9 @@
 # Skill: rotator etiquette
 
-You are running inside a free-tier LLM rotator (LiteLLM Router over ~20
-NIM / Mistral / Groq / Gemini / Cerebras deployments). Several behaviors
-help the rotator's cascade absorb provider quirks gracefully.
+You are running behind a free-tier LLM rotator — a gateway that picks
+which underlying provider/model actually serves each request and
+cascades to another one on failure. Several behaviors help the
+rotator's cascade absorb provider quirks gracefully.
 
 ## Always emit tool_calls when the prompt asks
 

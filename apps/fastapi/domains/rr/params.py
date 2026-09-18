@@ -67,9 +67,16 @@ class StoresParams:
     Per docs/CODE-CONVENTIONS.md §3: groups loose I/O tunables so a
     callsite passes ONE object instead of a fan-in of imports.
     """
-    # Qdrant — must match the embedding model's output dim. The RR uses
-    # the existing NIM `nvidia/llama-nemotron-embed-1b-v2` (2048d) via the
-    # LLM rotator's embed_via_router_async — see architecture-doc §2.4.2.
+    # Qdrant — must match the embedding model's output dim. Embeddings
+    # come from the Settings-page-configured embedding endpoint
+    # (`domains.llm.embeddings.embed_texts_async`, called from
+    # `agent/tools/graph_build.py`) — currently resolves to NIM
+    # `nim/nvidia/nemotron-3-embed-1b` (2048d), confirmed live
+    # 2026-09-17. If the Settings-page embedding pin ever changes to a
+    # model with a different output size, this must be updated to
+    # match or every Qdrant upsert 400s (root-caused live: this exact
+    # mismatch, against the OLD local-FastEmbed 384d path, broke
+    # graph_build entirely until fixed that day).
     qdrant_vector_dim:       int = 2048
     qdrant_segment_count:    int = 2     # OptimizersConfigDiff.default_segment_number
     qdrant_upsert_batch:     int = 64    # chunk per upsert call
