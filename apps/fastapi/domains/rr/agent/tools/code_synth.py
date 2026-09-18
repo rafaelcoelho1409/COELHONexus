@@ -30,10 +30,11 @@ Design notes (June 2026 SOTA distilled from a focused web sweep):
     + post-extract first fenced block. We don't force JSON wrapping —
     that degrades Python quality (March 2026 vLLM/SGLang consensus).
 
-  - Bandit pool: build_rr_strong_chain_bandit() — same FGTS-VA brain
-    Planner/Synth use. Qwen3-Coder-480B-A35B-Instruct is the strongest
-    Python coder in the rr-strong pool as of 2026-06; the bandit will
-    converge on it for code_synth calls without us hardcoding a choice.
+  - build_rr_strong_chain(rotator_task="rr-code-synth") — same external-
+    rotator FGTS-VA brain Planner/Synth use, server-side. Own bandit
+    cell so the rotator's per-call-shape stats for this 150-400-line
+    code-gen workload don't blend with RR's other (much shorter)
+    extraction calls.
 
 Cache-invalidation contract: bump `CODE_SYNTH_PROMPT_VERSION` whenever
 the system prompt or refine-loop logic changes. MinIO keys embed the
@@ -51,7 +52,13 @@ logger = logging.getLogger(__name__)
 # Bump this on every prompt or refine-logic change so MinIO cache misses
 # repopulate against the new behavior. Old objects sit alongside the new
 # ones (cheap) — operator can wipe `rr/scans/{id}/code/` to GC.
-CODE_SYNTH_PROMPT_VERSION: str = "v1"
+CODE_SYNTH_PROMPT_VERSION: str = "v2"
+
+# Per-call bound for one generate/critique/revise round — full paper
+# context in, 150-400 line file out. 2 attempts: a transient NIM
+# timeout/connection blip gets one retry via `resilient_ainvoke` rather
+# than failing the whole 3-round synthesis outright.
+_CODE_SYNTH_CALL_TIMEOUT_S = 180.0
 
 
 # Prompts — see module docstring for the design rationale
@@ -63,6 +70,7 @@ Hard rules (violating ANY of these makes your output unusable):
   - Implement the algorithm from the `method` field — the core routine is fully written, not sketched.
   - Imports must be valid and installed: stdlib + numpy + torch + scipy + scikit-learn + matplotlib are fair game. Skip pip-install-required exotica (no `xgboost`, no random GitHub repos).
   - Include a `__main__` smoke example with synthetic data that exercises the full pipeline end-to-end. The reader should be able to copy-paste the file and `python file.py` it.
+  - The `__main__` example must run in a few seconds on a laptop CPU, no GPU assumed. If it trains anything with PyTorch, call `torch.set_num_threads(1)` first — PyTorch's CPU thread-pool overhead dominates runtime on tiny tensors and can turn a trivial toy model into a multi-minute run. Keep steps/epochs small (tens, not hundreds) and tensors small (batch/hidden sizes in the dozens-to-low-hundreds) — the goal is a fast demo of the mechanism, not real convergence.
   - Anchor on the `money_angle` — the file's docstring and at least one comment should reflect the practical use case named there, not generic ML phrasing.
   - Use clear class / function names from the paper's domain. Add brief docstrings (1-3 lines) on every public symbol.
   - Length budget: 150 to 400 lines. Quality over brevity. If the algorithm is non-trivial, lean longer; never truncate.
@@ -110,14 +118,23 @@ async def synth_code(finding: dict[str, Any]) -> dict[str, str]:
     # Lazy imports — keep cold-start light and avoid pulling the rotator
     # into smoke tests that import this module.
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-    from domains.llm.rotator.chain.service import build_rr_strong_chain_bandit
+    from domains.llm.rotator.chain.service import build_rr_strong_chain
+    from ...runtime.llm_call import resilient_ainvoke
 
     extraction = finding.get("extraction") or {}
     user_msg   = _build_user_message(finding, extraction)
-    chain      = build_rr_strong_chain_bandit()
+    chain      = build_rr_strong_chain(rotator_task = "rr-code-synth")
+
+    async def _call(messages: list) -> Any:
+        return await resilient_ainvoke(
+            chain, messages,
+            operation    = "code_synth",
+            timeout_s    = _CODE_SYNTH_CALL_TIMEOUT_S,
+            max_attempts = 2,
+        )
 
     # Round 1 — generate.
-    gen_response = await chain.ainvoke([
+    gen_response = await _call([
         SystemMessage(content = _SYSTEM_PROMPT),
         HumanMessage(content  = user_msg),
     ])
@@ -127,7 +144,7 @@ async def synth_code(finding: dict[str, Any]) -> dict[str, str]:
     draft_code  = _extract_python_block(draft_raw)
 
     # Round 2 — critique (forces the model to surface completeness gaps).
-    critique_response = await chain.ainvoke([
+    critique_response = await _call([
         SystemMessage(content = _SYSTEM_PROMPT),
         HumanMessage(content  = user_msg),
         AIMessage(content     = f"```python\n{draft_code}\n```"),
@@ -142,7 +159,7 @@ async def synth_code(finding: dict[str, Any]) -> dict[str, str]:
         return {"code": draft_code, "model_id": model_id}
 
     # Round 3 — revise.
-    revised_response = await chain.ainvoke([
+    revised_response = await _call([
         SystemMessage(content = _SYSTEM_PROMPT),
         HumanMessage(content  = user_msg),
         AIMessage(content     = f"```python\n{draft_code}\n```"),

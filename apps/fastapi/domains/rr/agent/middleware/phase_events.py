@@ -91,7 +91,18 @@ class PhaseEventsMiddleware(AgentMiddleware):
             return "deep_read", f"{n_extractions}/{len(topn)} extractions written"
         if fs_read(scan_id, FS_FILE_SYNTHESIS_REPORT) is None:
             return "synthesis", "clustering themes"
-        return "done", "agent finished — task is persisting"
+        # 2026-09-17: was `return "done", ...` — collided with the REAL
+        # terminal "done" event `task.py` emits after digest assembly +
+        # Postgres persist complete. This fires as soon as the synthesis
+        # report exists on fs and the orchestrator's next own turn
+        # returns — but the orchestrator still needs 1-2 more turns to
+        # produce its final ScanComplete structured output before
+        # Python-side digest assembly even starts. Confirmed live: a
+        # scan showed "Done" in the UI ~2 minutes before the Postgres
+        # row actually flipped to status='done'. Frontend code treating
+        # `phase === "done"` as terminal (main.js) couldn't tell these
+        # two events apart because they carried the identical string.
+        return "finalizing", "agent finished — task is persisting"
 
     @staticmethod
     def _emit_phase_span(

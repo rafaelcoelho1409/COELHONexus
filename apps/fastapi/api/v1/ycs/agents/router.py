@@ -1,4 +1,4 @@
-"""ycs/agents — agentic RAG router: BYOK config, ask (sync+stream), ingest, graph stats, pipeline."""
+"""ycs/agents — agentic RAG router: ask (sync+stream), ingest, graph stats, pipeline."""
 from __future__ import annotations
 
 import asyncio
@@ -41,39 +41,13 @@ from domains.ycs.runtime.llm_counter import (
     set_thread as _llm_set_thread,
 )
 
-from domains.llm.credentials           import resolve_key
-from domains.llm.rotator.benchmarks    import rank_for_step
-from domains.llm.rotator.chain.domain  import is_non_chat_model
-from domains.llm.rotator.discovery     import (
-    PROVIDERS,
-    list_all_alive_models,
-)
-
 from .build import _serialize_update, build_graph_from_request
-from .byok import CONFIG_REDIS_KEY, get_byok_config, ping_byok
 from .schemas import (
     GraphIngestRequest,
     IngestRequest,
-    LLMConfig,
     PipelineRequest,
     RAGSearchRequest,
 )
-
-
-# Human-readable provider labels for the BYOK dropdown; decoupled from rotator identifiers.
-_PROVIDER_LABELS: dict[str, str] = {
-    "nim":        "NVIDIA NIM",
-    "groq":       "Groq",
-    "cerebras":   "Cerebras",
-    "gemini":     "Google Gemini",
-    "mistral":    "Mistral",
-    "deepseek":   "DeepSeek",
-    "sambanova":  "SambaNova",
-    "openai":     "OpenAI",
-    "anthropic":  "Anthropic",
-    "openrouter": "OpenRouter",
-    "ollama":     "Ollama (local)",
-}
 
 
 router = APIRouter()
@@ -224,46 +198,11 @@ def _result_to_graph_updates(result: dict[str, Any]) -> list[dict[str, dict[str,
     return updates
 
 
-@router.get("/config")
-async def get_agents_config(request: Request) -> dict:
-    """Return the persisted BYOK config (api_key redacted) so the UI
-    can populate the form on page load. Empty dict if nothing is set."""
-    config = await get_byok_config(request.app.state.redis_aio)
-    if not config:
-        return {"config": {}, "has_api_key": False}
-    safe = {k: v for k, v in config.items() if k != "api_key"}
-    return {"config": safe, "has_api_key": bool(config.get("api_key"))}
-
-
 @router.get("/usage/{thread_id}")
 async def get_thread_usage(thread_id: str) -> dict:
     """Aggregate LLM usage for one Ask conversation (models + tokens per
     node, and totals) — mirrors Ingestion's per-video LLM drawer."""
     return await _llm_read_counters(thread_id)
-
-
-@router.put("/config")
-async def update_agents_config(
-    config:  LLMConfig,
-    request: Request,
-) -> dict:
-    """Persist user-supplied LLM config to Redis; graph falls back to rotator if unset."""
-    redis_aio = request.app.state.redis_aio
-    await redis_aio.json().set(
-        CONFIG_REDIS_KEY,
-        "$",
-        config.model_dump(exclude_none = True),
-    )
-    return {
-        "status": "saved",
-        "config": config.model_dump(exclude = {"api_key"}),
-    }
-
-
-@router.post("/config/test")
-async def test_agents_config(config: LLMConfig) -> dict:
-    """Validate supplied credentials before saving: returns status/model/ms/reply."""
-    return await ping_byok(config.model_dump(exclude_none = True))
 
 
 @router.post("/rotator/ping")
@@ -297,69 +236,6 @@ async def rotator_ping(request: Request) -> dict:
         "ms":     elapsed_ms,
         "reply":  str(reply)[:200],
     }
-
-
-@router.get("/providers")
-async def list_byok_providers() -> dict:
-    """List enabled providers with a resolvable credential; NIM first then alphabetical."""
-    items: list[dict] = []
-    for pid, cfg in PROVIDERS.items():
-        if not cfg.enabled:
-            continue
-        if not resolve_key(cfg.key_env):
-            continue
-        items.append({
-            "id":       pid,
-            "label":    _PROVIDER_LABELS.get(pid, pid.capitalize()),
-            "key_env":  cfg.key_env,
-        })
-    items.sort(key = lambda x: (x["id"] != "nim", x["label"].lower()))
-    return {"items": items, "total": len(items)}
-
-
-@router.get("/providers/{provider_id}/models")
-async def list_byok_provider_models(
-    provider_id: str, request: Request,
-) -> dict:
-    """Live model list for a provider, ranked by rank_for_step("dd-all"); falls back to alphabetical on error."""
-    cfg = PROVIDERS.get(provider_id)
-    if cfg is None:
-        raise HTTPException(
-            status_code = 404,
-            detail      = f"unknown provider {provider_id!r}",
-        )
-    if not resolve_key(cfg.key_env):
-        return {
-            "provider": provider_id,
-            "items":    [],
-            "total":    0,
-            "error":    f"{cfg.key_env} not configured on Settings page",
-        }
-    try:
-        by_provider = await list_all_alive_models(
-            only_providers = [provider_id],
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code = 502,
-            detail      = (
-                f"discovery for {provider_id!r} failed: "
-                f"{type(e).__name__}: {str(e)[:200]}"
-            ),
-        )
-    records = [
-        r for r in by_provider.get(provider_id, [])
-        if r.model_id and not is_non_chat_model(r.model_id)
-    ]
-    if not records:
-        return {"provider": provider_id, "items": [], "total": 0}
-    redis_aio = getattr(request.app.state, "redis_aio", None)
-    try:
-        ranked = await rank_for_step("dd-all", records, redis = redis_aio)
-        items = [r.model_id for r, _score in ranked]
-    except Exception:
-        items = sorted(r.model_id for r in records)
-    return {"provider": provider_id, "items": items, "total": len(items)}
 
 
 @router.get("/history/{thread_id}")

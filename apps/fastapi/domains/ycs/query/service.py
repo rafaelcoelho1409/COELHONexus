@@ -698,8 +698,8 @@ async def ai_generate_stream(
     # 1-15 s of `<think>` tokens before any DSL). For NL → DSL, which
     # is deterministic structural translation, reasoning is wasted
     # `app.state.llm` is the graceful fallback when the fast chain
-    # failed to init (BYOK with no Groq/Gemini/NIM key, lifespan race,
-    # etc.) — still functional, just slower.
+    # failed to init (Settings-page endpoint unreachable at lifespan,
+    # a race, etc.) — still functional, just slower.
     llm = (
         getattr(request.app.state, "query_ai_llm", None)
         or getattr(request.app.state, "llm", None)

@@ -112,6 +112,28 @@ RETRY_PASS_BACKOFF_S = (10.0, 30.0)
 # with 5-video chunks a per-video streak would be trigger-happy).
 MAX_CONSECUTIVE_INFRA_PASSES = 2
 
+# 2026-09-17: a pass's "0 successes" only counts toward the streak
+# above when at least this many videos were pending IN THAT PASS.
+# Root-caused via a live Nomad Capitalist video (AkH_MtjFfz0) that
+# failed 3 separate ingestion runs in a row — always as a lone
+# `batch_size=1` streaming chunk/retry (0/1 = trivially "all failed"
+# off two merely-unlucky NIM timeouts), tripping the halt at exactly
+# MAX_CONSECUTIVE_INFRA_PASSES and abandoning the video after only 2
+# of its 4 allotted MAX_RETRY_PASSES attempts. A manual re-run of the
+# exact same transcript minutes later succeeded in 3s — the content
+# was never the problem, the breaker was just evaluated on a sample
+# too small to mean anything (the "5-video chunks" assumption in the
+# comment above doesn't hold for single-video chunks/retries, which
+# this same code path also serves). Below this threshold, infra
+# failures still retry with the normal backoff — they just don't
+# count toward the early-abandon streak.
+MIN_PENDING_FOR_INFRA_HALT = 6
+# 2026-09-17 (raised 3 -> 6, same day): a 3-5 video pass was still
+# exposed to the breaker on 2 consecutive fully-unlucky passes — the
+# threshold now sits above EXTRACT_CONCURRENCY's normal chunk size
+# (3), so only a genuinely larger batch's all-fail streak counts as
+# real outage evidence.
+
 # Per-video Bolt write budget (DD: wait_for(write,60)). add_graph_documents
 # is a SYNC driver call — run in a thread + watchdog so a wedged
 # connection can't hang the task past its retry budget.

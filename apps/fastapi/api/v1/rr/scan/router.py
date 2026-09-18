@@ -19,6 +19,8 @@ from domains.rr.keys import (
 from domains.rr.runtime.events import store_task_id, subscribe_events
 from domains.rr.runtime.fs_mirror import mirror_index, mirror_read
 from domains.rr.runtime.llm_counter import read_counters as read_llm_counters
+from domains.rr.runtime.llm_counter import set_phase as _set_llm_phase
+from domains.rr.runtime.llm_counter import set_scan as _set_llm_scan
 from domains.rr.schemas import ScanCreated, ScanRequest, ScanResult
 from domains.rr.service import cancel_scan, delete_scan
 from domains.rr.task import run_radar_scan
@@ -249,6 +251,16 @@ async def scan_finding_code(
                     ),
                 )
             finding = row[0] or {}
+
+    # 2026-09-17: this endpoint runs outside the scan's own agent.ainvoke()
+    # context, so the per-scan LLM counters were never attributed to code
+    # synthesis calls until now — set the contextvars synth_code's
+    # resilient_ainvoke reads (task-scoped: safe under concurrent requests).
+    try:
+        _set_llm_scan(str(scan_id))
+        _set_llm_phase("build")
+    except Exception:
+        pass
 
     try:
         result = await synth_code(finding)

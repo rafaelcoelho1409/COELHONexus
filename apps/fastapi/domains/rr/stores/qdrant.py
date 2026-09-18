@@ -4,9 +4,12 @@ Per docs/CODE-CONVENTIONS.md §service: async + I/O. The collection is
 created idempotently via `bootstrap_qdrant()` at FastAPI lifespan startup
 (architecture doc §2.4.2).
 
-Vector model: NIM `nvidia/llama-nemotron-embed-1b-v2` (2048d). Embedding
-calls live in the LLM rotator (`embed_via_router_async`); this module
-just persists the resulting vectors + payload.
+Vector model: whatever the Settings-page-configured embedding endpoint
+resolves to (currently `nim/nvidia/nemotron-3-embed-1b`, 2048d — must
+match `STORES_PARAMS.qdrant_vector_dim` below, or every upsert 400s).
+Embedding calls live in `domains.llm.embeddings.embed_texts_async`
+(`agent/tools/graph_build.py`'s caller); this module just persists the
+resulting vectors + payload.
 
 Client reuse: `infra.qdrant.get_qdrant()` is the process-wide singleton
 AsyncQdrantClient — no new HTTP/2 pool.

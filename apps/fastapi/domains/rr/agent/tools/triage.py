@@ -1,19 +1,25 @@
-"""Triage — async orchestrator tool with off-topic rerank gate.
+"""Triage — async orchestrator tool.
 
 The deterministic Phase-2 node from the architecture doc. Reads the 4
 discovery outputs from the scan's virtual fs, runs the domain pipeline:
 
-  normalize → dedup_by_arxiv_id → topical rerank → diversify by source
-  → signal_score → top-N
+  normalize → dedup_by_arxiv_id → diversify by source → signal_score
+  → top-N
 
 Writes the ranked list back to fs.
 
 2026-06-15 UPGRADES (Fixes #3+#4):
-- Off-topic rerank gate via NIM rerank-1b cross-encoder. Drops papers
-  whose topical relevance to the user's query string scores below the
-  bottom quantile. Catches the OmniDirector-at-rank-1 failure mode
-  (camera cloning paper surviving a "deep agents" query because HF
-  daily papers have no categories → vertical_fit was 0).
+- Off-topic rerank gate via NIM rerank-1b cross-encoder — REMOVED
+  2026-09-17. It called `rerank_via_router_async`, a hardcoded stub
+  that always returned `[]`; no rerank infra was ever actually built
+  for this codebase's rotator, so the gate was a permanent no-op
+  pass-through in every real run — removing it changes nothing about
+  runtime behavior, just deletes dead code. The failure mode it was
+  meant to catch (an off-topic-but-popular paper surviving because HF
+  daily papers have no categories → vertical_fit was 0) is still
+  possible; if it shows up as a real, observed problem, the cheaper
+  fix is an LLM-judge relevance call through the existing chat
+  rotator connection, not a dedicated rerank model.
 - Source-diversity quota. When ≥2 sources contributed ≥`MIN_PER_SOURCE_FLOOR`
   candidates each, force min-1-per-source in the top_n so a single
   source can't monopolize the digest (HF daily had all 4 ranks in
@@ -66,77 +72,10 @@ _NORMALIZER_BY_SOURCE = {
 }
 
 
-# Off-topic rerank — keep candidates whose rerank logit is >= the
-# OFF_TOPIC_KEEP_QUANTILE of the candidate set. 0.50 = keep top half.
-# Rerank logits are unbounded reals (~[-12, +12] on NIM nemotron-rerank-1b);
-# quantile gate is more robust than an absolute threshold across topics.
-_OFF_TOPIC_KEEP_QUANTILE: float = 0.50
-
 # Source-diversity quota — only kicks in when ≥2 sources EACH contributed
 # at least this many candidates. Below the floor we don't force diversity
 # (a 5-arxiv + 0-hn pool shouldn't be artificially split).
 _MIN_PER_SOURCE_FLOOR: int = 3
-
-
-def _topic_summary_text(p: NormalizedPaper) -> str:
-    """Concatenate title + abstract into a single dense string for rerank.
-    Title carries the most discriminating signal; abstract gives the
-    model enough context for borderline cases. Length-capped to ~4 KB so
-    the rerank API call payload stays well under NIM's limit even with
-    50 candidates in flight."""
-    title = (p.title or "").strip()
-    abstract = (p.abstract or "").strip()
-    if not title and not abstract:
-        return "(no text)"
-    combined = f"{title}\n\n{abstract}"
-    return combined[:4096]
-
-
-async def _topical_rerank_filter(
-    candidates: list[NormalizedPaper], topic: str,
-) -> tuple[list[NormalizedPaper], dict[str, float]]:
-    """Score every candidate by topical relevance to `topic`; keep the
-    top-quantile fraction. Returns (survivors, per_arxiv_logit_dict).
-
-    Fail-open: if the rerank API errors (rate-limit, network), we keep
-    all candidates and let signal_score handle ordering. Empty-topic →
-    no-op pass-through (the orchestrator caller should always provide
-    a topic, but be defensive)."""
-    if not topic.strip() or len(candidates) <= 1:
-        return list(candidates), {}
-    try:
-        from domains.llm.rotator.chain import rerank_via_router_async
-    except Exception as e:
-        logger.warning(f"[triage] rerank import failed: {e}; passing through")
-        return list(candidates), {}
-    documents = [_topic_summary_text(p) for p in candidates]
-    try:
-        pairs = await rerank_via_router_async(topic, documents)
-    except Exception as e:
-        logger.warning(
-            f"[triage] off-topic rerank failed: {e}; passing through all {len(candidates)} candidates"
-        )
-        return list(candidates), {}
-    if not pairs:
-        return list(candidates), {}
-    # NIM returns (orig_index, logit) sorted descending. Pick the keep set
-    # by the OFF_TOPIC_KEEP_QUANTILE.
-    keep_count = max(1, int(round(len(pairs) * _OFF_TOPIC_KEEP_QUANTILE)))
-    survivor_indices = {idx for idx, _logit in pairs[:keep_count]}
-    survivors = [candidates[i] for i in range(len(candidates)) if i in survivor_indices]
-    # Per-arxiv logit dict for telemetry/debugging.
-    logit_by_id: dict[str, float] = {}
-    for idx, logit in pairs:
-        aid = candidates[idx].arxiv_id
-        if aid:
-            logit_by_id[aid] = float(logit)
-    logger.info(
-        f"[triage] off-topic rerank: kept {len(survivors)}/{len(candidates)} "
-        f"(quantile={_OFF_TOPIC_KEEP_QUANTILE}, topic={topic!r}) "
-        f"logit_by_id_total={len(logit_by_id)} "
-        f"survivor_arxiv_ids={[p.arxiv_id for p in survivors]}"
-    )
-    return survivors, logit_by_id
 
 
 def _diversify_by_source(
@@ -221,9 +160,10 @@ async def triage_candidates(
         scan_id: Identifier for this radar scan (provided in your initial
             user message — pass it through).
         topic: The user's topic string from the initial message (e.g.
-            'deep agents'). Used to off-topic-filter candidates via NIM
-            cross-encoder rerank BEFORE signal scoring — keeps the digest
-            relevant when HF daily papers contribute off-topic content.
+            'deep agents'). Currently unused by the ranking pipeline
+            itself (the off-topic rerank gate that consumed it was
+            removed — see module docstring); kept in the signature for
+            logging and any future relevance gate.
         profile_verticals: Profile's vertical categories (e.g. ['cs.LG',
             'cs.AI', 'q-fin.PR']). Pass an empty list if the user didn't
             specify any.
@@ -334,11 +274,15 @@ async def triage_candidates(
         except Exception: pass
         return msg
 
-    n_before_rerank = len(deduped)
-
-    # Off-topic rerank gate — drop the half whose topical relevance to
-    # the user's `topic` string falls below median. Fail-open on API error.
-    relevant, rerank_logits = await _topical_rerank_filter(deduped, topic)
+    # 2026-09-17: the off-topic rerank gate (`_topical_rerank_filter`,
+    # NIM cross-encoder) was removed — `rerank_via_router_async` it
+    # called was a hardcoded stub always returning `[]` (no rerank
+    # infra was ever actually built for this codebase's rotator), so
+    # this gate was ALREADY a permanent no-op pass-through in every
+    # real run. `topic` is kept as a parameter (still used for logging
+    # + kept for callers) but no longer filters anything; signal_score
+    # alone drives ranking, same as it already effectively did.
+    relevant = deduped
 
     # Score each — pure function. embedding=None means relevance term = 0;
     # vertical_fit + recency + buzz + velocity + influential_ratio drive
@@ -362,11 +306,12 @@ async def triage_candidates(
     # min-1-per-source in the top_n so a single source can't monopolize.
     top = _diversify_by_source(scored, max(1, int(top_n)), per_source_counts)
 
-    # Attach rerank logit so downstream extraction can prioritize.
+    # topical_logit is always None now (no rerank gate — see above);
+    # kept as an explicit field since task.py's digest assembly reads it.
     payload = [
         _paper_as_dict(
             p, score=s,
-            topical_logit=rerank_logits.get(p.arxiv_id or "", None),
+            topical_logit=None,
         )
         for p, s in top
     ]
@@ -449,7 +394,7 @@ async def triage_candidates(
     )
     msg = (
         f"[triage] in={sum(per_source_counts.values())} "
-        f"deduped={n_before_rerank} after_rerank={len(relevant)} "
+        f"deduped={len(deduped)} "
         f"top_n={len(top)} per_source={per_source_counts} "
         f"{score_range}"
         f"top_arxiv_ids={top_arxiv_ids}{cache_note}"

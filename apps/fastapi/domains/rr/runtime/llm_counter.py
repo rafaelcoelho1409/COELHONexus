@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from contextvars import ContextVar
 from typing import Any
 
@@ -46,6 +47,9 @@ _KNOWN_PHASES: tuple[str, ...] = (
     "deep_read",
     "graph_build",
     "synthesis",
+    # "build" — code_synth's Build-tab endpoint, outside the scan pipeline
+    # proper (api/v1/rr/scan/router.py's scan_finding_code).
+    "build",
 )
 
 # All 4 discovery subagents share the "discovery" bucket — they fan out in parallel and belong to one pipeline node.
@@ -80,15 +84,45 @@ class RRLlmCounterCallback(BaseCallbackHandler):
     raise_error = False
     run_inline  = True
 
+    def __init__(self) -> None:
+        super().__init__()
+        # 2026-09-17: per-call wall-time logging — root-causing a slow
+        # scan previously required pulling raw span data out of
+        # LangFuse by hand (confirmed live: a 522s "gap" between
+        # graph_build and digest assembly turned out to be two
+        # sequential ~250s rotator calls; a 945s synthesis phase was 7
+        # sequential calls, one alone 364s). None of that was visible
+        # from `kubectl logs`. Keyed by `run_id` (unique per LLM
+        # invocation, assigned by LangChain) rather than any shared
+        # state, so concurrent calls — deep_read's parallel subagent
+        # fan-out included — never cross-contaminate each other's
+        # timers. Entries are popped in `on_llm_end`/`on_llm_error`;
+        # a run whose end callback never fires (e.g. a hard-killed
+        # task) leaks one small dict entry — acceptable, matches this
+        # module's existing best-effort style elsewhere.
+        self._call_start: dict[Any, float] = {}
+
+    def _mark_start(self, run_id: Any) -> None:
+        if run_id is not None:
+            self._call_start[run_id] = time.monotonic()
+
+    def _pop_duration(self, run_id: Any) -> float | None:
+        if run_id is None:
+            return None
+        t0 = self._call_start.pop(run_id, None)
+        return None if t0 is None else time.monotonic() - t0
+
     def on_llm_start(
         self,
         serialized: dict[str, Any] | None,
         prompts: list[str] | None,
         *,
+        run_id: Any = None,
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         **_: Any,
     ) -> None:
+        self._mark_start(run_id)
         try:
             self._phase_from_tags(tags or [])
         except Exception as e:
@@ -99,28 +133,37 @@ class RRLlmCounterCallback(BaseCallbackHandler):
         serialized: dict[str, Any] | None,
         messages: Any,
         *,
+        run_id: Any = None,
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         **_: Any,
     ) -> None:
         # ChatModels emit on_chat_model_start instead of on_llm_start.
+        self._mark_start(run_id)
         try:
             self._phase_from_tags(tags or [])
         except Exception as e:
             logger.warning(f"[rr-llm-counter] on_chat_model_start failed: {e}")
 
-    def on_llm_end(self, response: Any, **_: Any) -> None:
+    def on_llm_end(self, response: Any, *, run_id: Any = None, **_: Any) -> None:
         """Bump counters on every successful completion.
 
         Uses group-name fallback (`rr-strong`) for model id — registering a LiteLLM
         success_callback broke msgpack serialization in langgraph's InMemorySaver.put_writes.
         """
+        duration_s = self._pop_duration(run_id)
         try:
             scan_id = get_scan()
             if not scan_id:
                 return
             phase = get_phase()
             model, tokens_in, tokens_out = _extract_usage(response)
+            logger.info(
+                f"[rr-llm-timing] scan_id={scan_id} phase={phase} "
+                f"model={model or 'unknown'} "
+                f"duration_s={'?' if duration_s is None else f'{duration_s:.1f}'} "
+                f"tokens_in={tokens_in} tokens_out={tokens_out}"
+            )
             _bump_sync(
                 scan_id   = scan_id,
                 phase     = phase,
@@ -130,6 +173,23 @@ class RRLlmCounterCallback(BaseCallbackHandler):
             )
         except Exception as e:
             logger.warning(f"[rr-llm-counter] on_llm_end bump failed: {e}")
+
+    def on_llm_error(self, error: BaseException, *, run_id: Any = None, **_: Any) -> None:
+        """Log failed-call duration too — a slow-then-failing call is exactly
+        as diagnosable-worthy as a slow-but-successful one."""
+        duration_s = self._pop_duration(run_id)
+        try:
+            scan_id = get_scan()
+            if not scan_id:
+                return
+            logger.info(
+                f"[rr-llm-timing] scan_id={scan_id} phase={get_phase()} "
+                f"FAILED after "
+                f"duration_s={'?' if duration_s is None else f'{duration_s:.1f}'} "
+                f"error={type(error).__name__}: {str(error)[:200]}"
+            )
+        except Exception as e:
+            logger.warning(f"[rr-llm-counter] on_llm_error logging failed: {e}")
 
     def on_tool_start(
         self,
@@ -207,18 +267,17 @@ class RRLlmCounterCallback(BaseCallbackHandler):
         return None
 
 
-# Group names that are rotator pool aliases, not real deployments.
-_ROTATOR_GROUP_NAMES: frozenset[str] = frozenset({
-    "rr-strong", "dd-all", "dd-synth", "dd-reduce-label",
-    "dd-keylm", "dd-embed",
-})
-
-
 def _pick_first_real_model(*candidates: Any) -> str | None:
-    """Return the first non-empty model string that isn't a rotator group name."""
-    for c in candidates:
-        if isinstance(c, str) and c and c not in _ROTATOR_GROUP_NAMES:
-            return c
+    """Return the first non-empty model string.
+
+    2026-09-17: dropped the old `_ROTATOR_GROUP_NAMES` filter (rr-strong,
+    dd-all, dd-synth, dd-reduce-label, dd-keylm, dd-embed) — those were
+    LiteLLM Router group-alias names from the superseded in-process
+    multi-provider rotator. The external COELHO LLM Rotator always
+    resolves `model="auto"` to a real per-deployment string server-side
+    (e.g. "NVIDIA/nvidia/nemotron-..."), so none of these candidates can
+    ever equal one of those names anymore — the filter was pure dead
+    weight."""
     for c in candidates:
         if isinstance(c, str) and c:
             return c
@@ -493,81 +552,26 @@ async def snapshot_to_postgres(scan_id: str) -> bool:
         return False
 
 
-def _litellm_pull_model_id(kwargs: dict | None, response: Any) -> str:
-    """Best deployment id from LiteLLM success_callback args; falls back to 'unknown'."""
-    model = getattr(response, "model", None)
-    if isinstance(model, str) and model:
-        return model
-    if isinstance(response, dict):
-        v = response.get("model")
-        if isinstance(v, str) and v:
-            return v
-    hp = getattr(response, "_hidden_params", None)
-    if isinstance(hp, dict):
-        v = hp.get("model_id") or hp.get("model")
-        if isinstance(v, str) and v:
-            return v
-    if isinstance(kwargs, dict):
-        v = kwargs.get("model")
-        if isinstance(v, str) and v:
-            return v
-    return "unknown"
-
-
-def _litellm_pull_usage(response: Any) -> tuple[int, int]:
-    """Pull prompt/completion tokens from a LiteLLM ModelResponse."""
-    usage = getattr(response, "usage", None)
-    if usage is None and isinstance(response, dict):
-        usage = response.get("usage")
-    if usage is None:
-        return 0, 0
-    if hasattr(usage, "prompt_tokens") or hasattr(usage, "completion_tokens"):
-        return (
-            int(getattr(usage, "prompt_tokens", 0) or 0),
-            int(getattr(usage, "completion_tokens", 0) or 0),
-        )
-    if isinstance(usage, dict):
-        return (
-            int(usage.get("prompt_tokens",     0) or 0),
-            int(usage.get("completion_tokens", 0) or 0),
-        )
-    return 0, 0
-
-
-def _litellm_success_callback(
-    kwargs: dict | None,
-    response: Any,
-    start_time: Any = None,
-    end_time:   Any = None,
+def bump_llm_usage(
+    *,
+    scan_id:    str,
+    phase:      str,
+    model:      str,
+    tokens_in:  int,
+    tokens_out: int,
 ) -> None:
-    """LiteLLM success callback — bumps Redis counters with the real deployment name."""
-    try:
-        scan_id = get_scan()
-        if not scan_id:
-            return
-        phase = get_phase()
-        model = _litellm_pull_model_id(kwargs, response)
-        tokens_in, tokens_out = _litellm_pull_usage(response)
-        _bump_sync(
-            scan_id    = scan_id,
-            phase      = phase,
-            model      = model,
-            tokens_in  = tokens_in,
-            tokens_out = tokens_out,
-        )
-    except Exception as e:
-        logger.warning(f"[rr-llm-counter] litellm success callback bump failed: {e}")
-
-
-def _register_with_litellm() -> None:
-    """DISABLED — registering this callback caused litellm to attach a function reference to
-    response._hidden_params, which propagated into AIMessage.response_metadata and broke
-    langgraph's InMemorySaver.put_writes with msgpack serialization errors."""
-    return
-
-
-# Intentionally NOT invoked. Re-enable only after a msgpack-safe deployment extraction path is wired.
-# _register_with_litellm()
+    """Public wrapper over `_bump_sync` for callers outside the LangChain
+    callback path (`rr/runtime/llm_call.py`'s `capture_llm_usage`) — one-off
+    `chain.ainvoke()` calls in `task.py`'s backfill and `code_synth.py`
+    that run outside `agent.ainvoke()`'s `config={"callbacks":[...]}`, so
+    `RRLlmCounterCallback.on_llm_end` never fires for them."""
+    _bump_sync(
+        scan_id    = scan_id,
+        phase      = phase,
+        model      = model,
+        tokens_in  = tokens_in,
+        tokens_out = tokens_out,
+    )
 
 
 __all__ = [
@@ -577,4 +581,5 @@ __all__ = [
     "set_phase",
     "get_phase",
     "read_counters",
+    "bump_llm_usage",
 ]

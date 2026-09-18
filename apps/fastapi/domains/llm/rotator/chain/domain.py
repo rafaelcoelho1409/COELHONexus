@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from .keys import _NON_CHAT_MARKERS
-
 
 def classify_error(exc: Exception) -> str:
     name = type(exc).__name__.lower()
@@ -17,8 +15,3 @@ def classify_error(exc: Exception) -> str:
     if "5" in msg and ("server" in msg or "internal" in msg or "bad gateway" in msg):
         return "server_error"
     return "unknown"
-
-
-def is_non_chat_model(model_id: str) -> bool:
-    name = (model_id or "").lower()
-    return any(m in name for m in _NON_CHAT_MARKERS)

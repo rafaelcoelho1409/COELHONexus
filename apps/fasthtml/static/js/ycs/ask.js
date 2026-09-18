@@ -1,9 +1,14 @@
 /* YCS · Step 3 · Ask — Adaptive RAG chat (SSE streaming).
  *
- * Three subsystems wired here:
- *   (1) LLM config form — PUT /api/v1/ycs/agents/config
- *   (2) Channel multi-select populated from /admin/ingested-channels
- *   (3) Mode pill + composer → POST /api/v1/ycs/agents/search/stream (SSE)
+ * Two subsystems wired here:
+ *   (1) Channel multi-select populated from /admin/ingested-channels
+ *   (2) Mode pill + composer → POST /api/v1/ycs/agents/search/stream (SSE)
+ *
+ * 2026-09-17: the per-request BYOK config form (provider/model/key
+ * picker, PUT /agents/config) and its backing endpoints were removed —
+ * dead since 2026-06-17 when the frontend control for it was already
+ * pulled (routing always goes through the Settings-page-configured
+ * external rotator; see `api/v1/ycs/agents/router.py` git history).
  *
  * SSE consumption: events arrive as `data: {json}\n\n`. Each event is one
  * LangGraph node update (classify / retrieve / grade / generate / ...).

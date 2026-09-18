@@ -106,9 +106,21 @@ MINIO_PYTHON_CONTENT_TYPE: str = "text/x-python"
 NEO4J_LABEL_PAPER:   str = "Paper"
 NEO4J_LABEL_AUTHOR:  str = "Author"
 NEO4J_LABEL_CONCEPT: str = "Concept"
-NEO4J_LABEL_SOURCE:  str = "Source"
+NEO4J_LABEL_SOURCE:  str = "Source"   # citation-source node type ("arxiv"/"hn"/...) — NOT the project tag below
 
 NEO4J_REL_CITES:    str = "CITES"
 NEO4J_REL_AUTHORED: str = "AUTHORED"
 NEO4J_REL_ABOUT:    str = "ABOUT"
 NEO4J_REL_FROM:     str = "FROM"
+
+# 2026-09-17: project/domain namespace tag — mirrors YCS's
+# `PROJECT_LABEL`/`SOURCE_LABEL` pair (`graph_builder/params.py`), which
+# stamps every YCS-written node `:COELHONexus:YCS` so the shared Neo4j
+# instance can tell which domain a node belongs to. RR's writes had no
+# equivalent tag until now — added as an extra label via `SET n:...`
+# alongside each MERGE, same pattern YCS uses. NOTE the name collision
+# with `NEO4J_LABEL_SOURCE` above ("Source" the citation-source node
+# type) — `SOURCE_LABEL` here is the domain tag ("RR"), a different
+# concept that happens to share YCS's naming convention.
+PROJECT_LABEL: str = "COELHONexus"
+SOURCE_LABEL:  str = "RR"

@@ -1,14 +1,28 @@
 """Graph-build — pure I/O orchestrator tool.
 
 The deterministic Phase-4 node from the architecture doc. Reads the
-ranked top-N from fs, embeds each paper's abstract via the existing LLM
-rotator (NIM `llama-nemotron-embed-1b-v2`, 2048d), and persists to
-Neo4j + Qdrant via `service.persist_paper`.
+ranked top-N from fs, embeds each paper's abstract via the Settings-
+page-configured embedding endpoint, and persists to Neo4j + Qdrant via
+`service.persist_paper`.
 
-No LLM (the rotator's embed model is a separate non-chat path). Wired
-into create_deep_agent's `tools=` list so the orchestrator can invoke it
-after deep_read finishes.
-"""
+No chat LLM here — embeddings are a separate, independently-configured
+connection. Wired into create_deep_agent's `tools=` list so the
+orchestrator can invoke it after deep_read finishes.
+
+2026-09-17: was calling `domains.llm.rotator.chain.service.
+embed_via_router_async` — that function is NOT the Settings-page-
+configured embedding endpoint despite the name; it's local in-process
+FastEmbed ONNX (384d), with a direct-to-NVIDIA-API fallback as a last
+resort, bypassing the Settings page entirely. `radar_papers`'
+collection has always been sized for 2048d (matching NIM's real
+embedding model), so every upsert since that local-FastEmbed fallback
+became the effective path was silently rejected by Qdrant with a 400 —
+100% failure, confirmed live (persisted=0/8 on the last real scan).
+`domains.llm.embeddings.embed_texts_async` is the genuine Settings-
+page-configured path (`api/v1/llm/settings/router.py`'s `/embedding`
+routes) — confirmed live to resolve to `nim/nvidia/nemotron-3-embed-1b`
+at 2048d, exactly matching the collection, so no resize/migration is
+needed, just this call-site fix."""
 from __future__ import annotations
 
 import asyncio
@@ -18,9 +32,7 @@ from typing import Any
 
 from langchain_core.tools import tool
 
-# The embedding factory lives in the LLM rotator package — same one DD/YCS
-# use for their embedding workloads.
-from domains.llm.rotator.chain.service import embed_via_router_async
+from domains.llm.embeddings.service import embed_texts_async
 
 from ..keys import FS_FILE_TRIAGE_TOPN
 from ...entities import NormalizedPaper
@@ -114,7 +126,7 @@ async def _persist_one(
     async with sem:
         try:
             if abstract:
-                vecs = await embed_via_router_async([abstract], input_type="passage")
+                vecs, _model = await embed_texts_async([abstract])
                 embedding = vecs[0] if vecs else None
             await persist_paper(paper, embedding=embedding, signal=item.get("signal"))
             return "ok"

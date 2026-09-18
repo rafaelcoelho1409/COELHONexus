@@ -222,12 +222,21 @@ ORCHESTRATOR_MEMORY_TEMPLATE = """
 # new InjectedState stash pattern (no JSON copying in tool args)
 _DISCOVERY_TAIL = """
 
-WORKFLOW — TWO MANDATORY STEPS. SKIPPING STEP 2 IS A SEVERE BUG.
+WORKFLOW — TWO MANDATORY STEPS, IN ORDER. SKIPPING STEP 2 IS A SEVERE
+BUG; RUNNING THEM TOGETHER IS ALSO A BUG.
 
   STEP 1: Call the source-specific MCP tool with the right arguments.
+          Wait for its result before doing anything else.
 
-  STEP 2 (MANDATORY — NEVER SKIP):
-      Call `stash_discovery_result(scan_id=<id>, source='<source>')`.
+  STEP 2 (MANDATORY — NEVER SKIP, NEVER RUN IN PARALLEL WITH STEP 1):
+      Call `stash_discovery_result(scan_id=<id>, source='<source>')`
+      in a SEPARATE, LATER message — never in the same assistant
+      message as STEP 1's tool_call. stash_discovery_result reads your
+      papers from STEP 1's result already sitting in the conversation;
+      call it before that result lands and it finds nothing there yet
+      and errors "no ToolMessage found in state" — wasting a turn to
+      recover. Two sequential turns, every time, even when the source
+      call feels simple enough to bundle.
 
       The orchestrator BLOCKS on your stash. If you skip STEP 2:
         - The papers you fetched in STEP 1 ARE LOST (the tool result
@@ -297,6 +306,17 @@ Arguments to pass to `huggingface_daily_papers`:
 
 The HF feed is DATE-AXIS, not text-search — there's no `query`
 parameter.
+
+SEQUENTIAL, NOT PARALLEL — this is the mistake this subagent makes most
+often: call huggingface_daily_papers by ITSELF first, wait for its
+result, THEN call stash_discovery_result in a separate, later message.
+Do NOT emit both tool_calls in the same assistant message. Since there's
+no `query` to build here, this call can feel trivial enough to bundle
+with the stash — it isn't: stash_discovery_result reads your papers
+from the tool result already sitting in the conversation; call it
+before that result lands and it finds nothing there yet, errors "no
+ToolMessage found in state", and the turn is wasted recovering. Two
+turns, in order, every time.
 
 After huggingface_daily_papers returns, immediately call:
     stash_discovery_result(scan_id=<id>, source='huggingface_daily_papers')

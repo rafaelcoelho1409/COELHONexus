@@ -111,13 +111,58 @@ def stash_discovery_result(
     """
     messages = state.get("messages") or []
     last_tool_content = None
+    last_tool_status = "success"
     for m in reversed(messages):
         if type(m).__name__ == "ToolMessage":
             last_tool_content = getattr(m, "content", None)
+            last_tool_status = getattr(m, "status", "success") or "success"
             break
     if last_tool_content is None:
         msg = "ERROR: no ToolMessage found in state — call your MCP tool BEFORE calling stash_discovery_result"
         logger.warning(f"[fs-tool] stash_discovery_result scan_id={scan_id} source={source!r}: {msg}")
+        return msg
+
+    # 2026-09-17: `langchain_mcp_adapters` sets `ToolMessage(status="error")`
+    # when the underlying MCP tool raises (`CallToolResult(isError=True)`) —
+    # e.g. arXiv returning a 406/429 rate-limit response, a network error,
+    # malformed XML. Root-caused live: two consecutive scans stashed
+    # arxiv count=0 with ZERO error anywhere in the logs, tracing back to
+    # a real `httpx.HTTPStatusError: 406` from export.arxiv.org that
+    # `tool.py` correctly wrapped as a `ToolError` — but this function
+    # only ever read `.content`, and `_parse_tool_message_content` silently
+    # turns any unparseable string (including an error message) into `[]`.
+    # A genuine infra failure was indistinguishable from "arxiv legitimately
+    # found nothing." Check `.status` FIRST so a real failure surfaces as
+    # an error instead of a clean empty stash.
+    if last_tool_status == "error":
+        error_text = (
+            last_tool_content if isinstance(last_tool_content, str)
+            else str(last_tool_content)
+        )[:300]
+        # 2026-09-17: added an explicit cap after a live 6-retry, ~26-
+        # minute arxiv storm (root cause was an external rate-limit
+        # block, not a subagent bug — the subagent DID eventually give
+        # up on its own judgment, just far later than necessary). This
+        # is a prompt nudge, not a code-counted limit: nothing here
+        # tracks how many times THIS source has actually failed, it
+        # relies on the LLM reading its own conversation history — same
+        # enforcement style as the "STASH EXACTLY ONCE" rule below,
+        # which is also instruction-only. Good enough given the
+        # subagent already showed it responds to this kind of guidance.
+        msg = (
+            f"ERROR: your MCP tool call failed ({error_text!r}) — this is "
+            f"NOT a legitimate zero-result search. Do NOT stash this as "
+            f"count=0 yet. Check your OWN conversation history first: if "
+            f"you have already retried this SAME tool once before and it "
+            f"failed again (this is your 2nd+ failure in a row for this "
+            f"source), STOP — do not try a 3rd time, just stash count=0 "
+            f"now and move on. Otherwise (this is your 1st failure), wait "
+            f"a moment and retry the SAME tool call exactly once."
+        )
+        logger.warning(
+            f"[fs-tool] stash_discovery_result scan_id={scan_id} "
+            f"source={source!r} REJECTED: tool call errored: {error_text}"
+        )
         return msg
 
     papers = _parse_tool_message_content(last_tool_content)
@@ -307,6 +352,36 @@ def write_synthesis_report(
                 `method` fields), not by title token overlap.
             Defaults to empty dict — without per_paper_themes the digest's per-item themes will be empty `[]`.
     """
+    # Idempotency guard — mirrors triage_candidates' guard exactly (same
+    # failure class, different tool). 2026-09-17: scan a2e05dca showed
+    # the orchestrator calling write_synthesis_report a SECOND time,
+    # ~13 minutes after the first, once a slow-to-resolve discovery
+    # source (Semantic Scholar, rate-limited) finally reported in —
+    # the second call had WORSE output (3 themes vs the first pass's 6)
+    # and silently overwrote it, since this tool had no guard against
+    # being called twice. The final digest used the worse pass purely
+    # because it was written last. Refuse a second write; keep the
+    # first (real) result — same "single-source-of-truth per scan"
+    # reasoning as triage's guard.
+    existing_report = fs_read(scan_id, FS_FILE_SYNTHESIS_REPORT)
+    if isinstance(existing_report, dict) and existing_report.get("themes"):
+        existing_themes = existing_report.get("themes") or []
+        msg = (
+            f"[synthesis] IDEMPOTENT — synthesis already ran for this "
+            f"scan_id. themes={existing_themes} "
+            f"(call args ignored: {len(themes)} new themes, "
+            f"{len(per_paper_themes or {})} per-paper assignments). "
+            f"The existing report is final — do NOT call "
+            f"write_synthesis_report again. Proceed to emit "
+            f"respond_in_format(ScanComplete)."
+        )
+        logger.warning(
+            f"[fs-tool] write_synthesis_report scan_id={scan_id} "
+            f"REJECTED (idempotent): existing_themes={existing_themes} "
+            f"refused_new_themes={themes}"
+        )
+        return msg
+
     cleaned_ppt: dict[str, list[str]] = {}
     if per_paper_themes:
         themes_set = {t for t in themes if isinstance(t, str)}
@@ -430,23 +505,6 @@ def _bump_failed(scan_id: str) -> int:
     return n
 
 
-def _peek_last_model() -> str | None:
-    """Best-effort: last LiteLLM deployment identity for failure logs."""
-    try:
-        import litellm
-        last = getattr(litellm, "last_response", None)
-        if last is None:
-            return None
-        model = getattr(last, "model", None)
-        if model:
-            return str(model)
-        if isinstance(last, dict):
-            return str(last.get("model") or "") or None
-    except Exception:
-        pass
-    return None
-
-
 @tool
 def write_digest(scan_id: str, digest_json: str) -> str:
     """Persist the final ranked digest as JSON.
@@ -499,7 +557,14 @@ def write_digest(scan_id: str, digest_json: str) -> str:
 
     trimmed = (digest_json or "").strip()
     if len(trimmed) < _MIN_DIGEST_JSON_LEN:
-        model_id = _peek_last_model() or "unknown"
+        # 2026-09-17: was `_peek_last_model() or "unknown"` — that read
+        # litellm's global `last_response`, which only the litellm SDK's
+        # own completion calls populate. Nothing calls it directly
+        # anymore (every chain is `ChatOpenAI` → raw HTTP to the
+        # external rotator), so it always silently resolved to
+        # "unknown" anyway — the subagent identity isn't recoverable
+        # here regardless, this just stops pretending it might be.
+        model_id = "unknown"
         msg = (
             f"ERROR: digest_json was {len(trimmed)} chars — too short "
             f"to be a valid digest (min {_MIN_DIGEST_JSON_LEN}). The "
@@ -542,7 +607,7 @@ def write_digest(scan_id: str, digest_json: str) -> str:
             "items":         [],
         }
         new_count = _bump_failed(scan_id)
-        model_id = _peek_last_model() or "unknown"
+        model_id = "unknown"
         log_msg = (
             f"stored RAW after all repairs failed (debug={debug_path}); "
             f"model={model_id} "
@@ -568,7 +633,7 @@ def write_digest(scan_id: str, digest_json: str) -> str:
                 f"fs/synthesis/report.json), summary MUST be >=50 chars."
             )
             new_count = _bump_failed(scan_id)
-            model_id = _peek_last_model() or "unknown"
+            model_id = "unknown"
             logger.warning(
                 f"[fs-tool] write_digest scan_id={scan_id} REJECTED: "
                 f"{type(ve).__name__}: {str(ve)[:200]} "

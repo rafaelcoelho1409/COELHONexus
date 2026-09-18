@@ -53,8 +53,20 @@ logger = logging.getLogger(__name__)
     bind           = True,
     acks_late      = False,
     track_started  = True,
-    soft_time_limit = 1800,
-    time_limit      = 2100,  # +5 min over soft limit; cleanup paths get time to fail loud vs SIGKILL
+    # 2026-09-17: soft_time_limit=1800/time_limit=2100 removed — same
+    # bug DD's Planner hit and fixed on 2026-09-09 (see that task's
+    # comment). Confirmed live: scan c01bf761 was killed by
+    # SoftTimeLimitExceeded at exactly 1800.03s while STILL making real
+    # progress (graph_build had just persisted 8/8 papers moments
+    # before; synthesis was mid-retry-loop, not hung) — a prior scan on
+    # the identical topic/top_n had already finished healthily in
+    # 1557s, 87% of this same budget, so the margin was never safe
+    # against normal NIM latency variance. Celery's signal-based
+    # timeout can't distinguish "hung" from "genuinely slow"; RR
+    # already has a real cooperative-cancel path for a truly-stuck scan
+    # (`service.cancel_scan` → `celery_app.control.revoke(...,
+    # terminate=True)`, wired to the UI's cancel button) — no blanket
+    # wall-clock cap needed on top of it.
 )
 def run_radar_scan(
     self,
@@ -93,16 +105,34 @@ def run_radar_scan(
             )
         )
     except Exception as e:
+        err = f"{type(e).__name__}: {e}"
         logger.exception(f"[rr-task] run_radar_scan failed at outer scope: {e}")
         emit_event_sync(
             scan_id, "error",
-            message = f"task-outer: {type(e).__name__}: {e}",
+            message = f"task-outer: {err}",
         )
+        # 2026-09-17: this outer handler was missing the `fail_scan`
+        # call the INNER handler (`_run_radar_scan_async`'s own
+        # try/except, above) already has — confirmed live: scan
+        # c01bf761 hit SoftTimeLimitExceeded here specifically (the
+        # signal escaping the inner try/except, landing in this outer
+        # one instead — visible from the "at outer scope" log line),
+        # emitted the SSE error event, but the `radar_scans` Postgres
+        # row was NEVER marked failed. It stayed `status='running',
+        # finished_at=NULL` forever — anything computing elapsed time
+        # from `started_at` with no `finished_at` shows an ever-
+        # growing duration (this row was already ~4h40m "running" by
+        # the time it was found, not a real 4-hour scan).
+        try:
+            from uuid import UUID
+            asyncio.run(fail_scan(UUID(scan_id), err))
+        except Exception as fe:
+            logger.warning(f"[rr-task] outer-scope fail_scan also failed: {fe}")
         return {
             "scan_id":    scan_id,
             "profile_id": profile_id,
             "status":     "failed",
-            "error":      f"{type(e).__name__}: {e}",
+            "error":      err,
         }
 
 
@@ -512,6 +542,12 @@ def _build_digest_from_fs(scan_id: str) -> dict[str, Any] | None:
 # Capped at 3 — beyond that, infra is likely wedged and retrying won't help.
 BACKFILL_MAX = 3
 
+# Per-call bound for one backfill extraction (single abstract → 6-field
+# JSON — much lighter than deep_read's full-paper-text shape). 2 attempts:
+# a transient NIM timeout/connection blip gets one retry via
+# `resilient_ainvoke`, same accelerator YCS Ask/Query use.
+_BACKFILL_CALL_TIMEOUT_S = 90.0
+
 
 async def _backfill_missing_extractions(scan_id: str) -> None:
     """Recover extractions missing from fs up to BACKFILL_MAX. No-op when complete or gap > cap."""
@@ -551,26 +587,40 @@ async def _backfill_missing_extractions(scan_id: str) -> None:
         for p in top_n_raw
         if isinstance(p, dict) and p.get("arxiv_id")
     }
-    from domains.llm.rotator.chain.service import build_rr_strong_chain_bandit
+    from domains.llm.rotator.chain.service import build_rr_strong_chain
     from .runtime.llm_counter import set_phase as _set_llm_phase
 
-    chain = build_rr_strong_chain_bandit()
+    chain = build_rr_strong_chain(rotator_task = "rr-backfill")
     try: _set_llm_phase("deep_read")  # bucket backfill calls under deep_read in drawer KPIs
     except Exception: pass
 
-    backfilled = 0
-    for arxiv_id in sorted(missing_ids):
-        paper = paper_by_id.get(arxiv_id)
-        if not isinstance(paper, dict):
-            continue
-        try:
-            await _backfill_one(scan_id, arxiv_id, paper, chain)
-            backfilled += 1
-        except Exception as e:
-            logger.warning(
-                f"[rr-task] backfill failed for {arxiv_id}: "
-                f"{type(e).__name__}: {e}"
-            )
+    # 2026-09-17: was a sequential `for` loop — the one place in RR that
+    # didn't match DD/YCS's gathered-concurrency pattern for "N
+    # independent items" (same shape as `graph_build_papers`'
+    # Semaphore+gather, just never ported here). BACKFILL_MAX already
+    # caps this at 3 items, so the semaphore is a safety margin rather
+    # than a real rate-limit need — matches graph_build's default
+    # concurrency (4) rather than inventing a new number.
+    sem = asyncio.Semaphore(min(4, max(1, BACKFILL_MAX)))
+
+    async def _guarded(arxiv_id: str, paper: dict[str, Any]) -> bool:
+        async with sem:
+            try:
+                await _backfill_one(scan_id, arxiv_id, paper, chain)
+                return True
+            except Exception as e:
+                logger.warning(
+                    f"[rr-task] backfill failed for {arxiv_id}: "
+                    f"{type(e).__name__}: {e}"
+                )
+                return False
+
+    results = await asyncio.gather(*(
+        _guarded(arxiv_id, paper_by_id[arxiv_id])
+        for arxiv_id in sorted(missing_ids)
+        if isinstance(paper_by_id.get(arxiv_id), dict)
+    ))
+    backfilled = sum(1 for ok in results if ok)
     logger.info(
         f"[rr-task] backfill done scan_id={scan_id} "
         f"recovered={backfilled}/{len(missing_ids)}"
@@ -609,10 +659,18 @@ async def _backfill_one(
         f"title: {title}\n\n"
         f"abstract:\n{abstract}\n"
     )
-    response = await chain.ainvoke([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_msg),
-    ])
+    from .runtime.llm_call import resilient_ainvoke
+
+    response = await resilient_ainvoke(
+        chain,
+        [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_msg),
+        ],
+        operation    = "backfill",
+        timeout_s    = _BACKFILL_CALL_TIMEOUT_S,
+        max_attempts = 2,
+    )
     raw = (getattr(response, "content", None) or "").strip()
     if not raw:
         raise RuntimeError("empty content from rotator")

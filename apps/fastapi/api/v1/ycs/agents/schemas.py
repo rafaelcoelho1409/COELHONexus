@@ -3,21 +3,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
 from domains.ycs.content.schemas import NonEmptyStr
-
-
-# LLM Configuration
-class LLMConfig(BaseModel):
-    """User-provided LLM config persisted to Redis JSON. `api_key`/`base_url` accepted but ignored
-    at build time — keys are owned by the global Settings page and resolved via `resolve_key()`."""
-    provider:    NonEmptyStr        = "nim"
-    model:       NonEmptyStr | None = None
-    temperature: float | None       = None
-    base_url:    NonEmptyStr | None = None   # ignored at build time
-    api_key:     NonEmptyStr | None = None   # ignored at build time
-    model_config = ConfigDict(extra = "allow")
 
 
 # Agentic RAG Requests

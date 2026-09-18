@@ -49,6 +49,7 @@ const PHASE_LABELS = {
   synthesis:   'Synthesis',
   report:      'Report',
   persisting:  'Persisting',
+  finalizing:  'Finalizing',
   done:        'Done',
   error:       'Failed',
   cancelled:   'Cancelled',
@@ -67,6 +68,7 @@ const PHASE_TO_STATUS = {
   synthesis:   'working',
   report:      'working',
   persisting:  'working',
+  finalizing:  'working',
   done:        'done',
   error:       'failed',
   cancelled:   'cancelled',
@@ -94,7 +96,7 @@ const stopBtn  = document.getElementById('rr-stop-btn');
 const PHASES_TERMINAL    = new Set(['done', 'error', 'cancelled']);
 const PHASES_PRE_TERMINAL = new Set([
   'pending', 'running', 'discovery', 'triage', 'deep_read',
-  'graph_build', 'synthesis', 'report', 'persisting',
+  'graph_build', 'synthesis', 'report', 'persisting', 'finalizing',
 ]);
 
 function setButtonsForPhase(phase) {
@@ -1098,7 +1100,8 @@ function _buildPanelIdle(panel) {
         Synthesize complete, runnable Python from this paper's extraction
         (money_angle + problem + method + how_to_build + math) via a
         generate&nbsp;→&nbsp;critique&nbsp;→&nbsp;revise loop on the rotator.
-        Synthesis takes 20–60s and runs on demand only.
+        Synthesis takes 1–5 minutes (sometimes longer, depending on
+        provider response time) and runs on demand only.
       </p>
       <button type="button" class="rr-finding-drawer-codegen-trigger">
         ⚡ Generate Python code
@@ -1110,7 +1113,7 @@ function _buildPanelPending(panel) {
   panel.innerHTML =
     '<p class="rr-finding-drawer-codegen-pending">' +
     'Synthesizing Python from the paper extraction… ' +
-    '(generate → critique → revise; ~20–60s)' +
+    '(generate → critique → revise; 1–5 min, sometimes longer)' +
     '</p>';
 }
 function _buildPanelError(panel, message) {

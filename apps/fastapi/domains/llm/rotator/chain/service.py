@@ -305,12 +305,29 @@ def _build_chat_openai(
     response_format: dict | None  = None,
     rotator_task:    str | None   = None,
     max_wall_s:      float | None = None,
+    max_retries:     int          = 0,
 ):
     """Shared LangChain `ChatOpenAI` construction for every non-hot-path
-    caller — one place to keep `max_retries=0` applied consistently.
-    Rotator handles cascade server-side; an SDK-level retry loop on top
-    of it would stack a second, redundant retry (same reasoning as the
-    raw-client hot path's `max_retries=0` in `_get_async_openai`).
+    caller — one place to keep `max_retries=0` applied consistently BY
+    DEFAULT. Rotator handles cascade server-side; an SDK-level retry
+    loop on top of it would stack a second, redundant retry for any
+    caller that already retries itself (same reasoning as the raw-
+    client hot path's `max_retries=0` in `_get_async_openai`).
+
+    2026-09-18: `max_retries` made overridable (still defaults to 0 —
+    every existing caller is unaffected) for callers with NO retry
+    protection of their own. Root-caused live: RR's orchestrator/
+    subagent models (`build_rr_strong_chain`, passed directly to
+    DeepAgents as the bare model object) can't use `resilient_ainvoke`
+    like YCS Ask or RR's own backfill/code_synth do — wrapping the
+    model breaks DeepAgents' `isinstance(model, BaseChatModel)` check.
+    With zero retry anywhere, one transient rotator 504 (confirmed
+    live: hit the rotator's own 600s max_wall_s ceiling, 90% into a
+    scan, 7/8 extractions already done) crashed the ENTIRE scan,
+    discarding all prior progress. `max_retries` at the SDK level is
+    the only retry mechanism that doesn't touch the model's class, so
+    it's the one lever compatible with DeepAgents' bare-model
+    requirement.
 
     2026-09-13: added after finding TWO independent `ChatOpenAI`
     construction sites (`_get_chat_llm` and YCS's Neo4j chain builder)
@@ -361,7 +378,7 @@ def _build_chat_openai(
         "api_key":           COELHO_API_KEY,
         "model":             COELHO_ROTATOR_MODEL,
         "temperature":       temperature if temperature is not None else 0.0,
-        "max_retries":       0,
+        "max_retries":       max_retries,
         "http_async_client": _get_shared_http_client(),
     }
     if timeout_s is not None:
@@ -742,11 +759,6 @@ def reset_rotator(*args, **kwargs) -> None:
     return None
 
 
-async def rerank_via_router_async(query: str, documents: list[str], top_n: int | None = None):
-    # Not used via rotator — fallback to no rerank
-    return []
-
-
 def build_reduce_label_chain(
     *,
     timeout_s:    float | None = 600.0,
@@ -873,6 +885,63 @@ def build_ycs_neo4j_pinned_chain(pinned_model: str | None = None, *args, **kwarg
         timeout_s    = 650.0,
         rotator_task = "ycs-neo4j-extract",
         max_wall_s   = 600.0,
+    )
+
+
+def build_rr_strong_chain(
+    *,
+    rotator_task: str | None   = None,
+    temperature:  float | None = None,
+    max_retries:  int          = 0,
+) -> BaseChatModel:
+    """Research Radar's strong-tier `ChatOpenAI` — orchestrator, subagents,
+    and the two one-off callers outside the DeepAgents loop (task.py's
+    backfill, code_synth's 3-round generate/critique/revise) all build
+    through here now.
+
+    2026-09-17: replaces the old `build_rr_strong_chain`/
+    `build_rr_strong_chain_bandit` pair, which no longer existed as real
+    functions — both names silently fell through `chain/service.py`'s
+    generic `__getattr__` stub to a bare, UNTAGGED
+    `build_reduce_label_chain()` (bucketed under the rotator's "general"
+    cell). `graph.py`'s surrounding comments still described a client-
+    side "10-arm pool (7 NIM frontier + 2 Mistral direct + 1 SambaNova
+    free-tier 405B)" and a `KD_RR_BANDIT_CHAT` flag choosing between a
+    "LiteLLM Router simple-shuffle chain" and a "bandit-routed chain" —
+    neither exists anymore; every arm/deployment pick happens server-
+    side in the external COELHO LLM Rotator (model="auto", the same
+    Settings-page-configured endpoint every other build_* here talks
+    to), same as DD's Planner/Synth and YCS's Ingestion/Ask/Query. The
+    two names always resolved to the exact same call, so the flag was
+    already dead — removed along with it.
+
+    `rotator_task` (e.g. "rr-orchestrator", "rr-subagent", "rr-backfill",
+    "rr-code-synth") gives the bandit a dedicated cell per call shape,
+    same reasoning as `build_ycs_neo4j_pinned_chain` above — RR's calls
+    span short JSON extractions and long code-gen completions; pooling
+    them all under "general" (or even one shared "rr" tag) would blur
+    the bandit's per-shape statistics. `timeout_s`/`max_wall_s` reuse
+    the same 650s/600s budget as the Neo4j chain — RR's deep_read/
+    synthesis/code_synth calls carry comparably large context+completion
+    shapes (full paper text in, 150-400 line files or multi-field JSON
+    out).
+
+    2026-09-18: `max_retries` (default 0, unchanged) — RR's task.py
+    backfill and code_synth callers already wrap their calls in
+    `resilient_ainvoke` and should leave this at 0 (an SDK retry on
+    top would double-stack). `graph.py`'s orchestrator/subagent
+    factories pass `max_retries=1` — those calls run inside DeepAgents'
+    own loop with no caller-side retry at all (wrapping the model
+    breaks DeepAgents' `isinstance(model, BaseChatModel)` check), so
+    this is their only protection against a transient rotator 5xx —
+    see `_build_chat_openai`'s docstring for the live incident that
+    motivated this."""
+    return _build_chat_openai(
+        timeout_s    = 650.0,
+        rotator_task = rotator_task,
+        max_wall_s   = 600.0,
+        temperature  = temperature,
+        max_retries  = max_retries,
     )
 
 

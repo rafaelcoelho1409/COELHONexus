@@ -58,6 +58,7 @@ from domains.ycs.graph_builder import (
 from domains.ycs.graph_builder.domain import is_infra_error
 from domains.ycs.graph_builder.params import (
     MAX_CONSECUTIVE_INFRA_PASSES,
+    MIN_PENDING_FOR_INFRA_HALT,
     RETRY_PASS_BACKOFF_S,
     SOURCE_LABEL,
 )
@@ -489,32 +490,54 @@ def ingest_to_neo4j(
                         extraction_stats.get("last_batch_error") or ""
                     )
                     if is_infra_error(_last_err):
-                        consecutive_infra_passes += 1
-                        if consecutive_infra_passes >= MAX_CONSECUTIVE_INFRA_PASSES:
-                            logger.error(
+                        # 2026-09-17: a pass with too few pending videos
+                        # can't tell "provider is down" apart from "this
+                        # one item got unlucky twice" — see
+                        # MIN_PENDING_FOR_INFRA_HALT's comment. Below the
+                        # threshold, retry normally without touching the
+                        # streak counter at all.
+                        if len(pending_transcripts) < MIN_PENDING_FOR_INFRA_HALT:
+                            logger.warning(
                                 f"[ingest_to_neo4j] {pass_label} produced 0 "
                                 f"successes out of {len(pending_transcripts)} "
-                                f"attempted ({consecutive_infra_passes}x "
-                                f"consecutive infra failure) — provider "
-                                f"down, giving up on the remaining "
-                                f"{len(failed_ids)} video(s) for this run: "
-                                f"{failed_ids[:10]} "
-                                f"(breakdown={agg_error_breakdown})"
+                                f"attempted (below the "
+                                f"{MIN_PENDING_FOR_INFRA_HALT}-video infra-"
+                                f"halt threshold — retrying without "
+                                f"counting toward the streak)"
                             )
-                            break
-                        logger.warning(
-                            f"[ingest_to_neo4j] {pass_label} produced 0 "
-                            f"successes (infra streak "
-                            f"{consecutive_infra_passes}/"
-                            f"{MAX_CONSECUTIVE_INFRA_PASSES}) — one more "
-                            f"pass after backoff"
-                        )
-                        if attempt < MAX_RETRY_PASSES:
-                            pending_transcripts = [
-                                t for t in transcripts
-                                if t["video_id"] in failed_ids
-                            ]
-                            continue
+                            if attempt < MAX_RETRY_PASSES:
+                                pending_transcripts = [
+                                    t for t in transcripts
+                                    if t["video_id"] in failed_ids
+                                ]
+                                continue
+                        else:
+                            consecutive_infra_passes += 1
+                            if consecutive_infra_passes >= MAX_CONSECUTIVE_INFRA_PASSES:
+                                logger.error(
+                                    f"[ingest_to_neo4j] {pass_label} produced 0 "
+                                    f"successes out of {len(pending_transcripts)} "
+                                    f"attempted ({consecutive_infra_passes}x "
+                                    f"consecutive infra failure) — provider "
+                                    f"down, giving up on the remaining "
+                                    f"{len(failed_ids)} video(s) for this run: "
+                                    f"{failed_ids[:10]} "
+                                    f"(breakdown={agg_error_breakdown})"
+                                )
+                                break
+                            logger.warning(
+                                f"[ingest_to_neo4j] {pass_label} produced 0 "
+                                f"successes (infra streak "
+                                f"{consecutive_infra_passes}/"
+                                f"{MAX_CONSECUTIVE_INFRA_PASSES}) — one more "
+                                f"pass after backoff"
+                            )
+                            if attempt < MAX_RETRY_PASSES:
+                                pending_transcripts = [
+                                    t for t in transcripts
+                                    if t["video_id"] in failed_ids
+                                ]
+                                continue
                     logger.error(
                         f"[ingest_to_neo4j] {pass_label} produced 0 "
                         f"successes out of {len(pending_transcripts)} "

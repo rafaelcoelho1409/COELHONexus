@@ -31,6 +31,8 @@ from ..keys import (
     NEO4J_REL_ABOUT,
     NEO4J_REL_AUTHORED,
     NEO4J_REL_FROM,
+    PROJECT_LABEL,
+    SOURCE_LABEL,
 )
 
 
@@ -70,9 +72,17 @@ async def bootstrap_neo4j() -> None:
 
 # Paper upsert — MERGE by arxiv_id; sources / authors / concepts grafted
 # onto the same node so cross-source ingest collapses correctly.
+#
+# 2026-09-17: every node gets `:COELHONexus:RR` stamped on via `SET
+# n:{PROJECT_LABEL}:{SOURCE_LABEL}` — mirrors YCS's `:COELHONexus:YCS`
+# tagging (`domains/ycs/graph_builder/service.py`) so the shared Neo4j
+# instance can tell RR's nodes apart from any other domain's. Adding a
+# label is idempotent (Neo4j no-ops re-adding an existing label), so
+# this is safe on every re-MERGE, not just first-write.
 _UPSERT_PAPER_CYPHER = f"""
 MERGE (p:{NEO4J_LABEL_PAPER} {{id: $arxiv_id}})
-SET   p.title    = coalesce($title,    p.title),
+SET   p:{PROJECT_LABEL}:{SOURCE_LABEL},
+      p.title    = coalesce($title,    p.title),
       p.abstract = coalesce($abstract, p.abstract),
       p.published = coalesce(date($published), p.published),
       p.citations             = CASE WHEN $citations             > coalesce(p.citations, 0)             THEN $citations             ELSE coalesce(p.citations, 0)             END,
@@ -85,16 +95,19 @@ SET   p.title    = coalesce($title,    p.title),
 WITH p
 UNWIND $sources AS source_name
     MERGE (s:{NEO4J_LABEL_SOURCE} {{name: source_name}})
+    SET   s:{PROJECT_LABEL}:{SOURCE_LABEL}
     MERGE (p)-[:{NEO4J_REL_FROM}]->(s)
 WITH p
 UNWIND $authors AS author_name
     MERGE (a:{NEO4J_LABEL_AUTHOR} {{name: author_name}})
+    SET   a:{PROJECT_LABEL}:{SOURCE_LABEL}
     MERGE (a)-[:{NEO4J_REL_AUTHORED}]->(p)
 WITH p
 UNWIND $categories AS concept_name
     MERGE (c:{NEO4J_LABEL_CONCEPT} {{name: concept_name}})
+    SET   c:{PROJECT_LABEL}:{SOURCE_LABEL}
     MERGE (p)-[:{NEO4J_REL_ABOUT}]->(c)
-RETURN p.id AS paper_id
+RETURN DISTINCT p.id AS paper_id
 """
 
 
