@@ -110,3 +110,21 @@ def namespace_label(app: str, backend: str) -> str:
     """Human-readable label for the (app, backend) target — used in the
     response's `namespace` field. Empty when unsupported."""
     return APP_BACKENDS.get(app, {}).get(backend, AppNamespace(False)).label
+
+
+# Raw-DSL read-only safety guard tunables (`domain.py`'s
+# assert_cypher_readonly / parse_es_body / parse_qdrant_body).
+
+# Match a write-keyword as a WHOLE TOKEN (word boundaries) outside of
+# string literals. Matched in lowercase against a literal-stripped copy
+# of the query so a sneaky `"CREATE ..."` inside a string property doesn't
+# graph-projection procedures that mutate state.
+CYPHER_WRITE_KEYWORDS: tuple[str, ...] = (
+    "create", "merge", "delete", "set", "remove",
+    "drop", "load", "foreach", "detach",
+)
+
+ES_MAX_SIZE = 200
+
+QDRANT_READ_OPS: tuple[str, ...] = ("search", "scroll", "query_points", "count")
+QDRANT_MAX_LIMIT = 200

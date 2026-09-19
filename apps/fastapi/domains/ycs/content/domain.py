@@ -12,15 +12,16 @@ What lives here:
 """
 from __future__ import annotations
 
-from .params import BASE_ARGS, FETCH_MULTIPLIER_FILTERED
-from .patterns import STRING_FILTER_OP_PREFIXES
+import re
+
+from . import params, patterns
 
 
 def build_string_filter(field: str, value: str) -> str:
     """Translate a user-supplied string filter into a yt-dlp match-filter
     expression. Recognizes the operator prefixes from `patterns.py`; any
     other value defaults to a case-insensitive contains."""
-    if value.startswith(STRING_FILTER_OP_PREFIXES):
+    if value.startswith(patterns.STRING_FILTER_OP_PREFIXES):
         return f"{field}{value}"
     # whitespace in `value` doesn't break the shell-style yt-dlp parser.
     return f"{field}*='{value}'"
@@ -89,7 +90,7 @@ def effective_fetch_count(max_results: int, conditions: list[str]) -> int:
     any post-filter is set, so the final list still hits `max_results`
     after rejections."""
     return (
-        max_results * FETCH_MULTIPLIER_FILTERED if conditions else max_results
+        max_results * params.FETCH_MULTIPLIER_FILTERED if conditions else max_results
     )
 
 
@@ -149,7 +150,7 @@ def build_search_args(
         search_url = f"ytsearch{fetch_count}:{query}"
 
     args: list[str] = [
-        *BASE_ARGS,
+        *params.BASE_ARGS,
         "--flat-playlist",
         "--dump-single-json",
     ]
@@ -199,12 +200,11 @@ def resolve_channel_input(channel_input: str) -> str:
     s = (channel_input or "").strip()
     if not s:
         return s
-    import re as _re
     # 1. Bare UC ID
-    if _re.match(r"^UC[A-Za-z0-9_-]{22}$", s):
+    if re.match(r"^UC[A-Za-z0-9_-]{22}$", s):
         return f"https://www.youtube.com/playlist?list=UU{s[2:]}"
     # 2. URL with /channel/UC...
-    m = _re.search(r"channel/(UC[A-Za-z0-9_-]{22})", s)
+    m = re.search(r"channel/(UC[A-Za-z0-9_-]{22})", s)
     if m:
         return f"https://www.youtube.com/playlist?list=UU{m.group(1)[2:]}"
     # 3-5. URL containing @handle / /c/ / /user/ — pass through
@@ -223,7 +223,6 @@ def resolve_playlist_input(playlist_input: str) -> str:
     s = (playlist_input or "").strip()
     if not s:
         return s
-    import re as _re
     # Common playlist ID prefixes — see _PLAYLIST_ID_RE above.
     if _PLAYLIST_ID_RE.match(s):
         return f"https://www.youtube.com/playlist?list={s}"
@@ -231,7 +230,7 @@ def resolve_playlist_input(playlist_input: str) -> str:
     if "playlist?list=" in s or "/playlist/" in s:
         return s
     # `watch?v=X&list=Y` URL — extract the list= param and rebuild
-    m = _re.search(r"[?&]list=([A-Za-z0-9_-]+)", s)
+    m = re.search(r"[?&]list=([A-Za-z0-9_-]+)", s)
     if m:
         return f"https://www.youtube.com/playlist?list={m.group(1)}"
     return s
@@ -308,8 +307,6 @@ def pick_best_thumbnail(thumbnails: list[dict] | None) -> str:
     )
     return _absolutize_thumbnail_url((best or {}).get("url", "") or "")
 
-
-import re
 
 _PLAYLIST_ID_RE = re.compile(r"^(PL|UU|LL|RD|OL|FL|TL|EL)[A-Za-z0-9_-]{10,}")
 _CHANNEL_ID_RE  = re.compile(r"^UC[A-Za-z0-9_-]{22}$")

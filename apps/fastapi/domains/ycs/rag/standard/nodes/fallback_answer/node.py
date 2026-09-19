@@ -10,7 +10,7 @@ Produces a real `generation` from:
     rejected them as not directly relevant, but they remain useful
     as topical hints.
   - WEB SEARCH (2026-09-16): a best-effort external lookup via
-    `domains.ycs.rag.web_search.search_web` (Parallel's free keyless
+    `domains.ycs.rag.service.search_web` (Parallel's free keyless
     MCP endpoint) when the corpus has nothing — closes genuine corpus
     gaps (topics never covered by any indexed video) instead of
     relying on stale/absent parametric knowledge alone. Deliberately
@@ -33,14 +33,12 @@ import asyncio
 
 from langchain_core.documents import Document
 
-from domains.ycs.rag.llm_call import resilient_ainvoke
-from domains.ycs.rag.web_search import search_web
-from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
-from domains.ycs.runtime.observability import traced
+import domains
+from domains.ycs.runtime.observability.service import traced
 
-from ....domain import history_to_messages, strip_think_tags
-from ...state import YouTubeRAGState
-from .prompts import FALLBACK_PROMPT
+from .... import domain, service
+from ... import state
+from . import prompts
 
 
 # Tighter than `generate`'s 180s — soft-evidence prompts run shorter
@@ -125,7 +123,7 @@ def _related_citations(docs: list[Document]) -> list[dict]:
 
 
 @traced("rag.fallback_answer")
-async def fallback_answer(state: YouTubeRAGState, llm) -> dict:
+async def fallback_answer(state: state.YouTubeRAGState, llm) -> dict:
     """Produce a candid answer using soft evidence + history + general
     knowledge when retrieval yields no strict-relevant docs.
 
@@ -146,21 +144,21 @@ async def fallback_answer(state: YouTubeRAGState, llm) -> dict:
     # `web_search._SEARCH_TIMEOUT_S` (15s) independent of the
     # generation call's own 60s budget.
     web_context_text = _format_web_context(
-        await search_web(
+        await service.search_web(
             state["question"], session_id = state.get("thread_id"),
         ),
     )
 
-    chain = FALLBACK_PROMPT | llm
+    chain = prompts.FALLBACK_PROMPT | llm
     try:
-        _llm_set_node(node = "fallback_answer")
-        response = await resilient_ainvoke(
+        domains.ycs.runtime.llm_counter.service.set_node(node = "fallback_answer")
+        response = await service.resilient_ainvoke(
             chain,
             {
                 "question":      state["question"],
                 "soft_evidence": soft_evidence_text,
                 "web_context":   web_context_text,
-                "history":       history_to_messages(
+                "history":       domain.history_to_messages(
                     state.get("conversation_history"),
                 ),
             },
@@ -169,7 +167,7 @@ async def fallback_answer(state: YouTubeRAGState, llm) -> dict:
             max_attempts = 2,
         )
         return {
-            "generation": strip_think_tags(response.content),
+            "generation": domain.strip_think_tags(response.content),
             "citations":  related_citations,
             "grounded":   False,
         }

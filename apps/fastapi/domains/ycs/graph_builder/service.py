@@ -26,30 +26,9 @@ from langchain_experimental.graph_transformers import LLMGraphTransformer
 from langchain_neo4j import Neo4jGraph
 from rapidfuzz import fuzz
 
-from domains.ycs.embeddings import create_dense_embeddings
-from domains.ycs.runtime import llm_counter
-from domains.ycs.runtime.llm_counter import YCSLLMUsageCallback
+import domains
 
-from . import domain
-from .params import (
-    DEFAULT_BATCH_SIZE,
-    EMBED_COSINE_CUTOFF,
-    EXTRACT_CONCURRENCY,
-    EXTRACT_PROMPT_VERSION,
-    FUZZ_MERGE_CUTOFF,
-    GRAPH_BATCH_TIMEOUT_S,
-    MAX_CONSECUTIVE_INFRA_PASSES,
-    NEO4J_EXTRACT_SEM_KEY,
-    NEO4J_EXTRACT_SEM_LEASE_S,
-    PROJECT_LABEL,
-    RETRY_PASS_BACKOFF_S,
-    SCHEMA_DISCOVERY_SAMPLE_CHAR_CAP,
-    SCHEMA_DISCOVERY_SAMPLE_COUNT,
-    SOURCE_LABEL,
-    WRITE_TIMEOUT_S,
-)
-from .prompts import EXTRACTION_INSTRUCTIONS, SCHEMA_DISCOVERY_PROMPT
-from .schemas import SchemaDiscovery
+from . import domain, params, prompts, schemas
 
 
 async def _embed_ids_for_resolution(ids: list[str]) -> dict[str, list[float]]:
@@ -63,7 +42,7 @@ async def _embed_ids_for_resolution(ids: list[str]) -> dict[str, list[float]]:
     Now shares the SAME embedding-endpoint singleton as the main Qdrant
     path — the endpoint resolves its own model dynamically ("auto"), so
     there's no client-side way to pin a specific model per call anymore.
-    `EMBED_COSINE_CUTOFF` (0.85) was tuned against bge-m3's score
+    `params.EMBED_COSINE_CUTOFF` (0.85) was tuned against bge-m3's score
     distribution specifically and may need re-tuning if the endpoint's
     current pick scores entity-id similarity differently — flagged, not
     silently assumed fine.
@@ -77,7 +56,7 @@ async def _embed_ids_for_resolution(ids: list[str]) -> dict[str, list[float]]:
     if not ids:
         return {}
     try:
-        vecs = await create_dense_embeddings().aembed_documents(ids)
+        vecs = await domains.ycs.embeddings.service.create_dense_embeddings().aembed_documents(ids)
     except Exception as e:
         logger.warning(
             f"[ycs:graph:resolve] embedding endpoint call failed; falling "
@@ -126,7 +105,7 @@ def create_graph_transformer(llm: Any) -> LLMGraphTransformer:
         (incompatible with the unstructured path; we don't read those
         downstream anyway — graph_builder + resolver only use
         node.id + node.type + relationship.type)
-      - Keeps `additional_instructions` (our EXTRACTION_INSTRUCTIONS)
+      - Keeps `additional_instructions` (our prompts.EXTRACTION_INSTRUCTIONS)
         — the unstructured prompt still honors it via the system
         message append.
 
@@ -139,7 +118,7 @@ def create_graph_transformer(llm: Any) -> LLMGraphTransformer:
         # plain-text-prompt path. See docstring above for rationale.
         ignore_tool_usage = True,
         strict_mode = False,
-        additional_instructions = EXTRACTION_INSTRUCTIONS,
+        additional_instructions = prompts.EXTRACTION_INSTRUCTIONS,
     )
 
 
@@ -192,7 +171,7 @@ async def extract_and_store_graph(
     metadata_map: dict,
     llm: Any,
     neo4j_graph: Neo4jGraph,
-    batch_size: int = DEFAULT_BATCH_SIZE,
+    batch_size: int = params.DEFAULT_BATCH_SIZE,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
     run_resolution: bool = True,
     extract_id: str | None = None,
@@ -206,7 +185,7 @@ async def extract_and_store_graph(
 
       - `batch_size` > 1 is the pool width (back-compat: the agents
         endpoint documents it as "concurrent LLM calls"); `<= 1` means
-        "use EXTRACT_CONCURRENCY" — the old `=1` callers wanted
+        "use params.EXTRACT_CONCURRENCY" — the old `=1` callers wanted
         per-video PROGRESS granularity, which the streaming pool now
         provides at any width, so sequential execution is no longer the
         price of a granular progress bar.
@@ -245,20 +224,17 @@ async def extract_and_store_graph(
     # that predate this feature pass none, and stay silently unmetered
     # rather than erroring).
     if extract_id:
-        llm = llm.with_config(callbacks=[YCSLLMUsageCallback()])
+        llm = llm.with_config(
+            callbacks=[domains.ycs.runtime.llm_counter.service.YCSLLMUsageCallback()],
+        )
     transformer = create_graph_transformer(llm)
     concurrency = (
-        batch_size if batch_size and batch_size > 1 else EXTRACT_CONCURRENCY
+        batch_size if batch_size and batch_size > 1 else params.EXTRACT_CONCURRENCY
     )
     # Distributed slot — see _acquire_extract_slot's docstring. Closed
     # in the `finally:` below alongside the in-flight-task cleanup;
-    # unused (never acquired) when `documents` ends up empty. Deferred
-    # import: `pipeline_task.streaming` sits behind `pipeline_task`'s
-    # package `__init__` → `task.py` → `infra.celery` chain, which
-    # needs REDIS_HOST at import time — a module-level import here
-    # would drag that whole chain into graph_builder's own import path.
-    from domains.ycs.pipeline_task.streaming import build_redis_client
-    redis_client = build_redis_client()
+    # unused (never acquired) when `documents` ends up empty.
+    redis_client = domains.ycs.pipeline_task.service.build_redis_client()
     total_nodes = 0
     total_relationships = 0
     total_processed = 0
@@ -267,7 +243,7 @@ async def extract_and_store_graph(
     # Skip-on-re-run, fingerprint-aware (2026-09-14, DD manifest_hash
     # pattern adapted): a video skips only when its Document carries a
     # matching `transcript_sha` AND `extract_prompt_version`. A
-    # transcript edit or a prompt bump (EXTRACT_PROMPT_VERSION) makes
+    # transcript edit or a prompt bump (params.EXTRACT_PROMPT_VERSION) makes
     # the tag stale → re-extract instead of trusting outdated entities.
     # Stale Documents are wiped first (scoped delete) so the re-extract
     # can't duplicate nodes.
@@ -280,13 +256,13 @@ async def extract_and_store_graph(
         if vid and content.strip():
             current_fingerprints[vid] = (
                 hashlib.sha256(content.encode("utf-8")).hexdigest()[:16],
-                EXTRACT_PROMPT_VERSION,
+                params.EXTRACT_PROMPT_VERSION,
             )
     already_processed: set[str] = set()
     stale_ids: list[str] = []
     try:
         result = neo4j_graph.query(
-            f"MATCH (d:Document:{SOURCE_LABEL}) WHERE d.video_id IS NOT NULL "
+            f"MATCH (d:Document:{params.SOURCE_LABEL}) WHERE d.video_id IS NOT NULL "
             "RETURN d.video_id AS vid, d.transcript_sha AS sha, "
             "       d.extract_prompt_version AS ver"
         )
@@ -330,7 +306,7 @@ async def extract_and_store_graph(
         meta = metadata_map.get(vid, {})
         if not isinstance(meta, dict):
             meta = {}
-        sha, ver = current_fingerprints.get(vid, ("", EXTRACT_PROMPT_VERSION))
+        sha, ver = current_fingerprints.get(vid, ("", params.EXTRACT_PROMPT_VERSION))
         doc_metadata: dict[str, Any] = {
             "video_id": vid,
             "title":    meta.get("title", ""),
@@ -422,23 +398,23 @@ async def extract_and_store_graph(
     async def _convert(doc: Document):
         async with sem:
             # 2026-09-14: the GLOBAL slot's limit must be the configured
-            # EXTRACT_CONCURRENCY, NOT the local `concurrency` above —
+            # params.EXTRACT_CONCURRENCY, NOT the local `concurrency` above —
             # that one is batch_size-derived and varies per chunk (a
             # 2-video leftover chunk computes concurrency=2). Passing
             # it here meant two chunks running at once would enforce
             # TWO DIFFERENT ceilings on the SAME shared Redis semaphore
             # — whichever chunk was smaller silently capped the whole
             # run's true concurrency to its own size, independent of
-            # what EXTRACT_CONCURRENCY was actually configured to
+            # what params.EXTRACT_CONCURRENCY was actually configured to
             # (observed live: a 2-video leftover chunk capped the run
-            # to 2 concurrent slots even with EXTRACT_CONCURRENCY=3).
+            # to 2 concurrent slots even with params.EXTRACT_CONCURRENCY=3).
             async with _distributed_extract_slot(
-                redis_client, NEO4J_EXTRACT_SEM_KEY, EXTRACT_CONCURRENCY,
-                NEO4J_EXTRACT_SEM_LEASE_S,
+                redis_client, params.NEO4J_EXTRACT_SEM_KEY, params.EXTRACT_CONCURRENCY,
+                params.NEO4J_EXTRACT_SEM_LEASE_S,
             ):
                 return await asyncio.wait_for(
                     transformer.aconvert_to_graph_documents([doc]),
-                    timeout = GRAPH_BATCH_TIMEOUT_S,
+                    timeout = params.GRAPH_BATCH_TIMEOUT_S,
                 )
 
     async def _extract_one(doc: Document) -> tuple[str, Any, str | None]:
@@ -447,7 +423,9 @@ async def extract_and_store_graph(
         loop keeps video attribution in completion order."""
         vid = doc.metadata.get("video_id", "") if isinstance(doc.metadata, dict) else ""
         if extract_id:
-            llm_counter.set_context(extract_id = extract_id, video_id = vid)
+            domains.ycs.runtime.llm_counter.service.set_context(
+                extract_id = extract_id, video_id = vid,
+            )
         try:
             # Watchdog: hard wall-clock ceiling per transcript. The
             # inner request stack already has per-deployment timeouts +
@@ -474,7 +452,7 @@ async def extract_and_store_graph(
                 # so the silent-zero guard's diagnostic isn't empty.
                 err = (
                     f"TimeoutError: extraction exceeded the "
-                    f"{GRAPH_BATCH_TIMEOUT_S:.0f}s watchdog"
+                    f"{params.GRAPH_BATCH_TIMEOUT_S:.0f}s watchdog"
                 )
             else:
                 err = f"{type(e).__name__}: {str(e)[:400]}"
@@ -607,7 +585,7 @@ async def extract_and_store_graph(
                             include_source = True,
                             baseEntityLabel = True,
                         ),
-                        timeout = WRITE_TIMEOUT_S,
+                        timeout = params.WRITE_TIMEOUT_S,
                     )
                 except Exception as write_err:
                     # 2026-09-14: widened 200->500 — the 200-char cut
@@ -655,19 +633,19 @@ async def extract_and_store_graph(
                 # carries no "id" — video_id is the reliable property
                 # already used elsewhere in this file for this exact
                 # video-scoped-query purpose. See params.py's
-                # PROJECT_LABEL/SOURCE_LABEL comment for why.
+                # params.PROJECT_LABEL/params.SOURCE_LABEL comment for why.
                 try:
                     await asyncio.wait_for(
                         asyncio.to_thread(
                             neo4j_graph.query,
                             f"MATCH (d:Document {{video_id: $video_id}}) "
-                            f"SET d:{PROJECT_LABEL}:{SOURCE_LABEL} "
+                            f"SET d:{params.PROJECT_LABEL}:{params.SOURCE_LABEL} "
                             "WITH d "
                             "MATCH (d)-[:MENTIONS]->(e:__Entity__) "
-                            f"SET e:{PROJECT_LABEL}:{SOURCE_LABEL}",
+                            f"SET e:{params.PROJECT_LABEL}:{params.SOURCE_LABEL}",
                             params = {"video_id": vid},
                         ),
-                        timeout = WRITE_TIMEOUT_S,
+                        timeout = params.WRITE_TIMEOUT_S,
                     )
                 except Exception as tag_err:
                     logger.warning(
@@ -768,7 +746,7 @@ async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
 
       1. Lowercase + trim every id.
       2. Cypher MERGE exact duplicates per `(label, id)`.
-      3. rapidfuzz fuzzy merge at `FUZZ_MERGE_CUTOFF` (75) per label,
+      3. rapidfuzz fuzzy merge at `params.FUZZ_MERGE_CUTOFF` (75) per label,
          skipping NUMERIC_LABELS_SKIP where lexical similarity ≠ semantic
          identity.
 
@@ -796,7 +774,7 @@ async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     # the corruption was created in the first place). Safe to re-run.
     try:
         rows = neo4j_graph.query(
-            f"MATCH (n:__Entity__:{SOURCE_LABEL}) "
+            f"MATCH (n:__Entity__:{params.SOURCE_LABEL}) "
             "WHERE valueType(n.id) CONTAINS 'LIST' "
             "RETURN elementId(n) AS nid, n.id AS raw, "
             "       [l IN labels(n) WHERE l <> '__Entity__'] AS lbls"
@@ -820,9 +798,9 @@ async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
             for cand in candidates:
                 try:
                     res = neo4j_graph.query(
-                        f"MATCH (broken:__Entity__:{SOURCE_LABEL}) "
+                        f"MATCH (broken:__Entity__:{params.SOURCE_LABEL}) "
                         "WHERE elementId(broken) = $nid "
-                        f"MATCH (twin:__Entity__:{SOURCE_LABEL}) "
+                        f"MATCH (twin:__Entity__:{params.SOURCE_LABEL}) "
                         "WHERE twin <> broken AND twin.id = $cand "
                         "AND any(L IN labels(twin) "
                         "        WHERE L IN $lbls AND L <> '__Entity__') "
@@ -875,7 +853,7 @@ async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     # Python-side normalize (vs Cypher trim()) — trim() blows up on StringArray ids from LLMGraphTransformer.
     try:
         rows = neo4j_graph.query(
-            f"MATCH (n:__Entity__:{SOURCE_LABEL}) WHERE n.id IS NOT NULL "
+            f"MATCH (n:__Entity__:{params.SOURCE_LABEL}) WHERE n.id IS NOT NULL "
             "RETURN elementId(n) AS nid, n.id AS raw_id"
         )
         updates = []
@@ -904,7 +882,7 @@ async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     # Exact merge (same label + same normalized id).
     try:
         result = neo4j_graph.query(
-            f"MATCH (n1:__Entity__:{SOURCE_LABEL}), (n2:__Entity__:{SOURCE_LABEL}) "
+            f"MATCH (n1:__Entity__:{params.SOURCE_LABEL}), (n2:__Entity__:{params.SOURCE_LABEL}) "
             "WHERE n1 <> n2 AND n1.id = n2.id "
             "AND any(label IN labels(n1) WHERE label IN labels(n2) AND label <> '__Entity__') "
             "WITH n1, collect(DISTINCT n2) AS duplicates "
@@ -920,9 +898,9 @@ async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
 
     # Fuzzy merge with semantic gate (per label, skip numeric).
     # Pipeline per label:
-    #   a) fuzz.ratio pre-filter at FUZZ_MERGE_CUTOFF (75) — fast,
+    #   a) fuzz.ratio pre-filter at params.FUZZ_MERGE_CUTOFF (75) — fast,
     #      kills the obviously-different pairs.
-    #   b) NIM BGE-M3 embedding cosine gate at EMBED_COSINE_CUTOFF
+    #   b) NIM BGE-M3 embedding cosine gate at params.EMBED_COSINE_CUTOFF
     #      (0.85) — catches false-positive fuzz matches like
     #      `Astronomia`↔`Gastronomia` (85.7% fuzz but cos 0.597).
     #      Embeddings are batched once per label so we make at most
@@ -936,7 +914,7 @@ async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
     # introducing semantic confusions.
     try:
         entities = neo4j_graph.query(
-            f"MATCH (n:__Entity__:{SOURCE_LABEL}) "
+            f"MATCH (n:__Entity__:{params.SOURCE_LABEL}) "
             "WHERE n.id IS NOT NULL AND n.id <> '' "
             "UNWIND labels(n) AS label "
             "WITH label, n.id AS id "
@@ -967,8 +945,8 @@ async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
                         canonical, duplicate = domain.pick_canonical(id1, id2)
                         try:
                             neo4j_graph.query(
-                                f"MATCH (n1:`{label}`:{SOURCE_LABEL} {{id: $canonical}}), "
-                                f"      (n2:`{label}`:{SOURCE_LABEL} {{id: $duplicate}}) "
+                                f"MATCH (n1:`{label}`:{params.SOURCE_LABEL} {{id: $canonical}}), "
+                                f"      (n2:`{label}`:{params.SOURCE_LABEL} {{id: $duplicate}}) "
                                 "CALL apoc.refactor.mergeNodes([n1, n2], "
                                 "  {properties: 'discard', mergeRels: true}) "
                                 "YIELD node "
@@ -990,7 +968,7 @@ async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
                         continue
                     # (a) fuzz pre-filter
                     score = fuzz.ratio(id1, id2)
-                    if not (FUZZ_MERGE_CUTOFF <= score < 100):
+                    if not (params.FUZZ_MERGE_CUTOFF <= score < 100):
                         continue
                     # (b) semantic gate
                     vec_a = embeddings.get(id1, [])
@@ -1000,14 +978,14 @@ async def resolve_entities(neo4j_graph: Neo4jGraph) -> int:
                         logger.info(
                             f"[ycs:graph:resolve] semantic-skip "
                             f"'{id1}' ↔ '{id2}' fuzz={score}% "
-                            f"cos={cosine:.3f}<{EMBED_COSINE_CUTOFF}"
+                            f"cos={cosine:.3f}<{params.EMBED_COSINE_CUTOFF}"
                         )
                         continue
                     canonical, duplicate = domain.pick_canonical(id1, id2)
                     try:
                         neo4j_graph.query(
-                            f"MATCH (n1:`{label}`:{SOURCE_LABEL} {{id: $canonical}}), "
-                            f"      (n2:`{label}`:{SOURCE_LABEL} {{id: $duplicate}}) "
+                            f"MATCH (n1:`{label}`:{params.SOURCE_LABEL} {{id: $canonical}}), "
+                            f"      (n2:`{label}`:{params.SOURCE_LABEL} {{id: $duplicate}}) "
                             "CALL apoc.refactor.mergeNodes([n1, n2], "
                             "  {properties: 'discard', mergeRels: true}) "
                             "YIELD node "
@@ -1037,13 +1015,13 @@ async def discover_schema(
 ) -> dict:
     """LLM-suggested allowed_nodes/allowed_relationships from sample transcripts (AutoSchemaKG-style, optional)."""
     samples = "\n\n---\n\n".join(
-        sample_transcripts[:SCHEMA_DISCOVERY_SAMPLE_COUNT]
+        sample_transcripts[:params.SCHEMA_DISCOVERY_SAMPLE_COUNT]
     )
-    chain = SCHEMA_DISCOVERY_PROMPT | llm.with_structured_output(
-        SchemaDiscovery, method = "function_calling",
+    chain = prompts.SCHEMA_DISCOVERY_PROMPT | llm.with_structured_output(
+        schemas.SchemaDiscovery, method = "function_calling",
     )
     result = await chain.ainvoke(
-        {"samples": samples[:SCHEMA_DISCOVERY_SAMPLE_CHAR_CAP]},
+        {"samples": samples[:params.SCHEMA_DISCOVERY_SAMPLE_CHAR_CAP]},
     )
     return {
         "allowed_nodes":          result.allowed_nodes,
@@ -1054,19 +1032,19 @@ async def discover_schema(
 
 
 async def get_graph_stats(neo4j_graph: Neo4jGraph) -> dict:
-    """Cypher counts grouped by label / type. Scoped to SOURCE_LABEL —
+    """Cypher counts grouped by label / type. Scoped to params.SOURCE_LABEL —
     this is surfaced as YCS's own graph-size stats (api/v1/ycs/agents),
     not a whole-instance admin view, so it must not count a future
     second project's nodes sharing this same Neo4j CE instance."""
     nodes_result = neo4j_graph.query(
-        f"MATCH (n:{SOURCE_LABEL}) "
+        f"MATCH (n:{params.SOURCE_LABEL}) "
         "UNWIND labels(n) AS label "
         "RETURN label, count(*) AS count "
         "ORDER BY count DESC"
     )
     nodes_by_label = {row["label"]: row["count"] for row in nodes_result}
     rels_result = neo4j_graph.query(
-        f"MATCH (a:{SOURCE_LABEL})-[r]->(b:{SOURCE_LABEL}) "
+        f"MATCH (a:{params.SOURCE_LABEL})-[r]->(b:{params.SOURCE_LABEL}) "
         "RETURN type(r) AS type, count(*) AS count "
         "ORDER BY count DESC"
     )
@@ -1085,13 +1063,13 @@ def build_video_metadata_graph(
 ) -> None:
     """`MERGE Video {id}` + `MERGE Channel {id}` + `(Video)-[:BELONGS_TO]->(Channel)`.
     No LLM call — pure metadata pass before the entity extraction.
-    Video/Channel carry PROJECT_LABEL/SOURCE_LABEL from creation (see
+    Video/Channel carry params.PROJECT_LABEL/params.SOURCE_LABEL from creation (see
     params.py) — unlike Document/__Entity__, these are only ever MERGEd
     here, so the tag can go straight into the pattern instead of a
     follow-up query."""
     for video in videos:
         neo4j_graph.query(
-            f"MERGE (v:Video:{PROJECT_LABEL}:{SOURCE_LABEL} {{id: $id}}) "
+            f"MERGE (v:Video:{params.PROJECT_LABEL}:{params.SOURCE_LABEL} {{id: $id}}) "
             "SET v.title = $title, "
             "    v.upload_date = $upload_date, "
             "    v.webpage_url = $webpage_url",
@@ -1106,10 +1084,10 @@ def build_video_metadata_graph(
         channel_id = video.get("channel_id", "")
         if channel and channel_id:
             neo4j_graph.query(
-                f"MERGE (c:Channel:{PROJECT_LABEL}:{SOURCE_LABEL} {{id: $channel_id}}) "
+                f"MERGE (c:Channel:{params.PROJECT_LABEL}:{params.SOURCE_LABEL} {{id: $channel_id}}) "
                 "SET c.name = $channel_name "
                 "WITH c "
-                f"MATCH (v:Video:{SOURCE_LABEL} {{id: $video_id}}) "
+                f"MATCH (v:Video:{params.SOURCE_LABEL} {{id: $video_id}}) "
                 "MERGE (v)-[:BELONGS_TO]->(c)",
                 params = {
                     "channel_id":   channel_id,
@@ -1166,7 +1144,7 @@ def delete_documents_for_videos(
     candidate_ids: list[str] = []
     try:
         cand = neo4j_graph.query(
-            f"MATCH (d:Document:{SOURCE_LABEL})-[:MENTIONS]->(e:__Entity__:{SOURCE_LABEL}) "
+            f"MATCH (d:Document:{params.SOURCE_LABEL})-[:MENTIONS]->(e:__Entity__:{params.SOURCE_LABEL}) "
             "WHERE d.video_id IN $vids OR d.parent_video_id IN $vids "
             "RETURN collect(DISTINCT elementId(e)) AS ids",
             params = {"vids": list(video_ids)},
@@ -1180,7 +1158,7 @@ def delete_documents_for_videos(
 
     try:
         doc_result = neo4j_graph.query(
-            f"MATCH (d:Document:{SOURCE_LABEL}) "
+            f"MATCH (d:Document:{params.SOURCE_LABEL}) "
             "WHERE d.video_id IN $vids OR d.parent_video_id IN $vids "
             "WITH d, count(d) AS _ "
             "DETACH DELETE d "
@@ -1199,7 +1177,7 @@ def delete_documents_for_videos(
         )
     try:
         vid_result = neo4j_graph.query(
-            f"MATCH (v:Video:{SOURCE_LABEL}) WHERE v.id IN $vids "
+            f"MATCH (v:Video:{params.SOURCE_LABEL}) WHERE v.id IN $vids "
             "DETACH DELETE v "
             "RETURN count(*) AS deleted",
             params = {"vids": list(video_ids)},
@@ -1223,7 +1201,7 @@ def delete_documents_for_videos(
     if candidate_ids:
         try:
             sweep = neo4j_graph.query(
-                f"MATCH (e:__Entity__:{SOURCE_LABEL}) "
+                f"MATCH (e:__Entity__:{params.SOURCE_LABEL}) "
                 "WHERE elementId(e) IN $ids "
                 "AND NOT EXISTS { MATCH (:Document)-[:MENTIONS]->(e) } "
                 "DETACH DELETE e "

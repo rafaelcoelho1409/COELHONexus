@@ -12,8 +12,7 @@ import time
 
 import redis.asyncio as redis_aio
 
-from .keys import cache_key
-from .params import CACHE_PREFIX, DEFAULT_TTL_S
+from . import keys, params
 
 
 logger = logging.getLogger(__name__)
@@ -26,7 +25,7 @@ async def get_cached_response(
 ) -> dict | None:
     """Return the cached payload or None. Best-effort — Redis hiccups
     surface as a cache miss, never a 5xx for the caller."""
-    key = cache_key(question, mode)
+    key = keys.cache_key(question, mode)
     try:
         raw = await redis.get(key)
     except Exception as e:
@@ -44,12 +43,12 @@ async def cache_response(
     redis: redis_aio.Redis,
     question: str,
     response: dict,
-    ttl: int = DEFAULT_TTL_S,
+    ttl: int = params.DEFAULT_TTL_S,
     mode: str | None = None,
 ) -> None:
     """Persist the response with TTL. Best-effort. `_cached_at` is
     stamped on the payload so the consumer can surface cache age."""
-    key = cache_key(question, mode)
+    key = keys.cache_key(question, mode)
     payload = {**response, "_cached_at": time.time()}
     try:
         await redis.set(key, json.dumps(payload, ensure_ascii = False), ex = ttl)
@@ -66,11 +65,11 @@ async def invalidate_cache(
     cleared = 0
     try:
         if question is not None:
-            key = cache_key(question)
+            key = keys.cache_key(question)
             n = await redis.delete(key)
             cleared = int(n or 0)
         else:
-            async for key in redis.scan_iter(match = f"{CACHE_PREFIX}*"):
+            async for key in redis.scan_iter(match = f"{params.CACHE_PREFIX}*"):
                 try:
                     await redis.delete(key)
                     cleared += 1

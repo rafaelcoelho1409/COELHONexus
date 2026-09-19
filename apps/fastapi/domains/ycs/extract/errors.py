@@ -5,10 +5,10 @@ modules share the same subprocess wrapper shape) — only the
 input-normalization domain errors are local."""
 from __future__ import annotations
 
-from domains.ycs.content.errors import YtDlpError
+from .. import content
 
 
-class ExtractError(YtDlpError):
+class ExtractError(content.errors.YtDlpError):
     """Base — anything that surfaces from a metadata-extraction call."""
 
 

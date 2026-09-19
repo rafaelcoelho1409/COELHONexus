@@ -10,64 +10,9 @@ URL/ID normalization + result projection); `service.py` is the async
 shell around `asyncio.create_subprocess_exec(...)`. Persistence is NOT
 done here — Wave 4 Celery tasks wrap these calls + write Elasticsearch.
 
-Public:
-  YtDlpExtractor                — service class
-  get_extractor()               — singleton accessor
-  VideoMetadata / PlaylistResult / ChannelResult  — response shapes
-  VideosRequest / ChannelRequest / PlaylistRequest — request shapes
-  Invalid*IdError                — exceptions for caller translation"""
-from .domain import (
-    aggregate_timeout_s,
-    build_channel_args,
-    build_playlist_args,
-    build_video_args,
-    normalize_channel_id,
-    normalize_full_video,
-    normalize_playlist_id,
-    normalize_video_id,
-    normalize_video_ids,
-)
-from .errors import (
-    ExtractError,
-    InvalidChannelIdError,
-    InvalidPlaylistIdError,
-    InvalidVideoIdError,
-)
-from .schemas import (
-    ChannelPipelineRequest,
-    ChannelRequest,
-    ChannelResult,
-    PlaylistPipelineRequest,
-    PlaylistRequest,
-    PlaylistResult,
-    VideoMetadata,
-    VideosRequest,
-)
-from .service import YtDlpExtractor, get_extractor
+`task.py` is excluded from this eager chain (§8 Exception 1 —
+`from infra.celery import app` at module level); reach it via a direct
+`from domains.ycs.extract.task import extract_videos`."""
+from __future__ import annotations
 
-
-__all__ = [
-    "ChannelPipelineRequest",
-    "ChannelRequest",
-    "ChannelResult",
-    "ExtractError",
-    "InvalidChannelIdError",
-    "InvalidPlaylistIdError",
-    "InvalidVideoIdError",
-    "PlaylistPipelineRequest",
-    "PlaylistRequest",
-    "PlaylistResult",
-    "VideoMetadata",
-    "VideosRequest",
-    "YtDlpExtractor",
-    "aggregate_timeout_s",
-    "build_channel_args",
-    "build_playlist_args",
-    "build_video_args",
-    "get_extractor",
-    "normalize_channel_id",
-    "normalize_full_video",
-    "normalize_playlist_id",
-    "normalize_video_id",
-    "normalize_video_ids",
-]
+from . import domain, errors, params, patterns, schemas, service

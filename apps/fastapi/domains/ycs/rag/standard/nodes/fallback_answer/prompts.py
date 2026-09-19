@@ -41,7 +41,7 @@ boundary" (answer) from "outside boundary" (decline) instead of
 silently emitting an empty response.
 
 2026-09-16 v3 — WEB SEARCH slot. `{web_context}` (from `domains.ycs.
-rag.web_search.search_web`, Parallel's free MCP endpoint) adds a 4th
+rag.service.search_web`, Parallel's free MCP endpoint) adds a 4th
 knowledge source for genuine corpus gaps — topics the indexed videos
 never covered at all, where soft evidence has nothing useful to
 paraphrase and parametric knowledge alone risks staleness. Same

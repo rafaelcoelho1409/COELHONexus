@@ -13,7 +13,7 @@ import re
 import unicodedata
 from typing import Any, Sequence
 
-from .params import EMBED_COSINE_CUTOFF, NUMERIC_LABELS_SKIP
+from . import params
 
 
 # Pre-compiled regex for collapsing internal whitespace (multiple
@@ -36,7 +36,7 @@ def pick_canonical(name_a: str, name_b: str) -> tuple[str, str]:
 def should_skip_fuzzy_label(label: str) -> bool:
     """True for labels whose IDs are numerically- or temporally-distinct
     even when lexically similar (e.g. "$100,000" vs "$1,000,000").py:L230-231`)."""
-    return label in NUMERIC_LABELS_SKIP
+    return label in params.NUMERIC_LABELS_SKIP
 
 
 def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
@@ -59,7 +59,7 @@ def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
 
 
 def should_merge_by_cosine(
-    cosine: float, cutoff: float = EMBED_COSINE_CUTOFF,
+    cosine: float, cutoff: float = params.EMBED_COSINE_CUTOFF,
 ) -> bool:
     """Semantic merge gate — pass iff the cosine clears the empirical
     `EMBED_COSINE_CUTOFF` (default 0.85). Pulled out as a named decision

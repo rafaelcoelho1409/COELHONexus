@@ -8,7 +8,7 @@ canonical `db.*` semconv attributes plus a small set of YCS-specific
 labels (collection / index / channel_filter_count).
 
 Usage:
-    from domains.ycs.runtime.observability import qdrant_search_span
+    from domains.ycs.runtime.observability.spans import qdrant_search_span
     with qdrant_search_span(collection="...", top_k=10, channel_filter_count=1):
         results = await self.qdrant.query_points(...)
 

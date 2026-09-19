@@ -17,6 +17,8 @@ from typing import Any
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
+from . import params
+
 
 logger = logging.getLogger(__name__)
 
@@ -393,10 +395,9 @@ def classify_error(error_msg: str) -> str:
 
     Centralized here so batch retry logic and unit tests use the same
     rules."""
-    from .params import PERMANENT_ERRORS, RETRYABLE_ERRORS
     error_lower = error_msg.lower()
-    if any(p in error_lower for p in PERMANENT_ERRORS):
+    if any(p in error_lower for p in params.PERMANENT_ERRORS):
         return "permanent"
-    if any(r in error_lower for r in RETRYABLE_ERRORS):
+    if any(r in error_lower for r in params.RETRYABLE_ERRORS):
         return "retryable"
     return "unknown"

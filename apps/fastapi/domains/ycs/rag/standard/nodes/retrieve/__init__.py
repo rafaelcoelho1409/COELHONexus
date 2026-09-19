@@ -1,4 +1,3 @@
-from .node import retrieve
+from __future__ import annotations
 
-
-__all__ = ["retrieve"]
+from . import node

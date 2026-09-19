@@ -1,4 +1,3 @@
-from .node import run_standard_pipeline
+from __future__ import annotations
 
-
-__all__ = ["run_standard_pipeline"]
+from . import node

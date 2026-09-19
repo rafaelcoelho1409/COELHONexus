@@ -1,5 +1,3 @@
-from .node import rewrite_query
-from .prompts import REWRITE_PROMPT, REWRITE_PROMPT_VERSION
+from __future__ import annotations
 
-
-__all__ = ["REWRITE_PROMPT", "REWRITE_PROMPT_VERSION", "rewrite_query"]
+from . import node, prompts

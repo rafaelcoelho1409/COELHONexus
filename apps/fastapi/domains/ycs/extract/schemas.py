@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from domains.ycs.content.schemas import NonEmptyStr
+from .. import content
+
+
+NonEmptyStr = content.schemas.NonEmptyStr
 
 
 class VideosRequest(BaseModel):

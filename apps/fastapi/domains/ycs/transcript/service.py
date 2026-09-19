@@ -44,45 +44,10 @@ import httpx
 from elasticsearch import AsyncElasticsearch
 from playwright.async_api import async_playwright
 
-from domains.ycs.es_index import index_transcriptions_to_elasticsearch
+import domains
 from infra.elasticsearch import INDEX_TRANSCRIPTIONS
 
-from .domain import (
-    _close_stale_cdp_targets,
-    CaptionTrack,
-    _get_cdp_websocket_url,
-    _parse_transcript,
-    _select_best_track,
-    build_get_panel_params,
-    build_partition_texts,
-    parse_get_panel_segments,
-    parse_get_transcript_segments,
-    split_segments_by_gap,
-)
-from .params import (
-    BLOCK_PATTERNS,
-    BLOCK_RESOURCE_TYPES,
-    BROWSER_REFRESH_INTERVAL,
-    CDP_HEADED,
-    CONNECT_TIMEOUT_S,
-    CONTEXT_POOL_SIZE,
-    DEFAULT_CHUNK_SIZE,
-    INITIAL_RETRY_WAIT_S,
-    MAX_CONCURRENT,
-    MAX_RETRIES,
-    NAVIGATION_TIMEOUT_MS,
-    PERMANENT_ERRORS,
-    POT_CACHE_SLACK_S,
-    POT_PROVIDER_URL,
-    POT_REQUEST_TIMEOUT_S,
-    RETRY_LIMIT,
-    RETRYABLE_ERRORS,
-    SPLIT_OVERLAP_WORDS,
-    SPLIT_SEARCH_WINDOW_RATIO,
-    SPLIT_TARGET_PARTITION_S,
-    SPLIT_THRESHOLD_S,
-    TIMEOUT_MS,
-)
+from . import domain, params
 
 
 log = logging.getLogger("uvicorn.error")
@@ -91,11 +56,11 @@ log = logging.getLogger("uvicorn.error")
 # Page-level helpers (helpers.py:L824-1145)
 async def _setup_routes(page) -> None:
     """Set up aggressive resource blocking."""
-    for pattern in BLOCK_PATTERNS:
+    for pattern in params.BLOCK_PATTERNS:
         await page.route(pattern, lambda r: r.abort())
 
     async def block_by_type(route):
-        if route.request.resource_type in BLOCK_RESOURCE_TYPES:
+        if route.request.resource_type in params.BLOCK_RESOURCE_TYPES:
             await route.abort()
         else:
             await route.continue_()
@@ -239,7 +204,7 @@ async def _fetch_via_get_panel(page, video_id: str) -> list[dict]:
     INNERTUBE_CONTEXT, cookies and origin. ~250 ms; no DOM interaction;
     works on blank/unhydrated pages. Raises ValueError on HTTP error,
     error payload, or empty segment list."""
-    params = build_get_panel_params(video_id)
+    panel_params = domain.build_get_panel_params(video_id)
     result = await page.evaluate(
         """async (params) => {
             try {
@@ -263,11 +228,11 @@ async def _fetch_via_get_panel(page, video_id: str) -> list[dict]:
                 return { __err: String((e && e.message) || e) };
             }
         }""",
-        params,
+        panel_params,
     )
     if isinstance(result, dict) and result.get("__err"):
         raise ValueError(f"get_panel: {result['__err']}")
-    segments = parse_get_panel_segments(result)
+    segments = domain.parse_get_panel_segments(result)
     if not segments:
         raise ValueError("get_panel: no segments in response")
     return segments
@@ -315,7 +280,7 @@ async def _fetch_via_get_transcript(page) -> list[dict]:
     )
     if isinstance(result, dict) and result.get("__err"):
         raise ValueError(f"get_transcript: {result['__err']}")
-    segments = parse_get_transcript_segments(result)
+    segments = domain.parse_get_transcript_segments(result)
     if not segments:
         raise ValueError("get_transcript: no segments in response")
     return segments
@@ -323,7 +288,7 @@ async def _fetch_via_get_transcript(page) -> list[dict]:
 
 # PoT token cache — one entry per visitorData (the WEB-client content
 # binding for caption/timedtext requests). Tokens live ~6h; we re-mint
-# POT_CACHE_SLACK_S early. Module-level on purpose: the Celery worker
+# params.POT_CACHE_SLACK_S early. Module-level on purpose: the Celery worker
 # processes share one event loop per task, and the binding is stable
 # across videos within a browser session.
 _pot_cache: dict[str, tuple[str, float]] = {}
@@ -361,11 +326,11 @@ async def _get_caption_po_token(page) -> str | None:
             log.info("[transcript-service] no visitorData on page; pot skipped")
             return None
         cached = _pot_cache.get(visitor_data)
-        if cached and cached[1] - POT_CACHE_SLACK_S > time.time():
+        if cached and cached[1] - params.POT_CACHE_SLACK_S > time.time():
             return cached[0]
-        async with httpx.AsyncClient(timeout = POT_REQUEST_TIMEOUT_S) as client:
+        async with httpx.AsyncClient(timeout = params.POT_REQUEST_TIMEOUT_S) as client:
             resp = await client.post(
-                f"{POT_PROVIDER_URL}/get_pot",
+                f"{params.POT_PROVIDER_URL}/get_pot",
                 json = {"content_binding": visitor_data},
             )
             resp.raise_for_status()
@@ -699,12 +664,12 @@ class PlaywrightTranscriptService:
     def __init__(
         self,
         cdp_url:                  str | None = None,
-        max_concurrent:           int        = MAX_CONCURRENT,
+        max_concurrent:           int        = params.MAX_CONCURRENT,
         context_pool_size:        int | None = None,
-        timeout_ms:               int        = TIMEOUT_MS,
-        navigation_timeout_ms:    int        = NAVIGATION_TIMEOUT_MS,
-        browser_refresh_interval: int        = BROWSER_REFRESH_INTERVAL,
-        max_retries:              int        = MAX_RETRIES,
+        timeout_ms:               int        = params.TIMEOUT_MS,
+        navigation_timeout_ms:    int        = params.NAVIGATION_TIMEOUT_MS,
+        browser_refresh_interval: int        = params.BROWSER_REFRESH_INTERVAL,
+        max_retries:              int        = params.MAX_RETRIES,
     ) -> None:
         self._cdp_endpoint = cdp_url
         self.max_concurrent = max_concurrent
@@ -740,14 +705,14 @@ class PlaywrightTranscriptService:
         if self._initialized:
             return
         # YouTube blocks headless for captions extraction → always HEADED
-        cdp_endpoint = self._cdp_endpoint or CDP_HEADED
+        cdp_endpoint = self._cdp_endpoint or params.CDP_HEADED
         # Sweep stale service-worker / dedicated-worker targets left
         # over from a previous run BEFORE attaching — otherwise the
         # Playwright driver crashes in `_onAttachedToTarget`. See
         # `domain._close_stale_cdp_targets` for the full story.
-        await asyncio.to_thread(_close_stale_cdp_targets, cdp_endpoint)
+        await asyncio.to_thread(domain._close_stale_cdp_targets, cdp_endpoint)
         self._cdp_url = await asyncio.to_thread(
-            _get_cdp_websocket_url, cdp_endpoint,
+            domain._get_cdp_websocket_url, cdp_endpoint,
         )
         log.info(
             f"[transcript-service] Initializing with CDP: {self._cdp_url[:60]}...",
@@ -800,14 +765,14 @@ class PlaywrightTranscriptService:
 
     async def _refresh_browser(
         self,
-        max_retries:  int   = RETRY_LIMIT,
-        initial_wait: float = INITIAL_RETRY_WAIT_S,
+        max_retries:  int   = params.RETRY_LIMIT,
+        initial_wait: float = params.INITIAL_RETRY_WAIT_S,
     ) -> None:
         """Refresh browser connection to prevent stale CDP connections.
 
         Caller must hold `_refresh_lock` (asyncio locks are not reentrant).
         Connect_over_cdp can hang indefinitely (known Playwright bug) so
-        each attempt is wrapped in `asyncio.wait_for(timeout=CONNECT_TIMEOUT_S)`."""
+        each attempt is wrapped in `asyncio.wait_for(timeout=params.CONNECT_TIMEOUT_S)`."""
         log.info(
             f"[transcript-service] Refreshing browser "
             f"(after {self._videos_since_refresh} videos)...",
@@ -830,8 +795,8 @@ class PlaywrightTranscriptService:
                     f"[transcript-service] Error closing old browser: {e}",
                 )
         # 3. Re-resolve CDP URL and connect with retry
-        cdp_endpoint = self._cdp_endpoint or CDP_HEADED
-        connect_timeout = CONNECT_TIMEOUT_S
+        cdp_endpoint = self._cdp_endpoint or params.CDP_HEADED
+        connect_timeout = params.CONNECT_TIMEOUT_S
         last_error: Exception | None = None
         for attempt in range(max_retries):
             try:
@@ -844,10 +809,10 @@ class PlaywrightTranscriptService:
                 # 10 videos and is exactly where the assertion crash
                 # would otherwise resurface.
                 await asyncio.to_thread(
-                    _close_stale_cdp_targets, cdp_endpoint,
+                    domain._close_stale_cdp_targets, cdp_endpoint,
                 )
                 self._cdp_url = await asyncio.wait_for(
-                    asyncio.to_thread(_get_cdp_websocket_url, cdp_endpoint),
+                    asyncio.to_thread(domain._get_cdp_websocket_url, cdp_endpoint),
                     timeout = connect_timeout,
                 )
                 self._browser = await asyncio.wait_for(
@@ -976,7 +941,7 @@ class PlaywrightTranscriptService:
         (callers even override it to 10, per `extract/task.py`) but nothing
         ever compared it against `_videos_since_refresh`. Wired up now:
         dodges stale-CDP-connection accumulation (YouTube's per-page
-        service workers, `_close_stale_cdp_targets`) proactively instead
+        service workers, `domain._close_stale_cdp_targets`) proactively instead
         of waiting for a health-check failure to force a reactive one."""
         if self._videos_since_refresh < self.browser_refresh_interval:
             return
@@ -1169,7 +1134,7 @@ class PlaywrightTranscriptService:
                         "no_transcript": True,
                     }
                 tracks = [
-                    CaptionTrack(
+                    domain.CaptionTrack(
                         language_code     = t["languageCode"],
                         name              = t["name"],
                         is_auto_generated = t["isAutoGenerated"],
@@ -1186,9 +1151,9 @@ class PlaywrightTranscriptService:
                     # Playable video, zero caption tracks on THIS page
                     # load. 2026-09-14: no longer treated as an
                     # instant, unretried verdict — `"no caption
-                    # tracks"` is in `RETRYABLE_ERRORS` now, so
+                    # tracks"` is in `params.RETRYABLE_ERRORS` now, so
                     # `fetch_transcriptions_batch`'s batch-retry-pass
-                    # loop gives it up to `MAX_RETRIES` fresh page
+                    # loop gives it up to `params.MAX_RETRIES` fresh page
                     # loads before finalizing it as genuinely
                     # caption-less (unlike a deleted/private/region-
                     # blocked video, which stays a real single-shot
@@ -1215,7 +1180,7 @@ class PlaywrightTranscriptService:
                         f"[transcript-service] {video_id}: "
                         f"tracks={len(tracks)} manual={manual_count}",
                     )
-                    selected = _select_best_track(tracks, prefer_manual)
+                    selected = domain._select_best_track(tracks, prefer_manual)
                     language = selected.language_code
                     is_auto_generated = selected.is_auto_generated
 
@@ -1263,7 +1228,7 @@ class PlaywrightTranscriptService:
                     raw_text = await _extract_via_dom(page, self.timeout_ms)
                     if not raw_text:
                         raise ValueError(f"No transcript for: {video_id}")
-                    parsed = _parse_transcript(raw_text)
+                    parsed = domain._parse_transcript(raw_text)
                     if "auto-generated" in raw_text.lower():
                         is_auto_generated = True
                     return _ok(
@@ -1356,9 +1321,9 @@ class PlaywrightTranscriptService:
 
         def is_retryable(error_msg: str) -> bool:
             error_lower = error_msg.lower()
-            if any(p in error_lower for p in PERMANENT_ERRORS):
+            if any(p in error_lower for p in params.PERMANENT_ERRORS):
                 return False
-            return any(r in error_lower for r in RETRYABLE_ERRORS)
+            return any(r in error_lower for r in params.RETRYABLE_ERRORS)
 
         pending_ids = list(video_ids)
         for pass_num in range(self.max_retries + 1):
@@ -1448,11 +1413,11 @@ def get_transcript_service() -> PlaywrightTranscriptService:
 
 
 async def init_transcript_service(
-    max_concurrent:           int        = MAX_CONCURRENT,
+    max_concurrent:           int        = params.MAX_CONCURRENT,
     context_pool_size:        int | None = None,
-    navigation_timeout_ms:    int        = NAVIGATION_TIMEOUT_MS,
-    browser_refresh_interval: int        = BROWSER_REFRESH_INTERVAL,
-    max_retries:              int        = MAX_RETRIES,
+    navigation_timeout_ms:    int        = params.NAVIGATION_TIMEOUT_MS,
+    browser_refresh_interval: int        = params.BROWSER_REFRESH_INTERVAL,
+    max_retries:              int        = params.MAX_RETRIES,
 ) -> PlaywrightTranscriptService:
     """Initialize the global transcript service. Call from Celery task setup
     (deprecated had FastAPI lifespan handle it; Celery is sync so each task
@@ -1533,7 +1498,7 @@ async def fetch_transcriptions_batch(
     transcript_service: PlaywrightTranscriptService | None = None,
     es_client:          AsyncElasticsearch | None         = None,
     languages:          list[str] | None                  = None,
-    chunk_size:         int                               = DEFAULT_CHUNK_SIZE,
+    chunk_size:         int                               = params.DEFAULT_CHUNK_SIZE,
     video_metadata:     dict[str, dict[str, Any]] | None  = None,
     # `Callable` can't express the optional `no_transcript` keyword arg
     # this is actually called with (see the live `_on_video_done` call
@@ -1708,7 +1673,7 @@ async def fetch_transcriptions_batch(
         nonlocal total_success, total_index_write_failed
         if es_client:
             try:
-                await index_transcriptions_to_elasticsearch(es_client, [doc])
+                await domains.ycs.es_index.service.index_transcriptions_to_elasticsearch(es_client, [doc])
             except Exception as e:
                 total_index_write_failed += 1
                 log.error(
@@ -1755,7 +1720,7 @@ async def fetch_transcriptions_batch(
             # 2026-09-14: long-video partitioning. `segments` (per-
             # caption timing) was already produced by every fetch path
             # — only `page_content` (the flattened join) reached
-            # storage before this. Below SPLIT_THRESHOLD_S (the
+            # storage before this. Below params.SPLIT_THRESHOLD_S (the
             # overwhelming majority of videos), this is a no-op: single
             # partition == the exact same one-document path as before.
             # Above it, each partition is dispatched through
@@ -1767,11 +1732,11 @@ async def fetch_transcriptions_batch(
             # by the ORIGINAL video (fetching is unaffected — splitting
             # happens only to what gets stored/dispatched downstream).
             partitions = (
-                split_segments_by_gap(
+                domain.split_segments_by_gap(
                     segments,
-                    threshold_s = SPLIT_THRESHOLD_S,
-                    target_partition_s = SPLIT_TARGET_PARTITION_S,
-                    search_window_ratio = SPLIT_SEARCH_WINDOW_RATIO,
+                    threshold_s = params.SPLIT_THRESHOLD_S,
+                    target_partition_s = params.SPLIT_TARGET_PARTITION_S,
+                    search_window_ratio = params.SPLIT_SEARCH_WINDOW_RATIO,
                 ) if segments else [segments]
             )
             if len(partitions) <= 1:
@@ -1790,12 +1755,12 @@ async def fetch_transcriptions_batch(
                     asyncio.ensure_future(_index_and_notify(doc, vid)),
                 )
             else:
-                texts = build_partition_texts(partitions, SPLIT_OVERLAP_WORDS)
+                texts = domain.build_partition_texts(partitions, params.SPLIT_OVERLAP_WORDS)
                 log.info(
                     f"[fetch_transcriptions_batch] OK {vid} lang={lang} "
                     f"auto={is_auto} len={len(content)} — split into "
                     f"{len(partitions)} partitions "
-                    f"(> {SPLIT_THRESHOLD_S // 60}min)",
+                    f"(> {params.SPLIT_THRESHOLD_S // 60}min)",
                 )
                 for i, (part, text) in enumerate(zip(partitions, texts), start = 1):
                     part_id = f"{vid}#p{i}"

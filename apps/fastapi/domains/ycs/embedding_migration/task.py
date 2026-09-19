@@ -44,7 +44,7 @@ def finalize_embedding_migration(self, physical_collection: str) -> dict:
 
     async def _run() -> dict:
         import redis.asyncio as redis_aio
-        from .service import cutover
+        from . import service
 
         redis_host = os.environ.get("REDIS_HOST", "localhost")
         redis_port = os.environ.get("REDIS_PORT", "6379")
@@ -61,7 +61,7 @@ def finalize_embedding_migration(self, physical_collection: str) -> dict:
             api_key = qdrant_api_key if qdrant_api_key else None,
         )
         try:
-            await cutover(redis, qdrant, physical_collection)
+            await service.cutover(redis, qdrant, physical_collection)
             return {"status": "done", "collection": physical_collection}
         finally:
             await qdrant.close()

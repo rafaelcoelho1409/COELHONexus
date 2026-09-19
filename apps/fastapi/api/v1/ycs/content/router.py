@@ -4,16 +4,18 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
-from domains.ycs.content import (
-    EnumerationResponse,
-    SearchRequest,
-    SearchResponse,
+from domains.ycs.content.errors import (
     YtDlpJsonParseError,
     YtDlpSubprocessError,
     YtDlpTimeoutError,
-    get_search_service,
 )
-from domains.ycs.extract import (
+from domains.ycs.content.schemas import (
+    EnumerationResponse,
+    SearchRequest,
+    SearchResponse,
+)
+from domains.ycs.content.service import get_search_service
+from domains.ycs.extract.schemas import (
     ChannelPipelineRequest,
     ChannelRequest,
     PlaylistPipelineRequest,
@@ -46,7 +48,7 @@ async def _raise_if_embedding_migration_needed(include_transcription: bool) -> N
     all until this was found)."""
     if not include_transcription:
         return
-    from domains.ycs.embedding_migration import check_migration_needed_now
+    from domains.ycs.embedding_migration.service import check_migration_needed_now
     mismatch = await check_migration_needed_now()
     if mismatch is not None:
         raise HTTPException(
@@ -124,7 +126,7 @@ async def get_videos_pipeline(
             status_code = 400, detail = "video_ids is required",
         )
     await _raise_if_embedding_migration_needed(payload.include_transcription)
-    from domains.ycs.pipeline_task import (
+    from domains.ycs.pipeline_task.service import (
         dispatch_videos_pipeline,
         persist_pipeline_state,
     )
@@ -153,7 +155,7 @@ async def get_videos_pipeline(
 async def rerun_videos_pipeline(extract_id: str, request: Request) -> dict:
     """Re-fire the 3-phase chain from the Redis snapshot of a prior dispatch (24h TTL).
     Phase A skips existing ES transcripts; Phase B re-upserts (idempotent); Phase C skips tagged video_ids."""
-    from domains.ycs.pipeline_task import (
+    from domains.ycs.pipeline_task.service import (
         dispatch_videos_pipeline,
         load_pipeline_state,
         persist_pipeline_state,
@@ -198,7 +200,7 @@ async def get_videos_pipeline_state(
 ) -> dict:
     """Return the saved dispatch state for a pipeline. Used to rehydrate `video_ids`+`phases` after
     page refresh or cross-tab navigation. 404 after the 24h Redis TTL."""
-    from domains.ycs.pipeline_task import load_pipeline_state
+    from domains.ycs.pipeline_task.service import load_pipeline_state
     state = await load_pipeline_state(
         getattr(request.app.state, "redis_aio", None),
         extract_id,
@@ -227,7 +229,7 @@ async def wipe_videos_pipeline(extract_id: str, request: Request) -> dict:
     that cooperative-only cancellation can't guarantee — a task stuck
     mid-LLM-call between checkpoints would otherwise finish and write
     after the wipe already ran."""
-    from domains.ycs.pipeline_task import (
+    from domains.ycs.pipeline_task.service import (
         get_dispatched_task_ids,
         load_pipeline_state,
         request_cancel,
@@ -283,7 +285,7 @@ async def stop_videos_pipeline(extract_id: str, request: Request) -> dict:
     is clicked finishes that unit of work (one Playwright chunk of up
     to 10 videos, or one Neo4j retry pass) before noticing the flag —
     bounded, not indefinite."""
-    from domains.ycs.pipeline_task import (
+    from domains.ycs.pipeline_task.service import (
         get_dispatched_task_ids,
         load_pipeline_state,
         request_cancel,
@@ -427,7 +429,7 @@ async def channel_pipeline(
             detail = f"No videos found in channel {payload.channel_id!r}",
         )
     await _raise_if_embedding_migration_needed(payload.include_transcription)
-    from domains.ycs.pipeline_task import (
+    from domains.ycs.pipeline_task.service import (
         dispatch_videos_pipeline,
         persist_pipeline_state,
     )
@@ -477,7 +479,7 @@ async def playlist_pipeline(
             detail = f"No videos found in playlist {payload.playlist_id!r}",
         )
     await _raise_if_embedding_migration_needed(payload.include_transcription)
-    from domains.ycs.pipeline_task import (
+    from domains.ycs.pipeline_task.service import (
         dispatch_videos_pipeline,
         persist_pipeline_state,
     )
@@ -554,7 +556,7 @@ async def embedding_migration_status(request: Request) -> dict:
     Settings/Ingestion page to show a banner before the user even tries
     to dispatch anything."""
     from domains.llm.embeddings import get_configured_model
-    from domains.ycs.embedding_migration import (
+    from domains.ycs.embedding_migration.service import (
         check_migration_needed,
         get_active_collection_name,
         get_migration_state,
@@ -582,8 +584,8 @@ async def embedding_migration_start(request: Request) -> dict:
     migrating (avoids a spurious re-embed if the user double-clicks
     after the gate already cleared)."""
     from domains.llm.embeddings import get_configured_model
-    from domains.ycs.embedding_migration import check_migration_needed, dispatch_migration
-    from domains.ycs.embeddings import get_embedding_info
+    from domains.ycs.embedding_migration.service import check_migration_needed, dispatch_migration
+    from domains.ycs.embeddings.service import get_embedding_info
 
     redis = getattr(request.app.state, "redis_aio", None)
     if redis is None:

@@ -3,8 +3,8 @@ Two near-symmetric writers (one per index). Both:
   - skip the no-op early
   - build `[{"index": {...}}, doc, ...]` ops
   - skip ops missing the doc id
-  - emit `await es.bulk(operations=..., refresh=BULK_REFRESH)`
-  - count items whose `item["index"]["status"] in INDEXED_STATUSES`
+  - emit `await es.bulk(operations=..., refresh=params.BULK_REFRESH)`
+  - count items whose `item["index"]["status"] in params.INDEXED_STATUSES`
   - return `{indexed, failed, errors}` on success or
     `{indexed:0, failed:len(...), error:str(e)}` on exception
 
@@ -20,7 +20,7 @@ from elasticsearch import AsyncElasticsearch
 
 from infra.elasticsearch import INDEX_METADATA, INDEX_TRANSCRIPTIONS
 
-from .params import BULK_REFRESH, INDEXED_STATUSES
+from . import params
 
 
 logger = logging.getLogger(__name__)
@@ -56,13 +56,13 @@ async def index_videos_to_elasticsearch(
     try:
         response = await es_client.bulk(
             operations = operations,
-            refresh = BULK_REFRESH,
+            refresh = params.BULK_REFRESH,
         )
         elapsed = time.time() - start_time
         indexed = sum(
             1
             for item in response["items"]
-            if item["index"]["status"] in INDEXED_STATUSES
+            if item["index"]["status"] in params.INDEXED_STATUSES
         )
         failed = len(response["items"]) - indexed
         logger.info(
@@ -115,13 +115,13 @@ async def index_transcriptions_to_elasticsearch(
     try:
         response = await es_client.bulk(
             operations = operations,
-            refresh = BULK_REFRESH,
+            refresh = params.BULK_REFRESH,
         )
         elapsed = time.time() - start_time
         indexed = sum(
             1
             for item in response["items"]
-            if item["index"]["status"] in INDEXED_STATUSES
+            if item["index"]["status"] in params.INDEXED_STATUSES
         )
         failed = len(response["items"]) - indexed
         logger.info(

@@ -10,12 +10,12 @@ from __future__ import annotations
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from .params import CHUNK_OVERLAP_CHARS, CHUNK_SIZE_CHARS, SEPARATORS
+from . import params
 
 
 def create_chunker(
-    chunk_size: int = CHUNK_SIZE_CHARS,
-    chunk_overlap: int = CHUNK_OVERLAP_CHARS,
+    chunk_size: int = params.CHUNK_SIZE_CHARS,
+    chunk_overlap: int = params.CHUNK_OVERLAP_CHARS,
 ) -> RecursiveCharacterTextSplitter:
     """Returns a splitter configured with the deprecated separator
     ladder. Caller threads it through `chunk_transcript` per transcript
@@ -23,7 +23,7 @@ def create_chunker(
     return RecursiveCharacterTextSplitter(
         chunk_size = chunk_size,
         chunk_overlap = chunk_overlap,
-        separators = list(SEPARATORS),
+        separators = list(params.SEPARATORS),
         length_function = len,
     )
 

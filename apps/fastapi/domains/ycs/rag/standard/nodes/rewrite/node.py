@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import asyncio
 
-from domains.ycs.rag.llm_call import resilient_ainvoke
-from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
-from domains.ycs.runtime.observability import record_rewrite, traced
+import domains
+from domains.ycs.runtime.observability.service import traced
 
-from ....domain import strip_think_tags
-from ...state import YouTubeRAGState
-from .prompts import REWRITE_PROMPT
+from .... import domain, service
+from ... import state
+from . import prompts
 
 
 # 2026-09-15: 30 → 20s tiering — failure falls back to
@@ -23,16 +22,16 @@ _REWRITE_TIMEOUT_S = 20.0
 
 
 @traced("rag.rewrite")
-async def rewrite_query(state: YouTubeRAGState, llm) -> dict:
+async def rewrite_query(state: state.YouTubeRAGState, llm) -> dict:
     """Expand/rephrase the query for better retrieval."""
-    record_rewrite(
+    domains.ycs.runtime.observability.metrics.record_rewrite(
         route = str(state.get("route") or "unknown"),
         mode = str(state.get("mode") or "standard"),
     )
-    chain = REWRITE_PROMPT | llm
+    chain = prompts.REWRITE_PROMPT | llm
     try:
-        _llm_set_node(node = "rewrite")
-        response = await resilient_ainvoke(
+        domains.ycs.runtime.llm_counter.service.set_node(node = "rewrite")
+        response = await service.resilient_ainvoke(
             chain,
             {
                 "question":     state["question"],
@@ -42,7 +41,7 @@ async def rewrite_query(state: YouTubeRAGState, llm) -> dict:
             timeout_s    = _REWRITE_TIMEOUT_S,
             max_attempts = 2,
         )
-        new_query = strip_think_tags(response.content)
+        new_query = domain.strip_think_tags(response.content)
     except (asyncio.TimeoutError, Exception):
         new_query = f"{state['question']} (expanded)"
     return {

@@ -1,22 +1,10 @@
 """ycs/embedding_migration — consent-gated re-embed when the configured
-embedding model changes. See `service.py` for the full design."""
-from .service import (
-    check_migration_needed,
-    check_migration_needed_now,
-    cutover,
-    dispatch_migration,
-    get_active_collection_name,
-    get_migration_state,
-    start_migration,
-)
+embedding model changes. See `service.py` for the full design.
 
+`task.py` is excluded from this eager chain (docs/CODE-CONVENTIONS.md §8
+Exception 1 — `from infra.celery import app` at module level requires
+Celery/Redis env vars); reach it via a direct
+`from domains.ycs.embedding_migration.task import finalize_embedding_migration`."""
+from __future__ import annotations
 
-__all__ = [
-    "check_migration_needed",
-    "check_migration_needed_now",
-    "cutover",
-    "dispatch_migration",
-    "get_active_collection_name",
-    "get_migration_state",
-    "start_migration",
-]
+from . import domain, keys, params, service

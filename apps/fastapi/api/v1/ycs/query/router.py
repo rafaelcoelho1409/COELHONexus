@@ -5,16 +5,17 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from domains.ycs.query import (
+from domains.ycs.query.params import APP_BACKENDS, APPS, BACKENDS
+from domains.ycs.query.schemas import (
     AIGenerateRequest,
-    APP_BACKENDS,
-    APPS,
-    BACKENDS,
+    NamespaceEntry,
     NamespaceMap,
     QueryRequest,
     QueryResponse,
     RawQueryRequest,
     RawQueryResponse,
+)
+from domains.ycs.query.service import (
     query_es,
     query_neo4j,
     query_qdrant,
@@ -22,7 +23,6 @@ from domains.ycs.query import (
     raw_neo4j,
     raw_qdrant,
 )
-from domains.ycs.query.schemas import NamespaceEntry
 
 
 router = APIRouter()
@@ -197,14 +197,14 @@ async def list_history(
     """Return the latest history entries, newest-first. `backend` is an
     optional filter — UI passes the current backend so the user only
     sees relevant prior queries."""
-    from domains.ycs.query.history import list_entries
+    from domains.ycs.query.service import list_query_history_entries
     pg_url = getattr(request.app.state, "pg_url", None)
     if not pg_url:
         raise HTTPException(
             status_code = 503,
             detail = "Postgres not initialized (YCS lifespan failed).",
         )
-    items = await list_entries(pg_url, backend = backend, limit = max(1, min(limit, 200)))
+    items = await list_query_history_entries(pg_url, backend = backend, limit = max(1, min(limit, 200)))
     return {"items": items, "total": len(items)}
 
 
@@ -214,7 +214,7 @@ async def save_history(
 ) -> dict:
     """Persist one query into history. Body shape:
        `{backend, app?, body, prompt?, favorite?}`."""
-    from domains.ycs.query.history import save_entry
+    from domains.ycs.query.service import save_query_history_entry
     pg_url = getattr(request.app.state, "pg_url", None)
     if not pg_url:
         raise HTTPException(
@@ -233,7 +233,7 @@ async def save_history(
         )
     if not body or not str(body).strip():
         raise HTTPException(status_code = 400, detail = "`body` is required.")
-    entry_id = await save_entry(
+    entry_id = await save_query_history_entry(
         pg_url,
         backend  = backend,
         app      = payload.get("app", "ycs"),
@@ -246,12 +246,12 @@ async def save_history(
 
 @router.delete("/history/{entry_id}")
 async def delete_history(entry_id: int, request: Request) -> dict:
-    from domains.ycs.query.history import delete_entry
+    from domains.ycs.query.service import delete_query_history_entry
     pg_url = getattr(request.app.state, "pg_url", None)
     if not pg_url:
         raise HTTPException(
             status_code = 503,
             detail = "Postgres not initialized (YCS lifespan failed).",
         )
-    n = await delete_entry(pg_url, entry_id)
+    n = await delete_query_history_entry(pg_url, entry_id)
     return {"deleted": n}

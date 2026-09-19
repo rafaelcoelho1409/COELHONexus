@@ -7,7 +7,7 @@ delegated to `params.py`; HTTP boundary validation to `schemas.py`.
 All three entry points (`query_es`, `query_qdrant`, `query_neo4j`)
 share the same shape:
     in:  app, q, limit, offset, request
-    out: QueryResponse (`supported=False` short-circuit if the app
+    out: schemas.QueryResponse (`supported=False` short-circuit if the app
          has no presence in that backend).
 
 The functions are best-effort: a store hiccup degrades to
@@ -16,12 +16,12 @@ rather than 5xx, so the Query page can render one failed tab without
 killing the other two."""
 from __future__ import annotations
 
-import json
 import logging
-import re
 import time
 from typing import Any
 
+import domains
+import psycopg
 from elasticsearch import AsyncElasticsearch
 from fastapi import Request
 
@@ -34,66 +34,40 @@ from infra.neo4j import get_driver
 from infra.neo4j.params import NEO4J_DATABASE
 from infra.qdrant import get_qdrant
 
-from . import domain
-from .params import (
-    APP_RR,
-    APP_YCS,
-    BACKEND_ES,
-    BACKEND_NEO4J,
-    BACKEND_QDRANT,
-    is_supported,
-    namespace_label,
-)
-from .safety import (
-    QueryNotAllowed,
-    assert_cypher_readonly,
-    parse_es_body,
-    parse_qdrant_body,
-)
-from .schemas import (
-    QueryHit,
-    QueryResponse,
-    RawQueryHit,
-    RawQueryResponse,
-)
+from . import domain, errors, params, prompts, schemas
 
 
 logger = logging.getLogger(__name__)
 
 
-def _unsupported(backend: str, app: str, q: str) -> QueryResponse:
+def _unsupported(backend: str, app: str, q: str) -> schemas.QueryResponse:
     """Same shape as a real response — `supported=False` is the only
     signal the UI needs to render the "no data here" state."""
-    return QueryResponse(
-        backend   = backend,           # type: ignore[arg-type]
-        app       = app,               # type: ignore[arg-type]
-        supported = False,
-        namespace = "",
-        q         = q,
-        hits      = [],
+    return schemas.QueryResponse(
+        **domain.unsupported_response(backend, app, q),  # type: ignore[arg-type]
     )
 
 
 def _envelope(
     backend: str, app: str, q: str, hits: list[dict[str, Any]],
     total: int, t0: float, error: str | None = None,
-) -> QueryResponse:
-    return QueryResponse(
+) -> schemas.QueryResponse:
+    return schemas.QueryResponse(
         backend   = backend,           # type: ignore[arg-type]
         app       = app,               # type: ignore[arg-type]
         supported = True,
-        namespace = namespace_label(app, backend),
+        namespace = params.namespace_label(app, backend),
         q         = q,
         total     = total,
         took_ms   = int((time.monotonic() - t0) * 1000),
-        hits      = [QueryHit(**h) for h in hits],
+        hits      = [schemas.QueryHit(**h) for h in hits],
         error     = error,
     )
 
 
 async def query_es(
     *, app: str, q: str, limit: int, offset: int, request: Request,
-) -> QueryResponse:
+) -> schemas.QueryResponse:
     """Multi-index ES search for the selected app.
 
     YCS path: multi_match across both the metadata index (title +
@@ -102,8 +76,8 @@ async def query_es(
 
     Empty `q` returns a `match_all` page so the user can browse without
     typing — same idiom as the Ingest library view."""
-    if not is_supported(app, BACKEND_ES):
-        return _unsupported(BACKEND_ES, app, q)
+    if not params.is_supported(app, params.BACKEND_ES):
+        return _unsupported(params.BACKEND_ES, app, q)
 
     es: AsyncElasticsearch = get_es()
     indexes = f"{INDEX_METADATA},{INDEX_TRANSCRIPTIONS}"
@@ -136,19 +110,19 @@ async def query_es(
     except Exception as e:
         logger.warning(f"[ycs:query:es] search failed: {type(e).__name__}: {e}")
         return _envelope(
-            BACKEND_ES, app, q, hits = [], total = 0, t0 = t0,
+            params.BACKEND_ES, app, q, hits = [], total = 0, t0 = t0,
             error = f"{type(e).__name__}: {str(e)[:200]}",
         )
 
     raw_hits = response.get("hits", {}).get("hits", [])
     total    = int(response.get("hits", {}).get("total", {}).get("value", 0))
     hits     = [domain.project_es_hit(h, app = app) for h in raw_hits]
-    return _envelope(BACKEND_ES, app, q, hits, total, t0)
+    return _envelope(params.BACKEND_ES, app, q, hits, total, t0)
 
 
 async def query_qdrant(
     *, app: str, q: str, limit: int, request: Request,
-) -> QueryResponse:
+) -> schemas.QueryResponse:
     """Qdrant kNN over the app's collection.
 
     With a non-empty query we embed it via the dense embedder shared
@@ -161,11 +135,10 @@ async def query_qdrant(
     the dense vector here because RR's collection is dense-only. Keeping
     one path = one mental model. For YCS hybrid retrieval the agentic
     RAG pipeline still owns that surface (`/agents/search`)."""
-    if not is_supported(app, BACKEND_QDRANT):
-        return _unsupported(BACKEND_QDRANT, app, q)
+    if not params.is_supported(app, params.BACKEND_QDRANT):
+        return _unsupported(params.BACKEND_QDRANT, app, q)
 
-    from .params import APP_BACKENDS
-    collection = APP_BACKENDS[app][BACKEND_QDRANT].target
+    collection = params.APP_BACKENDS[app][params.BACKEND_QDRANT].target
 
     client = get_qdrant()
     t0 = time.monotonic()
@@ -176,7 +149,7 @@ async def query_qdrant(
         embedder = getattr(getattr(smart, "qdrant_retriever", None), "dense_embeddings", None)
         if embedder is None:
             return _envelope(
-                BACKEND_QDRANT, app, q, hits = [], total = 0, t0 = t0,
+                params.BACKEND_QDRANT, app, q, hits = [], total = 0, t0 = t0,
                 error = "dense embedder not initialized (YCS lifespan failed?)",
             )
         try:
@@ -184,11 +157,11 @@ async def query_qdrant(
         except Exception as e:
             logger.warning(f"[ycs:query:qdrant] embed failed: {type(e).__name__}: {e}")
             return _envelope(
-                BACKEND_QDRANT, app, q, hits = [], total = 0, t0 = t0,
+                params.BACKEND_QDRANT, app, q, hits = [], total = 0, t0 = t0,
                 error = f"embed failed: {type(e).__name__}: {str(e)[:160]}",
             )
         # YCS uses NAMED vectors ("dense"/"sparse"); RR uses the default unnamed vector.
-        using = "dense" if app == APP_YCS else None
+        using = "dense" if app == params.APP_YCS else None
         try:
             # 2026-09-17: `AsyncQdrantClient.search()` was removed in
             # qdrant-client 1.16 (live-confirmed: `AttributeError:
@@ -197,8 +170,8 @@ async def query_qdrant(
             # upgrade dropped it). `query_points()` is the replacement:
             # the named-vector selector moves from a `(name, vector)`
             # tuple into its own `using=` kwarg, and the vector itself
-            # goes bare into `query=`. Same shape `retriever/
-            # qdrant_hybrid.py` already uses for the RAG path.
+            # goes bare into `query=`. Same shape `retriever/service.py`'s
+            # `QdrantHybridRetriever` already uses for the RAG path.
             response = await client.query_points(
                 collection_name = collection,
                 query           = vector,
@@ -210,11 +183,11 @@ async def query_qdrant(
         except Exception as e:
             logger.warning(f"[ycs:query:qdrant] search failed: {type(e).__name__}: {e}")
             return _envelope(
-                BACKEND_QDRANT, app, q, hits = [], total = 0, t0 = t0,
+                params.BACKEND_QDRANT, app, q, hits = [], total = 0, t0 = t0,
                 error = f"{type(e).__name__}: {str(e)[:200]}",
             )
         hits = [domain.project_qdrant_point(p, app = app) for p in results]
-        return _envelope(BACKEND_QDRANT, app, q, hits, total = len(hits), t0 = t0)
+        return _envelope(params.BACKEND_QDRANT, app, q, hits, total = len(hits), t0 = t0)
 
     try:
         records, _next = await client.scroll(
@@ -226,11 +199,11 @@ async def query_qdrant(
     except Exception as e:
         logger.warning(f"[ycs:query:qdrant] scroll failed: {type(e).__name__}: {e}")
         return _envelope(
-            BACKEND_QDRANT, app, q, hits = [], total = 0, t0 = t0,
+            params.BACKEND_QDRANT, app, q, hits = [], total = 0, t0 = t0,
             error = f"{type(e).__name__}: {str(e)[:200]}",
         )
     hits = [domain.project_qdrant_point(r, app = app) for r in records]
-    return _envelope(BACKEND_QDRANT, app, q, hits, total = len(hits), t0 = t0)
+    return _envelope(params.BACKEND_QDRANT, app, q, hits, total = len(hits), t0 = t0)
 
 
 # CONTAINS over toLower vs fulltext index: zero bootstrap cost; fast enough for current corpus size.
@@ -315,41 +288,41 @@ LIMIT  $limit
 
 async def query_neo4j(
     *, app: str, q: str, limit: int, request: Request,
-) -> QueryResponse:
+) -> schemas.QueryResponse:
     """Cypher search over the app's labels.
 
     Two parameter shapes: `{needle, limit}` for `_*_SEARCH` (CONTAINS
     over title/name/id/text), `{limit}` for `_*_BROWSE` (no filter).
     `needle` is pre-lowered so the Cypher only does `toLower(field)
     CONTAINS $needle` once per field — cheaper than `=~ "(?i)..."`."""
-    if not is_supported(app, BACKEND_NEO4J):
-        return _unsupported(BACKEND_NEO4J, app, q)
+    if not params.is_supported(app, params.BACKEND_NEO4J):
+        return _unsupported(params.BACKEND_NEO4J, app, q)
 
     raw_q = q.strip()
-    if app == APP_RR:
+    if app == params.APP_RR:
         cypher = _RR_CYPHER_SEARCH if raw_q else _RR_CYPHER_BROWSE
     else:
         cypher = _YCS_CYPHER_SEARCH if raw_q else _YCS_CYPHER_BROWSE
 
-    params: dict[str, Any] = {"limit": limit}
+    cypher_params: dict[str, Any] = {"limit": limit}
     if raw_q:
-        params["needle"] = raw_q.lower()
+        cypher_params["needle"] = raw_q.lower()
 
     t0 = time.monotonic()
     try:
         driver = get_driver()
         async with driver.session(database = NEO4J_DATABASE) as session:
-            result = await session.run(cypher, params)
+            result = await session.run(cypher, cypher_params)
             records = [dict(record) async for record in result]
     except Exception as e:
         logger.warning(f"[ycs:query:neo4j] cypher failed: {type(e).__name__}: {e}")
         return _envelope(
-            BACKEND_NEO4J, app, q, hits = [], total = 0, t0 = t0,
+            params.BACKEND_NEO4J, app, q, hits = [], total = 0, t0 = t0,
             error = f"{type(e).__name__}: {str(e)[:200]}",
         )
 
     hits = [domain.project_neo4j_row(r, app = app) for r in records]
-    return _envelope(BACKEND_NEO4J, app, q, hits, total = len(hits), t0 = t0)
+    return _envelope(params.BACKEND_NEO4J, app, q, hits, total = len(hits), t0 = t0)
 
 
 # Raw DSL — Phase 1 of the SOTA workbench. User-supplied DSL/Cypher/JSON.
@@ -361,8 +334,8 @@ def _raw_envelope(
     notes: list[str] | None = None,
     error: str | None = None,
     ok:    bool = True,
-) -> RawQueryResponse:
-    return RawQueryResponse(
+) -> schemas.RawQueryResponse:
+    return schemas.RawQueryResponse(
         backend = backend,                  # type: ignore[arg-type]
         app     = app,                      # type: ignore[arg-type]
         ok      = ok,
@@ -370,20 +343,15 @@ def _raw_envelope(
         notes   = list(notes or []),
         took_ms = int((time.monotonic() - t0) * 1000),
         total   = total,
-        hits    = [RawQueryHit(**h) for h in (hits or [])],
+        hits    = [schemas.RawQueryHit(**h) for h in (hits or [])],
     )
 
 
-def _raw_disallowed(backend: str, app: str, msg: str) -> RawQueryResponse:
+def _raw_disallowed(backend: str, app: str, msg: str) -> schemas.RawQueryResponse:
     """Validation rejection — returned with `ok=False` so the editor's
     error band lights up. HTTP layer still returns 200 to keep the
     SSE / fetch flow simple."""
-    return RawQueryResponse(
-        backend = backend,                  # type: ignore[arg-type]
-        app     = app,                      # type: ignore[arg-type]
-        ok      = False,
-        error   = msg,
-    )
+    return schemas.RawQueryResponse(**domain.raw_disallowed_response(backend, app, msg))
 
 
 # Elasticsearch — POST the validated body straight at `_search` on the
@@ -392,16 +360,16 @@ def _raw_disallowed(backend: str, app: str, msg: str) -> RawQueryResponse:
 # JSON body — and `parse_es_body` shaped it.
 async def raw_es(
     *, app: str, body_text: str, request: Request,
-) -> RawQueryResponse:
-    if not is_supported(app, BACKEND_ES):
+) -> schemas.RawQueryResponse:
+    if not params.is_supported(app, params.BACKEND_ES):
         return _raw_disallowed(
-            BACKEND_ES, app,
+            params.BACKEND_ES, app,
             f"{app!r} has no presence in Elasticsearch.",
         )
     try:
-        parsed = parse_es_body(body_text)
-    except QueryNotAllowed as e:
-        return _raw_disallowed(BACKEND_ES, app, str(e))
+        parsed = domain.parse_es_body(body_text)
+    except errors.QueryNotAllowed as e:
+        return _raw_disallowed(params.BACKEND_ES, app, str(e))
 
     es: AsyncElasticsearch = get_es()
     indexes = f"{INDEX_METADATA},{INDEX_TRANSCRIPTIONS}"
@@ -417,7 +385,7 @@ async def raw_es(
     except Exception as e:
         logger.warning(f"[ycs:query:raw_es] failed: {type(e).__name__}: {e}")
         return _raw_envelope(
-            BACKEND_ES, app, t0, ok = False,
+            params.BACKEND_ES, app, t0, ok = False,
             error = f"{type(e).__name__}: {str(e)[:300]}",
             notes = notes,
         )
@@ -440,36 +408,11 @@ async def raw_es(
             "raw":     h,
         })
     return _raw_envelope(
-        BACKEND_ES, app, t0,
+        params.BACKEND_ES, app, t0,
         hits  = projected,
         total = total,
         notes = notes,
     )
-
-
-def _translate_search_body(body: dict[str, Any]) -> dict[str, Any]:
-    """Legacy `search()` kwargs → `query_points()` kwargs.
-
-    `query_vector` (search's arg) becomes `query` (+ `using` when the
-    old body named a vector). Handles the three shapes a hand-typed or
-    AI-generated raw body might use for a named vector: a `{"name":
-    ..., "vector": ...}` dict (NamedVector's JSON shape), a `[name,
-    vector]` pair (the old Python-tuple convention, JSON-serialized as
-    a 2-element list), or a bare vector (unnamed collection)."""
-    out = dict(body)
-    qv = out.pop("query_vector", None)
-    query, using = qv, None
-    if isinstance(qv, dict) and "name" in qv and "vector" in qv:
-        using, query = qv["name"], qv["vector"]
-    elif (
-        isinstance(qv, list) and len(qv) == 2
-        and isinstance(qv[0], str) and isinstance(qv[1], list)
-    ):
-        using, query = qv
-    out["query"] = query
-    if using is not None:
-        out["using"] = using
-    return out
 
 
 # Qdrant — the editor body is `{"op": ..., ...}`. Dispatch off `op`,
@@ -477,19 +420,18 @@ def _translate_search_body(body: dict[str, Any]) -> dict[str, Any]:
 # can't query a different collection.
 async def raw_qdrant(
     *, app: str, body_text: str, request: Request,
-) -> RawQueryResponse:
-    if not is_supported(app, BACKEND_QDRANT):
+) -> schemas.RawQueryResponse:
+    if not params.is_supported(app, params.BACKEND_QDRANT):
         return _raw_disallowed(
-            BACKEND_QDRANT, app,
+            params.BACKEND_QDRANT, app,
             f"{app!r} has no presence in Qdrant.",
         )
     try:
-        parsed = parse_qdrant_body(body_text)
-    except QueryNotAllowed as e:
-        return _raw_disallowed(BACKEND_QDRANT, app, str(e))
+        parsed = domain.parse_qdrant_body(body_text)
+    except errors.QueryNotAllowed as e:
+        return _raw_disallowed(params.BACKEND_QDRANT, app, str(e))
 
-    from .params import APP_BACKENDS
-    collection = APP_BACKENDS[app][BACKEND_QDRANT].target
+    collection = params.APP_BACKENDS[app][params.BACKEND_QDRANT].target
 
     client = get_qdrant()
     t0 = time.monotonic()
@@ -510,12 +452,12 @@ async def raw_qdrant(
             # qdrant-client 1.16 (live-confirmed via the semantic-search
             # tab throwing `AttributeError: 'AsyncQdrantClient' object
             # has no attribute 'search'`) — "search" is this editor's
-            # DEFAULT op (`safety.py::parse_qdrant_body`), so this was
+            # DEFAULT op (`domain.py::parse_qdrant_body`), so this was
             # broken for anyone who didn't explicitly type `"op":
             # "query_points"`. Translate the legacy body shape and
             # dispatch through `query_points()` instead, same as the
             # explicit `query_points` branch below.
-            r = await client.query_points(**_translate_search_body(body))
+            r = await client.query_points(**domain.translate_search_body(body))
             results = getattr(r, "points", r)
         elif op == "scroll":
             records, _ = await client.scroll(**body)
@@ -526,24 +468,24 @@ async def raw_qdrant(
         elif op == "count":
             n = await client.count(**body)
             return _raw_envelope(
-                BACKEND_QDRANT, app, t0,
+                params.BACKEND_QDRANT, app, t0,
                 hits  = [{"summary": f"count={n.count}", "raw": {"count": n.count}}],
                 total = int(n.count),
                 notes = notes,
             )
         else:
-            return _raw_disallowed(BACKEND_QDRANT, app, f"unknown op {op!r}")
+            return _raw_disallowed(params.BACKEND_QDRANT, app, f"unknown op {op!r}")
     except TypeError as e:
         # Pydantic / qdrant-client kwargs mismatch on user-supplied body.
         return _raw_envelope(
-            BACKEND_QDRANT, app, t0, ok = False,
+            params.BACKEND_QDRANT, app, t0, ok = False,
             error = f"Invalid Qdrant body for op={op!r}: {e}",
             notes = notes,
         )
     except Exception as e:
         logger.warning(f"[ycs:query:raw_qdrant] failed: {type(e).__name__}: {e}")
         return _raw_envelope(
-            BACKEND_QDRANT, app, t0, ok = False,
+            params.BACKEND_QDRANT, app, t0, ok = False,
             error = f"{type(e).__name__}: {str(e)[:300]}",
             notes = notes,
         )
@@ -568,7 +510,7 @@ async def raw_qdrant(
             },
         })
     return _raw_envelope(
-        BACKEND_QDRANT, app, t0,
+        params.BACKEND_QDRANT, app, t0,
         hits  = projected,
         total = len(projected),
         notes = notes,
@@ -582,16 +524,16 @@ async def raw_qdrant(
 # rejected by the server itself.
 async def raw_neo4j(
     *, app: str, body_text: str, request: Request,
-) -> RawQueryResponse:
-    if not is_supported(app, BACKEND_NEO4J):
+) -> schemas.RawQueryResponse:
+    if not params.is_supported(app, params.BACKEND_NEO4J):
         return _raw_disallowed(
-            BACKEND_NEO4J, app,
+            params.BACKEND_NEO4J, app,
             f"{app!r} has no presence in Neo4j.",
         )
     try:
-        assert_cypher_readonly(body_text)
-    except QueryNotAllowed as e:
-        return _raw_disallowed(BACKEND_NEO4J, app, str(e))
+        domain.assert_cypher_readonly(body_text)
+    except errors.QueryNotAllowed as e:
+        return _raw_disallowed(params.BACKEND_NEO4J, app, str(e))
 
     t0 = time.monotonic()
     try:
@@ -604,7 +546,7 @@ async def raw_neo4j(
     except Exception as e:
         logger.warning(f"[ycs:query:raw_neo4j] failed: {type(e).__name__}: {e}")
         return _raw_envelope(
-            BACKEND_NEO4J, app, t0, ok = False,
+            params.BACKEND_NEO4J, app, t0, ok = False,
             error = f"{type(e).__name__}: {str(e)[:400]}",
         )
 
@@ -623,25 +565,13 @@ async def raw_neo4j(
                 break
         projected.append({
             "summary": "  ".join(bits) if bits else "(empty row)",
-            "raw":     _neo4j_jsonify(r),
+            "raw":     domain.neo4j_jsonify(r),
         })
     return _raw_envelope(
-        BACKEND_NEO4J, app, t0,
+        params.BACKEND_NEO4J, app, t0,
         hits  = projected,
         total = len(projected),
     )
-
-
-# Neo4j driver returns Node / Relationship objects that aren't directly
-# JSON-serializable. Convert each row into a plain `dict` of primitives
-# preserving the graph-shape under `_node` / `_relationship` keys so the
-# frontend can build a Cytoscape graph view from them.
-def _neo4j_jsonify(row: dict) -> dict:
-    from neo4j.graph import Node, Path, Relationship
-    out: dict = {}
-    for k, v in row.items():
-        out[k] = _neo4j_value(v, Node = Node, Rel = Relationship, Path = Path)
-    return out
 
 
 # AI text-to-DSL — Phase 4
@@ -656,7 +586,7 @@ def _neo4j_jsonify(row: dict) -> dict:
 # matter how the callback tried to read it. A plain non-streaming
 # `llm.ainvoke()` call on the SAME client DOES correctly return it in
 # `response.response_metadata["model_name"]` — that's exactly the field
-# `domains.ycs.rag.llm_call.capture_llm_usage`/`resilient_ainvoke`
+# `domains.ycs.rag.service.capture_llm_usage`/`resilient_ainvoke`
 # already read for DD's Planner/Synth and YCS Ingestion/Ask's model
 # chips and usage tables. Rather than fight the rotator's streaming
 # response shape, `_stream()` below now generates the SAME way those
@@ -688,9 +618,6 @@ async def ai_generate_stream(
          clean text (vs. the streamed-with-self-repair chatter)."""
     import json as _json
 
-    from .examples import EXAMPLES_BY_BACKEND
-    from .prompts  import build_generate_prompt, build_repair_prompt
-
     # prefer the speed-optimised `dd-reduce-label` chain
     # built once at lifespan as `app.state.query_ai_llm`. It targets
     # fast non-reasoning arms (Groq Llama-3.3-70b LPU, Gemini Flash
@@ -714,11 +641,11 @@ async def ai_generate_stream(
     # 1. Schema. Best-effort — degrades to None on any failure.
     schema_payload = None
     try:
-        if backend == BACKEND_ES:
+        if backend == params.BACKEND_ES:
             schema_payload = await get_es_schema(request = request)
-        elif backend == BACKEND_QDRANT:
+        elif backend == params.BACKEND_QDRANT:
             schema_payload = await get_qdrant_schema(request = request)
-        elif backend == BACKEND_NEO4J:
+        elif backend == params.BACKEND_NEO4J:
             schema_payload = await get_neo4j_schema(request = request)
     except Exception as e:
         logger.warning(f"[ycs:query:ai] schema fetch failed: {type(e).__name__}: {e}")
@@ -730,7 +657,7 @@ async def ai_generate_stream(
         # wrapper key.
         schema_obj = {k: v for k, v in schema_payload.items() if k != "cached_at"}
 
-    examples = EXAMPLES_BY_BACKEND.get(backend, [])
+    examples = prompts.EXAMPLES_BY_BACKEND.get(backend, [])
 
     async def _stream(prompt_text: str):
         """Yield `(kind, payload, accumulated)` tuples — `kind` is one of
@@ -769,8 +696,7 @@ async def ai_generate_stream(
             yield ("yield", payload, accumulated)
 
         try:
-            from domains.ycs.rag.llm_call import capture_llm_usage
-            await capture_llm_usage(response)
+            await domains.ycs.rag.service.capture_llm_usage(response)
         except Exception:
             pass
 
@@ -814,7 +740,7 @@ async def ai_generate_stream(
                     return
 
     # First pass.
-    prompt1 = build_generate_prompt(
+    prompt1 = prompts.build_generate_prompt(
         backend     = backend,
         user_prompt = user_prompt,
         schema      = schema_obj,
@@ -844,8 +770,8 @@ async def ai_generate_stream(
         })}
         return
 
-    final = _post_clean(acc, backend = backend)
-    ok, err = _check_with_safety(final, backend = backend)
+    final = domain.post_clean(acc, backend = backend)
+    ok, err = domain.check_with_safety(final, backend = backend)
     if not ok:
         # diagnosable from `kubectl logs` without a transcript-replay.
         # Capped at 1500 chars to bound log volume.
@@ -858,7 +784,7 @@ async def ai_generate_stream(
             "event": "repair",
             "error": err or "(unknown parse error)",
         })}
-        prompt2 = build_repair_prompt(
+        prompt2 = prompts.build_repair_prompt(
             backend     = backend,
             user_prompt = user_prompt,
             attempt     = final,
@@ -882,11 +808,11 @@ async def ai_generate_stream(
         if stream_err is not None:
             yield {"data": _json.dumps({
                 "event": "done", "ok": False,
-                "error": stream_err, "final": _post_clean(acc2, backend = backend),
+                "error": stream_err, "final": domain.post_clean(acc2, backend = backend),
             })}
             return
-        final = _post_clean(acc2, backend = backend)
-        ok, err = _check_with_safety(final, backend = backend)
+        final = domain.post_clean(acc2, backend = backend)
+        ok, err = domain.check_with_safety(final, backend = backend)
         if not ok:
             logger.warning(
                 "[ycs:query:ai] self-repair ALSO rejected (%s): %s — body[:1500]=%r",
@@ -899,246 +825,6 @@ async def ai_generate_stream(
         "error": err,
         "final": final,
     })}
-
-
-def _post_clean(text: str, *, backend: str) -> str:
-    """Strip markdown fences + leading/trailing prose the model sometimes
-    can't help adding, then PRETTY-FORMAT the result so the editor
-    shows it indented + readable.
-
-      - JSON backends → balance braces to extract the JSON object,
-        then `json.loads` + `json.dumps(indent=2)` so the final body
-        is canonical-pretty (2-space indent, stable key order, no
-        trailing whitespace). Falls back to the raw extract if the
-        text doesn't parse — that path also gets surfaced by the
-        safety guard and triggers a self-repair retry.
-      - Cypher → rstrip per line, collapse blank-line runs > 2,
-        and strip leading/trailing whitespace. The few-shot
-        exemplars already teach the LLM the line-per-clause style;
-        we just polish what came back.
-    """
-    if not text:
-        return ""
-    s = text.strip()
-
-    if s.startswith("```"):
-        s = s.split("\n", 1)[1] if "\n" in s else s
-    if s.endswith("```"):
-        s = s.rsplit("```", 1)[0]
-    s = s.strip()
-
-    if backend in (BACKEND_ES, BACKEND_QDRANT):
-        extracted = _extract_balanced_json(s)
-        try:
-            obj = json.loads(extracted)
-        except json.JSONDecodeError:
-            # Common LLM mistake: trailing commas before `}` / `]`.
-            # Standard JSON forbids them; one permissive sweep recovers
-            # the most frequent failure mode without pulling in json5.
-            relaxed = re.sub(r",(\s*[}\]])", r"\1", extracted)
-            try:
-                obj = json.loads(relaxed)
-            except json.JSONDecodeError:
-                # Truly malformed — return raw so the safety guard
-                # surfaces a precise error and self-repair fires.
-                return extracted
-        # ensure_ascii=False so unicode survives the round-trip;
-        # indent=2 matches the scaffold templates in editor.js so the
-        # editor renders cleanly after replacement.
-        return json.dumps(obj, indent = 2, ensure_ascii = False)
-
-    if backend == BACKEND_NEO4J:
-        return _format_cypher(_extract_cypher(s))
-
-    return s
-
-
-def _extract_cypher(s: str) -> str:
-    """Pull just the Cypher out of a response that may also contain
-    prose, fenced blocks, or other commentary.
-
-    Real-world failure mode (2026-06-16, "best graph about Brasil"):
-    the LLM wrote prose around the Cypher — e.g. "I'll create a query
-    that…" / "this will delete duplicates from the result". The prose
-    contained `create` / `delete`, which the safety regex flagged as
-    write ops, rejecting an otherwise-valid READ-only query.
-
-    Extraction strategy (each step strictly stronger than the last):
-      1. Fenced block ANYWHERE — triple-backtick blocks, optionally
-         tagged ``cypher`` / ``cql``. Strong signal; almost never
-         matches inside natural prose.
-      2. Per-LINE scan for a line that STARTS with a Cypher clause
-         pattern (MATCH `(`, OPTIONAL MATCH `(`, CALL foo.bar`(`, or
-         WITH/UNWIND/RETURN + identifier). The next-token requirement
-         filters out prose words like "match the entity then …".
-      3. Last-resort: substring search for `MATCH (` or `OPTIONAL
-         MATCH (` with the opening paren mandatory — that's about as
-         strong a Cypher signal as you can get in a single token.
-      4. Failing all three, return the input verbatim and let the
-         safety regex deliver a precise rejection message."""
-    if not s:
-        return s
-    # 1. Fenced extraction.
-    fence = re.search(
-        r"```(?:cypher|cql)?\s*\n?(.*?)```",
-        s, flags = re.DOTALL | re.IGNORECASE,
-    )
-    if fence:
-        return fence.group(1).strip()
-    # 2. Per-line scan for the FIRST line that opens a Cypher clause.
-    #    The next-token after the keyword (`(` or `\S`) is what
-    #    distinguishes "MATCH (x)" from a prose word like "match".
-    _CYPHER_LINE_START = re.compile(
-        r"^\s*(?:"
-        r"MATCH\s*\("                       # MATCH (
-        r"|OPTIONAL\s+MATCH\s*\("           # OPTIONAL MATCH (
-        r"|WITH\s+\S"                       # WITH x
-        r"|UNWIND\s+\S"                     # UNWIND list
-        r")",
-        flags = re.IGNORECASE,
-    )
-    lines = s.split("\n")
-    for i, line in enumerate(lines):
-        if _CYPHER_LINE_START.match(line):
-            return "\n".join(lines[i:]).strip()
-    # 3. Substring fallback — only the strongest signals (`KEYWORD (`)
-    #    to avoid grabbing prose words.
-    m = re.search(
-        r"\b(?:MATCH|OPTIONAL\s+MATCH)\s*\(",
-        s, flags = re.IGNORECASE,
-    )
-    if m:
-        return s[m.start():].strip()
-    # 4. Give up — let safety speak.
-    return s
-
-
-def _extract_balanced_json(s: str) -> str:
-    """Walk from the first `{` to its matching `}`, ignoring braces
-    inside string literals (handles escaped quotes). Returns the
-    enclosed JSON or `s` unchanged if no balanced object is found —
-    cheap defense against prose around the JSON body."""
-    start = s.find("{")
-    if start < 0:
-        return s
-    depth = 0
-    in_str = False
-    esc    = False
-    for i, ch in enumerate(s[start:], start = start):
-        if in_str:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_str = False
-            continue
-        if ch == '"':
-            in_str = True
-            continue
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return s[start: i + 1]
-    return s
-
-
-def _format_cypher(s: str) -> str:
-    """Cypher polish — inject newlines before major clause keywords so
-    a single-line model response renders multi-line + legible.
-
-    Pipeline:
-      1. Normalize line endings + strip.
-      2. PROTECT string literals + `//` + `/* */` comments by swapping
-         them out for placeholders — so we never insert newlines inside
-         a quoted token (e.g. `RETURN \"what to RETURN\"` shouldn't
-         break in the middle of the string).
-      3. Inject a newline before each major Cypher keyword that's
-         preceded by inline whitespace. Compound keywords first
-         (`OPTIONAL MATCH`, `UNION ALL`, `ORDER BY`) so they win over
-         the bare single-word variants.
-      4. Restore the protected literals.
-      5. rstrip per line + collapse blank-line runs of 3+.
-
-    Case-preserving: the matched keyword text is reused verbatim in the
-    replacement (the LLM might output lowercase Cypher; we don't
-    silently upper-case it)."""
-    if not s.strip():
-        return ""
-    src = s.replace("\r\n", "\n").strip()
-
-    # 1. Protect strings + comments.
-    placeholders: list[str] = []
-    def _protect(match: "re.Match[str]") -> str:
-        placeholders.append(match.group(0))
-        return f"\x00P{len(placeholders) - 1}\x00"
-
-    _protect_re = re.compile(
-        r"//[^\n]*"                       # line comment
-        r"|/\*.*?\*/"                     # block comment (non-greedy)
-        r"|'(?:\\.|[^'\\])*'"             # single-quoted string
-        r"|\"(?:\\.|[^\"\\])*\""          # double-quoted string
-        r"|`(?:\\.|[^`\\])*`",            # back-tick identifier
-        flags = re.DOTALL,
-    )
-    protected = _protect_re.sub(_protect, src)
-
-    # 2. Inject newlines before major clauses. SINGLE alternation regex
-    #    with longest-first ordering so `OPTIONAL MATCH` wins over the
-    #    bare `MATCH` rule and doesn't get split in half (the two-pass
-    #    version produced `OPTIONAL\nMATCH`). `re.sub` does left-to-
-    #    right non-overlapping matching, so once "OPTIONAL MATCH" is
-    #    consumed at position N the next search resumes past the
-    #    compound keyword.
-    _KEYWORDS = (
-        "OPTIONAL MATCH", "UNION ALL", "ORDER BY",
-        "MATCH", "WHERE", "WITH", "RETURN", "LIMIT", "SKIP",
-        "UNION", "UNWIND", "CALL", "YIELD",
-    )
-    _alts = sorted(
-        # Spaces in keywords become `\s+` so `OPTIONAL\nMATCH` or
-        # `OPTIONAL  MATCH` (multiple spaces) still match as one
-        # compound clause.
-        (kw.replace(" ", r"\s+") for kw in _KEYWORDS),
-        key = len, reverse = True,
-    )
-    _all_kw_re = re.compile(
-        r"(?<!\n)[ \t]+(" + "|".join(_alts) + r")\b",
-        flags = re.IGNORECASE,
-    )
-    protected = _all_kw_re.sub(lambda m: "\n" + m.group(1), protected)
-
-    # 3. Restore protected spans.
-    out = re.sub(
-        r"\x00P(\d+)\x00",
-        lambda m: placeholders[int(m.group(1))],
-        protected,
-    )
-
-    # 4. Final normalization.
-    out = "\n".join(line.rstrip() for line in out.split("\n"))
-    out = re.sub(r"\n{3,}", "\n\n", out)
-    return out.strip()
-
-
-def _check_with_safety(text: str, *, backend: str) -> tuple[bool, str | None]:
-    """Apply the same safety guards the Run path uses — so the AI
-    output passes the EXACT same gate as user-typed content. Returns
-    `(ok, error)`."""
-    try:
-        if backend == BACKEND_NEO4J:
-            assert_cypher_readonly(text)
-        elif backend == BACKEND_ES:
-            parse_es_body(text)
-        elif backend == BACKEND_QDRANT:
-            parse_qdrant_body(text)
-    except QueryNotAllowed as e:
-        return False, str(e)
-    except Exception as e:
-        return False, f"{type(e).__name__}: {e}"
-    return True, None
 
 
 # Two-layer schema: declared floor (structural contract) + live overlay (real samples + LLM-generated rel names).
@@ -1222,7 +908,7 @@ async def _build_es_schema_live() -> dict[str, Any]:
             for h in s_resp.get("hits", {}).get("hits", []):
                 samples.append({
                     "_id":     h.get("_id"),
-                    "_source": _truncate_doc(h.get("_source", {}) or {}),
+                    "_source": domain.truncate_doc(h.get("_source", {}) or {}),
                 })
         except Exception as e:
             logger.debug(f"[ycs:query:schema:es] sample fetch failed for {idx}: {e}")
@@ -1261,68 +947,26 @@ async def _build_es_schema_live() -> dict[str, Any]:
     return out
 
 
-def _truncate_doc(src: dict, *, max_field_chars: int = 240) -> dict:
-    """Trim long string fields in a sample `_source` so the prompt
-    stays under-budget. Lists are shallow-truncated to 3 items."""
-    out: dict[str, Any] = {}
-    for k, v in (src or {}).items():
-        if isinstance(v, str):
-            out[k] = v if len(v) <= max_field_chars else v[:max_field_chars] + "…"
-        elif isinstance(v, list):
-            out[k] = v[:3]
-        elif isinstance(v, dict):
-            out[k] = {ik: iv for ik, iv in list(v.items())[:6]}
-        elif isinstance(v, (int, float, bool)) or v is None:
-            out[k] = v
-        else:
-            out[k] = str(v)
-    return out
-
-
 async def _build_es_schema() -> dict[str, Any]:
     """Two-layer ES schema: declared floor + live overlay.
 
-    Declared floor (`declared.declared_es_schema`) is sourced from
+    Declared floor (`domain.declared_es_schema`) is sourced from
     `infra/elasticsearch/mappings.py` so an empty cluster / outage
     still surfaces the full mapping. Live overlay merges per-index
     samples + field_values + observed mappings (in case ES has drifted
     from what we declared) + doc_count."""
-    from .declared import declared_es_schema
-    declared = declared_es_schema()
+    declared = domain.declared_es_schema()
     try:
         live = await _build_es_schema_live()
     except Exception as e:
         logger.warning(f"[ycs:query:schema:es] live fetch failed: {type(e).__name__}: {e}")
         return declared
-    return _merge_es_schema(declared, live)
-
-
-def _merge_es_schema(declared: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
-    """Per-index overlay. Declared mappings are kept ONLY when live is
-    missing/erroring (live wins on mappings to track schema drift);
-    samples + field_values + doc_count come from live."""
-    out: dict[str, Any] = {"indices": {}}
-    for name, idx in (declared.get("indices") or {}).items():
-        out["indices"][name] = dict(idx)
-    for name, idx in (live.get("indices") or {}).items():
-        cur = out["indices"].get(name, {})
-        if idx.get("error"):
-            # Live had an error for this index — keep declared floor
-            cur["error"] = idx["error"]
-            out["indices"][name] = cur
-            continue
-        if idx.get("mappings"):
-            cur["mappings"] = idx["mappings"]
-        cur["doc_count"]    = idx.get("doc_count", cur.get("doc_count", 0))
-        cur["samples"]      = idx.get("samples")      or cur.get("samples", [])
-        cur["field_values"] = idx.get("field_values") or cur.get("field_values", {})
-        out["indices"][name] = cur
-    return out
+    return domain.merge_es_schema(declared, live)
 
 
 async def get_es_schema(*, request: Request, refresh: bool = False) -> dict[str, Any]:
     return await _schema_cached(
-        backend = BACKEND_ES, request = request, refresh = refresh,
+        backend = params.BACKEND_ES, request = request, refresh = refresh,
         builder = _build_es_schema,
     )
 
@@ -1334,8 +978,7 @@ async def _build_qdrant_schema_live() -> dict[str, Any]:
     + observed_payload_keys (union of keys across sampled payloads) +
     3 sample payloads. Degrades to empty when the collection is empty;
     `_build_qdrant_schema` merges this on top of the declared floor."""
-    from .params import APP_BACKENDS
-    collection = APP_BACKENDS[APP_YCS][BACKEND_QDRANT].target
+    collection = params.APP_BACKENDS[params.APP_YCS][params.BACKEND_QDRANT].target
     client = get_qdrant()
     try:
         info = await client.get_collection(collection_name = collection)
@@ -1369,7 +1012,7 @@ async def _build_qdrant_schema_live() -> dict[str, Any]:
             payload = (getattr(r, "payload", None) or {})
             samples.append({
                 "id":      str(getattr(r, "id", "")),
-                "payload": _truncate_doc(payload),
+                "payload": domain.truncate_doc(payload),
             })
     except Exception as e:
         logger.debug(f"[ycs:query:schema:qdrant] sample scroll failed: {e}")
@@ -1397,63 +1040,22 @@ async def _build_qdrant_schema_live() -> dict[str, Any]:
 async def _build_qdrant_schema() -> dict[str, Any]:
     """Two-layer Qdrant schema: declared floor + live overlay.
 
-    Declared floor (`declared.declared_qdrant_schema`) lists the FULL
-    canonical payload keys from `domains/ycs/ingestion/domain.py:
-    build_payload`. Live overlay adds the actual points_count + real
+    Declared floor (`domain.declared_qdrant_schema`) lists the FULL
+    canonical payload keys from `domains.ycs.ingestion.domain
+    .build_payload`. Live overlay adds the actual points_count + real
     sample payloads (so the LLM sees concrete values, not just keys)."""
-    from .declared import declared_qdrant_schema
-    declared = declared_qdrant_schema()
+    declared = domain.declared_qdrant_schema()
     try:
         live = await _build_qdrant_schema_live()
     except Exception as e:
         logger.warning(f"[ycs:query:schema:qdrant] live fetch failed: {type(e).__name__}: {e}")
         return declared
-    return _merge_qdrant_schema(declared, live)
-
-
-def _merge_qdrant_schema(declared: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
-    """Per-collection overlay. Declared payload-key list is the floor
-    (union with whatever the live scroll observed). Live vectors_config
-    + samples + points_count overlay. `text_indexed_fields` is derived
-    from the declared payload_schema where data_type == 'text'; live
-    can add to it if a field has a text index in production that the
-    declared floor doesn't list."""
-    declared_cols = {c["name"]: c for c in (declared.get("collections") or [])}
-    live_cols     = {c["name"]: c for c in (live.get("collections")     or [])}
-    out_cols: list[dict[str, Any]] = []
-    for name in (set(declared_cols) | set(live_cols)):
-        d = declared_cols.get(name, {})
-        l = live_cols.get(name, {})
-        if l.get("error"):
-            merged = dict(d)
-            merged["error"] = l["error"]
-            out_cols.append(merged)
-            continue
-        text_idx: set[str] = set(d.get("text_indexed_fields") or [])
-        text_idx.update(l.get("text_indexed_fields") or [])
-        for field, cfg in (l.get("payload_schema") or {}).items():
-            dt = str((cfg or {}).get("data_type") or "").lower()
-            if dt.startswith("text"):
-                text_idx.add(field)
-        merged = {
-            "name":           name,
-            "points_count":   l.get("points_count", d.get("points_count", 0)),
-            "vectors_config": l.get("vectors_config") or d.get("vectors_config"),
-            "payload_schema": l.get("payload_schema") or d.get("payload_schema") or {},
-            "observed_payload_keys": sorted(
-                set(d.get("observed_payload_keys") or [])
-                | set(l.get("observed_payload_keys") or [])
-            ),
-            "text_indexed_fields": sorted(text_idx),
-            "samples": l.get("samples") or d.get("samples") or [],
-        }
-        out_cols.append(merged)
-    return {"collections": out_cols}
+    return domain.merge_qdrant_schema(declared, live)
 
 
 async def get_qdrant_schema(*, request: Request, refresh: bool = False) -> dict[str, Any]:
     return await _schema_cached(
-        backend = BACKEND_QDRANT, request = request, refresh = refresh,
+        backend = params.BACKEND_QDRANT, request = request, refresh = refresh,
         builder = _build_qdrant_schema,
     )
 
@@ -1565,7 +1167,7 @@ async def _build_neo4j_schema_live() -> dict[str, Any]:
                         props = dict(n) if n else {}
                         samples.append({
                             "id":         n.element_id if n else None,
-                            "properties": _truncate_doc(props),
+                            "properties": domain.truncate_doc(props),
                         })
                     out["node_samples"][lab] = samples
                 except Exception as e:
@@ -1586,116 +1188,133 @@ async def _build_neo4j_schema() -> dict[str, Any]:
     empty graph returns NOTHING. Without the declared floor the AI has
     zero structural grounding on day-zero or after a wipe.
 
-    Declared floor (`declared.declared_neo4j_schema`) is sourced from
+    Declared floor (`domain.declared_neo4j_schema`) is sourced from
     the actual writer code in `domains/ycs/graph_builder/` so it
     matches what the LLMGraphTransformer + the YCS-specific
     `build_video_metadata_graph` produce."""
-    from .declared import declared_neo4j_schema
-    declared = declared_neo4j_schema()
+    declared = domain.declared_neo4j_schema()
     try:
         live = await _build_neo4j_schema_live()
     except Exception as e:
         logger.warning(f"[ycs:query:schema:neo4j] live fetch failed: {type(e).__name__}: {e}")
         return declared
-    return _merge_neo4j_schema(declared, live)
-
-
-def _merge_neo4j_schema(declared: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
-    """Union of labels + rel types; union of properties per label; merge
-    of relationship_patterns marking declared-but-unobserved with
-    `count=null`, declared-AND-observed with the live count, and
-    live-only (LLM-invented inter-entity rels) untouched."""
-    if live.get("error") and not (live.get("labels") or live.get("relationship_types")):
-        # Live call totally failed — pass declared with the error annotated.
-        out = dict(declared)
-        out["error"] = live["error"]
-        return out
-
-    labels = sorted(set(declared.get("labels") or []) | set(live.get("labels") or []))
-    rels   = sorted(
-        set(declared.get("relationship_types") or [])
-        | set(live.get("relationship_types") or [])
-    )
-
-    node_props: dict[str, list[dict[str, Any]]] = {}
-    for source in (declared.get("node_properties") or {}, live.get("node_properties") or {}):
-        for label, props in source.items():
-            current = {p["name"]: p for p in node_props.get(label, [])}
-            for p in (props or []):
-                # live overrides declared on property types (schema drift is real)
-                current[p["name"]] = p
-            node_props[label] = list(current.values())
-
-    # Live count takes precedence; declared-only entries keep count=None to signal structurally valid but empty.
-    pat: dict[tuple[str, str, str], dict[str, Any]] = {}
-    for p in (declared.get("relationship_patterns") or []):
-        key = (p.get("src", ""), p.get("rel", ""), p.get("dst", ""))
-        pat[key] = {**p, "declared": True}
-    for p in (live.get("relationship_patterns") or []):
-        key = (p.get("src", ""), p.get("rel", ""), p.get("dst", ""))
-        if key in pat:
-            pat[key] = {**pat[key], "count": p.get("count"), "observed": True}
-        else:
-            pat[key] = {**p, "observed": True}
-    def _pat_sort(p: dict[str, Any]):
-        c = p.get("count")
-        return (-(c if c is not None else -1), p.get("src", ""), p.get("rel", ""))
-    rel_patterns = sorted(pat.values(), key = _pat_sort)
-
-    node_samples: dict[str, list[dict[str, Any]]] = {}
-    for source in (declared.get("node_samples") or {}, live.get("node_samples") or {}):
-        for label, samples in source.items():
-            if samples:
-                node_samples[label] = samples
-            elif label not in node_samples:
-                node_samples[label] = []
-
-    out: dict[str, Any] = {
-        "labels":                labels,
-        "relationship_types":    rels,
-        "node_properties":       node_props,
-        "relationship_patterns": rel_patterns,
-        "node_samples":          node_samples,
-    }
-    if live.get("error"):
-        out["error"] = live["error"]
-    return out
+    return domain.merge_neo4j_schema(declared, live)
 
 
 async def get_neo4j_schema(*, request: Request, refresh: bool = False) -> dict[str, Any]:
     return await _schema_cached(
-        backend = BACKEND_NEO4J, request = request, refresh = refresh,
+        backend = params.BACKEND_NEO4J, request = request, refresh = refresh,
         builder = _build_neo4j_schema,
     )
 
 
-def _neo4j_value(v, *, Node, Rel, Path):
-    if v is None or isinstance(v, (str, int, float, bool)):
-        return v
-    if isinstance(v, Node):
-        return {
-            "_kind":      "node",
-            "id":         v.element_id,
-            "labels":     list(v.labels),
-            "properties": dict(v),
+# Per-user query history (Postgres-backed).
+#
+# Tiny table (one schema, three queries). Uses `psycopg` v3 — same driver
+# the YCS conversation service uses, the only async-Postgres lib actually
+# present in the FastAPI image (`asyncpg` would have to be added to
+# `pyproject.toml` + a wheel rebuild; staying on psycopg keeps the
+# deploy surface unchanged).
+#
+# There's no auth yet — every user sees every row. Add an `owner` column
+# + filter when SSO lands; the schema below already accommodates it as a
+# nullable text.
+
+_HISTORY_TABLE_NAME = "query_history"
+
+
+async def ensure_query_history_table(pg_url: str) -> None:
+    """Idempotent table init. Called lazily on first read/write — keeps
+    Query out of the lifespan hot path (cheap when already created)."""
+    async with await psycopg.AsyncConnection.connect(
+        pg_url, autocommit = True,
+    ) as conn:
+        await conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS {_HISTORY_TABLE_NAME} (
+                id           BIGSERIAL PRIMARY KEY,
+                backend      TEXT      NOT NULL,
+                app          TEXT      NOT NULL DEFAULT 'ycs',
+                body         TEXT      NOT NULL,
+                prompt       TEXT      NOT NULL DEFAULT '',
+                favorite     BOOLEAN   NOT NULL DEFAULT FALSE,
+                owner        TEXT,
+                created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """)
+        await conn.execute(f"""
+            CREATE INDEX IF NOT EXISTS query_history_created_idx
+                ON {_HISTORY_TABLE_NAME} (created_at DESC)
+        """)
+        await conn.execute(f"""
+            CREATE INDEX IF NOT EXISTS query_history_backend_idx
+                ON {_HISTORY_TABLE_NAME} (backend, created_at DESC)
+        """)
+
+
+async def save_query_history_entry(
+    pg_url: str, *, backend: str, app: str, body: str, prompt: str,
+    favorite: bool = False,
+) -> int:
+    """Insert one row, return its id. Errors propagate up so the router
+    can 5xx on Postgres outages instead of silently no-op'ing."""
+    await ensure_query_history_table(pg_url)
+    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        result = await conn.execute(
+            f"INSERT INTO {_HISTORY_TABLE_NAME} "
+            f"(backend, app, body, prompt, favorite) "
+            f"VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (backend, app, body, prompt, favorite),
+        )
+        row = await result.fetchone()
+        await conn.commit()
+    return int(row[0]) if row else 0
+
+
+async def list_query_history_entries(
+    pg_url: str, *, backend: str | None = None, limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Return the latest `limit` entries, optionally filtered to one
+    backend. Body is included so the UI can show a snippet without an
+    extra round-trip."""
+    await ensure_query_history_table(pg_url)
+    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        if backend:
+            result = await conn.execute(
+                f"SELECT id, backend, app, body, prompt, favorite, created_at "
+                f"FROM {_HISTORY_TABLE_NAME} WHERE backend = %s "
+                f"ORDER BY created_at DESC LIMIT %s",
+                (backend, limit),
+            )
+        else:
+            result = await conn.execute(
+                f"SELECT id, backend, app, body, prompt, favorite, created_at "
+                f"FROM {_HISTORY_TABLE_NAME} "
+                f"ORDER BY created_at DESC LIMIT %s",
+                (limit,),
+            )
+        rows = await result.fetchall()
+    return [
+        {
+            "id":         int(r[0]),
+            "backend":    r[1],
+            "app":        r[2],
+            "body":       r[3],
+            "prompt":     r[4] or "",
+            "favorite":   bool(r[5]),
+            "created_at": r[6].isoformat() if r[6] is not None else "",
         }
-    if isinstance(v, Rel):
-        return {
-            "_kind":      "relationship",
-            "id":         v.element_id,
-            "type":       v.type,
-            "start":      v.start_node.element_id if v.start_node else None,
-            "end":        v.end_node.element_id   if v.end_node   else None,
-            "properties": dict(v),
-        }
-    if isinstance(v, Path):
-        return {
-            "_kind": "path",
-            "nodes": [_neo4j_value(n, Node = Node, Rel = Rel, Path = Path) for n in v.nodes],
-            "rels":  [_neo4j_value(r, Node = Node, Rel = Rel, Path = Path) for r in v.relationships],
-        }
-    if isinstance(v, (list, tuple)):
-        return [_neo4j_value(x, Node = Node, Rel = Rel, Path = Path) for x in v]
-    if isinstance(v, dict):
-        return {k: _neo4j_value(x, Node = Node, Rel = Rel, Path = Path) for k, x in v.items()}
-    return str(v)
+        for r in rows
+    ]
+
+
+async def delete_query_history_entry(pg_url: str, entry_id: int) -> int:
+    """DELETE one row by id. Returns 1 if removed, 0 if not found."""
+    await ensure_query_history_table(pg_url)
+    async with await psycopg.AsyncConnection.connect(pg_url) as conn:
+        result = await conn.execute(
+            f"DELETE FROM {_HISTORY_TABLE_NAME} WHERE id = %s",
+            (entry_id,),
+        )
+        await conn.commit()
+    # psycopg cursor.rowcount carries the affected-row count.
+    return int(getattr(result, "rowcount", 0) or 0)

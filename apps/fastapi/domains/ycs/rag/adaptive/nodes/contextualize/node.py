@@ -8,14 +8,12 @@ from __future__ import annotations
 
 import asyncio
 
-from domains.ycs.rag.llm_call import resilient_ainvoke
-from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
-from domains.ycs.runtime.observability import traced
+import domains
+from domains.ycs.runtime.observability.service import traced
 
-from ....domain import strip_think_tags
-from ...params import MAX_HISTORY_ANSWER_CHARS, MAX_HISTORY_TURNS
-from ...state import AdaptiveRAGState
-from .prompts import CONTEXTUALIZE_PROMPT
+from .... import domain, service
+from ... import params, state
+from . import prompts
 
 
 # 2026-09-15: 45 → 30s tiering — failure degrades to skipping the
@@ -24,24 +22,24 @@ _CONTEXTUALIZE_TIMEOUT_S = 30.0
 
 
 @traced("rag.contextualize")
-async def contextualize_question(state: AdaptiveRAGState, llm) -> dict:
+async def contextualize_question(state: state.AdaptiveRAGState, llm) -> dict:
     """Rewrite the question when prior history exists."""
     history = state.get("conversation_history") or []
     if not history:
         return {"contextualized": True}
 
     parts: list[str] = []
-    for turn in history[-MAX_HISTORY_TURNS:]:
+    for turn in history[-params.MAX_HISTORY_TURNS:]:
         parts.append(
             f"Q: {turn['question']}\n"
-            f"A: {turn['answer'][:MAX_HISTORY_ANSWER_CHARS]}"
+            f"A: {turn['answer'][:params.MAX_HISTORY_ANSWER_CHARS]}"
         )
     formatted = "\n---\n".join(parts)
 
-    chain = CONTEXTUALIZE_PROMPT | llm
+    chain = prompts.CONTEXTUALIZE_PROMPT | llm
     try:
-        _llm_set_node(node = "contextualize")
-        response = await resilient_ainvoke(
+        domains.ycs.runtime.llm_counter.service.set_node(node = "contextualize")
+        response = await service.resilient_ainvoke(
             chain,
             {
                 "history":  formatted,
@@ -51,7 +49,7 @@ async def contextualize_question(state: AdaptiveRAGState, llm) -> dict:
             timeout_s    = _CONTEXTUALIZE_TIMEOUT_S,
             max_attempts = 2,
         )
-        rewritten = strip_think_tags(response.content)
+        rewritten = domain.strip_think_tags(response.content)
         if rewritten and rewritten != state["question"]:
             return {
                 "question":       rewritten,

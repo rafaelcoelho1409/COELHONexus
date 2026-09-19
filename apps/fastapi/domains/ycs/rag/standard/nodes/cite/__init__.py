@@ -1,4 +1,3 @@
-from .node import format_citations
+from __future__ import annotations
 
-
-__all__ = ["format_citations"]
+from . import node

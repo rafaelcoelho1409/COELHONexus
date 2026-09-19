@@ -5,22 +5,18 @@ clock. Lives at the `rag/` level because `standard/` and `adaptive/`
 both call into it."""
 from __future__ import annotations
 
-import re
+import asyncio
+import json
 from typing import Any, TypeVar
 
 from json_repair import loads as json_repair_loads
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel
 
+from . import params, patterns
 
-_THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>\s*")
+
 _ModelT = TypeVar("_ModelT", bound = BaseModel)
-
-# Cap on the prior turns we materialize into the prompt. Each turn = 2
-# messages (Human + AI), so 8 turns = 16 messages. Big enough to keep
-# multi-turn coherence; small enough that a 5-turn back-and-forth
-# doesn't eat the LLM context budget.
-_HISTORY_MESSAGES_CAP = 8
 
 
 def history_to_messages(history: list[dict] | None) -> list[BaseMessage]:
@@ -32,7 +28,7 @@ def history_to_messages(history: list[dict] | None) -> list[BaseMessage]:
     returns. Empty `answer` rows are skipped (turns where the assistant
     crashed mid-stream and no row was persisted in the AI direction).
 
-    Only the last `_HISTORY_MESSAGES_CAP` rows are kept; the older ones
+    Only the last `params.HISTORY_MESSAGES_CAP` rows are kept; the older ones
     are dropped so the prompt budget stays predictable for long
     conversations. Older context is preserved indirectly via the
     `contextualize` node's question-rewrite (it sees all rows).
@@ -40,7 +36,7 @@ def history_to_messages(history: list[dict] | None) -> list[BaseMessage]:
     Used by: generate / direct_answer / synthesize nodes."""
     if not history:
         return []
-    rows = history[-_HISTORY_MESSAGES_CAP:]
+    rows = history[-params.HISTORY_MESSAGES_CAP:]
     out: list[BaseMessage] = []
     for row in rows:
         q = (row.get("question") or "").strip()
@@ -92,13 +88,13 @@ def strip_think_tags(text: Any) -> str:
         text = "".join(parts)
     elif not isinstance(text, str):
         text = str(text)
-    text = _THINK_TAG_RE.sub("", text)
+    text = patterns.THINK_TAG_RE.sub("", text)
     # 2026-09-17: some reasoning models (GPT-OSS/DeepSeek-R1/Qwen3
     # reasoning class, seen live via the rotator) emit a bare closing
     # `</think>` with NO matching opening tag — the serving harness
     # swallows the implicit opener but leaves the raw reasoning text
     # (often a verbatim draft of the final answer) in front of it.
-    # `_THINK_TAG_RE` can't match an unpaired tag, so it passed
+    # `patterns.THINK_TAG_RE` can't match an unpaired tag, so it passed
     # through untouched, leaking duplicated reasoning + a literal
     # "</think>" into the shipped answer. Keep only what follows the
     # LAST such tag — that's the model's actual final answer.
@@ -121,3 +117,70 @@ def parse_json_model_output(text: Any, model_cls: type[_ModelT]) -> _ModelT:
             f"{type(payload).__name__}"
         )
     return model_cls.model_validate(payload)
+
+
+def is_transient(exc: BaseException) -> bool:
+    """True only for errors worth spending another attempt on. Used by
+    `service.py`'s `resilient_ainvoke`/`hedged_ainvoke`."""
+    if isinstance(exc, asyncio.TimeoutError):
+        return True
+    msg = str(exc).lower()
+    if any(k in msg for k in params.NON_TRANSIENT_SUBSTRINGS):
+        return False
+    return any(k in msg for k in params.TRANSIENT_SUBSTRINGS)
+
+
+def extract_result_items(raw: Any) -> list[dict]:
+    """Normalize whatever `langchain-mcp-adapters` hands back into a
+    flat list of result dicts. Live-verified shape (2026-09-16,
+    against the real `https://search.parallel.ai/mcp` endpoint):
+    `tool.ainvoke()` returns `list[{"type": "text", "text": "<JSON
+    string>"}]` (standard MCP text-content-block wrapping); the JSON
+    string itself is `{"search_id": ..., "results": [{"url", "title",
+    "publish_date", "excerpts": [...]}]}`.
+
+    Stays defensive beyond that one confirmed shape — a raw string, a
+    bare dict, or a differently-shaped list all degrade to SOMETHING
+    usable rather than raising; only a hard structural mismatch
+    ultimately returns []."""
+    if not raw:
+        return []
+    if isinstance(raw, list) and raw and isinstance(raw[0], dict) and "text" in raw[0]:
+        texts = [b.get("text", "") for b in raw if isinstance(b, dict)]
+        raw = "\n".join(t for t in texts if t)
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return [{"excerpts": [raw]}] if raw.strip() else []
+    if isinstance(raw, dict):
+        raw = raw.get("results") or raw.get("data") or [raw]
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    return [{"excerpts": [str(raw)]}]
+
+
+def format_web_search_results(raw: Any) -> str:
+    """Render up to `params.MAX_RESULTS` result items into a short text
+    block for the fallback prompt's `{web_context}` slot."""
+    items = extract_result_items(raw)
+    if not items:
+        return ""
+    parts: list[str] = []
+    for item in items[:params.MAX_RESULTS]:
+        title = item.get("title") or item.get("name") or ""
+        url = item.get("url") or item.get("link") or ""
+        excerpts = item.get("excerpts")
+        if isinstance(excerpts, list):
+            excerpt = " ".join(str(e) for e in excerpts if e)
+        else:
+            excerpt = str(
+                item.get("excerpt") or item.get("snippet")
+                or item.get("content") or item.get("text") or excerpts or ""
+            )
+        excerpt = excerpt[:params.EXCERPT_CHAR_CAP]
+        header = f"[{title}]({url})" if (title or url) else ""
+        block = f"{header}\n{excerpt}".strip()
+        if block:
+            parts.append(block)
+    return "\n\n---\n\n".join(parts)

@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from .params import APPS, BACKENDS, DEFAULT_LIMIT, MAX_LIMIT
+from . import params
 
 
 AppLiteral     = Literal["dd", "ycs", "rr"]
@@ -25,7 +25,7 @@ class QueryRequest(BaseModel):
     purpose."""
     app:   AppLiteral = "ycs"
     q:     str        = Field(default = "", description = "Free-text query. Empty = browse-all.")
-    limit: int        = Field(default = DEFAULT_LIMIT, ge = 1, le = MAX_LIMIT)
+    limit: int        = Field(default = params.DEFAULT_LIMIT, ge = 1, le = params.MAX_LIMIT)
     # Pagination is only meaningful for ES + Neo4j (Qdrant kNN is unranked
     # beyond `limit`). The Qdrant endpoint ignores this.
     offset: int = Field(default = 0, ge = 0)
@@ -81,8 +81,8 @@ class NamespaceEntry(BaseModel):
 class NamespaceMap(BaseModel):
     """Returned by `GET /query/namespaces`. The UI fetches this on
     first load to know which `(app, backend)` chips to grey out."""
-    apps:     list[str]                              = Field(default_factory = lambda: list(APPS))
-    backends: list[str]                              = Field(default_factory = lambda: list(BACKENDS))
+    apps:     list[str]                              = Field(default_factory = lambda: list(params.APPS))
+    backends: list[str]                              = Field(default_factory = lambda: list(params.BACKENDS))
     matrix:   dict[str, dict[str, NamespaceEntry]]   = Field(default_factory = dict)
 
 
@@ -96,7 +96,7 @@ class RawQueryRequest(BaseModel):
 
     The `body` is the editor's text content verbatim:
       - Elasticsearch → JSON request-body for `_search`
-      - Qdrant        → JSON `{"op": ..., ...}` (see safety.parse_qdrant_body)
+      - Qdrant        → JSON `{"op": ..., ...}` (see domain.parse_qdrant_body)
       - Neo4j         → Cypher source"""
     app:  AppLiteral = "ycs"
     body: str        = Field(default = "", description = "Editor content.")

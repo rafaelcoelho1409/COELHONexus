@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import asyncio
-from domains.ycs.rag.llm_call import resilient_ainvoke
-from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
-from domains.ycs.runtime.observability import traced
 
-from ....domain import history_to_messages, strip_think_tags
-from ...state import YouTubeRAGState
-from .prompts import GENERATE_PROMPT
+import domains
+from domains.ycs.runtime.observability.service import traced
+
+from .... import domain, service
+from ... import state
+from . import prompts
 
 
 # 180s: after the Router exhausts its catalog, a hung connection won't raise TimeoutError natively.
@@ -26,7 +26,7 @@ _GENERATE_TOTAL_CHARS = 12000
 
 
 @traced("rag.generate")
-async def generate(state: YouTubeRAGState, llm) -> dict:
+async def generate(state: state.YouTubeRAGState, llm) -> dict:
     """Produce an answer using the relevant documents."""
     context_parts: list[str] = []
     budget = _GENERATE_TOTAL_CHARS
@@ -45,20 +45,20 @@ async def generate(state: YouTubeRAGState, llm) -> dict:
         budget -= len(body)
     context = "\n\n---\n\n".join(context_parts)
 
-    chain = GENERATE_PROMPT | llm
+    chain = prompts.GENERATE_PROMPT | llm
     try:
-        _llm_set_node(node = "generate")
-        response = await resilient_ainvoke(
+        domains.ycs.runtime.llm_counter.service.set_node(node = "generate")
+        response = await service.resilient_ainvoke(
             chain,
             {
                 "question": state["question"],
                 "context":  context,
-                "history":  history_to_messages(state.get("conversation_history")),
+                "history":  domain.history_to_messages(state.get("conversation_history")),
             },
             operation = "generate",
             timeout_s = _GENERATE_TIMEOUT_S,
         )
-        return {"generation": strip_think_tags(response.content)}
+        return {"generation": domain.strip_think_tags(response.content)}
     except asyncio.TimeoutError:
         return {
             "generation": (

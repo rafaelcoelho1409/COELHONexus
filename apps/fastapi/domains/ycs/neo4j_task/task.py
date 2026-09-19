@@ -10,7 +10,7 @@ extract_id=None)`. Two callers, two shapes:
     2026-09-13/14): `extract/task.py`'s `_on_video_indexed` calls this
     with a CHUNK of up to `EXTRACT_CONCURRENCY` video ids (accumulated
     as videos finish Phase 1, flushed once the chunk fills) and
-    `batch_size=len(chunk)`, so `extract_and_store_graph`'s internal
+    `batch_size=len(chunk)`, so `domains.ycs.graph_builder.service.extract_and_store_graph`'s internal
     pool width exactly matches the chunk — full concurrency within the
     chunk, starting well before the whole run's video batch clears
     Phase 1. (An earlier same-day version dispatched one Celery task
@@ -23,7 +23,7 @@ Internally:
   1. Fresh AsyncElasticsearch (worker process)
   2. Fresh `Neo4jGraph` — deprecated did NOT pass `refresh_schema=False`
      here (only in app.py). Preserve that omission per port-fidelity.
-  3. Build the chat chain via `build_ycs_neo4j_pinned_chain()` — talks
+  3. Build the chat chain via `domains.llm.rotator.chain.build_ycs_neo4j_pinned_chain()` — talks
      to COELHO LLM Rotator with `model="auto"`; the rotator's own
      server-side FGTS-VA bandit does the real arm/deployment selection.
      2026-09-13: removed the local `pick_ycs_neo4j_deployment_bandit`/
@@ -33,8 +33,8 @@ Internally:
      did nothing). There was no local bandit left to feed; only the
      shell of one remained.
   4. Fetch transcripts + metadata from ES.
-  5. `build_video_metadata_graph` — Video/Channel nodes (no LLM cost).
-  6. `extract_and_store_graph` — LLM entity extraction, one real attempt
+  5. `domains.ycs.graph_builder.service.build_video_metadata_graph` — Video/Channel nodes (no LLM cost).
+  6. `domains.ycs.graph_builder.service.extract_and_store_graph` — LLM entity extraction, one real attempt
      per video. Videos that fail get retried (same connection, same
      model) up to `MAX_RETRY_PASSES` times — see that constant's
      comment for why this replaced the old "arm-swap" framing."""
@@ -45,27 +45,11 @@ import os
 import random
 from typing import Any
 
+import domains
 from celery.utils.log import get_task_logger
 from elasticsearch import AsyncElasticsearch
 from langchain_neo4j import Neo4jGraph
 
-from domains.llm.rotator.chain import build_ycs_neo4j_pinned_chain
-from domains.ycs.graph_builder import (
-    build_video_metadata_graph,
-    extract_and_store_graph,
-    resolve_entities,
-)
-from domains.ycs.graph_builder.domain import is_infra_error
-from domains.ycs.graph_builder.params import (
-    MAX_CONSECUTIVE_INFRA_PASSES,
-    MIN_PENDING_FOR_INFRA_HALT,
-    RETRY_PASS_BACKOFF_S,
-    SOURCE_LABEL,
-)
-from domains.ycs.ingestion import (
-    fetch_metadata_from_es,
-    fetch_transcripts_from_es,
-)
 from infra.celery import app
 
 
@@ -73,7 +57,7 @@ logger = get_task_logger(__name__)
 
 # 2026-09-13: replaces the old MAX_ARM_SWAPS. There is no longer a real
 # "arm" to swap to — pick_ycs_neo4j_deployment_bandit and
-# build_ycs_neo4j_pinned_chain were confirmed to always resolve to the
+# domains.llm.rotator.chain.build_ycs_neo4j_pinned_chain were confirmed to always resolve to the
 # same generic "auto" target server-side, regardless of any client-side
 # exclusion tracking (the rotator does the real arm selection now). What
 # this loop actually does is retry videos that failed on the previous
@@ -105,7 +89,7 @@ def ingest_to_neo4j(
     per-video (it would re-run the same whole-graph fuzzy-merge pass N
     times — the exact "4× redundant" bug a previous ship already fixed
     for the batched path). Instead, each streaming call reports its
-    outcome to `pipeline_task.streaming.mark_video_done`; whichever call
+    outcome to `pipeline_task.service.mark_video_done`; whichever call
     turns out to be the LAST one for the run's Neo4j phase (atomic
     counter reaching the total `extract_videos` recorded) runs
     resolution exactly once, then checks whether Qdrant's phase is also
@@ -212,7 +196,7 @@ def ingest_to_neo4j(
         # finding: a hardcoded-True check is worse than no check).
         try:
             _progress({"phase": "fetching"})
-            transcripts = await fetch_transcripts_from_es(es, video_ids)
+            transcripts = await domains.ycs.ingestion.service.fetch_transcripts_from_es(es, video_ids)
             all_video_ids = list({t["video_id"] for t in transcripts})
             # 2026-09-14: with chunked streaming dispatch (a chunk can
             # now carry several video_ids, not just one), a transcript
@@ -227,13 +211,7 @@ def ingest_to_neo4j(
                 vid for vid in (video_ids or []) if vid not in all_video_ids
             ]
             if missing_ids and skip_resolution and extract_id:
-                from domains.ycs.ingestion.domain import parent_video_id
-                from domains.ycs.pipeline_task.streaming import (
-                    build_redis_client,
-                    mark_video_or_partition_done,
-                    maybe_finalize,
-                )
-                r = build_redis_client()
+                r = domains.ycs.pipeline_task.service.build_redis_client()
                 try:
                     for vid in missing_ids:
                         # part_total unknowable here (the ES doc this
@@ -243,18 +221,18 @@ def ingest_to_neo4j(
                         # still derived from the id string so it at
                         # least reports under the right group instead
                         # of double-counting a split video's total.
-                        await mark_video_or_partition_done(
+                        await domains.ycs.pipeline_task.service.mark_video_or_partition_done(
                             r, extract_id, "neo4j", vid, success = False,
                             extra = {"error": "no transcript found in ES"},
-                            parent_video_id = parent_video_id(vid),
+                            parent_video_id = domains.ycs.ingestion.domain.parent_video_id(vid),
                         )
-                        await maybe_finalize(r, extract_id)
+                        await domains.ycs.pipeline_task.service.maybe_finalize(r, extract_id)
                 finally:
                     await r.close()
             if not transcripts:
                 return {"error": "No transcripts found in ES"}
             total_videos = len(all_video_ids)
-            metadata_map = await fetch_metadata_from_es(es, all_video_ids)
+            metadata_map = await domains.ycs.ingestion.service.fetch_metadata_from_es(es, all_video_ids)
             _progress({
                 "phase": "metadata_graph",
                 "total": total_videos,
@@ -262,7 +240,7 @@ def ingest_to_neo4j(
             # 2026-09-15: dedupe to PARENT video ids before building the
             # Video/Channel metadata graph — `all_video_ids` carries one
             # entry PER PARTITION for a split video (correct for
-            # Document nodes, one per piece), but `build_video_metadata_graph`
+            # Document nodes, one per piece), but `domains.ycs.graph_builder.service.build_video_metadata_graph`
             # MERGEs on `video_id` verbatim, so passing partition ids
             # through unchanged created one duplicate `Video` node per
             # partition (`id: "xyz#p1"`, `"xyz#p2"`, …) instead of one
@@ -272,21 +250,20 @@ def ingest_to_neo4j(
             # (`fetch_metadata_from_es` resolves partitions to their
             # parent before querying ES) — just keep the first
             # occurrence per parent and re-tag it with the parent id.
-            from domains.ycs.ingestion.domain import parent_video_id
             _seen_parents: set[str] = set()
             video_metadata = []
             for vid in all_video_ids:
-                parent = parent_video_id(vid)
+                parent = domains.ycs.ingestion.domain.parent_video_id(vid)
                 if parent in _seen_parents:
                     continue
                 _seen_parents.add(parent)
                 video_metadata.append({**metadata_map.get(vid, {}), "video_id": parent})
-            build_video_metadata_graph(neo4j_graph, video_metadata)
+            domains.ycs.graph_builder.service.build_video_metadata_graph(neo4j_graph, video_metadata)
             # Cumulative progress adapter: segment-local callback restarts at 0/1; this keeps the bar advancing.
             completed_global: set[str] = set()
             try:
                 rows = neo4j_graph.query(
-                    f"MATCH (d:Document:{SOURCE_LABEL}) "
+                    f"MATCH (d:Document:{domains.ycs.graph_builder.params.SOURCE_LABEL}) "
                     "WHERE d.video_id IN $video_ids "
                     "RETURN collect(DISTINCT d.video_id) AS processed_ids",
                     params = {"video_ids": all_video_ids},
@@ -302,7 +279,7 @@ def ingest_to_neo4j(
                 return [vid for vid in all_video_ids if vid in ids]
 
             # 2026-09-14: display-only in-chunk preview (see
-            # `pipeline_task.streaming.update_phase_preview`) — the bar
+            # `pipeline_task.service.update_phase_preview`) — the bar
             # polls the per-video aggregator, which only advances when
             # a whole CHUNK task reports. Without this push the bar
             # sits at 0/N while videos visibly succeed in the logs.
@@ -313,11 +290,7 @@ def ingest_to_neo4j(
             # `_run_inner` so the `finally` is safe on every path.)
             if skip_resolution and extract_id:
                 try:
-                    from domains.ycs.pipeline_task.streaming import (
-                        build_redis_client,
-                        update_phase_preview,
-                    )
-                    _preview_redis = build_redis_client()
+                    _preview_redis = domains.ycs.pipeline_task.service.build_redis_client()
                 except Exception:
                     _preview_redis = None
 
@@ -330,7 +303,7 @@ def ingest_to_neo4j(
                     return
                 try:
                     t = loop.create_task(
-                        update_phase_preview(
+                        domains.ycs.pipeline_task.service.update_phase_preview(
                             _preview_redis, extract_id, "neo4j",
                             _ordered(completed_global),
                         )
@@ -380,7 +353,7 @@ def ingest_to_neo4j(
                     _progress(meta)
                     return
                 _progress(payload)
-            llm = build_ycs_neo4j_pinned_chain()
+            llm = domains.llm.rotator.chain.build_ycs_neo4j_pinned_chain()
             logger.info(
                 f"[ingest_to_neo4j] videos={len(all_video_ids)}, "
                 f"max_retry_passes={MAX_RETRY_PASSES}",
@@ -397,19 +370,15 @@ def ingest_to_neo4j(
             for attempt in range(MAX_RETRY_PASSES + 1):
                 # 2026-09-14: cooperative-cancel checkpoint — only
                 # between passes (never mid-pass; a pass's own
-                # `extract_and_store_graph` call always runs to
+                # `domains.ycs.graph_builder.service.extract_and_store_graph` call always runs to
                 # completion for whatever it's already dispatched).
                 # Stop's replacement for `revoke(terminate=True)` — see
                 # `pipeline_task.service.revoke_pipeline_phases`.
                 if attempt > 0 and extract_id:
                     try:
-                        from domains.ycs.pipeline_task import is_pipeline_cancelled
-                        from domains.ycs.pipeline_task.streaming import (
-                            build_redis_client as _build_cancel_redis,
-                        )
-                        _cr = _build_cancel_redis()
+                        _cr = domains.ycs.pipeline_task.service.build_redis_client()
                         try:
-                            if await is_pipeline_cancelled(_cr, extract_id):
+                            if await domains.ycs.pipeline_task.service.is_pipeline_cancelled(_cr, extract_id):
                                 logger.info(
                                     f"[ingest_to_neo4j] {extract_id}: "
                                     f"cancelled — stopping retry passes "
@@ -428,7 +397,7 @@ def ingest_to_neo4j(
                     # Jittered backoff between passes (DD pattern,
                     # scaled for heavy calls): immediate retries hammer
                     # an already-exhausted free-tier pool.
-                    _lo, _hi = RETRY_PASS_BACKOFF_S
+                    _lo, _hi = domains.ycs.graph_builder.params.RETRY_PASS_BACKOFF_S
                     _sleep_s = _lo + random.uniform(0, _hi - _lo)
                     logger.info(
                         f"[ingest_to_neo4j] backing off {_sleep_s:.1f}s "
@@ -443,7 +412,7 @@ def ingest_to_neo4j(
                     f"[ingest_to_neo4j] {pass_label}: "
                     f"{len(pending_transcripts)} transcript(s)",
                 )
-                extraction_stats = await extract_and_store_graph(
+                extraction_stats = await domains.ycs.graph_builder.service.extract_and_store_graph(
                     transcripts  = pending_transcripts,
                     metadata_map = metadata_map,
                     llm          = llm,
@@ -489,19 +458,19 @@ def ingest_to_neo4j(
                     _last_err = str(
                         extraction_stats.get("last_batch_error") or ""
                     )
-                    if is_infra_error(_last_err):
+                    if domains.ycs.graph_builder.domain.is_infra_error(_last_err):
                         # 2026-09-17: a pass with too few pending videos
                         # can't tell "provider is down" apart from "this
                         # one item got unlucky twice" — see
-                        # MIN_PENDING_FOR_INFRA_HALT's comment. Below the
+                        # domains.ycs.graph_builder.params.MIN_PENDING_FOR_INFRA_HALT's comment. Below the
                         # threshold, retry normally without touching the
                         # streak counter at all.
-                        if len(pending_transcripts) < MIN_PENDING_FOR_INFRA_HALT:
+                        if len(pending_transcripts) < domains.ycs.graph_builder.params.MIN_PENDING_FOR_INFRA_HALT:
                             logger.warning(
                                 f"[ingest_to_neo4j] {pass_label} produced 0 "
                                 f"successes out of {len(pending_transcripts)} "
                                 f"attempted (below the "
-                                f"{MIN_PENDING_FOR_INFRA_HALT}-video infra-"
+                                f"{domains.ycs.graph_builder.params.MIN_PENDING_FOR_INFRA_HALT}-video infra-"
                                 f"halt threshold — retrying without "
                                 f"counting toward the streak)"
                             )
@@ -513,7 +482,7 @@ def ingest_to_neo4j(
                                 continue
                         else:
                             consecutive_infra_passes += 1
-                            if consecutive_infra_passes >= MAX_CONSECUTIVE_INFRA_PASSES:
+                            if consecutive_infra_passes >= domains.ycs.graph_builder.params.MAX_CONSECUTIVE_INFRA_PASSES:
                                 logger.error(
                                     f"[ingest_to_neo4j] {pass_label} produced 0 "
                                     f"successes out of {len(pending_transcripts)} "
@@ -529,7 +498,7 @@ def ingest_to_neo4j(
                                 f"[ingest_to_neo4j] {pass_label} produced 0 "
                                 f"successes (infra streak "
                                 f"{consecutive_infra_passes}/"
-                                f"{MAX_CONSECUTIVE_INFRA_PASSES}) — one more "
+                                f"{domains.ycs.graph_builder.params.MAX_CONSECUTIVE_INFRA_PASSES}) — one more "
                                 f"pass after backoff"
                             )
                             if attempt < MAX_RETRY_PASSES:
@@ -583,13 +552,6 @@ def ingest_to_neo4j(
                 # exactly once (unconditionally safe/idempotent even if
                 # THIS chunk created 0 nodes but an earlier one did).
                 if extract_id and all_video_ids:
-                    from domains.ycs.ingestion.domain import parent_video_id
-                    from domains.ycs.pipeline_task.streaming import (
-                        build_redis_client,
-                        mark_video_or_partition_done,
-                        maybe_finalize,
-                        update_video_extra,
-                    )
                     # 2026-09-14: long-video partitioning — `part_total`
                     # per video, read from the SAME `transcripts` this
                     # pass already fetched (now carrying it thanks to
@@ -598,7 +560,7 @@ def ingest_to_neo4j(
                         t["video_id"]: t.get("part_total")
                         for t in transcripts if isinstance(t, dict)
                     }
-                    r = build_redis_client()
+                    r = domains.ycs.pipeline_task.service.build_redis_client()
                     try:
                         for i, vid in enumerate(all_video_ids):
                             # Chunk-level aggregates (agg_nodes/agg_rels)
@@ -621,8 +583,8 @@ def ingest_to_neo4j(
                                     "relationships_created": agg_rels,
                                 } if i == 0 else {}
                             )
-                            parent_vid = parent_video_id(vid)
-                            finished, total = await mark_video_or_partition_done(
+                            parent_vid = domains.ycs.ingestion.domain.parent_video_id(vid)
+                            finished, total = await domains.ycs.pipeline_task.service.mark_video_or_partition_done(
                                 r, extract_id, "neo4j", vid,
                                 success = vid not in final_failed_ids,
                                 extra = extra,
@@ -648,14 +610,11 @@ def ingest_to_neo4j(
                                 # so the bar doesn't freeze at "0
                                 # merged". TTL is a backstop if this
                                 # process dies mid-resolution.
-                                from domains.ycs.pipeline_task.keys import (
-                                    neo4j_resolving_key,
-                                )
                                 await r.set(
-                                    neo4j_resolving_key(extract_id), "1", ex = 300,
+                                    domains.ycs.pipeline_task.keys.neo4j_resolving_key(extract_id), "1", ex = 300,
                                 )
                                 try:
-                                    agg_merged = await resolve_entities(neo4j_graph)
+                                    agg_merged = await domains.ycs.graph_builder.service.resolve_entities(neo4j_graph)
                                     # entities_merged is a WHOLE-RUN number,
                                     # only known now — patched onto the
                                     # DISPLAYED status entry: parent_vid, not
@@ -664,13 +623,13 @@ def ingest_to_neo4j(
                                     # outcome lives in the partition-group
                                     # hash until the group completes and
                                     # folds into one entry under the parent).
-                                    await update_video_extra(
+                                    await domains.ycs.pipeline_task.service.update_video_extra(
                                         r, extract_id, "neo4j", parent_vid,
                                         {"entities_merged": agg_merged},
                                     )
                                 finally:
-                                    await r.delete(neo4j_resolving_key(extract_id))
-                            await maybe_finalize(r, extract_id)
+                                    await r.delete(domains.ycs.pipeline_task.keys.neo4j_resolving_key(extract_id))
+                            await domains.ycs.pipeline_task.service.maybe_finalize(r, extract_id)
                     finally:
                         await r.close()
             elif agg_nodes > 0:
@@ -681,7 +640,7 @@ def ingest_to_neo4j(
                     "rels":  agg_rels,
                 })
                 logger.info("[ingest_to_neo4j] entity resolution starting")
-                agg_merged = await resolve_entities(neo4j_graph)
+                agg_merged = await domains.ycs.graph_builder.service.resolve_entities(neo4j_graph)
                 logger.info(
                     f"[ingest_to_neo4j] entity resolution: "
                     f"{agg_merged} nodes merged"

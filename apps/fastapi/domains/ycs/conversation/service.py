@@ -12,12 +12,7 @@ import logging
 
 import psycopg
 
-from .params import (
-    DEFAULT_HISTORY_LIMIT,
-    DEFAULT_THREAD_ID,
-    INDEX_NAME,
-    TABLE_NAME,
-)
+from . import params
 
 
 logger = logging.getLogger(__name__)
@@ -39,7 +34,7 @@ async def ensure_conversation_table(pg_url: str) -> None:
     ) as conn:
         await conn.execute(
             f"""
-            CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
+            CREATE TABLE IF NOT EXISTS {params.TABLE_NAME} (
                 id              SERIAL PRIMARY KEY,
                 thread_id       TEXT NOT NULL,
                 question        TEXT NOT NULL,
@@ -52,14 +47,14 @@ async def ensure_conversation_table(pg_url: str) -> None:
         )
         await conn.execute(
             f"""
-            ALTER TABLE {TABLE_NAME}
+            ALTER TABLE {params.TABLE_NAME}
             ADD COLUMN IF NOT EXISTS thinking_state JSONB
             """,
         )
         await conn.execute(
             f"""
-            CREATE INDEX IF NOT EXISTS {INDEX_NAME}
-            ON {TABLE_NAME}(thread_id, created_at DESC)
+            CREATE INDEX IF NOT EXISTS {params.INDEX_NAME}
+            ON {params.TABLE_NAME}(thread_id, created_at DESC)
             """,
         )
 
@@ -67,19 +62,19 @@ async def ensure_conversation_table(pg_url: str) -> None:
 async def get_history(
     pg_url: str,
     thread_id: str,
-    limit: int = DEFAULT_HISTORY_LIMIT,
+    limit: int = params.DEFAULT_HISTORY_LIMIT,
 ) -> list[dict]:
     """Last N Q&A pairs for `thread_id`, oldest-first (so the LLM sees
     chronological context). Returns [] for the `default` sentinel —
     deprecated convention for stateless single-turn queries.
 
     Shape: `[{"question": str, "answer": str}, ...]`."""
-    if not thread_id or thread_id == DEFAULT_THREAD_ID:
+    if not thread_id or thread_id == params.DEFAULT_THREAD_ID:
         return []
     async with await psycopg.AsyncConnection.connect(pg_url) as conn:
         result = await conn.execute(
             f"""
-            SELECT question, answer FROM {TABLE_NAME}
+            SELECT question, answer FROM {params.TABLE_NAME}
             WHERE thread_id = %s
             ORDER BY created_at DESC LIMIT %s
             """,
@@ -109,13 +104,13 @@ async def list_threads(
                 MAX(created_at) AS last_seen,
                 (ARRAY_AGG(question ORDER BY created_at ASC))[1]
                     AS first_question
-            FROM {TABLE_NAME}
+            FROM {params.TABLE_NAME}
             WHERE thread_id <> %s
             GROUP BY thread_id
             ORDER BY MAX(created_at) DESC
             LIMIT %s
             """,
-            (DEFAULT_THREAD_ID, limit),
+            (params.DEFAULT_THREAD_ID, limit),
         )
         rows = await result.fetchall()
     return [
@@ -142,13 +137,13 @@ async def list_thread_messages(
     refresh.
 
     Returns [] for the `default` sentinel."""
-    if not thread_id or thread_id == DEFAULT_THREAD_ID:
+    if not thread_id or thread_id == params.DEFAULT_THREAD_ID:
         return []
     async with await psycopg.AsyncConnection.connect(pg_url) as conn:
         result = await conn.execute(
             f"""
             SELECT id, question, answer, mode, thinking_state, created_at
-            FROM {TABLE_NAME}
+            FROM {params.TABLE_NAME}
             WHERE thread_id = %s
             ORDER BY created_at ASC LIMIT %s
             """,
@@ -189,17 +184,17 @@ async def get_thread_locked_scope(
     channels mode and must stay that way".
 
     Returns `None` (no lock) when:
-      - the thread is the DEFAULT_THREAD_ID sentinel,
+      - the thread is the `DEFAULT_THREAD_ID` sentinel,
       - the thread doesn't exist in `conversation_history` yet,
       - the first turn's `thinking_state` is missing or doesn't
         contain a `channel_ids` field (pre-2026-06-17 rows)."""
-    if not thread_id or thread_id == DEFAULT_THREAD_ID:
+    if not thread_id or thread_id == params.DEFAULT_THREAD_ID:
         return None
     async with await psycopg.AsyncConnection.connect(pg_url) as conn:
         result = await conn.execute(
             f"""
             SELECT thinking_state
-            FROM {TABLE_NAME}
+            FROM {params.TABLE_NAME}
             WHERE thread_id = %s
             ORDER BY created_at ASC
             LIMIT 1
@@ -234,26 +229,26 @@ async def branch_thread(
     Used by the per-turn "Branch" action chip in `ask.js` so the user
     can rewind to a specific point and explore an alternative path
     without losing the original conversation."""
-    if not source_thread_id or source_thread_id == DEFAULT_THREAD_ID:
+    if not source_thread_id or source_thread_id == params.DEFAULT_THREAD_ID:
         return 0
     if not new_thread_id:
         return 0
     async with await psycopg.AsyncConnection.connect(pg_url) as conn:
-        params: tuple = (new_thread_id, source_thread_id)
+        query_params: tuple = (new_thread_id, source_thread_id)
         cutoff_sql = ""
         if up_to_created_at:
             cutoff_sql = "AND created_at <= %s"
-            params = (new_thread_id, source_thread_id, up_to_created_at)
+            query_params = (new_thread_id, source_thread_id, up_to_created_at)
         result = await conn.execute(
             f"""
-            INSERT INTO {TABLE_NAME} (thread_id, question, answer, mode, created_at)
+            INSERT INTO {params.TABLE_NAME} (thread_id, question, answer, mode, created_at)
             SELECT %s, question, answer, mode, created_at
-            FROM {TABLE_NAME}
+            FROM {params.TABLE_NAME}
             WHERE thread_id = %s
             {cutoff_sql}
             ORDER BY created_at ASC
             """,
-            params,
+            query_params,
         )
         await conn.commit()
         return int(result.rowcount or 0)
@@ -269,11 +264,11 @@ async def delete_thread(
     The `default` sentinel is silently no-op'd — stateless single-turn
     queries never land in the table to begin with, but a misguided
     delete on `default` would otherwise be a no-op anyway."""
-    if not thread_id or thread_id == DEFAULT_THREAD_ID:
+    if not thread_id or thread_id == params.DEFAULT_THREAD_ID:
         return 0
     async with await psycopg.AsyncConnection.connect(pg_url) as conn:
         result = await conn.execute(
-            f"DELETE FROM {TABLE_NAME} WHERE thread_id = %s",
+            f"DELETE FROM {params.TABLE_NAME} WHERE thread_id = %s",
             (thread_id,),
         )
         await conn.commit()
@@ -292,12 +287,12 @@ async def save_turn(
     `mode` carries the adaptive-RAG decision (`fast` / `standard` /
     `deep`) so a future debug query can audit how each turn was
     answered."""
-    if not thread_id or thread_id == DEFAULT_THREAD_ID:
+    if not thread_id or thread_id == params.DEFAULT_THREAD_ID:
         return
     async with await psycopg.AsyncConnection.connect(pg_url) as conn:
         await conn.execute(
             f"""
-            INSERT INTO {TABLE_NAME} (thread_id, question, answer, mode)
+            INSERT INTO {params.TABLE_NAME} (thread_id, question, answer, mode)
             VALUES (%s, %s, %s, %s)
             """,
             (thread_id, question, answer, mode),
@@ -315,12 +310,12 @@ async def insert_turn(
     conversation survives mid-stream refresh / hang. Returns the new
     row's `id` so subsequent `update_turn_answer()` calls can target
     it. Returns `None` for the `default` sentinel."""
-    if not thread_id or thread_id == DEFAULT_THREAD_ID:
+    if not thread_id or thread_id == params.DEFAULT_THREAD_ID:
         return None
     async with await psycopg.AsyncConnection.connect(pg_url) as conn:
         result = await conn.execute(
             f"""
-            INSERT INTO {TABLE_NAME} (thread_id, question, answer, mode)
+            INSERT INTO {params.TABLE_NAME} (thread_id, question, answer, mode)
             VALUES (%s, %s, '', %s)
             RETURNING id
             """,
@@ -350,7 +345,7 @@ async def update_turn_answer(
         if thinking_state is None:
             await conn.execute(
                 f"""
-                UPDATE {TABLE_NAME}
+                UPDATE {params.TABLE_NAME}
                 SET answer = %s,
                     mode   = COALESCE(NULLIF(%s, ''), mode)
                 WHERE id = %s
@@ -360,7 +355,7 @@ async def update_turn_answer(
         else:
             await conn.execute(
                 f"""
-                UPDATE {TABLE_NAME}
+                UPDATE {params.TABLE_NAME}
                 SET answer         = %s,
                     mode           = COALESCE(NULLIF(%s, ''), mode),
                     thinking_state = %s::jsonb
@@ -379,7 +374,7 @@ async def delete_turn(pg_url: str, turn_id: int | None) -> None:
         return
     async with await psycopg.AsyncConnection.connect(pg_url) as conn:
         await conn.execute(
-            f"DELETE FROM {TABLE_NAME} WHERE id = %s",
+            f"DELETE FROM {params.TABLE_NAME} WHERE id = %s",
             (turn_id,),
         )
         await conn.commit()

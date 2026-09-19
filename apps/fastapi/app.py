@@ -52,18 +52,6 @@ from api.v1.ycs.agents.llm_chain import (
 from domains.llm.credentials import warm as warm_credentials
 from domains.llm.rotator.chain import build_reduce_label_chain
 from domains.rr.service import bootstrap_stores as bootstrap_rr_stores
-from domains.ycs.conversation import ensure_conversation_table
-from domains.ycs.embeddings import (
-    create_dense_embeddings,
-    create_sparse_embeddings,
-)
-from domains.ycs.grader import DocumentGrader
-from domains.ycs.retriever import (
-    ElasticsearchRetriever,
-    Neo4jRetriever,
-    QdrantHybridRetriever,
-    SmartRetriever,
-)
 from infra.elasticsearch import (
     close_es,
     ensure_indexes as ensure_es_indexes,
@@ -192,7 +180,7 @@ async def lifespan(app: FastAPI):
 
     try:
         app.state.pg_url = _postgres_url_from_env()
-        await ensure_conversation_table(app.state.pg_url)
+        await domains.ycs.conversation.service.ensure_conversation_table(app.state.pg_url)
     except Exception as e:
         logger.warning(
             f"[lifespan] YCS conversation table init failed: "
@@ -253,22 +241,22 @@ async def lifespan(app: FastAPI):
     try:
         es = get_es()
         qdrant = get_qdrant()
-        es_retriever = ElasticsearchRetriever(es)
-        qdrant_retriever = QdrantHybridRetriever(
+        es_retriever = domains.ycs.retriever.service.ElasticsearchRetriever(es)
+        qdrant_retriever = domains.ycs.retriever.service.QdrantHybridRetriever(
             qdrant            = qdrant,
-            dense_embeddings  = create_dense_embeddings(),
-            sparse_embeddings = create_sparse_embeddings(),
+            dense_embeddings  = domains.ycs.embeddings.service.create_dense_embeddings(),
+            sparse_embeddings = domains.ycs.embeddings.service.create_sparse_embeddings(),
             es_client         = es,
         )
         neo4j_retriever = (
-            Neo4jRetriever(
+            domains.ycs.retriever.service.Neo4jRetriever(
                 neo4j_graph = app.state.neo4j_graph,
                 llm         = app.state.llm,
             )
             if app.state.neo4j_graph is not None and app.state.llm is not None
             else None
         )
-        app.state.smart_retriever = SmartRetriever(
+        app.state.smart_retriever = domains.ycs.retriever.service.SmartRetriever(
             es_retriever      = es_retriever,
             qdrant_retriever  = qdrant_retriever,
             neo4j_retriever   = neo4j_retriever,
@@ -282,7 +270,8 @@ async def lifespan(app: FastAPI):
 
     try:
         app.state.grader = (
-            DocumentGrader(app.state.llm) if app.state.llm is not None else None
+            domains.ycs.grader.service.DocumentGrader(app.state.llm)
+            if app.state.llm is not None else None
         )
     except Exception as e:
         app.state.grader = None

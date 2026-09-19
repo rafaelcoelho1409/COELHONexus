@@ -9,14 +9,12 @@ from __future__ import annotations
 
 import asyncio
 
-from domains.ycs.rag.llm_call import resilient_ainvoke
-from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
-from domains.ycs.runtime.observability import traced
+import domains
+from domains.ycs.runtime.observability.service import traced
 
-from ...params import CRITIC_FALLBACK_CONFIDENCE
-from ...state import AdaptiveRAGState
-from .prompts import CRITIC_PROMPT
-from .schemas import CriticAssessment
+from .... import service
+from ... import params, state
+from . import prompts, schemas
 
 
 # 2026-09-15: 90 → 60s tiering — failure falls back to
@@ -25,7 +23,7 @@ _CRITIC_TIMEOUT_S = 60.0
 
 
 @traced("rag.critic")
-async def critic(state: AdaptiveRAGState, llm) -> dict:
+async def critic(state: state.AdaptiveRAGState, llm) -> dict:
     """LLM-as-critic over the synthesis. Returns
     (confidence_score, grounded) for the response envelope."""
     parts: list[str] = []
@@ -35,12 +33,12 @@ async def critic(state: AdaptiveRAGState, llm) -> dict:
 
     # default `method="json_schema"` — see
     # `standard/nodes/hallucination/node.py` for the rationale.
-    chain = CRITIC_PROMPT | llm.with_structured_output(
-        CriticAssessment,
+    chain = prompts.CRITIC_PROMPT | llm.with_structured_output(
+        schemas.CriticAssessment,
     )
     try:
-        _llm_set_node(node = "critic")
-        result = await resilient_ainvoke(
+        domains.ycs.runtime.llm_counter.service.set_node(node = "critic")
+        result = await service.resilient_ainvoke(
             chain,
             {
                 "question":     state["question"],
@@ -57,6 +55,6 @@ async def critic(state: AdaptiveRAGState, llm) -> dict:
         }
     except (asyncio.TimeoutError, Exception):
         return {
-            "confidence_score": CRITIC_FALLBACK_CONFIDENCE,
+            "confidence_score": params.CRITIC_FALLBACK_CONFIDENCE,
             "grounded":         True,
         }

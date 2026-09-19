@@ -7,9 +7,10 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+import domains
 from langchain_core.documents import Document
 
-from .params import DEFAULT_TOP_K, PER_DOC_CHAR_CAP
+from . import params
 
 
 # Lazy — initialized on first `rerank_documents` call.
@@ -29,7 +30,7 @@ def _get_ranker():
 def rerank_documents(
     query: str,
     documents: list[Document],
-    top_k: int = DEFAULT_TOP_K,
+    top_k: int = params.DEFAULT_TOP_K,
 ) -> list[Document]:
     """Cross-encoder rerank. `rerank_score` is stamped onto each
     returned doc's metadata.
@@ -40,16 +41,15 @@ def rerank_documents(
     if not documents:
         return []
     from flashrank import RerankRequest
-    from domains.ycs.runtime.observability import reranker_span
 
-    with reranker_span(
+    with domains.ycs.runtime.observability.spans.reranker_span(
         model     = "flashrank-default",
         doc_count = len(documents),
         top_k     = top_k,
     ):
         ranker = _get_ranker()
         passages = [
-            {"id": i, "text": doc.page_content[:PER_DOC_CHAR_CAP]}
+            {"id": i, "text": doc.page_content[:params.PER_DOC_CHAR_CAP]}
             for i, doc in enumerate(documents)
         ]
         results = ranker.rerank(RerankRequest(query = query, passages = passages))

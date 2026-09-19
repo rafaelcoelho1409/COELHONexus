@@ -4,7 +4,7 @@ corroboration node.
 Fires ONLY from `graph.py::_decide_after_hallucination_check`'s
 "ungrounded, retries exhausted" branch — the exact moment the graph
 was about to ship an unverified answer unchanged. Runs ONE Parallel
-web search (`domains.ycs.rag.web_search.search_web`, same free
+web search (`domains.ycs.rag.service.search_web`, same free
 keyless MCP endpoint `fallback_answer` uses) + ONE short LLM judgment
 call, then appends a one-sentence corroboration/contradiction note to
 the EXISTING answer. Never regenerates the answer, never blocks on
@@ -20,14 +20,12 @@ from __future__ import annotations
 
 import asyncio
 
-from domains.ycs.rag.llm_call import resilient_ainvoke
-from domains.ycs.rag.web_search import search_web
-from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
-from domains.ycs.runtime.observability import traced
+import domains
+from domains.ycs.runtime.observability.service import traced
 
-from ...state import YouTubeRAGState
-from .prompts import CORROBORATION_PROMPT
-from .schemas import CorroborationResult
+from .... import service
+from ... import state
+from . import prompts, schemas
 
 
 # Own budget, separate from `check_hallucination`'s 45s and
@@ -38,7 +36,7 @@ _JUDGE_TIMEOUT_S = 30.0
 
 
 @traced("rag.corroborate")
-async def corroborate_claim(state: YouTubeRAGState, llm) -> dict:
+async def corroborate_claim(state: state.YouTubeRAGState, llm) -> dict:
     """Best-effort external corroboration/contradiction check for an
     answer the grounding judge couldn't verify. Returns `{}` (no
     state change) on ANY failure or inconclusive result — the caller
@@ -49,16 +47,16 @@ async def corroborate_claim(state: YouTubeRAGState, llm) -> dict:
     if not generation.strip():
         return {}
 
-    web_context = await search_web(question, session_id = state.get("thread_id"))
+    web_context = await service.search_web(question, session_id = state.get("thread_id"))
     if not web_context.strip():
         return {}
 
-    chain = CORROBORATION_PROMPT | llm.with_structured_output(
-        CorroborationResult,
+    chain = prompts.CORROBORATION_PROMPT | llm.with_structured_output(
+        schemas.CorroborationResult,
     )
     try:
-        _llm_set_node(node = "corroborate")
-        result: CorroborationResult = await resilient_ainvoke(
+        domains.ycs.runtime.llm_counter.service.set_node(node = "corroborate")
+        result: schemas.CorroborationResult = await service.resilient_ainvoke(
             chain,
             {
                 "question":    question,

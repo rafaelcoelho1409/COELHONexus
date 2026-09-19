@@ -7,67 +7,49 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from domains.ycs.content.domain import pick_best_thumbnail
-from domains.ycs.content.params import BASE_ARGS
+import domains
 
-from .errors import (
-    InvalidChannelIdError,
-    InvalidPlaylistIdError,
-    InvalidVideoIdError,
-)
-from .params import (
-    MAX_AGGREGATE_TIMEOUT_S,
-    MIN_AGGREGATE_TIMEOUT_S,
-    SECONDS_PER_VIDEO,
-)
-from .patterns import (
-    CHANNEL_HANDLE_RE,
-    CHANNEL_UC_RE,
-    CHANNEL_URL_HANDLE_RE,
-    PLAYLIST_ID_RE,
-    VIDEO_ID_RE,
-    WATCH_V_RE,
-)
+from . import errors, params, patterns
 
 
 
 def normalize_video_id(raw: str) -> str:
     """Accept a bare id, a watch URL, a youtu.be URL, a shorts URL."""
     if not raw:
-        raise InvalidVideoIdError("empty")
+        raise errors.InvalidVideoIdError("empty")
     s = raw.strip()
-    if VIDEO_ID_RE.fullmatch(s):
+    if patterns.VIDEO_ID_RE.fullmatch(s):
         return s
-    m = WATCH_V_RE.search(s)
+    m = patterns.WATCH_V_RE.search(s)
     if m:
         return m.group(1)
-    raise InvalidVideoIdError(f"not a video id or URL: {raw!r}")
+    raise errors.InvalidVideoIdError(f"not a video id or URL: {raw!r}")
 
 
 def normalize_channel_id(raw: str) -> str:
     """Return either a `UC…` id or a `@handle` (both valid yt-dlp inputs)."""
     if not raw:
-        raise InvalidChannelIdError("empty")
+        raise errors.InvalidChannelIdError("empty")
     s = raw.strip()
-    m = CHANNEL_UC_RE.search(s)
+    m = patterns.CHANNEL_UC_RE.search(s)
     if m:
         return m.group(1)
-    m = CHANNEL_URL_HANDLE_RE.search(s)
+    m = patterns.CHANNEL_URL_HANDLE_RE.search(s)
     if m:
         return m.group(1)
-    if CHANNEL_HANDLE_RE.fullmatch(s):
+    if patterns.CHANNEL_HANDLE_RE.fullmatch(s):
         return s
-    raise InvalidChannelIdError(f"not a channel id or @handle: {raw!r}")
+    raise errors.InvalidChannelIdError(f"not a channel id or @handle: {raw!r}")
 
 
 def normalize_playlist_id(raw: str) -> str:
     if not raw:
-        raise InvalidPlaylistIdError("empty")
+        raise errors.InvalidPlaylistIdError("empty")
     s = raw.strip()
-    m = PLAYLIST_ID_RE.search(s)
+    m = patterns.PLAYLIST_ID_RE.search(s)
     if m:
         return m.group(1)
-    raise InvalidPlaylistIdError(f"not a playlist id or URL: {raw!r}")
+    raise errors.InvalidPlaylistIdError(f"not a playlist id or URL: {raw!r}")
 
 
 def normalize_video_ids(raws: list[str]) -> tuple[list[str], list[str]]:
@@ -79,7 +61,7 @@ def normalize_video_ids(raws: list[str]) -> tuple[list[str], list[str]]:
     for raw in raws or []:
         try:
             vid = normalize_video_id(raw)
-        except InvalidVideoIdError:
+        except errors.InvalidVideoIdError:
             rejected.append(raw)
             continue
         if vid in seen:
@@ -93,13 +75,13 @@ def normalize_video_ids(raws: list[str]) -> tuple[list[str], list[str]]:
 def build_video_args(video_id: str) -> list[str]:
     """Full single-video metadata extraction (`--dump-json`)."""
     url = f"https://www.youtube.com/watch?v={video_id}"
-    return [*BASE_ARGS, "--dump-json", "--no-playlist", url]
+    return [*domains.ycs.content.params.BASE_ARGS, "--dump-json", "--no-playlist", url]
 
 
 def build_playlist_args(playlist_id: str, max_videos: int) -> list[str]:
     url = f"https://www.youtube.com/playlist?list={playlist_id}"
     args: list[str] = [
-        *BASE_ARGS,
+        *domains.ycs.content.params.BASE_ARGS,
         "--dump-single-json",
         "--match-filter", "availability != subscriber_only",
         "--match-filter", "availability != premium_only",
@@ -117,7 +99,7 @@ def build_channel_args(channel_id_or_handle: str, max_videos: int) -> list[str]:
     else:
         url = f"https://www.youtube.com/{channel_id_or_handle}/videos"
     args: list[str] = [
-        *BASE_ARGS,
+        *domains.ycs.content.params.BASE_ARGS,
         "--dump-single-json",
         "--match-filter", "availability != subscriber_only",
         "--match-filter", "availability != premium_only",
@@ -134,9 +116,9 @@ def aggregate_timeout_s(max_videos: int) -> float:
     (deprecated `helpers.py:L349,L398`): 10s per video clamped to
     [120s, 1800s]."""
     if max_videos <= 0:
-        return float(MAX_AGGREGATE_TIMEOUT_S)
-    raw = max_videos * SECONDS_PER_VIDEO
-    return float(max(MIN_AGGREGATE_TIMEOUT_S, min(MAX_AGGREGATE_TIMEOUT_S, raw)))
+        return float(params.MAX_AGGREGATE_TIMEOUT_S)
+    raw = max_videos * params.SECONDS_PER_VIDEO
+    return float(max(params.MIN_AGGREGATE_TIMEOUT_S, min(params.MAX_AGGREGATE_TIMEOUT_S, raw)))
 
 
 
@@ -165,7 +147,7 @@ def normalize_full_video(data: dict) -> dict:
         "description":            data.get("description", ""),
         "webpage_url":            data.get("webpage_url", ""),
         "original_url":           data.get("original_url", ""),
-        "thumbnail_url":          pick_best_thumbnail(data.get("thumbnails") or []),
+        "thumbnail_url":          domains.ycs.content.domain.pick_best_thumbnail(data.get("thumbnails") or []),
         "channel":                data.get("channel", ""),
         "channel_id":             data.get("channel_id", ""),
         "channel_url":            data.get("channel_url", ""),

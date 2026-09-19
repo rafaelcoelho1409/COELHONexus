@@ -6,7 +6,7 @@ and usage-capture "for free" from DeepAgents' own turn loop + the
 task.py; these one-off `chain.ainvoke()` calls sit outside that loop
 entirely and previously had neither.
 
-Mirrors `domains.ycs.rag.llm_call` (used by every YCS Ask node): retry
+Mirrors `domains.ycs.rag.service` (used by every YCS Ask node): retry
 only genuinely transient errors (timeout/connection — never rate_limit,
 which means the provider side already gave up and a retry just burns
 budget), with jittered backoff so concurrent retries don't herd onto the

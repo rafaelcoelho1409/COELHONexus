@@ -155,7 +155,7 @@ async def pipeline_stream_status(
 ) -> dict:
     """2026-09-13: aggregator counterpart to `task_status` above, for
     the Videos pipeline's per-video streaming fan-out (Neo4j/Qdrant no
-    longer map to one Celery task id — see `pipeline_task.streaming`'s
+    longer map to one Celery task id — see `pipeline_task.service`'s
     docstring). Synthesizes the SAME `{task_id, state, meta, result,
     error}` shape `task_status` returns from Redis counters instead of
     one `AsyncResult`, so `pipeline_panel.js`'s existing bar-rendering
@@ -167,7 +167,7 @@ async def pipeline_stream_status(
     redis = getattr(request.app.state, "redis_aio", None)
     if redis is None:
         raise HTTPException(status_code = 503, detail = "Redis unavailable")
-    from domains.ycs.pipeline_task import get_phase_progress
+    from domains.ycs.pipeline_task.service import get_phase_progress
     progress = await get_phase_progress(redis, extract_id, phase)
     payload: dict[str, Any] = {"task_id": extract_id, "state": progress["state"]}
     if progress["state"] == "SUCCESS":
@@ -186,7 +186,7 @@ async def pipeline_llm_counters(extract_id: str) -> dict:
     extraction isn't a LangGraph graph with a thread_id to key off —
     keyed by extract_id instead, "node" is the video_id being
     extracted rather than a workflow node."""
-    from domains.ycs.runtime.llm_counter import read_counters
+    from domains.ycs.runtime.llm_counter.service import read_counters
     return await read_counters(extract_id)
 
 
@@ -512,7 +512,7 @@ async def videos_facets(request: Request) -> dict:
 @router.delete("/videos/{video_id}")
 async def delete_video(video_id: str, request: Request) -> dict:
     """Drop ES metadata + transcripts, Qdrant points, and Neo4j nodes for one video."""
-    from domains.ycs.pipeline_task import wipe_videos_data
+    from domains.ycs.pipeline_task.service import wipe_videos_data
     if not video_id:
         raise HTTPException(status_code = 400, detail = "video_id required")
     summary = await wipe_videos_data(
@@ -531,7 +531,7 @@ async def bulk_delete_videos(
     payload: BulkDeleteRequest, request: Request,
 ) -> dict:
     """Multi-select wipe. POST (not DELETE) because HTTP DELETE doesn't reliably carry a body."""
-    from domains.ycs.pipeline_task import wipe_videos_data
+    from domains.ycs.pipeline_task.service import wipe_videos_data
     if not payload.video_ids:
         return {"status": "noop", "summary": {"video_ids": []}}
     summary = await wipe_videos_data(

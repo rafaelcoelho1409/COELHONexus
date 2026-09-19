@@ -10,9 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-from domains.ycs.rag.standard.nodes.hallucination.schemas import (
-    _coerce_bool,
-)
+from .... import standard
 
 
 class CriticAssessment(BaseModel):
@@ -31,4 +29,4 @@ class CriticAssessment(BaseModel):
     @field_validator("claims_supported", mode = "before")
     @classmethod
     def _coerce_bool_field(cls, v: Any) -> bool:
-        return _coerce_bool(v)
+        return standard.nodes.hallucination.schemas._coerce_bool(v)

@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import Request
 
-from domains.ycs.rag.adaptive import build_adaptive_rag_graph
+from domains.ycs.rag.adaptive.graph import build_adaptive_rag_graph
 
 
 async def build_graph_from_request(request: Request):

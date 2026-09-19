@@ -18,14 +18,12 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from domains.ycs.rag.llm_call import capture_llm_usage
-from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
-from domains.ycs.runtime.observability import record_subquestion, traced
+import domains
+from domains.ycs.runtime.observability.service import traced
 
-from ....domain import strip_think_tags
-from ...params import SUBAGENT_RECURSION_LIMIT
-from .params import REPHRASE_TIMEOUT_S, SUBAGENT_RUNTIME_TIMEOUT_S
-from .prompts import REPHRASE_PROMPT
+from .... import domain, service
+from ... import params as _adaptive_params
+from . import params, prompts
 
 
 logger = logging.getLogger(__name__)
@@ -49,7 +47,7 @@ def _classify_subagent_outcome(
     if isinstance(exc, asyncio.TimeoutError):
         return "timeout", (
             "_(this sub-question timed out after "
-            f"{int(SUBAGENT_RUNTIME_TIMEOUT_S / 60)} min — likely a "
+            f"{int(params.SUBAGENT_RUNTIME_TIMEOUT_S / 60)} min — likely a "
             "single node hung silently. Re-asking often picks a "
             "different rotator arm and completes.)_"
         )
@@ -121,7 +119,7 @@ def _build_initial_state(
 # caps the worst-case stuck sub-agent at ~2 minutes instead of the
 # ~10 minutes seen before this commit.
 _STANDARD_GRAPH_CONFIG = {
-    "recursion_limit": SUBAGENT_RECURSION_LIMIT,
+    "recursion_limit": _adaptive_params.SUBAGENT_RECURSION_LIMIT,
     "configurable":    {"max_retries": 1},
 }
 
@@ -148,7 +146,7 @@ async def _run_standard_once(
                 ),
                 config = _STANDARD_GRAPH_CONFIG,
             ),
-            timeout = SUBAGENT_RUNTIME_TIMEOUT_S,
+            timeout = params.SUBAGENT_RUNTIME_TIMEOUT_S,
         )
         return result, None
     except (asyncio.TimeoutError, Exception) as e:
@@ -171,24 +169,24 @@ async def _rephrase_subquestion(
     the no_docs retry and report the first attempt's placeholder."""
     if llm is None:
         return None
-    chain = REPHRASE_PROMPT | llm
+    chain = prompts.REPHRASE_PROMPT | llm
     try:
-        _llm_set_node(node = "subagent_rephrase")
+        domains.ycs.runtime.llm_counter.service.set_node(node = "subagent_rephrase")
         response = await asyncio.wait_for(
             chain.ainvoke({
                 "sub_question":    sub_q,
                 "parent_question": parent_q,
             }),
-            timeout = REPHRASE_TIMEOUT_S,
+            timeout = params.REPHRASE_TIMEOUT_S,
         )
-        await capture_llm_usage(response)
+        await service.capture_llm_usage(response)
     except (asyncio.TimeoutError, Exception) as e:
         logger.info(
             f"[ycs:subagent] rephrase failed for sub_q={sub_q[:60]!r}: "
             f"{type(e).__name__}: {e}"
         )
         return None
-    rewritten = strip_think_tags(response.content).strip().strip('"').strip("'")
+    rewritten = domain.strip_think_tags(response.content).strip().strip('"').strip("'")
     if not rewritten or rewritten.lower() == sub_q.lower():
         return None
     return rewritten
@@ -258,7 +256,7 @@ async def run_subagent(
                 )
                 answer_text = answer_text2 + retry_note
 
-    record_subquestion(
+    domains.ycs.runtime.observability.metrics.record_subquestion(
         route = route,
         outcome = error_kind or "success",
     )
@@ -334,7 +332,7 @@ async def run_subagents_bounded(
                 f"[ycs:subagent] bounded fan-out: sub_q={q[:60]!r} "
                 f"raised {_ename}: {e}"
             )
-            record_subquestion(route = route, outcome = "hard_error")
+            domains.ycs.runtime.observability.metrics.record_subquestion(route = route, outcome = "hard_error")
             return {
                 "sub_question":      q,
                 "answer": (
@@ -387,7 +385,7 @@ async def run_subagents_bounded(
         )
         for t, q in list(remaining_tasks.items()):
             t.cancel()
-            record_subquestion(route = route, outcome = "deadline")
+            domains.ycs.runtime.observability.metrics.record_subquestion(route = route, outcome = "deadline")
             item = {
                 "sub_question": q,
                 "answer": (

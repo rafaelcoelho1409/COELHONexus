@@ -7,10 +7,12 @@ Memory-safe: never holds more than one transcript's chunks in memory
 at a time."""
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, AsyncIterator, Callable
 
 from elasticsearch import AsyncElasticsearch
+from langchain_core.documents import Document
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http.models import (
     Distance,
@@ -25,27 +27,12 @@ from qdrant_client.http.models import (
     SparseVectorParams,
     VectorParams,
 )
+from redis.asyncio import Redis
 
-from domains.ycs.chunker import chunk_transcript, create_chunker
-from domains.ycs.embeddings import (
-    create_dense_embeddings,
-    create_sparse_embeddings,
-    get_embedding_info,
-)
+import domains
 from infra.elasticsearch import INDEX_METADATA, INDEX_TRANSCRIPTIONS
 
-from . import domain
-from .keys import point_id
-from .params import (
-    DEFAULT_CHUNK_OVERLAP,
-    DEFAULT_CHUNK_SIZE,
-    FETCH_BATCH_SIZE,
-    FLUSH_CHUNKS,
-    LOG_EVERY_N_TRANSCRIPTS,
-    QDRANT_COLLECTION,
-    SCROLL_BATCH_SIZE,
-    SCROLL_KEEPALIVE,
-)
+from . import domain, keys, params
 
 
 logger = logging.getLogger(__name__)
@@ -54,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 async def ensure_collection(
     qdrant: AsyncQdrantClient, dense_dimensions: int, embedding_model: str = "",
-    collection_name: str = QDRANT_COLLECTION,
+    collection_name: str = params.QDRANT_COLLECTION,
 ) -> bool:
     """Idempotent collection create. Returns True only on first
     creation (False on a no-op).
@@ -100,7 +87,7 @@ async def ensure_collection(
     2026-09-15: existence check switched from `get_collections()`
     (list of REAL collection names only — live-confirmed Qdrant never
     includes aliases in that listing) to `collection_exists()`, which
-    resolves through an alias transparently. `QDRANT_COLLECTION` is a
+    resolves through an alias transparently. `params.QDRANT_COLLECTION` is a
     real collection today but becomes an alias the first time
     `embedding_migration` cuts one over — the old list-membership check
     would have silently stopped seeing it as existing at that point and
@@ -219,7 +206,7 @@ async def ensure_collection(
 async def _scroll_transcripts(
     es: AsyncElasticsearch,
     video_ids: list[str] | None = None,
-    batch_size: int = SCROLL_BATCH_SIZE,
+    batch_size: int = params.SCROLL_BATCH_SIZE,
 ) -> AsyncIterator[dict]:
     """Async generator yielding transcript hits from the deprecated
     transcripts index. Uses ES scroll API so a 359+ result-set
@@ -232,7 +219,7 @@ async def _scroll_transcripts(
         index = INDEX_TRANSCRIPTIONS,
         query = query,
         size = batch_size,
-        scroll = SCROLL_KEEPALIVE,
+        scroll = params.SCROLL_KEEPALIVE,
         # 2026-09-14: parent_video_id/part_index/part_total added for
         # the long-video splitter's partition-group completion
         # tracking (neo4j_task/qdrant_task need to know "is this a
@@ -251,7 +238,7 @@ async def _scroll_transcripts(
             for hit in hits:
                 yield hit["_source"]
             response = await es.scroll(
-                scroll_id = scroll_id, scroll = SCROLL_KEEPALIVE,
+                scroll_id = scroll_id, scroll = params.SCROLL_KEEPALIVE,
             )
             scroll_id = response.get("_scroll_id")
             hits = response["hits"]["hits"]
@@ -297,7 +284,7 @@ async def fetch_metadata_from_es(
 async def fetch_transcripts_from_es(
     es: AsyncElasticsearch,
     video_ids: list[str] | None = None,
-    batch_size: int = FETCH_BATCH_SIZE,
+    batch_size: int = params.FETCH_BATCH_SIZE,
 ) -> list[dict]:
     """Non-streaming bulk fetch — used by `graph_builder` for the
     LLM-graph pass (small batches, full transcripts in memory)."""
@@ -312,10 +299,10 @@ async def ingest_to_qdrant(
     es: AsyncElasticsearch,
     qdrant: AsyncQdrantClient,
     video_ids: list[str] | None = None,
-    chunk_size: int = DEFAULT_CHUNK_SIZE,
-    chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
+    chunk_size: int = params.DEFAULT_CHUNK_SIZE,
+    chunk_overlap: int = params.DEFAULT_CHUNK_OVERLAP,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
-    collection_name: str = QDRANT_COLLECTION,
+    collection_name: str = params.QDRANT_COLLECTION,
 ) -> dict:
     """Streaming pipeline: chunk → embed (dense NIM + sparse BM25) →
     upsert. Memory stays flat regardless of corpus size.
@@ -326,7 +313,7 @@ async def ingest_to_qdrant(
         dominated (~11-15 s/call whether it carries 5 or 50 texts;
         measured 60.7 s per-video vs 11.2 s packed for the same 48
         chunks). Chunks now accumulate across videos and flush in
-        FLUSH_CHUNKS groups — one NIM call per flush instead of one
+        params.FLUSH_CHUNKS groups — one NIM call per flush instead of one
         per video (5.4× on the embed stage).
       - CONTENT-HASH SKIP. Every point carries `content_hash` (md5 of
         the full transcript). A pre-pass compares the stored hash per
@@ -342,9 +329,9 @@ async def ingest_to_qdrant(
         video).
     `progress_cb` (Wave 5 polish) receives per-transcript dicts so the
     Celery task wrapper can pipe them into `self.update_state(meta=)`."""
-    dense_embeddings = create_dense_embeddings()
-    sparse_embeddings = create_sparse_embeddings()
-    dimensions, embedding_model = await get_embedding_info()
+    dense_embeddings = domains.ycs.embeddings.service.create_dense_embeddings()
+    sparse_embeddings = domains.ycs.embeddings.service.create_sparse_embeddings()
+    dimensions, embedding_model = await domains.ycs.embeddings.service.get_embedding_info()
 
     collection_created = await ensure_collection(
         qdrant, dimensions, embedding_model, collection_name = collection_name,
@@ -407,7 +394,7 @@ async def ingest_to_qdrant(
             "points":  0,
         })
 
-    chunker = create_chunker(chunk_size, chunk_overlap)
+    chunker = domains.ycs.chunker.domain.create_chunker(chunk_size, chunk_overlap)
     total_transcripts = 0
     total_chunks = 0
     total_upserted = 0
@@ -436,7 +423,7 @@ async def ingest_to_qdrant(
             },
         })
 
-    # Pack buffer — flushed every FLUSH_CHUNKS chunks. `pending_vids`
+    # Pack buffer — flushed every params.FLUSH_CHUNKS chunks. `pending_vids`
     # tracks which videos' chunks are inside the un-flushed buffer so
     # completed_ids only advances once a video's points are actually
     # in Qdrant.
@@ -457,7 +444,7 @@ async def ingest_to_qdrant(
         model_used = dense_embeddings.last_model or ""
         points = [
             PointStruct(
-                id = point_id(
+                id = keys.point_id(
                     doc.metadata["video_id"],
                     doc.metadata["chunk_index"],
                 ),
@@ -496,7 +483,7 @@ async def ingest_to_qdrant(
             continue
         meta = metadata_cache.get(vid, {})
 
-        chunks = chunk_transcript(
+        chunks = domains.ycs.chunker.domain.chunk_transcript(
             video_id = vid,
             content = transcript.get("content") or "",
             metadata = domain.build_chunk_metadata(
@@ -533,10 +520,10 @@ async def ingest_to_qdrant(
                 pass
         buffer.extend(chunks)
         pending_vids.append(vid)
-        if len(buffer) >= FLUSH_CHUNKS:
+        if len(buffer) >= params.FLUSH_CHUNKS:
             await _flush()
 
-        if total_transcripts % LOG_EVERY_N_TRANSCRIPTS == 0:
+        if total_transcripts % params.LOG_EVERY_N_TRANSCRIPTS == 0:
             logger.info(
                 f"[ycs:ingestion] progress: {total_transcripts} "
                 f"transcripts, {total_chunks} chunks, "
@@ -606,11 +593,11 @@ async def expand_with_partition_ids(
 
 async def _find_all_ycs_collections(qdrant: AsyncQdrantClient) -> list[str]:
     """Every REAL Qdrant collection that could hold YCS video data —
-    the bare `QDRANT_COLLECTION` name (if it's still a literal, pre-
+    the bare `params.QDRANT_COLLECTION` name (if it's still a literal, pre-
     migration collection) plus every versioned physical collection any
     past embedding-migration ever created
     (`domains.ycs.embedding_migration.domain.physical_collection_name`
-    → `"{QDRANT_COLLECTION}__{model}__{dim}d"`).
+    → `"{params.QDRANT_COLLECTION}__{model}__{dim}d"`).
 
     2026-09-15: added — `delete_points_for_videos` previously only
     swept the CURRENT alias target, silently leaving a video's vectors
@@ -624,12 +611,12 @@ async def _find_all_ycs_collections(qdrant: AsyncQdrantClient) -> list[str]:
     try:
         collections = await qdrant.get_collections()
     except Exception:
-        return [QDRANT_COLLECTION]
-    prefix = f"{QDRANT_COLLECTION}__"
+        return [params.QDRANT_COLLECTION]
+    prefix = f"{params.QDRANT_COLLECTION}__"
     return [
         c.name for c in collections.collections
-        if c.name == QDRANT_COLLECTION or c.name.startswith(prefix)
-    ] or [QDRANT_COLLECTION]
+        if c.name == params.QDRANT_COLLECTION or c.name.startswith(prefix)
+    ] or [params.QDRANT_COLLECTION]
 
 
 async def delete_points_for_videos(
@@ -649,7 +636,7 @@ async def delete_points_for_videos(
     which sweeps all chunks per video in one call, per collection.
 
     2026-09-15: sweeps every collection `_find_all_ycs_collections`
-    finds, not just `QDRANT_COLLECTION` — a video ingested before an
+    finds, not just `params.QDRANT_COLLECTION` — a video ingested before an
     embedding-model migration has vectors in the OLD (superseded)
     physical collection too, which is kept around deliberately as a
     migration safety net; deleting a video must still remove it from
@@ -702,4 +689,297 @@ async def delete_points_for_videos(
     if errors:
         out["qdrant_errors"] = errors
     return out
+
+
+# Per-video Qdrant streaming buffer (2026-09-13: streaming counterpart to
+# `ingest_to_qdrant` above. That function's cross-video chunk-packing
+# buffer (`buffer`/`pending_vids`) only works because ONE task holds it
+# in memory for the whole batch's lifetime. Once Qdrant ingestion is
+# triggered per video from separate Celery task invocations
+# (`qdrant_task/task.py::stream_video_to_qdrant`), the buffer has to live
+# somewhere all of them can reach — Redis, not a Python list.
+#
+# Same embedding-latency-amortization rationale as the bulk path (NIM
+# calls are per-CALL dominated, ~11-15s whether carrying 5 or 50 texts)
+# — chunks still accumulate across videos and flush in `FLUSH_CHUNKS`
+# groups, just via a Redis LIST instead of an in-memory one. The flush
+# critical section is guarded by a Redis lock so two videos finishing
+# near-simultaneously can't both pop + upsert the same chunks.
+
+
+async def _already_current(
+    qdrant: AsyncQdrantClient, video_id: str, content_hash: str,
+) -> bool:
+    """Same content-hash skip as the bulk path's pre-pass — a Rerun
+    over an unchanged video shouldn't re-embed it. Best-effort: any
+    lookup trouble falls through to "not current" (re-embed), never
+    raises."""
+    try:
+        points, _ = await qdrant.scroll(
+            collection_name = params.QDRANT_COLLECTION,
+            scroll_filter = Filter(must = [
+                FieldCondition(key = "video_id", match = MatchAny(any = [video_id])),
+            ]),
+            limit = 1,
+            with_payload = ["content_hash"],
+            with_vectors = False,
+        )
+    except Exception:
+        return False
+    return bool(
+        points and (points[0].payload or {}).get("content_hash") == content_hash,
+    )
+
+
+async def _flush_buffer(
+    redis: Redis, qdrant: AsyncQdrantClient, extract_id: str, *, drain_all: bool = False,
+) -> int:
+    """Lock-guarded pop-and-upsert. Returns points upserted (0 if
+    another caller was already flushing, or the buffer was empty).
+
+    2026-09-14: popped chunks are re-queued (front of the list, same
+    order) if embedding/upsert fails — previously they were silently
+    dropped, so 2 transient rotator blips on a 25-video run permanently
+    lost those videos' points (22/24). A later video's flush or the
+    final drain retries them. The embed call itself gets 3 attempts
+    with backoff before giving up for this flush."""
+    import asyncio as _asyncio
+
+    from redis.asyncio.lock import Lock
+
+    lock = Lock(
+        redis, keys.qdrant_flush_lock_key(extract_id), timeout = 60, blocking_timeout = 0,
+    )
+    acquired = await lock.acquire()
+    if not acquired:
+        return 0  # someone else is flushing — fine, they'll drain what's there
+    try:
+        buffer_key = keys.qdrant_buffer_key(extract_id)
+        if drain_all:
+            count = await redis.llen(buffer_key)
+            if count <= 0:
+                return 0
+        else:
+            count = params.FLUSH_CHUNKS
+            if await redis.llen(buffer_key) < params.FLUSH_CHUNKS:
+                return 0
+        raw_items = await redis.lpop(buffer_key, count)
+        if not raw_items:
+            return 0
+
+        # 2026-09-14: mark this phase as actively draining for the
+        # duration of the embed+upsert below — TTL is a self-healing
+        # backstop if this process gets hard-killed (SIGTERM revoke)
+        # before the `finally` gets to clear it. See `qdrant_draining_
+        # key`'s docstring for why this exists: `get_phase_progress`
+        # reads it so the bar doesn't report "Done" while this is
+        # still running (that gap is what let a Stop click aimed at an
+        # unrelated phase kill an in-flight drain with no warning).
+        draining_key = keys.qdrant_draining_key(extract_id)
+        await redis.set(draining_key, "1", ex = 120)
+
+        async def _requeue(why: str) -> None:
+            # Put popped chunks BACK at the front of the buffer (same
+            # order) so a later flush or the final drain retries them
+            # instead of losing them. Best-effort — logs and swallows.
+            try:
+                if raw_items:
+                    await redis.lpush(buffer_key, *reversed(raw_items))
+                    await redis.expire(buffer_key, params.STREAMING_KEY_TTL_S)
+                    logger.warning(
+                        f"[ycs:ingestion:streaming] {extract_id}: "
+                        f"re-queued {len(raw_items)} chunks after {why}"
+                    )
+            except Exception as requeue_err:
+                logger.warning(
+                    f"[ycs:ingestion:streaming] {extract_id}: re-queue "
+                    f"failed after {why}: "
+                    f"{type(requeue_err).__name__}: {requeue_err}"
+                )
+        docs: list[Document] = []
+        for raw in raw_items:
+            text = raw.decode() if isinstance(raw, (bytes, bytearray)) else raw
+            try:
+                rec = json.loads(text)
+                docs.append(Document(page_content = rec["page_content"], metadata = rec["metadata"]))
+            except Exception as e:
+                logger.warning(
+                    f"[ycs:ingestion:streaming] dropped malformed buffer "
+                    f"entry: {type(e).__name__}: {e}"
+                )
+        if not docs:
+            return 0
+        try:
+            dense_embeddings = domains.ycs.embeddings.service.create_dense_embeddings()
+            sparse_embeddings = domains.ycs.embeddings.service.create_sparse_embeddings()
+            dimensions, embedding_model = await domains.ycs.embeddings.service.get_embedding_info()
+            await ensure_collection(qdrant, dimensions, embedding_model)
+        except Exception as setup_err:
+            # Probe/collection failure happens AFTER the pop — without
+            # a re-queue these chunks are lost (observed live:
+            # `embed_probe_async timed out after 20s` dropped a whole
+            # video's chunks). Re-queue and let a later flush retry.
+            await _requeue(f"setup failure ({type(setup_err).__name__})")
+            raise
+        texts = [doc.page_content for doc in docs]
+        last_err: Exception | None = None
+        dense_vectors = None
+        for attempt in range(3):
+            try:
+                dense_vectors = await dense_embeddings.aembed_documents(texts)
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                logger.warning(
+                    f"[ycs:ingestion:streaming] {extract_id}: embed "
+                    f"attempt {attempt + 1}/3 failed "
+                    f"({type(e).__name__}: {e}) — "
+                    f"{len(docs)} chunks stay buffered for retry"
+                )
+                await _asyncio.sleep(2 * (attempt + 1))
+        if dense_vectors is None:
+            # All attempts failed — re-queue for a later flush / drain.
+            await _requeue("embed failure")
+            raise last_err
+        sparse_vectors = list(sparse_embeddings.embed_documents(texts))
+        model_used = dense_embeddings.last_model or ""
+        points = [
+            PointStruct(
+                id = keys.point_id(doc.metadata["video_id"], doc.metadata["chunk_index"]),
+                vector = {
+                    "dense": dense_vectors[i],
+                    "sparse": SparseVector(
+                        indices = sparse_vectors[i].indices,
+                        values =  sparse_vectors[i].values,
+                    ),
+                },
+                payload = {**domain.build_payload(doc), "embedding_model": model_used},
+            )
+            for i, doc in enumerate(docs)
+        ]
+        try:
+            await qdrant.upsert(collection_name = params.QDRANT_COLLECTION, points = points)
+        except Exception:
+            # An upsert failure must not lose already-popped chunks.
+            await _requeue("upsert failure")
+            raise
+        logger.info(
+            f"[ycs:ingestion:streaming] {extract_id}: flushed "
+            f"{len(points)} points (drain_all={drain_all})"
+        )
+        return len(points)
+    finally:
+        # Clears unconditionally — a harmless no-op delete if we
+        # returned before the flag was ever set (empty buffer, no
+        # docs). Runs on every exit path (return OR raise) from the
+        # try above, so a re-queued failure clears it exactly the same
+        # as a clean flush.
+        try:
+            await redis.delete(keys.qdrant_draining_key(extract_id))
+        except Exception:
+            pass
+        try:
+            await lock.release()
+        except Exception:
+            pass
+
+
+async def stream_video_to_qdrant(
+    es:            AsyncElasticsearch,
+    qdrant:        AsyncQdrantClient,
+    redis:         Redis,
+    video_id:      str,
+    extract_id:    str,
+    chunk_size:    int = params.DEFAULT_CHUNK_SIZE,
+    chunk_overlap: int = params.DEFAULT_CHUNK_OVERLAP,
+) -> dict[str, Any]:
+    """Chunk ONE video's transcript (fresh ES read — this task doesn't
+    share the bulk path's prefetch) and push its chunks onto the run's
+    shared Redis buffer, flushing whenever the buffer crosses
+    `FLUSH_CHUNKS`. Stale-chunk sweep on content change, same as the
+    bulk path (`ensure_collection`'s slot/dim checks happen inside
+    `_flush_buffer`, only when a flush actually runs)."""
+    transcripts = await fetch_transcripts_from_es(es, [video_id])
+    if not transcripts:
+        return {"video_id": video_id, "chunks": 0, "skipped": False, "error": "not found in ES"}
+    transcript = transcripts[0] if isinstance(transcripts[0], dict) else {}
+    # 2026-09-14: long-video partitioning — carried through every
+    # return path below so `qdrant_task/task.py` can route this
+    # partition's outcome through `mark_video_or_partition_done`
+    # instead of directly bumping the phase counter. `None` for the
+    # overwhelming majority (unsplit) videos.
+    part_group = {
+        "parent_video_id": transcript.get("parent_video_id"),
+        "part_total":       transcript.get("part_total"),
+    }
+    metadata_map = await fetch_metadata_from_es(es, [video_id])
+    meta = metadata_map.get(video_id, {})
+    if not isinstance(meta, dict):
+        meta = {}
+    content = transcript.get("content") or ""
+    content_hash = domain.content_hash(content)
+
+    if await _already_current(qdrant, video_id, content_hash):
+        logger.info(f"[ycs:ingestion:streaming] {video_id}: unchanged, skipping re-embed")
+        return {"video_id": video_id, "chunks": 0, "skipped": True, **part_group}
+
+    chunker = domains.ycs.chunker.domain.create_chunker(chunk_size, chunk_overlap)
+    chunks = domains.ycs.chunker.domain.chunk_transcript(
+        video_id = video_id,
+        content = content,
+        metadata = domain.build_chunk_metadata(
+            lang =         transcript.get("lang", "en"),
+            channel_id =   transcript.get("channel_id", ""),
+            title =        meta.get("title", ""),
+            channel =      meta.get("channel", ""),
+            upload_date =  meta.get("upload_date", ""),
+            webpage_url =  meta.get("webpage_url", ""),
+            content_hash = content_hash,
+        ),
+        chunker = chunker,
+    )
+    if not chunks:
+        return {"video_id": video_id, "chunks": 0, "skipped": False, **part_group}
+
+    # Stale-chunk sweep — a shorter re-chunk could otherwise leave
+    # orphans at high chunk_index values (same rationale as the bulk
+    # path). Best-effort.
+    try:
+        await qdrant.delete(
+            collection_name = params.QDRANT_COLLECTION,
+            points_selector = FilterSelector(
+                filter = Filter(must = [
+                    FieldCondition(key = "video_id", match = MatchAny(any = [video_id])),
+                ]),
+            ),
+        )
+    except Exception:
+        pass
+
+    buffer_key = keys.qdrant_buffer_key(extract_id)
+    records = [
+        json.dumps({"page_content": doc.page_content, "metadata": doc.metadata})
+        for doc in chunks
+    ]
+    await redis.rpush(buffer_key, *records)
+    await redis.expire(buffer_key, params.STREAMING_KEY_TTL_S)
+    points_flushed = await _flush_buffer(redis, qdrant, extract_id)
+    return {
+        "video_id":       video_id,
+        "chunks":         len(chunks),
+        "skipped":        False,
+        "points_flushed": points_flushed,
+        **part_group,
+    }
+
+
+async def finalize_qdrant_buffer(
+    redis: Redis, qdrant: AsyncQdrantClient, extract_id: str,
+) -> int:
+    """Called by whichever per-video task turns out to be the LAST one
+    for the Qdrant phase (see `pipeline_task.service.mark_video_done`)
+    — drains any remainder below the normal `FLUSH_CHUNKS` threshold so
+    the tail of a run isn't silently left unembedded."""
+    return await _flush_buffer(redis, qdrant, extract_id, drain_all = True)
 

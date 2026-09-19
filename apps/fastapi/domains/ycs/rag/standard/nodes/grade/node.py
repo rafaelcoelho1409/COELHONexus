@@ -8,10 +8,10 @@ from __future__ import annotations
 import logging
 import os
 
-from domains.ycs.grader import DocumentGrader
-from domains.ycs.runtime.observability import record_graded_docs, traced
+import domains
+from domains.ycs.runtime.observability.service import traced
 
-from ...state import YouTubeRAGState
+from ... import state
 
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 @traced("rag.grade")
 async def grade_documents(
-    state: YouTubeRAGState, grader: DocumentGrader,
+    state: state.YouTubeRAGState, grader: domains.ycs.grader.service.DocumentGrader,
 ) -> dict:
     """LLM evaluates each document for relevance IN PARALLEL.
 
@@ -34,7 +34,7 @@ async def grade_documents(
             f"[ycs:ablation] grader BYPASSED — passing {len(docs)} "
             f"reranked doc(s) straight to generate"
         )
-        record_graded_docs(
+        domains.ycs.runtime.observability.metrics.record_graded_docs(
             route = str(state.get("route") or "unknown"),
             mode = str(state.get("mode") or "standard") + "+no-grade",
             count = len(docs),
@@ -43,7 +43,7 @@ async def grade_documents(
     relevant_docs = await grader.grade_documents(
         state["question"], state["documents"],
     )
-    record_graded_docs(
+    domains.ycs.runtime.observability.metrics.record_graded_docs(
         route = str(state.get("route") or "unknown"),
         mode = str(state.get("mode") or "standard"),
         count = len(relevant_docs),

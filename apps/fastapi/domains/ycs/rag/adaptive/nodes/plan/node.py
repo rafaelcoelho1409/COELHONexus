@@ -12,14 +12,12 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from domains.ycs.rag.llm_call import capture_llm_usage
-from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
-from domains.ycs.runtime.observability import traced
+import domains
+from domains.ycs.runtime.observability.service import traced
 
-from ....domain import parse_json_model_output
-from ...state import AdaptiveRAGState
-from .prompts import PLAN_FALLBACK_PROMPT
-from .schemas import ResearchPlan
+from .... import domain, service
+from ... import state
+from . import prompts, schemas
 
 
 logger = logging.getLogger(__name__)
@@ -38,7 +36,7 @@ _PLAN_MAX_ATTEMPTS = 2
 
 
 @traced("rag.plan")
-async def plan_research(state: AdaptiveRAGState, llm) -> dict:
+async def plan_research(state: state.AdaptiveRAGState, llm) -> dict:
     """If `sub_questions` exist already, no LLM call. Otherwise fall
     back to the planner prompt."""
     if state.get("sub_questions"):
@@ -51,18 +49,18 @@ async def plan_research(state: AdaptiveRAGState, llm) -> dict:
     # match classify's plain-JSON strategy. Native
     # structured-output validation can wedge before emitting any graph
     # update; local validation keeps the planner portable across arms.
-    chain = PLAN_FALLBACK_PROMPT | llm
+    chain = prompts.PLAN_FALLBACK_PROMPT | llm
     last_exc: BaseException | None = None
     for attempt in range(1, _PLAN_MAX_ATTEMPTS + 1):
         try:
-            _llm_set_node(node = "plan")
+            domains.ycs.runtime.llm_counter.service.set_node(node = "plan")
             response = await asyncio.wait_for(
                 chain.ainvoke({"question": state["question"]}),
                 timeout = _PLAN_TIMEOUT_S,
             )
-            await capture_llm_usage(response)
-            result = parse_json_model_output(
-                response.content, ResearchPlan,
+            await service.capture_llm_usage(response)
+            result = domain.parse_json_model_output(
+                response.content, schemas.ResearchPlan,
             )
             # Defensive: a structured-output that parsed cleanly but
             # came back empty is the same failure mode for our

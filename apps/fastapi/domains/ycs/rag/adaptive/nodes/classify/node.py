@@ -14,16 +14,12 @@ from __future__ import annotations
 
 import asyncio
 
-from domains.ycs.graph_builder.params import SOURCE_LABEL
-from domains.ycs.rag.llm_call import resilient_ainvoke
-from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
-from domains.ycs.runtime.observability import traced
+import domains
+from domains.ycs.runtime.observability.service import traced
 
-from ....domain import parse_json_model_output
-from ...params import MAX_HISTORY_ANSWER_CHARS, MAX_HISTORY_TURNS
-from ...state import AdaptiveRAGState
-from .prompts import CLASSIFY_PROMPT
-from .schemas import QueryClassification
+from .... import domain, service
+from ... import params, state
+from . import prompts, schemas
 
 
 # Single LLM call, output cap is small (mode + a handful of sub-
@@ -43,8 +39,9 @@ def _resolve_channel_ids(neo4j_graph, channel_names: list[str]) -> list[str]:
         return []
     patterns = [n.lower() for n in channel_names]
     try:
+        source_label = domains.ycs.graph_builder.params.SOURCE_LABEL
         results = neo4j_graph.query(
-            f"MATCH (c:Channel:{SOURCE_LABEL}) "
+            f"MATCH (c:Channel:{source_label}) "
             "WHERE toLower(c.name) IN $names OR toLower(c.id) IN $names "
             "RETURN c.id AS channel_id",
             params = {"names": patterns},
@@ -61,7 +58,7 @@ def _resolve_channel_ids(neo4j_graph, channel_names: list[str]) -> list[str]:
         if not pats:
             return []
         results = neo4j_graph.query(
-            f"MATCH (c:Channel:{SOURCE_LABEL}) "
+            f"MATCH (c:Channel:{source_label}) "
             "WHERE any(_p IN $names "
             "WHERE toLower(c.name) CONTAINS _p) "
             "RETURN c.id AS channel_id",
@@ -74,7 +71,7 @@ def _resolve_channel_ids(neo4j_graph, channel_names: list[str]) -> list[str]:
 
 @traced("rag.classify")
 async def classify_query(
-    state: AdaptiveRAGState, llm, neo4j_graph = None,
+    state: state.AdaptiveRAGState, llm, neo4j_graph = None,
 ) -> dict:
     """Classify complexity + auto-detect channel scope.
 
@@ -115,24 +112,24 @@ async def classify_query(
     # against history inside the classify call itself.
     history = state.get("conversation_history") or []
     parts: list[str] = []
-    for turn in history[-MAX_HISTORY_TURNS:]:
+    for turn in history[-params.MAX_HISTORY_TURNS:]:
         parts.append(
             f"Q: {turn['question']}\n"
-            f"A: {turn['answer'][:MAX_HISTORY_ANSWER_CHARS]}"
+            f"A: {turn['answer'][:params.MAX_HISTORY_ANSWER_CHARS]}"
         )
     formatted_history = "\n---\n".join(parts)
-    chain = CLASSIFY_PROMPT | llm
+    chain = prompts.CLASSIFY_PROMPT | llm
     try:
-        _llm_set_node(node = "classify")
-        response = await resilient_ainvoke(
+        domains.ycs.runtime.llm_counter.service.set_node(node = "classify")
+        response = await service.resilient_ainvoke(
             chain,
             {"history": formatted_history, "question": state["question"]},
             operation    = "classify",
             timeout_s    = _CLASSIFY_TIMEOUT_S,
             max_attempts = 2,
         )
-        result = parse_json_model_output(
-            response.content, QueryClassification,
+        result = domain.parse_json_model_output(
+            response.content, schemas.QueryClassification,
         )
         mode = force or result.mode
         sub_questions = result.sub_questions if mode == "deep" else []

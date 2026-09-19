@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import asyncio
 
-from domains.ycs.rag.llm_call import resilient_ainvoke
-from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
-from domains.ycs.runtime.observability import traced
+import domains
+from domains.ycs.runtime.observability.service import traced
 
-from ....domain import history_to_messages, strip_think_tags
-from ...state import AdaptiveRAGState
-from .prompts import SYNTHESIZE_PROMPT
+from .... import domain, service
+from ... import state
+from . import prompts
 
 
 # DEEP synthesis takes a long-context input (every sub-question's
@@ -25,7 +24,7 @@ _SYNTHESIZE_TIMEOUT_S = 240.0
 
 
 @traced("rag.synthesize")
-async def synthesize(state: AdaptiveRAGState, llm) -> dict:
+async def synthesize(state: state.AdaptiveRAGState, llm) -> dict:
     """Merge sub-results into one report + deduped citations."""
     parts: list[str] = []
     for i, sr in enumerate(state.get("sub_results", []), 1):
@@ -50,23 +49,23 @@ async def synthesize(state: AdaptiveRAGState, llm) -> dict:
         )
     sub_results_text = "\n\n".join(parts)
 
-    chain = SYNTHESIZE_PROMPT | llm
+    chain = prompts.SYNTHESIZE_PROMPT | llm
     try:
-        _llm_set_node(node = "synthesize")
-        response = await resilient_ainvoke(
+        domains.ycs.runtime.llm_counter.service.set_node(node = "synthesize")
+        response = await service.resilient_ainvoke(
             chain,
             {
                 "question":       state["question"],
                 "research_plan":  state.get("research_plan", ""),
                 "sub_results":    sub_results_text,
-                "history":        history_to_messages(
+                "history":        domain.history_to_messages(
                     state.get("conversation_history"),
                 ),
             },
             operation = "synthesize",
             timeout_s = _SYNTHESIZE_TIMEOUT_S,
         )
-        generation = strip_think_tags(response.content)
+        generation = domain.strip_think_tags(response.content)
     except asyncio.TimeoutError:
         generation = (
             f"Synthesis didn't complete within {int(_SYNTHESIZE_TIMEOUT_S)}s — "

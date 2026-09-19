@@ -1,4 +1,3 @@
-from .node import grade_documents
+from __future__ import annotations
 
-
-__all__ = ["grade_documents"]
+from . import node

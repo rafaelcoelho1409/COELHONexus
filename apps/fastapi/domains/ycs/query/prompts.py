@@ -7,7 +7,7 @@ baseline. The prompt builder below assembles three components:
   1. A short rules block (read-only, response format, no commentary).
   2. A compact schema slice (the user-visible store schema; trimmed if
      it would blow the context budget).
-  3. 3–5 curated few-shot exemplars (from examples.py).
+  3. 3–5 curated few-shot exemplars (`EXAMPLES_BY_BACKEND` below).
 
 Repair prompt (`build_repair_prompt`) is the same shell with the
 previous attempt + parser error appended — the model gets ONE shot at
@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .params import BACKEND_ES, BACKEND_NEO4J, BACKEND_QDRANT
+from . import params
 
 
 PROMPT_VERSION = "qaie-v1.3.0"   # Qdrant filter-shape rules + text-index hint
@@ -26,7 +26,7 @@ _SCHEMA_CHARS_CAP = 9000
 
 
 _RULES = {
-    BACKEND_ES: (
+    params.BACKEND_ES: (
         "You are a senior Elasticsearch engineer.\n"
         "Generate ONE Elasticsearch _search request body that answers the user's question.\n"
         "Hard constraints:\n"
@@ -40,7 +40,7 @@ _RULES = {
         " · If the user names a field that doesn't exist in the schema, pick the closest match\n"
         "   that DOES exist (don't fabricate field names).\n"
     ),
-    BACKEND_QDRANT: (
+    params.BACKEND_QDRANT: (
         "You are a senior Qdrant engineer.\n"
         "Generate ONE Qdrant query body that answers the user's question.\n"
         "Hard constraints:\n"
@@ -64,7 +64,7 @@ _RULES = {
         "   return a plain `scroll` (no filter) — Qdrant cannot do substring search on unindexed fields,\n"
         "   so the user should switch to the Elasticsearch backend for full-text queries.\n"
     ),
-    BACKEND_NEO4J: (
+    params.BACKEND_NEO4J: (
         "You are a senior Neo4j engineer.\n"
         "Generate ONE Cypher query that answers the user's question.\n"
         "Hard constraints:\n"
@@ -101,7 +101,7 @@ def _condense_schema(backend: str, schema: dict[str, Any] | None) -> str:
     if not schema:
         return "(schema unavailable; rely on common YCS field names: title, channel_id, content, video_id, webpage_url, upload_date)"
 
-    if backend == BACKEND_ES:
+    if backend == params.BACKEND_ES:
         lines: list[str] = []
         for name, idx in schema.get("indices", {}).items():
             lines.append(f"# index: {name} ({idx.get('doc_count', '?')} docs)")
@@ -126,7 +126,7 @@ def _condense_schema(backend: str, schema: dict[str, Any] | None) -> str:
                 lines.append("  " + json.dumps(src, ensure_ascii = False)[:600])
         text = "\n".join(lines)
 
-    elif backend == BACKEND_QDRANT:
+    elif backend == params.BACKEND_QDRANT:
         lines = []
         for c in schema.get("collections", []):
             lines.append(f"# collection: {c['name']} ({c.get('points_count', '?')} points)")
@@ -160,7 +160,7 @@ def _condense_schema(backend: str, schema: dict[str, Any] | None) -> str:
                 lines.append("  " + json.dumps(s.get("payload", {}), ensure_ascii = False)[:600])
         text = "\n".join(lines)
 
-    elif backend == BACKEND_NEO4J:
+    elif backend == params.BACKEND_NEO4J:
         lines = []
         lines.append("# labels: " + ", ".join(schema.get("labels") or []))
         lines.append("# relationship_types: " + ", ".join(schema.get("relationship_types") or []))
@@ -217,7 +217,7 @@ def build_generate_prompt(
 
     The model's output is then taken VERBATIM as the query body — no
     parsing past the read-only safety guard."""
-    rules     = _RULES.get(backend, _RULES[BACKEND_ES])
+    rules     = _RULES.get(backend, _RULES[params.BACKEND_ES])
     schema_s  = _condense_schema(backend, schema)
     fewshot   = _format_examples(examples)
     prior     = (
@@ -244,7 +244,7 @@ def build_repair_prompt(
 
     Matches the loop described in *Cypher Generation: The Good, The Bad
     and The Messy* (TDS, 2025)."""
-    rules    = _RULES.get(backend, _RULES[BACKEND_ES])
+    rules    = _RULES.get(backend, _RULES[params.BACKEND_ES])
     schema_s = _condense_schema(backend, schema)
     fewshot  = _format_examples(examples)
     return (
@@ -257,3 +257,207 @@ def build_repair_prompt(
         "--- OUTPUT ---\n"
         "Respond with a CORRECTED query body ONLY. No explanation. No markdown."
     )
+
+
+# Curated few-shot Q→DSL pairs per backend.
+#
+# Per the Neo4j Text2Cypher Guide (Feb 2026): "Few-shot learning uses
+# similar examples stored in a vector database for Cypher query
+# generation." For a v1 we hard-code 4–6 high-coverage exemplars per
+# backend; phase 4.x will swap this for a Qdrant collection
+# (`query_examples`) with embedding-based retrieval. Today
+# `build_generate_prompt`/`build_repair_prompt` dump the first N
+# exemplars into the prompt verbatim.
+#
+# Each pair carries:
+#   · question — the natural-language ask
+#   · query    — the DSL string the model should learn to produce
+#
+# Keep `query` strings runnable as-is (the editor will be populated
+# with the raw text + the model fills the parameters). When you add an
+# exemplar, eyeball it against the live store to confirm it returns
+# hits — a stale example teaches the model wrong shapes.
+
+ES_EXAMPLES: list[dict[str, str]] = [
+    {
+        "question": "show me the 10 most-viewed videos",
+        "query": (
+            '{\n'
+            '  "query": { "match_all": {} },\n'
+            '  "sort":  [{ "view_count": "desc" }],\n'
+            '  "size":  10\n'
+            '}'
+        ),
+    },
+    {
+        "question": "find transcripts mentioning attention mechanisms",
+        "query": (
+            '{\n'
+            '  "query": {\n'
+            '    "multi_match": {\n'
+            '      "query":  "attention mechanism",\n'
+            '      "fields": ["content"],\n'
+            '      "type":   "best_fields"\n'
+            '    }\n'
+            '  },\n'
+            '  "size": 20\n'
+            '}'
+        ),
+    },
+    {
+        "question": "search a channel's videos for the word transformer",
+        "query": (
+            '{\n'
+            '  "query": {\n'
+            '    "bool": {\n'
+            '      "must":   { "multi_match": { "query": "transformer", "fields": ["title^3", "description", "content"] } },\n'
+            '      "filter": { "term": { "channel_id": "UC...replace_me..." } }\n'
+            '    }\n'
+            '  },\n'
+            '  "size": 25\n'
+            '}'
+        ),
+    },
+    {
+        "question": "aggregate videos by channel and return counts",
+        "query": (
+            '{\n'
+            '  "size": 0,\n'
+            '  "aggs": {\n'
+            '    "by_channel": {\n'
+            '      "terms": { "field": "channel_id", "size": 30 }\n'
+            '    }\n'
+            '  }\n'
+            '}'
+        ),
+    },
+]
+
+
+QDRANT_EXAMPLES: list[dict[str, str]] = [
+    {
+        "question": "browse the first 20 chunks in the collection",
+        "query": (
+            '{\n'
+            '  "op":            "scroll",\n'
+            '  "limit":         20,\n'
+            '  "with_payload":  true\n'
+            '}'
+        ),
+    },
+    {
+        "question": "count points in the collection",
+        "query": '{ "op": "count", "exact": true }',
+    },
+    {
+        "question": "filter scroll to one video_id",
+        "query": (
+            '{\n'
+            '  "op": "scroll",\n'
+            '  "limit": 50,\n'
+            '  "with_payload": true,\n'
+            '  "scroll_filter": {\n'
+            '    "must": [\n'
+            '      { "key": "video_id", "match": { "value": "REPLACE_VIDEO_ID" } }\n'
+            '    ]\n'
+            '  }\n'
+            '}'
+        ),
+    },
+    {
+        "question": "filter scroll to chunks belonging to ANY of two channels",
+        "query": (
+            '{\n'
+            '  "op": "scroll",\n'
+            '  "limit": 50,\n'
+            '  "with_payload": true,\n'
+            '  "scroll_filter": {\n'
+            '    "must": [\n'
+            '      { "key": "channel_id", "match": { "any": ["UC...id1", "UC...id2"] } }\n'
+            '    ]\n'
+            '  }\n'
+            '}'
+        ),
+    },
+    {
+        "question": "scroll excluding a specific channel",
+        "query": (
+            '{\n'
+            '  "op": "scroll",\n'
+            '  "limit": 50,\n'
+            '  "with_payload": true,\n'
+            '  "scroll_filter": {\n'
+            '    "must_not": [\n'
+            '      { "key": "channel_id", "match": { "value": "UC...id1" } }\n'
+            '    ]\n'
+            '  }\n'
+            '}'
+        ),
+    },
+    {
+        # This is the negative example the user-reported bug needs —
+        # the LLM tried `match: {text: "Brasil"}` on `content`, which
+        # Pydantic rejects because the field has no text index. Show
+        # the LLM what to do in that case: drop the filter, return a
+        # browse-scroll, let the user pivot to Elasticsearch.
+        "question": "find chunks where content contains a substring (no text index on content)",
+        "query": (
+            '{\n'
+            '  "op":           "scroll",\n'
+            '  "limit":        100,\n'
+            '  "with_payload": true\n'
+            '}'
+        ),
+    },
+]
+
+
+NEO4J_EXAMPLES: list[dict[str, str]] = [
+    {
+        "question": "list 10 videos with title and url",
+        "query": (
+            "MATCH (v:Video)\n"
+            "RETURN v.title AS title, v.webpage_url AS url\n"
+            "LIMIT 10"
+        ),
+    },
+    {
+        "question": "count documents per channel",
+        "query": (
+            "MATCH (d:Document)\n"
+            "WITH d.channel_id AS channel_id, count(d) AS n\n"
+            "RETURN channel_id, n\n"
+            "ORDER BY n DESC\n"
+            "LIMIT 25"
+        ),
+    },
+    {
+        "question": "find entities most-mentioned across videos",
+        "query": (
+            "MATCH (d:Document)-[r:MENTIONS]->(e:__Entity__)\n"
+            "WITH e, count(DISTINCT d.video_id) AS videos\n"
+            "RETURN e.id AS entity, videos\n"
+            "ORDER BY videos DESC\n"
+            "LIMIT 25"
+        ),
+    },
+    {
+        "question": "find entities co-mentioned with X",
+        "query": (
+            'MATCH (d:Document)-[:MENTIONS]->(target:__Entity__ {id: "REPLACE_ENTITY"})\n'
+            "MATCH (d)-[:MENTIONS]->(other:__Entity__)\n"
+            "WHERE other <> target\n"
+            "WITH other, count(DISTINCT d) AS co\n"
+            "RETURN other.id AS co_entity, co\n"
+            "ORDER BY co DESC\n"
+            "LIMIT 20"
+        ),
+    },
+]
+
+
+EXAMPLES_BY_BACKEND: dict[str, list[dict[str, str]]] = {
+    params.BACKEND_ES:     ES_EXAMPLES,
+    params.BACKEND_QDRANT: QDRANT_EXAMPLES,
+    params.BACKEND_NEO4J:  NEO4J_EXAMPLES,
+}

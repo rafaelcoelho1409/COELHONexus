@@ -29,15 +29,7 @@ from langchain_qdrant import FastEmbedSparse
 
 from domains.llm.embeddings import embed_probe_async, embed_texts_async
 
-from . import domain
-from .errors import EmbeddingAPIError, EmbeddingEmptyQueryError
-from .params import (
-    BATCH_PAUSE_S,
-    BATCH_SIZE,
-    PROBE_RETRY_ATTEMPTS,
-    PROBE_RETRY_BACKOFF_S,
-    SPARSE_MODEL_NAME,
-)
+from . import domain, errors, params
 
 
 logger = logging.getLogger(__name__)
@@ -46,7 +38,8 @@ logger = logging.getLogger(__name__)
 # the real async call — for callers we don't directly control (e.g.
 # langchain_qdrant's own internals may invoke embed_documents/embed_query
 # synchronously as part of standard vector-store operations). Our own two
-# known call sites (ingestion/service.py, retriever/qdrant_hybrid.py) are
+# known call sites (ingestion/service.py, retriever/service.py's
+# QdrantHybridRetriever) are
 # already async and call the a*-prefixed methods directly, never hitting
 # this bridge. A fresh event loop per call (via asyncio.run in a separate
 # thread) is safe regardless of whether the CALLING thread already has one
@@ -91,7 +84,7 @@ class ExternalEmbeddings(Embeddings):
         still-warming-up endpoint, with no time given to recover
         between attempts."""
         last_err: Exception | None = None
-        for attempt in range(PROBE_RETRY_ATTEMPTS):
+        for attempt in range(params.PROBE_RETRY_ATTEMPTS):
             try:
                 vector, meta = await embed_probe_async()
                 self._record([vector] if vector else [], meta.get("deployment"))
@@ -100,11 +93,11 @@ class ExternalEmbeddings(Embeddings):
                 last_err = e
                 logger.warning(
                     f"[ycs:embeddings] probe attempt {attempt + 1}/"
-                    f"{PROBE_RETRY_ATTEMPTS} failed "
+                    f"{params.PROBE_RETRY_ATTEMPTS} failed "
                     f"({type(e).__name__}: {e})"
                 )
-                if attempt + 1 < PROBE_RETRY_ATTEMPTS:
-                    await asyncio.sleep(PROBE_RETRY_BACKOFF_S * (attempt + 1))
+                if attempt + 1 < params.PROBE_RETRY_ATTEMPTS:
+                    await asyncio.sleep(params.PROBE_RETRY_BACKOFF_S * (attempt + 1))
         assert last_err is not None
         raise last_err
 
@@ -118,25 +111,25 @@ class ExternalEmbeddings(Embeddings):
         if domain.is_empty_input(texts):
             return []
         out: list[list[float]] = []
-        for i in range(0, len(texts), BATCH_SIZE):
-            batch = texts[i : i + BATCH_SIZE]
+        for i in range(0, len(texts), params.BATCH_SIZE):
+            batch = texts[i : i + params.BATCH_SIZE]
             try:
                 vectors, model = await embed_texts_async(batch)
             except Exception as e:
-                raise EmbeddingAPIError(0, f"{type(e).__name__}: {e}") from e
+                raise errors.EmbeddingAPIError(0, f"{type(e).__name__}: {e}") from e
             self._record(vectors, model)
             out.extend(vectors)
-            if i + BATCH_SIZE < len(texts):
-                await asyncio.sleep(BATCH_PAUSE_S)
+            if i + params.BATCH_SIZE < len(texts):
+                await asyncio.sleep(params.BATCH_PAUSE_S)
         return out
 
     async def aembed_query(self, text: str) -> list[float]:
         """Single-shot — no batching, no pacing."""
         if not text or not text.strip():
-            raise EmbeddingEmptyQueryError("query text was empty")
+            raise errors.EmbeddingEmptyQueryError("query text was empty")
         vectors = await self.aembed_documents([text])
         if not vectors:
-            raise EmbeddingAPIError(0, "embedding endpoint returned no result for query")
+            raise errors.EmbeddingAPIError(0, "embedding endpoint returned no result for query")
         return vectors[0]
 
     # --- sync (LangChain ABC compliance, for callers we don't control) ---
@@ -186,5 +179,5 @@ def create_sparse_embeddings() -> FastEmbedSparse:
     stateless across calls."""
     global _sparse
     if _sparse is None:
-        _sparse = FastEmbedSparse(model_name = SPARSE_MODEL_NAME)
+        _sparse = FastEmbedSparse(model_name = params.SPARSE_MODEL_NAME)
     return _sparse

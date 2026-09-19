@@ -1,9 +1,3 @@
-from .node import contextualize_question
-from .prompts import CONTEXTUALIZE_PROMPT, CONTEXTUALIZE_PROMPT_VERSION
+from __future__ import annotations
 
-
-__all__ = [
-    "CONTEXTUALIZE_PROMPT",
-    "CONTEXTUALIZE_PROMPT_VERSION",
-    "contextualize_question",
-]
+from . import node, prompts

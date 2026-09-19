@@ -23,7 +23,11 @@ import logging
 from contextvars import ContextVar
 from typing import Any
 
+import domains
 from langchain_core.callbacks import AsyncCallbackHandler
+
+from . import domain, keys, params
+
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +46,6 @@ _thread_id_var: ContextVar[str | None] = ContextVar(
 _node_var: ContextVar[str | None] = ContextVar(
     "ycs_llm_node", default=None,
 )
-
-_COUNTER_TTL_S = 24 * 60 * 60  # matches PIPELINE_STATE_TTL_S
 
 
 def set_context(*, extract_id: str | None, video_id: str | None) -> None:
@@ -90,14 +92,6 @@ def clear_state() -> None:
     set_node(node=None)
 
 
-def _counters_key(extract_id: str) -> str:
-    return f"ycs:{extract_id}:llm:counters"
-
-
-def _models_key(extract_id: str, video_id: str) -> str:
-    return f"ycs:{extract_id}:llm:models:{video_id}"
-
-
 async def bump_current_call(
     *,
     tokens_in:    int,
@@ -120,20 +114,15 @@ async def bump_current_call(
         extract_id, video_id = get_context()
     if not (thread_id or (extract_id and video_id)):
         return
-    # Deferred import — pipeline_task's package __init__ drags in
-    # infra.celery, which needs real env vars at import time (see
-    # graph_builder/service.py's redis_client for the same reasoning).
-    from domains.ycs.pipeline_task.streaming import build_redis_client
-
-    redis = build_redis_client()
+    redis = domains.ycs.pipeline_task.service.build_redis_client()
     try:
         if thread_id:
-            counters_k = f"ycs:{thread_id}:llm:counters"
-            models_k   = f"ycs:{thread_id}:llm:models:{node or 'unknown'}"
+            counters_k = keys.counters_key(thread_id)
+            models_k   = keys.models_key(thread_id, node or "unknown")
             pp         = f"node:{node or 'unknown'}"
         else:
-            counters_k = _counters_key(extract_id or "")
-            models_k   = _models_key(extract_id or "", video_id or "")
+            counters_k = keys.counters_key(extract_id or "")
+            models_k   = keys.models_key(extract_id or "", video_id or "")
             pp         = f"node:{video_id or 'unknown'}"
         pipe = redis.pipeline(transaction=False)
         pipe.hincrby(counters_k, f"{pp}:calls", 1)
@@ -148,8 +137,8 @@ async def bump_current_call(
         pipe.hincrby(models_k, f"{model}:tokens_in", int(tokens_in))
         pipe.hincrby(models_k, f"{model}:tokens_out", int(tokens_out))
         pipe.hincrby(models_k, f"{model}:reasoning_tokens", int(reasoning_tokens))
-        pipe.expire(counters_k, _COUNTER_TTL_S)
-        pipe.expire(models_k, _COUNTER_TTL_S)
+        pipe.expire(counters_k, params.COUNTER_TTL_S)
+        pipe.expire(models_k, params.COUNTER_TTL_S)
         await pipe.execute()
     except Exception as e:
         logger.warning(
@@ -171,7 +160,7 @@ async def read_counters(extract_id: str) -> dict[str, Any]:
     new `set_thread` path), so `/agents/usage/{thread_id}` reports the
     aggregate for one conversation. Ingestion's video-keyed counter is
     untouched — pass an extract_id-shaped string and it works as before."""
-    key = _counters_key(extract_id)  # unchanged — extract_id IS the key
+    key = keys.counters_key(extract_id)  # unchanged — extract_id IS the key
     empty: dict[str, Any] = {
         "extract_id": extract_id,
         "total": {
@@ -182,9 +171,7 @@ async def read_counters(extract_id: str) -> dict[str, Any]:
     if not extract_id:
         return empty
 
-    from domains.ycs.pipeline_task.streaming import build_redis_client
-
-    redis = build_redis_client()
+    redis = domains.ycs.pipeline_task.service.build_redis_client()
     try:
         raw = await redis.hgetall(key)
         if not raw:
@@ -209,10 +196,10 @@ async def read_counters(extract_id: str) -> dict[str, Any]:
             if not field.startswith("node:"):
                 continue
             try:
-                _, video_id, key = field.split(":", 2)
+                _, video_id, key_ = field.split(":", 2)
             except ValueError:
                 continue
-            node_fields.setdefault(video_id, {})[key] = int(val or 0)
+            node_fields.setdefault(video_id, {})[key_] = int(val or 0)
 
         for video_id, fields in node_fields.items():
             by_model = await _read_models(redis, extract_id, video_id)
@@ -235,55 +222,16 @@ async def read_counters(extract_id: str) -> dict[str, Any]:
 
 
 async def _read_models(redis: Any, extract_id: str, video_id: str) -> dict:
-    raw = await redis.hgetall(_models_key(extract_id, video_id))
+    raw = await redis.hgetall(keys.models_key(extract_id, video_id))
     by_model: dict[str, dict[str, int]] = {}
     for k, v in (raw or {}).items():
-        key = k.decode() if isinstance(k, bytes) else k
+        key_ = k.decode() if isinstance(k, bytes) else k
         try:
-            model, field = key.rsplit(":", 1)
+            model, field = key_.rsplit(":", 1)
         except ValueError:
             continue
         by_model.setdefault(model, {})[field] = int(v or 0)
     return by_model
-
-
-def diff_usage(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
-    """Pure subtraction between two `read_counters()` snapshots — the
-    delta is exactly the LLM usage that happened between the two reads
-    (e.g. one Ask turn), isolated from the thread's running total.
-    Safe because the underlying Redis counters are monotonic
-    (`HINCRBY` only, never reset mid-thread).
-
-    2026-09-16: backs the Ask page's per-response usage badge — the
-    router snapshots `read_counters(thread_id)` right before and right
-    after a turn's graph run and diffs them here, rather than adding a
-    second turn-keyed Redis structure alongside the existing thread
-    aggregate."""
-    def _sub(a: dict[str, Any], b: dict[str, Any]) -> dict[str, int]:
-        return {
-            k: max(0, int(a.get(k, 0) or 0) - int(b.get(k, 0) or 0))
-            for k in ("calls", "tokens_in", "tokens_out", "reasoning_tokens")
-        }
-
-    total = _sub(after.get("total") or {}, before.get("total") or {})
-
-    def _models_agg(snapshot: dict[str, Any]) -> dict[str, dict[str, int]]:
-        agg: dict[str, dict[str, int]] = {}
-        for node in (snapshot.get("by_node") or {}).values():
-            for model, stats in (node.get("by_model") or {}).items():
-                acc = agg.setdefault(model, {})
-                for k, v in (stats or {}).items():
-                    acc[k] = acc.get(k, 0) + int(v or 0)
-        return agg
-
-    models_before = _models_agg(before)
-    models_after  = _models_agg(after)
-    by_model: dict[str, dict[str, int]] = {}
-    for model, stats_after in models_after.items():
-        d = _sub(stats_after, models_before.get(model, {}))
-        if d["calls"] > 0:
-            by_model[model] = d
-    return {"total": total, "by_model": by_model}
 
 
 class YCSLLMUsageCallback(AsyncCallbackHandler):
@@ -300,30 +248,12 @@ class YCSLLMUsageCallback(AsyncCallbackHandler):
         1.x). Nodes tag themselves via `set_node` right before invoking,
         so this lands in the right bucket."""
         try:
-            llm_output = getattr(response, "llm_output", None) or {}
-            usage = (
-                llm_output.get("token_usage")
-                or llm_output.get("usage")
-                or {}
-            )
-            tokens_in = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
-            tokens_out = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
-            details = (
-                usage.get("completion_tokens_details")
-                or usage.get("output_tokens_details")
-                or {}
-            )
-            if not isinstance(details, dict):
-                details = {}
-            reasoning = int(usage.get("reasoning_tokens") or details.get("reasoning_tokens") or 0)
-            model = (
-                llm_output.get("model_name")
-                or llm_output.get("model")
-                or "unknown"
-            )
+            parsed = domain.parse_callback_response(response)
             await bump_current_call(
-                tokens_in=tokens_in, tokens_out=tokens_out,
-                reasoning_tokens=reasoning, model=model,
+                tokens_in        = parsed["tokens_in"],
+                tokens_out       = parsed["tokens_out"],
+                reasoning_tokens = parsed["reasoning_tokens"],
+                model            = parsed["model"],
             )
         except Exception as e:
             logger.warning(f"[ycs-llm-counter] on_llm_end failed: {type(e).__name__}: {e}")

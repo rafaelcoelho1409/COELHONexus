@@ -1,30 +1,8 @@
-"""ycs/ingestion — streaming ES → Qdrant pipeline.
+"""ycs/ingestion — streaming ES → Qdrant pipeline + per-video streaming
+buffer.
 Memory-safe
 (one transcript in memory at a time), idempotent (deterministic point
 ids), hybrid (dense NIM + sparse BM25)."""
-from .keys import point_id
-from .params import (
-    QDRANT_COLLECTION,
-    SCROLL_BATCH_SIZE,
-)
-from .service import (
-    delete_points_for_videos,
-    ensure_collection,
-    expand_with_partition_ids,
-    fetch_metadata_from_es,
-    fetch_transcripts_from_es,
-    ingest_to_qdrant,
-)
+from __future__ import annotations
 
-
-__all__ = [
-    "QDRANT_COLLECTION",
-    "SCROLL_BATCH_SIZE",
-    "delete_points_for_videos",
-    "ensure_collection",
-    "expand_with_partition_ids",
-    "fetch_metadata_from_es",
-    "fetch_transcripts_from_es",
-    "ingest_to_qdrant",
-    "point_id",
-]
+from . import domain, keys, params, service

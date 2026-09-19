@@ -12,9 +12,10 @@ from __future__ import annotations
 
 from langchain_core.documents import Document
 
-from domains.ycs.runtime.observability import record_retrieved_docs, traced
+import domains
+from domains.ycs.runtime.observability.service import traced
 
-from ...state import YouTubeRAGState
+from ... import state
 
 
 # Cap on the cross-round pre-grade pool. Sized for the fallback
@@ -55,7 +56,7 @@ def _merge_pre_grade(
 
 @traced("rag.retrieve")
 async def retrieve(
-    state: YouTubeRAGState,
+    state: state.YouTubeRAGState,
     retriever,
     channel_ids: list[str] | None = None,
 ) -> dict:
@@ -97,7 +98,7 @@ async def retrieve(
     sources = list({
         doc.metadata.get("source", "unknown") for doc in documents
     })
-    record_retrieved_docs(
+    domains.ycs.runtime.observability.metrics.record_retrieved_docs(
         route = str(state.get("route") or "unknown"),
         mode = str(state.get("mode") or "standard"),
         count = len(documents),

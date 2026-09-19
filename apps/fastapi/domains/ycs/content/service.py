@@ -11,25 +11,9 @@ import json
 import logging
 import time
 
-from . import domain
-from .errors import (
-    YtDlpJsonParseError,
-    YtDlpSubprocessError,
-    YtDlpTimeoutError,
-)
-from .params import (
-    BUFFER_LIMIT_BYTES,
-    ENUMERATE_ALL_TIMEOUT_S,
-    MAX_CONCURRENT,
-    SEARCH_TIMEOUT_S,
-    TIMEOUT_S,
-)
-from .schemas import (
-    EnumerationResponse,
-    SearchRequest,
-    SearchResponse,
-    VideoSnippet,
-)
+import domains
+
+from . import domain, errors, params, schemas
 
 
 logger = logging.getLogger(__name__)
@@ -47,9 +31,9 @@ class YtDlpSearchService:
 
     def __init__(
         self,
-        max_concurrent: int = MAX_CONCURRENT,
-        default_timeout_s: float = TIMEOUT_S,
-        buffer_limit: int = BUFFER_LIMIT_BYTES,
+        max_concurrent: int = params.MAX_CONCURRENT,
+        default_timeout_s: float = params.TIMEOUT_S,
+        buffer_limit: int = params.BUFFER_LIMIT_BYTES,
     ) -> None:
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._default_timeout = default_timeout_s
@@ -59,7 +43,7 @@ class YtDlpSearchService:
         self, args: list[str], timeout_s: float | None = None,
     ) -> str:
         """Spawn `yt-dlp ...`, return stdout (UTF-8 decoded). Raises
-        YtDlpTimeoutError / YtDlpSubprocessError on failure."""
+        errors.YtDlpTimeoutError / errors.YtDlpSubprocessError on failure."""
         effective = timeout_s if timeout_s is not None else self._default_timeout
         started = time.monotonic()
         proc = await asyncio.create_subprocess_exec(
@@ -80,7 +64,7 @@ class YtDlpSearchService:
                 pass
             elapsed = time.monotonic() - started
             logger.info(f"[yt-dlp] TIMEOUT {elapsed:.2f}s limit={effective}s")
-            raise YtDlpTimeoutError(f"yt-dlp exceeded {effective}s") from None
+            raise errors.YtDlpTimeoutError(f"yt-dlp exceeded {effective}s") from None
 
         elapsed = time.monotonic() - started
         if proc.returncode != 0:
@@ -89,12 +73,12 @@ class YtDlpSearchService:
                 f"[yt-dlp] FAIL {elapsed:.2f}s rc={proc.returncode} "
                 f"stderr={err[:200]!r}"
             )
-            raise YtDlpSubprocessError(err, proc.returncode or -1)
+            raise errors.YtDlpSubprocessError(err, proc.returncode or -1)
 
         logger.info(f"[yt-dlp] OK {elapsed:.2f}s out={len(stdout)} bytes")
         return stdout.decode("utf-8", errors = "replace")
 
-    async def search(self, req: SearchRequest) -> SearchResponse:
+    async def search(self, req: schemas.SearchRequest) -> schemas.SearchResponse:
         """End-to-end: build args (pure) → run subprocess → normalize entries
         (pure) → cap at `req.max_results` → return envelope."""
         conditions = domain.build_match_conditions(req)
@@ -121,21 +105,21 @@ class YtDlpSearchService:
         )
         started = time.monotonic()
         async with self._semaphore:
-            stdout = await self._run(args, timeout_s = SEARCH_TIMEOUT_S)
+            stdout = await self._run(args, timeout_s = params.SEARCH_TIMEOUT_S)
         elapsed = time.monotonic() - started
 
         try:
             payload = json.loads(stdout) if stdout.strip() else {}
         except json.JSONDecodeError as e:
             logger.info(f"[ycs:search] JSON_ERROR q={req.query!r}: {e}")
-            raise YtDlpJsonParseError(str(e)) from e
+            raise errors.YtDlpJsonParseError(str(e)) from e
 
-        snippets: list[VideoSnippet] = []
+        snippets: list[schemas.VideoSnippet] = []
         for entry in payload.get("entries", []) or []:
             normalized = domain.normalize_search_entry(entry)
             if not normalized:
                 continue
-            snippets.append(VideoSnippet.model_validate(normalized))
+            snippets.append(schemas.VideoSnippet.model_validate(normalized))
             if len(snippets) >= req.max_results:
                 break
 
@@ -175,7 +159,7 @@ class YtDlpSearchService:
             f"[ycs:search] OK q={req.query!r} hits={len(snippets)} "
             f"elapsed={elapsed:.2f}s"
         )
-        return SearchResponse(
+        return schemas.SearchResponse(
             query = req.query,
             total = len(snippets),
             results = snippets,
@@ -190,7 +174,7 @@ class YtDlpSearchService:
         raw_input: str,
         limit:     int  = 100,
         offset:    int  = 0,
-    ) -> EnumerationResponse:
+    ) -> schemas.EnumerationResponse:
         """List videos in ONE channel or playlist with pagination. Used
         by the redesigned Channel + Playlist tabs to render a master+row
         checkbox picker so the user can submit a subset (or all) of the
@@ -229,16 +213,16 @@ class YtDlpSearchService:
         )
         started = time.monotonic()
         async with self._semaphore:
-            stdout = await self._run(args, timeout_s = SEARCH_TIMEOUT_S)
+            stdout = await self._run(args, timeout_s = params.SEARCH_TIMEOUT_S)
         elapsed = time.monotonic() - started
 
         try:
             data = json.loads(stdout) if stdout.strip() else {}
         except json.JSONDecodeError as e:
             logger.info(f"[ycs:enumerate] JSON_ERROR {target_url!r}: {e}")
-            raise YtDlpJsonParseError(str(e)) from e
+            raise errors.YtDlpJsonParseError(str(e)) from e
 
-        snippets: list[VideoSnippet] = []
+        snippets: list[schemas.VideoSnippet] = []
         for entry in data.get("entries", []) or []:
             normalized = domain.normalize_search_entry(entry)
             if not normalized:
@@ -248,7 +232,7 @@ class YtDlpSearchService:
             # uploads-playlist parent. Force `kind="video"` for the
             # enumerated entries.
             normalized["kind"] = "video"
-            snippets.append(VideoSnippet.model_validate(normalized))
+            snippets.append(schemas.VideoSnippet.model_validate(normalized))
 
         total = data.get("playlist_count")
         try:
@@ -279,7 +263,7 @@ class YtDlpSearchService:
             f"[ycs:enumerate] OK source={source} target={target_url!r} "
             f"page_items={len(snippets)} total={total_n} elapsed={elapsed:.2f}s"
         )
-        return EnumerationResponse(
+        return schemas.EnumerationResponse(
             source    = source,
             source_id = raw_input,
             title     = title,
@@ -308,7 +292,7 @@ class YtDlpSearchService:
         --dump-single-json, and avoids the 32MB buffer ceiling on
         truly large sources (Joe Rogan, MrBeast, etc.).
 
-        Timeout is the longer ENUMERATE_ALL_TIMEOUT_S (5 min default)
+        Timeout is the longer params.ENUMERATE_ALL_TIMEOUT_S (5 min default)
         since walking a 30k-video channel can take ~2-3 min — that's
         the trade for not making the client paginate."""
         if source == "channel":
@@ -334,7 +318,7 @@ class YtDlpSearchService:
         started = time.monotonic()
         async with self._semaphore:
             stdout = await self._run(
-                args, timeout_s = ENUMERATE_ALL_TIMEOUT_S,
+                args, timeout_s = params.ENUMERATE_ALL_TIMEOUT_S,
             )
         elapsed = time.monotonic() - started
 
@@ -358,9 +342,9 @@ class YtDlpSearchService:
         video_ids: list[str],
         limit:     int = 100,
         offset:    int = 0,
-    ) -> EnumerationResponse:
+    ) -> schemas.EnumerationResponse:
         """Fetch yt-dlp metadata for a list of video IDs and project
-        into the same EnumerationResponse shape Channel/Playlist tabs
+        into the same schemas.EnumerationResponse shape Channel/Playlist tabs
         use, so the Source page's Videos tab can render the SAME
         master+row checkbox picker UI.
 
@@ -369,15 +353,13 @@ class YtDlpSearchService:
         through 100-at-a-time. Per-video extract failures (private
         videos, deleted, geo-blocked, etc.) silently drop from the
         page; `total` reflects the original input size."""
-        from domains.ycs.extract.service import get_extractor
-
         ids = [vid for vid in (video_ids or []) if vid]
         total = len(ids)
         lo = max(0, int(offset))
         hi = lo + max(1, min(int(limit), 500))
         page_ids = ids[lo:hi]
         if not page_ids:
-            return EnumerationResponse(
+            return schemas.EnumerationResponse(
                 source    = "videos",
                 source_id = "",
                 title     = None,
@@ -389,15 +371,15 @@ class YtDlpSearchService:
                 items     = [],
             )
 
-        extractor = get_extractor()
+        extractor = domains.ycs.extract.service.get_extractor()
         started = time.monotonic()
         videos = await extractor.extract_batch(page_ids)
         elapsed = time.monotonic() - started
 
-        # Project VideoMetadata → VideoSnippet (picker.js consumes the
+        # Project VideoMetadata → schemas.VideoSnippet (picker.js consumes the
         # same shape). `extra="allow"` on VideoMetadata means we can
         # access .channel_url / .thumbnail_url verbatim.
-        snippets: list[VideoSnippet] = []
+        snippets: list[schemas.VideoSnippet] = []
         for v in videos:
             d = v.model_dump() if hasattr(v, "model_dump") else dict(v)
             normalized = {
@@ -425,15 +407,14 @@ class YtDlpSearchService:
             }
             if not normalized["id"]:
                 continue
-            snippets.append(VideoSnippet.model_validate(normalized))
+            snippets.append(schemas.VideoSnippet.model_validate(normalized))
 
         # 2026-09-14: every requested id failed (bot-check, all
         # private/deleted, etc.) — surface a real 502 instead of a
         # misleading 200 with `items=[]` (the picker would render
         # "Loaded 0 of N videos", indistinguishable from a UI bug).
         if page_ids and not snippets:
-            from .errors import YtDlpSubprocessError
-            raise YtDlpSubprocessError(
+            raise errors.YtDlpSubprocessError(
                 "yt-dlp extracted 0 of "
                 f"{len(page_ids)} requested videos "
                 "(likely YouTube bot-check or all ids unavailable)",
@@ -444,7 +425,7 @@ class YtDlpSearchService:
             f"[ycs:preview] OK ids={total} page_items={len(snippets)} "
             f"slice={lo}:{hi} elapsed={elapsed:.2f}s"
         )
-        return EnumerationResponse(
+        return schemas.EnumerationResponse(
             source    = "videos",
             source_id = "",
             title     = "Pasted videos",
@@ -485,13 +466,13 @@ class YtDlpSearchService:
             return None
 
     async def _populate_video_counts(
-        self, snippets: list[VideoSnippet],
+        self, snippets: list[schemas.VideoSnippet],
     ) -> None:
         """In-place fill of `video_count` for every channel/playlist
         snippet. Probes run in parallel under the same semaphore that
         gates the main search, so a burst of channel hits in one query
         can't blow the cluster's egress budget."""
-        probe_targets: list[tuple[VideoSnippet, str]] = []
+        probe_targets: list[tuple[schemas.VideoSnippet, str]] = []
         for s in snippets:
             if s.kind not in ("channel", "playlist"):
                 continue
@@ -501,7 +482,7 @@ class YtDlpSearchService:
         if not probe_targets:
             return
 
-        async def _one(s: VideoSnippet, url: str) -> None:
+        async def _one(s: schemas.VideoSnippet, url: str) -> None:
             async with self._semaphore:
                 n = await self._probe_video_count(url)
             if n is not None:

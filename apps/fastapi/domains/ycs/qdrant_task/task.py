@@ -6,13 +6,12 @@ import logging
 import os
 from typing import Any
 
+import domains
 import redis.asyncio as redis_aio
 from celery.utils.log import get_task_logger
 from elasticsearch import AsyncElasticsearch
 from qdrant_client import AsyncQdrantClient
 
-from domains.ycs.cache import invalidate_cache as _invalidate_cache
-from domains.ycs.ingestion import ingest_to_qdrant as run_ingestion
 from infra.celery import app
 
 
@@ -118,7 +117,7 @@ def ingest_to_qdrant(
                         }
                         if collection_name:
                             _kwargs["collection_name"] = collection_name
-                        result = await run_ingestion(**_kwargs)
+                        result = await domains.ycs.ingestion.service.ingest_to_qdrant(**_kwargs)
                     except Exception as e:
                         set_current_span_langfuse_io(output_data = {
                             "status": "failed",
@@ -158,27 +157,15 @@ def stream_video_to_qdrant(
     — dispatched once per video by `extract/task.py` as soon as that
     video's transcript lands in ES, instead of waiting for the whole
     batch. Chunks this ONE video and pushes onto `extract_id`'s shared
-    Redis buffer (`ingestion/streaming.py`), flushing whenever the
+    Redis buffer (`ingestion/service.py`), flushing whenever the
     buffer crosses `FLUSH_CHUNKS`. Reports its outcome to
-    `pipeline_task.streaming.mark_video_done`; whichever call turns out
+    `pipeline_task.service.mark_video_done`; whichever call turns out
     to be last for the run's Qdrant phase drains any buffer remainder
     and checks whether Neo4j's phase is also done to fire
     `invalidate_cache`."""
     logger.info(f"[stream_video_to_qdrant] {extract_id}: {video_id}")
 
     async def _run() -> dict[str, Any]:
-        from domains.ycs.ingestion import domain
-        from domains.ycs.ingestion.streaming import (
-            finalize_qdrant_buffer,
-            stream_video_to_qdrant as _stream_one,
-        )
-        from domains.ycs.pipeline_task.streaming import (
-            build_redis_client,
-            mark_video_or_partition_done,
-            maybe_finalize,
-            update_video_extra,
-        )
-
         es = AsyncElasticsearch(
             hosts      = [os.environ["ELASTICSEARCH_HOST"]],
             basic_auth = (
@@ -195,9 +182,9 @@ def stream_video_to_qdrant(
             port    = qdrant_port,
             api_key = qdrant_api_key if qdrant_api_key else None,
         )
-        redis = build_redis_client()
+        redis = domains.ycs.pipeline_task.service.build_redis_client()
         try:
-            result = await _stream_one(
+            result = await domains.ycs.ingestion.service.stream_video_to_qdrant(
                 es = es, qdrant = qdrant, redis = redis,
                 video_id = video_id, extract_id = extract_id,
                 chunk_size = chunk_size, chunk_overlap = chunk_overlap,
@@ -221,8 +208,8 @@ def stream_video_to_qdrant(
             # makes `mark_video_or_partition_done` call straight through
             # to `mark_video_done` unchanged for the overwhelming
             # majority of calls.
-            parent_vid = domain.parent_video_id(video_id)
-            finished, total = await mark_video_or_partition_done(
+            parent_vid = domains.ycs.ingestion.domain.parent_video_id(video_id)
+            finished, total = await domains.ycs.pipeline_task.service.mark_video_or_partition_done(
                 redis, extract_id, "qdrant", video_id, success = success,
                 extra = extra,
                 parent_video_id = parent_vid,
@@ -249,7 +236,7 @@ def stream_video_to_qdrant(
                 # on failure (see its docstring), so swallowing here
                 # loses nothing — a later Rerun's drain picks it up.
                 try:
-                    drained = await finalize_qdrant_buffer(redis, qdrant, extract_id)
+                    drained = await domains.ycs.ingestion.service.finalize_qdrant_buffer(redis, qdrant, extract_id)
                     result["final_drain_points"] = drained
                     # 2026-09-14: the drain count must be patched onto
                     # the DISPLAYED status entry — `parent_vid`, not
@@ -265,7 +252,7 @@ def stream_video_to_qdrant(
                     # landed via the final drain (e.g. 43 chunks <
                     # FLUSH_CHUNKS=50).
                     if drained:
-                        await update_video_extra(
+                        await domains.ycs.pipeline_task.service.update_video_extra(
                             redis, extract_id, "qdrant", parent_vid,
                             {"points_upserted": result.get("points_flushed", 0) + drained},
                         )
@@ -275,7 +262,7 @@ def stream_video_to_qdrant(
                         f"drain failed (chunks re-queued for a later "
                         f"attempt): {type(e).__name__}: {e}"
                     )
-            await maybe_finalize(redis, extract_id)
+            await domains.ycs.pipeline_task.service.maybe_finalize(redis, extract_id)
             return result
         except Exception as e:
             # `finished`/`total` can only be learned by actually calling
@@ -299,17 +286,16 @@ def stream_video_to_qdrant(
             # check is skipped entirely, and ONE partition's exception
             # would wrongly report the WHOLE video done after only 1 of
             # N partitions ever reported in.
-            parent_vid = domain.parent_video_id(video_id)
+            parent_vid = domains.ycs.ingestion.domain.parent_video_id(video_id)
             part_total = None
             if parent_vid != video_id:
                 try:
-                    from domains.ycs.ingestion.service import fetch_transcripts_from_es
-                    _t = await fetch_transcripts_from_es(es, [video_id])
+                    _t = await domains.ycs.ingestion.service.fetch_transcripts_from_es(es, [video_id])
                     if _t and isinstance(_t[0], dict):
                         part_total = _t[0].get("part_total")
                 except Exception:
                     pass
-            finished, total = await mark_video_or_partition_done(
+            finished, total = await domains.ycs.pipeline_task.service.mark_video_or_partition_done(
                 redis, extract_id, "qdrant", video_id, success = False,
                 extra = {"error": f"{type(e).__name__}: {e}"},
                 parent_video_id = parent_vid,
@@ -317,7 +303,7 @@ def stream_video_to_qdrant(
             )
             if total is not None and finished is not None and finished >= total:
                 try:
-                    drained = await finalize_qdrant_buffer(redis, qdrant, extract_id)
+                    drained = await domains.ycs.ingestion.service.finalize_qdrant_buffer(redis, qdrant, extract_id)
                 except Exception as drain_err:
                     drained = None
                     logger.warning(
@@ -332,7 +318,7 @@ def stream_video_to_qdrant(
                         f"recovered via final drain ({drained} point(s)) "
                         f"after {type(e).__name__}: {e}"
                     )
-                    await update_video_extra(
+                    await domains.ycs.pipeline_task.service.update_video_extra(
                         redis, extract_id, "qdrant", parent_vid,
                         {
                             "success":         True,
@@ -341,7 +327,7 @@ def stream_video_to_qdrant(
                             "recovered_from":  f"{type(e).__name__}: {str(e)[:200]}",
                         },
                     )
-                    await maybe_finalize(redis, extract_id)
+                    await domains.ycs.pipeline_task.service.maybe_finalize(redis, extract_id)
                     return {
                         "video_id":          video_id,
                         "chunks":            0,
@@ -349,7 +335,7 @@ def stream_video_to_qdrant(
                         "points_flushed":    drained,
                         "recovered_from":    f"{type(e).__name__}: {str(e)[:200]}",
                     }
-            await maybe_finalize(redis, extract_id)
+            await domains.ycs.pipeline_task.service.maybe_finalize(redis, extract_id)
             raise
         finally:
             await qdrant.close()
@@ -379,7 +365,7 @@ def invalidate_cache(self) -> dict[str, Any]:
         )
         r = redis_aio.from_url(url)
         try:
-            await _invalidate_cache(r)
+            await domains.ycs.cache.service.invalidate_cache(r)
         finally:
             await r.close()
     asyncio.run(_run())

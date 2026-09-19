@@ -10,7 +10,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from domains.ycs.runtime.observability import record_ask_run
+from domains.ycs.runtime.observability.metrics import record_ask_run
 from infra.langfuse import (
     set_current_span_langfuse_io,
     set_current_span_langfuse_observation_metadata,
@@ -18,9 +18,9 @@ from infra.langfuse import (
 )
 from infra.otel import get_tracer
 
-from domains.ycs.cache import cache_response, get_cached_response
-from domains.ycs.conversation import (
-    DEFAULT_THREAD_ID,
+from domains.ycs.cache.service import cache_response, get_cached_response
+from domains.ycs.conversation.params import DEFAULT_THREAD_ID
+from domains.ycs.conversation.service import (
     branch_thread,
     delete_thread,
     delete_turn,
@@ -32,14 +32,14 @@ from domains.ycs.conversation import (
     save_turn,
     update_turn_answer,
 )
-from domains.ycs.graph_builder import get_graph_stats
-from domains.ycs.runtime.llm_counter import (
+from domains.ycs.graph_builder.service import get_graph_stats
+from domains.ycs.runtime.llm_counter.service import (
     clear_state as _llm_counter_reset,
-    diff_usage as _llm_diff_usage,
     read_counters as _llm_read_counters,
     set_node as _llm_set_node,
     set_thread as _llm_set_thread,
 )
+from domains.ycs.runtime.llm_counter.domain import diff_usage as _llm_diff_usage
 
 from .build import _serialize_update, build_graph_from_request
 from .schemas import (
@@ -433,7 +433,7 @@ async def rag_search(
                     except asyncio.TimeoutError:
                         # Global deadline hit — one bounded fallback pass
                         # instead of grinding until the client disconnects.
-                        from domains.ycs.rag.standard.nodes.fallback_answer import (
+                        from domains.ycs.rag.standard.nodes.fallback_answer.node import (
                             fallback_answer as _deadline_fallback,
                         )
                         _fb = await _deadline_fallback(
@@ -1181,7 +1181,7 @@ async def rag_search_stream(
                     # live branch only ever inserted the placeholder
                     # text below. Merged into one branch.)
                     if not last_generation:
-                        from domains.ycs.rag.standard.nodes.fallback_answer import (
+                        from domains.ycs.rag.standard.nodes.fallback_answer.node import (
                             fallback_answer as _deadline_fallback,
                         )
                         try:
@@ -1581,7 +1581,7 @@ async def _raise_if_embedding_migration_needed() -> None:
     silent-corpus-fragmentation failure mode the gate exists to
     prevent. See `domains.ycs.embedding_migration.check_migration_needed_now`
     for the actual check."""
-    from domains.ycs.embedding_migration import check_migration_needed_now
+    from domains.ycs.embedding_migration.service import check_migration_needed_now
     mismatch = await check_migration_needed_now()
     if mismatch is not None:
         raise HTTPException(

@@ -50,25 +50,15 @@ no-op on any failure or genuinely inconclusive result — this can only
 ever ADD a signal, never block or replace the answer."""
 from __future__ import annotations
 
+import domains
+from . import nodes, params, state
+
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 
-from domains.ycs.grader import DocumentGrader
-
-from .nodes.cite import format_citations
-from .nodes.corroborate import corroborate_claim
-from .nodes.fallback_answer import fallback_answer
-from .nodes.generate import generate
-from .nodes.grade import grade_documents
-from .nodes.hallucination import check_hallucination
-from .nodes.retrieve import retrieve
-from .nodes.rewrite import rewrite_query
-from .params import DEFAULT_MAX_RETRIES
-from .state import YouTubeRAGState
-
 
 def _decide_after_grading(
-    state: YouTubeRAGState, config: RunnableConfig,
+    state: state.YouTubeRAGState, config: RunnableConfig,
 ) -> str:
     """Generate when docs survived grading; rewrite while retries
     remain; fall back to a no-evidence rescue answer when retries
@@ -77,7 +67,7 @@ def _decide_after_grading(
     if state["documents"]:
         return "generate"
     max_retries = config.get("configurable", {}).get(
-        "max_retries", DEFAULT_MAX_RETRIES,
+        "max_retries", params.DEFAULT_MAX_RETRIES,
     )
     if state.get("retry_count", 0) < max_retries:
         return "rewrite"
@@ -85,7 +75,7 @@ def _decide_after_grading(
 
 
 def _decide_after_hallucination_check(
-    state: YouTubeRAGState, config: RunnableConfig,
+    state: state.YouTubeRAGState, config: RunnableConfig,
 ) -> str:
     """Accept on grounded; rewrite while retries remain; once
     exhausted, run ONE external corroboration check instead of
@@ -100,7 +90,7 @@ def _decide_after_hallucination_check(
     if state.get("grounded", False):
         return "format_citations"
     max_retries = config.get("configurable", {}).get(
-        "max_retries", DEFAULT_MAX_RETRIES,
+        "max_retries", params.DEFAULT_MAX_RETRIES,
     )
     if state.get("retry_count", 0) < max_retries:
         return "rewrite"
@@ -109,7 +99,7 @@ def _decide_after_hallucination_check(
 
 def build_youtube_rag_graph(
     retriever,
-    grader: DocumentGrader,
+    grader: domains.ycs.grader.service.DocumentGrader,
     llm,
     checkpointer = None,
     channel_ids: list[str] | None = None,
@@ -125,43 +115,43 @@ def build_youtube_rag_graph(
     `checkpointer` is accepted but currently unused (preserved
     parameter for API compatibility — deprecated `rag.py:L305-307`
     documented the AsyncRedisSaver deadlock the same way)."""
-    workflow = StateGraph(YouTubeRAGState)
+    workflow = StateGraph(state.YouTubeRAGState)
 
-    async def _retrieve(state):
-        return await retrieve(state, retriever, channel_ids)
+    async def _retrieve(s):
+        return await nodes.retrieve.node.retrieve(s, retriever, channel_ids)
 
-    async def _grade(state):
-        return await grade_documents(state, grader)
+    async def _grade(s):
+        return await nodes.grade.node.grade_documents(s, grader)
 
-    async def _generate(state):
-        return await generate(state, llm)
+    async def _generate(s):
+        return await nodes.generate.node.generate(s, llm)
 
-    async def _check_hallucination(state):
-        return await check_hallucination(state, llm)
+    async def _check_hallucination(s):
+        return await nodes.hallucination.node.check_hallucination(s, llm)
 
-    async def _rewrite(state):
-        return await rewrite_query(state, llm)
+    async def _rewrite(s):
+        return await nodes.rewrite.node.rewrite_query(s, llm)
 
-    async def _fallback(state):
+    async def _fallback(s):
         # CRAG graceful-degradation rescue. Receives the
         # same `YouTubeRAGState` every other node sees so it can read
         # `conversation_history` for meta / follow-up resolution and
         # `question` for the literal user intent.
-        return await fallback_answer(state, llm)
+        return await nodes.fallback_answer.node.fallback_answer(s, llm)
 
-    async def _corroborate(state):
+    async def _corroborate(s):
         # CRAG "Ambiguous" handling — see `_decide_after_hallucination_
         # check`'s docstring. Distinct from `_fallback`: this fires
         # when retrieval DID find documents but the grounding judge
         # couldn't verify the generated answer against them; fallback
         # fires when retrieval found nothing at all.
-        return await corroborate_claim(state, llm)
+        return await nodes.corroborate.node.corroborate_claim(s, llm)
 
     workflow.add_node("retrieve",            _retrieve)
     workflow.add_node("grade_documents",     _grade)
     workflow.add_node("generate",            _generate)
     workflow.add_node("check_hallucination", _check_hallucination)
-    workflow.add_node("format_citations",    format_citations)
+    workflow.add_node("format_citations",    nodes.cite.node.format_citations)
     workflow.add_node("rewrite_query",       _rewrite)
     workflow.add_node("fallback_answer",     _fallback)
     workflow.add_node("corroborate",         _corroborate)

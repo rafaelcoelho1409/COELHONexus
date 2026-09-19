@@ -1,5 +1,3 @@
-from .node import synthesize
-from .prompts import SYNTHESIZE_PROMPT, SYNTHESIZE_PROMPT_VERSION
+from __future__ import annotations
 
-
-__all__ = ["SYNTHESIZE_PROMPT", "SYNTHESIZE_PROMPT_VERSION", "synthesize"]
+from . import node, prompts

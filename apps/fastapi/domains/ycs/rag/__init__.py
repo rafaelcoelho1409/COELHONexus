@@ -1,6 +1,7 @@
 """ycs/rag — LangGraph RAG workflows (standard pipeline + adaptive parent).
-"""
-from .domain import strip_think_tags
+Shared pure helpers (`domain.py`), resilient-call + web-search-fallback
+I/O (`service.py`), and their tunables/patterns live at this level
+because both `standard/` and `adaptive/` call into them."""
+from __future__ import annotations
 
-
-__all__ = ["strip_think_tags"]
+from . import adaptive, domain, params, patterns, service, standard

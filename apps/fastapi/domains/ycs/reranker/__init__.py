@@ -1,11 +1,5 @@
 """ycs/reranker — FlashRank cross-encoder reranking.
 """
-from .params import DEFAULT_TOP_K, PER_DOC_CHAR_CAP
-from .service import rerank_documents
+from __future__ import annotations
 
-
-__all__ = [
-    "DEFAULT_TOP_K",
-    "PER_DOC_CHAR_CAP",
-    "rerank_documents",
-]
+from . import params, service

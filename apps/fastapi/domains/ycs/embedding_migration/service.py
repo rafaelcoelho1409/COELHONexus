@@ -40,14 +40,11 @@ import logging
 import time
 from typing import Any
 
+import domains
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http.models import CreateAlias, CreateAliasOperation
 
-from domains.ycs.ingestion import QDRANT_COLLECTION, ensure_collection
-
-from .domain import physical_collection_name
-from .keys import migration_state_key
-from .params import MIGRATION_STATE_TTL_S
+from . import domain, keys, params
 
 
 logger = logging.getLogger(__name__)
@@ -96,11 +93,11 @@ async def get_active_collection_name(qdrant: AsyncQdrantClient) -> str:
     try:
         resp = await qdrant.get_aliases()
         for a in resp.aliases:
-            if a.alias_name == QDRANT_COLLECTION:
+            if a.alias_name == domains.ycs.ingestion.params.QDRANT_COLLECTION:
                 return a.collection_name
     except Exception as e:
         logger.debug(f"[ycs:embedding_migration] alias lookup failed: {e}")
-    return QDRANT_COLLECTION
+    return domains.ycs.ingestion.params.QDRANT_COLLECTION
 
 
 async def check_migration_needed(qdrant: AsyncQdrantClient, configured_pinned_id: str) -> dict[str, str] | None:
@@ -115,12 +112,12 @@ async def check_migration_needed(qdrant: AsyncQdrantClient, configured_pinned_id
     if (
         not configured_pinned_id
         or configured_pinned_id.strip().lower() == "auto"
-        or not await qdrant.collection_exists(QDRANT_COLLECTION)
+        or not await qdrant.collection_exists(domains.ycs.ingestion.params.QDRANT_COLLECTION)
     ):
         return None
     try:
         points, _ = await qdrant.scroll(
-            collection_name = QDRANT_COLLECTION,
+            collection_name = domains.ycs.ingestion.params.QDRANT_COLLECTION,
             limit = 1,
             with_payload = ["embedding_model"],
             with_vectors = False,
@@ -138,7 +135,7 @@ async def check_migration_needed(qdrant: AsyncQdrantClient, configured_pinned_id
 
 async def get_migration_state(redis: Any) -> dict[str, Any] | None:
     try:
-        raw = await redis.get(migration_state_key())
+        raw = await redis.get(keys.migration_state_key())
     except Exception:
         return None
     if not raw:
@@ -170,10 +167,10 @@ async def start_migration(
     existing = await get_migration_state(redis)
     if existing and existing.get("status") == "running":
         return existing
-    physical = physical_collection_name(QDRANT_COLLECTION, to_model, dimensions)
+    physical = domain.physical_collection_name(domains.ycs.ingestion.params.QDRANT_COLLECTION, to_model, dimensions)
     # Fresh collection — `ensure_collection`'s model-mismatch guard can
     # never fire here (nothing stored yet to mismatch against).
-    await ensure_collection(qdrant, dimensions, to_model, collection_name = physical)
+    await domains.ycs.ingestion.service.ensure_collection(qdrant, dimensions, to_model, collection_name = physical)
     state = {
         "status":              "running",
         "from_model":          from_model,
@@ -182,7 +179,7 @@ async def start_migration(
         "task_id":             "",
         "started_at":          time.time(),
     }
-    await redis.set(migration_state_key(), json.dumps(state), ex = MIGRATION_STATE_TTL_S)
+    await redis.set(keys.migration_state_key(), json.dumps(state), ex = params.MIGRATION_STATE_TTL_S)
     logger.info(
         f"[ycs:embedding_migration] started: {from_model!r} -> {to_model!r} "
         f"(physical={physical!r})"
@@ -195,7 +192,7 @@ async def set_migration_task_id(redis: Any, task_id: str) -> None:
     if not state:
         return
     state["task_id"] = task_id
-    await redis.set(migration_state_key(), json.dumps(state), ex = MIGRATION_STATE_TTL_S)
+    await redis.set(keys.migration_state_key(), json.dumps(state), ex = params.MIGRATION_STATE_TTL_S)
 
 
 async def dispatch_migration(
@@ -224,10 +221,10 @@ async def dispatch_migration(
         return state  # already dispatched (idempotency hit in start_migration)
 
     from domains.ycs.embedding_migration.task import finalize_embedding_migration
-    from domains.ycs.qdrant_task.task import ingest_to_qdrant as reembed_task
+    from domains.ycs.qdrant_task.task import ingest_to_qdrant
 
     physical = state["physical_collection"]
-    sig = reembed_task.si(video_ids = None, collection_name = physical)
+    sig = ingest_to_qdrant.si(video_ids = None, collection_name = physical)
     sig.link(finalize_embedding_migration.si(physical))
     result = sig.apply_async()
 
@@ -244,17 +241,17 @@ async def cutover(redis: Any, qdrant: AsyncQdrantClient, physical_collection: st
     entirely — see this module's docstring for the verified Qdrant
     behavior this relies on."""
     real_names = {c.name for c in (await qdrant.get_collections()).collections}
-    if QDRANT_COLLECTION in real_names:
-        await qdrant.delete_collection(QDRANT_COLLECTION)
+    if domains.ycs.ingestion.params.QDRANT_COLLECTION in real_names:
+        await qdrant.delete_collection(domains.ycs.ingestion.params.QDRANT_COLLECTION)
     await qdrant.update_collection_aliases(
         change_aliases_operations = [
             CreateAliasOperation(create_alias = CreateAlias(
-                collection_name = physical_collection, alias_name = QDRANT_COLLECTION,
+                collection_name = physical_collection, alias_name = domains.ycs.ingestion.params.QDRANT_COLLECTION,
             )),
         ],
     )
-    await redis.delete(migration_state_key())
+    await redis.delete(keys.migration_state_key())
     logger.info(
-        f"[ycs:embedding_migration] cutover complete — {QDRANT_COLLECTION!r} "
+        f"[ycs:embedding_migration] cutover complete — {domains.ycs.ingestion.params.QDRANT_COLLECTION!r} "
         f"now aliases {physical_collection!r}"
     )

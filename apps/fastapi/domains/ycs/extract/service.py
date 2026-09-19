@@ -6,10 +6,10 @@ URL/ID parsing — lives in `domain.py`. Subprocess + semaphore + logging
 + error translation live here.
 
 Public surface (mirrors deprecated `helpers.py:L122-439`):
-  extract_video(video_id)      → VideoMetadata
-  extract_batch(video_ids)     → list[VideoMetadata]    (parallel)
-  extract_playlist(playlist_id, max_videos) → PlaylistResult
-  extract_channel(channel_id_or_handle, max_videos) → ChannelResult
+  extract_video(video_id)      → schemas.VideoMetadata
+  extract_batch(video_ids)     → list[schemas.VideoMetadata]    (parallel)
+  extract_playlist(playlist_id, max_videos) → schemas.PlaylistResult
+  extract_channel(channel_id_or_handle, max_videos) → schemas.ChannelResult
 
 NO PERSISTENCE in this layer — Celery tasks (Wave 4) wrap these calls +
 write to Elasticsearch + dispatch the Playwright transcript fetch.
@@ -21,23 +21,9 @@ import json
 import logging
 import time
 
-from domains.ycs.content.errors import (
-    YtDlpJsonParseError,
-    YtDlpSubprocessError,
-    YtDlpTimeoutError,
-)
+import domains
 
-from . import domain
-from .params import (
-    BUFFER_LIMIT_BYTES,
-    MAX_CONCURRENT_VIDEOS,
-    TIMEOUT_PER_VIDEO_S,
-)
-from .schemas import (
-    ChannelResult,
-    PlaylistResult,
-    VideoMetadata,
-)
+from . import domain, params, schemas
 
 
 logger = logging.getLogger(__name__)
@@ -50,9 +36,9 @@ class YtDlpExtractor:
 
     def __init__(
         self,
-        max_concurrent: int = MAX_CONCURRENT_VIDEOS,
-        default_timeout_s: float = TIMEOUT_PER_VIDEO_S,
-        buffer_limit: int = BUFFER_LIMIT_BYTES,
+        max_concurrent: int = params.MAX_CONCURRENT_VIDEOS,
+        default_timeout_s: float = params.TIMEOUT_PER_VIDEO_S,
+        buffer_limit: int = params.BUFFER_LIMIT_BYTES,
     ) -> None:
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._default_timeout = default_timeout_s
@@ -62,8 +48,8 @@ class YtDlpExtractor:
     async def _run(
         self, args: list[str], timeout_s: float | None = None,
     ) -> str:
-        """Spawn `yt-dlp ...`, return stdout. Raises YtDlpTimeoutError /
-        YtDlpSubprocessError on failure."""
+        """Spawn `yt-dlp ...`, return stdout. Raises `YtDlpTimeoutError` /
+        `YtDlpSubprocessError` (both `domains.ycs.content.errors`) on failure."""
         effective = timeout_s if timeout_s is not None else self._default_timeout
         started = time.monotonic()
         proc = await asyncio.create_subprocess_exec(
@@ -84,7 +70,7 @@ class YtDlpExtractor:
                 pass
             elapsed = time.monotonic() - started
             logger.info(f"[yt-dlp] TIMEOUT {elapsed:.2f}s limit={effective}s")
-            raise YtDlpTimeoutError(f"yt-dlp exceeded {effective}s") from None
+            raise domains.ycs.content.errors.YtDlpTimeoutError(f"yt-dlp exceeded {effective}s") from None
 
         elapsed = time.monotonic() - started
         if proc.returncode != 0:
@@ -93,22 +79,22 @@ class YtDlpExtractor:
                 f"[yt-dlp] FAIL {elapsed:.2f}s rc={proc.returncode} "
                 f"stderr={err[:200]!r}"
             )
-            raise YtDlpSubprocessError(err, proc.returncode or -1)
+            raise domains.ycs.content.errors.YtDlpSubprocessError(err, proc.returncode or -1)
 
         logger.info(f"[yt-dlp] OK {elapsed:.2f}s out={len(stdout)} bytes")
         return stdout.decode("utf-8", errors = "replace")
 
 
-    async def extract_video(self, video_id: str) -> VideoMetadata:
+    async def extract_video(self, video_id: str) -> schemas.VideoMetadata:
         """Single video, full --dump-json projection."""
         normalized_id = domain.normalize_video_id(video_id)
         async with self._semaphore:
             stdout = await self._run(domain.build_video_args(normalized_id))
         raw = self._parse_json(stdout)
         projection = domain.normalize_full_video(raw)
-        return VideoMetadata.model_validate(projection)
+        return schemas.VideoMetadata.model_validate(projection)
 
-    async def extract_batch(self, video_ids: list[str]) -> list[VideoMetadata]:
+    async def extract_batch(self, video_ids: list[str]) -> list[schemas.VideoMetadata]:
         """Parallel extraction. Per-task failures land as `None` in
         gather's result list — caller filters."""
         valid, rejected = domain.normalize_video_ids(video_ids)
@@ -118,18 +104,18 @@ class YtDlpExtractor:
         results = await asyncio.gather(*coros)
         return [v for v in results if v is not None]
 
-    async def _safe_extract(self, video_id: str) -> VideoMetadata | None:
+    async def _safe_extract(self, video_id: str) -> schemas.VideoMetadata | None:
         """Per-batch wrapper: log + return None on per-video failure
         rather than tear down the whole gather."""
         try:
             return await self.extract_video(video_id)
-        except (YtDlpTimeoutError, YtDlpSubprocessError, YtDlpJsonParseError) as e:
+        except (domains.ycs.content.errors.YtDlpTimeoutError, domains.ycs.content.errors.YtDlpSubprocessError, domains.ycs.content.errors.YtDlpJsonParseError) as e:
             logger.info(f"[yt-dlp:batch] skip {video_id}: {type(e).__name__}")
             return None
 
     async def extract_playlist(
         self, playlist_id: str, max_videos: int = 0,
-    ) -> PlaylistResult:
+    ) -> schemas.PlaylistResult:
         """Full playlist metadata + per-video projections."""
         normalized_id = domain.normalize_playlist_id(playlist_id)
         args = domain.build_playlist_args(normalized_id, max_videos)
@@ -139,11 +125,11 @@ class YtDlpExtractor:
         raw = self._parse_json(stdout)
         entries = raw.get("entries") or []
         videos = [
-            VideoMetadata.model_validate(domain.normalize_full_video(e or {}))
+            schemas.VideoMetadata.model_validate(domain.normalize_full_video(e or {}))
             for e in entries
             if (e or {}).get("id")
         ]
-        return PlaylistResult(
+        return schemas.PlaylistResult(
             playlist_id =          raw.get("id"),
             playlist_title =       raw.get("title"),
             playlist_url =         f"https://www.youtube.com/playlist?list={normalized_id}",
@@ -157,7 +143,7 @@ class YtDlpExtractor:
 
     async def extract_channel(
         self, channel_id_or_handle: str, max_videos: int = 0,
-    ) -> ChannelResult:
+    ) -> schemas.ChannelResult:
         """Full channel metadata + per-video projections."""
         normalized = domain.normalize_channel_id(channel_id_or_handle)
         args = domain.build_channel_args(normalized, max_videos)
@@ -167,7 +153,7 @@ class YtDlpExtractor:
         raw = self._parse_json(stdout)
         entries = raw.get("entries") or []
         videos = [
-            VideoMetadata.model_validate(domain.normalize_full_video(e or {}))
+            schemas.VideoMetadata.model_validate(domain.normalize_full_video(e or {}))
             for e in entries
             if (e or {}).get("id")
         ]
@@ -176,7 +162,7 @@ class YtDlpExtractor:
             if normalized.startswith("UC")
             else f"https://www.youtube.com/{normalized}/videos"
         )
-        return ChannelResult(
+        return schemas.ChannelResult(
             channel_id =       raw.get("id") or normalized,
             channel_title =    raw.get("title"),
             channel_url =      url,
@@ -192,7 +178,7 @@ class YtDlpExtractor:
         try:
             return json.loads(stdout) if stdout.strip() else {}
         except json.JSONDecodeError as e:
-            raise YtDlpJsonParseError(str(e)) from e
+            raise domains.ycs.content.errors.YtDlpJsonParseError(str(e)) from e
 
 
 _extractor: YtDlpExtractor | None = None

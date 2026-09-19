@@ -1,28 +1,12 @@
 """ycs/pipeline_task — dispatches `extract_videos`, which self-fans-out
 Neo4j + Qdrant streaming work per video as transcripts land in ES; see
-`service.py` and `streaming.py` docstrings for the full model."""
-from .service import (
-    dispatch_videos_pipeline,
-    is_pipeline_cancelled,
-    load_pipeline_state,
-    persist_pipeline_state,
-    request_cancel,
-    revoke_pipeline_phases,
-    wipe_videos_data,
-)
-from .streaming import get_dispatched_task_ids, get_phase_progress
-from .task import full_channel_pipeline
+`service.py`'s docstring for the full model (dispatch + per-video
+streaming-coordination live together there — see `docs/CODE-CONVENTIONS.md`
+§8 strict-merge: both are I/O orchestration, one role, one file).
 
+`task.py` is excluded from this eager chain (§8 Exception 1 —
+`from infra.celery import app` at module level); reach it via a direct
+`from domains.ycs.pipeline_task.task import full_channel_pipeline`."""
+from __future__ import annotations
 
-__all__ = [
-    "dispatch_videos_pipeline",
-    "full_channel_pipeline",
-    "get_dispatched_task_ids",
-    "get_phase_progress",
-    "is_pipeline_cancelled",
-    "load_pipeline_state",
-    "persist_pipeline_state",
-    "request_cancel",
-    "revoke_pipeline_phases",
-    "wipe_videos_data",
-]
+from . import keys, params, service

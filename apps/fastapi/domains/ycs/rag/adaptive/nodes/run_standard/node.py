@@ -18,15 +18,15 @@ from __future__ import annotations
 
 from langchain_core.runnables import RunnableConfig
 
-from domains.ycs.runtime.observability import traced
+from domains.ycs.runtime.observability.service import traced
 
-from ...state import AdaptiveRAGState
-from ....standard.params import DEFAULT_MAX_RETRIES, DEFAULT_RECURSION_LIMIT
+from .... import standard
+from ... import state
 
 
 @traced("rag.run_standard")
 async def run_standard_pipeline(
-    state: AdaptiveRAGState,
+    state: state.AdaptiveRAGState,
     standard_graph,
     config: RunnableConfig | None = None,
 ) -> dict:
@@ -53,14 +53,14 @@ async def run_standard_pipeline(
         # generate node can ground a follow-up against prior turns.
         "conversation_history": state.get("conversation_history", []),
     }
-    max_retries = DEFAULT_MAX_RETRIES
+    max_retries = standard.params.DEFAULT_MAX_RETRIES
     if config is not None:
         max_retries = (
             (config.get("configurable") or {}).get("max_retries")
-            or DEFAULT_MAX_RETRIES
+            or standard.params.DEFAULT_MAX_RETRIES
         )
     sub_config = {
-        "recursion_limit": DEFAULT_RECURSION_LIMIT,
+        "recursion_limit": standard.params.DEFAULT_RECURSION_LIMIT,
         "configurable":    {"max_retries": max_retries},
     }
     try:

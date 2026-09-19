@@ -16,28 +16,13 @@ import logging
 import os
 from typing import Any
 
+import domains
 from langchain_core.documents import Document
 
-from .params import (
-    GRADER_CALL_TIMEOUT_S,
-    GRADER_CONCURRENCY,
-    PER_DOC_CHAR_CAP,
-)
-from .prompts import GRADING_PROMPT
-from .schemas import GradeResult
+from . import domain, params, prompts, schemas
 
 
 logger = logging.getLogger(__name__)
-
-
-# every grade label that counts as "keep the document".
-# Currently `relevant` (direct match) and `likely_relevant` (lateral /
-# on-topic without literal answer). Promoted to a module-level
-# `frozenset` so the keep/drop policy is configurable in one place
-# instead of scattered across the parsed-path and rescue-path
-# branches. Tightening the policy in the future (drop `likely_relevant`
-# again for a high-precision query class) is one edit here.
-_KEEPER_SCORES: frozenset[str] = frozenset(("relevant", "likely_relevant"))
 
 
 def _resolve_concurrency() -> int:
@@ -47,75 +32,7 @@ def _resolve_concurrency() -> int:
             return max(1, int(os.environ["KD_GRADER_CONCURRENCY"]))
         except (TypeError, ValueError):
             pass
-    return max(1, GRADER_CONCURRENCY)
-
-
-def _flatten_message_content(raw_content: Any) -> str:
-    """Flatten an `AIMessage.content` into a string regardless of shape.
-
-    LangChain `BaseMessage.content` can be either:
-      - `str`             — plain text (most providers)
-      - `list[dict]`      — reasoning models emit
-                            `[{type:'thinking',...}, {type:'text', text:'...'},
-                             {type:'reasoning',...}]` (kimi-k2, qwen-thinking,
-                            deepseek-v4, Claude extended-thinking)
-
-    Bug fix: YCS sub-agents crashed with
-    `'list' object has no attribute 'lower'` because `_rescue_score`
-    received a list-shaped content from a reasoning model. The rotator's
-    `_flatten_thinking_content` only sanitizes INCOMING messages (next
-    cascade arm safety); the model's OUTGOING response can still be a
-    list. This helper closes the gap on the consumer side.
-
-    Returns "" on any non-str/non-list input (defensive)."""
-    if isinstance(raw_content, str):
-        return raw_content
-    if isinstance(raw_content, list):
-        texts: list[str] = []
-        for block in raw_content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                t = block.get("text") or ""
-                if t:
-                    texts.append(t)
-            elif isinstance(block, str) and block:
-                texts.append(block)
-        return "\n".join(texts)
-    return ""
-
-
-def _rescue_score(raw_content: Any) -> str | None:
-    """Lenient fallback when Pydantic structured-output parse fails.
-
-    Free-tier rotator pool occasionally yields models that emit
-    truncated / malformed JSON envelopes (`not_relevant"}` was the 2026-
-    06-15 production crash trigger). When parsing dies, the binary
-    intent is almost always still recoverable from the raw payload —
-    every grading model phrases its verdict as some variant of
-    `relevant` / `likely_relevant` / `not_relevant` / `irrelevant`.
-    Surfacing the intent here avoids the catastrophic loop where the
-    standard sub-graph drops every doc, retries `rewrite → retrieve`,
-    and burns the sub-agent's recursion budget on what was actually a
-    parse hiccup.
-
-    Accepts `str` OR reasoning-model `list[dict]` content (via
-    `_flatten_message_content`). Returns one of `"relevant"`,
-    `"likely_relevant"`, `"not_relevant"`, or `None` (no signal).
-
-    extended for the ternary grade. Order of checks
-    matters: `not_relevant` is the most specific compound token, then
-    `likely_relevant`, then bare `relevant`. Checking `relevant`
-    first would swallow both compound variants as positives."""
-    flat = _flatten_message_content(raw_content)
-    if not flat:
-        return None
-    text = flat.lower()
-    if "not_relevant" in text or "not relevant" in text or "irrelevant" in text:
-        return "not_relevant"
-    if "likely_relevant" in text or "likely relevant" in text or "partially relevant" in text:
-        return "likely_relevant"
-    if "relevant" in text:
-        return "relevant"
-    return None
+    return max(1, params.GRADER_CONCURRENCY)
 
 
 class DocumentGrader:
@@ -131,11 +48,11 @@ class DocumentGrader:
 
     `include_raw=True` ships the raw `AIMessage` alongside
     the parsed Pydantic so we can rescue the binary intent from the
-    payload when the parser dies (see `_rescue_score`)."""
+    payload when the parser dies (see `domain.rescue_score`)."""
 
     def __init__(self, llm: Any) -> None:
-        self.grader = GRADING_PROMPT | llm.with_structured_output(
-            GradeResult,
+        self.grader = prompts.GRADING_PROMPT | llm.with_structured_output(
+            schemas.GradeResult,
             include_raw = True,
         )
 
@@ -159,17 +76,15 @@ class DocumentGrader:
                 # 2026-09-15: tag every graded doc with the retrieval
                 # node so the conversation-level usage counter splits
                 # retrieval.grade from retrieval.generate.
-                from domains.ycs.rag.llm_call import capture_llm_usage
-                from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
-                _llm_set_node(node = "grader")
+                domains.ycs.runtime.llm_counter.service.set_node(node = "grader")
                 # Per-call timeout prevents a single slow / hung model
                 # from blocking a semaphore slot indefinitely.
                 result = await asyncio.wait_for(
                     self.grader.ainvoke({
                         "question": question,
-                        "document": doc.page_content[:PER_DOC_CHAR_CAP],
+                        "document": doc.page_content[:params.PER_DOC_CHAR_CAP],
                     }),
-                    timeout = GRADER_CALL_TIMEOUT_S,
+                    timeout = params.GRADER_CALL_TIMEOUT_S,
                 )
                 # 2026-09-16: unlike `resilient_ainvoke`'s callers, this
                 # bypasses that helper (own semaphore + per-call
@@ -178,7 +93,7 @@ class DocumentGrader:
                 # AIMessage directly — `capture_llm_usage` needs the "raw"
                 # half, which carries `.usage_metadata`.
                 if isinstance(result, dict):
-                    await capture_llm_usage(result.get("raw"))
+                    await domains.ycs.rag.service.capture_llm_usage(result.get("raw"))
                 return result
 
         results = await asyncio.gather(
@@ -192,24 +107,24 @@ class DocumentGrader:
                 logger.info(f"[ycs:grader] hard error: {result}")
                 continue
             # With `include_raw=True`, success returns a dict
-            #   {"raw": AIMessage, "parsed": GradeResult | None,
+            #   {"raw": AIMessage, "parsed": schemas.GradeResult | None,
             #    "parsing_error": Exception | None}
             # Failure modes:
             #   - parsed is None + parsing_error present → lenient fallback
             #   - parsed.score != "relevant" → drop
             parsed = result.get("parsed") if isinstance(result, dict) else None
-            # `_KEEPER_SCORES` is the single source of
+            # `domain.KEEPER_SCORES` is the single source of
             # truth for "keep this doc". Both the parsed and rescue
             # paths gate on the same set so the ternary policy can't
             # accidentally diverge between them.
-            if parsed is not None and getattr(parsed, "score", None) in _KEEPER_SCORES:
+            if parsed is not None and getattr(parsed, "score", None) in domain.KEEPER_SCORES:
                 kept.append(doc)
                 continue
             if isinstance(result, dict) and parsed is None:
                 raw = result.get("raw")
                 raw_content = getattr(raw, "content", "") if raw is not None else ""
-                score = _rescue_score(raw_content or "")
-                if score in _KEEPER_SCORES:
+                score = domain.rescue_score(raw_content or "")
+                if score in domain.KEEPER_SCORES:
                     kept.append(doc)
                     rescued += 1
                 elif score is None:

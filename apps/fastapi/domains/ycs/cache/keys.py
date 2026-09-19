@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import hashlib
 
-from .params import CACHE_PREFIX
+from . import params
 
 
 def cache_key(question: str, mode: str | None = None) -> str:
@@ -19,4 +19,4 @@ def cache_key(question: str, mode: str | None = None) -> str:
     if mode:
         raw += f"|mode={mode}"
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
-    return f"{CACHE_PREFIX}{digest}"
+    return f"{params.CACHE_PREFIX}{digest}"

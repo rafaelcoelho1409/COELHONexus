@@ -7,9 +7,9 @@ clickable cards.
 """
 from __future__ import annotations
 
-from domains.ycs.runtime.observability import traced
+from domains.ycs.runtime.observability.service import traced
 
-from ...state import YouTubeRAGState
+from ... import state
 
 
 # 2026-09-16: /sota-search confirmed a snippet is table-stakes for a
@@ -21,7 +21,7 @@ _SNIPPET_CHAR_CAP = 220
 
 
 @traced("rag.cite")
-async def format_citations(state: YouTubeRAGState) -> dict:
+async def format_citations(state: state.YouTubeRAGState) -> dict:
     """Extract structured citations from documents (deduped by video_id)."""
     seen_videos: set[str] = set()
     citations: list[dict] = []

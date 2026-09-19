@@ -38,26 +38,16 @@ always starts on time regardless of how many sub-questions are still
 in flight."""
 from __future__ import annotations
 
+import domains
+from . import nodes, params, state
+from .. import standard
+
 import asyncio
 import logging
 import os
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
-
-from domains.ycs.grader import DocumentGrader
-from domains.ycs.rag.standard import build_youtube_rag_graph
-
-from .nodes.classify import classify_query
-from .nodes.contextualize import contextualize_question
-from .nodes.critic import critic
-from .nodes.direct_answer import direct_answer
-from .nodes.plan import plan_research
-from .nodes.run_standard import run_standard_pipeline
-from .nodes.subagent import run_subagent, run_subagents_bounded
-from .nodes.synthesize import synthesize
-from .params import DEEP_FANOUT_DEADLINE_S, SUBAGENT_CONCURRENCY
-from .state import AdaptiveRAGState
 
 
 logger = logging.getLogger(__name__)
@@ -71,7 +61,7 @@ def _resolve_subagent_concurrency() -> int:
             return max(1, int(os.environ["KD_SUBAGENT_CONCURRENCY"]))
         except (TypeError, ValueError):
             pass
-    return max(1, SUBAGENT_CONCURRENCY)
+    return max(1, params.SUBAGENT_CONCURRENCY)
 
 
 # Process-wide semaphore shared across ALL in-flight Ask requests. Two
@@ -99,7 +89,7 @@ def _get_subagent_semaphore() -> asyncio.Semaphore:
     return _subagent_semaphore
 
 
-def _route_by_mode(state: AdaptiveRAGState) -> str:
+def _route_by_mode(state: state.AdaptiveRAGState) -> str:
     """Route after classification: FAST, STANDARD, or DEEP."""
     mode = state.get("mode", "standard").lower()
     if mode == "fast":
@@ -109,7 +99,7 @@ def _route_by_mode(state: AdaptiveRAGState) -> str:
     return "run_standard"
 
 
-def _route_after_direct(state: AdaptiveRAGState) -> str:
+def _route_after_direct(state: state.AdaptiveRAGState) -> str:
     """After FAST: success ends, failure falls back to STANDARD.
 
     2026-09-15 (DD placeholder principle — a degraded
@@ -124,7 +114,7 @@ def _route_after_direct(state: AdaptiveRAGState) -> str:
 
 def build_adaptive_rag_graph(
     retriever,
-    grader: DocumentGrader,
+    grader: domains.ycs.grader.service.DocumentGrader,
     llm,
     checkpointer = None,
     neo4j_graph = None,
@@ -145,7 +135,7 @@ def build_adaptive_rag_graph(
 
     def _build_standard_graph(channel_ids: list[str] | None = None):
         """Build a STANDARD pipeline scoped to specific channels."""
-        return build_youtube_rag_graph(
+        return standard.graph.build_youtube_rag_graph(
             retriever = retriever,
             grader = grader,
             llm = llm,
@@ -153,11 +143,11 @@ def build_adaptive_rag_graph(
             channel_ids = channel_ids or None,
         )
 
-    workflow = StateGraph(AdaptiveRAGState)
+    workflow = StateGraph(state.AdaptiveRAGState)
 
     # Bind deps via async closures — LangGraph requires the node value
     # to be a true async callable.
-    async def _prepare(state):
+    async def _prepare(s):
         """CONTEXTUALIZE + CLASSIFY concurrently (2026-09-15, was serial).
 
         Both read the ORIGINAL question + history and write disjoint
@@ -171,36 +161,36 @@ def build_adaptive_rag_graph(
         import asyncio as _asyncio
 
         ctx_result, cls_result = await _asyncio.gather(
-            contextualize_question(state, llm),
-            classify_query(state, llm, neo4j_graph),
+            nodes.contextualize.node.contextualize_question(s, llm),
+            nodes.classify.node.classify_query(s, llm, neo4j_graph),
         )
         return {**ctx_result, **cls_result}
 
-    async def _direct(state):
-        return await direct_answer(state, llm_fast or llm)
+    async def _direct(s):
+        return await nodes.direct_answer.node.direct_answer(s, llm_fast or llm)
 
-    async def _run_standard(state, config: RunnableConfig):
+    async def _run_standard(s, config: RunnableConfig):
         # `config` arg is auto-injected by LangGraph so we
         # can forward the user's `max_retries` down to the scoped
         # STANDARD sub-graph (previously the override silently fell
         # back to the sub-graph's default 3). See
         # `run_standard/node.py` for the recursion-budget rationale.
-        scoped_graph = _build_standard_graph(state.get("channel_ids"))
-        return await run_standard_pipeline(state, scoped_graph, config)
+        scoped_graph = _build_standard_graph(s.get("channel_ids"))
+        return await nodes.run_standard.node.run_standard_pipeline(s, scoped_graph, config)
 
-    async def _plan(state):
-        return await plan_research(state, llm)
+    async def _plan(s):
+        return await nodes.plan.node.plan_research(s, llm)
 
-    async def _run_subagents(state: AdaptiveRAGState):
-        """DEEP fan-out — bounded by `DEEP_FANOUT_DEADLINE_S`, NOT a
+    async def _run_subagents(s: state.AdaptiveRAGState):
+        """DEEP fan-out — bounded by `params.DEEP_FANOUT_DEADLINE_S`, NOT a
         LangGraph `Send()` (see `run_subagents_bounded`'s docstring for
         why: Send's superstep barrier can't proceed without every
         branch, so an outer deadline has to be enforced by this node
         itself via `asyncio.wait`, not the graph)."""
-        channel_ids = state.get("channel_ids") or []
-        parent_q    = state.get("question", "") or ""
-        route       = state.get("route") or "search"
-        thread_id   = state.get("thread_id") or ""
+        channel_ids = s.get("channel_ids") or []
+        parent_q    = s.get("question", "") or ""
+        route       = s.get("route") or "search"
+        thread_id   = s.get("thread_id") or ""
 
         async def _one(sub_q: str) -> dict:
             # Sub-agents inherit the channel scope from the parent
@@ -218,7 +208,7 @@ def build_adaptive_rag_graph(
             sem = _get_subagent_semaphore()
             async with sem:
                 scoped_graph = _build_standard_graph(channel_ids)
-                return await run_subagent(
+                return await nodes.subagent.node.run_subagent(
                     {
                         "sub_question":    sub_q,
                         "parent_question": parent_q,
@@ -229,18 +219,18 @@ def build_adaptive_rag_graph(
                     scoped_graph, llm = llm,
                 )
 
-        return await run_subagents_bounded(
-            state.get("sub_questions") or [],
+        return await nodes.subagent.node.run_subagents_bounded(
+            s.get("sub_questions") or [],
             run_one    = _one,
-            deadline_s = DEEP_FANOUT_DEADLINE_S,
+            deadline_s = params.DEEP_FANOUT_DEADLINE_S,
             route      = route,
         )
 
-    async def _synthesize(state):
-        return await synthesize(state, llm)
+    async def _synthesize(s):
+        return await nodes.synthesize.node.synthesize(s, llm)
 
-    async def _critic(state):
-        return await critic(state, llm)
+    async def _critic(s):
+        return await nodes.critic.node.critic(s, llm)
 
     workflow.add_node("prepare",         _prepare)
     workflow.add_node("direct_answer",   _direct)

@@ -5,7 +5,7 @@ Three tasks
   2. dispatches `YtDlpExtractor.extract_{batch,channel,playlist}`
   3. bulk-indexes metadata via `domains.ycs.es_index`
   4. (if `include_transcription`) initializes Playwright service,
-     runs `fetch_transcriptions_batch`, and bulk-indexes transcripts
+     runs `domains.ycs.transcript.service.fetch_transcriptions_batch`, and bulk-indexes transcripts
   5. always closes ES (and the transcript service when used)
 
 Celery is sync; async work is wrapped in `asyncio.run(...)`. The
@@ -19,22 +19,13 @@ import logging
 import os
 from typing import Any, Callable
 
+import domains
 from celery.utils.log import get_task_logger
 from elasticsearch import AsyncElasticsearch
 
-from domains.ycs.es_index import (
-    index_transcriptions_to_elasticsearch,
-    index_videos_to_elasticsearch,
-)
-from domains.ycs.transcript import (
-    MAX_CONCURRENT,
-    close_transcript_service,
-    fetch_transcriptions_batch,
-    init_transcript_service,
-)
 from infra.celery import app
 
-from .service import get_extractor
+from . import service
 
 
 # Callback signature for live progress emission. The task wrapper
@@ -90,7 +81,7 @@ async def _dispatch_streaming_totals(
 ) -> None:
     """Called once, after `_extract_videos_async`'s fetch loop finishes
     dispatching every video's downstream work. Records the Neo4j/Qdrant
-    phase totals so `pipeline_task.streaming.maybe_finalize` knows when
+    phase totals so `pipeline_task.service.maybe_finalize` knows when
     the run is actually done, then makes one speculative finalize check
     itself — covering the (unlikely but real) race where every
     dispatched per-video task already finished before this function got
@@ -116,20 +107,15 @@ async def _dispatch_streaming_totals(
     or had no transcript) falls out naturally: totals correct to 0,
     which `get_phase_progress`/`maybe_finalize` already treat as
     trivially done — no separate branch needed."""
-    from domains.ycs.pipeline_task.streaming import (
-        build_redis_client,
-        maybe_finalize,
-        set_phase_total,
-    )
     if not include_transcription:
         # Metadata-only run — no downstream work exists. Zero the
         # seeded totals so both stream bars read trivially done
         # instead of dangling at 0/N.
-        redis = build_redis_client()
+        redis = domains.ycs.pipeline_task.service.build_redis_client()
         try:
-            await set_phase_total(redis, extract_id, "neo4j", 0)
-            await set_phase_total(redis, extract_id, "qdrant", 0)
-            await maybe_finalize(redis, extract_id)
+            await domains.ycs.pipeline_task.service.set_phase_total(redis, extract_id, "neo4j", 0)
+            await domains.ycs.pipeline_task.service.set_phase_total(redis, extract_id, "qdrant", 0)
+            await domains.ycs.pipeline_task.service.maybe_finalize(redis, extract_id)
         finally:
             await redis.close()
         return
@@ -138,29 +124,27 @@ async def _dispatch_streaming_totals(
     # partition, not once per original video), but the phase total
     # must count VIDEOS: a video split into 5 partitions should count
     # as 1 toward the total, exactly like an unsplit video, not 5.
-    # `mark_video_or_partition_done` (pipeline_task/streaming.py)
+    # `mark_video_or_partition_done` (pipeline_task/service.py)
     # aggregates all of a video's partition completions into exactly
     # one `mark_video_done` call for the parent id — this dedupe here
     # is what that single call is measured against.
-    from domains.ycs.ingestion.domain import parent_video_id
     dispatched_count = len({
-        parent_video_id(vid) for vid in (dispatched_ids or [])
+        domains.ycs.ingestion.domain.parent_video_id(vid) for vid in (dispatched_ids or [])
     })
-    redis = build_redis_client()
+    redis = domains.ycs.pipeline_task.service.build_redis_client()
     try:
         # 2026-09-15: PIECE-level total (partitions counted
         # individually) for the Neo4j bar's "K/M pieces" display —
         # `dispatched_ids` itself, undeduped, is exactly that count.
         # Neo4j-only per scope (Qdrant's bar is unchanged); see
         # `pipeline_task.keys.phase_piece_total_key`.
-        from domains.ycs.pipeline_task.streaming import set_phase_piece_total
-        await set_phase_piece_total(
+        await domains.ycs.pipeline_task.service.set_phase_piece_total(
             redis, extract_id, "neo4j", len(dispatched_ids or []),
         )
-        neo4j_finished, neo4j_total = await set_phase_total(
+        neo4j_finished, neo4j_total = await domains.ycs.pipeline_task.service.set_phase_total(
             redis, extract_id, "neo4j", dispatched_count,
         )
-        qdrant_finished, qdrant_total = await set_phase_total(
+        qdrant_finished, qdrant_total = await domains.ycs.pipeline_task.service.set_phase_total(
             redis, extract_id, "qdrant", dispatched_count,
         )
         # 2026-09-14: either correction — not a skip-mark any more —
@@ -181,8 +165,6 @@ async def _dispatch_streaming_totals(
             neo4j_total > 0 and neo4j_finished >= neo4j_total
         )
         if qdrant_completed_here:
-            from domains.ycs.ingestion.streaming import finalize_qdrant_buffer
-            from domains.ycs.pipeline_task.streaming import update_video_extra
             from qdrant_client import AsyncQdrantClient
             qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:6333")
             qdrant_port = int(os.environ.get("QDRANT_PORT", "6333"))
@@ -204,7 +186,7 @@ async def _dispatch_streaming_totals(
                 # re-queued in the buffer for a future Rerun's drain to
                 # pick up; this run has already reported its true
                 # outcome to Redis regardless.
-                drained = await finalize_qdrant_buffer(redis, qdrant, extract_id)
+                drained = await domains.ycs.ingestion.service.finalize_qdrant_buffer(redis, qdrant, extract_id)
                 logger.info(
                     f"[extract_videos] {extract_id}: totals-correction "
                     f"completed the Qdrant phase — drained {drained} "
@@ -223,7 +205,7 @@ async def _dispatch_streaming_totals(
                 # count to one of the dispatched videos so the sum
                 # picks it up.
                 if drained and dispatched_ids:
-                    await update_video_extra(
+                    await domains.ycs.pipeline_task.service.update_video_extra(
                         redis, extract_id, "qdrant", dispatched_ids[-1],
                         {"points_upserted": drained},
                     )
@@ -246,22 +228,20 @@ async def _dispatch_streaming_totals(
             # — same class of risk the Qdrant drain above already
             # guards against, just missed here on the first pass.
             try:
-                from domains.ycs.graph_builder import resolve_entities
-                from domains.ycs.pipeline_task.streaming import update_video_extra
                 from langchain_neo4j import Neo4jGraph
                 neo4j_graph = Neo4jGraph(
                     url      = os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
                     username = os.environ.get("NEO4J_USERNAME", "neo4j"),
                     password = os.environ.get("NEO4J_PASSWORD", ""),
                 )
-                merged = await resolve_entities(neo4j_graph)
+                merged = await domains.ycs.graph_builder.service.resolve_entities(neo4j_graph)
                 logger.info(
                     f"[extract_videos] {extract_id}: totals-correction "
                     f"completed the Neo4j phase — resolution merged "
                     f"{merged} node(s)"
                 )
                 if merged and dispatched_ids:
-                    await update_video_extra(
+                    await domains.ycs.pipeline_task.service.update_video_extra(
                         redis, extract_id, "neo4j", dispatched_ids[-1],
                         {"entities_merged": merged},
                     )
@@ -270,7 +250,7 @@ async def _dispatch_streaming_totals(
                     f"[extract_videos] {extract_id}: totals-correction "
                     f"entity resolution failed: {type(e).__name__}: {e}"
                 )
-        await maybe_finalize(redis, extract_id)
+        await domains.ycs.pipeline_task.service.maybe_finalize(redis, extract_id)
     finally:
         await redis.close()
 
@@ -284,7 +264,7 @@ async def _extract_videos_async(
     extract_id:            str | None        = None,
 ) -> dict[str, Any]:
     es = _get_es_client()
-    extractor = get_extractor()
+    extractor = service.get_extractor()
     try:
         if progress_cb:
             progress_cb({
@@ -303,14 +283,10 @@ async def _extract_videos_async(
             # dispatched count (K, excluding no-transcript/failed
             # videos) once that's known, at the end.
             try:
-                from domains.ycs.pipeline_task.streaming import (
-                    build_redis_client,
-                    set_phase_total,
-                )
-                _r = build_redis_client()
+                _r = domains.ycs.pipeline_task.service.build_redis_client()
                 try:
-                    await set_phase_total(_r, extract_id, "neo4j", len(video_ids))
-                    await set_phase_total(_r, extract_id, "qdrant", len(video_ids))
+                    await domains.ycs.pipeline_task.service.set_phase_total(_r, extract_id, "neo4j", len(video_ids))
+                    await domains.ycs.pipeline_task.service.set_phase_total(_r, extract_id, "qdrant", len(video_ids))
                 finally:
                     await _r.close()
             except Exception as _seed_err:
@@ -323,7 +299,7 @@ async def _extract_videos_async(
             v.model_dump(exclude_none = False) if hasattr(v, "model_dump") else v
             for v in videos
         ]
-        es_metadata = await index_videos_to_elasticsearch(es, videos_dicts)
+        es_metadata = await domains.ycs.es_index.service.index_videos_to_elasticsearch(es, videos_dicts)
         # transcript progress callback uses it to surface the most
         # recently completed video to the UI.
         videos_meta_map: dict[str, dict[str, Any]] = {
@@ -380,7 +356,7 @@ async def _extract_videos_async(
             # run, per-video dispatch left exactly 1 slot for ALL
             # downstream work — 21 videos ran through Neo4j strictly
             # one at a time, throwing away `extract_and_store_graph`'s
-            # own internal `EXTRACT_CONCURRENCY`-wide (5) asyncio pool
+            # own internal `domains.ycs.graph_builder.params.EXTRACT_CONCURRENCY`-wide (5) asyncio pool
             # entirely (a pool of width 5 processing 1 document at a
             # time buys nothing). That's a real regression from the
             # PRE-streaming design, where one `ingest_to_neo4j` call
@@ -393,7 +369,7 @@ async def _extract_videos_async(
             # `batch_size=len(chunk)` so the internal pool width exactly
             # matches the chunk — full concurrency restored, while still
             # starting well before the whole 25-video batch finishes
-            # Phase 1 (chunks flush every `EXTRACT_CONCURRENCY` videos,
+            # Phase 1 (chunks flush every `domains.ycs.graph_builder.params.EXTRACT_CONCURRENCY` videos,
             # not after all 25). `ingest_to_neo4j` already natively
             # accepts and pools a list — this reverts ONLY the call
             # site back to batching, not the task's own logic.
@@ -424,13 +400,10 @@ async def _extract_videos_async(
                 # pending" warnings (the event loop tore down before
                 # some of these ever got to run), meaning Stop's
                 # revoke list was silently incomplete.
-                from domains.ycs.pipeline_task.streaming import (
-                    build_redis_client, track_dispatched_task,
-                )
                 async def _track() -> None:
-                    r = build_redis_client()
+                    r = domains.ycs.pipeline_task.service.build_redis_client()
                     try:
-                        await track_dispatched_task(r, extract_id, task_id)
+                        await domains.ycs.pipeline_task.service.track_dispatched_task(r, extract_id, task_id)
                     finally:
                         await r.close()
                 _pending_track_tasks.append(asyncio.ensure_future(_track()))
@@ -444,11 +417,10 @@ async def _extract_videos_async(
                 # `extract_id` is this task's own id (`self.request.id`,
                 # threaded in from `extract_videos`) — the namespace
                 # every downstream piece of Redis bookkeeping shares.
-                from domains.ycs.graph_builder.params import EXTRACT_CONCURRENCY
                 from domains.ycs.qdrant_task.task import stream_video_to_qdrant
                 dispatched_ids.append(vid)
                 neo4j_chunk.append(vid)
-                if len(neo4j_chunk) >= EXTRACT_CONCURRENCY:
+                if len(neo4j_chunk) >= domains.ycs.graph_builder.params.EXTRACT_CONCURRENCY:
                     _flush_neo4j_chunk()
                 qdrant_task = stream_video_to_qdrant.si(
                     vid, extract_id,
@@ -508,13 +480,13 @@ async def _extract_videos_async(
                     payload["current_item"] = videos_meta_map[video_id]
                 progress_cb(payload)
 
-            transcript_service = await init_transcript_service(
-                max_concurrent           = MAX_CONCURRENT,
+            transcript_service = await domains.ycs.transcript.service.init_transcript_service(
+                max_concurrent           = domains.ycs.transcript.params.MAX_CONCURRENT,
                 browser_refresh_interval = 10,
                 max_retries              = 3,
             )
             # 2026-09-14: cooperative-cancel — checked once per Playwright
-            # chunk (see `fetch_transcriptions_batch`'s `cancel_check`
+            # chunk (see `domains.ycs.transcript.service.fetch_transcriptions_batch`'s `cancel_check`
             # param). A fresh client + raw GET per chunk boundary (every
             # ~10 videos) is cheap enough to skip throttling; this is the
             # Stop button's replacement for `revoke(terminate=True)`,
@@ -523,11 +495,9 @@ async def _extract_videos_async(
             async def _cancel_check() -> bool:
                 if not extract_id:
                     return False
-                from domains.ycs.pipeline_task import is_pipeline_cancelled
-                from domains.ycs.pipeline_task.streaming import build_redis_client
-                r = build_redis_client()
+                r = domains.ycs.pipeline_task.service.build_redis_client()
                 try:
-                    return await is_pipeline_cancelled(r, extract_id)
+                    return await domains.ycs.pipeline_task.service.is_pipeline_cancelled(r, extract_id)
                 except Exception:
                     return False
                 finally:
@@ -562,7 +532,7 @@ async def _extract_videos_async(
                     )
             try:
                 trans_stats: dict[str, int] = {}
-                await fetch_transcriptions_batch(
+                await domains.ycs.transcript.service.fetch_transcriptions_batch(
                     valid_ids,
                     transcript_service = transcript_service,
                     es_client          = es,
@@ -575,7 +545,7 @@ async def _extract_videos_async(
                     cancel_check       = _cancel_check if extract_id else None,
                 )
                 # 2026-09-13: ES indexing now happens PER-VIDEO inside
-                # `fetch_transcriptions_batch` itself (each doc is
+                # `domains.ycs.transcript.service.fetch_transcriptions_batch` itself (each doc is
                 # written the instant its video's fetch succeeds, so
                 # `_on_video_indexed` can safely trigger downstream
                 # Neo4j/Qdrant work against a document guaranteed to
@@ -592,14 +562,14 @@ async def _extract_videos_async(
                 es_transcriptions["cached"]       = trans_stats.get("cached", 0)
                 es_transcriptions["fetch_failed"] = trans_stats.get("fetched_failed", 0)
                 es_transcriptions["no_transcript"] = trans_stats.get("no_transcript", 0)
-                # Flush whatever's left below the EXTRACT_CONCURRENCY
+                # Flush whatever's left below the domains.ycs.graph_builder.params.EXTRACT_CONCURRENCY
                 # threshold — otherwise a tail of 1-4 videos would never
                 # get a Neo4j task at all.
                 _flush_neo4j_chunk()
                 if _pending_track_tasks:
                     await asyncio.gather(*_pending_track_tasks, return_exceptions = True)
             finally:
-                await close_transcript_service()
+                await domains.ycs.transcript.service.close_transcript_service()
         if extract_id:
             await _dispatch_streaming_totals(
                 extract_id, video_ids, dispatched_ids,
@@ -627,7 +597,7 @@ async def _extract_channel_async(
     languages:             list[str] | None,
 ) -> dict[str, Any]:
     es = _get_es_client()
-    extractor = get_extractor()
+    extractor = service.get_extractor()
     try:
         result = await extractor.extract_channel(channel_id, max_results)
         # ChannelResult schema → dict
@@ -641,7 +611,7 @@ async def _extract_channel_async(
             v if isinstance(v, dict) else v.model_dump(exclude_none = False)
             for v in videos
         ]
-        es_metadata = await index_videos_to_elasticsearch(es, videos_dicts)
+        es_metadata = await domains.ycs.es_index.service.index_videos_to_elasticsearch(es, videos_dicts)
         es_transcriptions = {"indexed": 0, "failed": 0}
         if include_transcription:
             valid_ids = [
@@ -656,14 +626,14 @@ async def _extract_channel_async(
                 }
                 for v in videos_dicts if v.get("id")
             }
-            transcript_service = await init_transcript_service(
-                max_concurrent           = MAX_CONCURRENT,
+            transcript_service = await domains.ycs.transcript.service.init_transcript_service(
+                max_concurrent           = domains.ycs.transcript.params.MAX_CONCURRENT,
                 browser_refresh_interval = 10,
                 max_retries              = 3,
             )
             try:
                 trans_stats: dict[str, int] = {}
-                transcription_docs = await fetch_transcriptions_batch(
+                transcription_docs = await domains.ycs.transcript.service.fetch_transcriptions_batch(
                     valid_ids,
                     transcript_service = transcript_service,
                     es_client          = es,
@@ -672,14 +642,14 @@ async def _extract_channel_async(
                     stats              = trans_stats,
                 )
                 if transcription_docs:
-                    es_transcriptions = await index_transcriptions_to_elasticsearch(
+                    es_transcriptions = await domains.ycs.es_index.service.index_transcriptions_to_elasticsearch(
                         es, transcription_docs,
                     )
                 es_transcriptions["cached"]       = trans_stats.get("cached", 0)
                 es_transcriptions["fetch_failed"] = trans_stats.get("fetched_failed", 0)
                 es_transcriptions["no_transcript"] = trans_stats.get("no_transcript", 0)
             finally:
-                await close_transcript_service()
+                await domains.ycs.transcript.service.close_transcript_service()
         return {
             "channel_id":     result_dict.get("channel_id"),
             "channel_name":   result_dict.get("channel_title"),
@@ -698,7 +668,7 @@ async def _extract_playlist_async(
     languages:             list[str] | None,
 ) -> dict[str, Any]:
     es = _get_es_client()
-    extractor = get_extractor()
+    extractor = service.get_extractor()
     try:
         result = await extractor.extract_playlist(playlist_id, max_results)
         result_dict = (
@@ -711,7 +681,7 @@ async def _extract_playlist_async(
             v if isinstance(v, dict) else v.model_dump(exclude_none = False)
             for v in videos
         ]
-        es_metadata = await index_videos_to_elasticsearch(es, videos_dicts)
+        es_metadata = await domains.ycs.es_index.service.index_videos_to_elasticsearch(es, videos_dicts)
         es_transcriptions = {"indexed": 0, "failed": 0}
         if include_transcription:
             valid_ids = [
@@ -726,14 +696,14 @@ async def _extract_playlist_async(
                 }
                 for v in videos_dicts if v.get("id")
             }
-            transcript_service = await init_transcript_service(
-                max_concurrent           = MAX_CONCURRENT,
+            transcript_service = await domains.ycs.transcript.service.init_transcript_service(
+                max_concurrent           = domains.ycs.transcript.params.MAX_CONCURRENT,
                 browser_refresh_interval = 10,
                 max_retries              = 3,
             )
             try:
                 trans_stats: dict[str, int] = {}
-                transcription_docs = await fetch_transcriptions_batch(
+                transcription_docs = await domains.ycs.transcript.service.fetch_transcriptions_batch(
                     valid_ids,
                     transcript_service = transcript_service,
                     es_client          = es,
@@ -742,14 +712,14 @@ async def _extract_playlist_async(
                     stats              = trans_stats,
                 )
                 if transcription_docs:
-                    es_transcriptions = await index_transcriptions_to_elasticsearch(
+                    es_transcriptions = await domains.ycs.es_index.service.index_transcriptions_to_elasticsearch(
                         es, transcription_docs,
                     )
                 es_transcriptions["cached"]       = trans_stats.get("cached", 0)
                 es_transcriptions["fetch_failed"] = trans_stats.get("fetched_failed", 0)
                 es_transcriptions["no_transcript"] = trans_stats.get("no_transcript", 0)
             finally:
-                await close_transcript_service()
+                await domains.ycs.transcript.service.close_transcript_service()
         return {
             "playlist_id":     result_dict.get("playlist_id"),
             "playlist_title":  result_dict.get("playlist_title"),

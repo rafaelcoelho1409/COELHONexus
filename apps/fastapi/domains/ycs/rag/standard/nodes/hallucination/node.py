@@ -10,14 +10,11 @@ from __future__ import annotations
 
 import asyncio
 
-from domains.ycs.rag.llm_call import resilient_ainvoke
-from domains.ycs.runtime.llm_counter import set_node as _llm_set_node
-from domains.ycs.runtime.observability import traced
+from domains.ycs.runtime.observability.service import traced
 
-from ...state import YouTubeRAGState
-from .params import MAX_DOC_CHARS
-from .prompts import HALLUCINATION_PROMPT
-from .schemas import HallucinationCheck
+from .... import service
+from ... import state
+from . import params, prompts, schemas
 
 
 # 2026-09-15: 60 → 45s tiering — failure defaults to grounded=True
@@ -26,10 +23,10 @@ _HALLUCINATION_TIMEOUT_S = 45.0
 
 
 @traced("rag.hallucination")
-async def check_hallucination(state: YouTubeRAGState, llm) -> dict:
+async def check_hallucination(state: state.YouTubeRAGState, llm) -> dict:
     """Verify the generation is grounded in documents."""
     doc_texts = [
-        doc.page_content[:MAX_DOC_CHARS] for doc in state["documents"]
+        doc.page_content[:params.MAX_DOC_CHARS] for doc in state["documents"]
     ]
     documents_str = "\n---\n".join(doc_texts)
 
@@ -40,11 +37,11 @@ async def check_hallucination(state: YouTubeRAGState, llm) -> dict:
     # responses with string `"true"` instead of boolean true, which
     # made the graph cycle through every model in the pool before the
     # `except Exception → grounded=True` fallback finally fired.
-    chain = HALLUCINATION_PROMPT | llm.with_structured_output(
-        HallucinationCheck,
+    chain = prompts.HALLUCINATION_PROMPT | llm.with_structured_output(
+        schemas.HallucinationCheck,
     )
     try:
-        result: HallucinationCheck = await resilient_ainvoke(
+        result: schemas.HallucinationCheck = await service.resilient_ainvoke(
             chain,
             {
                 "question":   state["question"],
